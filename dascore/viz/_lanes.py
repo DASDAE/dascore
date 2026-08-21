@@ -60,9 +60,9 @@ def _default_label(value) -> str:
     """Text for a value which was not given a label of its own."""
     if isinstance(value, str):
         return value
-    if isinstance(value, bool) or value is None:
+    if value is None:
         return ""
-    # A number states itself; a boolean group is named by its lane instead.
+    # A number states itself; a membership lane is named by its lane instead.
     return f"{value:g}" if isinstance(value, float) else str(value)
 
 
@@ -238,14 +238,10 @@ def _resolve_colors(rows, kind, lane_index, string_map, color):
         # Each numeric lane is its own scale, so each earns its own bar;
         # one bar for two lanes would read from a scale only one of them has.
         return colors, ("colorbar", (rows["lane"].iloc[0], cmap, norm))
-    # Boolean and unvalued lanes take one color, so the lane reads as one
-    # variable; a False interval is drawn faintly rather than dropped.
+    # An unvalued lane states membership: every row takes the one color, so
+    # the lane reads as one variable.
     base = plt.get_cmap(LANE_CMAP)(lane_index % 10)
-    colors = [
-        base if normalize_value(x) is not False else (*base[:3], 0.25)
-        for x in rows["value"]
-    ]
-    return colors, ("legend", {rows["lane"].iloc[0]: base})
+    return [base] * len(rows), ("legend", {rows["lane"].iloc[0]: base})
 
 
 def _draw_open_edges(ax, rows, y_low, height, colors, span):
@@ -340,11 +336,13 @@ def plot_lanes(
         one unnamed lane.
     value
         Column deciding each row's color. Strings are categorical,
-        numbers continuous, and booleans state membership of the lane.
+        numbers continuous, and a row with no value states membership
+        of the lane (true and false are not values; an interval outside
+        the lane has no row).
     label
         Column holding the text drawn in each box. Values supply it by
-        default: text as itself, a number as its digits, a boolean as
-        nothing, since the lane it sits in already names it.
+        default: text as itself, a number as its digits, a membership
+        row as nothing, since the lane it sits in already names it.
     lanes
         The lanes to draw, in order. Names with no rows are kept as empty
         lanes, so two figures of different subjects still line up.
@@ -386,7 +384,7 @@ def plot_lanes(
     ...         "group": ["zone", "zone", "noisy"],
     ...         "start": [0.0, 10.0, 5.0],
     ...         "end": [10.0, 20.0, 15.0],
-    ...         "value": ["north", "south", True],
+    ...         "value": ["north", "south", None],
     ...     }
     ... )
     >>> _ = plot_lanes(frame, lane="group", value="value")

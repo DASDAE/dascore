@@ -55,7 +55,7 @@ def kinds_frame():
             "lane": ["text", "text", "flag", "flag", "count", "count", "tick"],
             "start": [0.0, 5.0, 0.0, 5.0, 0.0, 5.0, 3.0],
             "end": [5.0, 10.0, 5.0, 10.0, 5.0, 10.0, 3.0],
-            "value": ["a", "b", True, False, 1, 2, None],
+            "value": ["a", "b", None, None, 1, 2, None],
         }
     )
 
@@ -253,7 +253,7 @@ class TestLayout:
         assert _texts(ax) == ["x"]
 
     def test_default_labels(self, kinds_frame):
-        """Numbers state themselves; booleans and None draw no text."""
+        """Numbers state themselves; membership rows draw no text."""
         ax = plot_lanes(kinds_frame, lane="lane", value="value")
         assert sorted(_texts(ax)) == ["1", "2", "a", "b"]
 
@@ -277,13 +277,20 @@ class TestColors:
         labels = [x.get_text() for x in ax.get_legend().get_texts()]
         assert labels == ["north", "south", "west"]
 
-    def test_boolean_lane(self, kinds_frame):
-        """False is the lane's color at low alpha; the legend names the lane."""
+    def test_membership_lane(self, kinds_frame):
+        """Every row takes the lane's one color; the legend names the lane."""
         ax = plot_lanes(kinds_frame, lane="lane", value="value", lanes=("flag",))
         colors = _collections(ax)[0].get_facecolors()
         assert colors[0][3] == pytest.approx(1.0)
-        assert colors[1][3] == pytest.approx(0.25)
+        assert colors[1][3] == pytest.approx(1.0)
+        assert np.allclose(colors[0], colors[1])
         assert [x.get_text() for x in ax.get_legend().get_texts()] == ["flag"]
+
+    def test_booleans_are_refused(self, kinds_frame):
+        """True and false are not values; membership is a row with none."""
+        frame = kinds_frame.assign(value=["a", "b", True, False, 1, 2, None])
+        with pytest.raises(ParameterError, match="not values"):
+            plot_lanes(frame, lane="lane", value="value")
 
     def test_numeric_few_values(self, kinds_frame):
         """A few numbers are colored continuously but earn no colorbar."""
