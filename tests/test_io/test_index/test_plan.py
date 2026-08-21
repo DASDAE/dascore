@@ -19,6 +19,7 @@ from dascore.exceptions import (
 from dascore.io.index.catalog import PatchCatalog
 from dascore.utils.chunk_plan import (
     ChunkPlan,
+    _order_key,
     _sampling_group,
     build_chunk_plan,
     build_concat_plan,
@@ -893,6 +894,12 @@ class TestConcatPlan:
         out = dc.spool([lat, p2]).concatenate(time=None, conflict="drop")
         assert "latitude" in out[0].coords.coord_map
         assert "latitude_min" in out.get_contents().columns
+
+    def test_order_key_ranks_mixed_kinds_by_spelling(self):
+        """Labels beside numbers still yield a total order, missing as NaN."""
+        key = _order_key(pd.Series(["b", 1, None, "a"], dtype=object))
+        assert np.isnan(key[2])
+        assert key[1] < key[3] < key[0]
 
     def test_empty_and_bad_arguments(self, trio):
         """An empty relation plans nothing; bad arguments raise."""

@@ -1656,6 +1656,19 @@ def build_concat_plan(
         )
         return ChunkPlan(outputs, members, name, value, params)
     df = _ensure_patch_id(df).reset_index(drop=True)
+    # rows which carry the name as a dimension; the others (a non-dimensional
+    # coordinate of that name, or none) gain a new dimension in its place
+    along = _structural(df, name)
+    is_coord = f"_{name}_def_key" in df.columns or bool(along.any())
+    envelope_cols = [min_name, max_name, step_name, f"_{name}_units"]
+    if not is_coord and any(x in df.columns for x in envelope_cols):
+        # the envelope names belong to the dimension about to be created
+        msg = (
+            f"Cannot concatenate along the new dimension {name!r}: the "
+            f"attributes {[x for x in envelope_cols if x in df.columns]} "
+            "would describe it. Rename them first."
+        )
+        raise ParameterError(msg)
     has_envelope = min_name in df.columns and max_name in df.columns
     if has_envelope:
         # one spelling per dimensionality, as a chunk plan: metres and
@@ -1666,9 +1679,6 @@ def build_concat_plan(
     # (the values would be mixed), while a patch with no values along the
     # dimension (an aggregated coordinate) joins whichever it meets.
     kind_names = list(names)
-    # rows which carry the name as a dimension; the others (a non-dimensional
-    # coordinate of that name, or none) gain a new dimension in its place
-    along = _structural(df, name)
     if (unit_col := f"_{name}_units") in df.columns:
         units = df[unit_col].fillna("unitless").astype(object)
         if has_envelope:
@@ -1813,12 +1823,18 @@ def _structural(df: pd.DataFrame, coord: str) -> np.ndarray:
 
 
 def _order_key(values: pd.Series) -> np.ndarray:
-    """Sortable floats for an envelope column: numbers as they are, labels by rank."""
+    """
+    Sortable floats for an envelope column: dense ranks of the native values.
+
+    Ranks rather than float conversions, which would fold nanosecond
+    timestamps a few hundred apart into one key. Missing values rank NaN.
+    """
     try:
-        return to_float(values.to_numpy())
-    except (TypeError, ValueError):
-        # a string-valued dimension: lexicographic order, missing last
-        return values.rank(method="dense").to_numpy(dtype=float)
+        ranked = values.rank(method="dense")
+    except TypeError:
+        # a mixture of kinds (labels beside numbers) ranks by its spelling
+        ranked = values.astype(str).where(values.notna()).rank(method="dense")
+    return ranked.to_numpy(dtype=float)
 
 
 def _concatenated_steps(sorted_df: pd.DataFrame, codes: np.ndarray, name: str):

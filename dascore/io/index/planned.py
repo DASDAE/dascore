@@ -724,6 +724,22 @@ def derived_catalog(
             member_rows.get("source_path", pd.Series(dtype=str)).astype(str)
         )
         loader.absorb(parent.resolver, paths=member_paths)
+    coord_dims_map = {} if parent is None else parent.backend.coord_dims_map()
+    # a coordinate riding the concatenated dimension which not every member
+    # states cannot be assembled: neither the patch nor the catalog carries
+    # it, and a view missing it must not re-plan from members which have it
+    partial_drops: dict[int, set[str]] = {}
+    if mode == "concat":
+        joined = trims[["output_id", "_patch_id"]].merge(sources, on="_patch_id")
+        grouped = joined.groupby("output_id")
+        for coord, dims_str in coord_dims_map.items():
+            rides = name in str(dims_str).split(",")
+            if not rides or f"{coord}_min" not in joined.columns:
+                continue
+            partial = grouped[f"{coord}_min"].count() < grouped.size()
+            for output_id in partial[partial].index:
+                partial_drops.setdefault(int(output_id), set()).add(coord)
+    lossy = lossy or bool(partial_drops)
     resolver = PlanResolver(
         token=token,
         dim=name,
@@ -739,7 +755,6 @@ def derived_catalog(
         coord_names=() if parent is None else parent.backend.coord_names(),
     )
     backend = get_backend(":memory:")
-    coord_dims_map = {} if parent is None else parent.backend.coord_dims_map()
     # residual selections trim at load; identity claims (def keys) for
     # coordinates on the trimmed dims would describe the untrimmed values
     trimmed_dims = _trimmed_dims(parent_residuals, coord_dims_map)
@@ -752,18 +767,9 @@ def derived_catalog(
     for output_id, names in plan.params.get("dropped_coords", {}).items():
         for coord in names:
             aux_info.get(output_id, {}).pop(coord, None)
-    if mode == "concat" and aux_info:
-        # a coordinate riding the concatenated dimension which not every
-        # member states cannot be assembled, so it is not advertised
-        joined = trims[["output_id", "_patch_id"]].merge(sources, on="_patch_id")
-        grouped = joined.groupby("output_id")
-        for coord, dims_str in coord_dims_map.items():
-            rides = name in str(dims_str).split(",")
-            if not rides or f"{coord}_min" not in joined.columns:
-                continue
-            partial = grouped[f"{coord}_min"].count() < grouped.size()
-            for output_id in partial[partial].index:
-                aux_info.get(int(output_id), {}).pop(coord, None)
+    for output_id, coords in partial_drops.items():
+        for coord in coords:
+            aux_info.get(output_id, {}).pop(coord, None)
     records = _output_records(
         outputs, token, aux_info=aux_info, coord_names=coord_dims_map
     )

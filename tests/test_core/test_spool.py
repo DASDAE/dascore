@@ -1391,6 +1391,35 @@ class TestConcatenatePartitions:
         dropped = dc.spool([first, lat, lat2]).concatenate(time=None, conflict="drop")
         assert "latitude" not in dropped[0].coords.coord_map
 
+    def test_nanosecond_neighbours_keep_dimension_order(self):
+        """Starts a float64 cannot tell apart still order the members."""
+        base = dc.get_example_patch().select(time=(0, 10), samples=True)
+        t0 = np.datetime64("2020-01-01T00:00:00.000000000")
+        ticks = np.arange(10) * np.timedelta64(1, "ns")
+        early = base.update_coords(time=t0 + ticks)
+        late = base.update_coords(time=t0 + np.timedelta64(10, "ns") + ticks)
+        out = dc.spool([late, early]).concatenate(time=None)
+        values = out[0].get_coord("time").values
+        assert values[0] == t0
+        assert np.all(np.diff(values) > np.timedelta64(0, "ns"))
+
+    def test_attrs_named_for_a_new_dimension_are_refused(self, pair):
+        """An attr spelled like the new dimension's envelope cannot survive it."""
+        first, _ = pair
+        named = first.update_attrs(batch_step=3)
+        with pytest.raises(ParameterError, match="batch_step"):
+            dc.spool([named, named.new()]).concatenate(batch=None)
+
+    def test_implicit_coordinate_drop_is_lossy(self, pair):
+        """Re-planning a view which lost a coordinate does not resurrect it."""
+        first, other = pair
+        nt = first.shape[first.get_axis("time")]
+        clock = other.update_coords(clock=("time", np.arange(nt) * 1.0))
+        out = dc.spool([first, clock]).concatenate(time=None)
+        again = out.concatenate(time=1)
+        assert len(again) == 1
+        assert "clock" not in again[0].coords.coord_map
+
     def test_vanishing_coordinate_units_do_not_partition(self, pair):
         """Auxiliary coordinates the new dimension replaces do not split by units."""
         first, _ = pair
