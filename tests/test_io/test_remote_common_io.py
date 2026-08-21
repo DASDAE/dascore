@@ -8,7 +8,7 @@ import pytest
 
 import dascore as dc
 from dascore.utils.downloader import fetch
-from dascore.utils.misc import suppress_warnings
+from dascore.utils.misc import iterate, suppress_warnings
 from tests.test_io._common_io_test_utils import (
     get_flat_io_test,
     get_representative_io_test,
@@ -33,15 +33,32 @@ pytestmark = [
     ),
 ]
 
-# Sintela protobuf walks its MTLV envelope with three small sequential reads
-# per record (magic, header, payload), so a modest file issues hundreds of
-# reads. That is fine locally and over memory://, but each read becomes a
-# request on the localhost-HTTP range-streaming path, which blows the timeouts
-# below. Remote coverage for this format stays at the memory:// level.
+# What the remote matrix is for is the streaming path, not the readers: every
+# reader is already read, scanned and format-detected against the same files
+# by tests/test_io/test_common_io.py. These nine cover the ways a reader can
+# reach the bytes -- whole-file HDF5, ranged HDF5, a plain binary walk, a
+# SEG-Y trace scan, an obspy handoff -- plus NETCDF_CF, the only one which
+# unwraps the handle through get_h5py_file into h5netcdf.
+#
+# Sintela_Protobuf is deliberately not among them: it walks its MTLV envelope
+# with three small sequential reads per record, so a modest file becomes
+# hundreds of range requests and blows the timeouts below. Its remote
+# coverage stays at the memory:// level.
+REMOTE_FORMATS = {
+    ("PRODML", "2.1"),
+    ("DASDAE", "1"),
+    ("TDMS", "4713"),
+    ("sentek", "5"),
+    ("Sintela_Binary", "3"),
+    ("SR4731", "200"),
+    ("segy", "1.0"),
+    ("MSEED", "2"),
+    ("NETCDF_CF", "1.8"),
+}
 REMOTE_COMMON_IO_READ_TESTS = {
-    io: fetch_names
+    io: next(iter(iterate(fetch_names)))
     for io, fetch_names in COMMON_IO_READ_TESTS.items()
-    if io.name != "Sintela_Protobuf"
+    if (io.name, io.version) in REMOTE_FORMATS
 }
 REMOTE_GET_FORMAT_CASES = get_flat_io_test(REMOTE_COMMON_IO_READ_TESTS)
 REMOTE_REPRESENTATIVE_CASES = get_representative_io_test(REMOTE_COMMON_IO_READ_TESTS)

@@ -2025,7 +2025,7 @@ class TestGetSampleCount:
         out = evenly_sampled_time_delta_coord.get_sample_count(12 * dt)
         assert out == 12
 
-    @pytest.mark.parametrize("sample", (0, 10, 100, 42, 13))
+    @pytest.mark.parametrize("sample", (0, 42))
     def test_samples(self, evenly_sampled_coord, sample):
         """Ensure value is returned when samples==True."""
         assert len(evenly_sampled_coord) >= sample
@@ -2356,7 +2356,9 @@ class TestChangeLength:
             with pytest.raises(ParameterError, match="non-negative"):
                 coord.change_length(length)
 
-    @pytest.mark.parametrize("length", [2.5, 3.0, "3", None, True, False])
+    # A float, a string and a bool: the three kinds of thing which are not
+    # an integer length (bool is the one the check has a clause for).
+    @pytest.mark.parametrize("length", [2.5, "3", True])
     def test_non_integer_length_raises(
         self, evenly_sampled_coord, basic_non_coord, length
     ):

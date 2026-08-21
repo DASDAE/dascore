@@ -1310,7 +1310,11 @@ class TestSizeChunk:
         return dc.spool([self._make("float64", start), self._make("float32", second)])
 
     @pytest.mark.parametrize(
-        "size", ("1 MB", "2 MB", "1 MiB", "500 kB"), ids=lambda x: x.replace(" ", "")
+        # One of each: a decimal unit and a binary one, at a size which
+        # splits the spool and a size which does not.
+        "size",
+        ("1 MiB", "500 kB"),
+        ids=lambda x: x.replace(" ", ""),
     )
     def test_never_exceeds_request(self, random_spool, size):
         """Every output patch fits inside the requested size."""

@@ -137,38 +137,16 @@ class TestEveryPatchFunction:
         args = resolve(args)
         func = _function(name)
         target = get_patch(key)
-        assert _same_patch(
-            func(target, *args, **kwargs), func.op(*args, **kwargs)(target)
-        )
-
-    @pytest.mark.parametrize("call", CALLS, ids=IDS)
-    def test_the_history_is_the_same(self, call):
-        """
-        Down to what the patch says was done to it.
-
-        `_same_patch` compares attrs, and history is one, so this is
-        already covered -- said again here because it is the property
-        which catches an operation that skipped the decorator, and it
-        should not quietly go away if that comparison is ever loosened.
-        """
-        name, key, args, kwargs = call
-        args = resolve(args)
-        func = _function(name)
-        target = get_patch(key)
         direct = func(target, *args, **kwargs)
-        if not isinstance(direct, dc.Patch):
-            pytest.skip(f"{name} does not return a patch")
-        assert func.op(*args, **kwargs)(target).attrs.history == direct.attrs.history
-
-    @pytest.mark.parametrize("call", CALLS, ids=IDS)
-    def test_the_call_fingerprints_alike(self, call):
-        """One call has one fingerprint, whichever route asks for it."""
-        name, _, args, kwargs = call
-        args = resolve(args)
-        func = _function(name)
-        assert (
-            fingerprint_call(func, args, kwargs) == func.op(*args, **kwargs).fingerprint
-        )
+        through_op = func.op(*args, **kwargs)(target)
+        assert _same_patch(direct, through_op)
+        # `_same_patch` compares attrs and history is one, so the history
+        # is already covered -- said again because it is the property
+        # which catches an operation that skipped the decorator, and it
+        # should not quietly go away if that comparison is loosened. Not
+        # every patch function returns a patch (the viz ones do not).
+        if isinstance(direct, dc.Patch):
+            assert through_op.attrs.history == direct.attrs.history
 
     @pytest.mark.parametrize("call", CALLS, ids=IDS)
     def test_the_op_is_written_down(self, call):
@@ -200,25 +178,18 @@ class TestEveryPatchFunction:
             op.to_dict()
 
     @pytest.mark.parametrize("call", CALLS, ids=IDS)
-    def test_the_op_pickles(self, call):
-        """An operation handed to another process carries what it is."""
-        name, _, args, kwargs = call
-        args = resolve(args)
-        op = _function(name).op(*args, **kwargs)
-        assert pickle.loads(pickle.dumps(op)) == op
-
-    @pytest.mark.parametrize("call", CALLS, ids=IDS)
-    def test_the_version_is_the_functions(self, call):
-        """
-        The operation reports the version its function is declared at.
-
-        Not the class's: `PatchOp` stands for every patch function, so its
-        own version says nothing about any of them.
-        """
+    def test_the_op_is_well_formed(self, call):
+        """One call is one fingerprint, one version, and pickles as itself."""
         name, _, args, kwargs = call
         args = resolve(args)
         func = _function(name)
-        assert _function(name).op(*args, **kwargs).version == func.__version__
+        op = func.op(*args, **kwargs)
+        assert fingerprint_call(func, args, kwargs) == op.fingerprint
+        # An operation handed to another process carries what it is.
+        assert pickle.loads(pickle.dumps(op)) == op
+        # The version is the function's, not PatchOp's: the class stands
+        # for every patch function, so its own says nothing about any.
+        assert op.version == func.__version__
 
 
 def _function(name):

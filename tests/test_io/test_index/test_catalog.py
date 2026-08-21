@@ -444,46 +444,30 @@ class TestSelectingWithinAMembership:
 class TestGlobTranslation:
     """The in-memory glob has to mean what the index's GLOB means."""
 
-    @pytest.mark.parametrize(
-        "pattern",
-        [
-            "a*",
-            "a?c",
-            "*",
-            "?",
-            "v[^x]*",
-            "v[!x]*",
-            "[abc]d",
-            "[]]x",
-            "a[b-d]e",
-            "[^]]a",
-            "x\\y*",
-            "no_meta",
-            "a[",
-            "[]",
-            "[z-a]",
-            "[^z-a]",
-            "[]-a]",
-            "[^]-a]",
-            "[]a]",
-        ],
-    )
-    def test_agrees_with_sqlite(self, pattern):
+    def test_agrees_with_sqlite(self):
         """
         SQLite decides what a glob means, since it is what answers one.
 
         Reaching for fnmatch instead made `[!x]` and `[^x]` each select
         the half of a spool the other did not.
+
+        The patterns loop inside one test rather than parametrizing it:
+        each is a fifth of a millisecond, and the assertion already names
+        the pattern and value which disagreed.
         """
+        patterns = ["a*", "a?c", "*", "?", "v[^x]*", "v[!x]*", "[abc]d", "[]]x"]
+        patterns += ["a[b-d]e", "[^]]a", "x\\y*", "no_meta", "a[", "[]", "[z-a]"]
+        patterns += ["[^z-a]", "[]-a]", "[^]-a]", "[]a]"]
         values = ["abc", "a1c", "vax", "vxx", "ad", "]x", "ace", "", "a", "a["]
         values += ["x\\yz", "!a", "^a", "]a", "no_meta", "[]", "-", "]", "_"]
         with sqlite3.connect(":memory:") as connection:
-            regex = glob_to_regex(pattern)
-            for value in values:
-                expected = connection.execute(
-                    "SELECT ? GLOB ?", (value, pattern)
-                ).fetchone()[0]
-                assert bool(expected) == bool(regex.match(value)), (pattern, value)
+            for pattern in patterns:
+                regex = glob_to_regex(pattern)
+                for value in values:
+                    expected = connection.execute(
+                        "SELECT ? GLOB ?", (value, pattern)
+                    ).fetchone()[0]
+                    assert bool(expected) == bool(regex.match(value)), (pattern, value)
 
     def test_a_reversed_range_matches_its_low_endpoint(self):
         """

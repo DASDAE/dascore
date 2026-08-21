@@ -23,7 +23,13 @@ def patch_ones(random_patch):
     return patch
 
 
-@pytest.fixture(scope="session", params=sorted(WINDOW_FUNCTIONS))
+# Three shapes rather than all thirteen: the taper machinery is what these
+# tests are about, and scipy owns the windows themselves (that every name in
+# the table reaches one is asserted in test_every_window_is_a_function).
+TAPER_WINDOWS = ("hann", "triang", "blackmanharris")
+
+
+@pytest.fixture(scope="session", params=TAPER_WINDOWS)
 def time_tapered_patch(request, patch_ones):
     """Return a tapered trace."""
     if "boxcar" in str(request.param):
@@ -32,6 +38,12 @@ def time_tapered_patch(request, patch_ones):
     patch = patch_ones.update(data=np.ones_like(patch_ones.data))
     out = taper(patch, time=0.05, window_type=request.param)
     return out
+
+
+def test_every_window_is_a_function():
+    """Each name in the table reaches something scipy can call."""
+    assert set(TAPER_WINDOWS) <= set(WINDOW_FUNCTIONS)
+    assert all(callable(x) for x in WINDOW_FUNCTIONS.values())
 
 
 def _get_start_end_indices(patch, dim):
