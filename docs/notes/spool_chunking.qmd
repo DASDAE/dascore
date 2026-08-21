@@ -36,7 +36,7 @@ Patches may only combine when they agree on all of:
 3. **Sampling** — step magnitudes within the relative tolerance `config.sampling_group_tolerance` (default 5%) of the group's smallest member, with matching orientation (ascending never merges with descending; contiguous descending patches merge with each other).
 4. **Continuity** — patches within `tolerance` samples of each other, evaluated within each group so unrelated patches can never bridge a gap.
 
-[`Spool.get_gaps`](`dascore.core.spool.Spool.get_gaps`) and [`Spool.get_coverage`](`dascore.core.spool.Spool.get_coverage`) read this same partition: a `get_coverage` row is one cell of criteria 1-3, and a `get_gaps` row is a boundary criterion 4 declines to close. So the counts tie — merging yields one patch per coverage row plus one per gap reported. The reports read the rows a spool presents rather than a plan's members, so merging a spool and then reporting on it finds nothing left to close.
+[`Spool.get_gaps`](`dascore.core.spool.Spool.get_gaps`) and [`Spool.get_coverage`](`dascore.core.spool.Spool.get_coverage`) read this same partition: a `get_coverage` row is one cell of criteria 1-3, and a `get_gaps` row is a boundary criterion 4 declines to close. So on a spool of unplanned patches the counts tie — merging yields one patch per coverage row plus one per gap reported. The reports read the rows a spool presents rather than a plan's members, so a spool that has already been chunked reports on the patches it now holds, and re-chunking it need not reproduce those counts.
 
 ```{python}
 import numpy as np

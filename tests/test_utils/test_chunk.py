@@ -918,6 +918,54 @@ class TestBuildGapFrame:
         assert set(out["group_id"]) == {0, 1}
         assert build_coverage_frame(df, "time")["group_id"].is_unique
 
+    def test_unsigned_overlap_is_not_a_gap(self):
+        """An overlap on an unsigned envelope must not wrap into a gap."""
+        df = pd.DataFrame(
+            {
+                "x_min": np.array([100, 50], dtype=np.uint64),
+                "x_max": np.array([200, 150], dtype=np.uint64),
+                "x_step": np.array([1, 1], dtype=np.uint64),
+            }
+        )
+        assert build_gap_frame(df, "x").empty
+        # and the shared kernel keeps chunk merging them
+        assert len(build_chunk_plan(df, x=None).outputs) == 1
+
+    def test_group_id_ignores_row_order(self):
+        """Two cells sharing an envelope keep their ids when rows move."""
+        t0 = np.datetime64("2020-01-01", "ns")
+        step = np.timedelta64(1, "s")
+        df = pd.DataFrame(
+            {
+                "time_min": [t0, t0],
+                "time_max": [t0 + step * 9, t0 + step * 9],
+                "time_step": [step, step],
+                "station": ["a", "b"],
+            }
+        )
+        expected = {"a": 0, "b": 1}
+        for order in ([0, 1], [1, 0]):
+            out = build_coverage_frame(
+                df.iloc[order].reset_index(drop=True), "time", group="station"
+            )
+            assert dict(zip(out["station"], out["group_id"])) == expected
+
+    def test_coverage_states_one_step(self, gapy_df):
+        """The coverage row advertises the cell's step, as chunk does."""
+        out = build_coverage_frame(gapy_df, "time")
+        assert out["time_step"].iloc[0] == gapy_df["time_step"].iloc[0]
+
+    def test_mixed_cells_keep_attr_dtypes(self, gapy_df, contiguous_df):
+        """A contiguous cell beside a gappy one must not widen dtypes."""
+        gappy = gapy_df.assign(station="a")
+        # a second cell with no gaps at all
+        whole = contiguous_df.iloc[:1].assign(station="b")
+        df = pd.concat([gappy, whole], ignore_index=True)
+        df["station"] = df["station"].astype(str)
+        out = build_gap_frame(df, "time", group="station")
+        assert set(out["station"]) == {"a"}
+        assert out["station"].dtype == df["station"].dtype
+
     def test_repeated_group_name(self, contiguous_df_two_stations):
         """A name repeated in `group` is not a duplicate column."""
         out = build_gap_frame(contiguous_df_two_stations, "time", group=["station"] * 2)
@@ -933,6 +981,11 @@ class TestBuildGapFrame:
         df = contiguous_df.assign(span=1.0)
         with pytest.raises(ParameterError, match="collide"):
             build_coverage_frame(df, "time", group="span")
+
+    def test_group_colliding_with_dim_column(self, contiguous_df):
+        """Grouping by an envelope column would emit it twice."""
+        with pytest.raises(ParameterError, match="collide"):
+            build_gap_frame(contiguous_df, "time", group="time_step")
 
     def test_bad_missing_dim_raises(self, contiguous_df):
         """A typo in missing_dim raises rather than silently dropping."""

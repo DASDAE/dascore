@@ -129,11 +129,40 @@ class TestGetGaps:
         """A report describes the patches the spool holds, not their sources."""
         merged = gappy_spool.concatenate(time=None)
         assert len(merged) == 1
-        # concatenate closed the holes, so there is nothing left to report
+        # concatenate ignores the coordinate values, so the holes are
+        # inside the one patch it made and no boundary is left to report
         assert merged.get_gaps().empty
         assert merged.get_coverage()["coverage"].iloc[0] == 1
         # and the report agrees with rebuilding the spool from its patches
         assert merged.get_gaps().equals(dc.spool(list(merged)).get_gaps())
+
+    def test_chunk_keeps_the_gaps_it_cannot_close(self, gappy_spool):
+        """Merging does not close a real hole, so the report still sees it."""
+        chunked = gappy_spool.chunk(time=...)
+        assert len(chunked) == len(gappy_spool)
+        assert len(chunked.get_gaps()) == len(gappy_spool.get_gaps())
+
+    def test_samples_selection_is_measured(self, gappy_spool):
+        """A samples window trims the envelopes the report reads."""
+        trimmed = gappy_spool.select(time=(0, 200), samples=True)
+        out = trimmed.get_gaps()
+        assert len(out) == len(gappy_spool.get_gaps())
+        # the trim shortened each patch, so the holes are wider than the
+        # untrimmed spool's
+        assert (out["gap_size"] > gappy_spool.get_gaps()["gap_size"]).all()
+
+    def test_group_id_ignores_construction_order(self):
+        """A group keeps its id however the spool was assembled."""
+        early, late = random_spool(tag="a"), random_spool(tag="b")
+        expected = {"a": 0, "b": 1}
+        for patches in ([*early, *late], [*late, *early]):
+            out = dc.spool(patches).get_coverage()
+            assert dict(zip(out["tag"], out["group_id"])) == expected
+
+    def test_group_colliding_with_emitted_column(self, gappy_spool):
+        """Grouping by a column the report emits is refused."""
+        with pytest.raises(ParameterError, match="collide"):
+            gappy_spool.get_gaps(group="time_step")
 
     def test_units_are_presented(self, gappy_spool):
         """The report says what unit its magnitudes are in."""

@@ -1631,16 +1631,17 @@ class Spool(NamespaceOwner):
             **kwargs,
         )
 
-    def _report_relation(self, dim: str) -> pd.DataFrame:
+    def _report_relation(self) -> pd.DataFrame:
         """
         Return the relation a gap report reads: the rows the spool presents.
 
         Unlike [`_plan_frames`](`dascore.core.spool.Spool._plan_frames`)
         a plan-backed spool is never collapsed to its members. Chunk
         collapses because re-planning a dimension replaces the plan; a
-        report describes the patches the spool actually holds, so a
-        merged spool has nothing left to report. Samples residuals still
-        adjust the envelopes, since they change what loads.
+        report describes the patches the spool actually holds, so it
+        reads the plan's outputs. Samples residuals still adjust the
+        envelopes, since they change what loads. No dimension is needed:
+        the whole relation is returned and the caller picks its columns.
         """
         base = _ensure_patch_id(self._df.reset_index(drop=True))
         working = base.drop(columns=list(self._drop_columns), errors="ignore")
@@ -1669,11 +1670,13 @@ class Spool(NamespaceOwner):
             The maximum number of samples patches can be spaced and still
             count as contiguous. Same meaning as chunk's `tolerance`.
         group
-            Attributes which separate patches into unrelated partitions; a
-            gap is never reported between two partitions. Defaults to the
-            config option `patch_kind_attrs`. Sampling rate and coordinate
-            structure split partitions too, exactly as they do for
-            `chunk`, so one group value can span several partitions.
+            Attributes which separate patches into unrelated groups; a gap
+            is never reported between two groups. Defaults to the config
+            option `patch_kind_attrs`. Sampling rate and coordinate
+            structure split groups too, exactly as they do for `chunk`,
+            so one attribute value can span several groups. A value
+            nobody recorded conflicts with nothing, so a patch which
+            never stated the attribute joins the group that did.
         missing_dim
             What to do with patches lacking `dim`: "drop" (the default)
             excludes them, "raise" refuses. Chunk defaults to "raise"
@@ -1683,10 +1686,11 @@ class Spool(NamespaceOwner):
         -----
         `{dim}_min` is the last sample before the gap and `{dim}_max` the
         first sample after it, so `gap_size` is their difference — one
-        step wider than the missing extent. Subtract the returned
-        `{dim}_step` column for the extent itself.
+        step wider than the missing extent. Subtract the magnitude of
+        the returned `{dim}_step` for the extent itself; the step keeps
+        the coordinate's sign, which is negative for a descending one.
 
-        `group_id` names the partition each gap belongs to, and is the
+        `group_id` names the group each gap belongs to, and is the
         column to join against
         [`get_coverage`](`dascore.core.spool.Spool.get_coverage`).
 
@@ -1713,7 +1717,7 @@ class Spool(NamespaceOwner):
         >>> assert random_spool().get_gaps().empty
         """
         out = build_gap_frame(
-            self._report_relation(dim),
+            self._report_relation(),
             dim,
             tolerance=tolerance,
             group=group,
@@ -1732,10 +1736,11 @@ class Spool(NamespaceOwner):
         """
         Return a dataframe summarizing how complete the spool is.
 
-        One row per partition, reporting the extent it spans along `dim`
-        and how much of that extent holds data. Patches divide on the
-        group attributes and, exactly as `chunk` divides them, on dims
-        signature, coordinate identity, units, and sampling rate.
+        One row per group of related patches — same kind, dims
+        signature, coordinate identity, units, and sampling rate,
+        exactly as `chunk` groups them before it looks at continuity.
+        Each row reports the extent the group spans along `dim` and how
+        much of that extent holds data.
 
         Parameters
         ----------
@@ -1745,10 +1750,12 @@ class Spool(NamespaceOwner):
             The maximum number of samples patches can be spaced and still
             count as contiguous. Same meaning as chunk's `tolerance`.
         group
-            Attributes which separate patches into unrelated partitions.
-            Defaults to the config option `patch_kind_attrs`; sampling and
-            structural differences split partitions too, so one group
-            value can span several rows.
+            Attributes which separate patches into unrelated groups.
+            Defaults to the config option `patch_kind_attrs`; sampling
+            and structural differences split groups too, so one
+            attribute value can span several rows. A value nobody
+            recorded conflicts with nothing, so a patch which never
+            stated the attribute joins the group that did.
         missing_dim
             What to do with patches lacking `dim`: "drop" (the default)
             excludes them, "raise" refuses.
@@ -1756,17 +1763,18 @@ class Spool(NamespaceOwner):
         Notes
         -----
         `span` is `{dim}_max - {dim}_min`, `gap_total` is the sum of the
-        partition's gaps as
+        group's gaps as
         [`get_gaps`](`dascore.core.spool.Spool.get_gaps`) reports them,
         `covered` is the rest, and `coverage` is `covered / span` (1.0
         when the span is zero, meaning a single sample). `group_id`
         matches the gap frame's, so the two join on it.
 
-        A partition whose step is unknown reports no gaps, and so counts
-        as fully covered. That is what `chunk` would do with it — it
-        would merge the patches — but it means `coverage` of 1.0 there
-        says "nothing chunk would refuse to merge", not "nothing
-        missing".
+        Coverage is measured between patches, from the envelopes the
+        index records; a hole *inside* a patch is not visible here. Nor
+        is one in a group whose step is unknown, which reports no gaps
+        and so counts as fully covered. Both are what `chunk` would
+        make of the data, so a `coverage` of 1.0 says "nothing chunk
+        would refuse to merge", not "nothing missing".
 
         See Also
         --------
@@ -1783,7 +1791,7 @@ class Spool(NamespaceOwner):
         >>> assert (random_spool().get_coverage()["coverage"] == 1).all()
         """
         out = build_coverage_frame(
-            self._report_relation(dim),
+            self._report_relation(),
             dim,
             tolerance=tolerance,
             group=group,

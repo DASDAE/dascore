@@ -325,19 +325,19 @@ gappy = random_spool(time_gap=np.timedelta64(1, "s"), length=3)
 gappy.get_gaps()
 ```
 
-`time_min` is the last sample before the gap and `time_max` the first sample after it, so `gap_size` is one step wider than the extent actually missing; subtract the `time_step` column for the extent itself. Overlapping patches are never a gap, and neither is a hole smaller than `tolerance` samples — the same `tolerance` `chunk` takes, so widening it here predicts exactly which merges will succeed.
+`time_min` is the last sample before the gap and `time_max` the first sample after it, so `gap_size` is one step wider than the extent actually missing; subtract the magnitude of the `time_step` column for the extent itself. Overlapping patches are never a gap, and neither is a hole the `tolerance` covers — a boundary is a gap once it exceeds `tolerance` samples, so at the default 1.5 a single missing sample already counts. It is the same `tolerance` `chunk` takes, so widening it here predicts exactly which merges will succeed.
 
 Pass another dimension to ask about it instead; `time` is only the default.
 
 # get_coverage
 
-[`get_coverage`](`dascore.core.spool.Spool.get_coverage`) summarizes the same partitions, one row each, which is the quicker way to see whether an archive is worth loading at all.
+[`get_coverage`](`dascore.core.spool.Spool.get_coverage`) summarizes the same groups, one row each, which is the quicker way to see whether an archive is worth loading at all.
 
 ```{python}
 gappy.get_coverage()
 ```
 
-`gap_total` is the sum of that partition's `get_gaps` rows, `span` is the extent it covers end to end, and `coverage` is the fraction of that span holding data. Patches divide into partitions the way `chunk` divides them — on the group attributes, but also on sampling rate and coordinate structure — so a single tag can span several rows. `group_id` names the partition in both frames, which is how a gap is traced back to the row that counts it.
+`gap_total` is the sum of that group's `get_gaps` rows, `span` is the extent it covers end to end, and `coverage` is the fraction of that span the patches cover. It is measured between patches, from the index's envelopes, so a hole *inside* a patch does not show up. Patches divide into groups the way `chunk` divides them — on the kind attributes, but also on sampling rate and coordinate structure — so a single tag can span several rows. `group_id` names the group in both frames, which is how a gap is traced back to the row that counts it.
 
 # concatenate
 Similar to `chunk`, [`Spool.concatenate`](`dascore.Spool.concatenate`) is used to combine patches together. However, `concatenate` doesn't account for coordinate values along the concatenation axis, and can even be used to create new patch dimensions. Like `chunk`, it produces a lazy, plan-backed result.

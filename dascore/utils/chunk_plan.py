@@ -291,7 +291,7 @@ def _sampling_group(step: pd.Series, tolerance: float) -> pd.Series:
 
 def _gap_boundaries(start, stop, step, tolerance):
     """
-    Locate the discontinuities in one partition cell (spec 2.4).
+    Locate the discontinuities in one cell (spec 2.4).
 
     Returns `(order, reach, has_gap)` over the start-ordered rows.
     `reach` is the furthest stop seen *before* each row, so an
@@ -317,7 +317,13 @@ def _gap_boundaries(start, stop, step, tolerance):
     # `reach + step * tolerance`: a float margin promotes that sum, and
     # an integer coordinate past 2**53 rounds both endpoints together,
     # hiding the gap. The distance itself is small enough to compare.
-    has_gap = (starts - reach) > steps * tolerance
+    # Only rows past the reach are measured — a row which starts at or
+    # before it cannot open a gap, and subtracting there would wrap an
+    # unsigned envelope into an enormous phantom one.
+    has_gap = np.zeros(len(starts), dtype=bool)
+    ahead = starts > reach
+    if ahead.any():
+        has_gap[ahead] = (starts[ahead] - reach[ahead]) > steps[ahead] * tolerance
     has_gap[:1] = False
     return order, reach, has_gap
 
@@ -1037,8 +1043,10 @@ def _report_dim_columns(df: pd.DataFrame, name: str, carried) -> tuple[str, str,
     Return the envelope columns of `name`, checked for a usable report.
 
     `get_interval_columns` words its error for chunking, and a carried
-    attr sharing a computed column's name would overwrite the statistic
-    rather than fail, so both are policed here instead.
+    attr sharing an emitted column's name would overwrite it rather than
+    fail, so both are policed here instead. The envelope columns count
+    as emitted: grouping by one would leave the frame two columns of
+    that name, which no longer answers to `frame[name]` as a series.
     """
     columns = (f"{name}_min", f"{name}_max", f"{name}_step")
     if missing := set(columns) - set(df.columns):
@@ -1048,10 +1056,11 @@ def _report_dim_columns(df: pd.DataFrame, name: str, carried) -> tuple[str, str,
             f"relation. Valid dimensions or columns are {dims}."
         )
         raise ParameterError(msg)
-    if collide := sorted(set(carried) & set(_REPORT_COLUMNS)):
+    emitted = set(_REPORT_COLUMNS) | set(columns)
+    if collide := sorted(set(carried) & emitted):
         msg = (
             f"Cannot group a report by {collide}: the name(s) collide with "
-            "the columns the report computes."
+            "the columns the report emits."
         )
         raise ParameterError(msg)
     return columns
@@ -1106,12 +1115,13 @@ def _cell_gaps(df: pd.DataFrame, name: str, group_attrs, tolerance: float):
     """
     Yield `(cell rows, gaps in that cell)` for every cell in `df`.
 
-    Cells come in the order partitions do (spec 8) — by envelope min,
-    then smallest patch id — so a report never depends on the order the
-    relation happened to arrive in. Each cell's ordinal rides on its
-    gaps as `group_id`, which is the only thing that always tells two
-    cells apart: sampling group and structural def keys partition
-    without being shown.
+    Cells come in envelope-min order, as partitions do (spec 8), and
+    ties break on what the cell states rather than on a patch id, which
+    is positional — so a report never depends on the order the relation
+    happened to arrive in. Each cell's ordinal rides on its gaps as
+    `group_id`, which is the only thing that always tells two cells
+    apart: sampling group and structural def keys partition without
+    being shown.
     """
     min_name, max_name, step_name = _dim_columns(df, name)
     carried = _gap_carried_columns(df, name, group_attrs)
@@ -1119,11 +1129,16 @@ def _cell_gaps(df: pd.DataFrame, name: str, group_attrs, tolerance: float):
         df, name, group_attrs, dc.get_config().sampling_group_tolerance
     )
     grouped = df.groupby(cells, sort=False)
-    order = grouped.agg(_min=(min_name, "min"), _pid=("_patch_id", "min")).sort_values(
-        ["_min", "_pid"], kind="stable"
-    )
     groups = grouped.groups
-    for group_id, label in enumerate(order.index):
+    mins = grouped[min_name].min()
+    stated = {
+        label: tuple(_stated(df.loc[index], x).iloc[0] for x in carried)
+        for label, index in groups.items()
+    }
+    order = sorted(
+        groups, key=lambda label: (mins[label], [str(x) for x in stated[label]])
+    )
+    for group_id, label in enumerate(order):
         sub = df.loc[groups[label]]
         start, stop, step = get_interval_columns(sub, name)
         row_order, reach, has_gap = _gap_boundaries(start, stop, step, tolerance)
