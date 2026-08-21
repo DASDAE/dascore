@@ -1420,6 +1420,17 @@ class TestConcatenatePartitions:
         assert len(again) == 1
         assert "clock" not in again[0].coords.coord_map
 
+    def test_value_kinds_partition(self, pair):
+        """A datetime coordinate and a numeric one of the same name stay apart."""
+        first, _ = pair
+        dated = first.rename_coords(time="epoch")
+        nt = dated.shape[dated.get_axis("epoch")]
+        numeric = dated.update_coords(epoch=np.arange(nt) * 1.0)
+        out = dc.spool([dated, numeric]).concatenate(epoch=None)
+        assert len(out) == 2
+        kinds = {x.get_coord("epoch").values.dtype.kind for x in out}
+        assert kinds == {"M", "f"}
+
     def test_vanishing_coordinate_units_do_not_partition(self, pair):
         """Auxiliary coordinates the new dimension replaces do not split by units."""
         first, _ = pair

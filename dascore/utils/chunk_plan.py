@@ -1685,6 +1685,11 @@ def build_concat_plan(
             units = units.where(df[min_name].notna(), "")
         df = df.assign(_concat_units=units.where(along, ""))
         kind_names.append("_concat_units")
+    if has_envelope:
+        # values of one kind concatenate; a datetime and a number sharing a
+        # name (and a unit) do not, and a row with no values joins either
+        df = df.assign(_concat_family=df[min_name].map(_value_family))
+        kind_names.append("_concat_family")
     keys: list = [_kind_codes(df, kind_names)]
     if "dims" in df.columns:
         keys.append(df["dims"])
@@ -1703,7 +1708,7 @@ def build_concat_plan(
             key = key.where(key.notna(), env)
         keys.append(key)
     labels = df.groupby(keys, dropna=False, sort=False).ngroup().to_numpy()
-    df = df.drop(columns=["_concat_units"], errors="ignore")
+    df = df.drop(columns=["_concat_units", "_concat_family"], errors="ignore")
     # Order: partitions in order of first appearance, rows within one the
     # way the data run along the dimension (ascending by start, descending
     # by stop), then cut into runs of `count`. A partition without a known
@@ -1715,7 +1720,7 @@ def build_concat_plan(
         starts = _order_key(df[min_name])
         stops = _order_key(df[max_name])
         no_steps = np.full(len(df), np.nan)
-        steps = to_float(df[step_name].to_numpy()) if step_name in df else no_steps
+        steps = _directions(df[step_name]) if step_name in df else no_steps
         first_step = pd.Series(steps).groupby(labels).transform("first").to_numpy()
         descending = np.nan_to_num(first_step, nan=0.0) < 0
         within = np.where(descending, -stops, starts)
@@ -1814,6 +1819,30 @@ def build_concat_plan(
     return ChunkPlan(outputs, members, name, value, params)
 
 
+def _directions(steps: pd.Series) -> np.ndarray:
+    """The sign of each step (±1.0), NaN where missing or without a sign."""
+
+    def direction(step):
+        if pd.isnull(step) or isinstance(step, str):
+            return np.nan
+        return -1.0 if step < step * 0 else 1.0
+
+    return np.array([direction(x) for x in steps], dtype=float)
+
+
+def _value_family(value) -> str:
+    """The kind of an envelope value: datetime, timedelta, number, or text."""
+    if pd.isnull(value):
+        return ""
+    if isinstance(value, np.datetime64 | pd.Timestamp):
+        return "datetime"
+    if isinstance(value, np.timedelta64 | pd.Timedelta):
+        return "timedelta"
+    if isinstance(value, str):
+        return "text"
+    return "number"
+
+
 def _structural(df: pd.DataFrame, coord: str) -> np.ndarray:
     """Per row, whether `coord` is one of the row's dimensions."""
     if "dims" not in df.columns:
@@ -1856,7 +1885,7 @@ def _concatenated_steps(sorted_df: pd.DataFrame, codes: np.ndarray, name: str):
     # descending data run from their max to their min, so the next member
     # starts (at its max) one step below the previous member's min
     try:
-        ascending = to_float(steps.to_numpy()) >= 0
+        ascending = _directions(steps) >= 0
         forward = (starts == stops.shift(1) + steps).to_numpy()
         backward = (stops == starts.shift(1) + steps).to_numpy()
     except (TypeError, ValueError):

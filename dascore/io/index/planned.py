@@ -280,17 +280,18 @@ def _output_records(
     outputs: pd.DataFrame,
     token: str,
     aux_info: Mapping[int, Mapping[str, Mapping]] | None = None,
-    coord_names: Iterable[str] = (),
+    removed_coords: Mapping[int, Iterable[str]] | None = None,
 ) -> list[SourceRecord]:
     """
     Convert plan output rows into ingestible source records.
 
-    `coord_names` are the parent's coordinates: their envelope columns
-    describe coordinates (advertised through `dims` and `aux_info`, or
-    not at all), never attrs.
+    `removed_coords` names, per output, coordinates its members held which
+    the output does not: their envelope columns describe those coordinates,
+    not attrs, and are left out with them.
     """
     records = []
     aux_info = aux_info or {}
+    removed_coords = removed_coords or {}
     # Envelope columns belong to coordinates actually present in a row;
     # an attr that merely looks envelope-shaped (channel_step with no
     # channel coord) is ordinary metadata and must be preserved. The
@@ -302,7 +303,6 @@ def _output_records(
         if key.startswith("_") and key.endswith("_def_key")
     }
     base_names |= {"time", "distance"}  # fixed patches-table envelopes
-    base_names |= set(coord_names)
     envelope_cache: dict[tuple, set[str]] = {}
     for row in outputs.to_dict("records"):
         output_id = int(row["output_id"])
@@ -322,10 +322,11 @@ def _output_records(
             record = _coord_record_from_row(info, name, dims=info["dims"])
             if record is not None:
                 coords.append(record)
-        cache_key = (dims, tuple(aux))
+        removed = tuple(removed_coords.get(output_id, ()))
+        cache_key = (dims, tuple(aux), removed)
         envelope_keys = envelope_cache.get(cache_key)
         if envelope_keys is None:
-            coord_names = set(dim_names) | set(aux) | base_names
+            coord_names = set(dim_names) | set(aux) | set(removed) | base_names
             envelope_keys = {
                 f"{name}_{sfx}"
                 for name in coord_names
@@ -764,15 +765,13 @@ def derived_catalog(
         outputs = outputs.drop(columns=stale_keys)
     aux_info = _aux_coord_info(sources, trims, name, coord_dims_map, trimmed_dims)
     # a coordinate the plan drops from an output is not advertised for it
+    removed: dict[int, set[str]] = {k: set(v) for k, v in partial_drops.items()}
     for output_id, names in plan.params.get("dropped_coords", {}).items():
-        for coord in names:
-            aux_info.get(output_id, {}).pop(coord, None)
-    for output_id, coords in partial_drops.items():
+        removed.setdefault(output_id, set()).update(names)
+    for output_id, coords in removed.items():
         for coord in coords:
             aux_info.get(output_id, {}).pop(coord, None)
-    records = _output_records(
-        outputs, token, aux_info=aux_info, coord_names=coord_dims_map
-    )
+    records = _output_records(outputs, token, aux_info=aux_info, removed_coords=removed)
     backend.write_sources(records)
     return PatchCatalog(backend=backend, resolver=resolver)
 

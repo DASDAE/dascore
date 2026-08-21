@@ -19,8 +19,10 @@ from dascore.exceptions import (
 from dascore.io.index.catalog import PatchCatalog
 from dascore.utils.chunk_plan import (
     ChunkPlan,
+    _directions,
     _order_key,
     _sampling_group,
+    _value_family,
     build_chunk_plan,
     build_concat_plan,
     samples_adjusted_envelopes,
@@ -894,6 +896,22 @@ class TestConcatPlan:
         out = dc.spool([lat, p2]).concatenate(time=None, conflict="drop")
         assert "latitude" in out[0].coords.coord_map
         assert "latitude_min" in out.get_contents().columns
+
+    def test_directions(self):
+        """Steps of any kind give a sign; a missing or signless one gives NaN."""
+        steps = pd.Series([2, -0.5, pd.Timedelta(-1, "s"), None, "x"], dtype=object)
+        got = _directions(steps)
+        assert got[0] == 1.0 and got[1] == -1.0 and got[2] == -1.0
+        assert np.isnan(got[3]) and np.isnan(got[4])
+
+    def test_value_family(self):
+        """Envelope values sort into four families; a missing one into none."""
+        assert _value_family(np.datetime64("2020-01-01")) == "datetime"
+        assert _value_family(pd.Timestamp("2020-01-01")) == "datetime"
+        assert _value_family(np.timedelta64(1, "s")) == "timedelta"
+        assert _value_family("a") == "text"
+        assert _value_family(3) == "number"
+        assert _value_family(None) == "" and _value_family(np.nan) == ""
 
     def test_order_key_ranks_mixed_kinds_by_spelling(self):
         """Labels beside numbers still yield a total order, missing as NaN."""
