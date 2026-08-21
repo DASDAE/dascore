@@ -860,6 +860,27 @@ class TestConcatPlan:
             len(build_concat_plan(_flat([p1, collapsed]), distance=None).outputs) == 1
         )
 
+    def test_relation_without_step_or_dtype(self, trio):
+        """An envelope without a step, or rows without a dtype, still plan."""
+        df = _flat(trio).drop(columns=["time_step"])
+        plan = build_concat_plan(df, time=None)
+        assert "time_step" not in plan.outputs.columns
+        assert len(plan.outputs) == 1
+        df = _flat(trio).assign(_dtype=None)
+        plan = build_concat_plan(df, time=None)
+        assert plan.outputs["_dtype"].iloc[0] == ""
+
+    def test_coordinate_only_some_members_have_is_not_dropped(self, trio):
+        """A coordinate other members lack rides along, in the catalog too."""
+        p1, p2, _ = trio
+        n = p1.shape[p1.get_axis("distance")]
+        lat = p1.update_coords(latitude=("distance", np.arange(n, dtype=float)))
+        plan = build_concat_plan(_flat([lat, p2]), time=None, conflict="drop")
+        assert "dropped_coords" not in plan.params or not plan.params["dropped_coords"]
+        out = dc.spool([lat, p2]).concatenate(time=None, conflict="drop")
+        assert "latitude" in out[0].coords.coord_map
+        assert "latitude_min" in out.get_contents().columns
+
     def test_empty_and_bad_arguments(self, trio):
         """An empty relation plans nothing; bad arguments raise."""
         plan = build_concat_plan(_flat(trio).iloc[:0], time=None)

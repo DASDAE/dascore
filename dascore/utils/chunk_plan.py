@@ -1722,7 +1722,8 @@ def build_concat_plan(
         # coordinate) has a null envelope, which the output's skips
         data[min_name] = by_output[min_name].min().to_numpy()
         data[max_name] = by_output[max_name].max().to_numpy()
-        data[step_name] = _concatenated_steps(sorted_df, codes, name)
+        if step_name in sorted_df.columns:
+            data[step_name] = _concatenated_steps(sorted_df, codes, name)
     if "dims" in sorted_df.columns:
         dims = sorted_df["dims"].to_numpy()[seg_starts].astype(str)
         new_dim = np.array([name not in d.split(",") for d in dims])
@@ -1752,7 +1753,11 @@ def build_concat_plan(
             and x[1 : -len("_def_key")] not in dim_names | {name}
         ]
         if aux_keys:
-            varied = sorted_df[aux_keys].groupby(codes).nunique(dropna=False) > 1
+            # only a coordinate every member states can conflict; one that
+            # some members lack rides along from the first
+            grouped = sorted_df[aux_keys].groupby(codes)
+            everywhere = grouped.count().eq(grouped.size(), axis=0)
+            varied = (grouped.nunique(dropna=True) > 1) & everywhere
             params["dropped_coords"] = {
                 int(i): [x[1 : -len("_def_key")] for x in aux_keys if row[x]]
                 for i, row in varied.iterrows()
@@ -1767,7 +1772,7 @@ def build_concat_plan(
             first[i] if uniform[i] else _combined_dtype(all_dtypes.iloc[a : a + n])
             for i, (a, n) in enumerate(zip(seg_starts, sizes))
         ]
-        data["_dtype"] = ["" if x is None else str(x) for x in combined]
+        data["_dtype"] = ["" if pd.isnull(x) else str(x) for x in combined]
     data["output_id"] = np.arange(n_out)
     outputs = pd.DataFrame(data)
     # members load whole unless the rows are themselves trims (a re-plan
