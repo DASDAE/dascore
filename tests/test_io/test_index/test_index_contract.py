@@ -211,9 +211,10 @@ class TestElementDtype:
     def test_dtype_is_private_in_flat_relation(self):
         """The spool sees `_dtype`, never a public `dtype` column."""
         spool = dc.get_example_spool("random_das")
-        df = spool.get_contents()
+        df = spool._df
         assert "dtype" not in df.columns
         assert set(df["_dtype"]) == {str(spool[0].data.dtype)}
+        assert "_dtype" not in spool.get_contents().columns
 
     def test_dtype_attr_does_not_shadow_column(self, tmp_path):
         """A patch attr named `dtype` is skipped, not written to the column."""
@@ -573,9 +574,10 @@ class TestLineageIds:
 
     def test_the_two_ids_are_different_columns(self, written_spool):
         """The row's id is private; the patch's owns the public name."""
-        df = written_spool.get_contents()
+        df = written_spool._df
         assert {"_patch_id", "patch_id"}.issubset(df.columns)
         assert df["_patch_id"].tolist() != df["patch_id"].tolist()
+        assert "_patch_id" not in written_spool.get_contents().columns
 
     def test_scanning_and_reading_agree(self, tmp_path):
         """Or an id found in the index would not name the patch it loads."""

@@ -433,6 +433,20 @@ class TestGetContents:
         df["tag"] = "modified"
         assert (random_spool.get_contents()["tag"] != "modified").all()
 
+    @pytest.mark.parametrize("name", ["random_spool", "diverse_directory_spool"])
+    def test_no_private_columns(self, name, request):
+        """What the index keeps for itself stays out of the frame."""
+        spool = request.getfixturevalue(name)
+        private = [x for x in spool._df.columns if str(x).startswith("_")]
+        assert private, "the flat relation should have some to drop"
+        df = spool.get_contents()
+        assert not [x for x in df.columns if str(x).startswith("_")]
+
+    def test_units_survive_the_drop(self, random_spool):
+        """A `_{name}_units` column is renamed, not dropped with the rest."""
+        df = random_spool.get_contents()
+        assert {"time_units", "distance_units"}.issubset(df.columns)
+
 
 class TestSelect:
     """Tests for selecting/trimming spools."""
@@ -519,9 +533,7 @@ class TestUnselect:
         kept = diverse_spool.select(tag="some_tag")
         dropped = diverse_spool.unselect(tag="some_tag")
         assert len(kept) + len(dropped) == len(diverse_spool)
-        assert not set(kept.get_contents()["_patch_id"]) & set(
-            dropped.get_contents()["_patch_id"]
-        )
+        assert not set(kept._df["_patch_id"]) & set(dropped._df["_patch_id"])
 
     def test_removes_the_matches(self, diverse_spool):
         """What comes back is what the selection would not have kept."""

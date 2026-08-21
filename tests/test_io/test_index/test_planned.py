@@ -98,8 +98,7 @@ class TestHelpers:
     def test_derived_catalog_adds_patch_ids(self, patches):
         """source_rows without _patch_id get positional ids."""
         spool = dc.spool(patches)
-        rows = spool.get_contents().drop(columns=["_patch_id"], errors="ignore")
-        rows = rows.reset_index(drop=True)
+        rows = spool._df.drop(columns=["_patch_id"]).reset_index(drop=True)
         members = pd.DataFrame(
             {"output_id": [0], "_patch_id": [0], "_modified": [False]}
         )

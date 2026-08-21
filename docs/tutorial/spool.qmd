@@ -199,19 +199,12 @@ new = spool[index_array]
 The [`get_contents`](`dascore.core.spool.Spool.get_contents`) method returns a dataframe listing the spool contents. It realizes the whole relation, so it can be expensive over a large remote archive.
 
 ```{python}
-#| output: false
 import dascore as dc
 spool = dc.get_example_spool()
 
 # Return dataframe with contents of spool (each row has metadata of a patch)
 contents = spool.get_contents()
-```
-
-```{python}
-#| echo: false
-from IPython.display import display
-
-display(contents.drop(columns=[c for c in contents.columns if c.startswith('_')]))
+contents
 ```
 
 The columns returned by `get_contents()` come from the same patch summary metadata exposed by `Patch.summary`, so fields such as `time_min`, `time_max`, and `distance_step` are available without loading the underlying patch data. Source metadata such as `source_path`, `source_format`, and `source_patch_key` are also available for file-backed spools.

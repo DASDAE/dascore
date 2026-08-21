@@ -1532,7 +1532,7 @@ class TestSizeChunk:
             [make("float32", t0), make("float64", t0 + np.timedelta64(1600, "ms"))]
         ).sort("time")
         out = spool.chunk(time=1.0)
-        claimed = out.get_contents()["_dtype"].tolist()
+        claimed = out._df["_dtype"].tolist()
         assert claimed == [str(x.data.dtype) for x in out]
         assert out == dc.spool(list(out))
 
