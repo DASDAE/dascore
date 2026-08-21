@@ -13,16 +13,17 @@ import pytest
 
 import dascore as dc
 import dascore.utils.patch_assembly as assembly_mod
+from dascore.core.coords import get_coord
 from dascore.core.spool import BaseSpool, Spool
 from dascore.examples import ricker_moveout
 from dascore.exceptions import (
+    CoordMergeError,
     IncompatiblePatchError,
     InvalidSpoolError,
     InvalidSpoolQueryError,
     MissingOptionalDependencyError,
     MissingPatchError,
     ParameterError,
-    PatchCoordinateError,
 )
 from dascore.io.index.planned import PlanResolver
 from dascore.io.segy import SegyV1_0
@@ -1211,229 +1212,735 @@ class TestSpoolCoverageEdges:
         assert "Spool" in str(empty)
 
 
-class TestConcatenateKind:
-    """Spool.concatenate only concatenates patches of the first's kind."""
+class TestConcatenatePartitions:
+    """Spool.concatenate partitions and polices as chunk does, then joins in order."""
 
     @pytest.fixture
-    def mixed_kind(self):
-        """Two contiguous patches which differ only in tag."""
+    def pair(self):
+        """Two same-kind patches, the second following the first in time."""
         first = dc.get_example_patch()
         time = first.get_coord("time")
-        other = first.update_coords(time_min=time.max() + time.step)
-        return first, other.update_attrs(tag="other")
+        return first, first.update_coords(time_min=time.max() + time.step)
 
-    def test_plan_agrees_with_patch(self, mixed_kind):
-        """The skipped patch is absent from the metadata too, not just the data."""
-        first, other = mixed_kind
-        with pytest.warns(UserWarning, match="not the same kind"):
-            out = dc.spool([first, other]).concatenate(time=None)
-        assert len(out) == 1
-        contents = out.get_contents()
-        assert contents["time_max"].iloc[0] == first.get_coord("time").max()
-        assert out[0].shape == first.shape
-        assert out[0].attrs.tag == first.attrs.tag
-
-    def test_raise(self, mixed_kind):
-        """check_behavior='raise' refuses at planning time."""
-        with pytest.raises(IncompatiblePatchError, match="not the same kind"):
-            dc.spool(mixed_kind).concatenate(time=None, check_behavior="raise")
-
-    def test_structure_rejected_row_binds_nothing(self, mixed_kind):
-        """A row rejected for its coordinates must not set the plan's kind."""
-        first, _ = mixed_kind
-        blank = first.update_attrs(tag="")
-        bad = first.update_attrs(tag="a").update_coords(distance_min=5)
-        good = first.update_attrs(tag="b")
-        with pytest.warns(UserWarning, match="not compatible"):
-            out = dc.spool([blank, bad, good]).concatenate(time=None)
-        assert len(out) == 1
-        assert out.get_contents()["tag"].iloc[0] == "b"
-        assert out[0].attrs.tag == "b"
-        assert out[0].shape[1] == 2 * first.shape[1]
-
-    def test_auxiliary_coordinate_gate(self, mixed_kind):
-        """A differing non-dimensional coordinate is caught at planning time."""
-        first, other = mixed_kind
-        other = other.update_attrs(tag=first.attrs.tag)
-        n = first.shape[first.get_axis("distance")]
-        first = first.update_coords(latitude=("distance", np.arange(n, dtype=float)))
-        other = other.update_coords(latitude=("distance", np.ones(n)))
-        with pytest.warns(UserWarning, match="not compatible"):
-            out = dc.spool([first, other]).concatenate(time=None)
-        # the plan row and the patch agree: only the first patch
-        assert out.get_contents()["time_max"].iloc[0] == first.get_coord("time").max()
-        assert out[0].shape == first.shape
-
-    def test_coordinate_only_one_patch_has_is_fine(self, mixed_kind):
-        """An auxiliary coordinate absent from one patch is not a conflict."""
-        first, other = mixed_kind
-        other = other.update_attrs(tag=first.attrs.tag)
-        n = first.shape[first.get_axis("distance")]
-        first = first.update_coords(latitude=("distance", np.arange(n, dtype=float)))
+    def test_different_kinds_land_in_separate_outputs(self, pair):
+        """Kind partitions; nothing is skipped and nothing raises."""
+        first, other = pair
+        other = other.update_attrs(tag="other")
         with suppress_warnings(action="error"):
             out = dc.spool([first, other]).concatenate(time=None)
+        assert len(out) == 2
+        assert sorted(out.get_contents()["tag"]) == sorted([first.attrs.tag, "other"])
+        for patch, row in zip(out, out.get_contents().to_dict("records")):
+            assert patch.attrs.tag == row["tag"]
+            assert patch.shape == first.shape
+
+    def test_check_behavior_is_deprecated(self, pair):
+        """The old skip-or-raise knob warns and changes nothing."""
+        first, other = pair
+        mixed = [first, other.update_attrs(tag="other")]
+        with pytest.warns(DeprecationWarning, match="separate outputs"):
+            out = dc.spool(mixed).concatenate(time=None, check_behavior="raise")
+        assert len(out) == 2  # neither skipped nor refused
+        # ... spells None, as it does for chunk
+        assert len(dc.spool(pair).concatenate(time=...)) == 1
+
+    def test_missing_kind_value_filled_in_rows_and_patch(self, pair):
+        """A member lacking the key matches, and the output carries the key."""
+        first, other = pair
+        other = other.update_attrs(acquisition_key="XX.R2D1..RAW")
+        out = dc.spool([first, other]).concatenate(time=None)
         assert len(out) == 1
+        assert out.get_contents()["acquisition_key"].iloc[0] == "XX.R2D1..RAW"
+        assert out[0].attrs.acquisition_key == "XX.R2D1..RAW"
         assert out[0].shape[1] == 2 * first.shape[1]
 
-    def test_different_dims_raise_at_planning(self, mixed_kind):
-        """Different dimensions raise for the spool as for the patches."""
-        first, other = mixed_kind
-        other = other.update_attrs(tag=first.attrs.tag).rename_coords(time="money")
-        with pytest.raises(PatchCoordinateError, match="different dimensions"):
-            dc.spool([first, other]).concatenate(time=None, check_behavior="ignore")
+    def test_data_units_policed_by_conflict(self, pair):
+        """Known, different units conflict as in chunk; a missing one matches."""
+        first, other = pair
+        metres, km = first.set_units("m"), other.set_units("km")
+        with pytest.raises(CoordMergeError, match="data_units"):
+            dc.spool([metres, km]).concatenate(time=None)
+        dropped = dc.spool([metres, km]).concatenate(time=None, conflict="drop")
+        assert len(dropped) == 1
+        assert dropped[0].attrs.data_units is None
+        assert (
+            dc.get_quantity(dropped.get_contents().get("data_units", [None])[0]) is None
+        )
+        bare = first.set_units(None)
+        out = dc.spool([bare, km]).concatenate(time=None)
+        assert len(out) == 1
+        assert dc.get_quantity(out[0].attrs.data_units) == dc.get_quantity("km")
+        # a missing unit never hides a conflict between two known ones
+        time = other.get_coord("time")
+        third = first.update_coords(time_min=time.max() + time.step).set_units("m")
+        with pytest.raises(CoordMergeError, match="data_units"):
+            dc.spool([bare, km, third]).concatenate(time=None)
+        assert dc.get_quantity(out.get_contents()["data_units"].iloc[0]) == (
+            dc.get_quantity("km")
+        )
 
-    def test_selection_before_concatenate_is_undecidable(self):
-        """Coordinates a pending selection might reconcile stay apart, and say why."""
+    def test_different_dims_partition(self, pair):
+        """Other dimensions are another partition, not an error."""
+        first, other = pair
+        other = other.rename_coords(time="money")
+        out = dc.spool([first, other]).concatenate(time=None)
+        assert len(out) == 2
+
+    def test_auxiliary_coordinates_must_agree(self, pair):
+        """Coordinates are reconciled or refused; `conflict` does not police them."""
+        first, other = pair
+        n = first.shape[first.get_axis("distance")]
+        lat_a = first.update_coords(latitude=("distance", np.arange(n) * 1.0))
+        lat_b = other.update_coords(latitude=("distance", np.ones(n)))
+        agree = other.update_coords(latitude=("distance", np.arange(n) * 1.0))
+        joined = dc.spool([lat_a, agree]).concatenate(time=None)
+        assert len(joined) == 1
+        assert "latitude" in joined[0].coords.coord_map
+        for conflict in ("raise", "drop", "keep_first"):
+            spool = dc.spool([lat_a, lat_b]).concatenate(time=None, conflict=conflict)
+            with pytest.raises(CoordMergeError, match="latitude"):
+                spool[0]
+        # values an envelope cannot tell apart are refused at load too
+        shuffled = np.arange(n, dtype=float)
+        shuffled[1], shuffled[2] = 2.0, 1.0
+        lat_c = other.update_coords(latitude=("distance", shuffled))
+        planned = dc.spool([lat_a, lat_c]).concatenate(time=None)
+        assert len(planned) == 1
+        with pytest.raises(CoordMergeError, match="latitude"):
+            planned[0]
+
+    def test_count_groups_within_partitions(self, pair):
+        """Each partition's patches are grouped in order by the count."""
+        first, other = pair
+        time = other.get_coord("time")
+        third = first.update_coords(time_min=time.max() + time.step)
+        stranger = other.update_attrs(tag="other")
+        out = dc.spool([first, stranger, third]).concatenate(time=2)
+        assert len(out) == 2
+        kinds = {(p.attrs.tag, p.shape[1]) for p in out}
+        expected = {(first.attrs.tag, 2 * first.shape[1]), ("other", first.shape[1])}
+        assert kinds == expected
+
+    def test_each_output_carries_its_own_members(self, pair):
+        """A value known only in another output is not borrowed."""
+        first, other = pair
+        blank, tagged = first.update_attrs(tag=""), other.update_attrs(tag="a")
+        out = dc.spool([blank, tagged]).concatenate(time=1)
+        assert [p.attrs.tag for p in out] == ["", "a"]
+        assert list(out.get_contents()["tag"].fillna("")) == ["", "a"]
+
+    def test_order_follows_the_dimension(self, pair):
+        """Within a partition, patches join in order of the dimension."""
+        first, other = pair
+        patch = dc.spool([other, first]).concatenate(time=None)[0]
+        coord = patch.get_coord("time")
+        assert coord.min() == first.get_coord("time").min()
+        assert np.all(np.diff(coord.values.astype("int64")) > 0)
+
+    def test_selection_before_concatenate_stays_apart(self):
+        """Coordinates a pending selection might reconcile are not guessed."""
         base = dc.get_example_patch()
         time = base.get_coord("time")
-        later = base.update_coords(time_min=time.max() + time.step)
-        # distance 0..299 and 5..304 agree on 5..299 once selected, but a
-        # phase-shifted grid would not, and metadata cannot tell the two apart
-        shifted = later.update_coords(distance_min=5)
+        shifted = base.update_coords(time_min=time.max() + time.step, distance_min=5)
         selected = dc.spool([base, shifted]).select(distance=(5, 299))
-        with pytest.warns(UserWarning, match="load the selected patches"):
+        with suppress_warnings(action="error"):
             out = selected.concatenate(time=None)
-        assert len(out) == 1
-        assert out[0].shape[1] == base.shape[1]
-        assert out.get_contents()["time_max"].iloc[0] == time.max()
-        # loading the selected patches settles their coordinates, and then
-        # they concatenate
+        assert len(out) == 2
+        # loading the selected patches settles their coordinates
         loaded = dc.spool(list(selected)).concatenate(time=None)
         assert len(loaded) == 1
         assert loaded[0].shape[1] == 2 * base.shape[1]
-        assert loaded[0].get_coord("distance").min() == 5
 
-    def test_selection_cannot_settle_irregular_coordinates(self):
-        """Irregular coordinates under a pending selection stay apart too."""
+    def test_plan_keeps_its_kind_rule(self, pair):
+        """A plan made under one kind rule assembles under it later."""
+        first, other = pair
+        other = other.update_attrs(tag="other")
+        # with tag out of the kind, it is an ordinary attr the policy folds
+        with dc.config_context(patch_kind_attrs=("acquisition_key",)):
+            out = dc.spool([first, other]).concatenate(time=None, conflict="keep_first")
+            assert len(out) == 1
+        assert out[0].shape[1] == 2 * first.shape[1]
+        assert out[0].attrs.tag == first.attrs.tag
+
+    def test_positional_check_behavior_still_works(self, pair):
+        """The deprecated argument keeps its old positional slot."""
+        with pytest.warns(DeprecationWarning, match="separate outputs"):
+            out = dc.spool(pair).concatenate("warn", time=None)
+        assert len(out) == 1
+
+    def test_convertible_units_plan_together(self, pair):
+        """Metres and centimetres along the dimension are one partition."""
+        first, _ = pair
+        distance = first.get_coord("distance")
+        shifted = first.update_coords(distance_min=distance.max() + distance.step)
+        in_cm = shifted.convert_units(distance="cm")
+        out = dc.spool([first, in_cm]).concatenate(distance=None)
+        assert len(out) == 1
+        patch = out[0]
+        assert patch.shape[0] == 2 * first.shape[0]
+        assert np.all(np.diff(patch.get_coord("distance").values) > 0)
+
+    def test_descending_data_keep_their_step(self, pair):
+        """Contiguous descending members concatenate in their own direction."""
+        first, _ = pair
+        n = first.shape[first.get_axis("distance")]
+        high = first.update_coords(distance=np.arange(2 * n - 1, n - 1, -1.0))
+        low = first.update_coords(distance=np.arange(n - 1, -1, -1.0))
+        out = dc.spool([low, high]).concatenate(distance=None)
+        coord = out[0].get_coord("distance")
+        assert coord.max() == 2 * n - 1 and coord.min() == 0
+        assert np.all(np.diff(coord.values) < 0)
+        assert out.get_contents()["distance_step"].iloc[0] == -1
+
+    def test_auxiliary_name_becomes_a_dimension(self, pair):
+        """Concatenating along a non-dimensional coordinate's name adds a dimension."""
+        first, _ = pair
+        n = first.shape[first.get_axis("distance")]
+        aux = first.update_coords(sensor=("distance", np.arange(n, dtype=float)))
+        out = dc.spool([aux, aux.new()]).concatenate(sensor=None)
+        patch = out[0]
+        assert "sensor" in patch.dims
+        assert patch.shape[patch.get_axis("sensor")] == 2
+        row = out.get_contents().iloc[0]
+        assert "sensor" in str(row["dims"]).split(",")
+        # a dimension without values claims no envelope
+        assert "sensor_min" not in row.index or pd.isnull(row["sensor_min"])
+
+    def test_string_dimension_keeps_input_order(self):
+        """Labels have no orientation, so a string dimension keeps spool order."""
         base = dc.get_example_patch()
-        time = base.get_coord("time")
+        data = base.data[:2]
+        coords = {"station": np.array(["c", "d"]), "time": base.get_coord("time")}
+        later = dc.Patch(data=data, coords=coords, dims=("station", "time"))
+        early = later.update_coords(station=np.array(["a", "b"]))
+        out = dc.spool([later, early]).concatenate(station=None)
+        assert list(out[0].get_coord("station").values) == ["c", "d", "a", "b"]
+        assert "station_step" not in out.get_contents().columns or pd.isnull(
+            out.get_contents()["station_step"].iloc[0]
+        )
+
+    def test_irregular_descending_data_keep_input_order(self):
+        """Without a step the envelopes cannot tell orientation; order is kept."""
+        base = dc.get_example_patch()
         n = base.shape[base.get_axis("distance")]
         rng = np.random.default_rng(0)
-        irregular = np.sort(rng.uniform(0, 300, n))
-        first = base.update_coords(distance=irregular)
-        other = base.update_coords(
-            time_min=time.max() + time.step, distance=np.sort(rng.uniform(0, 300, n))
-        )
-        selected = dc.spool([first, other]).select(distance=(50, 250))
-        with pytest.warns(UserWarning, match="not compatible"):
-            out = selected.concatenate(time=None)
-        # the plan and the patch agree: the second patch is not in the output
-        assert out.get_contents()["time_max"].iloc[0] == time.max()
-        assert out[0].shape[1] == base.shape[1]
+        gaps = np.sort(rng.uniform(0.5, 1.5, n))[::-1].cumsum()
+        high = base.update_coords(distance=2 * n + 10 - gaps)
+        low = base.update_coords(distance=-gaps)
+        out = dc.spool([high, low]).concatenate(distance=None)
+        values = out[0].get_coord("distance").values
+        assert np.all(np.diff(values) < 0)
+        assert np.allclose(values[:n], high.get_coord("distance").values)
 
-    def test_selection_cannot_settle_auxiliary_coordinates(self, mixed_kind):
-        """A trimmed auxiliary coordinate has no envelope to decide by."""
-        first, other = mixed_kind
-        other = other.update_attrs(tag=first.attrs.tag)
+    def test_new_dimension_over_auxiliary_name_keeps_input_order(self, pair):
+        """The vanishing coordinate's values do not order the new dimension."""
+        first, _ = pair
         n = first.shape[first.get_axis("distance")]
-        first = first.update_coords(latitude=("distance", np.arange(n, dtype=float)))
-        other = other.update_coords(latitude=("distance", np.ones(n)))
-        selected = dc.spool([first, other]).select(distance=(5, 250))
-        with pytest.warns(UserWarning, match="not compatible"):
-            out = selected.concatenate(time=None)
-        assert out[0].shape[1] == first.shape[1]
+        high = first.update_coords(sensor=("distance", np.arange(n) + 100.0))
+        low = first.update_coords(sensor=("distance", np.arange(n) * 1.0))
+        out = dc.spool([high, low]).concatenate(sensor=None)
+        patch = out[0]
+        axis = patch.get_axis("sensor")
+        assert np.allclose(np.take(patch.data, 0, axis=axis), high.data)
+        assert np.allclose(np.take(patch.data, 1, axis=axis), low.data)
 
-    def test_each_output_has_its_own_baseline(self, mixed_kind):
-        """Gates are applied per output against that output's first member."""
-        first, other = mixed_kind
-        other = other.update_attrs(tag=first.attrs.tag)
-        n = first.shape[first.get_axis("distance")]
-        lat_a = other.update_coords(latitude=("distance", np.arange(n, dtype=float)))
-        lat_b = other.update_coords(latitude=("distance", np.ones(n)))
-        # the global first lacks latitude; the second output's members disagree on it
-        with pytest.warns(UserWarning, match="not compatible"):
-            out = dc.spool([first, first.new(), lat_a, lat_b]).concatenate(time=2)
+    def test_later_only_coordinate_rides_along_or_is_refused(self, pair):
+        """A coordinate one member lacks rides along, or refuses to be invented."""
+        first, other = pair
+        nd = first.shape[first.get_axis("distance")]
+        nt = first.shape[first.get_axis("time")]
+        lat = other.update_coords(latitude=("distance", np.arange(nd) * 1.0))
+        out = dc.spool([first, lat]).concatenate(time=None)
+        assert "latitude" in out[0].coords.coord_map
+        assert out.get_contents()["latitude_min"].notna().all()
+        # one riding the concatenated dimension has no values to ride with
+        clock = other.update_coords(clock=("time", np.arange(nt) * 1.0))
+        spool = dc.spool([first, clock]).concatenate(time=None)
+        with pytest.raises(CoordMergeError, match="clock"):
+            spool[0]
+
+    def test_nanosecond_neighbours_keep_dimension_order(self):
+        """Starts a float64 cannot tell apart still order the members."""
+        base = dc.get_example_patch().select(time=(0, 10), samples=True)
+        t0 = np.datetime64("2020-01-01T00:00:00.000000000")
+        ticks = np.arange(10) * np.timedelta64(1, "ns")
+        early = base.update_coords(time=t0 + ticks)
+        late = base.update_coords(time=t0 + np.timedelta64(10, "ns") + ticks)
+        out = dc.spool([late, early]).concatenate(time=None)
+        values = out[0].get_coord("time").values
+        assert values[0] == t0
+        assert np.all(np.diff(values) > np.timedelta64(0, "ns"))
+
+    def test_attrs_named_for_a_new_dimension_are_refused(self, pair):
+        """An attr spelled like the new dimension's envelope cannot survive it."""
+        first, _ = pair
+        named = first.update_attrs(batch_step=3)
+        with pytest.raises(ParameterError, match="batch_step"):
+            dc.spool([named, named.new()]).concatenate(batch=None)
+
+    def test_value_kinds_partition(self, pair):
+        """A datetime coordinate and a numeric one of the same name stay apart."""
+        first, _ = pair
+        dated = first.rename_coords(time="epoch")
+        nt = dated.shape[dated.get_axis("epoch")]
+        numeric = dated.update_coords(epoch=np.arange(nt) * 1.0)
+        out = dc.spool([dated, numeric]).concatenate(epoch=None)
         assert len(out) == 2
-        second = out[1]
-        assert second.shape[1] == first.shape[1]
-        assert out.get_contents()["time_max"].iloc[1] == lat_a.get_coord("time").max()
+        kinds = {x.get_coord("epoch").values.dtype.kind for x in out}
+        assert kinds == {"M", "f"}
 
-    def test_rejected_rows_take_no_slots(self, mixed_kind):
-        """Members are chosen before they are grouped, as concatenate_patches does."""
-        first, other = mixed_kind
-        third = first.update_coords(
+    def test_coordinate_riding_the_dimension_is_joined(self, pair):
+        """A coordinate every member carries along the dimension follows it."""
+        first, other = pair
+        nt = first.shape[first.get_axis("time")]
+        a = first.update_coords(clock=("time", np.arange(nt) * 1.0))
+        b = other.update_coords(clock=("time", np.arange(nt) * 1.0 + nt))
+        out = dc.spool([a, b]).concatenate(time=None)
+        patch = out[0]
+        assert patch.coords.dim_map["clock"] == ("time",)
+        assert np.array_equal(patch.get_array("clock"), np.arange(2 * nt) * 1.0)
+        assert out.get_contents()["clock_max"].iloc[0] == 2 * nt - 1
+        direct = dc.utils.patch.concatenate_patches([a, b], time=None)[0]
+        assert np.array_equal(direct.get_array("clock"), np.arange(2 * nt) * 1.0)
+
+    def test_first_row_without_step_keeps_input_order(self):
+        """A later row's step does not lend the partition an orientation."""
+        base = dc.get_example_patch()
+        n = base.shape[base.get_axis("distance")]
+        rng = np.random.default_rng(1)
+        gaps = np.sort(rng.uniform(0.5, 1.5, n))[::-1].cumsum()
+        irregular = base.update_coords(distance=2 * n + 10 - gaps)
+        regular = base.update_coords(distance=np.arange(n)[::-1] * 1.0)
+        out = dc.spool([irregular, regular]).concatenate(distance=None)
+        values = out[0].get_coord("distance").values
+        assert np.allclose(values[:n], irregular.get_coord("distance").values)
+        assert np.all(np.diff(values) < 0)
+
+    def test_coordinate_attached_differently_conflicts(self):
+        """Equal values on different dimensions are different coordinates."""
+        base = dc.get_example_patch()
+        square = base.select(distance=(0, 50), samples=True)
+        square = square.select(time=(0, 50), samples=True)
+        t = square.get_coord("time")
+        later = square.update_coords(time_min=t.max() + t.step)
+        a = square.update_coords(quality=("distance", np.arange(50) * 1.0))
+        b = later.update_coords(quality=("time", np.arange(50) * 1.0))
+        for conflict in ("raise", "drop"):
+            sp = dc.spool([a, b]).concatenate(time=None, conflict=conflict)
+            with pytest.raises(CoordMergeError, match="quality"):
+                sp[0]
+        with pytest.raises(IncompatiblePatchError, match="quality"):
+            dc.utils.patch.concatenate_patches(
+                [a, b], time=None, check_behavior="raise"
+            )
+
+    def test_numeric_units_normalize_beside_another_kind(self, pair):
+        """A text coordinate of the same name does not stop metres meeting cm."""
+        first, _ = pair
+        distance = first.get_coord("distance")
+        shifted = first.update_coords(distance_min=distance.max() + distance.step)
+        metres = first.rename_coords(distance="range")
+        cm = shifted.convert_units(distance="cm").rename_coords(distance="range")
+        n = first.shape[first.get_axis("distance")]
+        labels = np.array([f"s{i:03d}" for i in range(n)])
+        text = first.update_coords(distance=labels).rename_coords(distance="range")
+        out = dc.spool([metres, cm, text]).concatenate(range=None)
+        assert len(out) == 2
+        joined = [x for x in out if x.shape[x.get_axis("range")] == 2 * n]
+        assert len(joined) == 1
+
+    def test_rider_only_on_the_first_is_left_out_directly(self, pair):
+        """The direct function drops a rider a later patch lacks, as the plan does."""
+        first, other = pair
+        nt = first.shape[first.get_axis("time")]
+        a = first.update_coords(clock=("time", np.arange(nt) * 1.0))
+        out = dc.utils.patch.concatenate_patches([a, other], time=None)[0]
+        assert "clock" not in out.coords.coord_map
+        assert out.shape[out.get_axis("time")] == 2 * nt
+
+    def test_rider_units_survive(self, pair):
+        """A unitful rider keeps its units; members in other spellings convert."""
+        first, other = pair
+        nt = first.shape[first.get_axis("time")]
+        a = first.update_coords(clock=("time", np.arange(nt) * 1.0))
+        a = a.convert_units(clock="s")
+        b = other.update_coords(clock=("time", (np.arange(nt) + nt) * 1000.0))
+        b = b.convert_units(clock="ms")
+        out = dc.spool([a, b]).concatenate(time=None)[0]
+        clock = out.get_coord("clock")
+        assert clock.units == dc.get_quantity("s")
+        assert np.allclose(clock.values, np.arange(2 * nt))
+        # a unitless first member adopts the first stated units
+        bare = first.update_coords(clock=("time", np.arange(nt) * 1.0))
+        out = dc.spool([bare, b]).concatenate(time=None)[0]
+        clock = out.get_coord("clock")
+        assert clock.units == dc.get_quantity("ms")
+        expected = np.concatenate([np.arange(nt), (np.arange(nt) + nt) * 1000.0])
+        assert np.allclose(clock.values, expected)
+
+    def test_holders_must_agree_before_riding_along(self, pair):
+        """Two members holding one coordinate differently is a conflict."""
+        first, other = pair
+        third = dc.get_example_patch(
             time_min=other.get_coord("time").max() + other.get_coord("time").step
         )
-        with pytest.warns(UserWarning, match="not the same kind"):
-            out = dc.spool([first, other, third]).concatenate(time=2)
-        # [A, B, A] with B rejected: one output holding both A patches
-        assert len(out) == 1
-        assert out[0].shape[1] == 2 * first.shape[1]
-
-    def test_different_units_kept_apart_in_plans(self, mixed_kind):
-        """The plan refuses to splice different data units, as assembly would."""
-        first, other = mixed_kind
-        other = other.update_attrs(tag=first.attrs.tag)
-        metres, km = first.set_units("m"), other.set_units("km")
-        with pytest.warns(UserWarning, match="data units"):
-            out = dc.spool([metres, km]).concatenate(time=None)
-        assert out.get_contents()["time_max"].iloc[0] == metres.get_coord("time").max()
-        assert out[0].shape == metres.shape
-
-    def test_groups_refill_after_group_rejections(self, mixed_kind):
-        """A row a group's first member rejects does not hold one of its slots."""
-        first, other = mixed_kind
-        other = other.update_attrs(tag=first.attrs.tag)
-        time = other.get_coord("time")
         n = first.shape[first.get_axis("distance")]
-        lat_a = other.update_coords(latitude=("distance", np.arange(n, dtype=float)))
-        lat_b = other.update_coords(
-            time_min=time.max() + time.step, latitude=("distance", np.ones(n))
+        a = first.update_coords(latitude=("distance", np.arange(n) * 1.0))
+        b = other.update_coords(latitude=("distance", np.ones(n)))
+        spool = dc.spool([a, b, third]).concatenate(time=None)
+        with pytest.raises(CoordMergeError, match="latitude"):
+            spool[0]
+        # holders which agree still ride along beside a member without it
+        b_ok = other.update_coords(latitude=("distance", np.arange(n) * 1.0))
+        out = dc.spool([a, b_ok, third]).concatenate(time=None)
+        assert "latitude" in out[0].coords.coord_map
+
+    def test_riders_are_joined_under_every_policy(self, pair):
+        """`conflict` polices attrs; a rider is joined whatever it says."""
+        first, other = pair
+        nt = first.shape[first.get_axis("time")]
+        a = first.update_coords(clock=("time", np.arange(nt) * 1.0))
+        b = other.update_coords(clock=("time", np.arange(nt) * 1.0 + nt))
+        for conflict in ("raise", "drop", "keep_first"):
+            out = dc.spool([a, b]).concatenate(time=None, conflict=conflict)
+            assert "clock" in out[0].coords.coord_map
+            assert out.get_contents()["clock_max"].iloc[0] == 2 * nt - 1
+
+    def test_rider_spellings_leave_no_envelope(self, pair):
+        """Two spellings of one rider share no envelope, so none is claimed."""
+        first, other = pair
+        nt = first.shape[first.get_axis("time")]
+        ticks = np.arange(nt) * 1.0
+        a = first.update_coords(clock=("time", ticks)).convert_units(clock="s")
+        b = other.update_coords(clock=("time", (ticks + nt) * 1000.0)).convert_units(
+            clock="ms"
         )
-        lat_a2 = other.update_coords(
-            time_min=time.max() + 2 * time.step,
-            latitude=("distance", np.arange(n, dtype=float)),
+        out = dc.spool([a, b]).concatenate(time=None)
+        row = out.get_contents().iloc[0]
+        assert pd.isnull(row["clock_min"]) and pd.isnull(row["clock_max"])
+        # the patch settles it, in the spelling of its lowest member
+        clock = out[0].get_coord("clock")
+        assert clock.units == dc.get_quantity("s")
+        assert np.allclose(clock.values, np.arange(2 * nt))
+
+    def test_incompatible_rider_units_are_refused(self, pair):
+        """Seconds beside metres cannot be joined under any policy."""
+        first, other = pair
+        nt = first.shape[first.get_axis("time")]
+        ticks = np.arange(nt) * 1.0
+        a = first.update_coords(clock=("time", ticks)).convert_units(clock="s")
+        b = other.update_coords(clock=("time", ticks + nt)).convert_units(clock="m")
+        for conflict in ("raise", "drop"):
+            spool = dc.spool([a, b]).concatenate(time=None, conflict=conflict)
+            with pytest.raises(CoordMergeError, match="clock"):
+                spool[0]
+
+    def test_direct_concatenation_picks_the_lowest_spelling(self, pair):
+        """Without a plan, the rider joins in the units of its lowest member."""
+        first, other = pair
+        nt = first.shape[first.get_axis("time")]
+        ticks = np.arange(nt) * 1.0
+        low = first.update_coords(clock=("time", ticks)).convert_units(clock="s")
+        high = other.update_coords(clock=("time", (ticks + nt) * 1000)).convert_units(
+            clock="ms"
         )
-        with pytest.warns(UserWarning, match="not compatible"):
-            out = dc.spool([first, first.new(), lat_a, lat_b, lat_a2]).concatenate(
-                time=2
-            )
-        # [first, first] then [lat_a, lat_a2] with lat_b rejected by lat_a
-        assert len(out) == 2
-        assert out[1].shape[1] == 2 * first.shape[1]
+        out = dc.utils.patch.concatenate_patches([high, low], time=None)[0]
+        clock = out.get_coord("clock")
+        assert clock.units == dc.get_quantity("s")
+        assert np.allclose(np.sort(clock.values), np.arange(2 * nt))
 
-    def test_plan_units_bind_to_the_first_known(self, mixed_kind):
-        """The plan's units baseline is the first known one, as assembly's is."""
-        first, other = mixed_kind
-        other = other.update_attrs(tag=first.attrs.tag)
-        time = other.get_coord("time")
-        third = other.update_coords(time_min=time.max() + time.step)
-        bare, metres, km = (
-            first.set_units(None),
-            other.set_units("m"),
-            third.set_units("km"),
+    def test_contiguous_rider_keeps_its_step(self, pair):
+        """A rider whose segments meet end to end is a range in the catalog too."""
+        first, other = pair
+        nt = first.shape[first.get_axis("time")]
+        ticks = np.arange(nt) * 1.0
+        a = first.update_coords(clock=("time", ticks))
+        b = other.update_coords(clock=("time", ticks + nt))
+        out = dc.spool([a, b]).concatenate(time=None)
+        assert out.get_contents()["clock_step"].iloc[0] == 1.0
+        assert out[0].get_coord("clock").step == 1.0
+        # a gap between the segments leaves the joined coordinate irregular
+        far = other.update_coords(clock=("time", ticks + 10 * nt))
+        gapped = dc.spool([a, far]).concatenate(time=None)
+        assert pd.isnull(gapped.get_contents()["clock_step"].iloc[0])
+        assert gapped[0].get_coord("clock").step is None
+
+    def test_keep_first_converts_the_data_it_labels(self, pair):
+        """Keeping the first data units converts the members stated otherwise."""
+        first, other = pair
+        metres = first.set_units("m")
+        km = other.set_units("km")
+        out = dc.spool([metres, km]).concatenate(time=None, conflict="keep_first")[0]
+        assert out.attrs.data_units == dc.get_quantity("m")
+        nt = first.shape[first.get_axis("time")]
+        assert np.allclose(out.data[:, nt:], km.data * 1000)
+        assert np.allclose(out.data[:, :nt], metres.data)
+
+    def test_rider_of_two_kinds_still_concatenates(self, pair):
+        """Numeric and text rider segments join, the catalog claiming no envelope."""
+        first, other = pair
+        nt = first.shape[first.get_axis("time")]
+        a = first.update_coords(clock=("time", np.arange(nt) * 1.0))
+        words = np.array([f"t{i:04d}" for i in range(nt)])
+        b = other.update_coords(clock=("time", words))
+        out = dc.spool([a, b]).concatenate(time=None)
+        contents = out.get_contents()
+        assert "clock_min" not in contents.columns or pd.isnull(
+            contents["clock_min"].iloc[0]
         )
-        with pytest.warns(UserWarning, match="data units"):
-            out = dc.spool([bare, metres, km]).concatenate(time=None)
-        assert out.get_contents()["time_max"].iloc[0] == time.max()
-        assert out[0].shape[1] == 2 * first.shape[1]
-        assert dc.get_quantity(out[0].attrs.data_units) == dc.get_quantity("m")
+        assert out[0].get_array("clock").shape == (2 * nt,)
 
-    def test_plan_keeps_its_kind_rule(self, mixed_kind):
-        """A plan made under one kind rule assembles under it later."""
-        first, other = mixed_kind
-        with dc.config_context(patch_kind_attrs=("acquisition_key",)):
-            out = dc.spool([first, other]).concatenate(time=None)
-            assert len(out) == 1
-        # tag is back in the default rule, but the plan was made without it
-        patch = out[0]
-        assert patch.shape[1] == 2 * first.shape[1]
+    def test_descending_rider_keeps_its_sign(self, pair):
+        """A descending rider is described as descending, not as ascending."""
+        first, other = pair
+        nt = first.shape[first.get_axis("time")]
+        ticks = np.arange(nt) * 1.0
+        a = first.update_coords(clock=("time", (2 * nt - 1) - ticks))
+        b = other.update_coords(clock=("time", (nt - 1) - ticks))
+        out = dc.spool([a, b]).concatenate(time=None)
+        assert out.get_contents()["clock_step"].iloc[0] == -1.0
+        assert out[0].get_coord("clock").step == -1.0
 
-    def test_missing_kind_value_filled_in_rows_and_patch(self, mixed_kind):
-        """A first member lacking the key takes the others' in row and patch."""
-        first, other = mixed_kind
-        other = other.update_attrs(tag=first.attrs.tag, acquisition_key="XX.R2D1..RAW")
-        out = dc.spool([first, other]).concatenate(time=None)
-        assert out.get_contents()["acquisition_key"].iloc[0] == "XX.R2D1..RAW"
-        assert out[0].attrs.acquisition_key == "XX.R2D1..RAW"
+    def test_the_dimension_keeps_its_units(self, pair):
+        """The joined dimension is spelled as the catalog says it is."""
+        first, other = pair
+        n = first.shape[first.get_axis("distance")]
+        a = first.update_coords(distance=np.arange(n) * 1.0).convert_units(distance="m")
+        b = other.update_coords(distance=(np.arange(n) + n) * 1.0).convert_units(
+            distance="m"
+        )
+        out = dc.spool([a, b]).concatenate(distance=None)
+        assert out.get_contents()["distance_units"].iloc[0] == "m"
+        assert out[0].get_coord("distance").units == dc.get_quantity("m")
+        # a member with no values along it states no units and adopts them
+        blank = first.update_coords(distance=get_coord(shape=(n,)))
+        out = dc.spool([blank, a]).concatenate(distance=None)
+        assert out.get_contents()["distance_units"].iloc[0] == "m"
+        assert out[0].get_coord("distance").units == dc.get_quantity("m")
 
-    def test_same_kind_concatenates(self, mixed_kind):
-        """Same-kind patches with differing other attrs still concatenate."""
-        first, other = mixed_kind
-        other = other.update_attrs(tag=first.attrs.tag, data_units="m/s")
-        out = dc.spool([first, other]).concatenate(time=None)
+    def test_value_less_member_joins_a_dated_dimension(self, pair):
+        """Placeholders take the kind the stated members use."""
+        first, _ = pair
+        dated = first.rename_coords(time="stamp")
+        nt = dated.shape[dated.get_axis("stamp")]
+        blank = dated.update_coords(stamp=get_coord(shape=(nt,)))
+        out = dc.spool([blank, dated]).concatenate(stamp=None)
+        stamp = out[0].get_coord("stamp")
+        assert stamp.dtype == dated.get_coord("stamp").dtype
+        assert stamp.shape == (2 * nt,)
+
+    def test_keep_first_dtype_follows_the_conversion(self, pair):
+        """Converting an integer member to another unit floats it."""
+        first, other = pair
+        ints = first.new(data=first.data.astype("int32")).set_units("m")
+        km = other.new(data=other.data.astype("int32")).set_units("km")
+        out = dc.spool([ints, km]).concatenate(time=None, conflict="keep_first")
+        assert out[0].data.dtype.kind == "f"
+        contents = out.get_contents()
+        if "_dtype" in contents.columns:  # the relation may not state one
+            assert np.dtype(contents["_dtype"].iloc[0]) == out[0].data.dtype
+
+    def test_all_null_rider_is_not_partial(self, pair):
+        """A rider every member states, though all its values are NaN, stays."""
+        first, other = pair
+        nt = first.shape[first.get_axis("time")]
+        a = first.update_coords(clock=("time", np.full(nt, np.nan)))
+        b = other.update_coords(clock=("time", np.full(nt, np.nan)))
+        out = dc.spool([a, b]).concatenate(time=None)
+        assert "clock" in out[0].coords.coord_map
+        # the catalog names it too, rather than denying a coordinate the
+        # patch will have
+        assert "clock" in out._catalog.backend.coord_names()
+
+    def test_value_less_dimension_reaches_the_catalog(self, pair):
+        """A blank dimension is named by the catalog and joined by the patch."""
+        first, other = pair
+        blank_a, blank_b = first.mean("time"), other.mean("time")
+        out = dc.spool([blank_a, blank_b]).concatenate(time=None)
+        assert "time" in out._catalog.backend.coord_names()
+        assert out[0].shape[out[0].get_axis("time")] == 2
+        # what identity such an output carries is pinned in test_plan.py
+
+    def test_all_null_rider_is_named_without_claims(self, pair):
+        """A rider nobody gives values keeps its identity and claims nothing."""
+        first, other = pair
+        nt = first.shape[first.get_axis("time")]
+        blank = np.full(nt, np.nan)
+        a = first.update_coords(clock=("time", blank)).convert_units(clock="s")
+        b = other.update_coords(clock=("time", blank)).convert_units(clock="s")
+        out = dc.spool([a, b]).concatenate(time=None)
+        assert "clock" in out._catalog.backend.coord_names()
+        row = out.get_contents().iloc[0]
+        assert pd.isnull(row["clock_min"]) and pd.isnull(row["clock_max"])
+        # the patch still holds it, units and all
+        assert out[0].get_coord("clock").units == dc.get_quantity("s")
+
+    def test_a_blank_member_cannot_join_labels(self, pair):
+        """No missing label exists, so nothing is invented for a blank member."""
+        first, _ = pair
+        renamed = first.rename_coords(distance="range")
+        n = renamed.shape[renamed.get_axis("range")]
+        labels = renamed.update_coords(range=np.array([f"s{i:03d}" for i in range(n)]))
+        blank = renamed.update_coords(range=get_coord(shape=(n,)))
+        out = dc.spool([blank, labels]).concatenate(range=None)
+        # the catalog claims no envelope for an output of two kinds
+        assert pd.isnull(out.get_contents()["range_min"].iloc[0])
+        with pytest.raises(CoordMergeError, match="no missing value"):
+            out[0]
+
+    def test_constant_coordinate_keeps_input_order(self, pair):
+        """A step of zero says nothing about which way the values run."""
+        first, _ = pair
+        n = first.shape[first.get_axis("distance")]
+        flat = first.update_coords(distance=np.full(n, 5.0))
+        ones = flat.new(data=np.ones_like(flat.data))
+        zeros = flat.new(data=np.zeros_like(flat.data))
+        out = dc.spool([ones, zeros]).concatenate(distance=None)
         assert len(out) == 1
-        assert out[0].shape[1] == 2 * first.shape[1]
+        joined = out[0].data
+        assert np.all(joined[:n] == 1) and np.all(joined[n:] == 0)
+
+    def test_a_count_must_be_whole(self, pair):
+        """A fractional count is refused rather than rounded down."""
+        first, other = pair
+        spool = dc.spool([first, other])
+        with pytest.raises(ParameterError, match="whole number"):
+            spool.concatenate(time=1.9)
+        with pytest.raises(ParameterError, match="whole number"):
+            spool.concatenate(time="2")
+
+    def test_stack_refuses_differing_riders(self, pair):
+        """Stacking keeps one coordinate manager, so riders must agree."""
+        first, _ = pair
+        nt = first.shape[first.get_axis("time")]
+        a = first.update_coords(clock=("time", np.arange(nt) * 1.0))
+        b = first.update_coords(clock=("time", np.arange(nt) * 2.0))
+        with pytest.raises(IncompatiblePatchError, match="clock"):
+            dc.utils.patch.stack_patches(
+                [a, b], dim_vary="time", check_behavior="raise"
+            )
+
+    def test_dimensional_envelope_kept_beside_an_auxiliary_role(self, pair):
+        """A name auxiliary elsewhere keeps its envelope where it is a dimension."""
+        first, other = pair
+        n = first.shape[first.get_axis("distance")]
+        as_dim = first.rename_coords(distance="sensor")
+        as_dim2 = other.rename_coords(distance="sensor")
+        aux = first.update_coords(sensor=("distance", np.arange(n) * 1.0))
+        out = dc.spool([as_dim, as_dim2, aux]).concatenate(time=None)
+        contents = out.get_contents()
+        dimensional = contents[contents["dims"].str.contains("sensor")]
+        assert len(dimensional) == 1
+        assert dimensional["sensor_min"].notna().all()
+        assert dimensional["sensor_max"].iloc[0] == n - 1
+
+    def test_vanishing_coordinate_kinds_do_not_partition(self, pair):
+        """Auxiliaries the new dimension replaces do not split it by kind."""
+        first, _ = pair
+        n = first.shape[first.get_axis("distance")]
+        numbers = first.update_coords(sensor=("distance", np.arange(n) * 1.0))
+        labels = np.array([f"s{i}" for i in range(n)])
+        text = first.update_coords(sensor=("distance", labels))
+        out = dc.spool([numbers, text]).concatenate(sensor=None)
+        assert len(out) == 1
+
+    def test_numeric_order_beside_a_text_partition(self, pair):
+        """Numbers rank as numbers even when labels share the dimension name."""
+        first, _ = pair
+        n = first.shape[first.get_axis("distance")]
+        two = first.update_coords(distance=np.arange(n) + 2.0).rename_coords(
+            distance="range"
+        )
+        ten = first.update_coords(distance=np.arange(n) + 2.0 + n).rename_coords(
+            distance="range"
+        )
+        labels = np.array([f"s{i:03d}" for i in range(n)])
+        text = first.update_coords(distance=labels).rename_coords(distance="range")
+        out = dc.spool([ten, two, text]).concatenate(range=None)
+        numeric = [x for x in out if x.get_coord("range").values.dtype.kind == "f"]
+        assert len(numeric) == 1
+        values = numeric[0].get_coord("range").values
+        assert values[0] == 2.0 and np.all(np.diff(values) > 0)
+        contents = out.get_contents()
+        assert contents["range_step"].notna().sum() == 1
+
+    def test_created_dimension_keeps_its_length_apart(self, pair):
+        """Outputs of two and of one member do not merge along another dimension."""
+        first, _ = pair
+        trio = [first, first.new(), first.new()]
+        ranked = dc.spool(trio).concatenate(rank=2)
+        assert len(ranked) == 2
+        again = ranked.concatenate(distance=None)
+        assert len(again) == 2
+        assert sorted(x.shape[x.get_axis("rank")] for x in again) == [1, 2]
+
+    def test_vanishing_coordinate_units_do_not_partition(self, pair):
+        """Auxiliary coordinates the new dimension replaces do not split by units."""
+        first, _ = pair
+        n = first.shape[first.get_axis("distance")]
+        metres = first.update_coords(sensor=("distance", np.arange(n) * 1.0))
+        metres = metres.convert_units(sensor="m")
+        seconds = first.update_coords(sensor=("distance", np.arange(n) * 1.0))
+        seconds = seconds.convert_units(sensor="s")
+        out = dc.spool([metres, seconds]).concatenate(sensor=None)
+        assert len(out) == 1
+        assert out[0].shape[out[0].get_axis("sensor")] == 2
+
+    def test_coordinate_identity_partitions_only_where_dimensional(self, pair):
+        """A name dimensional in one patch is still auxiliary in the others."""
+        first, other = pair
+        n = first.shape[first.get_axis("distance")]
+        values = np.arange(n) * 1.0
+        aux_a = first.update_coords(sensor=("distance", values))
+        aux_b = other.update_coords(sensor=("distance", values))
+        as_dim = first.rename_coords(distance="sensor")
+        out = dc.spool([aux_a, aux_b, as_dim]).concatenate(time=None)
+        assert len(out) == 2
+        joined = out[0]
+        assert joined.shape[joined.get_axis("time")] == 2 * first.shape[1]
+        assert "sensor" in joined.coords.coord_map
+        assert out[1].dims == as_dim.dims
+
+    def test_singleton_outputs_keep_weak_coordinates(self, pair):
+        """An output of one member has nothing to conflict with, so nothing drops."""
+        first, _ = pair
+        n = first.shape[first.get_axis("distance")]
+        irregular = np.arange(n, dtype=float)
+        irregular[1], irregular[2] = 2.0, 1.0
+        aux = first.update_coords(latitude=("distance", irregular))
+        out = dc.spool([aux, aux.new()]).concatenate(time=1, conflict="drop")
+        assert len(out) == 2
+        assert all("latitude" in x.coords.coord_map for x in out)
+
+    def test_replanning_after_a_drop_keeps_the_drop(self, pair):
+        """Concatenating again along the same dimension does not resurrect metadata."""
+        first, other = pair
+        metres, km = first.set_units("m"), other.set_units("km")
+        dropped = dc.spool([metres, km]).concatenate(time=None, conflict="drop")
+        again = dropped.concatenate(time=None)
+        assert len(again) == 1
+        assert again[0].attrs.data_units is None
+
+    def test_conflict_policy_is_part_of_the_identity(self, pair):
+        """Drop and keep_first give different patches, so different ids."""
+        first, other = pair
+        a = first.update_attrs(foo="a")
+        b = other.update_attrs(foo="b")
+        kept = dc.spool([a, b]).concatenate(time=None, conflict="keep_first")[0]
+        dropped = dc.spool([a, b]).concatenate(time=None, conflict="drop")[0]
+        assert kept.attrs.processing_id != dropped.attrs.processing_id
+
+    def test_new_dimension(self, pair):
+        """A dimension no patch has is added, one sample per patch."""
+        first, _ = pair
+        # along a new dimension the existing coordinates must agree
+        out = dc.spool([first, first.new()]).concatenate(wave_rank=None)
+        assert len(out) == 1
+        patch = out[0]
+        assert "wave_rank" in patch.dims
+        assert patch.shape[patch.get_axis("wave_rank")] == 2
+        # patches whose time ranges differ cannot share a new dimension
+        assert len(dc.spool(pair).concatenate(wave_rank=None)) == 2
 
 
 class TestEmptyConcatenate:

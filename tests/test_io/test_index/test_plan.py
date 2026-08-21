@@ -19,8 +19,13 @@ from dascore.exceptions import (
 from dascore.io.index.catalog import PatchCatalog
 from dascore.utils.chunk_plan import (
     ChunkPlan,
+    _directions,
+    _normalize_numeric_units,
+    _order_key,
     _sampling_group,
+    _value_family,
     build_chunk_plan,
+    build_concat_plan,
     samples_adjusted_envelopes,
 )
 from dascore.utils.time import to_timedelta64
@@ -776,3 +781,238 @@ class TestNonIntSamplesIndices:
         out = samples_adjusted_envelopes(df, (({"time": (0.5, None)}, True),))
         assert out["time_min"].iloc[0] == 0.0
         assert out["time_max"].iloc[0] == 9.0
+
+
+class TestConcatPlan:
+    """build_concat_plan: chunk's partitioning, then order-based grouping."""
+
+    @pytest.fixture(scope="class")
+    def trio(self):
+        """Three same-kind patches in time order."""
+        t0 = np.datetime64("2020-01-01", "ns")
+        p1 = dc.get_example_patch(time_min=t0)
+        time = p1.get_coord("time")
+        p2 = dc.get_example_patch(time_min=time.max() + time.step)
+        # a gap of eight samples between p2 and p3
+        p3 = dc.get_example_patch(time_min=p2.get_coord("time").max() + 9 * time.step)
+        return p1, p2, p3
+
+    def test_one_output_per_partition(self, trio):
+        """Gaps do not split; kind does."""
+        p1, p2, p3 = trio
+        plan = build_concat_plan(_flat([p1, p2, p3]), time=None)
+        assert len(plan.outputs) == 1
+        assert len(plan.members) == 3
+        assert plan.params["mode"] == "concat"
+        plan = build_concat_plan(_flat([p1, p2.update_attrs(tag="x"), p3]), time=None)
+        assert len(plan.outputs) == 2
+
+    def test_count_groups_in_order(self, trio):
+        """The count splits each partition's rows in dimension order."""
+        p1, p2, p3 = trio
+        plan = build_concat_plan(_flat([p3, p1, p2]), time=2)
+        assert len(plan.outputs) == 2
+        first = plan.members[plan.members["output_id"] == 0]
+        assert len(first) == 2
+        # the first output spans p1 and p2, whatever order the rows came in
+        assert plan.outputs["time_min"].iloc[0] == p1.get_coord("time").min()
+        assert plan.outputs["time_max"].iloc[0] == p2.get_coord("time").max()
+
+    def test_missing_matches_for_kind_and_units(self, trio):
+        """A missing kind value or unit matches, and the output carries the known."""
+        p1, p2, _ = trio
+        keyed = p2.update_attrs(acquisition_key="XX.R2D1..RAW").set_units("m")
+        plan = build_concat_plan(_flat([p1, keyed]), time=None)
+        assert len(plan.outputs) == 1
+        assert plan.outputs["acquisition_key"].iloc[0] == "XX.R2D1..RAW"
+        assert dc.get_quantity(plan.outputs["data_units"].iloc[0]) == dc.get_quantity(
+            "m"
+        )
+        # known, different units conflict, policed as a chunk plan polices them
+        mixed = _flat([p1.set_units("km"), keyed])
+        with pytest.raises(CoordMergeError, match="data_units"):
+            build_concat_plan(mixed, time=None)
+        plan = build_concat_plan(mixed, time=None, conflict="drop")
+        assert len(plan.outputs) == 1
+        assert "data_units" not in plan.outputs.columns
+
+    def test_new_dimension_is_described(self, trio):
+        """An output along a new dimension names it, claiming no envelope."""
+        p1 = trio[0]
+        copies = [p1, p1.new(), p1.new()]
+        plan = build_concat_plan(_flat(copies), wave_rank=None)
+        assert len(plan.outputs) == 1
+        row = plan.outputs.iloc[0]
+        assert row["dims"].endswith(",wave_rank")
+        assert "wave_rank_min" not in plan.outputs.columns
+        assert len(plan.members) == 3
+        # patches whose existing coordinates differ cannot share a new dimension
+        assert len(build_concat_plan(_flat(trio), wave_rank=None).outputs) == 3
+        # a relation of dimensionless rows spells the new dimension cleanly
+        flat = _flat(copies)
+        spatial = [x for x in flat.columns if "time" in x or "distance" in x]
+        flat = flat.drop(columns=spatial)
+        flat["dims"] = ""
+        plan = build_concat_plan(flat, wave_rank=None)
+        assert plan.outputs["dims"].tolist() == ["wave_rank"]
+
+    def test_dimension_units_partition(self, trio):
+        """Unitless coordinate values stay apart from unitful ones."""
+        p1 = trio[0]
+        distance = p1.get_coord("distance")
+        shifted = p1.update_coords(distance_min=distance.max() + distance.step)
+        unitless = shifted.get_coord("distance").set_units(None)
+        bare = shifted.update_coords(distance=unitless)
+        assert len(build_concat_plan(_flat([p1, bare]), distance=None).outputs) == 2
+        assert len(build_concat_plan(_flat([p1, shifted]), distance=None).outputs) == 1
+        # a patch with no values along the dimension joins whichever it meets
+        collapsed = p1.mean("distance")
+        assert (
+            len(build_concat_plan(_flat([p1, collapsed]), distance=None).outputs) == 1
+        )
+
+    def test_relation_without_step_or_dtype(self, trio):
+        """An envelope without a step, or rows without a dtype, still plan."""
+        df = _flat(trio).drop(columns=["time_step"])
+        plan = build_concat_plan(df, time=None)
+        assert "time_step" not in plan.outputs.columns
+        assert len(plan.outputs) == 1
+        df = _flat(trio).assign(_dtype=None)
+        plan = build_concat_plan(df, time=None)
+        assert plan.outputs["_dtype"].iloc[0] == ""
+        # a relation without a dims column still plans; the coordinates it
+        # identifies are settled when the output loads, not here
+        df = _flat(trio).drop(columns=["dims"]).assign(_sensor_def_key=None)
+        df.loc[0, "_sensor_def_key"] = "fp:a"
+        df.loc[1, "_sensor_def_key"] = "fp:b"
+        plan = build_concat_plan(df, time=None, conflict="drop")
+        assert len(plan.outputs) == 1
+        assert "dropped_coords" not in plan.params
+
+    def test_coordinate_only_some_members_have_is_not_dropped(self, trio):
+        """A coordinate other members lack rides along, in the catalog too."""
+        p1, p2, _ = trio
+        n = p1.shape[p1.get_axis("distance")]
+        lat = p1.update_coords(latitude=("distance", np.arange(n, dtype=float)))
+        plan = build_concat_plan(_flat([lat, p2]), time=None, conflict="drop")
+        assert "dropped_coords" not in plan.params or not plan.params["dropped_coords"]
+        out = dc.spool([lat, p2]).concatenate(time=None, conflict="drop")
+        assert "latitude" in out[0].coords.coord_map
+        assert "latitude_min" in out.get_contents().columns
+
+    def test_directions(self):
+        """Steps of any kind give a sign; a missing or signless one gives NaN."""
+        steps = pd.Series([2, -0.5, pd.Timedelta(-1, "s"), None, "x"], dtype=object)
+        got = _directions(steps)
+        assert got[0] == 1.0 and got[1] == -1.0 and got[2] == -1.0
+        assert np.isnan(got[3]) and np.isnan(got[4])
+
+    def test_value_less_dimension_is_identified_by_its_members(self, trio):
+        """A dimension carried without values takes a digest of what it joins."""
+        p1, p2, _ = trio
+        blank = p1.mean("time")  # time survives as a value-less coordinate
+        rows = _flat([blank, p2.mean("time")])
+        plan = build_concat_plan(rows, time=None)
+        key = plan.outputs["_time_def_key"].iloc[0]
+        assert str(key).startswith("cat:")
+        # an output joining other members is a different coordinate
+        rows = _flat([blank, p2.mean("time"), p1.mean("time").new()])
+        other = build_concat_plan(rows, time=None).outputs["_time_def_key"].iloc[0]
+        assert other != key
+        # a member whose identity the relation does not state leaves the
+        # output without one, rather than digesting a hole
+        blind = _flat([blank, p2.mean("time")])
+        blind.loc[0, "_time_def_key"] = None
+        plan = build_concat_plan(blind, time=None)
+        assert pd.isnull(plan.outputs["_time_def_key"].iloc[0])
+        # and one member alone keeps the identity it was given
+        lone = build_concat_plan(_flat([blank]), time=None)
+        assert lone.outputs["_time_def_key"].iloc[0] == rows["_time_def_key"].iloc[0]
+
+    def test_directions_of_a_constant_step(self):
+        """A zero step points neither way."""
+        assert np.isnan(_directions(pd.Series([0.0]))[0])
+        assert np.isnan(_directions(pd.Series([pd.Timedelta(0)], dtype=object))[0])
+
+    def test_created_dimension_leaves_other_identities_alone(self, trio):
+        """The new dimension's identity is its own, not another dimension's."""
+        p1, p2, _ = trio
+        rows = _flat([p1, p2])
+        before = list(rows["_time_def_key"])
+        assert len(set(before)) == 2
+        plan = build_concat_plan(rows, wave_rank=None)
+        # the two patches differ along time, so they cannot share an output
+        assert len(plan.outputs) == 2
+        assert list(plan.outputs["_time_def_key"]) == before
+        assert plan.outputs["_wave_rank_def_key"].str.startswith("fp:").all()
+
+    def test_public_units_attr_is_refused_for_a_new_dimension(self, trio):
+        """An attr spelled like the new dimension's units cannot survive it."""
+        p1 = trio[0]
+        rows = _flat([p1, p1.new()])
+        rows["batch_units"] = "m"
+        with pytest.raises(ParameterError, match="batch_units"):
+            build_concat_plan(rows, batch=None)
+
+    def test_keep_first_floats_a_converted_dtype(self, trio):
+        """An output which converts its members' data says so in its dtype."""
+        p1, p2, _ = trio
+        ints = p1.new(data=p1.data.astype("int32")).set_units("m")
+        km = p2.new(data=p2.data.astype("int32")).set_units("km")
+        df = _flat([ints, km])
+        assert set(df["_dtype"]) == {"int32"}
+        plan = build_concat_plan(df, time=None, conflict="keep_first")
+        assert plan.outputs["_dtype"].iloc[0] == "float64"
+        # without a conversion the dtype stands
+        same = _flat([ints, p2.new(data=p2.data.astype("int32")).set_units("m")])
+        plan = build_concat_plan(same, time=None, conflict="keep_first")
+        assert plan.outputs["_dtype"].iloc[0] == "int32"
+
+    def test_normalize_numeric_units_without_an_envelope(self):
+        """A coordinate the relation gives no envelope needs no conversion."""
+        df = pd.DataFrame({"_sensor_units": ["m", "cm"]})
+        assert _normalize_numeric_units(df, "sensor") is df
+
+    def test_value_family(self):
+        """Envelope values sort into four families; a missing one into none."""
+        assert _value_family(np.datetime64("2020-01-01")) == "datetime"
+        assert _value_family(pd.Timestamp("2020-01-01")) == "datetime"
+        assert _value_family(np.timedelta64(1, "s")) == "timedelta"
+        assert _value_family("a") == "text"
+        assert _value_family(3) == "number"
+        assert _value_family(None) == "" and _value_family(np.nan) == ""
+
+    def test_order_key_ranks_timedeltas_natively(self):
+        """Timedelta envelopes rank by duration, not by spelling."""
+        deltas = pd.Series([pd.Timedelta(10, "s"), pd.Timedelta(2, "s")], dtype=object)
+        key = _order_key(deltas)
+        assert key[1] < key[0]
+
+    def test_order_key_ranks_each_kind_among_its_own(self):
+        """Labels and numbers rank separately (kinds never share a partition)."""
+        key = _order_key(pd.Series(["b", 10, None, "a", 2], dtype=object))
+        assert np.isnan(key[2])
+        assert key[3] < key[0]
+        assert key[4] < key[1]
+
+    def test_envelope_attrs_refused_per_partition(self, trio):
+        """A partition elsewhere owning the name does not excuse an attr here."""
+        p1, p2, _ = trio
+        as_dim = p1.rename_coords(distance="batch")
+        rows = _flat([p2, p2.new()])
+        rows["batch_step"] = 3  # an ordinary attr, as the relation holds it
+        frame = pd.concat([_flat([as_dim]), rows], ignore_index=True)
+        with pytest.raises(ParameterError, match="batch_step"):
+            build_concat_plan(frame, batch=None)
+        # the same rows without the attr plan as two partitions
+        frame = pd.concat([_flat([as_dim]), _flat([p2, p2.new()])], ignore_index=True)
+        assert len(build_concat_plan(frame, batch=None).outputs) == 2
+
+    def test_empty_and_bad_arguments(self, trio):
+        """An empty relation plans nothing; bad arguments raise."""
+        plan = build_concat_plan(_flat(trio).iloc[:0], time=None)
+        assert plan.outputs.empty and plan.members.empty
+        with pytest.raises(ParameterError):
+            build_concat_plan(_flat(trio), time=None, distance=None)
+        with pytest.raises(ParameterError):
+            build_concat_plan(_flat(trio), time=0)

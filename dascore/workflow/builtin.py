@@ -39,6 +39,10 @@ class Concatenate(Task):
         order they were given: `(("time", None),)`.
     check_behavior
         What was done about patches which did not fit.
+    conflict
+        How conflicting attributes and coordinates were settled, for a
+        planned concatenation (`Spool.concatenate`); None for the direct
+        function, which has no such policy.
 
     Notes
     -----
@@ -52,6 +56,7 @@ class Concatenate(Task):
 
     arguments: tuple[tuple[str, Any], ...] = ()
     check_behavior: str | None = "warn"
+    conflict: str | None = None
 
     @classmethod
     def from_kwargs(cls, check_behavior: str | None = "warn", **kwargs) -> Concatenate:

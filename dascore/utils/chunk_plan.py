@@ -15,6 +15,7 @@ applied; `Spool.chunk` runs on these plans.
 
 from __future__ import annotations
 
+import hashlib
 import inspect
 import math
 import warnings
@@ -27,6 +28,7 @@ import numpy as np
 import pandas as pd
 
 import dascore as dc
+from dascore.constants import attr_conflict_description
 from dascore.exceptions import (
     ChunkError,
     CoordMergeError,
@@ -44,6 +46,7 @@ from dascore.units import (
 )
 from dascore.utils.attrs import known_only, validate_conflict
 from dascore.utils.chunk import get_intervals
+from dascore.utils.docs import compose_docstring
 from dascore.utils.misc import get_middle_value, is_range
 from dascore.utils.pd import get_dim_names_from_columns, get_interval_columns
 from dascore.utils.time import is_datetime64, is_timedelta64, to_float, to_timedelta64
@@ -1588,6 +1591,457 @@ def build_chunk_plan(
         member_parts = np.concatenate(m_parts)
         members[unit_col] = first_units.take(member_parts).reset_index(drop=True)
     return ChunkPlan(outputs, members, name, value, params)
+
+
+@compose_docstring(conflict_desc=attr_conflict_description)
+def build_concat_plan(
+    df: pd.DataFrame,
+    *,
+    conflict: Literal["drop", "raise", "keep_first"] = "raise",
+    group=None,
+    **kwargs,
+) -> ChunkPlan:
+    """
+    Build a plan concatenating patches in order (`Spool.concatenate`).
+
+    Partitions as a chunk plan does — kind (the config's attrs, a missing
+    value matching anything), dimensions, the identity of every other
+    dimension, and the concatenated dimension's units (a patch with no
+    values along it joins any) — and then groups
+    each partition's rows by the requested count in the order of the
+    dimension (ascending or descending as the data run; given order when
+    the rows have no envelope), with no sampling tolerance, no gap test,
+    and no overlap removal. Patches which cannot be concatenated together
+    land in separate outputs, never in an error. Remaining attributes must
+    hold no conflicting known values within an output, policed by
+    `conflict` exactly as a chunk plan polices them; non-dimensional
+    coordinates are checked when the output is assembled.
+
+    Parameters
+    ----------
+    df
+        The flat patch relation to plan over.
+    conflict
+        {conflict_desc}
+    group
+        Attributes to partition on instead of the config's `patch_kind_attrs`.
+    **kwargs
+        One keyword naming the dimension and the number of patches per
+        output; None (or ...) puts every patch of a partition in one
+        output. A dimension no patch has concatenates along a new one.
+    """
+    if len(kwargs) != 1:
+        msg = (
+            f"concatenate requires exactly one dimension keyword, got {sorted(kwargs)}"
+        )
+        raise ParameterError(msg)
+    validate_conflict(conflict)
+    ((name, value),) = kwargs.items()
+    value = None if value is Ellipsis else value
+    if value is not None and not isinstance(value, (int, np.integer)):
+        msg = (
+            "The number of patches per concatenated output is a whole number; "
+            f"got {value!r}. Pass None to put a whole partition in one output."
+        )
+        raise ParameterError(msg)
+    count = None if value is None else int(value)
+    if count is not None and count < 1:
+        msg = "The number of patches per concatenated output must be at least 1."
+        raise ParameterError(msg)
+    min_name, max_name, step_name = f"{name}_min", f"{name}_max", f"{name}_step"
+    unit_col = f"_{name}_units"
+    names = _resolve_group_attrs(group, set(df.columns))
+    params: dict[str, Any] = dict(mode="concat", count=count, conflict=conflict)
+    params["group"] = names
+    if df.empty:
+        outputs = pd.DataFrame({"output_id": pd.Series(dtype=np.int64)})
+        members = pd.DataFrame(
+            {
+                "output_id": pd.Series(dtype=np.int64),
+                "_patch_id": pd.Series(dtype=object),
+                "_modified": pd.Series(dtype=bool),
+            }
+        )
+        return ChunkPlan(outputs, members, name, value, params)
+    df = _ensure_patch_id(df).reset_index(drop=True)
+    # rows which carry the name as a dimension; the others (a non-dimensional
+    # coordinate of that name, or none) gain a new dimension in its place
+    along = _structural(df, name)
+    key_col = f"_{name}_def_key"
+    has_coord = along | (df[key_col].notna().to_numpy() if key_col in df else False)
+    # the public spelling names the coordinate just as the private one does
+    envelope_cols = [
+        x for x in (min_name, max_name, step_name, unit_col, f"{name}_units") if x in df
+    ]
+    if envelope_cols and (df[envelope_cols].notna().any(axis=1) & ~has_coord).any():
+        # the envelope names belong to the dimension about to be created
+        msg = (
+            f"Cannot concatenate along the new dimension {name!r}: the "
+            f"attributes {envelope_cols} would describe it. Rename them first."
+        )
+        raise ParameterError(msg)
+    has_envelope = min_name in df.columns and max_name in df.columns
+    if has_envelope:
+        # one spelling per dimensionality, as a chunk plan: metres and
+        # centimetres plan together and members convert on loading; only
+        # numbers are stored per spelling, so only they convert
+        df = _normalize_numeric_units(df, name)
+    # The concatenated dimension's units partition like kind: a patch whose
+    # coordinate has values but no units cannot join one whose has units
+    # (the values would be mixed), while a patch with no values along the
+    # dimension (an aggregated coordinate) joins whichever it meets.
+    kind_names = list(names)
+    if unit_col in df.columns:
+        units = df[unit_col].fillna("unitless").astype(object)
+        if has_envelope:
+            units = units.where(df[min_name].notna(), "")
+        df = df.assign(_concat_units=units.where(along, ""))
+        kind_names.append("_concat_units")
+    if has_envelope:
+        # values of one kind concatenate; a datetime and a number sharing a
+        # name (and a unit) do not, and a row with no values joins either
+        family = df[min_name].map(_value_family)
+        df = df.assign(_concat_family=family.where(along, ""))
+        kind_names.append("_concat_family")
+    keys: list = [_kind_codes(df, kind_names)]
+    if "dims" in df.columns:
+        keys.append(df["dims"])
+    for dim_key in _dim_def_key_columns(df, name):
+        dim = dim_key[1 : -len("_def_key")]
+        key = df[dim_key] if dim_key in df.columns else pd.Series(None, index=df.index)
+        # a coordinate's identity partitions only the rows it is a dimension
+        # of; elsewhere it is non-dimensional and `conflict` polices it
+        key = key.astype(object).where(_structural(df, dim), "")
+        env_cols = [f"{dim}_{x}" for x in ("min", "max", "step")]
+        if all(x in df.columns for x in env_cols):
+            # a re-planned output states no identity key; its envelope says
+            # what it is, which is enough to tell two of them apart
+            spelled = df[env_cols].itertuples(index=False, name=None)
+            env = pd.Series(["env:" + "|".join(map(str, x)) for x in spelled])
+            key = key.where(key.notna(), env)
+        keys.append(key)
+    labels = df.groupby(keys, dropna=False, sort=False).ngroup().to_numpy()
+    df = df.drop(columns=["_concat_units", "_concat_family"], errors="ignore")
+    # Order: partitions in order of first appearance, rows within one the
+    # way the data run along the dimension (ascending by start, descending
+    # by stop), then cut into runs of `count`. A partition without a known
+    # step (irregular values, labels) or along a new dimension cannot tell
+    # its orientation from envelopes, so it keeps its order; rows without
+    # an envelope sort last.
+    within = np.zeros(len(df))
+    if has_envelope:
+        starts = _order_key(df[min_name])
+        stops = _order_key(df[max_name])
+        no_steps = np.full(len(df), np.nan)
+        steps = _directions(df[step_name]) if step_name in df else no_steps
+        # the first row's step, null or not: a partition whose first row
+        # has no step has no orientation, whatever a later row knows
+        rows = pd.Series(np.arange(len(df)))
+        first_step = steps[rows.groupby(labels).transform("first").to_numpy()]
+        descending = np.nan_to_num(first_step, nan=0.0) < 0
+        within = np.where(descending, -stops, starts)
+        within = np.where(np.isnan(first_step) | ~along, 0.0, within)
+        within = np.where(np.isnan(within), np.inf, within)
+    perm = np.lexsort((np.arange(len(df)), within, labels))
+    sorted_df = df.iloc[perm].reset_index(drop=True)
+    part = labels[perm]
+    position = pd.Series(part).groupby(part).cumcount().to_numpy()
+    run = np.zeros_like(position) if count is None else position // count
+    codes = pd.DataFrame({"p": part, "r": run}).groupby(["p", "r"], sort=False).ngroup()
+    codes = codes.to_numpy()
+    n_out = int(codes.max()) + 1
+    sizes = np.bincount(codes, minlength=n_out)
+    seg_starts = np.r_[0, np.cumsum(sizes)[:-1]]
+    active = np.ones(n_out, dtype=bool)
+    # non-dimensional coordinates are described from the members when the
+    # catalog is derived (riders of the dimension follow it member by
+    # member, so their envelopes differ by design) and policed by their
+    # identity keys below; their envelopes are not attrs to carry
+    blanked = {}
+    for coord in _identified_coords(sorted_df) - {name}:
+        structural = _structural(sorted_df, coord)
+        if structural.all():
+            continue
+        for suffix in ("min", "max", "step"):
+            if (col := f"{coord}_{suffix}") in sorted_df.columns:
+                # kept where the coordinate is a dimension of the row
+                blanked[col] = sorted_df[col].where(structural)
+    policed_df = sorted_df.assign(**blanked)
+    carried = _carried_columns(policed_df, codes, seg_starts, name, conflict, active)
+    data: dict[str, Any] = {k: v.reset_index(drop=True) for k, v in carried.items()}
+    if has_envelope and not along.all():
+        # rows gaining the dimension have no values along it; what their
+        # column holds belongs to a coordinate the new dimension replaces
+        kept = along[perm]
+        blank = {c: sorted_df[c].where(kept) for c in envelope_cols if c in sorted_df}
+        sorted_df = sorted_df.assign(**blank)
+    by_output = sorted_df.groupby(codes, sort=True)
+    if has_envelope:
+        # a member with no values along the dimension (an aggregated
+        # coordinate) has a null envelope, which the output's skips
+        # An output whose members state values of more than one kind has no
+        # envelope the two could share. Labels are the awkward pair: they
+        # have no missing value, so a member which states none cannot join
+        # them either, and such an output claims nothing.
+        families = sorted_df[min_name].map(_value_family)
+        by_family = families.replace("", np.nan).groupby(codes, sort=True)
+        mixed = (by_family.nunique(dropna=True) > 1).to_numpy()
+        text = (by_family.first() == "text").fillna(False).to_numpy()
+        blank = (families == "").groupby(codes, sort=True).any().to_numpy()
+        undecided = pd.Series(mixed | (text & blank))
+        data[min_name] = by_output[min_name].min().where(~undecided).to_numpy()
+        data[max_name] = by_output[max_name].max().where(~undecided).to_numpy()
+        if unit_col in sorted_df.columns:
+            # a member with no values along the dimension states no unit;
+            # the output speaks the first unit any member states, which is
+            # what assembly joins in
+            known = known_only(sorted_df[[unit_col]])[unit_col]
+            data[unit_col] = known.groupby(codes, sort=True).first().to_numpy()
+        if step_name in sorted_df.columns:
+            data[step_name] = _concatenated_steps(sorted_df, codes, name)
+    if "dims" in sorted_df.columns:
+        dims = sorted_df["dims"].to_numpy()[seg_starts].astype(str)
+        new_dim = np.array([name not in d.split(",") for d in dims])
+        # a dimension the members carry without values is resized the same
+        # way, and is identified the same way: by how long it comes out
+        stated = np.zeros(n_out, dtype=bool)
+        if min_name in data:
+            stated = ~pd.isnull(pd.Series(data[min_name])).to_numpy()
+        value_less = new_dim | ~stated
+        if new_dim.any():
+            # an output whose members lack the dimension gains it, one
+            # sample per member, as a dimension without values (the name
+            # may have been a non-dimensional coordinate, which the new
+            # dimension replaces, so no envelope is claimed for it)
+            data["dims"] = [
+                ",".join([*[x for x in d.split(",") if x], name]) if n else d
+                for d, n in zip(dims, new_dim)
+            ]
+            for x in (min_name, max_name, step_name):
+                if x in data:
+                    data[x] = [None if n else v for v, n in zip(data[x], new_dim)]
+            # its identity is that of a value-less coordinate of its length
+            # (what ingesting the assembled patch would record), so outputs
+            # of different counts stay apart when a later plan partitions
+            # on it
+            keys = list(data.get(key_col, pd.Series([None] * n_out, dtype=object)))
+            keys = [
+                f"fp:{dc.core.coords.get_coord(shape=(int(s),)).fingerprint()[:32]}"
+                if n
+                else k
+                for k, n, s in zip(keys, new_dim, sizes)
+            ]
+            data[key_col] = pd.Series(keys, dtype=object)
+        if (existing := value_less & ~new_dim).any():
+            # a dimension the members carry without values is resized too,
+            # and the relation says nothing about how long it comes out;
+            # what the members are is the best identity available, and it
+            # is not a fingerprint claim about values
+            keys = list(data.get(key_col, pd.Series([None] * n_out, dtype=object)))
+            member_keys = _member_key_digests(sorted_df, codes, name)
+            keys = [
+                digest if e and digest is not None else k
+                for k, e, digest in zip(keys, existing, member_keys)
+            ]
+            data[key_col] = pd.Series(keys, dtype=object)
+    if "_dtype" in sorted_df.columns:
+        all_dtypes = sorted_df["_dtype"]
+        dtypes = by_output["_dtype"]
+        uniform = dtypes.nunique(dropna=False).to_numpy() == 1
+        first = dtypes.first().to_numpy(dtype=object)
+        combined = [
+            first[i] if uniform[i] else _combined_dtype(all_dtypes.iloc[a : a + n])
+            for i, (a, n) in enumerate(zip(seg_starts, sizes))
+        ]
+        if conflict == "keep_first" and "data_units" in sorted_df.columns:
+            # keeping one spelling of the data units converts the members
+            # stated otherwise, which floats an integer array
+            stated = known_only(sorted_df[["data_units"]])["data_units"]
+            converts = stated.groupby(codes, sort=True).nunique(dropna=True) > 1
+            combined = [
+                str(np.result_type(x, np.float64)) if c and not pd.isnull(x) else x
+                for x, c in zip(combined, converts.to_numpy())
+            ]
+        data["_dtype"] = ["" if pd.isnull(x) else str(x) for x in combined]
+    data["output_id"] = np.arange(n_out)
+    outputs = pd.DataFrame(data)
+    # members load whole unless the rows are themselves trims (a re-plan
+    # over a chunked view), whose ranges they then keep
+    members = pd.DataFrame(
+        {"output_id": codes, "_patch_id": sorted_df["_patch_id"].to_numpy()}
+    )
+    if has_envelope:
+        for col in (min_name, max_name, step_name, unit_col):
+            if col in sorted_df.columns:
+                members[col] = sorted_df[col].to_numpy()
+    modified = sorted_df["_modified"] if "_modified" in sorted_df.columns else False
+    members["_modified"] = np.asarray(modified, dtype=bool)
+    return ChunkPlan(outputs, members, name, value, params)
+
+
+def _normalize_numeric_units(df: pd.DataFrame, name: str) -> pd.DataFrame:
+    """
+    `_normalize_chunk_units` for the numeric rows of an envelope of mixed kinds.
+
+    A dimension name shared by numeric and, say, datetime coordinates holds
+    an object column, which the chunk normalizer leaves alone; the numeric
+    rows still deserve one spelling per dimensionality.
+    """
+    min_name, max_name, step_name = f"{name}_min", f"{name}_max", f"{name}_step"
+    if min_name not in df.columns:
+        return df
+    numeric = df[min_name].map(_value_family).to_numpy() == "number"
+    if not numeric.any():
+        return df
+    cols = [x for x in (min_name, max_name, step_name, f"_{name}_units") if x in df]
+    # the numeric rows are coerced from the column's kind-agnostic dtype;
+    # otherwise the chunk normalizer, which reads the dtype, would pass
+    # over rows which are numbers in an object column
+    part = df.loc[numeric, :].copy()
+    for col in (min_name, max_name, step_name):
+        if col in part:
+            part[col] = pd.to_numeric(part[col])
+    part = _normalize_chunk_units(part, name)
+    if numeric.all():
+        return df.assign(**{c: part[c] for c in cols})
+    out = df.copy()
+    for col in cols:
+        out[col] = out[col].astype(object)
+        out.loc[numeric, col] = part[col].astype(object)
+    return out
+
+
+def _directions(steps: pd.Series) -> np.ndarray:
+    """The sign of each step (±1.0), NaN where missing or without a sign."""
+
+    def direction(step):
+        if pd.isnull(step) or isinstance(step, str):
+            return np.nan
+        zero = step * 0
+        if step == zero:  # a constant coordinate runs neither way
+            return np.nan
+        return -1.0 if step < zero else 1.0
+
+    return np.array([direction(x) for x in steps], dtype=float)
+
+
+def _value_family(value) -> str:
+    """The kind of an envelope value: datetime, timedelta, number, or text."""
+    if pd.isnull(value):
+        return ""
+    if isinstance(value, np.datetime64 | pd.Timestamp):
+        return "datetime"
+    if isinstance(value, np.timedelta64 | pd.Timedelta):
+        return "timedelta"
+    if isinstance(value, str):
+        return "text"
+    return "number"
+
+
+def _identified_coords(df: pd.DataFrame) -> set[str]:
+    """The coordinates a relation identifies (those with a def-key column)."""
+    return {
+        col[1 : -len("_def_key")]
+        for col in df.columns
+        if col.startswith("_") and not col.startswith("__") and col.endswith("_def_key")
+    }
+
+
+def _structural(df: pd.DataFrame, coord: str) -> np.ndarray:
+    """Per row, whether `coord` is one of the row's dimensions."""
+    if "dims" not in df.columns:
+        return np.zeros(len(df), dtype=bool)
+    dims = df["dims"].astype(str).str.split(",")
+    return dims.apply(lambda d: coord in d).to_numpy(dtype=bool)
+
+
+def _member_key_digests(sorted_df: pd.DataFrame, codes: np.ndarray, name: str):
+    """
+    A "cat:" identity per output, digesting the identities it joins.
+
+    Outputs joining the same members in the same order come out the same;
+    the digest is deliberately not an "fp:" key, since it claims nothing
+    about values the relation never saw.
+    """
+    col = f"_{name}_def_key"
+    assert col in sorted_df.columns, "a value-less target states an identity"
+    out: list[str | None] = []
+    for _, group in sorted_df[col].groupby(codes, sort=True):
+        if group.isna().any():
+            out.append(None)
+            continue
+        if len(group) == 1:
+            # nothing was joined, so the member's own identity stands
+            out.append(str(group.iloc[0]))
+            continue
+        spelled = ",".join(map(str, group))
+        out.append(f"cat:{hashlib.sha256(spelled.encode()).hexdigest()[:32]}")
+    return out
+
+
+def _order_key(values: pd.Series) -> np.ndarray:
+    """
+    Sortable floats for an envelope column: dense ranks of the native values.
+
+    Ranks rather than float conversions, which would fold nanosecond
+    timestamps a few hundred apart into one key. Missing values rank NaN.
+    """
+    out = np.full(len(values), np.nan)
+    families = values.map(_value_family).to_numpy()
+    for family in {x for x in families if x}:
+        # each kind ranks among its own (kinds never share a partition)
+        mask = families == family
+        out[mask] = _coerce(values[mask], family).rank(method="dense").to_numpy()
+    return out
+
+
+def _coerce(values: pd.Series, family: str) -> pd.Series:
+    """Give an object column of one value family its native dtype."""
+    if family == "datetime":
+        return pd.to_datetime(values)
+    if family == "timedelta":
+        return pd.to_timedelta(values)
+    if family == "text":
+        return values.astype(str)
+    return pd.to_numeric(values)
+
+
+def _concatenated_steps(sorted_df: pd.DataFrame, codes: np.ndarray, name: str):
+    """
+    The step of each output's concatenated coordinate, where it stays even.
+
+    One shared step and each member starting one step after the previous
+    member stops keep the coordinate a range; anything else (a gap, an
+    overlap, mixed steps, no step) leaves it without a step, as the
+    assembled coordinate will be.
+    """
+    steps = sorted_df[f"{name}_step"]
+    by_output = steps.groupby(codes, sort=True)
+    one_step = (by_output.nunique(dropna=True) == 1) & (
+        by_output.count() == by_output.size()
+    )
+    starts, stops = sorted_df[f"{name}_min"], sorted_df[f"{name}_max"]
+    same_output = pd.Series(codes).shift(1).to_numpy() == codes
+    # descending data run from their max to their min, so the next member
+    # starts (at its max) one step below the previous member's min. Each
+    # value family does its own arithmetic (an output holds one family);
+    # labels have none, so a text output has no step.
+    families = starts.map(_value_family).to_numpy()
+    follows = np.zeros(len(sorted_df), dtype=bool)
+    for family in {x for x in families if x and x != "text"}:
+        mask = families == family
+        lo, hi = _coerce(starts[mask], family), _coerce(stops[mask], family)
+        step = steps[mask]
+        if family == "number":
+            step = pd.to_numeric(step)
+        ascending = _directions(step) >= 0
+        forward = (lo == hi.shift(1) + step).to_numpy()
+        backward = (hi == lo.shift(1) + step).to_numpy()
+        follows[mask] = np.where(ascending, forward, backward)
+    follows |= ~same_output
+    contiguous = pd.Series(follows).groupby(codes).all()
+    first = by_output.first()
+    return first.where(one_step & contiguous).to_numpy()
 
 
 def _snapped_cuts(cuts, start, step) -> list:
