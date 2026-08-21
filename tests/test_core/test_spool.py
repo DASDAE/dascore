@@ -1639,22 +1639,18 @@ class TestConcatenatePartitions:
         b = other.update_coords(clock=("time", np.full(nt, np.nan)))
         out = dc.spool([a, b]).concatenate(time=None)
         assert "clock" in out[0].coords.coord_map
-        # the catalog describes it too, by its identity alone
+        # the catalog names it too, rather than denying a coordinate the
+        # patch will have
         assert "clock" in out._catalog.backend.coord_names()
-        contents = out.get_contents()
-        assert contents["_clock_def_key"].notna().all()
 
     def test_value_less_dimension_reaches_the_catalog(self, pair):
-        """A blank dimension's joined identity survives into the catalog."""
+        """A blank dimension is named by the catalog and joined by the patch."""
         first, other = pair
         blank_a, blank_b = first.mean("time"), other.mean("time")
         out = dc.spool([blank_a, blank_b]).concatenate(time=None)
-        key = out.get_contents()["_time_def_key"].iloc[0]
-        assert not pd.isnull(key)
-        # an output of three members is a different coordinate from one of two
-        third = dc.spool([blank_a, blank_b, first.new().mean("time")])
-        other_key = third.concatenate(time=None).get_contents()["_time_def_key"].iloc[0]
-        assert other_key != key
+        assert "time" in out._catalog.backend.coord_names()
+        assert out[0].shape[out[0].get_axis("time")] == 2
+        # what identity such an output carries is pinned in test_plan.py
 
     def test_all_null_rider_is_named_without_claims(self, pair):
         """A rider nobody gives values keeps its identity and claims nothing."""
