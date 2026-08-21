@@ -1513,6 +1513,13 @@ class TestConcatenatePartitions:
         clock = out.get_coord("clock")
         assert clock.units == dc.get_quantity("s")
         assert np.allclose(clock.values, np.arange(2 * nt))
+        # a unitless first member adopts the first stated units
+        bare = first.update_coords(clock=("time", np.arange(nt) * 1.0))
+        out = dc.spool([bare, b]).concatenate(time=None)[0]
+        clock = out.get_coord("clock")
+        assert clock.units == dc.get_quantity("ms")
+        expected = np.concatenate([np.arange(nt), (np.arange(nt) + nt) * 1000.0])
+        assert np.allclose(clock.values, expected)
 
     def test_vanishing_coordinate_kinds_do_not_partition(self, pair):
         """Auxiliaries the new dimension replaces do not split it by kind."""

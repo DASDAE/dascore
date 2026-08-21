@@ -1774,8 +1774,10 @@ def _concatenate_group(
                 # a member lacks it, or attaches it elsewhere: values cannot
                 # be invented for it, so it is left out
                 continue
-            units = first.get_coord(name).units
+            # the first stated units win; a unitless member adopts them,
+            # as a unitless operand conflicts with nothing
             members = [x.get_coord(name) for x in patches]
+            units = next((x.units for x in members if x.units is not None), None)
             if units is not None:
                 members = [x.convert_units(units) for x in members]
             rider_axis = cdims.index(dim)
