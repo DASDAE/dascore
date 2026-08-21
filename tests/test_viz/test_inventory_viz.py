@@ -449,10 +449,8 @@ class TestPath:
         with pytest.raises(ParameterError, match="has no length"):
             path(inventory)
 
-    def test_color_override_and_figsize(self, site, monkeypatch):
+    def test_color_override_and_figsize(self, site, shown):
         """color= reaches the renderer, figsize the figure, show plt.show."""
-        called = []
-        monkeypatch.setattr(plt, "show", lambda: called.append(True))
         ax = path(
             site,
             "DAS.L1.00",
@@ -462,7 +460,7 @@ class TestPath:
             figsize=(4, 3),
             show=True,
         )
-        assert called
+        assert shown
         assert tuple(ax.get_figure().get_size_inches()) == (4.0, 3.0)
         assert np.allclose(_boxes(ax)[0].get_facecolors()[0][:3], [0, 0, 0])
 
@@ -1032,12 +1030,10 @@ class TestMap:
         ax = map_path(tunnel, x="x", y="z", color="section", time="2024-07-01")
         assert "borehole" in _legend_labels(ax)
 
-    def test_show(self, site, monkeypatch):
+    def test_show(self, site, shown):
         """Show calls plt.show."""
-        called = []
-        monkeypatch.setattr(plt, "show", lambda: called.append(True))
         map_path(site, show=True)
-        assert called
+        assert shown
 
 
 class TestTimeline:
@@ -1186,13 +1182,11 @@ class TestTimeline:
         with pytest.raises(ParameterError, match="nothing with a time epoch"):
             timeline(empty)
 
-    def test_ax_and_show(self, site, monkeypatch):
+    def test_ax_and_show(self, site, shown):
         """A given ax is drawn on; show calls plt.show."""
-        called = []
-        monkeypatch.setattr(plt, "show", lambda: called.append(True))
         _, ax = plt.subplots()
         assert timeline(site, ax=ax, show=True) is ax
-        assert called
+        assert shown
 
     def test_tunnel_repair(self, tunnel):
         """The tunnel's path lane holds two epochs split at the repair."""

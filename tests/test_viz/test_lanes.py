@@ -258,13 +258,11 @@ class TestLayout:
         ax = plot_lanes(kinds_frame, lane="lane", value="value")
         assert sorted(_texts(ax)) == ["1", "2", "a", "b"]
 
-    def test_x_label_and_show(self, monkeypatch):
+    def test_x_label_and_show(self, shown):
         """x_label is applied and show calls plt.show."""
-        called = []
-        monkeypatch.setattr(plt, "show", lambda: called.append(True))
         ax = plot_lanes({"start": [0.0], "end": [1.0]}, x_label="Time", show=True)
         assert ax.get_xlabel() == "Time"
-        assert called
+        assert shown
 
 
 class TestColors:

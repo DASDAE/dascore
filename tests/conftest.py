@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import gc
-import os
 import shutil
 import threading
 import warnings
@@ -106,9 +105,10 @@ def pytest_sessionstart(session):
     and to set debug hook to True to avoid showing progress bars,
     except when explicitly being tested.
     """
-    # If running in CI make sure to turn off matplotlib.
-    if os.environ.get("CI", False):
-        matplotlib.use("Agg")
+    # Unconditionally, not only under CI: a test suite which needs a display
+    # on one machine and not another is a suite whose viz tests are untested
+    # locally.
+    matplotlib.use("Agg")
 
     # Test-time debug defaults are applied by fixture to avoid state leakage.
 
