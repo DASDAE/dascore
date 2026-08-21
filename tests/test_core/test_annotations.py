@@ -356,6 +356,14 @@ class TestColumns:
         out = AnnotationSet(frame, dims=DIMS, columns={"note": {"dtype": "object"}})
         assert len(out) == 2
 
+    def test_an_extra_holding_timedeltas_is_held_at_nanoseconds(self):
+        """Every time is held at DASCore's resolution, an extra's too."""
+        frame = pd.DataFrame({"lag": np.array([1, 5], dtype="timedelta64[s]")})
+        out = AnnotationSet(frame, dims=DIMS)
+        held = out.io.to_dataframe()["lag"]
+        assert held.dtype == np.dtype("timedelta64[ns]")
+        assert held.iloc[0] == np.timedelta64(1, "s")
+
     def test_a_categorical_column_builds(self):
         """A categorical extra is carried like any other, blank cells and all."""
         frame = pd.DataFrame(

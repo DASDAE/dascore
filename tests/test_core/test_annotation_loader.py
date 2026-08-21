@@ -313,6 +313,19 @@ class TestDeclaredDtypes:
         assert not loaded.attrs.columns
         assert loaded.io.to_dataframe()["count"].dtype.name != "Int64"
 
+    def test_an_unreadable_declared_dtype(self, tmp_path):
+        """A dtype naming nothing is refused on reload as it is on building."""
+        frame = pd.DataFrame({"distance_start": [0.0], "distance_end": [1.0], "n": [1]})
+        directory = dc.AnnotationSet(frame, dims=("distance",)).io.save(
+            tmp_path / "set"
+        )
+        attrs_path = directory / "attrs.json"
+        document = json.loads(attrs_path.read_text())
+        document["columns"] = {"n": {"dtype": "not-a-dtype"}}
+        attrs_path.write_text(json.dumps(document))
+        with pytest.raises(InvalidAnnotationError, match="cannot be read as"):
+            dc.annotations(directory)
+
     def test_a_declaration_which_is_not_one(self, tmp_path):
         """A column spec which is no mapping is refused as a bad attrs file."""
         frame = pd.DataFrame({"distance_start": [0.0], "distance_end": [1.0], "n": [1]})
