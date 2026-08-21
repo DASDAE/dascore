@@ -17,13 +17,14 @@ import hashlib
 import json
 import re
 import warnings
-from collections.abc import Hashable
+from collections.abc import Hashable, Mapping
 from dataclasses import dataclass, field, fields, replace
-from typing import SupportsInt, TypedDict, cast
+from typing import Any, SupportsInt, TypedDict, cast
 
 import numpy as np
 import pandas as pd
 
+from dascore.core.coords import CoordSummary
 from dascore.core.summary import PatchSummary, normalize_source_patch_key
 from dascore.exceptions import InvalidInventoryError
 from dascore.io.index.schema import (
@@ -385,6 +386,73 @@ def hive_typed_attrs(path_attrs: dict[str, str]) -> dict[str, TypedValue]:
 def dump_path_attrs(path_attrs: dict[str, str] | None) -> str | None:
     """Serialize a path-attrs dict for the sources table (None when empty)."""
     return json.dumps(path_attrs, sort_keys=True) if path_attrs else None
+
+
+def coord_summary(row: Mapping) -> CoordSummary | None:
+    """
+    Rebuild a coordinate summary from one stored coordinate row.
+
+    The inverse of `_coord_record`: a row of `patch_coords` joined to its
+    `coord_defs` definition (see `SQLiteIndexBackend.coord_frame`) states
+    everything a summary carries, so a member's coordinate can be
+    described without loading the patch it belongs to.
+
+    Returns None for a row whose value kind the index does not represent.
+    """
+    kind = row.get("value_kind")
+    units = row.get("units")
+    units = None if units is None or pd.isnull(units) else units
+    fingerprint = row.get("fingerprint")
+    fingerprint = None if pd.isnull(fingerprint) else str(fingerprint)
+    length = row.get("length")
+    length = None if length is None or pd.isnull(length) else int(length)
+    dims = str(row.get("coord_dims") or "")
+    common: dict[str, Any] = dict(
+        dtype=str(row.get("dtype") or ""),
+        units=units,
+        dims=tuple(x for x in dims.split(",") if x),
+        len=length,
+        fingerprint=fingerprint,
+    )
+    if kind == "time":
+        # stored as integer nanoseconds; a relative coord is a duration
+        stamp = _ns_timedelta if row.get("is_relative") else _ns_datetime
+        step = row.get("step_ns")
+        return CoordSummary(
+            min=stamp(row.get("min_ns")),
+            max=stamp(row.get("max_ns")),
+            step=None if pd.isnull(step) else _ns_timedelta(step),
+            **common,
+        )
+    if kind == "num":
+        return CoordSummary(
+            min=row.get("min_num"),
+            max=row.get("max_num"),
+            step=_opt_float(row.get("step_num")),
+            **common,
+        )
+    if kind == "str":
+        return CoordSummary(min=row.get("min_str"), max=row.get("max_str"), **common)
+    return None
+
+
+def _opt_float(value) -> float | None:
+    """A stored number, or None where the row states none."""
+    return None if value is None or pd.isnull(value) else float(value)
+
+
+def _ns_datetime(value) -> np.datetime64:
+    """A stored nanosecond count as a datetime, NaT when the row states none."""
+    if value is None or pd.isnull(value):
+        return np.datetime64("NaT", "ns")
+    return np.datetime64(int(value), "ns")
+
+
+def _ns_timedelta(value) -> np.timedelta64:
+    """A stored nanosecond count as a duration, NaT when the row states none."""
+    if value is None or pd.isnull(value):
+        return np.timedelta64("NaT", "ns")
+    return np.timedelta64(int(value), "ns")
 
 
 def _coord_record(name: str, summary) -> CoordRecord | None:
