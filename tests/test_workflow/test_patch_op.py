@@ -362,6 +362,22 @@ class TestCanonicalByHand:
         assert by_hand == by_call
         assert by_hand.fingerprint == by_call.fingerprint
 
+    def test_a_name_with_an_implementation(self):
+        """
+        A hand-built `PatchOp` for an implemented name is the same
+        operation, and says so where it counts.
+
+        It is not the same *object*: `.op(...)` gives the class which
+        implements the name, and equality asks for one type. The
+        fingerprint is what provenance is written from, and that agrees,
+        so an id recorded either way still matches.
+        """
+        by_hand = PatchOp(name="normalize", kwargs={"dim": "time", "norm": "l2"})
+        by_call = dc.proc.normalize.op("time")
+        assert by_hand.fingerprint == by_call.fingerprint
+        assert by_hand.kwargs == by_call.kwargs
+        assert type(by_hand) is not type(by_call)
+
     def test_a_star_args_group_by_hand(self):
         """Including one whose arguments cannot be passed by name."""
         assert PatchOp(

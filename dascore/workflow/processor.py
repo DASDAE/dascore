@@ -302,6 +302,13 @@ class PatchProcessor(Task):
         # decorator reads that as nothing having happened, so no history
         # is written and no id advances -- which is what `conj` on real
         # data and a transpose into the order already held both mean.
+        #
+        # A kernel says "nothing to do" by handing its argument back, so
+        # a kernel must not write into that argument and return it: the
+        # result would be a change nothing records. Patch data is marked
+        # read-only where the backend allows it, but not every array-like
+        # can promise that, so this is a contract rather than a guard --
+        # checking it would mean hashing the data on every operation.
         if data is patch.data and out_meta is meta:
             return patch
         return self.reconcile(data, out_meta).to_patch(data)
@@ -472,10 +479,16 @@ def _resolve_kernel(cls: type[PatchProcessor], backend: str):
     `kernel`, which is written to the array API standard and so runs on
     any of them. A class which defines neither is metadata-only.
     """
+    # One class at a time, both questions asked of it before moving up:
+    # a subclass which wrote its own `kernel` means it, and a backend
+    # kernel registered against its parent must not answer for it.
     for klass in cls.__mro__:
-        if (found := klass.__dict__.get("_kernels", {}).get(backend)) is not None:
+        contents = klass.__dict__
+        if (found := contents.get("_kernels", {}).get(backend)) is not None:
             return found
-    return getattr(cls, "kernel", None)
+        if (generic := contents.get("kernel")) is not None:
+            return generic
+    return None
 
 
 def register_implementation(name: str, cls: type[PatchProcessor]) -> None:
@@ -518,9 +531,16 @@ def _reconcile(name: str, cls: type[PatchProcessor], function) -> None:
     """
     declared = getattr(function, "_declared", {})
     for field, value in declared.items():
+        # Asked of the class's own dict, not of `getattr`: a class which
+        # states the base default on purpose has still stated it, and
+        # silently overwriting that would make the check a formality.
+        declares = any(
+            field in klass.__dict__
+            for klass in cls.__mro__[:-1]
+            if klass is not PatchProcessor
+        )
         stated = getattr(cls, field, None)
-        default = getattr(PatchProcessor, field, None)
-        if stated == default:
+        if not declares:
             setattr(cls, field, value)
             continue
         if stated != value:
