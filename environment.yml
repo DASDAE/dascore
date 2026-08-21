@@ -2,6 +2,7 @@ name: dascore
 channels:
   - conda-forge
 dependencies:
+  - python>=3.12
   - pytest
   - pytest-timeout
   - numpy>=2.3.3
