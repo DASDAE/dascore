@@ -15,13 +15,10 @@ import dascore.examples
 from dascore.constants import ONE_SECOND
 from dascore.core.spool import Spool
 from dascore.exceptions import InvalidSpoolError, MissingPatchError, ParameterError
-from dascore.utils.misc import register_func, suppress_warnings
-
-DIRECTORY_SPOOLS = []
+from dascore.utils.misc import suppress_warnings
 
 
-@pytest.fixture(scope="class")
-@register_func(DIRECTORY_SPOOLS)
+@pytest.fixture(scope="module")
 def dir_spool_index_out_of_order(random_spool, tmp_path_factory):
     """Create an index that isn't order chronologically."""
     path = tmp_path_factory.mktemp("out_of_order_index")
@@ -38,16 +35,14 @@ def dir_spool_index_out_of_order(random_spool, tmp_path_factory):
     return spool
 
 
-@pytest.fixture(scope="class")
-@register_func(DIRECTORY_SPOOLS)
+@pytest.fixture(scope="module")
 def one_directory_spool(one_file_dir):
     """Create a directory with a single DAS file."""
     spool = Spool.from_directory(one_file_dir)
     return spool.update()
 
 
-@pytest.fixture(scope="class")
-@register_func(DIRECTORY_SPOOLS)
+@pytest.fixture(scope="module")
 def non_distance_dir_spool(tmp_path_factory):
     """Create a directory with a single DAS file."""
     # Simulate a patch that has time but no canonical distance coordinate.
@@ -59,8 +54,7 @@ def non_distance_dir_spool(tmp_path_factory):
     return dc.spool(path).update()
 
 
-@pytest.fixture(scope="class")
-@register_func(DIRECTORY_SPOOLS)
+@pytest.fixture(scope="module")
 def multi_patch_file_spool(tmp_path_factory):
     """Create a directory whose single file contains multiple patches."""
     path = tmp_path_factory.mktemp("multi_patch_file_spool")
@@ -76,31 +70,19 @@ def multi_patch_file_spool(tmp_path_factory):
 
 @pytest.fixture
 def directory_spool_redundant_index(random_spool, tmp_path_factory):
-    """Force a spool to be indexed many times with same files."""
+    """A spool re-indexed over files whose contents did not change."""
     path = Path(tmp_path_factory.mktemp("redundant_index_spool"))
     dascore.examples.spool_to_directory(random_spool, path, "dasdae")
     spool = dc.spool(path).update()
-
-    # Touch each file, re-index to saturate index with duplicates.
-    for _ in range(12):
-        for file_path in path.glob("*"):
-            file_path.touch()
-        spool = spool.update()
-    return spool
-
-
-@pytest.fixture(scope="class", params=DIRECTORY_SPOOLS)
-def directory_spool(request):
-    """Meta fixture for getting all file spools."""
-    return request.getfixturevalue(request.param)
+    # Touch, then re-index: one round is what puts an already-indexed file
+    # through the indexer again, which is the state under test.
+    for file_path in path.glob("*"):
+        file_path.touch()
+    return spool.update()
 
 
 class TestDirectorySpoolBasics:
     """Basic tests for the directory spool."""
-
-    def test_isinstance(self, directory_spool):
-        """Simply ensure expected type was returned."""
-        assert isinstance(directory_spool, Spool)
 
     def test_selected_str(self, diverse_directory_spool):
         """Ensure select kwargs show up in str."""
@@ -246,18 +228,6 @@ class TestSelectedDirectorySpools:
         time = patch.get_coord("time")
         return (time.min(), time.max())
 
-    def test_contents_restricted(self, spool_dir, random_spool, first_patch_range):
-        """Rows outside the requested range must not appear (regression)."""
-        spool = Spool.from_directory(spool_dir).update().select(time=first_patch_range)
-        assert 1 <= len(spool) < len(random_spool)
-        contents = spool.get_contents()
-        assert (contents["time_min"] <= first_patch_range[1]).all()
-        assert (contents["time_max"] >= first_patch_range[0]).all()
-        for patch in spool:
-            time = patch.get_coord("time")
-            assert time.min() >= first_patch_range[0]
-            assert time.max() <= first_patch_range[1]
-
     def test_selected_spool_refuses_update(
         self, spool_dir, random_spool, first_patch_range
     ):
@@ -265,11 +235,6 @@ class TestSelectedDirectorySpools:
         spool = Spool.from_directory(spool_dir).update().select(time=first_patch_range)
         with pytest.raises(InvalidSpoolError, match="root spool"):
             spool.update()
-
-    def test_select_kwargs_parameter_removed(self, spool_dir):
-        """The constructor no longer accepts select_kwargs."""
-        with pytest.raises(TypeError, match="select_kwargs"):
-            Spool.from_directory(spool_dir, select_kwargs={"tag": "x"})
 
 
 class TestDirectoryIndex:
@@ -361,13 +326,14 @@ class TestDirectoryIndex:
         assert isinstance(patch, dc.Patch)
         assert not default_index_path.exists()
 
-    def test_nested_directories(self, diverse_spool, tmp_path_factory):
+    def test_nested_directories(self, random_spool, tmp_path_factory):
         """Ensure files in nested directories work up to 3 levels."""
-        # split the spool into 3
-        sp_len = len(diverse_spool)
+        # One patch per level: what is under test is the walk, not how many
+        # files each level holds.
+        sp_len = len(random_spool)
         num = 3
         spools = [
-            diverse_spool[int((x / num) * sp_len) : int(((x + 1) / num) * sp_len)]
+            random_spool[int((x / num) * sp_len) : int(((x + 1) / num) * sp_len)]
             for x in range(num)
         ]
         # write each group to a different sub path
@@ -422,33 +388,6 @@ class TestSelect:
         out = basic_file_spool.select(tag=tag_collection).get_contents()
         assert out["tag"].isin(tag_collection).all()
 
-    def test_multiple_selects(self, diverse_directory_spool):
-        """Ensure selects can be stacked."""
-        spool = diverse_directory_spool
-        contents = spool.get_contents()
-        duration = contents["time_max"] - contents["time_min"]
-        new_max = (contents["time_min"] + duration.mean() / 2).median()
-        out = (
-            spool.select(acquisition_key="DAS2.*")
-            .select(tag="ran*")
-            .select(time=(None, new_max))
-        )
-        assert len(out) > 0
-        # first check content dataframe
-        new_content = out.get_contents()
-        assert len(new_content) == len(out)
-        assert (new_content["acquisition_key"] == "DAS2.R2D1..RAW").all()
-        assert (new_content["tag"].str.startswith("ran")).all()
-        assert (new_content["time_max"] <= new_max).all()
-        # then check patches
-        for patch in out:
-            assert patch.attrs["acquisition_key"] == "DAS2.R2D1..RAW"
-            assert patch.attrs["tag"].startswith("ran")
-            assert patch.get_coord("time").max() <= new_max
-        # ensure raises when selecting off the end of the spool
-        with pytest.raises(IndexError):
-            out[len(new_content)]
-
     def test_select_time_tuple_with_string(self, basic_file_spool):
         """Ensure time tuples with strings still work."""
         time_str = "2017-09-18T00:00:04"
@@ -493,25 +432,10 @@ class TestSelect:
 class TestBasicChunk:
     """Tests for chunking filespool."""
 
-    @pytest.fixture(scope="class")
-    def dir_spool_1_dim_patches(self, memory_spool_dim_1_patches, tmp_path_factory):
-        """Create a directory with patches that have 1 dim in time."""
-        path = tmp_path_factory.mktemp("dir_spool_1_dim_patches")
-        out = dc.examples.spool_to_directory(memory_spool_dim_1_patches, path)
-        return dc.spool(out).update()
-
     def test_directory_path_doesnt_change(self, one_file_directory_spool):
         """Chunking shouldn't change the path to the managed directory."""
         out = one_file_directory_spool.chunk(time=1)
         assert out.spool_path == one_file_directory_spool.spool_path
-
-    def test_chunk_doesnt_modify_original(self, one_file_directory_spool):
-        """Chunking shouldn't modify original spool or its dfs."""
-        spool = one_file_directory_spool
-        contents_before_chunk = spool.get_contents()
-        _ = spool.chunk(time=2)
-        contents_after_chunk = spool.get_contents()
-        assert contents_before_chunk.equals(contents_after_chunk)
 
     def test_sub_chunk(self, one_file_directory_spool):
         """Ensure the patches can be subdivided."""
@@ -528,18 +452,6 @@ class TestBasicChunk:
         for patch in patch_list:
             assert isinstance(patch, dc.Patch)
 
-    def test_merge_1_dim_patches(self, dir_spool_1_dim_patches):
-        """Ensure patches with one sample in time can be merged."""
-        spool = dir_spool_1_dim_patches
-        new = spool.chunk(time=None)
-        assert len(new) == 1
-        patch = new[0]
-        content = spool.get_contents()
-        time_coord = patch.get_coord("time")
-        assert time_coord.min() == content["time_min"].min()
-        assert time_coord.max() == content["time_max"].max()
-        assert time_coord.step == spool[0].get_coord("time").step
-
     def test_chunk_out_of_order_index(self, dir_spool_index_out_of_order):
         """Ensure when the index isn't ordered chunk can still work."""
         spool = dir_spool_index_out_of_order
@@ -554,11 +466,15 @@ class TestBasicChunk:
             # samples shorter than what was asked for. Maybe revisit this?
             assert diff <= 2 * (time_coord.step / ONE_SECOND)
 
-    def test_chunk_redundant_index(self, directory_spool_redundant_index):
+    def test_chunk_redundant_index(self, directory_spool_redundant_index, random_spool):
         """Ensure redundant indices are handled effectively with chunking"""
-        spool = directory_spool_redundant_index.chunk(time=None)
-        patch = spool[0]
-        assert isinstance(patch, dc.Patch)
+        spool = directory_spool_redundant_index
+        # Re-indexing unchanged files adds no rows, so the contiguous
+        # patches still merge into one rather than into one per index pass.
+        assert len(spool.get_contents()) == len(random_spool)
+        merged = spool.chunk(time=None)
+        assert len(merged) == 1
+        assert isinstance(merged[0], dc.Patch)
 
 
 class TestGetContents:

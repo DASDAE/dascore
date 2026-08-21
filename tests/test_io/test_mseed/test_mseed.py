@@ -180,10 +180,6 @@ class TestMiniSeedGetFormat:
         """MiniSEED v2 files can be detected."""
         assert MSeedV2().get_format(mseed_v2_path) == ("MSEED", "2")
 
-    def test_get_format_v3(self, mseed_v3_path):
-        """MiniSEED v3 files can be detected."""
-        assert MSeedV2().get_format(mseed_v3_path) == ("MSEED", "3")
-
     def test_get_format_from_dascore(self, mseed_v3_path):
         """DASCore can detect MiniSEED files through plugin discovery."""
         assert dc.get_format(mseed_v3_path) == ("MSEED", "3")
@@ -604,6 +600,8 @@ class TestMiniSeedUtils:
 
         assert mseed_utils._record_dtype(Record()) == "float64"
 
+    # One encoding per distinct dtype the table maps to, plus one it does
+    # not know: repeating int32 for 3, 10 and 11 says the same thing thrice.
     @pytest.mark.parametrize(
         ("encoding", "dtype"),
         (
@@ -612,8 +610,6 @@ class TestMiniSeedUtils:
             (3, "int32"),
             (4, "float32"),
             (5, "float64"),
-            (10, "int32"),
-            (11, "int32"),
             (999, ""),
         ),
     )

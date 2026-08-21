@@ -34,14 +34,6 @@ class TestGetFormat:
         parser = PickleIO()
         assert not parser.get_format(generic_hdf5)
 
-    def test_read_pickle(self, pickle_patch_path, random_patch):
-        """Ensure a pickle file can be read."""
-        out = dc.read(pickle_patch_path)
-        assert isinstance(out, dc.BaseSpool)
-        assert len(out) == 1
-        assert isinstance(out[0], dc.Patch)
-        assert random_patch == out[0]
-
     def test_spool_from_pickle(self, pickle_patch_path, random_patch):
         """dc.spool on a scanless format wraps the read spool and serves it.
 

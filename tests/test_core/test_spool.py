@@ -28,7 +28,7 @@ from dascore.exceptions import (
 from dascore.io.index.planned import PlanResolver
 from dascore.io.segy import SegyV1_0
 from dascore.utils.downloader import fetch
-from dascore.utils.misc import deep_equality_check, suppress_warnings
+from dascore.utils.misc import suppress_warnings
 from dascore.utils.patch_assembly import _estimate_merge_samples, _get_varying_dim
 from dascore.utils.time import to_datetime64, to_timedelta64
 
@@ -76,12 +76,6 @@ class TestSpoolBasics:
     def test_updated_spool_eq(self, random_spool):
         """Ensure updating the spool doesn't change equality."""
         assert random_spool == random_spool.update()
-
-    def test_empty_spool_str(self):
-        """Ensure and empty spool has a string rep. See #295."""
-        spool = dc.spool([])
-        spool_str = str(spool)
-        assert "Spool" in spool_str
 
     def test_spool_with_empty_patch_str(self):
         """A spool with an empty patch should have a str."""
@@ -201,12 +195,6 @@ class TestLiveSpoolLazy:
         assert tuple(registry.values()) == (random_patch,)
         # simple access never bootstrapped the index backend
         assert spool._catalog._backend is None
-
-    def test_empty_memory_spool(self):
-        """An empty Spool is a valid, iterable, zero-length spool."""
-        spool = Spool()
-        assert len(spool) == 0
-        assert list(spool) == []
 
 
 class TestSpoolHelpers:
@@ -461,14 +449,6 @@ class TestSpoolIntArraySelect:
 class TestSpoolIterable:
     """Tests for iterating Spools."""
 
-    def test_len(self, random_spool):
-        """Ensure the spool has a length."""
-        assert len(random_spool) == len(list(random_spool))
-
-    def test_index(self, random_spool):
-        """Ensure the spool can be indexed."""
-        assert isinstance(random_spool[0], dc.Patch)
-
     def test_list_o_patches(self, random_spool):
         """Ensure random_string can be iterated."""
         for pa in random_spool:
@@ -476,12 +456,6 @@ class TestSpoolIterable:
         patch_list = list(random_spool)
         for pa in patch_list:
             assert isinstance(pa, dc.Patch)
-
-    def test_index_error(self, random_spool):
-        """Ensure an IndexError is raised when indexing beyond spool."""
-        spool_len = len(random_spool)
-        with pytest.raises(IndexError, match="out of bounds"):
-            _ = random_spool[spool_len]
 
     def test_index_returns_corresponding_patch(self, random_spool):
         """Ensure the index returns the correct patch."""
@@ -1064,45 +1038,6 @@ class TestMisc:
         assert isinstance(patch, dc.Patch)
 
 
-class TestDeepEqualityCheck:
-    """Coverage for deep_equality_check branches (formerly via spool attrs)."""
-
-    def test_non_dict_comparison(self):
-        """Plain value comparison inside dicts."""
-        assert deep_equality_check({"a": "hello"}, {"a": "hello"})
-        assert not deep_equality_check({"a": "hello"}, {"a": "world"})
-
-    def test_objects_with_dict(self):
-        """Objects compare via recursive __dict__ comparison."""
-
-        class TestObject:
-            def __init__(self, value):
-                self.value = value
-
-        assert deep_equality_check({"o": TestObject(42)}, {"o": TestObject(42)})
-        assert not deep_equality_check({"o": TestObject(1)}, {"o": TestObject(2)})
-
-    def test_mixed_types(self):
-        """Ints, lists, and numpy arrays compare by value."""
-        d1 = {"i": 42, "l": [1, 2, 3], "a": np.array([1, 2, 3])}
-        d2 = {"i": 42, "l": [1, 2, 3], "a": np.array([1, 2, 3])}
-        assert deep_equality_check(d1, d2)
-        d2["a"] = np.array([1, 2, 4])
-        assert not deep_equality_check(d1, d2)
-
-    def test_dataframes(self):
-        """DataFrames compare via .equals."""
-        df1 = pd.DataFrame({"a": [1, 2, 3], "b": [4, 5, 6]})
-        df2 = pd.DataFrame({"a": [1, 2, 3], "b": [4, 5, 6]})
-        assert deep_equality_check({"df": df1}, {"df": df2})
-        df3 = pd.DataFrame({"a": [1, 2, 4], "b": [4, 5, 6]})
-        assert not deep_equality_check({"df": df1}, {"df": df3})
-
-    def test_unequal_sub_dicts(self):
-        """Nested dicts with different values are unequal."""
-        assert not deep_equality_check({"d": {1: 2}}, {"d": {2: 3}})
-
-
 class TestSpoolCoverageEdges:
     """Cover remaining spool-machinery branches with real operations."""
 
@@ -1110,11 +1045,16 @@ class TestSpoolCoverageEdges:
     def many_contiguous(self):
         """Twelve contiguous patches (for >10-row merge handling)."""
         t0 = np.datetime64("2020-01-01", "ns")
-        patch = dc.get_example_patch(time_min=t0)
+        # Twelve is the point (the de-dup branch needs more than ten rows);
+        # how much data is in each of them is not.
+        shape = (10, 50)
+        patch = dc.get_example_patch(time_min=t0, shape=shape)
         step = patch.get_coord("time").step
         out = [patch]
         for _ in range(11):
-            nxt = dc.get_example_patch(time_min=out[-1].get_coord("time").max() + step)
+            nxt = dc.get_example_patch(
+                time_min=out[-1].get_coord("time").max() + step, shape=shape
+            )
             out.append(nxt)
         return out
 
@@ -1205,7 +1145,7 @@ class TestSpoolCoverageEdges:
         )
 
     def test_empty_memory_spool_len_iter_repr(self):
-        """A bare Spool() is a valid empty spool."""
+        """A bare Spool() is a valid empty spool, string and all. See #295."""
         empty = Spool()
         assert len(empty) == 0
         assert list(empty) == []

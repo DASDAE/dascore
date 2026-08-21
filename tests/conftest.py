@@ -32,10 +32,8 @@ from dascore.utils.misc import register_func
 
 test_data_path = Path(__file__).parent.absolute() / "test_data"
 
-# A list to register functions that return general spools or patches
-# These are to be used for running many patches/spools through
-# Generic tests.
-SPOOL_FIXTURES = []
+# A list to register functions that return patches, for running many of
+# them through generic tests (the `patch` meta-fixture below).
 PATCH_FIXTURES = []
 
 # By default DASCore only issues a warning once per line. This ensures
@@ -511,7 +509,7 @@ def patch(request):
     return request.getfixturevalue(request.param)
 
 
-@pytest.fixture(scope="class")
+@pytest.fixture(scope="session")
 def one_file_dir(tmp_path_factory, random_patch):
     """Create a directory with a single DAS file."""
     out = Path(tmp_path_factory.mktemp("one_file_file_spool"))
@@ -526,7 +524,7 @@ def random_directory_spool(tmp_path_factory):
     return dc.examples.random_directory_spool(path=path)
 
 
-@pytest.fixture(scope="class")
+@pytest.fixture(scope="session")
 def two_patch_directory(tmp_path_factory, terra15_das_example_path, random_patch):
     """Create a directory of DAS files for testing."""
     # first copy in a terra15 file
@@ -537,7 +535,7 @@ def two_patch_directory(tmp_path_factory, terra15_das_example_path, random_patch
     return dir_path
 
 
-@pytest.fixture(scope="class")
+@pytest.fixture(scope="session")
 def diverse_spool_directory(diverse_spool, tmp_path_factory):
     """Save the diverse spool contents to a directory.
 
@@ -549,29 +547,10 @@ def diverse_spool_directory(diverse_spool, tmp_path_factory):
     return ex.spool_to_directory(diverse_spool, path=out)
 
 
-@pytest.fixture(scope="class")
-def adjacent_spool_directory(tmp_path_factory, adjacent_spool_no_overlap):
-    """Create a directory of adjacent patches."""
-    # create a directory with several patch files in it.
-    dir_path = Path(tmp_path_factory.mktemp("data"))
-    for num, patch in enumerate(adjacent_spool_no_overlap):
-        path = dir_path / f"{num}_patch.hdf5"
-        dc.write(patch, path, file_format="dasdae")
-    return dir_path
-
-
 # --- Spool fixtures
 
 
-@pytest.fixture()
-@register_func(SPOOL_FIXTURES)
-def terra15_das_spool(terra15_das_example_path) -> SpoolType:
-    """Return the spool of Terra15 Das Array."""
-    return read(terra15_das_example_path, file_format="terra15")
-
-
 @pytest.fixture(scope="session")
-@register_func(SPOOL_FIXTURES)
 def terra15_das_unfinished_path() -> Path:
     """Return the spool of Terra15 Das Array."""
     out = fetch("terra15_das_unfinished.hdf5")
@@ -579,15 +558,13 @@ def terra15_das_unfinished_path() -> Path:
     return out
 
 
-@pytest.fixture(scope="class")
-@register_func(SPOOL_FIXTURES)
+@pytest.fixture(scope="session")
 def random_spool() -> SpoolType:
     """Init a random array."""
     return get_example_spool("random_das")
 
 
-@pytest.fixture(scope="class")
-@register_func(SPOOL_FIXTURES)
+@pytest.fixture(scope="session")
 def adjacent_spool_no_overlap(random_patch) -> dc.BaseSpool:
     """
     Create a spool with several patches within one time sample but not
@@ -609,22 +586,19 @@ def adjacent_spool_no_overlap(random_patch) -> dc.BaseSpool:
     return dc.spool([pa2, pa1, pa3])
 
 
-@pytest.fixture(scope="class")
-@register_func(SPOOL_FIXTURES)
+@pytest.fixture(scope="session")
 def one_file_directory_spool(one_file_dir):
     """Create a directory with a single DAS file."""
     return Spool.from_directory(one_file_dir).update()
 
 
-@pytest.fixture(scope="class")
-@register_func(SPOOL_FIXTURES)
+@pytest.fixture(scope="session")
 def diverse_spool():
     """Create a spool with a diverse set of patches for testing."""
     return ex.diverse_spool()
 
 
-@pytest.fixture(scope="class")
-@register_func(SPOOL_FIXTURES)
+@pytest.fixture(scope="session")
 def diverse_directory_spool(diverse_spool_directory):
     """Save the diverse spool contents to a directory."""
     out = dc.spool(diverse_spool_directory).update()
@@ -633,8 +607,7 @@ def diverse_directory_spool(diverse_spool_directory):
     out.indexer.close()
 
 
-@pytest.fixture(scope="class")
-@register_func(SPOOL_FIXTURES)
+@pytest.fixture(scope="session")
 def basic_file_spool(two_patch_directory):
     """Return a DAS bank on basic_bank_directory."""
     out = Spool.from_directory(two_patch_directory).update().update()
@@ -643,14 +616,12 @@ def basic_file_spool(two_patch_directory):
 
 
 @pytest.fixture(scope="class")
-@register_func(SPOOL_FIXTURES)
 def terra15_file_spool(terra15_v5_path):
     """A file spool for terra15."""
     return dc.spool(terra15_v5_path)
 
 
-@pytest.fixture(scope="class")
-@register_func(SPOOL_FIXTURES)
+@pytest.fixture(scope="session")
 def memory_spool_dim_1_patches():
     """
     Memory spool with patches that have length 1 in one dimension.
@@ -666,8 +637,7 @@ def memory_spool_dim_1_patches():
     return spool
 
 
-@pytest.fixture(scope="class")
-@register_func(SPOOL_FIXTURES)
+@pytest.fixture(scope="session")
 def all_examples_spool(tmp_path_factory, terra15_das_example_path):
     """Create a spool from all the example files."""
     # Indexing the example files where they sit would write an index into the
@@ -683,8 +653,7 @@ def all_examples_spool(tmp_path_factory, terra15_das_example_path):
     return dc.spool(directory).update()
 
 
-@pytest.fixture(scope="class")
-@register_func(SPOOL_FIXTURES)
+@pytest.fixture(scope="session")
 def memory_spool_small_dt_differences(random_spool):
     """Create a memory spool with slightly different time_steps."""
     out = []
@@ -698,18 +667,11 @@ def memory_spool_small_dt_differences(random_spool):
 
 
 @pytest.fixture(scope="session")
-@register_func(SPOOL_FIXTURES)
 def spool_with_non_coords():
     """Return a spool which has some non-coordinate patches inside."""
     patches = list(dc.examples.get_example_spool(length=3))
     patches += [x.mean("time") for x in patches]
     return dc.spool(patches)
-
-
-@pytest.fixture(scope="class", params=SPOOL_FIXTURES)
-def spool(request):
-    """A meta-fixtures for collecting all spools used in testing."""
-    return request.getfixturevalue(request.param)
 
 
 # --- Misc. test fixtures

@@ -989,13 +989,19 @@ class TestScan:
         random_patch.io.write(path_3, "dasdae")
         return out
 
+    @pytest.fixture(scope="class")
+    def two_files(self, tmp_path_factory, random_patch):
+        """Two patch files, for the tests which only scan them."""
+        path = tmp_path_factory.mktemp("two_files")
+        paths = (path / "patch_1.h5", path / "patch_2.h5")
+        for each in paths:
+            random_patch.io.write(each, "dasdae")
+        return paths
+
     @pytest.mark.parametrize("func", [dc.scan, dc.scan_to_df, dc.scan_payloads])
-    def test_scan_accepts_a_collection(self, func, tmp_path, random_patch):
+    def test_scan_accepts_a_collection(self, func, two_files):
         """A collection of resources scans as the sum of its members."""
-        path_1 = tmp_path / "patch_1.h5"
-        path_2 = tmp_path / "patch_2.h5"
-        random_patch.io.write(path_1, "dasdae")
-        random_patch.io.write(path_2, "dasdae")
+        path_1, path_2 = two_files
         expected = len(func(path_1)) + len(func(path_2))
         assert len(func([path_1, path_2])) == expected
         # A set is a collection too, and the dispatcher does not index.
@@ -1006,12 +1012,9 @@ class TestScan:
         assert len(dc.scan([random_patch, random_patch])) == 2
 
     @pytest.mark.parametrize("func", [dc.scan, dc.scan_to_df, dc.scan_payloads])
-    def test_scan_accepts_a_one_shot_iterable(self, func, tmp_path, random_patch):
+    def test_scan_accepts_a_one_shot_iterable(self, func, two_files):
         """A generator input scans every element, not silently nothing (#818)."""
-        path_1 = tmp_path / "patch_1.h5"
-        path_2 = tmp_path / "patch_2.h5"
-        random_patch.io.write(path_1, "dasdae")
-        random_patch.io.write(path_2, "dasdae")
+        path_1, path_2 = two_files
         expected = len(func([path_1, path_2]))
         assert expected == 2
         assert len(func(p for p in [path_1, path_2])) == expected

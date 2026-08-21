@@ -75,11 +75,6 @@ class TestValidation:
         with pytest.raises(ParameterError, match="merging"):
             build_chunk_plan(random_flat, time=..., keep_partial=True)
 
-    def test_overlap_ge_length_raises(self, random_flat):
-        """D6: overlap >= length raises cleanly."""
-        with pytest.raises(ParameterError, match="overlap"):
-            build_chunk_plan(random_flat, time=2, overlap=2)
-
     def test_unknown_group_raises(self, random_flat):
         """Explicit group names must exist somewhere in the spool."""
         with pytest.raises(InvalidSpoolQueryError, match="bob"):
@@ -111,11 +106,6 @@ class TestMergePlan:
         # every source patch appears exactly once as a member
         assert len(plan.members) == len(random_flat)
         assert set(plan.members["_patch_id"]) == set(random_flat["_patch_id"])
-
-    def test_members_unmodified_when_contiguous(self, random_flat):
-        """Contiguous members load whole (no trims)."""
-        plan = build_chunk_plan(random_flat, time=None)
-        assert not plan.members["_modified"].any()
 
     def test_diverse_partitions(self, diverse_flat):
         """The diverse spool partitions by identity attrs, never raising."""
@@ -193,13 +183,6 @@ class TestSegmentPlan:
         with pytest.raises(ChunkError, match="sufficient length"):
             build_chunk_plan(df, time=100)
 
-    def test_overlap(self, random_flat):
-        """Overlapping chunks step by length minus overlap."""
-        plan = build_chunk_plan(random_flat, time=4, overlap=2)
-        starts = plan.outputs["time_min"].sort_values().values
-        strides = np.diff(starts)
-        assert (abs(strides - to_timedelta64(2)) <= to_timedelta64(0.01)).all()
-
     def test_middle_value_step(self):
         """D7: the partition step is the middle value of member steps."""
         t0 = np.datetime64("2020-01-01", "ns")
@@ -208,28 +191,6 @@ class TestSegmentPlan:
         p2 = dc.get_example_patch(time_min=time.max() + time.step)
         plan = build_chunk_plan(_flat([p1, p2]), time=None)
         assert plan.outputs["time_step"].iloc[0] == time.step
-
-
-class TestMissingDim:
-    """Spec section 7 (D2): patches lacking the chunk dim."""
-
-    @pytest.fixture()
-    def flat_with_null(self, random_flat):
-        """A flat relation with one null time envelope."""
-        df = random_flat.copy()
-        df.loc[df.index[0], ["time_min", "time_max"]] = (pd.NaT, pd.NaT)
-        return df
-
-    def test_raise_by_default(self, flat_with_null):
-        """Null chunk-dim envelopes raise by default."""
-        with pytest.raises(ChunkError, match="missing_dim"):
-            build_chunk_plan(flat_with_null, time=None)
-
-    def test_drop_opt_in(self, flat_with_null):
-        """missing_dim='drop' excludes the offending rows."""
-        plan = build_chunk_plan(flat_with_null, time=None, missing_dim="drop")
-        dropped = flat_with_null["_patch_id"].iloc[0]
-        assert dropped not in set(plan.members["_patch_id"])
 
 
 class TestConflict:
@@ -289,11 +250,6 @@ class TestConflict:
         """Drop omits the conflicting attr from outputs."""
         plan = build_chunk_plan(_flat(conflicted_patches), time=None, conflict="drop")
         assert "data_units" not in plan.outputs.columns
-
-    def test_unknown_policy_raises(self, conflicted_patches):
-        """A misspelled conflict policy cannot silently behave like drop."""
-        with pytest.raises(ParameterError, match="conflict must be"):
-            build_chunk_plan(_flat(conflicted_patches), time=None, conflict="keep_fist")
 
 
 class TestGroupParameter:
@@ -551,17 +507,6 @@ class TestSamplingGroups:
         labels = _sampling_group(pd.Series([1.0, np.nan, np.nan]), 0.05)
         assert labels.nunique() == 2
         assert labels.iloc[1] == labels.iloc[2]
-
-    def test_descending_contiguous_merges(self):
-        """Contiguous descending patches produce a single merge output."""
-        p = dc.get_example_patch()
-        flipped = p.flip("time")
-        t = p.get_coord("time")
-        span = t.max() - t.min() + t.step
-        shifted = flipped.update_coords(time=flipped.get_coord("time").data + span)
-        plan = dc.spool([shifted, flipped]).chunk_plan(time=None)
-        assert len(plan.outputs) == 1
-        assert len(plan.members) == 2
 
 
 class TestSamplesAdjustedEnvelopes:

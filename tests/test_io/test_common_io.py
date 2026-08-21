@@ -87,7 +87,9 @@ COMMON_IO_READ_TESTS = {
     NeubrexDASV1(): ("neubrex_das_1.h5",),
     NeubrexRFSV1(): ("neubrex_dss_forge.h5", "neubrex_dts_forge.h5"),
     ODH4V1(): ("optasense_odh4_1.h5",),
-    OptoDASV8(): ("opto_das_1.hdf5",),
+    # decimated_optodas.hdf5 is the #419 regression file; it is in the matrix
+    # so every contract runs over it, not only a read.
+    OptoDASV8(): ("opto_das_1.hdf5", "decimated_optodas.hdf5"),
     SR4731V200(): ("ofl100_1.sor", "ofl100_2.sor", "ofl100_3.sor"),
     ProdMLV2_0(): ("prodml_2.0.h5", "opta_sense_quantx_v2.h5"),
     ProdMLV2_1(): (

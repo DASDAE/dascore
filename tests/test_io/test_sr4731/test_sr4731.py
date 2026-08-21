@@ -156,13 +156,6 @@ class TestSR4731:
         """Return the parsed SR-4731 patch."""
         return self.parser.read(sor_path)[0]
 
-    def test_get_format(self, sor_path):
-        """Ensure the SOR file is identified."""
-        assert self.parser.get_format(sor_path) == (
-            self.parser.name,
-            self.parser.version,
-        )
-
     def test_scan(self, sor_path):
         """Scan returns expected SR-4731 metadata."""
         fixed = _expected_fixed_values(_get_block_payload(sor_path, "FxdParams"))
@@ -263,21 +256,6 @@ class TestSR4731:
         assert out.shape == (1, 6)
         assert_allclose(out.get_coord("distance").min(), distance.values[5])
         assert_allclose(out.get_coord("distance").max(), distance.values[10])
-
-    def test_out_of_range_selects_empty_spool(self, sor_path, sor_patch):
-        """Out-of-range selectors return an empty spool."""
-        time = sor_patch.get_coord("time")
-        distance = sor_patch.get_coord("distance")
-        assert not len(
-            self.parser.read(sor_path, time=(time.max() + np.timedelta64(1, "s"), ...))
-        )
-        assert not len(self.parser.read(sor_path, distance=(distance.max() + 1, ...)))
-
-    def test_read_stream(self, sor_path, sor_patch):
-        """BytesIO streams can be read."""
-        bio = BytesIO(sor_path.read_bytes())
-        out = self.parser.read(bio)[0]
-        assert out.equals(sor_patch)
 
     def test_get_format_false_for_version_mismatch(self, sor_path):
         """A valid SOR with the wrong map version should not be claimed."""

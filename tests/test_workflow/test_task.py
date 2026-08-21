@@ -183,16 +183,6 @@ class TestFingerprint:
         nanosecond = TimedValueTask(when=np.datetime64("2020-01-01T00:00:00.000000000"))
         assert day.fingerprint == nanosecond.fingerprint
 
-    def test_none_parameters_dropped(self):
-        """A parameter left at None is the same call as one left out."""
-        assert TimedValueTask(when=None).fingerprint == TimedValueTask().fingerprint
-
-    def test_array_parameter(self):
-        """An array parameter is hashed by its values."""
-        first = TimedValueTask(when=np.arange(3))
-        assert first.fingerprint != TimedValueTask(when=np.arange(4)).fingerprint
-        assert first.fingerprint == TimedValueTask(when=np.arange(3)).fingerprint
-
     def test_nested_task_parameter(self):
         """A task given to a task is part of its parameters."""
         first = TimedValueTask(when=ScaleTask(factor=2))

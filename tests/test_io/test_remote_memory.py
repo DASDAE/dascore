@@ -192,10 +192,10 @@ class TestMemoryRemoteMetadataAccess:
     @pytest.mark.parametrize(
         ("fetch_name", "expected"),
         [
+            # One HDF5 reader and one which walks a plain binary file: what
+            # this is about is the cache, not the readers.
             ("h5_simple_2.h5", ("H5Simple", "1")),
             ("sample_tdms_file_v4713.tdms", ("TDMS", "4713")),
-            ("DASDMSShot00_20230328155653619.das", ("sentek", "5")),
-            ("sintela_binary_v3_test_1.raw", ("Sintela_Binary", "3")),
         ],
     )
     def test_get_format_avoids_local_cache(
@@ -211,8 +211,6 @@ class TestMemoryRemoteMetadataAccess:
         [
             ("h5_simple_2.h5", ("H5Simple", "1")),
             ("sample_tdms_file_v4713.tdms", ("TDMS", "4713")),
-            ("DASDMSShot00_20230328155653619.das", ("sentek", "5")),
-            ("sintela_binary_v3_test_1.raw", ("Sintela_Binary", "3")),
         ],
     )
     def test_scan_avoids_local_cache(self, fetch_name, expected, memory_fetch_copy):

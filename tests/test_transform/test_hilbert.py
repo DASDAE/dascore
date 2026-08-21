@@ -67,7 +67,7 @@ class TestHilbert:
 class TestEnvelope:
     """Tests for the envelope function."""
 
-    @pytest.fixture(autouse=True)
+    @pytest.fixture(scope="class", autouse=True)
     def modulated_patch_and_envelope(self):
         """Return a modulated patch"""
         # Create AM signal: A(t) * cos(w*t) where A(t) is the envelope

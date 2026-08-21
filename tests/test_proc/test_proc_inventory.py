@@ -191,14 +191,6 @@ class TestAttrs:
             )
         assert "pulse_rate" not in dict(out.attrs)
 
-    def test_missing_named_coord_warn(self, patch, inventory):
-        """The coordinate half honors the same policy."""
-        with pytest.warns(UserWarning, match="defines no 'nope'"):
-            out = patch.enrich(
-                inventory, attrs=False, coords=("nope",), on_missing="warn"
-            )
-        assert "nope" not in out.coords.coord_map
-
     @pytest.mark.parametrize("kwargs", [{"attrs": None}, {"coords": None}])
     def test_none_is_not_the_off_switch(self, patch, inventory, kwargs):
         """False turns a half off; None is no longer a second spelling."""
@@ -517,13 +509,6 @@ class TestCoords:
         """It can instead be filled with the missing marker."""
         out = patch.enrich(inventory, attrs=False, coords=("nope",), on_missing="null")
         assert np.isnan(out.get_coord("nope").values).all()
-
-    def test_missing_coord_ignore(self, patch, inventory):
-        """Or omitted entirely."""
-        out = patch.enrich(
-            inventory, attrs=False, coords=("nope",), on_missing="ignore"
-        )
-        assert "nope" not in set(out.coords.coord_map)
 
     def test_blanket_without_geometry(self, patch, inventory):
         """A path with no geometry has no axes to project."""

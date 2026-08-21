@@ -83,7 +83,12 @@ class TestHDASV2:
         assert not hdas_v2_patch.attrs.data_units
 
     def test_v1_does_not_claim(self, hdas_v2_path):
-        """The V1 reader must not claim a V2 file."""
+        """The V1 reader must not claim a V2 file.
+
+        The common contract cannot say this: HDASV2 subclasses HDASV1, so
+        test_all_other_files_arent_format skips the V2 files while it is
+        testing V1.
+        """
         assert not HDASV1().get_format(hdas_v2_path)
 
 

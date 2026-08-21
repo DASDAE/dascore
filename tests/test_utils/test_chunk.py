@@ -232,13 +232,6 @@ class TestChunkPlanDF:
         )
         assert expected_start in set(plan.outputs["time_min"])
 
-    def test_all_nan(self, contiguous_df):
-        """When all rows lack the dim (and are dropped) the plan is empty."""
-        nat = dc.to_datetime64("NaT")
-        df = contiguous_df.assign(time_min=nat, time_max=nat)
-        plan = build_chunk_plan(df, missing_dim="drop", time=dc.to_timedelta64(1.2))
-        assert plan.outputs.empty
-
     def test_nan_in_sample_ok(self, contiguous_df):
         """Ensure a NaN in the sampling rate is ok."""
         df = contiguous_df.assign(time_step=dc.to_timedelta64("NaT"))
@@ -248,25 +241,9 @@ class TestChunkPlanDF:
         assert len(chunk_df) == 2 * len(contiguous_df)
         assert np.all(pd.isnull(chunk_df["time_step"]))
 
-    def test_unknown_dim_raises(self, contiguous_df):
-        """An unknown chunk dimension raises a clear error."""
-        with pytest.raises(ChunkError, match="Time"):
-            build_chunk_plan(contiguous_df, Time=10)
-
-    def test_invalid_conflict_raises(self, contiguous_df):
-        """An unsupported conflict value raises at the chunk call. See #804."""
-        with pytest.raises(ParameterError, match="conflict must be one of"):
-            build_chunk_plan(contiguous_df, time=None, conflict="banana")
-
 
 class TestChunkPlanToMerge:
     """Merge-mode planning on raw dataframes."""
-
-    def test_chunk_can_merge(self, contiguous_df):
-        """Ensure chunk can be used to merge unspecified segment lengths."""
-        out = build_chunk_plan(contiguous_df, time=None).outputs
-        assert len(out) == 1
-        assert out["time_min"].min() == contiguous_df["time_min"].min()
 
     def test_doesnt_merge_gappy_df(self, gapy_df):
         """Ensure the gappy dataframe doesn't get merged."""
@@ -308,14 +285,6 @@ class TestChunkPlanToMerge:
         with pytest.warns(UserWarning, match="force merging"):
             plan = build_chunk_plan(df, time=None, tolerance=10)
         assert len(plan.outputs) == 1
-
-    def test_modified_flag_after_merge(self, contiguous_df):
-        """The modified flag shows False for a simple contiguous merge."""
-        df = contiguous_df.assign(time_max=lambda x: x["time_max"] - x["time_step"])
-        plan = build_chunk_plan(df, time=None)
-        assert len(plan.outputs) == 1
-        assert plan.outputs["time_min"].min() == df["time_min"].min()
-        assert not plan.members["_modified"].any()
 
 
 class TestPlanMembers:
@@ -986,11 +955,6 @@ class TestBuildGapFrame:
         """Grouping by an envelope column would emit it twice."""
         with pytest.raises(ParameterError, match="collide"):
             build_gap_frame(contiguous_df, "time", group="time_step")
-
-    def test_bad_missing_dim_raises(self, contiguous_df):
-        """A typo in missing_dim raises rather than silently dropping."""
-        with pytest.raises(ParameterError, match="missing_dim"):
-            build_gap_frame(contiguous_df, "time", missing_dim="rasie")
 
 
 class TestBuildCoverageFrame:

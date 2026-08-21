@@ -280,9 +280,15 @@ class TestNanReduce:
         array[3, :] = np.nan
         return array
 
+    # Every pair but (keepdims=True, axis=0): what keepdims does to a
+    # reduction over the first axis, axis=1 already says. Keep the rest --
+    # min/max over axis 1 with keepdims is the only cell which notices the
+    # mask shape at array_api.py's all-nan check.
     @pytest.mark.parametrize("name", names)
-    @pytest.mark.parametrize("axis", [0, 1, None])
-    @pytest.mark.parametrize("keepdims", [True, False])
+    @pytest.mark.parametrize(
+        ("axis", "keepdims"),
+        [(0, False), (1, False), (None, False), (1, True), (None, True)],
+    )
     def test_matches_numpy(self, name, axis, keepdims, numpy_array, to_array):
         """The reductions agree with numpy, including on all-nan slices."""
         array = to_array(numpy_array)

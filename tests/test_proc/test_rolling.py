@@ -150,11 +150,11 @@ class TestRolling:
         last_label = np.take(out.data, 0, axis=time_ax)
         assert np.all(np.isnan(last_label))
 
-    @pytest.mark.parametrize("_", list(range(5)))
-    def test_compare_to_pandas(self, range_patch, _):
+    def test_compare_to_pandas(self, range_patch):
         """Test the apply method of PatchRoller when distance coordinate is entered
         and the first axis is distance.
         """
+        # Seeded, so the five trials this used to run were one trial five times.
         random = np.random.RandomState(42)
         patch = range_patch
         axis = patch.get_axis("distance")
@@ -235,20 +235,23 @@ class TestRolling:
         ).apply(lambda frame, axis=None: np.percentile(frame, 80, axis=axis) + 1)
         assert all_close(out, expected)
 
-    def test_pandas_apply_with_args_kwargs(self, random_patch):
+    def test_pandas_apply_with_args_kwargs(self):
         """Ensure pandas rolling apply supports extra function arguments."""
 
         def percentile_plus(frame, q, offset=0, axis=None):
             """Get percentile with an offset."""
             return np.percentile(frame, q, axis=axis) + offset
 
-        dt = random_patch.get_coord("time").step
-        out = random_patch.rolling(time=10 * dt, step=10 * dt, engine="pandas").apply(
+        # A small patch: pandas applies a python function per window, so this
+        # test's cost is the number of windows, not what is in them.
+        patch = dc.get_example_patch("random_das", shape=(30, 200))
+        dt = patch.get_coord("time").step
+        out = patch.rolling(time=10 * dt, step=10 * dt, engine="pandas").apply(
             percentile_plus, 80, offset=1
         )
-        expected = random_patch.rolling(
-            time=10 * dt, step=10 * dt, engine="pandas"
-        ).apply(lambda frame: np.percentile(frame, 80) + 1)
+        expected = patch.rolling(time=10 * dt, step=10 * dt, engine="pandas").apply(
+            lambda frame: np.percentile(frame, 80) + 1
+        )
         assert all_close(out, expected)
 
 

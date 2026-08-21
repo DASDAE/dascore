@@ -62,7 +62,7 @@ def _denies_access() -> bool:
 DENIES_ACCESS = _denies_access()
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 def curve() -> Moveout:
     """A moveout a path may be drawn from."""
     return Moveout(
@@ -75,7 +75,7 @@ def curve() -> Moveout:
     )
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 def regions() -> dc.AnnotationSet:
     """A set of regions, which a bare table can hold."""
     frame = pd.DataFrame(
@@ -103,7 +103,7 @@ def regions() -> dc.AnnotationSet:
     )
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 def with_vertices(curve) -> dc.AnnotationSet:
     """A set holding a hand-drawn path and one drawn from a curve."""
     drawn = curve.vertices(5)
@@ -133,7 +133,7 @@ def with_vertices(curve) -> dc.AnnotationSet:
     return dc.AnnotationSet(frame, dims=DIMS, vertices=vertices)
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 def picks() -> dc.AnnotationSet:
     """A set of time ranges made by a picker, on its own acquisition."""
     frame = pd.DataFrame(
@@ -277,7 +277,7 @@ class TestRoundTrip:
 class TestDeclaredDtypes:
     """A CSV states no types; the declaration beside it gives them back."""
 
-    @pytest.fixture
+    @pytest.fixture(scope="class")
     def typed(self):
         """A set declaring a categorical and a nullable integer column."""
         frame = pd.DataFrame(
@@ -1689,7 +1689,7 @@ def _forge(frame: pd.DataFrame, path, documents: str) -> None:
 class TestParquet:
     """The same tables, with their types kept, for a set too big to want text."""
 
-    @pytest.fixture
+    @pytest.fixture(scope="class")
     def mixed(self) -> dc.AnnotationSet:
         """A set whose columns hold what a CSV would have to spell as text."""
         frame = pd.DataFrame(

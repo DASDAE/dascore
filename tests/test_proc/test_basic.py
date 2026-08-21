@@ -209,19 +209,20 @@ class TestNormalize:
             assert np.all(norm.data[0, :] == 0.0)
             assert np.all(norm.data[:, 0] == 0.0)
 
+    # One dimension: normalize reduces along an axis, and which axis that
+    # is has its own tests above; what these two are about is the nans.
     @pytest.mark.parametrize("norm", ["l1", "l2", "max"])
-    @pytest.mark.parametrize("dim", ["time", "distance"])
-    def test_nan_does_not_contaminate_slice(self, random_patch, dim, norm):
+    def test_nan_does_not_contaminate_slice(self, random_patch, norm):
         """A single NaN should not blank every value sharing its slice."""
         patch = _patch_with_nan(random_patch)
-        out = patch.normalize(dim, norm=norm)
+        out = patch.normalize("time", norm=norm)
         assert np.isnan(out.data).sum() == 1
 
     @pytest.mark.filterwarnings("ignore:All-NaN slice encountered")
     @pytest.mark.parametrize("norm", ["l1", "l2", "max"])
-    @pytest.mark.parametrize("dim", ["time", "distance"])
-    def test_all_nan_slice_stays_null(self, random_patch, dim, norm):
+    def test_all_nan_slice_stays_null(self, random_patch, norm):
         """A completely null slice should stay null rather than become zeros."""
+        dim = "time"
         data = np.asarray(random_patch.data, dtype=np.float64).copy()
         # Null the first slice reduced by norm (patch is 2D, so the other axis).
         other_axis = 1 - random_patch.get_axis(dim)

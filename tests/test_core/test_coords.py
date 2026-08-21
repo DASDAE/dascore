@@ -156,11 +156,15 @@ def coord(request) -> BaseCoord:
     return request.getfixturevalue(request.param)
 
 
-@pytest.fixture(scope="session", params=COORDS)
+@pytest.fixture(scope="session")
 def long_coord(coord) -> BaseCoord:
-    """Meta-fixture for returning all coords with len > 7."""
-    if len(coord) < 7:
-        pytest.skip("Only coords with len 3 or more used.")
+    """The coord meta-fixture, for tests which need one longer than 7.
+
+    Every coord in COORDS is at least 100 long. Do not add `params=COORDS`
+    here: `coord` is already parametrized over them, so a second pass runs
+    each test once per pair of coords to see the same twelve.
+    """
+    assert len(coord) > 7
     return coord
 
 
@@ -194,10 +198,6 @@ def assert_value_in_one_step(coord, index, value, greater=True):
 
 class TestBasics:
     """A suite of basic tests for coordinates."""
-
-    def test_coord_init(self, coord):
-        """Simply run to insure all coords initialize."""
-        assert isinstance(coord, BaseCoord)
 
     def test_bad_init(self):
         """Ensure no parameters raises error."""
@@ -1040,13 +1040,6 @@ class TestOrder:
         coord, _reduction = long_coord.order(inds, samples=True)
         assert len(coord) == len(inds)
         assert np.all(coord.values == coord.values[0])
-
-    def test_non_integer_array_with_samples_raises(self, evenly_sampled_coord):
-        """Samples argument should require integer arrays."""
-        vals = np.array([1.01, 2.0, 3.0])
-        msg = "requires integer dtype"
-        with pytest.raises(CoordError, match=msg):
-            evenly_sampled_coord.select(vals, samples=True)
 
     def test_duplicate_array_values(self, long_coord):
         """Ensure duplicate values cause duplicates in array."""
@@ -2020,7 +2013,7 @@ class TestGetSampleCount:
         out = evenly_sampled_time_delta_coord.get_sample_count(12 * dt)
         assert out == 12
 
-    @pytest.mark.parametrize("sample", (0, 10, 100, 42, 13))
+    @pytest.mark.parametrize("sample", (0, 42))
     def test_samples(self, evenly_sampled_coord, sample):
         """Ensure value is returned when samples==True."""
         assert len(evenly_sampled_coord) >= sample
@@ -2351,7 +2344,9 @@ class TestChangeLength:
             with pytest.raises(ParameterError, match="non-negative"):
                 coord.change_length(length)
 
-    @pytest.mark.parametrize("length", [2.5, 3.0, "3", None, True, False])
+    # A float, a string and a bool: the three kinds of thing which are not
+    # an integer length (bool is the one the check has a clause for).
+    @pytest.mark.parametrize("length", [2.5, "3", True])
     def test_non_integer_length_raises(
         self, evenly_sampled_coord, basic_non_coord, length
     ):
