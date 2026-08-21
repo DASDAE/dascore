@@ -880,10 +880,10 @@ class TestSintelaProtobuf:
         ):
             fiber_io.scan(path)
 
-    # The check is `not isfinite(x) or x <= 0`: one value from each half.
-    # Zero rather than a negative, so a regression from `<= 0` to `< 0`
-    # fails here instead of passing.
-    @pytest.mark.parametrize("bad_sample_rate", [0.0, np.inf])
+    # The check is `not isfinite(x) or x <= 0`. Zero and a negative are not
+    # the same case: `< 0` would let zero through, `== 0` would let the
+    # negative through, and neither would notice the non-finite half.
+    @pytest.mark.parametrize("bad_sample_rate", [0.0, -1.0, np.inf])
     def test_timeseries_scan_rejects_invalid_sample_rate(
         self, fiber_io, write_sintela_file, ts_records, bad_sample_rate
     ):
@@ -902,7 +902,7 @@ class TestSintelaProtobuf:
         ):
             fiber_io.scan(path)
 
-    @pytest.mark.parametrize("bad_spacing", [0.0, np.inf])
+    @pytest.mark.parametrize("bad_spacing", [0.0, -1.0, np.inf])
     def test_scan_rejects_invalid_channel_spacing(
         self, fiber_io, write_sintela_file, ts_records, bad_spacing
     ):
@@ -1089,7 +1089,7 @@ class TestSintelaProtobuf:
         with pytest.raises(InvalidFiberFileError, match="FFT payload size"):
             fiber_io.read(path)
 
-    @pytest.mark.parametrize("bad_bin_res", [0.0, np.inf])
+    @pytest.mark.parametrize("bad_bin_res", [0.0, -1.0, np.inf])
     def test_fft_scan_rejects_invalid_bin_res(
         self, fiber_io, write_sintela_file, fft_records, bad_bin_res
     ):
