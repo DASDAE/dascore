@@ -45,12 +45,11 @@ from collections import defaultdict
 from collections.abc import Iterable, Mapping, Sequence
 from itertools import zip_longest
 from types import EllipsisType
-from typing import Annotated, Any, cast
+from typing import Annotated, Any, Self, cast
 
 import numpy as np
 from pydantic import field_validator, model_validator
 from rich.text import Text
-from typing_extensions import Self
 
 from dascore.constants import dascore_styles, select_values_description
 from dascore.core.coords import (

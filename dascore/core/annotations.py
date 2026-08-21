@@ -27,7 +27,7 @@ import pathlib
 import re
 from collections.abc import Collection, Iterable, Mapping, Sequence
 from contextlib import suppress
-from typing import Annotated, Any, ClassVar, Literal, NamedTuple
+from typing import Annotated, Any, ClassVar, Literal, NamedTuple, Self
 
 import numpy as np
 import pandas as pd
@@ -41,7 +41,6 @@ from pydantic import (
     ValidationError,
     model_validator,
 )
-from typing_extensions import Self
 
 from dascore.constants import max_lens
 from dascore.core.inventory import CreationInfo

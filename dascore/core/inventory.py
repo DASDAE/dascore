@@ -26,6 +26,7 @@ from typing import (
     ClassVar,
     Literal,
     NamedTuple,
+    Self,
     TypeAlias,
     Union,
     get_args,
@@ -41,7 +42,6 @@ from pydantic import (
     field_validator,
     model_validator,
 )
-from typing_extensions import Self
 
 from dascore.constants import DataCategory, DataType
 from dascore.exceptions import InvalidInventoryError, ParameterError

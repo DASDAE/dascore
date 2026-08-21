@@ -24,14 +24,13 @@ authors = [
 description = "A python library for distributed fiber optic sensing"
 readme = "readme.md"
 license = { file="docs/LICENSE" }
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 classifiers = [
     "Development Status :: 4 - Beta",
     "Environment :: WebAssembly",
     "Environment :: WebAssembly :: Emscripten",
     "License :: OSI Approved :: GNU Lesser General Public License v3 or later (LGPLv3+)",
     "Topic :: Scientific/Engineering",
-    "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
     "Programming Language :: Python :: 3.14",
@@ -254,12 +253,16 @@ exclude = [
 ]
 
 # lowest python version supported
-target-version = "py310"
+target-version = "py312"
 
 lint.fixable = ["ALL"]
 
 # List of codes to ignore
-lint.ignore = ["D105", "D107", "D401", "D205", "D200", "D400"]
+lint.ignore = [
+    "D105", "D107", "D401", "D205", "D200", "D400",
+    # PEP 695 generics and `type` aliases (3.12+): adopt in a dedicated pass.
+    "UP040", "UP046", "UP047",
+]
 
 [tool.ruff.lint.mccabe]
 # Unlike Flake8, default to a complexity level of 10.

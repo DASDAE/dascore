@@ -16,9 +16,9 @@ import os
 import tempfile
 from contextlib import suppress
 from pathlib import Path
+from typing import Self
 
 import pandas as pd
-from typing_extensions import Self
 
 import dascore as dc
 from dascore.compat import UPath

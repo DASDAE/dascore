@@ -1249,9 +1249,7 @@ def hash_array(arr: np.ndarray) -> str:
     h.update(np.asarray(arr.shape, dtype=np.int64).tobytes())
 
     # .data rather than memoryview(...) throughout: it is the same zero-copy
-    # object, and numpy types it as a memoryview, whereas ndarray's own
-    # __buffer__ is declared only for Python 3.12+ and so is invisible to a
-    # checker resolving the 3.11 floor this project supports.
+    # object, and numpy types it as a memoryview.
     if arr.flags.c_contiguous and arr.dtype.kind not in {"M", "m"}:
         # Zero-copy fast path
         h.update(arr.data.cast("B"))

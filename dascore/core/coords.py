@@ -18,7 +18,7 @@ from contextlib import suppress
 from functools import cache
 from operator import gt, lt
 from types import EllipsisType
-from typing import TYPE_CHECKING, Any, Literal, NoReturn, cast, overload
+from typing import TYPE_CHECKING, Any, Literal, NoReturn, Self, cast, overload
 
 import numpy as np
 import pandas as pd
@@ -29,7 +29,6 @@ from pydantic import (
     model_validator,
 )
 from rich.text import Text
-from typing_extensions import Self
 
 import dascore as dc
 from dascore.compat import array, is_array

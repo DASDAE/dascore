@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Annotated, Any, cast
+from typing import Annotated, Any, Self, cast
 
 from pydantic import (
     AfterValidator,
@@ -12,7 +12,6 @@ from pydantic import (
     PlainValidator,
     model_validator,
 )
-from typing_extensions import Self
 
 from dascore.constants import (
     DataCategory,
