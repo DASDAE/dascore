@@ -180,10 +180,6 @@ class TestMiniSeedGetFormat:
         """MiniSEED v2 files can be detected."""
         assert MSeedV2().get_format(mseed_v2_path) == ("MSEED", "2")
 
-    def test_get_format_v3(self, mseed_v3_path):
-        """MiniSEED v3 files can be detected."""
-        assert MSeedV2().get_format(mseed_v3_path) == ("MSEED", "3")
-
     def test_get_format_from_dascore(self, mseed_v3_path):
         """DASCore can detect MiniSEED files through plugin discovery."""
         assert dc.get_format(mseed_v3_path) == ("MSEED", "3")

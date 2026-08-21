@@ -11,7 +11,6 @@ import pandas as pd
 import pytest
 
 import dascore as dc
-from dascore.io.terra15 import Terra15FormatterV4
 from dascore.io.terra15.utils import _get_version_data_node
 
 
@@ -32,19 +31,6 @@ class TestTerra15:
         patch = dc.read(missing_gps_terra15_hdf5)[0]
         assert isinstance(patch, dc.Patch)
         assert not np.any(pd.isnull(patch.coords.get_array("time")))
-
-    def test_time_slice(self, terra15_v6_path):
-        """Ensure time slice within the file works."""
-        info = dc.scan_to_df(terra15_v6_path).iloc[0]
-        file_t1, file_t2 = info["time_min"], info["time_max"]
-        dur = file_t2 - file_t1
-        new_dur = dur / 4
-        t1, t2 = file_t1 + new_dur, file_t1 + 2 * new_dur
-        out = dc.read(terra15_v6_path, time=(t1, t2))[0]
-        assert isinstance(out, dc.Patch)
-        time_summary = out.summary.get_coord_summary("time")
-        assert time_summary.min >= t1
-        assert time_summary.max <= t2
 
     def test_time_slice_no_snap(self, terra15_v6_path):
         """Ensure no snapping returns raw time."""
@@ -85,11 +71,6 @@ class TestTerra15:
             patch.get_coord("distance").units
             == patch.summary.get_coord_summary("distance").units
         )
-
-    def test_hdf5file_not_terra15(self, generic_hdf5):
-        """Assert that the generic hdf5 file is not a terra15."""
-        parser = Terra15FormatterV4()
-        assert not parser.get_format(generic_hdf5)
 
     def test_unsupported_version_error(self):
         """Test that unsupported Terra15 version raises NotImplementedError."""

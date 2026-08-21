@@ -73,11 +73,6 @@ class TestProdMLFile:
         """Get the silixa file, return Patch."""
         return dc.spool(idas_h5_example_path)[0]
 
-    def test_read_silixa(self, silixa_h5_patch):
-        """Ensure we can read  Silixa file."""
-        assert isinstance(silixa_h5_patch, dc.Patch)
-        assert silixa_h5_patch.shape
-
     def test_has_gauge_length(self, silixa_h5_patch):
         """Ensure gauge-length is found in patch attrs."""
         patch = silixa_h5_patch

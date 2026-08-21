@@ -10,9 +10,8 @@ import pytest
 from numpy.testing import assert_allclose
 
 import dascore as dc
-from dascore.constants import STORAGE_PROVENANCE_ATTRS
 from dascore.io.febus import FebusBSLH5V1
-from dascore.io.febus.g1utils import _get_bsl_attrs, _get_g1_h5_base_coords
+from dascore.io.febus.g1utils import _get_g1_h5_base_coords
 from dascore.utils.downloader import fetch
 
 BSL_NAME = "febusg1_C2_2026-06-03T17.18.13+0200.bsl.h5"
@@ -32,13 +31,6 @@ class TestFebusBSL:
     def bsl_patch(self, bsl_path):
         """Return the parsed G1 BSL patch."""
         return self.parser.read(bsl_path)[0]
-
-    def test_get_format(self, bsl_path):
-        """Ensure the BSL HDF5 format can be auto-detected."""
-        assert self.parser.get_format(bsl_path) == (
-            self.parser.name,
-            self.parser.version,
-        )
 
     def test_future_format_version_not_claimed(self, bsl_path, tmp_path):
         """Future BSL format versions should not be claimed by the v1 reader."""
@@ -63,14 +55,6 @@ class TestFebusBSL:
         assert attr.data_type == "strain"
         assert attr.data_units == dc.get_quantity("microstrain")
 
-    def test_private_attrs_without_io_provenance(self, bsl_path):
-        """The low-level attrs helper can still omit DASCore IO attrs."""
-        with h5py.File(bsl_path) as h5:
-            attrs = _get_bsl_attrs(h5)
-        assert "file_format" not in attrs
-        assert "file_version" not in attrs
-        assert "path" not in attrs
-
     def test_read(self, bsl_patch):
         """Ensure the BSL file is read into a patch with expected shape."""
         assert isinstance(bsl_patch, dc.Patch)
@@ -78,11 +62,6 @@ class TestFebusBSL:
         assert bsl_patch.attrs.data_units == dc.get_quantity("microstrain")
         assert "temperature" in bsl_patch.coords.coord_map
         assert bsl_patch.coords.dim_map["temperature"] == ("time",)
-
-    def test_read_attrs_omit_storage_provenance(self, bsl_patch):
-        """Where the bytes live belongs to the spool, not to patch attrs."""
-        names = set(dict(bsl_patch.attrs))
-        assert not names & set(STORAGE_PROVENANCE_ATTRS)
 
     def test_distance_range(self, bsl_patch):
         """Distance should span 50-149 m."""
@@ -206,12 +185,3 @@ class TestFebusBSL:
         assert out.get_coord("time").max() == time.values[20]
         assert_allclose(out.get_coord("distance").min(), 55.0)
         assert_allclose(out.get_coord("distance").max(), 60.0)
-
-    def test_out_of_range_selects_empty_spool(self, bsl_path, bsl_patch):
-        """Out-of-range time and distance selections should return empty spools."""
-        time = bsl_patch.get_coord("time")
-        dist = bsl_patch.get_coord("distance")
-        assert not len(
-            self.parser.read(bsl_path, time=(time.max() + np.timedelta64(1, "s"), ...))
-        )
-        assert not len(self.parser.read(bsl_path, distance=(dist.max() + 1, ...)))

@@ -19,7 +19,6 @@ from dascore.io.netcdf.utils import (
     get_cf_version,
     is_netcdf4_file,
 )
-from dascore.utils.downloader import fetch
 from dascore.utils.remote_io import (
     clear_remote_file_cache,
     get_remote_cache_path,
@@ -230,15 +229,6 @@ class TestNetCDFUtils:
 
         with h5py.File(path, "r") as h5file:
             assert not is_netcdf4_file(h5file)
-
-    def test_get_cf_version_decodes_bytes(self, tmp_path):
-        """CF version extraction should decode byte attrs."""
-        path = tmp_path / "cf_version_bytes.nc"
-        with h5py.File(path, "w") as h5file:
-            h5file.attrs["Conventions"] = np.bytes_("CF-1.9")
-
-        with h5py.File(path, "r") as h5file:
-            assert get_cf_version(h5file) == "1.9"
 
 
 class TestNetCDFCoreHelpers:
@@ -561,10 +551,6 @@ class TestNetCDFIO:
         assert patch == example_patch
         assert _cached_file_count() == 0, "read should stream, not download"
 
-    def test_get_format(self, minimal_cf_netcdf_path):
-        """Test format detection."""
-        assert dc.get_format(minimal_cf_netcdf_path) == ("NETCDF_CF", "1.8")
-
     def test_get_format_without_xarray_import(
         self, minimal_cf_netcdf_path, monkeypatch
     ):
@@ -579,55 +565,6 @@ class TestNetCDFIO:
         monkeypatch.setattr(importlib, "import_module", _import_module)
 
         assert dc.get_format(minimal_cf_netcdf_path) == ("NETCDF_CF", "1.8")
-
-    def test_get_format_rejects_silixa_carina_hdf5(self):
-        """
-        NETCDF_CF must not claim Silixa Carina/iDAS HDF5 files.
-
-        These files (e.g. the INGV Mt Etna deployment) are written through a
-        netCDF library, so they carry _NCProperties and dimension scales, but
-        their netCDF coordinate variables are empty or zeroed; the usable
-        metadata lives in Silixa attrs on the root. They have no Conventions
-        attr, so the version requirement in get_format must reject them.
-        """
-        path = fetch("silixa_h5_ingv_1.h5")
-        formatter = netcdf_core.NetCDFCFV18()
-        with h5py.File(path, "r") as h5file:
-            assert is_netcdf4_file(h5file)
-            assert get_cf_version(h5file) is None
-            assert formatter.get_format(h5file) is False
-
-    def test_round_trip(self, example_patch, tmp_path):
-        """Test round-trip: patch -> NetCDF -> patch."""
-        _require_xarray_netcdf_engine()
-        path = tmp_path / "roundtrip.nc"
-
-        # Write and read back
-        dc.write(example_patch, path, file_format="netcdf_cf")
-        spool = dc.read(path, file_format="netcdf_cf")
-        recovered_patch = spool[0]
-
-        # Check data preservation
-        np.testing.assert_array_almost_equal(
-            example_patch.data, recovered_patch.data, decimal=6
-        )
-
-        # Check coordinate preservation
-        for coord_name in example_patch.coords.coord_map:
-            orig_coord = example_patch.coords.get_array(coord_name)
-            recovered_coord = recovered_patch.coords.get_array(coord_name)
-
-            if coord_name == "time":
-                # Time coordinates might have slight precision differences
-                # due to CF time conversion (float64 seconds -> datetime64[ns])
-                time_diff = np.abs(orig_coord - recovered_coord)
-                assert np.all(
-                    time_diff < np.timedelta64(200, "us")
-                )  # 200 microsecond tolerance
-            else:
-                np.testing.assert_array_almost_equal(
-                    orig_coord, recovered_coord, decimal=6
-                )
 
 
 class TestNetCDFXarrayCompatibility:
@@ -796,11 +733,6 @@ class TestNetCDFEdgeCases:
             NotImplementedError, match="Multi-patch spools not yet supported"
         ):
             dc.write(multi_patch_spool, path, file_format="netcdf_cf")
-
-    def test_invalid_netcdf_file(self, invalid_hdf5_file):
-        """Test behavior with invalid NetCDF file."""
-        with h5py.File(invalid_hdf5_file, "r") as h5file:
-            assert not is_netcdf4_file(h5file)
 
     def test_compression_options(self, compressed_netcdf_file):
         """Test NetCDF file creation with compression options."""

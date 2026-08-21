@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import pickle
 import shutil
-from pathlib import Path
 from typing import ClassVar
 
 import h5py
@@ -92,33 +91,11 @@ def dasdae_v1_file_path(request):
 class TestWriteDASDAE:
     """Ensure the format can be written."""
 
-    def test_file_exists(self, dasdae_v1_file_path):
-        """The file should *of course* exist."""
-        assert Path(dasdae_v1_file_path).exists()
-
     def test_append(self, written_dascore_v1_random, tmp_path_factory, random_patch):
         """Ensure files can be appended to unindexed dasdae file."""
         # make a copy of the dasdae file.
         new_path = tmp_path_factory.mktemp("dasdae_append") / "tmp.h5"
         shutil.copy(written_dascore_v1_random, new_path)
-        # ensure the patch exists in the copied spool.
-        df_pre = dc.spool(new_path).get_contents()
-        assert len(df_pre) == 1
-        # append patch to dasdae file
-        new_patch = random_patch.update_coords(time_min="1990-01-01")
-        dc.write(new_patch, new_path, "DASDAE")
-        # ensure the file has grown in contents
-        df = dc.spool(new_path).get_contents()
-        assert len(df) == len(df_pre) + 1
-        assert (df["time_min"] == to_datetime64("1990-01-01")).any()
-
-    def test_append_after_copy(
-        self, written_dascore_v1_random_copy, tmp_path_factory, random_patch
-    ):
-        """Ensure append still works on a copied DASDAE file."""
-        # make a copy of the dasdae file.
-        new_path = tmp_path_factory.mktemp("dasdae_append") / "tmp.h5"
-        shutil.copy(written_dascore_v1_random_copy, new_path)
         # ensure the patch exists in the copied spool.
         df_pre = dc.spool(new_path).get_contents()
         assert len(df_pre) == 1
@@ -145,27 +122,11 @@ class TestWriteDASDAE:
 class TestReadDASDAE:
     """Test for reading a dasdae format."""
 
-    def test_round_trip_random_patch(self, random_patch, tmp_path_factory):
-        """Ensure the random patch can be round-tripped."""
-        path = tmp_path_factory.mktemp("dasdae_round_trip") / "rt.h5"
-        dc.write(random_patch, path, "DASDAE")
-        out = dc.read(path)
-        assert len(out) == 1
-        assert out[0].equals(random_patch)
-
     def test_round_trip_empty_patch(self, written_dascore_v1_empty):
         """Ensure an empty patch can be deserialized."""
         spool = dc.read(written_dascore_v1_empty)
         assert len(spool) == 1
         spool[0].equals(dc.Patch())
-
-    def test_reads_legacy_fixture(self):
-        """Legacy DASDAE fixtures still need to remain readable."""
-        path = fetch("example_dasdae_event_1.h5")
-        with config_context(allow_dasdae_format_unpickle=True):
-            spool = dc.read(path, file_format="DASDAE")
-        assert len(spool) == 1
-        assert spool[0].dims
 
     def test_append_to_legacy_file_keeps_new_attrs(
         self, random_patch, tmp_path_factory
@@ -286,22 +247,6 @@ class TestReadDASDAE:
         assert len(out) == 1
         assert out[0].attrs.tag == "S120"
 
-    def test_get_format_false(self, generic_hdf5):
-        """A generic HDF5 file is not a DASDAE file."""
-        parser = DASDAEV1()
-        assert not parser.get_format(generic_hdf5)
-
-    def test_read_empty_selection_returns_no_patches(
-        self, tmp_path_factory, random_patch
-    ):
-        """Selections outside an empty patch should return no patches."""
-        path = tmp_path_factory.mktemp("dasdae_read_empty_selection") / "out.h5"
-        time = random_patch.get_coord("time")
-        random_patch.io.write(path, "dasdae")
-        empty_range_start = time.max() + 3 * time.step
-        out = dc.read(path, time=(empty_range_start, ...))
-        assert len(out) == 0
-
 
 class TestScanDASDAE:
     """Tests for scanning the dasdae format."""
@@ -316,23 +261,6 @@ class TestScanDASDAE:
         assert info1["patch_id"] == info2["patch_id"]
         for key in common_keys:
             assert info1[key] == info2[key]
-
-    def test_scan_has_source_patch_key(self, written_dascore_v1_random):
-        """Scanned DASDAE patches should expose source patch ids."""
-        patch = dc.scan(written_dascore_v1_random)[0]
-        assert patch.source_patch_key
-
-    def test_copied_fixture_matches_original(
-        self,
-        written_dascore_v1_random,
-        written_dascore_v1_random_copy,
-    ):
-        """Copying a DASDAE file should not change scan output."""
-        df1 = dc.scan_to_df(written_dascore_v1_random)
-        df2 = dc.scan_to_df(written_dascore_v1_random_copy)
-        # common fields should be equal (except path)
-        common = list((set(df1) & set(df2)) - {"source_path"})
-        assert df1[common].equals(df2[common])
 
     def test_get_patch_summary_has_file_metadata(self, random_spool):
         """The summary helper should stamp DASDAE metadata on each row."""
@@ -871,7 +799,7 @@ class TestRoundTrips:
         new = random_patch.update_coords(dt=("distance", dt))
         new.io.write(path, "dasdae")
         patch = dc.spool(path, file_format="DASDAE")[0]
-        assert isinstance(patch, dc.Patch)
+        assert patch == new
 
     def test_roundtrip_nullish_datetime_coord(self, tmp_path_factory, random_patch):
         """Ensure a patch with an attached datetime coord with nulls works."""

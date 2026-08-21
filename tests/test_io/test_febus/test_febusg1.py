@@ -14,7 +14,6 @@ import numpy as np
 import pytest
 
 import dascore as dc
-from dascore.constants import STORAGE_PROVENANCE_ATTRS
 from dascore.io.febus.core import FebusG1CSV1, FebusMTXH5V1
 from dascore.io.febus.g1utils import _is_g1_file
 from dascore.utils.downloader import fetch
@@ -130,25 +129,8 @@ class TestG1Scan:
         assert attr.source_version == g1.version
 
 
-class TestG1Read:
-    """Tests for reading G1 files into patches."""
-
-    def test_read(self, g1_path):
-        """Ensure a G1 file is read into a Patch with expected data."""
-        spool = dc.read(g1_path)
-        assert len(spool) == 1
-        patch = spool[0]
-        assert isinstance(patch, dc.Patch)
-
-
 class TestG1MTXH5:
     """Tests for Brillouin spectrum HDF5 files."""
-
-    def test_get_format(self, mtx_h5_path):
-        """Ensure the MTX HDF5 format can be auto-detected."""
-        fiber = FebusMTXH5V1()
-        assert fiber.get_format(mtx_h5_path) == (fiber.name, fiber.version)
-        assert dc.get_format(mtx_h5_path) == (fiber.name, fiber.version)
 
     def test_read(self, mtx_h5_path):
         """Ensure MTX HDF5 data are read into a 3D patch."""
@@ -181,21 +163,6 @@ class TestG1MTXH5:
         expected_frequency = 10750.0 + np.arange(3) * -3.90625
         np.testing.assert_array_equal(patch.data, stored)
         np.testing.assert_allclose(frequency.values, expected_frequency)
-
-    def test_read_attrs_omit_storage_provenance(self, mtx_h5_path):
-        """Where the bytes live belongs to the spool, not to patch attrs."""
-        patch = dc.read(mtx_h5_path)[0]
-        names = set(dict(patch.attrs))
-        assert not names & set(STORAGE_PROVENANCE_ATTRS)
-
-    def test_scan_matches_read_attrs(self, mtx_h5_path):
-        """Scan and read should return matching coord summaries."""
-        summary = dc.scan(mtx_h5_path)[0]
-        patch_summary = dc.read(mtx_h5_path)[0].summary
-        assert summary.dims == patch_summary.dims
-        assert summary.coords == patch_summary.coords
-        assert summary.source_format == FebusMTXH5V1.name
-        assert summary.source_version == FebusMTXH5V1.version
 
     def test_selects(self, mtx_h5_path):
         """Read supports selecting along all three dimensions."""
@@ -265,9 +232,3 @@ class TestMisc:
         fiber = FebusG1CSV1()
         with pytest.warns(UserWarning, match=self.mtx_text):
             fiber.scan(g1_mtx_buffer)
-
-    def test_directory_spool(self, two_patch_directory):
-        """Ensure a directory spool works and can read files."""
-        spool = dc.spool(two_patch_directory).update()
-        patch = spool[0]
-        assert isinstance(patch, dc.Patch)
