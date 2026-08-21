@@ -1984,7 +1984,6 @@ def _member_key_digests(sorted_df: pd.DataFrame, codes: np.ndarray, name: str):
     the digest is deliberately not an "fp:" key, since it claims nothing
     about values the relation never saw.
     """
-    n_out = int(codes.max()) + 1
     col = f"_{name}_def_key"
     assert col in sorted_df.columns, "a value-less target states an identity"
     out: list[str | None] = []
