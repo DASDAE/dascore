@@ -21,8 +21,9 @@ on:
 permissions:
   contents: read
 
+# Supersede the previous run: by pull request, or by branch for pushes.
 concurrency:
-  group: TestFreeThreaded-${{ github.event.pull_request.number || github.run_id }}
+  group: TestFreeThreaded-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 env:

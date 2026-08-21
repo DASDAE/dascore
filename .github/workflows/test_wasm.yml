@@ -26,8 +26,9 @@ on:
       - '.github/actions/**/*.yml'
       - '.github/scripts/**'
 
+# Supersede the previous run: by pull request, or by branch for pushes.
 concurrency:
-  group: TestWasm-${{ github.event.pull_request.number || github.run_id }}
+  group: TestWasm-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 # Both jobs must exercise the same Pyodide release so their results are

@@ -99,10 +99,7 @@ def _main_path(epoch: int) -> inv.OpticalPath:
                 start_distance=200.0, end_distance=400.0, group="zone", value="south"
             ),
             inv.OpticalPathLabel(
-                start_distance=150.0, end_distance=300.0, group="noisy", value=True
-            ),
-            inv.OpticalPathLabel(
-                start_distance=300.0, end_distance=400.0, group="noisy", value=False
+                start_distance=150.0, end_distance=300.0, group="noisy"
             ),
             inv.OpticalPathLabel(
                 start_distance=100.0, end_distance=200.0, group="count", value=0
