@@ -419,6 +419,25 @@ class TestDurationDimensions:
         saved = out.io.save(tmp_path / "picks", format="parquet")
         assert dc.annotations(saved) == out
 
+    @pytest.mark.skipif(pyarrow is None, reason="pyarrow is not installed")
+    def test_a_curve_drawn_over_one(self, tmp_path):
+        """The curve a path was drawn from survives with its endpoints."""
+        line = Line(
+            start={"offset": np.timedelta64(1, "s")},
+            end={"offset": np.timedelta64(3, "s")},
+        )
+        frame = pd.DataFrame({"id": ["p"], "geometry": ["path"], "basis": [line]})
+        vertices = pd.DataFrame(
+            {
+                "id": ["p"] * 2,
+                "seq": [0, 1],
+                "offset": np.array([1, 3], dtype="timedelta64[s]"),
+            }
+        )
+        out = dc.AnnotationSet(frame, dims=("offset",), vertices=vertices)
+        saved = out.io.save(tmp_path / "curve", format="parquet")
+        assert dc.annotations(saved)[0].geometry.basis == line
+
 
 class TestSavingOverASet:
     """Writing states the whole directory, not only the parts it has."""

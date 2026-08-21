@@ -180,10 +180,35 @@ def _serialize_coordinates(value, info):
 # apart.
 _DATETIME_TEXT = re.compile(r"^\d{4}-\d{2}-\d{2}(T\d{2}(:\d{2}(:\d{2}(\.\d+)?)?)?)?$")
 
+# What numpy spells a duration with, which is what `to_str` writes and so
+# what a stored curve over an offset dimension holds. Only the units a
+# coordinate is held in are read: a month and a year are no fixed span,
+# and numpy will not compare them against one.
+_DurationUnit = Literal["ns", "us", "ms", "s", "m", "h", "D", "W"]
+_DURATION_UNITS: dict[str, _DurationUnit] = {
+    "nanoseconds": "ns",
+    "microseconds": "us",
+    "milliseconds": "ms",
+    "seconds": "s",
+    "minutes": "m",
+    "hours": "h",
+    "days": "D",
+    "weeks": "W",
+}
+_DURATION_TEXT = re.compile(rf"^(-?\d+) ({'|'.join(_DURATION_UNITS)})$")
+
 
 def _coordinate(value):
-    """Read one coordinate, a datetime written as text becoming one again."""
-    if not (isinstance(value, str) and _DATETIME_TEXT.match(value)):
+    """Read one coordinate, a time or duration written as text becoming one."""
+    if not isinstance(value, str):
+        return value
+    if match := _DURATION_TEXT.match(value):
+        # The spelling `to_str` gives a duration, which is how a curve over
+        # an offset dimension is written down; read back, a basis holds the
+        # coordinates it was dumped from rather than their text.
+        count, unit = match.groups()
+        return np.timedelta64(int(count), _DURATION_UNITS[unit])
+    if not _DATETIME_TEXT.match(value):
         return value
     # Shaped like a date without being one: a label reading '2020-13-45'
     # is still the label it was written as.
@@ -1267,7 +1292,7 @@ def _type_vertices(vertices: pd.DataFrame, vertex_dims) -> pd.DataFrame:
     """
     changed = {}
     try:
-        changed[_ORDER] = pd.to_numeric(vertices[_ORDER])
+        order = pd.to_numeric(vertices[_ORDER])
     except (TypeError, ValueError) as error:
         msg = (
             f"The vertices state a {_ORDER} which is not a number: {error}. A "
@@ -1275,6 +1300,15 @@ def _type_vertices(vertices: pd.DataFrame, vertex_dims) -> pd.DataFrame:
             "orders it."
         )
         raise ParameterError(msg) from error
+    # The kind it converted to, as a dimension is read: `to_numeric` hands
+    # a boolean or a complex column straight back, and neither counts.
+    if order.dtype.kind not in _NUMBER_KINDS:
+        msg = (
+            f"The vertices state a {_ORDER} of {order.dtype}, which does not "
+            "count: a vertex states its place in the order as a number."
+        )
+        raise ParameterError(msg)
+    changed[_ORDER] = order
     for name in vertex_dims:
         read = _read_dimension(vertices[name])
         if read is not vertices[name]:
@@ -1474,11 +1508,30 @@ def _read_dimension(series: pd.Series) -> pd.Series:
     # column would read that number as an epoch, quietly placing it in
     # 1970 rather than where the row says.
     if not any(_is_number(x) for x in series[stated]):
-        for read, dtype in ((to_datetime64, _NS_TIME), (to_timedelta64, _NS_SPAN)):
-            # AssertionError: `to_timedelta64` states that way what it
-            # cannot read; OverflowError: a year a coordinate cannot hold.
-            with suppress(TypeError, ValueError, AssertionError, OverflowError):
-                values = np.asarray(read(series[stated]))
+        # Through `_scalar` first: python's own date and duration types
+        # are coordinates a frame may plainly hold, and the converters
+        # below read numpy's.
+        cells = series[stated].map(_scalar)
+        readers = ((to_datetime64, _NS_TIME), (to_timedelta64, _NS_SPAN))
+        # A duration is asked about first where the cells are plainly
+        # durations: the time reader takes one as a count from the epoch,
+        # so trying it first would read an offset of a second as 1970.
+        # Text keeps the other order, being the spelling times are written
+        # in and durations are not.
+        if all(isinstance(x, np.timedelta64 | datetime.timedelta) for x in cells):
+            readers = tuple(reversed(readers))
+        for read, dtype in readers:
+            # AssertionError and NotImplementedError: these two state that
+            # way what they cannot read; OverflowError: a year no
+            # coordinate holds.
+            with suppress(
+                TypeError,
+                ValueError,
+                AssertionError,
+                NotImplementedError,
+                OverflowError,
+            ):
+                values = np.asarray(read(cells))
                 # Checked rather than trusted: these read text nobody can
                 # place -- a label, a name -- as NaT rather than refusing
                 # it, and taking that would delete the cell rather than
@@ -1540,11 +1593,12 @@ def _normalize_identities(
     set built from a frame and the same set reloaded would otherwise name
     one row two things.
 
-    A whole number spelled as a float is named without its `.0`, but only
-    where the column also holds a blank -- that is what pandas makes of
-    whole numbers beside one, and it is the only reading under which the
-    `.0` was never the author's. A column of floats alone is named as the
-    floats it states.
+    A whole number is named without a `.0` wherever one appears, since a
+    blank beside it is all it takes for pandas to spell the column in
+    floats -- and an id, a parent and a vertex's id are read from three
+    columns which need not each hold a blank. Naming them from what each
+    column happens to hold would let one name `1` where another names
+    `1.0`, and the row they both mean would be an orphan.
     """
     changed = {}
     for name in columns:
@@ -1555,24 +1609,21 @@ def _normalize_identities(
             isinstance(x, str) for x in series if _stated(x)
         ):
             continue
-        stated = _stated_cells(series)
-        upcast = series.dtype.kind == "f" and not stated.all()
         changed[name] = pd.Series(
-            [_identity(x, upcast) for x in series], index=series.index, dtype=object
+            [_identity(x) for x in series], index=series.index, dtype=object
         )
     return _assign(frame, changed)
 
 
-def _identity(value, upcast: bool = False):
+def _identity(value):
     """Return the text one identity is named by, an unstated one as nothing."""
     if not _stated(value):
         return None
     value = _scalar(value)
     # Beyond where a float counts by ones it no longer names one integer,
     # so its own text is the most that can be said of it.
-    if upcast and isinstance(value, float) and value.is_integer():
-        if abs(value) < 2**53:
-            return str(int(value))
+    if isinstance(value, float) and value.is_integer() and abs(value) < 2**53:
+        return str(int(value))
     return str(value)
 
 
@@ -1688,6 +1739,12 @@ def _normalize_blanks(
         # and that is not this to overrule.
         if name in declared:
             continue
+        # A category is a dtype only a frame has: every table reads the
+        # column back as the text it holds, so a set which kept the
+        # category would differ from its own reload over nothing.
+        if isinstance(series.dtype, pd.CategoricalDtype):
+            series = series.astype(object)
+            changed[name] = series
         if series.dtype != object and not _stated_cells(series).any():
             changed[name] = pd.Series(
                 [None] * len(frame), index=frame.index, dtype=object
@@ -1892,8 +1949,9 @@ def _scalar(value):
     """
     if isinstance(value, datetime.datetime | datetime.date):
         return to_datetime64(value)
-    if isinstance(value, pd.Timedelta):
-        return value.to_timedelta64()
+    if isinstance(value, datetime.timedelta):
+        # pd.Timedelta is one of these, and so is the stdlib's own.
+        return np.timedelta64(value)
     if isinstance(value, np.generic) and value.dtype.kind not in "mM":
         return value.item()
     return value

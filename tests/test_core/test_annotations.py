@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import datetime
 from contextlib import suppress
 
 import numpy as np
@@ -290,6 +291,14 @@ class TestDimensionSpelling:
         held = AnnotationSet(frame, dims=("offset",)).io.to_dataframe()["offset"]
         assert held.dtype.kind in "Mm"
 
+    def test_a_dimension_of_python_durations(self):
+        """A frame may hold the stdlib's own duration; it is read as one."""
+        cells = pd.Series([datetime.timedelta(seconds=1)], dtype=object)
+        held = AnnotationSet(
+            pd.DataFrame({"offset": cells}), dims=("offset",)
+        ).io.to_dataframe()["offset"]
+        assert held.dtype == np.dtype("timedelta64[ns]")
+
     def test_a_duration_dimension_is_a_coordinate(self):
         """A dimension may be an offset from something, which is a duration."""
         spans = np.array([1, 3], dtype="timedelta64[s]")
@@ -547,10 +556,19 @@ class TestIdentity:
         assert [x.id for x in out] == ["1", "2"]
         assert out[1].parent == "1"
 
-    def test_float_ids_are_named_as_the_floats_they_are(self):
-        """Without a blank there was no upcast, so the `.0` is the author's."""
-        frame = pd.DataFrame({"id": [1.0, 2.5]})
-        assert [x.id for x in AnnotationSet(frame, dims=DIMS)] == ["1.0", "2.5"]
+    def test_a_whole_number_is_named_the_same_in_every_column(self):
+        """A blank in one identity column does not rename what another means."""
+        frame = pd.DataFrame({"id": [1.0, 2.5], "parent": [None, 1.0]})
+        out = AnnotationSet(frame, dims=DIMS)
+        assert [x.id for x in out] == ["1", "2.5"]
+        assert out[1].parent == "1"
+
+    def test_a_vertex_names_the_row_it_belongs_to(self):
+        """The vertex frame's ids are spelled as the annotations' are."""
+        frame = pd.DataFrame({"id": [1.0, None], "geometry": ["path", "region"]})
+        vertices = pd.DataFrame({"id": [1, 1], "seq": [0, 1], "distance": [0.0, 1.0]})
+        out = AnnotationSet(frame, dims=DIMS, vertices=vertices)
+        assert out[0].geometry.vertices["distance"] == (0.0, 1.0)
 
     def test_an_id_beyond_where_a_float_counts_by_ones(self):
         """A float that large names no one integer, so it keeps its own text."""
@@ -846,6 +864,19 @@ class TestVertexOrder:
         out = AnnotationSet(self._frame(), dims=DIMS, vertices=vertices)
         assert out[0].geometry.vertices["distance"] == (0.0, 1.0, 2.0, 10.0)
 
+    @pytest.mark.parametrize(
+        "order",
+        [
+            pytest.param([True, False], id="boolean"),
+            pytest.param([1 + 2j, 3 + 4j], id="complex"),
+        ],
+    )
+    def test_an_order_which_does_not_count(self, order):
+        """A true and an imaginary number place nothing in a sequence."""
+        vertices = pd.DataFrame({"id": ["p"] * 2, "seq": order, "distance": [0.0, 1.0]})
+        with pytest.raises(ParameterError, match="does not count"):
+            AnnotationSet(self._frame(), dims=DIMS, vertices=vertices)
+
     def test_order_which_is_not_a_number_refused(self):
         """A shape ordered by a label has no order a reader can keep."""
         vertices = pd.DataFrame(
@@ -912,6 +943,12 @@ class TestFrames:
         frame = pd.DataFrame({"group": pd.Categorical(["a", ""])})
         out = AnnotationSet(frame, dims=DIMS)
         assert out[0].group == "a" and out[1].group == ""
+
+    def test_a_categorical_column_is_held_as_text(self):
+        """Only a frame has a category; every table reads the text back."""
+        frame = pd.DataFrame({"group": pd.Categorical(["a", "b"])})
+        held = AnnotationSet(frame, dims=DIMS).io.to_dataframe()["group"]
+        assert held.dtype == object
 
     def test_round_trip(self, region_set):
         """A set rebuilt from its own frame holds the same annotations."""
@@ -1233,6 +1270,14 @@ class TestBasisColumn:
         frame = pd.DataFrame({"id": ["x"], "geometry": ["path"], "basis": [document]})
         out = AnnotationSet(frame, dims=DIMS, vertices=self._vertices())
         assert isinstance(out[0].geometry.basis, Line)
+
+    def test_a_curve_over_an_offset_dimension(self):
+        """A duration endpoint reads back as the duration it was dumped from."""
+        line = Line(
+            start={"offset": np.timedelta64(1, "s")},
+            end={"offset": np.timedelta64(3, "s")},
+        )
+        assert Line.model_validate(line.model_dump(mode="json")) == line
 
     def test_basis_which_is_not_a_document(self):
         """Text which is no document says that, not what pydantic made of it."""
