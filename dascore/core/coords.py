@@ -216,6 +216,33 @@ def _scalar_dtype(dtype: np.dtype, name: str) -> np.dtype:
         return dtype
     unit = np.datetime_data(dtype)[0]
     return np.dtype(f"timedelta64[{unit}]") if name == "step" else dtype
+def _grid_range(start, step, length: int, units, fields_set=None) -> CoordRange:
+    """
+    Build a CoordRange on an exactly known grid, skipping re-validation.
+
+    `CoordRange.validate_start_stop_step_len` exists to *derive* shape and a
+    normalized stop from loosely specified inputs. Callers here already know
+    the sample count exactly, so re-deriving costs ~60us and can only
+    reproduce what is passed in. Only use this where start/step/length come
+    from an already-validated coordinate; anything taking user input must go
+    through the validating constructor.
+    """
+    # Mirror check_time_units, which forces time-like coords to seconds.
+    # Note it tests `start` for truthiness, so a coord starting at exactly
+    # zero is left alone; that quirk is reproduced here deliberately.
+    if start and (is_timedelta64(start) or is_datetime64(start)):
+        units = _second_quantity()
+    return CoordRange.model_construct(
+        # copy; model_construct stores the set by reference.
+        _fields_set=set(fields_set) if fields_set else {"start", "stop", "step"},
+        units=units,
+        step=step,
+        shape=(length,),
+        # matches what the validator stores for dtype.
+        dtype=np.asarray(start + step).dtype,
+        start=start,
+        stop=start + step * length,
+    )
 
 
 class CoordSummary(DascoreBaseModel):
@@ -281,13 +308,29 @@ class CoordSummary(DascoreBaseModel):
             object.__setattr__(self, "dtype", str(dtype).split("[")[0])
         return self
 
-    def to_coord(self) -> CoordRange:
-        """Convert to coord range, if possible."""
+    def to_coord(self, *, on_grid: bool = False) -> CoordRange:
+        """
+        Convert to coord range, if possible.
+
+        Parameters
+        ----------
+        on_grid
+            When True the summary is trusted to describe a grid exactly —
+            `len` samples of `step` starting at `min` — and the range is
+            built without re-deriving what it already states, which costs
+            about 60us a call (see `CoordRange._new_grid`). Only pass this
+            for a summary which came from a validated coordinate, such as
+            one the index stored; anything taking user input must not.
+        """
         if not self.is_range_like:
             msg = "Cannot convert summary which is not evenly sampled to coord."
             raise CoordError(msg)
         step = self.step
         assert step is not None  # is_range_like above rules out a null step
+        if on_grid and self.len:
+            # a reverse coord runs from its max
+            start = self.max if np.sign(step) == -1 else self.min
+            return _grid_range(start, step, self.len, self.units)
         # this is a reverse coord
         if np.sign(step) == -1:
             start, stop = self.max, self.min + step
@@ -1509,23 +1552,8 @@ class CoordRange(BaseCoord):
         CoordRange and length is computed from indices; anything taking user
         input must go through the validating constructor.
         """
-        units = self.units
-        # Mirror check_time_units, which forces time-like coords to seconds.
-        # Note it tests `start` for truthiness, so a coord starting at exactly
-        # zero is left alone; that quirk is reproduced here deliberately.
-        if start and (is_timedelta64(start) or is_datetime64(start)):
-            units = _second_quantity()
-        return self.model_construct(
-            # copy; model_construct stores the set by reference.
-            _fields_set=set(self.model_fields_set),
-            units=units,
-            step=step,
-            shape=(length,),
-            # matches what the validator stores for dtype.
-            dtype=np.asarray(start + step).dtype,
-            start=start,
-            stop=start + step * length,
-        )
+        grid = _grid_range(start, step, length, self.units, self.model_fields_set)
+        return cast("Self", grid)
 
     @model_validator(mode="before")
     @classmethod

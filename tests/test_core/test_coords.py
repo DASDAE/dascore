@@ -2957,3 +2957,46 @@ class TestFusedRangeConstruction:
         assert isinstance(fused, CoordRange)
         assert len(fused) == 500
         assert fused.min() == 0.0 and fused.max() == 499.0
+
+
+class TestSummaryOnGrid:
+    """A summary trusted to describe a grid builds the same coord."""
+
+    @pytest.mark.parametrize(
+        "kwargs",
+        [
+            dict(start=0.0, stop=100.0, step=1.0),
+            dict(start=100.0, stop=0.0, step=-1.0),
+            dict(start=-5.0, stop=5.0, step=0.5, units="m"),
+        ],
+    )
+    def test_matches_the_validated_conversion(self, kwargs):
+        """on_grid=True is a shortcut, never a different answer."""
+        summary = get_coord(**kwargs).to_summary()
+        slow, fast = summary.to_coord(), summary.to_coord(on_grid=True)
+        assert slow == fast
+        assert slow.fingerprint() == fast.fingerprint()
+        assert slow.units == fast.units
+        assert np.array_equal(slow.values, fast.values)
+
+    def test_time_summary_matches(self):
+        """Time-like coords keep the seconds their validated twin states."""
+        t0 = np.datetime64("2020-01-01", "ns")
+        step = np.timedelta64(4, "ms")
+        summary = get_coord(start=t0, stop=t0 + 100 * step, step=step).to_summary()
+        slow, fast = summary.to_coord(), summary.to_coord(on_grid=True)
+        assert slow == fast
+        assert slow.units == fast.units
+        assert np.array_equal(slow.values, fast.values)
+
+    def test_without_a_length_falls_back(self):
+        """A summary which does not state its length is validated as before."""
+        summary = CoordSummary(dtype="float64", min=0.0, max=9.0, step=1.0)
+        assert summary.len is None
+        assert summary.to_coord(on_grid=True) == summary.to_coord()
+
+    def test_still_refuses_a_summary_without_a_step(self):
+        """The shortcut does not make an unsampled summary convertible."""
+        summary = CoordSummary(dtype="float64", min=0.0, max=9.0)
+        with pytest.raises(CoordError, match="evenly sampled"):
+            summary.to_coord(on_grid=True)
