@@ -8,12 +8,11 @@ from collections.abc import Callable, Generator, Iterator, Mapping, Sequence
 from dataclasses import replace
 from functools import singledispatch
 from pathlib import Path
-from typing import TYPE_CHECKING, ClassVar, Literal, NamedTuple, TypeVar, overload
+from typing import TYPE_CHECKING, ClassVar, Literal, NamedTuple, Self, TypeVar, overload
 
 import numpy as np
 import pandas as pd
 from rich.text import Text
-from typing_extensions import Self
 
 import dascore as dc
 from dascore.compat import UPath, is_array

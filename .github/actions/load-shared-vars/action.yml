@@ -36,14 +36,14 @@ runs:
         # pyproject claims is tested somewhere without widening the full
         # matrix (each entry there costs one environment cache per OS).
         full_py='["3.12","3.13","3.14"]'
-        min_deps_py='["3.11","3.14"]'
+        min_deps_py='["3.12","3.14"]'
 
         # What a pull request runs. Every python version and every OS is
         # still covered; only the redundant cross product is dropped. The
         # full grid runs on the push to dev that follows the merge. Set any
         # of these to its full_* counterpart to restore the old behavior.
         pr_test_matrix='{"os":["ubuntu-latest"],"python-version":["3.12","3.13","3.14"],"include":[{"os":"windows-latest","python-version":"3.13"},{"os":"macos-latest","python-version":"3.13"}]}'
-        pr_min_deps_matrix='{"os":["ubuntu-latest"],"python-version":["3.11","3.14"]}'
+        pr_min_deps_matrix='{"os":["ubuntu-latest"],"python-version":["3.12","3.14"]}'
         pr_network_os='["ubuntu-latest"]'
 
         # ---- nothing below here needs editing ----------------------

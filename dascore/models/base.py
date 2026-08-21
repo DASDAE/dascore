@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from functools import cached_property
-from typing import Any
+from typing import Any, Self
 
 import numpy as np
 import pandas as pd
@@ -17,7 +17,6 @@ from pydantic import (
     model_serializer,
     model_validator,
 )
-from typing_extensions import Self
 
 from dascore.compat import is_array_like
 from dascore.exceptions import InvalidInventoryError
