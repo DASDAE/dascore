@@ -121,6 +121,26 @@ class TestTDMSUtils:
         assert channel_length == 6
         assert out_attrs == attrs
 
+    def test_get_data_decimated_whole_chunks(self, monkeypatch):
+        """A decimated segment whose chunks are all full still has its data."""
+        fileinfo = {
+            "decimated": True,
+            "chunk_size": 2,
+            "data_type": "float32",
+            "file_size": 8,
+            "raw_data_offset": 0,
+            "n_channels": 1,
+            "next_segment_offset": 8,
+        }
+        attrs = {"tag": "example"}
+        data = np.array([1.0, 2.0], dtype=np.float32).tobytes()
+        fake = _FakeTDMSFile(data)
+        monkeypatch.setattr(tdms_utils, "_get_fileinfo", lambda _: (fileinfo, attrs))
+        monkeypatch.setattr(tdms_utils.mmap, "mmap", lambda *args, **kwargs: data)
+        out_data, channel_length, _ = tdms_utils._get_data(fake)
+        assert out_data.shape == (2, 1)
+        assert channel_length == 2
+
 
 class TestMultiSegment:
     """A TDMS file can hold several segments, each a stretch of time."""

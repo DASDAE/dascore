@@ -334,7 +334,9 @@ def _get_data(tdms_file, lead_in_length=28):
             # Rotate the axes to [samples, nch]
             raw_last_chunk = np.rollaxis(raw_last_chunk, 1)
             data_node = np.append(data_node, raw_last_chunk, axis=0)
-            return data_node, channel_length
+        # Outside the branch: a decimated segment whose chunks all happen to
+        # be full has nothing left over, and still has its data.
+        return data_node, channel_length
 
     fileinfo, attrs = _get_fileinfo(tdms_file)
 
