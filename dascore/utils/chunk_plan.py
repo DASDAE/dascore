@@ -45,7 +45,7 @@ from dascore.units import (
 from dascore.utils.attrs import known_only, validate_conflict
 from dascore.utils.chunk import get_intervals
 from dascore.utils.misc import get_middle_value, is_range
-from dascore.utils.pd import get_interval_columns
+from dascore.utils.pd import get_dim_names_from_columns, get_interval_columns
 from dascore.utils.time import is_datetime64, is_timedelta64, to_float, to_timedelta64
 
 # Columns which never participate in conflict policing and never carry to
@@ -289,19 +289,51 @@ def _sampling_group(step: pd.Series, tolerance: float) -> pd.Series:
     return pd.Series(labels, index=step.index)
 
 
-def _continuity_group(start, stop, step, tolerance) -> pd.Series:
-    """Label maximal near-contiguous runs (spec 2.4)."""
-    args = np.argsort(start.to_numpy())
-    start_sorted = start.iloc[args]
-    stop_sorted = stop.iloc[args]
+def _gap_boundaries(start, stop, step, tolerance):
+    """
+    Locate the discontinuities in one cell (spec 2.4).
+
+    Returns `(order, reach, has_gap)` over the start-ordered rows.
+    `reach` is the furthest stop seen *before* each row, so an
+    overlapping or fully-nested row can never open a gap behind it, and
+    `has_gap` marks each row whose start clears that reach by more than
+    `tolerance` steps. The first row has nothing behind it, and a row
+    whose step is unknown compares False, so neither reports a gap.
+
+    Arrays rather than a frame, and an explicit first-row mask rather
+    than `shift`, whose NaN fill would upcast integer envelopes to
+    float — `reach` is a reported value, not just a comparand.
+    """
+    order = np.argsort(start.to_numpy())
+    starts = start.to_numpy()[order]
+    stops = stop.to_numpy()[order]
     # envelopes are value-ordered regardless of coordinate orientation,
     # so the continuity margin uses the step magnitude
-    step_sorted = step.iloc[args].abs()
-    stop_cum_max = stop_sorted.cummax()
-    end_markers = stop_cum_max.shift() + step_sorted * tolerance
-    has_gap = start_sorted > end_markers
-    group = has_gap.astype(np.int64).cumsum()
-    return group[start.index]
+    steps = np.abs(step.to_numpy()[order])
+    reach = np.empty_like(stops)
+    reach[:1] = stops[:1]
+    np.maximum.accumulate(stops[:-1], out=reach[1:])
+    # Measure the distance from the reach rather than comparing against
+    # `reach + step * tolerance`: a float margin promotes that sum, and
+    # an integer coordinate past 2**53 rounds both endpoints together,
+    # hiding the gap. The distance itself is small enough to compare.
+    # Only rows past the reach are measured — a row which starts at or
+    # before it cannot open a gap, and subtracting there would wrap an
+    # unsigned envelope into an enormous phantom one.
+    has_gap = np.zeros(len(starts), dtype=bool)
+    ahead = starts > reach
+    if ahead.any():
+        has_gap[ahead] = (starts[ahead] - reach[ahead]) > steps[ahead] * tolerance
+    has_gap[:1] = False
+    return order, reach, has_gap
+
+
+def _continuity_group(start, stop, step, tolerance) -> pd.Series:
+    """Label maximal near-contiguous runs (spec 2.4)."""
+    order, _, has_gap = _gap_boundaries(start, stop, step, tolerance)
+    out = pd.Series(0, index=start.index, dtype=np.int64)
+    out.iloc[order] = np.cumsum(has_gap)
+    return out
 
 
 def _normalize_chunk_units(df: pd.DataFrame, name: str) -> pd.DataFrame:
@@ -376,24 +408,73 @@ def _normalize_chunk_units(df: pd.DataFrame, name: str) -> pd.DataFrame:
     return df
 
 
-def _partition(
-    df, name, group_attrs, tolerance, sampling_tolerance
-) -> tuple[pd.Series, bool]:
-    """
-    Return (partition labels, forced_merge): rows sharing a label may
-    combine (spec 2).
+def _validate_missing_dim(missing_dim) -> None:
+    """Reject a missing_dim value that is neither policy."""
+    if missing_dim not in ("raise", "drop"):
+        msg = f"missing_dim must be 'raise' or 'drop', got {missing_dim!r}"
+        raise ParameterError(msg)
 
-    Components: kind labels (`_kind_codes` over the group attrs), dims
-    signature, structural def keys of non-chunked coords, sampling group,
-    and continuity group. Continuity
-    is evaluated *within* each other-component cell so unrelated patches
-    can never bridge a gap. `forced_merge` is True when a loosened
-    tolerance merged patches the default would have kept apart (#662);
-    the caller owns warning about it.
+
+def _prepare_relation(
+    df: pd.DataFrame,
+    name: str,
+    missing_dim: str,
+    dim_label: str = "chunk dimension",
+    operation: str = "chunking",
+) -> pd.DataFrame:
     """
-    _start, _stop, step = get_interval_columns(df, name)
-    kind = _kind_codes(df, [x for x in group_attrs if x in df.columns])
-    cols: list = [kind]
+    Ready a flat relation for planning or reporting along ``name``.
+
+    Attaches patch ids, re-spells compatible units, then applies the
+    `missing_dim` policy. Missing envelopes, and patches carrying the
+    name only as a non-dimensional coordinate (spec 7 / D2), both count
+    as missing: envelope presence is not enough, because auxiliary
+    coordinates index their envelopes too but their patches cannot be
+    trimmed or merged *along* the name.
+
+    `dim_label` and `operation` word the error for the caller; a typo in
+    `missing_dim` raises here rather than silently taking the drop
+    branch, which would truncate exactly the report the user asked for.
+    """
+    _validate_missing_dim(missing_dim)
+    min_name, max_name = f"{name}_min", f"{name}_max"
+    df = _ensure_patch_id(df)
+    df = _normalize_chunk_units(df, name)
+    null_rows = pd.isnull(df[min_name]) | pd.isnull(df[max_name])
+    if "dims" in df.columns:
+        dim_lists = df["dims"].fillna("").astype(str).str.split(",")
+        not_a_dim = ~dim_lists.map(lambda dims: name in dims)
+    else:
+        not_a_dim = pd.Series(False, index=df.index)
+    unusable = null_rows | not_a_dim
+    if not unusable.any():
+        return df
+    if missing_dim == "raise":
+        bad = df.loc[unusable, "_patch_id"].tolist()
+        rides = int((not_a_dim & ~null_rows).sum())
+        detail = (
+            f" ({rides} of them carry {name!r} only as a non-dimensional "
+            f"coordinate; {operation} is defined on dimensions)"
+            if rides
+            else ""
+        )
+        msg = (
+            f"{int(unusable.sum())} patch(es) lack the {dim_label} "
+            f"{name!r}{detail} (patch ids {bad[:5]}...). Pass "
+            "missing_dim='drop' to exclude them."
+        )
+        raise ChunkError(msg)
+    return df[~unusable]
+
+
+def _cell_columns(df, name) -> list[str]:
+    """
+    Return the structural columns whose values decide a cell.
+
+    The kind attrs decide it too, but through `_kind_codes` rather than
+    their own values, so they are not listed here.
+    """
+    cols = []
     if "dims" in df.columns:
         cols.append("dims")
     # Structural identity: def keys of non-chunked *dimensions* only
@@ -409,10 +490,43 @@ def _partition(
     # coordinates either.
     if (unit_col := f"_{name}_units") in df.columns:
         cols.append(unit_col)
-    cols = [df[x] if isinstance(x, str) else x for x in cols]
-    base = df.groupby(cols, dropna=False, sort=False).ngroup()
+    # A name repeated in `group` would repeat the column, and a frame
+    # with duplicate labels cannot be grouped or sorted.
+    return list(dict.fromkeys(cols))
+
+
+def _cell_labels(df, name, group_attrs, sampling_tolerance) -> pd.Series:
+    """
+    Label the cells a partition's continuity runs live inside (spec 2).
+
+    A cell holds the rows which could combine if only their envelopes
+    lined up: the same kind, dims signature, structural def keys of the
+    non-chunked dimensions, chunk-dim units, and sampling group.
+    Continuity is then evaluated *within* a cell, so unrelated patches
+    can never bridge (or fabricate) a gap.
+    """
+    _start, _stop, step = get_interval_columns(df, name)
+    kind = _kind_codes(df, [x for x in group_attrs if x in df.columns])
+    keys = [kind, *(df[x] for x in _cell_columns(df, name))]
+    base = df.groupby(keys, dropna=False, sort=False).ngroup()
     samp = _sampling_group(step, sampling_tolerance)
-    cell = base.astype(str) + "_" + samp.astype(str)
+    return base.astype(str) + "_" + samp.astype(str)
+
+
+def _partition(
+    df, name, group_attrs, tolerance, sampling_tolerance
+) -> tuple[pd.Series, bool]:
+    """
+    Return (partition labels, forced_merge): rows sharing a label may
+    combine (spec 2).
+
+    A partition is a continuity run within a cell (see
+    [`_cell_labels`](`dascore.utils.chunk_plan._cell_labels`)).
+    `forced_merge` is True when a loosened tolerance merged patches the
+    default would have kept apart (#662); the caller owns warning about
+    it.
+    """
+    cell = _cell_labels(df, name, group_attrs, sampling_tolerance)
     cont = pd.Series(0, index=df.index, dtype=np.int64)
     forced_merge = False
     for _, index in df.groupby(cell, sort=False).groups.items():
@@ -921,6 +1035,257 @@ def _uniform_dtype_str(value, cache: dict[str, str]) -> str:
     return cache[key]
 
 
+_REPORT_COLUMNS = ("span", "gap_total", "gap_size", "covered", "coverage", "group_id")
+
+
+def _report_dim_columns(df: pd.DataFrame, name: str, carried) -> tuple[str, str, str]:
+    """
+    Return the envelope columns of `name`, checked for a usable report.
+
+    `get_interval_columns` words its error for chunking, and a carried
+    attr sharing an emitted column's name would overwrite it rather than
+    fail, so both are policed here instead. The envelope columns count
+    as emitted: grouping by one would leave the frame two columns of
+    that name, which no longer answers to `frame[name]` as a series.
+    """
+    columns = (f"{name}_min", f"{name}_max", f"{name}_step")
+    if missing := set(columns) - set(df.columns):
+        dims = get_dim_names_from_columns(df)
+        msg = (
+            f"Cannot report on {name!r}: no {sorted(missing)} in the "
+            f"relation. Valid dimensions or columns are {dims}."
+        )
+        raise ParameterError(msg)
+    emitted = set(_REPORT_COLUMNS) | set(columns)
+    if collide := sorted(set(carried) & emitted):
+        msg = (
+            f"Cannot group a report by {collide}: the name(s) collide with "
+            "the columns the report emits."
+        )
+        raise ParameterError(msg)
+    return columns
+
+
+def _report_preamble(df, name, group, missing_dim):
+    """
+    Resolve what both reports need before they can differ.
+
+    Returns the prepared relation, its carried columns, and the
+    envelope column names -- kept in one place so the two reports
+    cannot drift apart in how they group, validate, or label.
+    """
+    group_attrs = _resolve_group_attrs(group, set(df.columns))
+    names = _report_dim_columns(df, name, group_attrs)
+    df = _prepare_relation(df, name, missing_dim, "dimension", "gap reporting")
+    return df, group_attrs, _gap_carried_columns(df, name, group_attrs), names
+
+
+def _gap_carried_columns(df: pd.DataFrame, name: str, group_attrs) -> list[str]:
+    """
+    Return the cell columns a report shows, in a stable order.
+
+    Def keys are opaque structural identity, so they partition a report
+    without appearing in it; `group_id` tells cells apart instead. The
+    dimension's units are kept: they name what the reported magnitudes
+    are in, and `present_units_columns` makes them public at the spool
+    boundary. The kind attrs are shown by value, which is why they are
+    listed here rather than reached through `_kind_codes`.
+    """
+    private = set(_dim_def_key_columns(df, name))
+    cols = [x for x in group_attrs if x in df.columns]
+    cols += [x for x in _cell_columns(df, name) if x not in private]
+    return list(dict.fromkeys(cols))
+
+
+def _stated(sub: pd.DataFrame, column: str) -> pd.Series:
+    """
+    Return the one value a cell states for a column, as a length-1 slice.
+
+    Kind matching lets a row which never recorded an attr share a cell
+    with one that did, so the first row is not always the one that
+    knows. Slicing the column (rather than taking the value) keeps the
+    frame's dtype. Falls back to the first row when nobody recorded it.
+    """
+    known = known_only(sub[column])
+    index = known.first_valid_index()
+    return sub[column].iloc[:1] if index is None else sub[column].loc[[index]]
+
+
+def _cell_gaps(df: pd.DataFrame, name: str, group_attrs, tolerance: float):
+    """
+    Yield `(cell rows, gaps in that cell)` for every cell in `df`.
+
+    Cells come in envelope-min order, as partitions do (spec 8), and
+    ties break on what the cell states rather than on a patch id, which
+    is positional — so a report never depends on the order the relation
+    happened to arrive in. Each cell's ordinal rides on its gaps as
+    `group_id`, which is the only thing that always tells two cells
+    apart: sampling group and structural def keys partition without
+    being shown.
+    """
+    min_name, max_name, step_name = _dim_columns(df, name)
+    carried = _gap_carried_columns(df, name, group_attrs)
+    cells = _cell_labels(
+        df, name, group_attrs, dc.get_config().sampling_group_tolerance
+    )
+    grouped = df.groupby(cells, sort=False)
+    groups = grouped.groups
+    mins = grouped[min_name].min()
+    stated = {
+        label: tuple(_stated(df.loc[index], x).iloc[0] for x in carried)
+        for label, index in groups.items()
+    }
+    order = sorted(
+        groups, key=lambda label: (mins[label], [str(x) for x in stated[label]])
+    )
+    for group_id, label in enumerate(order):
+        sub = df.loc[groups[label]]
+        start, stop, step = get_interval_columns(sub, name)
+        row_order, reach, has_gap = _gap_boundaries(start, stop, step, tolerance)
+        found = np.flatnonzero(has_gap)
+        # the row opening each gap states the step, signed as the
+        # coordinate is -- only the continuity margin needs a magnitude
+        starts = start.to_numpy()[row_order][found]
+        gaps = pd.DataFrame(
+            {
+                min_name: reach[found],
+                max_name: starts,
+                step_name: step.to_numpy()[row_order][found],
+                "gap_size": starts - reach[found],
+                "group_id": np.full(len(found), group_id, dtype=np.int64),
+            }
+            | {x: _stated(sub, x).repeat(len(found)).to_numpy() for x in carried}
+        )
+        yield group_id, sub, gaps
+
+
+def _empty_report(columns: dict) -> pd.DataFrame:
+    """
+    Build a report frame with no rows but the right columns and dtypes.
+
+    Callers pass empty slices of relation columns, or expressions over
+    them, so a caller which sums or groups an empty report gets the
+    dtypes the same relation would give populated. Purely computed
+    columns (`coverage`, `group_id`) pass a bare typed Series instead.
+    """
+    return pd.DataFrame({k: v.iloc[:0] for k, v in columns.items()})
+
+
+def build_gap_frame(
+    df: pd.DataFrame,
+    name: str,
+    *,
+    tolerance: float = _DEFAULT_TOLERANCE,
+    group: str | Sequence[str] | None = None,
+    missing_dim: Literal["raise", "drop"] = "drop",
+) -> pd.DataFrame:
+    """
+    Report every discontinuity along ``name`` in a flat patch relation.
+
+    One row per gap, over the same cells and the same continuity rule
+    [`build_chunk_plan`](`dascore.utils.chunk_plan.build_chunk_plan`)
+    uses, so a gap here is exactly a boundary chunk refuses to merge.
+    `{name}_min` is the last sample before the gap and `{name}_max` the
+    first sample after it, so `gap_size` is their difference.
+    """
+    df, group_attrs, carried, names = _report_preamble(df, name, group, missing_dim)
+    min_name, max_name, step_name = names
+    columns = [min_name, max_name, step_name, "gap_size", "group_id", *carried]
+    # Contiguous cells are dropped rather than concatenated: their empty
+    # frames carry object-dtype attr columns, which would widen the
+    # dtypes of the gappy cells they are concatenated with.
+    frames = [x for _, _, x in _cell_gaps(df, name, group_attrs, tolerance) if len(x)]
+    if not frames:
+        return _empty_report(
+            {
+                min_name: df[min_name],
+                max_name: df[max_name],
+                step_name: df[step_name],
+                "gap_size": df[max_name] - df[min_name],
+                "group_id": pd.Series(dtype=np.int64),
+            }
+            | {x: df[x] for x in carried},
+        )[columns]
+    out = pd.concat(frames, ignore_index=True)
+    return out[columns].sort_values(["group_id", min_name]).reset_index(drop=True)
+
+
+def build_coverage_frame(
+    df: pd.DataFrame,
+    name: str,
+    *,
+    tolerance: float = _DEFAULT_TOLERANCE,
+    group: str | Sequence[str] | None = None,
+    missing_dim: Literal["raise", "drop"] = "drop",
+) -> pd.DataFrame:
+    """
+    Summarize how much of each cell's span along ``name`` holds data.
+
+    One row per cell, over the same cells
+    [`build_gap_frame`](`dascore.utils.chunk_plan.build_gap_frame`)
+    reports in and sharing its `group_id`: `span` is the cell's full
+    extent, `gap_total` the sum of its gaps, `covered` the rest, and
+    `coverage` their ratio.
+    """
+    df, group_attrs, carried, names = _report_preamble(df, name, group, missing_dim)
+    min_name, max_name, step_name = names
+    columns = [
+        min_name,
+        max_name,
+        step_name,
+        "span",
+        "gap_total",
+        "covered",
+        "coverage",
+        "group_id",
+        *carried,
+    ]
+    rows = []
+    for group_id, sub, gaps in _cell_gaps(df, name, group_attrs, tolerance):
+        low, high = sub[min_name].min(), sub[max_name].max()
+        span = high - low
+        # Sum through the span itself when there are no gaps, so a
+        # contiguous cell's total is a zero of the span's own dtype.
+        gap_total = gaps["gap_size"].sum() if len(gaps) else span - span
+        rows.append(
+            {
+                min_name: low,
+                max_name: high,
+                # D7: one step everywhere in a cell, as chunk advertises.
+                step_name: get_middle_value(sub[step_name].to_numpy()),
+                "span": span,
+                "gap_total": gap_total,
+                "group_id": group_id,
+            }
+            | {x: _stated(sub, x).iloc[0] for x in carried}
+        )
+    if not rows:
+        span = df[max_name] - df[min_name]
+        return _empty_report(
+            {
+                min_name: df[min_name],
+                max_name: df[max_name],
+                step_name: df[step_name],
+                "span": span,
+                "gap_total": span,
+                "covered": span,
+                "coverage": pd.Series(dtype=float),
+                "group_id": pd.Series(dtype=np.int64),
+            }
+            | {x: df[x] for x in carried},
+        )[columns]
+    out = pd.DataFrame(rows)
+    out["covered"] = out["span"] - out["gap_total"]
+    # A zero span is a single sample, which is wholly covered; dividing
+    # would make it NaN and read as "unknown" rather than "all there".
+    covered = np.asarray(to_float(out["covered"]), dtype=float)
+    total = np.asarray(to_float(out["span"]), dtype=float)
+    out["coverage"] = np.divide(
+        covered, total, out=np.ones_like(total), where=total != 0
+    )
+    return out[columns].reset_index(drop=True)
+
+
 def build_chunk_plan(
     df: pd.DataFrame,
     *,
@@ -968,10 +1333,7 @@ def build_chunk_plan(
         if value <= zero:
             msg = "Chunk value must be greater than 0."
             raise ParameterError(msg)
-    if missing_dim not in ("raise", "drop"):
-        msg = f"missing_dim must be 'raise' or 'drop', got {missing_dim!r}"
-        raise ParameterError(msg)
-
+    _validate_missing_dim(missing_dim)
     min_name, max_name = f"{name}_min", f"{name}_max"
     if min_name not in df.columns and not df.empty:
         msg = f"No patch in the spool has a {name!r} dimension to chunk."
@@ -992,37 +1354,7 @@ def build_chunk_plan(
     if df.empty:
         outputs = pd.DataFrame(columns=[min_name, max_name, "output_id"])
         return ChunkPlan(outputs, empty_members, name, value, params)
-    df = _ensure_patch_id(df)
-    df = _normalize_chunk_units(df, name)
-    # Missing chunk-dim envelopes, and patches carrying the name only as
-    # a non-dimensional coordinate (spec 7 / D2): chunking is defined on
-    # dimensions, so both fall under missing_dim. Envelope presence is
-    # not enough — auxiliary coordinates index their envelopes too, but
-    # their patches cannot be trimmed or merged *along* the name.
-    null_rows = pd.isnull(df[min_name]) | pd.isnull(df[max_name])
-    if "dims" in df.columns:
-        dim_lists = df["dims"].fillna("").astype(str).str.split(",")
-        not_a_dim = ~dim_lists.map(lambda dims: name in dims)
-    else:
-        not_a_dim = pd.Series(False, index=df.index)
-    unusable = null_rows | not_a_dim
-    if unusable.any():
-        if missing_dim == "raise":
-            bad = df.loc[unusable, "_patch_id"].tolist()
-            rides = int((not_a_dim & ~null_rows).sum())
-            detail = (
-                f" ({rides} of them carry {name!r} only as a non-dimensional "
-                "coordinate; chunking is defined on dimensions)"
-                if rides
-                else ""
-            )
-            msg = (
-                f"{int(unusable.sum())} patch(es) lack the chunk dimension "
-                f"{name!r}{detail} (patch ids {bad[:5]}...). Pass "
-                "missing_dim='drop' to exclude them."
-            )
-            raise ChunkError(msg)
-        df = df[~unusable]
+    df = _prepare_relation(df, name, missing_dim)
     if df.empty:
         outputs = pd.DataFrame(columns=[min_name, max_name, "output_id"])
         return ChunkPlan(outputs, empty_members, name, value, params)
