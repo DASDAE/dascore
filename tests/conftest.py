@@ -43,6 +43,12 @@ PATCH_FIXTURES = []
 warnings.filterwarnings("default", category=UserWarning)
 
 
+# A filesystem which has neither kind of link raises pathlib's
+# UnsupportedOperation (a NotImplementedError) rather than an OSError;
+# emscripten is one.
+_NO_LINK = (OSError, NotImplementedError)
+
+
 def _link_or_copy(source: Path, dest: Path) -> None:
     """Populate one file path using the cheapest available local copy."""
     dest.parent.mkdir(parents=True, exist_ok=True)
@@ -51,12 +57,12 @@ def _link_or_copy(source: Path, dest: Path) -> None:
     try:
         dest.hardlink_to(source)
         return
-    except OSError:
+    except _NO_LINK:
         pass
     try:
         dest.symlink_to(source)
         return
-    except OSError:
+    except _NO_LINK:
         pass
     shutil.copy2(source, dest)
 
