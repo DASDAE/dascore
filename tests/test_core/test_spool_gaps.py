@@ -170,6 +170,13 @@ class TestGetGaps:
         assert "time_units" in out.columns
         assert "_time_units" not in out.columns
 
+    @pytest.mark.parametrize("method", ["get_gaps", "get_coverage"])
+    def test_reports_are_public(self, gappy_spool, method):
+        """Neither report hands back the index's own bookkeeping."""
+        for spool in (gappy_spool, dc.spool([])):
+            out = getattr(spool, method)()
+            assert not [x for x in out.columns if str(x).startswith("_")]
+
     def test_unknown_dim_raises(self, gappy_spool):
         """An unknown dimension names the ones which exist."""
         with pytest.raises(ParameterError, match="Cannot report on"):
