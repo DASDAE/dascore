@@ -1150,10 +1150,10 @@ class TestFromArray:
 class TestPlannedSpoolWriteGuard:
     """The gap write guard covers plan-assembled spools (round-4 F3)."""
 
-    @pytest.fixture()
-    def gapped_planned_spool(self, tmp_path):
+    @pytest.fixture(scope="class")
+    def gapped_planned_spool(self, tmp_path_factory):
         """A file-backed planned spool whose output spans a real gap."""
-        src = tmp_path / "src"
+        src = tmp_path_factory.mktemp("gapped_planned") / "src"
         src.mkdir()
         p1 = dc.get_example_patch()
         t = p1.get_coord("time")

@@ -26,12 +26,13 @@ def contiguous_patches():
     return p1, p2
 
 
-@pytest.fixture()
-def dir_spool(contiguous_patches, tmp_path):
+@pytest.fixture(scope="module")
+def dir_spool(contiguous_patches, tmp_path_factory):
     """A directory spool holding the first patch."""
     p1, _ = contiguous_patches
-    dc.write(p1, tmp_path / "a.h5", "dasdae")
-    return dc.spool(tmp_path).update()
+    path = tmp_path_factory.mktemp("union_dir_spool")
+    dc.write(p1, path / "a.h5", "dasdae")
+    return dc.spool(path).update()
 
 
 class TestMemoryUnion:

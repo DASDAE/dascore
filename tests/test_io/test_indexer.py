@@ -400,13 +400,18 @@ class TestUpdate:
         after = basic_indexer._backend.get_sources()["last_indexed_ns"].max()
         assert before == after
 
-    def test_update_with_specific_paths(self, basic_indexer):
+    def test_update_with_specific_paths(self, two_patch_directory, tmp_path_factory):
         """Updating with specific paths restricts the rescan."""
-        files = sorted(basic_indexer.path.rglob("*.hdf5"))
+        # Its own copy: this test changes the files' modification times, and
+        # the directory fixture is shared with the rest of the session.
+        directory = tmp_path_factory.mktemp("specific_paths") / "data"
+        shutil.copytree(two_patch_directory, directory)
+        indexer = DBDirectoryIndexer(directory).update(progress=None)
+        files = sorted(indexer.path.rglob("*.hdf5"))
         assert len(files) >= 2
 
         def _indexed_times():
-            sources = basic_indexer._backend.get_sources().set_index("source_path")
+            sources = indexer._backend.get_sources().set_index("source_path")
             return sources["last_indexed_ns"].to_dict()
 
         before = _indexed_times()
@@ -414,16 +419,17 @@ class TestUpdate:
             stat = path.stat()
             os.utime(path, ns=(stat.st_atime_ns, stat.st_mtime_ns + 1_000_000_000))
 
-        first, second = (basic_indexer._rel(path) for path in files[:2])
-        basic_indexer.update(paths=[files[0].name], progress=None)
+        first, second = (indexer._rel(path) for path in files[:2])
+        indexer.update(paths=[files[0].name], progress=None)
         after_relative = _indexed_times()
         assert after_relative[first] > before[first]
         assert after_relative[second] == before[second]
 
-        basic_indexer.update(paths=[str(files[1])], progress=None)
+        indexer.update(paths=[str(files[1])], progress=None)
         after_absolute = _indexed_times()
         assert after_absolute[first] == after_relative[first]
         assert after_absolute[second] > after_relative[second]
+        indexer.close()
 
 
 class TestNameResolution:

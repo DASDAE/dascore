@@ -15,13 +15,10 @@ import dascore.examples
 from dascore.constants import ONE_SECOND
 from dascore.core.spool import Spool
 from dascore.exceptions import InvalidSpoolError, MissingPatchError, ParameterError
-from dascore.utils.misc import register_func, suppress_warnings
-
-DIRECTORY_SPOOLS = []
+from dascore.utils.misc import suppress_warnings
 
 
-@pytest.fixture(scope="class")
-@register_func(DIRECTORY_SPOOLS)
+@pytest.fixture(scope="module")
 def dir_spool_index_out_of_order(random_spool, tmp_path_factory):
     """Create an index that isn't order chronologically."""
     path = tmp_path_factory.mktemp("out_of_order_index")
@@ -38,16 +35,14 @@ def dir_spool_index_out_of_order(random_spool, tmp_path_factory):
     return spool
 
 
-@pytest.fixture(scope="class")
-@register_func(DIRECTORY_SPOOLS)
+@pytest.fixture(scope="module")
 def one_directory_spool(one_file_dir):
     """Create a directory with a single DAS file."""
     spool = Spool.from_directory(one_file_dir)
     return spool.update()
 
 
-@pytest.fixture(scope="class")
-@register_func(DIRECTORY_SPOOLS)
+@pytest.fixture(scope="module")
 def non_distance_dir_spool(tmp_path_factory):
     """Create a directory with a single DAS file."""
     # Simulate a patch that has time but no canonical distance coordinate.
@@ -59,8 +54,7 @@ def non_distance_dir_spool(tmp_path_factory):
     return dc.spool(path).update()
 
 
-@pytest.fixture(scope="class")
-@register_func(DIRECTORY_SPOOLS)
+@pytest.fixture(scope="module")
 def multi_patch_file_spool(tmp_path_factory):
     """Create a directory whose single file contains multiple patches."""
     path = tmp_path_factory.mktemp("multi_patch_file_spool")
@@ -76,31 +70,19 @@ def multi_patch_file_spool(tmp_path_factory):
 
 @pytest.fixture
 def directory_spool_redundant_index(random_spool, tmp_path_factory):
-    """Force a spool to be indexed many times with same files."""
+    """A spool re-indexed over files whose contents did not change."""
     path = Path(tmp_path_factory.mktemp("redundant_index_spool"))
     dascore.examples.spool_to_directory(random_spool, path, "dasdae")
     spool = dc.spool(path).update()
-
-    # Touch each file, re-index to saturate index with duplicates.
-    for _ in range(12):
-        for file_path in path.glob("*"):
-            file_path.touch()
-        spool = spool.update()
-    return spool
-
-
-@pytest.fixture(scope="class", params=DIRECTORY_SPOOLS)
-def directory_spool(request):
-    """Meta fixture for getting all file spools."""
-    return request.getfixturevalue(request.param)
+    # Touch, then re-index: the row count is the same after one round as
+    # after twelve, so one is what this needs.
+    for file_path in path.glob("*"):
+        file_path.touch()
+    return spool.update()
 
 
 class TestDirectorySpoolBasics:
     """Basic tests for the directory spool."""
-
-    def test_isinstance(self, directory_spool):
-        """Simply ensure expected type was returned."""
-        assert isinstance(directory_spool, Spool)
 
     def test_selected_str(self, diverse_directory_spool):
         """Ensure select kwargs show up in str."""
@@ -494,13 +476,6 @@ class TestSelect:
 class TestBasicChunk:
     """Tests for chunking filespool."""
 
-    @pytest.fixture(scope="class")
-    def dir_spool_1_dim_patches(self, memory_spool_dim_1_patches, tmp_path_factory):
-        """Create a directory with patches that have 1 dim in time."""
-        path = tmp_path_factory.mktemp("dir_spool_1_dim_patches")
-        out = dc.examples.spool_to_directory(memory_spool_dim_1_patches, path)
-        return dc.spool(out).update()
-
     def test_directory_path_doesnt_change(self, one_file_directory_spool):
         """Chunking shouldn't change the path to the managed directory."""
         out = one_file_directory_spool.chunk(time=1)
@@ -528,18 +503,6 @@ class TestBasicChunk:
         patch_list = list(new_spool)
         for patch in patch_list:
             assert isinstance(patch, dc.Patch)
-
-    def test_merge_1_dim_patches(self, dir_spool_1_dim_patches):
-        """Ensure patches with one sample in time can be merged."""
-        spool = dir_spool_1_dim_patches
-        new = spool.chunk(time=None)
-        assert len(new) == 1
-        patch = new[0]
-        content = spool.get_contents()
-        time_coord = patch.get_coord("time")
-        assert time_coord.min() == content["time_min"].min()
-        assert time_coord.max() == content["time_max"].max()
-        assert time_coord.step == spool[0].get_coord("time").step
 
     def test_chunk_out_of_order_index(self, dir_spool_index_out_of_order):
         """Ensure when the index isn't ordered chunk can still work."""

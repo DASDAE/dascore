@@ -158,7 +158,7 @@ def summaries():
     return make_random_summaries(N_PATCHES, seed=42)
 
 
-@pytest.fixture()
+@pytest.fixture(scope="module")
 def backend(tmp_path_factory, summaries):
     """A SQLite backend ingesting the random population."""
     path = tmp_path_factory.mktemp("stress") / "index.sqlite3"

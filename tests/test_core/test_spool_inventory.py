@@ -195,7 +195,7 @@ def write_inventory(root, files):
     return root
 
 
-@pytest.fixture(scope="class")
+@pytest.fixture(scope="module")
 def data_directory(tmp_path_factory, patch, inventory):
     """A directory of data which carries the inventory describing it."""
     path = tmp_path_factory.mktemp("blessed")
@@ -615,7 +615,7 @@ class TestLazyInventoryEquality:
 class TestOnUnresolved:
     """What a spool does with a patch its inventory does not describe."""
 
-    @pytest.fixture
+    @pytest.fixture(scope="class")
     def mixed(self, patch):
         """A spool of one patch the example inventory knows and one it does not."""
         return dc.spool([patch, dc.get_example_patch("random_das")])

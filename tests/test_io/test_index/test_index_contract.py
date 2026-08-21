@@ -564,13 +564,14 @@ class TestCoordPivot:
 class TestLineageIds:
     """A patch can be found by the id it carries, without loading it."""
 
-    @pytest.fixture
-    def written_spool(self, tmp_path):
+    @pytest.fixture(scope="class")
+    def written_spool(self, tmp_path_factory):
         """Three patches on disk, each its own datum."""
+        path = tmp_path_factory.mktemp("lineage_ids")
         with config_context(patch_provenance="disabled"):
             for index, patch in enumerate(dc.get_example_spool("random_das")):
-                patch.io.write(tmp_path / f"{index}.h5", "dasdae")
-        return dc.spool(tmp_path).update()
+                patch.io.write(path / f"{index}.h5", "dasdae")
+        return dc.spool(path).update()
 
     def test_the_two_ids_are_different_columns(self, written_spool):
         """The row's id is private; the patch's owns the public name."""
