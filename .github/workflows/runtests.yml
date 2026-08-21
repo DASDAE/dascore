@@ -34,9 +34,9 @@ env:
   MPLBACKEND: Agg
   QT_QPA_PLATFORM: offscreen
 
-# Cancel previous runs when this one starts.
+# Supersede the previous run: by pull request, or by branch for pushes.
 concurrency:
-  group: TestCode-${{ github.event.pull_request.number || github.run_id }}
+  group: TestCode-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
