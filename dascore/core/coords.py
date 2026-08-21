@@ -2147,29 +2147,46 @@ def _maybe_promote_segment(seg: BaseCoord) -> BaseCoord:
 
 
 def _fuse_segments(segments: tuple[BaseCoord, ...]) -> tuple[BaseCoord, ...]:
-    """Fuse adjacent segments that continue exactly (normal form)."""
-    out = [segments[0]]
+    """
+    Fuse adjacent segments that continue exactly (normal form).
+
+    Runs are gathered before anything is built. A merge of many
+    contiguous pieces is one run, and the coordinate covering it is
+    constructed once rather than once per piece, which a long merge
+    would otherwise pay thousands of times.
+    """
+    out: list[BaseCoord] = []
+    run: list[BaseCoord] = [segments[0]]
+
+    def flush() -> None:
+        """Add the run gathered so far as a single coordinate."""
+        if len(run) == 1:
+            out.append(run[0])
+        elif isinstance(run[0], CoordRange):
+            # every piece sits on one grid, so the whole run does too and
+            # its length is theirs added up: nothing needs re-deriving
+            length = sum(len(x) for x in run)
+            out.append(run[0]._new_grid(run[0].start, run[0].step, length))
+        else:
+            values = np.concatenate([x.values for x in run])
+            out.append(CoordMonotonicArray(values=values, units=run[0].units))
+        run.clear()
+
     for seg in segments[1:]:
-        prev = out[-1]
+        prev = run[-1]
         both_ranges = isinstance(prev, CoordRange) and isinstance(seg, CoordRange)
-        if both_ranges and prev.step == seg.step and prev.stop == seg.start:
-            # The fused range is on a grid both segments already sit on, so
-            # its length is theirs added up and nothing needs re-deriving.
-            # Validation here re-derives shape and stop from start/stop/step
-            # and costs ~60us a call, which a long merge pays thousands of
-            # times (see _new_grid).
-            out[-1] = prev._new_grid(prev.start, prev.step, len(prev) + len(seg))
-            continue
+        continues = both_ranges and prev.step == seg.step and prev.stop == seg.start
+        # Adjacent irregular arrays carry no sampling expectation, so the
+        # boundary between them has no meaning; fuse for canonical form.
         both_arrays = isinstance(prev, CoordMonotonicArray) and isinstance(
             seg, CoordMonotonicArray
         )
-        if both_arrays:
-            # Adjacent irregular arrays carry no sampling expectation, so the
-            # boundary between them has no meaning; fuse for canonical form.
-            values = np.concatenate([prev.values, seg.values])
-            out[-1] = CoordMonotonicArray(values=values, units=prev.units)
+        if continues or both_arrays:
+            run.append(seg)
             continue
-        out.append(seg)
+        flush()
+        run.append(seg)
+    flush()
     return tuple(out)
 
 
@@ -2192,10 +2209,15 @@ def _validate_segment_compat(segments: tuple[BaseCoord, ...]) -> None:
         dtypes = {np.dtype(s.dtype) for s in segments}
         msg = f"Segments must share compatible dtypes, got {dtypes}."
         raise CoordError(msg)
-    units = {get_quantity(s.units) for s in segments}
-    if len(units) > 1:
-        msg = "All segments must have the same units."
-        raise CoordError(msg)
+    # Hashing a pint Quantity is expensive and a long merge would do it
+    # once per segment, so the objects are compared first: segments which
+    # share one (or state none) agree without normalizing anything.
+    spellings = {id(s.units) for s in segments}
+    if len(spellings) > 1:
+        units = {get_quantity(s.units) for s in segments}
+        if len(units) > 1:
+            msg = "All segments must have the same units."
+            raise CoordError(msg)
 
 
 def _validate_segment_chain(segments: tuple[BaseCoord, ...]) -> None:

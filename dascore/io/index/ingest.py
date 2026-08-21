@@ -398,6 +398,10 @@ def coord_summary(row: Mapping) -> CoordSummary | None:
     described without loading the patch it belongs to.
 
     Returns None for a row whose value kind the index does not represent.
+
+    Built without re-validating: every value is converted here to the type
+    a validator would coerce it to, and this runs per coordinate per member
+    while a plan is made, where validation measured ~28us a call.
     """
     kind = row.get("value_kind")
     units = row.get("units")
@@ -408,7 +412,7 @@ def coord_summary(row: Mapping) -> CoordSummary | None:
     length = None if length is None or pd.isnull(length) else int(length)
     dims = str(row.get("coord_dims") or "")
     common: dict[str, Any] = dict(
-        dtype=str(row.get("dtype") or ""),
+        dtype=str(row.get("dtype") or "").split("[")[0],
         units=units,
         dims=tuple(x for x in dims.split(",") if x),
         len=length,
@@ -418,21 +422,29 @@ def coord_summary(row: Mapping) -> CoordSummary | None:
         # stored as integer nanoseconds; a relative coord is a duration
         stamp = _ns_timedelta if row.get("is_relative") else _ns_datetime
         step = row.get("step_ns")
-        return CoordSummary(
+        return CoordSummary.model_construct(
             min=stamp(row.get("min_ns")),
             max=stamp(row.get("max_ns")),
             step=None if pd.isnull(step) else _ns_timedelta(step),
             **common,
         )
     if kind == "num":
-        return CoordSummary(
-            min=row.get("min_num"),
-            max=row.get("max_num"),
+        # an envelope nobody stated is NaN, as validation would make it;
+        # only a step is genuinely absent
+        low, high = _opt_float(row.get("min_num")), _opt_float(row.get("max_num"))
+        return CoordSummary.model_construct(
+            min=np.nan if low is None else low,
+            max=np.nan if high is None else high,
             step=_opt_float(row.get("step_num")),
             **common,
         )
     if kind == "str":
-        return CoordSummary(min=row.get("min_str"), max=row.get("max_str"), **common)
+        low, high = row.get("min_str"), row.get("max_str")
+        return CoordSummary.model_construct(
+            min=None if low is None else str(low),
+            max=None if high is None else str(high),
+            **common,
+        )
     return None
 
 

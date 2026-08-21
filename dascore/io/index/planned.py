@@ -259,10 +259,18 @@ def _member_summaries(backend, members: pd.DataFrame) -> dict:
     ids = [int(x) for x in members["_patch_id"].dropna().unique()]
     assert ids, "a plan's members name the patches they load"
     out: dict[int, dict[str, CoordSummary]] = {}
+    # one coordinate definition serves every member which shares it: a
+    # coordinate riding along unchanged is stored once and read once,
+    # which is most of them
+    seen: dict[tuple, CoordSummary | None] = {}
     for row in backend.coord_frame(ids).to_dict("records"):
-        summary = coord_summary(row)
+        name = str(row["coord_name"])
+        key = (name, row.get("fingerprint"), row.get("coord_dims"))
+        if key[1] is None or key not in seen:
+            seen[key] = coord_summary(row)
+        summary = seen[key]
         if summary is not None:
-            out.setdefault(int(row["patch_id"]), {})[str(row["coord_name"])] = summary
+            out.setdefault(int(row["patch_id"]), {})[name] = summary
     if set(out) != set(ids):
         # Re-planning a derived view collapses to the *grandparent's*
         # members, whose ids this index does not use; matching them here
@@ -424,8 +432,12 @@ def predicted_coords(
     if not stored:
         return {}
     out: dict[int, dict[str, CoordSummary]] = {}
-    for output_id, rows in members.groupby("output_id", sort=True):
-        records = rows.to_dict("records")
+    # the whole table is turned into rows once: doing it per output costs
+    # pandas' fixed overhead thousands of times over on a segment plan
+    by_output: dict[int, list[dict]] = {}
+    for row in members.to_dict("records"):
+        by_output.setdefault(int(row["output_id"]), []).append(row)
+    for output_id, records in sorted(by_output.items()):
         names: dict[str, None] = {}  # an ordered set
         for row in records:
             names.update(dict.fromkeys(stored.get(int(row["_patch_id"]), {})))
@@ -453,7 +465,7 @@ def predicted_coords(
             stated = _describe(name, summaries, plan_dim, trimmed_dims, snap_tolerance)
             if stated is not None:
                 described[name] = stated
-        out[int(str(output_id))] = described
+        out[output_id] = described
     return out
 
 
