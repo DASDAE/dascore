@@ -11,7 +11,7 @@ import numpy as np
 
 from dascore.constants import DEFAULT_COLORMAPS, PatchType
 from dascore.exceptions import ParameterError
-from dascore.units import get_quantity_str, maybe_convert_percent_to_fraction
+from dascore.units import maybe_convert_percent_to_fraction
 from dascore.utils.gaps import get_gap_edges, is_monotonic_and_finite
 from dascore.utils.misc import tukey_fence
 from dascore.utils.patch import patch_function
@@ -19,6 +19,7 @@ from dascore.utils.plotting import (
     _format_time_axis,
     _get_ax,
     _get_cmap,
+    _get_data_label,
     _get_dim_label,
     _get_extents,
 )
@@ -146,12 +147,9 @@ def _add_colorbar(ax, im, data, patch, log, scale):
     cb = ax.get_figure().colorbar(
         im, ax=ax, fraction=0.05, pad=0.025, extend=extend, extendfrac=0.025
     )
-    data_type = str(patch.attrs.get("data_type", ""))
-    data_units = get_quantity_str(patch.attrs.data_units) or ""
-    dunits = f" [{data_units}]" if (data_type and data_units) else f"{data_units}"
+    label = _get_data_label(patch)
     if log:
-        dunits = f"{dunits} - log_10"
-    label = f"{data_type}{dunits}"
+        label = f"{label} - log_10"
     cb.set_label(label)
 
 
