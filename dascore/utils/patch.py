@@ -1782,15 +1782,41 @@ def concatenate_planned(
     (`combine_patch_attrs`, a missing value matching anything and known
     conflicts policed by `conflict`), and the non-dimensional coordinates
     the plan recorded as `dropped` (those whose identity differs, or cannot
-    be vouched for) are left out. Any other coordinate whose loaded values
+    be vouched for) are left out. A coordinate only some members state
+    rides along from those which have it, unless it rides `dim` — values
+    cannot be invented for the members lacking it, so it is left out, as
+    the catalog leaves it out. Any other coordinate whose loaded values
     differ raises whatever the policy: the plan vouched for it, so the
     catalog already advertises it, and an output must not quietly lose what
     its row states.
     """
     patches = [x.drop_private_coords() for x in patches]
-    if dropped:
-        gone = {x: None for x in dropped if x in patches[0].coords.coord_map}
-        patches = [x.update(coords=x.coords.update(**gone)) for x in patches]
+    gone: dict[str, None] = {x: None for x in dropped}
+    carried: dict[str, tuple] = {}
+    names = {c for x in patches for c in x.coords.coord_map} - {dim} - set(dropped)
+    for coord in names:
+        holders = [x for x in patches if coord in x.coords.coord_map]
+        if len(holders) == len(patches):
+            continue
+        holder = holders[0]
+        if dim in holder.coords.dim_map[coord]:
+            gone[coord] = None
+        elif coord not in patches[0].coords.coord_map:
+            carried[coord] = (
+                holder.coords.dim_map[coord],
+                holder.coords.coord_map[coord],
+            )
+    if gone:
+        patches = [
+            x.update(
+                coords=x.coords.update(
+                    **{c: None for c in gone if c in x.coords.coord_map}
+                )
+            )
+            for x in patches
+        ]
+    if carried:
+        patches[0] = patches[0].update(coords=patches[0].coords.update(**carried))
     first = patches[0]
     assert all(x.dims == first.dims for x in patches), (
         "a planned output holds one set of dimensions"

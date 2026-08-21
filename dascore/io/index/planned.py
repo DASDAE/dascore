@@ -280,8 +280,15 @@ def _output_records(
     outputs: pd.DataFrame,
     token: str,
     aux_info: Mapping[int, Mapping[str, Mapping]] | None = None,
+    coord_names: Iterable[str] = (),
 ) -> list[SourceRecord]:
-    """Convert plan output rows into ingestible source records."""
+    """
+    Convert plan output rows into ingestible source records.
+
+    `coord_names` are the parent's coordinates: their envelope columns
+    describe coordinates (advertised through `dims` and `aux_info`, or
+    not at all), never attrs.
+    """
     records = []
     aux_info = aux_info or {}
     # Envelope columns belong to coordinates actually present in a row;
@@ -295,6 +302,7 @@ def _output_records(
         if key.startswith("_") and key.endswith("_def_key")
     }
     base_names |= {"time", "distance"}  # fixed patches-table envelopes
+    base_names |= set(coord_names)
     envelope_cache: dict[tuple, set[str]] = {}
     for row in outputs.to_dict("records"):
         output_id = int(row["output_id"])
@@ -744,7 +752,22 @@ def derived_catalog(
     for output_id, names in plan.params.get("dropped_coords", {}).items():
         for coord in names:
             aux_info.get(output_id, {}).pop(coord, None)
-    backend.write_sources(_output_records(outputs, token, aux_info=aux_info))
+    if mode == "concat" and aux_info:
+        # a coordinate riding the concatenated dimension which not every
+        # member states cannot be assembled, so it is not advertised
+        joined = trims[["output_id", "_patch_id"]].merge(sources, on="_patch_id")
+        grouped = joined.groupby("output_id")
+        for coord, dims_str in coord_dims_map.items():
+            rides = name in str(dims_str).split(",")
+            if not rides or f"{coord}_min" not in joined.columns:
+                continue
+            partial = grouped[f"{coord}_min"].count() < grouped.size()
+            for output_id in partial[partial].index:
+                aux_info.get(int(output_id), {}).pop(coord, None)
+    records = _output_records(
+        outputs, token, aux_info=aux_info, coord_names=coord_dims_map
+    )
+    backend.write_sources(records)
     return PatchCatalog(backend=backend, resolver=resolver)
 
 

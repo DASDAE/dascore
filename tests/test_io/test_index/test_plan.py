@@ -876,6 +876,12 @@ class TestConcatPlan:
         df = _flat(trio).assign(_dtype=None)
         plan = build_concat_plan(df, time=None)
         assert plan.outputs["_dtype"].iloc[0] == ""
+        # without a dims column every identified coordinate is auxiliary
+        df = _flat(trio).drop(columns=["dims"]).assign(_sensor_def_key=None)
+        df.loc[0, "_sensor_def_key"] = "fp:a"
+        df.loc[1, "_sensor_def_key"] = "fp:b"
+        plan = build_concat_plan(df, time=None, conflict="drop")
+        assert plan.params["dropped_coords"] == {0: ["sensor"]}
 
     def test_coordinate_only_some_members_have_is_not_dropped(self, trio):
         """A coordinate other members lack rides along, in the catalog too."""

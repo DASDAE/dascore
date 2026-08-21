@@ -1368,6 +1368,55 @@ class TestConcatenatePartitions:
         assert np.allclose(np.take(patch.data, 0, axis=axis), high.data)
         assert np.allclose(np.take(patch.data, 1, axis=axis), low.data)
 
+    def test_later_only_coordinate_rides_along_unless_it_rides_the_dimension(
+        self, pair
+    ):
+        """The catalog and the patch agree on a coordinate the first member lacks."""
+        first, other = pair
+        nd = first.shape[first.get_axis("distance")]
+        nt = first.shape[first.get_axis("time")]
+        lat = other.update_coords(latitude=("distance", np.arange(nd) * 1.0))
+        out = dc.spool([first, lat]).concatenate(time=None)
+        assert "latitude" in out[0].coords.coord_map
+        assert out.get_contents()["latitude_min"].notna().all()
+        clock = other.update_coords(clock=("time", np.arange(nt) * 1.0))
+        out = dc.spool([first, clock]).concatenate(time=None)
+        assert "clock" not in out[0].coords.coord_map
+        contents = out.get_contents()
+        assert "clock_min" not in contents.columns or contents["clock_min"].isna().all()
+        # later members which disagree are a conflict, first member or not
+        lat2 = other.update_coords(latitude=("distance", np.ones(nd)))
+        with pytest.raises(CoordMergeError, match="latitude"):
+            dc.spool([first, lat, lat2]).concatenate(time=None)[0]
+        dropped = dc.spool([first, lat, lat2]).concatenate(time=None, conflict="drop")
+        assert "latitude" not in dropped[0].coords.coord_map
+
+    def test_vanishing_coordinate_units_do_not_partition(self, pair):
+        """Auxiliary coordinates the new dimension replaces do not split by units."""
+        first, _ = pair
+        n = first.shape[first.get_axis("distance")]
+        metres = first.update_coords(sensor=("distance", np.arange(n) * 1.0))
+        metres = metres.convert_units(sensor="m")
+        seconds = first.update_coords(sensor=("distance", np.arange(n) * 1.0))
+        seconds = seconds.convert_units(sensor="s")
+        out = dc.spool([metres, seconds]).concatenate(sensor=None)
+        assert len(out) == 1
+        assert out[0].shape[out[0].get_axis("sensor")] == 2
+
+    def test_coordinate_identity_partitions_only_where_dimensional(self, pair):
+        """A name dimensional in one patch is still auxiliary in the others."""
+        first, other = pair
+        n = first.shape[first.get_axis("distance")]
+        aux_a = first.update_coords(sensor=("distance", np.arange(n) * 1.0))
+        aux_b = other.update_coords(sensor=("distance", np.ones(n)))
+        as_dim = first.rename_coords(distance="sensor")
+        out = dc.spool([aux_a, aux_b, as_dim]).concatenate(time=None, conflict="drop")
+        assert len(out) == 2
+        joined = out[0]
+        assert joined.shape[joined.get_axis("time")] == 2 * first.shape[1]
+        assert "sensor" not in joined.coords.coord_map
+        assert out[1].dims == as_dim.dims
+
     def test_singleton_outputs_keep_weak_coordinates(self, pair):
         """An output of one member has nothing to conflict with, so nothing drops."""
         first, _ = pair

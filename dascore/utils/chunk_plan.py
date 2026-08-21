@@ -1666,11 +1666,14 @@ def build_concat_plan(
     # (the values would be mixed), while a patch with no values along the
     # dimension (an aggregated coordinate) joins whichever it meets.
     kind_names = list(names)
+    # rows which carry the name as a dimension; the others (a non-dimensional
+    # coordinate of that name, or none) gain a new dimension in its place
+    along = _structural(df, name)
     if (unit_col := f"_{name}_units") in df.columns:
         units = df[unit_col].fillna("unitless").astype(object)
         if has_envelope:
             units = units.where(df[min_name].notna(), "")
-        df = df.assign(_concat_units=units)
+        df = df.assign(_concat_units=units.where(along, ""))
         kind_names.append("_concat_units")
     keys: list = [_kind_codes(df, kind_names)]
     if "dims" in df.columns:
@@ -1678,7 +1681,9 @@ def build_concat_plan(
     for key_col in _dim_def_key_columns(df, name):
         dim = key_col[1 : -len("_def_key")]
         key = df[key_col] if key_col in df.columns else pd.Series(None, index=df.index)
-        key = key.astype(object)
+        # a coordinate's identity partitions only the rows it is a dimension
+        # of; elsewhere it is non-dimensional and `conflict` polices it
+        key = key.astype(object).where(_structural(df, dim), "")
         env_cols = [f"{dim}_{x}" for x in ("min", "max", "step")]
         if all(x in df.columns for x in env_cols):
             # a re-planned output states no identity key; its envelope says
@@ -1704,10 +1709,6 @@ def build_concat_plan(
         first_step = pd.Series(steps).groupby(labels).transform("first").to_numpy()
         descending = np.nan_to_num(first_step, nan=0.0) < 0
         within = np.where(descending, -stops, starts)
-        along = np.ones(len(df), dtype=bool)
-        if "dims" in df.columns:
-            along = df["dims"].astype(str).str.split(",").apply(lambda d: name in d)
-            along = along.to_numpy(dtype=bool)
         within = np.where(np.isnan(first_step) | ~along, 0.0, within)
         within = np.where(np.isnan(within), np.inf, within)
     perm = np.lexsort((np.arange(len(df)), within, labels))
@@ -1749,37 +1750,29 @@ def build_concat_plan(
     if conflict != "raise":
         # non-dimensional coordinates whose identity differs within an
         # output are dropped when it is assembled; the catalog must not
-        # advertise them either
-        dim_names = {
-            d
-            for x in sorted_df.get("dims", pd.Series(dtype=str))
-            for d in str(x).split(",")
-        }
-        aux_keys = [
-            x
+        # advertise them either. A coordinate is non-dimensional for the
+        # rows whose dims do not name it, whatever it is elsewhere.
+        aux = {
+            x: sorted_df[x].where(~_structural(sorted_df, x[1 : -len("_def_key")]))
             for x in sorted_df.columns
             if x.endswith("_def_key")
             and not x.startswith("__")
-            and x[1 : -len("_def_key")] not in dim_names | {name}
-        ]
+            and x[1 : -len("_def_key")] != name
+        }
+        aux_keys = list(aux)
         if aux_keys:
-            # only a coordinate every member states can conflict; one that
-            # some members lack rides along from the first
-            grouped = sorted_df[aux_keys].groupby(codes)
-            everywhere = grouped.count().eq(grouped.size(), axis=0)
-            varied = (grouped.nunique(dropna=True) > 1) & everywhere
+            # the members which state a coordinate must agree on it; one
+            # that some members lack rides along from those which have it
+            grouped = pd.DataFrame(aux).groupby(codes)
+            varied = grouped.nunique(dropna=True) > 1
             # a summary-only identity ("sum:") cannot vouch two coordinates
             # are equal, so such a coordinate is dropped too rather than
-            # advertised and then found to differ on loading; one member
-            # alone has nothing to differ from
+            # advertised and then found to differ on loading; one stating
+            # member alone has nothing to differ from
             weak = (
-                sorted_df[aux_keys]
-                .astype(str)
-                .apply(lambda c: c.str.startswith("sum:"))
+                pd.DataFrame(aux).astype(str).apply(lambda c: c.str.startswith("sum:"))
             )
-            several = grouped.size() > 1
-            weak_any = (weak.groupby(codes).any() & everywhere).where(several, False)
-            varied |= weak_any
+            varied |= weak.groupby(codes).any() & (grouped.count() > 1)
             params["dropped_coords"] = {
                 int(i): [x[1 : -len("_def_key")] for x in aux_keys if row[x]]
                 for i, row in varied.iterrows()
@@ -1809,6 +1802,14 @@ def build_concat_plan(
     modified = sorted_df["_modified"] if "_modified" in sorted_df.columns else False
     members["_modified"] = np.asarray(modified, dtype=bool)
     return ChunkPlan(outputs, members, name, value, params)
+
+
+def _structural(df: pd.DataFrame, coord: str) -> np.ndarray:
+    """Per row, whether `coord` is one of the row's dimensions."""
+    if "dims" not in df.columns:
+        return np.zeros(len(df), dtype=bool)
+    dims = df["dims"].astype(str).str.split(",")
+    return dims.apply(lambda d: coord in d).to_numpy(dtype=bool)
 
 
 def _order_key(values: pd.Series) -> np.ndarray:
