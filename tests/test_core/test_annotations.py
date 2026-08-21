@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import datetime
+from contextlib import suppress
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -253,6 +256,57 @@ class TestDimensionSpelling:
         """A truth value is no place on an axis, numpy's and a nullable one too."""
         frame = pd.DataFrame({"distance": pd.Series(values, dtype=object)})
         with pytest.raises(ParameterError, match="numbers or times"):
+            AnnotationSet(frame, dims=DIMS)
+
+    @pytest.mark.parametrize(
+        "cell",
+        [
+            pytest.param(np.datetime64("2020-01-01"), id="time"),
+            pytest.param(np.timedelta64(1, "s"), id="duration"),
+        ],
+    )
+    def test_a_dimension_of_objects_still_reads(self, cell):
+        """A frame may hold coordinates in an object column; they are read."""
+        frame = pd.DataFrame({"offset": pd.Series([cell], dtype=object)})
+        held = AnnotationSet(frame, dims=("offset",)).io.to_dataframe()["offset"]
+        assert held.dtype.kind in "Mm"
+
+    def test_a_dimension_of_python_durations(self):
+        """A frame may hold the stdlib's own duration; it is read as one."""
+        cells = pd.Series([datetime.timedelta(seconds=1)], dtype=object)
+        held = AnnotationSet(
+            pd.DataFrame({"offset": cells}), dims=("offset",)
+        ).io.to_dataframe()["offset"]
+        assert held.dtype == np.dtype("timedelta64[ns]")
+
+    def test_a_duration_dimension_is_a_coordinate(self):
+        """A dimension may be an offset from something, which is a duration."""
+        spans = np.array([1, 3], dtype="timedelta64[s]")
+        frame = pd.DataFrame({"offset_start": spans[:1], "offset_end": spans[1:]})
+        out = AnnotationSet(frame, dims=("offset",))
+        assert out.io.to_dataframe()["offset_start"].dtype == "timedelta64[ns]"
+
+    def test_a_dimension_mixing_numbers_and_times(self):
+        """A number already read as one is not re-read as an epoch."""
+        cells = pd.Series([1, np.datetime64("2020-01-01")], dtype=object)
+        with pytest.raises(ParameterError, match="neither numbers, times"):
+            AnnotationSet(pd.DataFrame({"time": cells}), dims=DIMS)
+
+    def test_a_dimension_no_coordinate_could_hold(self):
+        """A year no coordinate holds is refused, never raised past the set.
+
+        Whether the conversion overflows or quietly wraps is numpy's to
+        decide, and its versions decide differently; what is pinned here is
+        that neither reaches the caller as an implementation error.
+        """
+        frame = pd.DataFrame({"time": ["1000", "2020-01-01"]})
+        with suppress(ParameterError):
+            AnnotationSet(frame, dims=DIMS)
+
+    def test_a_complex_dimension_refused(self):
+        """`to_numeric` hands a complex column back; it is no coordinate."""
+        frame = pd.DataFrame({"distance": [1 + 2j]})
+        with pytest.raises(ParameterError, match="neither numbers, times"):
             AnnotationSet(frame, dims=DIMS)
 
     def test_datetime_endpoints_keep_their_type(self):

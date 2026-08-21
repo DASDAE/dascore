@@ -1495,8 +1495,11 @@ def read_dimension(series: pd.Series, where: str = "") -> pd.Series:
         return series
     # Through `_scalar`: python's own date and duration types are
     # coordinates a frame may plainly hold, and the readers below take
-    # numpy's.
-    cells = series[stated].map(_scalar)
+    # numpy's. Built rather than mapped, which would box a numpy scalar
+    # back into the pandas type it came as.
+    cells = pd.Series(
+        [_scalar(x) for x in series[stated]], index=series.index[stated], dtype=object
+    )
     if kind != "b" and not any(_is_bool(x) for x in cells):
         with suppress(TypeError, ValueError):
             # The kind it converted *to*, not merely that it converted:
