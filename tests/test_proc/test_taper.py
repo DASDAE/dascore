@@ -40,10 +40,18 @@ def time_tapered_patch(request, patch_ones):
     return out
 
 
-def test_every_window_is_a_function():
-    """Each name in the table reaches something scipy can call."""
+def test_every_window_resolves_to_a_scipy_window():
+    """Each name in the table reaches a window scipy actually has.
+
+    The entries are lazy imports, so a misspelled scipy symbol is not
+    found until one is called; calling each for a short window is what
+    makes this fail rather than the taper tests below, which only run
+    three of them.
+    """
     assert set(TAPER_WINDOWS) <= set(WINDOW_FUNCTIONS)
-    assert all(callable(x) for x in WINDOW_FUNCTIONS.values())
+    for name, func in WINDOW_FUNCTIONS.items():
+        window = np.asarray(func(8))
+        assert window.shape == (8,), name
 
 
 def _get_start_end_indices(patch, dim):

@@ -604,7 +604,14 @@ class TestMiniSeedUtils:
     # not know: repeating int32 for 3, 10 and 11 says the same thing thrice.
     @pytest.mark.parametrize(
         ("encoding", "dtype"),
-        ((0, "S1"), (1, "int16"), (3, "int32"), (5, "float64"), (999, "")),
+        (
+            (0, "S1"),
+            (1, "int16"),
+            (3, "int32"),
+            (4, "float32"),
+            (5, "float64"),
+            (999, ""),
+        ),
     )
     def test_record_dtype_from_encoding(self, encoding, dtype):
         """MiniSEED scan dtype can be inferred from known encodings."""
