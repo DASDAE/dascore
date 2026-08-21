@@ -7,6 +7,7 @@ import numpy as np
 import pytest
 
 import dascore as dc
+from dascore.config import config_context
 from dascore.utils.patch import get_start_stop_step
 
 
@@ -428,3 +429,55 @@ class TestAlignBenchmarks:
         """Benchmark 2D patch with 1D shift coordinate (300 shifts), valid mode."""
         patch = patch_2d_with_1d_shift
         patch.align_to_coord(time="shift_time", mode="valid")
+
+
+class TestIdentityOverhead:
+    """
+    What maintaining the lineage ids costs.
+
+    The cost is a flat charge per operation -- canonicalizing the call and
+    digesting it -- so it is invisible next to real signal processing and
+    plain next to an operation which barely touches the data. Both ends
+    are timed here, because it is the cheap end which decides whether the
+    `patch_provenance` knob is worth keeping.
+    """
+
+    @pytest.fixture(scope="class")
+    def tiny_patch(self):
+        """The smallest patch worth having: all overhead, no work."""
+        return dc.Patch(
+            data=np.ones((2, 2)),
+            coords={"distance": np.arange(2), "time": np.arange(2)},
+            dims=("distance", "time"),
+        )
+
+    @pytest.fixture(scope="class")
+    def big_mask(self, example_patch):
+        """A mask the fingerprint has to hash, being an array parameter."""
+        return np.asarray(example_patch.data) > 0.5
+
+    @pytest.mark.benchmark
+    def test_identity_overhead_tiny_patch(self, tiny_patch):
+        """The flat charge, with nothing else in the way."""
+        tiny_patch.transpose()
+
+    @pytest.mark.benchmark
+    def test_identity_overhead_tiny_patch_disabled(self, tiny_patch):
+        """The same call with the ids turned off, as the control."""
+        with config_context(patch_provenance="disabled"):
+            tiny_patch.transpose()
+
+    @pytest.mark.benchmark
+    def test_identity_overhead_array_argument(self, example_patch, big_mask):
+        """An array parameter is hashed, which is the one real cost."""
+        example_patch.where(big_mask)
+
+    @pytest.mark.benchmark
+    def test_identity_overhead_real_work(self, example_patch):
+        """Next to actual filtering the charge should not be findable."""
+        example_patch.pass_filter(time=(10, 100))
+
+    @pytest.mark.benchmark
+    def test_processor_fingerprint(self, example_patch):
+        """Building an operation and asking it what it is."""
+        dc.proc.normalize.op(dim="time").fingerprint

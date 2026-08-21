@@ -259,8 +259,14 @@ def digest(patch) -> dict:
         name: _hash(patch.get_array(name)) for name in sorted(patch.coords.coord_map)
     }
     # History holds the repr of the arguments, which says nothing about the
-    # answer, so it is left out.
-    attrs = patch.attrs.model_dump(exclude={"history", "coords"})
+    # answer, so it is left out. The lineage ids go with it, and for a
+    # sharper reason: this compares a patch against one built by other
+    # code, and `patch_id` is minted per patch for anything not read from
+    # a file while `processing_id` names the route rather than the result.
+    # Left in, every patch would differ and the check would say nothing.
+    attrs = patch.attrs.model_dump(
+        exclude={"history", "coords", "patch_id", "processing_id"}
+    )
     return {
         "dtype": str(data.dtype),
         "shape": list(data.shape),
