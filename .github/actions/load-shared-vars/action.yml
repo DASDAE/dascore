@@ -19,6 +19,9 @@ outputs:
   min-deps-matrix:
     description: "Matrix object for the minimum dependency test job"
     value: ${{ steps.load.outputs.min-deps-matrix }}
+  min-deps-python-default:
+    description: "The min-deps cell which runs the steps only one cell needs"
+    value: ${{ steps.load.outputs.min-deps-python-default }}
   network-os-matrix:
     description: "OS list for the network test job"
     value: ${{ steps.load.outputs.network-os-matrix }}
@@ -37,6 +40,9 @@ runs:
         # matrix (each entry there costs one environment cache per OS).
         full_py='["3.12","3.13","3.14"]'
         min_deps_py='["3.12","3.14"]'
+        # The one min-deps cell that runs the doctests: they take minutes and
+        # say the same thing on every version.
+        min_deps_py_default="3.12"
 
         # What a pull request runs. Every python version and every OS is
         # still covered; only the redundant cross product is dropped. The
@@ -60,4 +66,5 @@ runs:
         echo "python-default=$python_default" >> "$GITHUB_OUTPUT"
         echo "test-matrix=$test_matrix" >> "$GITHUB_OUTPUT"
         echo "min-deps-matrix=$min_deps_matrix" >> "$GITHUB_OUTPUT"
+        echo "min-deps-python-default=$min_deps_py_default" >> "$GITHUB_OUTPUT"
         echo "network-os-matrix=$network_os" >> "$GITHUB_OUTPUT"
