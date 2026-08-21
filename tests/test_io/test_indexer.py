@@ -406,6 +406,10 @@ class TestUpdate:
         # the directory fixture is shared with the rest of the session.
         directory = tmp_path_factory.mktemp("specific_paths") / "data"
         shutil.copytree(two_patch_directory, directory)
+        # Whatever indexed the shared directory before left its index in it,
+        # and the timestamps below would then be that run's, not this one's.
+        for index in Path(directory).glob(".dascore_index*"):
+            index.unlink()
         indexer = DBDirectoryIndexer(directory).update(progress=None)
         files = sorted(indexer.path.rglob("*.hdf5"))
         assert len(files) >= 2
