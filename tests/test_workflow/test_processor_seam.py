@@ -15,7 +15,7 @@ import numpy as np
 import pytest
 
 import dascore as dc
-from dascore.exceptions import ParameterError
+from dascore.exceptions import CoordDataError, ParameterError
 from dascore.proc.basic import Abs, Normalize, _known_real
 from dascore.workflow import PatchMeta, PatchProcessor, Task, register_kernel
 from dascore.workflow.processor import (
@@ -64,7 +64,7 @@ class TestPatchMeta:
 
     def test_data_of_the_wrong_shape(self, meta, patch):
         """The coords check the data on the way in, so this cannot pass."""
-        with pytest.raises(Exception, match="shape|match|size"):
+        with pytest.raises(CoordDataError, match="doesnt match the coordinate"):
             meta.to_patch(np.asarray(patch.data)[:2])
 
 
