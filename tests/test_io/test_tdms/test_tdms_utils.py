@@ -9,8 +9,11 @@ import struct
 import numpy as np
 import pytest
 
+import dascore as dc
+from dascore.io.silixah5.utils import _ATTR_MAP as _SILIXA_ATTR_MAP
 from dascore.io.tdms import utils as tdms_utils
 from dascore.io.tdms.utils import parse_time_stamp, type_not_supported
+from dascore.utils.downloader import fetch
 
 
 class _FakeTDMSFile(io.BytesIO):
@@ -115,3 +118,55 @@ class TestTDMSUtils:
         assert out_data.shape == (3, 2)
         assert channel_length == 6
         assert out_attrs == attrs
+
+
+class TestTDMSInterrogator:
+    """A TDMS file names the interrogator by its host name."""
+
+    @pytest.fixture(
+        scope="class",
+        params=["sample_tdms_file_v4713.tdms", "iDAS005_tdms_example.626.tdms"],
+    )
+    def tdms_path(self, request):
+        """Paths to each TDMS test file."""
+        return fetch(request.param)
+
+    @pytest.fixture(scope="class")
+    def tdms_attrs(self, tdms_path):
+        """Attrs read back from a TDMS file."""
+        return dict(dc.spool(tdms_path)[0].attrs)
+
+    @pytest.fixture(scope="class")
+    def raw_host_name(self, tdms_path):
+        """The HostName property as the TDMS header states it."""
+        with open(tdms_path, "rb") as fi:
+            header, _ = tdms_utils._get_all_attrs(fi)
+        return header["SystemInfomation.OS.HostName"]
+
+    def test_name_is_host_name(self, tdms_attrs, raw_host_name):
+        """The name is exactly the HostName property, eg "iDAS005"."""
+        assert raw_host_name
+        assert tdms_attrs["interrogator.name"] == raw_host_name
+
+    def test_no_component_serial_as_interrogator(self, tdms_attrs, tdms_path):
+        """No card or crate serial is passed off as the interrogator's."""
+        with open(tdms_path, "rb") as fi:
+            header, _ = tdms_utils._get_all_attrs(fi)
+        serials = {
+            v
+            for k, v in header.items()
+            if k.startswith("SystemInfomation.") and k.endswith(".SerialNum") and v
+        }
+        stated = {v for k, v in tdms_attrs.items() if k.startswith("interrogator.")}
+        assert serials
+        assert not (stated & serials)
+
+    def test_no_serial_claimed(self, tdms_attrs):
+        """The Devices and Chassis serials name parts, not the interrogator."""
+        assert "interrogator.serial_number" not in tdms_attrs
+
+    def test_agrees_with_silixa_h5(self, tdms_attrs, raw_host_name):
+        """Both Silixa readers key the interrogator off the same attr."""
+        key = "SystemInfomation.OS.HostName"
+        assert _SILIXA_ATTR_MAP[key] == "interrogator.name"
+        assert tdms_attrs["interrogator.name"] == raw_host_name

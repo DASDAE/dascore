@@ -2,6 +2,8 @@
 Febus specific tests.
 """
 
+import shutil
+
 import h5py
 import numpy as np
 import pytest
@@ -10,6 +12,7 @@ import dascore as dc
 from dascore.io.febus import Febus2
 from dascore.io.febus.a1utils import _flatten_febus_info
 from dascore.utils.downloader import fetch
+from dascore.utils.misc import unbyte
 from dascore.utils.time import to_float
 
 
@@ -90,3 +93,47 @@ class TestFebus:
         """A non-matching source_patch_key should filter out Febus patches."""
         out = dc.read(febus_path, source_patch_key="not-a-real-febus-patch")
         assert len(out) == 0
+
+
+class TestFebusA1Interrogator:
+    """A1 Source attrs name the interrogator which wrote the file."""
+
+    @pytest.fixture(scope="class", params=["febus_1.h5", "febus_2.h5"])
+    def a1_path(self, request):
+        """Paths to A1 files of both schema versions."""
+        return fetch(request.param)
+
+    def test_interrogator_name_is_hostname(self, a1_path):
+        """The name is the Hostname the Source states."""
+        with h5py.File(a1_path, "r") as f:
+            hostname = _flatten_febus_info(f)[0].source.attrs["Hostname"]
+        attrs = dict(dc.scan(a1_path)[0].attrs)
+        assert attrs["interrogator.name"] == unbyte(hostname)
+
+    def test_hostname_wins_over_group_name(self, a1_path, tmp_path):
+        """A renamed container group does not rename the interrogator."""
+        path = tmp_path / "renamed_group.h5"
+        shutil.copy2(a1_path, path)
+        with h5py.File(path, "r+") as f:
+            group_name = next(iter(f))
+            hostname = unbyte(f[f"{group_name}/Source1"].attrs["Hostname"])
+            f.move(group_name, "container-alias")
+        attrs = dict(dc.scan(path)[0].attrs)
+        assert attrs["group"] == "container-alias"
+        assert attrs["interrogator.name"] == hostname
+
+    def test_blank_hostname_dropped(self, a1_path, tmp_path):
+        """An empty Hostname is not passed off as a name."""
+        path = tmp_path / "blank_hostname.h5"
+        shutil.copy2(a1_path, path)
+        with h5py.File(path, "r+") as f:
+            group_name = next(iter(f))
+            for node in (f[group_name]["Source1"], f[group_name]["Source1"]["Zone1"]):
+                node.attrs["Hostname"] = b"  "
+        assert "interrogator.name" not in dict(dc.scan(path)[0].attrs)
+
+    def test_scan_and_read_agree(self, a1_path):
+        """A read states the same interrogator a scan does."""
+        scanned = dict(dc.scan(a1_path)[0].attrs)
+        read = dict(Febus2().read(a1_path)[0].attrs)
+        assert scanned["interrogator.name"] == read["interrogator.name"]

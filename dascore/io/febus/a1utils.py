@@ -11,6 +11,7 @@ import numpy as np
 import dascore as dc
 from dascore.core import get_coord, get_coord_manager
 from dascore.core.coordmanager import CoordManager
+from dascore.io.utils import drop_blank_attrs
 from dascore.utils.io import _normalize_source_patch_keys
 from dascore.utils.misc import (
     _maybe_unpack,
@@ -218,6 +219,11 @@ def _get_febus_attrs(feb: _FebusSlice) -> dict:
     }
     out = maybe_get_items(zone_attrs, attr_mapping, unpack_names=set(attr_mapping))
     out["group"] = feb.group_name
+    # Hostname states the interrogator host; the top-level group is named
+    # for it but is a container key, which a rewrite can rename. Format
+    # detection already requires Hostname on every Source.
+    out.update(maybe_get_items(feb.source.attrs, {"Hostname": "interrogator.name"}))
+    drop_blank_attrs(out, ("interrogator.name",))
     out["source"] = feb.source_name
     out["zone"] = feb.zone_name
     out["schema_version"] = out.get("folog_a1_software_version", "").split(".")[0]
