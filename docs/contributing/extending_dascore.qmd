@@ -175,6 +175,27 @@ Most of DASCore's patch functions are still written against NumPy, and make no p
 
 Array-likes which merely support `__array__`, rather than implementing the standard, are handled by NumPy and report `"numpy"` as their backend.
 
+### Supplying a kernel for your own backend
+
+A handful of operations are written out by hand as a [PatchProcessor](`dascore.workflow.processor.PatchProcessor`), splitting what the operation *means* from what it *computes*: `derive_meta` works out the result's coordinates and never sees an array, and `kernel` does the arithmetic and never sees a coordinate. Where one exists, a package which brings its own arrays can say how that operation runs on them, without touching DASCore:
+
+```{python}
+import numpy as np
+
+from dascore.proc.basic import Abs
+from dascore.workflow import register_kernel
+
+
+@register_kernel(Abs, "mybackend")
+def _abs_mybackend(processor, data, meta, out_meta):
+    """How `abs` runs on mybackend's arrays."""
+    return np.abs(data)
+```
+
+The kernel is chosen by the backend the data report, so nothing else about the operation changes — `patch.abs()` reaches it, and the name, arguments and fingerprint are what they always were. An operation with no registered kernel for a backend falls back to the class's own `kernel`, which is written to the standard.
+
+Only a few operations have a processor today; the rest are plain functions, and adding one is a deliberate act rather than something every patch function needs.
+
 ## Related guides
 
 - [Contributing](contributing.qmd)
