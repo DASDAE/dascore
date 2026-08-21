@@ -202,6 +202,11 @@ def velocity_to_strain_rate_edgeless(
     return patch.new(data=strain_rate, coords=new_coords, attrs=new_attrs)
 
 
+def _get_strain_data_type(units) -> str:
+    """Get the strain data_type implied by the converted data units."""
+    return "strain_rate" if units.dimensionality.get("[time]") == -1 else "strain"
+
+
 @patch_function()
 def radians_to_strain(
     patch: PatchType,
@@ -227,12 +232,26 @@ def radians_to_strain(
     refractive_index ($n$)
         The refractive index of the cable.
 
+    Examples
+    --------
+    >>> import dascore as dc
+    >>> patch = (
+    ...     dc.get_example_patch()
+    ...     .update_attrs(data_units="rad", gauge_length=10)
+    ...     .radians_to_strain()
+    ... )
+    >>> assert patch.attrs.data_type == "strain"
+
     Notes
     -----
     Equation 3 of @lindsey2020broadband:
     $$
     \epsilon_{xx}(t, x_j) = \frac{\lambda}{4 \pi n L_{g} \zeta} \Delta \Phi
     $$
+
+    The output `data_type` is set from the converted data units; it is
+    "strain_rate" when they are strain per unit time (eg rad/s becomes
+    strain/s) and "strain" otherwise.
     """
     # First get gauge length, using gl passed into function or attached to attrs.
     gl = getattr(patch.attrs, "gauge_length", None)
@@ -263,6 +282,8 @@ def radians_to_strain(
         msg = f"radians to strain failed to convert {data_units} to strain."
         raise UnitError(msg)
     # Build output patch
-    new_attrs = patch.attrs.update(data_units=new_units)
+    new_attrs = patch.attrs.update(
+        data_units=new_units, data_type=_get_strain_data_type(new_units)
+    )
     new_data = patch.data * const * d_factor
     return patch.update(data=new_data, attrs=new_attrs)
