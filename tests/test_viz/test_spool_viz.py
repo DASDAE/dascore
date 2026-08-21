@@ -287,6 +287,9 @@ class TestNaming:
             (90.0, "1.5 m"),
             (7200.0, "2 h"),
             (86_400.0 * 3, "3 d"),
+            # A multi-year outage is not worth reading in days.
+            (86_400.0 * 400, "1.1 y"),
+            (86_400.0 * 14_852, "40.7 y"),
         ],
     )
     def test_human_duration(self, seconds, text):

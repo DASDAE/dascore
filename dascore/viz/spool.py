@@ -43,8 +43,11 @@ _GAP_TICKS = (1.0, 60.0, 600.0, 3_600.0, 6 * 3_600.0, _SECONDS_IN_DAY)
 # is drawn over, so naming the lane with them would repeat the axis.
 _ENVELOPE_SUFFIXES = ("min", "max", "step", "units")
 
-# Steps a duration is worth reading in, largest first.
+# Steps a duration is worth reading in, largest first. A year is the
+# Gregorian mean, the same one numpy converts a timedelta64 with, since
+# a multi-year outage reads as "40.7 y" rather than "14852 d".
 _UNITS = (
+    ("y", 365.2425 * _SECONDS_IN_DAY),
     ("d", _SECONDS_IN_DAY),
     ("h", 3_600.0),
     ("m", 60.0),
