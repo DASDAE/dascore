@@ -29,9 +29,9 @@ env:
   # Must match the path used in .github/actions/prime-test-data-cache.
   DFS_DATA_DIR: ${{ github.workspace }}/.test_data_cache
 
-# Cancel previous runs when this one starts.
+# Supersede the previous run: by pull request, or by branch for pushes.
 concurrency:
-  group: TestCodeMinDeps-${{ github.event.pull_request.number || github.run_id }}
+  group: TestCodeMinDeps-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:

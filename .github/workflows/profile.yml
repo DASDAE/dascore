@@ -19,8 +19,9 @@ permissions:
   contents: read # required for actions/checkout
   id-token: write # required for OIDC authentication with CodSpeed
 
+# Supersede the previous run: by pull request, or by branch for pushes.
 concurrency:
-  group: CodSpeed-${{ github.event.pull_request.number || github.run_id }}
+  group: CodSpeed-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 env:
