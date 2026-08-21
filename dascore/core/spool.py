@@ -284,14 +284,21 @@ class Spool(NamespaceOwner):
         if array.ndim != 1:
             msg = f"Spool selectors must be one dimensional, got {array.ndim}D."
             raise ParameterError(msg)
+        length = len(self)
         if np.issubdtype(array.dtype, np.bool_):
-            if len(array) != len(self):
+            if len(array) != length:
                 msg = (
                     f"Boolean selector has {len(array)} values but the spool "
-                    f"has {len(self)} patches; it must have one per patch."
+                    f"has {length} patches; it must have one per patch."
                 )
                 raise ParameterError(msg)
-        elif not np.issubdtype(array.dtype, np.integer):
+        elif np.issubdtype(array.dtype, np.integer):
+            # numpy bounds-checks after casting to the platform's index type,
+            # which wraps a huge index into range on a 32 bit build.
+            if array.size and (array.min() < -length or array.max() >= length):
+                msg = f"Integer selector is out of bounds for {length} patches."
+                raise IndexError(msg)
+        else:
             msg = "Only bool or int dtypes are supported for spool array selection."
             raise ValueError(msg)
         return array

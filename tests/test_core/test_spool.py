@@ -440,6 +440,10 @@ class TestSpoolIntArraySelect:
         assert random_spool[pd.Series(indices, dtype="Int64")] == expected
         assert random_spool[pd.Series(indices, dtype="UInt64")] == expected
 
+    def test_negative_indices_count_from_end(self, random_spool):
+        """Negative positions count from the end, as they do for an int."""
+        assert random_spool[[-1]][0] == random_spool[-1]
+
     def test_missing_values_raise(self, random_spool):
         """A nullable integer selector holding NA has no position to select."""
         series = pd.Series([0, pd.NA], dtype="Int64")
