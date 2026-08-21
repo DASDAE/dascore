@@ -258,27 +258,85 @@ class Spool(NamespaceOwner):
         # relation is never realized just for a length
         return len(self._catalog)
 
-    # An int selects one patch; a slice or array selects a sub-spool.
+    def _as_selector_array(self, item) -> np.ndarray:
+        """Convert an array-like selector to an array which fits the spool."""
+        if isinstance(item, pd.Series) and pd.api.types.is_integer_dtype(item):
+            # Keep the Series' own integer width: nullable Int64/UInt64 unbox
+            # to it (NA raises) and unsigned values can't wrap negative.
+            dtype = getattr(item.dtype, "numpy_dtype", item.dtype)
+            try:
+                array = item.to_numpy(dtype=dtype)
+            except ValueError:  # a nullable dtype holding NA has no position
+                msg = "An integer selector cannot contain missing values."
+                raise ParameterError(msg) from None
+        elif isinstance(item, pd.Series) and pd.api.types.is_bool_dtype(item):
+            # A mask is applied by position, so it must line up with the frame
+            # get_contents returns; one built from a filtered frame would
+            # otherwise silently select the wrong patches.
+            if not item.index.equals(self._df.index):
+                msg = (
+                    "The index of a boolean Series selector must match this "
+                    "spool's get_contents; build the mask from it, or pass a "
+                    "numpy array to select by position."
+                )
+                raise ParameterError(msg)
+            # to_numpy handles nullable boolean dtypes; NA counts as False.
+            array = item.to_numpy(dtype=bool, na_value=False)
+        else:
+            array = np.asarray(item)
+            if array.size == 0:  # an empty list selects nothing
+                array = array.astype(np.int64)
+        if array.ndim != 1:
+            msg = f"Spool selectors must be one dimensional, got {array.ndim}D."
+            raise ParameterError(msg)
+        length = len(self)
+        if np.issubdtype(array.dtype, np.bool_):
+            if len(array) != length:
+                msg = (
+                    f"Boolean selector has {len(array)} values but the spool "
+                    f"has {length} patches; it must have one per patch."
+                )
+                raise ParameterError(msg)
+        elif np.issubdtype(array.dtype, np.integer):
+            # numpy bounds-checks after casting to the platform's index type,
+            # which wraps a huge index into range on a 32 bit build.
+            if array.size and (array.min() < -length or array.max() >= length):
+                msg = f"Integer selector is out of bounds for {length} patches."
+                raise IndexError(msg)
+        else:
+            msg = "Only bool or int dtypes are supported for spool array selection."
+            raise ValueError(msg)
+        return array
+
+    # An int selects one patch; anything array-like selects a sub-spool.
     @overload
     def __getitem__(self, item: int) -> dc.Patch: ...
 
     @overload
-    def __getitem__(self, item: slice | np.ndarray) -> Spool: ...
+    def __getitem__(self, item: slice | np.ndarray | pd.Series | list) -> Spool: ...
 
     def __getitem__(self, item) -> dc.Patch | Spool:
-        """Return a patch, or a spool for a slice or array of indices."""
+        """
+        Return a patch (int index) or a new spool (anything else).
+
+        A slice, an array, a pandas Series, or a list selects patches: with
+        booleans, one per patch, True keeps; with integers, by position.
+        Boolean masks built from `get_contents` line up with the spool.
+
+        Notes
+        -----
+        A boolean Series is applied by position, and `get_contents` hands
+        out a fresh positional index, so a mask must come from the contents
+        of the spool it selects. A mask built from a differently ordered
+        view of the same patches has a matching index and selects by its
+        own positions rather than raising.
+        """
         if isinstance(item, slice):
             # a lazy id-membership window (D2); never realizes the flat
             # relation, and keeps split()/map() parts cheap
             return self._new_from_catalog(self._catalog.window(item))
-        if is_array(item):
-            array = np.asarray(item)
-            if not (
-                np.issubdtype(array.dtype, np.bool_)
-                or np.issubdtype(array.dtype, np.integer)
-            ):
-                msg = "Only bool or int dtypes are supported for spool array selection."
-                raise ValueError(msg)
+        if is_array(item) or isinstance(item, pd.Series | list):
+            array = self._as_selector_array(item)
             return self._new_from_catalog(self._catalog.restrict(array))
         try:
             return self._maybe_enrich(self._catalog.get_patch(int(item)))

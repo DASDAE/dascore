@@ -52,6 +52,7 @@ from dascore.io.terra15 import (
     Terra15FormatterV5,
     Terra15FormatterV6,
 )
+from dascore.io.uptech import UptechH5V1
 from dascore.utils.downloader import fetch, get_registry_df
 from dascore.utils.misc import all_close, iterate, order_range_tuple
 from tests.test_io._common_io_test_utils import (
@@ -108,6 +109,7 @@ COMMON_IO_READ_TESTS = {
     Terra15FormatterV6(): ("terra15_v6_test_file.hdf5",),
     NetCDFCFV18(): ("xdas_netcdf.nc",),
     MSeedV2(): ("etna_9n_3chan_10s.mseed",),
+    UptechH5V1(): ("uptech_as1000_1.hdf5",),
 }
 
 # This tuple is for fiber io which support a write method and can write

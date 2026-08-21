@@ -312,6 +312,12 @@ class TestVisualizationBenchmarks:
         patch = example_patch.select(distance=(0, 100))  # Subset for performance
         patch.viz.wiggle()
 
+    @pytest.mark.usefixtures("cleanup_mpl")
+    @pytest.mark.benchmark
+    def test_wiggle_shade(self, example_patch):
+        """Time a shaded wiggle plot of every trace in the patch."""
+        example_patch.viz.wiggle(shade=True)
+
 
 class TestAggregationBenchmarks:
     """Benchmarks for patch aggregation operations."""

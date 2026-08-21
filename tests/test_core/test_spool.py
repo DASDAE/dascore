@@ -346,6 +346,55 @@ class TestSpoolBoolArraySelect:
         df2 = random_spool.get_contents()[bool_array].reset_index(drop=True)
         assert df1.equals(df2)
 
+    def test_bool_series_from_contents(self, diverse_spool):
+        """A mask built from get_contents should select like a select."""
+        df = diverse_spool.get_contents()
+        mask = df["tag"] == "some_tag"
+        assert 0 < mask.sum() < len(mask)
+        out = diverse_spool[mask]
+        expected = diverse_spool.select(tag="some_tag")
+        assert len(out) == len(expected) == mask.sum()
+        for patch, expected_patch in zip(out, expected, strict=True):
+            assert patch.equals(expected_patch)
+
+    def test_bool_list(self, random_spool):
+        """A list of bools should work like a bool array."""
+        mask = [i != 1 for i in range(len(random_spool))]
+        out = random_spool[mask]
+        assert out == random_spool[np.array(mask)]
+
+    def test_wrong_length_raises(self, random_spool):
+        """A mask which doesn't have one value per patch is an error."""
+        mask = np.ones(len(random_spool) + 1, dtype=np.bool_)
+        with pytest.raises(ParameterError, match="one per patch"):
+            random_spool[mask]
+
+    def test_misaligned_series_raises(self, diverse_spool):
+        """A mask which doesn't line up with get_contents must not be applied."""
+        df = diverse_spool.get_contents()
+        sub = df[df["tag"] == "some_tag"]
+        mask = sub["category"] == sub["category"].iloc[0]
+        with pytest.raises(ParameterError, match="match this spool"):
+            diverse_spool[mask]
+
+    def test_nullable_bool_series(self, diverse_spool):
+        """Missing values in a nullable boolean mask count as False."""
+        df = diverse_spool.get_contents()
+        mask = (df["tag"] == "some_tag").astype("boolean")
+        mask.iloc[0] = pd.NA
+        out = diverse_spool[mask]
+        assert len(out) == mask.fillna(False).sum()
+
+    def test_empty_list(self, random_spool):
+        """An empty list selects no patches."""
+        assert len(random_spool[[]]) == 0
+
+    def test_two_dimensional_raises(self, random_spool):
+        """Selectors must be one dimensional."""
+        mask = np.ones((len(random_spool), 1), dtype=np.bool_)
+        with pytest.raises(ParameterError, match="one dimensional"):
+            random_spool[mask]
+
 
 class TestSpoolIntArraySelect:
     """Tests for selecting patches using an integer array."""
@@ -369,12 +418,43 @@ class TestSpoolIntArraySelect:
         with pytest.raises(ValueError, match="Only bool or int dtypes"):
             random_spool[array]
 
+    def test_bad_series_type(self, random_spool):
+        """A Series which is neither bool nor int raises the same way."""
+        series = pd.Series(np.arange(len(random_spool)) + 0.01)
+        with pytest.raises(ValueError, match="Only bool or int dtypes"):
+            random_spool[series]
+
     def test_rearrange(self, random_spool):
         """Ensure patch order can be changed."""
         array = np.array([len(random_spool) - 1, 0])
         out = random_spool[array]
         assert out[0] == random_spool[-1]
         assert out[-1] == random_spool[0]
+
+    def test_int_series_and_list(self, random_spool):
+        """A pandas Series or list of ints should select by position."""
+        indices = [len(random_spool) - 1, 0]
+        expected = random_spool[np.array(indices)]
+        assert random_spool[indices] == expected
+        assert random_spool[pd.Series(indices)] == expected
+        assert random_spool[pd.Series(indices, dtype="Int64")] == expected
+        assert random_spool[pd.Series(indices, dtype="UInt64")] == expected
+
+    def test_negative_indices_count_from_end(self, random_spool):
+        """Negative positions count from the end, as they do for an int."""
+        assert random_spool[[-1]][0] == random_spool[-1]
+
+    def test_missing_values_raise(self, random_spool):
+        """A nullable integer selector holding NA has no position to select."""
+        series = pd.Series([0, pd.NA], dtype="Int64")
+        with pytest.raises(ParameterError, match="missing values"):
+            random_spool[series]
+
+    def test_unsigned_out_of_bounds_raises(self, random_spool):
+        """A huge unsigned index must not wrap around to a valid position."""
+        series = pd.Series([2**63 + 1], dtype="UInt64")
+        with pytest.raises(IndexError):
+            random_spool[series]
 
 
 class TestSpoolIterable:

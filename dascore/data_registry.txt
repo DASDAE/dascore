@@ -53,3 +53,4 @@ hdas_2.h5 d53841ee6d8608908e15114396f94948781ece1a3224f293ab21f5f8335570c4 https
 silixa_h5_ingv_1.h5 738a359fb0f7848fc352f6d2879967dd15bd5c3f04b4c3e12c553825b9df861d https://raw.githubusercontent.com/dasdae/test_data/master/das/silixa_h5_ingv_1.h5
 ai4eps_1.h5 2dd3d8bd16a9d775b69601f3683dad807caa51953488f495def70388e031e731 https://raw.githubusercontent.com/dasdae/test_data/master/das/ai4eps_1.h5
 optasense_odh4_1.h5 50becf9a3f83492c35f29ddfa1969338d3cfff165b1a7b4d199ed2e9d40c5822 https://raw.githubusercontent.com/dasdae/test_data/master/das/optasense_odh4_1.h5
+uptech_as1000_1.hdf5 57e88373acef5f5d1c6054169e347c642ff6a50ef0b7e05b8fdfd5c9b1478ee7 https://raw.githubusercontent.com/dasdae/test_data/master/das/uptech_as1000_1.hdf5
