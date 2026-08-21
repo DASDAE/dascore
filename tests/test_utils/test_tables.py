@@ -224,6 +224,17 @@ class TestParseCell:
         """Anything else is the string it was written as."""
         assert parse_cell("car") == "car"
 
+    def test_a_whole_number_wider_than_a_float(self):
+        """A nanosecond epoch is 19 digits, which a float cannot hold."""
+        out = parse_cell("1600000000123456789")
+        assert out == 1600000000123456789 and isinstance(out, int)
+
+    # The digits are full width, which `float` reads and a table never writes.
+    @pytest.mark.parametrize("text", ["1_000", "\uff11\uff12\uff13", "nan", "inf"])
+    def test_what_a_table_does_not_spell_a_number_with(self, text):
+        """Python reads these as numbers; a table's cell does not state one."""
+        assert parse_cell(text) == text
+
 
 def _forge(frame: pd.DataFrame, path, documents: str) -> None:
     """Write a parquet file whose document footer this library did not write."""

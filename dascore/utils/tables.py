@@ -16,6 +16,7 @@ from __future__ import annotations
 import csv
 import datetime
 import json
+import re
 from collections.abc import Mapping, Sized
 from pathlib import Path
 
@@ -580,6 +581,13 @@ def ordered_rows(frame: pd.DataFrame, column: str | None, path: Path) -> pd.Data
     return frame.assign(**{column: keys}).sort_values(column, kind="stable")
 
 
+# What a table spells a number with: ASCII digits, and nothing a
+# programmer writes for legibility. `\d` would read a full-width digit
+# too, which no reader of this table writes and `to_numeric` refuses.
+_WHOLE = re.compile(r"^[+-]?[0-9]+$")
+_NUMBER = re.compile(r"^[+-]?([0-9]+\.?[0-9]*|\.[0-9]+)([eE][+-]?[0-9]+)?$")
+
+
 def parse_cell(text: str):
     """
     Read a cell's value the way its own text states it.
@@ -590,6 +598,10 @@ def parse_cell(text: str):
     cannot express; that value is authored in YAML, where the types are
     explicit.
 
+    A number is what a table spells one with: ASCII digits, a point and an
+    exponent. Text Python alone reads as a number -- ``1_000``, ``nan`` --
+    is the text it says.
+
     Examples
     --------
     >>> from dascore.utils.tables import parse_cell
@@ -598,10 +610,17 @@ def parse_cell(text: str):
     """
     if (folded := text.strip().casefold()) in ("true", "false"):
         return folded == "true"
-    try:
-        number = float(text)
-    except ValueError:
+    # Read through the text's own spelling rather than through float(): a
+    # whole number wider than a float can hold -- a nanosecond epoch is 19
+    # digits -- would come back as the nearest float, which is a different
+    # number. Python's own float() is looser than a table's spelling of a
+    # number besides, reading `1_000` and `nan`; neither is a number a
+    # cell states, and a non-finite one is refused everywhere it lands.
+    if _WHOLE.match(text.strip()):
+        return int(text)
+    if not _NUMBER.match(text.strip()):
         return text
+    number = float(text)
     # int(number) rather than int(text): 1e3 is integral, and only the
     # number knows that -- the text raises.
     return int(number) if number.is_integer() and "." not in text else number

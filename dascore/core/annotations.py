@@ -9,9 +9,11 @@ itself belong to the inventory instead, in optical distance; see
 A set is dataframe-backed, one row per annotation. Columns name the
 dimensions a row constrains: ``<dim>_start``/``<dim>_end`` state a
 half-open range, a bare ``<dim>`` states a point, and a dimension no
-column names is unconstrained. Paths and polygons keep their vertices in
-a second, tidy frame keyed by annotation id, and every row keeps a
-bounding region so table operations work whatever its geometry is.
+column names is unconstrained. Those columns hold coordinates -- numbers,
+times or durations -- since that is what a bound is compared as. Paths
+and polygons keep their vertices in a second, tidy frame keyed by
+annotation id, and every row keeps a bounding region so table operations
+work whatever its geometry is.
 """
 
 from __future__ import annotations
@@ -87,6 +89,8 @@ _VERTEX_KINDS = {"path": 2, "polygon": 3}
 
 # The vertices frame's own scaffolding; every other column is a dimension.
 _VERTEX_COLUMNS = ("id", "seq")
+# The column a vertex states its place in the order by; a number.
+_ORDER = _VERTEX_COLUMNS[1]
 
 # The three parts a stored set spells itself with, and the suffixes each
 # takes. The loader reads these names; `io.save` writes them, and clears the
@@ -110,6 +114,10 @@ DIMS_KEY = "dascore:dims"
 
 # What a range column is spelled with.
 _START, _END = "_start", "_end"
+
+# The resolution DASCore holds a time and a duration at.
+_NS_TIME = np.dtype("datetime64[ns]")
+_NS_SPAN = np.dtype("timedelta64[ns]")
 
 # A moveout is physics, not geometry, so it names the dimensions it relates.
 DISTANCE_DIM, TIME_DIM = "distance", "time"
@@ -683,7 +691,9 @@ class AnnotationSet(NamespaceOwner):
         row per annotation.
     dims
         The patch dimensions the annotations are stated in. Required unless
-        ``attrs`` states them.
+        ``attrs`` states them. The columns spelling one hold numbers, times
+        or durations; text which merely looks like a number is refused,
+        since a bound stated in it compares by its spelling.
     vertices
         A tidy frame of one row per vertex, with ``id``, ``seq`` and one
         column per dimension. Required by every path and polygon row.
@@ -731,8 +741,12 @@ class AnnotationSet(NamespaceOwner):
             attrs, dims, creation_info, acquisition_key, history, columns
         )
         frame = _coerce_frame(data, "annotations")
-        frame = _normalize_blanks(_normalize_times(frame, self._attrs.dims))
+        # Blanks first: a blank cell states nothing, and a column holding
+        # one is only the times it states once that is known.
+        frame = _normalize_times(_normalize_blanks(frame), self._attrs.dims)
         spellings = _read_spellings(frame, self._attrs.dims)
+        frame = _type_dimensions(frame, spellings)
+        frame = _normalize_identities(frame, ("id", "parent"))
         _check_columns(frame, self._attrs)
         _check_ranges(frame, spellings)
         _check_values(frame)
@@ -740,13 +754,16 @@ class AnnotationSet(NamespaceOwner):
         ids = _check_ids(frame)
         frame = _normalize_tags(_normalize_basis(frame, self._attrs.dims))
         vertex_frame = _normalize_times(
-            _coerce_frame(vertices, "vertices"), self._attrs.dims
+            _normalize_blanks(_coerce_frame(vertices, "vertices")), self._attrs.dims
         )
+        vertex_frame = _normalize_identities(vertex_frame, ("id",))
         self._vertices = _check_vertices(vertex_frame, frame, ids, self._attrs.dims)
-        self._df = _fill_vertex_bounds(frame, self._vertices, spellings)
         # Read again: filling a derived bounding region adds the range
-        # columns a path row had none of, which are bounds like any other.
-        self._spellings = _read_spellings(self._df, self._attrs.dims)
+        # columns a path row had none of, which are bounds like any other,
+        # and are typed as any other.
+        filled = _fill_vertex_bounds(frame, self._vertices, spellings)
+        self._spellings = _read_spellings(filled, self._attrs.dims)
+        self._df = _type_dimensions(filled, self._spellings)
 
     # --- what the set is
 
@@ -773,7 +790,16 @@ class AnnotationSet(NamespaceOwner):
 
     def __getitem__(self, position: int) -> Annotation:
         """Return one annotation by its position."""
-        row = self._df.iloc[position]
+        if isinstance(position, bool) or not isinstance(position, int | np.integer):
+            msg = (
+                f"An annotation is read by its position; got {position!r}. "
+                "Iterate the set, or filter its frame, to reach many."
+            )
+            raise TypeError(msg)
+        # Read column by column rather than as a row: one row of a frame is
+        # a Series, which holds one dtype, so an id of 1 beside a float
+        # bound would be read back as '1.0'.
+        row = {str(name): self._df[name].iloc[position] for name in self._df.columns}
         label = _text(row.get("set"))
         return Annotation(
             geometry=self._geometry(row),
@@ -812,8 +838,10 @@ class AnnotationSet(NamespaceOwner):
             return NotImplemented
         return (
             self._attrs == other._attrs
-            and self._df.equals(other._df)
-            and self._vertices.equals(other._vertices)
+            and _ordered_columns(self._df).equals(_ordered_columns(other._df))
+            and _ordered_columns(self._vertices).equals(
+                _ordered_columns(other._vertices)
+            )
         )
 
     def __repr__(self) -> str:
@@ -1179,6 +1207,7 @@ def _check_vertices(vertices, frame, ids, dims) -> pd.DataFrame:
     if not vertex_dims:
         msg = "The vertices state no dimension column, so they place nothing."
         raise ParameterError(msg)
+    vertices = _type_vertices(vertices, vertex_dims)
     if vertices["seq"].isnull().any():
         rows = ", ".join(str(x) for x in vertices.index[vertices["seq"].isnull()][:5])
         msg = f"Vertex row(s) {rows} state no seq, so they have no place in the order."
@@ -1212,6 +1241,32 @@ def _check_vertices(vertices, frame, ids, dims) -> pd.DataFrame:
         msg = f"The path or polygon id(s) {', '.join(bare)} state no vertices."
         raise ParameterError(msg)
     return vertices.sort_values(["id", "seq"], kind="stable").reset_index(drop=True)
+
+
+def _type_vertices(vertices: pd.DataFrame, vertex_dims) -> pd.DataFrame:
+    """
+    Read a vertex frame's order and coordinates as the values they state.
+
+    The order is a number so the vertices sort by it: text sorts by its
+    spelling, which puts vertex 10 between 1 and 2 and draws a shape
+    nobody stated. The dimensions are read as the set's own are, so a
+    frame and the table it was written to draw one curve.
+    """
+    changed = {}
+    try:
+        changed[_ORDER] = pd.to_numeric(vertices[_ORDER])
+    except (TypeError, ValueError) as error:
+        msg = (
+            f"The vertices state a {_ORDER} which is not a number: {error}. A "
+            "vertex states its place in the order as one, since that is what "
+            "orders it."
+        )
+        raise ParameterError(msg) from error
+    for name in vertex_dims:
+        read = _read_dimension(vertices[name])
+        if read is not vertices[name]:
+            changed[name] = read
+    return _assign(vertices, changed)
 
 
 def _fill_vertex_bounds(frame, vertices, spellings) -> pd.DataFrame:
@@ -1348,12 +1403,140 @@ def _normalize_basis(frame, dims) -> pd.DataFrame:
     return frame.assign(basis=pd.Series(read, index=frame.index, dtype=object))
 
 
+def _stated_cells(series: pd.Series) -> pd.Series:
+    """Return which cells of a column state anything, as a plain mask."""
+    # Through object first: mapping a categorical column hands back a
+    # categorical, which has no `any`.
+    return pd.Series([bool(_stated(x)) for x in series], index=series.index, dtype=bool)
+
+
 def _states_times(series: pd.Series) -> bool:
     """Whether every cell a column states is a datetime written as text."""
     stated = [x for x in series if _stated(x)]
     return bool(stated) and all(
         isinstance(x, str) and _DATETIME_TEXT.match(x) for x in stated
     )
+
+
+def _read_dimension(series: pd.Series) -> pd.Series:
+    """
+    Return a dimension column as the numbers, times or durations it states.
+
+    A dimension is a coordinate, so a set holds one as something a
+    coordinate can be. Text which merely looks like a number compares by
+    its spelling -- '10' sorts before '9' -- so a range stated in it reads
+    as one which ends before it starts, and a set holding it cannot be
+    written and read back at all: the reader types these columns whether
+    the frame did or not. Reading them the same way on both sides is what
+    makes a stored set the set it was.
+
+    Numbers are tried first because every datetime spelling DASCore writes
+    is an ISO string, which is not a number, while seconds from the epoch
+    are a number a distance column would lose to a date.
+    """
+    kind = getattr(series.dtype, "kind", "")
+    if kind in "iuf":
+        return series
+    if kind == "M":
+        return series if series.dtype == _NS_TIME else to_datetime64(series)
+    if kind == "m":
+        return series if series.dtype == _NS_SPAN else to_timedelta64(series)
+    stated = _stated_cells(series)
+    if not stated.any():
+        # A column no row states says nothing about what it holds, and
+        # inventing a type for it would be inventing what it says.
+        return series
+    with suppress(TypeError, ValueError):
+        return pd.to_numeric(series)
+    for read, dtype in ((to_datetime64, _NS_TIME), (to_timedelta64, _NS_SPAN)):
+        # AssertionError: `to_timedelta64` states that way what it cannot read.
+        with suppress(TypeError, ValueError, AssertionError):
+            values = np.asarray(read(series[stated]))
+            # Checked rather than trusted: these read text nobody can place
+            # -- a label, a name -- as NaT rather than refusing it, and
+            # taking that would delete the cell rather than say it is not
+            # a coordinate.
+            if not pd.isnull(values).any():
+                return _restate(series, stated, values, dtype)
+    msg = (
+        f"The column {str(series.name)!r} states neither numbers, times nor "
+        "durations, so its values are not coordinates an annotation can be "
+        "placed at."
+    )
+    raise ParameterError(msg)
+
+
+def _restate(series: pd.Series, stated: pd.Series, values, dtype) -> pd.Series:
+    """Put converted cells back where the column stated them."""
+    out = pd.Series(np.array("NaT", dtype=dtype), index=series.index, dtype=dtype)
+    out[stated] = np.asarray(values)
+    return out
+
+
+def _type_dimensions(frame: pd.DataFrame, spellings) -> pd.DataFrame:
+    """Read every column which spells a dimension as the coordinates it states."""
+    named = {x for one in spellings.values() for x in (one.point, one.start, one.end)}
+    changed = {}
+    for name in frame.columns:
+        if name not in named:
+            continue
+        read = _read_dimension(frame[name])
+        if read is not frame[name]:
+            changed[name] = read
+    return _assign(frame, changed)
+
+
+def _normalize_identities(frame: pd.DataFrame, columns) -> pd.DataFrame:
+    """
+    Hold every identity as the text which names it.
+
+    An id is a label, not a number: a table reads one back as text, and a
+    blank cell beside a whole number makes a float column, so a set built
+    from a frame would name a row `1.0` where the vertices naming it, or
+    the same set reloaded, spells it `1`.
+    """
+    changed = {}
+    for name in columns:
+        if name not in frame.columns:
+            continue
+        series = frame[name]
+        if series.dtype == object and all(
+            isinstance(x, str) for x in series if _stated(x)
+        ):
+            continue
+        changed[name] = pd.Series(
+            [_identity(x) for x in series], index=series.index, dtype=object
+        )
+    return _assign(frame, changed)
+
+
+def _identity(value):
+    """Return the text one identity is named by, an unstated one as nothing."""
+    if not _stated(value):
+        return None
+    value = _scalar(value)
+    # A whole number spelled as a float names the row a table would name
+    # `1`, not `1.0`: the `.0` is the blank cell beside it, not the label.
+    if isinstance(value, float) and value.is_integer():
+        return str(int(value))
+    return str(value)
+
+
+def _ordered_columns(frame: pd.DataFrame) -> pd.DataFrame:
+    """Return a frame whose columns are in one order, whatever order it holds."""
+    return frame[sorted(frame.columns, key=str)]
+
+
+def _assign(frame: pd.DataFrame, changed: Mapping) -> pd.DataFrame:
+    """Return the frame with these columns replaced, or itself where none are."""
+    if not changed:
+        return frame
+    # Assigned by item rather than by keyword: a column need not be named
+    # anything a keyword can spell.
+    out = frame.copy()
+    for name, series in changed.items():
+        out[name] = series
+    return out
 
 
 def _normalize_times(frame: pd.DataFrame, dims: Sequence[str] = ()) -> pd.DataFrame:
@@ -1375,26 +1558,19 @@ def _normalize_times(frame: pd.DataFrame, dims: Sequence[str] = ()) -> pd.DataFr
     for name in frame.columns:
         series = frame[name]
         kind = getattr(series.dtype, "kind", "")
-        if kind == "M" and series.dtype != np.dtype("datetime64[ns]"):
+        if kind == "M" and series.dtype != _NS_TIME:
             changed[name] = to_datetime64(series)
-        elif kind == "m" and series.dtype != np.dtype("timedelta64[ns]"):
+        elif kind == "m" and series.dtype != _NS_SPAN:
             changed[name] = to_timedelta64(series)
         elif str(name) in spelled and _states_times(series):
             # Only the stated cells are converted, then put back where
             # they came from: masking the result instead hands every blank
             # cell to the datetime parser first, and what a blank one reads
             # as there is up to `astype`.
-            stated = series[series.notna()]
-            times = to_datetime64(stated.astype(str))
+            stated = series.notna()
+            times = to_datetime64(series[stated].astype(str))
             changed[name] = times.reindex(series.index)
-    if not changed:
-        return frame
-    # Assigned by item rather than by keyword: a column need not be named
-    # anything a keyword can spell.
-    out = frame.copy()
-    for name, series in changed.items():
-        out[name] = series
-    return out
+    return _assign(frame, changed)
 
 
 def _normalize_tags(frame) -> pd.DataFrame:
@@ -1437,25 +1613,26 @@ def _normalize_blanks(frame: pd.DataFrame) -> pd.DataFrame:
     changed = {}
     for name in frame.columns:
         series = frame[name]
-        if getattr(series.dtype, "kind", "") not in "OTU":
-            continue
-        blank = series.map(lambda x: isinstance(x, str) and not x)
-        if blank.any():
-            changed[name] = series.where(~blank, None)
-    # An all-blank value column is how a membership-only set is spelled,
-    # and it arrives as whatever dtype the reader inferred from nothing;
-    # one dtype keeps a saved set equal to its reload.
-    if "value" in frame.columns and frame["value"].dtype != object:
-        if not frame["value"].map(_stated).any():
-            changed["value"] = pd.Series(
+        if getattr(series.dtype, "kind", "") in "OTU":
+            # Through object first: mapping a categorical column hands
+            # back a categorical, which has no `any`.
+            blank = pd.Series(
+                [isinstance(x, str) and not x for x in series],
+                index=series.index,
+                dtype=bool,
+            )
+            if blank.any():
+                series = series.where(~blank, None)
+                changed[name] = series
+        # A column no row states -- an all-blank value column is how a
+        # membership-only set is spelled -- arrives as whatever dtype each
+        # reader inferred from nothing, and a format infers a different
+        # one; one dtype keeps a saved set equal to its reload.
+        if series.dtype != object and not _stated_cells(series).any():
+            changed[name] = pd.Series(
                 [None] * len(frame), index=frame.index, dtype=object
             )
-    if not changed:
-        return frame
-    out = frame.copy()
-    for name, series in changed.items():
-        out[name] = series
-    return out
+    return _assign(frame, changed)
 
 
 def _read_basis(value, dims):
@@ -1470,10 +1647,23 @@ def _read_basis(value, dims):
     if isinstance(value, AnnotationBasis):
         basis = value
     else:
+        # Text is the document a table holds a curve as, which is what
+        # this module writes, so a frame read straight back from one is a
+        # frame this can read.
+        if isinstance(value, str):
+            try:
+                value = json.loads(value)
+            except ValueError as error:
+                msg = (
+                    f"Could not read {value!r} as a curve: it is not a JSON "
+                    "document. A stored basis is what its curve dumps."
+                )
+                raise ParameterError(msg) from error
         try:
             basis = _BASIS_ADAPTER.validate_python(value)
         except ValidationError as error:
-            msg = f"Could not read {value!r} as a curve: {error}."
+            named = ", ".join(sorted(x.__name__ for x in (Line, Moveout)))
+            msg = f"Could not read {value!r} as a curve; one is a {named}: {error}."
             raise ParameterError(msg) from error
     if foreign := sorted(set(basis.dims) - set(dims)):
         msg = (
@@ -1725,7 +1915,9 @@ def annotation_set_to_csv(
 
     A bare table states one grain, so a set holding vertices is written
     with [save](`dascore.core.annotations.save_annotation_set`) instead;
-    this is the spelling for a set of regions.
+    this is the spelling for a set of regions. A duration dimension is
+    refused: a CSV has no spelling for one which reads back, where parquet
+    has a type for it.
 
     The dimensions are not written: they are not a column, and the only
     place a CSV has for them is a comment line, which a reader not told
@@ -1752,6 +1944,7 @@ def annotation_set_to_csv(
     True
     """
     _refuse_bare_vertices(annotations)
+    _refuse_unwritable_durations(annotations)
     return _write_table(annotations._df, path)
 
 
@@ -1805,6 +1998,35 @@ def annotation_set_to_parquet(
     return pathlib.Path(path)
 
 
+def _refuse_unwritable_durations(annotations: AnnotationSet) -> None:
+    """
+    Refuse to write a duration dimension as CSV, which cannot state one.
+
+    A duration is written as the text numpy spells it with -- `5000000000
+    nanoseconds` -- and nothing reads that back: the reader types a
+    dimension as numbers or times, so the set would be one this library
+    wrote and then refuses to load. Parquet has a type for a duration and
+    keeps it, so the set is storable; it is CSV which has nowhere to put
+    this.
+    """
+    spelled = {
+        x for dim in annotations.dims for x in (dim, f"{dim}{_START}", f"{dim}{_END}")
+    }
+    named = sorted(
+        str(name)
+        for frame in (annotations._df, annotations._vertices)
+        for name in frame.columns
+        if str(name) in spelled and getattr(frame[name].dtype, "kind", "") == "m"
+    )
+    if named:
+        msg = (
+            f"The dimension column(s) {', '.join(named)} hold durations, which "
+            "a CSV has no spelling for: written as text, nothing reads them "
+            "back as durations. Write the set as parquet, which keeps them."
+        )
+        raise ParameterError(msg)
+
+
 def _refuse_bare_vertices(annotations: AnnotationSet) -> None:
     """Refuse to write a set of shapes as one table, which has one grain."""
     if not annotations._vertices.empty:
@@ -1841,7 +2063,9 @@ def save_annotation_set(
     The tables are CSV unless another encoding is asked for. Parquet
     writes the same parts under the same names, with its own suffix, and
     keeps a column's type rather than its spelling wherever it has one
-    for it; it needs pyarrow, where CSV needs nothing.
+    for it; it needs pyarrow, where CSV needs nothing. A set whose
+    dimension is a duration is parquet's alone: CSV has no spelling for
+    one which reads back as a duration, so writing it is refused.
 
     Writing states the whole directory, so a part this set does not
     have is removed rather than left behind. A stale vertices table, the
@@ -1883,6 +2107,8 @@ def save_annotation_set(
     # says; dims has no default, so it is always written, and the
     # attributes name their own model, which is what the file holds.
     suffix = _table_suffix(format)
+    if suffix == TABLE_SUFFIX:
+        _refuse_unwritable_durations(annotations)
     document = annotations._attrs.model_dump(mode="json", exclude_defaults=True)
     dims = annotations.dims
     spelled = {ANNOTATION_STEM: _spell_table(annotations._df, suffix, dims)}

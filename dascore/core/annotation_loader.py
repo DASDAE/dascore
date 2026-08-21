@@ -20,9 +20,10 @@ carries the annotations made on it under the hidden name ``.annotations``, as
 it carries its inventory under ``.inventory``.
 
 CSV has no types, so this module decides what each column holds before the
-models see it: a dimension column is numbers or times, a ``basis`` cell is
-the JSON document its curve dumps, and every other cell is read the way it
-was written. Tables are read strictly, through
+models see it: a ``basis`` cell is the JSON document its curve dumps, and
+every other cell is read the way it was written. A dimension column is
+read by the set's own reader, so a stored table and a frame in memory are
+typed alike. Tables are read strictly, through
 [`read_table`](`dascore.utils.tables.read_table`), and the neutral errors
 that raises are named as annotation errors here, at the one boundary which
 knows the format.
@@ -31,14 +32,12 @@ knows the format.
 from __future__ import annotations
 
 import json
-import math
 import os
 from collections.abc import Collection, Mapping, Sequence
-from contextlib import contextmanager, suppress
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
-import numpy as np
 import pandas as pd
 from pydantic import ValidationError
 
@@ -58,6 +57,9 @@ from dascore.core.annotations import (
     annotation_set_to_dataframe,
     annotation_set_to_vertices,
 )
+from dascore.core.annotations import (
+    _read_dimension as _typed_dimension,
+)
 from dascore.exceptions import InvalidAnnotationError, ParameterError
 from dascore.models.registry import TAG_FIELD
 from dascore.utils.documents import read_document
@@ -69,7 +71,6 @@ from dascore.utils.tables import (
     read_parquet_metadata,
     read_table,
 )
-from dascore.utils.time import to_datetime64
 
 # What an attrs file declares itself to be; the model writes its own tag.
 _SET_TAG = "AnnotationSetAttrs"
@@ -168,30 +169,17 @@ def _read_attrs(directory: Path) -> dict[str, Any]:
 
 def _read_dimension(series: pd.Series, path: Path) -> pd.Series:
     """
-    Read a dimension column as the numbers or times its cells state.
+    Read a dimension column as the coordinates its cells state.
 
-    Numbers are tried first because every datetime spelling this writes is
-    an ISO string, which is not a number, while seconds from the epoch are
-    a number a distance column would lose to a date.
+    The reading is the set's own, so a stored table and the frame it was
+    written from are typed alike; only the file it went wrong in is added
+    here, which the set cannot know.
     """
-    stated = series.notna()
-    if not stated.any():
-        return series
-    with suppress(TypeError, ValueError):
-        return pd.to_numeric(series)
     try:
-        values = to_datetime64(series[stated].to_numpy(dtype=str))
-    except (TypeError, ValueError) as error:
-        msg = (
-            f"The column {series.name!r} of {quote_path(path)} states neither "
-            f"numbers nor times: {error}."
-        )
+        return _typed_dimension(series)
+    except ParameterError as error:
+        msg = f"{error} It is stated in {quote_path(path)}."
         raise ParameterError(msg) from error
-    out = pd.Series(
-        np.datetime64("NaT", "ns"), index=series.index, dtype="datetime64[ns]"
-    )
-    out[stated] = values
-    return out
 
 
 def _read_ordinal(series: pd.Series, path: Path) -> pd.Series:
@@ -302,16 +290,12 @@ def _read_extra(cell):
     """
     Read one cell of a column the set does not model.
 
-    A cell reading 'nan' or 'inf' parses as a float which every later
-    reader treats as unset, so the value would be deleted rather than
-    retyped; those stay the text the table plainly states.
+    A cell reading 'nan' or 'inf' stays the text the table plainly states:
+    `parse_cell` reads only what a table spells a number with, and a
+    non-finite one -- which every later reader treats as unset -- is not
+    among them.
     """
-    if not isinstance(cell, str):
-        return cell
-    value = parse_cell(cell)
-    if isinstance(value, float) and not math.isfinite(value):
-        return cell
-    return value
+    return parse_cell(cell) if isinstance(cell, str) else cell
 
 
 def _read_set_table(
