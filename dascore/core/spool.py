@@ -1705,6 +1705,10 @@ class Spool(NamespaceOwner):
         --------
         [`Spool.get_coverage`](`dascore.core.spool.Spool.get_coverage`)
 
+        [`get_gap_edges`](`dascore.utils.gaps.get_gap_edges`) finds the
+        gaps *inside* one patch's coordinate, which is a different
+        question: this method reads the index and never loads data.
+
         Examples
         --------
         >>> import numpy as np
@@ -1779,6 +1783,10 @@ class Spool(NamespaceOwner):
         See Also
         --------
         [`Spool.get_gaps`](`dascore.core.spool.Spool.get_gaps`)
+
+        [`get_gap_edges`](`dascore.utils.gaps.get_gap_edges`) finds the
+        gaps *inside* one patch's coordinate, which is a different
+        question: this method reads the index and never loads data.
 
         Examples
         --------
