@@ -1563,7 +1563,7 @@ class TestConcatenatePartitions:
 
     def test_stack_refuses_differing_riders(self, pair):
         """Stacking keeps one coordinate manager, so riders must agree."""
-        first, other = pair
+        first, _ = pair
         nt = first.shape[first.get_axis("time")]
         a = first.update_coords(clock=("time", np.arange(nt) * 1.0))
         b = first.update_coords(clock=("time", np.arange(nt) * 2.0))
