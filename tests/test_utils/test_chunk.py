@@ -14,6 +14,8 @@ from dascore.utils.chunk import get_intervals
 from dascore.utils.chunk_plan import (
     _normalize_chunk_units,
     build_chunk_plan,
+    build_coverage_frame,
+    build_gap_frame,
     build_subdivision_plan,
     subdivision_pieces,
 )
@@ -43,6 +45,21 @@ def contiguous_sr_spaced_df(contiguous_df):
     out = contiguous_df.copy()
     out["time_max"] = out["time_max"] - sr
     return out
+
+
+@pytest.fixture()
+def gapy_df(contiguous_df):
+    """Create a dataframe with gaps of 15 samples."""
+    df = contiguous_df.copy()
+    df["time_max"] -= df["time_step"] * 15
+    return df
+
+
+@pytest.fixture()
+def gapy_df_unordered(gapy_df):
+    """Create a dataframe with gaps that is not sorted by starttime."""
+    inds = np.random.RandomState(42).permutation(gapy_df.index)
+    return gapy_df.loc[inds].reset_index(drop=True)
 
 
 @pytest.fixture()
@@ -244,19 +261,6 @@ class TestChunkPlanDF:
 
 class TestChunkPlanToMerge:
     """Merge-mode planning on raw dataframes."""
-
-    @pytest.fixture()
-    def gapy_df(self, contiguous_df):
-        """Create a dataframe with gaps."""
-        df = contiguous_df.copy()
-        df["time_max"] -= df["time_step"] * 15
-        return df
-
-    @pytest.fixture()
-    def gapy_df_unordered(self, gapy_df):
-        """Create a dataframe with gaps that is not sorted by starttime."""
-        inds = np.random.RandomState(42).permutation(gapy_df.index)
-        return gapy_df.loc[inds].reset_index(drop=True)
 
     def test_chunk_can_merge(self, contiguous_df):
         """Ensure chunk can be used to merge unspecified segment lengths."""
@@ -739,3 +743,297 @@ class TestSnappedCutExactness:
             # it opens starts at the next one.
             assert pieces[1][0] > on_grid
             assert pieces[1][0] >= cut
+
+
+class TestBuildGapFrame:
+    """Gap reporting on raw dataframes."""
+
+    @pytest.fixture()
+    def nested_then_later_df(self, contiguous_df):
+        """A wide row, a row nested inside it, then a later adjacent row."""
+        step = contiguous_df["time_step"].iloc[0]
+        wide_min = contiguous_df["time_min"].iloc[0]
+        wide_max = wide_min + step * 100
+        return pd.DataFrame(
+            {
+                "time_min": [wide_min, wide_min + step * 10, wide_max + step],
+                "time_max": [wide_max, wide_min + step * 20, wide_max + step * 10],
+                "time_step": [step] * 3,
+                "distance_min": 0,
+                "distance_max": 10,
+                "distance_step": 1,
+            }
+        )
+
+    def test_contiguous_has_no_gaps(self, contiguous_df):
+        """A contiguous relation reports nothing, but keeps its schema."""
+        out = build_gap_frame(contiguous_df, "time")
+        assert out.empty
+        gappy = contiguous_df.assign(
+            time_max=contiguous_df["time_max"] - contiguous_df["time_step"] * 15
+        )
+        populated = build_gap_frame(gappy, "time")
+        assert not populated.empty
+        # an empty report must be summable and groupable like a real one
+        assert out.dtypes.to_dict() == populated.dtypes.to_dict()
+
+    def test_gap_count_and_size(self, gapy_df):
+        """Each 15 sample hole is one row, bracketed by the samples around it."""
+        out = build_gap_frame(gapy_df, "time")
+        assert len(out) == len(gapy_df) - 1
+        expected = gapy_df["time_step"].iloc[0] * 15
+        assert (out["gap_size"] == expected).all()
+        # the bracketing samples are real values from the relation
+        assert set(out["time_min"]).issubset(set(gapy_df["time_max"]))
+        assert set(out["time_max"]).issubset(set(gapy_df["time_min"]))
+
+    def test_gaps_match_merge_partitions(self, gapy_df):
+        """Gaps are exactly the boundaries a merge refuses to close."""
+        merged = build_chunk_plan(gapy_df, time=None).outputs
+        assert len(merged) == len(build_gap_frame(gapy_df, "time")) + 1
+
+    def test_unordered_input(self, gapy_df, gapy_df_unordered):
+        """Row order in the relation does not change the report."""
+        out = build_gap_frame(gapy_df_unordered, "time")
+        assert out.equals(build_gap_frame(gapy_df, "time"))
+
+    def test_overlaps_report_no_gap(self, contiguous_df):
+        """Overlapping rows are contiguous, so nothing is missing."""
+        df = contiguous_df.copy()
+        df["time_max"] += df["time_step"] * 5
+        assert build_gap_frame(df, "time").empty
+
+    def test_nested_row_reports_no_gap(self, nested_then_later_df):
+        """A row swallowed by an earlier one cannot open a gap behind it.
+
+        The later row starts one step after the *wide* row ends, so a
+        boundary measured against the previous row's stop (rather than
+        the running max) would fabricate an 80 sample gap.
+        """
+        assert build_gap_frame(nested_then_later_df, "time").empty
+
+    def test_sub_tolerance_gap_ignored(self, contiguous_df):
+        """A hole under the tolerance is not a gap."""
+        df = contiguous_df.copy()
+        df["time_max"] -= df["time_step"]
+        assert build_gap_frame(df, "time").empty
+        # ... but tightening the tolerance finds it
+        assert len(build_gap_frame(df, "time", tolerance=0.5)) == len(df) - 1
+
+    def test_unknown_step_reports_no_gap(self, gapy_df):
+        """With no step the tolerance has no sample to scale, so no gaps."""
+        df = gapy_df.assign(time_step=np.timedelta64("NaT", "ns"))
+        assert build_gap_frame(df, "time").empty
+
+    def test_groups_never_bridge(self, gapy_df):
+        """A gap is never reported between two unrelated groups."""
+        first, second = gapy_df.iloc[:1], gapy_df.iloc[1:2]
+        df = pd.concat(
+            [first.assign(station="sta1"), second.assign(station="sta2")],
+            ignore_index=True,
+        )
+        # the two rows are 15 samples apart, so one group would report a gap
+        assert len(build_gap_frame(df, "time", group=[])) == 1
+        assert build_gap_frame(df, "time", group="station").empty
+        # the hole became the boundary between two cells, not a gap
+        coverage = build_coverage_frame(df, "time", group="station")
+        assert len(coverage) == 2
+
+    def test_negative_step(self, contiguous_df, gapy_df):
+        """A descending coordinate is measured by its step's magnitude.
+
+        A signed margin would run backwards and turn every adjacent
+        boundary into a gap.
+        """
+        adjacent = contiguous_df.assign(time_step=-contiguous_df["time_step"])
+        assert build_gap_frame(adjacent, "time").empty
+        # real holes are still found ...
+        flipped = gapy_df.assign(time_step=-gapy_df["time_step"])
+        out = build_gap_frame(flipped, "time")
+        assert len(out) == len(build_gap_frame(gapy_df, "time"))
+        # ... and the reported step keeps the coordinate's own sign
+        assert (out["time_step"] == flipped["time_step"].iloc[0]).all()
+
+    def test_integer_dimension_keeps_precision(self):
+        """An integer envelope is not rounded through float on the way out."""
+        base = 10**18
+        df = pd.DataFrame(
+            {
+                "x_min": [base + 1, base + 1001],
+                "x_max": [base + 8, base + 1008],
+                "x_step": [1, 1],
+            }
+        )
+        out = build_gap_frame(df, "x")
+        assert out["x_min"].iloc[0] == base + 8
+        assert out["gap_size"].iloc[0] == 993
+        assert out["x_min"].dtype == df["x_min"].dtype
+
+    def test_cell_states_its_known_value(self, gapy_df):
+        """A cell reports the attr its members know, not the first row's.
+
+        Kind matching admits a row which never recorded an attr into the
+        cell of one that did, so the first row is not always the one
+        that knows.
+        """
+        df = gapy_df.iloc[:2].copy()
+        df["tag"] = ["", "sta1"]
+        # kind matching keeps them one cell, so the hole is a real gap
+        out = build_gap_frame(df, "time")
+        assert len(out) == 1
+        assert out["tag"].tolist() == ["sta1"]
+        assert build_coverage_frame(df, "time")["tag"].tolist() == ["sta1"]
+
+    def test_integer_dimension_beyond_float_precision(self):
+        """A gap survives an integer coordinate too large for float64.
+
+        Past 2**53 a float margin makes `reach + step * tolerance` and
+        the next start round to the same value, so the gap disappears.
+        """
+        base = 10**18
+        df = pd.DataFrame(
+            {
+                "x_min": [base, base + 10],
+                "x_max": [base + 8, base + 18],
+                "x_step": [1, 1],
+            }
+        )
+        # the start clears the reach by 2 samples, over the 1.5 tolerance
+        out = build_gap_frame(df, "x")
+        assert len(out) == 1
+        assert out["gap_size"].iloc[0] == 2
+        # and chunk agrees the two rows cannot merge
+        assert len(build_chunk_plan(df, x=None).outputs) == 2
+        # one sample of separation is still under the tolerance
+        close = df.assign(x_min=[base, base + 9])
+        assert build_gap_frame(close, "x").empty
+
+    def test_group_id_separates_cells(self, contiguous_df):
+        """Cells invisible in the carried columns are still told apart."""
+        # same envelopes, different sampling rate: one cell each
+        other = contiguous_df.assign(time_step=contiguous_df["time_step"] * 10)
+        df = pd.concat([contiguous_df, other], ignore_index=True)
+        df["time_max"] -= df["time_step"] * 15
+        out = build_gap_frame(df, "time")
+        assert set(out["group_id"]) == {0, 1}
+        assert build_coverage_frame(df, "time")["group_id"].is_unique
+
+    def test_unsigned_overlap_is_not_a_gap(self):
+        """An overlap on an unsigned envelope must not wrap into a gap."""
+        df = pd.DataFrame(
+            {
+                "x_min": np.array([100, 50], dtype=np.uint64),
+                "x_max": np.array([200, 150], dtype=np.uint64),
+                "x_step": np.array([1, 1], dtype=np.uint64),
+            }
+        )
+        assert build_gap_frame(df, "x").empty
+        # and the shared kernel keeps chunk merging them
+        assert len(build_chunk_plan(df, x=None).outputs) == 1
+
+    def test_group_id_ignores_row_order(self):
+        """Two cells sharing an envelope keep their ids when rows move."""
+        t0 = np.datetime64("2020-01-01", "ns")
+        step = np.timedelta64(1, "s")
+        df = pd.DataFrame(
+            {
+                "time_min": [t0, t0],
+                "time_max": [t0 + step * 9, t0 + step * 9],
+                "time_step": [step, step],
+                "station": ["a", "b"],
+            }
+        )
+        expected = {"a": 0, "b": 1}
+        for order in ([0, 1], [1, 0]):
+            out = build_coverage_frame(
+                df.iloc[order].reset_index(drop=True), "time", group="station"
+            )
+            assert dict(zip(out["station"], out["group_id"])) == expected
+
+    def test_coverage_states_one_step(self, gapy_df):
+        """The coverage row advertises the cell's step, as chunk does."""
+        out = build_coverage_frame(gapy_df, "time")
+        assert out["time_step"].iloc[0] == gapy_df["time_step"].iloc[0]
+
+    def test_mixed_cells_keep_attr_dtypes(self, gapy_df, contiguous_df):
+        """A contiguous cell beside a gappy one must not widen dtypes."""
+        gappy = gapy_df.assign(station="a")
+        # a second cell with no gaps at all
+        whole = contiguous_df.iloc[:1].assign(station="b")
+        df = pd.concat([gappy, whole], ignore_index=True)
+        df["station"] = df["station"].astype(str)
+        out = build_gap_frame(df, "time", group="station")
+        assert set(out["station"]) == {"a"}
+        assert out["station"].dtype == df["station"].dtype
+
+    def test_repeated_group_name(self, contiguous_df_two_stations):
+        """A name repeated in `group` is not a duplicate column."""
+        out = build_gap_frame(contiguous_df_two_stations, "time", group=["station"] * 2)
+        assert list(out.columns) == list(out.columns.unique())
+
+    def test_bad_dim_raises(self, contiguous_df):
+        """An unknown dimension names the ones which are known."""
+        with pytest.raises(ParameterError, match="Cannot report on"):
+            build_gap_frame(contiguous_df, "not_a_dim")
+
+    def test_group_colliding_with_report_column(self, contiguous_df):
+        """A group attr cannot quietly overwrite a computed statistic."""
+        df = contiguous_df.assign(span=1.0)
+        with pytest.raises(ParameterError, match="collide"):
+            build_coverage_frame(df, "time", group="span")
+
+    def test_group_colliding_with_dim_column(self, contiguous_df):
+        """Grouping by an envelope column would emit it twice."""
+        with pytest.raises(ParameterError, match="collide"):
+            build_gap_frame(contiguous_df, "time", group="time_step")
+
+    def test_bad_missing_dim_raises(self, contiguous_df):
+        """A typo in missing_dim raises rather than silently dropping."""
+        with pytest.raises(ParameterError, match="missing_dim"):
+            build_gap_frame(contiguous_df, "time", missing_dim="rasie")
+
+
+class TestBuildCoverageFrame:
+    """Coverage summaries on raw dataframes."""
+
+    def test_contiguous_is_fully_covered(self, contiguous_df):
+        """No gaps means nothing is missing."""
+        out = build_coverage_frame(contiguous_df, "time")
+        assert len(out) == 1
+        assert out["coverage"].iloc[0] == 1
+        assert out["gap_total"].iloc[0] == to_timedelta64(0)
+        assert out["span"].iloc[0] == (
+            contiguous_df["time_max"].max() - contiguous_df["time_min"].min()
+        )
+
+    def test_totals_telescope(self, gapy_df):
+        """gap_total is exactly the gap frame's own sum, and covered the rest."""
+        gaps = build_gap_frame(gapy_df, "time")
+        out = build_coverage_frame(gapy_df, "time")
+        assert out["gap_total"].iloc[0] == gaps["gap_size"].sum()
+        assert out["covered"].iloc[0] == out["span"].iloc[0] - out["gap_total"].iloc[0]
+        # covered really is the extent the patches themselves occupy
+        occupied = (gapy_df["time_max"] - gapy_df["time_min"]).sum()
+        assert out["covered"].iloc[0] == occupied
+
+    def test_empty_keeps_schema(self, gapy_df):
+        """An empty relation reports the dtypes a populated one would."""
+        out = build_coverage_frame(gapy_df.iloc[:0], "time")
+        assert out.empty
+        assert (
+            out.dtypes.to_dict()
+            == build_coverage_frame(gapy_df, "time").dtypes.to_dict()
+        )
+
+    def test_single_sample_span(self, contiguous_df):
+        """A zero length span is one sample, and it is wholly covered."""
+        df = contiguous_df.iloc[:1].copy()
+        df["time_max"] = df["time_min"]
+        assert build_coverage_frame(df, "time")["coverage"].iloc[0] == 1
+
+    def test_row_per_cell(self, contiguous_df_two_stations):
+        """Each cell gets exactly one row, keyed by group_id."""
+        out = build_coverage_frame(contiguous_df_two_stations, "time", group="station")
+        assert len(out) == 2
+        assert sorted(out["group_id"]) == [0, 1]
+        assert set(out["station"]) == {"sta1", "sta2"}
