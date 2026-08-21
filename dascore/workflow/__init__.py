@@ -25,11 +25,13 @@ from dascore.workflow.identity import (
     new_patch_id,
     source_patch_id,
 )
+from dascore.workflow.meta import PatchMeta
 from dascore.workflow.processor import (
     PatchOp,
     PatchProcessor,
     fingerprint_call,
     register_implementation,
+    register_kernel,
     resolve_patch_function,
 )
 from dascore.workflow.task import Task, intern, make_function_task_class, task

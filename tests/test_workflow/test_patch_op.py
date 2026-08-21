@@ -356,8 +356,8 @@ class TestCanonicalByHand:
 
     def test_defaults_are_filled_in(self):
         """Or the two would be two operations doing one thing."""
-        by_hand = PatchOp(name="normalize", kwargs={"dim": "time"})
-        by_call = dc.proc.normalize.op("time")
+        by_hand = PatchOp(name="detrend", kwargs={"dim": "time"})
+        by_call = dc.proc.detrend.op("time")
         assert by_hand.kwargs == by_call.kwargs
         assert by_hand == by_call
         assert by_hand.fingerprint == by_call.fingerprint
@@ -365,8 +365,8 @@ class TestCanonicalByHand:
     def test_a_star_args_group_by_hand(self):
         """Including one whose arguments cannot be passed by name."""
         assert PatchOp(
-            name="transpose", kwargs={"dims": ("time", "distance")}
-        ) == dc.proc.transpose.op("time", "distance")
+            name="flip", kwargs={"dims": ("time",), "flip_coords": True}
+        ) == dc.proc.flip.op("time")
 
 
 class TestAPositionalBeforeAStarArgs:
@@ -390,9 +390,14 @@ class TestVersions:
 
     def test_an_operation_carries_the_functions_version(self):
         """Not this class's, which is the same for every operation."""
-        op = dc.proc.normalize.op("time")
-        assert op.version == dc.proc.normalize.__version__
+        op = dc.proc.detrend.op("time")
+        assert op.version == dc.proc.detrend.__version__
         assert op.to_dict()["params"]["version"] == op.version
+        # A processor keeps its version out of the parameters, so that
+        # `kwargs` stays the call; the document still records it.
+        implemented = dc.proc.normalize.op("time")
+        assert implemented.version == dc.proc.normalize.__version__
+        assert implemented.to_dict()["version"] == implemented.version
 
     def test_a_document_reads_back_as_what_was_written(self, monkeypatch):
         """
@@ -607,7 +612,23 @@ class TestDocuments:
             for tag, cls in registered_models().items()
             if isinstance(cls, type) and issubclass(cls, (PatchOp, PatchProcessor))
         }
-        assert tags == {"PatchOp", "PatchProcessor"}
+        # Spelled out rather than counted, so that a class added without
+        # a reason to is noticed. The module argues against a class per
+        # patch function; these are the exceptions it names -- the ones
+        # wanting a kernel seam.
+        assert tags == {
+            "PatchOp",
+            "PatchProcessor",
+            "Abs",
+            "Conj",
+            "Demean",
+            "Imag",
+            "Normalize",
+            "Real",
+            "RenameCoords",
+            "Standardize",
+            "Transpose",
+        }
 
     def test_the_document_names_the_operation(self):
         """The name and the arguments are what a document holds."""
@@ -619,7 +640,7 @@ class TestDocuments:
 
     def test_a_document_which_cannot_be_read_says_what_to_import(self):
         """The message is worth nothing if it does not name the function."""
-        document = dc.proc.normalize.op("time").to_dict()
+        document = dc.proc.detrend.op("time").to_dict()
         broken = document["params"]
         broken["name"], broken["module"] = "nosuchpkg:denoise", "nosuchpkg.filters"
         with pytest.raises(ParameterError, match="nosuchpkg"):
@@ -742,8 +763,8 @@ class TestImplementations:
 
     def test_the_table_is_left_as_it_was(self):
         """The test above puts the table back, or the next one is wrong."""
-        assert "normalize" not in processor_module._IMPLEMENTATIONS
-        assert isinstance(dc.proc.normalize.op("time"), PatchOp)
+        assert "detrend" not in processor_module._IMPLEMENTATIONS
+        assert isinstance(dc.proc.detrend.op("time"), PatchOp)
 
     def test_registering_something_which_is_not_one(self):
         """Only a PatchProcessor can implement an operation."""

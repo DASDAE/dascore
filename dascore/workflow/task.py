@@ -209,7 +209,16 @@ class Task(DascoreBaseModel):
         params = {
             key: decode(value) for key, value in document.get(_PARAMS_KEY, {}).items()
         }
-        return task_class(**params)
+        out = task_class(**params)
+        # A processor keeps the version privately rather than as a
+        # parameter, so that `kwargs` stays the call and nothing else.
+        # The document's version still has to reach it, or a document
+        # written before a bump would fingerprint as one written after.
+        if (version := document.get(_VERSION_KEY)) and hasattr(
+            out, "_captured_version"
+        ):
+            object.__setattr__(out, "_captured_version", version)
+        return out
 
     def save(self, path: str | Path) -> Path:
         """

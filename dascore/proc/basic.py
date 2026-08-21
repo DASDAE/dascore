@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
+from contextlib import suppress
 from typing import Any, Literal
 
 import numpy as np
@@ -28,6 +29,10 @@ from dascore.utils.patch import (
     get_dim_axis_value,
     patch_function,
 )
+from dascore.workflow.processor import (
+    PatchProcessor,
+    register_implementation,
+)
 
 # The dtypes which promise, without the values being looked at, that there
 # is no imaginary part: bool, signed and unsigned integers, and floats.
@@ -43,7 +48,18 @@ def _known_real(data) -> bool:
     one. Anything whose dtype cannot be read is treated the same way --
     not known to be real, so the operation runs.
     """
-    return getattr(getattr(data, "dtype", None), "kind", None) in _REAL_KINDS
+    dtype = getattr(data, "dtype", None)
+    if (kind := getattr(dtype, "kind", None)) is not None:
+        return kind in _REAL_KINDS
+    if dtype is None:
+        return False
+    # A backend whose dtypes carry no `kind` -- the standard does not ask
+    # for one -- is asked through its own namespace instead. Without this
+    # every such array reads as "not known to be real", and the operation
+    # runs `real`/`conj` on data the standard forbids them for.
+    with suppress(Exception):
+        return not array_namespace(data).isdtype(dtype, "complex floating")
+    return False
 
 
 def _as_float(data):
@@ -290,7 +306,18 @@ def abs(patch: PatchType) -> PatchType:
     >>> pa = dascore.get_example_patch() # generate example patch
     >>> out = pa.abs() # take absolute value of generated example patch data
     """
-    return patch.new(data=np.abs(patch.data))
+    return Abs()._apply(patch)
+
+
+class Abs(PatchProcessor):
+    """Take the absolute value of the data."""
+
+    def kernel(self, data, meta, out_meta):
+        """Return the magnitude of every sample."""
+        return array_namespace(data).abs(data)
+
+
+register_implementation("abs", Abs)
 
 
 @patch_function()
@@ -307,9 +334,25 @@ def conj(patch: PatchType) -> PatchType:
     >>> dft = pa.dft(None)  # multi-dim dft
     >>> conj = dft.conj()
     """
-    if _known_real(patch.data):  # real data is its own conjugate
-        return patch
-    return patch.new(data=np.conj(patch.data))
+    return Conj()._apply(patch)
+
+
+class Conj(PatchProcessor):
+    """Flip the sign of the imaginary part."""
+
+    def kernel(self, data, meta, out_meta):
+        """
+        Return the conjugate, or the data unchanged.
+
+        Real data is its own conjugate, and handing back the very array
+        which came in is what tells the caller nothing happened.
+        """
+        if _known_real(data):
+            return data
+        return array_namespace(data).conj(data)
+
+
+register_implementation("conj", Conj)
 
 
 @patch_function()
@@ -323,9 +366,20 @@ def real(patch: PatchType) -> PatchType:
     >>> pa = dascore.get_example_patch()
     >>> out = pa.real()
     """
-    if _known_real(patch.data):  # already only a real part
-        return patch
-    return patch.new(data=np.real(patch.data))
+    return Real()._apply(patch)
+
+
+class Real(PatchProcessor):
+    """Keep only the real part of the data."""
+
+    def kernel(self, data, meta, out_meta):
+        """Return the real part, or the data which is already only that."""
+        if _known_real(data):
+            return data
+        return array_namespace(data).real(data)
+
+
+register_implementation("real", Real)
 
 
 @patch_function()
@@ -339,7 +393,28 @@ def imag(patch: PatchType) -> PatchType:
     >>> pa = dascore.get_example_patch()
     >>> out = pa.imag()
     """
-    return patch.new(data=np.imag(patch.data))
+    return Imag()._apply(patch)
+
+
+class Imag(PatchProcessor):
+    """Keep only the imaginary part of the data."""
+
+    def kernel(self, data, meta, out_meta):
+        """
+        Return the imaginary part, which is zero for real data.
+
+        Asked for explicitly rather than through `imag`: numpy answers
+        zero for a real array, and the standard refuses the question, so
+        the answer numpy gives has to be built here to mean the same
+        thing on every backend.
+        """
+        xp = array_namespace(data)
+        if _known_real(data):
+            return xp.zeros_like(data)
+        return xp.imag(data)
+
+
+register_implementation("imag", Imag)
 
 
 @patch_function(data_type="")
@@ -395,8 +470,26 @@ def normalize(
     >>> # Bit normalization (sign only)
     >>> bit_norm = patch.normalize(dim="time", norm="bit")
     """
-    axis = self.get_axis(dim)
-    data = _as_float(self.data)
+    return Normalize(dim=dim, norm=norm)._apply(self)
+
+
+class Normalize(PatchProcessor):
+    """Scale each slice along a dimension by a norm of that slice."""
+
+    dim: str
+    norm: str = "l2"
+
+    def kernel(self, data, meta, out_meta):
+        """Return the data with each slice divided by its norm."""
+        return _normalize_kernel(data, meta.get_axis(self.dim), self.norm)
+
+
+register_implementation("normalize", Normalize)
+
+
+def _normalize_kernel(data, axis: int, norm: str):
+    """Divide each slice along an axis by the norm named."""
+    data = _as_float(data)
     xp = array_namespace(data)
     if norm in {"l1", "l2"}:
         order = int(norm[-1])
@@ -420,8 +513,7 @@ def normalize(
     # A zero divisor means there is nothing but zeros and nulls to scale, so
     # divide those by one; the zeros stay zero and the nulls stay null.
     one = xp.asarray(1, dtype=divisor.dtype)
-    new_data = data / xp.where(divisor == 0, one, divisor)
-    return self.new(data=new_data)
+    return data / xp.where(divisor == 0, one, divisor)
 
 
 @patch_function(data_type="")
@@ -460,12 +552,24 @@ def standardize(
     standardized_distance = patch.standardize('distance')
     ```
     """
-    axis = self.get_axis(dim)
-    data = _as_float(self.data)
-    mean = nan_reduce("mean", data, axis=axis, keepdims=True)
-    std = nan_reduce("std", data, axis=axis, keepdims=True)
-    new_data = (data - mean) / std
-    return self.new(data=new_data)
+    return Standardize(dim=dim)._apply(self)
+
+
+class Standardize(PatchProcessor):
+    """Remove the mean and scale to unit variance along a dimension."""
+
+    dim: str
+
+    def kernel(self, data, meta, out_meta):
+        """Return the data centred and scaled along its dimension."""
+        axis = meta.get_axis(self.dim)
+        data = _as_float(data)
+        mean = nan_reduce("mean", data, axis=axis, keepdims=True)
+        std = nan_reduce("std", data, axis=axis, keepdims=True)
+        return (data - mean) / std
+
+
+register_implementation("standardize", Standardize)
 
 
 # This is left here to not break compatibility. It also forces `apply_ufunc`
@@ -987,13 +1091,19 @@ def demean(patch, dim: str = "time"):
     >>> plt.show()  # doctest: +SKIP
     >>> plt.close(fig)
     """
-    axis = patch.get_axis(dim)
-    data = _as_float(patch.data)
+    return Demean(dim=dim)._apply(patch)
 
-    # Compute mean along axis, keep dims for broadcasting
-    mea = nan_reduce("mean", data, axis=axis, keepdims=True)
 
-    new_data = data - mea
+class Demean(PatchProcessor):
+    """Remove the mean along a dimension."""
 
-    # Return a new patch with updated data
-    return patch.new(data=new_data)
+    dim: str = "time"
+
+    def kernel(self, data, meta, out_meta):
+        """Return the data with the mean of each slice taken out."""
+        data = _as_float(data)
+        mean = nan_reduce("mean", data, axis=meta.get_axis(self.dim), keepdims=True)
+        return data - mean
+
+
+register_implementation("demean", Demean)
