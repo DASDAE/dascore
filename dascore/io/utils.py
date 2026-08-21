@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import warnings
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from typing import Any
 
 import numpy as np
@@ -81,6 +81,29 @@ def convert_attr_units(attrs: dict, name: str, to_units: str, from_units="") -> 
         )
         warnings.warn(msg, UserWarning, stacklevel=2)
         attrs.pop(name)
+    return attrs
+
+
+def drop_blank_attrs(attrs: dict, names: Iterable[str]) -> dict:
+    """
+    Drop the named attrs whose value is blank, in place.
+
+    A field the vendor left empty, or omitted, states nothing. Keeping it
+    turns "the file does not say" into a value downstream code can match
+    on, so the parse boundary drops it rather than passing the blank along.
+
+    Parameters
+    ----------
+    attrs
+        The parsed attrs, modified in place and returned.
+    names
+        The attrs to drop when blank. A name is blank when it is missing,
+        None, or a string of only whitespace.
+    """
+    for name in names:
+        value = attrs.get(name)
+        if value is None or (isinstance(value, str) and not value.strip()):
+            attrs.pop(name, None)
     return attrs
 
 

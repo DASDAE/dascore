@@ -12,7 +12,7 @@ import numpy as np
 
 from dascore.core.attrs import PatchAttrs
 from dascore.core.coords import get_coord
-from dascore.io.utils import get_attr_names
+from dascore.io.utils import drop_blank_attrs, get_attr_names
 from dascore.utils.misc import get_buffer_size
 from dascore.utils.time import to_datetime64, to_timedelta64
 
@@ -209,7 +209,11 @@ def _get_all_attrs(tdms_file, lead_in_length=28):
     out["data_type"] = "strain_rate"
     out["data_units"] = ""
     out["dims"] = "time,distance"
-    out["interrogator.serial_number"] = out.get("SystemInfomation.Devices0.SerialNum")
+    # HostName names the unit ("iDAS005"). The Chassis and Devices<N>
+    # serials name COTS parts inside it, not the interrogator. Silixa's
+    # HDF5 reader keys off the same attr.
+    out["interrogator.name"] = out.get("SystemInfomation.OS.HostName")
+    drop_blank_attrs(out, ("interrogator.name",))
     # Rename some attributes to preferred names
     d_coord = _get_distance_coord(out)
     fileinfo["end_of_properties_offset"] = tdms_file.tell()

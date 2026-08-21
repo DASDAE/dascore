@@ -2,13 +2,18 @@
 FEBUS T1 DTS specific tests.
 """
 
+import shutil
+
+import h5py
 import numpy as np
 import pytest
 from numpy.testing import assert_allclose
 
+import dascore as dc
 from dascore.core.coords import CoordMonotonicArray
 from dascore.io.febus import FebusT1V1
 from dascore.utils.downloader import fetch
+from dascore.utils.misc import unbyte
 
 
 class TestFebusT1:
@@ -60,3 +65,54 @@ class TestFebusT1:
         time = t1_single_reading_patch.get_coord("time")
         assert isinstance(time, CoordMonotonicArray)
         assert time.min() == time.max()
+
+
+class TestFebusT1Interrogator:
+    """T1 root attrs name the unit and the kind of instrument it ran as."""
+
+    parser = FebusT1V1()
+
+    @pytest.fixture(
+        scope="class", params=["febus_dts.h5", "febus_dts_single_reading.h5"]
+    )
+    def t1_file(self, request):
+        """Paths to both T1 test files."""
+        return fetch(request.param)
+
+    def test_interrogator_from_root_attrs(self, t1_file):
+        """Name and instrument_type come from the file, not a constant."""
+        with h5py.File(t1_file, "r") as f:
+            device_name = unbyte(f.attrs["device_name"])
+            device = unbyte(f.attrs["device"])
+        attrs = dict(dc.scan(t1_file)[0].attrs)
+        assert attrs["interrogator.name"] == device_name
+        assert attrs["interrogator.instrument_type"] == device
+
+    def test_format_constants_still_set(self, t1_file):
+        """
+        Manufacturer and model come from the format, not the header.
+
+        T1 files state no maker or model, so these are what claiming the
+        format asserts rather than facts read out of the file.
+        """
+        attrs = dict(dc.scan(t1_file)[0].attrs)
+        assert attrs["interrogator.manufacturer"] == "FEBUS"
+        assert attrs["interrogator.model"] == "T1"
+
+    def test_scan_and_read_agree(self, t1_file):
+        """A read states the same interrogator a scan does."""
+        scanned = dict(dc.scan(t1_file)[0].attrs)
+        read = dict(self.parser.read(t1_file)[0].attrs)
+        keys = [x for x in scanned if x.startswith("interrogator.")]
+        assert keys
+        assert all(scanned[x] == read[x] for x in keys)
+
+    def test_blank_root_attrs_dropped(self, t1_file, tmp_path):
+        """An empty device_name is not passed off as a name."""
+        path = tmp_path / "blank_device.h5"
+        shutil.copy2(t1_file, path)
+        with h5py.File(path, "r+") as f:
+            f.attrs["device_name"] = b"   "
+        attrs = dict(dc.scan(path)[0].attrs)
+        assert "interrogator.name" not in attrs
+        assert attrs["interrogator.model"] == "T1"

@@ -49,7 +49,10 @@ MODERN_DASVADER = _ModernDASVaderValues()
 
 
 def _write_modern_dasvader_file(
-    path: Path, data_name: str = "data", include_attrib: bool = True
+    path: Path,
+    data_name: str = "data",
+    include_attrib: bool = True,
+    host_name: str | None = None,
 ) -> Path:
     """Write a readable DASVader file with named datasets and references."""
     tp_dtype = np.dtype([("hi", "<f8"), ("lo", "<f8")])
@@ -111,7 +114,7 @@ def _write_modern_dasvader_file(
             )
             host = fi.create_dataset(
                 "Hostname",
-                data=MODERN_DASVADER.host_name,
+                data=(MODERN_DASVADER.host_name if host_name is None else host_name),
                 dtype=h5py.string_dtype(encoding="utf-8"),
             )
             tracker = fi.create_dataset(
@@ -258,7 +261,8 @@ class TestDASVader:
         summary = scanned[0]
         assert summary.source_format == "DASVader"
         assert summary.attrs.gauge_length == MODERN_DASVADER.gauge_length
-        assert summary.attrs.host_name == MODERN_DASVADER.host_name
+        interrogator_name = dict(summary.attrs)["interrogator.name"]
+        assert interrogator_name == MODERN_DASVADER.host_name
         assert summary.attrs.pipeline_tracker == MODERN_DASVADER.pipeline_tracker
         assert summary.attrs.pulse_rate_frequency == MODERN_DASVADER.pulse_rate_freq
         time_summary = summary.get_coord_summary("time")
@@ -271,6 +275,13 @@ class TestDASVader:
         )[0]
         assert patch.dims == ("distance", "time")
         assert patch.attrs.gauge_length == MODERN_DASVADER.gauge_length
+        assert dict(patch.attrs)["interrogator.name"] == MODERN_DASVADER.host_name
+
+    def test_blank_host_name_dropped(self, tmp_path):
+        """An empty Hostname is not passed off as an interrogator name."""
+        path = _write_modern_dasvader_file(tmp_path / "blank.jld2", host_name="   ")
+        assert "interrogator.name" not in dict(dc.scan(path)[0].attrs)
+        assert "interrogator.name" not in dict(dc.read(path)[0].attrs)
 
     def test_modern_file_out_of_range_read_is_empty(self, dasvader_modern_path):
         """Out-of-range selections should return an empty spool."""
