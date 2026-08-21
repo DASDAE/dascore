@@ -291,9 +291,13 @@ class TestTheRulesOnRealPatches:
         not change -- documented in the patch tutorial, and pinned here
         because it is a policy rather than an accident.
         """
-        out = builder(patch)
-        assert out.attrs.patch_id == patch.attrs.patch_id
-        assert out.attrs.processing_id == patch.attrs.processing_id
+        # Operated on first: an unprocessed patch states no route, so
+        # preserving it would be satisfied by dropping it.
+        processed = patch.abs()
+        assert processed.attrs.processing_id != NOTHING_DONE
+        out = builder(processed)
+        assert out.attrs.patch_id == processed.attrs.patch_id
+        assert out.attrs.processing_id == processed.attrs.processing_id
 
     def test_a_patch_built_from_arrays_is_new_data(self, patch):
         """Naming no source, it is not the same data as anything else."""

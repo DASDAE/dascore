@@ -321,7 +321,7 @@ An operation which hands the patch straight back did nothing, and records nothin
 
 ### What builds a patch, and what operates on one
 
-`new`, `update` and `update_attrs` carry both ids through untouched. They are not operations — they are how a patch function assembles its own result — so stamping there would count every operation twice.
+`new`, `update` and `update_attrs` carry both ids through, unless you name one and set it yourself. They are not operations — they are how a patch function assembles its own result — so stamping there would count every operation twice.
 
 That has a consequence worth knowing: changing data through `new` yourself leaves the ids saying the data is unchanged and the route is the same one.
 

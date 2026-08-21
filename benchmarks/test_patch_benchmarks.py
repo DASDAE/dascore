@@ -9,6 +9,7 @@ import pytest
 import dascore as dc
 from dascore.config import config_context
 from dascore.utils.patch import get_start_stop_step
+from dascore.workflow.processor import _FINGERPRINTS
 
 
 @pytest.fixture(scope="module")
@@ -435,11 +436,15 @@ class TestIdentityOverhead:
     """
     What maintaining the lineage ids costs.
 
-    The cost is a flat charge per operation -- canonicalizing the call and
-    digesting it -- so it is invisible next to real signal processing and
-    plain next to an operation which barely touches the data. Both ends
-    are timed here, because it is the cheap end which decides whether the
+    The charge is per operation -- canonicalizing the call and digesting
+    it -- so it is invisible next to real signal processing and plain
+    next to an operation which barely touches the data. Both ends are
+    timed, because it is the cheap end which decides whether the
     `patch_provenance` knob is worth keeping.
+
+    Repeating one call is the cheap case: `fingerprint_call` memoizes, so
+    the second identical call pays the lookup and not the digest. Real
+    loops vary their arguments, so the uncached case is timed too.
     """
 
     @pytest.fixture(scope="class")
@@ -456,25 +461,65 @@ class TestIdentityOverhead:
         """A mask the fingerprint has to hash, being an array parameter."""
         return np.asarray(example_patch.data) > 0.5
 
+    @pytest.fixture()
+    def ids_disabled(self):
+        """
+        Turn the ids off around a benchmark, not inside it.
+
+        Entering the context builds and validates a whole config, which
+        is not what the control is supposed to be measuring.
+        """
+        with config_context(patch_provenance="disabled"):
+            yield
+
     @pytest.mark.benchmark
     def test_identity_overhead_tiny_patch(self, tiny_patch):
-        """The flat charge, with nothing else in the way."""
+        """The charge on a call which does nothing else, memoized."""
         tiny_patch.transpose()
 
     @pytest.mark.benchmark
-    def test_identity_overhead_tiny_patch_disabled(self, tiny_patch):
-        """The same call with the ids turned off, as the control."""
-        with config_context(patch_provenance="disabled"):
-            tiny_patch.transpose()
+    def test_identity_overhead_tiny_patch_disabled(self, tiny_patch, ids_disabled):
+        """The same call with the ids off, as the control."""
+        tiny_patch.transpose()
+
+    @pytest.mark.benchmark
+    def test_identity_overhead_uncached(self, tiny_patch):
+        """
+        The charge with the memo missed, which is what a real loop pays.
+
+        The cache is cleared rather than the arguments varied, so this
+        times the same call as the memoized benchmark above and the two
+        differ by the digest alone.
+        """
+        _FINGERPRINTS.clear()
+        tiny_patch.transpose()
+
+    @pytest.mark.benchmark
+    def test_identity_overhead_uncached_disabled(self, tiny_patch, ids_disabled):
+        """The control for the uncached charge, clearing included."""
+        _FINGERPRINTS.clear()
+        tiny_patch.transpose()
 
     @pytest.mark.benchmark
     def test_identity_overhead_array_argument(self, example_patch, big_mask):
-        """An array parameter is hashed, which is the one real cost."""
+        """An array parameter is hashed, which is the one unflat cost."""
+        example_patch.where(big_mask)
+
+    @pytest.mark.benchmark
+    def test_identity_overhead_array_argument_disabled(
+        self, example_patch, big_mask, ids_disabled
+    ):
+        """The control: the same call without hashing the mask."""
         example_patch.where(big_mask)
 
     @pytest.mark.benchmark
     def test_identity_overhead_real_work(self, example_patch):
         """Next to actual filtering the charge should not be findable."""
+        example_patch.pass_filter(time=(10, 100))
+
+    @pytest.mark.benchmark
+    def test_identity_overhead_real_work_disabled(self, example_patch, ids_disabled):
+        """The control for real work."""
         example_patch.pass_filter(time=(10, 100))
 
     @pytest.mark.benchmark
