@@ -1492,6 +1492,68 @@ class TestConcatenatePartitions:
         joined = [x for x in out if x.shape[x.get_axis("range")] == 2 * n]
         assert len(joined) == 1
 
+    def test_rider_only_on_the_first_is_left_out_directly(self, pair):
+        """The direct function drops a rider a later patch lacks, as the plan does."""
+        first, other = pair
+        nt = first.shape[first.get_axis("time")]
+        a = first.update_coords(clock=("time", np.arange(nt) * 1.0))
+        out = dc.utils.patch.concatenate_patches([a, other], time=None)[0]
+        assert "clock" not in out.coords.coord_map
+        assert out.shape[out.get_axis("time")] == 2 * nt
+
+    def test_rider_units_survive(self, pair):
+        """A unitful rider keeps its units; members in other spellings convert."""
+        first, other = pair
+        nt = first.shape[first.get_axis("time")]
+        a = first.update_coords(clock=("time", np.arange(nt) * 1.0))
+        a = a.convert_units(clock="s")
+        b = other.update_coords(clock=("time", (np.arange(nt) + nt) * 1000.0))
+        b = b.convert_units(clock="ms")
+        out = dc.spool([a, b]).concatenate(time=None)[0]
+        clock = out.get_coord("clock")
+        assert clock.units == dc.get_quantity("s")
+        assert np.allclose(clock.values, np.arange(2 * nt))
+
+    def test_vanishing_coordinate_kinds_do_not_partition(self, pair):
+        """Auxiliaries the new dimension replaces do not split it by kind."""
+        first, _ = pair
+        n = first.shape[first.get_axis("distance")]
+        numbers = first.update_coords(sensor=("distance", np.arange(n) * 1.0))
+        labels = np.array([f"s{i}" for i in range(n)])
+        text = first.update_coords(sensor=("distance", labels))
+        out = dc.spool([numbers, text]).concatenate(sensor=None)
+        assert len(out) == 1
+
+    def test_numeric_order_beside_a_text_partition(self, pair):
+        """Numbers rank as numbers even when labels share the dimension name."""
+        first, _ = pair
+        n = first.shape[first.get_axis("distance")]
+        two = first.update_coords(distance=np.arange(n) + 2.0).rename_coords(
+            distance="range"
+        )
+        ten = first.update_coords(distance=np.arange(n) + 2.0 + n).rename_coords(
+            distance="range"
+        )
+        labels = np.array([f"s{i:03d}" for i in range(n)])
+        text = first.update_coords(distance=labels).rename_coords(distance="range")
+        out = dc.spool([ten, two, text]).concatenate(range=None)
+        numeric = [x for x in out if x.get_coord("range").values.dtype.kind == "f"]
+        assert len(numeric) == 1
+        values = numeric[0].get_coord("range").values
+        assert values[0] == 2.0 and np.all(np.diff(values) > 0)
+        contents = out.get_contents()
+        assert contents["range_step"].notna().sum() == 1
+
+    def test_created_dimension_keeps_its_length_apart(self, pair):
+        """Outputs of two and of one member do not merge along another dimension."""
+        first, _ = pair
+        trio = [first, first.new(), first.new()]
+        ranked = dc.spool(trio).concatenate(rank=2)
+        assert len(ranked) == 2
+        again = ranked.concatenate(distance=None)
+        assert len(again) == 2
+        assert sorted(x.shape[x.get_axis("rank")] for x in again) == [1, 2]
+
     def test_vanishing_coordinate_units_do_not_partition(self, pair):
         """Auxiliary coordinates the new dimension replaces do not split by units."""
         first, _ = pair

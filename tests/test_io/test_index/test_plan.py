@@ -913,11 +913,18 @@ class TestConcatPlan:
         assert _value_family(3) == "number"
         assert _value_family(None) == "" and _value_family(np.nan) == ""
 
-    def test_order_key_ranks_mixed_kinds_by_spelling(self):
-        """Labels beside numbers still yield a total order, missing as NaN."""
-        key = _order_key(pd.Series(["b", 1, None, "a"], dtype=object))
+    def test_order_key_ranks_timedeltas_natively(self):
+        """Timedelta envelopes rank by duration, not by spelling."""
+        deltas = pd.Series([pd.Timedelta(10, "s"), pd.Timedelta(2, "s")], dtype=object)
+        key = _order_key(deltas)
+        assert key[1] < key[0]
+
+    def test_order_key_ranks_each_kind_among_its_own(self):
+        """Labels and numbers rank separately (kinds never share a partition)."""
+        key = _order_key(pd.Series(["b", 10, None, "a", 2], dtype=object))
         assert np.isnan(key[2])
-        assert key[1] < key[3] < key[0]
+        assert key[3] < key[0]
+        assert key[4] < key[1]
 
     def test_envelope_attrs_refused_per_partition(self, trio):
         """A partition elsewhere owning the name does not excuse an attr here."""

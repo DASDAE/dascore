@@ -128,7 +128,20 @@ def _coord_record_from_row(
     dims = (name,) if dims is None else dims
     lo, hi = row.get(f"{name}_min"), row.get(f"{name}_max")
     if lo is None or (pd.isnull(lo) and pd.isnull(hi)):
-        return None
+        # a coordinate without values (a dimension a plan created) has
+        # its identity and nothing else, as ingesting it would record
+        fingerprint = _def_key_fingerprint(row.get(f"_{name}_def_key"))
+        if fingerprint is None:
+            return None
+        return CoordRecord(
+            coord_name=name,
+            value_kind="num",
+            dtype="float64",
+            coord_dims=",".join(dims),
+            length=None,
+            units=None,
+            coord_hash=fingerprint,
+        )
     step = row.get(f"{name}_step")
     step = None if step is None or pd.isnull(step) else step
     if isinstance(lo, str):
@@ -229,7 +242,9 @@ def _aux_coord_info(
     )
     for name, dims_str in coord_dims_map.items():
         cmin, cmax = f"{name}_min", f"{name}_max"
-        if cmin not in joined.columns:
+        if cmin not in joined.columns or name == plan_dim:
+            # the planned dimension is described by its output row (a
+            # coordinate of that name a concatenation replaces is gone)
             continue
         dims = tuple(d for d in str(dims_str).split(",") if d)
         rides = plan_dim in dims

@@ -1690,7 +1690,8 @@ def build_concat_plan(
     if has_envelope:
         # values of one kind concatenate; a datetime and a number sharing a
         # name (and a unit) do not, and a row with no values joins either
-        df = df.assign(_concat_family=df[min_name].map(_value_family))
+        family = df[min_name].map(_value_family)
+        df = df.assign(_concat_family=family.where(along, ""))
         kind_names.append("_concat_family")
     keys: list = [_kind_codes(df, kind_names)]
     if "dims" in df.columns:
@@ -1755,6 +1756,12 @@ def build_concat_plan(
     policed_df = sorted_df.drop(columns=aux_envelopes)
     carried = _carried_columns(policed_df, codes, seg_starts, name, conflict, active)
     data: dict[str, Any] = {k: v.reset_index(drop=True) for k, v in carried.items()}
+    if has_envelope and not along.all():
+        # rows gaining the dimension have no values along it; what their
+        # column holds belongs to a coordinate the new dimension replaces
+        kept = along[perm]
+        blank = {c: sorted_df[c].where(kept) for c in envelope_cols if c in sorted_df}
+        sorted_df = sorted_df.assign(**blank)
     by_output = sorted_df.groupby(codes, sort=True)
     if has_envelope:
         # a member with no values along the dimension (an aggregated
@@ -1778,6 +1785,18 @@ def build_concat_plan(
             for x in (min_name, max_name, step_name):
                 if x in data:
                     data[x] = [None if n else v for v, n in zip(data[x], new_dim)]
+            # its identity is that of a value-less coordinate of its length
+            # (what ingesting the assembled patch would record), so outputs
+            # of different counts stay apart when a later plan partitions
+            # on it
+            keys = list(data.get(key_col, pd.Series([None] * n_out, dtype=object)))
+            keys = [
+                f"fp:{dc.core.coords.get_coord(shape=(int(s),)).fingerprint()[:32]}"
+                if n
+                else k
+                for k, n, s in zip(keys, new_dim, sizes)
+            ]
+            data[key_col] = pd.Series(keys, dtype=object)
     if conflict != "raise":
         # non-dimensional coordinates whose identity differs within an
         # output are dropped when it is assembled; the catalog must not
@@ -1910,12 +1929,24 @@ def _order_key(values: pd.Series) -> np.ndarray:
     Ranks rather than float conversions, which would fold nanosecond
     timestamps a few hundred apart into one key. Missing values rank NaN.
     """
-    try:
-        ranked = values.rank(method="dense")
-    except TypeError:
-        # a mixture of kinds (labels beside numbers) ranks by its spelling
-        ranked = values.astype(str).where(values.notna()).rank(method="dense")
-    return ranked.to_numpy(dtype=float)
+    out = np.full(len(values), np.nan)
+    families = values.map(_value_family).to_numpy()
+    for family in {x for x in families if x}:
+        # each kind ranks among its own (kinds never share a partition)
+        mask = families == family
+        out[mask] = _coerce(values[mask], family).rank(method="dense").to_numpy()
+    return out
+
+
+def _coerce(values: pd.Series, family: str) -> pd.Series:
+    """Give an object column of one value family its native dtype."""
+    if family == "datetime":
+        return pd.to_datetime(values)
+    if family == "timedelta":
+        return pd.to_timedelta(values)
+    if family == "text":
+        return values.astype(str)
+    return pd.to_numeric(values)
 
 
 def _concatenated_steps(sorted_df: pd.DataFrame, codes: np.ndarray, name: str):
@@ -1935,15 +1966,22 @@ def _concatenated_steps(sorted_df: pd.DataFrame, codes: np.ndarray, name: str):
     starts, stops = sorted_df[f"{name}_min"], sorted_df[f"{name}_max"]
     same_output = pd.Series(codes).shift(1).to_numpy() == codes
     # descending data run from their max to their min, so the next member
-    # starts (at its max) one step below the previous member's min
-    try:
-        ascending = _directions(steps) >= 0
-        forward = (starts == stops.shift(1) + steps).to_numpy()
-        backward = (stops == starts.shift(1) + steps).to_numpy()
-    except (TypeError, ValueError):
-        # labels (a string-valued dimension) have no arithmetic, so no step
-        return np.full(by_output.ngroups, None, dtype=object)
-    follows = np.where(ascending, forward, backward) | ~same_output
+    # starts (at its max) one step below the previous member's min. Each
+    # value family does its own arithmetic (an output holds one family);
+    # labels have none, so a text output has no step.
+    families = starts.map(_value_family).to_numpy()
+    follows = np.zeros(len(sorted_df), dtype=bool)
+    for family in {x for x in families if x and x != "text"}:
+        mask = families == family
+        lo, hi = _coerce(starts[mask], family), _coerce(stops[mask], family)
+        step = steps[mask]
+        if family == "number":
+            step = pd.to_numeric(step)
+        ascending = _directions(step) >= 0
+        forward = (lo == hi.shift(1) + step).to_numpy()
+        backward = (hi == lo.shift(1) + step).to_numpy()
+        follows[mask] = np.where(ascending, forward, backward)
+    follows |= ~same_output
     contiguous = pd.Series(follows).groupby(codes).all()
     first = by_output.first()
     return first.where(one_step & contiguous).to_numpy()

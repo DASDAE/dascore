@@ -1770,13 +1770,17 @@ def _concatenate_group(
         for name, cdims in first.coords.dim_map.items():
             if name == dim or dim not in cdims:
                 continue
-            # callers have checked the members attach it alike
-            assert all(x.coords.dim_map.get(name) == cdims for x in patches)
+            if not all(x.coords.dim_map.get(name) == cdims for x in patches):
+                # a member lacks it, or attaches it elsewhere: values cannot
+                # be invented for it, so it is left out
+                continue
+            units = first.get_coord(name).units
+            members = [x.get_coord(name) for x in patches]
+            if units is not None:
+                members = [x.convert_units(units) for x in members]
             rider_axis = cdims.index(dim)
-            joined = np.concatenate(
-                [x.get_array(name) for x in patches], axis=rider_axis
-            )
-            riders[name] = (cdims, joined)
+            joined = np.concatenate([x.values for x in members], axis=rider_axis)
+            riders[name] = (cdims, dc.core.coords.get_coord(data=joined, units=units))
         if riders:
             coords = coords.update(**riders)
     warn_if_histories_differ([x.attrs for x in patches], "Concatenating")
