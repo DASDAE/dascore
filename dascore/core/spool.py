@@ -69,6 +69,7 @@ from dascore.exceptions import (
     ParameterError,
     UnresolvedPatchError,
 )
+from dascore.utils.attrs import _is_missing, known_only
 from dascore.utils.chunk_plan import (
     _SOURCE_COLUMNS,
     ChunkPlan,
@@ -87,6 +88,7 @@ from dascore.utils.misc import (
 )
 from dascore.utils.namespace import NamespaceOwner
 from dascore.utils.patch import (
+    _concat_compatible_rows,
     concatenate_patches,
     get_patch_names,
     stack_patches,
@@ -1661,11 +1663,13 @@ class Spool(NamespaceOwner):
         conflict
             {conflict_desc}
         group
-            Attributes which partition patches into separate outputs (their
-            values differing is never an error). Defaults to the config
-            option `groupby_attrs`; unlike the default, explicitly passed
-            names must exist on at least one patch. Dimensions and
-            coordinate identities always partition implicitly.
+            Attributes which partition patches into separate outputs:
+            conflicting values are never an error, the patches simply land
+            in different outputs, and a missing value (null or "") joins the
+            one group consistent with it. Defaults to the config option
+            `patch_kind_attrs`; unlike the default, explicitly passed names
+            must exist on at least one patch. Dimensions and coordinate
+            identities always partition implicitly.
         missing_dim
             What to do when patches lack the chunked dimension: "raise"
             (default) or "drop" (exclude them from the output).
@@ -1743,7 +1747,10 @@ class Spool(NamespaceOwner):
     @compose_docstring(desc=get_docstring(concatenate_patches))
     def concatenate(self, check_behavior: WARN_LEVELS = "warn", **kwargs) -> Self:
         """{desc}"""
-        from dascore.io.index.planned import derived_catalog  # noqa: PLC0415
+        from dascore.io.index.planned import (  # noqa: PLC0415
+            derived_catalog,
+            stale_def_keys,
+        )
 
         if len(kwargs) != 1:
             msg = (
@@ -1757,13 +1764,32 @@ class Spool(NamespaceOwner):
         # a dim absent from the metadata envelopes is legal: concatenate
         # can stack patches along a brand-new dimension
         has_envelope = f"{dim}_min" in working.columns
+        # A selection still to be applied at load leaves the def keys of the
+        # trimmed coordinates describing the untrimmed values: inconclusive.
+        stale = stale_def_keys(
+            self._catalog.residuals,
+            self._catalog.backend.coord_dims_map(),
+            working.columns,
+        )
+        # Decided here, from metadata, twice, as the patches are: the
+        # compatible sequence first (concatenate_patches admits members
+        # before it groups them), then each output against its own first
+        # member, which is what assembly concatenates it by.
+        working = _concat_compatible_rows(working, dim, check_behavior, stale)
         count = len(working) if value in (None,) else int(value)
         count = max(count, 1)
-        rows = working.reset_index(drop=True)
+        remaining = working.reset_index(drop=True)
         member_frames = []
         output_rows = []
-        for output_id, start in enumerate(range(0, len(rows), count)):
-            group_rows = rows.iloc[start : start + count]
+        output_id = -1
+        while len(remaining):
+            # each output takes the next `count` rows admitted against its
+            # own first row; a row that first row rejects is out, not queued
+            admitted = _concat_compatible_rows(remaining, dim, check_behavior, stale)
+            group_rows = admitted.iloc[:count]
+            used = remaining.index.difference(admitted.index).union(group_rows.index)
+            remaining = remaining.loc[~remaining.index.isin(used)]
+            output_id += 1  # a group's first row is always admitted
             members = pd.DataFrame(
                 {
                     "output_id": output_id,
@@ -1773,6 +1799,12 @@ class Spool(NamespaceOwner):
             )
             member_frames.append(members)
             first = group_rows.iloc[0].to_dict()
+            # kind values and data units the first member lacks come from the others
+            for col in (*dc.get_config().patch_kind_attrs, "data_units"):
+                if col in group_rows.columns and _is_missing(first.get(col)):
+                    known = known_only(group_rows[col]).dropna()
+                    if len(known):
+                        first[col] = known.iloc[0]
             if "_dtype" in group_rows.columns:
                 # concatenation upcasts like a merge does, so the group's
                 # dtype is what the members combine to, not the first row's

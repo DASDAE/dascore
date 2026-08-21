@@ -17,7 +17,7 @@ syncer, and views never write.
 from __future__ import annotations
 
 import secrets
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 
 import numpy as np
 import pandas as pd
@@ -42,6 +42,7 @@ from dascore.io.index.ingest import (
     typed_value,
 )
 from dascore.units import get_quantity
+from dascore.utils.attrs import _is_missing
 from dascore.utils.chunk_plan import _SOURCE_COLUMNS, _ensure_patch_id
 from dascore.utils.misc import _CanonicalRange, is_range
 from dascore.utils.patch import concatenate_patches
@@ -391,6 +392,8 @@ class PlanResolver(PatchResolver):
         origin_path=None,
         stamped: tuple[str, ...] = (),
         lossy: bool = False,
+        attr_units: Mapping[str, str | None] | None = None,
+        coord_names: Iterable[str] = (),
     ):
         if "output_id" not in member_rows.columns:
             msg = "member_rows must carry an output_id column."
@@ -404,10 +407,20 @@ class PlanResolver(PatchResolver):
         self.parent_residuals = tuple(parent_residuals)
         self.mode = mode
         self.check_behavior = check_behavior
+        # The kind rule which produced the plan decides assembly too,
+        # whatever the config says by the time a patch is asked for.
+        self.kind_attrs = dc.get_config().patch_kind_attrs
         # informational only: the directory/file the plan derived from
         self.origin_path = origin_path
         # attrs the outputs state about themselves rather than inherit
         self.stamped = tuple(stamped)
+        # the units the index stores each numeric attr column in (None for
+        # a plain number), resolved at planning so a row's magnitude can
+        # be turned back into the attr it came from
+        self.attr_units = dict(attr_units or {})
+        # every coordinate the parent index knows, so a row's envelope
+        # columns are told from attrs which merely look like one
+        self.coord_names = frozenset(coord_names)
         # Whether the outputs leave samples of their sources out. A lossy
         # plan must never be collapsed: its members do not cover their
         # sources, so re-planning over them would load back what it
@@ -483,11 +496,16 @@ class PlanResolver(PatchResolver):
             return patch
         # raw_function: the conversion serves the plan's own bookkeeping,
         # and a history entry on some members but not others would make
-        # otherwise-mergeable members conflict on attrs.
+        # the merge warn about histories differing.
         return dc.proc.units.convert_units.raw_function(patch, **{self.dim: plan_units})
 
     def resolve(self, row: Mapping, **trim) -> dc.Patch:
         """Assemble the output patch a plan row describes."""
+        with dc.config_context(patch_kind_attrs=self.kind_attrs):
+            return self._resolve(row, **trim)
+
+    def _resolve(self, row: Mapping, **trim) -> dc.Patch:
+        """Assemble under the plan's own kind rule."""
         output_id = int(_row_source_patch_key(row))
         members = self.member_rows[self.member_rows["output_id"] == output_id]
         assert len(members), "no plan members found for output row"
@@ -522,9 +540,90 @@ class PlanResolver(PatchResolver):
         the patch which comes out agreeing with the row `get_contents`
         shows for it.
         """
-        if not self.stamped:
-            return patch
-        return patch.update_attrs(**{x: row[x] for x in self.stamped})
+        if self.stamped:
+            patch = patch.update_attrs(**{x: row[x] for x in self.stamped})
+        # A row carries its partition's known attr values; the members
+        # which survived into this output may lack some (a missing value
+        # matches, and overlap removal may keep the member which lacked
+        # it). Fill them so the patch agrees with the row.
+        attrs = patch.attrs
+        # every public attr column the row carries, extras included; the
+        # coordinate envelope columns and the row's own bookkeeping are not attrs
+        # the row may carry an envelope for a coordinate the assembled patch
+        # no longer has, so every coordinate the index knows has its envelope
+        # columns set aside; only the patch's own coordinate names are
+        # reserved outright — an attr may share its name with a coordinate
+        # some other patch has
+        own = set(patch.coords.coord_map) | set(patch.dims) | {self.dim}
+        coords = own | self.coord_names
+        envelope = {f"{x}_{y}" for x in coords for y in ("min", "max", "step", "units")}
+        skip = {*_SOURCE_COLUMNS, *own, *envelope, "dims", "output_id"}
+        names = {x for x in row if not x.startswith("_") and x not in skip}
+        # A number in a row may be a quantity the index stored as a base-SI
+        # magnitude with its units kept in the attr metadata resolved at
+        # planning; a number whose units the plan does not know is left
+        # alone rather than stamped as a bare magnitude.
+        fill = {}
+        for x in names:
+            value = row[x]
+            if _is_missing(value) or not _is_missing(attrs.get(x)):
+                continue
+            if _is_number(value):
+                if x not in self.attr_units:
+                    continue
+                if units := self.attr_units[x]:
+                    value = value * get_quantity(units)
+            fill[x] = value
+        if fill:
+            patch = patch.new(attrs=attrs.update(**fill))
+        return patch
+
+
+def _plan_attr_units(parent, outputs: pd.DataFrame) -> dict[str, str | None]:
+    """
+    The units the parent index stores each public numeric output column in.
+
+    One read of the index's attr metadata for the numeric kind, the only
+    kind which carries units: None marks a plain number, and a column the
+    index never held as a number is absent, so `_stamp` leaves a number
+    it cannot account for alone.
+    """
+    if parent is None:
+        return {}
+    known = parent.backend.attr_units_map()
+    return {x: known[x] for x in outputs.columns if x in known}
+
+
+def _is_number(value) -> bool:
+    """True for a numeric scalar other than a bool."""
+    return isinstance(value, int | float | np.number) and not isinstance(
+        value, bool | np.bool_
+    )
+
+
+def _trimmed_dims(residuals, coord_dims_map: Mapping) -> frozenset[str]:
+    """The dimensions a residual (load-time) selection trims."""
+    names = {n for coords, _ in residuals for n in coords}
+    return frozenset(
+        d for n in names for d in str(coord_dims_map.get(n, n)).split(",") if d
+    )
+
+
+def stale_def_keys(residuals, coord_dims_map: Mapping, columns) -> list[str]:
+    """
+    The def-key columns which describe coordinates a residual will trim.
+
+    A residual selection is applied when a patch is loaded, so until then
+    the identity claims (def keys) of coordinates on the trimmed
+    dimensions describe the untrimmed values and must not be compared or
+    published.
+    """
+    trimmed = _trimmed_dims(residuals, coord_dims_map)
+    return [
+        f"_{c}_def_key"
+        for c, dims_str in coord_dims_map.items()
+        if set(str(dims_str).split(",")) & trimmed and f"_{c}_def_key" in columns
+    ]
 
 
 def _residual_ranges(residuals) -> dict:
@@ -629,22 +728,16 @@ def derived_catalog(
         origin_path=origin_path,
         stamped=stamped,
         lossy=lossy,
+        attr_units=_plan_attr_units(parent, plan.outputs),
+        coord_names=() if parent is None else parent.backend.coord_names(),
     )
     backend = get_backend(":memory:")
     coord_dims_map = {} if parent is None else parent.backend.coord_dims_map()
     # residual selections trim at load; identity claims (def keys) for
     # coordinates on the trimmed dims would describe the untrimmed values
-    residual_names = {n for coords, _ in parent_residuals for n in coords}
-    trimmed_dims = frozenset(
-        d for n in residual_names for d in str(coord_dims_map.get(n, n)).split(",") if d
-    )
+    trimmed_dims = _trimmed_dims(parent_residuals, coord_dims_map)
     outputs = plan.outputs
-    stale_keys = [
-        f"_{c}_def_key"
-        for c, dims_str in coord_dims_map.items()
-        if set(str(dims_str).split(",")) & trimmed_dims
-        and f"_{c}_def_key" in outputs.columns
-    ]
+    stale_keys = stale_def_keys(parent_residuals, coord_dims_map, outputs.columns)
     if stale_keys:
         outputs = outputs.drop(columns=stale_keys)
     aux_info = _aux_coord_info(sources, trims, name, coord_dims_map, trimmed_dims)

@@ -154,19 +154,9 @@ INVENTORY_ATTRS = (
 # Methods FileFormatter needs to support
 FILE_FORMATTER_METHODS = ("read", "write", "get_format", "scan")
 
-# These attributes are the default to ignore when determine if patches
-# can be merged or broadcast together.
-# The ids say where a patch came from and what was done to it, which is
-# never a reason to refuse to combine two patches; the folds decide what
-# the result carries instead.
-DEFAULT_ATTRS_TO_IGNORE = ("history", "dims", "patch_id", "processing_id")
-
 # Large and small np.datetime64[ns] (used when defaults are needed)
 SMALLDT64 = np.datetime64(MININT64 + 5_000_000_000, "ns")
 LARGEDT64 = np.datetime64(MAXINT64 - 5_000_000_000, "ns")
-
-# Required shared attributes to merge patches together
-PATCH_MERGE_ATTRS = ("acquisition_key", "dims", "data_type", "data_category")
 
 # Storage provenance: where a patch's bytes live rather than where its
 # signal came from. The spool owns these and no reader may put them in
@@ -232,13 +222,13 @@ same units as the specified dimension, or have units attached.
 """
 
 attr_conflict_description = """
-Indicates how to handle conflicts in attributes other than those
-indicated by dim (eg tag, history, acquisition_key, etc). If "drop" simply
-drop conflicting attributes, or attributes not shared by all models.
-If "raise" raise an
-[AttributeMergeError](`dascore.exceptions.AttributeMergeError`] when
-issues are encountered. If "keep_first", just keep the first value
-for each attribute.
+Indicates how to handle attributes which hold conflicting values across
+the patches being combined (eg data_type, data_units, custom attrs). A
+missing value (None, NaN, "") conflicts with nothing: the known value is
+carried. History and the ids are never compared. If "raise" (default)
+raise an [AttributeMergeError](`dascore.exceptions.AttributeMergeError`)
+for conflicting known values. If "drop", omit the conflicting attributes
+from the output. If "keep_first", keep the first known value of each.
 """
 
 

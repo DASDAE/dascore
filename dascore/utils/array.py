@@ -14,7 +14,7 @@ import numpy as np
 
 import dascore as dc
 from dascore.compat import array, is_array
-from dascore.constants import DEFAULT_ATTRS_TO_IGNORE, PatchType
+from dascore.constants import PatchType
 from dascore.exceptions import ParameterError, PatchBroadcastError, UnitError
 from dascore.models import ArrayLike
 from dascore.units import DimensionalityError, Quantity, Unit, get_quantity
@@ -269,12 +269,81 @@ def _apply_unary_ufunc(operator: np.ufunc, patch, *args, **kwargs):
     return patch.new(data=out, attrs=attrs)
 
 
+def _quantity(array, units):
+    """
+    Attach a unit quantity to an array without multiplying by it.
+
+    Multiplying by an offset quantity (1 degC) would have the registry
+    convert to base units first; constructing the quantity keeps each
+    element a value in those units. A scale in the units ("100 cm") is
+    folded into the magnitudes, as multiplication would.
+    """
+    magnitude = array if units.magnitude == 1 else array * units.magnitude
+    return type(units)(magnitude, units.units)
+
+
+def _is_boolean(data) -> bool:
+    """True when an array's dtype is boolean, whichever backend holds it."""
+    if is_numpy(data):
+        return data.dtype == np.bool_
+    xp = array_namespace(data)
+    return bool(xp.isdtype(data.dtype, "bool"))
+
+
+def _base_magnitudes(quantity):
+    """The base-unit magnitudes of 0, 1, and 2 of a unit quantity."""
+    return tuple((x * quantity).to_base_units().magnitude for x in (0.0, 1.0, 2.0))
+
+
+def _is_offset_unit(quantity) -> bool:
+    """
+    Return True for an affine unit with an offset (degC), a temperature.
+
+    Decided by behaviour rather than a registry attribute: conversion to
+    base units is linear but does not send zero to zero (dascore's
+    registry converts offsets to base units rather than refusing).
+    """
+    zero, one, two = _base_magnitudes(quantity)
+    return np.isclose(two - one, one - zero) and not np.isclose(zero, 0)
+
+
+def _is_logarithmic_unit(quantity) -> bool:
+    """
+    Return True for a logarithmic unit (dB), whose base conversion is not linear.
+
+    A level may be scaled (2 dB times 2 is 4 dB) and compared, but adding a
+    bare number to it has no meaning the registry agrees on.
+    """
+    zero, one, two = _base_magnitudes(quantity)
+    return not np.isclose(two - one, one - zero)
+
+
+# The binary ufuncs which keep an offset unit (degC) meaningful beside a
+# unitless operand — a difference for sums and differences, an absolute
+# value for extrema and comparisons. Anything else needs an absolute unit.
+_OFFSET_UNIT_OPERATORS = frozenset(
+    {
+        np.add,
+        np.subtract,
+        np.maximum,
+        np.minimum,
+        np.fmax,
+        np.fmin,
+        np.greater,
+        np.greater_equal,
+        np.less,
+        np.less_equal,
+        np.equal,
+        np.not_equal,
+    }
+)
+
+
 def _apply_binary_ufunc(
     operator: np.ufunc,
     patch: PatchType | ArrayLike,
     other: PatchType | ArrayLike,
     *args: tuple[PatchType | ArrayLike, ...],
-    attrs_to_ignore=DEFAULT_ATTRS_TO_IGNORE,
     **kwargs,
 ) -> PatchType:
     """
@@ -293,13 +362,20 @@ def _apply_binary_ufunc(
     other
         The other object to apply the operator element-wise. Must be either a
         non-patch which is broadcastable to the shape of the patch's data, or
-        a patch which has compatible coordinates. If units are provided they
-        must be compatible.
+        a patch of the same kind (see
+        [`check_kind`](`dascore.utils.patch.check_kind`)) sharing at least
+        one dimension; shared dimensions are aligned on the intersection
+        of their coordinate values. Data units take part in the operation,
+        so they need not match unless the operator requires it (adding
+        metres to seconds raises, multiplying them does not). An operand
+        without units — an array, a scalar, or a patch with no
+        `data_units` — conflicts with nothing: it is dimensionless where
+        that works (`metres * x` is metres, `x / metres` is 1/metres) and
+        takes the other operand's units where the operation needs equal
+        units (`metres + x` is metres).
     *args
         Arguments to pass to the operator, can include arrays, scalars,
         and patches.
-    attrs_to_ignore
-        Attributes to ignore when considering if patches are compatible.
     **kwargs
         Keyword arguments to pass to the operator.
 
@@ -314,15 +390,11 @@ def _apply_binary_ufunc(
         patch, other_patch = align_patch_coords(patch, other)
         coords = _merge_aligned_coords(patch.coords, other_patch.coords)
         # Get new attributes.
-        attrs = _merge_models(
-            patch.attrs,
-            other_patch.attrs,
-            attrs_to_ignore=attrs_to_ignore,
-        )
-        other = other_patch.data
-        if other_units := get_quantity(other_patch.attrs.data_units):
-            other = other * other_units
-        return patch, other, coords, attrs
+        attrs = _merge_models(patch.attrs, other_patch.attrs)
+        # the other patch's data stay bare; its units ride alongside, so a
+        # scale in them ("100 cm") is never folded into the data
+        other_units = get_quantity(other_patch.attrs.data_units)
+        return patch, other_patch.data, coords, attrs, other_units
 
     def _ensure_array_compatible(patch, other):
         """Deal with broadcasting a patch and an array."""
@@ -346,28 +418,253 @@ def _apply_binary_ufunc(
             array1, array2 = array2, array1
         return _apply_operator(operator, array1, array2, *args, **kwargs)
 
-    def _apply_op_units(patch, other, operator, attrs, reversed=False):
-        """Apply the operation handling units attached to array."""
-        data_units = get_quantity(attrs.data_units)
-        data = patch.data if data_units is None else patch.data * data_units
-        # other is not numpy array wrapped w/ quantity, convert to quant
-        if not hasattr(other, "shape"):
-            other = get_quantity(other)
+    def _fallback_label(new_data, units):
+        """The units a numpy-computed result keeps: none when boolean."""
+        return None if _is_boolean(new_data) else _label(units)
+
+    def _label(quantity):
+        """The data_units string for one unit of output."""
+        # the scale comes out of a division, so shed its float noise
+        magnitude = float(f"{quantity.magnitude:.12g}")
+        if magnitude == 1:
+            return str(quantity.units)
+        return str(magnitude * quantity.units)
+
+    def _apply_op_one_unitful(
+        patch, other, operator, attrs, data_units, other_units, reversed=False
+    ):
+        """
+        Apply the operation when exactly one side has units.
+
+        The side without units conflicts with nothing: it is taken as
+        dimensionless first (right for products and quotients) and, if the
+        operator rejects that, as sharing the other side's units (right for
+        sums, differences, and comparisons). The units of one unit of output
+        are settled on scalars — the probe's result over the bare result —
+        so the data stay bare, a scale in the units ("100 cm") rides along
+        unchanged, and nothing large is ever wrapped by the unit registry.
+        A ufunc the registry does not implement falls through to numpy with
+        the units left as they were.
+        """
+        known = data_units if data_units is not None else other_units
+        if _is_offset_unit(known):
+            # An offset unit (degC) cannot be probed by scaling, and only
+            # the operations which keep a temperature a temperature are
+            # meaningful on one: the data keep their units for those, and a
+            # comparison drops them.
+            if operator not in _OFFSET_UNIT_OPERATORS:
+                msg = (
+                    f"{operator} is not defined for the offset units {known}; "
+                    "convert to an absolute unit (kelvin) first."
+                )
+                raise UnitError(msg)
+            # The unitless side is a difference in those units, so it may be
+            # added to or taken from the temperature, never the other way.
+            if operator is np.subtract and not ((data_units is not None) ^ reversed):
+                msg = (
+                    f"Cannot subtract a temperature in {known} from a value "
+                    "without units; convert to an absolute unit (kelvin) first."
+                )
+                raise UnitError(msg)
+            new_data = _apply_op(patch.data, other, operator, reversed)
+            if _is_boolean(new_data):
+                return new_data, attrs.update(data_units=None)
+            return new_data, attrs.update(data_units=_label(known))
+        if _is_logarithmic_unit(known) and operator in (np.add, np.subtract):
+            msg = (
+                f"{operator} is not defined between the logarithmic units {known} "
+                "and a value without units."
+            )
+            raise UnitError(msg)
+        is_power = operator in (np.power, np.float_power)
+        if is_power and np.ndim(other) > 0 and data_units is not None and not reversed:
+            msg = f"{operator} with units {data_units} needs a scalar exponent."
+            raise UnitError(msg)
+        # The exponent's value decides the units of a power; for every other
+        # operation any value does, so a pair whose bare result is not zero
+        # is tried first (2 // 1.5 is 1, and reversed 1.5 // 2 is 0).
+        probe_other = other if is_power and np.ndim(other) == 0 else 1.5
+        dimensionless = get_quantity("dimensionless")
+        assert dimensionless is not None
+        patch_q = data_units if data_units is not None else dimensionless
+        other_q = other_units if other_units is not None else dimensionless
+
+        def _probe(value, probe_other):
+            pair = (value * patch_q, probe_other * other_q)
+            try:
+                return operator(*(pair[::-1] if reversed else pair))
+            except DimensionalityError:
+                # equal units needed: the side without adopts the other's
+                adopt = data_units if data_units is not None else other_units
+                pair = (value * adopt, probe_other * adopt)
+                try:
+                    return operator(*(pair[::-1] if reversed else pair))
+                except DimensionalityError as er:
+                    msg = f"{operator} failed with units {data_units} and {other_units}"
+                    raise UnitError(msg) from er
+
         try:
-            new_data_w_units = _apply_op(data, other, operator, reversed=reversed)
+            probe, plain = None, 0.0
+            pairs = ((2.0, 1.5), (1.5, 2.0), (3.0, 2.0), (2.0, 3.0))
+            if is_power:
+                pairs = ((2.0, probe_other),)
+            for value, probe_other in pairs:
+                probe = _probe(value, probe_other)
+                pair = (value, probe_other)
+                plain = operator(*(pair[::-1] if reversed else pair))
+                if not hasattr(probe, "units") or (np.isfinite(plain) and plain != 0):
+                    break
+        except UnitError:
+            raise
+        except (TypeError, ValueError):
+            # The unit registry does not implement this ufunc, or cannot
+            # hold this scalar (a bool), or the ufunc wants dimensioned
+            # operands (matmul); numpy does the work, and the units are
+            # whatever they were, on whichever side had them — unless the
+            # result is boolean, which has none.
+            new_data = _apply_op(patch.data, other, operator, reversed)
+            return new_data, attrs.update(data_units=_fallback_label(new_data, known))
+        new_data = _apply_op(patch.data, other, operator, reversed)
+        if not hasattr(probe, "units"):
+            # a comparison: no units
+            return new_data, attrs.update(data_units=None)
+        # one of the pairs always gives a usable bare result for a ufunc
+        # which returns units at all
+        assert np.isfinite(plain) and plain != 0, f"no usable probe for {operator}"
+        try:
+            return new_data, attrs.update(data_units=_label(probe / plain))
+        except TypeError:
+            # a logarithmic level cannot be divided by a number, but it has
+            # kept its unit through the operation
+            return new_data, attrs.update(data_units=str(probe.units))
+
+    def _apply_op_both_unitful(
+        patch, other, operator, attrs, data_units, other_units, reversed=False
+    ):
+        """
+        Apply the operation with units on both sides through the registry.
+
+        Two known units are left to the unit registry to reconcile or
+        reject; the result's data are its magnitudes in the registry's
+        units (a scale in either side's units is folded into the data).
+        Offset units are the exception: the registry's ufunc dispatch does
+        not handle them, so they are done by hand — the other side is
+        converted to the patch's units, a difference is a delta, extrema
+        and comparisons keep or drop the units, anything else is refused.
+        """
+        if _is_offset_unit(data_units) or _is_offset_unit(other_units):
+            return _apply_op_both_offset(
+                patch, other, operator, attrs, data_units, other_units, reversed
+            )
+        try:
+            result = _apply_op(
+                _quantity(patch.data, data_units),
+                _quantity(other, other_units),
+                operator,
+                reversed,
+            )
         except DimensionalityError as er:
-            other_units = getattr(other, "units", None)
             msg = f"{operator} failed with units {data_units} and {other_units}"
             raise UnitError(msg) from er
-        # Check if result has units (comparison operators return plain arrays)
-        if hasattr(new_data_w_units, "units"):
-            attrs = attrs.update(data_units=str(new_data_w_units.units))
-            new_data = new_data_w_units.magnitude
-        else:
-            # Result is unitless (e.g., from boolean comparison)
-            attrs = attrs.update(data_units=None)
-            new_data = new_data_w_units
-        return new_data, attrs
+        except TypeError:
+            # The unit registry does not implement this ufunc; numpy does,
+            # on the data, with `other` expressed in the patch's units and
+            # the units left as they were.
+            if other_units == data_units:
+                other_data = other  # untouched, dtype included
+            else:
+                try:
+                    in_patch_units = _quantity(other, other_units).to(data_units.units)
+                except DimensionalityError as er:
+                    msg = f"{operator} failed with units {data_units} and {other_units}"
+                    raise UnitError(msg) from er
+                other_data = in_patch_units.magnitude / data_units.magnitude
+            new_data = _apply_op(patch.data, other_data, operator, reversed)
+            return new_data, attrs.update(
+                data_units=_fallback_label(new_data, data_units)
+            )
+        if hasattr(result, "units"):
+            return result.magnitude, attrs.update(data_units=str(result.units))
+        # Result is unitless (e.g., from boolean comparison)
+        return result, attrs.update(data_units=None)
+
+    def _apply_op_both_offset(
+        patch, other, operator, attrs, data_units, other_units, reversed=False
+    ):
+        """
+        Apply an operation where an offset unit (degC) meets another unit.
+
+        Two temperatures may be subtracted (a delta), ranked, or compared,
+        never added. A temperature and a difference (delta_degC, or any
+        unit convertible to it) may be added, and the difference taken
+        from the temperature; the result is a temperature.
+        """
+        patch_offset = _is_offset_unit(data_units)
+        other_offset = _is_offset_unit(other_units)
+        refused = UnitError(
+            f"{operator} is not defined for the offset units "
+            f"{data_units if patch_offset else other_units}."
+        )
+        if patch_offset and other_offset:
+            if operator not in _OFFSET_UNIT_OPERATORS or operator is np.add:
+                raise refused
+            # every offset unit is a temperature, so this always converts
+            other_data = _quantity(other, other_units).to(data_units.units).magnitude
+            new_data = _apply_op(patch.data, other_data, operator, reversed)
+            if _is_boolean(new_data):
+                return new_data, attrs.update(data_units=None)
+            if operator is np.subtract:
+                one, zero = _quantity(1.0, data_units), _quantity(0.0, data_units)
+                return new_data, attrs.update(data_units=str((one - zero).units))
+            return new_data, attrs.update(data_units=_label(data_units))
+        # one temperature, one difference: the temperature must be the
+        # minuend of a subtraction, and the sum or difference is a temperature
+        absolute = data_units if patch_offset else other_units
+        temperature_first = patch_offset != reversed
+        if operator not in (np.add, np.subtract) or (
+            operator is np.subtract and not temperature_first
+        ):
+            raise refused
+        delta = (_quantity(1.0, absolute) - _quantity(0.0, absolute)).units
+        try:
+            if patch_offset:
+                other = _quantity(other, other_units).to(delta).magnitude
+                patch_data = patch.data
+            else:
+                patch_data = _quantity(patch.data, data_units).to(delta).magnitude
+        except DimensionalityError as er:
+            msg = f"{operator} failed with units {data_units} and {other_units}"
+            raise UnitError(msg) from er
+        new_data = _apply_op(patch_data, other, operator, reversed)
+        return new_data, attrs.update(data_units=_label(absolute))
+
+    def _apply_op_units(
+        patch, other, operator, attrs, reversed=False, other_units=None
+    ):
+        """
+        Apply the operation with units on at least one side.
+
+        `other_units` is the quantity one unit of `other` stands for when
+        `other` is another patch's data; a bare number, array, or unit-less
+        patch has none, and a Quantity or Unit carries its own.
+        """
+        data_units = get_quantity(attrs.data_units)
+        if isinstance(other, Unit):
+            other = 1 * other
+        elif isinstance(other, str):
+            if (quantity := get_quantity(other)) is None:
+                msg = f"{other!r} names no units; a string operand must."
+                raise UnitError(msg)
+            other = quantity
+        if isinstance(other, Quantity):
+            other, other_units = other.magnitude, 1.0 * other.units
+        if data_units is not None and other_units is not None:
+            return _apply_op_both_unitful(
+                patch, other, operator, attrs, data_units, other_units, reversed
+            )
+        return _apply_op_one_unitful(
+            patch, other, operator, attrs, data_units, other_units, reversed
+        )
 
     # Count patch operands (we only support binary ops on patches).
     patch_is_patch = isinstance(patch, dc.Patch)
@@ -384,14 +681,20 @@ def _apply_binary_ufunc(
     # Taken before the operands are aligned and possibly replaced below:
     # what went in is what decides which data comes out.
     members = [x.attrs for x in (patch, other) if isinstance(x, dc.Patch)]
+    other_units = None
     if patch_count > 1:
-        patch, other, coords, attrs = _get_coords_attrs_from_patches(patch, other)
+        patch, other, coords, attrs, other_units = _get_coords_attrs_from_patches(
+            patch, other
+        )
     else:
         patch = _ensure_array_compatible(patch, other)
         coords, attrs = patch.coords, patch.attrs
-    # Apply operation
-    if isinstance(other, Quantity | Unit):
-        new_data, attrs = _apply_op_units(patch, other, operator, attrs, reversed)
+    # Apply operation; only two unitless operands skip the unit registry.
+    has_units = attrs.data_units is not None or other_units is not None
+    if has_units or isinstance(other, Quantity | Unit | str):
+        new_data, attrs = _apply_op_units(
+            patch, other, operator, attrs, reversed, other_units=other_units
+        )
     else:
         new_data = _apply_op(patch.data, other, operator, reversed)
     # A ufunc is not a patch function, so nothing else names it. Without

@@ -148,10 +148,10 @@ class TestConfigContext:
             assert config.allow_dasdae_format_unpickle is True
         assert get_config() == previous
 
-    def test_groupby_attrs_coerced_to_tuple(self):
+    def test_patch_kind_attrs_coerced_to_tuple(self):
         """List inputs coerce to the immutable tuple form."""
-        with config_context(groupby_attrs=["tag"]):
-            assert get_config().groupby_attrs == ("tag",)
+        with config_context(patch_kind_attrs=["tag"]):
+            assert get_config().patch_kind_attrs == ("tag",)
 
     def test_invalid_new_config_raises(self):
         """Validation is shared with set_config."""
@@ -195,17 +195,16 @@ class TestConfigContext:
 class TestConfigDefaults:
     """Sanity checks on default field values."""
 
-    def test_groupby_attrs_default(self):
+    def test_patch_kind_attrs_default(self):
         """The default group attrs are the conventional identity set."""
         expected = (
             "acquisition_key",
-            "data_type",
             "data_category",
             "tag",
             "network",
             "station",
         )
-        assert get_config().groupby_attrs == expected
+        assert get_config().patch_kind_attrs == expected
 
     def test_sampling_group_tolerance_default(self):
         """The default sampling group tolerance is 5%."""

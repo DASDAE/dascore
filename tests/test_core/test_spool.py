@@ -16,16 +16,18 @@ import dascore.utils.patch_assembly as assembly_mod
 from dascore.core.spool import BaseSpool, Spool
 from dascore.examples import ricker_moveout
 from dascore.exceptions import (
+    IncompatiblePatchError,
     InvalidSpoolError,
     InvalidSpoolQueryError,
     MissingOptionalDependencyError,
     MissingPatchError,
     ParameterError,
+    PatchCoordinateError,
 )
 from dascore.io.index.planned import PlanResolver
 from dascore.io.segy import SegyV1_0
 from dascore.utils.downloader import fetch
-from dascore.utils.misc import deep_equality_check
+from dascore.utils.misc import deep_equality_check, suppress_warnings
 from dascore.utils.patch_assembly import _estimate_merge_samples, _get_varying_dim
 from dascore.utils.time import to_datetime64, to_timedelta64
 
@@ -1115,6 +1117,231 @@ class TestSpoolCoverageEdges:
         assert len(empty) == 0
         assert list(empty) == []
         assert "Spool" in str(empty)
+
+
+class TestConcatenateKind:
+    """Spool.concatenate only concatenates patches of the first's kind."""
+
+    @pytest.fixture
+    def mixed_kind(self):
+        """Two contiguous patches which differ only in tag."""
+        first = dc.get_example_patch()
+        time = first.get_coord("time")
+        other = first.update_coords(time_min=time.max() + time.step)
+        return first, other.update_attrs(tag="other")
+
+    def test_plan_agrees_with_patch(self, mixed_kind):
+        """The skipped patch is absent from the metadata too, not just the data."""
+        first, other = mixed_kind
+        with pytest.warns(UserWarning, match="not the same kind"):
+            out = dc.spool([first, other]).concatenate(time=None)
+        assert len(out) == 1
+        contents = out.get_contents()
+        assert contents["time_max"].iloc[0] == first.get_coord("time").max()
+        assert out[0].shape == first.shape
+        assert out[0].attrs.tag == first.attrs.tag
+
+    def test_raise(self, mixed_kind):
+        """check_behavior='raise' refuses at planning time."""
+        with pytest.raises(IncompatiblePatchError, match="not the same kind"):
+            dc.spool(mixed_kind).concatenate(time=None, check_behavior="raise")
+
+    def test_structure_rejected_row_binds_nothing(self, mixed_kind):
+        """A row rejected for its coordinates must not set the plan's kind."""
+        first, _ = mixed_kind
+        blank = first.update_attrs(tag="")
+        bad = first.update_attrs(tag="a").update_coords(distance_min=5)
+        good = first.update_attrs(tag="b")
+        with pytest.warns(UserWarning, match="not compatible"):
+            out = dc.spool([blank, bad, good]).concatenate(time=None)
+        assert len(out) == 1
+        assert out.get_contents()["tag"].iloc[0] == "b"
+        assert out[0].attrs.tag == "b"
+        assert out[0].shape[1] == 2 * first.shape[1]
+
+    def test_auxiliary_coordinate_gate(self, mixed_kind):
+        """A differing non-dimensional coordinate is caught at planning time."""
+        first, other = mixed_kind
+        other = other.update_attrs(tag=first.attrs.tag)
+        n = first.shape[first.get_axis("distance")]
+        first = first.update_coords(latitude=("distance", np.arange(n, dtype=float)))
+        other = other.update_coords(latitude=("distance", np.ones(n)))
+        with pytest.warns(UserWarning, match="not compatible"):
+            out = dc.spool([first, other]).concatenate(time=None)
+        # the plan row and the patch agree: only the first patch
+        assert out.get_contents()["time_max"].iloc[0] == first.get_coord("time").max()
+        assert out[0].shape == first.shape
+
+    def test_coordinate_only_one_patch_has_is_fine(self, mixed_kind):
+        """An auxiliary coordinate absent from one patch is not a conflict."""
+        first, other = mixed_kind
+        other = other.update_attrs(tag=first.attrs.tag)
+        n = first.shape[first.get_axis("distance")]
+        first = first.update_coords(latitude=("distance", np.arange(n, dtype=float)))
+        with suppress_warnings(action="error"):
+            out = dc.spool([first, other]).concatenate(time=None)
+        assert len(out) == 1
+        assert out[0].shape[1] == 2 * first.shape[1]
+
+    def test_different_dims_raise_at_planning(self, mixed_kind):
+        """Different dimensions raise for the spool as for the patches."""
+        first, other = mixed_kind
+        other = other.update_attrs(tag=first.attrs.tag).rename_coords(time="money")
+        with pytest.raises(PatchCoordinateError, match="different dimensions"):
+            dc.spool([first, other]).concatenate(time=None, check_behavior="ignore")
+
+    def test_selection_before_concatenate_is_undecidable(self):
+        """Coordinates a pending selection might reconcile stay apart, and say why."""
+        base = dc.get_example_patch()
+        time = base.get_coord("time")
+        later = base.update_coords(time_min=time.max() + time.step)
+        # distance 0..299 and 5..304 agree on 5..299 once selected, but a
+        # phase-shifted grid would not, and metadata cannot tell the two apart
+        shifted = later.update_coords(distance_min=5)
+        selected = dc.spool([base, shifted]).select(distance=(5, 299))
+        with pytest.warns(UserWarning, match="load the selected patches"):
+            out = selected.concatenate(time=None)
+        assert len(out) == 1
+        assert out[0].shape[1] == base.shape[1]
+        assert out.get_contents()["time_max"].iloc[0] == time.max()
+        # loading the selected patches settles their coordinates, and then
+        # they concatenate
+        loaded = dc.spool(list(selected)).concatenate(time=None)
+        assert len(loaded) == 1
+        assert loaded[0].shape[1] == 2 * base.shape[1]
+        assert loaded[0].get_coord("distance").min() == 5
+
+    def test_selection_cannot_settle_irregular_coordinates(self):
+        """Irregular coordinates under a pending selection stay apart too."""
+        base = dc.get_example_patch()
+        time = base.get_coord("time")
+        n = base.shape[base.get_axis("distance")]
+        rng = np.random.default_rng(0)
+        irregular = np.sort(rng.uniform(0, 300, n))
+        first = base.update_coords(distance=irregular)
+        other = base.update_coords(
+            time_min=time.max() + time.step, distance=np.sort(rng.uniform(0, 300, n))
+        )
+        selected = dc.spool([first, other]).select(distance=(50, 250))
+        with pytest.warns(UserWarning, match="not compatible"):
+            out = selected.concatenate(time=None)
+        # the plan and the patch agree: the second patch is not in the output
+        assert out.get_contents()["time_max"].iloc[0] == time.max()
+        assert out[0].shape[1] == base.shape[1]
+
+    def test_selection_cannot_settle_auxiliary_coordinates(self, mixed_kind):
+        """A trimmed auxiliary coordinate has no envelope to decide by."""
+        first, other = mixed_kind
+        other = other.update_attrs(tag=first.attrs.tag)
+        n = first.shape[first.get_axis("distance")]
+        first = first.update_coords(latitude=("distance", np.arange(n, dtype=float)))
+        other = other.update_coords(latitude=("distance", np.ones(n)))
+        selected = dc.spool([first, other]).select(distance=(5, 250))
+        with pytest.warns(UserWarning, match="not compatible"):
+            out = selected.concatenate(time=None)
+        assert out[0].shape[1] == first.shape[1]
+
+    def test_each_output_has_its_own_baseline(self, mixed_kind):
+        """Gates are applied per output against that output's first member."""
+        first, other = mixed_kind
+        other = other.update_attrs(tag=first.attrs.tag)
+        n = first.shape[first.get_axis("distance")]
+        lat_a = other.update_coords(latitude=("distance", np.arange(n, dtype=float)))
+        lat_b = other.update_coords(latitude=("distance", np.ones(n)))
+        # the global first lacks latitude; the second output's members disagree on it
+        with pytest.warns(UserWarning, match="not compatible"):
+            out = dc.spool([first, first.new(), lat_a, lat_b]).concatenate(time=2)
+        assert len(out) == 2
+        second = out[1]
+        assert second.shape[1] == first.shape[1]
+        assert out.get_contents()["time_max"].iloc[1] == lat_a.get_coord("time").max()
+
+    def test_rejected_rows_take_no_slots(self, mixed_kind):
+        """Members are chosen before they are grouped, as concatenate_patches does."""
+        first, other = mixed_kind
+        third = first.update_coords(
+            time_min=other.get_coord("time").max() + other.get_coord("time").step
+        )
+        with pytest.warns(UserWarning, match="not the same kind"):
+            out = dc.spool([first, other, third]).concatenate(time=2)
+        # [A, B, A] with B rejected: one output holding both A patches
+        assert len(out) == 1
+        assert out[0].shape[1] == 2 * first.shape[1]
+
+    def test_different_units_kept_apart_in_plans(self, mixed_kind):
+        """The plan refuses to splice different data units, as assembly would."""
+        first, other = mixed_kind
+        other = other.update_attrs(tag=first.attrs.tag)
+        metres, km = first.set_units("m"), other.set_units("km")
+        with pytest.warns(UserWarning, match="data units"):
+            out = dc.spool([metres, km]).concatenate(time=None)
+        assert out.get_contents()["time_max"].iloc[0] == metres.get_coord("time").max()
+        assert out[0].shape == metres.shape
+
+    def test_groups_refill_after_group_rejections(self, mixed_kind):
+        """A row a group's first member rejects does not hold one of its slots."""
+        first, other = mixed_kind
+        other = other.update_attrs(tag=first.attrs.tag)
+        time = other.get_coord("time")
+        n = first.shape[first.get_axis("distance")]
+        lat_a = other.update_coords(latitude=("distance", np.arange(n, dtype=float)))
+        lat_b = other.update_coords(
+            time_min=time.max() + time.step, latitude=("distance", np.ones(n))
+        )
+        lat_a2 = other.update_coords(
+            time_min=time.max() + 2 * time.step,
+            latitude=("distance", np.arange(n, dtype=float)),
+        )
+        with pytest.warns(UserWarning, match="not compatible"):
+            out = dc.spool([first, first.new(), lat_a, lat_b, lat_a2]).concatenate(
+                time=2
+            )
+        # [first, first] then [lat_a, lat_a2] with lat_b rejected by lat_a
+        assert len(out) == 2
+        assert out[1].shape[1] == 2 * first.shape[1]
+
+    def test_plan_units_bind_to_the_first_known(self, mixed_kind):
+        """The plan's units baseline is the first known one, as assembly's is."""
+        first, other = mixed_kind
+        other = other.update_attrs(tag=first.attrs.tag)
+        time = other.get_coord("time")
+        third = other.update_coords(time_min=time.max() + time.step)
+        bare, metres, km = (
+            first.set_units(None),
+            other.set_units("m"),
+            third.set_units("km"),
+        )
+        with pytest.warns(UserWarning, match="data units"):
+            out = dc.spool([bare, metres, km]).concatenate(time=None)
+        assert out.get_contents()["time_max"].iloc[0] == time.max()
+        assert out[0].shape[1] == 2 * first.shape[1]
+        assert dc.get_quantity(out[0].attrs.data_units) == dc.get_quantity("m")
+
+    def test_plan_keeps_its_kind_rule(self, mixed_kind):
+        """A plan made under one kind rule assembles under it later."""
+        first, other = mixed_kind
+        with dc.config_context(patch_kind_attrs=("acquisition_key",)):
+            out = dc.spool([first, other]).concatenate(time=None)
+            assert len(out) == 1
+        # tag is back in the default rule, but the plan was made without it
+        patch = out[0]
+        assert patch.shape[1] == 2 * first.shape[1]
+
+    def test_missing_kind_value_filled_in_rows_and_patch(self, mixed_kind):
+        """A first member lacking the key takes the others' in row and patch."""
+        first, other = mixed_kind
+        other = other.update_attrs(tag=first.attrs.tag, acquisition_key="XX.R2D1..RAW")
+        out = dc.spool([first, other]).concatenate(time=None)
+        assert out.get_contents()["acquisition_key"].iloc[0] == "XX.R2D1..RAW"
+        assert out[0].attrs.acquisition_key == "XX.R2D1..RAW"
+
+    def test_same_kind_concatenates(self, mixed_kind):
+        """Same-kind patches with differing other attrs still concatenate."""
+        first, other = mixed_kind
+        other = other.update_attrs(tag=first.attrs.tag, data_units="m/s")
+        out = dc.spool([first, other]).concatenate(time=None)
+        assert len(out) == 1
+        assert out[0].shape[1] == 2 * first.shape[1]
 
 
 class TestEmptyConcatenate:

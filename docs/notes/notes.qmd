@@ -12,3 +12,4 @@ This section provides understanding-oriented explanations of DASCore implementat
 - [Spool Index](spool_index.qmd)
 - [Spool Selection](spool_selection.qmd)
 - [Spool Chunking](spool_chunking.qmd)
+- [Patch Compatibility](patch_compatibility.qmd)

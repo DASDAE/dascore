@@ -15,12 +15,18 @@ import dascore as dc
 import dascore.proc.coords
 import dascore.utils.array as array_utils
 from dascore import get_quantity
-from dascore.exceptions import ParameterError, UnitError
+from dascore.exceptions import (
+    IncompatiblePatchError,
+    ParameterError,
+    PatchCoordinateError,
+    UnitError,
+)
 from dascore.units import furlongs, m, s
 from dascore.utils.array import (
     UFUNC_NAMES,
     PatchUFunc,
     _BoundPatchUFunc,
+    _is_offset_unit,
     apply_array_func,
     apply_ufunc,
     convert_bytes_to_strings,
@@ -108,15 +114,13 @@ class TestApplyUfunc:
         assert np.allclose(out1.data, random_patch.data + 1)
         assert np.allclose(out2.data, random_patch.data + 10)
 
-    def test_incompatible_coords(self, random_patch):
-        """Ensure un-alignable coords returns degenerate patch."""
+    def test_disjoint_coords_raise(self, random_patch):
+        """Un-alignable coords are a conflict, not an empty answer."""
         time = random_patch.get_coord("time")
         new_time = time.max() + time.step
         new = random_patch.update_coords(time_min=new_time)
-        out = apply_ufunc(np.multiply, new, random_patch)
-        assert 0 in set(out.shape)
-        assert out.data.size == 0
-        assert out.dims == random_patch.dims
+        with pytest.raises(PatchCoordinateError, match="share no values"):
+            apply_ufunc(np.multiply, new, random_patch)
 
     def test_quantity_scalar(self, random_patch):
         """Ensure operators work with quantities."""
@@ -191,6 +195,244 @@ class TestApplyUfunc:
         other = 10 * get_quantity("m")
         with pytest.raises(UnitError):
             apply_ufunc(np.add, pa1, other)
+
+    def test_different_kind_raises(self, random_patch):
+        """Patches of different kinds are never operated together."""
+        other = random_patch.update_attrs(tag="other")
+        with pytest.raises(IncompatiblePatchError, match="not the same kind"):
+            apply_ufunc(np.add, random_patch, other)
+
+    def test_units_take_part_rather_than_gate(self, random_patch):
+        """Differing data units go through the operator, not a kind check."""
+        pa1 = random_patch.set_units("m")
+        pa2 = random_patch.set_units("s")
+        out = apply_ufunc(np.multiply, pa1, pa2)
+        assert get_quantity(out.attrs.data_units) == get_quantity("m * s")
+        with pytest.raises(UnitError):
+            apply_ufunc(np.add, pa1, pa2)
+        # Convertible units are converted to the first patch's.
+        pa3 = random_patch.set_units("km")
+        out = apply_ufunc(np.add, pa1, pa3)
+        assert get_quantity(out.attrs.data_units) == get_quantity("m")
+        assert np.allclose(out.data, pa1.data + 1000 * pa3.data)
+
+    @pytest.mark.parametrize("kind", ["patch", "array", "scalar"])
+    def test_missing_units_conflict_with_nothing(self, random_patch, kind):
+        """A unitless operand: dimensionless for products, adopts for sums."""
+        metres = random_patch.set_units("m")
+        bare = {
+            "patch": random_patch.set_units(None),
+            "array": np.ones(random_patch.shape),
+            "scalar": 2,
+        }[kind]
+        m, per_m = get_quantity("m"), get_quantity("1/m")
+        assert get_quantity((metres + bare).attrs.data_units) == m
+        assert get_quantity((bare + metres).attrs.data_units) == m
+        assert get_quantity((metres * bare).attrs.data_units) == m
+        assert get_quantity((metres / bare).attrs.data_units) == m
+        assert get_quantity((bare / metres).attrs.data_units) == per_m
+        # Comparisons need equal units too, so they adopt rather than raise.
+        assert (metres > bare).data.dtype == np.bool_
+
+    def test_ufuncs_outside_the_unit_registry(self, random_patch):
+        """A ufunc the registry lacks still works; units are left as they were."""
+        ints = random_patch.new(data=(random_patch.data * 100).astype(np.int64))
+        metres = ints.set_units("m")
+        out = apply_ufunc(np.bitwise_and, metres, 3)
+        assert get_quantity(out.attrs.data_units) == get_quantity("m")
+        assert np.array_equal(out.data, ints.data & 3)
+        out = apply_ufunc(np.logical_and, random_patch.set_units("m"), True)
+        assert out.data.dtype == np.bool_
+        # Two unitful operands take the same fallback, other in patch units.
+        out = apply_ufunc(np.bitwise_and, metres, metres)
+        assert get_quantity(out.attrs.data_units) == get_quantity("m")
+        assert np.array_equal(out.data, ints.data & ints.data)
+        with pytest.raises(UnitError):
+            apply_ufunc(np.bitwise_and, metres, ints.set_units("s"))
+        # convertible units are converted into the patch's for the fallback,
+        # and a boolean result has no units whichever path produced it
+        out = apply_ufunc(np.logical_and, metres, ints.set_units("km"))
+        assert out.data.dtype == np.bool_
+        assert out.attrs.data_units is None
+        assert apply_ufunc(np.logical_and, metres, metres).attrs.data_units is None
+        assert apply_ufunc(np.logical_or, metres, True).attrs.data_units is None
+
+    def test_scaled_units_keep_their_scale(self, random_patch):
+        """Data in "100 cm" stay as they are; the scale rides on the units."""
+        scaled = random_patch.set_units("100 cm")
+        out = scaled * 2
+        assert np.allclose(out.data, 2 * random_patch.data)
+        assert get_quantity(out.attrs.data_units) == get_quantity("100 cm")
+        out = scaled - 1
+        assert np.allclose(out.data, random_patch.data - 1)
+        assert get_quantity(out.attrs.data_units) == get_quantity("100 cm")
+        out = scaled**2
+        assert get_quantity(out.attrs.data_units) == get_quantity("10000 cm**2")
+
+    def test_unit_and_unit_string_operands(self, random_patch):
+        """A Unit or a unit string names units, unlike a bare number."""
+        patch = random_patch.set_units("m")
+        assert get_quantity((patch * m.units).attrs.data_units) == get_quantity("m**2")
+        assert get_quantity((patch / "s").attrs.data_units) == get_quantity("m/s")
+
+    def test_no_units_fit_raises(self, random_patch):
+        """An operation no assignment of units can satisfy raises UnitError."""
+        patch = random_patch.set_units("m")
+        # dimensionless ** metres and metres ** metres both fail
+        with pytest.raises(UnitError, match="failed with units"):
+            apply_ufunc(np.power, 2.0, patch)
+
+    def test_adopting_scaled_units_is_symmetric(self, random_patch):
+        """A unitless patch adopts "100 cm" whole, whichever side it is on."""
+        bare = random_patch.set_units(None)
+        scaled = random_patch.set_units("100 cm")
+        expected = 2 * random_patch.data
+        for out in (bare + scaled, scaled + bare):
+            assert np.allclose(out.data, expected)
+            assert get_quantity(out.attrs.data_units) == get_quantity("100 cm")
+        out = bare / scaled
+        units = get_quantity(out.attrs.data_units)
+        assert units.units == get_quantity("1 / cm").units
+        assert np.isclose(units.magnitude, 0.01)
+
+    def test_multiply_by_zero_keeps_units(self, random_patch):
+        """A result of all zeros is still in the patch's units."""
+        metres = random_patch.set_units("m")
+        out = metres * 0
+        assert np.all(out.data == 0)
+        assert get_quantity(out.attrs.data_units) == get_quantity("m")
+        out = metres.set_units("100 cm") - metres.data
+        assert get_quantity(out.attrs.data_units) == get_quantity("100 cm")
+
+    def test_offset_units_are_kept(self, random_patch):
+        """Temperatures are not scaled by a probe: degC stays degC."""
+        temp = random_patch.set_units("degC")
+        out = temp + 1
+        assert np.allclose(out.data, random_patch.data + 1)
+        assert get_quantity(out.attrs.data_units) == get_quantity("degC")
+        assert (temp > 20).attrs.data_units is None
+        out = random_patch.set_units(None) + temp
+        assert get_quantity(out.attrs.data_units) == get_quantity("degC")
+        # a reciprocal or a power of a temperature has no offset unit
+        for bad in (lambda: 1 / temp, lambda: temp**2, lambda: temp * 2):
+            with pytest.raises(UnitError, match="offset units"):
+                bad()
+        # degrees may be taken from a temperature, not a temperature from a number
+        assert get_quantity((temp - 1).attrs.data_units) == get_quantity("degC")
+        with pytest.raises(UnitError, match="Cannot subtract a temperature"):
+            1 - temp
+        with pytest.raises(UnitError, match="Cannot subtract a temperature"):
+            random_patch.set_units(None) - temp
+
+    def test_offset_unit_detection(self):
+        """Offset units are told apart by behaviour, not a registry attribute."""
+        assert _is_offset_unit(get_quantity("degC"))
+        assert _is_offset_unit(get_quantity("degF"))
+        assert not _is_offset_unit(get_quantity("kelvin"))
+        assert not _is_offset_unit(get_quantity("100 cm"))
+        # a logarithmic unit is neither multiplicative nor an offset
+        assert not _is_offset_unit(get_quantity("dB"))
+
+    def test_empty_unit_string_raises(self, random_patch):
+        """A string operand must name units."""
+        with pytest.raises(UnitError, match="names no units"):
+            apply_ufunc(np.multiply, random_patch, "")
+
+    def test_two_offset_unit_patches(self, random_patch):
+        """Two temperatures differ by a delta; their sum has no meaning."""
+        warm = random_patch.new(data=np.full(random_patch.shape, 20.0)).set_units(
+            "degC"
+        )
+        cool = random_patch.new(data=np.full(random_patch.shape, 5.0)).set_units("degC")
+        out = warm - cool
+        assert np.allclose(out.data, 15.0)
+        assert get_quantity(out.attrs.data_units) == get_quantity("delta_degC")
+        with pytest.raises(UnitError, match="offset units"):
+            warm + cool
+        assert np.all((warm > cool).data)
+        hottest = np.maximum(warm, cool)
+        assert get_quantity(hottest.attrs.data_units) == get_quantity("degC")
+        with pytest.raises(UnitError, match="failed with units"):
+            warm - random_patch.set_units("m")
+
+    def test_temperature_and_difference(self, random_patch):
+        """A temperature plus or minus a difference is a temperature."""
+        shape = random_patch.shape
+        warm = random_patch.new(data=np.full(shape, 20.0)).set_units("degC")
+        step = random_patch.new(data=np.full(shape, 5.0)).set_units("delta_degC")
+        for out in (warm + step, step + warm):
+            assert np.allclose(out.data, 25.0)
+            assert get_quantity(out.attrs.data_units) == get_quantity("degC")
+        out = warm - step
+        assert np.allclose(out.data, 15.0)
+        assert get_quantity(out.attrs.data_units) == get_quantity("degC")
+        # a kelvin difference converts; a difference minus a temperature does not exist
+        kelvin_step = step.set_units("kelvin")
+        assert np.allclose((warm + kelvin_step).data, 25.0)
+        with pytest.raises(UnitError, match="offset units"):
+            step - warm
+        with pytest.raises(UnitError, match="offset units"):
+            warm * step
+        with pytest.raises(UnitError, match="failed with units"):
+            warm + random_patch.set_units("m")
+
+    def test_boolean_fallback_on_a_foreign_backend(self, random_patch):
+        """A boolean result drops its units whichever array backend holds it."""
+        xp = pytest.importorskip("array_api_strict")
+        mask = xp.asarray(random_patch.data > 0)  # the strict backend wants bools
+        patch = random_patch.new(data=mask).set_units("m")
+        out = np.logical_and(patch, True)
+        assert out.attrs.data_units is None
+        # a comparison the backend implements itself, on an offset unit
+        temp = random_patch.new(data=xp.asarray(random_patch.data)).set_units("degC")
+        out = temp > 0.5
+        assert out.attrs.data_units is None
+        assert np.array_equal(np.asarray(out.data), random_patch.data > 0.5)
+
+    def test_reversed_floor_division(self, random_patch):
+        """A bare probe result of zero is sidestepped, not divided by."""
+        metres = random_patch.set_units("m") + 1  # keep away from zero
+        out = 3 // metres
+        assert np.allclose(out.data, 3 // metres.data)
+        assert get_quantity(out.attrs.data_units) == get_quantity("1/m")
+        out = metres // 3
+        assert get_quantity(out.attrs.data_units) == get_quantity("m")
+
+    def test_logarithmic_units(self, random_patch):
+        """A level in dB scales and compares, but no bare number is added to it."""
+        level = random_patch.set_units("dB")
+        out = level * 2
+        assert np.allclose(out.data, 2 * random_patch.data)
+        assert get_quantity(out.attrs.data_units) == get_quantity("dB")
+        assert (level > 0.5).attrs.data_units is None
+        with pytest.raises(UnitError, match="logarithmic"):
+            level + 1
+
+    def test_generalized_ufunc_with_units(self):
+        """A gufunc such as matmul cannot be probed on scalars; numpy runs it."""
+        square = dc.get_example_patch(shape=(10, 10)).set_units("m")
+        out = np.matmul(square, np.eye(10))
+        assert np.allclose(out.data, square.data)
+        assert get_quantity(out.attrs.data_units) == get_quantity("m")
+        # the units are kept from whichever side had them
+        bare = square.set_units(None)
+        out = np.matmul(bare, square)
+        assert get_quantity(out.attrs.data_units) == get_quantity("m")
+
+    def test_scalar_units_need_no_array_wrapping(self, random_patch):
+        """Scalars settle units on a probe; comparisons and powers behave."""
+        metres = random_patch.set_units("m")
+        assert (metres > 5).data.dtype == np.bool_
+        assert get_quantity((metres**2).attrs.data_units) == get_quantity("m**2")
+        with pytest.raises(UnitError, match="scalar exponent"):
+            metres ** np.ones(metres.shape)
+
+    def test_other_attrs_keep_first(self, random_patch):
+        """Attrs outside the kind keep the first patch's value."""
+        pa1 = random_patch.update_attrs(foo="a")
+        pa2 = random_patch.update_attrs(foo="b")
+        assert apply_ufunc(np.add, pa1, pa2).attrs.foo == "a"
+        assert apply_ufunc(np.add, pa2, pa1).attrs.foo == "b"
 
     def test_patches_non_coords_len_1(self, random_patch):
         """Ensure patches with non-coords also work."""

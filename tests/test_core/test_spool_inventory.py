@@ -1951,7 +1951,7 @@ class TestConformBoundaryPolicy:
         """
         other = patch.update_attrs(acquisition_key="DAS.R2D1..OTHER")
         spool = dc.spool([patch, other])
-        assert "acquisition_key" in dc.get_config().groupby_attrs
+        assert "acquisition_key" in dc.get_config().patch_kind_attrs
         merged = spool.chunk(time=None)
         assert sorted(merged.get_contents()["acquisition_key"]) == [
             "DAS.R2D1..OTHER",

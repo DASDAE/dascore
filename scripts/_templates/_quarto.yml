@@ -252,6 +252,12 @@ website:
         - text: Spool Selection
           href: notes/spool_selection.qmd
 
+        - text: Spool Chunking
+          href: notes/spool_chunking.qmd
+
+        - text: Patch Compatibility
+          href: notes/patch_compatibility.qmd
+
         - text: Inventory Attachment
           href: notes/inventory_attachment.qmd
 

@@ -74,10 +74,9 @@ class DascoreConfig(BaseModel):
             "separate groups."
         ),
     )
-    groupby_attrs: tuple[str, ...] = Field(
+    patch_kind_attrs: tuple[str, ...] = Field(
         default=(
             "acquisition_key",
-            "data_type",
             "data_category",
             "tag",
             # Legacy: these are not patch attrs any more, but archives
@@ -89,13 +88,16 @@ class DascoreConfig(BaseModel):
             "station",
         ),
         description=(
-            "Attributes which partition patches into separate groups for "
-            "chunk/merge operations. Patches whose values differ on any of "
-            "these are never combined (no error); the per-call `group` "
-            "argument overrides this default. Names missing from a spool "
-            "are ignored, which is why the legacy `network` and `station` "
-            "can stay: archives which predate `acquisition_key` partition "
-            "by them."
+            "Attributes which decide whether patches are the same kind; they "
+            "are categorical labels (strings), not quantities. Patches "
+            "holding conflicting values for any of these are never "
+            "combined: operators and ufuncs raise, concatenate and stack "
+            "skip them, and chunk puts them in separate outputs (its "
+            "per-call `group` argument overrides this default). A missing "
+            "or empty value conflicts with nothing, which is why the legacy "
+            "`network` and `station` can stay: archives which predate "
+            "`acquisition_key` partition by them and everything else "
+            "ignores them."
         ),
     )
 

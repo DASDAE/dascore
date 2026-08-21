@@ -11,7 +11,11 @@ from scipy.fft import next_fast_len
 
 import dascore as dc
 from dascore import get_example_patch
-from dascore.exceptions import ParameterError, PatchBroadcastError
+from dascore.exceptions import (
+    IncompatiblePatchError,
+    ParameterError,
+    PatchBroadcastError,
+)
 from dascore.utils.misc import _merge_tuples
 
 OP_NAMES = ("add", "sub", "pow", "truediv", "floordiv", "mul", "mod")
@@ -777,6 +781,16 @@ class TestWhere:
             assert np.all(
                 ~np.isnan(result.data[false_mask])
             )  # Should have valid values
+
+    def test_where_checks_kind(self, random_patch):
+        """Masks and fills must be the same kind, like any other operand."""
+        vel = random_patch.update_attrs(data_type="velocity")
+        # data_type is not kind, so a mask from a processed patch is fine.
+        out = vel.where(vel.standardize("time") > 0, other=vel.full(0))
+        assert out.attrs.data_type == "velocity"
+        other = random_patch.update_attrs(tag="other")
+        with pytest.raises(IncompatiblePatchError, match="not the same kind"):
+            random_patch.where(other > 0)
 
     def test_where_with_misaligned_coords(self, random_patch):
         """Test where with condition patch having misaligned coordinates."""

@@ -21,7 +21,7 @@ import pandas as pd
 import dascore as dc
 from dascore.exceptions import CoordMergeError, UnitError
 from dascore.units import get_quantity
-from dascore.utils.attrs import combine_patch_attrs
+from dascore.utils.attrs import combine_patch_attrs, warn_if_histories_differ
 from dascore.utils.misc import broadcast_for_index, is_range
 from dascore.utils.patch import (
     _force_patch_merge,
@@ -283,6 +283,7 @@ class PatchAssembler:
         new_coord = _get_merged_coord(
             summary_df, merge_dim, coords, drop_conflicting, **coord_kwargs
         )
+        warn_if_histories_differ(attrs, "Merging")
         new_attrs = combine_patch_attrs(attrs, **attr_kwargs)
         return dc.Patch(data=buffer, coords=new_coord, attrs=new_attrs, dims=list(dims))
 

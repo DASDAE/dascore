@@ -533,11 +533,111 @@ class TestChunkMerge:
         assert time_max <= time_tup[1]
         assert (time_max + time_step) > time_tup[1]
 
+    def test_missing_attr_merges_and_carries(self):
+        """A member lacking an attr merges; the output carries the known value."""
+        p1 = dc.get_example_patch().update_attrs(data_type="velocity")
+        time = p1.get_coord("time")
+        p2 = dc.get_example_patch(time_min=time.max() + time.step)
+        assert p2.attrs.data_type == ""
+        out = dc.spool([p1, p2]).chunk(time=None)
+        assert len(out) == 1
+        assert out.get_contents()["data_type"].iloc[0] == "velocity"
+        assert out[0].attrs.data_type == "velocity"
+
+    def test_surviving_member_takes_the_rows_attrs(self):
+        """Whichever duplicate survives overlap removal, patch and row agree."""
+        p1 = dc.get_example_patch().update_attrs(foo="a", data_type="velocity")
+        p2 = dc.get_example_patch()  # same span, knows neither
+        for patches in ([p1, p2], [p2, p1]):
+            out = dc.spool(patches).chunk(time=None)
+            assert len(out) == 1
+            row = out.get_contents().iloc[0]
+            assert row["foo"] == "a" and row["data_type"] == "velocity"
+            assert out[0].attrs.foo == "a"
+            assert out[0].attrs.data_type == "velocity"
+
+    def test_attr_held_in_two_kinds_takes_the_numeric_units(self):
+        """An attr stored as text in one patch and a quantity in another."""
+        p1 = dc.get_example_patch().update_attrs(foo=2 * dc.get_quantity("m"))
+        p2 = dc.get_example_patch(time_min=p1.get_coord("time").max()).update_attrs(
+            foo="text"
+        )
+        spool = dc.spool([p1, p2])
+        assert spool._catalog.backend.attr_units_map()["foo"] == "m"
+        assert "foo" not in spool._catalog.backend.attr_units_map(kind="bool")
+        # the quantity member dropped by overlap removal still stamps metres
+        dup = dc.get_example_patch()
+        out = dc.spool([dup, p1]).chunk(time=None)
+        assert out[0].attrs.foo == 2 * dc.get_quantity("m")
+
+    def test_attr_named_like_another_patches_coordinate(self):
+        """An attr is not suppressed because some other patch has such a coordinate."""
+        p1 = dc.get_example_patch().update_attrs(latitude="north")
+        p2 = dc.get_example_patch()
+        time = p1.get_coord("time")
+        n = p1.shape[p1.get_axis("distance")]
+        elsewhere = dc.get_example_patch(
+            time_min=time.max() + 10 * time.step, tag="other"
+        ).update_coords(latitude=("distance", np.arange(n, dtype=float)))
+        out = dc.spool([p2, p1, elsewhere]).chunk(time=None)
+        first = out.select(tag="random")[0]
+        assert first.attrs.latitude == "north"
+
+    def test_attr_pair_named_like_an_envelope_is_stamped(self):
+        """foo_min and foo_max attrs, with no foo coordinate, are attrs."""
+        p1 = dc.get_example_patch().update_attrs(foo_min="a", foo_max="b")
+        p2 = dc.get_example_patch()
+        out = dc.spool([p2, p1]).chunk(time=None)
+        assert out[0].attrs.foo_min == "a"
+        assert out[0].attrs.foo_max == "b"
+
+    def test_attr_named_like_a_coordinate_is_stamped(self):
+        """An attr such as time_zone is not coordinate metadata."""
+        p1 = dc.get_example_patch().update_attrs(time_zone="UTC")
+        p2 = dc.get_example_patch()
+        out = dc.spool([p2, p1]).chunk(time=None)
+        assert out.get_contents()["time_zone"].iloc[0] == "UTC"
+        assert out[0].attrs.time_zone == "UTC"
+
+    def test_dropped_coordinate_envelope_is_not_an_attr(self):
+        """A coordinate only one member has leaves no stray attrs behind."""
+        p1 = dc.get_example_patch()
+        time = p1.get_coord("time")
+        p2 = dc.get_example_patch(time_min=time.max() + time.step)
+        n = p1.shape[p1.get_axis("distance")]
+        p1 = p1.update_coords(latitude=("distance", np.arange(n, dtype=float)))
+        out = dc.spool([p1, p2]).chunk(time=None, conflict="drop")
+        patch = out[0]
+        assert patch.attrs.get("latitude_min") is None
+        assert patch.attrs.get("latitude_max") is None
+
+    def test_numeric_attrs_are_stamped_with_their_units(self):
+        """A number comes back a number; a quantity comes back with its units."""
+        p1 = dc.get_example_patch().update_attrs(
+            gauge=10 * dc.get_quantity("m"), shots=7
+        )
+        p2 = dc.get_example_patch()
+        for patches in ([p1, p2], [p2, p1]):
+            patch = dc.spool(patches).chunk(time=None)[0]
+            assert patch.attrs.gauge == 10 * dc.get_quantity("m")
+            assert patch.attrs.shots == 7
+
+    def test_history_warns_not_raises(self):
+        """Differing histories merge with a warning, carrying the first's."""
+        p1 = dc.get_example_patch()
+        time = p1.get_coord("time")
+        p2 = dc.get_example_patch(time_min=time.max() + time.step)
+        p2 = p2.pass_filter(time=(None, 10))
+        with pytest.warns(UserWarning, match="histories differ"):
+            patch = dc.spool([p1, p2]).chunk(time=None)[0]
+        assert patch.shape[1] == 2 * p1.shape[1]
+        assert patch.attrs.history == p1.attrs.history
+
     def test_attrs_conflict(self, adjacent_spool_different_attrs):
         """Test various cases for specifying what to do when attrs conflict."""
         spool = adjacent_spool_different_attrs
         # when we don't specify to ignore or drop attrs this should raise.
-        match = "all values for my_attr"
+        match = "my_attr holds conflicting values"
         with pytest.raises(CoordMergeError, match=match):
             spool.chunk(time=...)
         # however, when we specify drop attrs this shouldn't.

@@ -4,8 +4,10 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 
+import numpy as np
 import pytest
 
+import dascore as dc
 from dascore import PatchAttrs
 from dascore.exceptions import ParameterError
 from dascore.utils.attrs import combine_patch_attrs
@@ -39,8 +41,47 @@ class TestMergeAttrs:
         pa1 = PatchAttrs(tag="bob", another=2, same=42)
         pa2 = PatchAttrs(tag="bob", another=2, same=42)
         pa3 = PatchAttrs(another=1, same=42, different=10)
-        with pytest.raises(Exception, match="non-dim attrs are not equal"):
+        with pytest.raises(Exception, match="hold conflicting values"):
             combine_patch_attrs([pa1, pa2, pa3])
+
+    def test_missing_matches(self):
+        """An attr nobody recorded conflicts with nothing; the known value carries."""
+        pa1 = PatchAttrs(data_type="velocity", data_units=None, gauge=10.0)
+        pa2 = PatchAttrs(data_type="", data_units="m/s", gauge=np.nan)
+        for order in ([pa1, pa2], [pa2, pa1]):
+            out = combine_patch_attrs(order)  # conflict="raise" does not raise
+            assert out.data_type == "velocity"
+            assert dc.get_quantity(out.data_units) == dc.get_quantity("m/s")
+            assert out.gauge == 10.0
+
+    def test_all_missing_is_omitted(self):
+        """An attr nobody knows is left out rather than carried as ""."""
+        out = combine_patch_attrs([PatchAttrs(foo=""), PatchAttrs(foo="")])
+        assert out.get("foo") is None
+
+    def test_drop_keeps_known_beside_missing(self):
+        """Drop only omits attrs whose known values conflict."""
+        pa1 = PatchAttrs(data_type="velocity", foo="a")
+        pa2 = PatchAttrs(data_type="", foo="b")
+        out = combine_patch_attrs([pa1, pa2], conflict="drop")
+        assert out.data_type == "velocity"
+        assert out.get("foo") is None
+
+    def test_keep_first_means_first_known(self):
+        """keep_first skips a first member which lacks the value."""
+        pa1 = PatchAttrs(foo="", bar=None)
+        pa2 = PatchAttrs(foo="x", bar=1)
+        pa3 = PatchAttrs(foo="y", bar=2)
+        out = combine_patch_attrs([pa1, pa2, pa3], conflict="keep_first")
+        assert out.foo == "x"
+        assert out.bar == 1
+
+    def test_history_never_compared(self):
+        """Histories differing is not a conflict; the first member's carries."""
+        pa1 = PatchAttrs(history=("pass_filter",))
+        pa2 = PatchAttrs(history=())
+        assert combine_patch_attrs([pa1, pa2]).history == ("pass_filter",)
+        assert combine_patch_attrs([pa2, pa1]).history == ()
 
     def test_drop_conflicts(self, random_patch):
         """Ensure unequal non-coordinate attrs can be dropped."""

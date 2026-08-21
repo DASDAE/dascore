@@ -26,9 +26,12 @@ from dascore.utils.patch import (
     _force_patch_merge,
     _spool_up,
     align_patch_coords,
+    check_data_units,
     check_dims,
+    check_kind,
     concatenate_patches,
     get_dim_axis_value,
+    get_patch_kind,
     get_patch_names,
     get_patch_window_size,
     get_window_axis_step,
@@ -471,15 +474,12 @@ class TestAlignPatches:
         # The data should all be the same since this is a sub-patch.
         assert np.all(out1.data == out2.data)
 
-    def test_align_no_overlap(self, random_patch):
-        """Alignment with no overlap should return null."""
+    def test_align_no_overlap_raises(self, random_patch):
+        """Sharing a dimension but none of its values is a conflict."""
         dist = random_patch.get_coord("distance")
         new = random_patch.update_coords(distance_min=dist.max() + 10)
-        out1, out2 = align_patch_coords(new, random_patch)
-        assert out1.shape == out2.shape
-        assert out1.coords == out2.coords
-        # Patches should be degenerate.
-        assert 0 in set(out1.shape)
+        with pytest.raises(PatchCoordinateError, match="share no values"):
+            align_patch_coords(new, random_patch)
 
     def test_no_common_dims_raises(self, random_patch):
         """Patches with no common dims should not be align-able."""
@@ -507,6 +507,122 @@ class TestAlignPatches:
         np.broadcast_shapes(out1.shape, out2.shape, desired_shape)
 
 
+class TestCheckKind:
+    """Tests for deciding whether two patches are the same kind."""
+
+    def test_kind_is_the_configured_attrs(self, random_patch):
+        """The kind holds exactly the config's attrs, in order."""
+        kind = get_patch_kind(random_patch)
+        names = dc.get_config().patch_kind_attrs
+        assert tuple(kind) == names
+        assert kind["tag"] == random_patch.attrs.tag
+        # Attrs work as well as patches.
+        assert get_patch_kind(random_patch.attrs) == kind
+
+    def test_processing_keeps_kind(self, random_patch):
+        """Coordinates, history, units, and ids never enter the kind."""
+        changed = (
+            random_patch.pass_filter(time=(None, 10))
+            .select(time=(1, 20), samples=True)
+            .set_units("m/s")
+        )
+        assert check_kind(random_patch, changed)
+
+    @pytest.mark.parametrize(
+        "update",
+        [
+            {"acquisition_key": "TA.R2D1..RAW"},
+            {"data_category": "DTS"},
+            {"tag": "other"},
+        ],
+    )
+    def test_kind_attr_conflicts(self, random_patch, update):
+        """A conflicting kind attr raises, warns, or quietly reports False."""
+        random_patch = random_patch.update_attrs(
+            acquisition_key="DAS.R2D1..RAW", data_category="DAS", tag="a"
+        )
+        other = random_patch.update_attrs(**update)
+        msg = "not the same kind"
+        with pytest.raises(IncompatiblePatchError, match=msg):
+            check_kind(random_patch, other)
+        with pytest.warns(UserWarning, match=msg):
+            assert not check_kind(random_patch, other, check_behavior="warn")
+        with suppress_warnings(action="error"):
+            assert not check_kind(random_patch, other, check_behavior="ignore")
+
+    def test_message_names_the_attr(self, random_patch):
+        """The error says which attribute differs and how."""
+        other = random_patch.update_attrs(tag="other")
+        with pytest.raises(IncompatiblePatchError, match="'tag'") as info:
+            check_kind(random_patch, other)
+        assert "patch_kind_attrs" in str(info.value)
+
+    def test_custom_attr_is_not_kind_unless_configured(self, random_patch):
+        """Only the configured names count; config can add to them."""
+        pa1 = random_patch.update_attrs(foo="a")
+        pa2 = random_patch.update_attrs(foo="b")
+        assert check_kind(pa1, pa2)
+        with config_context(patch_kind_attrs=("foo",)):
+            with pytest.raises(IncompatiblePatchError, match="'foo'"):
+                check_kind(pa1, pa2)
+            # and the default names no longer matter
+            assert check_kind(pa1, pa1.update_attrs(tag="other"))
+
+    def test_missing_attr_matches_anything(self, random_patch):
+        """A missing value conflicts with nothing; only known values can."""
+        with config_context(patch_kind_attrs=("foo",)):
+            assert get_patch_kind(random_patch)["foo"] is None
+            assert check_kind(random_patch, random_patch.new())
+            assert check_kind(random_patch, random_patch.update_attrs(foo="a"))
+            with pytest.raises(IncompatiblePatchError, match="'foo'"):
+                check_kind(
+                    random_patch.update_attrs(foo="a"),
+                    random_patch.update_attrs(foo="b"),
+                )
+
+    def test_data_type_is_not_kind(self, random_patch):
+        """Processing changes data_type, so it must not gate arithmetic."""
+        vel = random_patch.update_attrs(data_type="velocity")
+        env = vel.envelope("time")
+        assert env.attrs.data_type == "envelope"
+        assert check_kind(vel, env)
+        assert (vel / env).attrs.data_type == "velocity"
+
+    def test_empty_string_is_absent(self, random_patch):
+        """An empty attr (a legacy reader's network="") is the same as none."""
+        legacy = random_patch.update_attrs(network="", station="")
+        assert get_patch_kind(legacy)["network"] is None
+        assert check_kind(legacy, random_patch)
+
+    def test_array_valued_kind_attr(self, random_patch):
+        """Array-valued kind attrs compare as a whole rather than raising."""
+        pa1 = random_patch.update_attrs(foo=np.array([1, 2]))
+        pa2 = random_patch.update_attrs(foo=np.array([1, 2]))
+        pa3 = random_patch.update_attrs(foo=np.array([1, 3]))
+        with config_context(patch_kind_attrs=("foo",)):
+            assert check_kind(pa1, pa2)
+            assert not check_kind(pa1, pa3, check_behavior="ignore")
+
+    def test_retired_check_behavior_raises(self, random_patch):
+        """The behavior argument is validated up front."""
+        with pytest.raises(ParameterError, match="behavior must be one of"):
+            check_kind(random_patch, random_patch, check_behavior=None)
+
+
+class TestCheckDataUnits:
+    """Tests for the data-units gate shared by concatenate and stack."""
+
+    def test_missing_agrees_known_differ(self, random_patch):
+        """A missing unit agrees with anything; known, different units do not."""
+        bare, metres, km = (random_patch.set_units(x) for x in (None, "m", "km"))
+        assert check_data_units(bare, metres)
+        assert check_data_units(metres, metres.set_units("meter"))
+        with pytest.raises(IncompatiblePatchError, match="data units differ"):
+            check_data_units(metres, km)
+        with pytest.warns(UserWarning, match="convert_units"):
+            assert not check_data_units(metres, km, check_behavior="warn")
+
+
 class TestMergeCompatibleCoordsAttrs:
     """Tests for merging compatible attrs, coords."""
 
@@ -532,11 +648,35 @@ class TestMergeCompatibleCoordsAttrs:
             merge_compatible_coords_attrs(new, random_patch)
 
     def test_incompatible_attrs(self, random_patch):
-        """Ensure if attrs are off an Error is raised."""
-        new = random_patch.update_attrs(acquisition_key="TA.R2D1..RAW")
-        match = "attributes are not equal"
+        """A conflicting kind attr raises."""
+        new = random_patch.update_attrs(tag="other")
+        match = "not the same kind"
         with pytest.raises(IncompatiblePatchError, match=match):
             merge_compatible_coords_attrs(new, random_patch)
+
+    def test_kind_is_the_union(self, random_patch):
+        """A value only one patch knows is carried by the result."""
+        keyed = random_patch.update_attrs(acquisition_key="TA.R2D1..RAW")
+        for first, second in [(random_patch, keyed), (keyed, random_patch)]:
+            _, attrs = merge_compatible_coords_attrs(first, second)
+            assert attrs.acquisition_key == "TA.R2D1..RAW"
+
+    def test_other_attrs_fold_to_first(self, random_patch):
+        """Attrs outside the kind never refuse a merge; the first wins."""
+        pa1 = random_patch.update_attrs(foo="a", data_units="m")
+        pa2 = random_patch.update_attrs(foo="b", data_units="s", bar="b")
+        _, attrs = merge_compatible_coords_attrs(pa1, pa2)
+        assert attrs.foo == "a"
+        assert dc.get_quantity(attrs.data_units) == dc.get_quantity("m")
+        # An attr only the second has is added.
+        assert attrs.bar == "b"
+
+    def test_first_without_units_stays_unitless(self, random_patch):
+        """A first patch without units must not inherit the second's."""
+        pa1 = random_patch.set_units(None)
+        pa2 = random_patch.set_units("m")
+        _, attrs = merge_compatible_coords_attrs(pa1, pa2)
+        assert dc.get_quantity(attrs.data_units) is None
 
     def test_extra_coord(self, random_patch, random_patch_with_lat_lon):
         """Extra coords on both patch should end up in the merged patch."""
@@ -586,6 +726,118 @@ class TestConcatenate:
         msg = "Cannot concatenate"
         with pytest.raises(PatchCoordinateError, match=msg):
             concatenate_patches([p1, p2], time=None)
+
+    def test_different_kind_skipped(self, random_patch):
+        """A patch of another kind is left out per check_behavior."""
+        other = random_patch.update_attrs(tag="other")
+        msg = "not the same kind"
+        with pytest.warns(UserWarning, match=msg):
+            out = concatenate_patches([random_patch, other], time=None)
+        assert len(out) == 1
+        assert out[0].shape == random_patch.shape
+        assert out[0].attrs.tag == random_patch.attrs.tag
+        with pytest.raises(IncompatiblePatchError, match=msg):
+            concatenate_patches(
+                [random_patch, other], time=None, check_behavior="raise"
+            )
+
+    def test_kind_accumulates(self, random_patch):
+        """A value a kept patch knows binds the patches after it."""
+        blank = random_patch.update_attrs(tag="")
+        a, b = random_patch.update_attrs(tag="a"), random_patch.update_attrs(tag="b")
+        with pytest.warns(UserWarning, match="'tag': \\('a', 'b'\\)"):
+            out = concatenate_patches([blank, a, b], time=None)
+        assert out[0].shape[1] == 2 * random_patch.shape[1]
+        assert out[0].attrs.tag == "a"
+
+    def test_rejected_patch_binds_nothing(self, random_patch):
+        """A patch dropped for its coordinates must not set the run's kind."""
+        blank = random_patch.update_attrs(tag="")
+        bad = random_patch.update_attrs(tag="a").update_coords(distance_min=5)
+        good = random_patch.update_attrs(tag="b")
+        with pytest.warns(UserWarning, match="not equal"):
+            out = concatenate_patches([blank, bad, good], time=None)
+        assert out[0].shape[1] == 2 * random_patch.shape[1]
+        assert out[0].attrs.tag == "b"
+
+    def test_dims_mismatch_raises_even_after_rejections(self, random_patch):
+        """Different dimensions raise whatever was rejected before them."""
+        blank = random_patch.update_attrs(tag="")
+        bad = random_patch.update_attrs(tag="a").update_coords(distance_min=5)
+        odd = random_patch.update_attrs(tag="b").rename_coords(time="money")
+        with pytest.warns(UserWarning, match="not equal"):
+            with pytest.raises(PatchCoordinateError, match="different dimensions"):
+                concatenate_patches([blank, bad, odd], time=None)
+        # another kind with other dimensions is merely skipped
+        other_kind = random_patch.update_attrs(tag="z").rename_coords(time="money")
+        with pytest.warns(UserWarning, match="not the same kind"):
+            out = concatenate_patches([random_patch, other_kind], time=None)
+        assert len(out) == 1
+
+    def test_kind_is_per_output(self, random_patch):
+        """Each output's kind comes from its own members only."""
+        blank = random_patch.update_attrs(tag="")
+        a = random_patch.update_attrs(tag="a")
+        out = concatenate_patches([blank, a], time=1)
+        assert [x.attrs.tag for x in out] == ["", "a"]
+
+    def test_nan_kind_value_is_filled(self, random_patch):
+        """A NaN kind value is missing and takes the known value."""
+        with config_context(patch_kind_attrs=("foo",)):
+            nan, known = (
+                random_patch.update_attrs(foo=np.nan),
+                random_patch.update_attrs(foo="a"),
+            )
+            out = concatenate_patches([nan, known], time=None)
+            assert out[0].attrs.foo == "a"
+
+    def test_different_kind_skipped_before_dims(self, random_patch):
+        """A different-kind patch is skipped whatever its dimensions."""
+        other = random_patch.update_attrs(tag="other").rename_coords(time="money")
+        with suppress_warnings(action="error"):
+            out = concatenate_patches(
+                [random_patch, other], time=None, check_behavior="ignore"
+            )
+        assert len(out) == 1
+        assert out[0].shape == random_patch.shape
+
+    def test_missing_units_adopt_the_known(self, random_patch):
+        """A patch without units concatenates and the output takes the known units."""
+        other = random_patch.set_units("m/s").update_attrs(
+            history=random_patch.attrs.history
+        )
+        with suppress_warnings(action="error"):
+            out = concatenate_patches([random_patch, other], time=None)
+        assert out[0].shape[1] == 2 * random_patch.shape[1]
+        assert dc.get_quantity(out[0].attrs.data_units) == dc.get_quantity("m/s")
+
+    def test_units_bind_to_the_first_known(self, random_patch):
+        """After a unitless first patch, the first known units set the bar."""
+        bare = random_patch.set_units(None)
+        metres = random_patch.set_units("m").update_attrs(history=bare.attrs.history)
+        km = random_patch.set_units("km").update_attrs(history=bare.attrs.history)
+        with pytest.warns(UserWarning, match="data units differ"):
+            out = concatenate_patches([bare, metres, km], time=None)
+        assert out[0].shape[1] == 2 * random_patch.shape[1]
+        assert dc.get_quantity(out[0].attrs.data_units) == dc.get_quantity("m")
+
+    def test_different_units_are_not_spliced(self, random_patch):
+        """Known, different data units are skipped or raise, never mixed."""
+        metres = random_patch.set_units("m")
+        km = random_patch.set_units("km").update_attrs(history=metres.attrs.history)
+        with pytest.warns(UserWarning, match="data units differ"):
+            out = concatenate_patches([metres, km], time=None)
+        assert out[0].shape == metres.shape
+        with pytest.raises(IncompatiblePatchError, match="data units differ"):
+            concatenate_patches([metres, km], time=None, check_behavior="raise")
+
+    def test_history_divergence_warns(self, random_patch):
+        """Splicing processed beside unprocessed data warns but proceeds."""
+        other = random_patch.pass_filter(time=(None, 10))
+        with pytest.warns(UserWarning, match="histories differ"):
+            out = concatenate_patches([random_patch, other], time=None)
+        assert out[0].shape[1] == 2 * random_patch.shape[1]
+        assert not any("pass_filter" in x for x in out[0].attrs.history)
 
     def test_duplicate_patches_existing_dim(self, random_patch):
         """Ensure equal (but distinct) patches are concatenated together.
@@ -819,6 +1071,41 @@ class TestStackPatches:
         """Ensure when dim_vary is not in patch an error is raised."""
         with pytest.raises(PatchCoordinateError):
             stack_patches(random_spool, dim_vary="money")
+
+    def test_different_kind_skipped(self, random_patch):
+        """A patch of another kind is not summed in."""
+        other = random_patch.update_attrs(tag="other")
+        msg = "not the same kind"
+        with pytest.warns(UserWarning, match=msg):
+            out = stack_patches([random_patch, other], check_behavior="warn")
+        assert np.allclose(out.data, random_patch.data)
+        with pytest.raises(IncompatiblePatchError, match=msg):
+            stack_patches([random_patch, other], check_behavior="raise")
+
+    def test_different_units_are_not_summed(self, random_patch):
+        """Stacking metres onto kilometres is refused; a unitless patch adopts."""
+        metres = random_patch.set_units("m")
+        km = random_patch.set_units("km")
+        with pytest.warns(UserWarning, match="data units differ"):
+            out = stack_patches([metres, km])
+        assert np.allclose(out.data, metres.data)
+        bare = random_patch.set_units(None)
+        out = stack_patches([bare, metres])
+        assert np.allclose(out.data, 2 * metres.data)
+        assert dc.get_quantity(out.attrs.data_units) == dc.get_quantity("m")
+        with pytest.warns(UserWarning, match="data units differ"):
+            out = stack_patches([bare, metres, km])
+        assert np.allclose(out.data, 2 * metres.data)
+
+    def test_rejected_patch_binds_nothing(self, random_patch):
+        """A patch dropped for its coordinates must not set the stack's kind."""
+        blank = random_patch.update_attrs(tag="")
+        bad = random_patch.update_attrs(tag="a").update_coords(distance_min=5)
+        good = random_patch.update_attrs(tag="b")
+        with pytest.warns(UserWarning, match="not equal"):
+            out = stack_patches([blank, bad, good])
+        assert np.allclose(out.data, 2 * random_patch.data)
+        assert out.attrs.tag == "b"
 
     def test_stack_coords(self):
         """

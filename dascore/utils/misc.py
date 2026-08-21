@@ -903,23 +903,6 @@ def _spool_map(
     return [x for y in client.map(new_func, spools) for x in y]
 
 
-def _dict_list_diffs(dict_list):
-    """Return the keys which are not equal dicts in a list."""
-    out = set()
-    first = dict_list[0]
-    first_keys = set(first)
-    for other in dict_list[1:]:
-        if other == first:
-            continue
-        other_keys = set(other)
-        out |= (other_keys - first_keys) | (first_keys - other_keys)
-        common_keys = other_keys & first_keys
-        for key in common_keys:
-            if first[key] != other[key]:
-                out.add(key)
-    return sorted(out)
-
-
 def is_range(value) -> bool:
     """True for a 2-tuple range (a ``(start, stop)`` selector)."""
     return isinstance(value, tuple) and len(value) == 2
