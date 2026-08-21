@@ -264,7 +264,24 @@ def _member_summaries(backend, members: pd.DataFrame) -> dict:
         summary = coord_summary(row)
         if summary is not None:
             out.setdefault(int(row["patch_id"]), {})[str(row["coord_name"])] = summary
+    if set(out) != set(ids):
+        # Re-planning a derived view collapses to the *grandparent's*
+        # members, whose ids this index does not use; matching them here
+        # would describe the wrong patches. The plan's own rows then say
+        # what the outputs hold, as they did before.
+        return {}
     return out
+
+
+def _is_cut(stored: Mapping, row: Mapping, plan_dim: str) -> bool:
+    """Whether this member loads less than the whole of its dimension."""
+    if row.get("_modified"):
+        return True
+    summary = stored.get(int(row["_patch_id"]), {}).get(plan_dim)
+    low, high = row.get(f"{plan_dim}_min"), row.get(f"{plan_dim}_max")
+    if summary is None or (pd.isnull(low) and pd.isnull(high)):
+        return False
+    return bool(low != summary.min or high != summary.max)
 
 
 def _trimmed_summary(summary: CoordSummary, row: Mapping, name: str) -> CoordSummary:
@@ -278,6 +295,8 @@ def _trimmed_summary(summary: CoordSummary, row: Mapping, name: str) -> CoordSum
     low, high = row.get(f"{name}_min"), row.get(f"{name}_max")
     if pd.isnull(low) and pd.isnull(high):
         return summary
+    if low == summary.min and high == summary.max:
+        return summary  # the whole of it, so its identity still holds
     step = row.get(f"{name}_step", summary.step)
     step = summary.step if pd.isnull(step) else step
     length = None
@@ -288,12 +307,14 @@ def _trimmed_summary(summary: CoordSummary, row: Mapping, name: str) -> CoordSum
     # built rather than copied: these values come from the plan's frame,
     # so they need the conforming a validated summary does (a pandas
     # Timestamp where the rest of the join speaks numpy would not compare)
+    units = row.get(f"_{name}_units", summary.units)
+    units = summary.units if units is None or pd.isnull(units) else units
     return CoordSummary(
         dtype=summary.dtype,
         min=low,
         max=high,
         step=step,
-        units=summary.units,
+        units=units,
         dims=summary.dims,
         len=length,
     )
@@ -331,6 +352,22 @@ def _union_summary(summaries: Sequence[CoordSummary]) -> CoordSummary:
             **blank,
         )
     )
+
+
+def _unvouched(trimmed: bool) -> dict:
+    """
+    What a summary may still say once its values are not vouched for.
+
+    A residual selection trims these values when the patch loads, so the
+    step and the sample count describe something the output will not
+    contain — and a summary which still looked evenly sampled would have
+    its identity recomputed from those very values by `_coord_record`.
+    The envelope stays: it still bounds where the output lies.
+    """
+    void: dict = {"fingerprint": None}
+    if trimmed:
+        void.update(step=None, len=None)
+    return void
 
 
 def _summary_kind(summary: CoordSummary) -> str:
@@ -394,14 +431,24 @@ def predicted_coords(
         for row in records:
             names.update(dict.fromkeys(stored.get(int(row["_patch_id"]), {})))
         described: dict[str, CoordSummary] = {}
+        # the plan's member rows are what will be *loaded*: they carry each
+        # member's trim, in the unit the plan settled on, so along the
+        # planned dimension they outrank what the index recorded
+        cut = any(_is_cut(stored, row, plan_dim) for row in records)
         for name in names:
             summaries = []
             for row in records:
                 summary = stored.get(int(row["_patch_id"]), {}).get(name)
                 if summary is None:
                     continue
-                if row.get("_modified"):
+                if name == plan_dim:
                     summary = _trimmed_summary(summary, row, name)
+                elif cut and plan_dim in summary.dims:
+                    # a coordinate riding a dimension being cut loses the
+                    # values the cut removes, which its summary still counts
+                    summary = summary.model_copy(
+                        update=dict(step=None, len=None, fingerprint=None)
+                    )
                 summaries.append(summary)
             if not summaries:
                 continue
@@ -431,19 +478,27 @@ def _describe(
         # nothing the members say about it survives
         return None
     rides = plan_dim == name or plan_dim in first.dims
+    trimmed = bool(set(first.dims) & trimmed_dims)
     if not rides:
         # every member states the same coordinate, or assembly refuses to
         # build the output at all; the identity survives when they agree
         agreed = len({x.fingerprint for x in summaries}) == 1
-        keep = agreed and not (set(first.dims) & trimmed_dims)
-        return first if keep else first.model_copy(update=dict(fingerprint=None))
+        if agreed and not trimmed:
+            return first
+        return first.model_copy(update=_unvouched(trimmed))
+    blank = all(pd.isnull(x.min) and pd.isnull(x.max) for x in summaries)
+    if blank and name == plan_dim:
+        # Nobody states any values along the dimension being joined, so
+        # there is nothing to join and nothing to say the plan's own row
+        # does not already say: it carries the identity the planner works
+        # out for such a dimension (see _member_key_digests). An
+        # auxiliary coordinate has no such row, so it is still described.
+        return None
     joined = join_summaries(summaries, snap_tolerance=snap_tolerance)
     if joined is None:
         return _union_summary(summaries)
-    if set(first.dims) & trimmed_dims:
-        # a residual trims these values at load, so the identity the join
-        # computed describes something the output will not contain
-        joined = joined.model_copy(update=dict(fingerprint=None, len=None))
+    if trimmed:
+        joined = joined.model_copy(update=_unvouched(True))
     return joined.model_copy(update=dict(dims=first.dims))
 
 
@@ -582,17 +637,25 @@ def _apply_predictions(
     min_name, max_name, step_name = f"{name}_min", f"{name}_max", f"{name}_step"
     unit_col = f"_{name}_units"
     out = outputs.copy(deep=False)
-    columns = {min_name: [], max_name: [], step_name: [], unit_col: []}
-    for output_id in out["output_id"]:
-        summary = predicted.get(int(output_id), {}).get(name)
-        columns[min_name].append(None if summary is None else summary.min)
-        columns[max_name].append(None if summary is None else summary.max)
-        columns[step_name].append(None if summary is None else summary.step)
-        units = None if summary is None else summary.units
-        columns[unit_col].append(None if units is None else get_quantity_str(units))
-    for column, values in columns.items():
-        if column in out.columns and any(x is not None for x in values):
-            out[column] = pd.Series(values, index=out.index, dtype=object)
+    described = [predicted.get(int(x), {}).get(name) for x in out["output_id"]]
+    if not any(x is not None for x in described):
+        return out
+    fields = {
+        min_name: lambda x: x.min,
+        max_name: lambda x: x.max,
+        step_name: lambda x: x.step,
+        unit_col: lambda x: None if x.units is None else get_quantity_str(x.units),
+    }
+    for column, read in fields.items():
+        if column not in out.columns:
+            continue
+        # an output the join could not describe keeps what the row said;
+        # only what was predicted is restated
+        kept = out[column].to_numpy(dtype=object, copy=True)
+        for index, summary in enumerate(described):
+            if summary is not None:
+                kept[index] = read(summary)
+        out[column] = pd.Series(kept, index=out.index, dtype=object)
     return out
 
 
@@ -1009,22 +1072,24 @@ def derived_catalog(
     stale_keys = stale_def_keys(parent_residuals, coord_dims_map, outputs.columns)
     if stale_keys:
         outputs = outputs.drop(columns=stale_keys)
-    predicted: dict[int, dict[str, CoordSummary]] = {}
-    aux_info: dict = {}
-    if mode == "concat":
-        # what the output will hold is decided by joining the members'
-        # summaries, the same join assembly runs on their values
-        predicted = predicted_coords(
-            None if parent is None else parent.backend,
-            trims,
-            name,
-            trimmed_dims=trimmed_dims,
-        )
-        outputs = _apply_predictions(outputs, predicted, name)
-    else:
-        aux_info = _aux_coord_info(
-            sources, trims, name, coord_dims_map, trimmed_dims, concat=False
-        )
+    # what an output will hold is decided by joining its members'
+    # summaries, the same join assembly runs on their values
+    snap = (
+        merge_kwargs.get("tolerance") if merge_kwargs.get("snap_coords", True) else None
+    )
+    predicted = predicted_coords(
+        None if parent is None else parent.backend,
+        trims,
+        name,
+        trimmed_dims=trimmed_dims,
+        snap_tolerance=snap,
+    )
+    outputs = _apply_predictions(outputs, predicted, name)
+    aux_info = {}
+    if not predicted:
+        # a re-plan whose members this index does not know: the auxiliary
+        # coordinates are described from the member rows, as before
+        aux_info = _aux_coord_info(sources, trims, name, coord_dims_map, trimmed_dims)
     records = _output_records(outputs, token, aux_info=aux_info, predicted=predicted)
     backend.write_sources(records)
     return PatchCatalog(backend=backend, resolver=resolver)
