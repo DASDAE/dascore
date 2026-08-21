@@ -4,9 +4,10 @@ execute:
   warning: false
 ---
 
-# Viz
+The [viz module](`dascore.viz`) holds DASCore's plots, and they hang off the object they are of: `Patch.viz` for data, `Inventory.viz` for the observing system which recorded it.
+
+# Patch
 The following provides some examples of patch visualization.
-See the [viz module documentation](`dascore.viz`) for a list of visualization functions
 
 ## Waterfall
 The [`waterfall patch function`](`dascore.viz.waterfall`) creates a waterfall plot of the patch data.
@@ -72,3 +73,49 @@ patch = dc.examples.get_example_patch(
 )
 patch.viz.wiggle(show=True);
 ```
+
+# Inventory
+
+An [inventory](inventory.qmd) plots what it knows about the fiber, with no data present. The examples below use the tunnel deployment the [tunnel recipe](../recipes/tunnel_inventory.qmd) builds.
+
+```{python}
+import dascore as dc
+
+inventory = dc.get_example_inventory("tunnel")
+```
+
+## Path
+
+The [`path plot`](`dascore.viz.inventory.path`) draws every track along the fiber against optical distance. `distance=` is the window to draw, in the same coordinate; this deployment starts with 1.5 km of telemetry lead-in, which would otherwise crush the instrumented part into a corner.
+
+```{python}
+inventory.viz.path(time="2024-07-01", distance=(1495, 1780), show=True);
+```
+
+The boreholes label themselves 3, 2, 1 — the fiber works back through them — and the splices are ticks rather than zero-width boxes.
+
+## Map
+
+The [`map plot`](`dascore.viz.inventory.map_path`) draws where the fiber physically goes, in two axes of the inventory's coordinate reference system. `x` and `y` choose them: a borehole runs straight down, so the default plan view collapses it to a point.
+
+```{python}
+inventory.viz.map(x="x", y="z", color="section", time="2024-07-01", show=True);
+```
+
+The break near the middle of the trench is the slack coil, which nobody surveyed. Unplaced fiber is left out rather than bridged, since a made-up polyline would be worse than a gap.
+
+`color=` also takes a geometry column, a label group, or `"coupling"`. Its default is optical distance, which is how a distance read off a waterfall is found on the ground:
+
+```{python}
+inventory.viz.map(x="x", y="z", time="2024-07-01", show=True);
+```
+
+## Timeline
+
+The [`timeline plot`](`dascore.viz.inventory.timeline`) draws when each acquisition and each optical path was valid. An epoch which states no start or no end is unbounded, and runs off that side of the axis hatched.
+
+```{python}
+inventory.viz.timeline(show=True);
+```
+
+The path lane splits on the first of September, which is the day the trench cable was repaired.

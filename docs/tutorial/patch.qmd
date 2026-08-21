@@ -319,6 +319,29 @@ The path is part of the id, so a derived id is not stable across machines. A sto
 
 An operation which hands the patch straight back did nothing, and records nothing. Neither id is part of `Patch.equals`: two patches holding the same data are equal however they were made.
 
+### What builds a patch, and what operates on one
+
+`new`, `update` and `update_attrs` carry both ids through, unless you name one and set it yourself. They are not operations — they are how a patch function assembles its own result — so stamping there would count every operation twice.
+
+That has a consequence worth knowing: changing data through `new` yourself leaves the ids saying the data is unchanged and the route is the same one.
+
+```{python}
+doubled = patch.new(data=patch.data * 2)
+
+# It says it is the same data by the same route, because nothing told it otherwise.
+assert doubled.attrs.patch_id == patch.attrs.patch_id
+assert doubled.attrs.processing_id == patch.attrs.processing_id
+```
+
+The ids describe what DASCore was asked to do. Work done through [patch functions](processing.qmd) is described; work done by reaching past them is not. Building a patch from arrays rather than from another patch is the honest case, and mints a new `patch_id`:
+
+```{python}
+import numpy as np
+
+built = dc.Patch(data=np.asarray(patch.data), coords=patch.coords, dims=patch.dims)
+assert built.attrs.patch_id != patch.attrs.patch_id
+```
+
 Set `patch_provenance="disabled"` to stop maintaining them:
 
 ```{python}

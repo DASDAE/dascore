@@ -272,6 +272,40 @@ class TestTheRulesOnRealPatches:
         first = dc.get_example_patch("random_das")
         assert first.attrs.patch_id != dc.get_example_patch("random_das").attrs.patch_id
 
+    @pytest.mark.parametrize(
+        "builder",
+        [
+            lambda p: p.new(data=p.data),
+            lambda p: p.new(data=np.asarray(p.data) * 2),
+            lambda p: p.update(data=np.asarray(p.data) * 2),
+            lambda p: p.update_attrs(tag="rebuilt"),
+        ],
+    )
+    def test_building_a_patch_is_not_operating_on_one(self, patch, builder):
+        """
+        `new` and `update` carry both ids through untouched.
+
+        They are how a patch function assembles its own result, so
+        stamping here would count every operation twice. The cost is that
+        changing data through `new` yourself leaves the ids saying it did
+        not change -- documented in the patch tutorial, and pinned here
+        because it is a policy rather than an accident.
+        """
+        # Operated on first: an unprocessed patch states no route, so
+        # preserving it would be satisfied by dropping it.
+        processed = patch.abs()
+        assert processed.attrs.processing_id != NOTHING_DONE
+        out = builder(processed)
+        assert out.attrs.patch_id == processed.attrs.patch_id
+        assert out.attrs.processing_id == processed.attrs.processing_id
+
+    def test_a_patch_built_from_arrays_is_new_data(self, patch):
+        """Naming no source, it is not the same data as anything else."""
+        built = dc.Patch(
+            data=np.asarray(patch.data), coords=patch.coords, dims=patch.dims
+        )
+        assert built.attrs.patch_id != patch.attrs.patch_id
+
     def test_an_operation_advances_what_was_done(self, patch):
         """Which is what the id is for."""
         out = patch.normalize("time")

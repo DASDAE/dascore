@@ -12,12 +12,16 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: CheckPRChangelog-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
 jobs:
   check_pr_changelog:
     runs-on: ubuntu-latest
 
     # only run if CI isn't turned off
-    if: "!contains(github.event.pull_request.labels.*.name, 'no_ci')"
+    if: github.event.pull_request.state == 'open' && !contains(github.event.pull_request.labels.*.name, 'no_ci')
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1

@@ -2,9 +2,6 @@
 
 from __future__ import annotations
 
-import datetime
-from contextlib import suppress
-
 import numpy as np
 import pandas as pd
 import pytest
@@ -212,99 +209,51 @@ class TestDimensionSpelling:
 
     def test_incomparable_range_refused(self):
         """A range whose ends cannot be compared says so, not TypeError."""
-        frame = pd.DataFrame({"time_start": [1.0, 2.0], "time_end": TIMES[:2]})
+        when = np.datetime64("2020-01-01", "ns")
+        frame = pd.DataFrame({"distance_start": [1.0], "distance_end": [when]})
         with pytest.raises(ParameterError, match="cannot be compared"):
             AnnotationSet(frame, dims=DIMS)
 
-    def test_a_dimension_of_text_is_refused(self):
-        """A coordinate is a number, a time or a duration; a label is none."""
-        frame = pd.DataFrame({"distance_start": ["alpha"], "distance_end": ["omega"]})
+    @pytest.mark.parametrize("spelling", ["distance", "distance_start"])
+    def test_text_in_a_dimension_refused(self, spelling):
+        """A dimension is a coordinate, so a word is no place on it."""
+        frame = pd.DataFrame({spelling: ["alpha"]})
+        if spelling != "distance":
+            frame["distance_end"] = ["omega"]
         with pytest.raises(ParameterError, match="neither numbers, times"):
             AnnotationSet(frame, dims=DIMS)
 
-    def test_a_dimension_of_text_is_not_quietly_dropped(self):
-        """Text a time parser reads as NaT is refused, not deleted."""
-        frame = pd.DataFrame({"time_start": ["alpha", "beta"], "time_end": ["c", "d"]})
-        with pytest.raises(ParameterError, match="neither numbers, times"):
-            AnnotationSet(frame, dims=DIMS)
-
-    def test_numbers_written_as_text_are_numbers(self):
-        """A range of numbers compares as numbers, not by its spelling."""
-        frame = pd.DataFrame({"distance_start": ["9"], "distance_end": ["10"]})
-        assert AnnotationSet(frame, dims=DIMS)[0].region.bounds["distance"] == (9, 10)
-
-    def test_a_backwards_range_of_text_numbers_is_refused(self):
-        """'10' before '9' is backwards as numbers, whatever text sorts as."""
-        frame = pd.DataFrame({"distance_start": ["10"], "distance_end": ["9"]})
-        with pytest.raises(ParameterError, match="ends before it starts"):
-            AnnotationSet(frame, dims=DIMS)
-
-    def test_a_blank_beside_a_time_keeps_the_column_a_time(self):
-        """A blank cell states nothing, so it does not make the column text."""
+    def test_numeric_text_in_a_dimension_is_read_as_numbers(self):
+        """Read as a stored table reads it, so the two cannot disagree."""
         frame = pd.DataFrame(
-            {"time_start": ["2020-01-01T00:00:00", ""], "time_end": [TIMES[1], None]}
+            {"distance_start": ["1.5", None], "distance_end": ["2", None]}
         )
         out = AnnotationSet(frame, dims=DIMS)
-        assert out.io.to_dataframe()["time_start"].dtype == np.dtype("datetime64[ns]")
-        assert out[1].region.bounds == {}
+        assert out[0].region.bounds["distance"] == (1.5, 2.0)
+        assert "distance" not in out[1].region.bounds
 
     @pytest.mark.parametrize(
-        "column",
-        [
-            pytest.param(pd.Series([True, False]), id="boolean"),
-            pytest.param(pd.Series([1 + 2j]), id="complex"),
-            pytest.param(pd.Series([True], dtype=object), id="boolean-object"),
-        ],
+        "text", ["2020-01-01 10:00:00", "2020-01-01T10:00:00Z", "2020-01-01T10:00:00"]
     )
-    def test_a_dimension_which_states_no_coordinate(self, column):
-        """A true is not a second past the epoch, and is refused as neither."""
+    def test_time_text_in_any_spelling_is_a_time(self, text):
+        """What `to_csv` writes and `read_csv` hands back is a time here too."""
+        out = AnnotationSet(pd.DataFrame({"time": [text]}), dims=DIMS)
+        assert out[0].region.bounds["time"][0] == np.datetime64("2020-01-01T10:00:00")
+
+    def test_a_malformed_date_is_refused_not_a_value_error(self):
+        """Shaped like a date without being one is text, and said to be."""
         with pytest.raises(ParameterError, match="neither numbers, times"):
-            AnnotationSet(pd.DataFrame({"distance": column}), dims=DIMS)
+            AnnotationSet(pd.DataFrame({"time": ["2020-13-45"]}), dims=DIMS)
 
-    def test_a_dimension_mixing_numbers_and_times(self):
-        """A number already read as one is not re-read as an epoch."""
-        cells = pd.Series([1, np.datetime64("2020-01-01")], dtype=object)
-        with pytest.raises(ParameterError, match="neither numbers, times"):
-            AnnotationSet(pd.DataFrame({"time": cells}), dims=DIMS)
-
-    def test_a_dimension_no_coordinate_could_hold(self):
-        """A year no coordinate holds is refused, never raised past the set.
-
-        Whether the conversion overflows or quietly wraps is numpy's to
-        decide, and its versions decide differently; what is pinned here is
-        that neither reaches the caller as an implementation error.
-        """
-        frame = pd.DataFrame({"time": ["1000", "2020-01-01"]})
-        with suppress(ParameterError):
+    @pytest.mark.parametrize(
+        "values",
+        [[True], pd.array([True, None], dtype="boolean"), [np.True_, None]],
+    )
+    def test_a_boolean_dimension_refused(self, values):
+        """A truth value is no place on an axis, numpy's and a nullable one too."""
+        frame = pd.DataFrame({"distance": pd.Series(values, dtype=object)})
+        with pytest.raises(ParameterError, match="numbers or times"):
             AnnotationSet(frame, dims=DIMS)
-
-    @pytest.mark.parametrize(
-        "cell",
-        [
-            pytest.param(np.datetime64("2020-01-01"), id="time"),
-            pytest.param(np.timedelta64(1, "s"), id="duration"),
-        ],
-    )
-    def test_a_dimension_of_objects_still_reads(self, cell):
-        """A frame may hold coordinates in an object column; they are read."""
-        frame = pd.DataFrame({"offset": pd.Series([cell], dtype=object)})
-        held = AnnotationSet(frame, dims=("offset",)).io.to_dataframe()["offset"]
-        assert held.dtype.kind in "Mm"
-
-    def test_a_dimension_of_python_durations(self):
-        """A frame may hold the stdlib's own duration; it is read as one."""
-        cells = pd.Series([datetime.timedelta(seconds=1)], dtype=object)
-        held = AnnotationSet(
-            pd.DataFrame({"offset": cells}), dims=("offset",)
-        ).io.to_dataframe()["offset"]
-        assert held.dtype == np.dtype("timedelta64[ns]")
-
-    def test_a_duration_dimension_is_a_coordinate(self):
-        """A dimension may be an offset from something, which is a duration."""
-        spans = np.array([1, 3], dtype="timedelta64[s]")
-        frame = pd.DataFrame({"offset_start": spans[:1], "offset_end": spans[1:]})
-        out = AnnotationSet(frame, dims=("offset",))
-        assert out.io.to_dataframe()["offset_start"].dtype == "timedelta64[ns]"
 
     def test_datetime_endpoints_keep_their_type(self):
         """A time bound is a time, not the integer behind it."""
@@ -377,6 +326,62 @@ class TestColumns:
         frame = pd.DataFrame({"note": values}).astype(dtype)
         out = AnnotationSet(frame, dims=DIMS, columns={"note": {"dtype": dtype}})
         assert len(out) == 2
+
+    @pytest.mark.parametrize("declared", ["str", "string", "object"])
+    def test_a_text_dtype_matches_any_text_spelling(self, declared):
+        """
+        Pandas spells text as `object`, `str` or `string` depending on its
+        version and on what built the column; a declaration of any of them
+        is a declaration of text.
+        """
+        for frame in (
+            pd.DataFrame({"note": pd.Series(["a"], dtype=object)}),
+            pd.DataFrame({"note": pd.Series(["a"], dtype="string")}),
+        ):
+            out = AnnotationSet(frame, dims=DIMS, columns={"note": {"dtype": declared}})
+            assert len(out) == 1
+        with pytest.raises(ParameterError, match="states dtype"):
+            AnnotationSet(
+                pd.DataFrame({"note": [1.0]}),
+                dims=DIMS,
+                columns={"note": {"dtype": declared}},
+            )
+
+    def test_an_object_column_is_text_only_if_its_cells_are(self):
+        """`object` may hold anything, so a text declaration reads its cells."""
+        frame = pd.DataFrame({"note": pd.Series(["a", {"x": 1}], dtype=object)})
+        with pytest.raises(ParameterError, match="states dtype"):
+            AnnotationSet(frame, dims=DIMS, columns={"note": {"dtype": "string"}})
+        # Declared as what it is, an object column holding anything is fine.
+        out = AnnotationSet(frame, dims=DIMS, columns={"note": {"dtype": "object"}})
+        assert len(out) == 2
+
+    def test_an_extra_holding_timedeltas_is_held_at_nanoseconds(self):
+        """Every time is held at DASCore's resolution, an extra's too."""
+        frame = pd.DataFrame({"lag": np.array([1, 5], dtype="timedelta64[s]")})
+        out = AnnotationSet(frame, dims=DIMS)
+        held = out.io.to_dataframe()["lag"]
+        assert held.dtype == np.dtype("timedelta64[ns]")
+        assert held.iloc[0] == np.timedelta64(1, "s")
+
+    def test_a_categorical_column_builds(self):
+        """A categorical extra is carried like any other, blank cells and all."""
+        frame = pd.DataFrame(
+            {
+                "distance_start": [0.0, 1.0],
+                "distance_end": [1.0, 2.0],
+                "note": pd.Series(["a", ""], dtype="category"),
+            }
+        )
+        out = AnnotationSet(frame, dims=DIMS)
+        assert out[0].extra["note"] == "a"
+        assert "note" not in out[1].extra
+
+    def test_a_column_named_by_something_other_than_a_string(self):
+        """A table names a column by a string, so a set does too."""
+        frame = pd.DataFrame({"distance_start": [0.0], "distance_end": [1.0], 1: ["x"]})
+        with pytest.raises(ParameterError, match="other than a string"):
+            AnnotationSet(frame, dims=DIMS)
 
     def test_category_needs_no_categories(self):
         """A column documented as categorical says so, not which categories."""
@@ -670,6 +675,53 @@ class TestGeometryKinds:
 class TestVertices:
     """The vertices frame is checked against the rows which need it."""
 
+    def test_seq_is_read_as_a_number(self):
+        """Text ordinals order '10' before '2'; a vertex states a number."""
+        frame = pd.DataFrame({"id": ["p1"], "geometry": ["path"]})
+        vertices = pd.DataFrame(
+            {"id": ["p1"] * 3, "seq": ["10", "2", "1"], "distance": [3.0, 2.0, 1.0]}
+        )
+        out = AnnotationSet(frame, dims=DIMS, vertices=vertices)
+        vertices = out.io.to_vertices()
+        assert vertices["seq"].tolist() == [1, 2, 10]
+        assert vertices["distance"].tolist() == [1.0, 2.0, 3.0]
+
+    @pytest.mark.parametrize(
+        "seq", [["first", "second"], [True, False], [np.True_, np.False_]]
+    )
+    def test_non_numeric_seq_refused(self, seq):
+        """What the loader refuses to read, the set refuses to hold -- a truth
+        value included, which `to_numeric` would otherwise count as 1 or 0.
+        """
+        frame = pd.DataFrame({"id": ["p1"], "geometry": ["path"]})
+        vertices = pd.DataFrame(
+            {
+                "id": ["p1"] * 2,
+                "seq": pd.Series(seq, dtype=object),
+                "distance": [1.0, 2.0],
+            }
+        )
+        with pytest.raises(ParameterError, match="non-numeric seq"):
+            AnnotationSet(frame, dims=DIMS, vertices=vertices)
+
+    def test_text_in_a_vertex_dimension_refused(self):
+        """A vertex places a shape, so its dimensions are numbers or times too."""
+        frame = pd.DataFrame({"id": ["p1"], "geometry": ["path"]})
+        vertices = pd.DataFrame(
+            {"id": ["p1"] * 2, "seq": [0, 1], "distance": ["here", "there"]}
+        )
+        with pytest.raises(ParameterError, match="neither numbers, times"):
+            AnnotationSet(frame, dims=DIMS, vertices=vertices)
+
+    def test_a_blank_seq_is_no_seq(self):
+        """The empty string is how a table spells an unset cell, here too."""
+        frame = pd.DataFrame({"id": ["p1"], "geometry": ["path"]})
+        vertices = pd.DataFrame(
+            {"id": ["p1"] * 2, "seq": ["", "1"], "distance": [1.0, 2.0]}
+        )
+        with pytest.raises(ParameterError, match="state no seq"):
+            AnnotationSet(frame, dims=DIMS, vertices=vertices)
+
     def test_bounds_derived_from_vertices(self, path_set):
         """A path's bounding region is the box its vertices fill."""
         assert path_set[0].region.bounds["distance"] == (1.0, 9.0)
@@ -864,25 +916,12 @@ class TestVertexOrder:
         out = AnnotationSet(self._frame(), dims=DIMS, vertices=vertices)
         assert out[0].geometry.vertices["distance"] == (0.0, 1.0, 2.0, 10.0)
 
-    @pytest.mark.parametrize(
-        "order",
-        [
-            pytest.param([True, False], id="boolean"),
-            pytest.param([1 + 2j, 3 + 4j], id="complex"),
-        ],
-    )
-    def test_an_order_which_does_not_count(self, order):
-        """A true and an imaginary number place nothing in a sequence."""
-        vertices = pd.DataFrame({"id": ["p"] * 2, "seq": order, "distance": [0.0, 1.0]})
-        with pytest.raises(ParameterError, match="does not count"):
-            AnnotationSet(self._frame(), dims=DIMS, vertices=vertices)
-
-    def test_order_which_is_not_a_number_refused(self):
-        """A shape ordered by a label has no order a reader can keep."""
+    def test_an_imaginary_order(self):
+        """`to_numeric` hands a complex column back; it places nothing."""
         vertices = pd.DataFrame(
-            {"id": ["p"] * 2, "seq": ["first", "second"], "distance": [0.0, 1.0]}
+            {"id": ["p"] * 2, "seq": [1 + 2j, 3 + 4j], "distance": [0.0, 1.0]}
         )
-        with pytest.raises(ParameterError, match="not a number"):
+        with pytest.raises(ParameterError, match="non-numeric seq"):
             AnnotationSet(self._frame(), dims=DIMS, vertices=vertices)
 
     def test_a_blank_vertex_cell_says_so(self):

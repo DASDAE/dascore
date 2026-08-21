@@ -596,7 +596,8 @@ class AnnotationColumn(_AnnotationModel):
 
     Documenting a column never gates it: an undeclared column is carried
     as an extra just the same. A stated dtype is checked, so a column
-    which says what it holds must hold it.
+    which says what it holds must hold it; a column read back from a CSV,
+    which keeps no types, is given its stated dtype again.
     """
 
     description: str = Field(default="", description="What the column means.")
@@ -772,8 +773,8 @@ class AnnotationSet(NamespaceOwner):
             attrs, dims, creation_info, acquisition_key, history, columns
         )
         frame = _coerce_frame(data, "annotations")
-        # Blanks first: a blank cell states nothing, and a column holding
-        # one is only the times it states once that is known.
+        # Blanks first: a blank cell beside times written as text is unset,
+        # not a word the time column holds.
         declared = _declared_dtypes(self._attrs)
         frame = _normalize_times(_normalize_blanks(frame, declared), self._attrs.dims)
         spellings = _read_spellings(frame, self._attrs.dims)
@@ -954,6 +955,14 @@ def _coerce_frame(data, what: str) -> pd.DataFrame:
             "states one thing."
         )
         raise ParameterError(msg)
+    # A table names a column by a string, so any other name would come
+    # back from a saved set as the string it was written as.
+    if odd := [repr(x) for x in frame.columns if not isinstance(x, str)][:5]:
+        msg = (
+            f"The {what} name the column(s) {', '.join(odd)} by something other "
+            "than a string, which is what a table names a column by."
+        )
+        raise ParameterError(msg)
     return frame
 
 
@@ -1022,7 +1031,7 @@ def _check_columns(frame: pd.DataFrame, attrs: AnnotationSetAttrs) -> None:
         # Compared by name rather than by identity: a column documented as
         # `category` says it is categorical, not which categories it holds,
         # and the two dtypes are otherwise unequal.
-        if declared.name != actual.name:
+        if not _dtype_matches(declared, frame[name]):
             # A time is held at nanoseconds whatever it arrived as, so
             # another unit is not a column this set could ever hold, and
             # saying it "holds datetime64[ns]" reads as a mistake the
@@ -1035,6 +1044,28 @@ def _check_columns(frame: pd.DataFrame, attrs: AnnotationSetAttrs) -> None:
                 raise ParameterError(msg)
             msg = f"The column {name!r} states dtype {column.dtype} but holds {actual}."
             raise ParameterError(msg)
+
+
+TEXT_DTYPES = frozenset({"object", "str", "string"})
+
+
+def _dtype_matches(declared, series: pd.Series) -> bool:
+    """
+    Whether a column holds its declared dtype, however pandas spells text.
+
+    Text has several spellings -- `object`, `str`, `string` -- and which
+    one a column gets depends on the pandas version and on what wrote it,
+    so a declaration of any of them is a declaration of text. An `object`
+    column may hold anything, so it is text only if its cells are.
+    """
+    actual = series.dtype
+    if declared.name == actual.name:
+        return True
+    if declared.name not in TEXT_DTYPES or actual.name not in TEXT_DTYPES:
+        return False
+    return actual.name != "object" or all(
+        isinstance(x, str) for x in series if _stated(x)
+    )
 
 
 def _check_ranges(frame: pd.DataFrame, spellings) -> None:
@@ -1250,6 +1281,7 @@ def _check_vertices(vertices, frame, ids, dims) -> pd.DataFrame:
         rows = ", ".join(str(x) for x in vertices.index[vertices["seq"].isnull()][:5])
         msg = f"Vertex row(s) {rows} state no seq, so they have no place in the order."
         raise ParameterError(msg)
+    vertices = vertices.assign(seq=read_ordinal(vertices["seq"]))
     blank = vertices[vertex_dims].isnull().any(axis=1)
     if blank.any():
         rows = ", ".join(str(x) for x in vertices.index[blank][:5])
@@ -1283,34 +1315,14 @@ def _check_vertices(vertices, frame, ids, dims) -> pd.DataFrame:
 
 def _type_vertices(vertices: pd.DataFrame, vertex_dims) -> pd.DataFrame:
     """
-    Read a vertex frame's order and coordinates as the values they state.
+    Read a vertex frame's coordinates as the values they state.
 
-    The order is a number so the vertices sort by it: text sorts by its
-    spelling, which puts vertex 10 between 1 and 2 and draws a shape
-    nobody stated. The dimensions are read as the set's own are, so a
-    frame and the table it was written to draw one curve.
+    The dimensions are read as the set's own are, so a frame and the table
+    it was written to draw one curve. The order is `read_ordinal`'s.
     """
     changed = {}
-    try:
-        order = pd.to_numeric(vertices[_ORDER])
-    except (TypeError, ValueError) as error:
-        msg = (
-            f"The vertices state a {_ORDER} which is not a number: {error}. A "
-            "vertex states its place in the order as one, since that is what "
-            "orders it."
-        )
-        raise ParameterError(msg) from error
-    # The kind it converted to, as a dimension is read: `to_numeric` hands
-    # a boolean or a complex column straight back, and neither counts.
-    if order.dtype.kind not in _NUMBER_KINDS:
-        msg = (
-            f"The vertices state a {_ORDER} of {order.dtype}, which does not "
-            "count: a vertex states its place in the order as a number."
-        )
-        raise ParameterError(msg)
-    changed[_ORDER] = order
     for name in vertex_dims:
-        read = _read_dimension(vertices[name])
+        read = read_dimension(vertices[name])
         if read is not vertices[name]:
             changed[name] = read
     return _assign(vertices, changed)
@@ -1450,105 +1462,122 @@ def _normalize_basis(frame, dims) -> pd.DataFrame:
     return frame.assign(basis=pd.Series(read, index=frame.index, dtype=object))
 
 
-def _stated_cells(series: pd.Series) -> pd.Series:
-    """Return which cells of a column state anything, as a plain mask."""
-    # Through object first: mapping a categorical column hands back a
-    # categorical, which has no `any`.
-    return pd.Series([bool(_stated(x)) for x in series], index=series.index, dtype=bool)
-
-
-def _states_times(series: pd.Series) -> bool:
-    """Whether every cell a column states is a datetime written as text."""
-    stated = [x for x in series if _stated(x)]
-    return bool(stated) and all(
-        isinstance(x, str) and _DATETIME_TEXT.match(x) for x in stated
-    )
-
-
-def _read_dimension(series: pd.Series) -> pd.Series:
+def read_dimension(series: pd.Series, where: str = "") -> pd.Series:
     """
-    Return a dimension column as the numbers, times or durations it states.
+    Read a dimension column as the numbers or times its cells state.
 
-    A dimension is a coordinate, so a set holds one as something a
-    coordinate can be. Text which merely looks like a number compares by
-    its spelling -- '10' sorts before '9' -- so a range stated in it reads
-    as one which ends before it starts, and a set holding it cannot be
-    written and read back at all: the reader types these columns whether
-    the frame did or not. Reading them the same way on both sides is what
-    makes a stored set the set it was.
-
-    Numbers are tried first because every datetime spelling DASCore writes
-    is an ISO string, which is not a number, while seconds from the epoch
-    are a number a distance column would lose to a date.
+    Numbers are tried first because every datetime spelling this writes is
+    an ISO string, which is not a number, while seconds from the epoch are
+    a number a distance column would lose to a date. Times arriving at
+    another resolution are held at nanoseconds, the resolution DASCore
+    keeps them at, and a column holding neither numbers nor times is
+    refused: a dimension is a coordinate, and the set's own store would
+    refuse to read it back. A duration is a coordinate too, and is read
+    where the cells hold one. `where` names the source in the refusal.
     """
     kind = getattr(series.dtype, "kind", "")
-    if kind in _NUMBER_KINDS:
+    if kind in "iuf":
         return series
     if kind == "M":
-        return series if series.dtype == _NS_TIME else to_datetime64(series)
+        return (
+            series
+            if series.dtype == np.dtype("datetime64[ns]")
+            else to_datetime64(series)
+        )
     if kind == "m":
-        return series if series.dtype == _NS_SPAN else to_timedelta64(series)
-    # Only a column of things this has to read is read: a boolean or a
-    # complex column states no coordinate, and handing one to a time
-    # parser reads true as a second past the epoch.
-    if kind not in _TEXT_KINDS:
-        raise _not_a_coordinate(series)
+        return (
+            series
+            if series.dtype == np.dtype("timedelta64[ns]")
+            else to_timedelta64(series)
+        )
     stated = _stated_cells(series)
     if not stated.any():
-        # A column no row states says nothing about what it holds, and
-        # inventing a type for it would be inventing what it says.
         return series
-    with suppress(TypeError, ValueError):
-        # The result's own kind, not merely that it converted: `to_numeric`
-        # hands a boolean or a complex column straight back, and neither is
-        # a coordinate anything can be placed at.
-        if (read := pd.to_numeric(series)).dtype.kind in _NUMBER_KINDS:
-            return read
-    # A number already read as one cannot also be a time: converting the
-    # column would read that number as an epoch, quietly placing it in
-    # 1970 rather than where the row says.
-    if not any(_is_number(x) for x in series[stated]):
-        # Through `_scalar` first: python's own date and duration types
-        # are coordinates a frame may plainly hold, and the converters
-        # below read numpy's.
-        cells = series[stated].map(_scalar)
-        readers = ((to_datetime64, _NS_TIME), (to_timedelta64, _NS_SPAN))
-        # A duration is asked about first where the cells are plainly
-        # durations: the time reader takes one as a count from the epoch,
-        # so trying it first would read an offset of a second as 1970.
-        # Text keeps the other order, being the spelling times are written
-        # in and durations are not.
-        if all(isinstance(x, np.timedelta64 | datetime.timedelta) for x in cells):
-            readers = tuple(reversed(readers))
-        for read, dtype in readers:
-            # AssertionError and NotImplementedError: these two state that
-            # way what they cannot read; OverflowError: a year no
-            # coordinate holds.
-            with suppress(
-                TypeError,
-                ValueError,
-                AssertionError,
-                NotImplementedError,
-                OverflowError,
-            ):
-                values = np.asarray(read(cells))
-                # Checked rather than trusted: these read text nobody can
-                # place -- a label, a name -- as NaT rather than refusing
-                # it, and taking that would delete the cell rather than
-                # say it is not a coordinate.
-                if not pd.isnull(values).any():
-                    return _restate(series, stated, values, dtype)
-    raise _not_a_coordinate(series)
-
-
-def _not_a_coordinate(series: pd.Series) -> ParameterError:
-    """Say that a column holds no coordinate an annotation can be placed at."""
+    # Through `_scalar`: python's own date and duration types are
+    # coordinates a frame may plainly hold, and the readers below take
+    # numpy's.
+    cells = series[stated].map(_scalar)
+    if kind != "b" and not any(_is_bool(x) for x in cells):
+        with suppress(TypeError, ValueError):
+            # The kind it converted *to*, not merely that it converted:
+            # `to_numeric` hands a complex column straight back, and a
+            # complex number is no coordinate.
+            if (read := pd.to_numeric(series)).dtype.kind in _NUMBER_KINDS:
+                return read
+        # A number already read as one cannot also be a time: reading the
+        # column as times would take that number for an epoch and place
+        # the row in 1970 rather than where it says.
+        if not any(_is_number(x) for x in cells):
+            readers = ((to_datetime64, _NS_TIME), (to_timedelta64, _NS_SPAN))
+            # A duration is asked about first where the cells plainly are
+            # durations: the time reader takes one as a count from the
+            # epoch. Text keeps the other order, being the spelling a time
+            # is written in and a duration is not.
+            if all(isinstance(x, np.timedelta64 | datetime.timedelta) for x in cells):
+                readers = tuple(reversed(readers))
+            for read_as, dtype in readers:
+                # AssertionError and NotImplementedError: these two state
+                # that way what they cannot read; OverflowError: a year no
+                # coordinate holds.
+                with suppress(
+                    TypeError,
+                    ValueError,
+                    AssertionError,
+                    NotImplementedError,
+                    OverflowError,
+                ):
+                    values = np.asarray(read_as(cells))
+                    # Checked rather than trusted: these read text nobody
+                    # can place -- a label, a name -- as NaT rather than
+                    # refusing it, and taking that would delete the cell
+                    # rather than say it is not a coordinate.
+                    if not pd.isnull(values).any():
+                        out = pd.Series(
+                            np.array("NaT", dtype=dtype),
+                            index=series.index,
+                            dtype=dtype,
+                        )
+                        out[stated] = values
+                        return out
+        msg = (
+            f"The column {series.name!r}{where} states neither numbers, times "
+            "nor durations, so its values are not coordinates an annotation "
+            "can be placed at."
+        )
+        raise ParameterError(msg)
     msg = (
-        f"The column {str(series.name)!r} states neither numbers, times nor "
-        "durations, so its values are not coordinates an annotation can be "
-        "placed at. One column states one of them."
+        f"The column {series.name!r}{where} holds {cells.iloc[0]!r}, where a "
+        "dimension holds numbers or times."
     )
-    return ParameterError(msg)
+    raise ParameterError(msg)
+
+
+def read_ordinal(series: pd.Series, where: str = "") -> pd.Series:
+    """Read the vertex order column as the numbers it states."""
+    # Refused before `to_numeric`, which would count a truth value as 1 or 0.
+    if getattr(series.dtype, "kind", "") == "b" or any(_is_bool(x) for x in series):
+        error = "it holds truth values"
+    else:
+        try:
+            order = pd.to_numeric(series)
+        except (TypeError, ValueError) as exc:
+            error = str(exc)
+        else:
+            # As a dimension is read: `to_numeric` hands a complex column
+            # straight back, and an imaginary place is no place in an order.
+            if order.dtype.kind in _NUMBER_KINDS:
+                return order
+            error = f"it holds {order.dtype}"
+    msg = (
+        f"The vertices{where} state a non-numeric {_VERTEX_COLUMNS[1]}: "
+        f"{error}. A vertex states its place in the order as a number."
+    )
+    raise ParameterError(msg)
+
+
+def _is_bool(value) -> bool:
+    """Whether a cell is a truth value, numpy's included."""
+    return isinstance(value, bool | np.bool_)
 
 
 def _is_number(value) -> bool:
@@ -1563,13 +1592,6 @@ def _is_number(value) -> bool:
     return isinstance(value, numbers.Number | np.bool_)
 
 
-def _restate(series: pd.Series, stated: pd.Series, values, dtype) -> pd.Series:
-    """Put converted cells back where the column stated them."""
-    out = pd.Series(np.array("NaT", dtype=dtype), index=series.index, dtype=dtype)
-    out[stated] = np.asarray(values)
-    return out
-
-
 def _type_dimensions(frame: pd.DataFrame, spellings) -> pd.DataFrame:
     """Read every column which spells a dimension as the coordinates it states."""
     named = {x for one in spellings.values() for x in (one.point, one.start, one.end)}
@@ -1577,7 +1599,7 @@ def _type_dimensions(frame: pd.DataFrame, spellings) -> pd.DataFrame:
     for name in frame.columns:
         if name not in named:
             continue
-        read = _read_dimension(frame[name])
+        read = read_dimension(frame[name])
         if read is not frame[name]:
             changed[name] = read
     return _assign(frame, changed)
@@ -1646,36 +1668,30 @@ def _assign(frame: pd.DataFrame, changed: Mapping) -> pd.DataFrame:
 
 def _normalize_times(frame: pd.DataFrame, dims: Sequence[str] = ()) -> pd.DataFrame:
     """
-    Hold every time at nanoseconds, the resolution DASCore keeps them at.
+    Hold every time at nanoseconds, and read each dimension column.
 
     A column arriving at another resolution states the same times, but
     everything which reads one back -- a stored table, a coordinate, a
     curve -- states them at DASCore's, so a set which kept both spellings
-    would differ from itself over nothing.
-
-    A dimension column holding times as *text* is read as times for the
-    same reason: the geometry a row builds reads that spelling back, so a
-    frame which kept the text would disagree with the region built from
-    it about what the row says.
+    would differ from itself over nothing. A dimension column is read as
+    the numbers or times it states, text included, for the same reason:
+    the geometry a row builds reads that spelling back, so a frame which
+    kept the text would disagree with the region built from it.
     """
     spelled = {x for dim in dims for x in (dim, f"{dim}{_START}", f"{dim}{_END}")}
     changed = {}
     for name in frame.columns:
         series = frame[name]
         kind = getattr(series.dtype, "kind", "")
-        if kind == "M" and series.dtype != _NS_TIME:
+        if name in spelled:
+            read = read_dimension(series)
+            if read is not series:
+                changed[name] = read
+        elif kind == "M" and series.dtype != np.dtype("datetime64[ns]"):
             changed[name] = to_datetime64(series)
         elif kind == "m" and series.dtype != _NS_SPAN:
             changed[name] = to_timedelta64(series)
-        elif str(name) in spelled and _states_times(series):
-            # Only the stated cells are converted, then put back where
-            # they came from: masking the result instead hands every blank
-            # cell to the datetime parser first, and what a blank one reads
-            # as there is up to `astype`.
-            stated = series.notna()
-            times = to_datetime64(series[stated].astype(str))
-            changed[name] = times.reindex(series.index)
-    return _assign(frame, changed)
+    return frame.assign(**changed) if changed else frame
 
 
 def _normalize_tags(frame) -> pd.DataFrame:
@@ -1707,41 +1723,40 @@ def _normalize_tags(frame) -> pd.DataFrame:
     return frame.assign(tags=pd.Series(read, index=frame.index, dtype=object))
 
 
+def _stated_cells(series: pd.Series) -> np.ndarray:
+    """Return which cells of a column state anything, as a plain mask."""
+    # Not `Series.map`: on a categorical column it returns a categorical,
+    # which pandas 3 refuses to reduce with `any`.
+    return np.array([bool(_stated(x)) for x in series], dtype=bool)
+
+
 def _normalize_blanks(
     frame: pd.DataFrame, declared: Collection[str] = ()
 ) -> pd.DataFrame:
     """
-    Read a cell holding the empty string as stating nothing.
+    Read a cell holding the empty string as stating nothing, in one dtype.
 
     A table writes an unset cell and a cell holding the empty string the
     same way, and reads that back as unset, so a set says unset for both
     rather than holding a value which cannot survive being written down.
+
+    Two dtypes are settled here for the same reason. A column no row
+    states -- an all-blank value column is how a membership-only set is
+    spelled -- arrives as whatever each reader inferred from nothing, and
+    each format infers a different one. A category is a dtype only a frame
+    has, and every table reads that column back as the text it holds. A
+    column which declares its dtype is left alone: an author saying what a
+    column holds outranks a canonical form.
     """
     changed = {}
     for name in frame.columns:
         series = frame[name]
-        if getattr(series.dtype, "kind", "") in "OTU":
-            # Through object first: mapping a categorical column hands
-            # back a categorical, which has no `any`.
-            blank = pd.Series(
-                [isinstance(x, str) and not x for x in series],
-                index=series.index,
-                dtype=bool,
-            )
-            if blank.any():
-                series = series.where(~blank, None)
-                changed[name] = series
-        # A column no row states -- an all-blank value column is how a
-        # membership-only set is spelled -- arrives as whatever dtype each
-        # reader inferred from nothing, and a format infers a different
-        # one; one dtype keeps a saved set equal to its reload. A column
-        # which declares its dtype has an author saying what it holds,
-        # and that is not this to overrule.
+        blank = np.array([isinstance(x, str) and not x for x in series], dtype=bool)
+        if blank.any():
+            series = series.where(~blank, None)
+            changed[name] = series
         if name in declared:
             continue
-        # A category is a dtype only a frame has: every table reads the
-        # column back as the text it holds, so a set which kept the
-        # category would differ from its own reload over nothing.
         if isinstance(series.dtype, pd.CategoricalDtype):
             series = series.astype(object)
             changed[name] = series

@@ -202,6 +202,22 @@ print("coords:", [x for x in names.coords if "." not in x])
 
 `section` and `borehole` are among the coordinates because the labels table named them. `x`, `y`, and `z` are there because the CRS declares those axes and the geometry table resolves to them.
 
+# Seeing it
+
+The inventory can now draw the deployment it describes. Along the fiber, past the lead-in, every track lines up against optical distance:
+
+```{python}
+inventory.viz.path(distance=(1495, 1780), show=True);
+```
+
+And in the tunnel's own survey grid, looking side-on — the second of the two views the [hand-drawn figure](#what-the-drawing-says) pairs:
+
+```{python}
+inventory.viz.map(x="x", y="z", color="section", show=True);
+```
+
+The three holes go to 20 m, the trench runs along the floor, and the break in it is the slack coil: ten meters of fiber wound into a one-meter loop, which the geometry table deliberately leaves unplaced.
+
 # What the data gets out of it
 
 A patch recorded here carries the acquisition key, and that key with the time the patch covers is the whole of the join.
@@ -290,6 +306,14 @@ for epoch in repaired.networks[0].fiber_arrays[0].optical_paths:
     began = "the beginning" if np.isnat(epoch.start_time) else str(epoch.start_time)[:10]
     print(f"from {began}: {epoch.optical_length:.1f} m")
 ```
+
+The two epochs are what the timeline draws, since it is the plot which looks along time:
+
+```{python}
+repaired.viz.timeline(show=True);
+```
+
+The path lane splits at the repair. The acquisition's does not: the interrogator was never reconfigured, so its epoch runs unbounded in both directions and is hatched at each end.
 
 A patch recorded across midnight on the first of September was recorded through both. [`Spool.conform_to_inventory`](`dascore.core.spool.Spool.conform_to_inventory`) is the step which insists every patch be describable by exactly one entry, and it subdivides that patch rather than choosing for you:
 
