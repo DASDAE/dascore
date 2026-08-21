@@ -24,15 +24,16 @@ def _is_uptech(resource) -> bool:
     """Return whether an HDF5 resource has the Uptech export layout."""
     try:
         data, time = resource[_DATASET], resource[_TIME]
-    except KeyError:
+        # A group at either path has no ndim; it is simply not an Uptech file.
+        return (
+            data.ndim == 2
+            and time.ndim == 1
+            and len(time) == data.shape[0]
+            # Uptech metadata is expected on the signal dataset, not its group.
+            and _ATTRS.issubset(data.attrs)
+        )
+    except (KeyError, AttributeError):
         return False
-    return (
-        data.ndim == 2
-        and time.ndim == 1
-        and len(time) == data.shape[0]
-        # Uptech metadata is expected on the signal dataset, not its group.
-        and _ATTRS.issubset(data.attrs)
-    )
 
 
 def _get_time(resource):

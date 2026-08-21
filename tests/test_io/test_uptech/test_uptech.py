@@ -73,6 +73,14 @@ class TestGetFormat:
             h5.create_dataset("something_else", shape=(2, 2))
         assert not UptechH5V1().get_format(path)
 
+    def test_not_detected_when_paths_are_groups(self, tmp_path):
+        """A file whose expected datasets are groups is not an Uptech file."""
+        path = tmp_path / "groups.hdf5"
+        with h5py.File(path, "w") as h5:
+            h5.create_group("Acquisition/StrainRate")
+            h5.create_group("Acquisition/Time")
+        assert not UptechH5V1().get_format(path)
+
 
 class TestRead:
     """Tests for reading Uptech files."""

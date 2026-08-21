@@ -259,7 +259,11 @@ class Spool(NamespaceOwner):
             # Keep the Series' own integer width: nullable Int64/UInt64 unbox
             # to it (NA raises) and unsigned values can't wrap negative.
             dtype = getattr(item.dtype, "numpy_dtype", item.dtype)
-            array = item.to_numpy(dtype=dtype)
+            try:
+                array = item.to_numpy(dtype=dtype)
+            except ValueError:  # a nullable dtype holding NA has no position
+                msg = "An integer selector cannot contain missing values."
+                raise ParameterError(msg) from None
         elif isinstance(item, pd.Series) and pd.api.types.is_bool_dtype(item):
             # A mask is applied by position, so it must line up with the frame
             # get_contents returns; one built from a filtered frame would
@@ -306,6 +310,14 @@ class Spool(NamespaceOwner):
         A slice, an array, a pandas Series, or a list selects patches: with
         booleans, one per patch, True keeps; with integers, by position.
         Boolean masks built from `get_contents` line up with the spool.
+
+        Notes
+        -----
+        A boolean Series is applied by position, and `get_contents` hands
+        out a fresh positional index, so a mask must come from the contents
+        of the spool it selects. A mask built from a differently ordered
+        view of the same patches has a matching index and selects by its
+        own positions rather than raising.
         """
         if isinstance(item, slice):
             # a lazy id-membership window (D2); never realizes the flat

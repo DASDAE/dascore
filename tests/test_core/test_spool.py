@@ -440,6 +440,12 @@ class TestSpoolIntArraySelect:
         assert random_spool[pd.Series(indices, dtype="Int64")] == expected
         assert random_spool[pd.Series(indices, dtype="UInt64")] == expected
 
+    def test_missing_values_raise(self, random_spool):
+        """A nullable integer selector holding NA has no position to select."""
+        series = pd.Series([0, pd.NA], dtype="Int64")
+        with pytest.raises(ParameterError, match="missing values"):
+            random_spool[series]
+
     def test_unsigned_out_of_bounds_raises(self, random_spool):
         """A huge unsigned index must not wrap around to a valid position."""
         series = pd.Series([2**63 + 1], dtype="UInt64")
