@@ -43,7 +43,8 @@ from dascore.io.index.ingest import (
     coord_summary,
     typed_value,
 )
-from dascore.units import get_quantity
+from dascore.units import get_quantity, get_quantity_str
+from dascore.utils.attrs import _is_missing
 from dascore.utils.chunk_plan import (
     _SOURCE_COLUMNS,
     _concatenated_steps,
@@ -305,18 +306,48 @@ def _union_summary(summaries: Sequence[CoordSummary]) -> CoordSummary:
     The envelope spans them all — that much any join preserves — and
     nothing else is claimed: no step, and no identity.
     """
-    lows = [x.min for x in summaries if not pd.isnull(x.min)]
+    stated = [x for x in summaries if not pd.isnull(x.min)]
+    # a member which states nothing describes nothing, not even its dtype
+    template = stated[0] if stated else summaries[0]
+    blank = dict(step=None, len=None, fingerprint=None)
+    kinds = {_summary_kind(x) for x in stated}
+    spellings = {get_quantity(x.units) for x in stated}
+    silent = len(stated) != len(summaries)
+    if len(kinds) > 1 or len(spellings) > 1 or (silent and "str" in kinds):
+        # No envelope covers these members. Two spellings of one
+        # coordinate (2000 milliseconds beside 3 seconds) cannot be
+        # compared until one is chosen, which only the loaded patch does;
+        # two kinds of value cannot be compared at all; and a member
+        # which states no labels cannot be given one, since text has no
+        # missing value to stand in.
+        null = _null_like(template.min)
+        return template.model_copy(update=dict(min=null, max=null, **blank))
+    lows = [x.min for x in stated]
     highs = [x.max for x in summaries if not pd.isnull(x.max)]
-    first = summaries[0]
-    return first.model_copy(
+    return template.model_copy(
         update=dict(
-            min=min(lows) if lows else first.min,
-            max=max(highs) if highs else first.max,
-            step=None,
-            len=None,
-            fingerprint=None,
+            min=min(lows) if lows else template.min,
+            max=max(highs) if highs else template.max,
+            **blank,
         )
     )
+
+
+def _summary_kind(summary: CoordSummary) -> str:
+    """Whether a summary holds times, numbers or labels."""
+    kind = np.dtype(summary.dtype).kind if summary.dtype else ""
+    if kind in "mM":
+        return "time"
+    return "str" if kind in "USO" else "num"
+
+
+def _null_like(value):
+    """The missing value of whatever kind this one is."""
+    if isinstance(value, np.datetime64 | pd.Timestamp):
+        return np.datetime64("NaT", "ns")
+    if isinstance(value, np.timedelta64 | pd.Timedelta):
+        return np.timedelta64("NaT", "ns")
+    return np.nan
 
 
 def predicted_coords(
@@ -372,10 +403,11 @@ def predicted_coords(
                 if row.get("_modified"):
                     summary = _trimmed_summary(summary, row, name)
                 summaries.append(summary)
-            if summaries:
-                described[name] = _describe(
-                    name, summaries, plan_dim, trimmed_dims, snap_tolerance
-                )
+            if not summaries:
+                continue
+            stated = _describe(name, summaries, plan_dim, trimmed_dims, snap_tolerance)
+            if stated is not None:
+                described[name] = stated
         out[int(str(output_id))] = described
     return out
 
@@ -386,9 +418,18 @@ def _describe(
     plan_dim: str,
     trimmed_dims: frozenset[str],
     snap_tolerance: float | None,
-) -> CoordSummary:
-    """State one coordinate of one output, claiming only what holds."""
+) -> CoordSummary | None:
+    """
+    State one coordinate of one output, claiming only what holds.
+
+    None means the output does not carry it at all.
+    """
     first = summaries[0]
+    if plan_dim == name and name not in first.dims:
+        # the members hold this as an ordinary coordinate and the
+        # concatenation replaces it with a dimension of its own, so
+        # nothing the members say about it survives
+        return None
     rides = plan_dim == name or plan_dim in first.dims
     if not rides:
         # every member states the same coordinate, or assembly refuses to
@@ -524,17 +565,54 @@ def _aux_coord_info(
     return out
 
 
+def _apply_predictions(
+    outputs: pd.DataFrame,
+    predicted: Mapping[int, Mapping[str, CoordSummary]],
+    name: str,
+) -> pd.DataFrame:
+    """
+    Restate the planned dimension's envelope from what the join predicts.
+
+    The frame's envelope columns feed selection and the patches table, so
+    they must say what the records say; otherwise the row and its own
+    coordinate would disagree, which is the drift this predicts away.
+    """
+    if not predicted:
+        return outputs
+    min_name, max_name, step_name = f"{name}_min", f"{name}_max", f"{name}_step"
+    unit_col = f"_{name}_units"
+    out = outputs.copy(deep=False)
+    columns = {min_name: [], max_name: [], step_name: [], unit_col: []}
+    for output_id in out["output_id"]:
+        summary = predicted.get(int(output_id), {}).get(name)
+        columns[min_name].append(None if summary is None else summary.min)
+        columns[max_name].append(None if summary is None else summary.max)
+        columns[step_name].append(None if summary is None else summary.step)
+        units = None if summary is None else summary.units
+        columns[unit_col].append(None if units is None else get_quantity_str(units))
+    for column, values in columns.items():
+        if column in out.columns and any(x is not None for x in values):
+            out[column] = pd.Series(values, index=out.index, dtype=object)
+    return out
+
+
 def _output_records(
     outputs: pd.DataFrame,
     token: str,
     aux_info: Mapping[int, Mapping[str, Mapping]] | None = None,
+    predicted: Mapping[int, Mapping[str, CoordSummary]] | None = None,
 ) -> list[SourceRecord]:
     """
     Convert plan output rows into ingestible source records.
 
+    `predicted` states what an output's coordinates will be, decided by
+    joining its members' summaries. A coordinate it describes is written
+    from that summary; the row is consulted only for what it cannot know,
+    such as a dimension the plan creates out of the member count.
     """
     records = []
     aux_info = aux_info or {}
+    predicted = predicted or {}
     # Envelope columns belong to coordinates actually present in a row;
     # an attr that merely looks envelope-shaped (channel_step with no
     # channel coord) is ordinary metadata and must be preserved. The
@@ -552,25 +630,38 @@ def _output_records(
         dims = str(row.get("dims") or "")
         dim_names = [d for d in dims.split(",") if d]
         aux = aux_info.get(output_id, {})
+        known = predicted.get(output_id, {})
         coords = []
         for name in dim_names:
-            record = _coord_record_from_row(row, name)
+            summary = known.get(name)
+            if summary is not None:
+                record = _coord_record(
+                    name, summary.model_copy(update={"dims": (name,)})
+                )
+            else:
+                record = _coord_record_from_row(row, name)
+            if record is not None:
+                coords.append(record)
+        for name, summary in known.items():
+            if name in dim_names:
+                continue
+            record = _coord_record(name, summary)
             if record is not None:
                 coords.append(record)
         # auxiliary (non-dimension) coordinates remain on the assembled
         # patches, so the catalog must keep describing them
         for name, info in aux.items():
-            if name in dim_names:
+            if name in dim_names or name in known:
                 continue
             record = _coord_record_from_row(
                 info, name, dims=info["dims"], name_is_held=True
             )
             if record is not None:
                 coords.append(record)
-        cache_key = (dims, tuple(aux))
+        cache_key = (dims, tuple(aux), tuple(known))
         envelope_keys = envelope_cache.get(cache_key)
         if envelope_keys is None:
-            coord_names = set(dim_names) | set(aux) | base_names
+            coord_names = set(dim_names) | set(aux) | set(known) | base_names
             envelope_keys = {
                 f"{name}_{sfx}"
                 for name in coord_names
@@ -918,10 +1009,23 @@ def derived_catalog(
     stale_keys = stale_def_keys(parent_residuals, coord_dims_map, outputs.columns)
     if stale_keys:
         outputs = outputs.drop(columns=stale_keys)
-    aux_info = _aux_coord_info(
-        sources, trims, name, coord_dims_map, trimmed_dims, concat=mode == "concat"
-    )
-    records = _output_records(outputs, token, aux_info=aux_info)
+    predicted: dict[int, dict[str, CoordSummary]] = {}
+    aux_info: dict = {}
+    if mode == "concat":
+        # what the output will hold is decided by joining the members'
+        # summaries, the same join assembly runs on their values
+        predicted = predicted_coords(
+            None if parent is None else parent.backend,
+            trims,
+            name,
+            trimmed_dims=trimmed_dims,
+        )
+        outputs = _apply_predictions(outputs, predicted, name)
+    else:
+        aux_info = _aux_coord_info(
+            sources, trims, name, coord_dims_map, trimmed_dims, concat=False
+        )
+    records = _output_records(outputs, token, aux_info=aux_info, predicted=predicted)
     backend.write_sources(records)
     return PatchCatalog(backend=backend, resolver=resolver)
 

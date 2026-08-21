@@ -506,10 +506,12 @@ def _coord_record(name: str, summary) -> CoordRecord | None:
             **common,
         )
     if dtype.kind in "USO":
+        # a summary which states no labels has none to store; stringifying
+        # the missing value would write the label "nan"
         return CoordRecord(
             value_kind="str",
-            min_str=str(summary.min),
-            max_str=str(summary.max),
+            min_str=None if pd.isnull(summary.min) else str(summary.min),
+            max_str=None if pd.isnull(summary.max) else str(summary.max),
             **common,
         )
     return None  # unsupported coord representation: skip, per design
