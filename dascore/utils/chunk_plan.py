@@ -1662,7 +1662,10 @@ def build_concat_plan(
     along = _structural(df, name)
     key_col = f"_{name}_def_key"
     has_coord = along | (df[key_col].notna().to_numpy() if key_col in df else False)
-    envelope_cols = [x for x in (min_name, max_name, step_name, unit_col) if x in df]
+    # the public spelling names the coordinate just as the private one does
+    envelope_cols = [
+        x for x in (min_name, max_name, step_name, unit_col, f"{name}_units") if x in df
+    ]
     if envelope_cols and (df[envelope_cols].notna().any(axis=1) & ~has_coord).any():
         # the envelope names belong to the dimension about to be created
         msg = (
@@ -1696,9 +1699,9 @@ def build_concat_plan(
     keys: list = [_kind_codes(df, kind_names)]
     if "dims" in df.columns:
         keys.append(df["dims"])
-    for key_col in _dim_def_key_columns(df, name):
-        dim = key_col[1 : -len("_def_key")]
-        key = df[key_col] if key_col in df.columns else pd.Series(None, index=df.index)
+    for dim_key in _dim_def_key_columns(df, name):
+        dim = dim_key[1 : -len("_def_key")]
+        key = df[dim_key] if dim_key in df.columns else pd.Series(None, index=df.index)
         # a coordinate's identity partitions only the rows it is a dimension
         # of; elsewhere it is non-dimensional and `conflict` polices it
         key = key.astype(object).where(_structural(df, dim), "")

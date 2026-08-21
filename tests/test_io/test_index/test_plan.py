@@ -905,6 +905,26 @@ class TestConcatPlan:
         assert got[0] == 1.0 and got[1] == -1.0 and got[2] == -1.0
         assert np.isnan(got[3]) and np.isnan(got[4])
 
+    def test_created_dimension_leaves_other_identities_alone(self, trio):
+        """The new dimension's identity is its own, not another dimension's."""
+        p1, p2, _ = trio
+        rows = _flat([p1, p2])
+        before = list(rows["_time_def_key"])
+        assert len(set(before)) == 2
+        plan = build_concat_plan(rows, wave_rank=None)
+        # the two patches differ along time, so they cannot share an output
+        assert len(plan.outputs) == 2
+        assert list(plan.outputs["_time_def_key"]) == before
+        assert plan.outputs["_wave_rank_def_key"].str.startswith("fp:").all()
+
+    def test_public_units_attr_is_refused_for_a_new_dimension(self, trio):
+        """An attr spelled like the new dimension's units cannot survive it."""
+        p1 = trio[0]
+        rows = _flat([p1, p1.new()])
+        rows["batch_units"] = "m"
+        with pytest.raises(ParameterError, match="batch_units"):
+            build_concat_plan(rows, batch=None)
+
     def test_keep_first_floats_a_converted_dtype(self, trio):
         """An output which converts its members' data says so in its dtype."""
         p1, p2, _ = trio
