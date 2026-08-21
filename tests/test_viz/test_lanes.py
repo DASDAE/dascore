@@ -286,6 +286,12 @@ class TestColors:
         assert np.allclose(colors[0], colors[1])
         assert [x.get_text() for x in ax.get_legend().get_texts()] == ["flag"]
 
+    def test_nan_states_membership(self, kinds_frame):
+        """A NaN value, as a mixed frame spells a missing one, is no value."""
+        frame = kinds_frame.assign(value=["a", "b", np.nan, np.nan, 1, 2, None])
+        ax = plot_lanes(frame, lane="lane", value="value")
+        assert sorted(_texts(ax)) == ["1", "2", "a", "b"]
+
     def test_booleans_are_refused(self, kinds_frame):
         """True and false are not values; membership is a row with none."""
         frame = kinds_frame.assign(value=["a", "b", True, False, 1, 2, None])
@@ -375,14 +381,14 @@ class TestColors:
         assert np.allclose(colors[:, :3], [1, 0, 0])
 
     def test_a_value_which_is_not_a_value(self):
-        """A lane value of NaN is refused, the way the model refuses it."""
+        """A NaN among a lane's numbers is refused: a valued lane has no gaps."""
         n = 10
         values = [float(x) for x in range(n)]
         values[3] = float("nan")
         frame = pd.DataFrame(
             {"start": np.arange(n) * 1.0, "end": np.arange(n) + 1.0, "v": values}
         )
-        with pytest.raises(ParameterError, match="must be finite"):
+        with pytest.raises(ParameterError, match="mixes value kinds"):
             plot_lanes(frame, value="v")
 
     def test_legend_off_suppresses_the_colorbar(self):
