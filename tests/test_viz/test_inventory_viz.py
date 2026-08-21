@@ -770,6 +770,13 @@ class TestMap:
         assert "n/a" in labels
         assert ax.get_legend().get_title().get_text() == "zone"
 
+    def test_color_a_membership_group(self, site):
+        """A group everything belongs to is named by the group, not by None."""
+        ax = map_path(site, "DAS.L1.00", time="2026-06-10", color="noisy")
+        labels = _legend_labels(ax)
+        assert "noisy" in labels
+        assert "None" not in labels
+
     def test_color_numeric_group(self, site):
         """A numeric label group colors continuously."""
         ax = map_path(site, "DAS.L1.00", time="2026-06-10", color="count")

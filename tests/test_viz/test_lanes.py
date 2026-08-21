@@ -333,6 +333,25 @@ class TestColors:
         assert bars[0].get_ylim() == pytest.approx((0.0, 7.0))
         assert bars[1].get_ylim() == pytest.approx((100.0, 107.0))
 
+    def test_one_value_is_not_no_value(self):
+        """A lone number colors its rows without swallowing the missing one."""
+        frame = pd.DataFrame(
+            {"start": [0.0, 1.0, 2.0], "end": [1.0, 2.0, 3.0], "v": [5.0, None, 5.0]}
+        )
+        ax = plot_lanes(frame, value="v")
+        colors = _collections(ax)[0].get_facecolors()
+        assert np.allclose(colors[0], colors[2])
+        assert not np.allclose(colors[0], colors[1])
+        assert np.allclose(colors[1][:3], plt.matplotlib.colors.to_rgb(UNCOVERED_COLOR))
+
+    def test_membership_has_one_key_in_a_mapping(self):
+        """A color keyed on None applies however the dtype spelled it."""
+        frame = pd.DataFrame({"start": [0.0, 1.0], "end": [1.0, 2.0], "v": ["a", None]})
+        ax = plot_lanes(frame, value="v", color={None: "red", "a": "blue"})
+        colors = _collections(ax)[0].get_facecolors()
+        assert np.allclose(colors[0][:3], [0, 0, 1])
+        assert np.allclose(colors[1][:3], [1, 0, 0])
+
     def test_numeric_one_value(self):
         """One number is not a scale, so every box shares one color."""
         frame = pd.DataFrame({"start": [0.0, 1.0], "end": [1.0, 2.0], "v": [4, 4]})
