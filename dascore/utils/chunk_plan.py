@@ -27,6 +27,7 @@ import numpy as np
 import pandas as pd
 
 import dascore as dc
+from dascore.constants import attr_conflict_description
 from dascore.exceptions import (
     ChunkError,
     CoordMergeError,
@@ -44,6 +45,7 @@ from dascore.units import (
 )
 from dascore.utils.attrs import known_only, validate_conflict
 from dascore.utils.chunk import get_intervals
+from dascore.utils.docs import compose_docstring
 from dascore.utils.misc import get_middle_value, is_range
 from dascore.utils.pd import get_dim_names_from_columns, get_interval_columns
 from dascore.utils.time import is_datetime64, is_timedelta64, to_float, to_timedelta64
@@ -1588,6 +1590,190 @@ def build_chunk_plan(
         member_parts = np.concatenate(m_parts)
         members[unit_col] = first_units.take(member_parts).reset_index(drop=True)
     return ChunkPlan(outputs, members, name, value, params)
+
+
+@compose_docstring(conflict_desc=attr_conflict_description)
+def build_concat_plan(
+    df: pd.DataFrame,
+    *,
+    conflict: Literal["drop", "raise", "keep_first"] = "raise",
+    group=None,
+    **kwargs,
+) -> ChunkPlan:
+    """
+    Build a plan concatenating patches in order (`Spool.concatenate`).
+
+    Partitions as a chunk plan does — kind (the config's attrs, a missing
+    value matching anything), dimensions, the identity of every other
+    dimension, and the concatenated dimension's units (a patch with no
+    values along it joins any) — and then groups
+    each partition's rows by the requested count in the order of the
+    dimension (ascending or descending as the data run; given order when
+    the rows have no envelope), with no sampling tolerance, no gap test,
+    and no overlap removal. Patches which cannot be concatenated together
+    land in separate outputs, never in an error. Remaining attributes must
+    hold no conflicting known values within an output, policed by
+    `conflict` exactly as a chunk plan polices them; non-dimensional
+    coordinates are checked when the output is assembled.
+
+    Parameters
+    ----------
+    df
+        The flat patch relation to plan over.
+    conflict
+        {conflict_desc}
+    group
+        Attributes to partition on instead of the config's `patch_kind_attrs`.
+    **kwargs
+        One keyword naming the dimension and the number of patches per
+        output; None (or ...) puts every patch of a partition in one
+        output. A dimension no patch has concatenates along a new one.
+    """
+    if len(kwargs) != 1:
+        msg = (
+            f"concatenate requires exactly one dimension keyword, got {sorted(kwargs)}"
+        )
+        raise ParameterError(msg)
+    validate_conflict(conflict)
+    ((name, value),) = kwargs.items()
+    value = None if value is Ellipsis else value
+    count = None if value is None else int(value)
+    if count is not None and count < 1:
+        msg = "The number of patches per concatenated output must be at least 1."
+        raise ParameterError(msg)
+    min_name, max_name, step_name = f"{name}_min", f"{name}_max", f"{name}_step"
+    names = _resolve_group_attrs(group, set(df.columns))
+    params = dict(mode="concat", count=count, conflict=conflict, group=names)
+    if df.empty:
+        outputs = pd.DataFrame({"output_id": pd.Series(dtype=np.int64)})
+        members = pd.DataFrame(
+            {
+                "output_id": pd.Series(dtype=np.int64),
+                "_patch_id": pd.Series(dtype=object),
+                "_modified": pd.Series(dtype=bool),
+            }
+        )
+        return ChunkPlan(outputs, members, name, value, params)
+    df = _ensure_patch_id(df).reset_index(drop=True)
+    has_envelope = min_name in df.columns and max_name in df.columns
+    # The concatenated dimension's units partition like kind: a patch whose
+    # coordinate has values but no units cannot join one whose has units
+    # (the values would be mixed), while a patch with no values along the
+    # dimension (an aggregated coordinate) joins whichever it meets.
+    kind_names = list(names)
+    if (unit_col := f"_{name}_units") in df.columns:
+        units = df[unit_col].fillna("unitless").astype(object)
+        if has_envelope:
+            units = units.where(df[min_name].notna(), "")
+        df = df.assign(_concat_units=units)
+        kind_names.append("_concat_units")
+    keys: list = [_kind_codes(df, kind_names)]
+    if "dims" in df.columns:
+        keys.append(df["dims"])
+    for key_col in _dim_def_key_columns(df, name):
+        dim = key_col[1 : -len("_def_key")]
+        key = df[key_col] if key_col in df.columns else pd.Series(None, index=df.index)
+        key = key.astype(object)
+        env_cols = [f"{dim}_{x}" for x in ("min", "max", "step")]
+        if all(x in df.columns for x in env_cols):
+            # a re-planned output states no identity key; its envelope says
+            # what it is, which is enough to tell two of them apart
+            spelled = df[env_cols].itertuples(index=False, name=None)
+            env = pd.Series(["env:" + "|".join(map(str, x)) for x in spelled])
+            key = key.where(key.notna(), env)
+        keys.append(key)
+    labels = df.groupby(keys, dropna=False, sort=False).ngroup().to_numpy()
+    df = df.drop(columns=["_concat_units"], errors="ignore")
+    # Order: partitions in order of first appearance, rows within one the
+    # way the data run along the dimension (ascending by start, descending
+    # by stop; rows without an envelope, or a partition without a known
+    # step, keep their order and sort last), then cut into runs of `count`.
+    within = np.zeros(len(df))
+    if has_envelope:
+        starts = to_float(df[min_name].to_numpy())
+        stops = to_float(df[max_name].to_numpy())
+        no_steps = np.full(len(df), np.nan)
+        steps = to_float(df[step_name].to_numpy()) if step_name in df else no_steps
+        first_step = pd.Series(steps).groupby(labels).transform("first").to_numpy()
+        descending = np.nan_to_num(first_step, nan=0.0) < 0
+        within = np.where(descending, -stops, starts)
+        within = np.where(np.isnan(within), np.inf, within)
+    perm = np.lexsort((np.arange(len(df)), within, labels))
+    sorted_df = df.iloc[perm].reset_index(drop=True)
+    part = labels[perm]
+    position = pd.Series(part).groupby(part).cumcount().to_numpy()
+    run = np.zeros_like(position) if count is None else position // count
+    codes = pd.DataFrame({"p": part, "r": run}).groupby(["p", "r"], sort=False).ngroup()
+    codes = codes.to_numpy()
+    n_out = int(codes.max()) + 1
+    sizes = np.bincount(codes, minlength=n_out)
+    seg_starts = np.r_[0, np.cumsum(sizes)[:-1]]
+    active = np.ones(n_out, dtype=bool)
+    carried = _carried_columns(sorted_df, codes, seg_starts, name, conflict, active)
+    data: dict[str, Any] = {k: v.reset_index(drop=True) for k, v in carried.items()}
+    by_output = sorted_df.groupby(codes, sort=True)
+    if has_envelope:
+        # a member with no values along the dimension (an aggregated
+        # coordinate) has a null envelope, which the output's skips
+        data[min_name] = by_output[min_name].min().to_numpy()
+        data[max_name] = by_output[max_name].max().to_numpy()
+        data[step_name] = _concatenated_steps(sorted_df, codes, name)
+    if "dims" in sorted_df.columns:
+        dims = sorted_df["dims"].to_numpy()[seg_starts].astype(str)
+        new_dim = np.array([name not in d.split(",") for d in dims])
+        if new_dim.any() and not has_envelope:
+            # concatenating along a dimension none of the patches has: the
+            # output gains it, one sample per member
+            data["dims"] = [f"{d},{name}" if n else d for d, n in zip(dims, new_dim)]
+            data[min_name] = [0 if n else None for n in new_dim]
+            data[max_name] = [int(s) - 1 if n else None for s, n in zip(sizes, new_dim)]
+            data[step_name] = [1 if n else None for n in new_dim]
+    if "_dtype" in sorted_df.columns:
+        all_dtypes = sorted_df["_dtype"]
+        dtypes = by_output["_dtype"]
+        uniform = dtypes.nunique(dropna=False).to_numpy() == 1
+        first = dtypes.first().to_numpy(dtype=object)
+        combined = [
+            first[i] if uniform[i] else _combined_dtype(all_dtypes.iloc[a : a + n])
+            for i, (a, n) in enumerate(zip(seg_starts, sizes))
+        ]
+        data["_dtype"] = ["" if x is None else str(x) for x in combined]
+    data["output_id"] = np.arange(n_out)
+    outputs = pd.DataFrame(data)
+    # members load whole unless the rows are themselves trims (a re-plan
+    # over a chunked view), whose ranges they then keep
+    members = pd.DataFrame(
+        {"output_id": codes, "_patch_id": sorted_df["_patch_id"].to_numpy()}
+    )
+    if has_envelope:
+        for col in (min_name, max_name, step_name, unit_col):
+            if col in sorted_df.columns:
+                members[col] = sorted_df[col].to_numpy()
+    modified = sorted_df["_modified"] if "_modified" in sorted_df.columns else False
+    members["_modified"] = np.asarray(modified, dtype=bool)
+    return ChunkPlan(outputs, members, name, value, params)
+
+
+def _concatenated_steps(sorted_df: pd.DataFrame, codes: np.ndarray, name: str):
+    """
+    The step of each output's concatenated coordinate, where it stays even.
+
+    One shared step and each member starting one step after the previous
+    member stops keep the coordinate a range; anything else (a gap, an
+    overlap, mixed steps, no step) leaves it without a step, as the
+    assembled coordinate will be.
+    """
+    steps = sorted_df[f"{name}_step"]
+    by_output = steps.groupby(codes, sort=True)
+    one_step = (by_output.nunique(dropna=True) == 1) & (
+        by_output.count() == by_output.size()
+    )
+    starts, stops = sorted_df[f"{name}_min"], sorted_df[f"{name}_max"]
+    same_output = pd.Series(codes).shift(1).to_numpy() == codes
+    follows = (starts == stops.shift(1) + steps).to_numpy() | ~same_output
+    contiguous = pd.Series(follows).groupby(codes).all()
+    first = by_output.first()
+    return first.where(one_step & contiguous).to_numpy()
 
 
 def _snapped_cuts(cuts, start, step) -> list:

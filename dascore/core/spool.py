@@ -69,13 +69,12 @@ from dascore.exceptions import (
     ParameterError,
     UnresolvedPatchError,
 )
-from dascore.utils.attrs import _is_missing, known_only
 from dascore.utils.chunk_plan import (
     _SOURCE_COLUMNS,
     ChunkPlan,
-    _combined_dtype,
     _ensure_patch_id,
     build_chunk_plan,
+    build_concat_plan,
     build_coverage_frame,
     build_gap_frame,
     build_subdivision_plan,
@@ -83,15 +82,13 @@ from dascore.utils.chunk_plan import (
     subdivision_pieces,
 )
 from dascore.utils.display import get_dascore_text, get_nice_text
-from dascore.utils.docs import compose_docstring, get_docstring
+from dascore.utils.docs import compose_docstring
 from dascore.utils.misc import (
     _spool_map,
     deep_equality_check,
 )
 from dascore.utils.namespace import NamespaceOwner
 from dascore.utils.patch import (
-    _concat_compatible_rows,
-    concatenate_patches,
     get_patch_names,
     stack_patches,
 )
@@ -1914,97 +1911,83 @@ class Spool(NamespaceOwner):
         )
         return self._new_from_catalog(catalog)
 
-    @compose_docstring(desc=get_docstring(concatenate_patches))
-    def concatenate(self, check_behavior: WARN_LEVELS = "warn", **kwargs) -> Self:
-        """{desc}"""
-        from dascore.io.index.planned import (  # noqa: PLC0415
-            derived_catalog,
-            stale_def_keys,
-        )
+    @compose_docstring(conflict_desc=attr_conflict_description)
+    def concatenate(
+        self,
+        conflict: Literal["drop", "raise", "keep_first"] = "raise",
+        group: str | Sequence[str] | None = None,
+        check_behavior: WARN_LEVELS | None = None,
+        **kwargs,
+    ) -> Self:
+        """
+        Concatenate patches in order along a dimension.
 
-        if len(kwargs) != 1:
+        Patches are partitioned as [`chunk`](`dascore.Spool.chunk`)
+        partitions them — by kind (see the
+        [patch compatibility note](`docs/notes/patch_compatibility`)),
+        dimensions, the identity of every other dimension, and the
+        concatenated dimension's units — and each partition's patches are
+        then joined by the requested count in the order of the dimension,
+        contiguous or not. Patches which cannot be concatenated together
+        land in separate outputs; nothing is skipped and nothing raises.
+        Remaining attributes and non-dimensional coordinates must agree
+        within an output, policed by `conflict` as `chunk` polices them.
+
+        Parameters
+        ----------
+        conflict
+            {conflict_desc}
+        group
+            Attributes which partition patches into separate outputs,
+            instead of the config option `patch_kind_attrs`.
+        check_behavior
+            Deprecated and ignored: patches which cannot be concatenated
+            together are placed in separate outputs rather than skipped.
+        **kwargs
+            One keyword naming the dimension and the number of patches per
+            output; `None` puts every patch of a partition in one output. A
+            dimension no patch has concatenates along a new one.
+
+        Examples
+        --------
+        >>> import dascore as dc
+        >>> spool = dc.get_example_spool()
+        >>>
+        >>> # Concatenate every patch along time, contiguous or not.
+        >>> merged = spool.concatenate(time=None)
+        >>> assert len(merged) == 1
+        >>>
+        >>> # Concatenate copies of a patch along a new dimension; patches
+        >>> # sharing a new dimension must agree on the existing ones.
+        >>> patch = dc.get_example_patch()
+        >>> stacked = dc.spool([patch, patch.new()]).concatenate(wave_rank=None)
+        >>> assert stacked[0].shape[stacked[0].get_axis("wave_rank")] == 2
+
+        Notes
+        -----
+        - [`Spool.chunk`](`dascore.Spool.chunk`) performs a similar
+          operation but accounts for coordinate values.
+        - [`concatenate_patches`](`dascore.utils.patch.concatenate_patches`)
+          concatenates a list of patches directly, relative to the first.
+        """
+        from dascore.io.index.planned import derived_catalog  # noqa: PLC0415
+
+        if check_behavior is not None:
             msg = (
-                "concatenate requires exactly one dimension keyword, "
-                f"got {sorted(kwargs)}"
+                "check_behavior is deprecated and ignored by Spool.concatenate: "
+                "patches which cannot be concatenated together are placed in "
+                "separate outputs. Drop the argument."
             )
-            raise ParameterError(msg)
-        ((dim, value),) = kwargs.items()
-        value = None if value is Ellipsis else value
+            warnings.warn(msg, DeprecationWarning, stacklevel=2)
+        dim = next(iter(kwargs), None)
         source_rows, working = self._plan_frames(dim)
-        # a dim absent from the metadata envelopes is legal: concatenate
-        # can stack patches along a brand-new dimension
-        has_envelope = f"{dim}_min" in working.columns
-        # A selection still to be applied at load leaves the def keys of the
-        # trimmed coordinates describing the untrimmed values: inconclusive.
-        stale = stale_def_keys(
-            self._catalog.residuals,
-            self._catalog.backend.coord_dims_map(),
-            working.columns,
-        )
-        # Decided here, from metadata, twice, as the patches are: the
-        # compatible sequence first (concatenate_patches admits members
-        # before it groups them), then each output against its own first
-        # member, which is what assembly concatenates it by.
-        working = _concat_compatible_rows(working, dim, check_behavior, stale)
-        count = len(working) if value in (None,) else int(value)
-        count = max(count, 1)
-        remaining = working.reset_index(drop=True)
-        member_frames = []
-        output_rows = []
-        output_id = -1
-        while len(remaining):
-            # each output takes the next `count` rows admitted against its
-            # own first row; a row that first row rejects is out, not queued
-            admitted = _concat_compatible_rows(remaining, dim, check_behavior, stale)
-            group_rows = admitted.iloc[:count]
-            used = remaining.index.difference(admitted.index).union(group_rows.index)
-            remaining = remaining.loc[~remaining.index.isin(used)]
-            output_id += 1  # a group's first row is always admitted
-            members = pd.DataFrame(
-                {
-                    "output_id": output_id,
-                    "_patch_id": group_rows["_patch_id"].values,
-                    "_modified": False,
-                }
-            )
-            member_frames.append(members)
-            first = group_rows.iloc[0].to_dict()
-            # kind values and data units the first member lacks come from the others
-            for col in (*dc.get_config().patch_kind_attrs, "data_units"):
-                if col in group_rows.columns and _is_missing(first.get(col)):
-                    known = known_only(group_rows[col]).dropna()
-                    if len(known):
-                        first[col] = known.iloc[0]
-            if "_dtype" in group_rows.columns:
-                # concatenation upcasts like a merge does, so the group's
-                # dtype is what the members combine to, not the first row's
-                combined = _combined_dtype(group_rows["_dtype"])
-                first["_dtype"] = "" if combined is None else str(combined)
-            if has_envelope:
-                first[f"{dim}_min"] = group_rows[f"{dim}_min"].min()
-                first[f"{dim}_max"] = group_rows[f"{dim}_max"].max()
-            first["output_id"] = output_id
-            first.pop("_patch_id", None)
-            output_rows.append(first)
-        outputs = pd.DataFrame(output_rows)
-        if member_frames:
-            members = pd.concat(member_frames, ignore_index=True)
-        else:  # nothing to concatenate: an empty spool stays empty
-            members = pd.DataFrame(
-                {
-                    "output_id": pd.Series(dtype=np.int64),
-                    "_patch_id": pd.Series(dtype=object),
-                    "_modified": pd.Series(dtype=bool),
-                }
-            )
-        plan = ChunkPlan(outputs, members, dim, None, {})
+        plan = build_concat_plan(working, conflict=conflict, group=group, **kwargs)
         catalog = derived_catalog(
             source_rows=source_rows,
             plan=plan,
             parent=self._catalog,
-            merge_kwargs={},
+            merge_kwargs={"conflict": conflict, "count": plan.params["count"]},
             mode="concat",
-            check_behavior=check_behavior,
             origin_path=self.spool_path,
         )
         return self._new_from_catalog(catalog)

@@ -21,6 +21,7 @@ from dascore.utils.chunk_plan import (
     ChunkPlan,
     _sampling_group,
     build_chunk_plan,
+    build_concat_plan,
     samples_adjusted_envelopes,
 )
 from dascore.utils.time import to_timedelta64
@@ -776,3 +777,95 @@ class TestNonIntSamplesIndices:
         out = samples_adjusted_envelopes(df, (({"time": (0.5, None)}, True),))
         assert out["time_min"].iloc[0] == 0.0
         assert out["time_max"].iloc[0] == 9.0
+
+
+class TestConcatPlan:
+    """build_concat_plan: chunk's partitioning, then order-based grouping."""
+
+    @pytest.fixture(scope="class")
+    def trio(self):
+        """Three same-kind patches in time order."""
+        t0 = np.datetime64("2020-01-01", "ns")
+        p1 = dc.get_example_patch(time_min=t0)
+        time = p1.get_coord("time")
+        p2 = dc.get_example_patch(time_min=time.max() + time.step)
+        # a gap of eight samples between p2 and p3
+        p3 = dc.get_example_patch(time_min=p2.get_coord("time").max() + 9 * time.step)
+        return p1, p2, p3
+
+    def test_one_output_per_partition(self, trio):
+        """Gaps do not split; kind does."""
+        p1, p2, p3 = trio
+        plan = build_concat_plan(_flat([p1, p2, p3]), time=None)
+        assert len(plan.outputs) == 1
+        assert len(plan.members) == 3
+        assert plan.params["mode"] == "concat"
+        plan = build_concat_plan(_flat([p1, p2.update_attrs(tag="x"), p3]), time=None)
+        assert len(plan.outputs) == 2
+
+    def test_count_groups_in_order(self, trio):
+        """The count splits each partition's rows in dimension order."""
+        p1, p2, p3 = trio
+        plan = build_concat_plan(_flat([p3, p1, p2]), time=2)
+        assert len(plan.outputs) == 2
+        first = plan.members[plan.members["output_id"] == 0]
+        assert len(first) == 2
+        # the first output spans p1 and p2, whatever order the rows came in
+        assert plan.outputs["time_min"].iloc[0] == p1.get_coord("time").min()
+        assert plan.outputs["time_max"].iloc[0] == p2.get_coord("time").max()
+
+    def test_missing_matches_for_kind_and_units(self, trio):
+        """A missing kind value or unit matches, and the output carries the known."""
+        p1, p2, _ = trio
+        keyed = p2.update_attrs(acquisition_key="XX.R2D1..RAW").set_units("m")
+        plan = build_concat_plan(_flat([p1, keyed]), time=None)
+        assert len(plan.outputs) == 1
+        assert plan.outputs["acquisition_key"].iloc[0] == "XX.R2D1..RAW"
+        assert dc.get_quantity(plan.outputs["data_units"].iloc[0]) == dc.get_quantity(
+            "m"
+        )
+        # known, different units conflict, policed as a chunk plan polices them
+        mixed = _flat([p1.set_units("km"), keyed])
+        with pytest.raises(CoordMergeError, match="data_units"):
+            build_concat_plan(mixed, time=None)
+        plan = build_concat_plan(mixed, time=None, conflict="drop")
+        assert len(plan.outputs) == 1
+        assert "data_units" not in plan.outputs.columns
+
+    def test_new_dimension_is_described(self, trio):
+        """An output along a new dimension states that dimension and its range."""
+        p1 = trio[0]
+        copies = [p1, p1.new(), p1.new()]
+        plan = build_concat_plan(_flat(copies), wave_rank=None)
+        assert len(plan.outputs) == 1
+        row = plan.outputs.iloc[0]
+        assert row["dims"].endswith(",wave_rank")
+        envelope = (row["wave_rank_min"], row["wave_rank_max"], row["wave_rank_step"])
+        assert envelope == (0, 2, 1)
+        assert len(plan.members) == 3
+        # patches whose existing coordinates differ cannot share a new dimension
+        assert len(build_concat_plan(_flat(trio), wave_rank=None).outputs) == 3
+
+    def test_dimension_units_partition(self, trio):
+        """Unitless coordinate values stay apart from unitful ones."""
+        p1 = trio[0]
+        distance = p1.get_coord("distance")
+        shifted = p1.update_coords(distance_min=distance.max() + distance.step)
+        unitless = shifted.get_coord("distance").set_units(None)
+        bare = shifted.update_coords(distance=unitless)
+        assert len(build_concat_plan(_flat([p1, bare]), distance=None).outputs) == 2
+        assert len(build_concat_plan(_flat([p1, shifted]), distance=None).outputs) == 1
+        # a patch with no values along the dimension joins whichever it meets
+        collapsed = p1.mean("distance")
+        assert (
+            len(build_concat_plan(_flat([p1, collapsed]), distance=None).outputs) == 1
+        )
+
+    def test_empty_and_bad_arguments(self, trio):
+        """An empty relation plans nothing; bad arguments raise."""
+        plan = build_concat_plan(_flat(trio).iloc[:0], time=None)
+        assert plan.outputs.empty and plan.members.empty
+        with pytest.raises(ParameterError):
+            build_concat_plan(_flat(trio), time=None, distance=None)
+        with pytest.raises(ParameterError):
+            build_concat_plan(_flat(trio), time=0)

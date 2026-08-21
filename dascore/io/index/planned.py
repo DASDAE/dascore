@@ -23,7 +23,6 @@ import numpy as np
 import pandas as pd
 
 import dascore as dc
-from dascore.constants import WARN_LEVELS
 from dascore.core.coords import CoordSummary
 from dascore.io.index.backend import get_backend
 from dascore.io.index.catalog import (
@@ -45,7 +44,7 @@ from dascore.units import get_quantity
 from dascore.utils.attrs import _is_missing
 from dascore.utils.chunk_plan import _SOURCE_COLUMNS, _ensure_patch_id
 from dascore.utils.misc import _CanonicalRange, is_range
-from dascore.utils.patch import concatenate_patches
+from dascore.utils.patch import concatenate_planned
 from dascore.utils.patch_assembly import PatchAssembler
 from dascore.utils.pd import adjust_segments
 
@@ -388,7 +387,6 @@ class PlanResolver(PatchResolver):
         merge_kwargs: Mapping,
         parent_residuals: tuple = (),
         mode: str = "chunk",
-        check_behavior: WARN_LEVELS = "warn",
         origin_path=None,
         stamped: tuple[str, ...] = (),
         lossy: bool = False,
@@ -406,7 +404,6 @@ class PlanResolver(PatchResolver):
         self.merge_kwargs = dict(merge_kwargs)
         self.parent_residuals = tuple(parent_residuals)
         self.mode = mode
-        self.check_behavior = check_behavior
         # The kind rule which produced the plan decides assembly too,
         # whatever the config says by the time a patch is asked for.
         self.kind_attrs = dc.get_config().patch_kind_attrs
@@ -514,14 +511,16 @@ class PlanResolver(PatchResolver):
             assert len(members) == 1
             patch = self._load_member(members.iloc[0].to_dict())
         elif self.mode == "concat":
+            # the plan decided what fits together; assembly executes it
             loaded = [
                 self._load_member(kwargs) for kwargs in members.to_dict("records")
             ]
-            out = concatenate_patches(
-                loaded, check_behavior=self.check_behavior, **{self.dim: None}
+            patch = concatenate_planned(
+                loaded,
+                self.dim,
+                count=self.merge_kwargs.get("count"),
+                conflict=self.merge_kwargs.get("conflict", "raise"),
             )
-            assert len(out) == 1
-            patch = out[0]
         else:
             joined = members.assign(current_index=output_id)
             assembled = self._assembler()._patch_from_instruction_df(joined)
@@ -654,7 +653,6 @@ def derived_catalog(
     parent: PatchCatalog | None,
     merge_kwargs: Mapping,
     mode: str = "chunk",
-    check_behavior: WARN_LEVELS = "warn",
     origin_path=None,
     stamped: tuple[str, ...] = (),
     lossy: bool = False,
@@ -724,7 +722,6 @@ def derived_catalog(
         merge_kwargs=merge_kwargs,
         parent_residuals=parent_residuals,
         mode=mode,
-        check_behavior=check_behavior,
         origin_path=origin_path,
         stamped=stamped,
         lossy=lossy,

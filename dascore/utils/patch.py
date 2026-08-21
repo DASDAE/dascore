@@ -25,6 +25,7 @@ from dascore.constants import (
 from dascore.exceptions import (
     CoordDataError,
     CoordError,
+    CoordMergeError,
     IncompatiblePatchError,
     ParameterError,
     PatchCoordinateError,
@@ -1353,99 +1354,6 @@ def _with_kind(attrs: dc.PatchAttrs, kind: Mapping) -> dc.PatchAttrs:
     return attrs.update(**fill) if fill else attrs
 
 
-def _concat_compatible_rows(
-    df: pd.DataFrame,
-    dim: str,
-    check_behavior: WARN_LEVELS,
-    inconclusive: Sequence[str] = (),
-) -> pd.DataFrame:
-    """
-    Keep the patch-summary rows `concatenate_patches` would concatenate.
-
-    The same gates, from metadata, so a plan decided without loading data
-    agrees with the patches assembled from it: a row must not conflict in
-    kind with the rows admitted so far, must have the first row's dimensions
-    (anything else raises, as it does for patches), and must share the first
-    row's coordinate identity (def keys) on every public coordinate both
-    rows have, other than the concatenated one. A row rejected for its
-    coordinates binds no kind, exactly as a patch rejected for its
-    coordinates does not. Kind attrs absent from the columns are absent from
-    every patch and ignored.
-
-    `inconclusive` names def-key columns a selection still to be applied at
-    load makes stale: equal stale keys are still equal after the same trim,
-    but differing ones cannot be decided from metadata (a def key is a hash,
-    and the trimmed envelope is clamped to the query, not to the samples
-    kept), so such a row is not admitted and the message says to load the
-    selected patches and concatenate those.
-    """
-    validate_warn_level(check_behavior)
-    if df.empty:
-        return df
-    names = [x for x in get_config().patch_kind_attrs if x in df.columns]
-    first = df.iloc[0]
-    # every public coordinate other than the concatenated one must keep its
-    # identity across rows, as check_coords asks of the patches; private
-    # coordinates (def keys starting "__") are dropped before concatenation
-    structure = [
-        x
-        for x in df.columns
-        if x.endswith("_def_key") and not x.startswith("__") and x != f"_{dim}_def_key"
-    ]
-    run, keep, units_run = _KindRun(), [], None
-    has_units = "data_units" in df.columns
-    for _, row in df.iterrows():
-        kind = {x: _kind_value(row[x]) for x in names}
-        ok = run.admits(kind, check_behavior)
-        if (
-            ok
-            and "dims" in df.columns
-            and not _values_equal(row["dims"], first["dims"])
-        ):
-            # as concatenate_patches: different dimensions are never skipped
-            msg = "Cannot concatenate patches with different dimensions."
-            raise PatchCoordinateError(msg)
-        if ok and (structure or has_units):
-            # only coordinates both rows have are compared, as check_coords
-            # compares the shared coordinates
-            differing = [
-                x
-                for x in structure
-                if not (
-                    _is_missing(row[x])
-                    or _is_missing(first[x])
-                    or _values_equal(row[x], first[x])
-                )
-            ]
-            if not differing and has_units:
-                units = get_quantity(row["data_units"])
-                if not _data_units_agree(units_run, units, "ignore"):
-                    differing = ["data_units"]
-            if differing:
-                msg = (
-                    "Patches are not compatible for concatenation: coordinates "
-                    "other than the concatenated one, or the data units, differ "
-                    "from the first patch's."
-                )
-                if any(x in inconclusive for x in differing):
-                    msg += (
-                        " A selection still to be applied when the patches load "
-                        "may or may not reconcile them, which cannot be decided "
-                        "from metadata; load the selected patches (for example "
-                        "dc.spool(list(spool))) and concatenate those."
-                    )
-                warn_or_raise(
-                    msg, exception=IncompatiblePatchError, behavior=check_behavior
-                )
-                ok = False
-        keep.append(ok)
-        if ok:
-            run.add(kind)
-            if has_units and units_run is None:
-                units_run = get_quantity(row["data_units"])
-    return df if all(keep) else df[keep]
-
-
 def check_data_units(patch1, patch2, check_behavior: WARN_LEVELS = "raise") -> bool:
     """
     Return True unless the patches hold known, different data units.
@@ -1740,25 +1648,27 @@ def concatenate_patches(
     >>> import dascore as dc
     >>> patch = dc.get_example_patch()
     >>>
+    >>> from dascore.utils.patch import concatenate_patches
+    >>>
     >>> # Concatenate patches along time axis
-    >>> spool = dc.spool([patch, patch])
-    >>> spool_concat = spool.concatenate(time=None)
-    >>> assert len(spool_concat) == 1
+    >>> out = concatenate_patches([patch, patch], time=None)
+    >>> assert len(out) == 1
     >>>
     >>> # Concatenate patches along a new dimension.
     >>> # Note: This will only include the first patch if existing
     >>> # dimensions are not identical.
-    >>> spool_concat = spool.concatenate(wave_rank=None)
-    >>> assert "wave_rank" in spool_concat[0].dims
+    >>> out = concatenate_patches([patch, patch], wave_rank=None)
+    >>> assert "wave_rank" in out[0].dims
     >>>
-    >>> # Concatenate patches in groups of 3. Note: spools keep one
-    >>> # entry per patch instance, so distinct copies are needed.
-    >>> big_spool = dc.spool([patch.new() for _ in range(12)])
-    >>> spool_concat = big_spool.concatenate(time=3)
-    >>> assert len(spool_concat) == 4
+    >>> # Concatenate patches in groups of 3.
+    >>> out = concatenate_patches([patch] * 12, time=3)
+    >>> assert len(out) == 4
 
     Notes
     -----
+    - [`Spool.concatenate`](`dascore.Spool.concatenate`) is the spool
+      form: it partitions patches which cannot be concatenated together
+      into separate outputs instead of skipping them.
     - [`Spool.chunk`](`dascore.Spool.chunk`) performs a similar operation
       but accounts for coordinate values.
     - See also the
@@ -1776,7 +1686,7 @@ def concatenate_patches(
         return dim, val
 
     def get_compatible_patches(patches, dim, check_behavior):
-        """Get the patches which can be concatenated, dim names, and new dim."""
+        """Get the patches which can be concatenated with the first."""
         # We need to drop private coords for dft concats to work.
         patches = list(x.drop_private_coords() for x in patches)
         first_patch = patches[0]
@@ -1786,10 +1696,7 @@ def concatenate_patches(
         run = _KindRun()
         # the units the run has settled on: the first admitted member's known ones
         units_run = None
-        # Get dim name and such
         first_dims = first_patch.dims
-        new_dim = dim not in first_dims
-        dims = tuple([*list(first_dims), dim]) if new_dim else first_dims
         # Get patches compatible with first.
         for p in patches:
             kind = get_patch_kind(p)
@@ -1811,51 +1718,94 @@ def concatenate_patches(
                 run.add(kind)
                 units_run = units_run if units_run is not None else units
                 compat_patches.append(p)
-        return compat_patches, dims, new_dim
-
-    def get_output_array(patches, axis, new_dim):
-        """Get a list of output arrays."""
-        sub_arrays = [x.data[..., None] if new_dim else x.data for x in patches]
-        out = np.concatenate(sub_arrays, axis=axis)
-        return out
-
-    def _get_new_coords(patch_list, dim, new_dim):
-        """Get new coordinates for creating patch."""
-        coords = patch_list[0].coords
-        if new_dim:
-            coords = coords.update(**{dim: (dim, len(patch_list))})
-        else:
-            array_list = [x.get_array(dim) for x in patch_list]
-            array = np.concatenate(array_list, axis=0)
-            coords = coords.update(**{dim: array})
-        return coords
+        return compat_patches
 
     dim, val = _get_dim_and_value(kwargs)
-    patches, dims, new_dim = get_compatible_patches(patches, dim, check_behavior)
+    patches = get_compatible_patches(patches, dim, check_behavior)
+    fingerprint = Concatenate.from_kwargs(check_behavior=check_behavior, **kwargs)
     out = []
     for patch_list in yield_sub_sequences(patches, val):
-        ar = get_output_array(patch_list, dims.index(dim), new_dim)
-        warn_if_histories_differ([x.attrs for x in patch_list], "Concatenating")
         # An output's kind is the union over its own members only.
         run = _KindRun()
         for p in patch_list:
             run.add(get_patch_kind(p))
         attrs = _with_kind(patch_list[0].attrs, run.kind)
         attrs = _with_data_units(attrs, [x.attrs for x in patch_list])
-        attrs = _maybe_add_history_str(attrs, "concatenate")
-        # Which data this now is: every member which went in, in order.
-        # Taking the first patch's id would claim the result was only the
-        # first source.
-        attrs = stamp_combination(
-            attrs,
-            [x.attrs for x in patch_list],
-            Concatenate.from_kwargs(
-                check_behavior=check_behavior, **kwargs
-            ).fingerprint,
-        )
-        coords = _get_new_coords(patch_list, dim, new_dim)
-        out.append(dc.Patch(data=ar, attrs=attrs, coords=coords, dims=dims))
+        out.append(_concatenate_group(patch_list, dim, attrs, fingerprint.fingerprint))
     return out
+
+
+def _concatenate_group(
+    patches: Sequence[dc.Patch], dim: str, attrs: dc.PatchAttrs, fingerprint: str
+) -> dc.Patch:
+    """
+    Concatenate patches already known to fit, along `dim`.
+
+    The patches share dimensions and every coordinate but `dim`, which is
+    either a dimension they all have (its values are concatenated) or a
+    new one (each patch becomes one sample of it). `attrs` are the
+    output's, history and ids aside, which this adds: the operation's own
+    history entry, and the ids of every member which went in — taking the
+    first patch's id would claim the result was only the first source.
+    """
+    first = patches[0]
+    new_dim = dim not in first.dims
+    dims = (*first.dims, dim) if new_dim else first.dims
+    axis = dims.index(dim)
+    arrays = [x.data[..., None] if new_dim else x.data for x in patches]
+    data = np.concatenate(arrays, axis=axis)
+    if new_dim:
+        coords = first.coords.update(**{dim: (dim, len(patches))})
+    else:
+        values = np.concatenate([x.get_array(dim) for x in patches], axis=0)
+        coords = first.coords.update(**{dim: values})
+    warn_if_histories_differ([x.attrs for x in patches], "Concatenating")
+    attrs = _maybe_add_history_str(attrs, "concatenate")
+    attrs = stamp_combination(attrs, [x.attrs for x in patches], fingerprint)
+    return dc.Patch(data=data, attrs=attrs, coords=coords, dims=dims)
+
+
+def concatenate_planned(
+    patches: Sequence[dc.Patch],
+    dim: str,
+    count: int | None = None,
+    conflict: Literal["drop", "raise", "keep_first"] = "raise",
+) -> dc.Patch:
+    """
+    Concatenate the members of one planned output, as the plan decided.
+
+    A concat plan (`dascore.utils.chunk_plan.build_concat_plan`) has
+    already decided kind, dimensions, and the dimensions' identities, so
+    none of that is asked again. What metadata cannot settle is settled
+    here, as a merge settles it: the attrs fold as a merge folds them
+    (`combine_patch_attrs`, a missing value matching anything and known
+    conflicts policed by `conflict`), and a non-dimensional coordinate the
+    members hold different values for either raises (`conflict="raise"`)
+    or is dropped from the output.
+    """
+    patches = [x.drop_private_coords() for x in patches]
+    first = patches[0]
+    assert all(x.dims == first.dims for x in patches), (
+        "a planned output holds one set of dimensions"
+    )
+    conflicting: set[str] = set()
+    for other in patches[1:]:
+        shared = set(first.coords.coord_map) & set(other.coords.coord_map)
+        for name in shared - {dim, *first.dims}:
+            if first.coords.coord_map[name] != other.coords.coord_map[name]:
+                conflicting.add(name)
+    if conflicting and conflict == "raise":
+        msg = (
+            f"Cannot concatenate along {dim!r}: the coordinates {sorted(conflicting)} "
+            "hold different values. Pass conflict='drop' to leave them out."
+        )
+        raise CoordMergeError(msg)
+    if conflicting:
+        drop = {x: None for x in conflicting}
+        patches = [x.update(coords=x.coords.update(**drop)) for x in patches]
+    attrs = combine_patch_attrs([x.attrs for x in patches], conflict=conflict)
+    task = Concatenate(arguments=((dim, count),), check_behavior=None)
+    return _concatenate_group(patches, dim, attrs, task.fingerprint)
 
 
 @compose_docstring(check_desc=check_behavior_description)
