@@ -255,6 +255,33 @@ class TestCoverage:
         """The plot is callable without the namespace, as tests need."""
         assert coverage(whole) is not None
 
+    def test_a_gap_is_labelled_in_its_own_units(self):
+        """Only time is measured in seconds; distance says metres."""
+        first = dc.get_example_patch("random_das", distance_min=0, shape=(10, 5))
+        second = dc.get_example_patch("random_das", distance_min=22, shape=(10, 5))
+        ax = dc.spool([first, second]).viz.coverage(distance=...)
+        assert [x.get_text() for x in ax.texts if x.get_text()] == ["13 m"]
+
+    def test_a_one_sample_run_is_drawn(self):
+        """A patch of one sample is a run, not a run which is not there."""
+        one = dc.get_example_patch(
+            "random_das", time_min=np.datetime64("2024-01-01"), shape=(3, 1)
+        )
+        rest = dc.get_example_patch(
+            "random_das", time_min=np.datetime64("2024-01-02"), shape=(3, 20)
+        )
+        spool = dc.spool([one, rest])
+        runs = spool_viz._runs(
+            spool.get_coverage("time"), spool.get_gaps("time"), "time"
+        )
+        assert len(runs) == 2
+        # The lone sample has no width, so it is drawn where it sits:
+        # plot_lanes gives a zero-width run a point marker, not a box.
+        assert runs.iloc[0]["start"] == runs.iloc[0]["end"]
+        ax = spool.viz.coverage()
+        assert _kinds(ax)["data"] == 1
+        assert len([x for x in ax.lines if x.get_marker() == "v"]) == 1
+
 
 class TestNaming:
     """How a lane says which group it is and how complete."""
@@ -299,6 +326,20 @@ class TestNaming:
     def test_duration_of_a_plain_number(self):
         """A dimension which is not time still labels its gaps."""
         assert _human_duration(12.0) == "12 s"
+
+    @pytest.mark.parametrize(
+        "size, units, text",
+        [
+            (13.0, "m", "13 m"),
+            (2.5, "", "2.5"),
+            # Parity with a duration: nothing wide says nothing.
+            (0.0, "m", ""),
+            (float("nan"), "m", ""),
+        ],
+    )
+    def test_gap_label_off_the_time_axis(self, size, units, text):
+        """A gap along another dimension is measured in that dimension."""
+        assert spool_viz._gap_label(size, units, dated=False) == text
 
     def test_duration_smaller_than_any_unit(self):
         """A gap under a microsecond still says how long it is."""
@@ -484,6 +525,18 @@ class TestCalendar:
         """A spool with no time in it has no calendar."""
         with pytest.raises(ParameterError, match="no time to draw"):
             dc.spool([]).viz.calendar()
+
+    def test_relative_time_has_no_calendar(self):
+        """Time stated relative to something sits on no date."""
+        patch = dc.get_example_patch("example_event_2")
+        assert not np.issubdtype(patch.coords.get_array("time").dtype, np.datetime64)
+        with pytest.raises(ParameterError, match="states time relative"):
+            dc.spool([patch]).viz.calendar()
+
+    def test_relative_time_still_draws_coverage(self):
+        """Coverage measures a dimension as it is given, so it still works."""
+        spool = dc.spool([dc.get_example_patch("example_event_2")])
+        assert spool.viz.coverage() is not None
 
     def test_ax_and_show(self, whole, monkeypatch):
         """A given ax is drawn on; show calls plt.show."""

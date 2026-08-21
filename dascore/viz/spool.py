@@ -160,7 +160,10 @@ def _runs(report: pd.DataFrame, gaps: pd.DataFrame, dim: str) -> pd.DataFrame:
         holes = gaps[gaps["group_id"] == group["group_id"]].sort_values(low)
         edge = group[low]
         for _, hole in holes.iterrows():
-            if hole[low] > edge:
+            # A run of one sample begins where the gap after it begins,
+            # so equal bounds are a run -- plot_lanes draws it as a point
+            # marker -- rather than a run which is not there.
+            if hole[low] >= edge:
                 rows.append((group["group_id"], edge, hole[low]))
             edge = hole[high]
         if edge <= group[high]:
@@ -168,10 +171,24 @@ def _runs(report: pd.DataFrame, gaps: pd.DataFrame, dim: str) -> pd.DataFrame:
     return pd.DataFrame(rows, columns=["group_id", "start", "end"])
 
 
+def _gap_label(size, units: str, dated: bool) -> str:
+    """Say how wide a gap is, in what its own dimension is measured in."""
+    if dated:
+        return _human_duration(size)
+    value = float(size)
+    if not np.isfinite(value) or value == 0:
+        return ""
+    return f"{value:g} {units}".strip()
+
+
 def _tile(report: pd.DataFrame, gaps: pd.DataFrame, dim: str) -> pd.DataFrame:
     """Lay each group's runs and holes out as the lane which draws them."""
     low, high = f"{dim}_min", f"{dim}_max"
     names = dict(zip(report["group_id"], _lane_names(report, dim), strict=True))
+    # Only time is measured in seconds. Any other dimension states what
+    # it is measured in, and a gap along it is labelled with that.
+    dated = pd.api.types.is_timedelta64_dtype(gaps["gap_size"])
+    units = gaps.get(f"{dim}_units", pd.Series(dtype=object))
     rows = [
         (names[group_id], start, end, "data", "")
         for group_id, start, end in _runs(report, gaps, dim).itertuples(index=False)
@@ -182,9 +199,9 @@ def _tile(report: pd.DataFrame, gaps: pd.DataFrame, dim: str) -> pd.DataFrame:
             hole[low],
             hole[high],
             "gap",
-            _human_duration(hole["gap_size"]),
+            _gap_label(hole["gap_size"], str(units.get(index, "") or ""), dated),
         )
-        for _, hole in gaps.iterrows()
+        for index, hole in gaps.iterrows()
     ]
     return pd.DataFrame(rows, columns=["lane", "start", "end", "kind", "label"])
 
@@ -511,6 +528,13 @@ def calendar(
     dim = "time"
     report = spool.get_coverage(dim, tolerance=tolerance, group=group)
     gaps = spool.get_gaps(dim, tolerance=tolerance, group=group)
+    if len(report) and not pd.api.types.is_datetime64_any_dtype(report[f"{dim}_min"]):
+        msg = (
+            "A calendar puts data on dates, and this spool states time "
+            "relative to something rather than as a date. Draw it with "
+            "Spool.viz.coverage, which measures a dimension as it is given."
+        )
+        raise ParameterError(msg)
     runs = _runs(report, gaps, dim)
     if not len(runs):
         msg = "This spool holds no time to draw a calendar of."
