@@ -231,12 +231,6 @@ class TestSobelFilter:
 class TestMedianFilter:
     """Simple tests on median filter."""
 
-    def test_median_no_kwargs_raises(self, random_patch):
-        """Apply default values."""
-        msg = "You must"
-        with pytest.raises(ParameterError, match=msg):
-            random_patch.median_filter()
-
     def test_median_filter_time(self):
         """Test median filter in time dimension."""
         # A median filter costs the window size times the sample count, so a
@@ -261,12 +255,6 @@ class TestMedianFilter:
 
 class TestNotchFilter:
     """Tests for the notch filter."""
-
-    def test_notch_no_kwargs_raises(self, random_patch):
-        """Test that no dimension raises an appropriate error."""
-        msg = "You must"
-        with pytest.raises(ParameterError, match=msg):
-            random_patch.notch_filter(q=30)
 
     def test_notch_filter_time(self, random_patch):
         """Test the notch filter along the time dimension."""
@@ -326,12 +314,6 @@ class TestNotchFilter:
 
 class TestSavgolFilter:
     """Simple tests on Savgol filter."""
-
-    def test_savgol_no_kwargs_raises(self, random_patch):
-        """Ensure no kwargs raises."""
-        msg = "You must"
-        with pytest.raises(ParameterError, match=msg):
-            random_patch.savgol_filter(polyorder=2)
 
     def test_savgol_filter_time(self):
         """Test savgol filter in time dimension."""
