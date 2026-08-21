@@ -283,6 +283,36 @@ class TestDeclaredDtypes:
         assert loaded[0].extra["n"] == "a"
         assert "n" not in loaded[1].extra
 
+    def test_a_declared_text_column_keeps_its_text(self, tmp_path):
+        """A cell a table would read as a number, a truth value or a date
+        stays the text it was written as when the column is declared text.
+        """
+        frame = pd.DataFrame(
+            {
+                "distance_start": [0.0, 1.0, 2.0],
+                "distance_end": [1.0, 2.0, 3.0],
+                "label": ["001", "true", "2020-01-01"],
+            }
+        )
+        columns = {"label": {"dtype": "str"}}
+        built = dc.AnnotationSet(frame, dims=("distance",), columns=columns)
+        loaded = dc.annotations(built.io.save(tmp_path / "set"))
+        assert [x.extra["label"] for x in loaded] == ["001", "true", "2020-01-01"]
+        assert loaded == built
+        # A bare table handed the declaration reads the same way.
+        path = tmp_path / "set.csv"
+        built.io.to_csv(path)
+        bare = dc.annotations(path, dims=("distance",), columns=columns)
+        assert [x.extra["label"] for x in bare] == ["001", "true", "2020-01-01"]
+
+    def test_an_empty_columns_override_restores_nothing(self, typed, tmp_path):
+        """`columns={}` clears the declarations, so nothing is restored from them."""
+        path = tmp_path / "typed.csv"
+        typed.io.to_csv(path)
+        loaded = dc.annotations(path, dims=("distance",), attrs=typed.attrs, columns={})
+        assert not loaded.attrs.columns
+        assert loaded.io.to_dataframe()["count"].dtype.name != "Int64"
+
     def test_a_declaration_which_is_not_one(self, tmp_path):
         """A column spec which is no mapping is refused as a bad attrs file."""
         frame = pd.DataFrame({"distance_start": [0.0], "distance_end": [1.0], "n": [1]})

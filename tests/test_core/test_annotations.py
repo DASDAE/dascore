@@ -245,10 +245,15 @@ class TestDimensionSpelling:
         with pytest.raises(ParameterError, match="neither numbers nor times"):
             AnnotationSet(pd.DataFrame({"time": ["2020-13-45"]}), dims=DIMS)
 
-    def test_a_boolean_dimension_refused(self):
-        """A truth value is no place on an axis, and a table reads it as a word."""
+    @pytest.mark.parametrize(
+        "values",
+        [[True], pd.array([True, None], dtype="boolean"), [np.True_, None]],
+    )
+    def test_a_boolean_dimension_refused(self, values):
+        """A truth value is no place on an axis, numpy's and a nullable one too."""
+        frame = pd.DataFrame({"distance": pd.Series(values, dtype=object)})
         with pytest.raises(ParameterError, match="numbers or times"):
-            AnnotationSet(pd.DataFrame({"distance": [True]}), dims=DIMS)
+            AnnotationSet(frame, dims=DIMS)
 
     def test_datetime_endpoints_keep_their_type(self):
         """A time bound is a time, not the integer behind it."""
@@ -636,11 +641,20 @@ class TestVertices:
         assert vertices["seq"].tolist() == [1, 2, 10]
         assert vertices["distance"].tolist() == [1.0, 2.0, 3.0]
 
-    def test_non_numeric_seq_refused(self):
-        """What the loader refuses to read, the set refuses to hold."""
+    @pytest.mark.parametrize(
+        "seq", [["first", "second"], [True, False], [np.True_, np.False_]]
+    )
+    def test_non_numeric_seq_refused(self, seq):
+        """What the loader refuses to read, the set refuses to hold -- a truth
+        value included, which `to_numeric` would otherwise count as 1 or 0.
+        """
         frame = pd.DataFrame({"id": ["p1"], "geometry": ["path"]})
         vertices = pd.DataFrame(
-            {"id": ["p1"] * 2, "seq": ["first", "second"], "distance": [1.0, 2.0]}
+            {
+                "id": ["p1"] * 2,
+                "seq": pd.Series(seq, dtype=object),
+                "distance": [1.0, 2.0],
+            }
         )
         with pytest.raises(ParameterError, match="non-numeric seq"):
             AnnotationSet(frame, dims=DIMS, vertices=vertices)

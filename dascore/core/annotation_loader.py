@@ -211,9 +211,13 @@ def _read_cells(
     path: Path,
     ordered: bool = False,
     typed: bool = False,
+    text: Collection[str] = (),
 ) -> pd.DataFrame:
     """
     Read a table's text cells as the values each column holds.
+
+    A column the set declares as text is left as the text it states:
+    "001" read as a number would not be the label it was written as.
 
     Only the vertices are ordered, so only they read ``seq`` as the number
     it is: the annotations table does not reserve that name, and an
@@ -245,6 +249,8 @@ def _read_cells(
             out[name] = _read_ordinal(series, path)
         elif str(name) == "basis":
             out[name] = _read_basis(series, path)
+        elif str(name) in text:
+            out[name] = series
         elif typed:
             # Text in a typed table is text: a cell reading 'true' in a
             # format which has a boolean is the word, not the boolean.
@@ -291,6 +297,7 @@ def _read_set_table(
     what: str,
     ordered: bool = False,
     skip: int = 0,
+    text: Collection[str] = (),
 ) -> pd.DataFrame | None:
     """
     Read one of a set's tables, with its cells typed.
@@ -303,11 +310,11 @@ def _read_set_table(
         frame, _ = read_parquet(path, what=what, empty=True)
         if not len(frame.columns):
             return None
-        return _read_cells(frame, dims, path, ordered=ordered, typed=True)
+        return _read_cells(frame, dims, path, ordered=ordered, typed=True, text=text)
     if _is_blank(path):
         return None
     frame = read_table(path, what=what, skip=skip)
-    return _read_cells(frame, dims, path, ordered=ordered)
+    return _read_cells(frame, dims, path, ordered=ordered, text=text)
 
 
 def _is_parquet(path: Path) -> bool:
@@ -959,8 +966,11 @@ def _load_set(directory: Path, attrs: Mapping, dims, **kwargs) -> AnnotationSet:
         raise ParameterError(msg)
     declared, skip = _read_table_dims(table)
     stated = _declared_dims(attrs, dims, directory, declared, table)
-    frame = _read_set_table(table, stated, "no annotations", skip=skip)
-    frame = _restore_dtypes(frame, attrs.get("columns"), table)
+    columns = attrs.get("columns")
+    frame = _read_set_table(
+        table, stated, "no annotations", skip=skip, text=_text_columns(columns)
+    )
+    frame = _restore_dtypes(frame, columns, table)
     # Found as the annotations table is: a set spells each of its parts
     # once, and a `vertices.CSV` beside a `vertices.csv` is two spellings of
     # one part rather than a table nobody reads.
@@ -993,17 +1003,9 @@ def _restore_dtypes(frame, columns: Mapping | None, path: Path):
     which is not one is left for the set's own validation to refuse.
     """
     restored = {}
-    for name, spec in (columns or {}).items():
-        dtype = (
-            spec.get("dtype")
-            if isinstance(spec, Mapping)
-            else getattr(spec, "dtype", None)
-        )
-        if frame is None or not dtype or name not in frame.columns:
+    for name, dtype in _declared_dtypes(columns).items():
+        if frame is None or name not in frame.columns or _is_text_dtype(dtype):
             continue
-        with suppress(TypeError):
-            if pd.api.types.pandas_dtype(dtype).name in TEXT_DTYPES:
-                continue
         try:
             restored[name] = frame[name].astype(dtype)
         except (TypeError, ValueError) as error:
@@ -1013,6 +1015,36 @@ def _restore_dtypes(frame, columns: Mapping | None, path: Path):
             )
             raise ParameterError(msg) from error
     return frame.assign(**restored) if restored else frame
+
+
+def _declared_dtypes(columns: Mapping | None) -> dict[str, str]:
+    """The dtype each declared column states, where the declaration is one."""
+    out = {}
+    for name, spec in (columns or {}).items():
+        dtype = (
+            spec.get("dtype")
+            if isinstance(spec, Mapping)
+            else getattr(spec, "dtype", None)
+        )
+        if dtype:
+            out[name] = dtype
+    return out
+
+
+def _is_text_dtype(dtype: str) -> bool:
+    """Whether a declared dtype is a spelling of text; an unreadable one is not."""
+    with suppress(TypeError):
+        return pd.api.types.pandas_dtype(dtype).name in TEXT_DTYPES
+    return False
+
+
+def _text_columns(columns: Mapping | None) -> frozenset[str]:
+    """The columns a set declares as text, which a table leaves as it reads them."""
+    return frozenset(
+        name
+        for name, dtype in _declared_dtypes(columns).items()
+        if _is_text_dtype(dtype)
+    )
 
 
 def _load_file(path: Path, dims, **kwargs) -> AnnotationSet:
@@ -1030,8 +1062,14 @@ def _load_file(path: Path, dims, **kwargs) -> AnnotationSet:
     # in, since nothing can be read before that is known.
     given = _given_attrs(kwargs)
     stated = _declared_dims(given, dims, path, declared, path)
-    frame = _read_set_table(path, stated, "no annotations", skip=skip)
-    columns = kwargs.get("columns") or given.get("columns")
+    # An empty mapping is an override which clears the declarations, as
+    # the set reads it, so only an absent one falls back to the attrs.
+    columns = kwargs.get("columns")
+    if columns is None:
+        columns = given.get("columns")
+    frame = _read_set_table(
+        path, stated, "no annotations", skip=skip, text=_text_columns(columns)
+    )
     return AnnotationSet(_restore_dtypes(frame, columns, path), dims=stated, **kwargs)
 
 

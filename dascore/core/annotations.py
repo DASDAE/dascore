@@ -1413,7 +1413,7 @@ def read_dimension(series: pd.Series, where: str = "") -> pd.Series:
     if not stated.any():
         return series
     cells = series[stated]
-    if kind != "b" and not any(isinstance(x, bool) for x in cells):
+    if kind != "b" and not any(_is_bool(x) for x in cells):
         with suppress(TypeError, ValueError):
             return pd.to_numeric(series)
         try:
@@ -1438,14 +1438,24 @@ def read_dimension(series: pd.Series, where: str = "") -> pd.Series:
 
 def read_ordinal(series: pd.Series, where: str = "") -> pd.Series:
     """Read the vertex order column as the numbers it states."""
-    try:
-        return pd.to_numeric(series)
-    except (TypeError, ValueError) as error:
-        msg = (
-            f"The vertices{where} state a non-numeric {_VERTEX_COLUMNS[1]}: "
-            f"{error}. A vertex states its place in the order as a number."
-        )
-        raise ParameterError(msg) from error
+    # Refused before `to_numeric`, which would count a truth value as 1 or 0.
+    if getattr(series.dtype, "kind", "") == "b" or any(_is_bool(x) for x in series):
+        error = "it holds truth values"
+    else:
+        try:
+            return pd.to_numeric(series)
+        except (TypeError, ValueError) as exc:
+            error = str(exc)
+    msg = (
+        f"The vertices{where} state a non-numeric {_VERTEX_COLUMNS[1]}: "
+        f"{error}. A vertex states its place in the order as a number."
+    )
+    raise ParameterError(msg)
+
+
+def _is_bool(value) -> bool:
+    """Whether a cell is a truth value, numpy's included."""
+    return isinstance(value, bool | np.bool_)
 
 
 def _normalize_times(frame: pd.DataFrame, dims: Sequence[str] = ()) -> pd.DataFrame:
