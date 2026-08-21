@@ -13,6 +13,7 @@ import pytest
 
 import dascore as dc
 import dascore.utils.patch_assembly as assembly_mod
+from dascore.core.coords import get_coord
 from dascore.core.spool import BaseSpool, Spool
 from dascore.examples import ricker_moveout
 from dascore.exceptions import (
@@ -1697,6 +1698,44 @@ class TestConcatenatePartitions:
         out = dc.spool([a, b]).concatenate(time=None)
         assert out.get_contents()["clock_step"].iloc[0] == -1.0
         assert out[0].get_coord("clock").step == -1.0
+
+    def test_the_dimension_keeps_its_units(self, pair):
+        """The joined dimension is spelled as the catalog says it is."""
+        first, other = pair
+        n = first.shape[first.get_axis("distance")]
+        a = first.update_coords(distance=np.arange(n) * 1.0).convert_units(distance="m")
+        b = other.update_coords(distance=(np.arange(n) + n) * 1.0).convert_units(
+            distance="m"
+        )
+        out = dc.spool([a, b]).concatenate(distance=None)
+        assert out.get_contents()["distance_units"].iloc[0] == "m"
+        assert out[0].get_coord("distance").units == dc.get_quantity("m")
+        # a member with no values along it states no units and adopts them
+        blank = first.update_coords(distance=get_coord(shape=(n,)))
+        out = dc.spool([blank, a]).concatenate(distance=None)
+        assert out.get_contents()["distance_units"].iloc[0] == "m"
+        assert out[0].get_coord("distance").units == dc.get_quantity("m")
+
+    def test_value_less_member_joins_a_dated_dimension(self, pair):
+        """Placeholders take the kind the stated members use."""
+        first, _ = pair
+        dated = first.rename_coords(time="stamp")
+        nt = dated.shape[dated.get_axis("stamp")]
+        blank = dated.update_coords(stamp=get_coord(shape=(nt,)))
+        out = dc.spool([blank, dated]).concatenate(stamp=None)
+        stamp = out[0].get_coord("stamp")
+        assert stamp.dtype == dated.get_coord("stamp").dtype
+        assert stamp.shape == (2 * nt,)
+
+    def test_keep_first_dtype_follows_the_conversion(self, pair):
+        """Converting an integer member to another unit floats it, as the row says."""
+        first, other = pair
+        ints = first.new(data=first.data.astype("int32")).set_units("m")
+        km = other.new(data=other.data.astype("int32")).set_units("km")
+        out = dc.spool([ints, km]).concatenate(time=None, conflict="keep_first")
+        row_dtype = out.get_contents()["_dtype"].iloc[0]
+        assert np.dtype(row_dtype) == out[0].data.dtype
+        assert np.dtype(row_dtype).kind == "f"
 
     def test_all_null_rider_is_not_partial(self, pair):
         """A rider every member states, though all its values are NaN, stays."""

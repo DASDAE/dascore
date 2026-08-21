@@ -1773,8 +1773,18 @@ def _concatenate_group(
     if new_dim:
         coords = first.coords.update(**{dim: (dim, len(patches))})
     else:
-        values = np.concatenate([x.get_array(dim) for x in patches], axis=0)
-        coords = first.coords.update(**{dim: values})
+        members = [x.get_coord(dim) for x in patches]
+        units = _lowest_units(members) or next(
+            (x.units for x in members if x.units is not None), None
+        )
+        if units is not None:
+            members = [
+                x if x.units is None else x.convert_units(units) for x in members
+            ]
+        values = np.concatenate(_joinable(members), axis=0)
+        coords = first.coords.update(
+            **{dim: dc.core.coords.get_coord(data=values, units=units)}
+        )
         # coordinates riding the dimension which every member states the
         # same way join along it too; resizing the dimension drops them
         riders = {}
@@ -1810,6 +1820,27 @@ def _concatenate_group(
     attrs = _maybe_add_history_str(attrs, "concatenate")
     attrs = stamp_combination(attrs, [x.attrs for x in patches], fingerprint)
     return dc.Patch(data=data, attrs=attrs, coords=coords, dims=dims)
+
+
+def _joinable(coords) -> list[np.ndarray]:
+    """
+    The coordinates' values, the value-less ones taking the others' kind.
+
+    A member with no values along the dimension holds placeholders whose
+    dtype says nothing (floating NaN); numpy cannot join those with, say,
+    datetimes, so they are recast as the stated members' own nulls.
+    """
+    arrays = [x.values for x in coords]
+    blank = [x.dtype.kind == "f" and bool(np.all(pd.isnull(x))) for x in arrays]
+    if all(blank) or not any(blank):
+        return arrays
+    target = np.result_type(*[x.dtype for x, b in zip(arrays, blank) if not b])
+    if target.kind == "f":
+        return arrays
+    null = np.array("NaT").astype(target) if target.kind in "mM" else target.type()
+    return [
+        np.full(x.shape, null, dtype=target) if b else x for x, b in zip(arrays, blank)
+    ]
 
 
 def _lowest_units(coords):

@@ -1771,6 +1771,12 @@ def build_concat_plan(
         # coordinate) has a null envelope, which the output's skips
         data[min_name] = by_output[min_name].min().to_numpy()
         data[max_name] = by_output[max_name].max().to_numpy()
+        if unit_col in sorted_df.columns:
+            # a member with no values along the dimension states no unit;
+            # the output speaks the first unit any member states, which is
+            # what assembly joins in
+            known = known_only(sorted_df[[unit_col]])[unit_col]
+            data[unit_col] = known.groupby(codes, sort=True).first().to_numpy()
         if step_name in sorted_df.columns:
             data[step_name] = _concatenated_steps(sorted_df, codes, name)
     if "dims" in sorted_df.columns:
@@ -1840,6 +1846,15 @@ def build_concat_plan(
             first[i] if uniform[i] else _combined_dtype(all_dtypes.iloc[a : a + n])
             for i, (a, n) in enumerate(zip(seg_starts, sizes))
         ]
+        if conflict == "keep_first" and "data_units" in sorted_df.columns:
+            # keeping one spelling of the data units converts the members
+            # stated otherwise, which floats an integer array
+            stated = known_only(sorted_df[["data_units"]])["data_units"]
+            converts = stated.groupby(codes, sort=True).nunique(dropna=True) > 1
+            combined = [
+                str(np.result_type(x, np.float64)) if c and not pd.isnull(x) else x
+                for x, c in zip(combined, converts.to_numpy())
+            ]
         data["_dtype"] = ["" if pd.isnull(x) else str(x) for x in combined]
     data["output_id"] = np.arange(n_out)
     outputs = pd.DataFrame(data)
