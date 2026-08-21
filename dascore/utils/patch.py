@@ -1446,6 +1446,7 @@ def check_coords(
     check_behavior: WARN_LEVELS = "raise",
     dim_to_ignore=None,
     ignore_dim_eq_shape=True,
+    riders_vary: bool = False,
 ) -> bool:
     """
     Return True if the coordinates of two patches are compatible, else False.
@@ -1462,9 +1463,12 @@ def check_coords(
     dim_to_ignore
         None by default (all coordinates must be identical).
         String specifying a dimension that differences in values,
-        but not shape, are allowed; coordinates riding that dimension
-        are allowed the same differences. A coordinate attached to
-        different dimensions in the two patches is never compatible.
+        but not shape, are allowed. A coordinate attached to different
+        dimensions in the two patches is never compatible.
+    riders_vary
+        If True, coordinates riding `dim_to_ignore` are allowed the same
+        differences as the dimension, for an operation which joins them
+        along it (concatenation); stacking keeps the first patch's.
     ignore_dim_eq_shape
         If True, the ignored dims must be equal shape to pass check.
         If dim_to_ignore is None this has no effect.
@@ -1484,7 +1488,7 @@ def check_coords(
         elif coord1 == coord2:
             # Straightforward case, coords are identical.
             continue
-        elif coord == dim_to_ignore or dim_to_ignore in cdims:
+        elif coord == dim_to_ignore or (riders_vary and dim_to_ignore in cdims):
             # If dimension that's ok to ignore value differences,
             # check whether shape is the same.
             if coord1.shape == coord2.shape:
@@ -1716,6 +1720,7 @@ def concatenate_patches(
                 check_behavior=check_behavior,
                 dim_to_ignore=dim,
                 ignore_dim_eq_shape=False,
+                riders_vary=True,
             )
             units = get_quantity(p.attrs.data_units)
             units_ok = coords_ok and _data_units_agree(units_run, units, check_behavior)
@@ -1774,10 +1779,11 @@ def _concatenate_group(
                 # a member lacks it, or attaches it elsewhere: values cannot
                 # be invented for it, so it is left out
                 continue
-            # the first stated units win; a unitless member adopts them,
+            # one spelling, the one the catalog keeps too: that of the
+            # member lowest along the rider; a unitless member adopts it,
             # as a unitless operand conflicts with nothing
             members = [x.get_coord(name) for x in patches]
-            units = next((x.units for x in members if x.units is not None), None)
+            units = _lowest_units(members)
             if units is not None:
                 members = [x.convert_units(units) for x in members]
             rider_axis = cdims.index(dim)
@@ -1789,6 +1795,17 @@ def _concatenate_group(
     attrs = _maybe_add_history_str(attrs, "concatenate")
     attrs = stamp_combination(attrs, [x.attrs for x in patches], fingerprint)
     return dc.Patch(data=data, attrs=attrs, coords=coords, dims=dims)
+
+
+def _lowest_units(coords):
+    """The units of the unitful coordinate whose minimum is lowest, else None."""
+    stated = [x for x in coords if x.units is not None]
+    if not stated:
+        return None
+    base = stated[0].units
+    lows = np.array([to_float(x.convert_units(base).min()) for x in stated])
+    lows = np.where(np.isnan(lows), np.inf, lows)
+    return stated[int(np.argmin(lows))].units
 
 
 def concatenate_planned(

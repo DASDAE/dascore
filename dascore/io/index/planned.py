@@ -42,7 +42,11 @@ from dascore.io.index.ingest import (
 )
 from dascore.units import get_quantity
 from dascore.utils.attrs import _is_missing
-from dascore.utils.chunk_plan import _SOURCE_COLUMNS, _ensure_patch_id
+from dascore.utils.chunk_plan import (
+    _SOURCE_COLUMNS,
+    _ensure_patch_id,
+    _normalize_chunk_units,
+)
 from dascore.utils.misc import _CanonicalRange, is_range
 from dascore.utils.patch import concatenate_planned
 from dascore.utils.patch_assembly import PatchAssembler
@@ -745,16 +749,32 @@ def derived_catalog(
     # states cannot be assembled: neither the patch nor the catalog carries
     # it, and a view missing it must not re-plan from members which have it
     partial_drops: dict[int, set[str]] = {}
+    dropped: Mapping[int, list[str]] = plan.params.get("dropped_coords", {})
     if mode == "concat":
+        riders = {
+            c
+            for c, d in coord_dims_map.items()
+            if c != name and name in str(d).split(",")
+        }
         joined = trims[["output_id", "_patch_id"]].merge(sources, on="_patch_id")
         grouped = joined.groupby("output_id")
-        for coord, dims_str in coord_dims_map.items():
-            rides = name in str(dims_str).split(",")
-            if not rides or f"{coord}_min" not in joined.columns:
+        for coord in riders:
+            # presence by identity: an all-null envelope is still a coordinate
+            key_col = f"_{coord}_def_key"
+            col = key_col if key_col in joined.columns else f"{coord}_min"
+            if col not in joined.columns:
                 continue
-            partial = grouped[f"{coord}_min"].count() < grouped.size()
+            partial = grouped[col].count() < grouped.size()
             for output_id in partial[partial].index:
                 partial_drops.setdefault(int(output_id), set()).add(coord)
+        # a rider's identity differs member by member by design: it is
+        # joined along the dimension, never dropped for differing
+        dropped = {k: [c for c in v if c not in riders] for k, v in dropped.items()}
+        dropped = {k: v for k, v in dropped.items() if v}
+        merge_kwargs = {**merge_kwargs, "dropped_coords": dropped}
+        # one spelling per rider, the one assembly joins in
+        for coord in riders:
+            sources = _normalize_chunk_units(sources, coord)
     lossy = lossy or bool(partial_drops)
     resolver = PlanResolver(
         token=token,
@@ -781,7 +801,7 @@ def derived_catalog(
     aux_info = _aux_coord_info(sources, trims, name, coord_dims_map, trimmed_dims)
     # a coordinate the plan drops from an output is not advertised for it
     removed: dict[int, set[str]] = {k: set(v) for k, v in partial_drops.items()}
-    for output_id, names in plan.params.get("dropped_coords", {}).items():
+    for output_id, names in dropped.items():
         removed.setdefault(output_id, set()).update(names)
     for output_id, coords in removed.items():
         for coord in coords:

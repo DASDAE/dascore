@@ -1521,6 +1521,71 @@ class TestConcatenatePartitions:
         expected = np.concatenate([np.arange(nt), (np.arange(nt) + nt) * 1000.0])
         assert np.allclose(clock.values, expected)
 
+    def test_riders_survive_non_raise_policies(self, pair):
+        """Differing rider identities are joined, not dropped, under drop."""
+        first, other = pair
+        nt = first.shape[first.get_axis("time")]
+        a = first.update_coords(clock=("time", np.arange(nt) * 1.0))
+        b = other.update_coords(clock=("time", np.arange(nt) * 1.0 + nt))
+        for conflict in ("drop", "keep_first"):
+            out = dc.spool([a, b]).concatenate(time=None, conflict=conflict)
+            assert "clock" in out[0].coords.coord_map
+            assert out.get_contents()["clock_max"].iloc[0] == 2 * nt - 1
+
+    def test_rider_catalog_spelling_matches_assembly(self, pair):
+        """The catalog describes a joined rider in the spelling it is joined in."""
+        first, other = pair
+        nt = first.shape[first.get_axis("time")]
+        a = first.update_coords(clock=("time", np.arange(nt) * 1.0)).convert_units(
+            clock="s"
+        )
+        b = other.update_coords(
+            clock=("time", (np.arange(nt) + nt) * 1000.0)
+        ).convert_units(clock="ms")
+        out = dc.spool([a, b]).concatenate(time=None)
+        row = out.get_contents().iloc[0]
+        assert row["clock_max"] == 2 * nt - 1
+        assert dc.get_quantity(row["clock_units"]) == dc.get_quantity("s")
+        assert out[0].get_coord("clock").units == dc.get_quantity("s")
+
+    def test_all_null_rider_is_not_partial(self, pair):
+        """A rider every member states, though all its values are NaN, stays."""
+        first, other = pair
+        nt = first.shape[first.get_axis("time")]
+        a = first.update_coords(clock=("time", np.full(nt, np.nan)))
+        b = other.update_coords(clock=("time", np.full(nt, np.nan)))
+        out = dc.spool([a, b]).concatenate(time=None)
+        assert "clock" in out[0].coords.coord_map
+        contents = out.get_contents()
+        assert (
+            "_clock_def_key" not in contents or contents["_clock_def_key"].notna().all()
+        )
+
+    def test_stack_refuses_differing_riders(self, pair):
+        """Stacking keeps one coordinate manager, so riders must agree."""
+        first, other = pair
+        nt = first.shape[first.get_axis("time")]
+        a = first.update_coords(clock=("time", np.arange(nt) * 1.0))
+        b = first.update_coords(clock=("time", np.arange(nt) * 2.0))
+        with pytest.raises(IncompatiblePatchError, match="clock"):
+            dc.utils.patch.stack_patches(
+                [a, b], dim_vary="time", check_behavior="raise"
+            )
+
+    def test_dimensional_envelope_kept_beside_an_auxiliary_role(self, pair):
+        """A name auxiliary elsewhere keeps its envelope where it is a dimension."""
+        first, other = pair
+        n = first.shape[first.get_axis("distance")]
+        as_dim = first.rename_coords(distance="sensor")
+        as_dim2 = other.rename_coords(distance="sensor")
+        aux = first.update_coords(sensor=("distance", np.arange(n) * 1.0))
+        out = dc.spool([as_dim, as_dim2, aux]).concatenate(time=None)
+        contents = out.get_contents()
+        dimensional = contents[contents["dims"].str.contains("sensor")]
+        assert len(dimensional) == 1
+        assert dimensional["sensor_min"].notna().all()
+        assert dimensional["sensor_max"].iloc[0] == n - 1
+
     def test_vanishing_coordinate_kinds_do_not_partition(self, pair):
         """Auxiliaries the new dimension replaces do not split it by kind."""
         first, _ = pair

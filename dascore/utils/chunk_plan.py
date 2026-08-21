@@ -1747,13 +1747,16 @@ def build_concat_plan(
     # catalog is derived (riders of the dimension follow it member by
     # member, so their envelopes differ by design) and policed by their
     # identity keys below; their envelopes are not attrs to carry
-    aux_envelopes = [
-        f"{c}_{s}"
-        for c in _identified_coords(sorted_df) - {name}
-        for s in ("min", "max", "step")
-        if f"{c}_{s}" in sorted_df.columns and not _structural(sorted_df, c).all()
-    ]
-    policed_df = sorted_df.drop(columns=aux_envelopes)
+    blanked = {}
+    for coord in _identified_coords(sorted_df) - {name}:
+        structural = _structural(sorted_df, coord)
+        if structural.all():
+            continue
+        for suffix in ("min", "max", "step"):
+            if (col := f"{coord}_{suffix}") in sorted_df.columns:
+                # kept where the coordinate is a dimension of the row
+                blanked[col] = sorted_df[col].where(structural)
+    policed_df = sorted_df.assign(**blanked)
     carried = _carried_columns(policed_df, codes, seg_starts, name, conflict, active)
     data: dict[str, Any] = {k: v.reset_index(drop=True) for k, v in carried.items()}
     if has_envelope and not along.all():
