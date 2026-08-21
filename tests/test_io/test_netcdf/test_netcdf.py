@@ -303,88 +303,16 @@ class TestNetCDFCoreHelpers:
         assert out["chunksizes"] == (10, 20)
 
     def test_read_returns_empty_spool_for_empty_filtered_patch(
-        self, minimal_cf_netcdf_path, monkeypatch
+        self, minimal_cf_netcdf_path
     ):
-        """Read should return an empty spool after filtering removes all data."""
+        """A selection which keeps no samples reads as an empty spool.
 
-        class FakeDataArray:
-            def __init__(self):
-                self.data = np.ones((1, 1))
-
-                def _make_coord(dims, vals):
-                    return type("Coord", (), {"dims": dims, "values": vals})()
-
-                self.coords = {
-                    "distance": _make_coord(("distance",), np.array([0])),
-                    "time": _make_coord(("time",), np.array([0])),
-                }
-                self.attrs = {}
-                self.dims = ("distance", "time")
-                self.shape = self.data.shape
-
-            def load(self):
-                return self
-
-        class FakeDataset:
-            def __init__(self):
-                self.data_vars = {"data": FakeDataArray()}
-                self.attrs = {}
-
-            def __enter__(self):
-                return self
-
-            def __exit__(self, *args):
-                return False
-
-            def get(self, name):
-                return self.data_vars["data"]
-
-            def __getitem__(self, item):
-                return self.data_vars[item]
-
-        formatter = netcdf_core.NetCDFCFV18()
-        fake_xarray = type(
-            "FakeXarray",
-            (),
-            {"open_dataset": staticmethod(lambda *args, **kwargs: FakeDataset())},
-        )
-        empty_patch = dc.Patch(
-            data=np.empty((0, 0)),
-            coords=dc.get_coord_manager(
-                coords={"distance": np.array([]), "time": np.array([])},
-                dims=("distance", "time"),
-            ),
-            dims=("distance", "time"),
-            attrs={"tag": "empty"},
-        )
-
-        def _optional_import(name, on_missing="raise"):
-            if name == "xarray":
-                return fake_xarray
-            if name == "netCDF4":
-                return object()
-            return None
-
-        monkeypatch.setattr(netcdf_core, "optional_import", _optional_import)
-        monkeypatch.setattr(
-            netcdf_core,
-            "xarray_to_patch",
-            lambda data_array: dc.Patch(
-                data=data_array.data,
-                coords=dc.get_coord_manager(
-                    coords={
-                        name: (coord.dims, coord.values)
-                        for name, coord in data_array.coords.items()
-                    },
-                    dims=data_array.dims,
-                ),
-                dims=data_array.dims,
-                attrs=dict(data_array.attrs),
-            ),
-        )
-        monkeypatch.setattr(dc.Patch, "select", lambda self, **kwargs: empty_patch)
-
-        spool = formatter.read(minimal_cf_netcdf_path, time=(0, 1))
+        A window past the end of the file is what empties the patch; the
+        fake xarray pipeline this replaces reached the same two lines by
+        making Patch.select return an empty patch to every caller.
+        """
+        # The file's time axis runs 0-9, so this window keeps nothing.
+        spool = netcdf_core.NetCDFCFV18().read(minimal_cf_netcdf_path, time=(100, 200))
         assert len(spool) == 0
 
     def test_write_uses_xarray_dataset_path(self, example_patch, tmp_path, monkeypatch):
@@ -552,18 +480,10 @@ class TestNetCDFIO:
         assert _cached_file_count() == 0, "read should stream, not download"
 
     def test_get_format_without_xarray_import(
-        self, minimal_cf_netcdf_path, monkeypatch
+        self, minimal_cf_netcdf_path, hide_module
     ):
         """Format detection should not depend on xarray being importable."""
-        original_import_module = importlib.import_module
-
-        def _import_module(name, package=None):
-            if name == "xarray":
-                raise ImportError("xarray disabled for test")
-            return original_import_module(name, package)
-
-        monkeypatch.setattr(importlib, "import_module", _import_module)
-
+        hide_module("xarray")
         assert dc.get_format(minimal_cf_netcdf_path) == ("NETCDF_CF", "1.8")
 
 

@@ -8,7 +8,6 @@ import numpy as np
 import pytest
 
 import dascore as dc
-import dascore.io.mseed.core as mseed_core
 from dascore.exceptions import MissingOptionalDependencyError
 from dascore.io.mseed import utils as mseed_utils
 from dascore.io.mseed.core import MSeedV2
@@ -184,13 +183,9 @@ class TestMiniSeedGetFormat:
         """DASCore can detect MiniSEED files through plugin discovery."""
         assert dc.get_format(mseed_v3_path) == ("MSEED", "3")
 
-    def test_get_format_without_pymseed(self, tmp_path, monkeypatch):
+    def test_get_format_without_pymseed(self, tmp_path, hide_module):
         """MiniSEED headers can be detected without PyMseed installed."""
-
-        def _optional_import(*args, **kwargs):
-            raise MissingOptionalDependencyError("missing")
-
-        monkeypatch.setattr(mseed_core, "optional_import", _optional_import)
+        hide_module("pymseed")
         v2_path = _write_mseed_v2_header(tmp_path / "test_v2.mseed")
         v3_path = tmp_path / "test_v3.mseed"
         v3_path.write_bytes(b"MS\x03" + bytes(45))
@@ -493,13 +488,9 @@ class TestMiniSeedScan:
         assert payload["shape"] == (1, 10)
         assert payload["dtype"] == "int32"
 
-    def test_missing_pymseed_raises(self, mseed_v3_path, monkeypatch):
+    def test_missing_pymseed_raises(self, mseed_v3_path, hide_module):
         """Explicit MiniSEED reads require PyMseed."""
-
-        def _optional_import(*args, **kwargs):
-            raise MissingOptionalDependencyError("missing")
-
-        monkeypatch.setattr(mseed_core, "optional_import", _optional_import)
+        hide_module("pymseed")
         with pytest.raises(MissingOptionalDependencyError):
             dc.read(mseed_v3_path, file_format="MSEED", file_version="3")
 

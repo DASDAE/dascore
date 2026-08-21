@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import gc
 import shutil
+import sys
 import threading
 import warnings
 from contextlib import contextmanager
@@ -62,6 +63,23 @@ def _link_or_copy(source: Path, dest: Path) -> None:
     except _NO_LINK:
         pass
     shutil.copy2(source, dest)
+
+
+@pytest.fixture
+def hide_module(monkeypatch):
+    """Return a function which makes a module unimportable for one test.
+
+    None in sys.modules is the interpreter's own record of a failed
+    import, so every import of that name raises ImportError -- which is
+    what dascore's optional_import turns into a
+    MissingOptionalDependencyError. Replacing the caller's own
+    optional_import instead only exercises the replacement.
+    """
+
+    def _hide(name: str) -> None:
+        monkeypatch.setitem(sys.modules, name, None)
+
+    return _hide
 
 
 # --- Pytest configuration
