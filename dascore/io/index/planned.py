@@ -44,6 +44,7 @@ from dascore.units import get_quantity
 from dascore.utils.attrs import _is_missing
 from dascore.utils.chunk_plan import (
     _SOURCE_COLUMNS,
+    _concatenated_steps,
     _ensure_patch_id,
     _normalize_chunk_units,
 )
@@ -218,6 +219,7 @@ def _aux_coord_info(
     plan_dim: str,
     coord_dims_map: Mapping[str, str],
     trimmed_dims: frozenset[str] = frozenset(),
+    concat: bool = False,
 ) -> dict[int, dict[str, dict]]:
     """
     Aggregate per-output envelope info for auxiliary coordinates.
@@ -230,6 +232,10 @@ def _aux_coord_info(
     so only a lone unmodified member keeps identity there. Envelopes
     always aggregate — the catalog contract is candidacy, with exact
     values re-established at load.
+
+    A concatenation joins a rider's segments rather than merging them, so
+    a rider whose members share one step and meet end to end keeps that
+    step (its values still differ member by member, so not its identity).
     """
     out: dict[int, dict[str, dict]] = {}
     if not len(members) or not coord_dims_map:
@@ -273,6 +279,13 @@ def _aux_coord_info(
         if step_col in joined.columns:
             step_ok = keep & (grouped[step_col].nunique().to_numpy() == 1)
             step_first = grouped[step_col].first().to_numpy()
+            if rides and concat:
+                # the joined coordinate is a range when the segments are
+                # (the members are already in the order they join in)
+                order = {v: i for i, v in enumerate(output_ids)}
+                codes = joined["output_id"].map(order).to_numpy()
+                step_first = _concatenated_steps(joined, codes, name)
+                step_ok = ~pd.isnull(step_first)
         unit_ok, unit_first = no_gate, None
         if unit_col in joined.columns:
             unit_ok = grouped[unit_col].nunique().to_numpy() == 1
@@ -848,7 +861,9 @@ def derived_catalog(
     stale_keys = stale_def_keys(parent_residuals, coord_dims_map, outputs.columns)
     if stale_keys:
         outputs = outputs.drop(columns=stale_keys)
-    aux_info = _aux_coord_info(sources, trims, name, coord_dims_map, trimmed_dims)
+    aux_info = _aux_coord_info(
+        sources, trims, name, coord_dims_map, trimmed_dims, concat=mode == "concat"
+    )
     # a coordinate the plan drops from an output is not advertised for it
     removed: dict[int, set[str]] = {k: set(v) for k, v in partial_drops.items()}
     for output_id, names in dropped.items():

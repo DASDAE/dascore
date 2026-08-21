@@ -1609,6 +1609,22 @@ class TestConcatenatePartitions:
         assert clock.units == dc.get_quantity("s")
         assert np.allclose(np.sort(clock.values), np.arange(2 * nt))
 
+    def test_contiguous_rider_keeps_its_step(self, pair):
+        """A rider whose segments meet end to end is a range in the catalog too."""
+        first, other = pair
+        nt = first.shape[first.get_axis("time")]
+        ticks = np.arange(nt) * 1.0
+        a = first.update_coords(clock=("time", ticks))
+        b = other.update_coords(clock=("time", ticks + nt))
+        out = dc.spool([a, b]).concatenate(time=None)
+        assert out.get_contents()["clock_step"].iloc[0] == 1.0
+        assert out[0].get_coord("clock").step == 1.0
+        # a gap between the segments leaves the joined coordinate irregular
+        far = other.update_coords(clock=("time", ticks + 10 * nt))
+        gapped = dc.spool([a, far]).concatenate(time=None)
+        assert pd.isnull(gapped.get_contents()["clock_step"].iloc[0])
+        assert gapped[0].get_coord("clock").step is None
+
     def test_all_null_rider_is_not_partial(self, pair):
         """A rider every member states, though all its values are NaN, stays."""
         first, other = pair
