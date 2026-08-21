@@ -30,4 +30,4 @@ jobs:
       cancel-in-progress: true
     steps:
       - name: Confirm cancellation
-        run: echo "Canceled obsolete ${{ matrix.workflow }} runs for PR #${{ github.event.pull_request.number }}."
+        run: echo "Canceled obsolete ${{ matrix.workflow }} runs for pull request ${{ github.event.pull_request.number }}."
