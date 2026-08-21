@@ -905,6 +905,20 @@ class TestConcatPlan:
         assert got[0] == 1.0 and got[1] == -1.0 and got[2] == -1.0
         assert np.isnan(got[3]) and np.isnan(got[4])
 
+    def test_keep_first_floats_a_converted_dtype(self, trio):
+        """An output which converts its members' data says so in its dtype."""
+        p1, p2, _ = trio
+        ints = p1.new(data=p1.data.astype("int32")).set_units("m")
+        km = p2.new(data=p2.data.astype("int32")).set_units("km")
+        df = _flat([ints, km])
+        assert set(df["_dtype"]) == {"int32"}
+        plan = build_concat_plan(df, time=None, conflict="keep_first")
+        assert plan.outputs["_dtype"].iloc[0] == "float64"
+        # without a conversion the dtype stands
+        same = _flat([ints, p2.new(data=p2.data.astype("int32")).set_units("m")])
+        plan = build_concat_plan(same, time=None, conflict="keep_first")
+        assert plan.outputs["_dtype"].iloc[0] == "int32"
+
     def test_normalize_numeric_units_without_an_envelope(self):
         """A coordinate the relation gives no envelope needs no conversion."""
         df = pd.DataFrame({"_sensor_units": ["m", "cm"]})
