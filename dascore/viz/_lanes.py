@@ -56,11 +56,20 @@ def _as_numeric(values):
     return array.astype(float)
 
 
+def _is_membership(value) -> bool:
+    """Whether a row states membership of its lane rather than a value.
+
+    A frame carries that as no value at all, which pandas spells None,
+    NaN or NA depending on what else the column holds.
+    """
+    return bool(pd.isna(value))
+
+
 def _default_label(value) -> str:
     """Text for a value which was not given a label of its own."""
     if isinstance(value, str):
         return value
-    if value is None:
+    if _is_membership(value):
         return ""
     # A number states itself; a membership lane is named by its lane instead.
     return f"{value:g}" if isinstance(value, float) else str(value)
@@ -124,14 +133,12 @@ def _read_frame(intervals, start, end, lane, value, label):
 
 def _lane_kind(values) -> str:
     """Return the one value kind a lane states, refusing a mixture."""
-    kinds = {value_kind(normalize_value(x)) for x in values if x is not None}
+    kinds = {value_kind(normalize_value(x)) for x in values if not _is_membership(x)}
     kinds.discard(None)
+    kinds.discard("membership")
     if not kinds:
         return "none"
     if len(kinds) > 1:
-        return "mixed"
-    if any(x is None for x in values):
-        # a lane states membership (no values) or a value in every row
         return "mixed"
     return kinds.pop()
 
@@ -221,7 +228,11 @@ def _resolve_colors(rows, kind, lane_index, string_map, color):
         )
     if kind == "numeric":
         values = np.asarray(
-            [float(normalize_value(x)) for x in rows["value"]], dtype=float
+            [
+                np.nan if _is_membership(x) else float(normalize_value(x))
+                for x in rows["value"]
+            ],
+            dtype=float,
         )
         if isinstance(color, str):
             try:

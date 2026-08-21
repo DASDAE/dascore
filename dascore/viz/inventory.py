@@ -806,7 +806,9 @@ def _segment_colors(one, color, mid, crs, handles, palette):
             handles.setdefault("n/a", PatchArtist(facecolor=UNPLACED, label="n/a"))
             return None, [UNPLACED] * len(mid)
     masks = interval_masks(mid, [x.interval for x in items])
-    kinds = {value_kind(normalize_value(k)) for k in keys}
+    kinds = {
+        value_kind(normalize_value(k)) for k in keys if not _lanes._is_membership(k)
+    }
     if kinds == {"numeric"}:
         values = np.full(len(mid), np.nan)
         for item, mask in zip(items, masks, strict=True):
