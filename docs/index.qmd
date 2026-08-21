@@ -108,7 +108,7 @@ patch.viz.waterfall(show=True);
 
 # Installation
 
-DASCore requires Python 3.12 or newer. Use pip or conda to install it:
+Use pip or conda to install DASCore:
 
 ```bash
 pip install dascore

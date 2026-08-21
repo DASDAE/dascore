@@ -22,7 +22,7 @@ git pull origin master --tags
 
 ## 3. Create a virtual environment (optional)
 
-Create and activate a virtual environment (Python 3.12 or newer) so DASCore will not mess with the base (or system) python installation.
+Create and activate a virtual environment so DASCore will not mess with the base (or system) python installation.
 
 If you are using [uv](https://docs.astral.sh/uv/), which is what most of DASCore's CI uses:
 
