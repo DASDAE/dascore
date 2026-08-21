@@ -7,7 +7,7 @@ import os
 import shutil
 import threading
 import warnings
-from contextlib import contextmanager, suppress
+from contextlib import contextmanager
 from pathlib import Path
 
 import h5py
@@ -41,6 +41,25 @@ PATCH_FIXTURES = []
 # By default DASCore only issues a warning once per line. This ensures
 # they get issued every time so tests around warning behavior aren't flaky.
 warnings.filterwarnings("default", category=UserWarning)
+
+
+def _link_or_copy(source: Path, dest: Path) -> None:
+    """Populate one file path using the cheapest available local copy."""
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    if dest.exists():
+        return
+    try:
+        dest.hardlink_to(source)
+        return
+    except OSError:
+        pass
+    try:
+        dest.symlink_to(source)
+        return
+    except OSError:
+        pass
+    shutil.copy2(source, dest)
+
 
 # --- Pytest configuration
 
@@ -643,17 +662,19 @@ def memory_spool_dim_1_patches():
 
 @pytest.fixture(scope="class")
 @register_func(SPOOL_FIXTURES)
-def all_examples_spool(terra15_das_example_path):
-    """Create a spool from all the examples."""
-    parent = terra15_das_example_path.parent
-    spool = dc.spool(parent)
-    try:
-        spool = spool.update()
-    except Exception:
-        with suppress(FileNotFoundError):
-            spool.indexer.index_path.unlink()  # delete index if problems found
-        spool = spool.update()  # then re-index
-    return spool
+def all_examples_spool(tmp_path_factory, terra15_das_example_path):
+    """Create a spool from all the example files."""
+    # Indexing the example files where they sit would write an index into the
+    # download cache, which every test process shares. Links cost nothing and
+    # give the index a directory of its own.
+    source = terra15_das_example_path.parent
+    directory = Path(tmp_path_factory.mktemp("all_examples"))
+    for path in source.rglob("*"):
+        # Skip the index (and anything else hidden) a previous run may have
+        # left in the cache: a hard link to it is that same file.
+        if path.is_file() and not path.name.startswith("."):
+            _link_or_copy(path, directory / path.relative_to(source))
+    return dc.spool(directory).update()
 
 
 @pytest.fixture(scope="class")
