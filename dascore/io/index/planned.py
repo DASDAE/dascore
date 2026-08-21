@@ -762,9 +762,8 @@ def derived_catalog(
             # presence by identity: an all-null envelope is still a coordinate
             key_col = f"_{coord}_def_key"
             col = key_col if key_col in joined.columns else f"{coord}_min"
-            if col not in joined.columns:
-                continue
-            partial = grouped[col].count() < grouped.size()
+            stated = joined.get(col, pd.Series(np.nan, index=joined.index))
+            partial = stated.groupby(joined["output_id"]).count() < grouped.size()
             for output_id in partial[partial].index:
                 partial_drops.setdefault(int(output_id), set()).add(coord)
         # a rider's identity differs member by member by design: it is
