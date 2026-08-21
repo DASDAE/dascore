@@ -1901,15 +1901,16 @@ def concatenate_planned(
             # which does not state it
             if len(holders) != len(patches):
                 unreconciled.add(name)
-        elif len(holders) != len(patches):
-            # one member's coordinate rides along; the others share its dims
-            if name not in first.coords.coord_map:
-                update = {name: (cdims, holders[0].coords.coord_map[name])}
-                patches[0] = first = first.update(coords=first.coords.update(**update))
         elif any(
-            x.coords.coord_map[name] != first.coords.coord_map[name] for x in patches
+            x.coords.coord_map[name] != holders[0].coords.coord_map[name]
+            for x in holders
         ):
+            # the members which state it disagree, however many they are
             unreconciled.add(name)
+        elif len(holders) != len(patches) and name not in first.coords.coord_map:
+            # every holder says the same thing, so it rides along
+            update = {name: (cdims, holders[0].coords.coord_map[name])}
+            patches[0] = first = first.update(coords=first.coords.update(**update))
     if unreconciled:
         msg = (
             f"Cannot concatenate along {dim!r}: the coordinates "

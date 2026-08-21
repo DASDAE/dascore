@@ -1486,6 +1486,23 @@ class TestConcatenatePartitions:
         expected = np.concatenate([np.arange(nt), (np.arange(nt) + nt) * 1000.0])
         assert np.allclose(clock.values, expected)
 
+    def test_holders_must_agree_before_riding_along(self, pair):
+        """Two members holding one coordinate differently is a conflict."""
+        first, other = pair
+        third = dc.get_example_patch(
+            time_min=other.get_coord("time").max() + other.get_coord("time").step
+        )
+        n = first.shape[first.get_axis("distance")]
+        a = first.update_coords(latitude=("distance", np.arange(n) * 1.0))
+        b = other.update_coords(latitude=("distance", np.ones(n)))
+        spool = dc.spool([a, b, third]).concatenate(time=None)
+        with pytest.raises(CoordMergeError, match="latitude"):
+            spool[0]
+        # holders which agree still ride along beside a member without it
+        b_ok = other.update_coords(latitude=("distance", np.arange(n) * 1.0))
+        out = dc.spool([a, b_ok, third]).concatenate(time=None)
+        assert "latitude" in out[0].coords.coord_map
+
     def test_riders_are_joined_under_every_policy(self, pair):
         """`conflict` polices attrs; a rider is joined whatever it says."""
         first, other = pair
