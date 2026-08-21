@@ -47,7 +47,6 @@ from dascore.units import get_quantity, get_quantity_str
 from dascore.utils.attrs import _is_missing
 from dascore.utils.chunk_plan import (
     _SOURCE_COLUMNS,
-    _concatenated_steps,
     _ensure_patch_id,
 )
 from dascore.utils.misc import _CanonicalRange, is_range
@@ -450,8 +449,7 @@ def predicted_coords(
                         update=dict(step=None, len=None, fingerprint=None)
                     )
                 summaries.append(summary)
-            if not summaries:
-                continue
+            assert summaries, "a name comes from the members which state it"
             stated = _describe(name, summaries, plan_dim, trimmed_dims, snap_tolerance)
             if stated is not None:
                 described[name] = stated
@@ -508,7 +506,6 @@ def _aux_coord_info(
     plan_dim: str,
     coord_dims_map: Mapping[str, str],
     trimmed_dims: frozenset[str] = frozenset(),
-    concat: bool = False,
 ) -> dict[int, dict[str, dict]]:
     """
     Aggregate per-output envelope info for auxiliary coordinates.
@@ -522,9 +519,9 @@ def _aux_coord_info(
     always aggregate — the catalog contract is candidacy, with exact
     values re-established at load.
 
-    A concatenation joins a rider's segments rather than merging them, so
-    a rider whose members share one step and meet end to end keeps that
-    step (its values still differ member by member, so not its identity).
+    Used where an output's coordinates cannot be predicted from the
+    members' own summaries — a re-plan whose members this index does not
+    know — so the member rows are all there is to describe them with.
 
     """
     out: dict[int, dict[str, dict]] = {}
@@ -573,30 +570,10 @@ def _aux_coord_info(
         if step_col in joined.columns:
             step_ok = keep & (grouped[step_col].nunique().to_numpy() == 1)
             step_first = grouped[step_col].first().to_numpy()
-            if rides and concat:
-                # the joined coordinate is a range when the segments are
-                # (the members are already in the order they join in)
-                order = {v: i for i, v in enumerate(output_ids)}
-                codes = joined["output_id"].map(order).to_numpy()
-                step_first = _concatenated_steps(joined, codes, name)
-                step_ok = ~pd.isnull(step_first)
         unit_ok, unit_first = no_gate, None
         if unit_col in joined.columns:
             unit_ok = grouped[unit_col].nunique().to_numpy() == 1
             unit_first = grouped[unit_col].first().to_numpy()
-            # members spelling one coordinate two ways (seconds beside
-            # milliseconds) have no envelope in common: the magnitudes mean
-            # different things, and only the loaded patch says which
-            # spelling wins. No units at all is one spelling, not two.
-            undecided = grouped[unit_col].nunique().to_numpy() > 1
-            if undecided.any():
-                lows = np.array(
-                    [None if u else v for v, u in zip(lows, undecided)], dtype=object
-                )
-                highs = np.array(
-                    [None if u else v for v, u in zip(highs, undecided)], dtype=object
-                )
-                step_ok = step_ok & ~undecided
         # a coordinate no member holds contributes nothing; one the members
         # do hold is always named, even when nothing about its values can
         # be stated — the patch will have it, so the catalog says so

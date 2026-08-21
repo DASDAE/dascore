@@ -16,9 +16,13 @@ from dascore.exceptions import MissingPatchError, ParameterError
 from dascore.io.index.catalog import PatchCatalog
 from dascore.io.index.planned import (
     PlanResolver,
+    _apply_predictions,
     _aux_coord_info,
     _coord_record_from_row,
+    _extrema,
     _ns,
+    _null_like,
+    _plan_attr_units,
     _stated_units,
     collapse_working_df,
     derived_catalog,
@@ -520,6 +524,85 @@ class TestPredictedCoords:
         described = predicted_coords(backend, plan.members, "time")[0]
         assert "latitude" in described
         assert described["latitude"].len == n
+
+    def test_a_coordinate_nobody_states_is_left_to_the_row(self, pair):
+        """A blank dimension is described by the plan, not predicted."""
+        first, _ = pair
+        blanks = [first.mean("time"), first.new().mean("time")]
+        plan, backend = self._plan_and_backend(blanks, time=None)
+        described = predicted_coords(backend, plan.members, "time")[0]
+        assert "time" not in described  # the row states its identity
+        assert "distance" in described  # everything else is still described
+
+    def test_null_of_each_kind(self):
+        """The missing value of a kind is of that kind."""
+        assert pd.isnull(_null_like(np.datetime64("2020-01-01", "ns")))
+        assert isinstance(_null_like(np.timedelta64(1, "s")), np.timedelta64)
+        assert isinstance(_null_like(pd.Timedelta(1, "s")), np.timedelta64)
+        assert pd.isnull(_null_like(1.0))
+
+    def test_predictions_skip_columns_the_frame_lacks(self, pair):
+        """Restating an envelope touches only columns the frame has."""
+        plan, backend = self._plan_and_backend(pair, time=None)
+        described = predicted_coords(backend, plan.members, "time")
+        outputs = plan.outputs.drop(columns=["time_step"])
+        applied = _apply_predictions(outputs, described, "time")
+        assert "time_step" not in applied.columns
+        assert applied["time_max"].iloc[0] == described[0]["time"].max
+
+    def test_a_replanned_view_falls_back_to_its_rows(self):
+        """Members this index does not know are described from the plan."""
+        spool = dc.get_example_spool("random_das")
+        patches = [
+            x.update_coords(
+                sensor=("distance", np.arange(x.shape[x.get_axis("distance")]) * 1.0)
+            )
+            for x in spool
+        ]
+        joined = dc.spool(patches).concatenate(time=None)
+        # the re-plan collapses to members of the *original* spool, whose
+        # ids this derived index does not use
+        again = joined.chunk(time=None)
+        row = again.get_contents().iloc[0]
+        assert row["sensor_min"] == 0.0
+        assert row["sensor_max"] == patches[0].get_coord("sensor").max()
+        assert "sensor" in again[0].coords.coord_map
+
+    def test_a_label_coordinate_falls_back_to_its_row(self):
+        """A string coordinate is described from the row when predicting cannot."""
+        row = {
+            "station_min": "a000",
+            "station_max": "a299",
+            "_station_def_key": "fp:" + "b" * 32,
+        }
+        record = _coord_record_from_row(row, "station", dims=("distance",))
+        assert record is not None
+        assert record.value_kind == "str"
+        assert record.min_str == "a000"
+        assert record.coord_hash == "b" * 32
+
+    def test_a_rider_falls_back_without_its_identity(self):
+        """In the fallback a rider keeps identity only when alone and whole."""
+        spool = dc.get_example_spool("random_das")
+        patches = [
+            x.update_coords(
+                clock=("time", np.arange(x.shape[x.get_axis("time")]) * 1.0)
+            )
+            for x in spool
+        ]
+        joined = dc.spool(patches).concatenate(time=None)
+        again = joined.chunk(time=None)  # re-plan: members are unknown here
+        frame = again._catalog.to_df()
+        assert not str(frame["_clock_def_key"].iloc[0]).startswith("fp:")
+        assert "clock" in again[0].coords.coord_map
+
+    def test_extrema_of_values_which_do_not_compare(self):
+        """A group holding two kinds of value has no envelope."""
+        frame = pd.DataFrame({"code": [0, 1], "value": ["a", 2.0]})
+        grouped = frame.groupby("code")["value"]
+        assert list(_extrema(grouped, "min")) == ["a", 2.0]
+        mixed = pd.DataFrame({"code": [0, 0], "value": ["a", 2.0]})
+        assert list(_extrema(mixed.groupby("code")["value"], "min")) == [None]
 
     def test_no_members_describes_nothing(self, pair):
         """An empty member table claims nothing."""
