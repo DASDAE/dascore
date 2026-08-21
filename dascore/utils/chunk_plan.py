@@ -1642,6 +1642,7 @@ def build_concat_plan(
         msg = "The number of patches per concatenated output must be at least 1."
         raise ParameterError(msg)
     min_name, max_name, step_name = f"{name}_min", f"{name}_max", f"{name}_step"
+    unit_col = f"_{name}_units"
     names = _resolve_group_attrs(group, set(df.columns))
     params: dict[str, Any] = dict(mode="concat", count=count, conflict=conflict)
     params["group"] = names
@@ -1659,27 +1660,28 @@ def build_concat_plan(
     # rows which carry the name as a dimension; the others (a non-dimensional
     # coordinate of that name, or none) gain a new dimension in its place
     along = _structural(df, name)
-    is_coord = f"_{name}_def_key" in df.columns or bool(along.any())
-    envelope_cols = [min_name, max_name, step_name, f"_{name}_units"]
-    if not is_coord and any(x in df.columns for x in envelope_cols):
+    key_col = f"_{name}_def_key"
+    has_coord = along | (df[key_col].notna().to_numpy() if key_col in df else False)
+    envelope_cols = [x for x in (min_name, max_name, step_name, unit_col) if x in df]
+    if envelope_cols and (df[envelope_cols].notna().any(axis=1) & ~has_coord).any():
         # the envelope names belong to the dimension about to be created
         msg = (
             f"Cannot concatenate along the new dimension {name!r}: the "
-            f"attributes {[x for x in envelope_cols if x in df.columns]} "
-            "would describe it. Rename them first."
+            f"attributes {envelope_cols} would describe it. Rename them first."
         )
         raise ParameterError(msg)
     has_envelope = min_name in df.columns and max_name in df.columns
     if has_envelope:
         # one spelling per dimensionality, as a chunk plan: metres and
-        # centimetres plan together and members convert on loading
-        df = _normalize_chunk_units(df, name)
+        # centimetres plan together and members convert on loading; only
+        # numbers are stored per spelling, so only they convert
+        df = _normalize_numeric_units(df, name)
     # The concatenated dimension's units partition like kind: a patch whose
     # coordinate has values but no units cannot join one whose has units
     # (the values would be mixed), while a patch with no values along the
     # dimension (an aggregated coordinate) joins whichever it meets.
     kind_names = list(names)
-    if (unit_col := f"_{name}_units") in df.columns:
+    if unit_col in df.columns:
         units = df[unit_col].fillna("unitless").astype(object)
         if has_envelope:
             units = units.where(df[min_name].notna(), "")
@@ -1721,7 +1723,10 @@ def build_concat_plan(
         stops = _order_key(df[max_name])
         no_steps = np.full(len(df), np.nan)
         steps = _directions(df[step_name]) if step_name in df else no_steps
-        first_step = pd.Series(steps).groupby(labels).transform("first").to_numpy()
+        # the first row's step, null or not: a partition whose first row
+        # has no step has no orientation, whatever a later row knows
+        rows = pd.Series(np.arange(len(df)))
+        first_step = steps[rows.groupby(labels).transform("first").to_numpy()]
         descending = np.nan_to_num(first_step, nan=0.0) < 0
         within = np.where(descending, -stops, starts)
         within = np.where(np.isnan(first_step) | ~along, 0.0, within)
@@ -1737,7 +1742,18 @@ def build_concat_plan(
     sizes = np.bincount(codes, minlength=n_out)
     seg_starts = np.r_[0, np.cumsum(sizes)[:-1]]
     active = np.ones(n_out, dtype=bool)
-    carried = _carried_columns(sorted_df, codes, seg_starts, name, conflict, active)
+    # non-dimensional coordinates are described from the members when the
+    # catalog is derived (riders of the dimension follow it member by
+    # member, so their envelopes differ by design) and policed by their
+    # identity keys below; their envelopes are not attrs to carry
+    aux_envelopes = [
+        f"{c}_{s}"
+        for c in _identified_coords(sorted_df) - {name}
+        for s in ("min", "max", "step")
+        if f"{c}_{s}" in sorted_df.columns and not _structural(sorted_df, c).all()
+    ]
+    policed_df = sorted_df.drop(columns=aux_envelopes)
+    carried = _carried_columns(policed_df, codes, seg_starts, name, conflict, active)
     data: dict[str, Any] = {k: v.reset_index(drop=True) for k, v in carried.items()}
     by_output = sorted_df.groupby(codes, sort=True)
     if has_envelope:
@@ -1819,6 +1835,33 @@ def build_concat_plan(
     return ChunkPlan(outputs, members, name, value, params)
 
 
+def _normalize_numeric_units(df: pd.DataFrame, name: str) -> pd.DataFrame:
+    """
+    `_normalize_chunk_units` for the numeric rows of an envelope of mixed kinds.
+
+    A dimension name shared by numeric and, say, datetime coordinates holds
+    an object column, which the chunk normalizer leaves alone; the numeric
+    rows still deserve one spelling per dimensionality.
+    """
+    min_name, max_name, step_name = f"{name}_min", f"{name}_max", f"{name}_step"
+    numeric = df[min_name].map(_value_family).to_numpy() == "number"
+    if numeric.all():
+        return _normalize_chunk_units(df, name)
+    if not numeric.any():
+        return df
+    cols = [x for x in (min_name, max_name, step_name, f"_{name}_units") if x in df]
+    part = df.loc[numeric, :].copy()
+    for col in (min_name, max_name, step_name):
+        if col in part:
+            part[col] = pd.to_numeric(part[col])
+    part = _normalize_chunk_units(part, name)
+    out = df.copy()
+    for col in cols:
+        out[col] = out[col].astype(object)
+        out.loc[numeric, col] = part[col].astype(object)
+    return out
+
+
 def _directions(steps: pd.Series) -> np.ndarray:
     """The sign of each step (±1.0), NaN where missing or without a sign."""
 
@@ -1841,6 +1884,15 @@ def _value_family(value) -> str:
     if isinstance(value, str):
         return "text"
     return "number"
+
+
+def _identified_coords(df: pd.DataFrame) -> set[str]:
+    """The coordinates a relation identifies (those with a def-key column)."""
+    return {
+        col[1 : -len("_def_key")]
+        for col in df.columns
+        if col.startswith("_") and not col.startswith("__") and col.endswith("_def_key")
+    }
 
 
 def _structural(df: pd.DataFrame, coord: str) -> np.ndarray:

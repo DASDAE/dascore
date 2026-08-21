@@ -919,6 +919,19 @@ class TestConcatPlan:
         assert np.isnan(key[2])
         assert key[1] < key[3] < key[0]
 
+    def test_envelope_attrs_refused_per_partition(self, trio):
+        """A partition elsewhere owning the name does not excuse an attr here."""
+        p1, p2, _ = trio
+        as_dim = p1.rename_coords(distance="batch")
+        rows = _flat([p2, p2.new()])
+        rows["batch_step"] = 3  # an ordinary attr, as the relation holds it
+        frame = pd.concat([_flat([as_dim]), rows], ignore_index=True)
+        with pytest.raises(ParameterError, match="batch_step"):
+            build_concat_plan(frame, batch=None)
+        # the same rows without the attr plan as two partitions
+        frame = pd.concat([_flat([as_dim]), _flat([p2, p2.new()])], ignore_index=True)
+        assert len(build_concat_plan(frame, batch=None).outputs) == 2
+
     def test_empty_and_bad_arguments(self, trio):
         """An empty relation plans nothing; bad arguments raise."""
         plan = build_concat_plan(_flat(trio).iloc[:0], time=None)

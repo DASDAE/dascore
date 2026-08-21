@@ -1431,6 +1431,66 @@ class TestConcatenatePartitions:
         kinds = {x.get_coord("epoch").values.dtype.kind for x in out}
         assert kinds == {"M", "f"}
 
+    def test_coordinate_riding_the_dimension_is_joined(self, pair):
+        """A coordinate every member carries along the dimension follows it."""
+        first, other = pair
+        nt = first.shape[first.get_axis("time")]
+        a = first.update_coords(clock=("time", np.arange(nt) * 1.0))
+        b = other.update_coords(clock=("time", np.arange(nt) * 1.0 + nt))
+        out = dc.spool([a, b]).concatenate(time=None)
+        patch = out[0]
+        assert patch.coords.dim_map["clock"] == ("time",)
+        assert np.array_equal(patch.get_array("clock"), np.arange(2 * nt) * 1.0)
+        assert out.get_contents()["clock_max"].iloc[0] == 2 * nt - 1
+        direct = dc.utils.patch.concatenate_patches([a, b], time=None)[0]
+        assert np.array_equal(direct.get_array("clock"), np.arange(2 * nt) * 1.0)
+
+    def test_first_row_without_step_keeps_input_order(self):
+        """A later row's step does not lend the partition an orientation."""
+        base = dc.get_example_patch()
+        n = base.shape[base.get_axis("distance")]
+        rng = np.random.default_rng(1)
+        gaps = np.sort(rng.uniform(0.5, 1.5, n))[::-1].cumsum()
+        irregular = base.update_coords(distance=2 * n + 10 - gaps)
+        regular = base.update_coords(distance=np.arange(n)[::-1] * 1.0)
+        out = dc.spool([irregular, regular]).concatenate(distance=None)
+        values = out[0].get_coord("distance").values
+        assert np.allclose(values[:n], irregular.get_coord("distance").values)
+        assert np.all(np.diff(values) < 0)
+
+    def test_coordinate_attached_differently_conflicts(self):
+        """Equal values on different dimensions are different coordinates."""
+        base = dc.get_example_patch()
+        square = base.select(distance=(0, 50), samples=True)
+        square = square.select(time=(0, 50), samples=True)
+        t = square.get_coord("time")
+        later = square.update_coords(time_min=t.max() + t.step)
+        a = square.update_coords(quality=("distance", np.arange(50) * 1.0))
+        b = later.update_coords(quality=("time", np.arange(50) * 1.0))
+        for conflict in ("raise", "drop"):
+            sp = dc.spool([a, b]).concatenate(time=None, conflict=conflict)
+            with pytest.raises(CoordMergeError, match="quality"):
+                sp[0]
+        with pytest.raises(IncompatiblePatchError, match="quality"):
+            dc.utils.patch.concatenate_patches(
+                [a, b], time=None, check_behavior="raise"
+            )
+
+    def test_numeric_units_normalize_beside_another_kind(self, pair):
+        """A text coordinate of the same name does not stop metres meeting cm."""
+        first, _ = pair
+        distance = first.get_coord("distance")
+        shifted = first.update_coords(distance_min=distance.max() + distance.step)
+        metres = first.rename_coords(distance="range")
+        cm = shifted.convert_units(distance="cm").rename_coords(distance="range")
+        n = first.shape[first.get_axis("distance")]
+        labels = np.array([f"s{i:03d}" for i in range(n)])
+        text = first.update_coords(distance=labels).rename_coords(distance="range")
+        out = dc.spool([metres, cm, text]).concatenate(range=None)
+        assert len(out) == 2
+        joined = [x for x in out if x.shape[x.get_axis("range")] == 2 * n]
+        assert len(joined) == 1
+
     def test_vanishing_coordinate_units_do_not_partition(self, pair):
         """Auxiliary coordinates the new dimension replaces do not split by units."""
         first, _ = pair

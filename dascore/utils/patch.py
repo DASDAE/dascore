@@ -1462,7 +1462,9 @@ def check_coords(
     dim_to_ignore
         None by default (all coordinates must be identical).
         String specifying a dimension that differences in values,
-        but not shape, are allowed.
+        but not shape, are allowed; coordinates riding that dimension
+        are allowed the same differences. A coordinate attached to
+        different dimensions in the two patches is never compatible.
     ignore_dim_eq_shape
         If True, the ignored dims must be equal shape to pass check.
         If dim_to_ignore is None this has no effect.
@@ -1476,10 +1478,13 @@ def check_coords(
     for coord in shared:
         coord1 = cm1.coord_map[coord]
         coord2 = cm2.coord_map[coord]
-        if coord1 == coord2:
+        cdims = cm1.dim_map[coord]
+        if cdims != cm2.dim_map[coord]:
+            not_equal_coords.append(coord)
+        elif coord1 == coord2:
             # Straightforward case, coords are identical.
             continue
-        elif coord == dim_to_ignore:
+        elif coord == dim_to_ignore or dim_to_ignore in cdims:
             # If dimension that's ok to ignore value differences,
             # check whether shape is the same.
             if coord1.shape == coord2.shape:
@@ -1491,7 +1496,7 @@ def check_coords(
     if not_equal_coords and len(shared):
         msg = (
             f"Patches are not compatible. The following shared coordinates "
-            f"are not equal: {coord}"
+            f"are not equal: {not_equal_coords}"
         )
         warn_or_raise(msg, exception=IncompatiblePatchError, behavior=check_behavior)
         return False
@@ -1759,6 +1764,21 @@ def _concatenate_group(
     else:
         values = np.concatenate([x.get_array(dim) for x in patches], axis=0)
         coords = first.coords.update(**{dim: values})
+        # coordinates riding the dimension which every member states the
+        # same way join along it too; resizing the dimension drops them
+        riders = {}
+        for name, cdims in first.coords.dim_map.items():
+            if name == dim or dim not in cdims:
+                continue
+            # callers have checked the members attach it alike
+            assert all(x.coords.dim_map.get(name) == cdims for x in patches)
+            rider_axis = cdims.index(dim)
+            joined = np.concatenate(
+                [x.get_array(name) for x in patches], axis=rider_axis
+            )
+            riders[name] = (cdims, joined)
+        if riders:
+            coords = coords.update(**riders)
     warn_if_histories_differ([x.attrs for x in patches], "Concatenating")
     attrs = _maybe_add_history_str(attrs, "concatenate")
     attrs = stamp_combination(attrs, [x.attrs for x in patches], fingerprint)
@@ -1825,7 +1845,14 @@ def concatenate_planned(
     for other in patches[1:]:
         shared = set(first.coords.coord_map) & set(other.coords.coord_map)
         for name in shared - {dim}:
-            if first.coords.coord_map[name] != other.coords.coord_map[name]:
+            cdims = first.coords.dim_map[name]
+            if cdims != other.coords.dim_map[name]:
+                conflicting.add(name)
+            elif dim in cdims:
+                # a coordinate riding the dimension follows it member by
+                # member; its values are joined, not compared
+                continue
+            elif first.coords.coord_map[name] != other.coords.coord_map[name]:
                 conflicting.add(name)
     if conflicting:
         droppable = conflict == "raise" and not (conflicting & set(first.dims))
