@@ -495,7 +495,9 @@ def _describe(
     joined = join_summaries(summaries, snap_tolerance=snap_tolerance)
     if joined is None:
         return _union_summary(summaries)
-    if trimmed:
+    if trimmed and name != plan_dim:
+        # the planned dimension's own trim is already in the member rows
+        # this joined; any other coordinate is cut at load instead
         joined = joined.model_copy(update=_unvouched(True))
     return joined.model_copy(update=dict(dims=first.dims))
 

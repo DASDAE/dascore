@@ -479,16 +479,47 @@ class TestPredictedCoords:
         assert described["range"].min == "s000"
         assert described["range"].max == f"t{n - 1:03d}"
 
-    def test_a_trimmed_join_claims_no_identity(self, pair):
-        """A residual trimming the joined dimension voids its identity."""
+    def test_a_trim_of_the_joined_dimension_is_already_counted(self, pair):
+        """The planned dimension's own trim rides in the rows being joined."""
         plan, backend = self._plan_and_backend(pair, time=None)
         described = predicted_coords(
             backend, plan.members, "time", trimmed_dims=frozenset({"time"})
         )[0]
-        assert described["time"].fingerprint is None
-        assert described["time"].len is None
-        # the envelope still says where the output lies
-        assert described["time"].min == pair[0].get_coord("time").min()
+        # the members state what will be loaded, so the join still holds
+        assert described["time"].fingerprint is not None
+        assert described["time"].len is not None
+
+    def test_a_rider_of_a_trimmed_dimension_is_voided(self, pair):
+        """A coordinate joined along a dimension the load trims says less."""
+        first, second = pair
+        nt = first.shape[first.get_axis("time")]
+        patches = [
+            x.update_coords(clock=("time", np.arange(nt) * 1.0 + i * nt))
+            for i, x in enumerate((first, second))
+        ]
+        plan, backend = self._plan_and_backend(patches, time=None)
+        described = predicted_coords(
+            backend, plan.members, "time", trimmed_dims=frozenset({"time"})
+        )[0]
+        assert described["clock"].fingerprint is None
+        assert described["clock"].step is None
+        # the envelope still bounds where the rider lies
+        assert described["clock"].min == 0.0
+
+    def test_a_trim_of_another_dimension_voids_what_rides_it(self, pair):
+        """A coordinate cut at load claims neither step nor identity."""
+        first, second = pair
+        n = first.shape[first.get_axis("distance")]
+        patches = [
+            x.update_coords(latitude=("distance", np.arange(n) * 1.0))
+            for x in (first, second)
+        ]
+        plan, backend = self._plan_and_backend(patches, time=None)
+        described = predicted_coords(
+            backend, plan.members, "time", trimmed_dims=frozenset({"distance"})
+        )[0]
+        assert described["latitude"].fingerprint is None
+        assert described["latitude"].step is None
 
     def test_a_trimmed_member_is_described_by_its_trim(self, pair):
         """A member which loads part of its patch states that part."""
