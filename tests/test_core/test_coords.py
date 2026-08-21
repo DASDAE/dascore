@@ -28,6 +28,7 @@ from dascore.core.coords import (
     CoordString,
     CoordSummary,
     _get_coord_kind,
+    concat_coords,
     get_coord,
 )
 from dascore.exceptions import CoordError, ParameterError
@@ -2903,3 +2904,56 @@ class TestUnitNoOps:
         """A class which did not implement it gets an error naming itself."""
         with pytest.raises(NotImplementedError, match="unit conversion"):
             BaseCoord._convert_units(evenly_sampled_coord, "m")
+
+
+class TestFusedRangeConstruction:
+    """A fused range must equal the one full validation would build."""
+
+    @pytest.mark.parametrize(
+        "start,stop,step",
+        [
+            (0.0, 10.0, 1.0),
+            (10.0, 0.0, -1.0),
+            (-5.0, 5.0, 0.5),
+        ],
+    )
+    def test_numeric_fuse_matches_validated(self, start, stop, step):
+        """Fusing two ranges gives the range spanning both."""
+        first = get_coord(start=start, stop=stop, step=step)
+        second = get_coord(start=stop, stop=stop + (stop - start), step=step)
+        fused = concat_coords(first, second)
+        expected = CoordRange(start=start, stop=stop + (stop - start), step=step)
+        assert fused == expected
+        assert fused.fingerprint() == expected.fingerprint()
+        assert np.array_equal(fused.values, expected.values)
+
+    def test_time_fuse_keeps_units_and_values(self):
+        """A datetime fuse states seconds, as the validating path does."""
+        t0 = np.datetime64("2020-01-01", "ns")
+        step = np.timedelta64(4, "ms")
+        first = get_coord(start=t0, stop=t0 + 100 * step, step=step)
+        second = get_coord(start=t0 + 100 * step, stop=t0 + 200 * step, step=step)
+        fused = concat_coords(first, second)
+        expected = CoordRange(start=t0, stop=t0 + 200 * step, step=step)
+        assert fused == expected
+        assert fused.units == expected.units
+        assert fused.fingerprint() == expected.fingerprint()
+        assert np.array_equal(fused.values, expected.values)
+
+    def test_unitful_fuse_keeps_the_unit(self):
+        """The fused range speaks the unit its segments spoke."""
+        first = get_coord(start=0.0, stop=10.0, step=1.0, units="m")
+        second = get_coord(start=10.0, stop=20.0, step=1.0, units="m")
+        fused = concat_coords(first, second)
+        assert fused.units == get_quantity("m")
+        assert len(fused) == 20
+
+    def test_many_segments_fuse_to_one_range(self):
+        """A long run of contiguous ranges collapses to a single range."""
+        pieces = [
+            get_coord(start=i * 10.0, stop=(i + 1) * 10.0, step=1.0) for i in range(50)
+        ]
+        fused = concat_coords(*pieces)
+        assert isinstance(fused, CoordRange)
+        assert len(fused) == 500
+        assert fused.min() == 0.0 and fused.max() == 499.0

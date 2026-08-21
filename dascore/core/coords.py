@@ -2125,9 +2125,12 @@ def _fuse_segments(segments: tuple[BaseCoord, ...]) -> tuple[BaseCoord, ...]:
         prev = out[-1]
         both_ranges = isinstance(prev, CoordRange) and isinstance(seg, CoordRange)
         if both_ranges and prev.step == seg.step and prev.stop == seg.start:
-            out[-1] = CoordRange(
-                start=prev.start, stop=seg.stop, step=prev.step, units=prev.units
-            )
+            # The fused range is on a grid both segments already sit on, so
+            # its length is theirs added up and nothing needs re-deriving.
+            # Validation here re-derives shape and stop from start/stop/step
+            # and costs ~60us a call, which a long merge pays thousands of
+            # times (see _new_grid).
+            out[-1] = prev._new_grid(prev.start, prev.step, len(prev) + len(seg))
             continue
         both_arrays = isinstance(prev, CoordMonotonicArray) and isinstance(
             seg, CoordMonotonicArray
