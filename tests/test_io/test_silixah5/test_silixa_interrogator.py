@@ -65,6 +65,16 @@ class TestSilixaInterrogator:
         patch = dc.spool(silixa_path)[0]
         assert dict(patch.attrs)["interrogator.name"] == scanned["interrogator.name"]
 
+    def test_detection_survives_missing_host_name(self, silixa_path, tmp_path):
+        """A file which omits HostName is still claimed, just unnamed."""
+        path = tmp_path / "no_host.h5"
+        shutil.copy2(silixa_path, path)
+        with h5py.File(path, "r+") as f:
+            node = f["Acoustic"] if "Acoustic" in f else f
+            del node.attrs["SystemInfomation.OS.HostName"]
+        assert dc.get_format(path)[0] == "Silixa_H5"
+        assert "interrogator.name" not in dict(dc.scan(path)[0].attrs)
+
     def test_blank_host_name_dropped(self, silixa_path, tmp_path):
         """An empty HostName is not passed off as a name."""
         path = tmp_path / "blank_host.h5"

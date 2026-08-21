@@ -38,10 +38,20 @@ _ATTR_MAP = {
 # A file may carry the host name but leave it empty.
 _BLANKABLE_ATTRS = ("interrogator.name",)
 
+# Read for metadata but not required to claim the format: a file which omits
+# HostName is still a Silixa file. Kept out of the fingerprints below so that
+# changing what is extracted cannot change which files the reader accepts.
+_OPTIONAL_ATTRS = frozenset({"SystemInfomation.OS.HostName"})
+
+# The detection fingerprints. Devices1.SerialNum is named here rather than in
+# _ATTR_MAP: it is no longer read (it names a card, not the interrogator) but
+# is still required to claim a file, so detection is unchanged.
+_FINGERPRINT_EXTRAS = frozenset({"SystemInfomation.Devices1.SerialNum"})
+
 # The header states these units in the key; patch attrs use seconds.
 _PULSE_WIDTH_UNITS = "ns"
 
-_EXPECTED_ATTRS = set(_ATTR_MAP)
+_EXPECTED_ATTRS = (frozenset(_ATTR_MAP) - _OPTIONAL_ATTRS) | _FINGERPRINT_EXTRAS
 
 
 def _get_version_string(resource, version):
@@ -151,7 +161,9 @@ _CARINA_ATTR_MAP = {k: v for k, v in _ATTR_MAP.items() if k != "Tags"} | {
     "StartTime": "start_time_us",
     "Samplerate": "sample_rate",
 }
-_CARINA_EXPECTED_ATTRS = set(_CARINA_ATTR_MAP)
+_CARINA_EXPECTED_ATTRS = (
+    frozenset(_CARINA_ATTR_MAP) - _OPTIONAL_ATTRS
+) | _FINGERPRINT_EXTRAS
 
 
 def _get_carina_version_string(resource, version):
