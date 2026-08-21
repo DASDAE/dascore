@@ -155,7 +155,15 @@ Over months, one lane per group runs out of room. The [`calendar plot`](`dascore
 spool.viz.calendar(show=True);
 ```
 
-Two acquisitions running at once cover one day between them, not two, so a cell never exceeds 100%. A grey cell is a day the calendar has no room for — there is no thirtieth of February — which is a different claim from a day covered by nothing.
+A cell has no room for a lane per group, so it asks whether *anything* was recording: a day is the union of what every group covers. Two acquisitions running at once therefore cover one day between them, not two, and a cell never exceeds 100%. A grey cell is a day the calendar has no room for — there is no thirtieth of February — which is a different claim from a day covered by nothing.
+
+That also means `group` is not a way to pick one acquisition here; it only decides which boundaries count as gaps. Select the patches you mean first, and the calendar is of them alone:
+
+```{python}
+spool.select(tag="temperature").viz.calendar(show=True);
+```
+
+The four days in the middle of January are still empty, since that outage took the whole site, but the strain acquisition no longer fills in the days temperature was down on its own.
 
 `method="gap"` asks the opposite question on a log scale, which is the one to use when the holes are short enough that a percentage rounds them away:
 

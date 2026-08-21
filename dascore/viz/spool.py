@@ -481,6 +481,10 @@ def calendar(
     covers by nothing at all is drawn as empty, which is a different
     claim.
 
+    `group` is not a way to pick one of them: select the patches first,
+    as `spool.select(tag="temperature").viz.calendar()`, and the
+    calendar is of those alone.
+
     A run covers one sample past the last one it states, taken from the
     step its group reports. Patches within `sampling_group_tolerance` of
     each other share a group and so share that step, which rounds a
