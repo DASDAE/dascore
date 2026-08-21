@@ -11,6 +11,7 @@ import pandas as pd
 from matplotlib.colors import LogNorm
 
 from dascore.exceptions import ParameterError
+from dascore.utils.chunk_plan import _REPORT_COLUMNS
 from dascore.utils.plotting import _format_time_axis, _get_cmap
 from dascore.utils.time import to_datetime64
 
@@ -43,14 +44,9 @@ _GAP_TICKS = (
     (_SECONDS_IN_DAY, "24 hours"),
 )
 
-# The report's own columns; anything else a row carries names its group.
-_REPORT_COLUMNS = frozenset(
-    {"span", "gap_total", "gap_size", "covered", "coverage", "group_id"}
-)
-# A dimension states itself in these, whatever the dimension is called.
-# They describe the extent a lane is drawn over, so naming the lane with
-# them would only repeat the axis.
-_ENVELOPE_SUFFIXES = ("_min", "_max", "_step", "_units")
+# A dimension states itself in these. They describe the extent a lane
+# is drawn over, so naming the lane with them would repeat the axis.
+_ENVELOPE_SUFFIXES = ("min", "max", "step", "units")
 
 # Steps a duration is worth reading in, largest first.
 _UNITS = (
@@ -108,14 +104,16 @@ def _read_selection(kwargs) -> tuple[str, tuple | None]:
     return dim, _pair(dim, window)
 
 
-def _lane_names(report: pd.DataFrame) -> list[str]:
+def _lane_names(report: pd.DataFrame, dim: str) -> list[str]:
     """Name each group by what tells it apart, and how complete it is."""
+    # Named for the measured dimension rather than by suffix: an
+    # attribute may legitimately be called `site_min`, and it names its
+    # group as any other attribute does.
+    envelope = {f"{dim}_{x}" for x in _ENVELOPE_SUFFIXES}
     stated = [
         x
         for x in report.columns
-        if x not in _REPORT_COLUMNS
-        and not x.startswith("_")
-        and not x.endswith(_ENVELOPE_SUFFIXES)
+        if x not in _REPORT_COLUMNS and x not in envelope and not x.startswith("_")
     ]
     telling = [x for x in stated if report[x].astype(str).nunique() > 1]
     described = []
@@ -170,7 +168,7 @@ def _runs(report: pd.DataFrame, gaps: pd.DataFrame, dim: str) -> pd.DataFrame:
 def _tile(report: pd.DataFrame, gaps: pd.DataFrame, dim: str) -> pd.DataFrame:
     """Lay each group's runs and holes out as the lane which draws them."""
     low, high = f"{dim}_min", f"{dim}_max"
-    names = dict(zip(report["group_id"], _lane_names(report), strict=True))
+    names = dict(zip(report["group_id"], _lane_names(report, dim), strict=True))
     rows = [
         (names[group_id], start, end, "data", "")
         for group_id, start, end in _runs(report, gaps, dim).itertuples(index=False)
@@ -307,8 +305,10 @@ def _extended(runs: pd.DataFrame, report: pd.DataFrame, dim: str) -> np.ndarray:
     """
     steps = dict(zip(report["group_id"], report[f"{dim}_step"], strict=True))
     zero = np.timedelta64(0, "ns")
+    # A descending coordinate signs its step; a run is a step longer
+    # than its envelope whichever way its samples are ordered.
     extra = [
-        zero if pd.isnull(steps[x]) else np.timedelta64(steps[x])
+        zero if pd.isnull(steps[x]) else abs(np.timedelta64(steps[x]))
         for x in runs["group_id"]
     ]
     return runs["end"].to_numpy() + np.array(extra, dtype="timedelta64[ns]")
@@ -356,14 +356,15 @@ def _day_counts(contents: pd.DataFrame, days: np.ndarray, dim: str) -> np.ndarra
     )
 
 
-def _calendar_days(window, runs: pd.DataFrame) -> pd.DatetimeIndex:
+def _calendar_days(window, runs: pd.DataFrame, ends: np.ndarray) -> pd.DatetimeIndex:
     """Return every day the calendar shows, first and last included."""
     low, high = (None, None) if window is None else window
-    # Days are taken from the samples the spool states, not from the
-    # step added to the last of them, or a run ending at midnight would
-    # open a month for the one day it does not reach into.
     first = to_datetime64(low) if low not in (None, ...) else runs["start"].min()
-    last = to_datetime64(high) if high not in (None, ...) else runs["end"].max()
+    # A run covers up to its extended end without reaching it, so a run
+    # stopping at midnight ends on the day before, and one reaching half
+    # an hour past it earns the day it reaches into.
+    reach = ends.max() - np.timedelta64(1, "ns")
+    last = to_datetime64(high) if high not in (None, ...) else reach
     if last < first:
         msg = f"The window {window!r} must be increasing."
         raise ParameterError(msg)
@@ -449,7 +450,9 @@ def calendar(
         contiguous. Same meaning as chunk's `tolerance`.
     group
         Attributes which separate patches into unrelated groups. Defaults
-        to the config option `patch_kind_attrs`.
+        to the config option `patch_kind_attrs`. It decides which
+        boundaries are gaps; a day is the union of every group's data,
+        so regrouping moves a day's total only where it moves a gap.
     time
         The days to draw, as a (start, end) pair. Either end may be None
         to run to what the spool itself states.
@@ -467,6 +470,11 @@ def calendar(
     100%. A day the spool says nothing about is drawn grey; one it
     covers by nothing at all is drawn as empty, which is a different
     claim.
+
+    A run covers one sample past the last one it states, taken from the
+    step its group reports. Patches within `sampling_group_tolerance` of
+    each other share a group and so share that step, which rounds a
+    day's total by at most one sample.
 
     Examples
     --------
@@ -491,7 +499,7 @@ def calendar(
         msg = "This spool holds no time to draw a calendar of."
         raise ParameterError(msg)
     ends = _extended(runs, report, dim)
-    days = _calendar_days(_pair("time", time), runs)
+    days = _calendar_days(_pair("time", time), runs, ends)
     stamps = days.to_numpy()
     if method == "count":
         values = _day_counts(spool.get_contents(), stamps, dim)

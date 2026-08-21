@@ -11,7 +11,7 @@ import pytest
 from matplotlib.collections import PatchCollection
 
 import dascore as dc
-from dascore.exceptions import ParameterError
+from dascore.exceptions import InvalidSpoolQueryError, ParameterError
 from dascore.viz import VizSpoolNameSpace
 from dascore.viz import spool as spool_viz
 from dascore.viz.spool import (
@@ -299,31 +299,50 @@ class TestNaming:
         """A gap under a microsecond still says how long it is."""
         assert _human_duration(1e-9) == "1e-09 s"
 
-    def test_an_attr_ending_like_a_dimension(self):
-        """A lane is named by every attr, however the attr is spelled."""
-        first = dc.get_example_spool("random_das", acquisition_key="DAS1.R1..RAW")
-        second = dc.get_example_spool("random_das", acquisition_key="DAS2.R2..RAW")
-        spool = dc.spool(list(first) + list(second))
-        names = spool_viz._lane_names(spool.get_coverage("time"))
-        assert [x.split()[0] for x in names] == ["DAS1.R1..RAW", "DAS2.R2..RAW"]
+    def test_an_attr_spelled_like_an_envelope(self):
+        """Only the measured dimension owns the envelope column names."""
+        report = pd.DataFrame(
+            {
+                "group_id": [0, 1],
+                "coverage": [1.0, 1.0],
+                # An attr may be called this; it still names its group.
+                "site_min": ["west", "east"],
+                "time_min": [0.0, 0.0],
+                "time_max": [1.0, 1.0],
+                "time_step": [0.1, 0.1],
+            }
+        )
+        names = spool_viz._lane_names(report, "time")
+        assert [x.split()[0] for x in names] == ["west", "east"]
 
-    def test_an_unrecorded_attr_is_not_a_value(self, diverse):
-        """A group which states no acquisition key is not named by a blank."""
-        names = spool_viz._lane_names(diverse.get_coverage("time"))
-        assert not any(x.startswith("·") or x.startswith(" ") for x in names)
-
-    def test_group_id_when_nothing_tells_them_apart(self, monkeypatch):
-        """Where no attribute varies, the group's ordinal names the lane."""
+    def test_the_measured_dimension_never_names_a_lane(self):
+        """The axis already says the extent, so the lane does not repeat it."""
         report = pd.DataFrame(
             {
                 "group_id": [0, 1],
                 "coverage": [1.0, 1.0],
                 "tag": ["same", "same"],
-                "time_min": [0.0, 0.0],
-                "time_max": [1.0, 1.0],
+                "time_min": [0.0, 5.0],
+                "time_max": [1.0, 6.0],
             }
         )
-        assert spool_viz._lane_names(report) == ["group 0  100%", "group 1  100%"]
+        assert spool_viz._lane_names(report, "time") == [
+            "group 0  100%",
+            "group 1  100%",
+        ]
+
+    def test_a_key_is_shown(self):
+        """An acquisition key tells two groups apart, and names them."""
+        first = dc.get_example_spool("random_das", acquisition_key="DAS1.R1..RAW")
+        second = dc.get_example_spool("random_das", acquisition_key="DAS2.R2..RAW")
+        spool = dc.spool(list(first) + list(second))
+        names = spool_viz._lane_names(spool.get_coverage("time"), "time")
+        assert [x.split()[0] for x in names] == ["DAS1.R1..RAW", "DAS2.R2..RAW"]
+
+    def test_an_unrecorded_attr_is_not_a_value(self, diverse):
+        """A group which states no acquisition key is not named by a blank."""
+        names = spool_viz._lane_names(diverse.get_coverage("time"), "time")
+        assert not any(x.startswith("·") or x.startswith(" ") for x in names)
 
 
 class TestCalendar:
@@ -372,6 +391,42 @@ class TestCalendar:
         assert _cell(ax, "2024-02-03") == 1  # temperature is down
         assert _cell(ax, "2024-01-18") == 0  # the site outage
 
+    def test_a_run_reaching_into_the_next_day_gets_it(self):
+        """A run covers a step past its last sample, and that day counts."""
+        patch = dc.get_example_patch(
+            "random_das",
+            time_min=np.datetime64("2024-01-31T22:30"),
+            time_step=np.timedelta64(1, "h"),
+            shape=(2, 2),
+        )
+        ax = dc.spool([patch]).viz.calendar()
+        assert _cell(ax, "2024-01-31") == pytest.approx(5_400 / 864.0)
+        # The last sample is at 23:30 and covers the hour after it.
+        assert _cell(ax, "2024-02-01") == pytest.approx(1_800 / 864.0)
+
+    def test_a_run_ending_at_midnight_opens_no_day(self):
+        """Covering up to a day is not reaching into it."""
+        patch = dc.get_example_patch(
+            "random_das",
+            time_min=np.datetime64("2024-01-31T23:00"),
+            time_step=np.timedelta64(1, "h"),
+            shape=(2, 1),
+        )
+        ax = dc.spool([patch]).viz.calendar()
+        assert np.count_nonzero(~np.ma.getmaskarray(_cells(ax))) == 1
+
+    def test_a_descending_coordinate_covers_as_much(self):
+        """A run is a step long whichever way its samples are ordered."""
+        forward = dc.get_example_patch(
+            "random_das",
+            time_min=np.datetime64("2024-01-05"),
+            time_step=np.timedelta64(1, "h"),
+            shape=(2, 24),
+        )
+        backward = forward.update_coords(time=forward.coords.get_array("time")[::-1])
+        ax = dc.spool([backward]).viz.calendar()
+        assert _cell(ax, "2024-01-05") == 100.0
+
     def test_a_single_day_draws_a_cell(self):
         """The last day is a day with data, so a one-day spool is not empty."""
         ax = dc.get_example_spool("random_das").viz.calendar()
@@ -396,10 +451,10 @@ class TestCalendar:
         """A tolerance which closes the gaps fills the days they emptied."""
         assert _cell(deployment.viz.calendar(tolerance=200), "2024-01-18") == 100.0
 
-    def test_group_argument(self, deployment):
-        """Grouping is passed through to the reports the days are read from."""
-        ax = deployment.viz.calendar(group=[])
-        assert _cell(ax, "2024-01-18") == 0.0
+    def test_group_reaches_the_reports(self, deployment):
+        """Grouping is the spool's own argument, and its refusal stands."""
+        with pytest.raises(InvalidSpoolQueryError, match="nope"):
+            deployment.viz.calendar(group="nope")
 
     @pytest.mark.parametrize(
         "bad, match",
