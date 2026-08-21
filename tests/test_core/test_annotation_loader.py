@@ -25,6 +25,8 @@ from dascore.utils.tables import DOCUMENT_KEY, write_parquet
 
 DIMS = ("distance", "time")
 
+TIMES = np.array(["2020-01-01T00:00:00", "2020-01-01T00:00:01"], dtype="datetime64[ns]")
+
 
 def _folds_case() -> bool:
     """Return True if this filesystem holds two case variants as one file."""
@@ -172,6 +174,45 @@ class TestRoundTrip:
         regions.io.to_csv(path)
         loaded = dc.annotations(path, dims=DIMS)
         assert loaded.io.to_dataframe().equals(regions.io.to_dataframe())
+
+    def test_whole_number_ids(self, tmp_path):
+        """Ids written as numbers name the same rows once read back."""
+        frame = pd.DataFrame({"id": [1, 2], "distance": [1.0, 2.0]})
+        out = dc.AnnotationSet(frame, dims=DIMS)
+        assert dc.annotations(out.io.save(tmp_path / "picks")) == out
+
+    def test_a_column_stating_nothing(self, tmp_path):
+        """A column no row states holds the same nothing after a write."""
+        frame = pd.DataFrame({"id": ["a"], "note": [None], "distance": [1.0]})
+        out = dc.AnnotationSet(frame, dims=DIMS)
+        assert dc.annotations(out.io.save(tmp_path / "picks")) == out
+
+    def test_a_set_of_no_annotations(self, tmp_path):
+        """A set with columns and no rows is still that set."""
+        frame = pd.DataFrame({"id": [], "distance_start": [], "distance_end": []})
+        out = dc.AnnotationSet(frame, dims=DIMS)
+        assert dc.annotations(out.io.save(tmp_path / "picks")) == out
+
+    def test_bounds_derived_from_vertices(self, tmp_path):
+        """A bound filled in from vertices is the dimension's own type."""
+        frame = pd.DataFrame({"id": ["p"], "geometry": ["path"]})
+        vertices = pd.DataFrame(
+            {"id": ["p"] * 2, "seq": [0, 1], "time": TIMES[:2], "distance": [1.0, 5.0]}
+        )
+        out = dc.AnnotationSet(frame, dims=DIMS, vertices=vertices)
+        held = out.io.to_dataframe()["time_start"]
+        assert held.dtype == np.dtype("datetime64[ns]")
+        assert dc.annotations(out.io.save(tmp_path / "picks")) == out
+
+    def test_the_frame_a_writer_wrote(self, with_vertices, tmp_path):
+        """The tables a set writes build that set again, unread by the loader."""
+        directory = with_vertices.io.save(tmp_path / "picks")
+        rebuilt = dc.AnnotationSet(
+            pd.read_csv(directory / "annotations.csv"),
+            dims=with_vertices.dims,
+            vertices=pd.read_csv(directory / "vertices.csv"),
+        )
+        assert rebuilt == with_vertices
 
     def test_vertices_and_basis(self, with_vertices, curve, tmp_path):
         """Vertices and the curve they were drawn from both survive."""
@@ -469,6 +510,55 @@ class TestWhatATableCannotSay:
         annotations = dc.AnnotationSet(frame, dims=("distance",))
         loaded = dc.annotations(annotations.io.save(tmp_path / "picks"))
         assert loaded[0].extra["zip"] == 1234
+
+
+class TestDurationDimensions:
+    """A duration is a coordinate CSV has no spelling for."""
+
+    @staticmethod
+    def _set():
+        """A set whose dimension is an offset from something."""
+        spans = np.array([1, 3], dtype="timedelta64[s]")
+        frame = pd.DataFrame(
+            {"id": ["a"], "offset_start": spans[:1], "offset_end": spans[1:]}
+        )
+        return dc.AnnotationSet(frame, dims=("offset",))
+
+    def test_csv_refused(self, tmp_path):
+        """Written as text nothing reads it back, so it is not written."""
+        with pytest.raises(ParameterError, match="no spelling for"):
+            self._set().io.save(tmp_path / "picks")
+
+    def test_to_csv_refused(self):
+        """The bare table says the same thing."""
+        with pytest.raises(ParameterError, match="no spelling for"):
+            self._set().io.to_csv()
+
+    @pytest.mark.skipif(pyarrow is None, reason="pyarrow is not installed")
+    def test_parquet_keeps_it(self, tmp_path):
+        """Parquet has a type for a duration, so the set stores."""
+        out = self._set()
+        saved = out.io.save(tmp_path / "picks", format="parquet")
+        assert dc.annotations(saved) == out
+
+    @pytest.mark.skipif(pyarrow is None, reason="pyarrow is not installed")
+    def test_a_curve_drawn_over_one(self, tmp_path):
+        """The curve a path was drawn from survives with its endpoints."""
+        line = Line(
+            start={"offset": np.timedelta64(1, "s")},
+            end={"offset": np.timedelta64(3, "s")},
+        )
+        frame = pd.DataFrame({"id": ["p"], "geometry": ["path"], "basis": [line]})
+        vertices = pd.DataFrame(
+            {
+                "id": ["p"] * 2,
+                "seq": [0, 1],
+                "offset": np.array([1, 3], dtype="timedelta64[s]"),
+            }
+        )
+        out = dc.AnnotationSet(frame, dims=("offset",), vertices=vertices)
+        saved = out.io.save(tmp_path / "curve", format="parquet")
+        assert dc.annotations(saved)[0].geometry.basis == line
 
 
 class TestSavingOverASet:
@@ -785,7 +875,7 @@ class TestTheTables:
         directory = regions.io.save(tmp_path / "picks")
         table = directory / "annotations.csv"
         table.write_text(table.read_text().replace("120.0", "far"))
-        with pytest.raises(InvalidAnnotationError, match="neither numbers nor times"):
+        with pytest.raises(InvalidAnnotationError, match="neither numbers, times"):
             dc.annotations(directory)
 
     def test_a_dimension_no_row_states(self, tmp_path):
@@ -917,6 +1007,20 @@ class TestCollections:
         regions.io.save(root / "hand")
         picks.io.save(root / "phasenet")
         return root
+
+    def test_a_dimension_one_set_leaves_blank(self, tmp_path):
+        """A set stating no time beside one which does still holds times."""
+        root = tmp_path / "sets"
+        blank = pd.DataFrame({"id": ["a"], "time_start": [None], "time_end": [None]})
+        dc.AnnotationSet(blank, dims=DIMS).io.save(root / "one")
+        stated = pd.DataFrame(
+            {"id": ["b"], "time_start": TIMES[:1], "time_end": TIMES[1:2]}
+        )
+        dc.AnnotationSet(stated, dims=DIMS).io.save(root / "two")
+        merged = dc.annotations(root)
+        held = merged.io.to_dataframe()["time_start"]
+        assert held.dtype == np.dtype("datetime64[ns]")
+        assert dc.annotations(merged.io.save(tmp_path / "flat")) == merged
 
     def test_reads_as_one_set(self, collection, regions, picks):
         """Every set is in the table, in the dimensions all of them state."""

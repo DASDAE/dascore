@@ -20,9 +20,10 @@ carries the annotations made on it under the hidden name ``.annotations``, as
 it carries its inventory under ``.inventory``.
 
 CSV has no types, so this module decides what each column holds before the
-models see it: a dimension column is numbers or times, a ``basis`` cell is
-the JSON document its curve dumps, and every other cell is read the way it
-was written. Tables are read strictly, through
+models see it: a ``basis`` cell is the JSON document its curve dumps, and
+every other cell is read the way it was written. A dimension column is
+read by the set's own reader, so a stored table and a frame in memory are
+typed alike. Tables are read strictly, through
 [`read_table`](`dascore.utils.tables.read_table`), and the neutral errors
 that raises are named as annotation errors here, at the one boundary which
 knows the format.
@@ -31,7 +32,6 @@ knows the format.
 from __future__ import annotations
 
 import json
-import math
 import os
 from collections.abc import Collection, Mapping, Sequence
 from contextlib import contextmanager, suppress
@@ -239,7 +239,7 @@ def _read_cells(
             # to work it out from a spelling -- only check that what it
             # states is a thing the column is allowed to hold.
             if str(name) in spellings:
-                _check_kind(series, name, path, "iufMm", "numbers or times")
+                _check_kind(series, name, path, "iufMm", "numbers, times or durations")
             elif ordered and str(name) == _ORDINAL:
                 _check_kind(series, name, path, "iuf", "a number")
             out[name] = series
@@ -279,16 +279,12 @@ def _read_extra(cell):
     """
     Read one cell of a column the set does not model.
 
-    A cell reading 'nan' or 'inf' parses as a float which every later
-    reader treats as unset, so the value would be deleted rather than
-    retyped; those stay the text the table plainly states.
+    A cell reading 'nan' or 'inf' stays the text the table plainly states:
+    `parse_cell` reads only what a table spells a number with, and a
+    non-finite one -- which every later reader treats as unset -- is not
+    among them.
     """
-    if not isinstance(cell, str):
-        return cell
-    value = parse_cell(cell)
-    if isinstance(value, float) and not math.isfinite(value):
-        return cell
-    return value
+    return parse_cell(cell) if isinstance(cell, str) else cell
 
 
 def _read_set_table(
