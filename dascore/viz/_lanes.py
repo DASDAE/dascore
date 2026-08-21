@@ -60,9 +60,9 @@ def _default_label(value) -> str:
     """Text for a value which was not given a label of its own."""
     if isinstance(value, str):
         return value
-    if isinstance(value, bool) or value is None:
+    if value is None:
         return ""
-    # A number states itself; a boolean group is named by its lane instead.
+    # A number states itself; a membership lane is named by its lane instead.
     return f"{value:g}" if isinstance(value, float) else str(value)
 
 
@@ -102,11 +102,17 @@ def _read_frame(intervals, start, end, lane, value, label):
     out["start"] = _as_numeric(intervals[start])
     out["end"] = _as_numeric(intervals[end])
     out["lane"] = intervals[lane].astype(str) if lane else ""
-    out["value"] = intervals[value] if value else None
+    if value:
+        # a missing value (None, or the NaN a frame of mixed lanes spells
+        # it as) states membership; it is not a number
+        values = intervals[value].astype(object)
+        out["value"] = values.where(values.notna(), None)
+    else:
+        out["value"] = None
     if label:
         out["label"] = intervals[label].astype(str)
     elif value:
-        out["label"] = [_default_label(x) for x in intervals[value].tolist()]
+        out["label"] = [_default_label(x) for x in out["value"].tolist()]
     else:
         out["label"] = ""
     for flag in ("open_start", "open_end"):
@@ -123,6 +129,9 @@ def _lane_kind(values) -> str:
     if not kinds:
         return "none"
     if len(kinds) > 1:
+        return "mixed"
+    if any(x is None for x in values):
+        # a lane states membership (no values) or a value in every row
         return "mixed"
     return kinds.pop()
 
@@ -238,14 +247,10 @@ def _resolve_colors(rows, kind, lane_index, string_map, color):
         # Each numeric lane is its own scale, so each earns its own bar;
         # one bar for two lanes would read from a scale only one of them has.
         return colors, ("colorbar", (rows["lane"].iloc[0], cmap, norm))
-    # Boolean and unvalued lanes take one color, so the lane reads as one
-    # variable; a False interval is drawn faintly rather than dropped.
+    # An unvalued lane states membership: every row takes the one color, so
+    # the lane reads as one variable.
     base = plt.get_cmap(LANE_CMAP)(lane_index % 10)
-    colors = [
-        base if normalize_value(x) is not False else (*base[:3], 0.25)
-        for x in rows["value"]
-    ]
-    return colors, ("legend", {rows["lane"].iloc[0]: base})
+    return [base] * len(rows), ("legend", {rows["lane"].iloc[0]: base})
 
 
 def _draw_open_edges(ax, rows, y_low, height, colors, span):
@@ -340,11 +345,13 @@ def plot_lanes(
         one unnamed lane.
     value
         Column deciding each row's color. Strings are categorical,
-        numbers continuous, and booleans state membership of the lane.
+        numbers continuous, and a row with no value states membership
+        of the lane (true and false are not values; an interval outside
+        the lane has no row).
     label
         Column holding the text drawn in each box. Values supply it by
-        default: text as itself, a number as its digits, a boolean as
-        nothing, since the lane it sits in already names it.
+        default: text as itself, a number as its digits, a membership
+        row as nothing, since the lane it sits in already names it.
     lanes
         The lanes to draw, in order. Names with no rows are kept as empty
         lanes, so two figures of different subjects still line up.
@@ -386,7 +393,7 @@ def plot_lanes(
     ...         "group": ["zone", "zone", "noisy"],
     ...         "start": [0.0, 10.0, 5.0],
     ...         "end": [10.0, 20.0, 15.0],
-    ...         "value": ["north", "south", True],
+    ...         "value": ["north", "south", None],
     ...     }
     ... )
     >>> _ = plot_lanes(frame, lane="group", value="value")
@@ -437,9 +444,9 @@ def plot_lanes(
         kind = _lane_kind(rows["value"])
         if kind == "mixed":
             msg = (
-                f"Lane {name!r} mixes value kinds, so it has no one color "
-                "scheme. A group states one variable; split the kinds into "
-                "separate lanes."
+                f"Lane {name!r} mixes value kinds, or values with rows of "
+                "none, so it has no one color scheme. A group states one "
+                "variable: a value in every row, or none at all."
             )
             raise ParameterError(msg)
         sub_rows = _pack_rows(rows) if pack else np.zeros(len(rows), dtype=int)
