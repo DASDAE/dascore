@@ -81,6 +81,8 @@ jobs:
     env:
       debug_enabled: ${{ github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'debug') }}
       PYTEST_ADDOPTS: ${{ github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'debug') && '-vv --durations=100' || '' }}
+      # One data file per cell; the coverage_gate job combines them all.
+      COVERAGE_FILE: .coverage.${{ matrix.os }}-${{ matrix.python-version }}
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -94,8 +96,14 @@ jobs:
           python-version: ${{ matrix.python-version }}
           prepare-test-data: "true"
 
+      # The generated docs tests and the doctests are the same on every cell
+      # and cost minutes, so one cell runs each. The generated tests run
+      # inside the measured suite below, so their coverage reaches the gate;
+      # the doctests are not measured, and counting them would let a line
+      # reachable only from a docstring example satisfy the gate.
       - name: generate qmd docs tests
         id: generate_qmd_tests
+        if: matrix.os == 'ubuntu-latest' && matrix.python-version == needs.setup.outputs.python-default
         shell: bash
         run: python scripts/generate_doc_code_tests.py
 
@@ -110,6 +118,7 @@ jobs:
       # Runs examples in docstrings
       - name: test docstrings
         id: run_docstrings
+        if: matrix.os == 'ubuntu-latest' && matrix.python-version == needs.setup.outputs.python-default
         continue-on-error: ${{ env.debug_enabled == 'true' }}
         shell: bash
         run: ./.github/test_code.sh doctest
@@ -129,19 +138,80 @@ jobs:
         with:
           limit-access-to-actor: true
 
-      # Upload coverage files
-      - uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f  # v7.0.0
+      # The cell's coverage data, for the coverage_gate job to combine.
+      # Uploaded even when the tests failed, so a partial report is still
+      # readable; the gate then fails on the missing lines rather than on a
+      # missing artifact.
+      - name: upload coverage data
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
-          fail_ci_if_error: false
-          files: ./coverage.xml
-          flags: unittests
-          name: PR_tests
-          token: ${{ secrets.CODECOV_TOKEN }}
+          name: coverage-${{ matrix.os }}-${{ matrix.python-version }}
+          # A coverage data file starts with a dot.
+          path: ${{ env.COVERAGE_FILE }}
+          include-hidden-files: true
+          if-no-files-found: error
 
       - name: fail job after debug session if tests failed
         if: steps.generate_qmd_tests.outcome == 'failure' || steps.run_test_suite.outcome == 'failure' || steps.run_docstrings.outcome == 'failure'
         shell: bash
         run: exit 1
+
+  # Where the 100% coverage threshold is enforced. It has to run on the
+  # combined data rather than in any one cell: a handful of lines are
+  # reachable only on a case-insensitive filesystem (macOS, Windows), and
+  # the generated docs tests run on one cell.
+  coverage_gate:
+    needs: [setup, test_code]
+    timeout-minutes: 20
+    runs-on: ubuntu-latest
+
+    # Report on whatever the cells produced, including when one of them
+    # failed; do not wait on network_tests, which is allowed to fail.
+    if: ${{ !cancelled() && (github.event_name == 'push' || !contains(github.event.pull_request.labels.*.name, 'no_ci')) }}
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Coverage alone: this job reads the source tree, it does not import
+      # dascore, so the dependency install is not worth its minute.
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: ${{ needs.setup.outputs.python-default }}
+
+      - name: install coverage
+        shell: bash
+        run: python -m pip install "coverage>=7.4,<8"
+
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131  # v7.0.0
+        with:
+          pattern: coverage-*
+          merge-multiple: true
+
+      # [tool.coverage.paths] in pyproject.toml is what lets the three
+      # operating systems' data files combine into one set of files.
+      - name: combine coverage
+        shell: bash
+        run: |
+          coverage combine
+          coverage report --show-missing
+          coverage xml
+
+      - uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f  # v7.0.0
+        if: ${{ !cancelled() }}
+        with:
+          fail_ci_if_error: true
+          files: ./coverage.xml
+          flags: unittests
+          name: combined_tests
+          token: ${{ secrets.CODECOV_TOKEN }}
+
+      # Last, so the report is uploaded whether or not this passes.
+      - name: require full coverage
+        shell: bash
+        run: coverage report --fail-under=100
 
   network_tests:
     needs: setup
@@ -156,6 +226,9 @@ jobs:
 
     # Keep remote-IO coverage visible without blocking unrelated changes.
     if: github.event_name == 'push' || !contains(github.event.pull_request.labels.*.name, 'no_ci')
+
+    env:
+      COVERAGE_FILE: .coverage.network-${{ matrix.os }}
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -173,7 +246,19 @@ jobs:
         shell: bash
         run: ./.github/test_code.sh network
 
+      # One network report per run, from one OS: the codecov comment waits
+      # for a fixed number of uploads (codecov.yml), and the three operating
+      # systems exercise the same remote code.
+      # !cancelled(), not the implicit success(): the tests here are allowed
+      # to fail, and skipping the xml would leave codecov waiting forever for
+      # the second of the two uploads it counts.
+      - name: write coverage xml
+        if: ${{ matrix.os == 'ubuntu-latest' && !cancelled() }}
+        shell: bash
+        run: coverage xml
+
       - uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f  # v7.0.0
+        if: ${{ matrix.os == 'ubuntu-latest' && !cancelled() }}
         with:
           fail_ci_if_error: false
           files: ./coverage.xml
@@ -209,14 +294,21 @@ jobs:
       - uses: ./.github/actions/mamba-install-dascore
         with:
           python-version: ${{ needs.setup.outputs.python-default }}
-          # [test] rather than the [dev] default: pip would otherwise layer
-          # ~30 PyPI distributions over the conda environment, which is the
-          # opposite of what this job is checking.
-          install-group-str: "[test]"
+          # Installed below with --no-deps instead: letting pip resolve the
+          # dependencies would layer PyPI distributions over the conda
+          # environment and so hide whatever environment.yml is missing.
+          install-package: "false"
           prepare-test-data: "true"
 
-      # No coverage upload: the uv jobs already cover this suite, and this job
-      # exists to prove environment.yml still solves and dascore works in it.
-      - name: run test suite
+      - name: install dascore on the conda environment alone
         shell: bash -el {0}
-        run: python -m pytest tests -m "not network" -q
+        run: |
+          pip install --no-deps -e .
+          pip check
+
+      # A smoke test, not the suite: every test already runs on the uv
+      # matrix, and what this job answers is whether environment.yml still
+      # solves and dascore reads a file in the environment it describes.
+      - name: run a subset of the test suite
+        shell: bash -el {0}
+        run: python -m pytest tests/test_io/test_dasdae tests/test_compat.py -q

@@ -464,8 +464,13 @@ class TestOddballs:
 
     def test_sourceless_callable(self):
         """A callable whose source cannot be read is still encodable."""
-        # Built by eval, so there is no file holding the text of it.
-        assert isinstance(digest(eval("lambda x: x")), str)
+        # Compiled under a filename nothing will ever hold the text of.
+        # A plain eval() is not enough: something else in the process (an
+        # xdist worker's bootstrap, for one) can leave "<string>" in the
+        # linecache, and then the source is readable after all.
+        func = eval(compile("lambda x: x", "<dascore-nowhere>", "eval"))
+        assert encode(func)["$callable"]["source"] is None
+        assert isinstance(digest(func), str)
 
     def test_partial(self):
         """A partial is what it wraps and what it wraps it with."""

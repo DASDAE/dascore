@@ -20,6 +20,18 @@ introduce large blocks of dead code.
 pytest tests --cov dascore --cov-report term-missing
 ```
 
+The suite is parallel safe, and CI runs it that way. Locally it is the
+quickest way to run the whole thing:
+
+<!--pytest-codeblocks:skip-->
+```bash
+pytest tests -n logical --dist loadfile
+```
+
+CI requires 100% coverage of the combined data from every operating system
+rather than from any one run, so a Linux-only run can report a line or two
+missing which macOS and Windows cover.
+
 If you would like to test the IO modules it can be done like so:
 
 <!--pytest-codeblocks:skip-->

@@ -114,6 +114,7 @@ test = [
     "pytest",
     "pytest-timeout",
     "pytest-codeblocks",
+    "pytest-xdist",
     "s3fs",
     "starlette",
     "twine",
@@ -278,6 +279,15 @@ convention = "numpy"
 # F401: a notebook often imports a name only used inside an IPython magic,
 # which ruff cannot see, and its autofix would delete the import.
 "*.ipynb" = ["D103", "F401"]
+
+# Coverage is measured on three operating systems and combined in one job
+# (the coverage_gate job in runtests.yml), so the data files have to name the
+# same files: relative paths, with the separator differences mapped away.
+[tool.coverage.run]
+relative_files = true
+
+[tool.coverage.paths]
+source = ["dascore/", "*/dascore/"]
 
 [tool.pytest.ini_options]
 norecursedirs = [
