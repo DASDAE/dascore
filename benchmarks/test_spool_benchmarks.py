@@ -268,3 +268,56 @@ class TestMemorySpoolBenchmarks:
         merged = dc.spool(many_patches).chunk(time=None)
         assert len(merged) == 1
         assert isinstance(merged[0], dc.Patch)
+
+
+def _make_contiguous_patches(count, shape=(10, 20), time_step=0.01):
+    """Make small patches which meet end to end, so one partition holds all."""
+    base = dc.get_example_patch(
+        "random_das",
+        time_min="2023-01-01",
+        shape=shape,
+        time_step=time_step,
+        distance_step=1.0,
+    ).update_attrs(history=[])
+    stride = to_timedelta64(shape[1] * time_step)
+    start = np.datetime64("2023-01-01")
+    return [
+        base.update_coords(time_min=start + i * stride).update_attrs(history=[])
+        for i in range(count)
+    ]
+
+
+class TestLargePlanBenchmarks:
+    """
+    Benchmarks for plan construction at the scale an archive reaches.
+
+    The other plan benchmarks stop at 100 patches, where per-member cost
+    is invisible. These run at thousands so a change in how an output's
+    metadata is decided shows up as time rather than noise. Planning is
+    lazy, so nothing here loads data: `len` realizes the plan and stops.
+    """
+
+    @pytest.fixture(scope="class")
+    def large_spool(self):
+        """A spool of several thousand patches which meet end to end."""
+        return dc.spool(_make_contiguous_patches(4000))
+
+    @pytest.mark.benchmark
+    def test_merge_plan_many_members(self, large_spool):
+        """Time planning one output out of thousands of members."""
+        assert len(large_spool.chunk(time=None)) == 1
+
+    @pytest.mark.benchmark
+    def test_segment_plan_many_outputs(self, large_spool):
+        """Time planning many outputs, each cut from the merged span."""
+        assert len(large_spool.chunk(time=0.4)) > 100
+
+    @pytest.mark.benchmark
+    def test_concatenate_plan_many_members(self, large_spool):
+        """Time planning a concatenation which joins every member."""
+        assert len(large_spool.concatenate(time=None)) == 1
+
+    @pytest.mark.benchmark
+    def test_concatenate_plan_many_outputs(self, large_spool):
+        """Time planning a concatenation which groups members in pairs."""
+        assert len(large_spool.concatenate(time=2)) == 2000
