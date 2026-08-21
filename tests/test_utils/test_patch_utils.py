@@ -986,6 +986,19 @@ class TestConcatenate:
         other = random_patch.update_coords(distance_min=5)
         with pytest.raises(CoordMergeError, match="distance"):
             concatenate_planned([random_patch, other], "time")
+        # a coordinate the plan vouched for but which differs is refused too,
+        # whatever the policy; one the plan recorded as dropped is left out
+        n = random_patch.shape[random_patch.get_axis("distance")]
+        lat_a = random_patch.update_coords(
+            latitude=("distance", np.arange(n, dtype=float))
+        )
+        lat_b = random_patch.update_coords(latitude=("distance", np.ones(n)))
+        with pytest.raises(CoordMergeError, match="latitude"):
+            concatenate_planned([lat_a, lat_b], "time", conflict="drop")
+        out = concatenate_planned(
+            [lat_a, lat_b], "time", conflict="drop", dropped=["latitude"]
+        )
+        assert "latitude" not in out.coords.coord_map
 
     def test_private_coords_dropped(self, random_patch):
         """Ensure private coords don't interfere with concat along new dim."""

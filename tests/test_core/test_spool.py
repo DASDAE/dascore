@@ -1330,6 +1330,34 @@ class TestConcatenatePartitions:
             contents["latitude_min"].iloc[0]
         )
 
+    def test_string_dimension_orders_lexicographically(self):
+        """A string-valued dimension concatenates in label order."""
+        base = dc.get_example_patch()
+        data = base.data[:2]
+        coords = {"station": np.array(["c", "d"]), "time": base.get_coord("time")}
+        later = dc.Patch(data=data, coords=coords, dims=("station", "time"))
+        early = later.update_coords(station=np.array(["a", "b"]))
+        out = dc.spool([later, early]).concatenate(station=None)
+        assert list(out[0].get_coord("station").values) == ["a", "b", "c", "d"]
+
+    def test_replanning_after_a_drop_keeps_the_drop(self, pair):
+        """Concatenating again along the same dimension does not resurrect metadata."""
+        first, other = pair
+        metres, km = first.set_units("m"), other.set_units("km")
+        dropped = dc.spool([metres, km]).concatenate(time=None, conflict="drop")
+        again = dropped.concatenate(time=None)
+        assert len(again) == 1
+        assert again[0].attrs.data_units is None
+
+    def test_conflict_policy_is_part_of_the_identity(self, pair):
+        """Drop and keep_first give different patches, so different ids."""
+        first, other = pair
+        a = first.update_attrs(foo="a")
+        b = other.update_attrs(foo="b")
+        kept = dc.spool([a, b]).concatenate(time=None, conflict="keep_first")[0]
+        dropped = dc.spool([a, b]).concatenate(time=None, conflict="drop")[0]
+        assert kept.attrs.processing_id != dropped.attrs.processing_id
+
     def test_new_dimension(self, pair):
         """A dimension no patch has is added, one sample per patch."""
         first, _ = pair

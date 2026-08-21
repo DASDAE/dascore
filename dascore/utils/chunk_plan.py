@@ -1695,8 +1695,8 @@ def build_concat_plan(
     # step, keep their order and sort last), then cut into runs of `count`.
     within = np.zeros(len(df))
     if has_envelope:
-        starts = to_float(df[min_name].to_numpy())
-        stops = to_float(df[max_name].to_numpy())
+        starts = _order_key(df[min_name])
+        stops = _order_key(df[max_name])
         no_steps = np.full(len(df), np.nan)
         steps = to_float(df[step_name].to_numpy()) if step_name in df else no_steps
         first_step = pd.Series(steps).groupby(labels).transform("first").to_numpy()
@@ -1732,7 +1732,10 @@ def build_concat_plan(
             # sample per member, as a dimension without values (the name
             # may have been a non-dimensional coordinate, which the new
             # dimension replaces, so no envelope is claimed for it)
-            data["dims"] = [f"{d},{name}" if n else d for d, n in zip(dims, new_dim)]
+            data["dims"] = [
+                ",".join([*[x for x in d.split(",") if x], name]) if n else d
+                for d, n in zip(dims, new_dim)
+            ]
             for x in (min_name, max_name, step_name):
                 if x in data:
                     data[x] = [None if n else v for v, n in zip(data[x], new_dim)]
@@ -1758,6 +1761,15 @@ def build_concat_plan(
             grouped = sorted_df[aux_keys].groupby(codes)
             everywhere = grouped.count().eq(grouped.size(), axis=0)
             varied = (grouped.nunique(dropna=True) > 1) & everywhere
+            # a summary-only identity ("sum:") cannot vouch two coordinates
+            # are equal, so such a coordinate is dropped too rather than
+            # advertised and then found to differ on loading
+            weak = (
+                sorted_df[aux_keys]
+                .astype(str)
+                .apply(lambda c: c.str.startswith("sum:"))
+            )
+            varied |= weak.groupby(codes).any() & everywhere
             params["dropped_coords"] = {
                 int(i): [x[1 : -len("_def_key")] for x in aux_keys if row[x]]
                 for i, row in varied.iterrows()
@@ -1789,6 +1801,15 @@ def build_concat_plan(
     return ChunkPlan(outputs, members, name, value, params)
 
 
+def _order_key(values: pd.Series) -> np.ndarray:
+    """Sortable floats for an envelope column: numbers as they are, labels by rank."""
+    try:
+        return to_float(values.to_numpy())
+    except (TypeError, ValueError):
+        # a string-valued dimension: lexicographic order, missing last
+        return values.rank(method="dense").to_numpy(dtype=float)
+
+
 def _concatenated_steps(sorted_df: pd.DataFrame, codes: np.ndarray, name: str):
     """
     The step of each output's concatenated coordinate, where it stays even.
@@ -1807,9 +1828,13 @@ def _concatenated_steps(sorted_df: pd.DataFrame, codes: np.ndarray, name: str):
     same_output = pd.Series(codes).shift(1).to_numpy() == codes
     # descending data run from their max to their min, so the next member
     # starts (at its max) one step below the previous member's min
-    ascending = to_float(steps.to_numpy()) >= 0
-    forward = (starts == stops.shift(1) + steps).to_numpy()
-    backward = (stops == starts.shift(1) + steps).to_numpy()
+    try:
+        ascending = to_float(steps.to_numpy()) >= 0
+        forward = (starts == stops.shift(1) + steps).to_numpy()
+        backward = (stops == starts.shift(1) + steps).to_numpy()
+    except (TypeError, ValueError):
+        # labels (a string-valued dimension) have no arithmetic, so no step
+        return np.full(by_output.ngroups, None, dtype=object)
     follows = np.where(ascending, forward, backward) | ~same_output
     contiguous = pd.Series(follows).groupby(codes).all()
     first = by_output.first()

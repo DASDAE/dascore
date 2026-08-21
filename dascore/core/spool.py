@@ -1984,13 +1984,21 @@ class Spool(NamespaceOwner):
         dim = next(iter(kwargs), None)
         source_rows, working = self._plan_frames(dim)
         plan = build_concat_plan(working, conflict=conflict, group=group, **kwargs)
+        merge_kwargs = {
+            "conflict": conflict,
+            "count": plan.params["count"],
+            "dropped_coords": plan.params.get("dropped_coords", {}),
+        }
         catalog = derived_catalog(
             source_rows=source_rows,
             plan=plan,
             parent=self._catalog,
-            merge_kwargs={"conflict": conflict, "count": plan.params["count"]},
+            merge_kwargs=merge_kwargs,
             mode="concat",
             origin_path=self.spool_path,
+            # a plan which drops or picks among conflicting metadata must
+            # not be re-planned from its members, which still hold it all
+            lossy=conflict != "raise",
         )
         return self._new_from_catalog(catalog)
 

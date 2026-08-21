@@ -1770,6 +1770,7 @@ def concatenate_planned(
     dim: str,
     count: int | None = None,
     conflict: Literal["drop", "raise", "keep_first"] = "raise",
+    dropped: Sequence[str] = (),
 ) -> dc.Patch:
     """
     Concatenate the members of one planned output, as the plan decided.
@@ -1779,11 +1780,17 @@ def concatenate_planned(
     none of that is asked again. What metadata cannot settle is settled
     here, as a merge settles it: the attrs fold as a merge folds them
     (`combine_patch_attrs`, a missing value matching anything and known
-    conflicts policed by `conflict`), and a non-dimensional coordinate the
-    members hold different values for either raises (`conflict="raise"`)
-    or is dropped from the output.
+    conflicts policed by `conflict`), and the non-dimensional coordinates
+    the plan recorded as `dropped` (those whose identity differs, or cannot
+    be vouched for) are left out. Any other coordinate whose loaded values
+    differ raises whatever the policy: the plan vouched for it, so the
+    catalog already advertises it, and an output must not quietly lose what
+    its row states.
     """
     patches = [x.drop_private_coords() for x in patches]
+    if dropped:
+        gone = {x: None for x in dropped if x in patches[0].coords.coord_map}
+        patches = [x.update(coords=x.coords.update(**gone)) for x in patches]
     first = patches[0]
     assert all(x.dims == first.dims for x in patches), (
         "a planned output holds one set of dimensions"
@@ -1794,26 +1801,22 @@ def concatenate_planned(
         for name in shared - {dim}:
             if first.coords.coord_map[name] != other.coords.coord_map[name]:
                 conflicting.add(name)
-    # a dimension's identity in the index may be a summary which two
-    # different coordinates share, so dimensions are checked here too, and
-    # a dimension cannot be dropped
-    if bad_dims := conflicting & set(first.dims):
-        msg = (
-            f"Cannot concatenate along {dim!r}: the dimensions {sorted(bad_dims)} "
-            "hold different values; load the patches to see them."
+    if conflicting:
+        droppable = conflict == "raise" and not (conflicting & set(first.dims))
+        advice = (
+            "Pass conflict='drop' to leave them out."
+            if droppable
+            else "Load the patches to see them."
         )
-        raise CoordMergeError(msg)
-    if conflicting and conflict == "raise":
         msg = (
             f"Cannot concatenate along {dim!r}: the coordinates {sorted(conflicting)} "
-            "hold different values. Pass conflict='drop' to leave them out."
+            f"hold different values. {advice}"
         )
         raise CoordMergeError(msg)
-    if conflicting:
-        drop = {x: None for x in conflicting}
-        patches = [x.update(coords=x.coords.update(**drop)) for x in patches]
     attrs = combine_patch_attrs([x.attrs for x in patches], conflict=conflict)
-    task = Concatenate(arguments=((dim, count),), check_behavior=None)
+    task = Concatenate(
+        arguments=((dim, count),), check_behavior=None, conflict=conflict
+    )
     return _concatenate_group(patches, dim, attrs, task.fingerprint)
 
 

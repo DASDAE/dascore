@@ -844,6 +844,13 @@ class TestConcatPlan:
         assert len(plan.members) == 3
         # patches whose existing coordinates differ cannot share a new dimension
         assert len(build_concat_plan(_flat(trio), wave_rank=None).outputs) == 3
+        # a relation of dimensionless rows spells the new dimension cleanly
+        flat = _flat(copies)
+        spatial = [x for x in flat.columns if "time" in x or "distance" in x]
+        flat = flat.drop(columns=spatial)
+        flat["dims"] = ""
+        plan = build_concat_plan(flat, wave_rank=None)
+        assert plan.outputs["dims"].tolist() == ["wave_rank"]
 
     def test_dimension_units_partition(self, trio):
         """Unitless coordinate values stay apart from unitful ones."""

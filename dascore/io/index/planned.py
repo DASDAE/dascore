@@ -515,11 +515,13 @@ class PlanResolver(PatchResolver):
             loaded = [
                 self._load_member(kwargs) for kwargs in members.to_dict("records")
             ]
+            dropped = self.merge_kwargs.get("dropped_coords", {})
             patch = concatenate_planned(
                 loaded,
                 self.dim,
                 count=self.merge_kwargs.get("count"),
                 conflict=self.merge_kwargs.get("conflict", "raise"),
+                dropped=dropped.get(output_id, ()),
             )
         else:
             joined = members.assign(current_index=output_id)
