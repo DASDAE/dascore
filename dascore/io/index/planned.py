@@ -17,12 +17,14 @@ syncer, and views never write.
 from __future__ import annotations
 
 import secrets
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping, Sequence
+from contextlib import suppress
 
 import numpy as np
 import pandas as pd
 
 import dascore as dc
+from dascore.core.coord_join import join_summaries
 from dascore.core.coords import CoordSummary
 from dascore.io.index.backend import get_backend
 from dascore.io.index.catalog import (
@@ -38,6 +40,7 @@ from dascore.io.index.ingest import (
     PatchRecord,
     SourceRecord,
     _coord_record,
+    coord_summary,
     typed_value,
 )
 from dascore.units import get_quantity
@@ -50,6 +53,7 @@ from dascore.utils.misc import _CanonicalRange, is_range
 from dascore.utils.patch import concatenate_planned
 from dascore.utils.patch_assembly import PatchAssembler
 from dascore.utils.pd import adjust_segments
+from dascore.utils.time import to_float
 
 # Row columns which name dc.read's own keyword arguments; passing one along
 # as a trim hint would collide with the value the loader already supplies.
@@ -246,6 +250,160 @@ def _extrema(grouped, how: str) -> np.ndarray:
             # even within the output the values do not compare
             values.append(None)
     return np.array(values, dtype=object)
+
+
+def _member_summaries(backend, members: pd.DataFrame) -> dict:
+    """Every member's coordinates, as the index recorded them."""
+    if not len(members) or backend is None:
+        return {}
+    ids = [int(x) for x in members["_patch_id"].dropna().unique()]
+    assert ids, "a plan's members name the patches they load"
+    out: dict[int, dict[str, CoordSummary]] = {}
+    for row in backend.coord_frame(ids).to_dict("records"):
+        summary = coord_summary(row)
+        if summary is not None:
+            out.setdefault(int(row["patch_id"]), {})[str(row["coord_name"])] = summary
+    return out
+
+
+def _trimmed_summary(summary: CoordSummary, row: Mapping, name: str) -> CoordSummary:
+    """
+    The member's summary as its trim leaves it.
+
+    A trimmed member holds fewer samples than the index recorded, so the
+    stored envelope, length and identity all describe something the
+    output will not contain; the plan's own range replaces them.
+    """
+    low, high = row.get(f"{name}_min"), row.get(f"{name}_max")
+    if pd.isnull(low) and pd.isnull(high):
+        return summary
+    step = row.get(f"{name}_step", summary.step)
+    step = summary.step if pd.isnull(step) else step
+    length = None
+    if step is not None and not pd.isnull(step):
+        with suppress(TypeError, ValueError, ZeroDivisionError):
+            span = to_float(high) - to_float(low)
+            length = round(abs(span / to_float(step))) + 1
+    # built rather than copied: these values come from the plan's frame,
+    # so they need the conforming a validated summary does (a pandas
+    # Timestamp where the rest of the join speaks numpy would not compare)
+    return CoordSummary(
+        dtype=summary.dtype,
+        min=low,
+        max=high,
+        step=step,
+        units=summary.units,
+        dims=summary.dims,
+        len=length,
+    )
+
+
+def _union_summary(summaries: Sequence[CoordSummary]) -> CoordSummary:
+    """
+    What can be said of members which cannot be joined from summaries.
+
+    The envelope spans them all — that much any join preserves — and
+    nothing else is claimed: no step, and no identity.
+    """
+    lows = [x.min for x in summaries if not pd.isnull(x.min)]
+    highs = [x.max for x in summaries if not pd.isnull(x.max)]
+    first = summaries[0]
+    return first.model_copy(
+        update=dict(
+            min=min(lows) if lows else first.min,
+            max=max(highs) if highs else first.max,
+            step=None,
+            len=None,
+            fingerprint=None,
+        )
+    )
+
+
+def predicted_coords(
+    backend,
+    members: pd.DataFrame,
+    plan_dim: str,
+    *,
+    trimmed_dims: frozenset[str] = frozenset(),
+    snap_tolerance: float | None = None,
+) -> dict[int, dict[str, CoordSummary]]:
+    """
+    Per output, the summary of every coordinate its members hold.
+
+    This is what the plan claims about an output, and it is decided by
+    running the *real* join over the members' summaries
+    ([`join_summaries`](`dascore.core.coord_join.join_summaries`)), so a
+    row cannot describe a coordinate differently from the patch assembly
+    will build. Where the join cannot be decided from summaries alone the
+    envelope still spans the members and nothing else is claimed.
+
+    Parameters
+    ----------
+    backend
+        The parent index, which holds the members' coordinate rows.
+    members
+        The plan's member table: which patches feed which output, with
+        each member's trim.
+    plan_dim
+        The dimension being chunked or concatenated. Coordinates riding
+        it are joined along it; the others must already agree.
+    trimmed_dims
+        Dimensions a residual selection trims at load. A coordinate on
+        one of them describes untrimmed values, so it keeps no identity.
+    snap_tolerance
+        Passed to the join, bounding how far a seam may be absorbed.
+    """
+    stored = _member_summaries(backend, members)
+    if not stored:
+        return {}
+    out: dict[int, dict[str, CoordSummary]] = {}
+    for output_id, rows in members.groupby("output_id", sort=True):
+        records = rows.to_dict("records")
+        names: dict[str, None] = {}  # an ordered set
+        for row in records:
+            names.update(dict.fromkeys(stored.get(int(row["_patch_id"]), {})))
+        described: dict[str, CoordSummary] = {}
+        for name in names:
+            summaries = []
+            for row in records:
+                summary = stored.get(int(row["_patch_id"]), {}).get(name)
+                if summary is None:
+                    continue
+                if row.get("_modified"):
+                    summary = _trimmed_summary(summary, row, name)
+                summaries.append(summary)
+            if summaries:
+                described[name] = _describe(
+                    name, summaries, plan_dim, trimmed_dims, snap_tolerance
+                )
+        out[int(str(output_id))] = described
+    return out
+
+
+def _describe(
+    name: str,
+    summaries: Sequence[CoordSummary],
+    plan_dim: str,
+    trimmed_dims: frozenset[str],
+    snap_tolerance: float | None,
+) -> CoordSummary:
+    """State one coordinate of one output, claiming only what holds."""
+    first = summaries[0]
+    rides = plan_dim == name or plan_dim in first.dims
+    if not rides:
+        # every member states the same coordinate, or assembly refuses to
+        # build the output at all; the identity survives when they agree
+        agreed = len({x.fingerprint for x in summaries}) == 1
+        keep = agreed and not (set(first.dims) & trimmed_dims)
+        return first if keep else first.model_copy(update=dict(fingerprint=None))
+    joined = join_summaries(summaries, snap_tolerance=snap_tolerance)
+    if joined is None:
+        return _union_summary(summaries)
+    if set(first.dims) & trimmed_dims:
+        # a residual trims these values at load, so the identity the join
+        # computed describes something the output will not contain
+        joined = joined.model_copy(update=dict(fingerprint=None, len=None))
+    return joined.model_copy(update=dict(dims=first.dims))
 
 
 def _aux_coord_info(

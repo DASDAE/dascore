@@ -13,6 +13,7 @@ import pytest
 
 import dascore as dc
 from dascore.exceptions import MissingPatchError, ParameterError
+from dascore.io.index.catalog import PatchCatalog
 from dascore.io.index.planned import (
     PlanResolver,
     _aux_coord_info,
@@ -21,9 +22,15 @@ from dascore.io.index.planned import (
     _stated_units,
     collapse_working_df,
     derived_catalog,
+    predicted_coords,
 )
 from dascore.units import m
-from dascore.utils.chunk_plan import ChunkPlan, samples_adjusted_envelopes
+from dascore.utils.chunk_plan import (
+    ChunkPlan,
+    build_concat_plan,
+    samples_adjusted_envelopes,
+)
+from dascore.utils.patch import concatenate_patches
 
 
 @pytest.fixture(scope="module")
@@ -397,3 +404,126 @@ class TestStatedUnits:
     def test_stated_units_pass_through(self):
         """A real spelling survives as a string."""
         assert _stated_units("ft") == "ft"
+
+
+class TestNumericAttrUnits:
+    """The attr units a plan resolves for stamping."""
+
+    def test_no_parent_knows_nothing(self):
+        """Without a parent index there are no attr units to resolve."""
+        assert _plan_attr_units(None, pd.DataFrame({"foo": [1.0]})) == {}
+
+
+class TestPredictedCoords:
+    """What a plan claims about an output, decided by the real join."""
+
+    @pytest.fixture()
+    def pair(self):
+        """Two patches which meet end to end along time."""
+        first = dc.get_example_patch()
+        time = first.get_coord("time")
+        second = dc.get_example_patch(time_min=time.max() + time.step)
+        return first, second
+
+    def _plan_and_backend(self, patches, **kwargs):
+        """A concat plan over the patches, and the spool's backend."""
+        spool = dc.spool(list(patches))
+        frame = PatchCatalog.from_patches(list(patches)).to_df()
+        plan = build_concat_plan(frame, **kwargs)
+        return plan, spool._catalog.backend
+
+    def test_joined_dimension_is_the_real_join(self, pair):
+        """The concatenated dimension is described as assembly builds it."""
+        plan, backend = self._plan_and_backend(pair, time=None)
+        described = predicted_coords(backend, plan.members, "time")[0]
+        time = described["time"]
+        whole = concatenate_patches(list(pair), time=None)[0].get_coord("time")
+        assert time.min == whole.min()
+        assert time.max == whole.max()
+        assert time.len == len(whole)
+        assert time.step == whole.step
+        assert time.fingerprint == whole.fingerprint()
+
+    def test_other_coordinates_keep_their_identity(self, pair):
+        """A coordinate every member shares is described as it stands."""
+        plan, backend = self._plan_and_backend(pair, time=None)
+        described = predicted_coords(backend, plan.members, "time")[0]
+        distance = pair[0].get_coord("distance")
+        assert described["distance"].fingerprint == distance.fingerprint()
+        assert described["distance"].len == len(distance)
+
+    def test_a_trimmed_dimension_claims_no_identity(self, pair):
+        """Values a residual trims at load are not vouched for."""
+        plan, backend = self._plan_and_backend(pair, time=None)
+        described = predicted_coords(
+            backend, plan.members, "time", trimmed_dims=frozenset({"distance"})
+        )[0]
+        assert described["distance"].fingerprint is None
+
+    def test_members_which_cannot_be_joined_span_the_envelope(self):
+        """Labels have no step, so only the envelope is claimed."""
+        base = dc.get_example_patch()
+        n = base.shape[base.get_axis("distance")]
+        labels = np.array([f"s{i:03d}" for i in range(n)])
+        renamed = base.rename_coords(distance="range")
+        first = renamed.update_coords(range=labels)
+        second = renamed.update_coords(range=np.array([f"t{i:03d}" for i in range(n)]))
+        plan, backend = self._plan_and_backend([first, second], range=None)
+        described = predicted_coords(backend, plan.members, "range")[0]
+        assert described["range"].step is None
+        assert described["range"].fingerprint is None
+        assert described["range"].min == "s000"
+        assert described["range"].max == f"t{n - 1:03d}"
+
+    def test_a_trimmed_join_claims_no_identity(self, pair):
+        """A residual trimming the joined dimension voids its identity."""
+        plan, backend = self._plan_and_backend(pair, time=None)
+        described = predicted_coords(
+            backend, plan.members, "time", trimmed_dims=frozenset({"time"})
+        )[0]
+        assert described["time"].fingerprint is None
+        assert described["time"].len is None
+        # the envelope still says where the output lies
+        assert described["time"].min == pair[0].get_coord("time").min()
+
+    def test_a_trimmed_member_is_described_by_its_trim(self, pair):
+        """A member which loads part of its patch states that part."""
+        first, second = pair
+        plan, backend = self._plan_and_backend(pair, time=None)
+        members = plan.members.copy()
+        time = first.get_coord("time")
+        cut = time.min() + (time.max() - time.min()) / 2
+        members["_modified"] = [True, False]
+        members.loc[members.index[0], "time_max"] = cut
+        described = predicted_coords(backend, members, "time")[0]
+        # the trimmed member's own range bounds the join, not its source
+        assert described["time"].min == time.min()
+        assert described["time"].max == second.get_coord("time").max()
+
+    def test_a_trim_which_states_no_range_is_left_alone(self, pair):
+        """A member marked modified but stating no range keeps its summary."""
+        plan, backend = self._plan_and_backend(pair, time=None)
+        members = plan.members.copy()
+        members["_modified"] = True
+        members["time_min"] = pd.NaT
+        members["time_max"] = pd.NaT
+        described = predicted_coords(backend, members, "time")[0]
+        whole = concatenate_patches(list(pair), time=None)[0].get_coord("time")
+        assert described["time"].max == whole.max()
+
+    def test_a_coordinate_one_member_lacks(self, pair):
+        """A coordinate only some members hold is still described."""
+        first, second = pair
+        n = first.shape[first.get_axis("distance")]
+        lat = second.update_coords(latitude=("distance", np.arange(n) * 1.0))
+        plan, backend = self._plan_and_backend([first, lat], time=None)
+        described = predicted_coords(backend, plan.members, "time")[0]
+        assert "latitude" in described
+        assert described["latitude"].len == n
+
+    def test_no_members_describes_nothing(self, pair):
+        """An empty member table claims nothing."""
+        plan, backend = self._plan_and_backend(pair, time=None)
+        empty = plan.members.iloc[:0]
+        assert predicted_coords(backend, empty, "time") == {}
+        assert predicted_coords(None, plan.members, "time") == {}
