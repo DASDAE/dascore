@@ -97,8 +97,10 @@ jobs:
           prepare-test-data: "true"
 
       # The generated docs tests and the doctests are the same on every cell
-      # and cost minutes, so one cell runs them; their coverage reaches the
-      # gate through the combined data file.
+      # and cost minutes, so one cell runs each. The generated tests run
+      # inside the measured suite below, so their coverage reaches the gate;
+      # the doctests are not measured, and counting them would let a line
+      # reachable only from a docstring example satisfy the gate.
       - name: generate qmd docs tests
         id: generate_qmd_tests
         if: matrix.os == 'ubuntu-latest' && matrix.python-version == needs.setup.outputs.python-default
@@ -247,8 +249,11 @@ jobs:
       # One network report per run, from one OS: the codecov comment waits
       # for a fixed number of uploads (codecov.yml), and the three operating
       # systems exercise the same remote code.
+      # !cancelled(), not the implicit success(): the tests here are allowed
+      # to fail, and skipping the xml would leave codecov waiting forever for
+      # the second of the two uploads it counts.
       - name: write coverage xml
-        if: matrix.os == 'ubuntu-latest'
+        if: ${{ matrix.os == 'ubuntu-latest' && !cancelled() }}
         shell: bash
         run: coverage xml
 
