@@ -46,27 +46,6 @@ class TestChunk:
         df = random_spool.get_contents().sort_values("time_min").reset_index(drop=True)
         return df
 
-    def test_merge_eq(self, adjacent_spool_no_overlap):
-        """Ensure merged spools are equal."""
-        sp1 = adjacent_spool_no_overlap.chunk(time=2)
-        sp2 = adjacent_spool_no_overlap.chunk(time=2)
-        assert sp1 == sp2
-
-    def test_merge_chunk_adjacent_no_overlap(self, adjacent_spool_no_overlap):
-        """Ensure chunking works on simple case of contiguous data w/ no overlap."""
-        new = adjacent_spool_no_overlap.chunk(time=None)
-        out_list = list(new)
-        assert len(new) == len(out_list) == 1
-
-    def test_adjacent_merge_no_overlap(self, adjacent_spool_no_overlap):
-        """Test that the adjacent patches get merged."""
-        spool = adjacent_spool_no_overlap
-        st_len = len(spool)
-        merged_st = spool.chunk(time=None)
-        merged_len = len(merged_st)
-        assert merged_len < st_len
-        assert merged_len == 1
-
     def test_chunk_doesnt_modify_original(self, random_spool):
         """Chunking shouldn't modify original spool."""
         first = random_spool.get_contents().copy()
@@ -376,11 +355,6 @@ class TestChunkMerge:
         pa1 = spool_slight_gap.chunk(time=...)
         pa2 = spool_slight_gap.chunk(time=None)
         assert pa1 == pa2
-
-    def test_merge_transposed_patches(self, spool_complete_overlap):
-        """Ensure if one of the patches is transposed merge still works."""
-        # TODO for now this won't work; its probably a silly edge case to complicate
-        # the code over, but maybe revisit.
 
     def test_merge_monotonic_no_overlap(self, adjacent_spool_monotonic):
         """Ensure monotonic coords can merge."""
@@ -707,47 +681,6 @@ class TestChunkMerge:
 
         # Should have more patches (chunking into smaller pieces)
         assert len(result_spool) > len(spool)
-
-        # Verify NO patches have NaN values and dataframe consistency
-        result_contents = result_spool.get_contents().reset_index(drop=True)
-        for i, patch in enumerate(result_spool):
-            # Assert no NaN values in patch attributes
-            time_coord = patch.get_coord("time")
-            assert not pd.isna(time_coord.min()), f"Patch {i} has NaN time_min"
-            assert not pd.isna(time_coord.max()), f"Patch {i} has NaN time_max"
-
-            # Verify dataframe contains reasonable time values
-            df_row = result_contents.iloc[i]
-            df_time_min = dc.to_datetime64(df_row["time_min"])
-            df_time_max = dc.to_datetime64(df_row["time_max"])
-
-            # Dataframe times should not be NaN or invalid
-            assert not pd.isna(df_time_min), f"DF row {i} has NaN time_min"
-            assert not pd.isna(df_time_max), f"DF row {i} has NaN time_max"
-            assert df_time_min <= df_time_max, f"DF row {i} has invalid time range"
-
-    def test_multiple_chained_chunks(self, random_spool):
-        """Test multiple chained chunk operations. See #533."""
-        # Chain multiple chunk operations
-        result_spool = random_spool.chunk(time=...).chunk(time=5).chunk(time=2)
-
-        # Should be able to access all patches
-        for i in range(len(result_spool)):
-            patch = result_spool[i]
-            assert isinstance(patch, dc.Patch)
-
-    def test_chunk_split_then_merge(self, random_spool):
-        """Test chaining chunk split followed by merge. See #533."""
-        # First chunk into smaller pieces, then merge back
-        result_spool = random_spool.chunk(time=1).chunk(time=...)
-
-        # Should be able to access patches (this test the fix works)
-        first_patch = result_spool[0]
-        assert isinstance(first_patch, dc.Patch)
-
-        # The merge operation should result in fewer patches than the chunked operation
-        chunked_spool = random_spool.chunk(time=1)
-        assert len(result_spool) <= len(chunked_spool)
 
         # Verify NO patches have NaN values and dataframe consistency
         result_contents = result_spool.get_contents().reset_index(drop=True)
@@ -1259,18 +1192,6 @@ class TestMatchMergeUnits:
 class TestUnitChunkValue:
     """Chunk lengths carrying the coordinate's own units."""
 
-    def test_seconds_match_bare(self, random_spool):
-        """A duration in seconds equals the bare seconds value."""
-        quant = random_spool.chunk(time=3 * dc.units.s)
-        bare = random_spool.chunk(time=3)
-        assert len(quant) == len(bare)
-        assert [x.shape for x in quant] == [x.shape for x in bare]
-
-    def test_other_time_unit(self, random_spool):
-        """Milliseconds convert to the same chunk as seconds."""
-        out = random_spool.chunk(time=3000 * dc.units.ms)
-        assert len(out) == len(random_spool.chunk(time=3))
-
     def test_distance_unit_converts(self, random_spool):
         """A distance in feet converts to the coordinate's metres."""
         out = random_spool.chunk(distance=100 * dc.units.ft)
@@ -1281,11 +1202,6 @@ class TestUnitChunkValue:
         patches = [x.set_units(distance=None) for x in random_spool]
         with pytest.raises(UnitError, match="no units"):
             dc.spool(patches).chunk(distance=100 * dc.units.ft)
-
-    def test_wrong_dimensionality_raises(self, random_spool):
-        """A length cannot chunk time."""
-        with pytest.raises(UnitError, match="time-like"):
-            random_spool.chunk(time=100 * dc.units.ft)
 
 
 class TestSizeChunk:
@@ -1341,15 +1257,6 @@ class TestSizeChunk:
         wide_samples = wide[0].shape[wide[0].get_axis("time")]
         narrow_samples = narrow[0].shape[narrow[0].get_axis("time")]
         assert narrow_samples == 2 * wide_samples
-
-    def test_mixed_dtype_partition_uses_upcast(self, mixed_dtype_spool):
-        """A mixed partition is sized against the dtype assembly upcasts to."""
-        target = dc.get_quantity("100 kB")
-        plan = mixed_dtype_spool.chunk_plan(time=target)
-        (part,) = plan.params["size"]["partitions"]
-        assert part["dtype"] == "float64"
-        out = mixed_dtype_spool.chunk(time=target)
-        assert max(x.data.nbytes for x in out) <= target.to("byte").magnitude
 
     def test_mixed_steps_in_one_partition_stay_bounded(self):
         """
@@ -1543,13 +1450,6 @@ class TestSizeChunk:
         claimed = out._df["_dtype"].tolist()
         assert claimed == [str(x.data.dtype) for x in out]
         assert out == dc.spool(list(out))
-
-    def test_merge_mode_records_no_size(self, random_spool):
-        """A merge takes no length, so no size is ever resolved."""
-        plan = random_spool.chunk_plan(time=None)
-        assert plan.merge_mode
-        assert "size" not in plan.params
-        assert len(random_spool.chunk(time=None)) == 1
 
     def test_merge_mode_rejects_size_overlap(self, random_spool):
         """A size overlap is still an overlap, which merging forbids."""

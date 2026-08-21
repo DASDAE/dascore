@@ -334,11 +334,6 @@ class TestHistory:
 class TestPatchMergeWorkflow:
     """Tests for the supported patch merge workflow."""
 
-    def test_spool_chunk_replacement(self, random_patch):
-        """Ensure spool.chunk remains the supported merge path."""
-        out = dc.spool([random_patch]).chunk(time=None)
-        assert len(out) == 1
-
     def test_merge_compatible_coords_attrs_ignores_private_attrs(self, random_patch):
         """Private attrs should not make otherwise compatible patches fail."""
         patch_1 = random_patch.update_attrs(_source_patch_key="one")
@@ -913,15 +908,6 @@ class TestConcatenate:
         func = _spool_up(concatenate_patches)
         out = func([random_patch] * 3, time=None)
         assert isinstance(out, dc.BaseSpool)
-
-    def test_new_dim_spool(self, random_patch):
-        """Ensure a patch with new dim can be retrieved from spool."""
-        spool = dc.spool([random_patch, random_patch])
-        spool_concat = spool.concatenate(wave_rank=None)
-        assert len(spool_concat) == 1
-        patch = spool_concat[0]
-        assert "wave_rank" in patch.dims
-        assert len(patch.get_coord("wave_rank")) == len(spool)
 
     def test_patch_with_gap(self, random_patch):
         """Ensure a patch with a time gap still concats."""

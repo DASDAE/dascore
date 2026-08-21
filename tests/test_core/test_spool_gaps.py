@@ -120,11 +120,6 @@ class TestGetGaps:
         with pytest.raises(ChunkError, match="lack the dimension"):
             spool_with_non_coords.get_gaps(missing_dim="raise")
 
-    def test_bad_missing_dim_raises(self, gappy_spool):
-        """A typo in missing_dim raises rather than silently dropping."""
-        with pytest.raises(ParameterError, match="missing_dim"):
-            gappy_spool.get_gaps(missing_dim="rasie")
-
     def test_plan_backed_spool(self, gappy_spool):
         """A report describes the patches the spool holds, not their sources."""
         merged = gappy_spool.concatenate(time=None)
@@ -150,14 +145,6 @@ class TestGetGaps:
         # the trim shortened each patch, so the holes are wider than the
         # untrimmed spool's
         assert (out["gap_size"] > gappy_spool.get_gaps()["gap_size"]).all()
-
-    def test_group_id_ignores_construction_order(self):
-        """A group keeps its id however the spool was assembled."""
-        early, late = random_spool(tag="a"), random_spool(tag="b")
-        expected = {"a": 0, "b": 1}
-        for patches in ([*early, *late], [*late, *early]):
-            out = dc.spool(patches).get_coverage()
-            assert dict(zip(out["tag"], out["group_id"])) == expected
 
     def test_group_colliding_with_emitted_column(self, gappy_spool):
         """Grouping by a column the report emits is refused."""

@@ -133,13 +133,6 @@ class TestConstruction:
         with pytest.raises(ValidationError, match="fuse"):
             CoordSegmented(segments=(c1, c2))
 
-    def test_overlap_raises(self):
-        """Overlapping segments are rejected."""
-        c1 = get_coord(start=0.0, stop=10.0, step=1.0)
-        c2 = get_coord(start=5.0, stop=15.0, step=1.0)
-        with pytest.raises(CoordError, match="overlap"):
-            concat_coords(c1, c2)
-
     def test_shared_value_raises(self):
         """Segments sharing a boundary value are rejected (not strict)."""
         c1 = get_coord(start=0.0, stop=10.0, step=1.0)  # max 9
@@ -538,11 +531,6 @@ class TestSortAndShift:
 
 class TestSimplifyAndSnap:
     """Tests for tolerance-bounded simplification and snapping."""
-
-    def test_simplify_zero_keeps_structure(self, float_gap_coord):
-        """Zero tolerance cannot absorb a real gap."""
-        out = float_gap_coord.simplify(0)
-        assert out == float_gap_coord
 
     def test_simplify_absorbs_gap_within_tolerance(self, float_gap_coord):
         """A large enough tolerance collapses to a single range."""

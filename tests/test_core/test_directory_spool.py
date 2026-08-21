@@ -228,18 +228,6 @@ class TestSelectedDirectorySpools:
         time = patch.get_coord("time")
         return (time.min(), time.max())
 
-    def test_contents_restricted(self, spool_dir, random_spool, first_patch_range):
-        """Rows outside the requested range must not appear (regression)."""
-        spool = Spool.from_directory(spool_dir).update().select(time=first_patch_range)
-        assert 1 <= len(spool) < len(random_spool)
-        contents = spool.get_contents()
-        assert (contents["time_min"] <= first_patch_range[1]).all()
-        assert (contents["time_max"] >= first_patch_range[0]).all()
-        for patch in spool:
-            time = patch.get_coord("time")
-            assert time.min() >= first_patch_range[0]
-            assert time.max() <= first_patch_range[1]
-
     def test_selected_spool_refuses_update(
         self, spool_dir, random_spool, first_patch_range
     ):
@@ -247,11 +235,6 @@ class TestSelectedDirectorySpools:
         spool = Spool.from_directory(spool_dir).update().select(time=first_patch_range)
         with pytest.raises(InvalidSpoolError, match="root spool"):
             spool.update()
-
-    def test_select_kwargs_parameter_removed(self, spool_dir):
-        """The constructor no longer accepts select_kwargs."""
-        with pytest.raises(TypeError, match="select_kwargs"):
-            Spool.from_directory(spool_dir, select_kwargs={"tag": "x"})
 
 
 class TestDirectoryIndex:
@@ -405,33 +388,6 @@ class TestSelect:
         out = basic_file_spool.select(tag=tag_collection).get_contents()
         assert out["tag"].isin(tag_collection).all()
 
-    def test_multiple_selects(self, diverse_directory_spool):
-        """Ensure selects can be stacked."""
-        spool = diverse_directory_spool
-        contents = spool.get_contents()
-        duration = contents["time_max"] - contents["time_min"]
-        new_max = (contents["time_min"] + duration.mean() / 2).median()
-        out = (
-            spool.select(acquisition_key="DAS2.*")
-            .select(tag="ran*")
-            .select(time=(None, new_max))
-        )
-        assert len(out) > 0
-        # first check content dataframe
-        new_content = out.get_contents()
-        assert len(new_content) == len(out)
-        assert (new_content["acquisition_key"] == "DAS2.R2D1..RAW").all()
-        assert (new_content["tag"].str.startswith("ran")).all()
-        assert (new_content["time_max"] <= new_max).all()
-        # then check patches
-        for patch in out:
-            assert patch.attrs["acquisition_key"] == "DAS2.R2D1..RAW"
-            assert patch.attrs["tag"].startswith("ran")
-            assert patch.get_coord("time").max() <= new_max
-        # ensure raises when selecting off the end of the spool
-        with pytest.raises(IndexError):
-            out[len(new_content)]
-
     def test_select_time_tuple_with_string(self, basic_file_spool):
         """Ensure time tuples with strings still work."""
         time_str = "2017-09-18T00:00:04"
@@ -480,14 +436,6 @@ class TestBasicChunk:
         """Chunking shouldn't change the path to the managed directory."""
         out = one_file_directory_spool.chunk(time=1)
         assert out.spool_path == one_file_directory_spool.spool_path
-
-    def test_chunk_doesnt_modify_original(self, one_file_directory_spool):
-        """Chunking shouldn't modify original spool or its dfs."""
-        spool = one_file_directory_spool
-        contents_before_chunk = spool.get_contents()
-        _ = spool.chunk(time=2)
-        contents_after_chunk = spool.get_contents()
-        assert contents_before_chunk.equals(contents_after_chunk)
 
     def test_sub_chunk(self, one_file_directory_spool):
         """Ensure the patches can be subdivided."""

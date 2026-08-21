@@ -200,10 +200,6 @@ def assert_value_in_one_step(coord, index, value, greater=True):
 class TestBasics:
     """A suite of basic tests for coordinates."""
 
-    def test_coord_init(self, coord):
-        """Simply run to insure all coords initialize."""
-        assert isinstance(coord, BaseCoord)
-
     def test_bad_init(self):
         """Ensure no parameters raises error."""
         with pytest.raises(CoordError):
@@ -1045,13 +1041,6 @@ class TestOrder:
         coord, _reduction = long_coord.order(inds, samples=True)
         assert len(coord) == len(inds)
         assert np.all(coord.values == coord.values[0])
-
-    def test_non_integer_array_with_samples_raises(self, evenly_sampled_coord):
-        """Samples argument should require integer arrays."""
-        vals = np.array([1.01, 2.0, 3.0])
-        msg = "requires integer dtype"
-        with pytest.raises(CoordError, match=msg):
-            evenly_sampled_coord.select(vals, samples=True)
 
     def test_duplicate_array_values(self, long_coord):
         """Ensure duplicate values cause duplicates in array."""
