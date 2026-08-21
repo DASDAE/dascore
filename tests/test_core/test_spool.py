@@ -109,12 +109,6 @@ class TestSpoolBasics:
         with pytest.raises(InvalidSpoolError, match="has no catalog"):
             Spool(SubSpool(random_spool))
 
-    def test_viz_raises(self, random_spool):
-        """Ensure Spool.viz raises AttributeError."""
-        msg = "Apply 'viz' on a Patch object"
-        with pytest.raises(AttributeError, match=msg):
-            random_spool.viz.waterfall(random_spool)
-
 
 class TestLiveSpoolLazy:
     """

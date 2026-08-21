@@ -156,14 +156,7 @@ class Spool(NamespaceOwner):
 
     _rich_style = "bold"
     _namespace_entry_point_group = "dascore.spool_namespace"
-    _namespace_attr_errors: ClassVar[dict[str, str]] = {
-        "viz": (
-            "'Spool' has no 'viz' namespace. "
-            "Apply 'viz' on a Patch object. "
-            "(you can merge a subset of the spool into a single patch using "
-            "the Chunk function. i.e., spool.chunk(time=None)[0].viz.waterfall())"
-        )
-    }
+    _namespace_attr_errors: ClassVar[dict[str, str]] = {}
     # synthetic catalog identity columns must not join patch kwargs
     # comparisons or chunk merge-compatibility checks
     _drop_columns = (
