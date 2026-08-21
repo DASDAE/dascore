@@ -544,12 +544,14 @@ class PlanResolver(PatchResolver):
                 self._load_member(kwargs) for kwargs in members.to_dict("records")
             ]
             dropped = self.merge_kwargs.get("dropped_coords", {})
+            rider_units = self.merge_kwargs.get("rider_units", {})
             patch = concatenate_planned(
                 loaded,
                 self.dim,
                 count=self.merge_kwargs.get("count"),
                 conflict=self.merge_kwargs.get("conflict", "raise"),
                 dropped=dropped.get(output_id, ()),
+                rider_units=rider_units.get(output_id, {}),
             )
         else:
             joined = members.assign(current_index=output_id)
@@ -676,6 +678,47 @@ def _residual_ranges(residuals) -> dict:
     return out
 
 
+def _rider_spellings(
+    sources: pd.DataFrame, joined: pd.DataFrame, riders: set[str]
+) -> tuple[pd.DataFrame, dict[int, dict[str, str]], dict[int, set[str]]]:
+    """
+    Give each rider one unit spelling per output, as assembly joins it.
+
+    Returns the source rows with each output's rider envelopes re-expressed
+    in that spelling, the spelling chosen per output and rider, and the
+    riders whose members' spellings do not convert to one another.
+    """
+    chosen: dict[int, dict[str, str]] = {}
+    incompatible: dict[int, set[str]] = {}
+    pieces = []
+    for output_id, rows in joined.groupby("output_id", sort=False):
+        for coord in riders:
+            unit_col = f"_{coord}_units"
+            rows = _normalize_chunk_units(rows, coord)
+            units = rows.get(unit_col, pd.Series(dtype=object)).dropna()
+            units = units[units != ""]
+            quantities = [get_quantity(u) for u in set(units)]
+            kinds = {q.dimensionality for q in quantities if q is not None}
+            if len(kinds) > 1:
+                incompatible.setdefault(int(str(output_id)), set()).add(coord)
+            elif len(units):
+                key = int(str(output_id))
+                chosen.setdefault(key, {})[coord] = units.iloc[0]
+        pieces.append(rows)
+    if not pieces:
+        return sources, chosen, incompatible
+    cols = [
+        c
+        for coord in riders
+        for c in (f"{coord}_min", f"{coord}_max", f"{coord}_step", f"_{coord}_units")
+        if c in sources.columns
+    ]
+    normalized = pd.concat(pieces).drop_duplicates("_patch_id").set_index("_patch_id")
+    sources = sources.set_index("_patch_id")
+    sources.loc[normalized.index, cols] = normalized[cols]
+    return sources.reset_index(), chosen, incompatible
+
+
 def derived_catalog(
     *,
     source_rows: pd.DataFrame,
@@ -766,14 +809,22 @@ def derived_catalog(
             partial = stated.groupby(joined["output_id"]).count() < grouped.size()
             for output_id in partial[partial].index:
                 partial_drops.setdefault(int(output_id), set()).add(coord)
-        # a rider's identity differs member by member by design: it is
-        # joined along the dimension, never dropped for differing
-        dropped = {k: [c for c in v if c not in riders] for k, v in dropped.items()}
+        # one spelling per rider per output, which assembly joins in too;
+        # members whose spellings cannot convert (seconds beside metres)
+        # leave the rider unassemblable, so it is dropped after all
+        sources, rider_units, incompatible = _rider_spellings(sources, joined, riders)
+        # otherwise a rider's identity differs member by member by design:
+        # it is joined along the dimension, never dropped for differing
+        dropped = {
+            k: [c for c in v if c not in riders or c in incompatible.get(k, set())]
+            for k, v in dropped.items()
+        }
         dropped = {k: v for k, v in dropped.items() if v}
-        merge_kwargs = {**merge_kwargs, "dropped_coords": dropped}
-        # one spelling per rider, the one assembly joins in
-        for coord in riders:
-            sources = _normalize_chunk_units(sources, coord)
+        merge_kwargs = {
+            **merge_kwargs,
+            "dropped_coords": dropped,
+            "rider_units": rider_units,
+        }
     lossy = lossy or bool(partial_drops)
     resolver = PlanResolver(
         token=token,

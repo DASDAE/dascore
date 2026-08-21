@@ -8,11 +8,12 @@ import sys
 import warnings
 from collections import namedtuple
 from collections.abc import Callable, Iterable, Mapping, Sequence
-from typing import Literal, Protocol, cast, overload
+from typing import Any, Literal, Protocol, cast, overload
 
 import numpy as np
 import pandas as pd
 import pydantic
+from pint import DimensionalityError
 from pydantic import TypeAdapter
 
 import dascore as dc
@@ -29,6 +30,7 @@ from dascore.exceptions import (
     IncompatiblePatchError,
     ParameterError,
     PatchCoordinateError,
+    UnitError,
 )
 from dascore.units import convert_units, get_quantity, is_percent
 from dascore.utils.array_api import (
@@ -1746,7 +1748,11 @@ def concatenate_patches(
 
 
 def _concatenate_group(
-    patches: Sequence[dc.Patch], dim: str, attrs: dc.PatchAttrs, fingerprint: str
+    patches: Sequence[dc.Patch],
+    dim: str,
+    attrs: dc.PatchAttrs,
+    fingerprint: str,
+    rider_units: Mapping[str, Any] | None = None,
 ) -> dc.Patch:
     """
     Concatenate patches already known to fit, along `dim`.
@@ -1783,9 +1789,18 @@ def _concatenate_group(
             # member lowest along the rider; a unitless member adopts it,
             # as a unitless operand conflicts with nothing
             members = [x.get_coord(name) for x in patches]
-            units = _lowest_units(members)
-            if units is not None:
-                members = [x.convert_units(units) for x in members]
+            try:
+                units = (rider_units or {}).get(name) or _lowest_units(members)
+                if units is not None:
+                    members = [x.convert_units(units) for x in members]
+            except (DimensionalityError, UnitError) as err:
+                # seconds beside metres: the members cannot be joined at all
+                msg = (
+                    f"Cannot concatenate along {dim!r}: the coordinate {name!r} "
+                    f"is stated in units which do not convert to one another "
+                    f"({err}). Pass conflict='drop' to leave it out."
+                )
+                raise CoordMergeError(msg) from err
             rider_axis = cdims.index(dim)
             joined = np.concatenate([x.values for x in members], axis=rider_axis)
             riders[name] = (cdims, dc.core.coords.get_coord(data=joined, units=units))
@@ -1814,6 +1829,7 @@ def concatenate_planned(
     count: int | None = None,
     conflict: Literal["drop", "raise", "keep_first"] = "raise",
     dropped: Sequence[str] = (),
+    rider_units: Mapping[str, Any] | None = None,
 ) -> dc.Patch:
     """
     Concatenate the members of one planned output, as the plan decided.
@@ -1893,7 +1909,7 @@ def concatenate_planned(
     task = Concatenate(
         arguments=((dim, count),), check_behavior=None, conflict=conflict
     )
-    return _concatenate_group(patches, dim, attrs, task.fingerprint)
+    return _concatenate_group(patches, dim, attrs, task.fingerprint, rider_units)
 
 
 @compose_docstring(check_desc=check_behavior_description)

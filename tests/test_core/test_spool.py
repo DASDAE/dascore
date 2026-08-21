@@ -1548,6 +1548,67 @@ class TestConcatenatePartitions:
         assert dc.get_quantity(row["clock_units"]) == dc.get_quantity("s")
         assert out[0].get_coord("clock").units == dc.get_quantity("s")
 
+    def test_rider_spelling_chosen_per_output(self, pair):
+        """Each output picks its own rider spelling, in catalog and patch alike."""
+        first, other = pair
+        nt = first.shape[first.get_axis("time")]
+        ticks = np.arange(nt) * 1.0
+        s_then_ms = [
+            first.update_coords(clock=("time", ticks)).convert_units(clock="s"),
+            other.update_coords(clock=("time", (ticks + nt) * 1000)).convert_units(
+                clock="ms"
+            ),
+        ]
+        ms_then_s = [
+            x.update_attrs(tag="b")
+            for x in (
+                first.update_coords(clock=("time", ticks * 1000)).convert_units(
+                    clock="ms"
+                ),
+                other.update_coords(clock=("time", ticks + nt)).convert_units(
+                    clock="s"
+                ),
+            )
+        ]
+        out = dc.spool([*s_then_ms, *ms_then_s]).concatenate(time=None)
+        assert len(out) == 2
+        contents = out.get_contents().set_index("tag")
+        for tag, expected in (("random", "s"), ("b", "ms")):
+            patch = out.select(tag=tag)[0]
+            assert patch.get_coord("clock").units == dc.get_quantity(expected)
+            row = contents.loc[tag]
+            assert dc.get_quantity(row["clock_units"]) == dc.get_quantity(expected)
+            assert row["clock_max"] == patch.get_coord("clock").max()
+
+    def test_incompatible_rider_units_follow_the_policy(self, pair):
+        """Seconds beside metres cannot join: dropped under drop, refused otherwise."""
+        first, other = pair
+        nt = first.shape[first.get_axis("time")]
+        ticks = np.arange(nt) * 1.0
+        a = first.update_coords(clock=("time", ticks)).convert_units(clock="s")
+        b = other.update_coords(clock=("time", ticks + nt)).convert_units(clock="m")
+        dropped = dc.spool([a, b]).concatenate(time=None, conflict="drop")
+        assert "clock" not in dropped[0].coords.coord_map
+        assert "clock_max" not in dropped.get_contents().columns or pd.isnull(
+            dropped.get_contents()["clock_max"].iloc[0]
+        )
+        with pytest.raises(CoordMergeError, match="clock"):
+            dc.spool([a, b]).concatenate(time=None)[0]
+
+    def test_direct_concatenation_picks_the_lowest_spelling(self, pair):
+        """Without a plan, the rider joins in the units of its lowest member."""
+        first, other = pair
+        nt = first.shape[first.get_axis("time")]
+        ticks = np.arange(nt) * 1.0
+        low = first.update_coords(clock=("time", ticks)).convert_units(clock="s")
+        high = other.update_coords(clock=("time", (ticks + nt) * 1000)).convert_units(
+            clock="ms"
+        )
+        out = dc.utils.patch.concatenate_patches([high, low], time=None)[0]
+        clock = out.get_coord("clock")
+        assert clock.units == dc.get_quantity("s")
+        assert np.allclose(np.sort(clock.values), np.arange(2 * nt))
+
     def test_all_null_rider_is_not_partial(self, pair):
         """A rider every member states, though all its values are NaN, stays."""
         first, other = pair
