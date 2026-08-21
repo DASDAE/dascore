@@ -95,6 +95,14 @@ class TestAgreesWithTheRealJoin:
         assert predicted == _joined(coords, tolerance=1.5)
         assert predicted.step is not None  # the gap was within tolerance
 
+    def test_snapping_a_join_which_already_fused(self):
+        """Members which meet exactly are already simple; a tolerance is moot."""
+        coords = [_range(0.0, 10.0), _range(10.0, 20.0)]
+        summaries = [x.to_summary() for x in coords]
+        with_tolerance = join_summaries(summaries, snap_tolerance=1.5)
+        assert with_tolerance == join_summaries(summaries)
+        assert with_tolerance.step == 1.0
+
     def test_gap_beyond_tolerance_stays_stepless(self):
         """A seam too wide to absorb leaves a coordinate with no step."""
         coords = [_range(0.0, 10.0), _range(50.0, 60.0)]
