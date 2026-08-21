@@ -5,6 +5,7 @@ from __future__ import annotations
 import datetime
 import io
 import struct
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -115,9 +116,79 @@ class TestTDMSUtils:
         monkeypatch.setattr(tdms_utils, "_get_fileinfo", lambda _: (fileinfo, attrs))
         monkeypatch.setattr(tdms_utils.mmap, "mmap", lambda *args, **kwargs: data)
         out_data, channel_length, out_attrs = tdms_utils._get_data(fake)
-        assert out_data.shape == (3, 2)
+        # Three samples on one channel from each of the two segments.
+        assert out_data.shape == (6, 1)
         assert channel_length == 6
         assert out_attrs == attrs
+
+
+class TestMultiSegment:
+    """A TDMS file can hold several segments, each a stretch of time."""
+
+    @pytest.fixture(scope="class")
+    def two_segment_path(self, tmp_path_factory):
+        """The example file's segment, written twice.
+
+        Appending segments is how a TDMS file grows, and this example
+        declares its segment length exactly, so the second copy reads as a
+        second segment. sample_tdms_file_v4713.tdms cannot stand in for it:
+        its lead-in claims 146 MB for a 1 MB file, so anything after it is
+        read as part of the first segment.
+        """
+        raw = Path(fetch("iDAS005_tdms_example.626.tdms")).read_bytes()
+        path = tmp_path_factory.mktemp("tdms_multi_segment") / "two_segment.tdms"
+        path.write_bytes(raw + raw)
+        return path
+
+    def test_segments_stack_along_time(self, two_segment_path):
+        """Both segments are read, and they stack along time, not distance."""
+        with open(two_segment_path, "rb") as fi:
+            data, channel_length, _ = tdms_utils._get_data(fi)
+        assert data.shape == (2000, 1152)
+        assert channel_length == 2000
+        # One segment written twice, so the halves are the same samples.
+        assert np.array_equal(data[:1000], data[1000:])
+
+    def test_read(self, two_segment_path):
+        """A multi-segment file reads as one patch holding every segment."""
+        patch = dc.spool(two_segment_path)[0]
+        single = dc.spool(fetch("iDAS005_tdms_example.626.tdms"))[0]
+        assert patch.shape == (2000, 1152)
+        assert np.array_equal(patch.data[:1000], single.data)
+        assert len(patch.get_coord("time")) == 2000
+
+    def test_unclosed_last_segment_runs_to_the_end_of_the_file(self):
+        """All ones for a segment's length means the rest of the file.
+
+        TDMS writes that when a file was never closed -- the recording was
+        cut short -- and the offsets are unsigned, so reading them as signed
+        would make the last segment a backwards one.
+        """
+        fileinfo = {
+            "raw_data_offset": 28,
+            "next_segment_offset": 40,
+            "file_size": 200,
+            "n_channels": 1,
+            "data_type": "float32",
+        }
+        buffer = bytearray(200)
+        buffer[52:68] = struct.pack("<QQ", 0xFFFFFFFFFFFFFFFF, 0)
+        fake = _FakeTDMSFile(bytes(buffer))
+        bounds = list(tdms_utils._iter_segment_bounds(fake, fileinfo))
+        assert bounds == [(28, 40), (68, 200)]
+        assert tdms_utils._get_sample_count(fake, fileinfo) == 3 + 33
+
+    def test_scan_agrees_with_read(self, two_segment_path):
+        """Counting bytes to the end of the file would over-count the time.
+
+        A scan never reads the data, so nothing else would catch it saying
+        the file covers more time than it holds.
+        """
+        summary = dc.scan(two_segment_path)[0]
+        time = dc.spool(two_segment_path)[0].get_coord("time")
+        assert summary.coords["time"].len == 2000
+        assert summary.coords["time"].min == time.min()
+        assert summary.coords["time"].max == time.max()
 
 
 class TestTDMSInterrogator:

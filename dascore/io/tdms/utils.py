@@ -173,6 +173,48 @@ def _get_distance_coord(attr):
     return d_coord
 
 
+def _iter_segment_bounds(tdms_file, fileinfo, lead_in_length=28):
+    """
+    Yield the (data start, data end) byte offsets of each segment in the file.
+
+    A TDMS file is a sequence of segments, each with its own lead-in naming
+    where the next one begins; the first segment's offsets are the ones
+    already read into fileinfo. Leaves the file position at the last lead-in
+    it had to read, so callers which care must restore it.
+    """
+    rdo = int(fileinfo["raw_data_offset"])
+    nso = int(fileinfo["next_segment_offset"])
+    file_size = fileinfo["file_size"]
+    while True:
+        yield rdo, nso
+        if nso >= file_size:
+            return
+        tdms_file.seek(nso + 12, 0)
+        # Unsigned, as the lead-in reader above also reads them: TDMS writes
+        # all ones for a file it never got to close, meaning the segment runs
+        # to the end of the file, and clamping is what says so.
+        (next_seg_nso, next_seg_rdo) = struct.unpack("<QQ", tdms_file.read(2 * 8))
+        start = nso + lead_in_length
+        rdo = min(file_size, start + next_seg_rdo)
+        # Each segment starts a whole lead-in past the one before it, so this
+        # climbs to file_size and the walk always ends.
+        nso = min(file_size, start + next_seg_nso)
+
+
+def _get_sample_count(tdms_file, fileinfo, lead_in_length=28):
+    """Return how many samples per channel the whole file holds."""
+    itemsize = np.dtype(fileinfo["data_type"]).itemsize
+    per_sample = fileinfo["n_channels"] * itemsize
+    position = tdms_file.tell()
+    try:
+        bounds = list(_iter_segment_bounds(tdms_file, fileinfo, lead_in_length))
+    finally:
+        tdms_file.seek(position, 0)
+    # Counting bytes to the end of the file instead would count every
+    # segment's lead-in and metadata as data.
+    return sum((nso - rdo) // per_sample for rdo, nso in bounds)
+
+
 def _get_all_attrs(tdms_file, lead_in_length=28):
     """Return all the attributes which can be fetched from attributes."""
     # read lead-in information into fileinfo
@@ -227,13 +269,9 @@ def _get_all_attrs(tdms_file, lead_in_length=28):
     fileinfo["data_type"] = TDS_DATA_TYPE.get(struct.unpack("<i", tdms_file.read(4))[0])
     if fileinfo["data_type"] not in ("int16", "float32"):
         raise Exception(f"Unsupported TDMS data type: {fileinfo['data_type']}")
-    # get number of samples by dividing amount of unread data by the
-    # size of data per channel
-    numofsamples = (
-        (fileinfo["file_size"] - fileinfo["raw_data_offset"])
-        / n_channels
-        / np.dtype(fileinfo["data_type"]).itemsize
-    )
+    # Add up what each segment holds, which for a one-segment file is the
+    # whole file after the header.
+    numofsamples = _get_sample_count(tdms_file, fileinfo, lead_in_length)
     t_coord = _get_time_coord(out, numofsamples)
     out["coords"] = {"time": t_coord, "distance": d_coord}
     return out, fileinfo
@@ -302,31 +340,19 @@ def _get_data(tdms_file, lead_in_length=28):
 
     # map file contents to a variable dmap
     dmap = mmap.mmap(tdms_file.fileno(), 0, access=mmap.ACCESS_READ)
-    # rdo: the start of the data in the file
-    rdo = int(fileinfo["raw_data_offset"])
     # nch: number of channels
     nch = int(fileinfo["n_channels"])
 
-    # nso: the beginning of the segment that comes next after the data
-    nso = fileinfo["next_segment_offset"]
-    # seg1_length: length of recording indicated as raw_data in metadata for
-    # each channel in bytes
-
-    flag = 0
-    while flag == 0:
-        cdata_node, cchannel_length = get_segment_data(fileinfo, nch, dmap, nso, rdo)
-        if fileinfo["file_size"] == nso:
-            flag = 1
+    data_node = None
+    channel_length = 0
+    for rdo, nso in _iter_segment_bounds(tdms_file, fileinfo, lead_in_length):
+        segment, seg_length = get_segment_data(fileinfo, nch, dmap, nso, rdo)
+        # A segment holds every channel for a stretch of time, so segments
+        # stack along time, which is the first axis of (samples, channels).
+        if data_node is None:
+            data_node = segment
         else:
-            tdms_file.seek(nso + 12, 0)
-            (next_seg_nso, next_seg_rdo) = struct.unpack("<qq", tdms_file.read(2 * 8))
-            rdo = min(fileinfo["file_size"], nso + lead_in_length + next_seg_rdo)
-            nso = min(fileinfo["file_size"], nso + lead_in_length + next_seg_nso)
-        try:
-            data_node = np.append(data_node, cdata_node, axis=1)
-            channel_length += cchannel_length
-        except NameError:
-            data_node = cdata_node
-            channel_length = cchannel_length
+            data_node = np.append(data_node, segment, axis=0)
+        channel_length += seg_length
 
     return data_node, channel_length, attrs
