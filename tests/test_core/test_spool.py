@@ -17,6 +17,7 @@ from dascore.core.spool import BaseSpool, Spool
 from dascore.examples import ricker_moveout
 from dascore.exceptions import (
     CoordMergeError,
+    IncompatiblePatchError,
     InvalidSpoolError,
     InvalidSpoolQueryError,
     MissingOptionalDependencyError,
