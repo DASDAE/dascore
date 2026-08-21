@@ -581,23 +581,23 @@ def random_spool(
         The start time of the first patch. Subsequent patches have start times
         after the end time of the previous patch, plus the time_gap.
     var
-        Variability (in percent) of the file-lengths. A normal distribution of
-        file lengths is generated if var > 0
+        How much the patch lengths vary, in percent. Zero makes every patch
+        the same length; a positive value draws each from a normal
+        distribution that wide, as an archive of real files has.
     **kwargs
         Passed to the [_random_patch](`dascore.examples.random_patch`) function.
     """
-    out = []
+    shape = kwargs.pop("shape", (300, 2_000))
+    samples = shape[-1]
     if var > 0:
-        sigma = 2_000 * var / 100
-        rng = np.default_rng()
-        nsmpl = rng.normal(2_000, sigma, size=length).astype(int)
+        # Seeded, since an example which differs run to run is not one.
+        draws = np.random.default_rng(42).normal(samples, samples * var / 100, length)
+        lengths = np.clip(draws, 1, None).astype(int)
     else:
-        nsmpl = (np.zeros((length,)) + 2_000).astype(int)
-
-    for i in range(length):
-        nchn = 300
-        shape = (nchn, nsmpl[i])
-        patch = random_patch(time_min=time_min, shape=shape, **kwargs)
+        lengths = np.full(length, samples, dtype=int)
+    out = []
+    for count in lengths:
+        patch = random_patch(time_min=time_min, shape=(*shape[:-1], count), **kwargs)
         out.append(patch)
         diff = to_timedelta64(time_gap) + patch.coords.step("time")
         time_min = patch.coords.max("time") + diff
@@ -656,6 +656,46 @@ def diverse_spool():
     ]
 
     return dc.spool([y for x in all_spools for y in x])
+
+
+@register_func(EXAMPLE_SPOOLS, key="sparse_dss")
+def sparse_dss_spool():
+    """
+    Two months of a sparsely sampled DSS deployment.
+
+    One patch per day of hourly samples along 20 channels, for a
+    temperature and a strain acquisition which start and end at
+    different times and lose different days to outages. Sampled once an
+    hour, so the whole thing is a few hundred kilobytes -- small enough
+    to build in memory, long enough to draw on a calendar.
+
+    A day short of its 24 samples leaves a hole after it, so the
+    acquisitions cover their spans by different amounts.
+    """
+    hour = to_timedelta64(np.timedelta64(1, "h"))
+    day_one = np.datetime64("2024-01-01")
+    runs = {
+        # tag: (days it ran, days it was down, days it cut short)
+        # Days 17-20 are the site's own outage, so both lose them.
+        "temperature": (range(60), {17, 18, 19, 20, 33}, {8: 18, 41: 12}),
+        "strain": (range(9, 50), {17, 18, 19, 20, 28, 29, 30}, {41: 12}),
+    }
+    patches = []
+    for tag, (days, down, short) in runs.items():
+        for day in days:
+            if day in down:
+                continue
+            samples = short.get(day, 24)
+            patches.append(
+                random_patch(
+                    time_min=day_one + np.timedelta64(day, "D"),
+                    time_step=hour,
+                    distance_step=5,
+                    shape=(20, samples),
+                    tag=tag,
+                )
+            )
+    return dc.spool(patches)
 
 
 def spool_to_directory(spool, path=None, file_format="DASDAE", extension="hdf5"):

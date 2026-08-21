@@ -13,7 +13,15 @@ from matplotlib.collections import PatchCollection
 import dascore as dc
 from dascore.exceptions import ParameterError
 from dascore.viz import VizSpoolNameSpace
-from dascore.viz.spool import COVERAGE_COLORS, _human_duration, _percent, coverage
+from dascore.viz import spool as spool_viz
+from dascore.viz.spool import (
+    COVERAGE_COLORS,
+    _human_duration,
+    _percent,
+    _union,
+    calendar,
+    coverage,
+)
 
 
 def _lanes(ax):
@@ -55,13 +63,34 @@ def whole():
     return dc.get_example_spool("random_das")
 
 
+@pytest.fixture(scope="module")
+def deployment():
+    """Two months of a sparsely sampled deployment, with real outages."""
+    return dc.get_example_spool("sparse_dss")
+
+
+def _cells(ax):
+    """The value drawn in each calendar cell, as a masked (months, 31) array."""
+    return ax.collections[0].get_array().reshape(-1, 31)
+
+
+def _cell(ax, day) -> float:
+    """The value drawn for one day, named as text."""
+    stamp = pd.Timestamp(day)
+    cells = _cells(ax)
+    first = pd.Timestamp(ax.get_yticklabels(minor=True)[0].get_text())
+    row = (stamp.year - first.year) * 12 + stamp.month - first.month
+    return float(cells[row, stamp.day - 1])
+
+
 class TestNamespace:
     """The plots hang off spool.viz."""
 
     def test_registered(self, whole):
-        """Spool.viz is the viz namespace, holding coverage."""
+        """Spool.viz is the viz namespace, holding the spool's plots."""
         assert isinstance(whole.viz, VizSpoolNameSpace)
         assert whole.viz.coverage.__name__ == "coverage"
+        assert whole.viz.calendar.__name__ == "calendar"
 
     def test_declared_as_an_entry_point(self):
         """An install must carry the namespace, not just an import of it."""
@@ -266,10 +295,25 @@ class TestNaming:
         """A dimension which is not time still labels its gaps."""
         assert _human_duration(12.0) == "12 s"
 
+    def test_duration_smaller_than_any_unit(self):
+        """A gap under a microsecond still says how long it is."""
+        assert _human_duration(1e-9) == "1e-09 s"
+
+    def test_an_attr_ending_like_a_dimension(self):
+        """A lane is named by every attr, however the attr is spelled."""
+        first = dc.get_example_spool("random_das", acquisition_key="DAS1.R1..RAW")
+        second = dc.get_example_spool("random_das", acquisition_key="DAS2.R2..RAW")
+        spool = dc.spool(list(first) + list(second))
+        names = spool_viz._lane_names(spool.get_coverage("time"))
+        assert [x.split()[0] for x in names] == ["DAS1.R1..RAW", "DAS2.R2..RAW"]
+
+    def test_an_unrecorded_attr_is_not_a_value(self, diverse):
+        """A group which states no acquisition key is not named by a blank."""
+        names = spool_viz._lane_names(diverse.get_coverage("time"))
+        assert not any(x.startswith("·") or x.startswith(" ") for x in names)
+
     def test_group_id_when_nothing_tells_them_apart(self, monkeypatch):
         """Where no attribute varies, the group's ordinal names the lane."""
-        from dascore.viz import spool as module
-
         report = pd.DataFrame(
             {
                 "group_id": [0, 1],
@@ -279,7 +323,164 @@ class TestNaming:
                 "time_max": [1.0, 1.0],
             }
         )
-        assert module._lane_names(report) == ["group 0  100%", "group 1  100%"]
+        assert spool_viz._lane_names(report) == ["group 0  100%", "group 1  100%"]
+
+
+class TestCalendar:
+    """How much of each day a spool holds."""
+
+    def test_one_cell_per_day(self, deployment):
+        """Every day between the first and the last gets a cell."""
+        ax = deployment.viz.calendar()
+        drawn = np.count_nonzero(~np.ma.getmaskarray(_cells(ax)))
+        assert drawn == 60  # 2024-01-01 through 2024-02-29
+        assert [x.get_text() for x in ax.get_yticklabels(minor=True)] == [
+            "2024-Jan",
+            "2024-Feb",
+        ]
+
+    def test_percent(self, deployment):
+        """A day reads as the fraction of it the spool covers."""
+        ax = deployment.viz.calendar()
+        assert _cell(ax, "2024-01-05") == 100.0  # both acquisitions run
+        assert _cell(ax, "2024-01-18") == 0.0  # the site outage
+        assert _cell(ax, "2024-01-09") == 75.0  # one, and it stopped early
+        assert _cell(ax, "2024-02-11") == 50.0  # both stopped early
+
+    def test_never_over_a_whole_day(self, deployment):
+        """Acquisitions which run at once cover one day between them."""
+        assert _cells(deployment.viz.calendar()).max() == 100.0
+
+    def test_overlap_is_measured_once(self):
+        """Two copies of one interval cover what one of them does."""
+        spool = dc.get_example_spool("random_das")
+        doubled = dc.spool(list(spool) + list(spool))
+        assert _cells(doubled.viz.calendar()).max() <= 100.0
+
+    def test_gap_method(self, deployment):
+        """The gap method says how much of the day is missing."""
+        ax = deployment.viz.calendar(method="gap")
+        assert _cell(ax, "2024-01-18") == 86_400.0
+        assert _cell(ax, "2024-01-09") == 86_400.0 * 0.25
+        assert _cell(ax, "2024-01-05") == 0.0
+
+    def test_count_method(self, deployment):
+        """The count method counts the patches which overlap the day."""
+        ax = deployment.viz.calendar(method="count")
+        assert _cell(ax, "2024-01-15") == 2  # both acquisitions run
+        assert _cell(ax, "2024-01-05") == 1  # strain has not started
+        assert _cell(ax, "2024-02-03") == 1  # temperature is down
+        assert _cell(ax, "2024-01-18") == 0  # the site outage
+
+    def test_a_single_day_draws_a_cell(self):
+        """The last day is a day with data, so a one-day spool is not empty."""
+        ax = dc.get_example_spool("random_das").viz.calendar()
+        assert np.count_nonzero(~np.ma.getmaskarray(_cells(ax))) == 1
+
+    def test_days_outside_the_data_are_blank(self, deployment):
+        """A month has no thirtieth of February, and no cell for one."""
+        cells = _cells(deployment.viz.calendar())
+        assert np.ma.getmaskarray(cells)[1, 29:].all()
+
+    def test_window(self, deployment):
+        """A window states the days to draw."""
+        ax = deployment.viz.calendar(time=("2024-01-05", "2024-01-09"))
+        assert np.count_nonzero(~np.ma.getmaskarray(_cells(ax))) == 5
+
+    def test_half_open_window(self, deployment):
+        """Either end may be left to the spool."""
+        ax = deployment.viz.calendar(time=(None, "2024-01-31"))
+        assert np.count_nonzero(~np.ma.getmaskarray(_cells(ax))) == 31
+
+    def test_tolerance_changes_what_counts(self, deployment):
+        """A tolerance which closes the gaps fills the days they emptied."""
+        assert _cell(deployment.viz.calendar(tolerance=200), "2024-01-18") == 100.0
+
+    def test_group_argument(self, deployment):
+        """Grouping is passed through to the reports the days are read from."""
+        ax = deployment.viz.calendar(group=[])
+        assert _cell(ax, "2024-01-18") == 0.0
+
+    @pytest.mark.parametrize(
+        "bad, match",
+        [
+            (dict(method="nope"), "not a calendar measure"),
+            (dict(time=5), "must be a .start, end. pair"),
+            (dict(time=("2024-02-01", "2024-01-01")), "must be increasing"),
+        ],
+    )
+    def test_bad_arguments(self, deployment, bad, match):
+        """An argument which states nothing drawable is explained."""
+        with pytest.raises(ParameterError, match=match):
+            deployment.viz.calendar(**bad)
+
+    def test_an_empty_spool(self):
+        """A spool with no time in it has no calendar."""
+        with pytest.raises(ParameterError, match="no time to draw"):
+            dc.spool([]).viz.calendar()
+
+    def test_ax_and_show(self, whole, monkeypatch):
+        """A given ax is drawn on; show calls plt.show."""
+        called = []
+        monkeypatch.setattr(plt, "show", lambda: called.append(True))
+        _, ax = plt.subplots()
+        assert whole.viz.calendar(ax=ax, show=True) is ax
+        assert called
+
+    def test_figsize(self, whole):
+        """Figsize sizes the figure built when no ax is given."""
+        ax = whole.viz.calendar(figsize=(4, 3))
+        assert tuple(ax.get_figure().get_size_inches()) == (4.0, 3.0)
+
+    def test_module_function(self, whole):
+        """The plot is callable without the namespace, as tests need."""
+        assert calendar(whole) is not None
+
+
+class TestUnion:
+    """Intervals are measured once, however they overlap."""
+
+    def test_disjoint(self):
+        """Intervals which do not touch are left alone."""
+        assert _union(np.array([0, 5]), np.array([2, 7])) == [(0, 2), (5, 7)]
+
+    def test_overlapping(self):
+        """Intervals which overlap become the one they span."""
+        assert _union(np.array([0, 1]), np.array([3, 7])) == [(0, 7)]
+
+    def test_nested(self):
+        """An interval inside another adds nothing to it."""
+        assert _union(np.array([0, 2]), np.array([9, 3])) == [(0, 9)]
+
+    def test_touching(self):
+        """Intervals which meet at a point are one interval."""
+        assert _union(np.array([0, 4]), np.array([4, 8])) == [(0, 8)]
+
+    def test_out_of_order(self):
+        """The order they arrive in does not matter."""
+        assert _union(np.array([5, 0]), np.array([7, 2])) == [(0, 2), (5, 7)]
+
+
+class TestSparseDssExample:
+    """The example the calendar is drawn from."""
+
+    def test_two_acquisitions(self, deployment):
+        """It holds a temperature and a strain acquisition."""
+        report = deployment.get_coverage("time")
+        assert set(report["tag"]) == {"temperature", "strain"}
+
+    def test_stays_small(self, deployment):
+        """Sampled once an hour, so the whole deployment is tiny."""
+        contents = deployment.get_contents()
+        total = sum(len(x.data.tobytes()) for x in deployment)
+        assert total < 1_000_000
+        assert (contents["time_step"] == np.timedelta64(1, "h")).all()
+
+    def test_reports_the_outage(self, deployment):
+        """The site outage is a gap in both acquisitions."""
+        gaps = deployment.get_gaps("time")
+        outage = gaps[gaps["gap_size"] > np.timedelta64(3, "D")]
+        assert set(outage["tag"]) == {"temperature", "strain"}
 
 
 def _is_gap(x0, ax) -> bool:

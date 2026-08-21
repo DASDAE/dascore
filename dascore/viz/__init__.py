@@ -14,7 +14,7 @@ from .waterfall import waterfall
 from .wiggle import wiggle
 from .map_fiber import map_fiber
 from .inventory import map_path, path, timeline
-from .spool import coverage
+from .spool import calendar, coverage
 
 
 class VizPatchNameSpace(PatchNameSpace):
@@ -45,6 +45,7 @@ class VizSpoolNameSpace(SpoolNameSpace):
     name = "viz"
 
     coverage = coverage
+    calendar = calendar
 
     def __getattr__(self, item):
         """Point a patch plot at the patch it needs."""

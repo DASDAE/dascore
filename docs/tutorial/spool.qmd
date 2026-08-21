@@ -347,6 +347,8 @@ gappy.get_coverage()
 
 `gap_total` is the sum of that group's `get_gaps` rows, `span` is the extent it covers end to end, and `coverage` is the fraction of that span the patches cover. It is measured between patches, from the index's envelopes, so a hole *inside* a patch does not show up. Patches divide into groups the way `chunk` divides them — on the kind attributes, but also on sampling rate and coordinate structure — so a single tag can span several rows. `group_id` names the group in both frames, which is how a gap is traced back to the row that counts it.
 
+Both frames are drawn by [`Spool.viz.coverage`](`dascore.viz.spool.coverage`), and a long archive by [`Spool.viz.calendar`](`dascore.viz.spool.calendar`); see the [visualization tutorial](visualization.qmd#spool).
+
 # concatenate
 Similar to `chunk`, [`Spool.concatenate`](`dascore.Spool.concatenate`) is used to combine patches together. However, `concatenate` doesn't account for coordinate values along the concatenation axis, and can even be used to create new patch dimensions. Like `chunk`, it produces a lazy, plan-backed result.
 
