@@ -1931,7 +1931,11 @@ class Spool(NamespaceOwner):
         then joined by the requested count in the order of the dimension
         (spool order when its step is unknown, or along a new dimension),
         contiguous or not. Patches which cannot be concatenated together
-        land in separate outputs; nothing is skipped and nothing raises.
+        land in separate outputs; nothing is skipped and planning does not
+        raise. A coordinate the index describes only by a summary cannot
+        be told from another with the same summary, so such an output is
+        settled when it loads: equal values concatenate, and different
+        ones raise there rather than being silently mixed.
         Remaining attributes and non-dimensional coordinates must agree
         within an output, policed by `conflict` as `chunk` polices them.
 
