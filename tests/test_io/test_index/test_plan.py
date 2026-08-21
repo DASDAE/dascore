@@ -917,6 +917,12 @@ class TestConcatPlan:
         rows = _flat([blank, p2.mean("time"), p1.mean("time").new()])
         other = build_concat_plan(rows, time=None).outputs["_time_def_key"].iloc[0]
         assert other != key
+        # a member whose identity the relation does not state leaves the
+        # output without one, rather than digesting a hole
+        blind = _flat([blank, p2.mean("time")])
+        blind.loc[0, "_time_def_key"] = None
+        plan = build_concat_plan(blind, time=None)
+        assert pd.isnull(plan.outputs["_time_def_key"].iloc[0])
         # and one member alone keeps the identity it was given
         lone = build_concat_plan(_flat([blank]), time=None)
         assert lone.outputs["_time_def_key"].iloc[0] == rows["_time_def_key"].iloc[0]
