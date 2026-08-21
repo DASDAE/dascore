@@ -245,6 +245,44 @@ class TestDimensionSpelling:
         assert out.io.to_dataframe()["time_start"].dtype == np.dtype("datetime64[ns]")
         assert out[1].region.bounds == {}
 
+    @pytest.mark.parametrize(
+        "column",
+        [
+            pytest.param(pd.Series([True, False]), id="boolean"),
+            pytest.param(pd.Series([1 + 2j]), id="complex"),
+            pytest.param(pd.Series([True], dtype=object), id="boolean-object"),
+        ],
+    )
+    def test_a_dimension_which_states_no_coordinate(self, column):
+        """A true is not a second past the epoch, and is refused as neither."""
+        with pytest.raises(ParameterError, match="neither numbers, times"):
+            AnnotationSet(pd.DataFrame({"distance": column}), dims=DIMS)
+
+    def test_a_dimension_mixing_numbers_and_times(self):
+        """A number already read as one is not re-read as an epoch."""
+        cells = pd.Series([1, np.datetime64("2020-01-01")], dtype=object)
+        with pytest.raises(ParameterError, match="neither numbers, times"):
+            AnnotationSet(pd.DataFrame({"time": cells}), dims=DIMS)
+
+    def test_a_dimension_no_coordinate_could_hold(self):
+        """A year outside what a coordinate holds says so, not OverflowError."""
+        frame = pd.DataFrame({"time": ["1000", "2020-01-01"]})
+        with pytest.raises(ParameterError, match="neither numbers, times"):
+            AnnotationSet(frame, dims=DIMS)
+
+    @pytest.mark.parametrize(
+        "cell",
+        [
+            pytest.param(np.datetime64("2020-01-01"), id="time"),
+            pytest.param(np.timedelta64(1, "s"), id="duration"),
+        ],
+    )
+    def test_a_dimension_of_objects_still_reads(self, cell):
+        """A frame may hold coordinates in an object column; they are read."""
+        frame = pd.DataFrame({"offset": pd.Series([cell], dtype=object)})
+        held = AnnotationSet(frame, dims=("offset",)).io.to_dataframe()["offset"]
+        assert held.dtype.kind in "Mm"
+
     def test_a_duration_dimension_is_a_coordinate(self):
         """A dimension may be an offset from something, which is a duration."""
         spans = np.array([1, 3], dtype="timedelta64[s]")
@@ -501,6 +539,16 @@ class TestIdentity:
         out = AnnotationSet(frame, dims=DIMS)
         assert [x.id for x in out] == ["1", "2"]
         assert out[1].parent == "1"
+
+    def test_float_ids_are_named_as_the_floats_they_are(self):
+        """Without a blank there was no upcast, so the `.0` is the author's."""
+        frame = pd.DataFrame({"id": [1.0, 2.5]})
+        assert [x.id for x in AnnotationSet(frame, dims=DIMS)] == ["1.0", "2.5"]
+
+    def test_an_id_beyond_where_a_float_counts_by_ones(self):
+        """A float that large names no one integer, so it keeps its own text."""
+        frame = pd.DataFrame({"id": [1e20, None]})
+        assert AnnotationSet(frame, dims=DIMS)[0].id == "1e+20"
 
     def test_an_id_is_not_read_from_a_row(self):
         """A row of a frame holds one dtype; an id does not take the float
@@ -845,6 +893,12 @@ class TestFrames:
         frame = pd.DataFrame({"group": ["a"], "note": [None]})
         held = AnnotationSet(frame, dims=DIMS).io.to_dataframe()
         assert held["note"].dtype == object
+
+    def test_a_declared_dtype_is_not_overruled(self):
+        """A column saying what it holds is not canonicalized out of it."""
+        frame = pd.DataFrame({"group": ["a"], "note": [np.nan]})
+        out = AnnotationSet(frame, dims=DIMS, columns={"note": {"dtype": "float64"}})
+        assert out.io.to_dataframe()["note"].dtype == np.dtype("float64")
 
     def test_a_categorical_column_carries(self):
         """A category column is text, blanks and all."""

@@ -235,6 +235,10 @@ class TestParseCell:
         """Python reads these as numbers; a table's cell does not state one."""
         assert parse_cell(text) == text
 
+    def test_an_exponent_no_float_holds(self):
+        """A number which reads as infinity is not the number written."""
+        assert parse_cell("1e309") == "1e309"
+
 
 def _forge(frame: pd.DataFrame, path, documents: str) -> None:
     """Write a parquet file whose document footer this library did not write."""

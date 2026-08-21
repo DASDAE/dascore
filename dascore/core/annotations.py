@@ -20,11 +20,12 @@ from __future__ import annotations
 
 import datetime
 import json
+import numbers
 
 # Whole rather than by name: this module's own Path is a geometry.
 import pathlib
 import re
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Collection, Iterable, Mapping, Sequence
 from contextlib import suppress
 from typing import Annotated, Any, ClassVar, Literal, NamedTuple
 
@@ -118,6 +119,11 @@ _START, _END = "_start", "_end"
 # The resolution DASCore holds a time and a duration at.
 _NS_TIME = np.dtype("datetime64[ns]")
 _NS_SPAN = np.dtype("timedelta64[ns]")
+
+# The dtype kinds a coordinate may be a number in, and the ones a column
+# whose type nothing has decided yet arrives as.
+_NUMBER_KINDS = "iuf"
+_TEXT_KINDS = "OTUS"
 
 # A moveout is physics, not geometry, so it names the dimensions it relates.
 DISTANCE_DIM, TIME_DIM = "distance", "time"
@@ -743,10 +749,11 @@ class AnnotationSet(NamespaceOwner):
         frame = _coerce_frame(data, "annotations")
         # Blanks first: a blank cell states nothing, and a column holding
         # one is only the times it states once that is known.
-        frame = _normalize_times(_normalize_blanks(frame), self._attrs.dims)
+        declared = _declared_dtypes(self._attrs)
+        frame = _normalize_times(_normalize_blanks(frame, declared), self._attrs.dims)
         spellings = _read_spellings(frame, self._attrs.dims)
         frame = _type_dimensions(frame, spellings)
-        frame = _normalize_identities(frame, ("id", "parent"))
+        frame = _normalize_identities(frame, ("id", "parent"), declared)
         _check_columns(frame, self._attrs)
         _check_ranges(frame, spellings)
         _check_values(frame)
@@ -754,9 +761,10 @@ class AnnotationSet(NamespaceOwner):
         ids = _check_ids(frame)
         frame = _normalize_tags(_normalize_basis(frame, self._attrs.dims))
         vertex_frame = _normalize_times(
-            _normalize_blanks(_coerce_frame(vertices, "vertices")), self._attrs.dims
+            _normalize_blanks(_coerce_frame(vertices, "vertices"), declared),
+            self._attrs.dims,
         )
-        vertex_frame = _normalize_identities(vertex_frame, ("id",))
+        vertex_frame = _normalize_identities(vertex_frame, ("id",), declared)
         self._vertices = _check_vertices(vertex_frame, frame, ids, self._attrs.dims)
         # Read again: filling a derived bounding region adds the range
         # columns a path row had none of, which are bounds like any other,
@@ -892,6 +900,11 @@ def _build_attrs(
         )
         raise ParameterError(msg)
     return AnnotationSetAttrs(**stated)
+
+
+def _declared_dtypes(attrs: AnnotationSetAttrs) -> frozenset[str]:
+    """Return the columns whose dtype the set states, and so does not decide."""
+    return frozenset(k for k, v in attrs.columns.items() if v.dtype)
 
 
 def _coerce_frame(data, what: str) -> pd.DataFrame:
@@ -1435,35 +1448,66 @@ def _read_dimension(series: pd.Series) -> pd.Series:
     are a number a distance column would lose to a date.
     """
     kind = getattr(series.dtype, "kind", "")
-    if kind in "iuf":
+    if kind in _NUMBER_KINDS:
         return series
     if kind == "M":
         return series if series.dtype == _NS_TIME else to_datetime64(series)
     if kind == "m":
         return series if series.dtype == _NS_SPAN else to_timedelta64(series)
+    # Only a column of things this has to read is read: a boolean or a
+    # complex column states no coordinate, and handing one to a time
+    # parser reads true as a second past the epoch.
+    if kind not in _TEXT_KINDS:
+        raise _not_a_coordinate(series)
     stated = _stated_cells(series)
     if not stated.any():
         # A column no row states says nothing about what it holds, and
         # inventing a type for it would be inventing what it says.
         return series
     with suppress(TypeError, ValueError):
-        return pd.to_numeric(series)
-    for read, dtype in ((to_datetime64, _NS_TIME), (to_timedelta64, _NS_SPAN)):
-        # AssertionError: `to_timedelta64` states that way what it cannot read.
-        with suppress(TypeError, ValueError, AssertionError):
-            values = np.asarray(read(series[stated]))
-            # Checked rather than trusted: these read text nobody can place
-            # -- a label, a name -- as NaT rather than refusing it, and
-            # taking that would delete the cell rather than say it is not
-            # a coordinate.
-            if not pd.isnull(values).any():
-                return _restate(series, stated, values, dtype)
+        # The result's own kind, not merely that it converted: `to_numeric`
+        # hands a boolean or a complex column straight back, and neither is
+        # a coordinate anything can be placed at.
+        if (read := pd.to_numeric(series)).dtype.kind in _NUMBER_KINDS:
+            return read
+    # A number already read as one cannot also be a time: converting the
+    # column would read that number as an epoch, quietly placing it in
+    # 1970 rather than where the row says.
+    if not any(_is_number(x) for x in series[stated]):
+        for read, dtype in ((to_datetime64, _NS_TIME), (to_timedelta64, _NS_SPAN)):
+            # AssertionError: `to_timedelta64` states that way what it
+            # cannot read; OverflowError: a year a coordinate cannot hold.
+            with suppress(TypeError, ValueError, AssertionError, OverflowError):
+                values = np.asarray(read(series[stated]))
+                # Checked rather than trusted: these read text nobody can
+                # place -- a label, a name -- as NaT rather than refusing
+                # it, and taking that would delete the cell rather than
+                # say it is not a coordinate.
+                if not pd.isnull(values).any():
+                    return _restate(series, stated, values, dtype)
+    raise _not_a_coordinate(series)
+
+
+def _not_a_coordinate(series: pd.Series) -> ParameterError:
+    """Say that a column holds no coordinate an annotation can be placed at."""
     msg = (
         f"The column {str(series.name)!r} states neither numbers, times nor "
         "durations, so its values are not coordinates an annotation can be "
-        "placed at."
+        "placed at. One column states one of them."
     )
-    raise ParameterError(msg)
+    return ParameterError(msg)
+
+
+def _is_number(value) -> bool:
+    """
+    Whether a cell already holds a number, a boolean among them.
+
+    A time and a duration are not numbers here, whatever python says of
+    them: they are the two kinds this reads a column *into*.
+    """
+    if isinstance(value, np.datetime64 | np.timedelta64):
+        return False
+    return isinstance(value, numbers.Number | np.bool_)
 
 
 def _restate(series: pd.Series, stated: pd.Series, values, dtype) -> pd.Series:
@@ -1486,39 +1530,49 @@ def _type_dimensions(frame: pd.DataFrame, spellings) -> pd.DataFrame:
     return _assign(frame, changed)
 
 
-def _normalize_identities(frame: pd.DataFrame, columns) -> pd.DataFrame:
+def _normalize_identities(
+    frame: pd.DataFrame, columns, declared: Collection[str] = ()
+) -> pd.DataFrame:
     """
     Hold every identity as the text which names it.
 
-    An id is a label, not a number: a table reads one back as text, and a
-    blank cell beside a whole number makes a float column, so a set built
-    from a frame would name a row `1.0` where the vertices naming it, or
-    the same set reloaded, spells it `1`.
+    An id is a label, not a number: a table reads one back as text, so a
+    set built from a frame and the same set reloaded would otherwise name
+    one row two things.
+
+    A whole number spelled as a float is named without its `.0`, but only
+    where the column also holds a blank -- that is what pandas makes of
+    whole numbers beside one, and it is the only reading under which the
+    `.0` was never the author's. A column of floats alone is named as the
+    floats it states.
     """
     changed = {}
     for name in columns:
-        if name not in frame.columns:
+        if name not in frame.columns or name in declared:
             continue
         series = frame[name]
         if series.dtype == object and all(
             isinstance(x, str) for x in series if _stated(x)
         ):
             continue
+        stated = _stated_cells(series)
+        upcast = series.dtype.kind == "f" and not stated.all()
         changed[name] = pd.Series(
-            [_identity(x) for x in series], index=series.index, dtype=object
+            [_identity(x, upcast) for x in series], index=series.index, dtype=object
         )
     return _assign(frame, changed)
 
 
-def _identity(value):
+def _identity(value, upcast: bool = False):
     """Return the text one identity is named by, an unstated one as nothing."""
     if not _stated(value):
         return None
     value = _scalar(value)
-    # A whole number spelled as a float names the row a table would name
-    # `1`, not `1.0`: the `.0` is the blank cell beside it, not the label.
-    if isinstance(value, float) and value.is_integer():
-        return str(int(value))
+    # Beyond where a float counts by ones it no longer names one integer,
+    # so its own text is the most that can be said of it.
+    if upcast and isinstance(value, float) and value.is_integer():
+        if abs(value) < 2**53:
+            return str(int(value))
     return str(value)
 
 
@@ -1602,7 +1656,9 @@ def _normalize_tags(frame) -> pd.DataFrame:
     return frame.assign(tags=pd.Series(read, index=frame.index, dtype=object))
 
 
-def _normalize_blanks(frame: pd.DataFrame) -> pd.DataFrame:
+def _normalize_blanks(
+    frame: pd.DataFrame, declared: Collection[str] = ()
+) -> pd.DataFrame:
     """
     Read a cell holding the empty string as stating nothing.
 
@@ -1627,7 +1683,11 @@ def _normalize_blanks(frame: pd.DataFrame) -> pd.DataFrame:
         # A column no row states -- an all-blank value column is how a
         # membership-only set is spelled -- arrives as whatever dtype each
         # reader inferred from nothing, and a format infers a different
-        # one; one dtype keeps a saved set equal to its reload.
+        # one; one dtype keeps a saved set equal to its reload. A column
+        # which declares its dtype has an author saying what it holds,
+        # and that is not this to overrule.
+        if name in declared:
+            continue
         if series.dtype != object and not _stated_cells(series).any():
             changed[name] = pd.Series(
                 [None] * len(frame), index=frame.index, dtype=object

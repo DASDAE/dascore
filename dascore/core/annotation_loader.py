@@ -252,7 +252,7 @@ def _read_cells(
             # to work it out from a spelling -- only check that what it
             # states is a thing the column is allowed to hold.
             if str(name) in spellings:
-                _check_kind(series, name, path, "iufMm", "numbers or times")
+                _check_kind(series, name, path, "iufMm", "numbers, times or durations")
             elif ordered and str(name) == _ORDINAL:
                 _check_kind(series, name, path, "iuf", "a number")
             out[name] = series

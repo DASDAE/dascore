@@ -16,6 +16,7 @@ from __future__ import annotations
 import csv
 import datetime
 import json
+import math
 import re
 from collections.abc import Mapping, Sized
 from pathlib import Path
@@ -621,6 +622,11 @@ def parse_cell(text: str):
     if not _NUMBER.match(text.strip()):
         return text
     number = float(text)
+    # An exponent may name a number no float holds, and the infinity that
+    # makes is treated as unset by every later reader: the cell would be
+    # deleted rather than read, so it stays the text it plainly states.
+    if not math.isfinite(number):
+        return text
     # int(number) rather than int(text): 1e3 is integral, and only the
     # number knows that -- the text raises.
     return int(number) if number.is_integer() and "." not in text else number
