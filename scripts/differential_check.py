@@ -35,12 +35,34 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 import warnings
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 
 import dascore as dc
+
+# How hard to work at timing a call. A microsecond-scale call is repeated
+# until it has run for _TIMING_BUDGET so the reading means something; a
+# slow one stops at _TIMING_MIN_ROUNDS so the sweep stays quick.
+_TIMING_MIN_ROUNDS = 3
+_TIMING_MAX_ROUNDS = 200
+_TIMING_BUDGET = 0.002
+# Timings below this are noise on any machine, so they are not reported
+# however far they appear to have moved.
+_TIMING_FLOOR = 50e-6
+# How far a single call can read out with nothing changed at all. Measured
+# by running this script with --ref HEAD, which compares a checkout against
+# itself: the totals landed within 10% and individual calls within 35%.
+_TIMING_NOISE = 0.35
+# How many times each leg is run. Two is enough to stop the leg which
+# happened to go first from looking slow.
+_TIMING_PASSES = 3
+
+# Keys a dump carries which are not calls.
+_BOOKKEEPING = {"_timing", "_dascore_path"}
 
 
 # Data covering the dtypes patch data can hold and the values which
@@ -106,6 +128,11 @@ MATRIX_CALLS = {
     "min": lambda patch: patch.min("time"),
     "mul": lambda patch: patch * 2,
     "norm_bit": lambda patch: patch.normalize("time", norm="bit"),
+    "norm_l2_distance": lambda patch: patch.normalize("distance", norm="l2"),
+    "demean_distance": lambda patch: patch.demean("distance"),
+    "rename": lambda patch: patch.rename_coords(time="t"),
+    "transpose_noop": lambda patch: patch.transpose(*patch.dims),
+    "transpose_ell": lambda patch: patch.transpose(..., "distance"),
     "norm_l1": lambda patch: patch.normalize("time", norm="l1"),
     "norm_l2": lambda patch: patch.normalize("time", norm="l2"),
     "norm_max": lambda patch: patch.normalize("time", norm="max"),
@@ -160,6 +187,13 @@ def get_calls() -> dict:
     int_patch = patch.new(data=(np.asarray(patch.data) * 10).astype("int32"))
     bool_patch = patch.new(data=np.asarray(patch.data) > 0.5)
     collapsed = patch.mean("time")
+    # A patch which states a data_type, so that clearing it is visible.
+    # Every other patch here already carries "", where a processor which
+    # forgot to clear it would read the same as one which cleared it.
+    typed = patch.update_attrs(data_type="strain_rate")
+    with_nondim = patch.update_coords(
+        quality=("distance", np.arange(patch.shape[0], dtype="float64"))
+    )
     return {
         # The inputs themselves, so a difference in the examples cannot
         # masquerade as a difference in the functions.
@@ -241,8 +275,33 @@ def get_calls() -> dict:
         "pad_no_expand": lambda: patch.pad(time=2, samples=True, expand_coords=False),
         "pad_fill": lambda: patch.pad(time=1, samples=True, constant_values=1.0),
         "pad_two_dims": lambda: patch.pad(time=1, distance=2, samples=True),
+        # data_type is cleared by these; only a typed input can show it
+        "norm_typed": lambda: typed.normalize("time"),
+        "standardize_typed": lambda: typed.standardize("time"),
+        "abs_typed": lambda: typed.abs(),
+        "conj_typed": lambda: typed.conj(),
+        # the other axis, the other dtypes, and the default argument
+        "norm_l2_distance": lambda: patch.normalize("distance", norm="l2"),
+        "norm_complex_l2": lambda: dft_patch.normalize("ft_time", norm="l2"),
+        "norm_units": lambda: patch.update_attrs(data_units="m/s").normalize("time"),
+        "standardize_distance": lambda: patch.standardize("distance"),
+        "standardize_complex": lambda: dft_patch.standardize("ft_time"),
+        "demean_distance": lambda: patch.demean("distance"),
+        "demean_complex": lambda: dft_patch.demean("ft_time"),
+        "abs_complex": lambda: dft_patch.abs(),
+        # the messages, which a rewrite can change without changing a number
+        "norm_bad": lambda: patch.normalize("time", norm="nope"),
+        "transpose_bad_dim": lambda: patch.transpose("nope"),
+        "rename_missing": lambda: patch.rename_coords(nope="x"),
         # coords
         "transpose": lambda: patch.transpose(),
+        # The no-op and ellipsis branches, which nothing else here reaches.
+        # `transpose_noop` must keep handing back the patch it was given.
+        "transpose_noop": lambda: patch.transpose(*patch.dims),
+        "transpose_ell_last": lambda: patch.transpose(..., "distance"),
+        "transpose_ell_first": lambda: patch.transpose("distance", ...),
+        "rename_coords": lambda: patch.rename_coords(distance="depth"),
+        "rename_nondim": lambda: with_nondim.rename_coords(quality="grade"),
         "transpose_named": lambda: patch.transpose("time", "distance"),
         "squeeze": lambda: patch.select(distance=0, samples=True).squeeze(),
         "broadcast": lambda: collapsed.make_broadcastable_to((collapsed.shape[0], 3)),
@@ -284,22 +343,80 @@ def _hash(array) -> str:
 def dump(path: Path) -> None:
     """Write the fingerprint of every call to path."""
     warnings.simplefilter("ignore")
-    out = {}
-    for name, call in (get_calls() | get_matrix_calls()).items():
+    calls = get_calls() | get_matrix_calls()
+    # Hashed before anything runs, so a call which writes into its own
+    # argument can be told from one which does not. Nothing else here
+    # would notice: every digest is taken from the call's own result.
+    inputs_before = _input_digests(calls)
+    out, timing = {}, {}
+    for name, call in calls.items():
         try:
-            out[name] = digest(call())
+            seconds, patch = _timed(call)
+            out[name] = digest(patch)
+            timing[name] = seconds
         except Exception as error:
             out[name] = {"error": f"{type(error).__name__}: {error}"}
+    inputs_after = _input_digests(calls)
+    for name, before in inputs_before.items():
+        if inputs_after.get(name) != before:
+            out[name] = {"error": "the call changed the patch it was given"}
     # Recorded so the caller can prove which dascore was measured.
     out["_dascore_path"] = str(Path(dc.__file__).parent)
+    out["_timing"] = timing
     path.write_text(json.dumps(out, indent=1, sort_keys=True))
 
 
-def compare(before: dict, after: dict) -> list[str]:
-    """Return a report of the calls whose results differ."""
+def _timed(call) -> tuple[float, Any]:
+    """
+    Return how long a call took, and what it returned.
+
+    Best of several, and enough of them to be worth reading: a call which
+    takes a microsecond gets repeated until it has run for a few
+    milliseconds, so the answer is about the code rather than about when
+    the scheduler happened to look away. A slow call is measured a few
+    times and left alone. The last result is the one fingerprinted; they
+    are all the same call, so any of them would do.
+    """
+    best, patch, spent, rounds = None, None, 0.0, 0
+    while rounds < _TIMING_MAX_ROUNDS and (
+        rounds < _TIMING_MIN_ROUNDS or spent < _TIMING_BUDGET
+    ):
+        start = time.perf_counter()
+        patch = call()
+        elapsed = time.perf_counter() - start
+        best = elapsed if best is None else min(best, elapsed)
+        spent += elapsed
+        rounds += 1
+    return best, patch
+
+
+def _input_digests(calls) -> dict:
+    """Return a fingerprint of the patches the calls close over."""
+    seen = {}
+    for name, call in calls.items():
+        for value in getattr(call, "__closure__", None) or ():
+            contents = value.cell_contents
+            if isinstance(contents, dc.Patch):
+                seen[f"_input_of/{name}"] = _hash(np.asarray(contents.data))
+                break
+    return seen
+
+
+def compare(before: dict, after: dict, fields: set[str] | None = None) -> list[str]:
+    """
+    Return a report of the calls whose results differ.
+
+    `fields` restricts the comparison to part of a fingerprint. Comparing
+    against a ref far enough back that the attrs schema itself changed --
+    master, at the time of writing -- otherwise reports every call as a
+    difference and so reports nothing; the numbers are still worth
+    checking there, and this is how.
+    """
     report = []
-    for name in sorted(set(before) | set(after)):
-        old, new = before.get(name), after.get(name)
+    # Timing is not a result; it is reported on its own and never compared.
+    names = (set(before) | set(after)) - _BOOKKEEPING
+    for name in sorted(names):
+        old, new = _select(before.get(name), fields), _select(after.get(name), fields)
         if old == new:
             continue
         if old is None or new is None:
@@ -312,6 +429,59 @@ def compare(before: dict, after: dict) -> list[str]:
             for i in fields
         )
     return report
+
+
+def _select(fingerprint: dict | None, fields: set[str] | None) -> dict | None:
+    """Return the part of a fingerprint being compared."""
+    if fingerprint is None or fields is None:
+        return fingerprint
+    # An error is never dropped: a call which raised on one side and not
+    # the other is a difference whatever fields were asked for.
+    kept = {i: v for i, v in fingerprint.items() if i in fields or i == "error"}
+    return kept
+
+
+def report_timing(before: dict, after: dict, slowest: int = 15) -> list[str]:
+    """
+    Return what the change cost, call by call.
+
+    Best-of readings on one machine, so this is a guide rather than a
+    benchmark: it says which calls moved, not by exactly how much.
+    """
+    old, new = before.get("_timing", {}), after.get("_timing", {})
+    shared = sorted(set(old) & set(new))
+    if not shared:
+        return []
+    rows = [
+        (new[i] / old[i], old[i], new[i], i)
+        for i in shared
+        # A call too quick to time is not evidence of anything; reporting
+        # it just fills the list with whichever ones the scheduler noticed.
+        if old[i] >= _TIMING_FLOOR and new[i] >= _TIMING_FLOOR
+    ]
+    rows.sort(reverse=True)
+    total_old = sum(old[i] for i in shared)
+    total_new = sum(new[i] for i in shared)
+    out = [
+        f"timing over {len(shared)} calls: "
+        f"{total_old * 1e3:.1f} ms before, {total_new * 1e3:.1f} ms after "
+        f"({(total_new / total_old - 1) * 100:+.1f}%)",
+        "  the two legs are separate processes, so a single call can read "
+        f"{_TIMING_NOISE:.0%} out either way;",
+        "  the total is the number to trust, and benchmarks/ is where a "
+        "single operation gets measured properly.",
+    ]
+    moved = [x for x in rows if x[0] >= 1 + _TIMING_NOISE or x[0] <= 1 - _TIMING_NOISE]
+    if not moved:
+        out.append(f"  no call moved by more than {_TIMING_NOISE:.0%}.")
+        return out
+    out.append(f"  calls which moved more than {_TIMING_NOISE:.0%}:")
+    out.extend(
+        f"    {name:34} {before_s * 1e6:9.1f} us -> {after_s * 1e6:9.1f} us "
+        f"({(ratio - 1) * 100:+6.1f}%)"
+        for ratio, before_s, after_s, name in moved[:slowest]
+    )
+    return out
 
 
 def _dump_at(worktree: Path, out_path: Path) -> dict:
@@ -338,7 +508,7 @@ def check_dascore_path(used: str, worktree: Path) -> None:
         raise RuntimeError(msg)
 
 
-def main(ref: str) -> int:
+def main(ref: str, fields: set[str] | None = None, strict: bool = False) -> int:
     """Compare the working tree against a git ref."""
     repo = Path(__file__).resolve().parent.parent
     with tempfile.TemporaryDirectory() as temp:
@@ -357,8 +527,19 @@ def main(ref: str) -> int:
             msg = f"could not check out {ref!r}: {error.stderr.strip()}"
             raise SystemExit(msg) from error
         try:
+            # Alternated, and more than once: run one leg after the other
+            # and the first pays for a cold cache and a CPU which has not
+            # yet ramped, which reads as the second being faster. Taking
+            # the best of each pass per call takes most of that out.
             before = _dump_at(worktree, temp / "before.json")
             after = _dump_at(repo, temp / "after.json")
+            for index in range(_TIMING_PASSES - 1):
+                after = _merge_timing(
+                    after, _dump_at(repo, temp / f"after{index}.json")
+                )
+                before = _merge_timing(
+                    before, _dump_at(worktree, temp / f"before{index}.json")
+                )
         finally:
             subprocess.run(
                 ["git", "worktree", "remove", "--force", str(worktree)],
@@ -366,22 +547,66 @@ def main(ref: str) -> int:
                 check=False,
                 capture_output=True,
             )
-    if report := compare(before, after):
-        print(f"{len(before)} calls compared against {ref}; some differ:\n")  # noqa
+    # Timing is reported whatever the verdict: a change which alters no
+    # value can still cost, and that is worth seeing on a passing run.
+    counted = len(before) - len(_BOOKKEEPING & set(before))
+    if timing := report_timing(before, after):
+        print("\n".join(timing), end="\n\n")  # noqa
+    if strict and (raised := _raised(before) | _raised(after)):
+        print(f"calls which raised on one side or both: {sorted(raised)}")  # noqa
+        return 1
+    if report := compare(before, after, fields):
+        print(f"{counted} calls compared against {ref}; some differ:\n")  # noqa
         print("\n".join(report))  # noqa
         return 1
-    print(f"{len(before)} calls compared against {ref}; all identical.")  # noqa
+    print(f"{counted} calls compared against {ref}; all identical.")  # noqa
     return 0
+
+
+def _merge_timing(kept: dict, other: dict) -> dict:
+    """Return one dump holding the best timing of two runs of the same code."""
+    best = dict(kept.get("_timing", {}))
+    for name, seconds in other.get("_timing", {}).items():
+        best[name] = min(seconds, best.get(name, seconds))
+    return kept | {"_timing": best}
+
+
+def _raised(dumped: dict) -> set[str]:
+    """Return the names of calls which recorded an error.
+
+    An error is stored as its message and compared like any other field,
+    so a call which fails the same way on both sides reads as a pass.
+    `--strict` is how to notice that the check is not checking anything.
+    """
+    return {
+        i
+        for i, v in dumped.items()
+        if i not in _BOOKKEEPING and isinstance(v, dict) and "error" in v
+    }
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--ref", help="The git ref to compare against.")
     parser.add_argument("--dump", help="Write fingerprints here and exit.")
+    parser.add_argument(
+        "--fields",
+        help=(
+            "Comma separated fingerprint fields to compare, e.g. "
+            "'dtype,shape,dims,data_hash,coords'. Use when the ref is far "
+            "enough back that the attrs schema itself changed."
+        ),
+    )
+    parser.add_argument(
+        "--strict",
+        action="store_true",
+        help="Fail if any call raised, even where both sides raised alike.",
+    )
     args = parser.parse_args()
     if args.dump:
         dump(Path(args.dump))
     elif not args.ref:
         parser.error("--ref is required; it names the checkout to compare against.")
     else:
-        sys.exit(main(args.ref))
+        chosen = {i.strip() for i in args.fields.split(",")} if args.fields else None
+        sys.exit(main(args.ref, chosen, args.strict))
