@@ -1936,8 +1936,12 @@ class Spool(NamespaceOwner):
         be told from another with the same summary, so such an output is
         settled when it loads: equal values concatenate, and different
         ones raise there rather than being silently mixed.
-        Remaining attributes and non-dimensional coordinates must agree
-        within an output, policed by `conflict` as `chunk` polices them.
+        Remaining attributes must agree within an output, policed by
+        `conflict` as `chunk` polices them. Coordinates are not policed:
+        a coordinate riding the concatenated dimension is joined along
+        it, every other coordinate must agree, and one which cannot be
+        reconciled raises when the output loads rather than being
+        dropped from a patch the catalog describes.
 
         Parameters
         ----------
@@ -1989,11 +1993,7 @@ class Spool(NamespaceOwner):
         dim = next(iter(kwargs), None)
         source_rows, working = self._plan_frames(dim)
         plan = build_concat_plan(working, conflict=conflict, group=group, **kwargs)
-        merge_kwargs = {
-            "conflict": conflict,
-            "count": plan.params["count"],
-            "dropped_coords": plan.params.get("dropped_coords", {}),
-        }
+        merge_kwargs = {"conflict": conflict, "count": plan.params["count"]}
         catalog = derived_catalog(
             source_rows=source_rows,
             plan=plan,

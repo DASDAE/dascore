@@ -1844,37 +1844,6 @@ def build_concat_plan(
                 for k, e, digest in zip(keys, existing, member_keys)
             ]
             data[key_col] = pd.Series(keys, dtype=object)
-    if conflict != "raise":
-        # non-dimensional coordinates whose identity differs within an
-        # output are dropped when it is assembled; the catalog must not
-        # advertise them either. A coordinate is non-dimensional for the
-        # rows whose dims do not name it, whatever it is elsewhere.
-        aux = {
-            x: sorted_df[x].where(~_structural(sorted_df, x[1 : -len("_def_key")]))
-            for x in sorted_df.columns
-            if x.endswith("_def_key")
-            and not x.startswith("__")
-            and x[1 : -len("_def_key")] != name
-        }
-        aux_keys = list(aux)
-        if aux_keys:
-            # the members which state a coordinate must agree on it; one
-            # that some members lack rides along from those which have it
-            grouped = pd.DataFrame(aux).groupby(codes)
-            varied = grouped.nunique(dropna=True) > 1
-            # a summary-only identity ("sum:") cannot vouch two coordinates
-            # are equal, so such a coordinate is dropped too rather than
-            # advertised and then found to differ on loading; one stating
-            # member alone has nothing to differ from
-            weak = (
-                pd.DataFrame(aux).astype(str).apply(lambda c: c.str.startswith("sum:"))
-            )
-            varied |= weak.groupby(codes).any() & (grouped.count() > 1)
-            params["dropped_coords"] = {
-                int(i): [x[1 : -len("_def_key")] for x in aux_keys if row[x]]
-                for i, row in varied.iterrows()
-                if row.any()
-            }
     if "_dtype" in sorted_df.columns:
         all_dtypes = sorted_df["_dtype"]
         dtypes = by_output["_dtype"]

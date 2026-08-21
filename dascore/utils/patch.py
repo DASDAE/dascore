@@ -8,7 +8,7 @@ import sys
 import warnings
 from collections import namedtuple
 from collections.abc import Callable, Iterable, Mapping, Sequence
-from typing import Any, Literal, Protocol, cast, overload
+from typing import Literal, Protocol, cast, overload
 
 import numpy as np
 import pandas as pd
@@ -1752,7 +1752,6 @@ def _concatenate_group(
     dim: str,
     attrs: dc.PatchAttrs,
     fingerprint: str,
-    rider_units: Mapping[str, Any] | None = None,
 ) -> dc.Patch:
     """
     Concatenate patches already known to fit, along `dim`.
@@ -1800,7 +1799,7 @@ def _concatenate_group(
             # as a unitless operand conflicts with nothing
             members = [x.get_coord(name) for x in patches]
             try:
-                units = (rider_units or {}).get(name) or _lowest_units(members)
+                units = _lowest_units(members)
                 if units is not None:
                     members = [x.convert_units(units) for x in members]
             except (DimensionalityError, UnitError) as err:
@@ -1868,81 +1867,55 @@ def concatenate_planned(
     dim: str,
     count: int | None = None,
     conflict: Literal["drop", "raise", "keep_first"] = "raise",
-    dropped: Sequence[str] = (),
-    rider_units: Mapping[str, Any] | None = None,
 ) -> dc.Patch:
     """
     Concatenate the members of one planned output, as the plan decided.
 
     A concat plan (`dascore.utils.chunk_plan.build_concat_plan`) has
     already decided kind, dimensions, and the dimensions' identities, so
-    none of that is asked again. What metadata cannot settle is settled
-    here, as a merge settles it: the attrs fold as a merge folds them
+    none of that is asked again. The attrs fold as a merge folds them
     (`combine_patch_attrs`, a missing value matching anything and known
-    conflicts policed by `conflict`), and the non-dimensional coordinates
-    the plan recorded as `dropped` (those whose identity differs, or cannot
-    be vouched for) are left out. A coordinate only some members state
-    rides along from those which have it, unless it rides `dim` — values
-    cannot be invented for the members lacking it, so it is left out, as
-    the catalog leaves it out. Any other coordinate whose loaded values
-    differ raises whatever the policy: the plan vouched for it, so the
-    catalog already advertises it, and an output must not quietly lose what
-    its row states.
+    conflicts policed by `conflict`).
+
+    Coordinates are not policed by `conflict`; they are reconciled or
+    refused. A coordinate riding `dim` is joined along it, provided every
+    member states it the same way; every other coordinate must agree, or
+    the output raises rather than dropping metadata the catalog describes.
     """
     patches = [x.drop_private_coords() for x in patches]
-    gone: dict[str, None] = {x: None for x in dropped}
-    carried: dict[str, tuple] = {}
-    names = {c for x in patches for c in x.coords.coord_map} - {dim} - set(dropped)
-    for coord in names:
-        holders = [x for x in patches if coord in x.coords.coord_map]
-        if len(holders) == len(patches):
-            continue
-        holder = holders[0]
-        if dim in holder.coords.dim_map[coord]:
-            gone[coord] = None
-        elif coord not in patches[0].coords.coord_map:
-            carried[coord] = (
-                holder.coords.dim_map[coord],
-                holder.coords.coord_map[coord],
-            )
-    if gone:
-        patches = [
-            x.update(
-                coords=x.coords.update(
-                    **{c: None for c in gone if c in x.coords.coord_map}
-                )
-            )
-            for x in patches
-        ]
-    if carried:
-        patches[0] = patches[0].update(coords=patches[0].coords.update(**carried))
     first = patches[0]
     assert all(x.dims == first.dims for x in patches), (
         "a planned output holds one set of dimensions"
     )
-    conflicting: set[str] = set()
-    for other in patches[1:]:
-        shared = set(first.coords.coord_map) & set(other.coords.coord_map)
-        for name in shared - {dim}:
-            cdims = first.coords.dim_map[name]
-            if cdims != other.coords.dim_map[name]:
-                conflicting.add(name)
-            elif dim in cdims:
-                # a coordinate riding the dimension follows it member by
-                # member; its values are joined, not compared
-                continue
-            elif first.coords.coord_map[name] != other.coords.coord_map[name]:
-                conflicting.add(name)
-    if conflicting:
-        droppable = conflict == "raise" and not (conflicting & set(first.dims))
-        advice = (
-            "Pass conflict='drop' to leave them out."
-            if droppable
-            else "Load the patches to see them."
-        )
+    names = {c for x in patches for c in x.coords.coord_map} - {dim}
+    unreconciled: set[str] = set()
+    for name in sorted(names):
+        holders = [x for x in patches if name in x.coords.coord_map]
+        cdims = holders[0].coords.dim_map[name]
+        if any(x.coords.dim_map[name] != cdims for x in holders):
+            # equal values on different dimensions are different coordinates
+            unreconciled.add(name)
+        elif dim in cdims:
+            # a rider follows the dimension member by member: its values are
+            # joined, not compared, and none can be invented for a member
+            # which does not state it
+            if len(holders) != len(patches):
+                unreconciled.add(name)
+        elif len(holders) != len(patches):
+            # one member's coordinate rides along; the others share its dims
+            if name not in first.coords.coord_map:
+                update = {name: (cdims, holders[0].coords.coord_map[name])}
+                patches[0] = first = first.update(coords=first.coords.update(**update))
+        elif any(
+            x.coords.coord_map[name] != first.coords.coord_map[name] for x in patches
+        ):
+            unreconciled.add(name)
+    if unreconciled:
         msg = (
-            f"Cannot concatenate along {dim!r}: the coordinates {sorted(conflicting)} "
-            f"hold different values. {advice}"
+            f"Cannot concatenate along {dim!r}: the coordinates "
+            f"{sorted(unreconciled)} cannot be reconciled — the patches hold "
+            "different values, attach them to different dimensions, or some "
+            "patch does not state them. Drop them before concatenating."
         )
         raise CoordMergeError(msg)
     attrs = combine_patch_attrs([x.attrs for x in patches], conflict=conflict)
@@ -1954,15 +1927,11 @@ def concatenate_planned(
             for x in patches
         ]
     task = Concatenate(
-        arguments=((dim, count),),
-        check_behavior=None,
-        conflict=conflict,
-        dropped=tuple(sorted(gone)),
+        arguments=((dim, count),), check_behavior=None, conflict=conflict
     )
-    return _concatenate_group(patches, dim, attrs, task.fingerprint, rider_units)
+    return _concatenate_group(patches, dim, attrs, task.fingerprint)
 
 
-@compose_docstring(check_desc=check_behavior_description)
 def stack_patches(
     patches, dim_vary=None, check_behavior: WARN_LEVELS = "warn"
 ) -> dc.Patch:

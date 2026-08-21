@@ -46,7 +46,6 @@ from dascore.utils.chunk_plan import (
     _SOURCE_COLUMNS,
     _concatenated_steps,
     _ensure_patch_id,
-    _normalize_numeric_units,
 )
 from dascore.utils.misc import _CanonicalRange, is_range
 from dascore.utils.patch import concatenate_planned
@@ -119,7 +118,10 @@ def _dtype_str(value) -> str:
 
 
 def _coord_record_from_row(
-    row: Mapping, name: str, dims: tuple[str, ...] | None = None
+    row: Mapping,
+    name: str,
+    dims: tuple[str, ...] | None = None,
+    name_is_held: bool = False,
 ) -> CoordRecord | None:
     """
     Build the envelope coord record for one output coordinate.
@@ -129,6 +131,9 @@ def _coord_record_from_row(
     carried ``fp:`` def key survives for non-planned dims, and the
     planned dim's range fingerprint is reconstructed exactly. ``dims``
     names the dimensions the coordinate rides (itself by default).
+    `name_is_held` says the members hold this coordinate, so a record is
+    written even when nothing about its values can be stated: the patch
+    will carry it, and a catalog which omitted it would deny it.
     """
     dims = (name,) if dims is None else dims
     lo, hi = row.get(f"{name}_min"), row.get(f"{name}_max")
@@ -143,7 +148,7 @@ def _coord_record_from_row(
         fingerprint = _def_key_fingerprint(key)
         if fingerprint is None and isinstance(key, str) and key.startswith("cat:"):
             fingerprint = key[4:]
-        if fingerprint is None:
+        if fingerprint is None and not name_is_held:
             return None
         units = row.get(f"_{name}_units")
         if units == "" or (units is not None and pd.isnull(units)):
@@ -225,19 +230,16 @@ def _coord_record_from_row(
     return _coord_record(name, summary)
 
 
-def _extrema(grouped, how: str, skip: np.ndarray) -> np.ndarray:
+def _extrema(grouped, how: str) -> np.ndarray:
     """
-    One end of each group's envelope, None for the groups to skip.
+    One end of each group's envelope, None where the values do not compare.
 
-    Groups are taken one at a time when the column holds more than one
-    kind of value (a name numeric in one output and text in another),
+    Groups are taken one at a time because the column may hold more than
+    one kind of value (a name numeric in one output and text in another),
     which pandas cannot aggregate whole.
     """
     values: list = []
-    for (_, group), drop in zip(grouped, skip, strict=True):
-        if drop:
-            values.append(None)
-            continue
+    for _, group in grouped:
         stated = group.dropna()
         try:
             values.append(getattr(stated, how)() if len(stated) else None)
@@ -254,7 +256,6 @@ def _aux_coord_info(
     coord_dims_map: Mapping[str, str],
     trimmed_dims: frozenset[str] = frozenset(),
     concat: bool = False,
-    removed: Mapping[int, set[str]] | None = None,
 ) -> dict[int, dict[str, dict]]:
     """
     Aggregate per-output envelope info for auxiliary coordinates.
@@ -272,12 +273,7 @@ def _aux_coord_info(
     a rider whose members share one step and meet end to end keeps that
     step (its values still differ member by member, so not its identity).
 
-    `removed` names, per output, coordinates the output does not carry;
-    they are not described, so their members are not even aggregated —
-    an output dropped a coordinate exactly when its values could not be
-    reconciled, and reconciling them is what would raise.
     """
-    removed = removed or {}
     out: dict[int, dict[str, dict]] = {}
     if not len(members) or not coord_dims_map:
         return out
@@ -304,9 +300,8 @@ def _aux_coord_info(
         trimmed = bool(set(dims) & trimmed_dims)
         key_col, step_col = f"_{name}_def_key", f"{name}_step"
         unit_col = f"_{name}_units"
-        gone = np.array([name in removed.get(int(x), ()) for x in output_ids])
-        lows = _extrema(grouped[cmin], "min", gone)
-        highs = _extrema(grouped[cmax], "max", gone)
+        lows = _extrema(grouped[cmin], "min")
+        highs = _extrema(grouped[cmax], "max")
         # the *_first arrays are only read where their gate is True, and
         # a gate can only be True when its column exists
         no_gate = np.zeros(len(output_ids), dtype=bool)
@@ -336,9 +331,26 @@ def _aux_coord_info(
         if unit_col in joined.columns:
             unit_ok = grouped[unit_col].nunique().to_numpy() == 1
             unit_first = grouped[unit_col].first().to_numpy()
-        # a coordinate no member holds contributes nothing; one every
-        # member holds without values is described by its identity alone
-        absent = all_null & ~keep
+            # members spelling one coordinate two ways (seconds beside
+            # milliseconds) have no envelope in common: the magnitudes mean
+            # different things, and only the loaded patch says which
+            # spelling wins. No units at all is one spelling, not two.
+            undecided = grouped[unit_col].nunique().to_numpy() > 1
+            if undecided.any():
+                lows = np.array(
+                    [None if u else v for v, u in zip(lows, undecided)], dtype=object
+                )
+                highs = np.array(
+                    [None if u else v for v, u in zip(highs, undecided)], dtype=object
+                )
+                step_ok = step_ok & ~undecided
+        # a coordinate no member holds contributes nothing; one the members
+        # do hold is always named, even when nothing about its values can
+        # be stated — the patch will have it, so the catalog says so
+        held = grouped[cmin].count().to_numpy() > 0
+        if key_col in joined.columns:
+            held = held | (grouped[key_col].count().to_numpy() > 0)
+        absent = ~held
         for index in np.flatnonzero(~absent):
             step = step_first[index] if step_first is not None else None
             key = key_first[index] if key_first is not None else None
@@ -359,18 +371,13 @@ def _output_records(
     outputs: pd.DataFrame,
     token: str,
     aux_info: Mapping[int, Mapping[str, Mapping]] | None = None,
-    removed_coords: Mapping[int, Iterable[str]] | None = None,
 ) -> list[SourceRecord]:
     """
     Convert plan output rows into ingestible source records.
 
-    `removed_coords` names, per output, coordinates its members held which
-    the output does not: their envelope columns describe those coordinates,
-    not attrs, and are left out with them.
     """
     records = []
     aux_info = aux_info or {}
-    removed_coords = removed_coords or {}
     # Envelope columns belong to coordinates actually present in a row;
     # an attr that merely looks envelope-shaped (channel_step with no
     # channel coord) is ordinary metadata and must be preserved. The
@@ -398,14 +405,15 @@ def _output_records(
         for name, info in aux.items():
             if name in dim_names:
                 continue
-            record = _coord_record_from_row(info, name, dims=info["dims"])
+            record = _coord_record_from_row(
+                info, name, dims=info["dims"], name_is_held=True
+            )
             if record is not None:
                 coords.append(record)
-        removed = tuple(removed_coords.get(output_id, ()))
-        cache_key = (dims, tuple(aux), removed)
+        cache_key = (dims, tuple(aux))
         envelope_keys = envelope_cache.get(cache_key)
         if envelope_keys is None:
-            coord_names = set(dim_names) | set(aux) | set(removed) | base_names
+            coord_names = set(dim_names) | set(aux) | base_names
             envelope_keys = {
                 f"{name}_{sfx}"
                 for name in coord_names
@@ -603,15 +611,11 @@ class PlanResolver(PatchResolver):
             loaded = [
                 self._load_member(kwargs) for kwargs in members.to_dict("records")
             ]
-            dropped = self.merge_kwargs.get("dropped_coords", {})
-            rider_units = self.merge_kwargs.get("rider_units", {})
             patch = concatenate_planned(
                 loaded,
                 self.dim,
                 count=self.merge_kwargs.get("count"),
                 conflict=self.merge_kwargs.get("conflict", "raise"),
-                dropped=dropped.get(output_id, ()),
-                rider_units=rider_units.get(output_id, {}),
             )
         else:
             joined = members.assign(current_index=output_id)
@@ -738,52 +742,6 @@ def _residual_ranges(residuals) -> dict:
     return out
 
 
-def _rider_spellings(
-    sources: pd.DataFrame, joined: pd.DataFrame, riders: set[str]
-) -> tuple[pd.DataFrame, dict[int, dict[str, str]], dict[int, set[str]]]:
-    """
-    Give each rider one unit spelling per output, as assembly joins it.
-
-    Returns the source rows with each output's rider envelopes re-expressed
-    in that spelling, the spelling chosen per output and rider, and the
-    riders whose members' spellings do not convert to one another.
-    """
-    chosen: dict[int, dict[str, str]] = {}
-    incompatible: dict[int, set[str]] = {}
-    pieces = []
-    for output_id, rows in joined.groupby("output_id", sort=False):
-        for coord in riders:
-            unit_col = f"_{coord}_units"
-            rows = _normalize_numeric_units(rows, coord)
-            units = rows.get(unit_col, pd.Series(dtype=object)).dropna()
-            units = units[units != ""]
-            quantities = [get_quantity(u) for u in set(units)]
-            kinds = {q.dimensionality for q in quantities if q is not None}
-            if len(kinds) > 1:
-                incompatible.setdefault(int(str(output_id)), set()).add(coord)
-            elif len(units):
-                key = int(str(output_id))
-                chosen.setdefault(key, {})[coord] = units.iloc[0]
-        pieces.append(rows)
-    if not pieces:
-        return sources, chosen, incompatible
-    cols = [
-        c
-        for coord in riders
-        for c in (f"{coord}_min", f"{coord}_max", f"{coord}_step", f"_{coord}_units")
-        if c in sources.columns
-    ]
-    normalized = pd.concat(pieces).drop_duplicates("_patch_id").set_index("_patch_id")
-    sources = sources.set_index("_patch_id")
-    for col in cols:
-        # through object, so a converted value cannot be refused by the
-        # column's old dtype; the column takes its dtype back afterwards
-        updated = sources[col].astype(object)
-        updated.loc[normalized.index] = normalized[col]
-        sources[col] = updated.infer_objects()
-    return sources.reset_index(), chosen, incompatible
-
-
 def derived_catalog(
     *,
     source_rows: pd.DataFrame,
@@ -853,44 +811,6 @@ def derived_catalog(
         )
         loader.absorb(parent.resolver, paths=member_paths)
     coord_dims_map = {} if parent is None else parent.backend.coord_dims_map()
-    # a coordinate riding the concatenated dimension which not every member
-    # states cannot be assembled: neither the patch nor the catalog carries
-    # it, and a view missing it must not re-plan from members which have it
-    partial_drops: dict[int, set[str]] = {}
-    dropped: Mapping[int, list[str]] = plan.params.get("dropped_coords", {})
-    if mode == "concat":
-        riders = {
-            c
-            for c, d in coord_dims_map.items()
-            if c != name and name in str(d).split(",")
-        }
-        joined = trims[["output_id", "_patch_id"]].merge(sources, on="_patch_id")
-        grouped = joined.groupby("output_id")
-        for coord in riders:
-            # presence by identity: an all-null envelope is still a coordinate
-            key_col = f"_{coord}_def_key"
-            col = key_col if key_col in joined.columns else f"{coord}_min"
-            stated = joined.get(col, pd.Series(np.nan, index=joined.index))
-            partial = stated.groupby(joined["output_id"]).count() < grouped.size()
-            for output_id in partial[partial].index:
-                partial_drops.setdefault(int(output_id), set()).add(coord)
-        # one spelling per rider per output, which assembly joins in too;
-        # members whose spellings cannot convert (seconds beside metres)
-        # leave the rider unassemblable, so it is dropped after all
-        sources, rider_units, incompatible = _rider_spellings(sources, joined, riders)
-        # otherwise a rider's identity differs member by member by design:
-        # it is joined along the dimension, never dropped for differing
-        dropped = {
-            k: [c for c in v if c not in riders or c in incompatible.get(k, set())]
-            for k, v in dropped.items()
-        }
-        dropped = {k: v for k, v in dropped.items() if v}
-        merge_kwargs = {
-            **merge_kwargs,
-            "dropped_coords": dropped,
-            "rider_units": rider_units,
-        }
-    lossy = lossy or bool(partial_drops)
     resolver = PlanResolver(
         token=token,
         dim=name,
@@ -913,20 +833,10 @@ def derived_catalog(
     stale_keys = stale_def_keys(parent_residuals, coord_dims_map, outputs.columns)
     if stale_keys:
         outputs = outputs.drop(columns=stale_keys)
-    # a coordinate the plan drops from an output is not advertised for it
-    removed: dict[int, set[str]] = {k: set(v) for k, v in partial_drops.items()}
-    for output_id, names in dropped.items():
-        removed.setdefault(output_id, set()).update(names)
     aux_info = _aux_coord_info(
-        sources,
-        trims,
-        name,
-        coord_dims_map,
-        trimmed_dims,
-        concat=mode == "concat",
-        removed=removed,
+        sources, trims, name, coord_dims_map, trimmed_dims, concat=mode == "concat"
     )
-    records = _output_records(outputs, token, aux_info=aux_info, removed_coords=removed)
+    records = _output_records(outputs, token, aux_info=aux_info)
     backend.write_sources(records)
     return PatchCatalog(backend=backend, resolver=resolver)
 
