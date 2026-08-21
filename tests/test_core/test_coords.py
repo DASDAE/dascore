@@ -156,11 +156,16 @@ def coord(request) -> BaseCoord:
     return request.getfixturevalue(request.param)
 
 
-@pytest.fixture(scope="session", params=COORDS)
+@pytest.fixture(scope="session")
 def long_coord(coord) -> BaseCoord:
-    """Meta-fixture for returning all coords with len > 7."""
-    if len(coord) < 7:
-        pytest.skip("Only coords with len 3 or more used.")
+    """The coord meta-fixture, for tests which need one longer than 7.
+
+    Every coord in COORDS is at least 100 long, so this is `coord` under
+    the name the tests which need the length use. Parametrizing it over
+    COORDS as well ran each of those tests once per pair of coords while
+    still only ever seeing twelve.
+    """
+    assert len(coord) > 7
     return coord
 
 

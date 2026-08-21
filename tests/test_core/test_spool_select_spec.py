@@ -33,7 +33,12 @@ def spool(request, tmp_path_factory):
     parity net proving one selector engine serves identity and
     restructured spools alike.
     """
-    base = dc.get_example_spool("random_das")
+    # A tenth of the default patches' pixels, at a step which keeps each of
+    # them 8 seconds long: the specs below select windows in seconds, and a
+    # window narrower than one patch is what several of them are about.
+    base = dc.get_example_spool(
+        "random_das", shape=(10, 200), time_step=dc.to_timedelta64(0.04)
+    )
     if request.param.startswith("memory"):
         out = dc.spool(list(base))
     else:

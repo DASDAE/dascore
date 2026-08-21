@@ -1404,10 +1404,14 @@ class TestSizeChunk:
         out = spool.chunk(time=target)
         assert max(x.data.nbytes for x in out) <= target.to("byte").magnitude
 
-    def test_slab_larger_than_target_warns(self, random_spool):
+    def test_slab_larger_than_target_warns(self):
         """One sample is the floor; the request cannot be honored below it."""
+        # 200 channels of float64 is a 1,600 byte slab, so one sample already
+        # exceeds the request. The default patch's 400 byte slab would not.
+        start = np.datetime64("2020-01-01T00:00:00")
+        spool = dc.spool([self._make("float64", start, distance=200, samples=10)])
         with pytest.warns(UserWarning, match="larger than the requested size"):
-            out = random_spool.chunk(time=1 * dc.units.kB)
+            out = spool.chunk(time=1 * dc.units.kB)
         patch = out[0]
         assert patch.shape[patch.get_axis("time")] == 1
 

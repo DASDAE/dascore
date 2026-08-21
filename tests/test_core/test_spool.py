@@ -1110,11 +1110,16 @@ class TestSpoolCoverageEdges:
     def many_contiguous(self):
         """Twelve contiguous patches (for >10-row merge handling)."""
         t0 = np.datetime64("2020-01-01", "ns")
-        patch = dc.get_example_patch(time_min=t0)
+        # Twelve is the point (the de-dup branch needs more than ten rows);
+        # how much data is in each of them is not.
+        shape = (10, 50)
+        patch = dc.get_example_patch(time_min=t0, shape=shape)
         step = patch.get_coord("time").step
         out = [patch]
         for _ in range(11):
-            nxt = dc.get_example_patch(time_min=out[-1].get_coord("time").max() + step)
+            nxt = dc.get_example_patch(
+                time_min=out[-1].get_coord("time").max() + step, shape=shape
+            )
             out.append(nxt)
         return out
 

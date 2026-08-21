@@ -361,13 +361,14 @@ class TestDirectoryIndex:
         assert isinstance(patch, dc.Patch)
         assert not default_index_path.exists()
 
-    def test_nested_directories(self, diverse_spool, tmp_path_factory):
+    def test_nested_directories(self, random_spool, tmp_path_factory):
         """Ensure files in nested directories work up to 3 levels."""
-        # split the spool into 3
-        sp_len = len(diverse_spool)
+        # One patch per level: what is under test is the walk, and the
+        # diverse spool's 20-odd patches only made the writing slower.
+        sp_len = len(random_spool)
         num = 3
         spools = [
-            diverse_spool[int((x / num) * sp_len) : int(((x + 1) / num) * sp_len)]
+            random_spool[int((x / num) * sp_len) : int(((x + 1) / num) * sp_len)]
             for x in range(num)
         ]
         # write each group to a different sub path

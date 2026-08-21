@@ -237,15 +237,19 @@ class TestMedianFilter:
         with pytest.raises(ParameterError, match=msg):
             random_patch.median_filter()
 
-    def test_median_filter_time(self, random_patch):
+    def test_median_filter_time(self):
         """Test median filter in time dimension."""
-        out = random_patch.median_filter(time=0.5)
+        # A median filter costs the window size times the sample count, so a
+        # small patch says the same thing much sooner.
+        patch = dc.get_example_patch("random_das", shape=(30, 200))
+        out = patch.median_filter(time=0.5)
         assert isinstance(out, dc.Patch)
         assert not np.any(pd.isnull(out.data))
 
-    def test_median_filter_time_distance(self, random_patch):
+    def test_median_filter_time_distance(self):
         """Apply default values."""
-        out = random_patch.median_filter(time=0.05, distance=2)
+        patch = dc.get_example_patch("random_das", shape=(30, 200))
+        out = patch.median_filter(time=0.05, distance=2)
         assert isinstance(out, dc.Patch)
         assert not np.any(pd.isnull(out.data))
 
@@ -329,9 +333,12 @@ class TestSavgolFilter:
         with pytest.raises(ParameterError, match=msg):
             random_patch.savgol_filter(polyorder=2)
 
-    def test_savgol_filter_time(self, random_patch):
+    def test_savgol_filter_time(self):
         """Test savgol filter in time dimension."""
-        out = random_patch.savgol_filter(polyorder=2, time=5)
+        # time=0.5 rather than 5 with the smaller patch: the window is a
+        # count of samples, and 5 seconds of it no longer fits.
+        patch = dc.get_example_patch("random_das", shape=(30, 200))
+        out = patch.savgol_filter(polyorder=2, time=0.5)
         assert isinstance(out, dc.Patch)
         assert not np.any(pd.isnull(out.data))
 

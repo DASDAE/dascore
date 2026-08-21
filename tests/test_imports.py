@@ -4,8 +4,10 @@ Tests for dascore's import behavior.
 
 from __future__ import annotations
 
+import importlib.util
 import subprocess
 import sys
+from textwrap import dedent
 
 import pytest
 
@@ -28,46 +30,47 @@ class TestLazyImports:
     """Ensure expensive optional machinery is not imported eagerly."""
 
     @pytest.mark.concurrency
-    def test_matplotlib_not_imported(self):
-        """Importing dascore should not import matplotlib (it is slow)."""
-        code = "import dascore, sys; assert 'matplotlib' not in sys.modules"
-        _run_snippet(code)
+    def test_nothing_expensive_is_imported_eagerly(self):
+        """Walk one clean interpreter from a bare import through to viz.
 
-    @pytest.mark.concurrency
-    def test_scipy_signal_not_imported(self):
-        """Importing dascore should not import scipy.signal (it is slow)."""
-        code = "import dascore, sys; assert 'scipy.signal' not in sys.modules"
-        _run_snippet(code)
+        Every check needs a process which has not yet imported what the
+        check before it pulls in, so they are ordered rather than split
+        across processes: each subprocess costs more than a second of
+        interpreter startup, and this used to be eight of them.
+        """
+        has_numba = importlib.util.find_spec("numba") is not None
+        code = dedent(f"""
+            import sys
+            import dascore
 
-    @pytest.mark.concurrency
-    def test_numba_not_imported(self):
-        """Importing dascore should not import numba (it is slow)."""
-        code = "import dascore, sys; assert 'numba' not in sys.modules"
-        _run_snippet(code)
+            for name in ("matplotlib", "scipy.signal", "numba"):
+                assert name not in sys.modules, name + " imported by dascore"
 
-    @pytest.mark.concurrency
-    def test_numba_imported_with_jit_kernels(self):
-        """The jit kernel modules should pull numba in when they are imported."""
-        pytest.importorskip("numba")
-        code = (
-            "import sys, dascore; "
-            "assert 'numba' not in sys.modules; "
-            "import dascore.transform._kurtosis_kernels; "
-            "assert 'numba' in sys.modules"
-        )
-        _run_snippet(code)
+            # The kernels import without numba; the assertion is what needs it.
+            if {has_numba}:
+                import dascore.transform._kurtosis_kernels
+                assert "numba" in sys.modules, "jit kernels left numba unimported"
 
-    @pytest.mark.concurrency
-    def test_lazy_import_doesnt_import_scipy_signal_until_use(self):
-        """The lazy proxy should resolve scipy.signal only on first use."""
-        code = (
-            "import sys; "
-            "from dascore.utils.imports import lazy_import; "
-            "hann = lazy_import('scipy.signal.windows', 'hann'); "
-            "assert 'scipy.signal' not in sys.modules; "
-            "assert hann.__name__ == 'hann'; "
-            "assert 'scipy.signal' in sys.modules"
-        )
+            from dascore.utils.imports import lazy_import
+
+            hann = lazy_import("scipy.signal.windows", "hann")
+            assert "scipy.signal" not in sys.modules, "lazy import resolved early"
+            assert hann.__name__ == "hann", "lazy proxy resolved to the wrong thing"
+            assert "scipy.signal" in sys.modules, "use did not resolve the proxy"
+
+            try:
+                dascore.not_a_real_attribute
+            except AttributeError:
+                pass
+            else:
+                raise AssertionError("AttributeError not raised")
+
+            from dascore import viz
+
+            assert callable(viz.waterfall), "from-import of viz did not work"
+            assert callable(dascore.viz.waterfall), "viz attribute hook did not work"
+            assert "matplotlib" in sys.modules, "viz left matplotlib unimported"
+        """)
         _run_snippet(code)
 
     def test_lazy_import_proxy_forwards_calls_and_attrs(self):
@@ -76,39 +79,9 @@ class TestLazyImports:
         assert sqrt(4) == 2
         assert sqrt.__name__ == "sqrt"
 
-    @pytest.mark.concurrency
-    def test_viz_module_lazy_loads(self):
-        """Accessing dascore.viz should still work via lazy (PEP 562) import."""
-        code = (
-            "import dascore; "
-            "assert callable(dascore.viz.waterfall); "
-            "import sys; assert 'matplotlib' in sys.modules"
-        )
-        _run_snippet(code)
-
     def test_viz_module_lazy_loads_in_process(self):
         """Accessing dascore.viz should use the package attribute hook."""
         assert callable(dascore.__getattr__("viz").waterfall)
-
-    @pytest.mark.concurrency
-    def test_viz_from_import_still_works(self):
-        """The package attribute hook should preserve from-import behavior."""
-        code = "from dascore import viz; assert callable(viz.waterfall)"
-        _run_snippet(code)
-
-    @pytest.mark.concurrency
-    def test_missing_attribute_raises(self):
-        """Unknown attributes on the package should still raise AttributeError."""
-        code = (
-            "import dascore\n"
-            "try:\n"
-            "    dascore.not_a_real_attribute\n"
-            "except AttributeError:\n"
-            "    pass\n"
-            "else:\n"
-            "    raise AssertionError('AttributeError not raised')\n"
-        )
-        _run_snippet(code)
 
     def test_missing_attribute_raises_in_process(self):
         """Unknown package attributes should raise in the parent process too."""

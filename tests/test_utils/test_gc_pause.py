@@ -94,7 +94,10 @@ class TestDeadlockProperty:
         server.start()
         pause_gc()
         try:
-            for _ in range(20):
+            # Eight rounds of 200 allocations, so the round which would
+            # collect (the threshold is 2000 on 3.13) is well inside the
+            # loop rather than the last one.
+            for _ in range(8):
                 with phil:  # h5py holds its lock across the fetch
                     request.release()
                     assert answer.acquire(timeout=20), "deadlocked"

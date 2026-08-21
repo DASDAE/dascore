@@ -107,8 +107,10 @@ class TestTauP:
         """Ensures correct slowness and tau values are computed"""
         pytest.importorskip("numba")
         test_vels = np.linspace(1000, 3000, 101)
-        nch = 1000
-        nt = 2000
+        # Small enough to be quick, large enough that the winning slowness
+        # still stands clear of its neighbours in every case below.
+        nch = 200
+        nt = 600
 
         # positive slope
         vel = 1500
