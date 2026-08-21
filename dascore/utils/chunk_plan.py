@@ -1779,8 +1779,18 @@ def build_concat_plan(
     if has_envelope:
         # a member with no values along the dimension (an aggregated
         # coordinate) has a null envelope, which the output's skips
-        data[min_name] = by_output[min_name].min().to_numpy()
-        data[max_name] = by_output[max_name].max().to_numpy()
+        # An output whose members state values of more than one kind has no
+        # envelope the two could share. Labels are the awkward pair: they
+        # have no missing value, so a member which states none cannot join
+        # them either, and such an output claims nothing.
+        families = sorted_df[min_name].map(_value_family)
+        by_family = families.replace("", np.nan).groupby(codes, sort=True)
+        mixed = (by_family.nunique(dropna=True) > 1).to_numpy()
+        text = (by_family.first() == "text").fillna(False).to_numpy()
+        blank = (families == "").groupby(codes, sort=True).any().to_numpy()
+        undecided = pd.Series(mixed | (text & blank))
+        data[min_name] = by_output[min_name].min().where(~undecided).to_numpy()
+        data[max_name] = by_output[max_name].max().where(~undecided).to_numpy()
         if unit_col in sorted_df.columns:
             # a member with no values along the dimension states no unit;
             # the output speaks the first unit any member states, which is

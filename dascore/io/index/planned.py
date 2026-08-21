@@ -133,18 +133,28 @@ def _coord_record_from_row(
     dims = (name,) if dims is None else dims
     lo, hi = row.get(f"{name}_min"), row.get(f"{name}_max")
     if lo is None or (pd.isnull(lo) and pd.isnull(hi)):
-        # a coordinate without values (a dimension a plan created) has
-        # its identity and nothing else, as ingesting it would record
-        fingerprint = _def_key_fingerprint(row.get(f"_{name}_def_key"))
+        # a coordinate without values (a dimension a plan created, or one
+        # its members carry blank) has its identity and nothing else, as
+        # ingesting it would record. A "cat:" digest — what such a
+        # dimension is worth after a concatenation — identifies it here
+        # the same way, matching another output only when the members it
+        # joined were the same.
+        key = row.get(f"_{name}_def_key")
+        fingerprint = _def_key_fingerprint(key)
+        if fingerprint is None and isinstance(key, str) and key.startswith("cat:"):
+            fingerprint = key[4:]
         if fingerprint is None:
             return None
+        units = row.get(f"_{name}_units")
+        if units == "" or (units is not None and pd.isnull(units)):
+            units = None
         return CoordRecord(
             coord_name=name,
             value_kind="num",
             dtype="float64",
             coord_dims=",".join(dims),
             length=None,
-            units=None,
+            units=units,
             coord_hash=fingerprint,
         )
     step = row.get(f"{name}_step")

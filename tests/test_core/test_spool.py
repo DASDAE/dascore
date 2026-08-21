@@ -1751,6 +1751,43 @@ class TestConcatenatePartitions:
         contents = out.get_contents()
         assert contents["_clock_def_key"].notna().all()
 
+    def test_value_less_dimension_reaches_the_catalog(self, pair):
+        """A blank dimension's joined identity survives into the catalog."""
+        first, other = pair
+        blank_a, blank_b = first.mean("time"), other.mean("time")
+        out = dc.spool([blank_a, blank_b]).concatenate(time=None)
+        key = out.get_contents()["_time_def_key"].iloc[0]
+        assert not pd.isnull(key)
+        # an output of three members is a different coordinate from one of two
+        third = dc.spool([blank_a, blank_b, first.new().mean("time")])
+        other_key = third.concatenate(time=None).get_contents()["_time_def_key"].iloc[0]
+        assert other_key != key
+
+    def test_all_null_rider_keeps_its_units(self, pair):
+        """The catalog spells a value-less rider the way the patch does."""
+        first, other = pair
+        nt = first.shape[first.get_axis("time")]
+        blank = np.full(nt, np.nan)
+        a = first.update_coords(clock=("time", blank)).convert_units(clock="s")
+        b = other.update_coords(clock=("time", blank)).convert_units(clock="s")
+        out = dc.spool([a, b]).concatenate(time=None)
+        row_units = out.get_contents()["clock_units"].iloc[0]
+        assert dc.get_quantity(row_units) == dc.get_quantity("s")
+        assert out[0].get_coord("clock").units == dc.get_quantity("s")
+
+    def test_a_blank_member_cannot_join_labels(self, pair):
+        """No missing label exists, so nothing is invented for a blank member."""
+        first, _ = pair
+        renamed = first.rename_coords(distance="range")
+        n = renamed.shape[renamed.get_axis("range")]
+        labels = renamed.update_coords(range=np.array([f"s{i:03d}" for i in range(n)]))
+        blank = renamed.update_coords(range=get_coord(shape=(n,)))
+        out = dc.spool([blank, labels]).concatenate(range=None)
+        # the catalog claims no envelope for an output of two kinds
+        assert pd.isnull(out.get_contents()["range_min"].iloc[0])
+        with pytest.raises(CoordMergeError, match="no missing value"):
+            out[0]
+
     def test_constant_coordinate_keeps_input_order(self, pair):
         """A step of zero says nothing about which way the values run."""
         first, _ = pair

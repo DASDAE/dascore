@@ -1781,7 +1781,7 @@ def _concatenate_group(
             members = [
                 x if x.units is None else x.convert_units(units) for x in members
             ]
-        values = np.concatenate(_joinable(members), axis=0)
+        values = np.concatenate(_joinable(members, dim), axis=0)
         coords = first.coords.update(
             **{dim: dc.core.coords.get_coord(data=values, units=units)}
         )
@@ -1822,13 +1822,15 @@ def _concatenate_group(
     return dc.Patch(data=data, attrs=attrs, coords=coords, dims=dims)
 
 
-def _joinable(coords) -> list[np.ndarray]:
+def _joinable(coords, dim: str) -> list[np.ndarray]:
     """
     The coordinates' values, the value-less ones taking the others' kind.
 
     A member with no values along the dimension holds placeholders whose
     dtype says nothing (floating NaN); numpy cannot join those with, say,
-    datetimes, so they are recast as the stated members' own nulls.
+    datetimes, so they are recast as the stated members' own nulls. Where
+    the stated kind has no null to write — whole numbers, booleans, text —
+    the join is refused rather than inventing zeros or empty labels.
     """
     arrays = [x.values for x in coords]
     blank = [x.dtype.kind == "f" and bool(np.all(pd.isnull(x))) for x in arrays]
@@ -1837,7 +1839,14 @@ def _joinable(coords) -> list[np.ndarray]:
     target = np.result_type(*[x.dtype for x, b in zip(arrays, blank) if not b])
     if target.kind == "f":
         return arrays
-    null = np.array("NaT").astype(target) if target.kind in "mM" else target.type()
+    if target.kind not in "mM":
+        msg = (
+            f"Cannot concatenate along {dim!r}: a patch states no values "
+            f"there, and a {target} coordinate has no missing value to "
+            "stand in for them."
+        )
+        raise CoordMergeError(msg)
+    null = np.array("NaT").astype(target)
     return [
         np.full(x.shape, null, dtype=target) if b else x for x, b in zip(arrays, blank)
     ]
