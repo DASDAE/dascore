@@ -13,7 +13,7 @@ from matplotlib.colors import LogNorm
 from dascore.exceptions import ParameterError
 from dascore.utils.chunk_plan import _REPORT_COLUMNS
 from dascore.utils.plotting import _format_time_axis, _get_cmap
-from dascore.utils.time import to_datetime64
+from dascore.utils.time import to_datetime64, to_float
 
 from ._lanes import plot_lanes
 
@@ -34,15 +34,10 @@ _CALENDAR_LABELS = {
     "count": "Patches overlapping the day",
 }
 _CALENDAR_METHODS = tuple(_CALENDAR_CMAPS)
-# The durations a missing-time colorbar is worth reading in.
-_GAP_TICKS = (
-    (1.0, "1 s"),
-    (60.0, "1 min"),
-    (600.0, "10 min"),
-    (3_600.0, "1 hour"),
-    (6 * 3_600.0, "6 hours"),
-    (_SECONDS_IN_DAY, "24 hours"),
-)
+# The durations a missing-time colorbar is worth reading in. They are
+# named by the same formatter the gap labels use, so a colorbar and a
+# bar of the coverage plot say a length the same way.
+_GAP_TICKS = (1.0, 60.0, 600.0, 3_600.0, 6 * 3_600.0, _SECONDS_IN_DAY)
 
 # A dimension states itself in these. They describe the extent a lane
 # is drawn over, so naming the lane with them would repeat the axis.
@@ -61,9 +56,9 @@ _UNITS = (
 
 def _human_duration(value) -> str:
     """Say how long something lasted, in the largest unit which fits."""
-    seconds = (
-        float(pd.Timedelta(value).total_seconds()) if _is_time(value) else float(value)
-    )
+    # to_float reads a duration in seconds, whichever time type states
+    # it, and passes a plain number through as itself.
+    seconds = to_float(value)
     if not np.isfinite(seconds) or seconds == 0:
         return ""
     size = abs(seconds)
@@ -71,11 +66,6 @@ def _human_duration(value) -> str:
         if size >= scale:
             return f"{size / scale:.1f} {name}".replace(".0 ", " ")
     return f"{size:.3g} s"
-
-
-def _is_time(value) -> bool:
-    """Whether a value states a time rather than a number."""
-    return isinstance(value, pd.Timedelta | np.timedelta64)
 
 
 def _pair(name, window) -> tuple | None:
@@ -139,6 +129,16 @@ def _lane_names(report: pd.DataFrame, dim: str) -> list[str]:
     return names
 
 
+def _new_ax(ax, figsize, height: float):
+    """Build the figure a plot of this height needs, unless given one."""
+    if ax is not None:
+        return ax
+    _, ax = plt.subplots(
+        1, figsize=figsize or (10.0, min(height, 14.0)), layout="constrained"
+    )
+    return ax
+
+
 def _percent(value: float) -> str:
     """Say a fraction as a percentage, without rounding a hole away."""
     for places in range(4):
@@ -186,21 +186,35 @@ def _tile(report: pd.DataFrame, gaps: pd.DataFrame, dim: str) -> pd.DataFrame:
     return pd.DataFrame(rows, columns=["lane", "start", "end", "kind", "label"])
 
 
-def _window_bounds(window, frame, dated: bool):
-    """Resolve a window against the data, in the units the data states."""
-    if window is None:
-        return None
-    low, high = window
-    edges = []
-    for value, fallback in ((low, frame["start"].min()), (high, frame["end"].max())):
-        if value is None or value is ...:
-            edges.append(fallback)
-            continue
-        edges.append(to_datetime64(value) if dated else float(value))
-    if edges[1] <= edges[0]:
+def _bounds(window, low, high, dated: bool = True) -> tuple:
+    """
+    Resolve a window's two ends, taking either of them from the data.
+
+    Returns the pair in the units the data states, so a caller can
+    compare it against the frame it came from.
+    """
+    asked = (None, None) if window is None else window
+    edges = tuple(
+        fallback
+        if value is None or value is ...
+        else (to_datetime64(value) if dated else float(value))
+        for value, fallback in zip(asked, (low, high), strict=True)
+    )
+    if edges[1] < edges[0]:
         msg = f"The window {window!r} must be increasing."
         raise ParameterError(msg)
-    return tuple(edges)
+    return edges
+
+
+def _x_limits(window, frame: pd.DataFrame, dated: bool):
+    """Resolve the window a lane plot draws between, or None for all of it."""
+    if window is None:
+        return None
+    low, high = _bounds(window, frame["start"].min(), frame["end"].max(), dated)
+    if high <= low:
+        msg = f"The window {window!r} must be increasing."
+        raise ParameterError(msg)
+    return (low, high)
 
 
 def coverage(
@@ -272,9 +286,7 @@ def coverage(
     gaps = spool.get_gaps(dim, tolerance=tolerance, group=group)
     frame = _tile(report, gaps, dim)
     lanes = list(dict.fromkeys(frame["lane"]))
-    if ax is None:
-        height = min(1.2 + 0.45 * len(lanes), 14.0)
-        _, ax = plt.subplots(1, figsize=figsize or (10.0, height), layout="constrained")
+    ax = _new_ax(ax, figsize, 1.2 + 0.45 * len(lanes))
     dated = pd.api.types.is_datetime64_any_dtype(frame["start"])
     plot_lanes(
         frame,
@@ -284,7 +296,7 @@ def coverage(
         label="label",
         lanes=lanes,
         color=color or COVERAGE_COLORS,
-        x_limits=_window_bounds(window, frame, dated),
+        x_limits=_x_limits(window, frame, dated),
         x_label="" if dated else dim,
     )
     if dated:
@@ -335,13 +347,16 @@ def _day_seconds(intervals, days: np.ndarray) -> np.ndarray:
     out = np.zeros(len(days))
     one_day = np.timedelta64(1, "D")
     second = np.timedelta64(1, "s")
+    zero = np.timedelta64(0, "ns")
     for start, end in intervals:
-        first = int(np.searchsorted(days, start, "right")) - 1
-        last = int(np.searchsorted(days, end, "right")) - 1
-        for index in range(max(first, 0), min(last, len(days) - 1) + 1):
-            low = max(start, days[index])
-            high = min(end, days[index] + one_day)
-            out[index] += max((high - low) / second, 0.0)
+        # Only the days an interval touches are measured against it; a
+        # long archive has far more days than any one interval spans.
+        first = max(int(np.searchsorted(days, start, "right")) - 1, 0)
+        last = min(int(np.searchsorted(days, end, "right")) - 1, len(days) - 1)
+        touched = days[first : last + 1]
+        low = np.maximum(start, touched)
+        high = np.minimum(end, touched + one_day)
+        out[first : last + 1] += np.maximum(high - low, zero) / second
     return out
 
 
@@ -358,16 +373,11 @@ def _day_counts(contents: pd.DataFrame, days: np.ndarray, dim: str) -> np.ndarra
 
 def _calendar_days(window, runs: pd.DataFrame, ends: np.ndarray) -> pd.DatetimeIndex:
     """Return every day the calendar shows, first and last included."""
-    low, high = (None, None) if window is None else window
-    first = to_datetime64(low) if low not in (None, ...) else runs["start"].min()
     # A run covers up to its extended end without reaching it, so a run
     # stopping at midnight ends on the day before, and one reaching half
     # an hour past it earns the day it reaches into.
     reach = ends.max() - np.timedelta64(1, "ns")
-    last = to_datetime64(high) if high not in (None, ...) else reach
-    if last < first:
-        msg = f"The window {window!r} must be increasing."
-        raise ParameterError(msg)
+    first, last = _bounds(window, runs["start"].min(), reach)
     # The last day is a day the spool has data in, so the calendar shows
     # it. An exclusive end would leave a one-day spool with no cells.
     return pd.date_range(
@@ -511,9 +521,7 @@ def calendar(
             else _SECONDS_IN_DAY - covered
         )
     matrix, labels = _calendar_cells(days, values)
-    if ax is None:
-        height = min(1.5 + 0.5 * len(labels), 14.0)
-        _, ax = plt.subplots(1, figsize=figsize or (10.0, height), layout="constrained")
+    ax = _new_ax(ax, figsize, 1.5 + 0.5 * len(labels))
     ax.set_facecolor(_UNSTATED_COLOR)
     cmap = _get_cmap(_CALENDAR_CMAPS[method]).copy()
     cmap.set_bad(_UNSTATED_COLOR)
@@ -537,8 +545,8 @@ def calendar(
         # Half a patch overlapped no day.
         bar.ax.yaxis.set_major_locator(ticker.MaxNLocator(integer=True))
     if method == "gap":
-        bar.set_ticks([x for x, _ in _GAP_TICKS])
-        bar.set_ticklabels([x for _, x in _GAP_TICKS])
+        bar.set_ticks(list(_GAP_TICKS))
+        bar.set_ticklabels([_human_duration(x) for x in _GAP_TICKS])
         bar.minorticks_off()
     if show:
         plt.show()

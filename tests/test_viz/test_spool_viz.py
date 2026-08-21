@@ -217,6 +217,8 @@ class TestCoverage:
         [
             (dict(time=5), "must be a .start, end. pair"),
             (dict(time=("2020-01-04", "2020-01-03")), "must be increasing"),
+            # A lane needs a width, so its two ends may not be one point.
+            (dict(time=("2020-01-03", "2020-01-03")), "must be increasing"),
             (dict(time=..., distance=...), "names 2"),
         ],
     )
@@ -446,6 +448,12 @@ class TestCalendar:
         """Either end may be left to the spool."""
         ax = deployment.viz.calendar(time=(None, "2024-01-31"))
         assert np.count_nonzero(~np.ma.getmaskarray(_cells(ax))) == 31
+
+    def test_a_window_of_one_day(self, deployment):
+        """Both ends may name the same day; a calendar cell is a day wide."""
+        ax = deployment.viz.calendar(time=("2024-01-18", "2024-01-18"))
+        assert np.count_nonzero(~np.ma.getmaskarray(_cells(ax))) == 1
+        assert _cell(ax, "2024-01-18") == 0.0
 
     def test_tolerance_changes_what_counts(self, deployment):
         """A tolerance which closes the gaps fills the days they emptied."""
