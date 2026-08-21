@@ -56,11 +56,20 @@ def _as_numeric(values):
     return array.astype(float)
 
 
+def _is_membership(value) -> bool:
+    """Whether a row states membership of its lane rather than a value.
+
+    A frame carries that as no value at all, which pandas spells None,
+    NaN or NA depending on what else the column holds.
+    """
+    return bool(pd.isna(value))
+
+
 def _default_label(value) -> str:
     """Text for a value which was not given a label of its own."""
     if isinstance(value, str):
         return value
-    if value is None:
+    if _is_membership(value):
         return ""
     # A number states itself; a membership lane is named by its lane instead.
     return f"{value:g}" if isinstance(value, float) else str(value)
@@ -124,14 +133,12 @@ def _read_frame(intervals, start, end, lane, value, label):
 
 def _lane_kind(values) -> str:
     """Return the one value kind a lane states, refusing a mixture."""
-    kinds = {value_kind(normalize_value(x)) for x in values if x is not None}
+    kinds = {value_kind(normalize_value(x)) for x in values if not _is_membership(x)}
     kinds.discard(None)
+    kinds.discard("membership")
     if not kinds:
         return "none"
     if len(kinds) > 1:
-        return "mixed"
-    if any(x is None for x in values):
-        # a lane states membership (no values) or a value in every row
         return "mixed"
     return kinds.pop()
 
@@ -208,8 +215,11 @@ def _resolve_colors(rows, kind, lane_index, string_map, color):
         # default treatment rather than being matched against lane names.
         color = color.get(rows["lane"].iloc[0])
     if isinstance(color, Mapping):
-        colors = [color.get(x, UNCOVERED_COLOR) for x in rows["value"]]
-        used = {x: color[x] for x in rows["value"] if x in color}
+        # A mapping is keyed by the value, and membership has one key
+        # however the column's dtype spelled it.
+        keys = [None if _is_membership(x) else x for x in rows["value"]]
+        colors = [color.get(x, UNCOVERED_COLOR) for x in keys]
+        used = {x: color[x] for x in keys if x in color}
         return colors, ("legend", used)
     if isinstance(color, str) and kind != "numeric":
         return [color] * len(rows), None
@@ -221,7 +231,11 @@ def _resolve_colors(rows, kind, lane_index, string_map, color):
         )
     if kind == "numeric":
         values = np.asarray(
-            [float(normalize_value(x)) for x in rows["value"]], dtype=float
+            [
+                np.nan if _is_membership(x) else float(normalize_value(x))
+                for x in rows["value"]
+            ],
+            dtype=float,
         )
         if isinstance(color, str):
             try:
@@ -235,7 +249,8 @@ def _resolve_colors(rows, kind, lane_index, string_map, color):
         if len(np.unique(values[np.isfinite(values)])) < 2:
             # One value is not a scale, so it gets a color and its number
             # rather than a colorbar reading from it to a value nothing has.
-            return [cmap(0.5)] * len(rows), None
+            # A row which states none is still not that value.
+            return [UNCOVERED_COLOR if np.isnan(x) else cmap(0.5) for x in values], None
         cmap, norm, ticks = numeric_scale(values, getattr(cmap, "name", NUMERIC_CMAP))
         # A value nothing states maps to a transparent color unless the
         # colormap is told otherwise, and the box would simply vanish.
@@ -350,8 +365,8 @@ def plot_lanes(
         the lane has no row).
     label
         Column holding the text drawn in each box. Values supply it by
-        default: text as itself, a number as its digits, a membership
-        row as nothing, since the lane it sits in already names it.
+        default: text as itself, a number as its digits, and a row which
+        states no value nothing, since its lane already names it.
     lanes
         The lanes to draw, in order. Names with no rows are kept as empty
         lanes, so two figures of different subjects still line up.

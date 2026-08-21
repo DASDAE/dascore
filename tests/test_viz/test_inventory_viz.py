@@ -98,8 +98,12 @@ def _main_path(epoch: int) -> inv.OpticalPath:
             inv.OpticalPathLabel(
                 start_distance=200.0, end_distance=400.0, group="zone", value="south"
             ),
+            # A label group states membership by stating no value.
             inv.OpticalPathLabel(
                 start_distance=150.0, end_distance=300.0, group="noisy"
+            ),
+            inv.OpticalPathLabel(
+                start_distance=300.0, end_distance=400.0, group="noisy"
             ),
             inv.OpticalPathLabel(
                 start_distance=100.0, end_distance=200.0, group="count", value=0
@@ -765,6 +769,13 @@ class TestMap:
         assert labels[:2] == ["north", "south"]
         assert "n/a" in labels
         assert ax.get_legend().get_title().get_text() == "zone"
+
+    def test_color_a_membership_group(self, site):
+        """A group everything belongs to is named by the group, not by None."""
+        ax = map_path(site, "DAS.L1.00", time="2026-06-10", color="noisy")
+        labels = _legend_labels(ax)
+        assert "noisy" in labels
+        assert "None" not in labels
 
     def test_color_numeric_group(self, site):
         """A numeric label group colors continuously."""

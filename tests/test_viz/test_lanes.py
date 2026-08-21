@@ -55,6 +55,7 @@ def kinds_frame():
             "lane": ["text", "text", "flag", "flag", "count", "count", "tick"],
             "start": [0.0, 5.0, 0.0, 5.0, 0.0, 5.0, 3.0],
             "end": [5.0, 10.0, 5.0, 10.0, 5.0, 10.0, 3.0],
+            # A row belongs to its lane by stating no value at all.
             "value": ["a", "b", None, None, 1, 2, None],
         }
     )
@@ -253,7 +254,7 @@ class TestLayout:
         assert _texts(ax) == ["x"]
 
     def test_default_labels(self, kinds_frame):
-        """Numbers state themselves; membership rows draw no text."""
+        """Numbers state themselves; a row stating no value draws no text."""
         ax = plot_lanes(kinds_frame, lane="lane", value="value")
         assert sorted(_texts(ax)) == ["1", "2", "a", "b"]
 
@@ -278,9 +279,10 @@ class TestColors:
         assert labels == ["north", "south", "west"]
 
     def test_membership_lane(self, kinds_frame):
-        """Every row takes the lane's one color; the legend names the lane."""
+        """Rows which state no value take the lane's color, and name it."""
         ax = plot_lanes(kinds_frame, lane="lane", value="value", lanes=("flag",))
         colors = _collections(ax)[0].get_facecolors()
+        assert len(colors) == 2
         assert colors[0][3] == pytest.approx(1.0)
         assert colors[1][3] == pytest.approx(1.0)
         assert np.allclose(colors[0], colors[1])
@@ -331,6 +333,25 @@ class TestColors:
         assert bars[0].get_ylim() == pytest.approx((0.0, 7.0))
         assert bars[1].get_ylim() == pytest.approx((100.0, 107.0))
 
+    def test_one_value_is_not_no_value(self):
+        """A lone number colors its rows without swallowing the missing one."""
+        frame = pd.DataFrame(
+            {"start": [0.0, 1.0, 2.0], "end": [1.0, 2.0, 3.0], "v": [5.0, None, 5.0]}
+        )
+        ax = plot_lanes(frame, value="v")
+        colors = _collections(ax)[0].get_facecolors()
+        assert np.allclose(colors[0], colors[2])
+        assert not np.allclose(colors[0], colors[1])
+        assert np.allclose(colors[1][:3], plt.matplotlib.colors.to_rgb(UNCOVERED_COLOR))
+
+    def test_membership_has_one_key_in_a_mapping(self):
+        """A color keyed on None applies however the dtype spelled it."""
+        frame = pd.DataFrame({"start": [0.0, 1.0], "end": [1.0, 2.0], "v": ["a", None]})
+        ax = plot_lanes(frame, value="v", color={None: "red", "a": "blue"})
+        colors = _collections(ax)[0].get_facecolors()
+        assert np.allclose(colors[0][:3], [0, 0, 1])
+        assert np.allclose(colors[1][:3], [1, 0, 0])
+
     def test_numeric_one_value(self):
         """One number is not a scale, so every box shares one color."""
         frame = pd.DataFrame({"start": [0.0, 1.0], "end": [1.0, 2.0], "v": [4, 4]})
@@ -380,16 +401,20 @@ class TestColors:
         colors = _collections(ax)[0].get_facecolors()
         assert np.allclose(colors[:, :3], [1, 0, 0])
 
-    def test_a_value_which_is_not_a_value(self):
-        """A NaN among a lane's numbers is refused: a valued lane has no gaps."""
+    def test_a_number_nobody_stated(self):
+        """A missing number in a numeric lane is drawn, not made invisible."""
         n = 10
         values = [float(x) for x in range(n)]
         values[3] = float("nan")
         frame = pd.DataFrame(
             {"start": np.arange(n) * 1.0, "end": np.arange(n) + 1.0, "v": values}
         )
-        with pytest.raises(ParameterError, match="mixes value kinds"):
-            plot_lanes(frame, value="v")
+        ax = plot_lanes(frame, value="v")
+        colors = _collections(ax)[0].get_facecolors()
+        # It states no value, so it takes the color which says so rather
+        # than the transparent one a colormap gives a NaN.
+        assert colors[3][3] == pytest.approx(1.0)
+        assert not np.allclose(colors[3], colors[0])
 
     def test_legend_off_suppresses_the_colorbar(self):
         """legend='off' means no colorbar either."""

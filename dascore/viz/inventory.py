@@ -806,7 +806,21 @@ def _segment_colors(one, color, mid, crs, handles, palette):
             handles.setdefault("n/a", PatchArtist(facecolor=UNPLACED, label="n/a"))
             return None, [UNPLACED] * len(mid)
     masks = interval_masks(mid, [x.interval for x in items])
-    kinds = {value_kind(normalize_value(k)) for k in keys}
+    kinds = {
+        value_kind(normalize_value(k)) for k in keys if not _lanes._is_membership(k)
+    }
+    if not kinds:
+        # Every row states membership, so the group itself is the value
+        # and belonging to it is the only thing there is to color.
+        colors = [UNPLACED] * len(mid)
+        base = plt.get_cmap(_lanes.STRING_CMAP)(_lanes.WHEEL_ORDER[0])
+        for mask in masks:
+            for position in np.flatnonzero(mask):
+                colors[position] = base
+        handles.setdefault(color, PatchArtist(facecolor=base, label=color))
+        if any(c is UNPLACED for c in colors):
+            handles.setdefault("n/a", PatchArtist(facecolor=UNPLACED, label="n/a"))
+        return None, colors
     if kinds == {"numeric"}:
         values = np.full(len(mid), np.nan)
         for item, mask in zip(items, masks, strict=True):
