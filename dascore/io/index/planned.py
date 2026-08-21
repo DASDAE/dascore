@@ -738,6 +738,10 @@ def derived_catalog(
     if stale_keys:
         outputs = outputs.drop(columns=stale_keys)
     aux_info = _aux_coord_info(sources, trims, name, coord_dims_map, trimmed_dims)
+    # a coordinate the plan drops from an output is not advertised for it
+    for output_id, names in plan.params.get("dropped_coords", {}).items():
+        for coord in names:
+            aux_info.get(output_id, {}).pop(coord, None)
     backend.write_sources(_output_records(outputs, token, aux_info=aux_info))
     return PatchCatalog(backend=backend, resolver=resolver)
 

@@ -1791,9 +1791,18 @@ def concatenate_planned(
     conflicting: set[str] = set()
     for other in patches[1:]:
         shared = set(first.coords.coord_map) & set(other.coords.coord_map)
-        for name in shared - {dim, *first.dims}:
+        for name in shared - {dim}:
             if first.coords.coord_map[name] != other.coords.coord_map[name]:
                 conflicting.add(name)
+    # a dimension's identity in the index may be a summary which two
+    # different coordinates share, so dimensions are checked here too, and
+    # a dimension cannot be dropped
+    if bad_dims := conflicting & set(first.dims):
+        msg = (
+            f"Cannot concatenate along {dim!r}: the dimensions {sorted(bad_dims)} "
+            "hold different values; load the patches to see them."
+        )
+        raise CoordMergeError(msg)
     if conflicting and conflict == "raise":
         msg = (
             f"Cannot concatenate along {dim!r}: the coordinates {sorted(conflicting)} "

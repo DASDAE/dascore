@@ -1273,6 +1273,63 @@ class TestConcatenatePartitions:
         assert out[0].shape[1] == 2 * first.shape[1]
         assert out[0].attrs.tag == first.attrs.tag
 
+    def test_positional_check_behavior_still_works(self, pair):
+        """The deprecated argument keeps its old positional slot."""
+        with pytest.warns(DeprecationWarning, match="separate outputs"):
+            out = dc.spool(pair).concatenate("warn", time=None)
+        assert len(out) == 1
+
+    def test_convertible_units_plan_together(self, pair):
+        """Metres and centimetres along the dimension are one partition."""
+        first, _ = pair
+        distance = first.get_coord("distance")
+        shifted = first.update_coords(distance_min=distance.max() + distance.step)
+        in_cm = shifted.convert_units(distance="cm")
+        out = dc.spool([first, in_cm]).concatenate(distance=None)
+        assert len(out) == 1
+        patch = out[0]
+        assert patch.shape[0] == 2 * first.shape[0]
+        assert np.all(np.diff(patch.get_coord("distance").values) > 0)
+
+    def test_descending_data_keep_their_step(self, pair):
+        """Contiguous descending members concatenate in their own direction."""
+        first, _ = pair
+        n = first.shape[first.get_axis("distance")]
+        high = first.update_coords(distance=np.arange(2 * n - 1, n - 1, -1.0))
+        low = first.update_coords(distance=np.arange(n - 1, -1, -1.0))
+        out = dc.spool([low, high]).concatenate(distance=None)
+        coord = out[0].get_coord("distance")
+        assert coord.max() == 2 * n - 1 and coord.min() == 0
+        assert np.all(np.diff(coord.values) < 0)
+        assert out.get_contents()["distance_step"].iloc[0] == -1
+
+    def test_auxiliary_name_becomes_a_dimension(self, pair):
+        """Concatenating along a non-dimensional coordinate's name adds a dimension."""
+        first, _ = pair
+        n = first.shape[first.get_axis("distance")]
+        aux = first.update_coords(sensor=("distance", np.arange(n, dtype=float)))
+        out = dc.spool([aux, aux.new()]).concatenate(sensor=None)
+        patch = out[0]
+        assert "sensor" in patch.dims
+        assert patch.shape[patch.get_axis("sensor")] == 2
+        row = out.get_contents().iloc[0]
+        assert "sensor" in str(row["dims"]).split(",")
+        # a dimension without values claims no envelope
+        assert "sensor_min" not in row.index or pd.isnull(row["sensor_min"])
+
+    def test_dropped_coordinate_leaves_the_catalog(self, pair):
+        """A coordinate dropped for conflicting is not advertised either."""
+        first, other = pair
+        n = first.shape[first.get_axis("distance")]
+        lat_a = first.update_coords(latitude=("distance", np.arange(n, dtype=float)))
+        lat_b = other.update_coords(latitude=("distance", np.ones(n)))
+        out = dc.spool([lat_a, lat_b]).concatenate(time=None, conflict="drop")
+        contents = out.get_contents()
+        assert "latitude" not in out[0].coords.coord_map
+        assert "latitude_min" not in contents.columns or pd.isnull(
+            contents["latitude_min"].iloc[0]
+        )
+
     def test_new_dimension(self, pair):
         """A dimension no patch has is added, one sample per patch."""
         first, _ = pair

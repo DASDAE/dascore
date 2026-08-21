@@ -833,15 +833,14 @@ class TestConcatPlan:
         assert "data_units" not in plan.outputs.columns
 
     def test_new_dimension_is_described(self, trio):
-        """An output along a new dimension states that dimension and its range."""
+        """An output along a new dimension names it, claiming no envelope."""
         p1 = trio[0]
         copies = [p1, p1.new(), p1.new()]
         plan = build_concat_plan(_flat(copies), wave_rank=None)
         assert len(plan.outputs) == 1
         row = plan.outputs.iloc[0]
         assert row["dims"].endswith(",wave_rank")
-        envelope = (row["wave_rank_min"], row["wave_rank_max"], row["wave_rank_step"])
-        assert envelope == (0, 2, 1)
+        assert "wave_rank_min" not in plan.outputs.columns
         assert len(plan.members) == 3
         # patches whose existing coordinates differ cannot share a new dimension
         assert len(build_concat_plan(_flat(trio), wave_rank=None).outputs) == 3

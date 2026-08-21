@@ -15,6 +15,7 @@ from dascore.config import config_context
 from dascore.constants import PatchType
 from dascore.exceptions import (
     CoordError,
+    CoordMergeError,
     IncompatiblePatchError,
     ParameterError,
     PatchAttributeError,
@@ -30,6 +31,7 @@ from dascore.utils.patch import (
     check_dims,
     check_kind,
     concatenate_patches,
+    concatenate_planned,
     get_dim_axis_value,
     get_patch_kind,
     get_patch_names,
@@ -978,6 +980,12 @@ class TestConcatenate:
         except TypeError:
             nearly_eq = old_array == new_array
         assert np.all(both_nan | nearly_eq)
+
+    def test_planned_concatenation_rechecks_dimensions(self, random_patch):
+        """A plan's identity keys may be summaries, so dimensions are rechecked."""
+        other = random_patch.update_coords(distance_min=5)
+        with pytest.raises(CoordMergeError, match="distance"):
+            concatenate_planned([random_patch, other], "time")
 
     def test_private_coords_dropped(self, random_patch):
         """Ensure private coords don't interfere with concat along new dim."""

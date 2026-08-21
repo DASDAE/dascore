@@ -1643,7 +1643,8 @@ def build_concat_plan(
         raise ParameterError(msg)
     min_name, max_name, step_name = f"{name}_min", f"{name}_max", f"{name}_step"
     names = _resolve_group_attrs(group, set(df.columns))
-    params = dict(mode="concat", count=count, conflict=conflict, group=names)
+    params: dict[str, Any] = dict(mode="concat", count=count, conflict=conflict)
+    params["group"] = names
     if df.empty:
         outputs = pd.DataFrame({"output_id": pd.Series(dtype=np.int64)})
         members = pd.DataFrame(
@@ -1656,6 +1657,10 @@ def build_concat_plan(
         return ChunkPlan(outputs, members, name, value, params)
     df = _ensure_patch_id(df).reset_index(drop=True)
     has_envelope = min_name in df.columns and max_name in df.columns
+    if has_envelope:
+        # one spelling per dimensionality, as a chunk plan: metres and
+        # centimetres plan together and members convert on loading
+        df = _normalize_chunk_units(df, name)
     # The concatenated dimension's units partition like kind: a patch whose
     # coordinate has values but no units cannot join one whose has units
     # (the values would be mixed), while a patch with no values along the
@@ -1721,13 +1726,38 @@ def build_concat_plan(
     if "dims" in sorted_df.columns:
         dims = sorted_df["dims"].to_numpy()[seg_starts].astype(str)
         new_dim = np.array([name not in d.split(",") for d in dims])
-        if new_dim.any() and not has_envelope:
-            # concatenating along a dimension none of the patches has: the
-            # output gains it, one sample per member
+        if new_dim.any():
+            # an output whose members lack the dimension gains it, one
+            # sample per member, as a dimension without values (the name
+            # may have been a non-dimensional coordinate, which the new
+            # dimension replaces, so no envelope is claimed for it)
             data["dims"] = [f"{d},{name}" if n else d for d, n in zip(dims, new_dim)]
-            data[min_name] = [0 if n else None for n in new_dim]
-            data[max_name] = [int(s) - 1 if n else None for s, n in zip(sizes, new_dim)]
-            data[step_name] = [1 if n else None for n in new_dim]
+            for x in (min_name, max_name, step_name):
+                if x in data:
+                    data[x] = [None if n else v for v, n in zip(data[x], new_dim)]
+    if conflict != "raise":
+        # non-dimensional coordinates whose identity differs within an
+        # output are dropped when it is assembled; the catalog must not
+        # advertise them either
+        dim_names = {
+            d
+            for x in sorted_df.get("dims", pd.Series(dtype=str))
+            for d in str(x).split(",")
+        }
+        aux_keys = [
+            x
+            for x in sorted_df.columns
+            if x.endswith("_def_key")
+            and not x.startswith("__")
+            and x[1 : -len("_def_key")] not in dim_names | {name}
+        ]
+        if aux_keys:
+            varied = sorted_df[aux_keys].groupby(codes).nunique(dropna=False) > 1
+            params["dropped_coords"] = {
+                int(i): [x[1 : -len("_def_key")] for x in aux_keys if row[x]]
+                for i, row in varied.iterrows()
+                if row.any()
+            }
     if "_dtype" in sorted_df.columns:
         all_dtypes = sorted_df["_dtype"]
         dtypes = by_output["_dtype"]
@@ -1770,7 +1800,12 @@ def _concatenated_steps(sorted_df: pd.DataFrame, codes: np.ndarray, name: str):
     )
     starts, stops = sorted_df[f"{name}_min"], sorted_df[f"{name}_max"]
     same_output = pd.Series(codes).shift(1).to_numpy() == codes
-    follows = (starts == stops.shift(1) + steps).to_numpy() | ~same_output
+    # descending data run from their max to their min, so the next member
+    # starts (at its max) one step below the previous member's min
+    ascending = to_float(steps.to_numpy()) >= 0
+    forward = (starts == stops.shift(1) + steps).to_numpy()
+    backward = (stops == starts.shift(1) + steps).to_numpy()
+    follows = np.where(ascending, forward, backward) | ~same_output
     contiguous = pd.Series(follows).groupby(codes).all()
     first = by_output.first()
     return first.where(one_step & contiguous).to_numpy()

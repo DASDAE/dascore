@@ -1914,9 +1914,10 @@ class Spool(NamespaceOwner):
     @compose_docstring(conflict_desc=attr_conflict_description)
     def concatenate(
         self,
+        check_behavior: WARN_LEVELS | None = None,
+        *,
         conflict: Literal["drop", "raise", "keep_first"] = "raise",
         group: str | Sequence[str] | None = None,
-        check_behavior: WARN_LEVELS | None = None,
         **kwargs,
     ) -> Self:
         """
@@ -1935,14 +1936,15 @@ class Spool(NamespaceOwner):
 
         Parameters
         ----------
+        check_behavior
+            Deprecated and ignored (kept in its old place for callers who
+            passed it positionally): patches which cannot be concatenated
+            together are placed in separate outputs rather than skipped.
         conflict
             {conflict_desc}
         group
             Attributes which partition patches into separate outputs,
             instead of the config option `patch_kind_attrs`.
-        check_behavior
-            Deprecated and ignored: patches which cannot be concatenated
-            together are placed in separate outputs rather than skipped.
         **kwargs
             One keyword naming the dimension and the number of patches per
             output; `None` puts every patch of a partition in one output. A
