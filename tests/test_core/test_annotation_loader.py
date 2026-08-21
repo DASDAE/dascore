@@ -233,6 +233,128 @@ class TestRoundTrip:
         assert "distance" not in loaded[1].region.bounds
 
 
+class TestDeclaredDtypes:
+    """A CSV states no types; the declaration beside it gives them back."""
+
+    @pytest.fixture
+    def typed(self):
+        """A set declaring a categorical and a nullable integer column."""
+        frame = pd.DataFrame(
+            {
+                "distance_start": [0.0, 1.0],
+                "distance_end": [1.0, 2.0],
+                "kind": pd.Series(["a", "b"], dtype="category"),
+                "count": pd.Series([1, None], dtype="Int64"),
+            }
+        )
+        columns = {"kind": {"dtype": "category"}, "count": {"dtype": "Int64"}}
+        return dc.AnnotationSet(frame, dims=("distance",), columns=columns)
+
+    def test_declared_dtypes_survive_a_csv(self, typed, tmp_path):
+        """The loaded set holds what the saved one declared, and equals it."""
+        loaded = dc.annotations(typed.io.save(tmp_path / "typed"))
+        frame = loaded.io.to_dataframe()
+        assert frame["kind"].dtype.name == "category"
+        assert frame["count"].dtype.name == "Int64"
+        assert loaded == typed
+
+    def test_declared_dtypes_survive_parquet(self, typed, tmp_path):
+        """Parquet keeps the types itself; the declaration then changes nothing."""
+        pytest.importorskip("pyarrow")
+        loaded = dc.annotations(typed.io.save(tmp_path / "typed", format="parquet"))
+        assert loaded == typed
+
+    def test_a_bare_table_given_its_declarations(self, typed, tmp_path):
+        """A CSV states no attrs; a caller handing it the columns gets them back."""
+        path = tmp_path / "typed.csv"
+        typed.io.to_csv(path)
+        loaded = dc.annotations(path, dims=("distance",), columns=typed.attrs.columns)
+        assert loaded.io.to_dataframe()["count"].dtype.name == "Int64"
+
+    def test_a_declared_text_dtype_keeps_blank_cells_unset(self, tmp_path):
+        """Text is not cast on reload, so a blank stays a blank, not the word 'nan'."""
+        frame = pd.DataFrame(
+            {"distance_start": [0.0, 1.0], "distance_end": [1.0, 2.0], "n": ["a", None]}
+        )
+        built = dc.AnnotationSet(
+            frame, dims=("distance",), columns={"n": {"dtype": "str"}}
+        )
+        loaded = dc.annotations(built.io.save(tmp_path / "set"))
+        assert loaded[0].extra["n"] == "a"
+        assert "n" not in loaded[1].extra
+
+    def test_a_declared_text_column_keeps_its_text(self, tmp_path):
+        """A cell a table would read as a number, a truth value or a date
+        stays the text it was written as when the column is declared text.
+        """
+        frame = pd.DataFrame(
+            {
+                "distance_start": [0.0, 1.0, 2.0],
+                "distance_end": [1.0, 2.0, 3.0],
+                "label": ["001", "true", "2020-01-01"],
+            }
+        )
+        columns = {"label": {"dtype": "str"}}
+        built = dc.AnnotationSet(frame, dims=("distance",), columns=columns)
+        loaded = dc.annotations(built.io.save(tmp_path / "set"))
+        assert [x.extra["label"] for x in loaded] == ["001", "true", "2020-01-01"]
+        assert loaded == built
+        # A bare table handed the declaration reads the same way.
+        path = tmp_path / "set.csv"
+        built.io.to_csv(path)
+        bare = dc.annotations(path, dims=("distance",), columns=columns)
+        assert [x.extra["label"] for x in bare] == ["001", "true", "2020-01-01"]
+
+    def test_an_empty_columns_override_restores_nothing(self, typed, tmp_path):
+        """`columns={}` clears the declarations, so nothing is restored from them."""
+        path = tmp_path / "typed.csv"
+        typed.io.to_csv(path)
+        loaded = dc.annotations(path, dims=("distance",), attrs=typed.attrs, columns={})
+        assert not loaded.attrs.columns
+        assert loaded.io.to_dataframe()["count"].dtype.name != "Int64"
+
+    def test_an_unreadable_declared_dtype(self, tmp_path):
+        """A dtype naming nothing is refused on reload as it is on building."""
+        frame = pd.DataFrame({"distance_start": [0.0], "distance_end": [1.0], "n": [1]})
+        directory = dc.AnnotationSet(frame, dims=("distance",)).io.save(
+            tmp_path / "set"
+        )
+        attrs_path = directory / "attrs.json"
+        document = json.loads(attrs_path.read_text())
+        document["columns"] = {"n": {"dtype": "not-a-dtype"}}
+        attrs_path.write_text(json.dumps(document))
+        with pytest.raises(InvalidAnnotationError, match="cannot be read as"):
+            dc.annotations(directory)
+
+    def test_a_declaration_which_is_not_one(self, tmp_path):
+        """A column spec which is no mapping is refused as a bad attrs file."""
+        frame = pd.DataFrame({"distance_start": [0.0], "distance_end": [1.0], "n": [1]})
+        directory = dc.AnnotationSet(frame, dims=("distance",)).io.save(
+            tmp_path / "set"
+        )
+        attrs_path = directory / "attrs.json"
+        document = json.loads(attrs_path.read_text())
+        document["columns"] = {"n": None}
+        attrs_path.write_text(json.dumps(document))
+        with pytest.raises(InvalidAnnotationError):
+            dc.annotations(directory)
+
+    def test_a_declaration_the_cells_cannot_hold(self, tmp_path):
+        """A declaration edited to something the column is not says so."""
+        frame = pd.DataFrame(
+            {"distance_start": [0.0], "distance_end": [1.0], "n": ["x"]}
+        )
+        directory = dc.AnnotationSet(frame, dims=("distance",)).io.save(
+            tmp_path / "set"
+        )
+        attrs_path = directory / "attrs.json"
+        document = json.loads(attrs_path.read_text())
+        document["columns"] = {"n": {"dtype": "Int64"}}
+        attrs_path.write_text(json.dumps(document))
+        with pytest.raises(InvalidAnnotationError, match="cannot be read as"):
+            dc.annotations(directory)
+
+
 class TestWhatATableCannotSay:
     """A CSV has no types, and these are the corners where that shows."""
 
@@ -687,13 +809,14 @@ class TestTheTables:
         assert loaded == annotations
         assert isinstance(loaded[0].region.bounds["time"][0], np.datetime64)
 
-    def test_a_dimension_some_rows_leave_blank(self):
+    @pytest.mark.parametrize("blank", [None, ""])
+    def test_a_dimension_some_rows_leave_blank(self, blank):
         """Times as text beside empty cells read as times and as unset."""
         frame = pd.DataFrame(
             {
                 "group": ["a", "b"],
-                "time_start": ["2020-01-01", None],
-                "time_end": ["2020-01-02", None],
+                "time_start": ["2020-01-01", blank],
+                "time_end": ["2020-01-02", blank],
             }
         )
         out = dc.AnnotationSet(frame, dims=("time",))
