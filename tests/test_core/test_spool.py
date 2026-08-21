@@ -1746,10 +1746,44 @@ class TestConcatenatePartitions:
         b = other.update_coords(clock=("time", np.full(nt, np.nan)))
         out = dc.spool([a, b]).concatenate(time=None)
         assert "clock" in out[0].coords.coord_map
+        # the catalog describes it too, by its identity alone
+        assert "clock" in out._catalog.backend.coord_names()
         contents = out.get_contents()
-        assert (
-            "_clock_def_key" not in contents or contents["_clock_def_key"].notna().all()
-        )
+        assert contents["_clock_def_key"].notna().all()
+
+    def test_constant_coordinate_keeps_input_order(self, pair):
+        """A step of zero says nothing about which way the values run."""
+        first, _ = pair
+        n = first.shape[first.get_axis("distance")]
+        flat = first.update_coords(distance=np.full(n, 5.0))
+        ones = flat.new(data=np.ones_like(flat.data))
+        zeros = flat.new(data=np.zeros_like(flat.data))
+        out = dc.spool([ones, zeros]).concatenate(distance=None)
+        assert len(out) == 1
+        joined = out[0].data
+        assert np.all(joined[:n] == 1) and np.all(joined[n:] == 0)
+
+    def test_a_count_must_be_whole(self, pair):
+        """A fractional count is refused rather than rounded down."""
+        first, other = pair
+        spool = dc.spool([first, other])
+        with pytest.raises(ParameterError, match="whole number"):
+            spool.concatenate(time=1.9)
+        with pytest.raises(ParameterError, match="whole number"):
+            spool.concatenate(time="2")
+
+    def test_dropped_coordinates_are_part_of_the_identity(self, pair):
+        """Two outputs of the same members differ when one lost a coordinate."""
+        first, other = pair
+        n = first.shape[first.get_axis("distance")]
+        a = first.update_coords(latitude=("distance", np.arange(n) * 1.0))
+        b = other.update_coords(latitude=("distance", np.ones(n)))
+        dropped = dc.spool([a, b]).concatenate(time=None, conflict="drop")[0]
+        same = first.update_coords(latitude=("distance", np.arange(n) * 1.0))
+        kept = other.update_coords(latitude=("distance", np.arange(n) * 1.0))
+        whole = dc.spool([same, kept]).concatenate(time=None, conflict="drop")[0]
+        assert "latitude" in whole.coords.coord_map
+        assert dropped.attrs.processing_id != whole.attrs.processing_id
 
     def test_stack_refuses_differing_riders(self, pair):
         """Stacking keeps one coordinate manager, so riders must agree."""

@@ -43,6 +43,10 @@ class Concatenate(Task):
         How conflicting attributes and coordinates were settled, for a
         planned concatenation (`Spool.concatenate`); None for the direct
         function, which has no such policy.
+    dropped
+        Coordinates the output does not carry, which its members held.
+        Two outputs of the same members differ when one keeps a
+        coordinate the other could not vouch for.
 
     Notes
     -----
@@ -57,6 +61,7 @@ class Concatenate(Task):
     arguments: tuple[tuple[str, Any], ...] = ()
     check_behavior: str | None = "warn"
     conflict: str | None = None
+    dropped: tuple[str, ...] = ()
 
     @classmethod
     def from_kwargs(cls, check_behavior: str | None = "warn", **kwargs) -> Concatenate:

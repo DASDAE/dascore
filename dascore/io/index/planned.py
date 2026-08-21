@@ -305,8 +305,12 @@ def _aux_coord_info(
             keep = grouped[key_col].nunique().to_numpy() == 1
             key_first = grouped[key_col].first().to_numpy()
         keep = keep & (not trimmed)
+        all_null = pd.isnull(lows) & pd.isnull(highs)
         if rides:
-            keep = keep & single & ~modified
+            # a rider's values differ member by member, so only a lone
+            # member keeps identity — unless nobody states any values,
+            # which every member says the same way
+            keep = keep & ((single & ~modified) | all_null)
         step_ok, step_first = no_gate, None
         if step_col in joined.columns:
             step_ok = keep & (grouped[step_col].nunique().to_numpy() == 1)
@@ -322,8 +326,9 @@ def _aux_coord_info(
         if unit_col in joined.columns:
             unit_ok = grouped[unit_col].nunique().to_numpy() == 1
             unit_first = grouped[unit_col].first().to_numpy()
-        # a coordinate absent from every member contributes nothing
-        absent = pd.isnull(lows) & pd.isnull(highs)
+        # a coordinate no member holds contributes nothing; one every
+        # member holds without values is described by its identity alone
+        absent = all_null & ~keep
         for index in np.flatnonzero(~absent):
             step = step_first[index] if step_first is not None else None
             key = key_first[index] if key_first is not None else None

@@ -905,6 +905,27 @@ class TestConcatPlan:
         assert got[0] == 1.0 and got[1] == -1.0 and got[2] == -1.0
         assert np.isnan(got[3]) and np.isnan(got[4])
 
+    def test_value_less_dimension_is_identified_by_its_members(self, trio):
+        """A dimension carried without values takes a digest of what it joins."""
+        p1, p2, _ = trio
+        blank = p1.mean("time")  # time survives as a value-less coordinate
+        rows = _flat([blank, p2.mean("time")])
+        plan = build_concat_plan(rows, time=None)
+        key = plan.outputs["_time_def_key"].iloc[0]
+        assert str(key).startswith("cat:")
+        # an output joining other members is a different coordinate
+        rows = _flat([blank, p2.mean("time"), p1.mean("time").new()])
+        other = build_concat_plan(rows, time=None).outputs["_time_def_key"].iloc[0]
+        assert other != key
+        # and one member alone keeps the identity it was given
+        lone = build_concat_plan(_flat([blank]), time=None)
+        assert lone.outputs["_time_def_key"].iloc[0] == rows["_time_def_key"].iloc[0]
+
+    def test_directions_of_a_constant_step(self):
+        """A zero step points neither way."""
+        assert np.isnan(_directions(pd.Series([0.0]))[0])
+        assert np.isnan(_directions(pd.Series([pd.Timedelta(0)], dtype=object))[0])
+
     def test_created_dimension_leaves_other_identities_alone(self, trio):
         """The new dimension's identity is its own, not another dimension's."""
         p1, p2, _ = trio

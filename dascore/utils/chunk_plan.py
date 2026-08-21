@@ -15,6 +15,7 @@ applied; `Spool.chunk` runs on these plans.
 
 from __future__ import annotations
 
+import hashlib
 import inspect
 import math
 import warnings
@@ -1637,6 +1638,12 @@ def build_concat_plan(
     validate_conflict(conflict)
     ((name, value),) = kwargs.items()
     value = None if value is Ellipsis else value
+    if value is not None and not isinstance(value, (int, np.integer)):
+        msg = (
+            "The number of patches per concatenated output is a whole number; "
+            f"got {value!r}. Pass None to put a whole partition in one output."
+        )
+        raise ParameterError(msg)
     count = None if value is None else int(value)
     if count is not None and count < 1:
         msg = "The number of patches per concatenated output must be at least 1."
@@ -1785,6 +1792,12 @@ def build_concat_plan(
     if "dims" in sorted_df.columns:
         dims = sorted_df["dims"].to_numpy()[seg_starts].astype(str)
         new_dim = np.array([name not in d.split(",") for d in dims])
+        # a dimension the members carry without values is resized the same
+        # way, and is identified the same way: by how long it comes out
+        stated = np.zeros(n_out, dtype=bool)
+        if min_name in data:
+            stated = ~pd.isnull(pd.Series(data[min_name])).to_numpy()
+        value_less = new_dim | ~stated
         if new_dim.any():
             # an output whose members lack the dimension gains it, one
             # sample per member, as a dimension without values (the name
@@ -1807,6 +1820,18 @@ def build_concat_plan(
                 if n
                 else k
                 for k, n, s in zip(keys, new_dim, sizes)
+            ]
+            data[key_col] = pd.Series(keys, dtype=object)
+        if (existing := value_less & ~new_dim).any():
+            # a dimension the members carry without values is resized too,
+            # and the relation says nothing about how long it comes out;
+            # what the members are is the best identity available, and it
+            # is not a fingerprint claim about values
+            keys = list(data.get(key_col, pd.Series([None] * n_out, dtype=object)))
+            member_keys = _member_key_digests(sorted_df, codes, name)
+            keys = [
+                digest if e and digest is not None else k
+                for k, e, digest in zip(keys, existing, member_keys)
             ]
             data[key_col] = pd.Series(keys, dtype=object)
     if conflict != "raise":
@@ -1913,7 +1938,10 @@ def _directions(steps: pd.Series) -> np.ndarray:
     def direction(step):
         if pd.isnull(step) or isinstance(step, str):
             return np.nan
-        return -1.0 if step < step * 0 else 1.0
+        zero = step * 0
+        if step == zero:  # a constant coordinate runs neither way
+            return np.nan
+        return -1.0 if step < zero else 1.0
 
     return np.array([direction(x) for x in steps], dtype=float)
 
@@ -1946,6 +1974,31 @@ def _structural(df: pd.DataFrame, coord: str) -> np.ndarray:
         return np.zeros(len(df), dtype=bool)
     dims = df["dims"].astype(str).str.split(",")
     return dims.apply(lambda d: coord in d).to_numpy(dtype=bool)
+
+
+def _member_key_digests(sorted_df: pd.DataFrame, codes: np.ndarray, name: str):
+    """
+    A "cat:" identity per output, digesting the identities it joins.
+
+    Outputs joining the same members in the same order come out the same;
+    the digest is deliberately not an "fp:" key, since it claims nothing
+    about values the relation never saw.
+    """
+    n_out = int(codes.max()) + 1
+    col = f"_{name}_def_key"
+    assert col in sorted_df.columns, "a value-less target states an identity"
+    out: list[str | None] = []
+    for _, group in sorted_df[col].groupby(codes, sort=True):
+        if group.isna().any():
+            out.append(None)
+            continue
+        if len(group) == 1:
+            # nothing was joined, so the member's own identity stands
+            out.append(str(group.iloc[0]))
+            continue
+        spelled = ",".join(map(str, group))
+        out.append(f"cat:{hashlib.sha256(spelled.encode()).hexdigest()[:32]}")
+    return out
 
 
 def _order_key(values: pd.Series) -> np.ndarray:

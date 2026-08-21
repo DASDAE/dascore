@@ -1945,7 +1945,10 @@ def concatenate_planned(
             for x in patches
         ]
     task = Concatenate(
-        arguments=((dim, count),), check_behavior=None, conflict=conflict
+        arguments=((dim, count),),
+        check_behavior=None,
+        conflict=conflict,
+        dropped=tuple(sorted(gone)),
     )
     return _concatenate_group(patches, dim, attrs, task.fingerprint, rider_units)
 
