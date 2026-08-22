@@ -1009,3 +1009,64 @@ class TestFallbackAgreement:
             drop_conflicting=True,
         )
         assert "depth" not in described.get(0, {})
+
+
+class TestWhatTheUnionCarriesOver:
+    """The fallback describes what raw concatenation will produce."""
+
+    def test_mixed_numeric_dtypes_promote(self):
+        """Numpy promotes what it concatenates, so the record must too."""
+        first = dc.get_example_patch()
+        time = first.get_coord("time")
+        second = dc.get_example_patch(time_min=time.max() + time.step)
+        samples = first.shape[first.get_axis("time")]
+        rng = np.random.default_rng(0)
+        left = first.update_coords(
+            rider=("time", np.sort(rng.integers(0, 100, samples)).astype("int32"))
+        )
+        right = second.update_coords(
+            rider=("time", np.sort(rng.uniform(200, 300, samples)).astype("float64"))
+        )
+        spool = dc.spool([left, right]).concatenate(time=None)
+        frame = spool._catalog.backend.coord_frame([0, 1, 2])
+        stated = frame[frame["coord_name"] == "rider"]["dtype"].iloc[0]
+        assert stated == str(spool[0].get_coord("rider").dtype) == "float64"
+
+    def test_one_dtype_is_left_alone(self):
+        """Promotion is not an excuse to restate what already agrees."""
+        first = dc.get_example_patch()
+        time = first.get_coord("time")
+        second = dc.get_example_patch(time_min=time.max() + time.step)
+        samples = first.shape[first.get_axis("time")]
+        rng = np.random.default_rng(0)
+        values = np.sort(rng.integers(0, 100, samples)).astype("int32")
+        spool = dc.spool(
+            [
+                first.update_coords(rider=("time", values)),
+                second.update_coords(rider=("time", values + 100)),
+            ]
+        ).concatenate(time=None)
+        frame = spool._catalog.backend.coord_frame([0, 1, 2])
+        assert frame[frame["coord_name"] == "rider"]["dtype"].iloc[0] == "int32"
+
+    def test_zero_in_two_units_is_not_one_bound(self, assert_contents_match):
+        """Equal numbers in different spellings are not the same bounds."""
+        first = dc.get_example_patch()
+        time = first.get_coord("time")
+        data = np.random.default_rng(0).random((1, len(time)))
+
+        def sample(units):
+            """A one-sample patch whose distance sits at zero."""
+            distance = get_coord(values=np.array([0.0]), units=units)
+            return dc.Patch(
+                data=data,
+                coords={"distance": distance, "time": time},
+                dims=("distance", "time"),
+            )
+
+        spool = dc.spool([sample("m"), sample("cm")]).concatenate(distance=None)
+        row = spool.get_contents().iloc[0]
+        assert row["distance_min"] == 0.0 and row["distance_max"] == 0.0
+        # the output is real, so a selection over it must keep it
+        assert len(spool.select(distance=(-1, 1))) == 1
+        assert_contents_match(spool)

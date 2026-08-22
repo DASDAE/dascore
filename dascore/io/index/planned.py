@@ -319,7 +319,18 @@ def _trimmed_summary(summary: CoordSummary, row: Mapping, name: str) -> CoordSum
     low, high = row.get(f"{name}_min"), row.get(f"{name}_max")
     if pd.isnull(low) and pd.isnull(high):
         return summary
-    if low == summary.min and high == summary.max:
+    # The bounds are only the same bounds if they are said in the same
+    # unit: two single-sample members at zero read as equal whatever
+    # they are measured in, and returning each one's native spelling
+    # leaves the join with mixed units and nothing it can state.
+    stated = row.get(f"_{name}_units")
+    spelled_alike = (
+        stated is None
+        or pd.isnull(stated)
+        or summary.units is None
+        or get_quantity(stated) == get_quantity(summary.units)
+    )
+    if spelled_alike and low == summary.min and high == summary.max:
         return summary  # the whole of it, so its identity still holds
     step = row.get(f"{name}_step", summary.step)
     step = summary.step if pd.isnull(step) else step
@@ -372,10 +383,17 @@ def _union_summary(summaries: Sequence[CoordSummary]) -> CoordSummary:
     # letting its max through would compare a moment with a number
     lows = [x.min for x in stated]
     highs = [x.max for x in stated if not pd.isnull(x.max)]
+    # assembly hands these arrays to numpy, which promotes them: an
+    # int32 laid beside a float64 comes back float64, and a record
+    # naming the first member's dtype would describe neither
+    dtype = template.dtype
+    with suppress(TypeError, ValueError):
+        dtype = str(np.result_type(*[np.dtype(x.dtype) for x in stated if x.dtype]))
     return template.model_copy(
         update=dict(
             min=min(lows) if lows else template.min,
             max=max(highs) if highs else template.max,
+            dtype=dtype,
             **blank,
         )
     )
