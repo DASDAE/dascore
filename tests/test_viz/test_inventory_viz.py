@@ -169,14 +169,14 @@ def build_site_inventory() -> inv.Inventory:
     ).check()
 
 
-def build_labeled_inventory(values: int, crs) -> inv.Inventory:
+def build_labeled_inventory(values: int, crs, lines: int = 1) -> inv.Inventory:
     """One path of one label group, stating this many distinct values."""
     labels = tuple(
         inv.OpticalPathLabel(
             start_distance=float(x * 10),
             end_distance=float(x * 10 + 8),
             group="hole",
-            value=f"H{x % values:02d}",
+            value="\n".join([f"H{x % values:02d}"] * lines),
         )
         for x in range(24)
     )
@@ -394,6 +394,23 @@ class TestPath:
         lanes = ax.get_window_extent()
         assert lanes.height > 0 and lanes.y0 >= 0
         assert lanes.y1 <= figure.bbox.height
+
+    def test_a_value_on_two_lines_is_kept_room_for_both(self, site):
+        """A legend entry of two lines stands as tall as two of one.
+
+        Counting entries and not lines would keep too little room, and
+        the legend would go below into space nobody reserved.
+        """
+        crs = site.coordinate_reference_system
+        flat = path(build_labeled_inventory(12, crs), "DAS.L2.00")
+        short = flat.get_figure().get_size_inches()[1]
+        plt.close("all")
+        tall = path(build_labeled_inventory(12, crs, lines=2), "DAS.L2.00")
+        figure = tall.get_figure()
+        assert figure.get_size_inches()[1] > short
+        figure.draw_without_rendering()
+        box = figure.legends[0].get_window_extent(figure.canvas.get_renderer())
+        assert box.y0 >= 0 and box.y1 <= tall.get_window_extent().y0
 
     def test_room_is_kept_for_a_legend_which_names_many_values(self, site):
         """A path naming more values than it has lanes needs a taller figure.

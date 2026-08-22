@@ -21,6 +21,7 @@ from dascore.viz._lanes import (
     _pack_rows,
     _text_points,
     estimate_legend_rows,
+    legend_column_points,
     plot_lanes,
 )
 
@@ -364,6 +365,15 @@ class TestLayout:
         """A caller sizing a figure for no legend keeps no room for one."""
         assert estimate_legend_rows([], 720.0) == 0
         assert estimate_legend_rows(["one"], 720.0) == 1
+
+    def test_a_legend_estimate_counts_the_lines_it_names(self):
+        """A value written on two lines takes two lines of legend.
+
+        Counting entries rather than lines keeps too little room, and
+        the legend then goes below into space nobody reserved.
+        """
+        assert legend_column_points(["a\nb"]) == legend_column_points(["a", "b"])
+        assert estimate_legend_rows(["a\nb"], 720.0) == 2
 
     def test_a_label_of_two_lines_is_two_lines_tall(self):
         """Height is what decides a rotated label, so lines must count."""

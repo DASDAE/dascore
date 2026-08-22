@@ -433,13 +433,19 @@ def _fit_labels(ax, placements, max_labels):
             break
 
 
-def legend_column_points(count: int) -> float:
-    """How tall one column naming this many things would stand.
+def _label_lines(labels: Sequence) -> list[int]:
+    """How many lines each of these labels is written on."""
+    return [str(x).count("\n") + 1 for x in labels]
+
+
+def legend_column_points(labels: Sequence) -> float:
+    """How tall one column naming these would stand.
 
     plot_lanes measures the legend it draws. A caller sizing a figure
     before there is a figure to measure has only this.
     """
-    return count * plt.rcParams["font.size"] * _SMALL_SCALE * _LEGEND_PITCH
+    pitch = plt.rcParams["font.size"] * _SMALL_SCALE * _LEGEND_PITCH
+    return sum(_label_lines(labels)) * pitch
 
 
 def estimate_legend_rows(labels: Sequence, width_points: float) -> int:
@@ -453,7 +459,9 @@ def estimate_legend_rows(labels: Sequence, width_points: float) -> int:
     size = plt.rcParams["font.size"] * _SMALL_SCALE
     widest = max(_text_points(x, size)[0] for x in labels)
     columns = max(1, int(width_points // (widest + _SWATCH_WIDTH * size)))
-    return -(-len(labels) // columns)
+    # Counted in single lines, since that is what a caller keeping room
+    # for them counts in; a row is as tall as its tallest entry.
+    return -(-len(labels) // columns) * max(_label_lines(labels))
 
 
 def _legend_below(figure, ax, handles, owned):

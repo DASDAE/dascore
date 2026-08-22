@@ -447,7 +447,7 @@ def path(
         # side. Deciding here rather than leaving it to the renderer is
         # what keeps the two from disagreeing: room kept below would
         # otherwise be room enough to sit beside, and go unused.
-        column = _lanes.legend_column_points(len(named)) / 72.0
+        column = _lanes.legend_column_points(named) / 72.0
         legend_rows = (
             0
             if column <= 0.8 * lane_height
