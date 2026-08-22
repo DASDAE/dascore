@@ -587,6 +587,15 @@ class TestCoordFingerprint:
         )
         assert coord.to_summary().to_coord().fingerprint() == coord.fingerprint()
 
+    def test_metadata_which_does_not_fit_its_dtype_still_differs(self):
+        """Conforming is a change of spelling, never a loss of value."""
+        first = CoordPartial(shape=(10,), dtype="int64", start=1.1, stop=11.1, step=1.0)
+        second = CoordPartial(
+            shape=(10,), dtype="int64", start=1.2, stop=11.2, step=1.0
+        )
+        assert first != second
+        assert first.fingerprint() != second.fingerprint()
+
     def test_finer_precision_than_nanoseconds_still_differs(self):
         """Conforming a scalar must not round away what a coordinate keeps."""
         start = np.datetime64("1969-09-23T15:46:49.660978561024")

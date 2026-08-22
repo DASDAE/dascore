@@ -184,6 +184,24 @@ def _get_dtype(value, dtype):
     return str(np.dtype(value))
 
 
+def _conformed(value, dtype: np.dtype):
+    """
+    The value as the given dtype, or unchanged where that would lose it.
+
+    Conforming is only ever a change of spelling. A coordinate whose
+    metadata does not fit the dtype it declares — a partial one stating
+    an integer dtype and a fractional start — would otherwise have the
+    difference truncated away, and two coordinates which are not equal
+    would share an identity.
+    """
+    with suppress(TypeError, ValueError, OverflowError):
+        original = np.asarray(value)
+        converted = original.astype(dtype)
+        if converted.astype(original.dtype) == original:
+            return converted
+    return value
+
+
 def _scalar_dtype(dtype: np.dtype, name: str) -> np.dtype:
     """
     The dtype a coordinate's own scalar is conformed to before hashing.
@@ -655,8 +673,7 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
             return ("none", None)
         dtype = np.dtype(self.dtype) if self.dtype else None
         if dtype is not None:
-            with suppress(TypeError, ValueError, OverflowError):
-                value = np.asarray(value).astype(_scalar_dtype(dtype, name))
+            value = _conformed(value, _scalar_dtype(dtype, name))
         return ("scalar", hash_array(np.asarray([value])))
 
     @staticmethod
