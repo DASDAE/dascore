@@ -47,16 +47,16 @@ UNCOVERED_COLOR = "0.7"
 # and alternating shade separates two which still land on a similar hue.
 _GOLDEN_STEP = 0.6180339887498949
 
-# Everything a label is measured in, so the same figure keeps the same
-# labels whatever resolution it is drawn at. Rasterized glyphs round to
-# whole pixels, which makes text as much as a tenth wider at 50 dpi than
-# at 300, so both the text and the box it must fit are asked for in
-# points instead of the pixels the renderer works in.
+# Points per inch: the unit both a label and its box are measured in, so
+# the same figure keeps the same labels whatever dpi it is drawn at.
 _MEASURED_DPI = 72.0
 
 # What matplotlib sets successive lines of one label apart by, as a
 # multiple of the font size.
 _LINE_SPACING = 1.2
+
+# What matplotlib makes of the fontsize="small" the legends ask for.
+_SMALL_SCALE = 0.833
 
 # A legend entry is its label plus a swatch and the gaps around it, which
 # come to about this many times the text height.
@@ -226,7 +226,8 @@ def _string_colors(frame, vocabulary=None, cmap_name=STRING_CMAP) -> dict:
     The vocabulary widens the palette beyond what this frame holds, so a
     figure of part of a subject colors it as a figure of all of it does.
     Adding a value to the vocabulary itself moves the colors of the ones
-    which sort after it, and crossing the wheel moves all of them.
+    which sort after it, and pushing the count past the wheel moves all
+    of them.
     """
     seen = list(frame["value"].tolist()) + list(vocabulary or [])
     values = sorted({x for x in seen if isinstance(x, str) and x != ""})
@@ -389,16 +390,16 @@ def _fit_labels(ax, placements, max_labels):
     """Draw each label the way it fits its box, and drop what cannot.
 
     Horizontal reads best, so it is tried first. A lane of many short
-    stretches gives every box far less width than its text needs, and
-    turning the text on its side fits it where the one rule would drop
-    it and leave the lane readable only from the legend.
+    stretches gives every box far less width than its text needs;
+    turning the text on its side keeps those labels, which fitting
+    horizontally alone would drop and leave readable only from the
+    legend.
     """
     if len(placements) > max_labels:
         return
     figure = ax.get_figure()
     # Lay the figure out before measuring: a label is compared against its
-    # box, and the box moves when the axes does. The legend and the
-    # colorbars are drawn by now, so this is the geometry it lands in.
+    # box, and the box moves when the axes does.
     figure.draw_without_rendering()
     transform = ax.transData
     scale = _MEASURED_DPI / figure.dpi
@@ -438,7 +439,7 @@ def legend_column_points(count: int) -> float:
     plot_lanes measures the legend it draws. A caller sizing a figure
     before there is a figure to measure has only this.
     """
-    return count * plt.rcParams["font.size"] * 0.833 * _LEGEND_PITCH
+    return count * plt.rcParams["font.size"] * _SMALL_SCALE * _LEGEND_PITCH
 
 
 def estimate_legend_rows(labels: Sequence, width_points: float) -> int:
@@ -449,7 +450,7 @@ def estimate_legend_rows(labels: Sequence, width_points: float) -> int:
     labels = [str(x) for x in labels]
     if not labels:
         return 0
-    size = plt.rcParams["font.size"] * 0.833
+    size = plt.rcParams["font.size"] * _SMALL_SCALE
     widest = max(_text_points(x, size)[0] for x in labels)
     columns = max(1, int(width_points // (widest + _SWATCH_WIDTH * size)))
     return -(-len(labels) // columns)

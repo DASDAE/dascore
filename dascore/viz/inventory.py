@@ -387,9 +387,9 @@ def path(
     color
         Passed to the lane renderer to override its colors.
     max_labels
-        Draw no lane text at all past this many intervals. Under it, a
-        label too wide for its box is turned on its side rather than
-        dropped, so a lane of many short stretches still reads.
+        Draw no lane text at all past this many intervals. Below that
+        count, a label too wide for its box is turned on its side, and
+        dropped only if it does not fit that way either.
     ax
         An Axes to draw the lanes on. Column panels need their own
         figure, so passing this and naming columns is refused.
@@ -433,12 +433,12 @@ def path(
     frame = _select_tracks(frame, tracks, chosen)
     lanes = list(dict.fromkeys(frame["lane"]))
     if ax is None:
-        # A legend naming more than the lanes are tall sits below them, so
-        # keep the rows it will take there; without them the lanes give up
-        # the room instead and every bar is squeezed into a sliver. There
-        # is no figure to measure yet, so the rows are estimated from the
-        # labels themselves; an estimate which is low costs only some of
-        # the room it was meant to save.
+        # A legend which goes below the lanes needs height kept for it;
+        # without that the lanes give up the room instead and every bar is
+        # squeezed into a sliver. There is no figure to measure yet, so
+        # both the standing height of one column and the rows it breaks
+        # into are estimated from the labels; guessing low gives back less
+        # room than intended, which is the harmless direction.
         named = _legend_names(frame, color)
         width = (figsize or (10.0, 0.0))[0]
         lane_height = 1.2 + 0.42 * len(lanes)
@@ -543,11 +543,12 @@ def _time_window(asked):
 def _legend_names(frame, color) -> list[str]:
     """What a legend of these lanes would name, in the order it names it.
 
-    Only what earns a swatch counts. One color for every lane earns no
-    legend at all; a lane which states no value earns one swatch named
-    for the lane; a lane of numbers reads from a colorbar instead, unless
-    a mapping gives its values swatches, in which case it names the ones
-    the mapping holds and no others.
+    Only what earns a swatch counts. A single color for the whole figure
+    earns no legend at all; a lane which states no value earns one swatch
+    named for the lane; and a lane of numbers reads from its colorbar, or
+    from the numbers printed in its boxes where there are few enough of
+    them, so it names none. A mapping is the exception: it gives swatches
+    to the values it holds, numbers included, and to no others.
     """
     if isinstance(color, str):
         return []
