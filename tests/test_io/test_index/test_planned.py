@@ -856,3 +856,37 @@ class TestAgreementNeedsIdentity:
         assert "depth" in merged[0].coords.coord_map
         assert merged.get_contents().iloc[0]["depth_min"] == 0.0
         assert_contents_match(merged)
+
+
+class TestTrimmedCoordsStayTrimmed:
+    """A residual trims at load; the record must not outrun it."""
+
+    def test_a_samples_residual_survives_a_union(self):
+        """Candidacy is answered from the record, so it holds the trim."""
+        first = dc.get_example_patch()
+        time = first.get_coord("time")
+        second = dc.get_example_patch(time_min=time.max() + time.step)
+        selected = dc.spool([first]).select(distance=(5, 50), samples=True)
+        union = selected + dc.spool([second])
+        # the trimmed patch holds distance 5..49 and must not be a
+        # candidate for values only the untrimmed source ever held
+        elsewhere = union.select(distance=(60, 80))
+        assert len(elsewhere) == len(elsewhere.get_contents()) == 1
+        assert len(list(elsewhere)) == 1
+        loaded = elsewhere[0].get_coord("distance")
+        assert loaded.min() == 60 and loaded.max() == 80
+
+    def test_the_record_says_what_the_patch_holds(self):
+        """The stored envelope matches the trimmed patch, not its source."""
+        first = dc.get_example_patch()
+        time = first.get_coord("time")
+        second = dc.get_example_patch(time_min=time.max() + time.step)
+        selected = dc.spool([first]).select(distance=(5, 50), samples=True)
+        union = selected + dc.spool([second])
+        frame = union._catalog.backend.coord_frame([1, 2])
+        distance = frame[frame["coord_name"] == "distance"]
+        stated = distance[distance["patch_id"] == 1].iloc[0]
+        held = union[0].get_coord("distance")
+        assert stated["min_num"] == held.min()
+        assert stated["max_num"] == held.max()
+        assert stated["length"] == len(held)

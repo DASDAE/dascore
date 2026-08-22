@@ -756,6 +756,37 @@ def _clear_dropped_aux(
     return out
 
 
+def _trimmed_envelopes(
+    predicted: Mapping[int, Mapping[str, CoordSummary | None]],
+    outputs: pd.DataFrame,
+    trimmed_dims: frozenset[str],
+) -> dict[int, dict[str, CoordSummary | None]]:
+    """
+    Restate a trimmed coordinate's envelope from the row holding the trim.
+
+    A residual selection is applied when the patch loads, and the plan's
+    own row is where its adjusted bounds live: the members' stored
+    summaries still describe the whole of what the index recorded.
+    Candidacy is answered from the coordinate record, so a record which
+    kept the untrimmed envelope would keep the row a candidate for values
+    it will not return.
+    """
+    rows = {int(x["output_id"]): x for x in outputs.to_dict("records")}
+    out: dict[int, dict[str, CoordSummary | None]] = {}
+    for output_id, described in predicted.items():
+        row = rows.get(int(output_id))
+        if row is None:
+            out[output_id] = dict(described)
+            continue
+        out[output_id] = {
+            name: summary
+            if summary is None or not (set(summary.dims) & trimmed_dims)
+            else _trimmed_summary(summary, row, name)
+            for name, summary in described.items()
+        }
+    return out
+
+
 def _apply_predictions(
     outputs: pd.DataFrame,
     predicted: Mapping[int, Mapping[str, CoordSummary | None]],
@@ -1232,6 +1263,8 @@ def derived_catalog(
         mode=mode,
         drop_conflicting=merge_kwargs.get("conflict") in {"drop", "keep_first"},
     )
+    if predicted and trimmed_dims:
+        predicted = _trimmed_envelopes(predicted, outputs, trimmed_dims)
     outputs = _apply_predictions(outputs, predicted, name)
     aux_info = {}
     if not predicted:
