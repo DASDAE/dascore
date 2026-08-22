@@ -1743,6 +1743,16 @@ def build_concat_plan(
     policed_df = sorted_df.assign(**blanked)
     carried = _carried_columns(policed_df, codes, seg_starts, name, conflict, active)
     data: dict[str, Any] = {k: v.reset_index(drop=True) for k, v in carried.items()}
+    if "data_units" in sorted_df.columns:
+        # Data units scale the data, so assembly converts every member to
+        # the first units any member states rather than letting a loosened
+        # policy splice differently scaled samples (`concatenate_planned`).
+        # The row has to say the same, or it would describe kilometre-scaled
+        # samples by a first member's silence -- or, under `drop`, not at all.
+        first_stated = known_only(sorted_df[["data_units"]])["data_units"]
+        first_stated = first_stated.groupby(codes, sort=True).first()
+        if first_stated.notna().any():
+            data["data_units"] = first_stated.reset_index(drop=True)
     if has_envelope and not along.all():
         # rows gaining the dimension have no values along it; what their
         # column holds belongs to a coordinate the new dimension replaces
@@ -1825,9 +1835,10 @@ def build_concat_plan(
             first[i] if uniform[i] else _combined_dtype(all_dtypes.iloc[a : a + n])
             for i, (a, n) in enumerate(zip(seg_starts, sizes))
         ]
-        if conflict == "keep_first" and "data_units" in sorted_df.columns:
-            # keeping one spelling of the data units converts the members
-            # stated otherwise, which floats an integer array
+        if conflict != "raise" and "data_units" in sorted_df.columns:
+            # settling on one spelling of the data units converts the members
+            # stated otherwise, which floats an integer array; `drop` reaches
+            # the same conversion, since units are reconciled either way
             stated = known_only(sorted_df[["data_units"]])["data_units"]
             converts = stated.groupby(codes, sort=True).nunique(dropna=True) > 1
             combined = [

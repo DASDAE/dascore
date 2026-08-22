@@ -754,7 +754,11 @@ class TestConcatPlan:
             build_concat_plan(mixed, time=None)
         plan = build_concat_plan(mixed, time=None, conflict="drop")
         assert len(plan.outputs) == 1
-        assert "data_units" not in plan.outputs.columns
+        # dropping the conflict still leaves the row stating the units the
+        # members are converted to, which is what the patch will hold
+        assert dc.get_quantity(plan.outputs["data_units"].iloc[0]) == dc.get_quantity(
+            "km"
+        )
 
     def test_new_dimension_is_described(self, trio):
         """An output along a new dimension names it, claiming no envelope."""

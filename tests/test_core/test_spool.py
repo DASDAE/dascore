@@ -1224,6 +1224,30 @@ class TestConcatenatePartitions:
         out = dc.spool([km, metres]).concatenate(time=None, conflict="keep_first")
         assert np.allclose(out[0].data[:, n:], metres.data / 1000)
 
+    def test_rows_state_the_reconciled_units(self, pair):
+        """The row must declare the units assembly converts the members to."""
+        first, other = pair
+        bare, km = first.set_units(None), other.set_units("km")
+        for conflict in ("keep_first", "drop"):
+            out = dc.spool([bare, km]).concatenate(time=None, conflict=conflict)
+            row_units = out.get_contents()["data_units"].iloc[0]
+            assert dc.get_quantity(row_units) == dc.get_quantity("km")
+            assert dc.get_quantity(out[0].attrs.data_units) == dc.get_quantity(
+                row_units
+            )
+
+    def test_rows_state_the_dtype_the_conversion_produces(self, pair):
+        """Converting an integer member floats it under every loosened policy."""
+        first, other = pair
+        km = first.new(data=first.data.astype("int32")).set_units("km")
+        metres = other.new(data=other.data.astype("int32")).set_units("m")
+        for conflict in ("keep_first", "drop"):
+            out = dc.spool([km, metres]).concatenate(time=None, conflict=conflict)
+            contents = out.get_contents()
+            assert out[0].data.dtype.kind == "f"
+            if "_dtype" in contents.columns:  # the relation may not state one
+                assert np.dtype(contents["_dtype"].iloc[0]) == out[0].data.dtype
+
     def test_different_dims_partition(self, pair):
         """Other dimensions are another partition, not an error."""
         first, other = pair
