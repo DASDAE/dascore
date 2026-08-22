@@ -12,6 +12,7 @@ import pandas as pd
 import pytest
 
 import dascore as dc
+from dascore.core.coords import get_coord
 from dascore.exceptions import MissingPatchError, ParameterError
 from dascore.io.index.catalog import PatchCatalog
 from dascore.io.index.planned import (
@@ -663,3 +664,109 @@ class TestPredictedCoords:
         empty = plan.members.iloc[:0]
         assert predicted_coords(backend, empty, "time") == {}
         assert predicted_coords(None, plan.members, "time") == {}
+
+
+class TestWhatAMergeWillNotCarry:
+    """A row states a coordinate only where the patch will hold it."""
+
+    @pytest.fixture()
+    def pair(self):
+        """Two patches meeting end to end along time."""
+        first = dc.get_example_patch()
+        time = first.get_coord("time")
+        second = dc.get_example_patch(time_min=time.max() + time.step)
+        return first, second
+
+    def test_rider_only_one_member_states(self, pair, assert_contents_match):
+        """A merge drops a coordinate its members do not all hold."""
+        first, second = pair
+        samples = first.shape[first.get_axis("time")]
+        held = first.update_coords(bar=("time", np.arange(float(samples))))
+        merged = dc.spool([held, second]).chunk(time=None)
+        assert "bar" not in merged[0].coords.coord_map
+        assert "bar_min" not in merged.get_contents().columns
+        assert_contents_match(merged)
+
+    def test_conflicting_rider_is_dropped_in_the_fallback(
+        self, pair, assert_contents_match
+    ):
+        """A re-plan describes no coordinate the merge drops for conflicting."""
+        first, second = pair
+        axis = first.get_axis("distance")
+        values = np.arange(float(first.shape[axis]))
+        left = first.update_coords(
+            depth=("distance", get_coord(values=values, units="m"))
+        )
+        right = second.update_coords(
+            depth=("distance", get_coord(values=values, units="ft"))
+        )
+        time = first.get_coord("time")
+        step = (time.max() - time.min()) / 3
+        spool = dc.spool([left, right]).chunk(time=step, conflict="drop")
+        # the subdivision keeps it wherever an output has one member; the
+        # output spanning the seam merges two spellings and drops it
+        assert "depth" in spool[0].coords.coord_map
+        stated = spool.get_contents()["depth_min"]
+        assert stated.notnull().any() and stated.isnull().any()
+        # merging them back drops it, and the row must not still state it
+        again = spool.chunk(time=None, conflict="drop")
+        assert "depth" not in again[0].coords.coord_map
+        assert "depth_min" not in again.get_contents().columns
+
+
+class TestRidersKeepMemberOrder:
+    """A concatenation lays members end to end; the join sorts them."""
+
+    def _pair(self, low, high):
+        """Two contiguous patches carrying a rider on time."""
+        first = dc.get_example_patch()
+        time = first.get_coord("time")
+        second = dc.get_example_patch(time_min=time.max() + time.step)
+        samples = first.shape[first.get_axis("time")]
+        return (
+            first.update_coords(foo=("time", np.arange(*low, dtype=float))),
+            second.update_coords(foo=("time", np.arange(*high, dtype=float))),
+        ), samples
+
+    def test_reversed_rider_claims_no_structure(self, assert_contents_match):
+        """Blocks running backwards concatenate into an array, not a range."""
+        first = dc.get_example_patch()
+        samples = first.shape[first.get_axis("time")]
+        (pair, _) = self._pair((samples, 2 * samples), (0, samples))
+        spool = dc.spool(list(pair)).concatenate(time=None)
+        row = spool.get_contents().iloc[0]
+        assert pd.isnull(row["foo_step"])
+        frame = spool._catalog.to_df()
+        assert not str(frame["_foo_def_key"].iloc[0]).startswith("fp:")
+        assert_contents_match(spool)
+
+    def test_ordered_rider_keeps_its_identity(self, assert_contents_match):
+        """Blocks already in order do join into one range."""
+        first = dc.get_example_patch()
+        samples = first.shape[first.get_axis("time")]
+        (pair, _) = self._pair((0, samples), (samples, 2 * samples))
+        spool = dc.spool(list(pair)).concatenate(time=None)
+        assert spool.get_contents().iloc[0]["foo_step"] == 1.0
+        assert_contents_match(spool)
+
+
+class TestMomentsAndDurations:
+    """A datetime and a timedelta are not two spellings of one kind."""
+
+    def test_mixed_time_kinds_state_no_envelope(self):
+        """Neither bounds the other, so the row states neither."""
+        first = dc.get_example_patch()
+        time = first.get_coord("time")
+        second = dc.get_example_patch(time_min=time.max() + time.step)
+        samples = first.shape[first.get_axis("time")]
+        moment = get_coord(values=time.values.copy(), units="s")
+        duration = get_coord(
+            values=np.arange(samples).astype("timedelta64[s]"), units="s"
+        )
+        spool = dc.spool(
+            [
+                first.update_coords(stamp=("time", moment)),
+                second.update_coords(stamp=("time", duration)),
+            ]
+        ).concatenate(time=None)
+        assert pd.isnull(spool.get_contents().iloc[0]["stamp_min"])

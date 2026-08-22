@@ -755,6 +755,14 @@ def _assert_contents_match_patches(spool, skip=()):
         "source_patch_key",
         *skip,
     }
+    claimed = sorted(
+        c
+        for c in set(described.columns) - set(actual.columns) - ignored
+        if described[c].notnull().any()
+    )
+    if claimed:
+        msg = f"the catalog states columns its patches do not hold: {claimed}"
+        raise AssertionError(msg)
     columns = sorted(common - ignored)
     left, right = described[columns], actual[columns]
     same = (left == right) | (pd.isnull(left) & pd.isnull(right))

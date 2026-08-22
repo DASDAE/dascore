@@ -277,10 +277,12 @@ def _member_summaries(backend, members: pd.DataFrame) -> dict:
         if summary is not None:
             out.setdefault(int(row["patch_id"]), {})[name] = summary
     if set(out) != set(ids):
-        # Re-planning a derived view collapses to the *grandparent's*
-        # members, whose ids this index does not use; matching them here
-        # would describe the wrong patches. The plan's own rows then say
-        # what the outputs hold, as they did before.
+        # Members this backend does not name describe other patches, so
+        # nothing here says what the outputs hold and the plan's own rows
+        # answer instead. Bare integers from two indexes also overlap by
+        # chance, which this cannot see: the collapse that would ask such
+        # a question is recognized by provenance in `derived_catalog`,
+        # which passes no backend at all.
         return {}
     return out
 
@@ -382,11 +384,28 @@ def _unvouched(trimmed: bool) -> dict:
     return void
 
 
+def _joins_in_member_order(
+    summaries: Sequence[CoordSummary], joined: CoordSummary
+) -> bool:
+    """Whether the members already lie in the order the join put them in."""
+    if joined.step is None:
+        # nothing structural is claimed of a join with no step, so the
+        # order the blocks lie in changes nothing this can protect
+        return True
+    # a summary's min is its smallest value whichever way it runs, so the
+    # direction comes from the step; `step - step` is its own zero
+    descending = joined.step < joined.step - joined.step
+    lows = [x.min for x in summaries]
+    return lows == sorted(lows, reverse=descending)
+
+
 def _summary_kind(summary: CoordSummary) -> str:
     """Whether a summary holds times, numbers or labels."""
     kind = np.dtype(summary.dtype).kind if summary.dtype else ""
     if kind in "mM":
-        return "time"
+        # a moment and a duration are both spelled with time units and
+        # cannot be compared with each other, so they are not one kind
+        return "datetime" if kind == "M" else "timedelta"
     return "str" if kind in "USO" else "num"
 
 
@@ -528,13 +547,18 @@ def _describe(
         return None
     rides = plan_dim == name or plan_dim in first.dims
     trimmed = bool(set(first.dims) & trimmed_dims)
+    if mode == "chunk" and not every_member:
+        # A merge keeps only what every member states:
+        # merge_coord_managers drops the rest (see
+        # _drop_unshared_coordinates), so describing it would advertise a
+        # coordinate the patch will not carry. This holds for a rider as
+        # much as for a coordinate standing outside the merged dimension.
+        return None
     if not rides:
         agreed = len({x.fingerprint for x in summaries}) == 1
-        if mode == "chunk" and not (every_member and (agreed or not drop_conflicting)):
-            # A merge keeps only what every member states and agrees on:
-            # merge_coord_managers drops the rest (see
-            # _drop_unshared_coordinates), so describing it would
-            # advertise a coordinate the patch will not carry.
+        if mode == "chunk" and not (agreed or not drop_conflicting):
+            # the members disagree, and a merge told to drop conflicts
+            # will drop this one rather than choose between them
             return None
         if agreed and not trimmed:
             return first
@@ -551,6 +575,12 @@ def _describe(
     if joined is None:
         return _union_summary(summaries)
     raw_join = mode == "concat" or name != plan_dim
+    if raw_join and not _joins_in_member_order(summaries, joined):
+        # The join sorted these blocks; the concatenation will not. Their
+        # values interleave or run backwards once laid end to end, so the
+        # result is an array whose order -- and identity -- the sorted
+        # join does not describe.
+        joined = joined.model_copy(update=dict(step=None))
     if raw_join and joined.step is None:
         # Only the merged dimension is built by the join this predicts
         # with. A concatenation, and a rider on either path, has its raw
@@ -571,6 +601,9 @@ def _aux_coord_info(
     plan_dim: str,
     coord_dims_map: Mapping[str, str],
     trimmed_dims: frozenset[str] = frozenset(),
+    *,
+    mode: str = "chunk",
+    drop_conflicting: bool = False,
 ) -> dict[int, dict[str, dict]]:
     """
     Aggregate per-output envelope info for auxiliary coordinates.
@@ -645,6 +678,18 @@ def _aux_coord_info(
         held = grouped[cmin].count().to_numpy() > 0
         if key_col in joined.columns:
             held = held | (grouped[key_col].count().to_numpy() > 0)
+        if mode == "chunk":
+            # A merge keeps only what every member states, and only what
+            # they agree on when told to drop conflicts: assembly drops
+            # the rest, so naming it here would advertise a coordinate
+            # the patch will not carry.
+            stated = grouped[cmin].count().to_numpy()
+            if key_col in joined.columns:
+                stated = np.maximum(stated, grouped[key_col].count().to_numpy())
+            dropped = stated != grouped.size().to_numpy()
+            if drop_conflicting and key_col in joined.columns:
+                dropped = dropped | (grouped[key_col].nunique().to_numpy() != 1)
+            held = held & ~dropped
         absent = ~held
         for index in np.flatnonzero(~absent):
             step = step_first[index] if step_first is not None else None
@@ -659,6 +704,37 @@ def _aux_coord_info(
                 "dims": dims,
             }
             out.setdefault(int(output_ids[index]), {})[name] = info
+    return out
+
+
+def _clear_dropped_aux(
+    outputs: pd.DataFrame,
+    aux_info: Mapping[int, Mapping[str, Mapping]],
+    coord_dims_map: Mapping[str, str],
+    plan_dim: str,
+) -> pd.DataFrame:
+    """
+    Blank the envelope columns of coordinates the output will not carry.
+
+    A coordinate `_aux_coord_info` does not describe is one assembly
+    drops. Its envelope columns are carried from the members and would
+    otherwise survive as ordinary metadata, so the row would still state
+    values for a coordinate the patch does not hold.
+    """
+    names = [x for x in coord_dims_map if x != plan_dim]
+    if not names:
+        return outputs
+    out = outputs.copy(deep=False)
+    ids = [int(x) for x in out["output_id"]]
+    for name in names:
+        gone = [name not in aux_info.get(x, {}) for x in ids]
+        if not any(gone):
+            continue
+        columns = [f"{name}_min", f"{name}_max", f"{name}_step", f"_{name}_units"]
+        for column in (x for x in columns if x in out.columns):
+            kept = out[column].to_numpy(dtype=object, copy=True)
+            kept[np.array(gone)] = None
+            out[column] = pd.Series(kept, index=out.index, dtype=object)
     return out
 
 
@@ -1119,8 +1195,18 @@ def derived_catalog(
     snap = (
         merge_kwargs.get("tolerance") if merge_kwargs.get("snap_coords", True) else None
     )
+    # Re-planning a derived view on its own dimension collapses to the
+    # *grandparent's* members (see `collapse_working_df`), which this
+    # backend holds no coordinates for: its ids name the derived outputs,
+    # and asking it about a member id would describe the wrong patch.
+    collapsed = (
+        parent is not None
+        and isinstance(parent.resolver, PlanResolver)
+        and parent.resolver.dim == name
+        and not parent.resolver.lossy
+    )
     predicted = predicted_coords(
-        None if parent is None else parent.backend,
+        None if parent is None or collapsed else parent.backend,
         trims,
         name,
         trimmed_dims=trimmed_dims,
@@ -1133,7 +1219,16 @@ def derived_catalog(
     if not predicted:
         # a re-plan whose members this index does not know: the auxiliary
         # coordinates are described from the member rows, as before
-        aux_info = _aux_coord_info(sources, trims, name, coord_dims_map, trimmed_dims)
+        aux_info = _aux_coord_info(
+            sources,
+            trims,
+            name,
+            coord_dims_map,
+            trimmed_dims,
+            mode=mode,
+            drop_conflicting=merge_kwargs.get("conflict") in {"drop", "keep_first"},
+        )
+        outputs = _clear_dropped_aux(outputs, aux_info, coord_dims_map, name)
     records = _output_records(outputs, token, aux_info=aux_info, predicted=predicted)
     backend.write_sources(records)
     return PatchCatalog(backend=backend, resolver=resolver)
