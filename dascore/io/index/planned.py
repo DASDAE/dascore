@@ -24,7 +24,7 @@ import numpy as np
 import pandas as pd
 
 import dascore as dc
-from dascore.core.coord_join import join_summaries
+from dascore.core.coord_join import join_summaries, raw_join_summary
 from dascore.core.coords import CoordSummary
 from dascore.exceptions import UnitError
 from dascore.io.index.backend import get_backend
@@ -639,6 +639,11 @@ def _describe(
         # result is an array whose order -- and identity -- the sorted
         # join does not describe.
         joined = joined.model_copy(update=dict(step=None))
+    if raw_join:
+        # The join generated one grid from a single start; the
+        # concatenation lays each member's own values end to end, which
+        # for floats is not always the same coordinate.
+        joined = raw_join_summary(summaries, joined)
     if raw_join and joined.step is None:
         # Only the merged dimension is built by the join this predicts
         # with. A concatenation, and a rider on either path, has its raw

@@ -1070,3 +1070,44 @@ class TestWhatTheUnionCarriesOver:
         # the output is real, so a selection over it must keep it
         assert len(spool.select(distance=(-1, 1))) == 1
         assert_contents_match(spool)
+
+
+class TestRawJoinsUseRawValues:
+    """A concatenation lays values end to end; a range regenerates them."""
+
+    def _pieces(self, lengths, start=-10.0, step=0.1):
+        """Patches whose distance ranges meet but drift inside their spans."""
+        time = dc.get_example_patch().get_coord("time")
+        patches = []
+        for length in lengths:
+            distance = get_coord(start=start, step=step, stop=start + step * length)
+            data = np.random.default_rng(0).random((length, len(time)))
+            patches.append(
+                dc.Patch(
+                    data=data,
+                    coords={"distance": distance, "time": time},
+                    dims=("distance", "time"),
+                )
+            )
+            start = start + step * length
+        return patches
+
+    def test_drifting_floats_state_the_step_they_will_have(self, assert_contents_match):
+        """Boundaries can match while interior samples do not."""
+        spool = dc.spool(self._pieces((2, 3, 4))).concatenate(distance=None)
+        loaded = spool[0].get_coord("distance")
+        assert spool.get_contents().iloc[0]["distance_step"] == loaded.step
+        frame = spool._catalog.backend.coord_frame([0, 1, 2, 3])
+        stated = frame[frame["coord_name"] == "distance"]["fingerprint"].iloc[0]
+        assert stated == loaded.fingerprint()
+        assert_contents_match(spool)
+
+    def test_floats_which_do_not_drift_keep_the_fused_range(
+        self, assert_contents_match
+    ):
+        """Rebuilding from values is a correction, not a policy."""
+        spool = dc.spool(self._pieces((2, 3, 4), start=0.0, step=1.0)).concatenate(
+            distance=None
+        )
+        assert spool.get_contents().iloc[0]["distance_step"] == 1.0
+        assert_contents_match(spool)

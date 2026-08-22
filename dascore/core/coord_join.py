@@ -19,7 +19,7 @@ from collections.abc import Sequence
 
 import numpy as np
 
-from dascore.core.coords import CoordSummary, concat_coords
+from dascore.core.coords import CoordSummary, concat_coords, get_coord
 from dascore.exceptions import CoordError
 from dascore.units import get_quantity
 from dascore.utils.misc import get_middle_value
@@ -96,6 +96,35 @@ def join_summaries(
         # which did not survive. The envelope holds either way.
         stated = stated.model_copy(update=dict(fingerprint=None, step=None, len=None))
     return stated
+
+
+def raw_join_summary(
+    summaries: Sequence[CoordSummary], joined: CoordSummary
+) -> CoordSummary:
+    """
+    What laying the members' own values end to end actually gives.
+
+    A raw concatenation hands those values to
+    [`get_coord`](`dascore.core.coords.get_coord`), which reads the step
+    back off them, while a fused range is generated from a single start.
+    The two agree in exact arithmetic, so integer and datetime grids are
+    returned untouched; floating members generated from their own starts
+    can drift from the fused grid inside their span even where every
+    boundary matches, and the coordinate which loads is then a different
+    one with a different step and identity. Where they do drift, the
+    values are already in hand, so the answer is built from them rather
+    than guessed at.
+    """
+    if joined.step is None or not joined.len:
+        return joined  # nothing structural is claimed either way
+    if np.dtype(joined.dtype).kind != "f":
+        return joined
+    raw = np.concatenate([x.to_coord(on_grid=True).values for x in summaries])
+    grid = joined.to_coord(on_grid=True).values
+    if raw.shape == grid.shape and np.array_equal(raw, grid):
+        return joined
+    stated = get_coord(values=raw, units=joined.units).to_summary()
+    return stated.model_copy(update=dict(dims=joined.dims))
 
 
 def _rebuilt_faithfully(summaries, coords) -> bool:
