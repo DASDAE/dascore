@@ -178,9 +178,10 @@ jobs:
     env:
       # Whether this run has a pull request to comment on, and something
       # trustworthy to say. A push has no pull request; a fork's token is
-      # read-only, as test_doc_build.yml also has to allow for; and a failed
-      # test cell leaves a hole in the combined data.
-      can_comment: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && needs.test_code.result == 'success' }}
+      # read-only, as test_doc_build.yml also has to allow for, and so is
+      # Dependabot's even though its branch is in this repository; and a
+      # failed test cell leaves a hole in the combined data.
+      can_comment: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'dependabot[bot]' && needs.test_code.result == 'success' }}
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -258,9 +259,14 @@ jobs:
           table=$(coverage report --format=markdown --show-missing --skip-covered)
           # A comment past 65,536 characters is refused, which would turn a
           # coverage problem into a workflow error. The log has every line.
-          rows=$(printf '%s\n' "$table" | tail -n +3 | wc -l)
+          # Sliced in bash rather than piped through head: the runner's shell
+          # sets pipefail, so head closing the pipe early on a large table
+          # would kill this step with SIGPIPE -- in exactly the case the cap
+          # is here for.
+          mapfile -t lines <<< "$table"
+          rows=$(( ${#lines[@]} - 2 ))  # less the header and its underline
           if [ "$rows" -gt 40 ]; then
-            table=$(printf '%s\n' "$table" | head -n 42)
+            table=$(printf '%s\n' "${lines[@]:0:42}")
             table="${table}"$'\n\n'"…and $((rows - 40)) more files; the job log lists them all."
           fi
           if [ "${#table}" -gt 60000 ]; then
