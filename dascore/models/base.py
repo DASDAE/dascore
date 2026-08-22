@@ -17,6 +17,7 @@ from pydantic import (
     model_serializer,
     model_validator,
 )
+from rich.text import Text
 
 from dascore.compat import is_array_like
 from dascore.exceptions import InvalidInventoryError
@@ -28,6 +29,7 @@ from dascore.models.registry import (
     register_model,
 )
 from dascore.models.types import DateTime64, FrozenDictType
+from dascore.utils.display import model_to_line
 from dascore.utils.misc import _all_null, all_close
 from dascore.utils.time import to_datetime64
 
@@ -236,6 +238,15 @@ class InventoryModel(DascoreBaseModel):
         out = self.model_dump()
         out.update(kwargs)
         return self.__class__(**out)
+
+    def __rich__(self) -> Text:
+        """One line naming the class and what it states."""
+        return model_to_line(self)
+
+    def __str__(self) -> str:
+        return str(self.__rich__())
+
+    __repr__ = __str__
 
 
 class TimeRangedModel(InventoryModel):

@@ -9,6 +9,7 @@ import numpy as np
 import pandas as pd
 import pytest
 from pydantic import ValidationError
+from rich.text import Text
 
 import dascore as dc
 from dascore.core.annotations import (
@@ -131,8 +132,45 @@ class TestConstruction:
 
     def test_repr_names_contents(self, region_set):
         """The repr says how many annotations and over which dimensions."""
-        assert "3 annotations" in repr(region_set)
-        assert "time" in repr(region_set)
+        out = repr(region_set)
+        assert "3 Annotations" in out
+        assert "time" in out and "distance" in out
+        assert "event: 2" in out  # the groups it holds, and how many of each
+
+    def test_repr_states_dimension_extent(self, region_set):
+        """A dimension the set states is shown by what it spans."""
+        out = repr(region_set)
+        assert "min: 0.000 max: 100.000" in out
+        # A dimension no column spells has no extent to state.
+        assert "unstated" in out
+
+    def test_repr_of_empty_set(self):
+        """An empty set still has a repr, and claims no contents."""
+        out = repr(AnnotationSet(None, dims=DIMS))
+        assert "0 Annotations" in out
+        assert "Contents" not in out
+
+    def test_repr_counts_vertices(self, path_set):
+        """A set holding a path names its geometry kinds and its vertices."""
+        out = repr(path_set)
+        assert "path: 1" in out and "region: 1" in out
+        assert "vertices: 3" in out
+
+    def test_repr_shows_attributes(self):
+        """What the set says of itself is shown, and defaults are not."""
+        out = repr(AnnotationSet(None, dims=DIMS, acquisition_key="XT.TUN1.00.DAS"))
+        assert "acquisition_key: XT.TUN1.00.DAS" in out
+        assert "history" not in out  # unset, so it states nothing
+
+    def test_rich(self, region_set):
+        """Annotation sets have a rich representation."""
+        assert isinstance(region_set.__rich__(), Text)
+
+    def test_annotation_repr(self, region_set):
+        """One annotation names its class and what it states."""
+        out = repr(region_set[0])
+        assert out.startswith("Annotation(")
+        assert "group: event" in out
 
     def test_equality(self, region_set):
         """Two sets built the same way are equal."""

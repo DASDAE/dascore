@@ -42,8 +42,9 @@ from pydantic import (
     field_validator,
     model_validator,
 )
+from rich.text import Text
 
-from dascore.constants import DataCategory, DataType
+from dascore.constants import DataCategory, DataType, dascore_styles
 from dascore.exceptions import InvalidInventoryError, ParameterError
 from dascore.models import (
     DateTime64,
@@ -52,6 +53,14 @@ from dascore.models import (
     InventoryModel,
     TimeRangedModel,
     UnitQuantity,
+)
+from dascore.utils.display import (
+    get_header_text,
+    indent_text,
+    limit_reprs,
+    mapping_to_text,
+    model_to_line,
+    stated_fields,
 )
 from dascore.utils.documents import (
     dump_document,
@@ -230,6 +239,20 @@ class CoordinateReferenceSystem(InventoryModel):
             )
             raise InvalidInventoryError(msg)
         return self
+
+    def __rich__(self) -> Text:
+        """
+        One line naming the frame and its axes.
+
+        Stated in full rather than through the usual default-skipping
+        summary: the default CRS is a real answer, and an empty line for
+        it would say the inventory has no frame.
+        """
+        base = Text(self.__class__.__name__, style="bold") + Text("(")
+        base += Text(f" {self.authority}:{self.code}")
+        base += Text("  axes: ", dascore_styles["keys"])
+        base += Text(", ".join(self.coordinate_labels))
+        return base + Text(" )")
 
     def axis_index(self, label: str) -> int:
         """
@@ -628,6 +651,16 @@ class Geometry(InventoryModel):
         return out
 
 
+def _distance_line(model, skip=()) -> Text:
+    """One line for a model covering an interval of optical distance."""
+    span = f"[{model.start_distance:g}, {model.end_distance:g}) m"
+    return model_to_line(
+        model,
+        skip=(*skip, "start_distance", "end_distance"),
+        extra={"distance": span},
+    )
+
+
 class _IntervalModel(InventoryModel):
     """
     Base for items covering the half-open interval [start, end) of optical
@@ -661,6 +694,10 @@ class _IntervalModel(InventoryModel):
             )
             raise InvalidInventoryError(msg)
         return self
+
+    def __rich__(self) -> Text:
+        """One line stating the interval this item covers."""
+        return _distance_line(self)
 
     @property
     def optical_length(self) -> float:
@@ -826,6 +863,20 @@ class DistanceMap(InventoryModel):
                 "interrogator samples at a fixed spacing."
             )
             raise InvalidInventoryError(msg)
+
+    def __rich__(self) -> Text:
+        """
+        One line naming the axes mapped and how many points do it.
+
+        The control points themselves are a table rather than a fact, and
+        a measured map holds enough of them to bury the line it sits on.
+        """
+        axes = " and ".join(self.axes)
+        points = f"{len(self.distance)} control points"
+        base = Text(self.__class__.__name__, style="bold") + Text("(")
+        base += Text(f" {axes} -> distance", dascore_styles["keys"])
+        base += Text(f", {points}")
+        return base + Text(" )")
 
     @property
     def axes(self) -> tuple[str, ...]:
@@ -1195,6 +1246,10 @@ class OpticalPath(TimeRangedModel):
         default=(),
         description="OTDR and other optical measurements of this whole path.",
     )
+
+    def __rich__(self) -> Text:
+        """One line naming the path, its extent, and its track sizes."""
+        return _distance_line(self)
 
     @property
     def optical_length(self) -> float:
@@ -1708,6 +1763,13 @@ class FiberArray(TimeRangedModel):
         default=(), description="Optical paths associated with this fiber array."
     )
 
+    def __rich__(self) -> Text:
+        """The array's own line, then the reprs of what it holds."""
+        base = model_to_line(self, skip=("acquisitions", "optical_paths"))
+        for child in limit_reprs((*self.acquisitions, *self.optical_paths)):
+            base += Text("\n") + indent_text(child)
+        return base
+
     def check(self) -> Self:
         """
         Check epoch rules for this fiber array.
@@ -1760,6 +1822,13 @@ class Network(TimeRangedModel):
     stations: tuple[Station, ...] = Field(
         default=(), description="Stations in this network."
     )
+
+    def __rich__(self) -> Text:
+        """The network's own line, then the reprs of what it holds."""
+        base = model_to_line(self, skip=("fiber_arrays", "stations"))
+        for child in limit_reprs((*self.fiber_arrays, *self.stations)):
+            base += Text("\n") + indent_text(child)
+        return base
 
     def check(self) -> Self:
         """
@@ -2107,6 +2176,35 @@ class Inventory(NamespaceOwner, InventoryModel):
         object.__setattr__(self, "networks", networks)
         self.__pydantic_fields_set__.update({"resources", "networks"})
         return self
+
+    def __rich__(self) -> Text:
+        """
+        The banner, the network tree, and what the manifest itself states.
+
+        The tree is the networks' own reprs indented into place, so an
+        inventory says nothing about a network the network does not.
+        """
+        header = get_header_text("Inventory 📖")
+        networks = Text("➤ ") + Text("Networks", style=dascore_styles["dc_blue"])
+        networks += Text(f" ({len(self.networks)})")
+        for network in limit_reprs(self.networks):
+            networks += Text("\n") + indent_text(network)
+        # schema_version, resources and the CRS are stated whether or not
+        # they are the defaults: an inventory has a version and a frame,
+        # and a blank line for either would read as having neither.
+        shown = ("networks", "schema_version", "resources")
+        attrs = {
+            "schema_version": self.schema_version,
+            "resources": len(self.resources),
+            **stated_fields(self, skip=shown),
+            "coordinate_reference_system": self.coordinate_reference_system,
+        }
+        return Text("\n").join([header, networks, mapping_to_text(attrs, "Attributes")])
+
+    def __str__(self) -> str:
+        return str(self.__rich__())
+
+    __repr__ = __str__
 
     def get_resource(self, resource_id: str):
         """Return the shareable resource registered under a resource_id."""

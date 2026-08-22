@@ -11,8 +11,10 @@ import numpy as np
 import pytest
 import yaml
 from pydantic import ValidationError
+from rich.text import Text
 
 import dascore as dc
+from dascore.config import config_context
 from dascore.constants import INVENTORY_ATTRS
 from dascore.core import Inventory
 from dascore.core import inventory as inv
@@ -1645,6 +1647,71 @@ class TestCoverageCompleteness:
         assert values_equal(np.array([1.0, np.nan]), np.array([1.0, np.nan]))
         assert not values_equal({"a": 1}, {"b": 1})
         assert values_equal((1.0, np.nan), (1.0, np.nan))
+
+
+class TestDisplay:
+    """Tests for the inventory's text representation."""
+
+    @pytest.fixture(scope="class")
+    def tunnel(self):
+        """A populated inventory with two optical paths."""
+        return dc.get_example_inventory("tunnel")
+
+    def test_rich(self, tunnel):
+        """An inventory has a rich representation."""
+        assert isinstance(tunnel.__rich__(), Text)
+
+    def test_empty_inventory(self):
+        """An empty inventory still prints, and says it holds nothing."""
+        out = str(dc.Inventory())
+        assert "Networks (0)" in out
+        assert "schema_version: 1" in out
+
+    def test_names_the_tree(self, tunnel):
+        """The tree is composed of the reprs of what the inventory holds."""
+        out = str(tunnel)
+        network = tunnel.networks[0]
+        array = network.fiber_arrays[0]
+        assert str(network.__rich__()).splitlines()[0] in out
+        assert str(array.__rich__()).splitlines()[0] in out
+        for path in array.optical_paths:
+            assert str(path.__rich__()) in out
+
+    def test_shorter_than_a_field_dump(self, tunnel):
+        """A repr is a glance; the whole manifest is not."""
+        dumped = len(str(tunnel.model_dump()))
+        assert len(str(tunnel)) < dumped / 10
+
+    def test_coordinate_reference_system_stated(self, tunnel):
+        """The frame is shown even where it is the default one."""
+        assert "coordinate_reference_system" in str(tunnel)
+        assert "EPSG:4979" in str(dc.Inventory())
+
+    def test_path_states_its_extent(self, tunnel):
+        """An optical path shows the distances it covers."""
+        path = tunnel.networks[0].fiber_arrays[0].optical_paths[0]
+        assert f"[{path.start_distance:g}, {path.end_distance:g}) m" in str(path)
+
+    def test_interval_states_its_extent(self, tunnel):
+        """So does anything else which covers an interval of distance."""
+        label = tunnel.networks[0].fiber_arrays[0].optical_paths[0].labels[0]
+        assert "distance: [" in str(label)
+        assert "start_distance" not in str(label)  # stated by the interval
+
+    def test_distance_map_counts_points(self, tunnel):
+        """A measured map names its axes rather than listing its points."""
+        acquisition = tunnel.networks[0].fiber_arrays[0].acquisitions[0]
+        out = str(acquisition.distance_map)
+        assert "-> distance" in out
+        assert "control points" in out
+
+    def test_children_elided(self):
+        """A container says how many children it is not showing."""
+        stations = [{"code": f"S{x}"} for x in range(5)]
+        network = inv.Network(code="XT", stations=stations)
+        with config_context(display_max_items=2):
+            out = str(network)
+        assert "... 3 more" in out
 
 
 class TestObjectTypeTag:

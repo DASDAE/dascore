@@ -41,8 +41,9 @@ from pydantic import (
     ValidationError,
     model_validator,
 )
+from rich.text import Text
 
-from dascore.constants import max_lens
+from dascore.constants import dascore_styles, max_lens
 from dascore.core.inventory import CreationInfo
 from dascore.exceptions import ParameterError
 from dascore.models import (
@@ -52,6 +53,14 @@ from dascore.models import (
     FrozenDictType,
     PositiveFiniteFloat,
     UnitQuantity,
+)
+from dascore.utils.display import (
+    counts_to_text,
+    get_header_text,
+    get_nice_text,
+    mapping_to_text,
+    model_to_line,
+    stated_fields,
 )
 from dascore.utils.documents import write_document
 from dascore.utils.intervals import normalize_value, value_kind
@@ -277,6 +286,15 @@ class _AnnotationModel(DascoreBaseModel):
         validate_default=True,
         arbitrary_types_allowed=True,
     )
+
+    def __rich__(self) -> Text:
+        """One line naming the class and what it states."""
+        return model_to_line(self)
+
+    def __str__(self) -> str:
+        return str(self.__rich__())
+
+    __repr__ = __str__
 
 
 # --- Curves ---------------------------------------------------------------
@@ -877,12 +895,56 @@ class AnnotationSet(NamespaceOwner):
             )
         )
 
-    def __repr__(self) -> str:
-        """Name the set by what it holds."""
-        dims = ", ".join(self.dims)
-        return f"AnnotationSet({len(self)} annotations, dims=({dims}))"
+    def __rich__(self) -> Text:
+        """The banner, then what the set spans, holds, and says of itself."""
+        count = len(self)
+        plural = "" if count == 1 else "s"
+        name = f"AnnotationSet \U0001f3f7 ({count} Annotation{plural})"
+        blocks = [get_header_text(name), self._dims_text()]
+        if contents := self._contents():
+            blocks.append(mapping_to_text(contents, "Contents", style="dc_red"))
+        attrs = stated_fields(self._attrs, skip=("dims",))
+        if attrs:
+            blocks.append(mapping_to_text(attrs, "Attributes"))
+        return Text("\n").join(blocks)
 
-    __str__ = __repr__
+    def __str__(self) -> str:
+        return str(self.__rich__())
+
+    __repr__ = __str__
+
+    def _dims_text(self) -> Text:
+        """The extent each dimension is annotated over, and how it is spelled."""
+        key_style = dascore_styles["keys"]
+        base = Text("➤ ") + Text("Dimensions", style=dascore_styles["dc_blue"])
+        base += Text(" (") + Text(", ".join(self.dims), style="bold") + Text(")")
+        for dim in self.dims:
+            spelling = self._spellings[dim]
+            spelled = (spelling.point, spelling.start, spelling.end)
+            names = [x for x in spelled if x and x in self._df.columns]
+            columns = [self._df[x] for x in names] or [pd.Series(dtype=float)]
+            values = pd.concat(columns, ignore_index=True).dropna()
+            base += Text.assemble("\n    *", Text(dim, style="bold"), ": ")
+            if not len(values):
+                base += Text("unstated", key_style)
+                continue
+            base += Text("min: ", key_style) + get_nice_text(values.min())
+            base += Text(" max: ", key_style) + get_nice_text(values.max())
+            kind = "point" if spelling.point else "range"
+            base += Text(f" ({kind})", key_style)
+        return base
+
+    def _contents(self) -> dict:
+        """What the set holds: its kinds, its groups, and its columns."""
+        contents = {}
+        for name in ("geometry", "group"):
+            if name in self._df.columns:
+                contents[name] = counts_to_text(self._df[name].value_counts())
+        if len(self._df.columns):
+            contents["columns"] = ", ".join(str(x) for x in self._df.columns)
+        if len(self._vertices):
+            contents["vertices"] = len(self._vertices)
+        return contents
 
     # --- internals
 
