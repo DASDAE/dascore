@@ -99,6 +99,10 @@ def get_patch(name: str):
         # Dimensions which carry no coordinate, which is the shape
         # `make_broadcastable_to` is for.
         return patch.mean()
+    if name == "flat_coord":
+        # A non-dimensional coord which says one thing about the patch.
+        ones = np.ones(patch.coord_shapes["distance"])
+        return patch.update_coords(quality=("distance", ones))
     if name == "shifted":
         # Each channel carries the time it should be aligned by.
         small = patch.select(distance=(0, 50))
@@ -180,6 +184,7 @@ CALLS: tuple[tuple[str, str, tuple, dict], ...] = (
     ("envelope", "default", ("time",), {}),
     ("dropna", "null", ("time",), {"how": "all"}),
     ("squeeze", "default", (), {"dim": None}),
+    ("squeeze_coords", "flat_coord", ("quality",), {}),
     ("idft", "dft", (), {"dim": "ft_time"}),
     ("sobel_filter", "default", ("time",), {"mode": "reflect"}),
     # -- aggregations

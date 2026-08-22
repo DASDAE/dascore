@@ -9,7 +9,7 @@ import pytest
 import dascore as dc
 import dascore.proc.coords
 from dascore.compat import is_array
-from dascore.core.coords import BaseCoord
+from dascore.core.coords import BaseCoord, CoordPartial
 from dascore.exceptions import (
     CoordError,
     ParameterError,
@@ -878,6 +878,142 @@ class TestSqueeze:
         """CoordManager squeeze with no length-1 dims returns self."""
         coords = random_patch.coords
         assert coords.squeeze() is coords
+
+
+class TestSqueezeCoords:
+    """Tests for turning single valued coords into attrs."""
+
+    @pytest.fixture(scope="class")
+    def patch_with_flat_coords(self, random_patch):
+        """A patch with a few coords which hold only one value."""
+        dist_len = random_patch.coord_shapes["distance"][0]
+        time_start = random_patch.get_coord("time").min()
+        return random_patch.update_coords(
+            quality=("distance", np.ones(dist_len)),
+            start=("distance", np.full(dist_len, time_start)),
+            varying=("distance", np.arange(dist_len)),
+            lone=(None, np.array([12])),
+            label=("distance", np.array(["good"] * dist_len)),
+        )
+
+    def test_coords_become_attrs(self, patch_with_flat_coords):
+        """Single valued coords should be dropped and stored in attrs."""
+        out = patch_with_flat_coords.squeeze_coords()
+        assert {"quality", "lone"}.isdisjoint(out.coords.coord_map)
+        assert out.attrs.get("quality") == 1
+        assert out.attrs.get("lone") == 12
+
+    def test_data_unchanged(self, patch_with_flat_coords):
+        """Only coords are squeezed; the data are not touched."""
+        out = patch_with_flat_coords.squeeze_coords()
+        assert out.shape == patch_with_flat_coords.shape
+        assert np.array_equal(out.data, patch_with_flat_coords.data)
+
+    def test_multi_valued_coord_kept(self, patch_with_flat_coords):
+        """A coord with more than one value stays a coord."""
+        out = patch_with_flat_coords.squeeze_coords()
+        assert "varying" in out.coords.coord_map
+
+    def test_string_coord(self, patch_with_flat_coords):
+        """A string coord becomes a plain string attr."""
+        out = patch_with_flat_coords.squeeze_coords()
+        assert out.attrs.get("label") == "good"
+
+    def test_time_stays_datetime(self, patch_with_flat_coords):
+        """A time-like coord keeps its numpy type in the attrs."""
+        out = patch_with_flat_coords.squeeze_coords()
+        assert isinstance(out.attrs.get("start"), np.datetime64)
+
+    def test_specified_coords(self, patch_with_flat_coords):
+        """Naming coords squeezes only those, and sequences work."""
+        out = patch_with_flat_coords.squeeze_coords(["quality"])
+        assert "quality" not in out.coords.coord_map
+        assert "lone" in out.coords.coord_map
+
+    def test_units_dropped(self, random_patch):
+        """Only the value of the coord is kept, not its units."""
+        dist_len = random_patch.coord_shapes["distance"][0]
+        patch = random_patch.update_coords(
+            depth=("distance", np.full(dist_len, 10.0))
+        ).set_units(depth="m")
+        out = patch.squeeze_coords()
+        assert out.attrs.get("depth") == 10.0
+
+    def test_dim_raises(self, patch_with_flat_coords):
+        """Dimensions are never squeezed, even when named."""
+        msg = "because it is a dimension"
+        with pytest.raises(CoordError, match=msg):
+            patch_with_flat_coords.squeeze_coords("distance")
+
+    def test_missing_coord_raises(self, patch_with_flat_coords):
+        """A coord which isn't in the patch raises."""
+        msg = "not found in Patch"
+        with pytest.raises(CoordError, match=msg):
+            patch_with_flat_coords.squeeze_coords("not_a_coord")
+
+    def test_multi_valued_named_raises(self, patch_with_flat_coords):
+        """Naming a coord with several values raises."""
+        msg = "does not hold exactly one non-null value"
+        with pytest.raises(CoordError, match=msg):
+            patch_with_flat_coords.squeeze_coords("varying")
+
+    def test_null_coord_not_squeezed(self, random_patch):
+        """A coord with no known values doesn't become an attr."""
+        dist_len = random_patch.coord_shapes["distance"][0]
+        patch = random_patch.update_coords(
+            nully=("distance", np.full(dist_len, np.nan))
+        )
+        assert "nully" in patch.squeeze_coords().coords.coord_map
+
+    def test_single_null_value_not_squeezed(self, random_patch):
+        """One null value is still nothing to say in an attr."""
+        patch = random_patch.update_coords(
+            lone_nan=(None, np.array([np.nan])),
+            lone_nat=(None, np.array(["NaT"], dtype="datetime64[ns]")),
+        )
+        assert patch.squeeze_coords() is patch
+
+    def test_partial_coord_not_squeezed(self, random_patch):
+        """A coord which only knows its shape holds no value."""
+        dist_len = random_patch.coord_shapes["distance"][0]
+        coord = CoordPartial(shape=(dist_len,), dtype=np.float64)
+        patch = random_patch.update_coords(partial=("distance", coord))
+        assert "partial" in patch.squeeze_coords().coords.coord_map
+
+    def test_empty_coord_not_squeezed(self, random_patch):
+        """A coord with no values at all holds nothing to store."""
+        patch = random_patch.update_coords(empty=(None, np.array([])))
+        assert patch.squeeze_coords() is patch
+
+    def test_empty_selection_does_nothing(self, patch_with_flat_coords):
+        """Asking for no coords squeezes no coords."""
+        assert patch_with_flat_coords.squeeze_coords([]) is patch_with_flat_coords
+
+    def test_multi_dim_coord(self, random_patch):
+        """A coord spanning several dims is squeezed like any other."""
+        patch = random_patch.update_coords(
+            grid=(random_patch.dims, np.ones(random_patch.shape))
+        )
+        out = patch.squeeze_coords()
+        assert out.attrs.get("grid") == 1
+        assert out.shape == random_patch.shape
+
+    def test_reserved_name_not_squeezed(self, random_patch):
+        """A coord named for an attr the patch owns is left alone."""
+        patch = random_patch.update_coords(history=(None, np.array(["abc"])))
+        assert patch.squeeze_coords() is patch
+        msg = "reserve that name"
+        with pytest.raises(CoordError, match=msg):
+            patch.squeeze_coords("history")
+
+    def test_length_one_dim_untouched(self, random_patch):
+        """A length one dimension is left for Patch.squeeze."""
+        patch = random_patch.select(distance=0, samples=True)
+        assert patch.squeeze_coords() is patch
+
+    def test_noop_returns_self(self, random_patch):
+        """A patch with nothing to squeeze is handed back."""
+        assert random_patch.squeeze_coords() is random_patch
 
 
 class TestGetCoord:

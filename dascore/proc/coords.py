@@ -23,6 +23,7 @@ from dascore.utils.array_api import array_namespace
 from dascore.utils.docs import compose_docstring
 from dascore.utils.misc import get_parent_code_name, iterate
 from dascore.utils.patch import patch_function
+from dascore.utils.time import dtype_time_like
 from dascore.workflow.processor import (
     PatchProcessor,
     register_implementation,
@@ -901,6 +902,11 @@ def squeeze(self: PatchType, dim=None) -> PatchType:
     >>>
     >>> # Squeeze the length-1 time dimension
     >>> squeezed = single_time.squeeze(dim="time")
+
+    Notes
+    -----
+    Non-dimensional coordinates which hold a single value are removed by
+    [`Patch.squeeze_coords`](`dascore.Patch.squeeze_coords`).
     """
     coords = self.coords.squeeze(dim)
     # Nothing to squeeze; the coord manager returned self, so reuse this patch.
@@ -913,6 +919,140 @@ def squeeze(self: PatchType, dim=None) -> PatchType:
     xp = array_namespace(self.data)
     data = xp.squeeze(self.data, axis=axes)
     return self.new(data=data, coords=coords)
+
+
+# Says a coord has no lone value, told apart from a coord whose lone
+# value is itself falsey.
+_NO_VALUE = object()
+
+# The attrs the patch machinery owns, which a coord cannot be stored
+# under: `dims` is dropped on the way into the attrs, `coords` is refused
+# there, and the rest are stamped over by the decorator once this returns.
+_RESERVED_ATTRS = frozenset({"coords", "dims", "history", "patch_id", "processing_id"})
+
+
+def _get_lone_value(coord: BaseCoord):
+    """Return the only value a coord holds, or _NO_VALUE if it has no such."""
+    if not coord.size:
+        return _NO_VALUE
+    values = np.asarray(coord.values).reshape(-1)
+    value = values[0]
+    if values.size > 1 and not bool(np.all(values == value)):
+        return _NO_VALUE
+    # A nullish value is what a coord says when it doesn't know, which a
+    # partial coord says for every sample. Not something to state as an
+    # attr, so such a coord keeps its shape and stays a coord.
+    if pd.isnull(value):
+        return _NO_VALUE
+    # Times stay numpy scalars, as the rest of the attrs spell them;
+    # everything else is nicer to store as the python value.
+    if not dtype_time_like(values.dtype) and hasattr(value, "item"):
+        value = value.item()
+    return value
+
+
+@patch_function()
+def squeeze_coords(self: PatchType, *coords: str | Iterable[str]) -> PatchType:
+    """
+    Convert coordinates which hold a single value to attributes.
+
+    A coordinate whose values are all the same says one thing about the
+    patch rather than one thing about each sample. Each such coordinate is
+    dropped and its value stored in the patch attrs under the coordinate's
+    name.
+
+    Parameters
+    ----------
+    *coords
+        The names of the coordinates to squeeze, or sequences of them. If
+        none are given, every non-dimensional coordinate which holds a
+        single value is squeezed.
+
+    Raises
+    ------
+    CoordError
+        If a named coordinate is not in the patch, is a dimension, is
+        named for an attr the patch machinery owns, or does not hold
+        exactly one non-null value.
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> import dascore as dc
+    >>>
+    >>> patch = dc.get_example_patch()
+    >>>
+    >>> # Add a coordinate which has the same value for each distance.
+    >>> quality = np.ones(patch.coord_shapes["distance"])
+    >>> patch = patch.update_coords(quality=("distance", quality))
+    >>>
+    >>> # The coordinate becomes an attribute.
+    >>> out = patch.squeeze_coords()
+    >>> assert "quality" not in out.coords.coord_map
+    >>> assert out.attrs.get("quality") == 1
+
+    Notes
+    -----
+    - Dimensions are never squeezed, even when they have length one; use
+      [`Patch.squeeze`](`dascore.Patch.squeeze`) for those.
+    - Coordinate units are not kept, only the value.
+    - A coordinate whose only value is null (NaN or NaT) says nothing to
+      store, and is left alone.
+    - An attribute of the same name is overwritten, and the value it is
+      given must be one the attrs can hold.
+    """
+    cm = self.coords
+    # Whether the caller named the coords, rather than whether naming
+    # them came to anything: an empty sequence asks for nothing, and
+    # gets it.
+    named = bool(coords)
+    if named:
+        names = tuple(x for coord in coords for x in iterate(coord))
+    else:
+        names = tuple(x for x in cm.coord_map if x not in cm.dims)
+    values = {}
+    for name in names:
+        # A named coord must qualify, so the caller hears about one which
+        # doesn't; the sweep just passes over it.
+        if named:
+            _validate_squeezable(cm, name)
+        elif name in _RESERVED_ATTRS:
+            continue
+        value = _get_lone_value(cm.coord_map[name])
+        if value is _NO_VALUE:
+            if not named:
+                continue
+            msg = (
+                f"Cannot squeeze coordinate {name} because it does not "
+                f"hold exactly one non-null value."
+            )
+            raise CoordError(msg)
+        values[name] = value
+    # Nothing qualified, so nothing happened.
+    if not values:
+        return self
+    new_coords, _ = cm.drop_coords(*values)
+    attrs = self.attrs.model_dump(exclude_unset=True) | values
+    return self.new(coords=new_coords, attrs=attrs)
+
+
+def _validate_squeezable(cm, name: str) -> None:
+    """Ensure a named coord is one which could become an attr."""
+    if name not in cm.coord_map:
+        msg = f"Coordinate {name} not found in Patch. Cannot squeeze it."
+        raise CoordError(msg)
+    if name in cm.dims:
+        msg = (
+            f"Cannot squeeze coordinate {name} because it is a dimension. "
+            f"Use Patch.squeeze to remove length one dimensions."
+        )
+        raise CoordError(msg)
+    if name in _RESERVED_ATTRS:
+        msg = (
+            f"Cannot squeeze coordinate {name} because the patch attrs "
+            f"reserve that name. Rename the coordinate first."
+        )
+        raise CoordError(msg)
 
 
 @patch_function()

@@ -371,6 +371,7 @@ class Patch(NamespaceOwner):
     pipe = dascore.proc.pipe
     set_dims = dascore.proc.set_dims
     squeeze = dascore.proc.coords.squeeze
+    squeeze_coords = dascore.proc.coords.squeeze_coords
     append_dims = dascore.proc.coords.append_dims
     split_gaps = dascore.proc.coords.split_gaps
     transpose = dascore.proc.coords.transpose
