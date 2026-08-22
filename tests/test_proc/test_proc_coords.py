@@ -909,14 +909,27 @@ class TestSqueezeCoords:
         assert out.shape == patch_with_flat_coords.shape
         assert np.array_equal(out.data, patch_with_flat_coords.data)
 
+    def test_other_attrs_kept(self, patch_with_flat_coords):
+        """Squeezing adds to the attrs rather than replacing them."""
+        patch = patch_with_flat_coords.update_attrs(tag="mytag")
+        out = patch.squeeze_coords()
+        assert out.attrs.tag == "mytag"
+
+    def test_dim_coord_intact(self, patch_with_flat_coords):
+        """The dim a squeezed coord hung off is left as it was."""
+        out = patch_with_flat_coords.squeeze_coords()
+        assert out.get_coord("distance") == patch_with_flat_coords.get_coord("distance")
+
     def test_multi_valued_coord_kept(self, patch_with_flat_coords):
         """A coord with more than one value stays a coord."""
         out = patch_with_flat_coords.squeeze_coords()
         assert "varying" in out.coords.coord_map
 
-    def test_string_coord(self, patch_with_flat_coords):
-        """A string coord becomes a plain string attr."""
+    def test_values_are_python_scalars(self, patch_with_flat_coords):
+        """Values which aren't times are stored as python scalars."""
         out = patch_with_flat_coords.squeeze_coords()
+        assert type(out.attrs.get("label")) is str
+        assert type(out.attrs.get("quality")) is float
         assert out.attrs.get("label") == "good"
 
     def test_time_stays_datetime(self, patch_with_flat_coords):
@@ -953,7 +966,7 @@ class TestSqueezeCoords:
 
     def test_multi_valued_named_raises(self, patch_with_flat_coords):
         """Naming a coord with several values raises."""
-        msg = "does not hold exactly one non-null value"
+        msg = "values are not all the same non-null value"
         with pytest.raises(CoordError, match=msg):
             patch_with_flat_coords.squeeze_coords("varying")
 
@@ -975,10 +988,11 @@ class TestSqueezeCoords:
 
     def test_partial_coord_not_squeezed(self, random_patch):
         """A coord which only knows its shape holds no value."""
-        dist_len = random_patch.coord_shapes["distance"][0]
-        coord = CoordPartial(shape=(dist_len,), dtype=np.float64)
-        patch = random_patch.update_coords(partial=("distance", coord))
-        assert "partial" in patch.squeeze_coords().coords.coord_map
+        # Length one, so it gets past the all-the-same test and is
+        # refused for the nullish value a partial coord stands for.
+        coord = CoordPartial(shape=(1,), dtype=np.float64)
+        patch = random_patch.update_coords(partial=(None, coord))
+        assert patch.squeeze_coords() is patch
 
     def test_empty_coord_not_squeezed(self, random_patch):
         """A coord with no values at all holds nothing to store."""
@@ -998,18 +1012,58 @@ class TestSqueezeCoords:
         assert out.attrs.get("grid") == 1
         assert out.shape == random_patch.shape
 
-    def test_reserved_name_not_squeezed(self, random_patch):
-        """A coord named for an attr the patch owns is left alone."""
-        patch = random_patch.update_coords(history=(None, np.array(["abc"])))
+    def test_private_coord_not_squeezed(self, random_patch):
+        """A private coord belongs to the operation which made it."""
+        patch = random_patch.stft(time=0.1, taper_window="boxcar")
+        assert "_stft_window" in patch.coords.coord_map
         assert patch.squeeze_coords() is patch
-        msg = "reserve that name"
+        msg = "because it is private"
         with pytest.raises(CoordError, match=msg):
-            patch.squeeze_coords("history")
+            patch.squeeze_coords("_stft_window")
+
+    def test_object_coord_not_squeezed(self, random_patch):
+        """An object coord holds no value the attrs can state."""
+        dist_len = random_patch.coord_shapes["distance"][0]
+        values = np.empty(dist_len, dtype=object)
+        values[:] = [(1, 2)] * dist_len
+        patch = random_patch.update_coords(pairs=("distance", values))
+        assert patch.squeeze_coords() is patch
+
+    @pytest.mark.parametrize("name", ["history", "tag", "data_units", "update"])
+    def test_reserved_name_not_squeezed(self, random_patch, name):
+        """A coord named for something the attrs use is left alone."""
+        patch = random_patch.update_coords(**{name: (None, np.array(["abc"]))})
+        assert patch.squeeze_coords() is patch
+        msg = "already use that name"
+        with pytest.raises(CoordError, match=msg):
+            patch.squeeze_coords(name)
+
+    def test_transform_source_coord_not_squeezed(self, random_patch):
+        """The coord a transform needs to invert itself is left alone."""
+        patch = random_patch.select(time=(0, 1), samples=True).dft("time")
+        assert patch.squeeze_coords() is patch
+        msg = "needs it to be inverted"
+        with pytest.raises(CoordError, match=msg):
+            patch.squeeze_coords("time")
+
+    def test_complex_coord_not_squeezed(self, random_patch):
+        """A complex value is not one the attrs can state."""
+        patch = random_patch.update_coords(phase=(None, np.array([1 + 1j])))
+        assert patch.squeeze_coords() is patch
+
+    def test_none_sweeps(self, patch_with_flat_coords):
+        """A None argument means no argument, as Patch.squeeze spells it."""
+        out = patch_with_flat_coords.squeeze_coords(None)
+        assert out.equals(patch_with_flat_coords.squeeze_coords())
 
     def test_length_one_dim_untouched(self, random_patch):
         """A length one dimension is left for Patch.squeeze."""
-        patch = random_patch.select(distance=0, samples=True)
-        assert patch.squeeze_coords() is patch
+        patch = random_patch.select(distance=0, samples=True).update_coords(
+            quality=("distance", np.ones(1))
+        )
+        out = patch.squeeze_coords()
+        assert "distance" in out.dims
+        assert out.attrs.get("quality") == 1
 
     def test_noop_returns_self(self, random_patch):
         """A patch with nothing to squeeze is handed back."""

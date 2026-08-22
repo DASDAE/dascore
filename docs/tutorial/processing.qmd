@@ -44,7 +44,7 @@ print(f"Post-squeeze shape: {squeezed.shape}")
 
 ## Squeeze coords
 
-[`squeeze_coords`](`dascore.Patch.squeeze_coords`) does the same for non-dimensional coordinates: a coordinate whose values are all the same is dropped and its value stored in the patch attrs under the coordinate's name. Units are not kept.
+[`squeeze_coords`](`dascore.Patch.squeeze_coords`) does something similar for non-dimensional coordinates: a coordinate whose values are all the same, however long it is, is dropped and its value stored in the patch attrs under the coordinate's name. Units are not kept.
 
 ```{python}
 import numpy as np

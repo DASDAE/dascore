@@ -24,6 +24,7 @@ from dascore.utils.docs import compose_docstring
 from dascore.utils.misc import get_parent_code_name, iterate
 from dascore.utils.patch import patch_function
 from dascore.utils.time import dtype_time_like
+from dascore.utils.transformatter import FourierTransformatter
 from dascore.workflow.processor import (
     PatchProcessor,
     register_implementation,
@@ -905,8 +906,9 @@ def squeeze(self: PatchType, dim=None) -> PatchType:
 
     Notes
     -----
-    Non-dimensional coordinates which hold a single value are removed by
-    [`Patch.squeeze_coords`](`dascore.Patch.squeeze_coords`).
+    [`Patch.squeeze_coords`](`dascore.Patch.squeeze_coords`) does the
+    analogous thing for non-dimensional coordinates whose values are all
+    the same: it drops them and stores the value in the attrs.
     """
     coords = self.coords.squeeze(dim)
     # Nothing to squeeze; the coord manager returned self, so reuse this patch.
@@ -921,21 +923,40 @@ def squeeze(self: PatchType, dim=None) -> PatchType:
     return self.new(data=data, coords=coords)
 
 
-# Says a coord has no lone value, told apart from a coord whose lone
-# value is itself falsey.
+# Sentinel for a coord with no lone value, since a lone value can itself
+# be falsey.
 _NO_VALUE = object()
 
-# The attrs the patch machinery owns, which a coord cannot be stored
-# under: `dims` is dropped on the way into the attrs, `coords` is refused
-# there, and the rest are stamped over by the decorator once this returns.
-_RESERVED_ATTRS = frozenset({"coords", "dims", "history", "patch_id", "processing_id"})
+
+# Names the attrs already use, so a coord value cannot be stored under
+# them. Asked of the class rather than listed: a declared field validates
+# or coerces whatever it is given (`data_type=3.0` becomes `"3.0"`), a
+# method shadows the value on the way back out, `dims` is dropped on the
+# way in and `coords` refused there, and the decorator stamps `history`
+# and both ids over once this returns.
+def _reserved_attr(name: str) -> bool:
+    """Whether the patch attrs already use a name for something else."""
+    attrs = dc.PatchAttrs
+    if name in {"coords", "dims"} or name in attrs.model_fields:
+        return True
+    return hasattr(attrs, name)
+
+
+# What an attr can hold and the rest of DASCore can write down: numbers,
+# booleans, text, times. An object coord holds python objects, which need
+# not even compare elementwise (an entry which is itself a sequence
+# broadcasts instead), and a complex value is read back as a time by the
+# spool index.
+_STATEABLE_KINDS = frozenset("biufSUMm")
 
 
 def _get_lone_value(coord: BaseCoord):
-    """Return the only value a coord holds, or _NO_VALUE if it has no such."""
+    """Return the single distinct value a coord holds, or _NO_VALUE if it has none."""
     if not coord.size:
         return _NO_VALUE
     values = np.asarray(coord.values).reshape(-1)
+    if values.dtype.kind not in _STATEABLE_KINDS:
+        return _NO_VALUE
     value = values[0]
     if values.size > 1 and not bool(np.all(values == value)):
         return _NO_VALUE
@@ -944,8 +965,8 @@ def _get_lone_value(coord: BaseCoord):
     # attr, so such a coord keeps its shape and stays a coord.
     if pd.isnull(value):
         return _NO_VALUE
-    # Times stay numpy scalars, as the rest of the attrs spell them;
-    # everything else is nicer to store as the python value.
+    # Times stay numpy scalars, matching how the other attrs store them;
+    # everything else stores better as a python scalar.
     if not dtype_time_like(values.dtype) and hasattr(value, "item"):
         value = value.item()
     return value
@@ -972,8 +993,9 @@ def squeeze_coords(self: PatchType, *coords: str | Iterable[str]) -> PatchType:
     ------
     CoordError
         If a named coordinate is not in the patch, is a dimension, is
-        named for an attr the patch machinery owns, or does not hold
-        exactly one non-null value.
+        private, is named for something the patch attrs already use, is
+        needed to invert a transform, or does not hold the same non-null
+        value the attrs can state for every sample.
 
     Examples
     --------
@@ -996,63 +1018,89 @@ def squeeze_coords(self: PatchType, *coords: str | Iterable[str]) -> PatchType:
     - Dimensions are never squeezed, even when they have length one; use
       [`Patch.squeeze`](`dascore.Patch.squeeze`) for those.
     - Coordinate units are not kept, only the value.
-    - A coordinate whose only value is null (NaN or NaT) says nothing to
-      store, and is left alone.
-    - An attribute of the same name is overwritten, and the value it is
-      given must be one the attrs can hold.
+    - A coordinate whose only value is null (NaN or NaT), or whose values
+      are of a type the attrs cannot state (an object or a complex
+      number), is left alone.
+    - So are the coordinates which are not the patch's to state: a
+      private one (whose name begins with an underscore), one needed to
+      invert a transform ([`Patch.idft`](`dascore.Patch.idft`) reads
+      `time` off a patch whose dimension is `ft_time`), and one named
+      for something the attrs already use, such as `tag` or `history`.
+      All of these are passed over by the sweep, and raise when named.
+    - An attribute of the same name is overwritten.
+    - Which coordinates the sweep takes depends on the values a patch
+      holds, so patches in a spool can come out with different
+      coordinates. Name the coordinates to squeeze the same ones
+      everywhere.
     """
     cm = self.coords
-    # Whether the caller named the coords, rather than whether naming
-    # them came to anything: an empty sequence asks for nothing, and
-    # gets it.
-    named = bool(coords)
-    if named:
-        names = tuple(x for coord in coords for x in iterate(coord))
-    else:
-        names = tuple(x for x in cm.coord_map if x not in cm.dims)
+    # True when the caller named coords at all: an explicitly empty
+    # sequence squeezes nothing rather than sweeping every coord.
+    given = tuple(x for x in coords if x is not None)
+    named = bool(given)
+    names = (
+        tuple(x for coord in given for x in iterate(coord))
+        if named
+        else tuple(cm.coord_map)
+    )
     values = {}
     for name in names:
-        # A named coord must qualify, so the caller hears about one which
-        # doesn't; the sweep just passes over it.
-        if named:
-            _validate_squeezable(cm, name)
-        elif name in _RESERVED_ATTRS:
+        value, refusal = _get_squeezed_value(cm, name)
+        # A named coord must qualify, so one which doesn't raises; the
+        # sweep skips it silently.
+        if refusal:
+            if named:
+                raise CoordError(refusal)
             continue
-        value = _get_lone_value(cm.coord_map[name])
-        if value is _NO_VALUE:
-            if not named:
-                continue
-            msg = (
-                f"Cannot squeeze coordinate {name} because it does not "
-                f"hold exactly one non-null value."
-            )
-            raise CoordError(msg)
         values[name] = value
     # Nothing qualified, so nothing happened.
     if not values:
         return self
     new_coords, _ = cm.drop_coords(*values)
-    attrs = self.attrs.model_dump(exclude_unset=True) | values
-    return self.new(coords=new_coords, attrs=attrs)
+    return self.new(coords=new_coords, attrs=self.attrs.update(**values))
 
 
-def _validate_squeezable(cm, name: str) -> None:
-    """Ensure a named coord is one which could become an attr."""
+def _get_squeezed_value(cm, name: str) -> tuple[Any, str]:
+    """Return the value a coord becomes, and why it cannot become one."""
     if name not in cm.coord_map:
-        msg = f"Coordinate {name} not found in Patch. Cannot squeeze it."
-        raise CoordError(msg)
+        # Said as `Patch.get_coord` says it, listing what is there.
+        coords = sorted(cm.coord_map)
+        msg = f"Coordinate '{name}' not found in Patch coordinates: {coords}"
+        return _NO_VALUE, msg
     if name in cm.dims:
         msg = (
             f"Cannot squeeze coordinate {name} because it is a dimension. "
             f"Use Patch.squeeze to remove length one dimensions."
         )
-        raise CoordError(msg)
-    if name in _RESERVED_ATTRS:
+        return _NO_VALUE, msg
+    if _reserved_attr(name):
         msg = (
             f"Cannot squeeze coordinate {name} because the patch attrs "
-            f"reserve that name. Rename the coordinate first."
+            f"already use that name. Rename the coordinate first."
         )
-        raise CoordError(msg)
+        return _NO_VALUE, msg
+    # A private coord belongs to whichever operation put it there --
+    # `stft` reads its window back in `istft` -- so it is not the
+    # patch's to state as an attr.
+    if name.startswith("_"):
+        return _NO_VALUE, f"Cannot squeeze coordinate {name} because it is private."
+    # A transform leaves the coordinate it consumed behind under its own
+    # name so the transform can be undone: `idft` reads `time` off a
+    # patch whose dimension is `ft_time`.
+    if name in FourierTransformatter().rename_dims(cm.dims, forward=False):
+        msg = (
+            f"Cannot squeeze coordinate {name} because the transform "
+            f"which made this patch needs it to be inverted."
+        )
+        return _NO_VALUE, msg
+    value = _get_lone_value(cm.coord_map[name])
+    if value is _NO_VALUE:
+        msg = (
+            f"Cannot squeeze coordinate {name} because its values are "
+            f"not all the same non-null value."
+        )
+        return _NO_VALUE, msg
+    return value, ""
 
 
 @patch_function()
