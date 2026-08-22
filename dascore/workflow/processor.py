@@ -31,6 +31,7 @@ Examples
 
 from __future__ import annotations
 
+import functools
 import inspect
 import re
 import warnings
@@ -39,15 +40,16 @@ from contextlib import suppress
 from functools import cached_property, lru_cache
 from typing import Any, ClassVar
 
-from pydantic import Field
+from pydantic import Field, PrivateAttr
 
 from dascore.constants import PatchType
 from dascore.exceptions import ParameterError
 from dascore.utils.misc import suppress_warnings
 from dascore.warnings import DASCoreWarning
 from dascore.workflow.checks import attr_type, check_patch_attrs, check_patch_coords
+from dascore.workflow.meta import PatchMeta
 from dascore.workflow.serialize import digest
-from dascore.workflow.task import Task, _resolve_default
+from dascore.workflow.task import _VERSION_KEY, Task, _resolve_default
 
 # Stands in for the patch while a call is bound to a signature. The bind
 # only needs something to put in that slot; nothing ever looks at it.
@@ -96,6 +98,11 @@ class PatchProcessor(Task):
     so that the patch function's name reaches them.
     """
 
+    # Everything `patch_function` is given, so that a processor is a whole
+    # description of its operation rather than half of one. Something
+    # reading a chain of these -- to fuse them, to compile them -- has the
+    # decorator nowhere in reach, and needs all of it.
+    #
     # What the patch must hold. Stated on the class rather than passed to
     # `run`, because it is a property of the operation and not of the call.
     required_dims: ClassVar[tuple[str, ...] | str | None] = None
@@ -104,15 +111,36 @@ class PatchProcessor(Task):
     # What the result is, when the operation changes it; None leaves it as
     # it was, and "" clears it.
     data_type: ClassVar[str | None] = None
+    # How the call is written into the patch's history, or None for an
+    # operation which records nothing. `transpose` is the live case.
+    history: ClassVar[str | None] = "full"
+    # Whether the function's arguments are checked by pydantic on the way
+    # in. A processor validates its own fields, so this is here to be
+    # reconciled with the decorator rather than acted on.
+    validate_call: ClassVar[bool] = False
+
+    # The registry tag this class implements, set by
+    # `register_implementation`. Empty until it is registered.
+    _patch_function: ClassVar[str] = ""
+    # Kernels registered for a particular array backend, by
+    # `register_kernel`. Looked up in `__dict__` per class, never
+    # inherited wholesale, so a subclass does not silently answer for its
+    # parent's backends.
+    _kernels: ClassVar[dict[str, Any]] = {}
 
     def check(self, patch: PatchType) -> PatchType:
         """
         Refuse a patch which does not carry what the operation needs.
 
-        A subclass which declares `required_dims`, `required_coords` or
-        `required_attrs` has to call this from its own `run`; nothing calls
-        it for you yet. The framework `run` which will call it arrives with
-        the first plan/kernel split.
+        The framework does not call this, and deliberately: a registered
+        processor is reached through its patch function, whose decorator
+        has already run the same checks from its own declaration of them.
+        Running them again from the class's declaration would mean two
+        sources of truth which can disagree in silence.
+        `register_implementation` reconciles the two instead, at import.
+
+        It is still here for a hand-written `run` which does not go
+        through a patch function, which has nothing else to call.
 
         Parameters
         ----------
@@ -132,6 +160,158 @@ class PatchProcessor(Task):
         """
         check_patch_coords(patch, dims=self.required_dims, coords=self.required_coords)
         return check_patch_attrs(patch, self.required_attrs)
+
+    # --- the surface a PatchOp has -----------------------------------
+    #
+    # A registered processor stands where a `PatchOp` would, so it answers
+    # the same questions. Every contract parametrised over all the patch
+    # functions -- the fingerprint, the document, the pickle -- then keeps
+    # passing without knowing which of the two it got.
+
+    @property
+    def name(self) -> str:
+        """Return the registry tag of the operation this implements."""
+        return self._patch_function
+
+    @property
+    def kwargs(self) -> dict:
+        """Return the arguments the operation was given."""
+        return self._params()
+
+    # The function's version, read once when the operation is built. A
+    # `PatchOp` keeps it as a field for the same reason: an operation is
+    # what it was when it was written down, so a later bump of the
+    # function must not reach back and change what an existing one
+    # fingerprints as.
+    _captured_version: str = PrivateAttr(default="")
+
+    def model_post_init(self, context) -> None:
+        """Record the version the function was at when this was built."""
+        function = _REGISTERED.get(self._patch_function)
+        version = getattr(function, "__version__", self.__version__)
+        object.__setattr__(self, "_captured_version", version)
+
+    @property
+    def version(self) -> str:
+        """
+        Return the version the operation is declared at.
+
+        The patch function's, not this class's. Registration pins the two
+        equal, so they can only part when the function is bumped -- and a
+        bump has to reach the fingerprint, which is the whole reason a
+        version exists.
+        """
+        return self._captured_version or self.__version__
+
+    def to_dict(self) -> dict:
+        """
+        Return a document which describes this operation.
+
+        The version written down is the function's, so the document
+        fingerprints as it did when it was written even after the
+        function has moved on.
+        """
+        return super().to_dict() | {_VERSION_KEY: self.version}
+
+    @property
+    def node_name(self) -> str:
+        """Return the name this operation goes by where a task is labelled."""
+        return self.name.replace(_SEPARATOR, "_")
+
+    def fingerprint_at(self, version: str) -> str:
+        """
+        Return the digest which identifies this operation and its arguments.
+
+        Spelled as the `PatchOp` for the same call would spell it, not as
+        this class. Registering a hand-written implementation is meant to
+        be invisible from outside: were the class name to reach the
+        digest, every `processing_id` ever recorded for the operation
+        would stop matching, and every stored document with it.
+        """
+        return _fingerprint(self.name, self.version, self.kwargs)
+
+    def run(self, patch: PatchType) -> Any:
+        """
+        Run the operation against a patch.
+
+        Through the patch function, not straight into `_apply`: the
+        function's decorator is what writes the history and stamps the
+        ids, and a processor reached by `.op(...)` has to come out the
+        same as one reached by calling the method.
+        """
+        function = resolve_patch_function(self.name)
+        args, kwargs = _as_call(function, self.kwargs)
+        return function(patch, *args, **kwargs)
+
+    # --- the seam ----------------------------------------------------
+
+    def derive_meta(self, meta: PatchMeta) -> PatchMeta:
+        """
+        Return what the result's metadata is.
+
+        Never sees an array, which is what lets something fuse a chain of
+        operations without holding any data. The default says the
+        operation changes nothing: right for anything elementwise.
+        """
+        return meta
+
+    def plan_kernel(self, meta: PatchMeta, out_meta: PatchMeta):
+        """
+        Return the array function this call is, or None to touch no data.
+
+        Both metadata objects are given because a kernel often needs the
+        difference between them -- `transpose` wants the permutation which
+        takes the old dimension order to the new.
+
+        The default finds a kernel registered for the data's backend, and
+        failing that the class's own `kernel`, which is written to the
+        array API standard and so runs on any of them. A class with no
+        kernel at all is a metadata-only operation and gets None.
+        """
+        if (found := _resolve_kernel(type(self), meta.backend)) is None:
+            return None
+        return functools.partial(found, self, meta=meta, out_meta=out_meta)
+
+    def reconcile(self, data, meta: PatchMeta) -> PatchMeta:
+        """
+        Return the metadata the data actually turned out to have.
+
+        Defining this says the operation cannot be fused: it is the one
+        step which has to see both halves at once. The default only
+        carries the data's dtype back, since a kernel may promote.
+        """
+        dtype = getattr(data, "dtype", meta.dtype)
+        return meta if dtype == meta.dtype else meta.update(dtype=dtype)
+
+    def _apply(self, patch: PatchType) -> PatchType:
+        """
+        Run the operation, metadata first and then the data.
+
+        This is what a patch function's body calls. It does none of the
+        ceremony around an operation -- the checks, the history, the
+        lineage ids -- because the patch function's decorator is still
+        wrapped around this call and is already doing all of it. Doing it
+        here as well would count every operation twice.
+        """
+        meta = PatchMeta.from_patch(patch)
+        out_meta = self.derive_meta(meta)
+        kernel = self.plan_kernel(meta, out_meta)
+        data = patch.data if kernel is None else kernel(patch.data)
+        # An operation which changed neither half did nothing, and hands
+        # back the patch it was given rather than an equal one. The
+        # decorator reads that as nothing having happened, so no history
+        # is written and no id advances -- which is what `conj` on real
+        # data and a transpose into the order already held both mean.
+        #
+        # A kernel says "nothing to do" by handing its argument back, so
+        # a kernel must not write into that argument and return it: the
+        # result would be a change nothing records. Patch data is marked
+        # read-only where the backend allows it, but not every array-like
+        # can promise that, so this is a contract rather than a guard --
+        # checking it would mean hashing the data on every operation.
+        if data is patch.data and out_meta is meta:
+            return patch
+        return self.reconcile(data, out_meta).to_patch(data)
 
 
 class PatchOp(Task):
@@ -263,6 +443,54 @@ class PatchOp(Task):
         return cls(name=name, kwargs=bound)
 
 
+def register_kernel(cls: type[PatchProcessor], backend: str):
+    """
+    Say that a function is how an operation runs on one array backend.
+
+    Used as a decorator. The kernel takes the processor, the data, and
+    both metadata objects, and returns an array.
+
+    Parameters
+    ----------
+    cls
+        The processor the kernel belongs to.
+    backend
+        The backend it is for, as
+        [`backend_name`](`dascore.utils.array_api.backend_name`) spells
+        it -- "numpy", "cupy", "dask".
+    """
+
+    def decorate(func):
+        """Record the kernel against the class and hand it back."""
+        # Written into this class's own dict, not a ClassVar it shares
+        # with its parent, so registering for a subclass cannot answer
+        # for the class it derives from.
+        cls._kernels = {**cls.__dict__.get("_kernels", {}), backend: func}
+        return func
+
+    return decorate
+
+
+def _resolve_kernel(cls: type[PatchProcessor], backend: str):
+    """
+    Return the kernel a class runs for one backend, or None if it has none.
+
+    A kernel registered for the backend wins; failing that the class's own
+    `kernel`, which is written to the array API standard and so runs on
+    any of them. A class which defines neither is metadata-only.
+    """
+    # One class at a time, both questions asked of it before moving up:
+    # a subclass which wrote its own `kernel` means it, and a backend
+    # kernel registered against its parent must not answer for it.
+    for klass in cls.__mro__:
+        contents = klass.__dict__
+        if (found := contents.get("_kernels", {}).get(backend)) is not None:
+            return found
+        if (generic := contents.get("kernel")) is not None:
+            return generic
+    return None
+
+
 def register_implementation(name: str, cls: type[PatchProcessor]) -> None:
     """
     Say that a hand-written class is what a patch function's name means.
@@ -283,7 +511,80 @@ def register_implementation(name: str, cls: type[PatchProcessor]) -> None:
             f"{cls.__name__} is not a PatchProcessor, so it cannot implement {name!r}."
         )
         raise ParameterError(msg)
+    function = resolve_patch_function(name)
+    _reconcile(name, cls, function)
+    _check_fields(name, cls, function)
+    cls._patch_function = name
     _IMPLEMENTATIONS[name] = cls
+
+
+def _reconcile(name: str, cls: type[PatchProcessor], function) -> None:
+    """
+    Make the class and the decorator say the same thing, or refuse both.
+
+    A processor states what its operation requires so that something
+    reading a chain of them has the whole story without the decorator in
+    reach. That leaves two places saying it, and two places which say it
+    differently are worse than one -- so a class which states a
+    requirement must state the one the decorator did, and a class which
+    states none takes the decorator's.
+    """
+    declared = getattr(function, "_declared", {})
+    for field, value in declared.items():
+        # Asked of the class's own dict, not of `getattr`: a class which
+        # states the base default on purpose has still stated it, and
+        # silently overwriting that would make the check a formality.
+        declares = any(
+            field in klass.__dict__
+            for klass in cls.__mro__[:-1]
+            if klass is not PatchProcessor
+        )
+        stated = getattr(cls, field, None)
+        if not declares:
+            setattr(cls, field, value)
+            continue
+        if stated != value:
+            msg = (
+                f"{cls.__name__} says {field}={stated!r} and {name!r} says "
+                f"{value!r}. A processor and its patch function have to "
+                "agree about what the operation requires."
+            )
+            raise ParameterError(msg)
+    if (version := getattr(function, "__version__", None)) != cls.__version__:
+        msg = (
+            f"{cls.__name__} is version {cls.__version__!r} and {name!r} is "
+            f"{version!r}. They fingerprint as one operation, so one version."
+        )
+        raise ParameterError(msg)
+
+
+def _check_fields(name: str, cls: type[PatchProcessor], function) -> None:
+    """
+    Refuse a class which could not be built from a call to its function.
+
+    Caught here rather than where someone calls the patch function: the
+    class is built with the call's bound arguments, so a mismatch is a
+    pydantic complaint about a name the caller never typed, arriving at
+    the wrong moment and pointing at the wrong thing.
+    """
+    parameters = list(_signature(function).parameters.values())[1:]
+    fields = set(cls.model_fields)
+    takes_extras = cls.model_config.get("extra") == "allow"
+    for parameter in parameters:
+        if parameter.kind == inspect.Parameter.VAR_KEYWORD:
+            if not takes_extras:
+                msg = (
+                    f"{name!r} takes **{parameter.name}, so {cls.__name__} has "
+                    'to accept them: set model_config extra="allow".'
+                )
+                raise ParameterError(msg)
+            continue
+        if parameter.name not in fields:
+            msg = (
+                f"{name!r} takes {parameter.name!r} and {cls.__name__} has no "
+                "such field, so a call could not be written down as one."
+            )
+            raise ParameterError(msg)
 
 
 def patch_function_tag(func) -> str | None:

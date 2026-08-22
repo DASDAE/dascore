@@ -4,7 +4,7 @@ execute:
   warning: false
 ---
 
-The [viz module](`dascore.viz`) holds DASCore's plots, and they hang off the object they are of: `Patch.viz` for data, `Inventory.viz` for the observing system which recorded it.
+The [viz module](`dascore.viz`) holds DASCore's plots, and they hang off the object they are of: `Patch.viz` for data, `Spool.viz` for what an archive holds, `Inventory.viz` for the observing system which recorded it.
 
 # Patch
 The following provides some examples of patch visualization.
@@ -119,3 +119,56 @@ inventory.viz.timeline(show=True);
 ```
 
 The path lane splits on the first of September, which is the day the trench cable was repaired.
+
+
+# Spool
+
+A [spool](spool.qmd) plots what it has and what it is missing, reading its index rather than its data, so these work on an archive far too large to load. The examples use a sparsely sampled deployment example: two months of a temperature and a strain acquisition, sampled once an hour.
+
+```{python}
+import dascore as dc
+
+spool = dc.get_example_spool("sparse_dss")
+```
+
+## Coverage
+
+The [`coverage plot`](`dascore.viz.spool.coverage`) gives each group of patches which could combine a lane, drawn as the runs it holds and the holes between them. The holes are the ones [`get_gaps`](`dascore.core.spool.Spool.get_gaps`) reports and the percentage is that lane's [`get_coverage`](`dascore.core.spool.Spool.get_coverage`), so the picture and the numbers cannot disagree.
+
+```{python}
+spool.viz.coverage(show=True);
+```
+
+Both acquisitions lose the four days in the middle of January, which is the site's own outage; the strain acquisition started later and was pulled out earlier, which is why its lane is shorter rather than gappy at the ends.
+
+Any dimension the spool states can be measured, and a `(start, end)` pair windows it:
+
+```{python}
+spool.viz.coverage(time=("2024-01-15", "2024-01-25"), show=True);
+```
+
+## Calendar
+
+Over months, one lane per group runs out of room. The [`calendar plot`](`dascore.viz.spool.calendar`) gives each day a cell instead, colored by how much of that day the spool covers:
+
+```{python}
+spool.viz.calendar(show=True);
+```
+
+A cell has no room for a lane per group, so it asks whether *anything* was recording: a day is the union of what every group covers. Two acquisitions running at once therefore cover one day between them, not two, and a cell never exceeds 100%. A grey cell is a day the calendar has no room for — there is no thirtieth of February — which is a different claim from a day covered by nothing.
+
+That also means `group` is not a way to pick one acquisition here; it only decides which boundaries count as gaps. Select the patches you mean first, and the calendar is of them alone:
+
+```{python}
+spool.select(tag="temperature").viz.calendar(show=True);
+```
+
+The four days in the middle of January are still empty, since that outage took the whole site, but the strain acquisition no longer fills in the days temperature was down on its own.
+
+`method="gap"` asks the opposite question on a log scale, which is the one to use when the holes are short enough that a percentage rounds them away:
+
+```{python}
+spool.viz.calendar(method="gap", show=True);
+```
+
+`method="count"` colors each day by how many patches overlap it, which is how an archive's file layout shows itself.

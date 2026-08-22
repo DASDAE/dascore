@@ -174,7 +174,14 @@ class Task(DascoreBaseModel):
         ...     factor: float = 1.0
         >>> assert ScaleExample().update(factor=2.0).factor == 2.0
         """
-        return type(self)(**{**self._params(), **kwargs})
+        out = type(self)(**{**self._params(), **kwargs})
+        # Changing an argument does not change which version the
+        # operation was written at; see `__reduce__`.
+        if (version := getattr(self, "_captured_version", "")) and hasattr(
+            out, "_captured_version"
+        ):
+            object.__setattr__(out, "_captured_version", version)
+        return out
 
     def to_dict(self) -> dict[str, Any]:
         """
@@ -209,7 +216,16 @@ class Task(DascoreBaseModel):
         params = {
             key: decode(value) for key, value in document.get(_PARAMS_KEY, {}).items()
         }
-        return task_class(**params)
+        out = task_class(**params)
+        # A processor keeps the version privately rather than as a
+        # parameter, so that `kwargs` stays the call and nothing else.
+        # The document's version still has to reach it, or a document
+        # written before a bump would fingerprint as one written after.
+        if (version := document.get(_VERSION_KEY)) and hasattr(
+            out, "_captured_version"
+        ):
+            object.__setattr__(out, "_captured_version", version)
+        return out
 
     def save(self, path: str | Path) -> Path:
         """
@@ -260,13 +276,21 @@ class Task(DascoreBaseModel):
         carries an array as bytes rather than as a list of numbers.
         """
         _check_nameable(type(self), self.tag)
-        return (_rebuild, (self.tag, self._params()))
+        # The captured version travels too. A processor keeps it privately
+        # rather than as a parameter, and an operation which came back
+        # from a document says which version it was written at; rebuilding
+        # it must not quietly re-read whatever the function is now.
+        version = getattr(self, "_captured_version", "")
+        return (_rebuild, (self.tag, self._params(), version))
 
 
-def _rebuild(tag: str, params: dict[str, Any]) -> Task:
+def _rebuild(tag: str, params: dict[str, Any], version: str = "") -> Task:
     """Return the task a tag and its parameters name; see `Task.__reduce__`."""
     task_class = resolve_tagged_model(tag)
-    return task_class(**params)
+    out = task_class(**params)
+    if version and hasattr(out, "_captured_version"):
+        object.__setattr__(out, "_captured_version", version)
+    return out
 
 
 def _check_nameable(task_class: type[Task], tag: str | None) -> None:
