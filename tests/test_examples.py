@@ -103,6 +103,34 @@ class TestGetExampleSpool:
         assert isinstance(spool, dc.BaseSpool)
 
 
+class TestRandomSpool:
+    """The knobs on the random spool example."""
+
+    def test_patches_are_one_length_by_default(self):
+        """Every patch is the same length unless asked otherwise."""
+        spool = dc_examples.random_spool(length=4)
+        assert len({x.shape for x in spool}) == 1
+
+    def test_var_varies_the_lengths(self):
+        """A percent of variability gives the patches a spread of lengths."""
+        spool = dc_examples.random_spool(length=6, var=20)
+        samples = {x.shape[-1] for x in spool}
+        assert len(samples) > 1
+        # A spread, not a scattering: 20% of 2000 samples is a few hundred.
+        assert max(samples) - min(samples) < 2_000
+
+    def test_var_is_seeded(self):
+        """An example which differs run to run is not one."""
+        first = [x.shape for x in dc_examples.random_spool(length=4, var=20)]
+        assert first == [x.shape for x in dc_examples.random_spool(length=4, var=20)]
+
+    def test_var_respects_a_given_shape(self):
+        """The caller's shape sets the channels; only the length varies."""
+        spool = dc_examples.random_spool(length=3, var=20, shape=(7, 50))
+        assert {x.shape[0] for x in spool} == {7}
+        assert all(0 < x.shape[-1] < 150 for x in spool)
+
+
 class TestGetExampleInventory:
     """Test suite for `get_example_inventory`."""
 

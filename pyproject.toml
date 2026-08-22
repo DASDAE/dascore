@@ -197,6 +197,9 @@ MSEED__V3 = "dascore.io.mseed.core:MSeedV3"
 io = "dascore.io:PatchIO"
 viz = "dascore.viz:VizPatchNameSpace"
 
+[project.entry-points."dascore.spool_namespace"]
+viz = "dascore.viz:VizSpoolNameSpace"
+
 [project.entry-points."dascore.inventory_namespace"]
 io = "dascore.io:InventoryIO"
 viz = "dascore.viz:VizInventoryNameSpace"
