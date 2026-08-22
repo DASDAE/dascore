@@ -184,6 +184,40 @@ def _get_dtype(value, dtype):
     return str(np.dtype(value))
 
 
+def _conformed(value, dtype: np.dtype):
+    """
+    The value as the given dtype, or unchanged where that would lose it.
+
+    Conforming is only ever a change of spelling. A coordinate whose
+    metadata does not fit the dtype it declares — a partial one stating
+    an integer dtype and a fractional start — would otherwise have the
+    difference truncated away, and two coordinates which are not equal
+    would share an identity.
+    """
+    with suppress(TypeError, ValueError, OverflowError):
+        original = np.asarray(value)
+        converted = original.astype(dtype)
+        if converted.astype(original.dtype) == original:
+            return converted
+    return value
+
+
+def _scalar_dtype(dtype: np.dtype, name: str) -> np.dtype:
+    """
+    The dtype a coordinate's own scalar is conformed to before hashing.
+
+    The coordinate's dtype, at its own precision — a coordinate keeping
+    picoseconds must not have them rounded away, or two coordinates a
+    picosecond apart would share an identity. A step is the duration
+    between values, so it takes the matching time unit rather than the
+    time kind itself.
+    """
+    if dtype.kind not in "mM":
+        return dtype
+    unit = np.datetime_data(dtype)[0]
+    return np.dtype(f"timedelta64[{unit}]") if name == "step" else dtype
+
+
 class CoordSummary(DascoreBaseModel):
     """
     A summary for coordinates.
@@ -624,11 +658,22 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
         _, units = get_factor_and_unit(self.units, simplify=True)
         return self._convert_units(units)
 
-    @staticmethod
-    def _hash_scalar(value) -> tuple[str, str | None]:
-        """Return a dtype-aware scalar hash token."""
+    def _hash_scalar(self, value, name: str = "start") -> tuple[str, str | None]:
+        """
+        Return a dtype-aware scalar hash token.
+
+        The value is first conformed to the coordinate's own dtype, since
+        a fingerprint identifies *values*, not how they were spelled: a
+        range whose start was given as `0` holds the same coordinate as
+        one given `0.0`, and a step of four milliseconds is the step of
+        four million nanoseconds. Without this they would be stored under
+        different identities and never deduplicate.
+        """
         if value is None:
             return ("none", None)
+        dtype = np.dtype(self.dtype) if self.dtype else None
+        if dtype is not None:
+            value = _conformed(value, _scalar_dtype(dtype, name))
         return ("scalar", hash_array(np.asarray([value])))
 
     @staticmethod
@@ -1419,9 +1464,9 @@ class CoordPartial(BaseCoord):
         return (
             self.shape,
             str(np.dtype(self.dtype)),
-            self._hash_scalar(self.start),
-            self._hash_scalar(self.stop),
-            self._hash_scalar(self.step),
+            self._hash_scalar(self.start, "start"),
+            self._hash_scalar(self.stop, "stop"),
+            self._hash_scalar(self.step, "step"),
         )
 
 
@@ -1562,9 +1607,9 @@ class CoordRange(BaseCoord):
         """Return the scalar payload needed to fingerprint range coords."""
         return (
             self.shape,
-            self._hash_scalar(self.start),
-            self._hash_scalar(self.stop),
-            self._hash_scalar(self.step),
+            self._hash_scalar(self.start, "start"),
+            self._hash_scalar(self.stop, "stop"),
+            self._hash_scalar(self.step, "step"),
         )
 
     def __getitem__(self, item):

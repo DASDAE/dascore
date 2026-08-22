@@ -550,7 +550,76 @@ class TestCoordFingerprint:
 
     def test_hash_scalar_none(self):
         """The helper should preserve an explicit None sentinel."""
-        assert BaseCoord._hash_scalar(None) == ("none", None)
+        coord = get_coord(start=0.0, stop=10.0, step=1.0)
+        assert coord._hash_scalar(None) == ("none", None)
+
+    def test_spelling_of_a_scalar_is_not_its_identity(self):
+        """Equal coordinates fingerprint alike however they were written."""
+        as_ints = get_coord(start=0, stop=10, step=1.0)
+        as_floats = get_coord(start=0.0, stop=10.0, step=1.0)
+        assert as_ints == as_floats
+        assert as_ints.fingerprint() == as_floats.fingerprint()
+
+    def test_time_precision_is_not_its_identity(self):
+        """A step of four milliseconds is four million nanoseconds."""
+        t0 = np.datetime64("2020-01-01", "ns")
+        coarse = get_coord(
+            start=t0,
+            stop=t0 + np.timedelta64(400, "ms"),
+            step=np.timedelta64(4, "ms"),
+        )
+        fine = get_coord(
+            start=t0,
+            stop=t0 + np.timedelta64(400_000_000, "ns"),
+            step=np.timedelta64(4_000_000, "ns"),
+        )
+        assert coarse == fine
+        assert coarse.fingerprint() == fine.fingerprint()
+
+    def test_a_summary_round_trip_keeps_the_identity(self):
+        """Describing a coordinate and rebuilding it is the same coordinate."""
+        t0 = np.datetime64("2020-01-01", "ns")
+        coord = get_coord(
+            start=t0,
+            stop=t0 + np.timedelta64(400, "ms"),
+            step=np.timedelta64(4, "ms"),
+        )
+        assert coord.to_summary().to_coord().fingerprint() == coord.fingerprint()
+
+    def test_metadata_which_does_not_fit_its_dtype_still_differs(self):
+        """Conforming is a change of spelling, never a loss of value."""
+        first = CoordPartial(shape=(10,), dtype="int64", start=1.1, stop=11.1, step=1.0)
+        second = CoordPartial(
+            shape=(10,), dtype="int64", start=1.2, stop=11.2, step=1.0
+        )
+        assert first != second
+        assert first.fingerprint() != second.fingerprint()
+
+    def test_finer_precision_than_nanoseconds_still_differs(self):
+        """Conforming a scalar must not round away what a coordinate keeps."""
+        start = np.datetime64("1969-09-23T15:46:49.660978561024")
+        step = np.timedelta64(1000, "ps")
+        first = get_coord(start=start, stop=start + step * 100, step=step)
+        apart = start + np.timedelta64(1, "ps")
+        second = get_coord(start=apart, stop=apart + step * 100, step=step)
+        assert first != second
+        assert first.fingerprint() != second.fingerprint()
+
+    def test_different_values_still_differ(self):
+        """Canonicalizing the spelling does not blur real differences."""
+        first = get_coord(start=0.0, stop=10.0, step=1.0)
+        assert (
+            first.fingerprint()
+            != get_coord(start=0.0, stop=20.0, step=1.0).fingerprint()
+        )
+        assert (
+            first.fingerprint()
+            != get_coord(start=1.0, stop=11.0, step=1.0).fingerprint()
+        )
+        assert (
+            first.fingerprint()
+            != get_coord(start=0.0, stop=10.0, step=0.5).fingerprint()
+        )
 
     def test_range_equivalent_units_same_fingerprint(self):
         """Equivalent range coords should fingerprint the same after normalization."""
