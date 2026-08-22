@@ -801,6 +801,18 @@ class TestConcatPlan:
             == 3
         )
 
+    def test_empty_and_null_coordinate_units_are_one_spelling(self, trio):
+        """A coordinate stated with no units spells that null or ""."""
+        p1, p2, _ = trio
+        df = _flat([p1, p2])
+        col = "_time_units"
+        assert col in df.columns
+        df = df.copy()
+        df.loc[df.index[0], col] = ""
+        df.loc[df.index[1], col] = None
+        plan = build_concat_plan(df, time=None)
+        assert len(plan.outputs) == 1
+
     def test_relation_without_step_or_dtype(self, trio):
         """An envelope without a step, or rows without a dtype, still plan."""
         df = _flat(trio).drop(columns=["time_step"])

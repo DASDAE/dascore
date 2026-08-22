@@ -1664,7 +1664,9 @@ def build_concat_plan(
     # them, see `_joinable`) and forms its own group when they state two.
     spelling = pd.Series("", index=df.index, dtype=object)
     if unit_col in df.columns:
-        units = df[unit_col].fillna("unitless").astype(object)
+        # `known_only` first: a coordinate stated with no units spells that
+        # null or "", and the two are one statement here as everywhere else.
+        units = known_only(df[unit_col]).fillna("unitless").astype(object)
         if has_envelope:
             units = units.where(df[min_name].notna(), "")
         spelling = spelling.str.cat(units.where(along, ""))
