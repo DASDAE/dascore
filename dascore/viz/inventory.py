@@ -435,12 +435,16 @@ def path(
     if ax is None:
         # A legend naming more than the lanes are tall sits below them, so
         # count the rows it will take there; without them the lanes give up
-        # the room instead and every bar is squeezed into a sliver.
-        # A lane which states no value takes one swatch, named for the lane.
+        # the room instead and every bar is squeezed into a sliver. Only
+        # what earns a swatch counts: a lane of numbers earns a colorbar,
+        # one color for every lane earns nothing, and a lane which states
+        # no value earns one swatch named for the lane itself.
         stated = frame["value"]
-        swatches = (
-            stated.dropna().nunique() + frame.loc[stated.isna(), "lane"].nunique()
-        )
+        if isinstance(color, str):
+            swatches = 0
+        else:
+            named = stated[[isinstance(x, str) for x in stated]]
+            swatches = named.nunique() + frame.loc[stated.isna(), "lane"].nunique()
         legend_rows = 0 if swatches <= len(lanes) else -(-swatches // 6)
         # Capped: a figure taller than a page is not more readable.
         height = min(

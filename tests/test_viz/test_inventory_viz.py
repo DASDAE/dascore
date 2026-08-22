@@ -387,16 +387,30 @@ class TestPath:
         """
         crs = site.coordinate_reference_system
         few = path(build_labeled_inventory(2, crs), "DAS.L2.00")
-        short = few.get_figure().get_size_inches()[1]
+        few.get_figure().draw_without_rendering()
+        short, lanes = few.get_figure().get_size_inches()[1], _lanes(few)
+        room = few.get_window_extent().height / few.get_figure().dpi
         plt.close("all")
         many = path(build_labeled_inventory(24, crs), "DAS.L2.00")
         figure = many.get_figure()
-        # Same one lane either way, so only the legend can move the height.
-        assert _lanes(many) == _lanes(few) == ["components", "hole"]
-        assert figure.get_size_inches()[1] > short
         figure.draw_without_rendering()
+        # Same one lane either way, so only the legend can move the height.
+        assert _lanes(many) == lanes == ["components", "hole"]
+        assert figure.get_size_inches()[1] > short
+        # The room is kept for the legend, not taken from the lanes.
+        assert many.get_window_extent().height / figure.dpi >= room
         box = figure.legends[0].get_window_extent(figure.canvas.get_renderer())
         assert box.y0 >= 0 and box.y1 <= figure.bbox.height
+
+    def test_one_color_for_every_lane_needs_no_legend_room(self, site):
+        """A figure which names no value has no legend to keep room for."""
+        crowded = build_labeled_inventory(24, site.coordinate_reference_system)
+        named = path(crowded, "DAS.L2.00")
+        tall = named.get_figure().get_size_inches()[1]
+        plt.close("all")
+        plain = path(crowded, "DAS.L2.00", color="red")
+        assert plain.get_figure().legends == []
+        assert plain.get_figure().get_size_inches()[1] < tall
 
     def test_tracks_selected_in_order(self, site):
         """tracks= picks lanes and orders them."""

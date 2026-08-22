@@ -12,6 +12,7 @@ from __future__ import annotations
 import colorsys
 import datetime
 from collections.abc import Mapping, Sequence
+from functools import lru_cache
 
 import matplotlib.dates as mdates
 import matplotlib.patheffects as pe
@@ -20,8 +21,11 @@ import numpy as np
 import pandas as pd
 from matplotlib.collections import PatchCollection
 from matplotlib.colors import BoundaryNorm, ListedColormap
+from matplotlib.font_manager import FontProperties
+from matplotlib.layout_engine import ConstrainedLayoutEngine
 from matplotlib.patches import Patch as PatchArtist
 from matplotlib.patches import Rectangle
+from matplotlib.textpath import TextPath
 
 from dascore.exceptions import ParameterError
 from dascore.utils.intervals import normalize_value, value_kind
@@ -43,10 +47,17 @@ UNCOVERED_COLOR = "0.7"
 # and alternating shade separates two which still land on a similar hue.
 _GOLDEN_STEP = 0.6180339887498949
 
-# Pixels of clearance a label needs inside its box. Without it a label the
-# exact width of its box touches the one in the next box, and the two read
-# as one word.
-_LABEL_PAD = 4.0
+# Everything a label is measured in, so the same figure keeps the same
+# labels whatever resolution it is drawn at. Rasterized glyphs round to
+# whole pixels, which makes text as much as a tenth wider at 50 dpi than
+# at 300, so both the text and the box it must fit are asked for in
+# points instead of the pixels the renderer works in.
+_MEASURED_DPI = 72.0
+
+# Clearance a label needs inside its box, in points. Without it a label
+# the exact width of its box touches the one in the next box, and the two
+# read as one word.
+_LABEL_PAD = 3.0
 
 # The fraction of the x axis hatched where a bar runs off the end of it.
 _OPEN_FRACTION = 0.02
@@ -192,6 +203,8 @@ def _string_colors(frame, vocabulary=None, cmap_name=STRING_CMAP) -> dict:
 
     The vocabulary widens the palette beyond what this frame holds, so a
     figure of part of a subject colors it as a figure of all of it does.
+    Adding a value to the vocabulary itself moves the colors of the ones
+    which sort after it, and crossing the wheel moves all of them.
     """
     seen = list(frame["value"].tolist()) + list(vocabulary or [])
     values = sorted({x for x in seen if isinstance(x, str) and x != ""})
@@ -320,11 +333,24 @@ def _draw_open_edges(ax, rows, y_low, height, colors, span):
     ax.add_collection(patches)
 
 
-def _box_pixels(transform, x_mid, y_mid, width, height):
-    """The size of one box, in pixels, however the axes is scaled."""
+def _box_points(transform, scale, x_mid, y_mid, width, height):
+    """The size of one box, in points, however the axes is scaled."""
     low = transform.transform((x_mid - width / 2, y_mid - height / 2))
     high = transform.transform((x_mid + width / 2, y_mid + height / 2))
-    return abs(high[0] - low[0]), abs(high[1] - low[1])
+    return abs(high[0] - low[0]) * scale, abs(high[1] - low[1]) * scale
+
+
+@lru_cache(maxsize=1024)
+def _text_points(text: str, size: float) -> tuple[float, float]:
+    """The room a label takes, in points, at any resolution.
+
+    A renderer rounds each glyph to whole pixels, so the same text comes
+    out a tenth wider at 50 dpi than at 300. Measuring what it drew would
+    let the resolution decide which labels a figure keeps; the outlines
+    behind it are the same however finely they are drawn.
+    """
+    box = TextPath((0, 0), text, prop=FontProperties(size=size)).get_extents()
+    return box.width, box.height
 
 
 def _fit_labels(ax, placements, max_labels):
@@ -339,58 +365,102 @@ def _fit_labels(ax, placements, max_labels):
         return
     figure = ax.get_figure()
     # Lay the figure out before measuring: a label is compared against its
-    # box in pixels, and both move when the axes does. The legend and the
+    # box, and the box moves when the axes does. The legend and the
     # colorbars are drawn by now, so this is the geometry it lands in.
     figure.draw_without_rendering()
-    renderer = figure.canvas.get_renderer()
     transform = ax.transData
+    scale = _MEASURED_DPI / figure.dpi
+    size = plt.rcParams["font.size"] * 0.8
     for text, x_mid, y_mid, width, height in placements:
         if not text:
             continue
-        box = _box_pixels(transform, x_mid, y_mid, width, height)
+        box = _box_points(transform, scale, x_mid, y_mid, width, height)
         room = (box[0] - _LABEL_PAD, box[1] - _LABEL_PAD)
+        taken = _text_points(text, size)
         for rotation in (0, 90):
-            artist = ax.text(
+            # Turning the text swaps which way it has to fit.
+            if rotation:
+                taken = taken[::-1]
+            if taken[0] > room[0] or taken[1] > room[1]:
+                continue
+            ax.text(
                 x_mid,
                 y_mid,
                 text,
                 ha="center",
                 va="center",
                 rotation=rotation,
-                fontsize=plt.rcParams["font.size"] * 0.8,
+                fontsize=size,
                 zorder=4,
                 clip_on=True,
                 # A dark fill would otherwise swallow the text sitting on it.
                 path_effects=[pe.withStroke(linewidth=1.3, foreground="white")],
             )
-            extent = artist.get_window_extent(renderer)
-            if extent.width <= room[0] and extent.height <= room[1]:
-                break
-            artist.remove()
+            break
 
 
-def _legend_placement(ax, handles, renderer):
-    """Where a legend of these handles fits, and in how many columns.
+def _fits_beside(ax, handles, renderer) -> bool:
+    """Whether one column of these handles is shorter than the axes.
 
-    One column beside the lanes is the natural home, but a figure can
-    name more values than its axes is tall, and the column then runs off
-    the bottom of the figure. Such a legend goes underneath instead, in
-    as many columns as the axes is wide enough to hold.
+    A figure can name more values than its axes is tall, and the column
+    beside it then runs off the bottom of the page.
     """
-    # A membership swatch can be keyed on no value at all, and states None.
-    labels = [str(x.get_label() or "") for x in handles]
-    probe = ax.text(0, 0, max(labels, key=len), fontsize="small")
-    size = probe.get_window_extent(renderer)
-    probe.remove()
-    box = ax.get_window_extent(renderer)
+    figure = ax.get_figure()
+    scale = _MEASURED_DPI / figure.dpi
+    size = plt.rcParams["font.size"] * 0.833
     # Legend rows are set a little further apart than the text is tall.
-    pitch = size.height * 1.6
-    if len(handles) * pitch <= box.height:
-        return "beside", 1
-    # A swatch and the gaps around it take about three text heights.
-    entry = size.width + 3.0 * size.height
-    columns = max(1, min(len(handles), int(box.width // entry)))
-    return "below", columns
+    pitch = _text_points("Ay", size)[1] * 1.9
+    room = ax.get_window_extent(renderer).height * scale
+    return len(handles) * pitch <= room
+
+
+def _legend_below(figure, ax, handles, renderer, outside):
+    """Lay a legend out under the lanes, in as many columns as fit.
+
+    How wide matplotlib draws a column is not worth predicting, so the
+    widest layout is drawn and narrowed until it is inside the figure.
+    """
+    columns = len(handles)
+    while True:
+        if outside:
+            # The figure lays itself out, so it can keep the room this
+            # legend takes at its foot rather than the lanes giving it up.
+            legend = figure.legend(
+                handles=handles,
+                loc="outside lower center",
+                ncol=columns,
+                frameon=False,
+                fontsize="small",
+            )
+        else:
+            legend = figure.legend(
+                handles=handles,
+                loc="lower center",
+                ncol=columns,
+                frameon=False,
+                fontsize="small",
+            )
+        figure.draw_without_rendering()
+        box = legend.get_window_extent(renderer)
+        if columns == 1 or box.width <= figure.bbox.width:
+            break
+        legend.remove()
+        # Overshooting by a lot is common, so step to what did fit.
+        columns = max(1, min(columns - 1, int(columns * figure.bbox.width / box.width)))
+    if outside:
+        return legend
+    # Nothing lays this figure out, so the axes gives up the room itself.
+    room = box.height / figure.bbox.height
+    position = ax.get_position()
+    ax.set_position(
+        (
+            position.x0,
+            position.y0 + room,
+            position.width,
+            max(position.height - room, 0.1),
+        )
+    )
+    return legend
 
 
 def plot_lanes(
@@ -621,8 +691,8 @@ def plot_lanes(
         ]
         figure = ax.get_figure()
         figure.draw_without_rendering()
-        where, columns = _legend_placement(ax, handles, figure.canvas.get_renderer())
-        if where == "beside":
+        renderer = figure.canvas.get_renderer()
+        if _fits_beside(ax, handles, renderer):
             # A colorbar already occupies the strip beside the axes.
             offset = 1.01 + 0.17 * len(colorbars)
             ax.legend(
@@ -632,25 +702,11 @@ def plot_lanes(
                 frameon=False,
                 fontsize="small",
             )
-        elif figure.get_layout_engine() is not None:
-            # The figure lays itself out, so it can keep the room this
-            # legend takes at its foot rather than the lanes giving it up.
-            figure.legend(
-                handles=handles,
-                loc="outside lower center",
-                ncol=columns,
-                frameon=False,
-                fontsize="small",
-            )
         else:
-            ax.legend(
-                handles=handles,
-                loc="upper center",
-                bbox_to_anchor=(0.5, -0.12),
-                ncol=columns,
-                frameon=False,
-                fontsize="small",
-            )
+            # Only a constrained layout keeps room for a legend outside
+            # the axes; any other figure has to be given it explicitly.
+            outside = isinstance(figure.get_layout_engine(), ConstrainedLayoutEngine)
+            _legend_below(figure, ax, handles, renderer, outside)
     # Fit the labels last: the legend and the colorbars have taken their
     # room by now, so a label is measured against the box it lands in.
     _fit_labels(ax, placements, max_labels)

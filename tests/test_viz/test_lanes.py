@@ -544,24 +544,32 @@ class TestColors:
         together = plot_lanes(whole, value="v")
         assert np.allclose(first, _collections(together)[0].get_facecolors()[0])
 
-    def test_labels_decided_the_same_at_any_dpi(self):
-        """Whether a label fits is a question about the figure, not its dpi."""
-        frame = pd.DataFrame(
-            {"start": [0.0], "end": [1.0], "v": ["a rather long label"]}
-        )
+    @pytest.mark.parametrize("length", range(4, 34, 3))
+    def test_labels_decided_the_same_at_any_dpi(self, length):
+        """Whether a label fits is a question about the figure, not its dpi.
+
+        A width is swept because only a label near the edge of its box
+        can be decided two ways, and every width is near some box's edge.
+        """
+        frame = pd.DataFrame({"start": [0.0], "end": [1.0], "v": ["x" * length]})
         drawn = []
-        for dpi in (50, 200):
+        for dpi in (50, 100, 300):
             _, ax = plt.subplots(figsize=(2, 1), dpi=dpi)
             plot_lanes(frame, ax=ax, value="v")
-            drawn.append(_texts(ax))
+            drawn.append((_texts(ax), [x.get_rotation() for x in ax.texts]))
             plt.close("all")
-        # Measuring text in points against a box in pixels answers this
-        # differently at each dpi, which is how the same figure saved at
-        # two resolutions loses its labels.
-        assert drawn[0] == drawn[1]
+        # A renderer rounds each glyph to whole pixels, so measuring what
+        # it drew is how the same figure saved at two resolutions keeps
+        # different labels.
+        assert len(set(map(str, drawn))) == 1
 
-    def test_a_tall_legend_goes_below_the_lanes(self, string_frame):
-        """A column naming more than the axes is tall runs off the figure."""
+    @pytest.mark.parametrize("engine", [None, "constrained", "tight"])
+    def test_a_tall_legend_stays_on_the_page(self, engine):
+        """A column naming more than the axes is tall runs off the figure.
+
+        Only a constrained layout keeps room for a legend outside the
+        axes, so the other figures have to be given it explicitly.
+        """
         names = [f"value {x:02d}" for x in range(30)]
         frame = pd.DataFrame(
             {
@@ -570,16 +578,33 @@ class TestColors:
                 "v": names,
             }
         )
-        figure, ax = plt.subplots(figsize=(8, 3), layout="constrained")
+        figure, ax = plt.subplots(figsize=(8, 3), layout=engine)
         plot_lanes(frame, ax=ax, value="v")
         # It belongs to the figure now, which is what keeps room for it.
         assert ax.get_legend() is None
         legend = figure.legends[0]
         figure.draw_without_rendering()
         box = legend.get_window_extent(figure.canvas.get_renderer())
+        assert box.x0 >= 0 and box.x1 <= figure.bbox.width
         assert box.y0 >= 0 and box.y1 <= figure.bbox.height
-        # Laid out in columns rather than the one column which did not fit.
-        assert box.width > box.height
+        # Every value is still named; none was dropped to make it fit.
+        assert len(legend.get_texts()) == len(names)
+
+    def test_a_legend_below_leaves_the_lanes_their_room(self):
+        """Where nothing lays the figure out the axes gives up the room."""
+        names = [f"value {x:02d}" for x in range(30)]
+        frame = pd.DataFrame(
+            {
+                "start": np.arange(float(len(names))),
+                "end": np.arange(float(len(names))) + 1.0,
+                "v": names,
+            }
+        )
+        figure, ax = plt.subplots(figsize=(8, 3))
+        plot_lanes(frame, ax=ax, value="v")
+        figure.draw_without_rendering()
+        legend = figure.legends[0].get_window_extent(figure.canvas.get_renderer())
+        assert ax.get_window_extent().y0 >= legend.y1
 
     def test_a_short_legend_stays_beside_them(self, string_frame):
         """Few enough values still read best in one column at the side."""
