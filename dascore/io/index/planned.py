@@ -430,6 +430,35 @@ def _joins_in_member_order(
     return lows == sorted(lows, reverse=descending)
 
 
+def _cut_rider(
+    summary: CoordSummary,
+    whole: CoordSummary | None,
+    row: Mapping,
+    plan_dim: str,
+) -> CoordSummary | None:
+    """
+    A rider as the cut leaves it, where the members say enough to tell.
+
+    A coordinate riding the dimension being cut is sliced along with it,
+    sample for sample, so where both are evenly sampled the slice is
+    exact. Working it out matters: a row which states nothing about a
+    coordinate is not a candidate for any range over it, and the patch it
+    would have loaded is real.
+    """
+    if whole is None or not (whole.is_range_like and whole.len):
+        return None
+    if not (summary.is_range_like and summary.len) or summary.len != whole.len:
+        return None
+    low, high = row.get(f"{plan_dim}_min"), row.get(f"{plan_dim}_max")
+    if pd.isnull(low) or pd.isnull(high):
+        return None
+    # both are evenly sampled and the same length, so the trim which
+    # slices one slices the other at the same samples
+    _, indexer = whole.to_coord(on_grid=True).select((low, high))
+    sliced = summary.to_coord(on_grid=True)[indexer]
+    return sliced.to_summary().model_copy(update=dict(dims=summary.dims))
+
+
 def _summary_kind(summary: CoordSummary) -> str:
     """Whether a summary holds times, numbers or labels."""
     kind = np.dtype(summary.dtype).kind if summary.dtype else ""
@@ -524,16 +553,29 @@ def predicted_coords(
                     summary = _trimmed_summary(summary, row, name)
                 elif cut and plan_dim in summary.dims:
                     # A coordinate riding a dimension being cut keeps only
-                    # the values inside the cut, which its summary still
-                    # counts and cannot locate: the envelope goes with the
-                    # step and the identity, or the row would advertise
-                    # values the patch does not hold.
-                    null = _null_like(summary.min)
-                    summary = summary.model_copy(
-                        update=dict(
-                            min=null, max=null, step=None, len=None, fingerprint=None
-                        )
+                    # the values inside the cut. Where both are evenly
+                    # sampled that slice is exact; where it cannot be
+                    # worked out the envelope goes with the step and the
+                    # identity, rather than advertising values the patch
+                    # does not hold.
+                    sliced = _cut_rider(
+                        summary,
+                        stored.get(int(row["_patch_id"]), {}).get(plan_dim),
+                        row,
+                        plan_dim,
                     )
+                    if sliced is None:
+                        null = _null_like(summary.min)
+                        sliced = summary.model_copy(
+                            update=dict(
+                                min=null,
+                                max=null,
+                                step=None,
+                                len=None,
+                                fingerprint=None,
+                            )
+                        )
+                    summary = sliced
                 summaries.append(summary)
             assert summaries, "a name comes from the members which state it"
             stated = _describe(

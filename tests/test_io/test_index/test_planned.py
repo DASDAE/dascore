@@ -20,6 +20,7 @@ from dascore.io.index.planned import (
     _apply_predictions,
     _aux_coord_info,
     _coord_record_from_row,
+    _cut_rider,
     _describe,
     _extrema,
     _ns,
@@ -1136,3 +1137,52 @@ class TestRawJoinsUseRawValues:
         stated = frame[frame["coord_name"] == "distance"]
         assert stated["dtype"].iloc[0] == str(loaded.dtype) == "int64"
         assert stated["fingerprint"].iloc[0] == loaded.fingerprint()
+
+
+class TestCutRiders:
+    """A coordinate riding a cut dimension is sliced along with it."""
+
+    def _summaries(self, samples=100):
+        """A whole dimension and a rider of the same length."""
+        start = np.datetime64("2020-01-01")
+        step = np.timedelta64(1, "s")
+        whole = get_coord(start=start, step=step, stop=start + step * samples)
+        rider = get_coord(values=np.arange(float(samples)))
+        return whole.to_summary(), rider.to_summary()
+
+    def test_the_slice_is_exact(self):
+        """Evenly sampled members give the cut exactly."""
+        whole, rider = self._summaries()
+        start = np.datetime64("2020-01-01")
+        row = {
+            "time_min": start + np.timedelta64(10, "s"),
+            "time_max": start + np.timedelta64(20, "s"),
+        }
+        sliced = _cut_rider(rider, whole, row, "time")
+        assert sliced.min == 10.0 and sliced.max == 20.0 and sliced.len == 11
+
+    def test_an_unmeasured_dimension_says_nothing(self):
+        """Without a grid on both sides the slice cannot be worked out."""
+        whole, rider = self._summaries()
+        row = {"time_min": np.datetime64("2020-01-01"), "time_max": None}
+        assert _cut_rider(rider, None, row, "time") is None
+        assert _cut_rider(rider, whole, row, "time") is None
+        stepless = rider.model_copy(update=dict(step=None))
+        row = {
+            "time_min": np.datetime64("2020-01-01"),
+            "time_max": np.datetime64("2020-01-01") + np.timedelta64(5, "s"),
+        }
+        assert _cut_rider(stepless, whole, row, "time") is None
+
+    def test_an_array_rider_keeps_no_envelope(self, assert_contents_match):
+        """What cannot be sliced is not guessed at."""
+        first = dc.get_example_patch()
+        time = first.get_coord("time")
+        samples = first.shape[first.get_axis("time")]
+        rng = np.random.default_rng(0)
+        rough = first.update_coords(rough=("time", np.sort(rng.uniform(0, 1, samples))))
+        spool = dc.spool([rough]).chunk(
+            time=(time.max() - time.min()) / 2, conflict="keep_first"
+        )
+        assert spool.get_contents()["rough_min"].isnull().all()
+        assert "rough" in spool[0].coords.coord_map

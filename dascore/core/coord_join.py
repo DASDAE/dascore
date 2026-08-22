@@ -71,19 +71,29 @@ def join_summaries(
         # Values the summary does not carry cannot be joined without
         # reading them, and reading them is what laziness avoids.
         return None
-    if len({get_quantity(x.units) for x in summaries}) > 1:
+    spellings = {get_quantity(x.units) for x in summaries if x.units is not None}
+    if len(spellings) > 1:
         # One physical coordinate spelled two ways: which spelling the
         # output speaks is assembly's choice, made on the values.
         return None
     coords = [x.to_coord(on_grid=True) for x in summaries]
+    joining = coords
+    if spellings and any(x.units is None for x in summaries):
+        # A member stating no units is not a member disagreeing about
+        # them: `_concatenate_group` picks a spelling and every unitless
+        # member adopts it, its numbers unchanged. Only the copies being
+        # joined adopt it, so each member is still checked against the
+        # summary it was actually made from.
+        spoken = next(x.units for x in summaries if x.units is not None)
+        joining = [x if x.units is not None else x.set_units(spoken) for x in coords]
     try:
-        joined = concat_coords(*coords)
+        joined = concat_coords(*joining)
     except CoordError:
         # Overlapping, contradictory, or otherwise unjoinable members;
         # loading them will raise, and the row must not pretend otherwise.
         return None
     if snap_tolerance:
-        step = joined.step if joined.step is not None else _middle_step(coords)
+        step = joined.step if joined.step is not None else _middle_step(joining)
         if step is not None:
             joined = joined.simplify(snap_tolerance * np.abs(step))
     stated = joined.to_summary()
