@@ -7,7 +7,8 @@ import pandas as pd
 import pytest
 
 import dascore as dc
-from dascore.io.index.ingest import coord_summary
+from dascore.core.coords import get_coord
+from dascore.io.index.ingest import _as_dtype, coord_summary
 
 
 class TestCoordSummaryFromRow:
@@ -57,6 +58,25 @@ class TestCoordSummaryFromRow:
             coord = patch.get_coord(row["coord_name"])
             assert rebuilt.fingerprint() == coord.fingerprint()
             assert np.array_equal(rebuilt.values, coord.values)
+
+    @pytest.mark.parametrize("dtype", ["float32", "float64", "int64", "uint16"])
+    def test_every_numeric_dtype_rebuilds_as_itself(self, dtype):
+        """A stored envelope comes back as the kind of number it was."""
+        patch = dc.get_example_patch()
+        n = patch.shape[patch.get_axis("distance")]
+        coord = get_coord(values=np.arange(n, dtype=dtype))
+        spool = dc.spool([patch.update_coords(distance=coord)])
+        row = next(x for x in self._rows(spool) if x["coord_name"] == "distance")
+        rebuilt = coord_summary(row).to_coord(on_grid=True)
+        assert rebuilt.dtype == coord.dtype
+        assert rebuilt.fingerprint() == coord.fingerprint()
+
+    def test_a_cast_which_would_change_a_value_is_not_made(self):
+        """Restoring a dtype is a change of type, never of value."""
+        # a fractional value cannot be an integer, so it stays as it is
+        assert _as_dtype(1.5, np.dtype("int64")) == 1.5
+        # a dtype which is not a number is left alone
+        assert _as_dtype(1.5, np.dtype("str")) == 1.5
 
     def test_relative_time_is_a_duration(self):
         """A relative time coordinate rebuilds as a duration, not a date."""

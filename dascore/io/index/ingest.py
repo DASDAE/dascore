@@ -18,6 +18,7 @@ import json
 import re
 import warnings
 from collections.abc import Hashable, Mapping
+from contextlib import suppress
 from dataclasses import dataclass, field, fields, replace
 from functools import partial
 from typing import Any, SupportsInt, TypedDict, cast
@@ -456,9 +457,20 @@ def coord_summary(row: Mapping) -> CoordSummary | None:
 
 
 def _as_dtype(value: float, dtype: np.dtype) -> Any:
-    """A stored float as the numeric type the coordinate states."""
-    if np.issubdtype(dtype, np.integer) and float(value).is_integer():
-        return int(value)
+    """
+    A stored float as the numeric type the coordinate states.
+
+    Envelopes are stored as float64 whatever the coordinate is, so a
+    float32 or an unsigned one would rebuild as something else and carry
+    a different identity from the patch. The cast is kept only where it
+    round-trips, since restoring a dtype must not alter a value.
+    """
+    if not np.issubdtype(dtype, np.number):
+        return value
+    with suppress(TypeError, ValueError, OverflowError):
+        cast = dtype.type(value)
+        if float(cast) == float(value):
+            return cast
     return value
 
 
