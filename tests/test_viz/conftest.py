@@ -20,6 +20,10 @@ def shown(monkeypatch) -> list:
     Agg makes the backend headless; this is what keeps `plt.show()` from
     warning that the canvas is non-interactive, and it gives a test asking
     whether `show=True` reached the call something to assert.
+
+    It records rather than forwarding even under --pdb: a real show on an
+    interactive backend blocks until the window is closed, once per viz
+    test. At a breakpoint, `plt.gcf().show()` displays the figure in hand.
     """
     calls = []
     monkeypatch.setattr(plt, "show", lambda *args, **kwargs: calls.append(kwargs))
