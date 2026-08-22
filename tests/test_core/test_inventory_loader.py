@@ -1498,6 +1498,57 @@ class TestTrackTables:
             make_inventory(files)
 
 
+class TestPrivateColumns:
+    """A header beginning with an underscore is the crew's own."""
+
+    @staticmethod
+    def _annotated(files, column="_crew_note"):
+        """Return the track tables with one private column added to each."""
+        out = dict(files)
+        for name, text in files.items():
+            if not name.endswith(".csv"):
+                continue
+            header, *rows = text.splitlines()
+            written = [f"{header},{column}"]
+            written += [f"{row},mapped from drawing 4" for row in rows]
+            out[name] = "\n".join(written) + "\n"
+        return out
+
+    def test_every_table_takes_one(self, make_inventory):
+        """The path a private column is added to is the path without it."""
+        plain = one_path(make_inventory({**MINIMAL, **TRACKS}, name="plain"))
+        noted = one_path(
+            make_inventory({**MINIMAL, **self._annotated(TRACKS)}, name="noted")
+        )
+        assert noted == plain
+
+    def test_geometry_takes_text(self, make_inventory):
+        """A geometry column is numeric; a private one is not a column."""
+        files = {
+            **MINIMAL,
+            **TRACKS,
+            "fiber_arrays/DAS.L001/path/geometry.csv": (
+                "segment,distance,longitude,latitude,elevation,_surveyed_by\n"
+                "S100,100.0,-117.0,40.0,687.0,north crew\n"
+                "S100,102.0,-117.1,40.1,685.0,north crew\n"
+            ),
+        }
+        segment = one_path(make_inventory(files)).geometry[0]
+        assert set(segment.coordinates) == {"longitude", "latitude", "elevation"}
+
+    def test_a_private_column_states_nothing(self, make_inventory):
+        """Underscoring a column the table needs does not state it."""
+        files = {
+            **MINIMAL,
+            **TRACKS,
+            "fiber_arrays/DAS.L001/path/coupling.csv": (
+                "_start_distance,end_distance,coupling_type\n0,340,conduit\n"
+            ),
+        }
+        with pytest.raises(InvalidInventoryError, match="start_distance"):
+            make_inventory(files)
+
+
 class TestPathEpochs:
     """`path` is the one reserved container stem, and it holds a lineage."""
 

@@ -19,6 +19,10 @@ A table may declare the dimensions it is stated in itself, in a
 carries the annotations made on it under the hidden name ``.annotations``, as
 it carries its inventory under ``.inventory``.
 
+A column whose header begins with an underscore is the author's own -- a
+crew's notes on how something was deployed, say -- and is read by nothing:
+the set does not carry it, so it stays in the file it was written in.
+
 CSV has no types, so this module decides what each column holds before the
 models see it: a ``basis`` cell is the JSON document its curve dumps, and
 every other cell is read the way it was written. A dimension column is

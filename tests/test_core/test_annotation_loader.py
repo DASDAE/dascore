@@ -1686,6 +1686,39 @@ def _forge(frame: pd.DataFrame, path, documents: str) -> None:
 
 
 @pytest.mark.skipif(pyarrow is None, reason="pyarrow is not installed")
+class TestPrivateColumns:
+    """A column an author kept for themselves is read by nothing."""
+
+    def test_a_bare_table(self, tmp_path):
+        """A note on how something was deployed stays in the file."""
+        path = tmp_path / "picks.csv"
+        path.write_text(
+            "id,group,distance_start,distance_end,_crew\n"
+            "r1,noise,10.0,60.0,north crew\n"
+        )
+        loaded = dc.annotations(path, dims=DIMS)
+        assert "_crew" not in loaded.io.to_dataframe().columns
+        assert loaded[0].group == "noise"
+
+    def test_a_saved_set(self, regions, tmp_path):
+        """One added to a written table changes nothing about the set."""
+        directory = regions.io.save(tmp_path / "picks")
+        table = directory / "annotations.csv"
+        header, *rows = table.read_text().splitlines()
+        written = [f"{header},_crew", *[f"{row},north crew" for row in rows]]
+        table.write_text("\n".join(written) + "\n")
+        assert dc.annotations(directory) == regions
+
+    def test_vertices(self, with_vertices, tmp_path):
+        """Vertices are a table like any other, so they take one too."""
+        directory = with_vertices.io.save(tmp_path / "picks")
+        table = directory / "vertices.csv"
+        header, *rows = table.read_text().splitlines()
+        written = [f"{header},_source", *[f"{row},drawing 4" for row in rows]]
+        table.write_text("\n".join(written) + "\n")
+        assert dc.annotations(directory) == with_vertices
+
+
 class TestParquet:
     """The same tables, with their types kept, for a set too big to want text."""
 

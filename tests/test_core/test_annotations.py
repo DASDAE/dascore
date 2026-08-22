@@ -419,6 +419,19 @@ class TestColumns:
         out = AnnotationSet(pd.DataFrame({"group": ["a"]}), dims=DIMS)
         assert out[0].set == ""
 
+    def test_private_column_is_not_an_extra(self):
+        """An underscore says the column is the author's, not the set's."""
+        frame = pd.DataFrame({"score": [0.9], "_crew": ["north crew"]})
+        out = AnnotationSet(frame, dims=DIMS)
+        assert "_crew" not in out[0].extra
+        assert "_crew" not in out.io.to_dataframe().columns
+
+    def test_a_private_column_states_no_dimension(self):
+        """Underscoring a range column makes it nothing, not a bound."""
+        frame = pd.DataFrame({"_distance_start": [1.0], "_distance_end": [2.0]})
+        out = AnnotationSet(frame, dims=DIMS)
+        assert out[0].region.bounds == {}
+
     def test_declared_column_documents_only(self):
         """Documenting a column does not gate any other one."""
         out = AnnotationSet(

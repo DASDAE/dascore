@@ -14,6 +14,11 @@ times or durations -- since that is what a bound is compared as. Paths
 and polygons keep their vertices in a second, tidy frame keyed by
 annotation id, and every row keeps a bounding region so table operations
 work whatever its geometry is.
+
+Any other column is an extra the annotation carries, with one exception: a
+column whose name begins with an underscore is the author's own record
+keeping. A set never holds one, so it stays where it was written and no
+reader looks for meaning in it.
 """
 
 from __future__ import annotations
@@ -68,6 +73,7 @@ from dascore.utils.mapping import FrozenDict
 from dascore.utils.misc import iterate, to_str, validate_acquisition_key
 from dascore.utils.namespace import NamespaceOwner
 from dascore.utils.tables import (
+    drop_private_columns,
     parquet_table,
     parse_cell,
     write_parquet,
@@ -1036,7 +1042,11 @@ def _coerce_frame(data, what: str) -> pd.DataFrame:
             "than a string, which is what a table names a column by."
         )
         raise ParameterError(msg)
-    return frame
+    # Here rather than where a file is read, so a set holds what a stored
+    # one holds: a private column is the author's own either way, and a set
+    # which kept one from a frame would write a column it could not read
+    # back.
+    return drop_private_columns(frame)
 
 
 def _read_spellings(frame: pd.DataFrame, dims) -> dict[str, _Spelling]:

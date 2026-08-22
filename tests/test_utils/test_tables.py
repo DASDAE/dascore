@@ -12,6 +12,7 @@ from dascore.core.annotations import Line
 from dascore.exceptions import ParameterError
 from dascore.utils.tables import (
     DOCUMENT_KEY,
+    drop_private_columns,
     ordered_rows,
     parquet_table,
     parse_cell,
@@ -114,6 +115,31 @@ class TestReadTable:
         path = _write(tmp_path, "# dims: time\na,b\n1,2,3\n")
         with pytest.raises(ParameterError, match="row 3"):
             read_table(path, skip=1)
+
+
+class TestDropPrivateColumns:
+    """A column naming itself private is nobody's to read."""
+
+    def test_private_columns_go(self):
+        """An underscore says the column is not the format's."""
+        frame = pd.DataFrame({"group": ["rail"], "_crew": ["JD"], "_": ["x"]})
+        assert list(drop_private_columns(frame).columns) == ["group"]
+
+    def test_a_table_without_one_is_the_table(self):
+        """Nothing to drop leaves the frame as it was."""
+        frame = pd.DataFrame({"group": ["rail"]})
+        assert drop_private_columns(frame) is frame
+
+    def test_the_frame_given_is_not_changed(self):
+        """Dropping hands back a new table, as the rest of this module does."""
+        frame = pd.DataFrame({"group": ["rail"], "_crew": ["JD"]})
+        drop_private_columns(frame)
+        assert "_crew" in frame.columns
+
+    def test_an_underscore_inside_a_name_stays(self):
+        """The prefix states the intent; a name merely holding one does not."""
+        frame = pd.DataFrame({"start_distance": [0.0], "mid_": [1.0]})
+        assert list(drop_private_columns(frame).columns) == ["start_distance", "mid_"]
 
 
 class TestRowCells:
