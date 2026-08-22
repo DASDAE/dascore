@@ -90,9 +90,11 @@ def join_summaries(
     if not _rebuilt_faithfully(summaries, coords):
         # A member which does not rebuild into the coordinate it was made
         # from — one written at a precision the index does not store, say
-        # — cannot have the join's identity computed from it. The
-        # envelope holds either way; the identity is not claimed.
-        stated = stated.model_copy(update=dict(fingerprint=None))
+        # — cannot have the join's identity computed from it. The step
+        # goes with the identity: a summary which still looked evenly
+        # sampled would have the identity recomputed from the very values
+        # which did not survive. The envelope holds either way.
+        stated = stated.model_copy(update=dict(fingerprint=None, step=None, len=None))
     return stated
 
 

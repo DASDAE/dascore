@@ -265,7 +265,12 @@ def _member_summaries(backend, members: pd.DataFrame) -> dict:
     seen: dict[tuple, CoordSummary | None] = {}
     for row in backend.coord_frame(ids).to_dict("records"):
         name = str(row["coord_name"])
-        key = (name, row.get("fingerprint"), row.get("coord_dims"))
+        # keyed by the stored definition, not the fingerprint: a
+        # fingerprint normalizes units, so metres and feet holding the
+        # same physical values share one while their stored envelopes and
+        # spellings differ, and reusing either for the other would
+        # misreport what the patch holds
+        key = (name, row.get("def_key"), row.get("coord_dims"))
         if key[1] is None or key not in seen:
             seen[key] = coord_summary(row)
         summary = seen[key]
@@ -468,10 +473,16 @@ def predicted_coords(
                 if name == plan_dim:
                     summary = _trimmed_summary(summary, row, name)
                 elif cut and plan_dim in summary.dims:
-                    # a coordinate riding a dimension being cut loses the
-                    # values the cut removes, which its summary still counts
+                    # A coordinate riding a dimension being cut keeps only
+                    # the values inside the cut, which its summary still
+                    # counts and cannot locate: the envelope goes with the
+                    # step and the identity, or the row would advertise
+                    # values the patch does not hold.
+                    null = _null_like(summary.min)
                     summary = summary.model_copy(
-                        update=dict(step=None, len=None, fingerprint=None)
+                        update=dict(
+                            min=null, max=null, step=None, len=None, fingerprint=None
+                        )
                     )
                 summaries.append(summary)
             assert summaries, "a name comes from the members which state it"

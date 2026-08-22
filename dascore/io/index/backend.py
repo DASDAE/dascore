@@ -1270,7 +1270,7 @@ class SQLiteIndexBackend:
         is what a summary needs to be rebuilt without loading anything.
         """
         columns = (
-            "pc.patch_id, pc.coord_name, pc.coord_dims, cd.fingerprint, "
+            "pc.patch_id, pc.coord_name, pc.coord_dims, cd.def_key, cd.fingerprint, "
             "cd.value_kind, cd.dtype, cd.length, cd.units, "
             "cd.min_num, cd.max_num, cd.step_num, "
             "cd.min_ns, cd.max_ns, cd.step_ns, cd.min_str, cd.max_str, "

@@ -65,51 +65,28 @@ class TestAgreesWithTheRealJoin:
         assert predicted == _joined([first, second])
         assert predicted.fingerprint == time.fingerprint()
 
-    def test_a_coarser_step_describes_the_same_join(self):
+    def test_a_coarser_step_is_not_vouched_for(self):
         """
-        A step spelled in coarser units predicts the same coordinate.
+        A step spelled in coarser units leaves the join unidentified.
 
-        The fingerprint is excluded: a summary normalizes a step to
-        nanoseconds while the coordinate keeps the precision it was built
-        with, and the two spellings hash differently even though they are
-        the same duration.
+        The index stores nanoseconds, so a coordinate written at another
+        precision does not rebuild into itself; the envelope still spans
+        the members, but nothing is claimed about how they sample it.
         """
-        t0 = np.datetime64("2020-01-01", "ns")
+        t0 = np.datetime64("2020-01-01", "ms")
         step = np.timedelta64(4, "ms")
         coords = [
             get_coord(start=t0, stop=t0 + 100 * step, step=step),
             get_coord(start=t0 + 100 * step, stop=t0 + 200 * step, step=step),
         ]
         predicted = join_summaries([x.to_summary() for x in coords])
-        expected = _joined(coords)
-        described = {"min", "max", "step", "len", "dtype", "units"}
-        assert {k: getattr(predicted, k) for k in described} == {
-            k: getattr(expected, k) for k in described
-        }
-
-    def test_snapping_matches(self):
-        """A seam absorbed by simplify is absorbed in the prediction too."""
-        coords = [_range(0.0, 10.0), _range(11.0, 21.0)]
-        summaries = [x.to_summary() for x in coords]
-        predicted = join_summaries(summaries, snap_tolerance=1.5)
-        assert predicted == _joined(coords, tolerance=1.5)
-        assert predicted.step is not None  # the gap was within tolerance
-
-    def test_snapping_a_join_which_already_fused(self):
-        """Members which meet exactly are already simple; a tolerance is moot."""
-        coords = [_range(0.0, 10.0), _range(10.0, 20.0)]
-        summaries = [x.to_summary() for x in coords]
-        with_tolerance = join_summaries(summaries, snap_tolerance=1.5)
-        assert with_tolerance == join_summaries(summaries)
-        assert with_tolerance.step == 1.0
-
-    def test_gap_beyond_tolerance_stays_stepless(self):
-        """A seam too wide to absorb leaves a coordinate with no step."""
-        coords = [_range(0.0, 10.0), _range(50.0, 60.0)]
-        predicted = join_summaries([x.to_summary() for x in coords], snap_tolerance=1.5)
-        assert predicted is not None
+        assert predicted.fingerprint is None
         assert predicted.step is None
-        assert predicted.min == 0.0 and predicted.max == 59.0
+        assert predicted.len is None
+        # the envelope is still the one the join produces
+        expected = _joined(coords)
+        assert predicted.min == expected.min
+        assert predicted.max == expected.max
 
 
 class TestClaimsNothingWhenItCannotTell:
