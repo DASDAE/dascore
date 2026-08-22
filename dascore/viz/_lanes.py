@@ -9,6 +9,7 @@ objects, and the columns it reads are named by the caller.
 
 from __future__ import annotations
 
+import colorsys
 import datetime
 from collections.abc import Mapping, Sequence
 
@@ -35,6 +36,13 @@ WHEEL_ORDER = (0, 2, 4, 6, 8, 10, 12, 16, 18, 1, 3, 5, 7, 9, 11, 13, 17, 19)
 LANE_CMAP = "tab10"
 NUMERIC_CMAP = "viridis"
 UNCOVERED_COLOR = "0.7"
+
+# The wheel holds every color tab20 offers which is not a grey, so a
+# palette past it can only repeat itself. Values then walk the hue circle:
+# stepping by the golden ratio keeps neighbors in the sorted order apart,
+# and alternating shade separates two which still land on a similar hue.
+_GOLDEN_STEP = 0.6180339887498949
+
 
 # The fraction of the x axis hatched where a bar runs off the end of it.
 _OPEN_FRACTION = 0.02
@@ -162,6 +170,19 @@ def _pack_rows(frame) -> np.ndarray:
     return np.minimum(rows, _MAX_SUB_ROWS - 1)
 
 
+def _wide_colors(values) -> dict:
+    """One distinct color per value, past what the wheel can hold."""
+    out = {}
+    for index, value in enumerate(values):
+        hue = (index * _GOLDEN_STEP) % 1.0
+        pale = index % 2
+        # Held near tab20's own saturation so the two schemes sit together
+        # in a figure whose other lanes are still colored from the wheel.
+        rgb = colorsys.hsv_to_rgb(hue, 0.38 if pale else 0.62, 0.92 if pale else 0.72)
+        out[value] = (*rgb, 1.0)
+    return out
+
+
 def _string_colors(frame, vocabulary=None, cmap_name=STRING_CMAP) -> dict:
     """Map every string value to a stable color.
 
@@ -170,6 +191,10 @@ def _string_colors(frame, vocabulary=None, cmap_name=STRING_CMAP) -> dict:
     """
     seen = list(frame["value"].tolist()) + list(vocabulary or [])
     values = sorted({x for x in seen if isinstance(x, str) and x != ""})
+    if len(values) > len(WHEEL_ORDER):
+        # Cycling the wheel here would give two values one color, and a
+        # legend which says one swatch means two things is worse than none.
+        return _wide_colors(values)
     cmap = plt.get_cmap(cmap_name)
     return {
         value: cmap(WHEEL_ORDER[index % len(WHEEL_ORDER)])

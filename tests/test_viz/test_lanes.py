@@ -12,7 +12,12 @@ import pytest
 from matplotlib.collections import PatchCollection
 
 from dascore.exceptions import ParameterError
-from dascore.viz._lanes import UNCOVERED_COLOR, _pack_rows, plot_lanes
+from dascore.viz._lanes import (
+    UNCOVERED_COLOR,
+    WHEEL_ORDER,
+    _pack_rows,
+    plot_lanes,
+)
 
 
 def _collections(ax):
@@ -439,6 +444,40 @@ class TestColors:
             _collections(alone)[0].get_facecolors()[0],
             _collections(shifted)[0].get_facecolors()[0],
         )
+
+    def test_no_two_values_share_a_color(self):
+        """Past what the wheel holds a palette must widen, not repeat.
+
+        A legend whose swatch means two things is worse than none.
+        """
+        names = [f"value {x:02d}" for x in range(len(WHEEL_ORDER) + 8)]
+        frame = pd.DataFrame(
+            {
+                "start": np.arange(float(len(names))),
+                "end": np.arange(float(len(names))) + 1.0,
+                "v": names,
+            }
+        )
+        ax = plot_lanes(frame, value="v")
+        colors = {tuple(x) for x in _collections(ax)[0].get_facecolors()}
+        assert len(colors) == len(names)
+
+    def test_a_wide_palette_is_still_stable(self):
+        """A value keeps its color whether or not the others are drawn."""
+        names = [f"value {x:02d}" for x in range(len(WHEEL_ORDER) + 8)]
+        frame = pd.DataFrame({"start": [0.0], "end": [1.0], "v": [names[0]]})
+        alone = plot_lanes(frame, value="v", vocabulary=names)
+        first = _collections(alone)[0].get_facecolors()[0]
+        plt.close("all")
+        whole = pd.DataFrame(
+            {
+                "start": np.arange(float(len(names))),
+                "end": np.arange(float(len(names))) + 1.0,
+                "v": names,
+            }
+        )
+        together = plot_lanes(whole, value="v")
+        assert np.allclose(first, _collections(together)[0].get_facecolors()[0])
 
     def test_labels_decided_the_same_at_any_dpi(self):
         """Whether a label fits is a question about the figure, not its dpi."""
