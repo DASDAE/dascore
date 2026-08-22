@@ -1727,8 +1727,8 @@ class Spool(NamespaceOwner):
             option `patch_kind_attrs`. Sampling rate and coordinate
             structure split groups too, exactly as they do for `chunk`,
             so one attribute value can span several groups. A value
-            nobody recorded conflicts with nothing, so a patch which
-            never stated the attribute joins the group that did.
+            nobody recorded is a value of its own, so a patch which never
+            stated the attribute is not grouped with one which did.
         missing_dim
             What to do with patches lacking `dim`: "drop" (the default)
             excludes them, "raise" refuses. Chunk defaults to "raise"
@@ -1810,8 +1810,8 @@ class Spool(NamespaceOwner):
             Defaults to the config option `patch_kind_attrs`; sampling
             and structural differences split groups too, so one
             attribute value can span several rows. A value nobody
-            recorded conflicts with nothing, so a patch which never
-            stated the attribute joins the group that did.
+            recorded is a value of its own, so a patch which never
+            stated the attribute is not grouped with one which did.
         missing_dim
             What to do with patches lacking `dim`: "drop" (the default)
             excludes them, "raise" refuses.
@@ -1895,8 +1895,10 @@ class Spool(NamespaceOwner):
         group
             Attributes which partition patches into separate outputs:
             conflicting values are never an error, the patches simply land
-            in different outputs, and a missing value (null or "") joins the
-            one group consistent with it. Defaults to the config option
+            in different outputs. A missing value (null or "") is a value
+            like any other, so patches which never stated an attribute are
+            grouped together and apart from those which did. Defaults to
+            the config option
             `patch_kind_attrs`; unlike the default, explicitly passed names
             must exist on at least one patch. Dimensions and coordinate
             identities always partition implicitly.

@@ -47,7 +47,7 @@ with config_context(patch_history="disabled"):
     ...
 ```
 
-Which patches may be combined is configurable too: `patch_kind_attrs` names the attributes that decide whether two patches are the same kind (patches with conflicting values for any of them are never combined; a missing value conflicts with nothing). See the [Patch Compatibility](../notes/patch_compatibility.qmd) note.
+Which patches may be combined is configurable too: `patch_kind_attrs` names the attributes that decide whether two patches are the same kind (patches with differing values for any of them are never combined; a missing value is a wildcard for operators and a value of its own where patches are partitioned). See the [Patch Compatibility](../notes/patch_compatibility.qmd) note.
 
 ```python
 with config_context(patch_kind_attrs=("acquisition_key",)):

@@ -111,8 +111,9 @@ def _lane_names(report: pd.DataFrame, dim: str) -> list[str]:
     telling = [x for x in stated if report[x].astype(str).nunique() > 1]
     described = []
     for _, row in report.iterrows():
-        # An attr nobody recorded is left out rather than shown as a
-        # blank, which would read as a value the group states.
+        # A group which recorded nothing is left blank here and named by
+        # its ordinal below; the blank is a value it states, but drawing
+        # it as an empty label would read as a rendering gap.
         stated_values = (str(row[x]) for x in telling if pd.notnull(row[x]))
         parts = [x for x in stated_values if x]
         described.append(" · ".join(parts))

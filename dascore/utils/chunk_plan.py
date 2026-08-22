@@ -107,51 +107,26 @@ class ChunkPlan:
 
 def _kind_codes(df: pd.DataFrame, names: Sequence[str]) -> pd.Series:
     """
-    Label each row by kind: rows sharing a label hold no conflicting values.
+    Label each row by kind: rows sharing a label hold equal values.
 
-    A missing (null or "") value conflicts with nothing, so rows are
-    gathered into runs the way `_KindRun` admits patches: a row joins the
-    one run it conflicts with nothing in, and the run takes on the values
-    the row knows. Fully specified rows seed the runs; the rest are taken
-    in a canonical order (so the labels are deterministic and independent
-    of row order), and a row consistent with *several* runs — an unlabelled
-    file between two acquisitions — starts a run of its own rather than
-    guessing. Rows spelled identically always share a label.
+    A plan partitions a whole relation at once, which needs an
+    equivalence relation, so kind values are compared for equality: a
+    missing value (null or "") is a value like any other, equal to
+    another missing one and nothing else. `known_only` is what makes the
+    two spellings one value.
     """
+    names = list(names)
     if not names or df.empty:
         return pd.Series(0, index=df.index, dtype=np.int64)
-    values = known_only(df[list(names)].astype(object))
-    values = values.where(values.notna(), None)
-    rows = [tuple(x) for x in values.itertuples(index=False, name=None)]
-    order = sorted(
-        range(len(rows)), key=lambda i: (None in rows[i], [str(x) for x in rows[i]])
-    )
-    runs: list[tuple] = []  # the accumulated kind of each label
-    seeded: dict[tuple, int] = {}  # the label a spelling started
-    out = np.empty(len(rows), dtype=np.int64)
-    for i in order:
-        row = rows[i]
-        if (label := seeded.get(row)) is None:
-            candidates = [
-                j
-                for j, run in enumerate(runs)
-                if all(a is None or b is None or a == b for a, b in zip(row, run))
-            ]
-            if len(candidates) == 1:
-                (label,) = candidates
-                runs[label] = tuple(
-                    a if a is not None else b for a, b in zip(runs[label], row)
-                )
-            else:
-                label = len(runs)
-                runs.append(row)
-            seeded[row] = label
-        out[i] = label
-    return pd.Series(out, index=df.index)
+    values = known_only(df[names].astype(object))
+    return values.groupby(names, dropna=False, sort=False).ngroup()
 
 
 def _resolve_group_attrs(group, columns) -> tuple[str, ...]:
     """Resolve the group attrs: per-call > config; explicit names must exist."""
+    # A name repeated says nothing twice; deduping here keeps it out of the
+    # recorded params as well as out of the groupby, which cannot take
+    # duplicate labels.
     if group is not None:
         group = (group,) if isinstance(group, str) else tuple(group)
         if missing := [x for x in group if x not in columns]:
@@ -159,9 +134,10 @@ def _resolve_group_attrs(group, columns) -> tuple[str, ...]:
                 f"group attribute(s) {missing} do not exist on any patch in the spool."
             )
             raise InvalidSpoolQueryError(msg)
-        return group
+        return tuple(dict.fromkeys(group))
     # Config (and default) names are best-effort.
-    return tuple(x for x in dc.get_config().patch_kind_attrs if x in columns)
+    names = (x for x in dc.get_config().patch_kind_attrs if x in columns)
+    return tuple(dict.fromkeys(names))
 
 
 def samples_adjusted_envelopes(
@@ -918,15 +894,16 @@ def _carried_columns(
     Resolve every partition's carried columns at once (spec 2.5/6.4).
 
     Dims and def keys are single-valued by construction. Public attrs
-    must hold no conflicting *known* values per partition, policed by
-    `conflict`: a missing value (null or "") is an attr nobody recorded,
-    so it conflicts with nothing and the partition carries the known
-    value. Returns a mapping of column -> one carried value per
-    partition (null where a partition does not carry the column), in the
-    order columns ride onto outputs. A conflict raises for the first
-    active partition (in output order) and its first conflicting column,
-    exactly as per-partition policing did; partitions which produced no
-    outputs (`active` False) are never policed.
+    must hold equal values per partition, policed by `conflict`: a
+    missing value (null or "") is a value like any other, equal to
+    another missing one and nothing else, so a member which never
+    recorded an attr conflicts with one which did. Returns a mapping of
+    column -> one carried value per partition (null where a partition
+    does not carry the column), in the order columns ride onto outputs.
+    A conflict raises for the first active partition (in output order)
+    and its first conflicting column, exactly as per-partition policing
+    did; partitions which produced no outputs (`active` False) are never
+    policed.
     """
     n_parts = len(seg_starts)
     first = sorted_df.iloc[seg_starts].reset_index(drop=True)
@@ -956,7 +933,7 @@ def _carried_columns(
         # were never policed (their values may not even be hashable),
         # and their carried values are never published.
         rows = active[codes]
-        # "" is a value nobody recorded, like null; neither conflicts.
+        # "" and null are one missing value, which is a value like any other.
         known = known_only(sorted_df.loc[rows, policed])
         grouped = known.groupby(codes[rows], sort=True)
         part_index = grouped.size().index.to_numpy()
@@ -965,13 +942,18 @@ def _carried_columns(
         # TypeError here. Per-partition policing raised it too, though
         # partition-major rather than at aggregation; such values are
         # outside the relation's contract, so the eager error is fine.
-        nunique[part_index] = grouped.nunique(dropna=True).to_numpy()
-        # no conflict: at most one distinct known value
+        # dropna=False: a member which recorded nothing is a distinct value.
+        nunique[part_index] = grouped.nunique(dropna=False).to_numpy()
+        # no conflict: exactly one distinct value
         single = nunique <= 1
         conflicted = ~single & active[:, None]
-        # the first known value of each partition, null where none
+        # The first *row* of each partition, not `grouped.first()`, which
+        # skips nulls and would resurrect the old first-known rule. Only
+        # active partitions: `known_only` on the rest could meet an
+        # unhashable value, as the comment above says.
         firsts = pd.DataFrame(index=range(n_parts), columns=policed, dtype=object)
-        firsts.loc[part_index] = grouped.first().to_numpy()
+        stated = known_only(first.loc[part_index, policed])
+        firsts.loc[part_index] = stated.to_numpy()
         # Dims are a partition key and group attrs never conflict within
         # one, so neither reaches the conflict policy here.
         raising = conflicted & (owned | (conflict == "raise"))
@@ -986,7 +968,7 @@ def _carried_columns(
             raise CoordMergeError(msg)
         keep_first = conflict == "keep_first"
         for index, col in enumerate(policed):
-            # keep_first carries the first known value; drop omits the
+            # keep_first carries the first member's value; drop omits the
             # column for that partition (null after assembly).
             keeps = single[:, index] | (conflicted[:, index] & keep_first)
             if not (keeps & active).any():
@@ -1100,20 +1082,6 @@ def _gap_carried_columns(df: pd.DataFrame, name: str, group_attrs) -> list[str]:
     return list(dict.fromkeys(cols))
 
 
-def _stated(sub: pd.DataFrame, column: str) -> pd.Series:
-    """
-    Return the one value a cell states for a column, as a length-1 slice.
-
-    Kind matching lets a row which never recorded an attr share a cell
-    with one that did, so the first row is not always the one that
-    knows. Slicing the column (rather than taking the value) keeps the
-    frame's dtype. Falls back to the first row when nobody recorded it.
-    """
-    known = known_only(sub[column])
-    index = known.first_valid_index()
-    return sub[column].iloc[:1] if index is None else sub[column].loc[[index]]
-
-
 def _cell_gaps(df: pd.DataFrame, name: str, group_attrs, tolerance: float):
     """
     Yield `(cell rows, gaps in that cell)` for every cell in `df`.
@@ -1135,7 +1103,7 @@ def _cell_gaps(df: pd.DataFrame, name: str, group_attrs, tolerance: float):
     groups = grouped.groups
     mins = grouped[min_name].min()
     stated = {
-        label: tuple(_stated(df.loc[index], x).iloc[0] for x in carried)
+        label: tuple(df.loc[index, x].iloc[0] for x in carried)
         for label, index in groups.items()
     }
     order = sorted(
@@ -1157,7 +1125,7 @@ def _cell_gaps(df: pd.DataFrame, name: str, group_attrs, tolerance: float):
                 "gap_size": starts - reach[found],
                 "group_id": np.full(len(found), group_id, dtype=np.int64),
             }
-            | {x: _stated(sub, x).repeat(len(found)).to_numpy() for x in carried}
+            | {x: sub[x].iloc[:1].repeat(len(found)).to_numpy() for x in carried}
         )
         yield group_id, sub, gaps
 
@@ -1260,7 +1228,7 @@ def build_coverage_frame(
                 "gap_total": gap_total,
                 "group_id": group_id,
             }
-            | {x: _stated(sub, x).iloc[0] for x in carried}
+            | {x: sub[x].iloc[0] for x in carried}
         )
     if not rows:
         span = df[max_name] - df[min_name]
@@ -1604,18 +1572,20 @@ def build_concat_plan(
     """
     Build a plan concatenating patches in order (`Spool.concatenate`).
 
-    Partitions as a chunk plan does — kind (the config's attrs, a missing
-    value matching anything), dimensions, the identity of every other
-    dimension, and the concatenated dimension's units (a patch with no
-    values along it joins any) — and then groups
-    each partition's rows by the requested count in the order of the
-    dimension (ascending or descending as the data run; given order when
-    the rows have no envelope), with no sampling tolerance, no gap test,
-    and no overlap removal. Patches which cannot be concatenated together
-    land in separate outputs, never in an error. Remaining attributes must
-    hold no conflicting known values within an output, policed by
-    `conflict` exactly as a chunk plan polices them; non-dimensional
-    coordinates are checked when the output is assembled.
+    Partitions as a chunk plan does — kind (the config's attrs, compared
+    for equality, so a missing value is a value), dimensions, the identity
+    of every other dimension, and how the concatenated dimension is
+    spelled (its units and value kind; a patch with no values along it
+    states neither, so it follows the one spelling the others share and
+    forms its own group when they state two) — and then groups each
+    partition's rows by the requested count in the order of the dimension
+    (ascending or descending as the data run; given order when the rows
+    have no envelope), with no sampling tolerance, no gap test, and no
+    overlap removal. Patches which cannot be concatenated together land in
+    separate outputs, never in an error. Remaining attributes must hold
+    equal values within an output, policed by `conflict` exactly as a
+    chunk plan polices them; non-dimensional coordinates are checked when
+    the output is assembled.
 
     Parameters
     ----------
@@ -1686,24 +1656,24 @@ def build_concat_plan(
         # centimetres plan together and members convert on loading; only
         # numbers are stored per spelling, so only they convert
         df = _normalize_numeric_units(df, name)
-    # The concatenated dimension's units partition like kind: a patch whose
-    # coordinate has values but no units cannot join one whose has units
-    # (the values would be mixed), while a patch with no values along the
-    # dimension (an aggregated coordinate) joins whichever it meets.
-    kind_names = list(names)
+    # The concatenated dimension's spelling partitions too: values with no
+    # units cannot join values with units (they would be mixed), and a
+    # datetime cannot join a number sharing its name and unit. A row with
+    # no values along the dimension states no spelling; it follows the one
+    # spelling the stated rows share (assembly fills its placeholders from
+    # them, see `_joinable`) and forms its own group when they state two.
+    spelling = pd.Series("", index=df.index, dtype=object)
     if unit_col in df.columns:
-        units = df[unit_col].fillna("unitless").astype(object)
+        # `known_only` first: a coordinate stated with no units spells that
+        # null or "", and the two are one statement here as everywhere else.
+        units = known_only(df[unit_col]).fillna("unitless").astype(object)
         if has_envelope:
             units = units.where(df[min_name].notna(), "")
-        df = df.assign(_concat_units=units.where(along, ""))
-        kind_names.append("_concat_units")
+        spelling = spelling.str.cat(units.where(along, ""))
     if has_envelope:
-        # values of one kind concatenate; a datetime and a number sharing a
-        # name (and a unit) do not, and a row with no values joins either
         family = df[min_name].map(_value_family)
-        df = df.assign(_concat_family=family.where(along, ""))
-        kind_names.append("_concat_family")
-    keys: list = [_kind_codes(df, kind_names)]
+        spelling = spelling.str.cat(family.where(along, ""), sep="|")
+    keys: list = [_kind_codes(df, list(names))]
     if "dims" in df.columns:
         keys.append(df["dims"])
     for dim_key in _dim_def_key_columns(df, name):
@@ -1720,8 +1690,14 @@ def build_concat_plan(
             env = pd.Series(["env:" + "|".join(map(str, x)) for x in spelled])
             key = key.where(key.notna(), env)
         keys.append(key)
-    labels = df.groupby(keys, dropna=False, sort=False).ngroup().to_numpy()
-    df = df.drop(columns=["_concat_units", "_concat_family"], errors="ignore")
+    # Everything a row states about itself; the dimension's spelling then
+    # splits these further, the value-less rows following the stated ones.
+    base = df.groupby(keys, dropna=False, sort=False).ngroup()
+    stated = spelling.where(spelling.str.strip("|") != "")
+    by_base = stated.groupby(base, sort=False)
+    lone = by_base.transform("nunique") == 1
+    spelling = spelling.mask(stated.isna() & lone, by_base.transform("first"))
+    labels = df.groupby([base, spelling], dropna=False, sort=False).ngroup().to_numpy()
     # Order: partitions in order of first appearance, rows within one the
     # way the data run along the dimension (ascending by start, descending
     # by stop), then cut into runs of `count`. A partition without a known
@@ -1769,6 +1745,16 @@ def build_concat_plan(
     policed_df = sorted_df.assign(**blanked)
     carried = _carried_columns(policed_df, codes, seg_starts, name, conflict, active)
     data: dict[str, Any] = {k: v.reset_index(drop=True) for k, v in carried.items()}
+    if "data_units" in sorted_df.columns:
+        # Data units scale the data, so assembly converts every member to
+        # the first units any member states rather than letting a loosened
+        # policy splice differently scaled samples (`concatenate_planned`).
+        # The row has to say the same, or it would describe kilometre-scaled
+        # samples by a first member's silence -- or, under `drop`, not at all.
+        first_stated = known_only(sorted_df[["data_units"]])["data_units"]
+        first_stated = first_stated.groupby(codes, sort=True).first()
+        if first_stated.notna().any():
+            data["data_units"] = first_stated.reset_index(drop=True)
     if has_envelope and not along.all():
         # rows gaining the dimension have no values along it; what their
         # column holds belongs to a coordinate the new dimension replaces
@@ -1777,23 +1763,21 @@ def build_concat_plan(
         sorted_df = sorted_df.assign(**blank)
     by_output = sorted_df.groupby(codes, sort=True)
     if has_envelope:
-        # a member with no values along the dimension (an aggregated
-        # coordinate) has a null envelope, which the output's skips
-        # An output whose members state values of more than one kind has no
-        # envelope the two could share. Labels are the awkward pair: they
-        # have no missing value, so a member which states none cannot join
-        # them either, and such an output claims nothing.
+        # A member with no values along the dimension (an aggregated
+        # coordinate) has a null envelope, which the output's skips.
+        # Labels are the awkward pair: they have no missing value, so a
+        # member which states none cannot join them, and such an output
+        # claims nothing until assembly refuses it.
         families = sorted_df[min_name].map(_value_family)
         by_family = families.replace("", np.nan).groupby(codes, sort=True)
-        mixed = (by_family.nunique(dropna=True) > 1).to_numpy()
         text = (by_family.first() == "text").fillna(False).to_numpy()
         blank = (families == "").groupby(codes, sort=True).any().to_numpy()
-        undecided = pd.Series(mixed | (text & blank))
+        undecided = pd.Series(text & blank)
         data[min_name] = by_output[min_name].min().where(~undecided).to_numpy()
         data[max_name] = by_output[max_name].max().where(~undecided).to_numpy()
         if unit_col in sorted_df.columns:
             # a member with no values along the dimension states no unit;
-            # the output speaks the first unit any member states, which is
+            # the output speaks the unit its stated members share, which is
             # what assembly joins in
             known = known_only(sorted_df[[unit_col]])[unit_col]
             data[unit_col] = known.groupby(codes, sort=True).first().to_numpy()
@@ -1853,9 +1837,10 @@ def build_concat_plan(
             first[i] if uniform[i] else _combined_dtype(all_dtypes.iloc[a : a + n])
             for i, (a, n) in enumerate(zip(seg_starts, sizes))
         ]
-        if conflict == "keep_first" and "data_units" in sorted_df.columns:
-            # keeping one spelling of the data units converts the members
-            # stated otherwise, which floats an integer array
+        if conflict != "raise" and "data_units" in sorted_df.columns:
+            # settling on one spelling of the data units converts the members
+            # stated otherwise, which floats an integer array; `drop` reaches
+            # the same conversion, since units are reconciled either way
             stated = known_only(sorted_df[["data_units"]])["data_units"]
             converts = stated.groupby(codes, sort=True).nunique(dropna=True) > 1
             combined = [

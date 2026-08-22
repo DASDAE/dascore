@@ -6,9 +6,9 @@ Several operations combine patches: the arithmetic operators and ufuncs (`patch1
 
 ## Kind
 
-The kind of a patch is the set of values it holds for the attributes named by the config option `patch_kind_attrs`. By default these are `acquisition_key`, `data_category`, and `tag` (plus the legacy `network` and `station`, which only archives predating `acquisition_key` still carry). Two patches are the same kind unless they hold *conflicting* values for one of these: a value that is missing — the attribute is absent, null, or left at its empty default `""` — conflicts with nothing. So a hand-built patch with no `acquisition_key` combines with one that has it, a reader that stamps `network=""` agrees with a patch carrying no `network` at all (which is also how spool metadata records such attributes), and the result of combining carries the union of the known values.
+The kind of a patch is the set of values it holds for the attributes named by the config option `patch_kind_attrs`. By default these are `acquisition_key`, `data_category`, and `tag` (plus the legacy `network` and `station`, which only archives predating `acquisition_key` still carry). Two patches are the same kind when they hold the same values for these attributes — with one wrinkle for missing values, below, which turns on how many patches are being combined. A value that is missing — the attribute is absent, null, or left at its empty default `""` — is one value however it is spelled, so a reader that stamps `network=""` agrees with a patch carrying no `network` at all, which is also how spool metadata records such attributes.
 
-Kind attributes are categorical labels — strings naming an acquisition, a category, a tag — not quantities; the spool index partitions on them as stored text, so a quantity named as a kind attribute is not supported. Kind is decided from attributes alone. Coordinates, data units, history, the patch and processing ids, and every attribute outside the configured names never enter: a filtered patch is the same kind as its raw source, and so is a copy with different units or a different time range. Attributes are scalars, and the missing-value rule is the same everywhere: an attribute nobody recorded (absent, null, or `""`) is satisfied by whatever another patch knows. `data_type` is deliberately *not* a kind attribute: processing rewrites it (`standardize` clears it, `envelope` sets it), so it would separate a patch from its own derivatives — `vel / vel.envelope("time")` must work — while the acquisition key, category, and tag already keep unrelated data apart.
+Kind attributes are categorical labels — strings naming an acquisition, a category, a tag — not quantities; the spool index partitions on them as stored text, so a quantity named as a kind attribute is not supported. Kind is decided from attributes alone. Coordinates, data units, history, the patch and processing ids, and every attribute outside the configured names never enter: a filtered patch is the same kind as its raw source, and so is a copy with different units or a different time range. `data_type` is deliberately *not* a kind attribute: processing rewrites it (`standardize` clears it, `envelope` sets it), so it would separate a patch from its own derivatives — `vel / vel.envelope("time")` must work — while the acquisition key, category, and tag already keep unrelated data apart.
 
 ```{python}
 import dascore as dc
@@ -20,16 +20,42 @@ assert tuple(get_patch_kind(patch)) == dc.get_config().patch_kind_attrs
 processed = patch.pass_filter(time=(None, 10)).set_units("m/s")
 assert check_kind(patch, processed)
 assert not check_kind(patch, patch.update_attrs(tag="other"), check_behavior="ignore")
-
-# A missing value matches; the result carries the known one.
-keyed = patch.update_attrs(acquisition_key="DAS.R2D1..RAW")
-assert check_kind(patch, keyed)
-assert (patch + keyed).attrs.acquisition_key == "DAS.R2D1..RAW"
 ```
 
-[`check_kind`](`dascore.utils.patch.check_kind`) implements this test for patches, and every combining operation applies it before looking at coordinates; the spool operations apply the same rule to their metadata, so a plan decided without loading data agrees with the patches it later assembles.
+[`check_kind`](`dascore.utils.patch.check_kind`) implements this test for patches (the next section covers how it compares a missing value), and every combining operation applies it before looking at coordinates; the spool operations apply the same rule to their metadata, so a plan decided without loading data agrees with the patches it later assembles.
 
-Because a missing value matches anything, "same kind" is not transitive — `"a"` matches `""` matches `"b"`, yet `"a"` conflicts with `"b"` — and operations that combine more than two patches resolve this in two ways. `concatenate_patches` and `stack` run through their patches in order with an *accumulated* kind: a value any kept patch knows binds the patches after it, so a run never ends up holding two values for one attribute. `Spool.chunk` and `Spool.concatenate` must partition a whole spool at once, so they gather patches into the same kind of runs in a canonical order: fully specified patches seed the runs, and each remaining patch joins the one run it conflicts with nothing in (the run taking on the values it knows), starts its own when none fits, or — when *several* runs would accept it, an unlabelled file between two acquisitions — starts its own rather than guessing. That keeps plans deterministic and independent of row order.
+### A missing value, and how many patches are being combined
+
+An operation with **two operands** — an operator, a ufunc, [`Patch.where`](`dascore.Patch.where`) — must produce one patch, and it has one answer available: a missing value is a wildcard which matches anything, and the result carries the union of what the two patches knew. This is the same rule the data units follow, where a unitless operand takes the other's units.
+
+An operation which combines a **collection** — `concatenate`, `stack`, and the spool operations — is not answering "do these two go together?" but "which of these go together?". That is a partition, and partitioning needs the comparison to be transitive. A wildcard is not: `"a"` would match `""` would match `"b"`, yet `"a"` and `"b"` conflict, so the answer would depend on which patch was looked at first. These operations therefore read a missing value as a *value*: it equals another missing value and nothing else. Partitioning is then just grouping by the kind attributes, and the result never depends on the order the patches arrived in.
+
+```{python}
+keyed = patch.update_attrs(acquisition_key="DAS.R2D1..RAW")
+
+# Two operands: the unset key is a wildcard and the result carries the key.
+assert check_kind(patch, keyed)
+assert (patch + keyed).attrs.acquisition_key == "DAS.R2D1..RAW"
+
+# A collection: not stating a key is its own kind, so these do not merge.
+assert not check_kind(patch, keyed, check_behavior="ignore", strict=True)
+assert len(dc.spool([patch, keyed]).chunk(time=None)) == 2
+```
+
+To fold such patches together, say what they have in common rather than leaving a spool operation to guess it. Stating the value is the direct way; `group=` alone is not enough, since an attribute outside the group is still policed by `conflict` (see rule 3), so a spool operation which should ignore one needs both.
+
+```{python}
+stated = dc.spool([patch, keyed]).map(
+    lambda x: x.update_attrs(acquisition_key="DAS.R2D1..RAW")
+)
+assert len(dc.spool(stated).chunk(time=None)) == 1
+
+# or say that the key neither partitions nor has to agree
+merged = dc.spool([patch, keyed]).chunk(
+    time=None, group=("tag",), conflict="keep_first"
+)
+assert len(merged) == 1
+```
 
 ## Rule 1: different kinds never combine
 
@@ -70,7 +96,7 @@ assert out.attrs.data_type == "velocity"
 Only once the kind matches do coordinates matter, and each operation has its own fit:
 
 - **Operators, ufuncs, and `where`** broadcast. A dimension only one patch has is appended to the other as length one; a dimension both have is aligned on the intersection of its coordinate values, so the result covers only where both patches have data. Sharing a dimension but none of its values is a conflict and raises a [`PatchCoordinateError`](`dascore.exceptions.PatchCoordinateError`) — an empty result is never what was meant, and it would propagate silently.
-- **`concatenate`** requires the same dimensions and equal coordinates except along the concatenated dimension; **`stack`** the same, except along `dim_vary`, which must still have the same shape. `Spool.concatenate` partitions a spool's metadata as `chunk` does — kind, dimensions, the identity of every other dimension, and the concatenated dimension's units (a patch with no values along it joins either) — so patches which differ on those land in separate outputs, then joins each partition's patches in the order of the dimension (when its step is known; irregular values, labels, and a new dimension keep spool order), contiguous or not; like `chunk`, it polices the remaining *attributes* with `conflict`. Coordinates are not policed by it: one riding the concatenated dimension is joined along it, and any other must agree between the members or the output raises when it loads — a patch never quietly loses a coordinate its catalog row describes. A selection still to be applied when the patches load leaves their coordinate identities undecided, so such patches stay in separate outputs; load them (`dc.spool(list(spool))`) to concatenate what the selection reconciles. Where the index knows a coordinate only by a summary — no fingerprint of its values — two patches whose summaries agree plan together and are settled when the output loads: equal values concatenate, different ones raise rather than being mixed.
+- **`concatenate`** requires the same dimensions and equal coordinates except along the concatenated dimension; **`stack`** the same, except along `dim_vary`, which must still have the same shape. `Spool.concatenate` partitions a spool's metadata as `chunk` does — kind, dimensions, the identity of every other dimension, and the concatenated dimension's units and value kind (a patch with no values along it states neither, so it follows the one spelling the others state, and stays out when they state two) — so patches which differ on those land in separate outputs, then joins each partition's patches in the order of the dimension (when its step is known; irregular values, labels, and a new dimension keep spool order), contiguous or not; like `chunk`, it polices the remaining *attributes* with `conflict`. Coordinates are not policed by it: one riding the concatenated dimension is joined along it, and any other must agree between the members or the output raises when it loads — a patch never quietly loses a coordinate its catalog row describes. A selection still to be applied when the patches load leaves their coordinate identities undecided, so such patches stay in separate outputs; load them (`dc.spool(list(spool))`) to concatenate what the selection reconciles. Where the index knows a coordinate only by a summary — no fingerprint of its values — two patches whose summaries agree plan together and are settled when the output loads: equal values concatenate, different ones raise rather than being mixed.
 - **`chunk`** partitions further by structure (the dimensions tuple, the coordinate identity of every non-chunked dimension, the chunked dimension's units), sampling interval, and continuity; see [Spool Chunking](spool_chunking.qmd).
 
 ```{python}
@@ -91,8 +117,8 @@ with pytest.raises(PatchCoordinateError, match="share no values"):
 Attributes outside the kind — `data_units`, `history`, the ids, and any custom attribute — never decide whether patches combine. They are folded instead:
 
 - **Operators and ufuncs**: data units take part in the arithmetic, so metres times seconds gives metre-seconds and metres plus seconds raises a [`UnitError`](`dascore.exceptions.UnitError`); convertible units are converted to the first patch's. An operand without units — a patch with no `data_units`, an array, or a scalar — conflicts with nothing, just like a missing kind value: it is dimensionless where that works (metres times it is metres, it divided by metres is 1/metres) and takes the other operand's units where the operation needs equal units (metres plus it is metres; comparisons likewise). Offset units such as `degC` cannot be scaled, so a patch in them accepts only sums, differences, extrema, and comparisons: beside a unitless operand, which counts as a difference of so many degrees, it may be added to or taken from the temperature but the temperature not from it (`temp - 1` is Celsius, `1 - temp` raises); beside another temperature, a difference is a delta (`delta_degC`), extrema and comparisons work, and a sum is refused; beside a difference (`delta_degC`, or anything convertible to it), a sum or a difference is a temperature. Anything else asks you to convert to kelvin first. Every other attribute keeps the first patch's value, and attributes only the second patch has are added. History and the ids follow the [patch identity rules](../tutorial/patch.qmd#patch-identity).
-- **`concatenate` and `stack`**: the output carries the first patch's attributes, with kind values and data units it lacks filled from the others, and its history with the operation's own entry appended. Splicing or summing data demands one unit, and units are not converted for you: a patch whose known data units differ from the first's is skipped (or raises) by `concatenate_patches` and `stack`, and is a conflict for `Spool.concatenate` and `chunk`, policed by `conflict` — convert it first.
-- **`chunk`**: attributes must hold no conflicting known values within a partition, policed by its `conflict` argument (`"raise"` by default, `"drop"`, or `"keep_first"`); a missing value conflicts with nothing and the output carries the known one, exactly as for kind.
+- **`concatenate` and `stack`**: the output carries the first patch's attributes, and its history with the operation's own entry appended. Splicing or summing data demands one unit, and units are not converted for you: a patch whose data units differ from the first's — a patch with no units included — is skipped (or raises) by `concatenate_patches` and `stack`, and is a conflict for `Spool.concatenate` and `chunk`, policed by `conflict`. Convert with [`Patch.convert_units`](`dascore.Patch.convert_units`), or state the units with [`Patch.set_units`](`dascore.Patch.set_units`), first.
+- **`chunk`**: attributes must hold equal values within a partition, policed by its `conflict` argument (`"raise"` by default, `"drop"`, or `"keep_first"`); a missing value is a value here too, exactly as for kind, so a patch which never recorded an attribute conflicts with one which did. `"keep_first"` keeps the first patch's value, stated or not.
 - **History** is never compared by any operation — processing differing between members is what combining is for — and the output carries the first patch's (plus the combining operation's own entry, where it records one). Operations which splice members side by side along a dimension (`chunk`'s merge and `concatenate`) warn when the histories differ, since a raw patch merged beside a filtered one is usually a mistake; elementwise operations do not, since a residual is exactly filtered minus raw.
 
 ```{python}

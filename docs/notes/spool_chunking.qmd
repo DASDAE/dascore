@@ -31,7 +31,7 @@ Plans are deterministic: the same spool produces the same plan regardless of met
 
 Patches may only combine when they agree on all of:
 
-1. **Kind** — the config option `patch_kind_attrs` by default (conventional categorical identity: acquisition key, data category, and tag; see [Patch Compatibility](patch_compatibility.qmd)), overridden per call with `group=`. Conflicting values are never an error; the patches simply land in separate outputs. A missing value conflicts with nothing: a patch lacking one joins the single kind consistent with it (which takes on the values the patch knows), or stays apart when several would accept it. Explicitly passed names must exist somewhere in the spool; config names are best-effort.
+1. **Kind** — the config option `patch_kind_attrs` by default (conventional categorical identity: acquisition key, data category, and tag; see [Patch Compatibility](patch_compatibility.qmd)), overridden per call with `group=`. Differing values are never an error; the patches simply land in separate outputs. A missing value is a value: patches which never recorded an attribute partition together, and apart from those which did. Explicitly passed names must exist somewhere in the spool; config names are best-effort.
 2. **Structure** — the dimensions tuple, the coordinate identity of every non-chunked dimension, and the chunked dimension's units (a metre patch can never plan into one output with a seconds patch, or a unitful with a unitless one; compatible spellings such as metres and feet are normalized to one unit per dimensionality before partitioning, so they plan together, and assembly converts each member to the first member's units).
 3. **Sampling** — step magnitudes within the relative tolerance `config.sampling_group_tolerance` (default 5%) of the group's smallest member, with matching orientation (ascending never merges with descending; contiguous descending patches merge with each other).
 4. **Continuity** — patches within `tolerance` samples of each other, evaluated within each group so unrelated patches can never bridge a gap.
@@ -57,11 +57,17 @@ assert len(merged) == 2
 assert len(merged) == len(spool.get_gaps()) + len(spool.get_coverage())
 ```
 
-Remaining (non-group, non-dimensional) attributes must hold no *conflicting* values within a partition, policed by `conflict`: `"raise"` (default), `"drop"`, or `"keep_first"`. A missing value (null or `""`) is an attribute nobody recorded, so it conflicts with nothing and the output carries the known value; only two differing known values are a conflict. History and the ids are never policed — the output carries the first member's — but merging members whose histories differ (processed beside unprocessed data) warns.
+Remaining (non-group, non-dimensional) attributes must hold *equal* values within a partition, policed by `conflict`: `"raise"` (default), `"drop"`, or `"keep_first"`. A missing value (null or `""`) is a value like any other — an attribute one member recorded and another did not is a conflict, since the output can only state one thing. `"keep_first"` states what the first member did, stated or not; `"drop"` leaves the attribute out. History and the ids are never policed — the output carries the first member's — but merging members whose histories differ (processed beside unprocessed data) warns.
 
 ```{python}
+import pytest
+from dascore.exceptions import CoordMergeError
+
 typed = p1.update_attrs(data_type="velocity")
-merged = dc.spool([typed, p2]).chunk(time=None)
+with pytest.raises(CoordMergeError, match="data_type"):
+    dc.spool([typed, p2]).chunk(time=None)
+
+merged = dc.spool([typed, p2]).chunk(time=None, conflict="keep_first")
 assert len(merged) == 1
 assert merged.get_contents()["data_type"].iloc[0] == "velocity"
 assert merged[0].attrs.data_type == "velocity"
@@ -139,7 +145,7 @@ assert isinstance(patch.get_coord("time"), CoordRange)
 # A gap forced together by a loose tolerance warns, and with
 # snap_coords=False the output keeps the exact segmented coordinate.
 gap_start = time.max() + 3 * time.step
-p_gap = dc.get_example_patch(time_min=gap_start)
+p_gap = dc.get_example_patch(time_min=gap_start, acquisition_key="XX1.R2D1..RAW")
 with pytest.warns(UserWarning, match="force merging"):
     forced = dc.spool([p1, p_gap]).chunk(
         time=None, tolerance=5, snap_coords=False

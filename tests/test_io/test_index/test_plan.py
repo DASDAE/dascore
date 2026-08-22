@@ -122,9 +122,10 @@ class TestMergePlan:
         )
         for col in ("acquisition_key", "tag"):
             src, out = merged[f"{col}_src"], merged[f"{col}_out"]
-            # a member missing the value matches any output value
-            equal = (src == out) | src.isnull() | (src == "")
-            assert equal.all()
+            # the members of an output state exactly what it does; the
+            # missing value is the one spelled two ways
+            missing = (src.isnull() | (src == "")) & (out.isnull() | (out == ""))
+            assert ((src == out) | missing).all()
 
     def test_gap_splits_partition(self):
         """A gap larger than tolerance yields separate outputs."""
@@ -200,56 +201,47 @@ class TestConflict:
     def conflicted_patches(self):
         """Two contiguous patches with conflicting known values of an attr."""
         t0 = np.datetime64("2020-01-01", "ns")
-        p1 = dc.get_example_patch(time_min=t0).update_attrs(data_units="ft/s")
+        p1 = dc.get_example_patch(time_min=t0).update_attrs(data_type="velocity")
         time = p1.get_coord("time")
         p2 = dc.get_example_patch(time_min=time.max() + time.step)
-        p2 = p2.update_attrs(data_units="m/s")
+        p2 = p2.update_attrs(data_type="strain_rate")
         return [p1, p2]
 
     def test_raise(self, conflicted_patches):
         """Conflicting known values raise by default."""
-        with pytest.raises(CoordMergeError, match="data_units"):
+        with pytest.raises(CoordMergeError, match="data_type"):
             build_chunk_plan(_flat(conflicted_patches), time=None)
 
-    def test_missing_value_is_not_a_conflict(self, conflicted_patches):
-        """A member lacking the attr merges; the output carries the known value."""
+    def test_missing_value_is_a_conflict(self, conflicted_patches):
+        """A member lacking the attr conflicts with one which has it."""
         p1, p2 = conflicted_patches
-        df = _flat([p1.update_attrs(data_units=None), p2])
-        plan = build_chunk_plan(df, time=None)
-        assert len(plan.outputs) == 1
-        assert plan.outputs["data_units"].iloc[0] == "m / s"
-        # the same for drop, which only omits real conflicts
+        df = _flat([p1.update_attrs(data_type=""), p2])
+        with pytest.raises(CoordMergeError, match="data_type"):
+            build_chunk_plan(df, time=None)
         plan = build_chunk_plan(df, time=None, conflict="drop")
-        assert plan.outputs["data_units"].iloc[0] == "m / s"
+        assert len(plan.outputs) == 1
+        assert "data_type" not in plan.outputs.columns
 
     def test_keep_first(self, conflicted_patches):
         """keep_first carries the first member's value."""
         df = _flat(conflicted_patches)
         plan = build_chunk_plan(df, time=None, conflict="keep_first")
         first_id = df.sort_values("time_min")["_patch_id"].iloc[0]
-        expected = df.loc[df["_patch_id"] == first_id, "data_units"].iloc[0]
-        assert plan.outputs["data_units"].iloc[0] == expected
+        expected = df.loc[df["_patch_id"] == first_id, "data_type"].iloc[0]
+        assert plan.outputs["data_type"].iloc[0] == expected
 
-    def test_keep_first_known(self, conflicted_patches):
-        """keep_first skips a first member which lacks the value."""
+    def test_keep_first_means_the_first_member(self, conflicted_patches):
+        """keep_first takes the first member's value even where it states none."""
         p1, p2 = conflicted_patches
-        third = p2.update_coords(
-            time_min=p2.get_coord("time").max() + p2.get_coord("time").step
-        )
-        df = _flat(
-            [
-                p1.update_attrs(data_units=None),
-                p2,
-                third.update_attrs(data_units="ft/s"),
-            ]
-        )
+        df = _flat([p1.update_attrs(data_type=""), p2])
         plan = build_chunk_plan(df, time=None, conflict="keep_first")
-        assert plan.outputs["data_units"].iloc[0] == "m / s"
+        assert len(plan.outputs) == 1
+        assert pd.isnull(plan.outputs["data_type"].iloc[0])
 
     def test_drop(self, conflicted_patches):
         """Drop omits the conflicting attr from outputs."""
         plan = build_chunk_plan(_flat(conflicted_patches), time=None, conflict="drop")
-        assert "data_units" not in plan.outputs.columns
+        assert "data_type" not in plan.outputs.columns
 
 
 class TestGroupParameter:
@@ -267,32 +259,17 @@ class TestGroupParameter:
         p4 = p2.update_attrs(acquisition_key="XX2.R2D1..RAW")
         return _flat([p1, p2, p3, p4])
 
-    def test_missing_value_joins_the_one_candidate(self, two_source_flat):
-        """A row lacking a kind value joins the only kind consistent with it."""
+    def test_missing_value_is_its_own_kind(self, two_source_flat):
+        """A row lacking a kind value is not the kind of one which states it."""
         df = two_source_flat
-        # Remove one acquisition entirely; the un-keyed row is unambiguous.
         one = df[df["acquisition_key"] == "XX1.R2D1..RAW"].copy()
         one.loc[one.index[-1], "acquisition_key"] = ""
         plan = build_chunk_plan(one, time=None)
-        assert len(plan.outputs) == 1
-        # The output carries the known value, not the first member's "".
-        assert plan.outputs["acquisition_key"].iloc[0] == "XX1.R2D1..RAW"
+        assert len(plan.outputs) == 2
+        keys = sorted(plan.outputs["acquisition_key"].fillna(""))
+        assert keys == ["", "XX1.R2D1..RAW"]
 
-    def test_complementary_partial_kinds_combine(self, two_source_flat):
-        """Rows knowing different attrs, none conflicting, are one kind."""
-        df = two_source_flat[
-            two_source_flat["acquisition_key"] == "XX1.R2D1..RAW"
-        ].copy()
-        # first row knows only the tag, second only the key
-        df.loc[df.index[0], "acquisition_key"] = ""
-        df.loc[df.index[1], "tag"] = ""
-        plan = build_chunk_plan(df, time=None)
-        assert len(plan.outputs) == 1
-        out = plan.outputs.iloc[0]
-        assert out["acquisition_key"] == "XX1.R2D1..RAW"
-        assert out["tag"] == "random"
-
-    def test_identical_ambiguous_rows_share_a_kind(self):
+    def test_un_keyed_rows_are_one_kind(self):
         """Un-keyed rows beside two acquisitions stay together, apart from both."""
         t0 = np.datetime64("2020-01-01", "ns")
         p1 = dc.get_example_patch(time_min=t0)
@@ -308,13 +285,12 @@ class TestGroupParameter:
         keys = sorted(plan.outputs["acquisition_key"].fillna(""))
         assert keys == ["", "XX1.R2D1..RAW", "XX2.R2D1..RAW"]
 
-    def test_missing_value_with_two_candidates_stays_apart(self, two_source_flat):
-        """With conflicting candidates a missing value joins neither."""
+    def test_missing_spellings_are_one_kind(self, two_source_flat):
+        """Null and "" spell one missing value, so they are one kind."""
         df = two_source_flat.copy()
-        df.loc[df.index[0], "acquisition_key"] = ""
+        df["acquisition_key"] = ["", None, "", None]
         plan = build_chunk_plan(df, time=None)
-        # un-keyed first patch alone, the rest of XX1, and XX2
-        assert len(plan.outputs) == 3
+        assert len(plan.outputs) == 1
 
     def test_source_partitions(self, two_source_flat):
         """Different data sources produce separate outputs, no error."""
@@ -409,9 +385,9 @@ class TestChunkPlanAccessor:
         plan = spool.chunk_plan(time=None)
         assert set(plan.members["output_id"]) == set(plan.outputs["output_id"])
         # Three un-keyed patches and three keyed ones cover the same span
-        # with the same tag; a missing key matches, so they are one kind and
-        # overlap removal keeps one copy of each span.
-        assert len(plan.members) == len(spool) - 3
+        # with the same tag, but a missing key is a kind of its own, so the
+        # two sets partition apart and nothing is deduplicated as an overlap.
+        assert len(plan.members) == len(spool)
         assert set(plan.members["_patch_id"]) <= set(spool._df["_patch_id"])
         # The plan rows and the assembled patches agree on the key.
         out = spool.chunk(time=None)
@@ -763,23 +739,26 @@ class TestConcatPlan:
         assert plan.outputs["time_min"].iloc[0] == p1.get_coord("time").min()
         assert plan.outputs["time_max"].iloc[0] == p2.get_coord("time").max()
 
-    def test_missing_matches_for_kind_and_units(self, trio):
-        """A missing kind value or unit matches, and the output carries the known."""
+    def test_missing_kind_value_partitions(self, trio):
+        """A missing kind value is a kind of its own; units are policed."""
         p1, p2, _ = trio
         keyed = p2.update_attrs(acquisition_key="XX.R2D1..RAW").set_units("m")
         plan = build_concat_plan(_flat([p1, keyed]), time=None)
-        assert len(plan.outputs) == 1
-        assert plan.outputs["acquisition_key"].iloc[0] == "XX.R2D1..RAW"
-        assert dc.get_quantity(plan.outputs["data_units"].iloc[0]) == dc.get_quantity(
-            "m"
-        )
-        # known, different units conflict, policed as a chunk plan polices them
-        mixed = _flat([p1.set_units("km"), keyed])
+        assert len(plan.outputs) == 2
+        keys = sorted(plan.outputs["acquisition_key"].fillna(""))
+        assert keys == ["", "XX.R2D1..RAW"]
+        # different units conflict, policed as a chunk plan polices them
+        same_kind = p1.update_attrs(acquisition_key="XX.R2D1..RAW")
+        mixed = _flat([same_kind.set_units("km"), keyed])
         with pytest.raises(CoordMergeError, match="data_units"):
             build_concat_plan(mixed, time=None)
         plan = build_concat_plan(mixed, time=None, conflict="drop")
         assert len(plan.outputs) == 1
-        assert "data_units" not in plan.outputs.columns
+        # dropping the conflict still leaves the row stating the units the
+        # members are converted to, which is what the patch will hold
+        assert dc.get_quantity(plan.outputs["data_units"].iloc[0]) == dc.get_quantity(
+            "km"
+        )
 
     def test_new_dimension_is_described(self, trio):
         """An output along a new dimension names it, claiming no envelope."""
@@ -810,11 +789,29 @@ class TestConcatPlan:
         bare = shifted.update_coords(distance=unitless)
         assert len(build_concat_plan(_flat([p1, bare]), distance=None).outputs) == 2
         assert len(build_concat_plan(_flat([p1, shifted]), distance=None).outputs) == 1
-        # a patch with no values along the dimension joins whichever it meets
+        # a patch with no values along the dimension states nothing which
+        # could clash, so it follows the one spelling the others state
         collapsed = p1.mean("distance")
         assert (
             len(build_concat_plan(_flat([p1, collapsed]), distance=None).outputs) == 1
         )
+        # but not when they state two, which would be a guess
+        assert (
+            len(build_concat_plan(_flat([p1, bare, collapsed]), distance=None).outputs)
+            == 3
+        )
+
+    def test_empty_and_null_coordinate_units_are_one_spelling(self, trio):
+        """A coordinate stated with no units spells that null or ""."""
+        p1, p2, _ = trio
+        df = _flat([p1, p2])
+        col = "_time_units"
+        assert col in df.columns
+        df = df.copy()
+        df.loc[df.index[0], col] = ""
+        df.loc[df.index[1], col] = None
+        plan = build_concat_plan(df, time=None)
+        assert len(plan.outputs) == 1
 
     def test_relation_without_step_or_dtype(self, trio):
         """An envelope without a step, or rows without a dtype, still plan."""
