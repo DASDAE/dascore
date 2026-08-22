@@ -83,6 +83,12 @@ class TestArrayFormatting:
         assert "..." in out
 
 
+def styles_at(text, substring):
+    """Return the styles covering the first character of a substring."""
+    start = text.plain.index(substring)
+    return {x.style for x in text.spans if x.start <= start < x.end}
+
+
 class TestGetHeaderText:
     """Tests for the banner which opens a top-level object's repr."""
 
@@ -97,6 +103,11 @@ class TestGetHeaderText:
         """The name given is in the banner, beside the DASCore text."""
         out = str(get_header_text("Inventory"))
         assert out.startswith("DASCore Inventory")
+
+    def test_style_key_resolved(self):
+        """A dascore_styles key is resolved, as the other helpers resolve it."""
+        text = get_header_text("Thing", style="dc_blue")
+        assert styles_at(text, "Thing") == {dascore_styles["dc_blue"]}
 
 
 class TestIndentText:
@@ -161,6 +172,10 @@ class TestCountsToText:
         out = str(counts_to_text({"a": 1, "b": 1, "c": 1}, limit=1))
         assert out == "a: 1, ... 2 more"
 
+    def test_zero_limit_has_no_leading_comma(self):
+        """Nothing is shown, and nothing needs a comma after it."""
+        assert str(counts_to_text({"a": 1, "b": 2}, limit=0)) == "... 2 more"
+
 
 class TestStatedFields:
     """Tests for reading what a model states about itself."""
@@ -193,12 +208,6 @@ class TestStatedFields:
         columns = {"pick": AnnotationColumn(description="a pick")}
         attrs = AnnotationSetAttrs(dims=("time",), columns=columns)
         assert "columns: 1" in str(model_to_line(attrs))
-
-
-def styles_at(text, substring):
-    """Return the styles covering the first character of a substring."""
-    start = text.plain.index(substring)
-    return {x.style for x in text.spans if x.start <= start < x.end}
 
 
 class TestModelToLine:

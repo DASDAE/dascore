@@ -939,9 +939,13 @@ class AnnotationSet(NamespaceOwner):
     def _contents(self) -> dict:
         """What the set holds: its kinds, its groups, and its columns."""
         contents = {}
-        for name in ("geometry", "group"):
-            if name in self._df.columns:
-                contents[name] = counts_to_text(self._df[name].value_counts())
+        # Every row has a geometry, whether or not it spells one: a blank
+        # cell, and a frame with no such column, are regions. Counting only
+        # what the column states would hide them.
+        if len(self._df):
+            contents["geometry"] = counts_to_text(self._kinds().value_counts())
+        if "group" in self._df.columns:
+            contents["group"] = counts_to_text(self._df["group"].value_counts())
         if len(self._df.columns):
             contents["columns"] = ", ".join(str(x) for x in self._df.columns)
         if len(self._vertices):
@@ -949,6 +953,12 @@ class AnnotationSet(NamespaceOwner):
         return contents
 
     # --- internals
+
+    def _kinds(self) -> pd.Series:
+        """The geometry kind each row states, read as ``_geometry`` reads it."""
+        if "geometry" not in self._df.columns:
+            return pd.Series("region", index=self._df.index)
+        return self._df["geometry"].map(lambda x: _text(x) or "region")
 
     def _geometry(self, row) -> Region | Path | Polygon:
         """Build the geometry a row states."""

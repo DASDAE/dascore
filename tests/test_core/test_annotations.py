@@ -150,6 +150,28 @@ class TestConstruction:
         assert "0 Annotations" in out
         assert "Contents" not in out
 
+    def test_repr_counts_default_geometry(self):
+        """A row which spells no geometry is a region, and is counted as one."""
+        frame = pd.DataFrame(
+            {
+                "id": ["a", "b", "c"],
+                "geometry": ["path", "", None],
+                "distance_start": [np.nan, 10.0, 20.0],
+                "distance_end": [np.nan, 80.0, 90.0],
+            }
+        )
+        vertices = pd.DataFrame(
+            {"id": ["a"] * 3, "seq": [0, 1, 2], "distance": [1.0, 5.0, 9.0]}
+        )
+        annotations = AnnotationSet(frame, dims=DIMS, vertices=vertices)
+        kinds = [type(x.geometry).__name__ for x in annotations]
+        assert kinds == ["Path", "Region", "Region"]
+        assert "geometry: region: 2, path: 1" in repr(annotations)
+
+    def test_repr_counts_geometry_without_the_column(self, region_set):
+        """A frame which never spells geometry holds regions all the same."""
+        assert "geometry: region: 3" in repr(region_set)
+
     def test_repr_counts_vertices(self, path_set):
         """A set holding a path names its geometry kinds and its vertices."""
         out = repr(path_set)

@@ -156,6 +156,7 @@ def get_header_text(name: str, style: str = "bold") -> Text:
     style
         A rich style, or a key of dascore.constants.dascore_styles.
     """
+    style = dascore_styles.get(style, style)
     header = Text.assemble(get_dascore_text(), " ", Text(name, style=style))
     # cell_len, not len: an emoji is one character and two columns wide,
     # and the underline is drawn in columns.
@@ -215,9 +216,9 @@ def counts_to_text(counts, limit: int | None = None) -> Text:
     shown = ", ".join(f"{name}: {count}" for name, count in items[:limit])
     if len(items) <= limit:
         return Text(shown)
-    return Text(shown) + Text(
-        f", ... {len(items) - limit} more", dascore_styles["keys"]
-    )
+    left_out = Text(f"... {len(items) - limit} more", dascore_styles["keys"])
+    # A zero limit shows nothing, and nothing needs no comma after it.
+    return Text(f"{shown}, ") + left_out if shown else left_out
 
 
 def _stated(value) -> bool:
@@ -340,7 +341,8 @@ def model_to_line(model, skip=(), style=None, extra=None) -> Text:
     # that style the base of everything appended after it, so the class name's
     # style would bleed onto every value.
     base = Text("")
-    base += Text(model.__class__.__name__, style=style or "bold")
+    style = dascore_styles.get(style, style or "bold")
+    base += Text(model.__class__.__name__, style=style)
     base += Text("(")
     fields = {**stated_fields(model, skip=skip), **dict(extra or {})}
     for name, value in fields.items():
