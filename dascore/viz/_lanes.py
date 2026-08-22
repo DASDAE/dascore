@@ -341,6 +341,21 @@ def _box_points(transform, scale, x_mid, y_mid, width, height):
 
 
 @lru_cache(maxsize=1024)
+def _measure_text(text: str, size: float, font: tuple, usetex: bool):
+    """Lay one label out as outlines, which is slow enough to cache."""
+    family, style, variant, weight, stretch = font
+    prop = FontProperties(
+        family=list(family),
+        style=style,
+        variant=variant,
+        weight=weight,
+        stretch=stretch,
+        size=size,
+    )
+    box = TextPath((0, 0), text, prop=prop, usetex=usetex).get_extents()
+    return box.width, box.height
+
+
 def _text_points(text: str, size: float) -> tuple[float, float]:
     """The room a label takes, in points, at any resolution.
 
@@ -349,8 +364,18 @@ def _text_points(text: str, size: float) -> tuple[float, float]:
     let the resolution decide which labels a figure keeps; the outlines
     behind it are the same however finely they are drawn.
     """
-    box = TextPath((0, 0), text, prop=FontProperties(size=size)).get_extents()
-    return box.width, box.height
+    # The font is part of the answer, so it is part of what is cached:
+    # the same label at the same size is a different width in a different
+    # family, and a style can change one between two figures.
+    family = plt.rcParams["font.family"]
+    font = (
+        (family,) if isinstance(family, str) else tuple(family),
+        plt.rcParams["font.style"],
+        plt.rcParams["font.variant"],
+        plt.rcParams["font.weight"],
+        plt.rcParams["font.stretch"],
+    )
+    return _measure_text(text, size, font, plt.rcParams["text.usetex"])
 
 
 def _fit_labels(ax, placements, max_labels):
@@ -418,13 +443,17 @@ def _legend_below(figure, ax, handles, renderer, outside):
     """Lay a legend out under the lanes, in as many columns as fit.
 
     How wide matplotlib draws a column is not worth predicting, so the
-    widest layout is drawn and narrowed until it is inside the figure.
+    widest layout is drawn and narrowed until it is inside the room it
+    has. Narrowing it further only makes it taller, so a legend which is
+    still too wide in one column is as close as column count can get.
     """
+    # Only a laid-out figure can be asked for room outside the axes; any
+    # other belongs to whoever built it, so the legend stays in the space
+    # the axes it was given already occupies.
+    room = figure.bbox.width if outside else ax.get_window_extent(renderer).width
     columns = len(handles)
     while True:
         if outside:
-            # The figure lays itself out, so it can keep the room this
-            # legend takes at its foot rather than the lanes giving it up.
             legend = figure.legend(
                 handles=handles,
                 loc="outside lower center",
@@ -433,31 +462,34 @@ def _legend_below(figure, ax, handles, renderer, outside):
                 fontsize="small",
             )
         else:
-            legend = figure.legend(
+            legend = ax.legend(
                 handles=handles,
-                loc="lower center",
+                loc="upper center",
+                bbox_to_anchor=(0.5, 0.0),
+                borderaxespad=0.0,
                 ncol=columns,
                 frameon=False,
                 fontsize="small",
             )
         figure.draw_without_rendering()
         box = legend.get_window_extent(renderer)
-        if columns == 1 or box.width <= figure.bbox.width:
+        if columns == 1 or box.width <= room:
             break
         legend.remove()
         # Overshooting by a lot is common, so step to what did fit.
-        columns = max(1, min(columns - 1, int(columns * figure.bbox.width / box.width)))
+        columns = max(1, min(columns - 1, int(columns * room / box.width)))
     if outside:
         return legend
-    # Nothing lays this figure out, so the axes gives up the room itself.
-    room = box.height / figure.bbox.height
+    # The legend hangs off the foot of the axes, so the axes rises by what
+    # it took and the pair together cover what the axes covered before.
+    taken = box.height / figure.bbox.height
     position = ax.get_position()
     ax.set_position(
         (
             position.x0,
-            position.y0 + room,
+            position.y0 + taken,
             position.width,
-            max(position.height - room, 0.1),
+            max(position.height - taken, 0.1),
         )
     )
     return legend

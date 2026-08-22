@@ -6,6 +6,7 @@ from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
+import pandas as pd
 import pytest
 from matplotlib.collections import LineCollection, PatchCollection
 
@@ -16,6 +17,7 @@ from dascore.viz import VizInventoryNameSpace
 from dascore.viz.inventory import (
     COMPONENT_COLORS,
     _distance_window,
+    _legend_size,
     map_path,
     path,
     timeline,
@@ -401,6 +403,22 @@ class TestPath:
         assert many.get_window_extent().height / figure.dpi >= room
         box = figure.legends[0].get_window_extent(figure.canvas.get_renderer())
         assert box.y0 >= 0 and box.y1 <= figure.bbox.height
+
+    def test_a_mapping_names_its_numbers_too(self, site):
+        """A number is a colorbar until a mapping gives it a swatch."""
+        frame = pd.DataFrame(
+            {"lane": ["count"] * 3, "value": [0, 1, 2], "start": 0.0, "end": 1.0}
+        )
+        assert _legend_size(frame, None) == 0
+        assert _legend_size(frame, "red") == 0
+        assert _legend_size(frame, {0: "red", 1: "blue", 2: "green"}) == 3
+        assert _legend_size(frame, {"count": {0: "red", 1: "blue"}}) == 2
+
+    def test_a_narrow_figure_still_sizes_its_legend(self, site):
+        """The columns a legend is divided into cannot fall to none."""
+        crowded = build_labeled_inventory(24, site.coordinate_reference_system)
+        ax = path(crowded, "DAS.L2.00", figsize=(1.0, 2.0))
+        assert ax.get_figure().get_size_inches()[0] == 1.0
 
     def test_one_color_for_every_lane_needs_no_legend_room(self, site):
         """A figure which names no value has no legend to keep room for."""

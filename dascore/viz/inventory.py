@@ -434,18 +434,15 @@ def path(
     lanes = list(dict.fromkeys(frame["lane"]))
     if ax is None:
         # A legend naming more than the lanes are tall sits below them, so
-        # count the rows it will take there; without them the lanes give up
-        # the room instead and every bar is squeezed into a sliver. Only
-        # what earns a swatch counts: a lane of numbers earns a colorbar,
-        # one color for every lane earns nothing, and a lane which states
-        # no value earns one swatch named for the lane itself.
-        stated = frame["value"]
-        if isinstance(color, str):
-            swatches = 0
-        else:
-            named = stated[[isinstance(x, str) for x in stated]]
-            swatches = named.nunique() + frame.loc[stated.isna(), "lane"].nunique()
-        legend_rows = 0 if swatches <= len(lanes) else -(-swatches // 6)
+        # keep the rows it will take there; without them the lanes give up
+        # the room instead and every bar is squeezed into a sliver. How
+        # many columns it ends up in is the renderer's to decide, so this
+        # is an estimate, and one which is low costs only some of the room
+        # it was meant to save.
+        swatches = _legend_size(frame, color)
+        width = (figsize or (10.0, 0.0))[0]
+        per_row = max(1, int(width // 1.6))
+        legend_rows = 0 if swatches <= len(lanes) else -(-swatches // per_row)
         # Capped: a figure taller than a page is not more readable.
         height = min(
             1.2 + 0.42 * len(lanes) + 1.1 * len(columns) + 0.3 * legend_rows,
@@ -527,6 +524,27 @@ def _time_window(asked):
         msg = f"time={asked!r} must be increasing."
         raise ParameterError(msg)
     return low, high
+
+
+def _legend_size(frame, color) -> int:
+    """How many swatches a legend of these lanes would name.
+
+    Only what earns one counts: a lane of numbers earns a colorbar and
+    reads from that, one color for every lane earns no legend at all,
+    and a lane which states no value earns one swatch named for itself.
+    A mapping names whatever it holds, numbers included.
+    """
+    if isinstance(color, str):
+        return 0
+    keyed = set()
+    if isinstance(color, Mapping):
+        for name, entry in color.items():
+            # Keyed by lane it holds a mapping of values; keyed by value
+            # the key is the value itself.
+            keyed.update(entry if isinstance(entry, Mapping) else {name})
+    stated = frame["value"]
+    named = stated[[isinstance(x, str) or x in keyed for x in stated]]
+    return int(named.nunique() + frame.loc[stated.isna(), "lane"].nunique())
 
 
 def _lane_colors(color):

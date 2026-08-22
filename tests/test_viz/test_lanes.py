@@ -39,6 +39,23 @@ def _texts(ax):
     return [x.get_text() for x in ax.texts]
 
 
+def _legend_of(figure, ax):
+    """The legend a figure grew, whichever of the two owns it."""
+    return figure.legends[0] if figure.legends else ax.get_legend()
+
+
+def _many_values(count=30):
+    """A frame of one lane naming more values than an axes is tall."""
+    names = [f"value {x:02d}" for x in range(count)]
+    return names, pd.DataFrame(
+        {
+            "start": np.arange(float(count)),
+            "end": np.arange(float(count)) + 1.0,
+            "v": names,
+        }
+    )
+
+
 def _overflowing(ax):
     """Labels drawn wider or taller, in pixels, than the box holding them."""
     figure = ax.get_figure()
@@ -570,19 +587,10 @@ class TestColors:
         Only a constrained layout keeps room for a legend outside the
         axes, so the other figures have to be given it explicitly.
         """
-        names = [f"value {x:02d}" for x in range(30)]
-        frame = pd.DataFrame(
-            {
-                "start": np.arange(float(len(names))),
-                "end": np.arange(float(len(names))) + 1.0,
-                "v": names,
-            }
-        )
+        names, frame = _many_values()
         figure, ax = plt.subplots(figsize=(8, 3), layout=engine)
         plot_lanes(frame, ax=ax, value="v")
-        # It belongs to the figure now, which is what keeps room for it.
-        assert ax.get_legend() is None
-        legend = figure.legends[0]
+        legend = _legend_of(figure, ax)
         figure.draw_without_rendering()
         box = legend.get_window_extent(figure.canvas.get_renderer())
         assert box.x0 >= 0 and box.x1 <= figure.bbox.width
@@ -590,21 +598,22 @@ class TestColors:
         # Every value is still named; none was dropped to make it fit.
         assert len(legend.get_texts()) == len(names)
 
-    def test_a_legend_below_leaves_the_lanes_their_room(self):
-        """Where nothing lays the figure out the axes gives up the room."""
-        names = [f"value {x:02d}" for x in range(30)]
-        frame = pd.DataFrame(
-            {
-                "start": np.arange(float(len(names))),
-                "end": np.arange(float(len(names))) + 1.0,
-                "v": names,
-            }
-        )
-        figure, ax = plt.subplots(figsize=(8, 3))
+    def test_a_legend_below_stays_inside_the_axes_it_was_given(self):
+        """A figure nobody laid out may hold other axes under this one.
+
+        The legend is the axes' own, so it takes the axes' room rather
+        than the space a neighbor below is sitting in.
+        """
+        _, frame = _many_values()
+        figure, (ax, below) = plt.subplots(2, 1, figsize=(8, 6))
+        before = ax.get_window_extent().frozen()
         plot_lanes(frame, ax=ax, value="v")
         figure.draw_without_rendering()
-        legend = figure.legends[0].get_window_extent(figure.canvas.get_renderer())
-        assert ax.get_window_extent().y0 >= legend.y1
+        box = _legend_of(figure, ax).get_window_extent(figure.canvas.get_renderer())
+        # Under the lanes, and no lower than the lanes used to reach.
+        assert box.y1 <= ax.get_window_extent().y0 + 1
+        assert box.y0 >= before.y0 - 1
+        assert box.y0 >= below.get_window_extent().y1
 
     def test_a_short_legend_stays_beside_them(self, string_frame):
         """Few enough values still read best in one column at the side."""
