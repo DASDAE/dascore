@@ -39,6 +39,28 @@ def _texts(ax):
     return [x.get_text() for x in ax.texts]
 
 
+def _overflowing(ax):
+    """Labels drawn wider or taller, in pixels, than the box holding them."""
+    figure = ax.get_figure()
+    figure.draw_without_rendering()
+    renderer = figure.canvas.get_renderer()
+    boxes = [x.get_extents() for x in _collections(ax)[0].get_paths()]
+    out = []
+    for text in ax.texts:
+        drawn = text.get_window_extent(renderer)
+        middle = text.get_position()
+        for box in boxes:
+            if not (box.x0 <= middle[0] <= box.x1):
+                continue
+            corner = ax.transData.transform((box.x0, box.y0))
+            far = ax.transData.transform((box.x1, box.y1))
+            if drawn.width > abs(far[0] - corner[0]) or drawn.height > abs(
+                far[1] - corner[1]
+            ):
+                out.append(text.get_text())
+    return out
+
+
 @pytest.fixture()
 def string_frame():
     """Two lanes of named zones."""
@@ -244,6 +266,49 @@ class TestLayout:
         )
         ax = plot_lanes(frame, value="v")
         assert _texts(ax) == ["wide"]
+
+    def test_a_narrow_box_turns_its_label(self):
+        """Text too wide for its box is stood on end rather than dropped."""
+        # Boxes narrower than the text but far taller than it is tall.
+        frame = pd.DataFrame(
+            {
+                "start": [0.0, 20.0],
+                "end": [1.6, 21.6],
+                "v": ["alpha zone", "beta zone"],
+            }
+        )
+        _, ax = plt.subplots(figsize=(4, 4))
+        plot_lanes(frame, ax=ax, value="v")
+        assert sorted(_texts(ax)) == ["alpha zone", "beta zone"]
+        assert {x.get_rotation() for x in ax.texts} == {90.0}
+
+    def test_a_label_needs_clearance(self):
+        """A label the exact width of its box would touch the next one."""
+        frame = pd.DataFrame({"start": [0.0], "end": [1.0], "v": ["tight"]})
+        _, ax = plt.subplots(figsize=(4, 4))
+        plot_lanes(frame, ax=ax, value="v")
+        figure = ax.get_figure()
+        figure.draw_without_rendering()
+        width = ax.texts[0].get_window_extent(figure.canvas.get_renderer()).width
+        box = ax.get_window_extent().width / 1.04  # the frame plus its padding
+        assert width <= box - 4.0
+
+    def test_no_drawn_label_overflows_its_box(self):
+        """Every label kept is measured against the axes it lands in.
+
+        The legend takes its room after the boxes are drawn, so a label
+        judged before that is judged against an axes which no longer
+        exists by the time it is rendered.
+        """
+        frame = pd.DataFrame(
+            {
+                "start": np.arange(20.0),
+                "end": np.arange(20.0) + 0.9,
+                "v": [f"value {x}" for x in range(20)],
+            }
+        )
+        ax = plot_lanes(frame, value="v")
+        assert _overflowing(ax) == []
 
     def test_max_labels(self):
         """Past max_labels no text is drawn at all."""
@@ -494,6 +559,34 @@ class TestColors:
         # differently at each dpi, which is how the same figure saved at
         # two resolutions loses its labels.
         assert drawn[0] == drawn[1]
+
+    def test_a_tall_legend_goes_below_the_lanes(self, string_frame):
+        """A column naming more than the axes is tall runs off the figure."""
+        names = [f"value {x:02d}" for x in range(30)]
+        frame = pd.DataFrame(
+            {
+                "start": np.arange(float(len(names))),
+                "end": np.arange(float(len(names))) + 1.0,
+                "v": names,
+            }
+        )
+        figure, ax = plt.subplots(figsize=(8, 3), layout="constrained")
+        plot_lanes(frame, ax=ax, value="v")
+        # It belongs to the figure now, which is what keeps room for it.
+        assert ax.get_legend() is None
+        legend = figure.legends[0]
+        figure.draw_without_rendering()
+        box = legend.get_window_extent(figure.canvas.get_renderer())
+        assert box.y0 >= 0 and box.y1 <= figure.bbox.height
+        # Laid out in columns rather than the one column which did not fit.
+        assert box.width > box.height
+
+    def test_a_short_legend_stays_beside_them(self, string_frame):
+        """Few enough values still read best in one column at the side."""
+        ax = plot_lanes(string_frame, lane="group", value="value")
+        assert ax.get_figure().legends == []
+        box = ax.get_legend().get_window_extent()
+        assert box.x0 >= ax.get_window_extent().x1
 
     def test_legend_off(self, string_frame):
         """legend=False draws none."""

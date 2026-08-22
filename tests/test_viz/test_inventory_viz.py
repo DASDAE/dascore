@@ -167,6 +167,42 @@ def build_site_inventory() -> inv.Inventory:
     ).check()
 
 
+def build_labeled_inventory(values: int, crs) -> inv.Inventory:
+    """One path of one label group, stating this many distinct values."""
+    labels = tuple(
+        inv.OpticalPathLabel(
+            start_distance=float(x * 10),
+            end_distance=float(x * 10 + 8),
+            group="hole",
+            value=f"H{x % values:02d}",
+        )
+        for x in range(24)
+    )
+    return inv.Inventory(
+        coordinate_reference_system=crs,
+        networks=(
+            inv.Network(
+                code="DAS",
+                fiber_arrays=(
+                    inv.FiberArray(
+                        code="L2",
+                        optical_paths=(
+                            inv.OpticalPath(
+                                name="holes",
+                                location_code="00",
+                                optical_components=(
+                                    inv.FiberSegment(name="run", optical_length=300.0),
+                                ),
+                                labels=labels,
+                            ),
+                        ),
+                    ),
+                ),
+            ),
+        ),
+    ).check()
+
+
 @pytest.fixture(scope="module")
 def site():
     """The inventory most tests draw."""
@@ -342,6 +378,25 @@ class TestPath:
         assert ax.get_xlabel() == "Optical distance [m]"
         # Components take their fixed colors, so the legend names the types.
         assert "FiberSegment" in _legend_labels(ax)
+
+    def test_room_is_kept_for_a_legend_which_names_many_values(self, site):
+        """A path naming more values than it has lanes needs a taller figure.
+
+        The legend goes below the lanes there, and without the rows it
+        takes the lanes give up the room instead.
+        """
+        crs = site.coordinate_reference_system
+        few = path(build_labeled_inventory(2, crs), "DAS.L2.00")
+        short = few.get_figure().get_size_inches()[1]
+        plt.close("all")
+        many = path(build_labeled_inventory(24, crs), "DAS.L2.00")
+        figure = many.get_figure()
+        # Same one lane either way, so only the legend can move the height.
+        assert _lanes(many) == _lanes(few) == ["components", "hole"]
+        assert figure.get_size_inches()[1] > short
+        figure.draw_without_rendering()
+        box = figure.legends[0].get_window_extent(figure.canvas.get_renderer())
+        assert box.y0 >= 0 and box.y1 <= figure.bbox.height
 
     def test_tracks_selected_in_order(self, site):
         """tracks= picks lanes and orders them."""

@@ -43,6 +43,10 @@ UNCOVERED_COLOR = "0.7"
 # and alternating shade separates two which still land on a similar hue.
 _GOLDEN_STEP = 0.6180339887498949
 
+# Pixels of clearance a label needs inside its box. Without it a label the
+# exact width of its box touches the one in the next box, and the two read
+# as one word.
+_LABEL_PAD = 4.0
 
 # The fraction of the x axis hatched where a bar runs off the end of it.
 _OPEN_FRACTION = 0.02
@@ -316,35 +320,77 @@ def _draw_open_edges(ax, rows, y_low, height, colors, span):
     ax.add_collection(patches)
 
 
+def _box_pixels(transform, x_mid, y_mid, width, height):
+    """The size of one box, in pixels, however the axes is scaled."""
+    low = transform.transform((x_mid - width / 2, y_mid - height / 2))
+    high = transform.transform((x_mid + width / 2, y_mid + height / 2))
+    return abs(high[0] - low[0]), abs(high[1] - low[1])
+
+
 def _fit_labels(ax, placements, max_labels):
-    """Draw the labels which fit in their box, and drop the rest."""
+    """Draw each label the way it fits its box, and drop what cannot.
+
+    Horizontal reads best, so it is tried first. A lane of many short
+    stretches gives every box far less width than its text needs, and
+    turning the text on its side fits it where the one rule would drop
+    it and leave the lane readable only from the legend.
+    """
     if len(placements) > max_labels:
         return
     figure = ax.get_figure()
     # Lay the figure out before measuring: a label is compared against its
-    # box in pixels, and both move when the axes does.
+    # box in pixels, and both move when the axes does. The legend and the
+    # colorbars are drawn by now, so this is the geometry it lands in.
     figure.draw_without_rendering()
     renderer = figure.canvas.get_renderer()
     transform = ax.transData
-    for text, x_mid, y_mid, width in placements:
+    for text, x_mid, y_mid, width, height in placements:
         if not text:
             continue
-        artist = ax.text(
-            x_mid,
-            y_mid,
-            text,
-            ha="center",
-            va="center",
-            fontsize=plt.rcParams["font.size"] * 0.8,
-            zorder=4,
-            clip_on=True,
-            # A dark fill would otherwise swallow the text sitting on it.
-            path_effects=[pe.withStroke(linewidth=1.3, foreground="white")],
-        )
-        left = transform.transform((x_mid - width / 2, y_mid))[0]
-        right = transform.transform((x_mid + width / 2, y_mid))[0]
-        if artist.get_window_extent(renderer).width > (right - left):
+        box = _box_pixels(transform, x_mid, y_mid, width, height)
+        room = (box[0] - _LABEL_PAD, box[1] - _LABEL_PAD)
+        for rotation in (0, 90):
+            artist = ax.text(
+                x_mid,
+                y_mid,
+                text,
+                ha="center",
+                va="center",
+                rotation=rotation,
+                fontsize=plt.rcParams["font.size"] * 0.8,
+                zorder=4,
+                clip_on=True,
+                # A dark fill would otherwise swallow the text sitting on it.
+                path_effects=[pe.withStroke(linewidth=1.3, foreground="white")],
+            )
+            extent = artist.get_window_extent(renderer)
+            if extent.width <= room[0] and extent.height <= room[1]:
+                break
             artist.remove()
+
+
+def _legend_placement(ax, handles, renderer):
+    """Where a legend of these handles fits, and in how many columns.
+
+    One column beside the lanes is the natural home, but a figure can
+    name more values than its axes is tall, and the column then runs off
+    the bottom of the figure. Such a legend goes underneath instead, in
+    as many columns as the axes is wide enough to hold.
+    """
+    # A membership swatch can be keyed on no value at all, and states None.
+    labels = [str(x.get_label() or "") for x in handles]
+    probe = ax.text(0, 0, max(labels, key=len), fontsize="small")
+    size = probe.get_window_extent(renderer)
+    probe.remove()
+    box = ax.get_window_extent(renderer)
+    # Legend rows are set a little further apart than the text is tall.
+    pitch = size.height * 1.6
+    if len(handles) * pitch <= box.height:
+        return "beside", 1
+    # A swatch and the gaps around it take about three text heights.
+    entry = size.width + 3.0 * size.height
+    columns = max(1, min(len(handles), int(box.width // entry)))
+    return "below", columns
 
 
 def plot_lanes(
@@ -391,7 +437,9 @@ def plot_lanes(
     label
         Column holding the text drawn in each box. Values supply it by
         default: text as itself, a number as its digits, and a row which
-        states no value nothing, since its lane already names it.
+        states no value nothing, since its lane already names it. Text
+        too wide for its box is turned on its side, and dropped only
+        when it does not fit that way either.
     lanes
         The lanes to draw, in order. Names with no rows are kept as empty
         lanes, so two figures of different subjects still line up.
@@ -407,7 +455,9 @@ def plot_lanes(
         Whether overlapping intervals are packed into sub-rows.
     legend
         Whether to draw a legend and any colorbars. False, or "off",
-        draws neither; anything else draws what the colors earn.
+        draws neither; anything else draws what the colors earn. A
+        legend naming more values than the axes is tall is laid out in
+        columns below it rather than one column off the figure.
     max_labels
         Draw no text at all past this many intervals.
     x_limits
@@ -511,7 +561,13 @@ def plot_lanes(
             boxes.append(Rectangle((row["start"], low), width, height))
             box_colors.append(row_color)
             placements.append(
-                (row["label"], row["start"] + width / 2, low + height / 2, width)
+                (
+                    row["label"],
+                    row["start"] + width / 2,
+                    low + height / 2,
+                    width,
+                    height,
+                )
             )
         if boxes:
             ax.add_collection(
@@ -549,7 +605,6 @@ def plot_lanes(
         ax.spines[side].set_visible(False)
     if dated:
         _format_time_axis(ax, x_label or "time", "x")
-    _fit_labels(ax, placements, max_labels)
     if legend and legend != "off":
         for name, cmap, norm in colorbars:
             bar = ax.get_figure().colorbar(
@@ -564,15 +619,41 @@ def plot_lanes(
             PatchArtist(facecolor=color, label=name)
             for name, color in legend_entries.items()
         ]
-        # A colorbar already occupies the strip beside the axes.
-        offset = 1.01 + 0.17 * len(colorbars)
-        ax.legend(
-            handles=handles,
-            loc="upper left",
-            bbox_to_anchor=(offset, 1.0),
-            frameon=False,
-            fontsize="small",
-        )
+        figure = ax.get_figure()
+        figure.draw_without_rendering()
+        where, columns = _legend_placement(ax, handles, figure.canvas.get_renderer())
+        if where == "beside":
+            # A colorbar already occupies the strip beside the axes.
+            offset = 1.01 + 0.17 * len(colorbars)
+            ax.legend(
+                handles=handles,
+                loc="upper left",
+                bbox_to_anchor=(offset, 1.0),
+                frameon=False,
+                fontsize="small",
+            )
+        elif figure.get_layout_engine() is not None:
+            # The figure lays itself out, so it can keep the room this
+            # legend takes at its foot rather than the lanes giving it up.
+            figure.legend(
+                handles=handles,
+                loc="outside lower center",
+                ncol=columns,
+                frameon=False,
+                fontsize="small",
+            )
+        else:
+            ax.legend(
+                handles=handles,
+                loc="upper center",
+                bbox_to_anchor=(0.5, -0.12),
+                ncol=columns,
+                frameon=False,
+                fontsize="small",
+            )
+    # Fit the labels last: the legend and the colorbars have taken their
+    # room by now, so a label is measured against the box it lands in.
+    _fit_labels(ax, placements, max_labels)
     if show:
         plt.show()
     return ax

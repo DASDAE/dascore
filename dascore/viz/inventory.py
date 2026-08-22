@@ -387,7 +387,9 @@ def path(
     color
         Passed to the lane renderer to override its colors.
     max_labels
-        Draw no lane text at all past this many intervals.
+        Draw no lane text at all past this many intervals. Under it, a
+        label too wide for its box is turned on its side rather than
+        dropped, so a lane of many short stretches still reads.
     ax
         An Axes to draw the lanes on. Column panels need their own
         figure, so passing this and naming columns is refused.
@@ -431,8 +433,20 @@ def path(
     frame = _select_tracks(frame, tracks, chosen)
     lanes = list(dict.fromkeys(frame["lane"]))
     if ax is None:
+        # A legend naming more than the lanes are tall sits below them, so
+        # count the rows it will take there; without them the lanes give up
+        # the room instead and every bar is squeezed into a sliver.
+        # A lane which states no value takes one swatch, named for the lane.
+        stated = frame["value"]
+        swatches = (
+            stated.dropna().nunique() + frame.loc[stated.isna(), "lane"].nunique()
+        )
+        legend_rows = 0 if swatches <= len(lanes) else -(-swatches // 6)
         # Capped: a figure taller than a page is not more readable.
-        height = min(1.2 + 0.42 * len(lanes) + 1.1 * len(columns), 14.0)
+        height = min(
+            1.2 + 0.42 * len(lanes) + 1.1 * len(columns) + 0.3 * legend_rows,
+            14.0,
+        )
         figure, all_axes = plt.subplots(
             1 + len(columns),
             1,
