@@ -1111,3 +1111,28 @@ class TestRawJoinsUseRawValues:
         )
         assert spool.get_contents().iloc[0]["distance_step"] == 1.0
         assert_contents_match(spool)
+
+    def test_integer_widths_promote(self):
+        """A fused range takes the first dtype; concatenation promotes."""
+        time = dc.get_example_patch().get_coord("time")
+
+        def piece(values):
+            """A patch whose distance holds exactly these values."""
+            data = np.random.default_rng(0).random((len(values), len(time)))
+            return dc.Patch(
+                data=data,
+                coords={"distance": get_coord(values=values), "time": time},
+                dims=("distance", "time"),
+            )
+
+        spool = dc.spool(
+            [
+                piece(np.arange(0, 5, dtype="int32")),
+                piece(np.arange(5, 10, dtype="int64")),
+            ]
+        ).concatenate(distance=None)
+        loaded = spool[0].get_coord("distance")
+        frame = spool._catalog.backend.coord_frame([0, 1, 2])
+        stated = frame[frame["coord_name"] == "distance"]
+        assert stated["dtype"].iloc[0] == str(loaded.dtype) == "int64"
+        assert stated["fingerprint"].iloc[0] == loaded.fingerprint()

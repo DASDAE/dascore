@@ -111,20 +111,38 @@ def raw_join_summary(
     returned untouched; floating members generated from their own starts
     can drift from the fused grid inside their span even where every
     boundary matches, and the coordinate which loads is then a different
-    one with a different step and identity. Where they do drift, the
-    values are already in hand, so the answer is built from them rather
-    than guessed at.
+    one with a different step and identity.
+
+    Widths promote the same way: a fused range takes the first member's
+    dtype, while `np.concatenate` gives an int32 laid before an int64
+    back as int64. Where either happens the values are already in hand,
+    so the answer is built from them rather than guessed at.
     """
     if joined.step is None or not joined.len:
         return joined  # nothing structural is claimed either way
-    if np.dtype(joined.dtype).kind != "f":
-        return joined
-    raw = np.concatenate([x.to_coord(on_grid=True).values for x in summaries])
-    grid = joined.to_coord(on_grid=True).values
-    if raw.shape == grid.shape and np.array_equal(raw, grid):
+    promoted = _promoted_dtype(summaries)
+    same_dtype = promoted == np.dtype(joined.dtype)
+    if same_dtype and np.dtype(joined.dtype).kind != "f":
+        return joined  # computed exactly, so there is nothing to check
+    raw = np.concatenate([x.to_coord(on_grid=True).values for x in summaries]).astype(
+        promoted
+    )
+    if same_dtype and np.array_equal(raw, joined.to_coord(on_grid=True).values):
         return joined
     stated = get_coord(values=raw, units=joined.units).to_summary()
     return stated.model_copy(update=dict(dims=joined.dims))
+
+
+def _promoted_dtype(summaries: Sequence[CoordSummary]):
+    """
+    The dtype `np.concatenate` gives these members.
+
+    A fused range takes the first member's dtype; laying the values end
+    to end promotes them, so an int32 followed by an int64 loads as
+    int64 -- a different coordinate with a different identity.
+    """
+    # every member here is range-like, and a range states its dtype
+    return np.result_type(*[np.dtype(x.dtype) for x in summaries])
 
 
 def _rebuilt_faithfully(summaries, coords) -> bool:
