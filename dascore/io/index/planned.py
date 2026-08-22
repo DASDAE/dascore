@@ -344,8 +344,13 @@ def _trimmed_summary(summary: CoordSummary, row: Mapping, name: str) -> CoordSum
     # Timestamp where the rest of the join speaks numpy would not compare)
     units = row.get(f"_{name}_units", summary.units)
     units = summary.units if units is None or pd.isnull(units) else units
+    # A member restated in another unit is converted when it loads, and
+    # scaling an integer grid by a fraction gives floats: the row's own
+    # numbers already say so, and the record must agree with them or the
+    # identity names a coordinate nobody will load.
+    dtype = summary.dtype if spelled_alike else _stated_dtype(low, summary)
     return CoordSummary(
-        dtype=summary.dtype,
+        dtype=dtype,
         min=low,
         max=high,
         step=step,
@@ -353,6 +358,15 @@ def _trimmed_summary(summary: CoordSummary, row: Mapping, name: str) -> CoordSum
         dims=summary.dims,
         len=length,
     )
+
+
+def _stated_dtype(value, summary: CoordSummary) -> str:
+    """The dtype of a bound the plan restated, falling back to the summary."""
+    with suppress(TypeError, ValueError):
+        restated = np.asarray(value).dtype
+        if restated.kind == np.dtype(summary.dtype).kind or restated.kind == "f":
+            return str(restated)
+    return summary.dtype
 
 
 def _union_summary(summaries: Sequence[CoordSummary]) -> CoordSummary:

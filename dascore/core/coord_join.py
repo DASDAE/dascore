@@ -128,9 +128,11 @@ def raw_join_summary(
     back as int64. Where either happens the values are already in hand,
     so the answer is built from them rather than guessed at.
     """
-    if joined.step is None or not joined.len:
-        return joined  # nothing structural is claimed either way
     promoted = _promoted_dtype(summaries)
+    if joined.step is None or not joined.len:
+        # nothing structural is claimed either way, but the width still
+        # is: what loads is the concatenation, whatever shape it has
+        return joined.model_copy(update=dict(dtype=str(promoted)))
     same_dtype = promoted == np.dtype(joined.dtype)
     if same_dtype and np.dtype(joined.dtype).kind != "f":
         return joined  # computed exactly, so there is nothing to check

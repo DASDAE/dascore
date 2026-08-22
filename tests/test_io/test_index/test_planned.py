@@ -25,6 +25,7 @@ from dascore.io.index.planned import (
     _extrema,
     _ns,
     _null_like,
+    _stated_dtype,
     _stated_units,
     collapse_working_df,
     derived_catalog,
@@ -1186,3 +1187,21 @@ class TestCutRiders:
         )
         assert spool.get_contents()["rough_min"].isnull().all()
         assert "rough" in spool[0].coords.coord_map
+
+
+class TestRestatedDtype:
+    """A bound the plan restated says what the coordinate becomes."""
+
+    def _summary(self):
+        """An integer summary in centimetres."""
+        values = np.arange(0, 500, 100, dtype="int32")
+        return get_coord(values=values, units="cm").to_summary()
+
+    def test_a_scaled_integer_becomes_a_float(self):
+        """Converting an integer grid by a fraction gives floats."""
+        assert _stated_dtype(np.float64(1.0), self._summary()) == "float64"
+
+    def test_a_bound_which_says_nothing_changes_nothing(self):
+        """A value of no kind cannot restate the coordinate's own."""
+        summary = self._summary()
+        assert _stated_dtype(None, summary) == summary.dtype
