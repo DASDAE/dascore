@@ -882,16 +882,18 @@ def _load_table(path: Path, table: _Table, stem: str, crs):
 
 def _read_track_table(path: Path, table: _Table, stem: str, crs):
     """Read one track table, in the table utilities' own error vocabulary."""
-    # Dropped before anything reads a header: a private column is the
-    # author's own, so a geometry table's numeric rule and the model's
-    # unknown-field error are both none of its business.
-    frame = drop_private_columns(read_table(path, what="no track"))
+    frame = read_table(path, what="no track")
     # Refused here rather than left to the model: a header with nothing
     # under it claims a track and states none, and for a single-object
     # table it would otherwise build one object out of no points.
     if frame.empty:
         msg = f"{_quote(path)} states no rows, so it describes no {stem}."
         raise InvalidInventoryError(msg)
+    # Read before any header is: a private column is the author's own, so
+    # a geometry table's numeric rule and the model's unknown-field error
+    # are both none of its business. A table of nothing else keeps its
+    # rows, and is refused by the columns it then fails to state.
+    frame = drop_private_columns(frame)
     units: Mapping[str, str] = {}
     if stem == "geometry":
         frame, units = _geometry_columns(frame, crs, path)

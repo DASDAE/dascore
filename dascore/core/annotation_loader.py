@@ -70,6 +70,7 @@ from dascore.utils.documents import read_document
 from dascore.utils.misc import iterate
 from dascore.utils.paths import quote_path
 from dascore.utils.tables import (
+    drop_private_columns,
     parse_cell,
     read_parquet,
     read_parquet_metadata,
@@ -265,7 +266,10 @@ def _read_cells(
             out[name] = series
         else:
             out[name] = series.map(_read_extra)
-    return pd.DataFrame(out)
+    # The index the table was read with: a file whose every column is the
+    # author's own still stated rows, and building from the columns alone
+    # would drop them where nothing would say they had gone.
+    return pd.DataFrame(out, index=frame.index)
 
 
 def _check_kind(series: pd.Series, name, path: Path, kinds: str, what: str) -> None:
@@ -310,11 +314,32 @@ def _read_set_table(
         frame, _ = read_parquet(path, what=what, empty=True)
         if not len(frame.columns):
             return None
+        frame = _kept_columns(frame, path)
         return _read_cells(frame, dims, path, ordered=ordered, typed=True, text=text)
     if _is_blank(path):
         return None
-    frame = read_table(path, what=what, skip=skip)
+    frame = _kept_columns(read_table(path, what=what, skip=skip), path)
     return _read_cells(frame, dims, path, ordered=ordered, text=text)
+
+
+def _kept_columns(frame: pd.DataFrame, path: Path) -> pd.DataFrame:
+    """
+    Return a table without the columns its author kept for themselves.
+
+    Read before any cell is: what a private column holds is not this
+    format's to type, to check against a declaration, or to refuse. A
+    table of nothing else states rows no column of the set can hold, and
+    is named here rather than left to the set, which would no longer know
+    which file they were in.
+    """
+    kept = drop_private_columns(frame)
+    if len(kept.index) and not len(kept.columns):
+        msg = (
+            f"{quote_path(path)} states rows and no column but its author's "
+            "own; a header beginning with an underscore is read by nothing."
+        )
+        raise ParameterError(msg)
+    return kept
 
 
 def _is_parquet(path: Path) -> bool:

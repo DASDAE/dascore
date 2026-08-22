@@ -1536,6 +1536,16 @@ class TestPrivateColumns:
         segment = one_path(make_inventory(files)).geometry[0]
         assert set(segment.coordinates) == {"longitude", "latitude", "elevation"}
 
+    def test_a_table_of_only_private_columns(self, make_inventory):
+        """A table which states nothing of its own states no track."""
+        files = {
+            **MINIMAL,
+            **TRACKS,
+            "fiber_arrays/DAS.L001/path/coupling.csv": "_crew\nnorth crew\n",
+        }
+        with pytest.raises(InvalidInventoryError, match="start_distance"):
+            make_inventory(files)
+
     def test_a_private_column_states_nothing(self, make_inventory):
         """Underscoring a column the table needs does not state it."""
         files = {

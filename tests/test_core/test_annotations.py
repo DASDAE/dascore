@@ -428,9 +428,28 @@ class TestColumns:
 
     def test_a_private_column_states_no_dimension(self):
         """Underscoring a range column makes it nothing, not a bound."""
-        frame = pd.DataFrame({"_distance_start": [1.0], "_distance_end": [2.0]})
+        frame = pd.DataFrame(
+            {"group": ["a"], "_distance_start": [1.0], "_distance_end": [2.0]}
+        )
         out = AnnotationSet(frame, dims=DIMS)
         assert out[0].region.bounds == {}
+
+    def test_a_private_dimension(self):
+        """A dimension is a column, and no set reads a private one."""
+        frame = pd.DataFrame({"_distance": [1.0]})
+        with pytest.raises(ValidationError, match="begin with an underscore"):
+            AnnotationSet(frame, dims=("_distance", "time"))
+
+    def test_rows_no_column_can_hold(self):
+        """Rows a table cannot write are refused where they can be named."""
+        frame = pd.DataFrame({"_crew": ["north crew", "south crew"]})
+        with pytest.raises(ParameterError, match="none is theirs"):
+            AnnotationSet(frame, dims=DIMS)
+
+    def test_rows_which_state_nothing_at_all(self):
+        """The same, for a frame which never had a column to lose."""
+        with pytest.raises(ParameterError, match="no column to hold them"):
+            AnnotationSet(pd.DataFrame(index=range(2)), dims=DIMS)
 
     def test_declared_column_documents_only(self):
         """Documenting a column does not gate any other one."""

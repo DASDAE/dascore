@@ -73,6 +73,7 @@ from dascore.utils.mapping import FrozenDict
 from dascore.utils.misc import iterate, to_str, validate_acquisition_key
 from dascore.utils.namespace import NamespaceOwner
 from dascore.utils.tables import (
+    PRIVATE_PREFIX,
     drop_private_columns,
     parquet_table,
     parse_cell,
@@ -701,6 +702,15 @@ class AnnotationSetAttrs(_AnnotationModel):
                 f"a set may not dimension {', '.join(RESERVED_COLUMNS)}."
             )
             raise ValueError(msg)
+        # A dimension is stated by a column, and a private column is the
+        # author's own: dimensioning one would declare a coordinate no
+        # table is allowed to hold.
+        if private := sorted(x for x in self.dims if x.startswith(PRIVATE_PREFIX)):
+            msg = (
+                f"The dimension(s) {', '.join(private)} begin with an "
+                "underscore, which names a column no set reads."
+            )
+            raise ValueError(msg)
         return self
 
     @model_validator(mode="after")
@@ -1046,7 +1056,16 @@ def _coerce_frame(data, what: str) -> pd.DataFrame:
     # one holds: a private column is the author's own either way, and a set
     # which kept one from a frame would write a column it could not read
     # back.
-    return drop_private_columns(frame)
+    kept = drop_private_columns(frame)
+    # A table writes rows by writing their cells, so rows with no cell to
+    # write are rows a saved set comes back without. Refused rather than
+    # counted here, where what went missing can still be named.
+    if len(kept.index) and not len(kept.columns):
+        msg = f"The {what} state rows and no column to hold them."
+        if len(frame.columns):
+            msg += " Every column they state is private, so none is theirs."
+        raise ParameterError(msg)
+    return kept
 
 
 def _read_spellings(frame: pd.DataFrame, dims) -> dict[str, _Spelling]:
