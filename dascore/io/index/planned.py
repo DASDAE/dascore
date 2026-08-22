@@ -550,10 +550,13 @@ def _describe(
     joined = join_summaries(summaries, snap_tolerance=snap_tolerance)
     if joined is None:
         return _union_summary(summaries)
-    if mode == "concat" and joined.step is None:
-        # A concatenation joins the raw values and asks get_coord what
-        # they are, which for anything but a single range is an array
-        # whose identity is those values -- unknowable from summaries.
+    raw_join = mode == "concat" or name != plan_dim
+    if raw_join and joined.step is None:
+        # Only the merged dimension is built by the join this predicts
+        # with. A concatenation, and a rider on either path, has its raw
+        # values concatenated and handed to get_coord, which for anything
+        # but a single range gives an array whose identity is those
+        # values — unknowable from summaries.
         joined = joined.model_copy(update=dict(fingerprint=None, len=None))
     if trimmed and name != plan_dim:
         # the planned dimension's own trim is already in the member rows

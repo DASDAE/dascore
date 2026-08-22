@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime
+import itertools
 import pickle
 import re
 from collections.abc import Mapping
@@ -28,6 +29,7 @@ from dascore.core.coords import (
     CoordString,
     CoordSummary,
     _get_coord_kind,
+    _reproduces,
     concat_coords,
     get_coord,
 )
@@ -2947,6 +2949,38 @@ class TestFusedRangeConstruction:
         fused = concat_coords(first, second)
         assert fused.units == get_quantity("m")
         assert len(fused) == 20
+
+    def test_a_run_which_cannot_be_rebuilt_keeps_its_pieces(self):
+        """
+        Fusing must not move a value, even by an ulp.
+
+        Floating point addition is not associative, so a grid rebuilt
+        from the first start and the summed length need not land on the
+        boundaries its pieces state; where it does not, the pieces stay
+        as they were rather than being quietly altered.
+        """
+        pieces, start = [], 0.1
+        for _ in range(4):
+            piece = get_coord(start=start, stop=start + 0.3, step=0.1)
+            pieces.append(piece)
+            start = piece.stop
+        # the pieces meet exactly, so they form one run
+        assert all(a.stop == b.start for a, b in itertools.pairwise(pieces))
+        joined = concat_coords(*pieces)
+        assert len(joined) == sum(len(x) for x in pieces)
+        assert np.array_equal(joined.values, np.concatenate([x.values for x in pieces]))
+
+    def test_reproduces_rejects_a_grid_which_misses_a_boundary(self):
+        """The check itself answers both ways."""
+        pieces, start = [], 0.1
+        for _ in range(4):
+            piece = get_coord(start=start, stop=start + 0.3, step=0.1)
+            pieces.append(piece)
+            start = piece.stop
+        length = sum(len(x) for x in pieces)
+        drifting = pieces[0]._new_grid(pieces[0].start, pieces[0].step, length)
+        assert not _reproduces(drifting, pieces)
+        assert _reproduces(pieces[0], [pieces[0]])
 
     def test_many_segments_fuse_to_one_range(self):
         """A long run of contiguous ranges collapses to a single range."""

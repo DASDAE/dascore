@@ -216,7 +216,9 @@ def _scalar_dtype(dtype: np.dtype, name: str) -> np.dtype:
         return dtype
     unit = np.datetime_data(dtype)[0]
     return np.dtype(f"timedelta64[{unit}]") if name == "step" else dtype
-def _grid_range(start, step, length: int, units, fields_set=None) -> CoordRange:
+
+
+def _grid_range(start, step, length: int, units, fields_set=None, cls=None):
     """
     Build a CoordRange on an exactly known grid, skipping re-validation.
 
@@ -232,7 +234,7 @@ def _grid_range(start, step, length: int, units, fields_set=None) -> CoordRange:
     # zero is left alone; that quirk is reproduced here deliberately.
     if start and (is_timedelta64(start) or is_datetime64(start)):
         units = _second_quantity()
-    return CoordRange.model_construct(
+    return (cls or CoordRange).model_construct(
         # copy; model_construct stores the set by reference.
         _fields_set=set(fields_set) if fields_set else {"start", "stop", "step"},
         units=units,
@@ -1552,8 +1554,9 @@ class CoordRange(BaseCoord):
         CoordRange and length is computed from indices; anything taking user
         input must go through the validating constructor.
         """
-        grid = _grid_range(start, step, length, self.units, self.model_fields_set)
-        return cast("Self", grid)
+        return _grid_range(
+            start, step, length, self.units, self.model_fields_set, type(self)
+        )
 
     @model_validator(mode="before")
     @classmethod
@@ -2146,6 +2149,16 @@ def _maybe_promote_segment(seg: BaseCoord) -> BaseCoord:
     return seg
 
 
+def _reproduces(fused: CoordRange, run: list) -> bool:
+    """Whether one grid lands on every boundary the pieces state."""
+    offset = 0
+    for piece in run:
+        if fused[offset] != piece.start or fused.stop != run[-1].stop:
+            return False
+        offset += len(piece)
+    return True
+
+
 def _fuse_segments(segments: tuple[BaseCoord, ...]) -> tuple[BaseCoord, ...]:
     """
     Fuse adjacent segments that continue exactly (normal form).
@@ -2163,10 +2176,17 @@ def _fuse_segments(segments: tuple[BaseCoord, ...]) -> tuple[BaseCoord, ...]:
         if len(run) == 1:
             out.append(run[0])
         elif isinstance(run[0], CoordRange):
-            # every piece sits on one grid, so the whole run does too and
-            # its length is theirs added up: nothing needs re-deriving
+            # Every piece sits on one grid, so the whole run does too and
+            # its length is theirs added up. Floating point addition is
+            # not associative, though, so the rebuilt grid is checked
+            # against the boundaries it must reproduce; where it cannot,
+            # the pieces stay as they were rather than being altered.
             length = sum(len(x) for x in run)
-            out.append(run[0]._new_grid(run[0].start, run[0].step, length))
+            fused = run[0]._new_grid(run[0].start, run[0].step, length)
+            if _reproduces(fused, run):
+                out.append(fused)
+            else:
+                out.extend(run)
         else:
             values = np.concatenate([x.values for x in run])
             out.append(CoordMonotonicArray(values=values, units=run[0].units))
