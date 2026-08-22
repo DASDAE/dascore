@@ -26,6 +26,7 @@ import pandas as pd
 import dascore as dc
 from dascore.core.coord_join import join_summaries
 from dascore.core.coords import CoordSummary
+from dascore.exceptions import UnitError
 from dascore.io.index.backend import get_backend
 from dascore.io.index.catalog import (
     CompositeResolver,
@@ -43,7 +44,7 @@ from dascore.io.index.ingest import (
     coord_summary,
     typed_value,
 )
-from dascore.units import get_quantity, get_quantity_str
+from dascore.units import convert_units, get_quantity, get_quantity_str
 from dascore.utils.chunk_plan import (
     _SOURCE_COLUMNS,
     _ensure_patch_id,
@@ -294,7 +295,17 @@ def _is_cut(stored: Mapping, row: Mapping, plan_dim: str) -> bool:
     low, high = row.get(f"{plan_dim}_min"), row.get(f"{plan_dim}_max")
     if summary is None or (pd.isnull(low) and pd.isnull(high)):
         return False
-    return bool(low != summary.min or high != summary.max)
+    # The planner states every member in one unit; the index kept each
+    # member's own spelling. Compared as they stand, a member restated
+    # from centimetres into metres looks trimmed to a hundredth of
+    # itself, and everything riding the dimension loses its envelope.
+    stated = row.get(f"_{plan_dim}_units")
+    first, last = summary.min, summary.max
+    if stated is not None and not pd.isnull(stated) and summary.units is not None:
+        with suppress(TypeError, ValueError, UnitError):
+            first = convert_units(first, stated, summary.units)
+            last = convert_units(last, stated, summary.units)
+    return bool(low != first or high != last)
 
 
 def _trimmed_summary(summary: CoordSummary, row: Mapping, name: str) -> CoordSummary:
@@ -589,7 +600,12 @@ def _describe(
         # out for such a dimension (see _member_key_digests). An
         # auxiliary coordinate has no such row, so it is still described.
         return None
-    joined = join_summaries(summaries, snap_tolerance=snap_tolerance)
+    # Only the merged dimension is snapped: `_get_merged_coord` simplifies
+    # it, while a rider is raw-concatenated through `get_coord`, which
+    # absorbs no seam. Snapping one here would claim a step the loaded
+    # coordinate does not have.
+    tolerance = snap_tolerance if name == plan_dim else None
+    joined = join_summaries(summaries, snap_tolerance=tolerance)
     if joined is None:
         return _union_summary(summaries)
     raw_join = mode == "concat" or name != plan_dim
@@ -705,7 +721,11 @@ def _aux_coord_info(
             if key_col in joined.columns:
                 stated = np.maximum(stated, grouped[key_col].count().to_numpy())
             dropped = stated != grouped.size().to_numpy()
-            if drop_conflicting and key_col in joined.columns:
+            if drop_conflicting and not rides and key_col in joined.columns:
+                # A rider holds a different segment in every member, so
+                # its definitions differ by design; assembly joins those
+                # values rather than comparing them, and only a
+                # coordinate standing outside the merge is a conflict.
                 dropped = dropped | (grouped[key_col].nunique().to_numpy() != 1)
             held = held & ~dropped
         absent = ~held

@@ -890,3 +890,72 @@ class TestTrimmedCoordsStayTrimmed:
         assert stated["min_num"] == held.min()
         assert stated["max_num"] == held.max()
         assert stated["length"] == len(held)
+
+
+class TestRidersSurviveTheirMerge:
+    """A rider is joined, not compared, and never snapped."""
+
+    @pytest.fixture()
+    def riding(self):
+        """Two contiguous patches carrying a clock on time."""
+        first = dc.get_example_patch()
+        time = first.get_coord("time")
+        second = dc.get_example_patch(time_min=time.max() + time.step)
+        samples = first.shape[first.get_axis("time")]
+        return first, second, samples
+
+    def test_a_replan_keeps_the_rider_it_holds(self, riding):
+        """Differing definitions are how a rider works, not a conflict."""
+        first, second, samples = riding
+        time = first.get_coord("time")
+        left = first.update_coords(clock=("time", np.arange(float(samples))))
+        right = second.update_coords(
+            clock=("time", np.arange(float(samples), 2.0 * samples))
+        )
+        step = (time.max() - time.min()) / 2
+        spool = dc.spool([left, right]).chunk(time=step, conflict="drop")
+        again = spool.chunk(time=None, conflict="drop")
+        assert "clock" in again[0].coords.coord_map
+        assert again.get_contents().iloc[0]["clock_min"] == 0.0
+
+    def test_an_irregular_rider_is_not_snapped(self, riding, assert_contents_match):
+        """Assembly simplifies the merged dimension and nothing else."""
+        first, second, samples = riding
+        left = first.update_coords(clock=("time", np.arange(float(samples))))
+        # the second block starts half a step late: a seam a tolerant
+        # snap would absorb on the merged dimension, but not here
+        right = second.update_coords(
+            clock=("time", np.arange(float(samples)) + samples + 0.5)
+        )
+        merged = dc.spool([left, right]).chunk(time=None, conflict="keep_first")
+        assert pd.isnull(merged.get_contents().iloc[0]["clock_step"])
+        assert_contents_match(merged)
+
+    def test_a_contiguous_rider_keeps_its_step(self, riding, assert_contents_match):
+        """Not snapping is not the same as claiming nothing."""
+        first, second, samples = riding
+        left = first.update_coords(clock=("time", np.arange(float(samples))))
+        right = second.update_coords(
+            clock=("time", np.arange(float(samples)) + samples)
+        )
+        merged = dc.spool([left, right]).chunk(time=None, conflict="keep_first")
+        assert merged.get_contents().iloc[0]["clock_step"] == 1.0
+        assert_contents_match(merged)
+
+    def test_a_restated_member_is_not_a_trimmed_one(self, assert_contents_match):
+        """The planner's unit and the index's spelling describe one member."""
+        first = dc.get_example_patch()
+        size = first.shape[first.get_axis("distance")]
+        values = np.arange(float(size))
+        left = first.update_coords(
+            distance=get_coord(values=values, units="m"),
+            rider=("distance", values),
+        )
+        right = first.update_coords(
+            distance=get_coord(values=(values + size) * 100.0, units="cm"),
+            rider=("distance", values + size),
+        )
+        merged = dc.spool([left, right]).chunk(distance=None, conflict="keep_first")
+        row = merged.get_contents().iloc[0]
+        assert row["rider_min"] == 0.0 and row["rider_max"] == 2 * size - 1
+        assert_contents_match(merged)
