@@ -19,6 +19,7 @@ import re
 import warnings
 from collections.abc import Hashable, Mapping
 from dataclasses import dataclass, field, fields, replace
+from functools import partial
 from typing import Any, SupportsInt, TypedDict, cast
 
 import numpy as np
@@ -429,13 +430,19 @@ def coord_summary(row: Mapping) -> CoordSummary | None:
             **common,
         )
     if kind == "num":
-        # an envelope nobody stated is NaN, as validation would make it;
-        # only a step is genuinely absent
+        # The envelope is stored as a float whatever the coordinate is, so
+        # it is cast back: an integer coordinate rebuilt from floats would
+        # be a float64 coordinate, with a different identity from the one
+        # the index recorded. An envelope nobody stated is NaN, as
+        # validation would make it; only a step is genuinely absent.
+        dtype = np.dtype(common["dtype"]) if common["dtype"] else np.dtype("float64")
         low, high = _opt_float(row.get("min_num")), _opt_float(row.get("max_num"))
+        step = _opt_float(row.get("step_num"))
+        cast = partial(_as_dtype, dtype=dtype)
         return CoordSummary.model_construct(
-            min=np.nan if low is None else low,
-            max=np.nan if high is None else high,
-            step=_opt_float(row.get("step_num")),
+            min=np.nan if low is None else cast(low),
+            max=np.nan if high is None else cast(high),
+            step=None if step is None else cast(step),
             **common,
         )
     if kind == "str":
@@ -446,6 +453,13 @@ def coord_summary(row: Mapping) -> CoordSummary | None:
             **common,
         )
     return None
+
+
+def _as_dtype(value: float, dtype: np.dtype) -> Any:
+    """A stored float as the numeric type the coordinate states."""
+    if np.issubdtype(dtype, np.integer) and float(value).is_integer():
+        return int(value)
+    return value
 
 
 def _opt_float(value) -> float | None:

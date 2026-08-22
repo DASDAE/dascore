@@ -22,6 +22,7 @@ import numpy as np
 from dascore.core.coords import CoordSummary, concat_coords
 from dascore.exceptions import CoordError
 from dascore.units import get_quantity
+from dascore.utils.misc import get_middle_value
 
 
 def join_summaries(
@@ -81,14 +82,35 @@ def join_summaries(
         # Overlapping, contradictory, or otherwise unjoinable members;
         # loading them will raise, and the row must not pretend otherwise.
         return None
-    if snap_tolerance and joined.step is not None:
-        joined = joined.simplify(snap_tolerance * np.abs(joined.step))
-    elif snap_tolerance:
-        joined = joined.simplify(snap_tolerance * np.abs(_widest_step(coords)))
-    return joined.to_summary()
+    if snap_tolerance:
+        step = joined.step if joined.step is not None else _middle_step(coords)
+        if step is not None:
+            joined = joined.simplify(snap_tolerance * np.abs(step))
+    stated = joined.to_summary()
+    if not _rebuilt_faithfully(summaries, coords):
+        # A member which does not rebuild into the coordinate it was made
+        # from — one written at a precision the index does not store, say
+        # — cannot have the join's identity computed from it. The
+        # envelope holds either way; the identity is not claimed.
+        stated = stated.model_copy(update=dict(fingerprint=None))
+    return stated
 
 
-def _widest_step(coords) -> float:
-    """The step to scale a tolerance by when the join has none of its own."""
+def _rebuilt_faithfully(summaries, coords) -> bool:
+    """Whether every member came back as the coordinate it was made from."""
+    return all(
+        x.fingerprint is None or x.fingerprint == y.fingerprint()
+        for x, y in zip(summaries, coords, strict=True)
+    )
+
+
+def _middle_step(coords):
+    """
+    The step a tolerance is scaled by when the join has none of its own.
+
+    The middle of the members' steps, which is what the assembler scales
+    by (`dascore.utils.patch._middle_step`); a wider one would absorb a
+    seam here that the loaded patch keeps.
+    """
     steps = [x.step for x in coords if x.step is not None]
-    return max(np.abs(steps)) if steps else 0
+    return get_middle_value(steps) if steps else None

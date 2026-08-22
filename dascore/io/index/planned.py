@@ -401,9 +401,15 @@ def predicted_coords(
     *,
     trimmed_dims: frozenset[str] = frozenset(),
     snap_tolerance: float | None = None,
-) -> dict[int, dict[str, CoordSummary]]:
+    mode: str = "chunk",
+    drop_conflicting: bool = False,
+) -> dict[int, dict[str, CoordSummary | None]]:
     """
     Per output, the summary of every coordinate its members hold.
+
+    A name mapped to None is one the members hold which the output will
+    not: the assembly drops it, so nothing is claimed about it, but the
+    envelope columns bearing its name are still its own.
 
     This is what the plan claims about an output, and it is decided by
     running the *real* join over the members' summaries
@@ -427,11 +433,18 @@ def predicted_coords(
         one of them describes untrimmed values, so it keeps no identity.
     snap_tolerance
         Passed to the join, bounding how far a seam may be absorbed.
+    mode
+        Which assembly will build these outputs. A merge drops a
+        coordinate its members do not all share; a concatenation joins
+        raw values, so it can be identified only where they form a range.
+    drop_conflicting
+        Whether the merge drops non-dimensional coordinates its members
+        disagree about, rather than refusing to build the patch.
     """
     stored = _member_summaries(backend, members)
     if not stored:
         return {}
-    out: dict[int, dict[str, CoordSummary]] = {}
+    out: dict[int, dict[str, CoordSummary | None]] = {}
     # the whole table is turned into rows once: doing it per output costs
     # pandas' fixed overhead thousands of times over on a segment plan
     by_output: dict[int, list[dict]] = {}
@@ -441,7 +454,7 @@ def predicted_coords(
         names: dict[str, None] = {}  # an ordered set
         for row in records:
             names.update(dict.fromkeys(stored.get(int(row["_patch_id"]), {})))
-        described: dict[str, CoordSummary] = {}
+        described: dict[str, CoordSummary | None] = {}
         # the plan's member rows are what will be *loaded*: they carry each
         # member's trim, in the unit the plan settled on, so along the
         # planned dimension they outrank what the index recorded
@@ -462,9 +475,20 @@ def predicted_coords(
                     )
                 summaries.append(summary)
             assert summaries, "a name comes from the members which state it"
-            stated = _describe(name, summaries, plan_dim, trimmed_dims, snap_tolerance)
-            if stated is not None:
-                described[name] = stated
+            stated = _describe(
+                name,
+                summaries,
+                plan_dim,
+                trimmed_dims,
+                snap_tolerance,
+                mode=mode,
+                every_member=len(summaries) == len(records),
+                drop_conflicting=drop_conflicting,
+            )
+            # None records that the members hold it and the output will
+            # not: no coordinate is written, and the envelope columns it
+            # owns are still recognized as its own rather than as attrs
+            described[name] = stated
         out[output_id] = described
     return out
 
@@ -475,6 +499,10 @@ def _describe(
     plan_dim: str,
     trimmed_dims: frozenset[str],
     snap_tolerance: float | None,
+    *,
+    mode: str = "chunk",
+    every_member: bool = True,
+    drop_conflicting: bool = False,
 ) -> CoordSummary | None:
     """
     State one coordinate of one output, claiming only what holds.
@@ -490,9 +518,13 @@ def _describe(
     rides = plan_dim == name or plan_dim in first.dims
     trimmed = bool(set(first.dims) & trimmed_dims)
     if not rides:
-        # every member states the same coordinate, or assembly refuses to
-        # build the output at all; the identity survives when they agree
         agreed = len({x.fingerprint for x in summaries}) == 1
+        if mode == "chunk" and not (every_member and (agreed or not drop_conflicting)):
+            # A merge keeps only what every member states and agrees on:
+            # merge_coord_managers drops the rest (see
+            # _drop_unshared_coordinates), so describing it would
+            # advertise a coordinate the patch will not carry.
+            return None
         if agreed and not trimmed:
             return first
         return first.model_copy(update=_unvouched(trimmed))
@@ -507,6 +539,11 @@ def _describe(
     joined = join_summaries(summaries, snap_tolerance=snap_tolerance)
     if joined is None:
         return _union_summary(summaries)
+    if mode == "concat" and joined.step is None:
+        # A concatenation joins the raw values and asks get_coord what
+        # they are, which for anything but a single range is an array
+        # whose identity is those values -- unknowable from summaries.
+        joined = joined.model_copy(update=dict(fingerprint=None, len=None))
     if trimmed and name != plan_dim:
         # the planned dimension's own trim is already in the member rows
         # this joined; any other coordinate is cut at load instead
@@ -613,7 +650,7 @@ def _aux_coord_info(
 
 def _apply_predictions(
     outputs: pd.DataFrame,
-    predicted: Mapping[int, Mapping[str, CoordSummary]],
+    predicted: Mapping[int, Mapping[str, CoordSummary | None]],
     name: str,
 ) -> pd.DataFrame:
     """
@@ -654,7 +691,7 @@ def _output_records(
     outputs: pd.DataFrame,
     token: str,
     aux_info: Mapping[int, Mapping[str, Mapping]] | None = None,
-    predicted: Mapping[int, Mapping[str, CoordSummary]] | None = None,
+    predicted: Mapping[int, Mapping[str, CoordSummary | None]] | None = None,
 ) -> list[SourceRecord]:
     """
     Convert plan output rows into ingestible source records.
@@ -697,7 +734,7 @@ def _output_records(
             if record is not None:
                 coords.append(record)
         for name, summary in known.items():
-            if name in dim_names:
+            if name in dim_names or summary is None:
                 continue
             record = _coord_record(name, summary)
             if record is not None:
@@ -1074,6 +1111,8 @@ def derived_catalog(
         name,
         trimmed_dims=trimmed_dims,
         snap_tolerance=snap,
+        mode=mode,
+        drop_conflicting=merge_kwargs.get("conflict") in {"drop", "keep_first"},
     )
     outputs = _apply_predictions(outputs, predicted, name)
     aux_info = {}

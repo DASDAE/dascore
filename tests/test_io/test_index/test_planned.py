@@ -547,14 +547,36 @@ class TestPredictedCoords:
         assert described["time"].max == whole.max()
 
     def test_a_coordinate_one_member_lacks(self, pair):
-        """A coordinate only some members hold is still described."""
+        """What a partly-held coordinate becomes depends on the assembly."""
         first, second = pair
         n = first.shape[first.get_axis("distance")]
         lat = second.update_coords(latitude=("distance", np.arange(n) * 1.0))
         plan, backend = self._plan_and_backend([first, lat], time=None)
-        described = predicted_coords(backend, plan.members, "time")[0]
+        # a concatenation carries it over from the member which has it
+        described = predicted_coords(backend, plan.members, "time", mode="concat")[0]
         assert "latitude" in described
         assert described["latitude"].len == n
+        # a merge drops what its members do not all share, so nothing is said
+        merged = predicted_coords(backend, plan.members, "time", mode="chunk")[0]
+        # named, but stated as nothing: the merge will not carry it
+        assert merged["latitude"] is None
+
+    def test_a_merge_drops_what_its_members_disagree_about(self, pair):
+        """Under drop, a coordinate the members differ on is not described."""
+        first, second = pair
+        n = first.shape[first.get_axis("distance")]
+        patches = [
+            first.update_coords(latitude=("distance", np.arange(n) * 1.0)),
+            second.update_coords(latitude=("distance", np.ones(n))),
+        ]
+        plan, backend = self._plan_and_backend(patches, time=None)
+        dropped = predicted_coords(
+            backend, plan.members, "time", mode="chunk", drop_conflicting=True
+        )[0]
+        assert dropped["latitude"] is None
+        # refusing instead of dropping, the output either matches or raises
+        kept = predicted_coords(backend, plan.members, "time", mode="chunk")[0]
+        assert "latitude" in kept
 
     def test_a_coordinate_nobody_states_is_left_to_the_row(self, pair):
         """A blank dimension is described by the plan, not predicted."""
@@ -562,7 +584,7 @@ class TestPredictedCoords:
         blanks = [first.mean("time"), first.new().mean("time")]
         plan, backend = self._plan_and_backend(blanks, time=None)
         described = predicted_coords(backend, plan.members, "time")[0]
-        assert "time" not in described  # the row states its identity
+        assert described["time"] is None  # the row states its identity
         assert "distance" in described  # everything else is still described
 
     def test_null_of_each_kind(self):
