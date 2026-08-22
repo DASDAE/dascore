@@ -1705,6 +1705,22 @@ class TestDisplay:
         assert "-> distance" in out
         assert "control points" in out
 
+    def test_child_styles_do_not_bleed(self, tunnel):
+        """A container does not paint its children with its own style."""
+        network = tunnel.networks[0]
+        text = network.__rich__()
+        assert text.style == ""
+        # The indent a child is placed under carries no style of its own.
+        indent = text.plain.index("FiberArray") - 4
+        assert not [x for x in text.spans if x.start <= indent < x.end]
+
+    def test_crs_styles_only_its_name(self, tunnel):
+        """The frame's own line marks its class, not its axes."""
+        text = tunnel.coordinate_reference_system.__rich__()
+        assert text.style == ""
+        start = text.plain.index("local:tunnel")
+        assert not [x for x in text.spans if x.start <= start < x.end]
+
     def test_children_elided(self):
         """A container says how many children it is not showing."""
         stations = [{"code": f"S{x}"} for x in range(5)]

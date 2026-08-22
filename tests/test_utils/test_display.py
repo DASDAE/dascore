@@ -9,6 +9,7 @@ from rich.text import Text
 
 import dascore as dc
 from dascore.config import config_context
+from dascore.constants import dascore_styles
 from dascore.core.annotations import AnnotationColumn, AnnotationSetAttrs
 from dascore.core.inventory import Acquisition, Cable, Network
 from dascore.utils.display import (
@@ -194,8 +195,28 @@ class TestStatedFields:
         assert "columns: 1" in str(model_to_line(attrs))
 
 
+def styles_at(text, substring):
+    """Return the styles covering the first character of a substring."""
+    start = text.plain.index(substring)
+    return {x.style for x in text.spans if x.start <= start < x.end}
+
+
 class TestModelToLine:
     """Tests for the one-line model summary."""
+
+    def test_only_the_name_is_styled(self):
+        """
+        A style stays on what it marks.
+
+        Text(x, style=...) makes that style the base of everything appended
+        after it, so building a line that way paints every value with the
+        class name's style.
+        """
+        line = model_to_line(Network(code="XT"))
+        assert line.style == ""
+        assert styles_at(line, "Network") == {"bold"}
+        assert styles_at(line, " code: ") == {dascore_styles["keys"]}
+        assert styles_at(line, "XT") == set()  # the value is not a key
 
     def test_names_class_and_fields(self):
         """The line names the class, then what the model states."""

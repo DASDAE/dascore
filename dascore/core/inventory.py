@@ -248,11 +248,13 @@ class CoordinateReferenceSystem(InventoryModel):
         summary: the default CRS is a real answer, and an empty line for
         it would say the inventory has no frame.
         """
-        base = Text(self.__class__.__name__, style="bold") + Text("(")
-        base += Text(f" {self.authority}:{self.code}")
+        base = Text("")
+        base += Text(self.__class__.__name__, style="bold")
+        base += Text(f"( {self.authority}:{self.code}")
         base += Text("  axes: ", dascore_styles["keys"])
         base += Text(", ".join(self.coordinate_labels))
-        return base + Text(" )")
+        base += Text(" )")
+        return base
 
     def axis_index(self, label: str) -> int:
         """
@@ -873,10 +875,13 @@ class DistanceMap(InventoryModel):
         """
         axes = " and ".join(self.axes)
         points = f"{len(self.distance)} control points"
-        base = Text(self.__class__.__name__, style="bold") + Text("(")
+        base = Text("")
+        base += Text(self.__class__.__name__, style="bold")
+        base += Text("(")
         base += Text(f" {axes} -> distance", dascore_styles["keys"])
         base += Text(f", {points}")
-        return base + Text(" )")
+        base += Text(" )")
+        return base
 
     @property
     def axes(self) -> tuple[str, ...]:

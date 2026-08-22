@@ -928,8 +928,10 @@ class AnnotationSet(NamespaceOwner):
             if not len(values):
                 base += Text("unstated", key_style)
                 continue
-            base += Text("min: ", key_style) + get_nice_text(values.min())
-            base += Text(" max: ", key_style) + get_nice_text(values.max())
+            base += Text("min: ", key_style)
+            base += get_nice_text(values.min())
+            base += Text(" max: ", key_style)
+            base += get_nice_text(values.max())
             kind = "point" if spelling.point else "range"
             base += Text(f" ({kind})", key_style)
         return base

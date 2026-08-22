@@ -336,7 +336,11 @@ def model_to_line(model, skip=(), style=None, extra=None) -> Text:
         model computes rather than stores.
     """
     key_style = dascore_styles["keys"]
-    base = Text(model.__class__.__name__, style=style or "bold")
+    # Started empty and appended to: a Text built as Text(x, style=...) makes
+    # that style the base of everything appended after it, so the class name's
+    # style would bleed onto every value.
+    base = Text("")
+    base += Text(model.__class__.__name__, style=style or "bold")
     base += Text("(")
     fields = {**stated_fields(model, skip=skip), **dict(extra or {})}
     for name, value in fields.items():

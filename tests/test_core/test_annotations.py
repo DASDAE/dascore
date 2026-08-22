@@ -166,6 +166,13 @@ class TestConstruction:
         """Annotation sets have a rich representation."""
         assert isinstance(region_set.__rich__(), Text)
 
+    def test_dimension_values_not_styled_as_keys(self, region_set):
+        """A dimension's extent is a value, not the label in front of it."""
+        text = region_set.__rich__()
+        assert text.style == ""
+        start = text.plain.index("100.000")
+        assert not [x for x in text.spans if x.start <= start < x.end]
+
     def test_annotation_repr(self, region_set):
         """One annotation names its class and what it states."""
         out = repr(region_set[0])
