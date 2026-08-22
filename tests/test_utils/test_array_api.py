@@ -205,6 +205,13 @@ def _identity(patch):
     return patch
 
 
+def _with_a_null(patch):
+    """Return the patch with a null in it, so filling one does something."""
+    data = np.asarray(patch.data).copy()
+    data[0, 0] = np.nan
+    return patch.new(data=data)
+
+
 def _make_complex(patch):
     """Return the patch with complex data, so a conjugate means something."""
     data = np.asarray(patch.data)
@@ -228,6 +235,16 @@ ARRAY_API_CASES = {
         call=lambda patch: patch.rename_coords(time="t")
     ),
     "dascore.proc.basic.abs": _Case(call=lambda patch: patch.abs()),
+    "dascore.proc.basic.flip": _Case(call=lambda patch: patch.flip("time")),
+    "dascore.proc.basic.full": _Case(call=lambda patch: patch.full(1.5)),
+    # fillna is given something to fill; with nothing null it hands the
+    # patch straight back, which says nothing about the backend.
+    "dascore.proc.basic.fillna": _Case(
+        call=lambda patch: patch.fillna(0.0), setup=_with_a_null
+    ),
+    "dascore.proc.coords.update_coords": _Case(
+        call=lambda patch: patch.update_coords(time=patch.get_array("time"))
+    ),
     # conj and real hand a real patch straight back, which says nothing
     # about the backend, so they are given something to actually do.
     "dascore.proc.basic.conj": _Case(

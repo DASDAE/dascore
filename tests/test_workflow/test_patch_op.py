@@ -353,8 +353,8 @@ class TestCanonicalByHand:
     def test_a_star_args_group_by_hand(self):
         """Including one whose arguments cannot be passed by name."""
         assert PatchOp(
-            name="flip", kwargs={"dims": ("time",), "flip_coords": True}
-        ) == dc.proc.flip.op("time")
+            name="sort_coords", kwargs={"coords": ("time",), "reverse": False}
+        ) == dc.proc.sort_coords.op("time")
 
 
 class TestAPositionalBeforeAStarArgs:
@@ -616,6 +616,11 @@ class TestDocuments:
             "RenameCoords",
             "Standardize",
             "Transpose",
+            "Demedian",
+            "FillNa",
+            "Flip",
+            "Full",
+            "UpdateCoords",
         }
 
     def test_the_document_names_the_operation(self):

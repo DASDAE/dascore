@@ -674,16 +674,33 @@ def fillna(patch: PatchType, value, include_inf=True) -> PatchType:
     >>> # Replace all occurrences of NaN with 5
     >>> out = patch.fillna(5)
     """
-    if include_inf:
-        to_replace = ~np.isfinite(patch.data)
-    else:
-        to_replace = pd.isnull(patch.data)
-    if not np.any(to_replace):  # nothing nullish to fill
-        return patch
-    new_data = patch.data.copy()
-    new_data[to_replace] = value
+    return FillNa(value=value, include_inf=include_inf)._apply(patch)
 
-    return patch.new(data=new_data)
+
+class FillNa(PatchProcessor):
+    """Put a value where the data has none."""
+
+    value: Any
+    include_inf: bool = True
+
+    def kernel(self, data, meta, out_meta):
+        """
+        Return the data with its nulls filled, or the data unchanged.
+
+        `where` rather than assigning into a copy: writing into an array
+        by boolean mask is not something the standard asks a backend for.
+        Handing the data straight back where there is nothing to fill is
+        what says the operation did nothing.
+        """
+        xp = array_namespace(data)
+        replace = ~np.isfinite(data) if self.include_inf else pd.isnull(data)
+        replace = xp.asarray(replace)
+        if not xp.any(replace):
+            return data
+        return xp.where(replace, xp.asarray(self.value, dtype=data.dtype), data)
+
+
+register_implementation("fillna", FillNa)
 
 
 @patch_function()
@@ -941,12 +958,36 @@ def flip(patch, *dims, flip_coords=True):
     >>> # Flip patch over all dimensions.
     >>> out = patch.flip(*patch.dims)
     """
-    if not dims:
-        return patch  # no-op
-    axes = tuple(patch.get_axis(name) for name in dims)
-    data = np.flip(patch.data, axis=axes) if dims else patch.data
-    coords = patch.coords.flip(*dims) if flip_coords else patch.coords
-    return patch.new(data=data, coords=coords)
+    return Flip(dims=tuple(dims), flip_coords=flip_coords)._apply(patch)
+
+
+class Flip(PatchProcessor):
+    """Reverse a patch along one or more of its dimensions."""
+
+    dims: tuple[Any, ...] = ()
+    flip_coords: bool = True
+
+    def derive_meta(self, meta):
+        """
+        Return the coordinates reversed along the same dimensions.
+
+        Named no dimensions, the operation has nothing to reverse and
+        hands the metadata back untouched, which is what tells `_apply`
+        to hand the patch back too.
+        """
+        if not self.dims or not self.flip_coords:
+            return meta
+        return meta.update(coords=meta.coords.flip(*self.dims))
+
+    def kernel(self, data, meta, out_meta):
+        """Return the data reversed along the axes the dimensions name."""
+        if not self.dims:
+            return data
+        axes = tuple(meta.get_axis(name) for name in self.dims)
+        return array_namespace(data).flip(data, axis=axes)
+
+
+register_implementation("flip", Flip)
 
 
 @patch_function(data_type="")
@@ -973,8 +1014,25 @@ def full(patch, fill_value):
     >>> # Same thing, except for 0s.
     >>> zero_patch = patch.full(0.0)
     """
-    array = np.full(patch.data.shape, fill_value)
-    return patch.update(data=array)
+    return Full(fill_value=fill_value)._apply(patch)
+
+
+class Full(PatchProcessor):
+    """Replace every sample with one value."""
+
+    fill_value: Any
+
+    def kernel(self, data, meta, out_meta):
+        """
+        Return an array of one value, the shape the patch is.
+
+        The only kernel here which does not read the data it is given:
+        what comes out depends on the shape and the value alone.
+        """
+        return array_namespace(data).full(meta.shape, self.fill_value)
+
+
+register_implementation("full", Full)
 
 
 @patch_function()
@@ -1028,16 +1086,26 @@ def demedian(patch, dim: str = "time"):
     >>> plt.show()  # doctest: +SKIP
     >>> plt.close(fig)
     """
-    axis = patch.get_axis(dim)
-    data = patch.data
+    return Demedian(dim=dim)._apply(patch)
 
-    # Compute median along axis, keep dims for broadcasting
-    med = np.nanmedian(data, axis=axis, keepdims=True)
 
-    new_data = data - med
+class Demedian(PatchProcessor):
+    """Remove the median along a dimension."""
 
-    # Return a new patch with updated data
-    return patch.new(data=new_data)
+    dim: str = "time"
+
+    def kernel(self, data, meta, out_meta):
+        """
+        Return the data with the median of each slice taken out.
+
+        Numpy, and staying that way: the standard has no median which
+        skips nulls, and `nan_reduce` says so by not offering one.
+        """
+        median = np.nanmedian(data, axis=meta.get_axis(self.dim), keepdims=True)
+        return data - median
+
+
+register_implementation("demedian", Demedian)
 
 
 @patch_function()
