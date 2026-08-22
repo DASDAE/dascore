@@ -959,3 +959,53 @@ class TestRidersSurviveTheirMerge:
         row = merged.get_contents().iloc[0]
         assert row["rider_min"] == 0.0 and row["rider_max"] == 2 * size - 1
         assert_contents_match(merged)
+
+
+class TestFallbackAgreement:
+    """The fallback mirrors the rules prediction applies."""
+
+    def _frames(self, keys):
+        """Source rows and members for one output holding `keys`."""
+        count = len(keys)
+        sources = pd.DataFrame(
+            {
+                "_patch_id": list(range(1, count + 1)),
+                "depth_min": [0.0] * count,
+                "depth_max": [9.0] * count,
+                "_depth_def_key": keys,
+            }
+        )
+        members = pd.DataFrame(
+            {
+                "output_id": [0] * count,
+                "_patch_id": list(range(1, count + 1)),
+                "_modified": [False] * count,
+            }
+        )
+        return sources, members
+
+    def test_a_lone_unidentified_member_is_still_described(self):
+        """`nunique` counts no nulls, and one member disagrees with nobody."""
+        sources, members = self._frames([None])
+        described = _aux_coord_info(
+            sources,
+            members,
+            "time",
+            {"depth": "distance"},
+            mode="chunk",
+            drop_conflicting=True,
+        )
+        assert "depth" in described[0]
+
+    def test_members_which_disagree_are_still_dropped(self):
+        """The exemption is for having nobody to disagree with."""
+        sources, members = self._frames(["fp:a", "fp:b"])
+        described = _aux_coord_info(
+            sources,
+            members,
+            "time",
+            {"depth": "distance"},
+            mode="chunk",
+            drop_conflicting=True,
+        )
+        assert "depth" not in described.get(0, {})

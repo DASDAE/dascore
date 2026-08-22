@@ -367,8 +367,11 @@ def _union_summary(summaries: Sequence[CoordSummary]) -> CoordSummary:
         # missing value to stand in.
         null = _null_like(template.min)
         return template.model_copy(update=dict(min=null, max=null, **blank))
+    # both ends come from the members the checks above inspected: a
+    # member stating only one of them was never compared for kind, and
+    # letting its max through would compare a moment with a number
     lows = [x.min for x in stated]
-    highs = [x.max for x in summaries if not pd.isnull(x.max)]
+    highs = [x.max for x in stated if not pd.isnull(x.max)]
     return template.model_copy(
         update=dict(
             min=min(lows) if lows else template.min,
@@ -591,7 +594,10 @@ def _describe(
             return None
         if agreed and not trimmed:
             return first
-        return first.model_copy(update=_unvouched(trimmed))
+        # members which disagree leave nothing to vouch for: a step and a
+        # sample count are enough for `_coord_record` to work an identity
+        # back out, so they go with the fingerprint
+        return first.model_copy(update=_unvouched(True))
     blank = all(pd.isnull(x.min) and pd.isnull(x.max) for x in summaries)
     if blank and name == plan_dim:
         # Nobody states any values along the dimension being joined, so
@@ -721,12 +727,17 @@ def _aux_coord_info(
             if key_col in joined.columns:
                 stated = np.maximum(stated, grouped[key_col].count().to_numpy())
             dropped = stated != grouped.size().to_numpy()
+            lone = grouped.size().to_numpy() == 1
             if drop_conflicting and not rides and key_col in joined.columns:
                 # A rider holds a different segment in every member, so
                 # its definitions differ by design; assembly joins those
                 # values rather than comparing them, and only a
                 # coordinate standing outside the merge is a conflict.
-                dropped = dropped | (grouped[key_col].nunique().to_numpy() != 1)
+                # `nunique` counts no nulls, so a lone member holding an
+                # unidentified coordinate counts zero of them; it has
+                # nothing to disagree with either way
+                disagree = grouped[key_col].nunique().to_numpy() != 1
+                dropped = dropped | (disagree & ~lone)
             held = held & ~dropped
         absent = ~held
         for index in np.flatnonzero(~absent):
