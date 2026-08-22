@@ -6,7 +6,7 @@ Several operations combine patches: the arithmetic operators and ufuncs (`patch1
 
 ## Kind
 
-The kind of a patch is the set of values it holds for the attributes named by the config option `patch_kind_attrs`. By default these are `acquisition_key`, `data_category`, and `tag` (plus the legacy `network` and `station`, which only archives predating `acquisition_key` still carry). Two patches are the same kind when they hold the same values for these attributes. A value that is missing — the attribute is absent, null, or left at its empty default `""` — is one value however it is spelled, so a reader that stamps `network=""` agrees with a patch carrying no `network` at all, which is also how spool metadata records such attributes.
+The kind of a patch is the set of values it holds for the attributes named by the config option `patch_kind_attrs`. By default these are `acquisition_key`, `data_category`, and `tag` (plus the legacy `network` and `station`, which only archives predating `acquisition_key` still carry). Two patches are the same kind when they hold the same values for these attributes — with one wrinkle for missing values, below, which turns on how many patches are being combined. A value that is missing — the attribute is absent, null, or left at its empty default `""` — is one value however it is spelled, so a reader that stamps `network=""` agrees with a patch carrying no `network` at all, which is also how spool metadata records such attributes.
 
 Kind attributes are categorical labels — strings naming an acquisition, a category, a tag — not quantities; the spool index partitions on them as stored text, so a quantity named as a kind attribute is not supported. Kind is decided from attributes alone. Coordinates, data units, history, the patch and processing ids, and every attribute outside the configured names never enter: a filtered patch is the same kind as its raw source, and so is a copy with different units or a different time range. `data_type` is deliberately *not* a kind attribute: processing rewrites it (`standardize` clears it, `envelope` sets it), so it would separate a patch from its own derivatives — `vel / vel.envelope("time")` must work — while the acquisition key, category, and tag already keep unrelated data apart.
 
@@ -22,11 +22,9 @@ assert check_kind(patch, processed)
 assert not check_kind(patch, patch.update_attrs(tag="other"), check_behavior="ignore")
 ```
 
-[`check_kind`](`dascore.utils.patch.check_kind`) implements this test for patches, and every combining operation applies it before looking at coordinates; the spool operations apply the same rule to their metadata, so a plan decided without loading data agrees with the patches it later assembles.
+[`check_kind`](`dascore.utils.patch.check_kind`) implements this test for patches (the next section covers how it compares a missing value), and every combining operation applies it before looking at coordinates; the spool operations apply the same rule to their metadata, so a plan decided without loading data agrees with the patches it later assembles.
 
 ### A missing value, and how many patches are being combined
-
-How a missing value compares depends on how many patches the operation combines, because the two cases are asking different questions.
 
 An operation with **two operands** — an operator, a ufunc, [`Patch.where`](`dascore.Patch.where`) — must produce one patch, and it has one answer available: a missing value is a wildcard which matches anything, and the result carries the union of what the two patches knew. This is the same rule the data units follow, where a unitless operand takes the other's units.
 

@@ -68,7 +68,6 @@ from dascore.workflow.checks import attr_type, check_patch_attrs, check_patch_co
 from dascore.workflow.identity import (
     _ID_FIELDS,
     advance,
-    fold_ids,
     fold_patch_ids,
     fold_processing_ids,
     ids_enabled,
@@ -1273,13 +1272,6 @@ def _kind_value(value):
     return None if _is_missing(value) else value
 
 
-def _kind_values_equal(value1, value2, strict: bool) -> bool:
-    """Compare two kind values; a missing one is a wildcard unless strict."""
-    if not strict and (value1 is None or value2 is None):
-        return True
-    return _values_equal(value1, value2)
-
-
 def check_kind(
     patch1, patch2, check_behavior: WARN_LEVELS = "raise", *, strict: bool = False
 ) -> bool:
@@ -1291,16 +1283,13 @@ def check_kind(
     the remaining attributes never enter. Patches of different kinds are
     never combined, whatever their coordinates.
 
-    How a missing value compares depends on how many patches the
-    operation combines. An operation with two operands -- an operator, a
-    ufunc, [`Patch.where`](`dascore.Patch.where`) -- has one answer to
-    give, so a missing value is a wildcard which matches anything and the
-    result carries the union of what the two knew. An operation which
-    combines a *collection* -- concatenate, stack, and the spool
-    operations -- must partition its patches instead, which a wildcard
-    cannot do consistently (`"a"` would match `""` would match `"b"`, yet
-    `"a"` and `"b"` conflict), so it passes `strict` and a missing value
-    is a value: it equals another missing value and nothing else.
+    Two-operand callers -- operators, ufuncs,
+    [`Patch.where`](`dascore.Patch.where`) -- leave `strict` False: a
+    missing value is a wildcard matching anything, and the result carries
+    the union of what the two knew. Callers combining a *collection* --
+    concatenate, stack, the spool operations -- pass `strict`, because a
+    wildcard is not transitive (`"a"` matches `""` matches `"b"`, yet
+    `"a"` and `"b"` conflict) and a partition needs it to be.
 
     Parameters
     ----------
@@ -1331,18 +1320,14 @@ def check_kind(
     """
     validate_warn_level(check_behavior)
     kind1, kind2 = get_patch_kind(patch1), get_patch_kind(patch2)
-    return _check_kinds(kind1, kind2, check_behavior, strict=strict)
 
+    def _equal(value1, value2) -> bool:
+        """A missing value is a wildcard unless the caller is strict."""
+        if not strict and (value1 is None or value2 is None):
+            return True
+        return _values_equal(value1, value2)
 
-def _check_kinds(
-    kind1: Mapping, kind2: Mapping, check_behavior, strict: bool = False
-) -> bool:
-    """Compare two kind mappings, warning or raising per check_behavior."""
-    diffs = {
-        x: (kind1[x], kind2[x])
-        for x in kind1
-        if not _kind_values_equal(kind1[x], kind2[x], strict)
-    }
+    diffs = {x: (kind1[x], kind2[x]) for x in kind1 if not _equal(kind1[x], kind2[x])}
     if not diffs:
         return True
     msg = (
@@ -1378,11 +1363,6 @@ def check_data_units(patch1, patch2, check_behavior: WARN_LEVELS = "raise") -> b
     validate_warn_level(check_behavior)
     units1 = get_quantity(patch1.attrs.data_units)
     units2 = get_quantity(patch2.attrs.data_units)
-    return _data_units_agree(units1, units2, check_behavior)
-
-
-def _data_units_agree(units1, units2, check_behavior) -> bool:
-    """Different units disagree; no units is a unit like any other."""
     if units1 == units2:
         return True
     msg = (
@@ -1533,22 +1513,24 @@ def _merge_models(attrs1, attrs2):
     """
     if attrs1 == attrs2:
         return attrs1
+    # keep_first gives the first patch's value for everything, folds the
+    # ids, and keeps the history and the attrs subclass; the data units of
+    # the output are decided by the operation from each operand's own, so
+    # the first's stand here whether or not it has any.
+    merged = combine_patch_attrs([attrs1, attrs2], conflict="keep_first")
+    # It does not fill, though, which is the one thing two operands do:
+    # what the first left empty the second supplies.
     dump1 = attrs1.model_dump(exclude_defaults=True)
-    dump2 = attrs2.model_dump(exclude_defaults=True)
     fill = {
         key: value
-        for key, value in dump2.items()
-        if key not in _ID_FIELDS
+        for key, value in attrs2.model_dump(exclude_defaults=True).items()
+        if key not in _ID_FIELDS  # fold_ids returns {} when ids are disabled
         and key not in ("history", "data_units")
         and not key.startswith("_")
         and not _is_missing(value)
         and _is_missing(dump1.get(key))
     }
-    # The ids fold as they do for any combination; the data units of the
-    # output are decided by the operation from each operand's own, so the
-    # first's must stand whether or not it has any.
-    merged = attrs1.update(**fill) if fill else attrs1
-    return merged.update(**fold_ids([attrs1, attrs2]))
+    return merged.update(**fill) if fill else merged
 
 
 def merge_compatible_coords_attrs(
@@ -1910,13 +1892,22 @@ def concatenate_planned(
         )
         raise CoordMergeError(msg)
     attrs = combine_patch_attrs([x.attrs for x in patches], conflict=conflict)
-    if (kept := attrs.data_units) is not None:
-        # keep_first keeps one spelling of the data units; the data must
-        # then say the same thing, so members stated otherwise convert
+    # Data units scale the data rather than labelling it, so they are
+    # reconciled rather than policed by `conflict` (the plan says the same,
+    # see `_carried_columns`): the output speaks the first units any member
+    # states and the rest convert to them. Letting a unitless first member
+    # stand would splice metre- and kilometre-scaled samples into one array.
+    units = (x.attrs.data_units for x in patches)
+    stated = [x for x in units if not _is_missing(x)]
+    if stated:
+        kept = stated[0]
         patches = [
-            x if x.attrs.data_units in (None, kept) else x.convert_units(kept)
+            x
+            if _is_missing(x.attrs.data_units) or x.attrs.data_units == kept
+            else x.convert_units(kept)
             for x in patches
         ]
+        attrs = attrs.update(data_units=kept)
     task = Concatenate(
         arguments=((dim, count),), check_behavior=None, conflict=conflict
     )

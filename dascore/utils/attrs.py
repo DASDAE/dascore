@@ -141,10 +141,10 @@ def _is_missing(value) -> bool:
     """
     True for an attr nobody recorded: None, NaN/NaT, or an empty string.
 
-    The one spelling of "missing": every rule which compares attrs
-    normalizes to it first, so a patch which never stated an attr, one
-    which stated null, and one which stated "" are the same patch as far
-    as kind, the merge conflict policy, and units are concerned.
+    A patch which never stated an attr, one which stated null, and one
+    which stated "" compare equal everywhere. Kind and the merge conflict
+    policy reach that through this function; `known_only` spells the same
+    predicate for frames and `get_quantity` for units.
     """
     return value is None or (np.ndim(value) == 0 and (pd.isnull(value) or value == ""))
 

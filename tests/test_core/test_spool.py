@@ -1198,12 +1198,6 @@ class TestConcatenatePartitions:
         for pair_ in ([metres, km], [metres, bare]):
             with pytest.raises(CoordMergeError, match="data_units"):
                 dc.spool(pair_).concatenate(time=None)
-        dropped = dc.spool([metres, km]).concatenate(time=None, conflict="drop")
-        assert len(dropped) == 1
-        assert dropped[0].attrs.data_units is None
-        assert (
-            dc.get_quantity(dropped.get_contents().get("data_units", [None])[0]) is None
-        )
         # equal units are one output, and the row says what the patch does
         out = dc.spool([metres, other.set_units("m")]).concatenate(time=None)
         assert len(out) == 1
@@ -1211,6 +1205,24 @@ class TestConcatenatePartitions:
         assert dc.get_quantity(out.get_contents()["data_units"].iloc[0]) == (
             dc.get_quantity("m")
         )
+
+    def test_members_convert_to_the_units_the_output_declares(self, pair):
+        """A loosened policy must never splice differently scaled samples."""
+        first, other = pair
+        bare, km = first.set_units(None), other.set_units("km")
+        metres = other.set_units("m")
+        n = first.shape[first.get_axis("time")]
+        for conflict in ("keep_first", "drop"):
+            out = dc.spool([bare, km]).concatenate(time=None, conflict=conflict)
+            assert len(out) == 1
+            patch = out[0]
+            # the output declares the units its samples are in ...
+            assert dc.get_quantity(patch.attrs.data_units) == dc.get_quantity("km")
+            # ... and the unitless member's samples are left as they were
+            assert np.allclose(patch.data[:, :n], bare.data)
+        # a member stated otherwise is rescaled, not spliced in raw
+        out = dc.spool([km, metres]).concatenate(time=None, conflict="keep_first")
+        assert np.allclose(out[0].data[:, n:], metres.data / 1000)
 
     def test_different_dims_partition(self, pair):
         """Other dimensions are another partition, not an error."""
@@ -1275,6 +1287,19 @@ class TestConcatenatePartitions:
         loaded = dc.spool(list(selected)).concatenate(time=None)
         assert len(loaded) == 1
         assert loaded[0].shape[1] == 2 * base.shape[1]
+
+    def test_assembly_does_not_read_the_kind_config(self, pair):
+        """A plan decides kind; assembly must not re-read the config later."""
+        first, other = pair
+        other = other.update_attrs(tag="other")
+        with dc.config_context(patch_kind_attrs=("acquisition_key",)):
+            # tag is not kind here, so these are one output
+            out = dc.spool([first, other]).concatenate(time=None, conflict="keep_first")
+            assert len(out) == 1
+        # the config that built the plan is gone; the patch is still the
+        # one the plan described, and its row still agrees
+        assert out[0].shape[1] == 2 * first.shape[1]
+        assert out[0].attrs.tag == out.get_contents()["tag"].iloc[0]
 
     def test_positional_check_behavior_still_works(self, pair):
         """The deprecated argument keeps its old positional slot."""
@@ -1829,11 +1854,11 @@ class TestConcatenatePartitions:
     def test_replanning_after_a_drop_keeps_the_drop(self, pair):
         """Concatenating again along the same dimension does not resurrect metadata."""
         first, other = pair
-        metres, km = first.set_units("m"), other.set_units("km")
-        dropped = dc.spool([metres, km]).concatenate(time=None, conflict="drop")
+        a, b = first.update_attrs(foo="a"), other.update_attrs(foo="b")
+        dropped = dc.spool([a, b]).concatenate(time=None, conflict="drop")
         again = dropped.concatenate(time=None)
         assert len(again) == 1
-        assert again[0].attrs.data_units is None
+        assert again[0].attrs.get("foo") is None
 
     def test_conflict_policy_is_part_of_the_identity(self, pair):
         """Drop and keep_first give different patches, so different ids."""

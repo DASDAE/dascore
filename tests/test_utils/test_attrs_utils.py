@@ -9,7 +9,7 @@ import pytest
 
 from dascore import PatchAttrs
 from dascore.exceptions import ParameterError
-from dascore.utils.attrs import _is_missing, combine_patch_attrs
+from dascore.utils.attrs import combine_patch_attrs
 
 
 class TestMergeAttrs:
@@ -67,7 +67,7 @@ class TestMergeAttrs:
         pa2 = PatchAttrs(data_type="", foo="b")
         out = combine_patch_attrs([pa1, pa2], conflict="drop")
         # data_type is a declared field, so dropping it leaves its default.
-        assert _is_missing(out.get("data_type"))
+        assert out.get("data_type") == ""
         assert out.get("foo") is None
 
     def test_keep_first_means_the_first_member(self):

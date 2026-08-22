@@ -201,47 +201,47 @@ class TestConflict:
     def conflicted_patches(self):
         """Two contiguous patches with conflicting known values of an attr."""
         t0 = np.datetime64("2020-01-01", "ns")
-        p1 = dc.get_example_patch(time_min=t0).update_attrs(data_units="ft/s")
+        p1 = dc.get_example_patch(time_min=t0).update_attrs(data_type="velocity")
         time = p1.get_coord("time")
         p2 = dc.get_example_patch(time_min=time.max() + time.step)
-        p2 = p2.update_attrs(data_units="m/s")
+        p2 = p2.update_attrs(data_type="strain_rate")
         return [p1, p2]
 
     def test_raise(self, conflicted_patches):
         """Conflicting known values raise by default."""
-        with pytest.raises(CoordMergeError, match="data_units"):
+        with pytest.raises(CoordMergeError, match="data_type"):
             build_chunk_plan(_flat(conflicted_patches), time=None)
 
     def test_missing_value_is_a_conflict(self, conflicted_patches):
         """A member lacking the attr conflicts with one which has it."""
         p1, p2 = conflicted_patches
-        df = _flat([p1.update_attrs(data_units=None), p2])
-        with pytest.raises(CoordMergeError, match="data_units"):
+        df = _flat([p1.update_attrs(data_type=""), p2])
+        with pytest.raises(CoordMergeError, match="data_type"):
             build_chunk_plan(df, time=None)
         plan = build_chunk_plan(df, time=None, conflict="drop")
         assert len(plan.outputs) == 1
-        assert "data_units" not in plan.outputs.columns
+        assert "data_type" not in plan.outputs.columns
 
     def test_keep_first(self, conflicted_patches):
         """keep_first carries the first member's value."""
         df = _flat(conflicted_patches)
         plan = build_chunk_plan(df, time=None, conflict="keep_first")
         first_id = df.sort_values("time_min")["_patch_id"].iloc[0]
-        expected = df.loc[df["_patch_id"] == first_id, "data_units"].iloc[0]
-        assert plan.outputs["data_units"].iloc[0] == expected
+        expected = df.loc[df["_patch_id"] == first_id, "data_type"].iloc[0]
+        assert plan.outputs["data_type"].iloc[0] == expected
 
     def test_keep_first_means_the_first_member(self, conflicted_patches):
         """keep_first takes the first member's value even where it states none."""
         p1, p2 = conflicted_patches
-        df = _flat([p1.update_attrs(data_units=None), p2])
+        df = _flat([p1.update_attrs(data_type=""), p2])
         plan = build_chunk_plan(df, time=None, conflict="keep_first")
         assert len(plan.outputs) == 1
-        assert pd.isnull(plan.outputs["data_units"].iloc[0])
+        assert pd.isnull(plan.outputs["data_type"].iloc[0])
 
     def test_drop(self, conflicted_patches):
         """Drop omits the conflicting attr from outputs."""
         plan = build_chunk_plan(_flat(conflicted_patches), time=None, conflict="drop")
-        assert "data_units" not in plan.outputs.columns
+        assert "data_type" not in plan.outputs.columns
 
 
 class TestGroupParameter:

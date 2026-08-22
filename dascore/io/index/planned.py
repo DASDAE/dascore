@@ -615,9 +615,10 @@ class PlanResolver(PatchResolver):
         an operation which does know says so -- `Spool.expand_by`
         recording which value each patch was split on -- and it keeps
         the patch which comes out agreeing with the row `get_contents`
-        shows for it. Nothing else needs filling: the members of an
-        output agree on every attr the row carries, so the assembled
-        patch already states what the row does.
+        shows for it. Nothing else needs filling: under every `conflict`
+        policy the row and the assembled patch reach the same values --
+        the members agree, or both take the first member's, or both
+        carry nothing.
         """
         if not self.stamped:
             return patch

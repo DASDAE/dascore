@@ -523,7 +523,7 @@ class TestChunkMerge:
         """Whichever duplicate survives overlap removal, patch and row agree."""
         p1 = dc.get_example_patch().update_attrs(foo="a", data_type="velocity")
         p2 = dc.get_example_patch()  # same span, knows neither
-        with pytest.raises(CoordMergeError, match=r"foo|data_type"):
+        with pytest.raises(CoordMergeError, match=r"\bfoo\b|\bdata_type\b"):
             dc.spool([p1, p2]).chunk(time=None)
         # keep_first takes the first member's values, stated or not, and
         # the assembled patch says exactly what its row does.
@@ -537,31 +537,50 @@ class TestChunkMerge:
         assert pd.isnull(out.get_contents().iloc[0].get("foo"))
         assert out[0].attrs.get("foo") is None
 
-    def test_attrs_named_like_coordinates_survive_a_chunk(self):
-        """Attrs which look like coordinate metadata are still attrs."""
-        extra = {
-            "latitude": "north",  # a coordinate some other patch has
+    def test_attrs_named_like_coordinates_are_policed_as_attrs(self):
+        """Attrs which look like coordinate metadata are policed by `conflict`.
+
+        A column a coordinate owns is refused whatever `conflict` says,
+        so keeping the first value is what proves these are read as
+        ordinary attrs rather than as the envelope of some coordinate.
+        """
+        # values differ, so only the conflict policy can decide them
+        first = {
+            "latitude": "north",  # a coordinate another patch has
             "foo_min": "a",  # an envelope pair with no foo coordinate
             "foo_max": "b",
             "time_zone": "UTC",  # a name prefixed by a real dimension
             "gauge": 10 * dc.get_quantity("m"),  # a quantity
             "shots": 7,  # a plain number
         }
-        p1 = dc.get_example_patch().update_attrs(**extra)
+        second = {
+            "latitude": "south",
+            "foo_min": "c",
+            "foo_max": "d",
+            "time_zone": "MST",
+            "gauge": 20 * dc.get_quantity("m"),
+            "shots": 9,
+        }
+        p1 = dc.get_example_patch().update_attrs(**first)
         time = p1.get_coord("time")
         p2 = dc.get_example_patch(time_min=time.max() + time.step)
-        p2 = p2.update_attrs(**extra)
+        p2 = p2.update_attrs(**second)
         n = p1.shape[p1.get_axis("distance")]
         # a patch which holds latitude as a coordinate rather than an attr
         elsewhere = dc.get_example_patch(
             time_min=time.max() + 10 * time.step, tag="other"
         ).update_coords(latitude=("distance", np.arange(n, dtype=float)))
-        out = dc.spool([p2, p1, elsewhere]).chunk(time=None)
+        spool = dc.spool([p1, p2, elsewhere])
+        # they are attrs, so they conflict rather than being coordinate metadata
+        with pytest.raises(CoordMergeError, match=r"latitude|foo_min|time_zone"):
+            spool.chunk(time=None)
+        out = spool.chunk(time=None, conflict="keep_first")
         merged = out.select(tag="random")[0]
         row = out.get_contents().set_index("tag").loc["random"]
-        for name, value in extra.items():
+        for name, value in first.items():
             assert merged.attrs.get(name) == value
-        assert row["time_zone"] == "UTC"
+            assert name in row or name == "gauge"
+        assert row["time_zone"] == "UTC" and row["latitude"] == "north"
 
     def test_dropped_coordinate_envelope_is_not_an_attr(self):
         """A coordinate only one member has leaves no stray attrs behind."""
