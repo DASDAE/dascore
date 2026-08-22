@@ -20,6 +20,7 @@ from dascore.io.index.planned import (
     _apply_predictions,
     _aux_coord_info,
     _coord_record_from_row,
+    _describe,
     _extrema,
     _ns,
     _null_like,
@@ -770,3 +771,60 @@ class TestMomentsAndDurations:
             ]
         ).concatenate(time=None)
         assert pd.isnull(spool.get_contents().iloc[0]["stamp_min"])
+
+
+class TestAgreementNeedsIdentity:
+    """Two coordinates nobody can identify are unknown, not equal."""
+
+    def _summary(self, values, fingerprint):
+        """A distance-riding summary stating (or not) an identity."""
+        summary = get_coord(values=values).to_summary()
+        return summary.model_copy(
+            update=dict(dims=("distance",), fingerprint=fingerprint)
+        )
+
+    def test_unidentified_members_do_not_agree(self):
+        """A merge told to drop conflicts drops what it cannot compare."""
+        left = self._summary(np.arange(4.0), None)
+        right = self._summary(np.arange(4.0) + 10, None)
+        described = _describe(
+            "rough",
+            [left, right],
+            "time",
+            frozenset(),
+            None,
+            mode="chunk",
+            drop_conflicting=True,
+        )
+        assert described is None
+
+    def test_a_lone_member_keeps_what_it_says(self):
+        """With nothing to agree with, an unidentified member still counts."""
+        only = self._summary(np.arange(4.0), None)
+        described = _describe(
+            "rough",
+            [only],
+            "time",
+            frozenset(),
+            None,
+            mode="chunk",
+            drop_conflicting=True,
+        )
+        assert described is not None
+        assert described.min == only.min
+
+    def test_dims_must_match_to_survive_a_merge(self, assert_contents_match):
+        """A coordinate hung on different dimensions is dropped, not merged."""
+        first = dc.get_example_patch()
+        time = first.get_coord("time")
+        second = dc.get_example_patch(time_min=time.max() + time.step)
+        values = np.arange(float(first.shape[first.get_axis("distance")]))
+        # matching values, so no envelope conflict raises first
+        left = first.update_coords(baz=("distance", values))
+        right = second.update_coords(
+            baz=("time", np.resize(values, first.shape[first.get_axis("time")]))
+        )
+        merged = dc.spool([left, right]).chunk(time=None)
+        assert "baz" not in merged[0].coords.coord_map
+        assert "baz_min" not in merged.get_contents().columns
+        assert_contents_match(merged)

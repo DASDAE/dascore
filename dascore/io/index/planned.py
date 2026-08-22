@@ -547,6 +547,12 @@ def _describe(
         return None
     rides = plan_dim == name or plan_dim in first.dims
     trimmed = bool(set(first.dims) & trimmed_dims)
+    if mode == "chunk" and len({tuple(x.dims) for x in summaries}) > 1:
+        # merge_coord_managers intersects (name, dims), so a coordinate
+        # the members hang on different dimensions is dropped rather than
+        # reconciled -- and where their values agree, nothing else
+        # notices in time to say so
+        return None
     if mode == "chunk" and not every_member:
         # A merge keeps only what every member states:
         # merge_coord_managers drops the rest (see
@@ -555,7 +561,14 @@ def _describe(
         # much as for a coordinate standing outside the merged dimension.
         return None
     if not rides:
-        agreed = len({x.fingerprint for x in summaries}) == 1
+        fingerprints = {x.fingerprint for x in summaries}
+        # An unidentified coordinate is not thereby the same coordinate
+        # in every member: a plan which could not vouch for its values
+        # stored no fingerprint, and two of those are unknown, not equal.
+        # A lone member has nothing to agree with and keeps what it says.
+        agreed = len(summaries) == 1 or (
+            None not in fingerprints and len(fingerprints) == 1
+        )
         if mode == "chunk" and not (agreed or not drop_conflicting):
             # the members disagree, and a merge told to drop conflicts
             # will drop this one rather than choose between them
