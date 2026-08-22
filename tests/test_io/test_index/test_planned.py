@@ -828,3 +828,36 @@ class TestAgreementNeedsIdentity:
         assert "baz" not in merged[0].coords.coord_map
         assert "baz_min" not in merged.get_contents().columns
         assert_contents_match(merged)
+
+    def test_one_fingerprint_two_spellings_do_not_agree(self, assert_contents_match):
+        """A fingerprint is normalized; what a merge compares is not."""
+        first = dc.get_example_patch()
+        time = first.get_coord("time")
+        second = dc.get_example_patch(time_min=time.max() + time.step)
+        values = np.arange(float(first.shape[first.get_axis("distance")]))
+        metres = get_coord(values=values, units="m")
+        centimetres = get_coord(values=values * 100.0, units="cm")
+        assert metres.to_summary().fingerprint == centimetres.to_summary().fingerprint
+        left = first.update_coords(depth=("distance", metres))
+        right = second.update_coords(depth=("distance", centimetres))
+        merged = dc.spool([left, right]).chunk(time=None, conflict="drop")
+        assert "depth" not in merged[0].coords.coord_map
+        assert "depth_min" not in merged.get_contents().columns
+        assert_contents_match(merged)
+
+    def test_one_spelling_still_agrees(self, assert_contents_match):
+        """Members stating one coordinate the same way keep it."""
+        first = dc.get_example_patch()
+        time = first.get_coord("time")
+        second = dc.get_example_patch(time_min=time.max() + time.step)
+        values = np.arange(float(first.shape[first.get_axis("distance")]))
+        coord = get_coord(values=values, units="m")
+        merged = dc.spool(
+            [
+                first.update_coords(depth=("distance", coord)),
+                second.update_coords(depth=("distance", coord)),
+            ]
+        ).chunk(time=None)
+        assert "depth" in merged[0].coords.coord_map
+        assert merged.get_contents().iloc[0]["depth_min"] == 0.0
+        assert_contents_match(merged)

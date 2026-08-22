@@ -561,13 +561,19 @@ def _describe(
         # much as for a coordinate standing outside the merged dimension.
         return None
     if not rides:
-        fingerprints = {x.fingerprint for x in summaries}
-        # An unidentified coordinate is not thereby the same coordinate
-        # in every member: a plan which could not vouch for its values
-        # stored no fingerprint, and two of those are unknown, not equal.
-        # A lone member has nothing to agree with and keeps what it says.
+        # What assembly compares is the coordinate as each member holds
+        # it, so agreement takes the fingerprint *and* the units it is
+        # stated in: a fingerprint is normalized, and metres beside
+        # centimetres share one while `merge_coord_managers` finds them
+        # unequal and drops them. An unidentified coordinate is not
+        # thereby the same one in every member either -- a plan which
+        # could not vouch for its values stored no fingerprint, and two
+        # of those are unknown, not equal. A lone member has nothing to
+        # agree with and keeps what it says.
+        identities = {(x.fingerprint, get_quantity(x.units)) for x in summaries}
         agreed = len(summaries) == 1 or (
-            None not in fingerprints and len(fingerprints) == 1
+            not any(fingerprint is None for fingerprint, _ in identities)
+            and len(identities) == 1
         )
         if mode == "chunk" and not (agreed or not drop_conflicting):
             # the members disagree, and a merge told to drop conflicts
