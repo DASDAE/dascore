@@ -318,6 +318,17 @@ def get_calls() -> dict:
         "full_complex": lambda: dft_patch.full(1 + 1j),
         "full_bool": lambda: patch.full(True),
         "full_on_int": lambda: int_patch.full(3),
+        # A value which is not a plain python scalar: numpy takes these
+        # and keeps their dtype, and the standard refuses them.
+        "full_np_scalar": lambda: patch.full(np.float32(1)),
+        "full_np_int8": lambda: patch.full(np.int8(3)),
+        # A value with a shape is spent on the nulls one element each,
+        # which is not what broadcasting it would do.
+        "fillna_array_value": lambda: null_patch.fillna(
+            np.arange(int((~np.isfinite(np.asarray(null_patch.data))).sum())).astype(
+                "float64"
+            )
+        ),
         "demedian_distance": lambda: patch.demedian("distance"),
         "demedian_null": lambda: null_patch.demedian("time"),
         "demedian_int": lambda: int_patch.demedian("time"),

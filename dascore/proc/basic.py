@@ -22,7 +22,7 @@ from dascore.core.coords import get_coord
 from dascore.exceptions import ParameterError
 from dascore.models import ArrayLike
 from dascore.utils.array import _apply_binary_ufunc
-from dascore.utils.array_api import array_namespace, nan_reduce
+from dascore.utils.array_api import array_namespace, asarray_like, nan_reduce
 from dascore.utils.misc import _get_nullish
 from dascore.utils.patch import (
     align_patch_coords,
@@ -697,6 +697,14 @@ class FillNa(PatchProcessor):
         replace = xp.asarray(replace)
         if not xp.any(replace):
             return data
+        if np.ndim(self.value):
+            # A value with a shape is spent on the nulls in order, one
+            # element each. `where` would broadcast it across the whole
+            # array instead, which is a different answer -- and not one
+            # the standard can express, so numpy keeps this case.
+            filled = np.array(data)
+            filled[np.asarray(replace)] = self.value
+            return asarray_like(filled, data)
         return xp.where(replace, xp.asarray(self.value, dtype=data.dtype), data)
 
 
@@ -1029,7 +1037,15 @@ class Full(PatchProcessor):
         The only kernel here which does not read the data it is given:
         what comes out depends on the shape and the value alone.
         """
-        return array_namespace(data).full(meta.shape, self.fill_value)
+        # Only a plain python scalar goes to the backend: the standard
+        # says which of those a namespace must accept, and says nothing
+        # about a numpy scalar or an integer too big for any dtype, both
+        # of which numpy took and some backends refuse. Numpy answers
+        # for the rest, exactly as it did before there was a kernel here.
+        if type(self.fill_value) in (int, float, bool, complex):
+            with suppress(Exception):
+                return array_namespace(data).full(meta.shape, self.fill_value)
+        return np.full(meta.shape, self.fill_value)
 
 
 register_implementation("full", Full)
