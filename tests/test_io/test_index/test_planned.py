@@ -13,7 +13,7 @@ import pytest
 
 import dascore as dc
 from dascore.core.coords import get_coord
-from dascore.exceptions import MissingPatchError, ParameterError
+from dascore.exceptions import CoordMergeError, MissingPatchError, ParameterError
 from dascore.io.index.catalog import PatchCatalog
 from dascore.io.index.planned import (
     PlanResolver,
@@ -24,7 +24,6 @@ from dascore.io.index.planned import (
     _extrema,
     _ns,
     _null_like,
-    _plan_attr_units,
     _stated_units,
     collapse_working_df,
     derived_catalog,
@@ -412,14 +411,6 @@ class TestStatedUnits:
         assert _stated_units("ft") == "ft"
 
 
-class TestNumericAttrUnits:
-    """The attr units a plan resolves for stamping."""
-
-    def test_no_parent_knows_nothing(self):
-        """Without a parent index there are no attr units to resolve."""
-        assert _plan_attr_units(None, pd.DataFrame({"foo": [1.0]})) == {}
-
-
 class TestPredictedCoords:
     """What a plan claims about an output, decided by the real join."""
 
@@ -683,7 +674,11 @@ class TestWhatAMergeWillNotCarry:
         first, second = pair
         samples = first.shape[first.get_axis("time")]
         held = first.update_coords(bar=("time", np.arange(float(samples))))
-        merged = dc.spool([held, second]).chunk(time=None)
+        spool = dc.spool([held, second])
+        # a value beside no value is a conflict, so a plain merge refuses
+        with pytest.raises(CoordMergeError):
+            spool.chunk(time=None)
+        merged = spool.chunk(time=None, conflict="drop")
         assert "bar" not in merged[0].coords.coord_map
         assert "bar_min" not in merged.get_contents().columns
         assert_contents_match(merged)
@@ -824,7 +819,7 @@ class TestAgreementNeedsIdentity:
         right = second.update_coords(
             baz=("time", np.resize(values, first.shape[first.get_axis("time")]))
         )
-        merged = dc.spool([left, right]).chunk(time=None)
+        merged = dc.spool([left, right]).chunk(time=None, conflict="drop")
         assert "baz" not in merged[0].coords.coord_map
         assert "baz_min" not in merged.get_contents().columns
         assert_contents_match(merged)

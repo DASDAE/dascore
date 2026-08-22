@@ -17,7 +17,7 @@ syncer, and views never write.
 from __future__ import annotations
 
 import secrets
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from contextlib import suppress
 
 import numpy as np
@@ -44,7 +44,6 @@ from dascore.io.index.ingest import (
     typed_value,
 )
 from dascore.units import get_quantity, get_quantity_str
-from dascore.utils.attrs import _is_missing
 from dascore.utils.chunk_plan import (
     _SOURCE_COLUMNS,
     _ensure_patch_id,
