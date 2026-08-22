@@ -915,6 +915,18 @@ class TestSqueezeCoords:
         out = patch.squeeze_coords()
         assert out.attrs.tag == "mytag"
 
+    def test_attrs_class_kept(self, patch_with_flat_coords):
+        """A format's own attrs class survives the squeeze."""
+
+        class _SubAttrs(dc.PatchAttrs):
+            """Attrs as a format might extend them."""
+
+            extra_field: str = "x"
+
+        attrs = _SubAttrs(**patch_with_flat_coords.attrs.model_dump(exclude_unset=True))
+        patch = patch_with_flat_coords.new(attrs=attrs)
+        assert isinstance(patch.squeeze_coords().attrs, _SubAttrs)
+
     def test_dim_coord_intact(self, patch_with_flat_coords):
         """The dim a squeezed coord hung off is left as it was."""
         out = patch_with_flat_coords.squeeze_coords()

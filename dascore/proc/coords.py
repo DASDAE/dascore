@@ -958,12 +958,14 @@ def _get_lone_value(coord: BaseCoord):
     if values.dtype.kind not in _STATEABLE_KINDS:
         return _NO_VALUE
     value = values[0]
-    if values.size > 1 and not bool(np.all(values == value)):
-        return _NO_VALUE
     # A nullish value is what a coord says when it doesn't know, which a
     # partial coord says for every sample. Not something to state as an
-    # attr, so such a coord keeps its shape and stays a coord.
+    # attr, so such a coord keeps its shape and stays a coord. Asked
+    # first: a partial coord's values are a broadcast view, and the
+    # comparison below would make a real array the size of the coord.
     if pd.isnull(value):
+        return _NO_VALUE
+    if values.size > 1 and not bool(np.all(values == value)):
         return _NO_VALUE
     # Times stay numpy scalars, matching how the other attrs store them;
     # everything else stores better as a python scalar.
