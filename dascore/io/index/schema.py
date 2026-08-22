@@ -30,8 +30,13 @@ from collections.abc import Mapping
 from types import MappingProxyType
 from typing import NamedTuple, get_args, get_type_hints
 
-# Version of the index schema, independent of dascore's version.
-INDEX_VERSION = 11
+# Version of the index schema, independent of dascore's version. Bump it
+# when an index written by an older dascore would be read wrongly rather
+# than merely incompletely -- including when what a *stored value* means
+# changes, not only when a column does. 12 canonicalizes the scalars a
+# coordinate's fingerprint is taken over, so identities written by 11 no
+# longer match the ones computed for the same coordinate.
+INDEX_VERSION = 12
 # Identity string so any tool can sanity-check what it opened.
 WHAT_IS_THIS = "dascore_spool_index"
 

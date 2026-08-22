@@ -624,11 +624,23 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
         _, units = get_factor_and_unit(self.units, simplify=True)
         return self._convert_units(units)
 
-    @staticmethod
-    def _hash_scalar(value) -> tuple[str, str | None]:
-        """Return a dtype-aware scalar hash token."""
+    def _hash_scalar(self, value, name: str = "start") -> tuple[str, str | None]:
+        """
+        Return a dtype-aware scalar hash token.
+
+        The value is first conformed to the coordinate's own dtype, since
+        a fingerprint identifies *values*, not how they were spelled: a
+        range whose start was given as `0` holds the same coordinate as
+        one given `0.0`, and a step of four milliseconds is the step of
+        four million nanoseconds. Without this they would be stored under
+        different identities and never deduplicate.
+        """
         if value is None:
             return ("none", None)
+        dtype = np.dtype(self.dtype) if self.dtype else None
+        if dtype is not None:
+            with suppress(TypeError, ValueError, OverflowError):
+                value = ensure_consistent_dtype(value, name, dtype)
         return ("scalar", hash_array(np.asarray([value])))
 
     @staticmethod
@@ -1419,9 +1431,9 @@ class CoordPartial(BaseCoord):
         return (
             self.shape,
             str(np.dtype(self.dtype)),
-            self._hash_scalar(self.start),
-            self._hash_scalar(self.stop),
-            self._hash_scalar(self.step),
+            self._hash_scalar(self.start, "start"),
+            self._hash_scalar(self.stop, "stop"),
+            self._hash_scalar(self.step, "step"),
         )
 
 
@@ -1562,9 +1574,9 @@ class CoordRange(BaseCoord):
         """Return the scalar payload needed to fingerprint range coords."""
         return (
             self.shape,
-            self._hash_scalar(self.start),
-            self._hash_scalar(self.stop),
-            self._hash_scalar(self.step),
+            self._hash_scalar(self.start, "start"),
+            self._hash_scalar(self.stop, "stop"),
+            self._hash_scalar(self.step, "step"),
         )
 
     def __getitem__(self, item):

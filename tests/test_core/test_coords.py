@@ -551,7 +551,57 @@ class TestCoordFingerprint:
 
     def test_hash_scalar_none(self):
         """The helper should preserve an explicit None sentinel."""
-        assert BaseCoord._hash_scalar(None) == ("none", None)
+        coord = get_coord(start=0.0, stop=10.0, step=1.0)
+        assert coord._hash_scalar(None) == ("none", None)
+
+    def test_spelling_of_a_scalar_is_not_its_identity(self):
+        """Equal coordinates fingerprint alike however they were written."""
+        as_ints = get_coord(start=0, stop=10, step=1.0)
+        as_floats = get_coord(start=0.0, stop=10.0, step=1.0)
+        assert as_ints == as_floats
+        assert as_ints.fingerprint() == as_floats.fingerprint()
+
+    def test_time_precision_is_not_its_identity(self):
+        """A step of four milliseconds is four million nanoseconds."""
+        t0 = np.datetime64("2020-01-01", "ns")
+        coarse = get_coord(
+            start=t0,
+            stop=t0 + np.timedelta64(400, "ms"),
+            step=np.timedelta64(4, "ms"),
+        )
+        fine = get_coord(
+            start=t0,
+            stop=t0 + np.timedelta64(400_000_000, "ns"),
+            step=np.timedelta64(4_000_000, "ns"),
+        )
+        assert coarse == fine
+        assert coarse.fingerprint() == fine.fingerprint()
+
+    def test_a_summary_round_trip_keeps_the_identity(self):
+        """Describing a coordinate and rebuilding it is the same coordinate."""
+        t0 = np.datetime64("2020-01-01", "ns")
+        coord = get_coord(
+            start=t0,
+            stop=t0 + np.timedelta64(400, "ms"),
+            step=np.timedelta64(4, "ms"),
+        )
+        assert coord.to_summary().to_coord().fingerprint() == coord.fingerprint()
+
+    def test_different_values_still_differ(self):
+        """Canonicalizing the spelling does not blur real differences."""
+        first = get_coord(start=0.0, stop=10.0, step=1.0)
+        assert (
+            first.fingerprint()
+            != get_coord(start=0.0, stop=20.0, step=1.0).fingerprint()
+        )
+        assert (
+            first.fingerprint()
+            != get_coord(start=1.0, stop=11.0, step=1.0).fingerprint()
+        )
+        assert (
+            first.fingerprint()
+            != get_coord(start=0.0, stop=10.0, step=0.5).fingerprint()
+        )
 
     def test_range_equivalent_units_same_fingerprint(self):
         """Equivalent range coords should fingerprint the same after normalization."""
