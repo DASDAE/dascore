@@ -205,6 +205,12 @@ def _identity(patch):
     return patch
 
 
+def _make_complex(patch):
+    """Return the patch with complex data, so a conjugate means something."""
+    data = np.asarray(patch.data)
+    return patch.new(data=(data + 1j * data[::-1]).astype("complex128"))
+
+
 class _Case(NamedTuple):
     """How to exercise one patch function on a non-numpy backend."""
 
@@ -218,6 +224,19 @@ class _Case(NamedTuple):
 # setup runs on the numpy patch, before it is moved to another backend.
 ARRAY_API_CASES = {
     "dascore.proc.coords.transpose": _Case(call=lambda patch: patch.transpose()),
+    "dascore.proc.coords.rename_coords": _Case(
+        call=lambda patch: patch.rename_coords(time="t")
+    ),
+    "dascore.proc.basic.abs": _Case(call=lambda patch: patch.abs()),
+    # conj and real hand a real patch straight back, which says nothing
+    # about the backend, so they are given something to actually do.
+    "dascore.proc.basic.conj": _Case(
+        call=lambda patch: patch.conj(), setup=_make_complex
+    ),
+    "dascore.proc.basic.imag": _Case(call=lambda patch: patch.imag()),
+    "dascore.proc.basic.real": _Case(
+        call=lambda patch: patch.real(), setup=_make_complex
+    ),
     "dascore.proc.aggregate.all": _Case(call=lambda patch: patch.all("time")),
     "dascore.proc.aggregate.any": _Case(call=lambda patch: patch.any("time")),
     "dascore.proc.aggregate.max": _Case(call=lambda patch: patch.max("time")),

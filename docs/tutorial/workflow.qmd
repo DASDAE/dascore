@@ -144,8 +144,28 @@ dc.viz.waterfall.op(show=False).name
 The document also records which module the function came from. It is informational — what an error message uses to tell you what to import — and deliberately not part of the fingerprint, so moving a function between modules does not make it a different operation:
 
 ```{python}
-normalize.to_dict()["params"]["module"]
+dc.proc.detrend.op("time").to_dict()["params"]["module"]
 ```
+
+## Operations written out by hand
+
+A few operations are not `PatchOp` at all. Where an operation wants a seam — a kernel another array library can supply, a metadata step something can read without touching the data — it is written as a [PatchProcessor](`dascore.workflow.processor.PatchProcessor`) instead, and the patch function delegates to it.
+
+```{python}
+type(normalize)
+```
+
+It is the same operation either way: the same name, the same arguments, and the same fingerprint, so an id recorded before the class existed still matches. What the class adds is that the two halves can be asked for separately — `derive_meta` says what happens to the coordinates and never sees an array, `kernel` does the arithmetic and never sees a coordinate.
+
+```{python}
+from dascore.workflow import PatchMeta
+
+meta = PatchMeta.from_patch(patch)
+# What normalizing does to the metadata: nothing, which is why it fuses.
+normalize.derive_meta(meta) is meta
+```
+
+`register_kernel` is how a package which brings its own arrays says how one of them runs; nothing else about the operation changes.
 
 ## Saving and loading
 

@@ -22,6 +22,7 @@ import dascore as dc
 import dascore.workflow.processor as processor_module
 from dascore.exceptions import ParameterError
 from dascore.models.registry import registered_models
+from dascore.proc.basic import Normalize
 from dascore.units import get_quantity
 from dascore.workflow import (
     PatchOp,
@@ -327,17 +328,33 @@ class TestCanonicalByHand:
 
     def test_defaults_are_filled_in(self):
         """Or the two would be two operations doing one thing."""
-        by_hand = PatchOp(name="normalize", kwargs={"dim": "time"})
-        by_call = dc.proc.normalize.op("time")
+        by_hand = PatchOp(name="detrend", kwargs={"dim": "time"})
+        by_call = dc.proc.detrend.op("time")
         assert by_hand.kwargs == by_call.kwargs
         assert by_hand == by_call
         assert by_hand.fingerprint == by_call.fingerprint
 
+    def test_a_name_with_an_implementation(self):
+        """
+        A hand-built `PatchOp` for an implemented name is the same
+        operation, and says so where it counts.
+
+        It is not the same *object*: `.op(...)` gives the class which
+        implements the name, and equality asks for one type. The
+        fingerprint is what provenance is written from, and that agrees,
+        so an id recorded either way still matches.
+        """
+        by_hand = PatchOp(name="normalize", kwargs={"dim": "time", "norm": "l2"})
+        by_call = dc.proc.normalize.op("time")
+        assert by_hand.fingerprint == by_call.fingerprint
+        assert by_hand.kwargs == by_call.kwargs
+        assert type(by_hand) is not type(by_call)
+
     def test_a_star_args_group_by_hand(self):
         """Including one whose arguments cannot be passed by name."""
         assert PatchOp(
-            name="transpose", kwargs={"dims": ("time", "distance")}
-        ) == dc.proc.transpose.op("time", "distance")
+            name="flip", kwargs={"dims": ("time",), "flip_coords": True}
+        ) == dc.proc.flip.op("time")
 
 
 class TestAPositionalBeforeAStarArgs:
@@ -361,9 +378,14 @@ class TestVersions:
 
     def test_an_operation_carries_the_functions_version(self):
         """Not this class's, which is the same for every operation."""
-        op = dc.proc.normalize.op("time")
-        assert op.version == dc.proc.normalize.__version__
+        op = dc.proc.detrend.op("time")
+        assert op.version == dc.proc.detrend.__version__
         assert op.to_dict()["params"]["version"] == op.version
+        # A processor keeps its version out of the parameters, so that
+        # `kwargs` stays the call; the document still records it.
+        implemented = dc.proc.normalize.op("time")
+        assert implemented.version == dc.proc.normalize.__version__
+        assert implemented.to_dict()["version"] == implemented.version
 
     def test_a_document_reads_back_as_what_was_written(self, monkeypatch):
         """
@@ -578,7 +600,23 @@ class TestDocuments:
             for tag, cls in registered_models().items()
             if isinstance(cls, type) and issubclass(cls, (PatchOp, PatchProcessor))
         }
-        assert tags == {"PatchOp", "PatchProcessor"}
+        # Spelled out rather than counted, so that a class added without
+        # a reason to is noticed. The module argues against a class per
+        # patch function; these are the exceptions it names -- the ones
+        # wanting a kernel seam.
+        assert tags == {
+            "PatchOp",
+            "PatchProcessor",
+            "Abs",
+            "Conj",
+            "Demean",
+            "Imag",
+            "Normalize",
+            "Real",
+            "RenameCoords",
+            "Standardize",
+            "Transpose",
+        }
 
     def test_the_document_names_the_operation(self):
         """The name and the arguments are what a document holds."""
@@ -590,7 +628,7 @@ class TestDocuments:
 
     def test_a_document_which_cannot_be_read_says_what_to_import(self):
         """The message is worth nothing if it does not name the function."""
-        document = dc.proc.normalize.op("time").to_dict()
+        document = dc.proc.detrend.op("time").to_dict()
         broken = document["params"]
         broken["name"], broken["module"] = "nosuchpkg:denoise", "nosuchpkg.filters"
         with pytest.raises(ParameterError, match="nosuchpkg"):
@@ -686,8 +724,9 @@ class TestImplementations:
         """
         A hand-written class takes over the name it implements.
 
-        Empty in this PR; the first entry arrives with the first
-        plan/kernel split, and this is what says the routing works.
+        The table already holds the operations which were split into a
+        plan and a kernel; this says the routing which reaches them is
+        the same routing anything else would get.
         """
 
         class Doubler(PatchProcessor):
@@ -713,8 +752,13 @@ class TestImplementations:
 
     def test_the_table_is_left_as_it_was(self):
         """The test above puts the table back, or the next one is wrong."""
-        assert "normalize" not in processor_module._IMPLEMENTATIONS
-        assert isinstance(dc.proc.normalize.op("time"), PatchOp)
+        assert "detrend" not in processor_module._IMPLEMENTATIONS
+        assert isinstance(dc.proc.detrend.op("time"), PatchOp)
+        # Stated positively too: were the test above to stop working on a
+        # copy of the table, it would leave its stand-in registered under
+        # a name which already has an implementation, and the absence of
+        # `detrend` would not notice.
+        assert processor_module._IMPLEMENTATIONS["normalize"] is Normalize
 
     def test_registering_something_which_is_not_one(self):
         """Only a PatchProcessor can implement an operation."""

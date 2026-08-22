@@ -190,6 +190,9 @@ class _PatchFunction(Protocol):
     func: Callable
     raw_function: Callable
     op: Callable
+    # What the decorator was told, so a registered processor can be held
+    # to the same requirements rather than declaring its own in parallel.
+    _declared: dict
     __version__: str
     __wrapped__: Callable
 
@@ -441,6 +444,17 @@ def patch_function(
         patch_func.raw_function = getattr(func, "raw_function", func)
         patch_func.__wrapped__ = func
         patch_func.__version__ = version
+        # What the decorator was told, kept where a registered processor
+        # can find it. `register_implementation` reconciles the two, so
+        # the class and the decorator cannot drift apart in silence.
+        patch_func._declared = {
+            "required_dims": required_dims,
+            "required_coords": required_coords,
+            "required_attrs": required_attrs,
+            "data_type": data_type,
+            "history": history,
+            "validate_call": validate_call,
+        }
         # Registered as it is decorated, so a function is nameable in a
         # document exactly when its module has been imported. A function
         # defined inside a call takes no tag; `op` says so if it is asked.
