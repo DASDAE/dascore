@@ -10,13 +10,21 @@ for getting wrong, and how a kernel for another array backend is found.
 from __future__ import annotations
 
 import pickle
+from typing import Any
 
 import numpy as np
 import pytest
 
 import dascore as dc
 from dascore.exceptions import CoordDataError, ParameterError
-from dascore.proc.basic import Abs, Normalize, _known_real
+from dascore.proc.basic import (
+    Abs,
+    Demedian,
+    FillNa,
+    Full,
+    Normalize,
+    _known_real,
+)
 from dascore.workflow import PatchMeta, PatchProcessor, Task, register_kernel
 from dascore.workflow.processor import (
     _resolve_kernel,
@@ -179,15 +187,11 @@ class TestFusibility:
 
     def test_a_portable_kernel_is_fusible(self):
         """Written in the backend's own terms, so it can be lowered."""
-        from dascore.proc.basic import Abs, Normalize
-
         assert Abs().fusible
         assert Normalize(dim="time", norm="l2").fusible
 
     def test_a_numpy_kernel_is_not(self):
         """The standard has no median which skips nulls, so this cannot."""
-        from dascore.proc.basic import Demedian
-
         assert not Demedian().fusible
 
     def test_it_can_depend_on_the_arguments(self):
@@ -195,22 +199,36 @@ class TestFusibility:
         Some operations are portable for some of what they accept.
 
         `full` takes any value numpy would; the standard promises only
-        the plain python scalars. `fillna` given a value with a shape
-        spends it positionally, which `where` cannot say.
+        the plain python scalars, and only those which fit a dtype.
+        `fillna` given a value with a shape spends it positionally,
+        which `where` cannot say, and `include_inf=False` asks pandas
+        what counts as nothing, which no backend answers.
         """
-        from dascore.proc.basic import FillNa, Full
-
         assert Full(fill_value=1.5).fusible
         assert not Full(fill_value=np.float64(1.5)).fusible
+        assert not Full(fill_value=2**70).fusible
         assert FillNa(value=0).fusible
         assert not FillNa(value=[1, 2]).fusible
+        assert not FillNa(value=0, include_inf=False).fusible
 
-    def test_the_answer_needs_no_data(self, patch):
-        """Asked of the operation, and the patch never offered."""
-        from dascore.proc.basic import Full
+    def test_a_value_numpy_cannot_measure(self):
+        """
+        A ragged value is answered for rather than raised on.
 
-        operation = Full(fill_value=1.5)
-        assert operation.fusible is Full(fill_value=1.5).fusible
+        `np.ndim` refuses it, and a `fusible` which raised would turn a
+        patch with nothing to fill from a no-op into an error.
+        """
+        assert not FillNa(value=[1, [2, 3]]).fusible
+
+    def test_the_answer_needs_no_data(self):
+        """
+        Reached with no array anywhere, which is the whole point.
+
+        A `fusible` which read the data would raise here rather than
+        answer, since the operation is never given a patch at all.
+        """
+        assert Full(fill_value=1.5).fusible
+        assert not Demedian(dim="time").fusible
 
     def test_defining_reconcile_says_not_fusible(self):
         """It is the step which has to see both halves at once."""
@@ -227,6 +245,109 @@ class TestFusibility:
                 return meta
 
         assert not Reconciling().fusible
+
+
+class TestTheNumpyFallbacks:
+    """
+    What the two half-portable operations do with the other half.
+
+    The parity check covers these, but it is not what the coverage gate
+    runs, and an untested fallback is how a rewrite quietly narrows what
+    an operation accepts.
+    """
+
+    def test_a_value_with_a_shape_is_spent_positionally(self):
+        """One element per null, in order -- not broadcast."""
+        patch = dc.get_example_patch("patch_with_null")
+        data = np.asarray(patch.data)
+        nulls = ~np.isfinite(data)
+        values = np.arange(int(nulls.sum()), dtype="float64")
+        expected = data.copy()
+        expected[nulls] = values
+        assert np.array_equal(np.asarray(patch.fillna(values).data), expected)
+
+    def test_nothing_to_fill_hands_the_patch_back(self, patch):
+        """
+        Whichever of the two fills was planned, an empty mask is a no-op.
+
+        The identity is what the decorator reads as nothing having
+        happened, so no history is written and no id advances.
+        """
+        assert patch.fillna(np.arange(3.0)) is patch
+        assert patch.fillna(0) is patch
+
+    @pytest.mark.parametrize("value", [np.int8(3), 2**70])
+    def test_a_value_the_standard_will_not_take_is_planned_onto_numpy(
+        self, patch, value
+    ):
+        """
+        The plan says numpy, and it says so before any data is read.
+
+        Asserted on the plan rather than on the dtype: on numpy the
+        portable fill answers a numpy scalar identically, so a result
+        cannot tell which kernel produced it.
+        """
+        meta = PatchMeta.from_patch(patch)
+        planned = Full(fill_value=value).plan_kernel(meta, meta)
+        assert planned.func is Full.numpy_kernel
+        # And the dtype numpy keeps for it is what comes out.
+        assert patch.full(value).data.dtype == np.full((1,), value).dtype
+
+    def test_a_registered_kernel_beats_the_numpy_one(self, patch):
+        """
+        Whoever registered it took this backend on, arguments and all.
+
+        Falling back where someone has said they handle it would throw
+        away the only reason `register_kernel` exists.
+        """
+
+        class Filling(Full):
+            """A `full` whose numpy backend someone else claimed."""
+
+        @register_kernel(Filling, "numpy")
+        def _theirs(self, data, meta, out_meta):
+            """Answer with something no other kernel would."""
+            return np.zeros(meta.shape)
+
+        meta = PatchMeta.from_patch(patch)
+        planned = Filling(fill_value=np.int8(3)).plan_kernel(meta, meta)
+        assert planned.func is _theirs
+
+
+class TestTheCallersArguments:
+    """
+    What a patch function does to the arguments it was handed.
+
+    A task freezes the arrays it is given so its fingerprint cannot come
+    to describe values it no longer holds. An operation built inside a
+    patch function is run once and thrown away, so there is no such
+    fingerprint -- and freezing would reach back and lock a buffer the
+    caller means to keep writing to.
+    """
+
+    def test_a_fill_array_stays_writable(self, patch):
+        """The values are read, not taken over."""
+        values = np.arange(3.0)
+        patch.fillna(values)
+        assert values.flags.writeable
+
+    def test_a_coordinate_array_stays_writable(self, patch):
+        """`update_coords` copies what it is given, and always has."""
+        values = np.arange(patch.shape[patch.dims.index("time")], dtype="float64")
+        patch.update_coords(time=values)
+        assert values.flags.writeable
+
+    def test_a_task_still_takes_ownership(self):
+        """The policy is off for the one case, not repealed."""
+        values = np.arange(3.0)
+
+        class Holding(Task):
+            """A task which holds whatever it is handed."""
+
+            value: Any = None
+
+        Holding(value=values)
+        assert not values.flags.writeable
 
 
 class TestRegistrationRefuses:

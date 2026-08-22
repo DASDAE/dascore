@@ -31,6 +31,7 @@ import inspect
 import warnings
 import weakref
 from collections.abc import Callable, Mapping
+from contextvars import ContextVar
 from functools import cached_property
 from pathlib import Path
 from typing import Any, ClassVar, Self
@@ -65,6 +66,15 @@ _VERSION_KEY = "version"
 _PARAMS_KEY = "params"
 
 
+# Whether a task being built takes over the arrays it is handed. A patch
+# function builds an operation, runs it and throws it away, so there is no
+# fingerprint left to go stale and no reason to lock the caller's buffer for
+# the rest of its life; `PatchProcessor._call` turns this off for that one
+# case. A ContextVar rather than a module flag so two threads building tasks
+# at once cannot see each other's answer.
+_take_ownership: ContextVar[bool] = ContextVar("_take_ownership", default=True)
+
+
 class Task(DascoreBaseModel):
     """
     Base class for a fingerprintable, serializable operation.
@@ -90,7 +100,9 @@ class Task(DascoreBaseModel):
     @classmethod
     def _own_the_arrays(cls, data: Any) -> Any:
         """Take ownership of any array a task was handed."""
-        return own_arrays(data) if isinstance(data, dict) else data
+        if not isinstance(data, dict) or not _take_ownership.get():
+            return data
+        return own_arrays(data)
 
     # Bumped by a subclass whenever the same parameters should mean a
     # different answer, so that old fingerprints do not name the new

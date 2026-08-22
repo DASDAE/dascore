@@ -130,14 +130,9 @@ MATRIX_CALLS = {
     "norm_bit": lambda patch: patch.normalize("time", norm="bit"),
     "norm_l2_distance": lambda patch: patch.normalize("distance", norm="l2"),
     "demean_distance": lambda patch: patch.demean("distance"),
-    "rename": lambda patch: patch.rename_coords(time="t"),
-    "flip_noop": lambda patch: patch.flip(),
-    "flip_distance": lambda patch: patch.flip("distance"),
     "demedian_distance": lambda patch: patch.demedian("distance"),
+    "rename": lambda patch: patch.rename_coords(time="t"),
     "full_bool": lambda patch: patch.full(True),
-    "update_coords_replace": lambda patch: patch.update_coords(
-        time=patch.get_array("time")
-    ),
     "transpose_noop": lambda patch: patch.transpose(*patch.dims),
     "transpose_ell": lambda patch: patch.transpose(..., "distance"),
     "norm_l1": lambda patch: patch.normalize("time", norm="l1"),
@@ -308,20 +303,31 @@ def get_calls() -> dict:
         "transpose_ell_last": lambda: patch.transpose(..., "distance"),
         "transpose_ell_first": lambda: patch.transpose("distance", ...),
         "rename_coords": lambda: patch.rename_coords(distance="depth"),
-        # The branches these five reach which nothing else here does.
+        # The five operations lowered here -- flip, fillna, full, demedian
+        # and update_coords -- with the branches only they reach.
         "flip_noop": lambda: patch.flip(),
-        "flip_distance": lambda: patch.flip("distance"),
         "flip_complex": lambda: dft_patch.flip("ft_time"),
+        "flip_bad_dim": lambda: patch.flip("nope"),
+        # The same name refused with the coordinates left alone: the two
+        # take different routes through the class and must still agree.
+        "flip_bad_dim_no_coords": lambda: patch.flip("nope", flip_coords=False),
         "fillna_nothing_to_do": lambda: patch.fillna(0),
         "fillna_complex": lambda: dft_patch.fillna(0),
-        "fillna_null_inf_only": lambda: null_patch.fillna(-1, include_inf=True),
+        "fillna_null_noinf": lambda: null_patch.fillna(-1, include_inf=False),
+        # A value `np.ndim` refuses, on a patch with nothing to fill: a
+        # no-op, and not the error measuring the value would raise.
+        "fillna_ragged_noop": lambda: patch.fillna([1, [2, 3]]),
         "full_complex": lambda: dft_patch.full(1 + 1j),
         "full_bool": lambda: patch.full(True),
         "full_on_int": lambda: int_patch.full(3),
-        # A value which is not a plain python scalar: numpy takes these
+        # Values which are not plain python scalars: numpy takes these
         # and keeps their dtype, and the standard refuses them.
         "full_np_scalar": lambda: patch.full(np.float32(1)),
         "full_np_int8": lambda: patch.full(np.int8(3)),
+        # No entry for an integer too large for a dtype: numpy answers
+        # with an object array, and hashing one hashes the pointers in
+        # it, so the same call never agrees with itself. `fusible` is
+        # what pins that case, in tests/test_workflow/test_processor_seam.py.
         # A value with a shape is spent on the nulls one element each,
         # which is not what broadcasting it would do.
         "fillna_array_value": lambda: null_patch.fillna(

@@ -194,6 +194,8 @@ def _abs_mybackend(processor, data, meta, out_meta):
 
 The kernel is chosen by the backend the data report, so nothing else about the operation changes — `patch.abs()` reaches it, and the name, arguments and fingerprint are what they always were. An operation with no registered kernel for a backend falls back to the class's own `kernel`, which is written to the standard.
 
+Some operations are portable for only some of what they accept — `patch.full(1.5)` is something every backend can do, `patch.full(np.float32(1))` is not. Those declare it through `fusible`, a property answered from the operation's arguments and never from the data, and supply a `numpy_kernel` for the rest, which converts to NumPy and back and issues a `NumpyFallbackWarning`. Which of the two runs is settled before any data is read, so a chain of operations can be inspected without being executed. A kernel you register for your backend still wins over the NumPy one: registering it says you took that operation on, arguments and all.
+
 Only a few operations have a processor today; the rest are plain functions, and adding one is a deliberate act rather than something every patch function needs.
 
 ## Related guides

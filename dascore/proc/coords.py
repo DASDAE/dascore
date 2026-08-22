@@ -237,7 +237,7 @@ def rename_coords(self: PatchType, **kwargs) -> PatchType:
     >>> pa2 = pa.rename_coords(distance='fragrance')
     >>> assert 'fragrance' in pa2.dims
     """
-    return RenameCoords(**kwargs)._apply(self)
+    return RenameCoords._call(self, **kwargs)
 
 
 class RenameCoords(PatchProcessor):
@@ -289,7 +289,7 @@ def update_coords(self: PatchType, **kwargs) -> PatchType:
     >>> pa2 = pa.update_coords(distance=new_dist)
     >>> assert np.allclose(pa2.coords.get_array('distance'), new_dist)
     """
-    return UpdateCoords(**kwargs)._apply(self)
+    return UpdateCoords._call(self, **kwargs)
 
 
 class UpdateCoords(PatchProcessor):
@@ -789,7 +789,7 @@ def transpose(self: PatchType, *dims: str) -> PatchType:
     >>> # Set distance as the first dimension.
     >>> out = pa.transpose("distance", ...)
     """
-    return Transpose(dims=tuple(dims))._apply(self)
+    return Transpose._call(self, dims=tuple(dims))
 
 
 class Transpose(PatchProcessor):
