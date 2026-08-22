@@ -184,6 +184,22 @@ def _get_dtype(value, dtype):
     return str(np.dtype(value))
 
 
+def _scalar_dtype(dtype: np.dtype, name: str) -> np.dtype:
+    """
+    The dtype a coordinate's own scalar is conformed to before hashing.
+
+    The coordinate's dtype, at its own precision — a coordinate keeping
+    picoseconds must not have them rounded away, or two coordinates a
+    picosecond apart would share an identity. A step is the duration
+    between values, so it takes the matching time unit rather than the
+    time kind itself.
+    """
+    if dtype.kind not in "mM":
+        return dtype
+    unit = np.datetime_data(dtype)[0]
+    return np.dtype(f"timedelta64[{unit}]") if name == "step" else dtype
+
+
 class CoordSummary(DascoreBaseModel):
     """
     A summary for coordinates.
@@ -640,7 +656,7 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
         dtype = np.dtype(self.dtype) if self.dtype else None
         if dtype is not None:
             with suppress(TypeError, ValueError, OverflowError):
-                value = ensure_consistent_dtype(value, name, dtype)
+                value = np.asarray(value).astype(_scalar_dtype(dtype, name))
         return ("scalar", hash_array(np.asarray([value])))
 
     @staticmethod

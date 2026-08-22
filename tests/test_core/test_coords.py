@@ -587,6 +587,16 @@ class TestCoordFingerprint:
         )
         assert coord.to_summary().to_coord().fingerprint() == coord.fingerprint()
 
+    def test_finer_precision_than_nanoseconds_still_differs(self):
+        """Conforming a scalar must not round away what a coordinate keeps."""
+        start = np.datetime64("1969-09-23T15:46:49.660978561024")
+        step = np.timedelta64(1000, "ps")
+        first = get_coord(start=start, stop=start + step * 100, step=step)
+        apart = start + np.timedelta64(1, "ps")
+        second = get_coord(start=apart, stop=apart + step * 100, step=step)
+        assert first != second
+        assert first.fingerprint() != second.fingerprint()
+
     def test_different_values_still_differ(self):
         """Canonicalizing the spelling does not blur real differences."""
         first = get_coord(start=0.0, stop=10.0, step=1.0)
