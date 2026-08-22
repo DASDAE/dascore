@@ -176,27 +176,26 @@ class TestKernelResolution:
         assert Nothing()._apply(patch) is patch
 
 
-class TestFusibility:
+class TestWhichKernelIsPlanned:
     """
-    Whether an operation can be lowered with the ones around it.
+    Which of a class's kernels a call gets, and why.
 
-    Something deciding what to fuse holds the chain and no arrays, so the
-    answer has to come from the operation's parameters. An answer which
-    needs the data is no answer at all.
+    Settled from the operation's parameters before any array is read, so
+    a chain can be inspected without being run.
     """
 
-    def test_a_portable_kernel_is_fusible(self):
-        """Written in the backend's own terms, so it can be lowered."""
-        assert Abs().fusible
-        assert Normalize(dim="time", norm="l2").fusible
+    def test_one_kernel_means_no_question(self):
+        """Most operations are portable for everything they accept."""
+        assert not Abs().needs_numpy
+        assert not Normalize(dim="time", norm="l2").needs_numpy
 
-    def test_a_numpy_kernel_is_not(self):
-        """The standard has no median which skips nulls, so this cannot."""
-        assert not Demedian().fusible
+    def test_a_kernel_which_is_numpy_says_so(self):
+        """The standard has no median which skips nulls."""
+        assert Demedian().needs_numpy
 
     def test_it_can_depend_on_the_arguments(self):
         """
-        Some operations are portable for some of what they accept.
+        Some operations are portable for only some of what they accept.
 
         `full` takes any value numpy would; the standard promises only
         the plain python scalars, and only those which fit a dtype.
@@ -204,47 +203,55 @@ class TestFusibility:
         which `where` cannot say, and `include_inf=False` asks pandas
         what counts as nothing, which no backend answers.
         """
-        assert Full(fill_value=1.5).fusible
-        assert not Full(fill_value=np.float64(1.5)).fusible
-        assert not Full(fill_value=2**70).fusible
-        assert FillNa(value=0).fusible
-        assert not FillNa(value=[1, 2]).fusible
-        assert not FillNa(value=0, include_inf=False).fusible
+        assert not Full(fill_value=1.5).needs_numpy
+        assert Full(fill_value=np.float64(1.5)).needs_numpy
+        assert Full(fill_value=2**70).needs_numpy
+        assert not FillNa(value=0).needs_numpy
+        assert FillNa(value=[1, 2]).needs_numpy
+        assert FillNa(value=0, include_inf=False).needs_numpy
 
     def test_a_value_numpy_cannot_measure(self):
         """
         A ragged value is answered for rather than raised on.
 
-        `np.ndim` refuses it, and a `fusible` which raised would turn a
+        `np.ndim` refuses it, and a property which raised would turn a
         patch with nothing to fill from a no-op into an error.
         """
-        assert not FillNa(value=[1, [2, 3]]).fusible
+        assert FillNa(value=[1, [2, 3]]).needs_numpy
 
     def test_the_answer_needs_no_data(self):
         """
         Reached with no array anywhere, which is the whole point.
 
-        A `fusible` which read the data would raise here rather than
+        A property which read the data would raise here rather than
         answer, since the operation is never given a patch at all.
         """
-        assert Full(fill_value=1.5).fusible
-        assert not Demedian(dim="time").fusible
+        assert not Full(fill_value=1.5).needs_numpy
+        assert Demedian(dim="time").needs_numpy
 
-    def test_defining_reconcile_says_not_fusible(self):
-        """It is the step which has to see both halves at once."""
+    def test_a_registered_kernel_is_not_held_to_it(self, patch):
+        """
+        Someone else's backend may express what ours cannot.
 
-        class Reconciling(PatchProcessor):
-            """A processor which checks the data against the metadata."""
+        `Demedian` says `needs_numpy` because the median written here is
+        numpy's. A package which registers a median for its own backend
+        is answering a different question, and is chosen ahead of the
+        numpy one so that it can -- otherwise registering a kernel for
+        the operations DASCore finds hardest would buy nothing.
+        """
 
-            def kernel(self, data, meta, out_meta):
-                """Do nothing, visibly."""
-                return data
+        class Middling(Demedian):
+            """A `demedian` whose backend someone else claimed."""
 
-            def reconcile(self, data, meta):
-                """Look at both, which is what cannot be lowered."""
-                return meta
+        @register_kernel(Middling, "numpy")
+        def _theirs(self, data, meta, out_meta):
+            """Answer with something no other kernel would."""
+            return np.zeros(meta.shape)
 
-        assert not Reconciling().fusible
+        operation = Middling(dim="time")
+        meta = PatchMeta.from_patch(patch)
+        assert operation.needs_numpy
+        assert operation.plan_kernel(meta, meta).func is _theirs
 
 
 class TestTheNumpyFallbacks:
@@ -292,26 +299,6 @@ class TestTheNumpyFallbacks:
         assert planned.func is Full.numpy_kernel
         # And the dtype numpy keeps for it is what comes out.
         assert patch.full(value).data.dtype == np.full((1,), value).dtype
-
-    def test_a_registered_kernel_beats_the_numpy_one(self, patch):
-        """
-        Whoever registered it took this backend on, arguments and all.
-
-        Falling back where someone has said they handle it would throw
-        away the only reason `register_kernel` exists.
-        """
-
-        class Filling(Full):
-            """A `full` whose numpy backend someone else claimed."""
-
-        @register_kernel(Filling, "numpy")
-        def _theirs(self, data, meta, out_meta):
-            """Answer with something no other kernel would."""
-            return np.zeros(meta.shape)
-
-        meta = PatchMeta.from_patch(patch)
-        planned = Filling(fill_value=np.int8(3)).plan_kernel(meta, meta)
-        assert planned.func is _theirs
 
 
 class TestTheCallersArguments:

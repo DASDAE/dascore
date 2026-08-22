@@ -693,9 +693,9 @@ class FillNa(PatchProcessor):
     include_inf: bool = True
 
     @property
-    def fusible(self) -> bool:
+    def needs_numpy(self) -> bool:
         """
-        Portable where the value is a scalar and nothing means non-finite.
+        Whether the value has a shape, or nothing means more than non-finite.
 
         A value with a shape is spent positionally, one element per null,
         which `where` cannot say -- it would broadcast. And
@@ -708,8 +708,8 @@ class FillNa(PatchProcessor):
         numpy, at the fill, exactly as it used to.
         """
         with suppress(ValueError):
-            return self.include_inf and not np.ndim(self.value)
-        return False
+            return not self.include_inf or bool(np.ndim(self.value))
+        return True
 
     def kernel(self, data, meta, out_meta):
         """
@@ -1090,9 +1090,9 @@ class Full(PatchProcessor):
     fill_value: Any
 
     @property
-    def fusible(self) -> bool:
+    def needs_numpy(self) -> bool:
         """
-        Only the values the standard promises a backend will take.
+        Whether the fill value is one the standard does not promise.
 
         The standard names which python scalars a namespace must accept.
         A numpy scalar is not one of them -- numpy fills with it and
@@ -1102,8 +1102,8 @@ class Full(PatchProcessor):
         """
         value = self.fill_value
         if type(value) not in (int, float, bool, complex):
-            return False
-        return type(value) is not int or -(2**63) <= value < 2**63
+            return True
+        return type(value) is int and not -(2**63) <= value < 2**63
 
     def kernel(self, data, meta, out_meta):
         """
@@ -1191,22 +1191,24 @@ class Demedian(PatchProcessor):
     dim: str = "time"
 
     @property
-    def fusible(self) -> bool:
+    def needs_numpy(self) -> bool:
         """
-        Never: this kernel is numpy and will stay numpy.
+        Always: the standard has no median which skips nulls.
 
-        The standard has no median which skips nulls, and `nan_reduce`
-        says so by not offering one.
+        `nan_reduce` says so by not offering one. This is about the
+        kernel written here, not about the operation: a package which
+        registers a median of its own for its backend is chosen ahead of
+        this and is not held to it.
         """
-        return False
+        return True
 
     def numpy_kernel(self, data, meta, out_meta):
         """
         Return the data with the median of each slice taken out.
 
-        By `np.nanmedian`; `fusible` says why that stays numpy. The only
-        kernel this class has, so data from another backend make the trip
-        to numpy and back rather than the operation refusing them.
+        By `np.nanmedian`; `needs_numpy` says why. The only kernel this
+        class has, so data from another backend make the trip to numpy
+        and back rather than the operation refusing them.
         """
         if not is_numpy(data):
             warn_numpy_fallback("demedian", backend_name(data))

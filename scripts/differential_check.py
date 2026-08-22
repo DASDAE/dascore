@@ -326,7 +326,7 @@ def get_calls() -> dict:
         "full_np_int8": lambda: patch.full(np.int8(3)),
         # No entry for an integer too large for a dtype: numpy answers
         # with an object array, and hashing one hashes the pointers in
-        # it, so the same call never agrees with itself. `fusible` is
+        # it, so the same call never agrees with itself. `needs_numpy` is
         # what pins that case, in tests/test_workflow/test_processor_seam.py.
         # A value with a shape is spent on the nulls one element each,
         # which is not what broadcasting it would do.

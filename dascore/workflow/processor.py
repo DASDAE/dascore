@@ -269,53 +269,55 @@ class PatchProcessor(Task):
         takes the old dimension order to the new.
 
         A kernel registered for the data's backend wins, being someone
-        saying they took this operation on there. Failing that, the
-        class's own `kernel`, written to the array API standard and so
-        able to run on any backend -- unless `fusible` says these
-        arguments are outside what the standard promises, in which case
-        the class's `numpy_kernel` answers for them instead. A class with
-        none of the three is a metadata-only operation and gets None.
+        saying they took this operation on there, arguments and all.
+        Failing that, the class's own `kernel`, written to the array API
+        standard and so able to run on any backend -- unless
+        `needs_numpy` says these arguments are outside what the standard
+        promises, in which case the class's `numpy_kernel` answers for
+        them instead. A class with none of the three is a metadata-only
+        operation and gets None.
 
         Which kernel runs is settled here rather than inside a kernel so
         that something reading a chain of operations can see what each
         one got without running any of them.
         """
-        fallback = not self.fusible
+        fallback = self.needs_numpy
         if (found := _resolve_kernel(type(self), meta.backend, fallback)) is None:
             return None
         return functools.partial(found, self, meta=meta, out_meta=out_meta)
 
     @property
-    def fusible(self) -> bool:
+    def needs_numpy(self) -> bool:
         """
-        Whether this operation can be lowered with the ones around it.
+        Whether these arguments are outside what the standard promises.
 
-        Fusing a chain means compiling the kernels into one pass over the
-        data, so it can only include kernels written in the backend's own
-        terms. A kernel which reaches for numpy cannot be lowered, and
-        neither can an operation which has to see the data and the
-        metadata at once -- which is what defining `reconcile` says.
+        Some operations are portable for only part of what they accept:
+        the standard names which python scalars a namespace must take,
+        and `full` given a numpy scalar is asking for something outside
+        that. A class which says yes here supplies a `numpy_kernel` for
+        those arguments; the default is no, since most operations have
+        only the one kernel.
 
-        Answered from the operation's own parameters, never from the
-        data: something deciding what to fuse has the chain and no
-        arrays, so an answer it has to run the operation to get is no
-        answer at all.
+        Answered from the operation's own parameters and never from the
+        data, so the choice is made before anything is read.
 
-        The default cannot see inside a kernel. It reads `reconcile`
-        alone and takes the class's own kernel to be portable, so a
-        processor whose kernel reaches for numpy -- `Demedian` -- and one
-        whose kernel is portable for only some of its arguments --
-        `Full`, `FillNa` -- both have to say so by overriding this.
+        This says nothing about whether the operation can be fused --
+        that is a property of the kernel which ends up running, not of
+        the operation, and it is not this class's to answer. A package
+        which registers its own kernel for a backend may well lower
+        these same arguments happily, and its kernel is chosen ahead of
+        the numpy one precisely so that it can.
         """
-        return type(self).reconcile is PatchProcessor.reconcile
+        return False
 
     def reconcile(self, data, meta: PatchMeta) -> PatchMeta:
         """
         Return the metadata the data actually turned out to have.
 
-        Defining this says the operation cannot be fused: it is the one
-        step which has to see both halves at once. The default only
-        carries the data's dtype back, since a kernel may promote.
+        The one step which sees both halves at once, which is why an
+        operation which needs it cannot be described by metadata alone.
+        The default only carries the data's dtype back, since a kernel
+        may promote.
         """
         dtype = getattr(data, "dtype", meta.dtype)
         return meta if dtype == meta.dtype else meta.update(dtype=dtype)
