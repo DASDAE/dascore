@@ -78,11 +78,13 @@ class TestPlotSpectrogram:
         axis = patch.viz.spectrogram(dim="time")
         assert isinstance(axis, plt.Axes)
 
-    def test_show(self, random_patch, monkeypatch):
+    def test_show(self, random_patch, shown):
         """Ensure show path is callable."""
-        monkeypatch.setattr(plt, "show", lambda: None)
         axis = random_patch.viz.spectrogram(dim="time", show=True)
         assert isinstance(axis, plt.Axes)
+        axis = random_patch.viz.spectrogram(dim="time", show=True)
+        assert isinstance(axis, plt.Axes)
+        assert shown
 
     @staticmethod
     def _image_shape(axis):

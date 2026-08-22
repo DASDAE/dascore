@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import gc
-import os
 import shutil
+import sys
 import threading
 import warnings
 from contextlib import contextmanager
@@ -65,6 +65,23 @@ def _link_or_copy(source: Path, dest: Path) -> None:
     shutil.copy2(source, dest)
 
 
+@pytest.fixture
+def hide_module(monkeypatch):
+    """Return a function which makes a module unimportable for one test.
+
+    None in sys.modules is the interpreter's own record of a failed
+    import, so every import of that name raises ImportError -- which is
+    what dascore's optional_import turns into a
+    MissingOptionalDependencyError. Replacing the caller's own
+    optional_import instead only exercises the replacement.
+    """
+
+    def _hide(name: str) -> None:
+        monkeypatch.setitem(sys.modules, name, None)
+
+    return _hide
+
+
 # --- Pytest configuration
 
 
@@ -106,8 +123,10 @@ def pytest_sessionstart(session):
     and to set debug hook to True to avoid showing progress bars,
     except when explicitly being tested.
     """
-    # If running in CI make sure to turn off matplotlib.
-    if os.environ.get("CI", False):
+    # Headless everywhere rather than only under CI, so the viz tests run
+    # the same way on a laptop as they do there -- except under --pdb, where
+    # someone is sitting at a breakpoint and may want to look at a figure.
+    if not session.config.getoption("usepdb", False):
         matplotlib.use("Agg")
 
     # Test-time debug defaults are applied by fixture to avoid state leakage.

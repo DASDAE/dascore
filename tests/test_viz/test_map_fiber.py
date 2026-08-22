@@ -111,10 +111,10 @@ class TestPlotMap:
         ax = new.viz.map_fiber("latitude", "longitude")
         check_label_units(new, ax, ["latitude", "longitude"])
 
-    def test_show(self, random_patch, monkeypatch):
+    def test_show(self, random_patch, shown):
         """Ensure show path is callable."""
-        monkeypatch.setattr(plt, "show", lambda: None)
         random_patch.viz.map_fiber(show=True)
+        assert shown
 
 
 class TestMapFiberErrors:

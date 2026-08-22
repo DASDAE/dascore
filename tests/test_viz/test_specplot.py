@@ -103,7 +103,7 @@ def test_specplot_log_distance_axis_uses_symlog(random_patch):
     assert ax.get_xscale() == "symlog" or ax.get_yscale() == "symlog"
 
 
-def test_show(random_patch, monkeypatch):
+def test_show(random_patch, shown):
     """Ensure show path is callable."""
-    monkeypatch.setattr(plt, "show", lambda: None)
     random_patch.dft("distance").abs().viz.specplot(show=True)
+    assert shown

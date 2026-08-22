@@ -10,7 +10,6 @@ from functools import partial
 from io import BytesIO
 from types import SimpleNamespace
 from typing import ClassVar
-from unittest.mock import patch
 
 import numpy as np
 import pandas as pd
@@ -632,16 +631,13 @@ class TestCoordFingerprint:
             units="cm",
             dtype="float64",
         )
-        seen = []
-
-        def _fake_convert(value, to_units=None, from_units=None):
-            seen.append((value, to_units, from_units))
-            return value
-
-        with patch("dascore.core.coords.convert_units", _fake_convert):
-            coord.convert_units("m")
-
-        assert seen == [(400.0, "m", coord.units), (100.0, "m", coord.units)]
+        out = coord.convert_units("m")
+        # The null start is left alone rather than converted; the two real
+        # scalars are converted from cm.
+        assert np.isnan(out.start)
+        assert out.stop == 4.0
+        assert out.step == 1.0
+        assert out.units == get_quantity("m")
 
     def test_partial_convert_units_without_existing_units_sets_units_only(self):
         """Unitless partial coords should take units without scalar conversion."""

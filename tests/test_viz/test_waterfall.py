@@ -289,10 +289,10 @@ class TestWaterfall:
         ax = timedelta_patch.viz.waterfall()
         assert ax is not None
 
-    def test_show(self, random_patch, monkeypatch):
+    def test_show(self, random_patch, shown):
         """Ensure show path is callable."""
-        monkeypatch.setattr(plt, "show", lambda: None)
         random_patch.viz.waterfall(show=True)
+        assert shown
 
     def test_log(self, random_patch):
         """Ensure log is callable."""
