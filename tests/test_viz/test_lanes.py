@@ -9,13 +9,18 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import pytest
+from matplotlib.backends.backend_pdf import FigureCanvasPdf
 from matplotlib.collections import PatchCollection
+from matplotlib.figure import Figure
 
 from dascore.exceptions import ParameterError
 from dascore.viz._lanes import (
+    _LABEL_PAD,
     UNCOVERED_COLOR,
     WHEEL_ORDER,
     _pack_rows,
+    _text_points,
+    estimate_legend_rows,
     plot_lanes,
 )
 
@@ -299,16 +304,30 @@ class TestLayout:
         assert sorted(_texts(ax)) == ["alpha zone", "beta zone"]
         assert {x.get_rotation() for x in ax.texts} == {90.0}
 
-    def test_a_label_needs_clearance(self):
-        """A label the exact width of its box would touch the next one."""
-        frame = pd.DataFrame({"start": [0.0], "end": [1.0], "v": ["tight"]})
-        _, ax = plt.subplots(figsize=(4, 4))
-        plot_lanes(frame, ax=ax, value="v")
-        figure = ax.get_figure()
+    @pytest.mark.parametrize("slack,rotation", [(1.0, 90.0), (_LABEL_PAD + 1.0, 0.0)])
+    def test_a_label_needs_clearance(self, slack, rotation):
+        """A label the exact width of its box would touch the next one.
+
+        A box wider than the text but by less than the clearance is
+        refused the flat label it would otherwise take, which is what
+        keeps two labels in neighboring boxes from reading as one word.
+        """
+        text = "value"
+        needed = _text_points(text, plt.rcParams["font.size"] * 0.8)[0]
+        figure, ax = plt.subplots(figsize=(4, 2), dpi=100)
         figure.draw_without_rendering()
-        width = ax.texts[0].get_window_extent(figure.canvas.get_renderer()).width
-        box = ax.get_window_extent().width / 1.04  # the frame plus its padding
-        assert width <= box - 4.0
+        # Scale the axes so one data unit is exactly the room to test.
+        points = ax.get_window_extent().width * 72 / figure.dpi
+        plt.close(figure)
+        _, ax = plt.subplots(figsize=(4, 2), dpi=100)
+        plot_lanes(
+            pd.DataFrame({"start": [0.0], "end": [1.0], "v": [text]}),
+            ax=ax,
+            value="v",
+            x_limits=(0.0, points / (needed + slack)),
+        )
+        assert _texts(ax) == [text]
+        assert ax.texts[0].get_rotation() == rotation
 
     def test_no_drawn_label_overflows_its_box(self):
         """Every label kept is measured against the axes it lands in.
@@ -325,7 +344,32 @@ class TestLayout:
             }
         )
         ax = plot_lanes(frame, value="v")
+        # Every label kept sits inside its box -- and they were kept. The
+        # first half of that is true of a figure which drew none at all.
+        assert len(ax.texts) == len(frame)
         assert _overflowing(ax) == []
+
+    @pytest.mark.parametrize("text", [" ", "  ", "two\nlines", "$x^2$"])
+    def test_labels_matplotlib_lays_out_its_own_way(self, text):
+        """Whitespace, several lines and mathtext are all measurable.
+
+        A label is measured before it is drawn, so a string the measurer
+        cannot read would take the whole figure down with it.
+        """
+        frame = pd.DataFrame({"start": [0.0], "end": [10.0], "v": [text]})
+        ax = plot_lanes(frame, value="v")
+        assert _overflowing(ax) == []
+
+    def test_a_legend_naming_nothing_takes_no_rows(self):
+        """A caller sizing a figure for no legend keeps no room for one."""
+        assert estimate_legend_rows([], 720.0) == 0
+        assert estimate_legend_rows(["one"], 720.0) == 1
+
+    def test_a_label_of_two_lines_is_two_lines_tall(self):
+        """Height is what decides a rotated label, so lines must count."""
+        size = plt.rcParams["font.size"] * 0.8
+        one = _text_points("two", size)[1]
+        assert _text_points("two\nlines", size)[1] > 2 * one
 
     def test_max_labels(self):
         """Past max_labels no text is drawn at all."""
@@ -610,10 +654,12 @@ class TestColors:
         plot_lanes(frame, ax=ax, value="v")
         figure.draw_without_rendering()
         box = _legend_of(figure, ax).get_window_extent(figure.canvas.get_renderer())
-        # Under the lanes, and no lower than the lanes used to reach.
+        # Under the lanes, clear of the neighbor, and neither the lanes
+        # nor the legend pushed off the page to make room.
         assert box.y1 <= ax.get_window_extent().y0 + 1
-        assert box.y0 >= before.y0 - 1
         assert box.y0 >= below.get_window_extent().y1
+        assert ax.get_position().y0 >= 0
+        assert ax.get_window_extent().height >= before.height / 2 - 1
 
     def test_a_short_legend_stays_beside_them(self, string_frame):
         """Few enough values still read best in one column at the side."""
@@ -621,6 +667,19 @@ class TestColors:
         assert ax.get_figure().legends == []
         box = ax.get_legend().get_window_extent()
         assert box.x0 >= ax.get_window_extent().x1
+
+    def test_a_backend_which_renders_no_pixels(self, string_frame):
+        """Not every canvas hands out a renderer when asked for one.
+
+        A vector backend has none until it draws, so a figure bound for
+        a pdf must be laid out without asking the canvas for one.
+        """
+        figure = Figure(figsize=(4, 3), layout="constrained")
+        FigureCanvasPdf(figure)
+        ax = figure.subplots()
+        names, frame = _many_values()
+        plot_lanes(frame, ax=ax, value="v")
+        assert len(_legend_of(figure, ax).get_texts()) == len(names)
 
     def test_legend_off(self, string_frame):
         """legend=False draws none."""

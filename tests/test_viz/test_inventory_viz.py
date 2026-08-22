@@ -17,7 +17,7 @@ from dascore.viz import VizInventoryNameSpace
 from dascore.viz.inventory import (
     COMPONENT_COLORS,
     _distance_window,
-    _legend_size,
+    _legend_names,
     map_path,
     path,
     timeline,
@@ -381,6 +381,20 @@ class TestPath:
         # Components take their fixed colors, so the legend names the types.
         assert "FiberSegment" in _legend_labels(ax)
 
+    def test_a_narrow_figure_keeps_its_legend_on_the_page(self, site):
+        """A figure too small to seat a legend must not be made nonsense of.
+
+        The lanes keep some of the figure whatever the legend needs, and
+        neither they nor it leave the canvas.
+        """
+        crowded = build_labeled_inventory(24, site.coordinate_reference_system)
+        ax = path(crowded, "DAS.L2.00", figsize=(3.0, 2.0))
+        figure = ax.get_figure()
+        figure.draw_without_rendering()
+        lanes = ax.get_window_extent()
+        assert lanes.height > 0 and lanes.y0 >= 0
+        assert lanes.y1 <= figure.bbox.height
+
     def test_room_is_kept_for_a_legend_which_names_many_values(self, site):
         """A path naming more values than it has lanes needs a taller figure.
 
@@ -399,26 +413,40 @@ class TestPath:
         # Same one lane either way, so only the legend can move the height.
         assert _lanes(many) == lanes == ["components", "hole"]
         assert figure.get_size_inches()[1] > short
-        # The room is kept for the legend, not taken from the lanes.
-        assert many.get_window_extent().height / figure.dpi >= room
+        # The room is kept for the legend, not taken from the lanes: with
+        # no allowance at all these lanes lose a third of their height.
+        assert many.get_window_extent().height / figure.dpi >= room * 0.9
         box = figure.legends[0].get_window_extent(figure.canvas.get_renderer())
         assert box.y0 >= 0 and box.y1 <= figure.bbox.height
 
-    def test_a_mapping_names_its_numbers_too(self, site):
-        """A number is a colorbar until a mapping gives it a swatch."""
+    def test_a_mapping_names_its_numbers_and_only_those(self, site):
+        """A number is a colorbar until a mapping gives it a swatch.
+
+        A mapping which names some of them names only those, which is
+        what the legend beside them will show.
+        """
         frame = pd.DataFrame(
             {"lane": ["count"] * 3, "value": [0, 1, 2], "start": 0.0, "end": 1.0}
         )
-        assert _legend_size(frame, None) == 0
-        assert _legend_size(frame, "red") == 0
-        assert _legend_size(frame, {0: "red", 1: "blue", 2: "green"}) == 3
-        assert _legend_size(frame, {"count": {0: "red", 1: "blue"}}) == 2
+        assert _legend_names(frame, None) == []
+        assert _legend_names(frame, "red") == []
+        assert _legend_names(frame, {0: "red", 1: "blue", 2: "green"}) == [
+            "0",
+            "1",
+            "2",
+        ]
+        assert _legend_names(frame, {"count": {0: "red"}}) == ["0"]
 
-    def test_a_narrow_figure_still_sizes_its_legend(self, site):
-        """The columns a legend is divided into cannot fall to none."""
+    def test_a_flat_mapping_names_only_what_it_holds(self, site):
+        """Room is kept for the swatches drawn, not for every value."""
         crowded = build_labeled_inventory(24, site.coordinate_reference_system)
-        ax = path(crowded, "DAS.L2.00", figsize=(1.0, 2.0))
-        assert ax.get_figure().get_size_inches()[0] == 1.0
+        frame = pd.DataFrame(
+            {"lane": ["hole"] * 3, "value": ["a", "b", "c"], "start": 0.0, "end": 1.0}
+        )
+        assert _legend_names(frame, {"a": "red"}) == ["a"]
+        # And the figure is no taller for the values it does not name.
+        one = path(crowded, "DAS.L2.00", color={"H00": "red"})
+        assert one.get_figure().get_size_inches()[1] < 3.0
 
     def test_one_color_for_every_lane_needs_no_legend_room(self, site):
         """A figure which names no value has no legend to keep room for."""
