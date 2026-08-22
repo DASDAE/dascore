@@ -771,13 +771,12 @@ def _trimmed_envelopes(
     kept the untrimmed envelope would keep the row a candidate for values
     it will not return.
     """
+    # every described output is one of these rows: both come from the
+    # same plan, and the members were grouped by these very ids
     rows = {int(x["output_id"]): x for x in outputs.to_dict("records")}
     out: dict[int, dict[str, CoordSummary | None]] = {}
     for output_id, described in predicted.items():
-        row = rows.get(int(output_id))
-        if row is None:
-            out[output_id] = dict(described)
-            continue
+        row = rows[int(output_id)]
         out[output_id] = {
             name: summary
             if summary is None or not (set(summary.dims) & trimmed_dims)
