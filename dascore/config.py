@@ -52,6 +52,11 @@ class DascoreConfig(BaseModel):
         default=10,
         description="Maximum history length to display before summarizing entries.",
     )
+    display_max_items: int = Field(
+        default=10,
+        ge=0,
+        description="Maximum children a repr lists per level before eliding.",
+    )
     patch_history: Literal["standard", "disabled"] = Field(
         default="standard",
         description="Controls whether DASCore appends processing history to patches.",

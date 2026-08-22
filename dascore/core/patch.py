@@ -26,7 +26,7 @@ from dascore.utils.array import (
     patch_array_ufunc,
 )
 from dascore.utils.array_api import to_numpy
-from dascore.utils.display import array_to_text, attrs_to_text, get_dascore_text
+from dascore.utils.display import array_to_text, attrs_to_text, get_header_text
 from dascore.utils.namespace import NamespaceOwner
 from dascore.utils.patch import check_patch_attrs, check_patch_coords, get_patch_names
 from dascore.utils.time import to_float
@@ -205,16 +205,12 @@ class Patch(NamespaceOwner):
         return out
 
     def __rich__(self):
-        dascore_text = get_dascore_text()
-        name = "Patch ⚡"
-        patch_text = Text(name, style="bold")
-        header = Text.assemble(dascore_text, " ", patch_text)
-        line = Text("-" * len(header))
+        header = get_header_text("Patch ⚡")
         coords = self.coords.__rich__()
         attrs = self.attrs
         data = array_to_text(self.data, units=attrs.get("data_units"))
         attrs = attrs_to_text(self.attrs)
-        out = Text("\n").join([header, line, coords, data, attrs])
+        out = Text("\n").join([header, coords, data, attrs])
         return out
 
     def __str__(self):
