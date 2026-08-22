@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import functools
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import suppress
 from typing import Any, Literal
@@ -683,6 +684,16 @@ class FillNa(PatchProcessor):
     value: Any
     include_inf: bool = True
 
+    @property
+    def fusible(self) -> bool:
+        """A value with a shape is spent positionally, which needs numpy."""
+        return not np.ndim(self.value)
+
+    def plan_kernel(self, meta, out_meta):
+        """Decide which of the two fills runs, before any data is seen."""
+        chosen = super().plan_kernel(meta, out_meta) if self.fusible else None
+        return chosen or self._numpy_kernel
+
     def kernel(self, data, meta, out_meta):
         """
         Return the data with its nulls filled, or the data unchanged.
@@ -693,19 +704,30 @@ class FillNa(PatchProcessor):
         what says the operation did nothing.
         """
         xp = array_namespace(data)
-        replace = ~np.isfinite(data) if self.include_inf else pd.isnull(data)
-        replace = xp.asarray(replace)
+        replace = self._nulls(data)
         if not xp.any(replace):
             return data
-        if np.ndim(self.value):
-            # A value with a shape is spent on the nulls in order, one
-            # element each. `where` would broadcast it across the whole
-            # array instead, which is a different answer -- and not one
-            # the standard can express, so numpy keeps this case.
-            filled = np.array(data)
-            filled[np.asarray(replace)] = self.value
-            return asarray_like(filled, data)
         return xp.where(replace, xp.asarray(self.value, dtype=data.dtype), data)
+
+    def _nulls(self, data):
+        """Return where the data has nothing, as the backend's own array."""
+        xp = array_namespace(data)
+        found = ~np.isfinite(data) if self.include_inf else pd.isnull(data)
+        return xp.asarray(found)
+
+    def _numpy_kernel(self, data):
+        """
+        Spend a value which has a shape on the nulls, one element each.
+
+        Not something `where` can say: it would broadcast the value
+        across the whole array, which is a different answer.
+        """
+        replace = np.asarray(self._nulls(data))
+        if not np.any(replace):
+            return data
+        filled = np.array(data)
+        filled[replace] = self.value
+        return asarray_like(filled, data)
 
 
 register_implementation("fillna", FillNa)
@@ -1030,6 +1052,25 @@ class Full(PatchProcessor):
 
     fill_value: Any
 
+    @property
+    def fusible(self) -> bool:
+        """Only the values the standard promises a backend will take."""
+        return type(self.fill_value) in (int, float, bool, complex)
+
+    def plan_kernel(self, meta, out_meta):
+        """
+        Choose between the portable fill and numpy's, before any data.
+
+        The standard says which python scalars a namespace must accept
+        and says nothing about a numpy scalar or an integer too large for
+        any dtype -- both of which numpy took and some backends refuse.
+        Which of the two runs is decided here rather than inside the
+        kernel, so that something reading the chain can see which kernel
+        it got without running it.
+        """
+        chosen = super().plan_kernel(meta, out_meta) if self.fusible else None
+        return chosen or functools.partial(self._numpy_kernel, meta=meta)
+
     def kernel(self, data, meta, out_meta):
         """
         Return an array of one value, the shape the patch is.
@@ -1037,14 +1078,10 @@ class Full(PatchProcessor):
         The only kernel here which does not read the data it is given:
         what comes out depends on the shape and the value alone.
         """
-        # Only a plain python scalar goes to the backend: the standard
-        # says which of those a namespace must accept, and says nothing
-        # about a numpy scalar or an integer too big for any dtype, both
-        # of which numpy took and some backends refuse. Numpy answers
-        # for the rest, exactly as it did before there was a kernel here.
-        if type(self.fill_value) in (int, float, bool, complex):
-            with suppress(Exception):
-                return array_namespace(data).full(meta.shape, self.fill_value)
+        return array_namespace(data).full(meta.shape, self.fill_value)
+
+    def _numpy_kernel(self, data, meta):
+        """Fill with a value only numpy will take."""
         return np.full(meta.shape, self.fill_value)
 
 
@@ -1109,6 +1146,16 @@ class Demedian(PatchProcessor):
     """Remove the median along a dimension."""
 
     dim: str = "time"
+
+    @property
+    def fusible(self) -> bool:
+        """
+        Never: this kernel is numpy and will stay numpy.
+
+        The standard has no median which skips nulls, and `nan_reduce`
+        says so by not offering one.
+        """
+        return False
 
     def kernel(self, data, meta, out_meta):
         """

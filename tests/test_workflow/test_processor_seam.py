@@ -168,6 +168,67 @@ class TestKernelResolution:
         assert Nothing()._apply(patch) is patch
 
 
+class TestFusibility:
+    """
+    Whether an operation can be lowered with the ones around it.
+
+    Something deciding what to fuse holds the chain and no arrays, so the
+    answer has to come from the operation's parameters. An answer which
+    needs the data is no answer at all.
+    """
+
+    def test_a_portable_kernel_is_fusible(self):
+        """Written in the backend's own terms, so it can be lowered."""
+        from dascore.proc.basic import Abs, Normalize
+
+        assert Abs().fusible
+        assert Normalize(dim="time", norm="l2").fusible
+
+    def test_a_numpy_kernel_is_not(self):
+        """The standard has no median which skips nulls, so this cannot."""
+        from dascore.proc.basic import Demedian
+
+        assert not Demedian().fusible
+
+    def test_it_can_depend_on_the_arguments(self):
+        """
+        Some operations are portable for some of what they accept.
+
+        `full` takes any value numpy would; the standard promises only
+        the plain python scalars. `fillna` given a value with a shape
+        spends it positionally, which `where` cannot say.
+        """
+        from dascore.proc.basic import FillNa, Full
+
+        assert Full(fill_value=1.5).fusible
+        assert not Full(fill_value=np.float64(1.5)).fusible
+        assert FillNa(value=0).fusible
+        assert not FillNa(value=[1, 2]).fusible
+
+    def test_the_answer_needs_no_data(self, patch):
+        """Asked of the operation, and the patch never offered."""
+        from dascore.proc.basic import Full
+
+        operation = Full(fill_value=1.5)
+        assert operation.fusible is Full(fill_value=1.5).fusible
+
+    def test_defining_reconcile_says_not_fusible(self):
+        """It is the step which has to see both halves at once."""
+
+        class Reconciling(PatchProcessor):
+            """A processor which checks the data against the metadata."""
+
+            def kernel(self, data, meta, out_meta):
+                """Do nothing, visibly."""
+                return data
+
+            def reconcile(self, data, meta):
+                """Look at both, which is what cannot be lowered."""
+                return meta
+
+        assert not Reconciling().fusible
+
+
 class TestRegistrationRefuses:
     """What a class is turned away for, at import rather than at use."""
 

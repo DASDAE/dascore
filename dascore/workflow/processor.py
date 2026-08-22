@@ -272,6 +272,25 @@ class PatchProcessor(Task):
             return None
         return functools.partial(found, self, meta=meta, out_meta=out_meta)
 
+    @property
+    def fusible(self) -> bool:
+        """
+        Whether this operation can be lowered with the ones around it.
+
+        Fusing a chain means compiling the kernels into one pass over the
+        data, so it can only include kernels written in the backend's own
+        terms. A kernel which reaches for numpy cannot be lowered, and
+        neither can an operation which has to see the data and the
+        metadata at once -- which is what defining `reconcile` says.
+
+        Answered from the operation's own parameters, never from the
+        data: something deciding what to fuse has the chain and no
+        arrays, so an answer it has to run the operation to get is no
+        answer at all. A processor whose kernel is only portable for
+        some of its arguments says so by overriding this.
+        """
+        return type(self).reconcile is PatchProcessor.reconcile
+
     def reconcile(self, data, meta: PatchMeta) -> PatchMeta:
         """
         Return the metadata the data actually turned out to have.
