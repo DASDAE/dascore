@@ -93,11 +93,13 @@ class DascoreConfig(BaseModel):
             "holding conflicting values for any of these are never "
             "combined: operators and ufuncs raise, concatenate and stack "
             "skip them, and chunk puts them in separate outputs (its "
-            "per-call `group` argument overrides this default). A missing "
-            "or empty value conflicts with nothing, which is why the legacy "
-            "`network` and `station` can stay: archives which predate "
-            "`acquisition_key` partition by them and everything else "
-            "ignores them."
+            "per-call `group` argument overrides this default). Operators "
+            "and ufuncs read a missing or empty value as a wildcard which "
+            "matches anything; the operations which partition a collection "
+            "read it as a value, equal to another missing value and nothing "
+            "else. The legacy `network` and `station` can stay because a "
+            "name no patch in a spool states is ignored, and an archive "
+            "which predates `acquisition_key` states them throughout."
         ),
     )
 

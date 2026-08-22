@@ -7,10 +7,9 @@ from collections.abc import Mapping
 import numpy as np
 import pytest
 
-import dascore as dc
 from dascore import PatchAttrs
 from dascore.exceptions import ParameterError
-from dascore.utils.attrs import combine_patch_attrs
+from dascore.utils.attrs import _is_missing, combine_patch_attrs
 
 
 class TestMergeAttrs:
@@ -44,35 +43,41 @@ class TestMergeAttrs:
         with pytest.raises(Exception, match="hold conflicting values"):
             combine_patch_attrs([pa1, pa2, pa3])
 
-    def test_missing_matches(self):
-        """An attr nobody recorded conflicts with nothing; the known value carries."""
-        pa1 = PatchAttrs(data_type="velocity", data_units=None, gauge=10.0)
-        pa2 = PatchAttrs(data_type="", data_units="m/s", gauge=np.nan)
+    def test_missing_is_a_value(self):
+        """An attr one member never recorded conflicts with one which did."""
+        pa1 = PatchAttrs(data_type="velocity", gauge=10.0)
+        pa2 = PatchAttrs(data_type="", gauge=np.nan)
         for order in ([pa1, pa2], [pa2, pa1]):
-            out = combine_patch_attrs(order)  # conflict="raise" does not raise
-            assert out.data_type == "velocity"
-            assert dc.get_quantity(out.data_units) == dc.get_quantity("m/s")
-            assert out.gauge == 10.0
+            with pytest.raises(Exception, match="hold conflicting values"):
+                combine_patch_attrs(order)
+
+    def test_missing_spellings_are_one_value(self):
+        """None, NaN, and "" are the same value, so they never conflict."""
+        attrs = [PatchAttrs(foo=""), PatchAttrs(foo=None), PatchAttrs(foo=np.nan)]
+        assert combine_patch_attrs(attrs).get("foo") is None
 
     def test_all_missing_is_omitted(self):
         """An attr nobody knows is left out rather than carried as ""."""
         out = combine_patch_attrs([PatchAttrs(foo=""), PatchAttrs(foo="")])
         assert out.get("foo") is None
 
-    def test_drop_keeps_known_beside_missing(self):
-        """Drop only omits attrs whose known values conflict."""
+    def test_drop_omits_missing_beside_known(self):
+        """Drop omits an attr one member left empty, like any other conflict."""
         pa1 = PatchAttrs(data_type="velocity", foo="a")
         pa2 = PatchAttrs(data_type="", foo="b")
         out = combine_patch_attrs([pa1, pa2], conflict="drop")
-        assert out.data_type == "velocity"
+        # data_type is a declared field, so dropping it leaves its default.
+        assert _is_missing(out.get("data_type"))
         assert out.get("foo") is None
 
-    def test_keep_first_means_first_known(self):
-        """keep_first skips a first member which lacks the value."""
+    def test_keep_first_means_the_first_member(self):
+        """keep_first keeps the first member's value, empty or not."""
         pa1 = PatchAttrs(foo="", bar=None)
         pa2 = PatchAttrs(foo="x", bar=1)
-        pa3 = PatchAttrs(foo="y", bar=2)
-        out = combine_patch_attrs([pa1, pa2, pa3], conflict="keep_first")
+        out = combine_patch_attrs([pa1, pa2], conflict="keep_first")
+        assert out.get("foo") is None
+        assert out.get("bar") is None
+        out = combine_patch_attrs([pa2, pa1], conflict="keep_first")
         assert out.foo == "x"
         assert out.bar == 1
 

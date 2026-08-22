@@ -838,20 +838,17 @@ class TestBuildGapFrame:
         assert out["gap_size"].iloc[0] == 993
         assert out["x_min"].dtype == df["x_min"].dtype
 
-    def test_cell_states_its_known_value(self, gapy_df):
-        """A cell reports the attr its members know, not the first row's.
+    def test_rows_of_different_kinds_are_different_cells(self, gapy_df):
+        """A row which never recorded an attr is not the kind of one which did.
 
-        Kind matching admits a row which never recorded an attr into the
-        cell of one that did, so the first row is not always the one
-        that knows.
+        The two are unrelated, so the hole between them is not a gap: a
+        report never bridges cells.
         """
         df = gapy_df.iloc[:2].copy()
         df["tag"] = ["", "sta1"]
-        # kind matching keeps them one cell, so the hole is a real gap
-        out = build_gap_frame(df, "time")
-        assert len(out) == 1
-        assert out["tag"].tolist() == ["sta1"]
-        assert build_coverage_frame(df, "time")["tag"].tolist() == ["sta1"]
+        assert len(build_gap_frame(df, "time")) == 0
+        coverage = build_coverage_frame(df, "time")
+        assert sorted(coverage["tag"].fillna("")) == ["", "sta1"]
 
     def test_integer_dimension_beyond_float_precision(self):
         """A gap survives an integer coordinate too large for float64.

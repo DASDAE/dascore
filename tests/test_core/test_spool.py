@@ -1184,39 +1184,38 @@ class TestConcatenatePartitions:
         # ... spells None, as it does for chunk
         assert len(dc.spool(pair).concatenate(time=...)) == 1
 
-    def test_missing_kind_value_filled_in_rows_and_patch(self, pair):
-        """A member lacking the key matches, and the output carries the key."""
+    def test_missing_kind_value_is_its_own_output(self, pair):
+        """A member lacking the key is another kind; rows and patches agree."""
         first, other = pair
         other = other.update_attrs(acquisition_key="XX.R2D1..RAW")
         out = dc.spool([first, other]).concatenate(time=None)
-        assert len(out) == 1
-        assert out.get_contents()["acquisition_key"].iloc[0] == "XX.R2D1..RAW"
-        assert out[0].attrs.acquisition_key == "XX.R2D1..RAW"
-        assert out[0].shape[1] == 2 * first.shape[1]
+        assert len(out) == 2
+        keys = out.get_contents()["acquisition_key"].fillna("")
+        assert sorted(keys) == ["", "XX.R2D1..RAW"]
+        for patch, key in zip(out, keys):
+            assert patch.attrs.acquisition_key == key
+            assert patch.shape == first.shape
 
     def test_data_units_policed_by_conflict(self, pair):
-        """Known, different units conflict as in chunk; a missing one matches."""
+        """Differing units conflict as in chunk; no units is a unit."""
         first, other = pair
         metres, km = first.set_units("m"), other.set_units("km")
-        with pytest.raises(CoordMergeError, match="data_units"):
-            dc.spool([metres, km]).concatenate(time=None)
+        bare = other.set_units(None)
+        for pair_ in ([metres, km], [metres, bare]):
+            with pytest.raises(CoordMergeError, match="data_units"):
+                dc.spool(pair_).concatenate(time=None)
         dropped = dc.spool([metres, km]).concatenate(time=None, conflict="drop")
         assert len(dropped) == 1
         assert dropped[0].attrs.data_units is None
         assert (
             dc.get_quantity(dropped.get_contents().get("data_units", [None])[0]) is None
         )
-        bare = first.set_units(None)
-        out = dc.spool([bare, km]).concatenate(time=None)
+        # equal units are one output, and the row says what the patch does
+        out = dc.spool([metres, other.set_units("m")]).concatenate(time=None)
         assert len(out) == 1
-        assert dc.get_quantity(out[0].attrs.data_units) == dc.get_quantity("km")
-        # a missing unit never hides a conflict between two known ones
-        time = other.get_coord("time")
-        third = first.update_coords(time_min=time.max() + time.step).set_units("m")
-        with pytest.raises(CoordMergeError, match="data_units"):
-            dc.spool([bare, km, third]).concatenate(time=None)
+        assert dc.get_quantity(out[0].attrs.data_units) == dc.get_quantity("m")
         assert dc.get_quantity(out.get_contents()["data_units"].iloc[0]) == (
-            dc.get_quantity("km")
+            dc.get_quantity("m")
         )
 
     def test_different_dims_partition(self, pair):
@@ -1261,14 +1260,6 @@ class TestConcatenatePartitions:
         expected = {(first.attrs.tag, 2 * first.shape[1]), ("other", first.shape[1])}
         assert kinds == expected
 
-    def test_each_output_carries_its_own_members(self, pair):
-        """A value known only in another output is not borrowed."""
-        first, other = pair
-        blank, tagged = first.update_attrs(tag=""), other.update_attrs(tag="a")
-        out = dc.spool([blank, tagged]).concatenate(time=1)
-        assert [p.attrs.tag for p in out] == ["", "a"]
-        assert list(out.get_contents()["tag"].fillna("")) == ["", "a"]
-
     def test_order_follows_the_dimension(self, pair):
         """Within a partition, patches join in order of the dimension."""
         first, other = pair
@@ -1290,17 +1281,6 @@ class TestConcatenatePartitions:
         loaded = dc.spool(list(selected)).concatenate(time=None)
         assert len(loaded) == 1
         assert loaded[0].shape[1] == 2 * base.shape[1]
-
-    def test_plan_keeps_its_kind_rule(self, pair):
-        """A plan made under one kind rule assembles under it later."""
-        first, other = pair
-        other = other.update_attrs(tag="other")
-        # with tag out of the kind, it is an ordinary attr the policy folds
-        with dc.config_context(patch_kind_attrs=("acquisition_key",)):
-            out = dc.spool([first, other]).concatenate(time=None, conflict="keep_first")
-            assert len(out) == 1
-        assert out[0].shape[1] == 2 * first.shape[1]
-        assert out[0].attrs.tag == first.attrs.tag
 
     def test_positional_check_behavior_still_works(self, pair):
         """The deprecated argument keeps its old positional slot."""

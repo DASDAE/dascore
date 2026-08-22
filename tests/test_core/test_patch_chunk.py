@@ -507,71 +507,61 @@ class TestChunkMerge:
         assert time_max <= time_tup[1]
         assert (time_max + time_step) > time_tup[1]
 
-    def test_missing_attr_merges_and_carries(self):
-        """A member lacking an attr merges; the output carries the known value."""
+    def test_missing_attr_is_a_conflict(self):
+        """A member lacking an attr conflicts with one which states it."""
         p1 = dc.get_example_patch().update_attrs(data_type="velocity")
         time = p1.get_coord("time")
         p2 = dc.get_example_patch(time_min=time.max() + time.step)
         assert p2.attrs.data_type == ""
-        out = dc.spool([p1, p2]).chunk(time=None)
+        with pytest.raises(CoordMergeError, match="data_type"):
+            dc.spool([p1, p2]).chunk(time=None)
+        out = dc.spool([p1, p2]).chunk(time=None, conflict="drop")
         assert len(out) == 1
-        assert out.get_contents()["data_type"].iloc[0] == "velocity"
-        assert out[0].attrs.data_type == "velocity"
+        assert out[0].attrs.data_type == ""
 
     def test_surviving_member_takes_the_rows_attrs(self):
         """Whichever duplicate survives overlap removal, patch and row agree."""
         p1 = dc.get_example_patch().update_attrs(foo="a", data_type="velocity")
         p2 = dc.get_example_patch()  # same span, knows neither
-        for patches in ([p1, p2], [p2, p1]):
-            out = dc.spool(patches).chunk(time=None)
-            assert len(out) == 1
-            row = out.get_contents().iloc[0]
-            assert row["foo"] == "a" and row["data_type"] == "velocity"
-            assert out[0].attrs.foo == "a"
-            assert out[0].attrs.data_type == "velocity"
+        with pytest.raises(CoordMergeError, match=r"foo|data_type"):
+            dc.spool([p1, p2]).chunk(time=None)
+        # keep_first takes the first member's values, stated or not, and
+        # the assembled patch says exactly what its row does.
+        out = dc.spool([p1, p2]).chunk(time=None, conflict="keep_first")
+        assert len(out) == 1
+        assert out.get_contents().iloc[0]["foo"] == "a"
+        assert out[0].attrs.foo == "a"
+        # the other order keeps the first member's silence
+        out = dc.spool([p2, p1]).chunk(time=None, conflict="keep_first")
+        assert len(out) == 1
+        assert pd.isnull(out.get_contents().iloc[0].get("foo"))
+        assert out[0].attrs.get("foo") is None
 
-    def test_attr_held_in_two_kinds_takes_the_numeric_units(self):
-        """An attr stored as text in one patch and a quantity in another."""
-        p1 = dc.get_example_patch().update_attrs(foo=2 * dc.get_quantity("m"))
-        p2 = dc.get_example_patch(time_min=p1.get_coord("time").max()).update_attrs(
-            foo="text"
-        )
-        spool = dc.spool([p1, p2])
-        assert spool._catalog.backend.attr_units_map()["foo"] == "m"
-        assert "foo" not in spool._catalog.backend.attr_units_map(kind="bool")
-        # the quantity member dropped by overlap removal still stamps metres
-        dup = dc.get_example_patch()
-        out = dc.spool([dup, p1]).chunk(time=None)
-        assert out[0].attrs.foo == 2 * dc.get_quantity("m")
-
-    def test_attr_named_like_another_patches_coordinate(self):
-        """An attr is not suppressed because some other patch has such a coordinate."""
-        p1 = dc.get_example_patch().update_attrs(latitude="north")
-        p2 = dc.get_example_patch()
+    def test_attrs_named_like_coordinates_survive_a_chunk(self):
+        """Attrs which look like coordinate metadata are still attrs."""
+        extra = {
+            "latitude": "north",  # a coordinate some other patch has
+            "foo_min": "a",  # an envelope pair with no foo coordinate
+            "foo_max": "b",
+            "time_zone": "UTC",  # a name prefixed by a real dimension
+            "gauge": 10 * dc.get_quantity("m"),  # a quantity
+            "shots": 7,  # a plain number
+        }
+        p1 = dc.get_example_patch().update_attrs(**extra)
         time = p1.get_coord("time")
+        p2 = dc.get_example_patch(time_min=time.max() + time.step)
+        p2 = p2.update_attrs(**extra)
         n = p1.shape[p1.get_axis("distance")]
+        # a patch which holds latitude as a coordinate rather than an attr
         elsewhere = dc.get_example_patch(
             time_min=time.max() + 10 * time.step, tag="other"
         ).update_coords(latitude=("distance", np.arange(n, dtype=float)))
         out = dc.spool([p2, p1, elsewhere]).chunk(time=None)
-        first = out.select(tag="random")[0]
-        assert first.attrs.latitude == "north"
-
-    def test_attr_pair_named_like_an_envelope_is_stamped(self):
-        """foo_min and foo_max attrs, with no foo coordinate, are attrs."""
-        p1 = dc.get_example_patch().update_attrs(foo_min="a", foo_max="b")
-        p2 = dc.get_example_patch()
-        out = dc.spool([p2, p1]).chunk(time=None)
-        assert out[0].attrs.foo_min == "a"
-        assert out[0].attrs.foo_max == "b"
-
-    def test_attr_named_like_a_coordinate_is_stamped(self):
-        """An attr such as time_zone is not coordinate metadata."""
-        p1 = dc.get_example_patch().update_attrs(time_zone="UTC")
-        p2 = dc.get_example_patch()
-        out = dc.spool([p2, p1]).chunk(time=None)
-        assert out.get_contents()["time_zone"].iloc[0] == "UTC"
-        assert out[0].attrs.time_zone == "UTC"
+        merged = out.select(tag="random")[0]
+        row = out.get_contents().set_index("tag").loc["random"]
+        for name, value in extra.items():
+            assert merged.attrs.get(name) == value
+        assert row["time_zone"] == "UTC"
 
     def test_dropped_coordinate_envelope_is_not_an_attr(self):
         """A coordinate only one member has leaves no stray attrs behind."""
@@ -584,17 +574,6 @@ class TestChunkMerge:
         patch = out[0]
         assert patch.attrs.get("latitude_min") is None
         assert patch.attrs.get("latitude_max") is None
-
-    def test_numeric_attrs_are_stamped_with_their_units(self):
-        """A number comes back a number; a quantity comes back with its units."""
-        p1 = dc.get_example_patch().update_attrs(
-            gauge=10 * dc.get_quantity("m"), shots=7
-        )
-        p2 = dc.get_example_patch()
-        for patches in ([p1, p2], [p2, p1]):
-            patch = dc.spool(patches).chunk(time=None)[0]
-            assert patch.attrs.gauge == 10 * dc.get_quantity("m")
-            assert patch.attrs.shots == 7
 
     def test_history_warns_not_raises(self):
         """Differing histories merge with a warning, carrying the first's."""
