@@ -14,6 +14,7 @@ from dascore.exceptions import ParameterError
 from dascore.utils.chunk_plan import _REPORT_COLUMNS
 from dascore.utils.display import (
     _SECONDS_IN_DAY,
+    ACQUISITION_ATTR,
     group_names,
     human_duration,
     percent,
@@ -46,12 +47,6 @@ _GAP_TICKS = (1.0, 60.0, 600.0, 3_600.0, 6 * 3_600.0, _SECONDS_IN_DAY)
 # is drawn over, so naming the lane with them would repeat the axis.
 _ENVELOPE_SUFFIXES = ("min", "max", "step", "units")
 
-# What names a group which shares every attribute it states with the
-# others, or states none: the key the acquisition is filed under. It is
-# the first of the config's `patch_kind_attrs`, and the one of them
-# which names a place rather than describing it.
-_ACQUISITION_ATTR = "acquisition_key"
-
 
 def _lane_names(report: pd.DataFrame, dim: str) -> list[str]:
     """Name each group by what tells it apart, and how complete it is."""
@@ -63,7 +58,7 @@ def _lane_names(report: pd.DataFrame, dim: str) -> list[str]:
         report,
         ignore=set(_REPORT_COLUMNS) | envelope,
         ordinals=report["group_id"],
-        fallback=_ACQUISITION_ATTR,
+        fallback=ACQUISITION_ATTR,
     )
     return [
         f"{name}  {percent(coverage)}"

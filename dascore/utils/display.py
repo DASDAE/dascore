@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import textwrap
 from collections import Counter
-from collections.abc import Mapping, Sized
+from collections.abc import Iterable, Mapping, Sized
 from contextlib import suppress
 from functools import singledispatch
 
@@ -231,7 +231,7 @@ def _length(value) -> int | None:
     return None
 
 
-def human_duration(value) -> str:
+def human_duration(value: np.timedelta64 | pd.Timedelta | float) -> str:
     """Say how long something lasted, in the largest unit which fits."""
     # to_float reads a duration in seconds, whichever time type states
     # it, and passes a plain number through as itself.
@@ -255,7 +255,19 @@ def percent(value: float) -> str:
     return "<100%"
 
 
-def group_names(frame, ignore=(), ordinals=None, fallback=None) -> list[str]:
+# What names a group which shares every attribute it states with the
+# others, or states none: the key the acquisition is filed under. It is
+# the first of the config's `patch_kind_attrs`, and the one of them
+# which names a place rather than describing it.
+ACQUISITION_ATTR = "acquisition_key"
+
+
+def group_names(
+    frame: pd.DataFrame,
+    ignore: Iterable[str] = (),
+    ordinals: Iterable | None = None,
+    fallback: str | None = None,
+) -> list[str]:
     """
     Name each row of a group frame by what tells it apart from the others.
 

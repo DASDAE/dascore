@@ -85,6 +85,7 @@ from dascore.utils.chunk_plan import (
     subdivision_pieces,
 )
 from dascore.utils.display import (
+    ACQUISITION_ATTR,
     elision_text,
     get_header_text,
     get_nice_text,
@@ -2362,18 +2363,8 @@ class Spool(NamespaceOwner):
 
     def _stated_dims(self, df) -> list[str]:
         """The dimensions this spool's patches actually have."""
-        # Two filters, and both are needed. The relation carries the
-        # envelope columns of every coordinate, dimensional or not, so
-        # `dims` is what says which of them is an axis; and it carries
-        # time_min/time_max whatever the patches state, so a column of
-        # NaT is a dimension nothing here has.
-        named = set()
-        for spelling in df["dims"].dropna().unique():
-            named.update(x for x in str(spelling).split(",") if x)
         stated = [
-            x
-            for x in get_dim_names_from_columns(df)
-            if x in named and self._measured(df, x).any()
+            x for x in get_dim_names_from_columns(df) if self._measured(df, x).any()
         ]
         # Time leads where it is one of them: it is the dimension a
         # reader looks for, and the one the tracks are measured along.
@@ -2381,8 +2372,34 @@ class Spool(NamespaceOwner):
 
     @staticmethod
     def _measured(df, dim: str):
-        """Which rows state both ends of their extent along a dimension."""
-        return df[f"{dim}_min"].notna() & df[f"{dim}_max"].notna()
+        """
+        Which rows have this dimension as an axis and state both its ends.
+
+        Three things are asked, and each is needed. The relation carries
+        an envelope for every coordinate, dimensional or not, and a
+        patch may ride a coordinate of this name along a different axis
+        -- so `dims` is what says whose axis it is, row by row rather
+        than over the frame. And the relation carries time whatever the
+        patches state, so a column of NaT is a dimension nothing has.
+        """
+        axis = df["dims"].fillna("").str.split(",").map(lambda x: dim in x)
+        return axis & df[f"{dim}_min"].notna() & df[f"{dim}_max"].notna()
+
+    @staticmethod
+    def _value_kinds(values) -> set[str]:
+        """How many kinds of thing an envelope column holds."""
+        # One dimension name can be a time on one patch and a number on
+        # another. Their envelopes share a column and do not compare, so
+        # asking for the extent of the two together raises.
+        kinds = set()
+        for value in values.dropna():
+            if isinstance(value, _TIMES):
+                kinds.add("time")
+            elif isinstance(value, numbers.Number | np.number):
+                kinds.add("number")
+            else:
+                kinds.add("label")
+        return kinds
 
     def _dims_text(self, df, dims: list[str]) -> Text:
         """The extent this spool covers along each of its dimensions."""
@@ -2391,9 +2408,15 @@ class Spool(NamespaceOwner):
         base += Text(" (") + Text(", ".join(dims), style="bold") + Text(")")
         width = max(len(x) for x in dims)
         for dim in dims:
-            low, high = df[f"{dim}_min"].min(), df[f"{dim}_max"].max()
-            units = self._dim_units(df, dim)
+            measured = df[self._measured(df, dim)]
             base += Text.assemble("\n    ", Text(f"{dim + ':':<{width + 1}} ", "bold"))
+            if len(self._value_kinds(measured[f"{dim}_min"])) > 1:
+                # Two kinds do not compare, so there are no two ends to
+                # state. Saying so beats the whole summary disappearing.
+                base += Text("mixed value kinds", key_style)
+                continue
+            low, high = measured[f"{dim}_min"].min(), measured[f"{dim}_max"].max()
+            units = self._dim_units(df, dim)
             base += get_nice_text(low) + Text(" to ", key_style) + get_nice_text(high)
             if len(units) > 1:
                 # Envelopes are stored in the units each patch was read
@@ -2493,7 +2516,14 @@ class Spool(NamespaceOwner):
         base += Text(f" ({len(frame)} along ") + Text(dim, style="bold") + Text(")")
         limit = dc.get_config().display_max_items
         shown = frame.head(limit)
-        names = group_names(frame, ignore=("_n", "_low", "_high"))[:limit]
+        names = group_names(
+            frame,
+            ignore=("_n", "_low", "_high"),
+            # The same fallback the plot names a lane by, or a group
+            # nothing tells apart is a track called "group 0" and a lane
+            # called by its acquisition -- one rule, two names.
+            fallback=ACQUISITION_ATTR,
+        )[:limit]
         counted = [f"{x:,d} patch{'' if x == 1 else 'es'}" for x in shown["_n"]]
         # The columns are measured over the lines which are drawn: a name
         # elided below should not pad the names above it.
@@ -2521,7 +2551,14 @@ class Spool(NamespaceOwner):
         if not (dims := self._stated_dims(df)):
             return []
         blocks = [self._dims_text(df, dims)]
-        if (tracks := self._tracks_text(df, dims[0])) is not None:
+        # Tracks are measured along one dimension, which has to be one
+        # whose ends can be compared; a mixed-kind dimension has none.
+        measurable = [
+            x
+            for x in dims
+            if len(self._value_kinds(df[self._measured(df, x)][f"{x}_min"])) == 1
+        ]
+        if measurable and (tracks := self._tracks_text(df, measurable[0])) is not None:
             blocks.append(tracks)
         return blocks
 

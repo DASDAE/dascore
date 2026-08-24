@@ -2202,6 +2202,68 @@ class TestSpoolRepr:
         assert "ft>" not in rendered
         assert " m>" not in rendered
 
+    def test_a_nameless_track_is_named_as_its_lane_is(self):
+        """A group nothing tells apart falls back where the plot does."""
+        spool = dc.spool(
+            [
+                dc.get_example_patch().update_attrs(
+                    acquisition_key="XM.A..HSF", station="A"
+                ),
+                dc.get_example_patch().update_attrs(acquisition_key="XM.A..HSF"),
+            ]
+        )
+        rendered = str(spool)
+        lanes = _lane_names(spool.get_coverage("time"), "time")
+        # The plot named this group by its acquisition; a track calling
+        # it "group 0" would be one rule reaching two names.
+        assert "XM.A..HSF" in rendered
+        assert "group 0" not in rendered
+        assert all(x.rsplit("  ", 1)[0] in rendered for x in lanes)
+
+    def test_a_dimension_of_two_kinds_states_no_one_extent(self):
+        """One name backed by times and by numbers has no two ends."""
+        data = np.random.default_rng().random((3, 4))
+        patches = [
+            dc.Patch(
+                data=data,
+                coords={"epoch": epoch, "distance": np.arange(4.0)},
+                dims=("epoch", "distance"),
+                attrs={"tag": tag},
+            )
+            for tag, epoch in (
+                ("dated", dc.to_datetime64(np.arange(3.0))),
+                ("numeric", np.arange(3.0)),
+            )
+        ]
+        rendered = str(dc.spool(patches))
+        # Comparing the two raised, and the whole summary went with it.
+        assert "epoch:" in rendered
+        assert "mixed value kinds" in rendered
+        assert "distance: 0.000 to 3.000" in rendered
+        # Tracks are measured along a dimension whose ends compare.
+        assert "➤ Tracks (2 along distance)" in rendered
+
+    def test_a_coordinate_riding_another_axis_is_not_this_one(self):
+        """A name may be a dimension on one patch and a rider on another."""
+        data = np.random.default_rng().random((4, 5))
+        as_dim = dc.Patch(
+            data=data,
+            coords={"quality": np.arange(4.0), "time": np.arange(5.0)},
+            dims=("quality", "time"),
+            attrs={"tag": "dim"},
+        )
+        as_rider = dc.Patch(
+            data=data,
+            coords={"channel": np.arange(4.0), "time": np.arange(5.0)},
+            dims=("channel", "time"),
+            attrs={"tag": "rider"},
+        ).update_coords(quality=("channel", np.linspace(100.0, 200.0, 4)))
+        rendered = str(dc.spool([as_dim, as_rider]))
+        # The rider's 100-200 is not part of the quality axis, whose
+        # only patch spans 0 to 3.
+        assert "quality: 0.000 to 3.000" in rendered
+        assert "200" not in rendered
+
     def test_a_kind_attr_named_twice_is_one_key(self):
         """A config may repeat an attribute; a groupby may not."""
         with config_context(patch_kind_attrs=("tag", "tag")):
