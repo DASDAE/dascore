@@ -370,11 +370,15 @@ def _output_records(
     outputs: pd.DataFrame,
     token: str,
     aux_info: Mapping[int, Mapping[str, Mapping]] | None = None,
+    sizes: Mapping[int, int] | None = None,
 ) -> list[SourceRecord]:
     """
     Convert plan output rows into ingestible source records.
 
+    ``sizes`` names the outputs whose sample count is known (see
+    `_whole_member_sizes`); every other output states none.
     """
+    sizes = sizes or {}
     records = []
     aux_info = aux_info or {}
     # Envelope columns belong to coordinates actually present in a row;
@@ -440,6 +444,7 @@ def _output_records(
             # NaN is truthy, so `or ""` alone would store the string
             # "nan" and poison every later np.dtype() of this column.
             dtype=_dtype_str(row.get("_dtype")),
+            data_size=sizes.get(output_id),
             time_min=_ns(row.get("time_min")),
             time_max=_ns(row.get("time_max")),
             time_step=_ns(row.get("time_step")),
@@ -671,6 +676,29 @@ def _residual_ranges(residuals) -> dict:
     return out
 
 
+def _whole_member_sizes(trims: pd.DataFrame, sources: pd.DataFrame) -> dict[int, int]:
+    """
+    The sample count of each output which is one whole member.
+
+    Such an output *is* that patch, so it holds the samples the patch
+    states. An output assembled from more than one member, or from a
+    member a trim cuts down, has a size only the loaded patch knows, and
+    states none rather than a member's.
+    """
+    if trims.empty or "_data_size" not in sources.columns:
+        return {}
+    counts = trims.groupby("output_id")["_patch_id"].transform("size").to_numpy()
+    modified = np.asarray(trims.get("_modified", False), dtype=bool)
+    whole = trims[(counts == 1) & ~modified]
+    lookup = sources.drop_duplicates("_patch_id").set_index("_patch_id")["_data_size"]
+    out = {}
+    for output_id, patch_id in zip(whole["output_id"], whole["_patch_id"]):
+        size = lookup.get(patch_id)
+        if not pd.isnull(size):
+            out[int(output_id)] = int(size)
+    return out
+
+
 def derived_catalog(
     *,
     source_rows: pd.DataFrame,
@@ -763,7 +791,9 @@ def derived_catalog(
     aux_info = _aux_coord_info(
         sources, trims, name, coord_dims_map, trimmed_dims, concat=mode == "concat"
     )
-    records = _output_records(outputs, token, aux_info=aux_info)
+    records = _output_records(
+        outputs, token, aux_info=aux_info, sizes=_whole_member_sizes(trims, sources)
+    )
     backend.write_sources(records)
     return PatchCatalog(backend=backend, resolver=resolver)
 

@@ -228,7 +228,13 @@ class Spool(NamespaceOwner):
 
         The columns the index keeps for itself are not part of the
         frame: everything returned is public, so no column name starts
-        with an underscore.
+        with an underscore. A few are private only because the chunk
+        planner polices public columns; those are presented under their
+        public names rather than dropped (`dascore.utils.pd.PRESENTERS`
+        lists them), so the frame states each patch's `dtype` and
+        `data_size` -- the samples its data array holds. A row which
+        does not know its size states none: a merged or subdivided
+        chunk output, or a patch a selection trims.
 
         Examples
         --------
@@ -236,6 +242,7 @@ class Spool(NamespaceOwner):
         >>> spool = dc.get_example_spool("random_das")
         >>> df = spool.get_contents()
         >>> assert not [x for x in df.columns if str(x).startswith("_")]
+        >>> assert df["data_size"].iloc[0] == spool[0].size
         """
         # Shallow: copy-on-write is always on from pandas 3, so the
         # caller's frame detaches from the cached one on its first write.
@@ -2290,6 +2297,11 @@ class Spool(NamespaceOwner):
                 "source_format",
                 "source_version",
                 "_modified",
+                # A plan states no size until its outputs are assembled,
+                # and equality holds between a view and its
+                # materialization: the envelopes already say what the
+                # rows describe, so the sample count adds nothing here.
+                "_data_size",
                 *[c for c in df.columns if str(c).endswith("_def_key")],
             ]
             out = df.drop(columns=drop, errors="ignore")

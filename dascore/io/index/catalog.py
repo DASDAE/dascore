@@ -441,6 +441,29 @@ class _Keep:
 _KEEP = _Keep()
 
 
+def _forget_trimmed_sizes(df: pd.DataFrame, residuals=()) -> pd.DataFrame:
+    """
+    Blank the stored sample count of every row a selection trims.
+
+    A trimmed row describes fewer samples than its source patch holds,
+    and how many is known only once the trim is applied, so it states no
+    size rather than the source's. A residual selection is not folded
+    into the envelopes at all — sample indices have no envelope to fold
+    into — so it trims every row it presents.
+    """
+    if "_data_size" not in df.columns:
+        return df
+    if residuals:
+        trimmed = np.ones(len(df), dtype=bool)
+    elif "_modified" in df.columns:
+        trimmed = df["_modified"].to_numpy(dtype=bool)
+    else:
+        return df
+    if not trimmed.any():
+        return df
+    return df.assign(_data_size=df["_data_size"].astype("Int64").where(~trimmed))
+
+
 class PatchCatalog:
     """
     Query-composable metadata catalog over the spool index tables.
@@ -968,6 +991,7 @@ class PatchCatalog:
                 for name, canonical in ranges.items():
                     if isinstance(canonical, _CanonicalRange):
                         df = _adjust_unit_segments(df, name, canonical)
+            df = _forget_trimmed_sizes(df, self._residuals)
             # Re-read the revision: bootstrapping the backend above can
             # bump it, and this frame reflects the state after that.
             return self._df_cache.set(df, self._revision.value)

@@ -496,6 +496,44 @@ class TestGetContents:
         df = random_spool.get_contents()
         assert {"time_units", "distance_units"}.issubset(df.columns)
 
+    def test_data_description_survives_the_drop(self, random_spool):
+        """`_dtype` and `_data_size` are renamed, not dropped."""
+        df = random_spool.get_contents()
+        patch = random_spool[0]
+        assert df["dtype"].iloc[0] == str(patch.data.dtype)
+        assert df["data_size"].iloc[0] == patch.size
+
+    def test_trimmed_row_states_no_size(self, random_spool):
+        """A row the selection trims no longer claims the source's size."""
+        df = random_spool.get_contents()
+        start, stop = df["time_min"].iloc[0], df["time_max"].iloc[0]
+        trimmed = random_spool.select(time=(start, start + (stop - start) / 2))
+        contents = trimmed.get_contents()
+        assert contents["data_size"].isnull().all()
+        # the element type is unchanged by a trim, so it is still stated
+        assert contents["dtype"].iloc[0] == str(trimmed[0].data.dtype)
+
+    def test_chunked_row_states_no_size(self, random_spool):
+        """A chunk output describes a patch whose size is not yet known."""
+        contents = random_spool.chunk(time=None).get_contents()
+        assert contents["data_size"].isnull().all()
+        # a subdivided output is a piece of a patch, not the patch
+        assert random_spool.chunk(time=4).get_contents()["data_size"].isnull().all()
+
+    def test_sample_trimmed_row_states_no_size(self, random_spool):
+        """A samples selection trims at load, so no row states a size."""
+        view = random_spool.select(time=(0, 10), samples=True)
+        assert view.get_contents()["data_size"].isnull().all()
+        # and a plan over that view cannot recover one either
+        combined = view + dc.spool([])
+        assert combined.get_contents()["data_size"].isnull().all()
+
+    def test_whole_member_output_keeps_size(self, random_spool):
+        """An output which is one whole patch still states that patch's size."""
+        combined = random_spool + dc.spool([])
+        want = random_spool.get_contents()["data_size"].tolist()
+        assert combined.get_contents()["data_size"].tolist() == want
+
 
 class TestSelect:
     """Tests for selecting/trimming spools."""

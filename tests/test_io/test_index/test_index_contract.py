@@ -8,6 +8,7 @@ index design doc (see discussion #648).
 
 from __future__ import annotations
 
+import math
 import re
 
 import numpy as np
@@ -238,6 +239,57 @@ class TestElementDtype:
             df = back.query()
             # the structural column keeps the element dtype, not the attr
             assert df["dtype"].iloc[0] == summary.dtype
+        finally:
+            back.close()
+
+
+class TestDataSize:
+    """The samples a patch holds are recorded per patch."""
+
+    def test_data_size_round_trips(self, backend):
+        """Each patch keeps the sample count its summary's shape implied."""
+        df = backend.query()
+
+        def _key(path):
+            """Compare path-independently; Windows round-trips backslashes."""
+            return str(path).replace("\\", "/")
+
+        expected = {_key(x.source_path): math.prod(x.shape) for x in make_summaries()}
+        got = {_key(k): int(v) for k, v in zip(df["source_path"], df["data_size"])}
+        assert got == expected
+
+    def test_shapeless_summary_states_no_size(self, tmp_path):
+        """A summary with no shape states no size; none is inferred."""
+        summary = make_summaries()[0]
+        shapeless = summary.new(shape=())
+        path = tmp_path / "shapeless.sqlite3"
+        back = get_backend(path)
+        try:
+            back.write_sources(summaries_to_records([shapeless]))
+            assert pd.isnull(back.query()["data_size"].iloc[0])
+        finally:
+            back.close()
+
+    def test_data_size_attr_does_not_shadow_column(self, tmp_path):
+        """A patch attr named `data_size` is skipped, not written."""
+        summary = make_summaries()[0]
+        shadowed = PatchSummary(
+            attrs=dict(summary.attrs.model_dump(), data_size="not a size"),
+            coords={k: v.model_dump() for k, v in summary.coords.items()},
+            dims=summary.dims,
+            shape=summary.shape,
+            dtype=summary.dtype,
+            source_path=summary.source_path,
+            source_format=summary.source_format,
+            source_version=summary.source_version,
+        )
+        path = tmp_path / "shadow.sqlite3"
+        back = get_backend(path)
+        try:
+            with pytest.warns(UserWarning, match="data_size"):
+                back.write_sources(summaries_to_records([shadowed]))
+            df = back.query()
+            assert df["data_size"].iloc[0] == math.prod(summary.shape)
         finally:
             back.close()
 

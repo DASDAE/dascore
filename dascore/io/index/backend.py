@@ -593,6 +593,7 @@ class SQLiteIndexBackend:
                             patch.source_patch_key,
                             patch.dims,
                             patch.dtype,
+                            patch.data_size,
                             patch.time_min,
                             patch.time_max,
                             patch.time_step,
