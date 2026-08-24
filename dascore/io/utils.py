@@ -194,8 +194,14 @@ def get_gridded_coord(values, units=None) -> BaseCoord:
     coord = get_coord(data=values, units=units)
     if len(coord) < 2 or not isinstance(coord, CoordRange | CoordMonotonicArray):
         return coord
-    # Anchored on the stored values rather than by snapping `coord`, because
-    # get_coord may already have inferred a range off the median step, which
+    # An array whose steps are all the same value states its grid outright,
+    # and get_coord already built that grid. Rebuilding gains nothing and
+    # would compute the span in the stored dtype, which overflows for a
+    # narrow integer coordinate spanning most of its range.
+    if len(np.unique(np.diff(values))) == 1:
+        return coord
+    # Otherwise anchor on the stored values rather than snapping `coord`,
+    # because get_coord may have inferred a range off the median step, which
     # leaves the last sample a few ulp from the stored one. Two files whose
     # jitter landed on opposite sides of that tolerance would then disagree
     # about a grid they both state identically, and would no longer merge.

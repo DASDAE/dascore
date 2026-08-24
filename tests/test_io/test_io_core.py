@@ -339,6 +339,18 @@ class TestGetGriddedCoord:
 
         np.testing.assert_array_equal(first.values, second.values)
 
+    def test_narrow_integer_range_does_not_overflow(self):
+        """An integer grid spanning most of its dtype keeps its own range.
+
+        Recomputing the span in the stored dtype would wrap it negative.
+        """
+        values = np.array([-30000, 0, 30000], dtype=np.int16)
+
+        coord = get_gridded_coord(values, units="m")
+
+        assert isinstance(coord, CoordRange)
+        np.testing.assert_array_equal(coord.values, values)
+
     def test_single_sample_states_no_step(self):
         """One sample states no spacing, so none should be invented."""
         coord = get_gridded_coord(np.array([42.0]), units="m")
