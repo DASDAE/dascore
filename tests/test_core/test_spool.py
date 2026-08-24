@@ -2184,8 +2184,8 @@ class TestSpoolRepr:
         # human_duration says nothing of a zero, which read as "<>".
         assert "<>" not in rendered
 
-    def test_a_track_is_not_labelled_in_a_unit_it_was_not_measured_in(self):
-        """Where patches disagree on a unit, no track claims either one."""
+    def test_tracks_are_not_measured_across_two_units(self):
+        """A metre taken from a foot is a number standing for nothing."""
         data = np.random.default_rng().random((6, 4))
         patches = [
             dc.Patch(
@@ -2197,7 +2197,10 @@ class TestSpoolRepr:
             for tag, units in (("metric", "m"), ("imperial", "ft"))
         ]
         rendered = str(dc.spool(patches))
-        assert "➤ Tracks (2 along distance)" in rendered
+        # distance is the dimension tracks would be measured along, and
+        # its patches disagree; frequency is the one whose ends compare.
+        assert "distance:  0.000 to 5.000  (mixed units: ft, m)" in rendered
+        assert "➤ Tracks (2 along frequency)" in rendered
         # Both tracks read <5 ft> when the first unit stood for every one.
         assert "ft>" not in rendered
         assert " m>" not in rendered
@@ -2242,6 +2245,66 @@ class TestSpoolRepr:
         assert "distance: 0.000 to 3.000" in rendered
         # Tracks are measured along a dimension whose ends compare.
         assert "➤ Tracks (2 along distance)" in rendered
+
+    def test_an_instant_and_an_offset_are_two_kinds(self):
+        """A date and a length are both times and do not compare."""
+        data = np.random.default_rng().random((3, 4))
+        patches = [
+            dc.Patch(
+                data=data,
+                coords={"epoch": epoch, "distance": np.arange(4.0)},
+                dims=("epoch", "distance"),
+                attrs={"tag": tag},
+            )
+            for tag, epoch in (
+                ("instant", dc.to_datetime64(np.arange(3.0))),
+                ("offset", dc.to_timedelta64(np.arange(3.0))),
+            )
+        ]
+        rendered = str(dc.spool(patches))
+        assert "epoch:    mixed value kinds" in rendered
+        # And tracks fall through to a dimension whose ends do compare.
+        assert "➤ Tracks (2 along distance)" in rendered
+
+    def test_ends_too_far_apart_to_subtract_still_state_themselves(self):
+        """A duration pandas cannot hold is not a reason to say nothing."""
+        spool = dc.spool(
+            [
+                dc.get_example_patch(
+                    time_min=dc.to_datetime64("1700-01-01")
+                ).update_attrs(tag="old"),
+                dc.get_example_patch(
+                    time_min=dc.to_datetime64("2200-01-01")
+                ).update_attrs(tag="new"),
+            ]
+        )
+        rendered = str(spool)
+        # 500 years overflows a Timedelta; the extents survive it.
+        assert "1700-01-01 to 2200-01-01" in rendered
+        assert "distance: 0.000 to 299.000 m" in rendered
+
+    def test_a_dimension_states_the_units_of_its_own_rows(self):
+        """A coordinate riding another axis does not name this one's unit."""
+        data = np.random.default_rng().random((4, 5))
+        as_dim = dc.Patch(
+            data=data,
+            coords={"quality": np.arange(4.0), "time": np.arange(5.0)},
+            dims=("quality", "time"),
+            attrs={"tag": "dim"},
+        )
+        as_rider = dc.Patch(
+            data=data,
+            coords={"channel": np.arange(4.0), "time": np.arange(5.0)},
+            dims=("channel", "time"),
+            attrs={"tag": "rider"},
+        ).update_coords(quality=("channel", np.arange(4.0)))
+        as_rider = as_rider.convert_units(quality="ft")
+        rendered = str(dc.spool([as_dim, as_rider]))
+        # The rider's feet are not the axis's units, and are not a
+        # conflict with them either.
+        assert "quality: 0.000 to 3.000" in rendered
+        assert "mixed units" not in rendered
+        assert "ft" not in rendered
 
     def test_a_coordinate_riding_another_axis_is_not_this_one(self):
         """A name may be a dimension on one patch and a rider on another."""

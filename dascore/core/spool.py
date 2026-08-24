@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, ClassVar, Literal, NamedTuple, Self, TypeVar, 
 
 import numpy as np
 import pandas as pd
+from pandas.errors import OutOfBoundsDatetime, OutOfBoundsTimedelta
 from rich.text import Text
 
 import dascore as dc
@@ -137,9 +138,10 @@ class _InventoryQuery(NamedTuple):
     kwargs: dict
 
 
-# What a dimension measured in time is stated as. Both are a duration
-# apart, which is a fact its two ends do not carry; every other
-# dimension states its own magnitude.
+# The types a dimension measured in time is stated in, instants and
+# offsets alike. Two such ends are a duration apart, which is a fact
+# neither end carries; every other dimension states its own magnitude
+# in its own units.
 _TIMES = (pd.Timestamp, np.datetime64, pd.Timedelta, np.timedelta64)
 
 
@@ -2346,9 +2348,12 @@ class Spool(NamespaceOwner):
             # A repr which raises makes an object undebuggable at the
             # one moment someone needs to look at it, so nothing a
             # summary does is allowed to stop the header from printing.
-            # Nor is it allowed to warn: building the relation can say a
-            # great deal about how it was built, and none of that was
-            # asked for by typing a name.
+            # Nor is it allowed to warn: building a directory index
+            # makes pandas warn, once per insert, that the frame is
+            # fragmented -- a hundred lines of advice about a frame the
+            # caller never asked for, from typing a name. Every category
+            # goes, since a repr only reads; anything worth warning
+            # about is warned again by the call which does the work.
             with suppress(Exception), suppress_warnings():
                 blocks.extend(self._summary_blocks())
         else:
@@ -2375,26 +2380,43 @@ class Spool(NamespaceOwner):
         """
         Which rows have this dimension as an axis and state both its ends.
 
-        Three things are asked, and each is needed. The relation carries
-        an envelope for every coordinate, dimensional or not, and a
-        patch may ride a coordinate of this name along a different axis
-        -- so `dims` is what says whose axis it is, row by row rather
-        than over the frame. And the relation carries time whatever the
-        patches state, so a column of NaT is a dimension nothing has.
+        Three things are asked. The relation carries an envelope for
+        every coordinate, dimensional or not, and a patch may ride a
+        coordinate of this name along a different axis -- so `dims` is
+        what says whose axis it is, row by row rather than over the
+        frame. `dims` alone is not enough: a patch may name an axis
+        whose envelope it never filled in, and an unstated end bounds
+        nothing.
         """
-        axis = df["dims"].fillna("").str.split(",").map(lambda x: dim in x)
+        spelled = df["dims"].astype(str).fillna("")
+        axis = spelled.str.split(",").map(lambda x: dim in [y.strip() for y in x])
         return axis & df[f"{dim}_min"].notna() & df[f"{dim}_max"].notna()
+
+    def _comparable(self, df, dim: str) -> bool:
+        """Whether this dimension's ends can be measured against each other."""
+        measured = df[self._measured(df, dim)]
+        # Two kinds do not subtract, and neither do two units: a metre
+        # taken from a foot is a number standing for nothing.
+        return (
+            len(self._value_kinds(measured[f"{dim}_min"])) == 1
+            and len(self._dim_units(measured, dim)) <= 1
+        )
 
     @staticmethod
     def _value_kinds(values) -> set[str]:
-        """How many kinds of thing an envelope column holds."""
+        """Which kinds of thing an envelope column holds."""
         # One dimension name can be a time on one patch and a number on
         # another. Their envelopes share a column and do not compare, so
         # asking for the extent of the two together raises.
         kinds = set()
         for value in values.dropna():
-            if isinstance(value, _TIMES):
-                kinds.add("time")
+            # An instant and an offset are both times and still do not
+            # compare: a date is not a length, and asking for the
+            # smaller of the two raises.
+            if isinstance(value, pd.Timestamp | np.datetime64):
+                kinds.add("instant")
+            elif isinstance(value, pd.Timedelta | np.timedelta64):
+                kinds.add("offset")
             elif isinstance(value, numbers.Number | np.number):
                 kinds.add("number")
             else:
@@ -2416,7 +2438,7 @@ class Spool(NamespaceOwner):
                 base += Text("mixed value kinds", key_style)
                 continue
             low, high = measured[f"{dim}_min"].min(), measured[f"{dim}_max"].max()
-            units = self._dim_units(df, dim)
+            units = self._dim_units(measured, dim)
             base += get_nice_text(low) + Text(" to ", key_style) + get_nice_text(high)
             if len(units) > 1:
                 # Envelopes are stored in the units each patch was read
@@ -2457,7 +2479,14 @@ class Spool(NamespaceOwner):
         zero, which reads as a label on a gap and as an empty pair of
         brackets here.
         """
-        if not (said := human_duration(high - low)):
+        try:
+            span = high - low
+        except (OutOfBoundsDatetime, OutOfBoundsTimedelta):
+            # Two instants can lie further apart than a Timedelta holds.
+            # How long that is matters less than the extents it would
+            # otherwise take down with it.
+            return None
+        if not (said := human_duration(span)):
             return None
         return Text(f"<{said}>", dascore_styles["keys"])
 
@@ -2552,12 +2581,8 @@ class Spool(NamespaceOwner):
             return []
         blocks = [self._dims_text(df, dims)]
         # Tracks are measured along one dimension, which has to be one
-        # whose ends can be compared; a mixed-kind dimension has none.
-        measurable = [
-            x
-            for x in dims
-            if len(self._value_kinds(df[self._measured(df, x)][f"{x}_min"])) == 1
-        ]
+        # whose ends can be compared.
+        measurable = [x for x in dims if self._comparable(df, x)]
         if measurable and (tracks := self._tracks_text(df, measurable[0])) is not None:
             blocks.append(tracks)
         return blocks

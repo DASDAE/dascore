@@ -357,7 +357,7 @@ class TestHumanDuration:
         assert human_duration(pd.Timedelta(seconds=seconds)) == text
 
     def test_duration_of_a_plain_number(self):
-        """A dimension which is not time still measures in seconds."""
+        """A plain number is read as a count of seconds, as the gap ticks are."""
         assert human_duration(12.0) == "12 s"
 
     def test_duration_smaller_than_any_unit(self):

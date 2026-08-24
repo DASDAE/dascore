@@ -221,7 +221,7 @@ import dascore as dc
 dc.get_example_spool("diverse_das")
 ```
 
-Summarizing realizes the whole index relation, which is more work than a glance is worth on a very large archive. The `display_max_patches` [configuration option](configuration.qmd) says where that line is; past it a spool states its count and its path alone. Nothing here measures coverage — that runs a chunk plan, and is what `get_coverage` below is for.
+Summarizing realizes the whole index relation, which is more work than a glance is worth on a very large archive. The `display_max_patches` [configuration option](configuration.qmd) says where that line is, and it holds however the spool got here: past it a spool prints its count, its path, and a line naming the limit it exceeded — never the extents — whether or not the relation was already realized. Nothing here measures coverage — that runs a chunk plan, and is what `get_coverage` below is for.
 
 # get_contents
 

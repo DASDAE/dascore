@@ -273,8 +273,10 @@ def group_names(
 
     The one naming rule a spool has, kept apart from the drawing of it
     so a coverage plot's lanes and a spool repr's tracks are named the
-    same way. The same way, not always the same name: each caller says
-    what to fall back on, and they partition their rows differently.
+    same way. The same way, not always the same name: both callers fall
+    back on the same attribute, but they partition their rows
+    differently and number an unnameable group differently -- the plot
+    by its ``group_id``, a repr by row position.
 
     Parameters
     ----------
