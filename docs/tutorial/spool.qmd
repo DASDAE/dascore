@@ -213,7 +213,7 @@ A boolean mask is applied by position, so it must come from the contents of the 
 
 # What a spool says of itself
 
-Printing a spool states how many patches it holds, the extent it covers along each dimension its patches have, and one *track* per group of patches. A track is named by the values which tell its group apart from the others, which is the same name the [coverage plot](visualization.qmd#spool) puts on the matching lane, so the text and the picture can be read against each other.
+Printing a spool states how many patches it holds, the extent it covers along each dimension its patches have, and one *track* per kind of patch. A track is named by the values which tell its kind apart from the others, by the same rule the [coverage plot](visualization.qmd#spool) names its lanes.
 
 ```{python}
 import dascore as dc
