@@ -1685,7 +1685,6 @@ def _forge(frame: pd.DataFrame, path, documents: str) -> None:
     pyarrow.parquet.write_table(table.replace_schema_metadata(kept), path)
 
 
-@pytest.mark.skipif(pyarrow is None, reason="pyarrow is not installed")
 class TestPrivateColumns:
     """A column an author kept for themselves is read by nothing."""
 
@@ -1744,6 +1743,7 @@ class TestPrivateColumns:
         assert dc.annotations(directory) == with_vertices
 
 
+@pytest.mark.skipif(pyarrow is None, reason="pyarrow is not installed")
 class TestParquet:
     """The same tables, with their types kept, for a set too big to want text."""
 
