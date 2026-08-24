@@ -18,8 +18,9 @@ files and makes these specific assumptions:
   declaring another count is refused rather than silently misread.
 - The averaging time is read as the standard's tenths of a second. Several
   vendors write that field on their own scale, so only a supplier known to
-  keep the standard has it promoted to the time coordinate's step; every
-  other file keeps the bare instant and reports the value as an attr.
+  keep the standard has it read as a duration, which is then both reported
+  and promoted to the time coordinate's step. Every other file keeps the
+  bare instant and states no averaging time.
 - ``DataPts`` is a single unsegmented trace with unsigned little-endian
   16-bit samples and the display scale documented in ``_parse_data_points``.
 - Trace samples follow pyotdr's SR-4731 display convention:
@@ -51,8 +52,8 @@ REQUIRED_BLOCKS = frozenset(
 SPEED_OF_LIGHT_KM_PER_USEC = 0.299792458
 
 # Suppliers whose averaging time is known to be the standard's tenths of
-# a second. Noyes writes hundredths and EXFO whole seconds, so a value
-# from an unlisted supplier is reported but never sized into a step.
+# a second. Noyes writes hundredths and EXFO whole seconds, so the field
+# an unlisted supplier states names no duration this reader can size.
 _STANDARD_AVERAGING_SUPPLIERS = frozenset({"FIBERCLOUD"})
 
 
@@ -193,12 +194,12 @@ def _parse_fixed_params(payload: bytes) -> dict[str, Any]:
     n_samples = _unpack_from("<I", payload, 24)[0]
     refractive_index = _unpack_from("<I", payload, 28)[0] * 1e-5
     n_averages = _unpack_from("<I", payload, 34)[0]
-    # Tenths of a second, which is the standard's scale and the one
-    # pyotdr and otdrs both read this field with. Vendors disagree in
-    # practice -- the same half minute is written 300 here, 3000 by
-    # Noyes and 30 by EXFO -- so the value is reported as read and only
-    # trusted as a duration for a supplier known to keep the standard.
-    averaging_time = _unpack_from("<H", payload, 38)[0] * 0.1
+    # Kept as the number the file states, since what it counts depends
+    # on who wrote it: the standard's tenths of a second, which pyotdr
+    # and otdrs both assume, but hundredths for Noyes and whole seconds
+    # for EXFO. Only `_averaging_seconds`, which knows the supplier,
+    # can turn it into a duration.
+    averaging_time_raw = _unpack_from("<H", payload, 38)[0]
     display_range_km = _unpack_from("<I", payload, 40)[0] * 2e-5
     if sample_spacing_usec <= 0 or refractive_index <= 0:
         msg = "SR-4731 SOR FxdParams block has invalid distance scaling fields."
@@ -212,7 +213,7 @@ def _parse_fixed_params(payload: bytes) -> dict[str, Any]:
         "wavelength_nm": wavelength_nm,
         "pulse_width": pulse_width,
         "n_averages": n_averages,
-        "averaging_time": averaging_time,
+        "averaging_time_raw": averaging_time_raw,
         "sample_spacing_usec": sample_spacing_usec,
         "n_samples": n_samples,
         "refractive_index": refractive_index,
@@ -295,6 +296,25 @@ def _parse_sor(resource, load_samples: bool = True) -> dict[str, Any]:
     }
 
 
+def _averaging_seconds(parsed: dict[str, Any]) -> float | None:
+    """
+    Return the averaging time in seconds, or None when it cannot be read.
+
+    The field is the standard's tenths of a second, but vendors write
+    it on their own scale -- the same half minute is 300 here, 3000 for
+    Noyes and 30 for EXFO -- and `get_format` accepts any version-200
+    file, not only the subset this module documents. A number scaled by
+    the wrong vendor's rule is wrong by a factor of ten, so a supplier
+    this reader does not know states no averaging time at all rather
+    than one which reads as physical and is not.
+    """
+    raw = parsed["fixed"]["averaging_time_raw"]
+    manufacturer = next(iter(parsed["supplier"]), "").strip().upper()
+    if raw <= 0 or manufacturer not in _STANDARD_AVERAGING_SUPPLIERS:
+        return None
+    return raw * 0.1
+
+
 def _get_time_coord(parsed: dict[str, Any]) -> BaseCoord:
     """
     Create the singleton time coordinate from the fixed-params timestamp.
@@ -305,16 +325,13 @@ def _get_time_coord(parsed: dict[str, Any]) -> BaseCoord:
     measurements rather than one unbroken recording, which is what a
     stepless instant reads as.
 
-    Only a supplier known to write the standard's scale earns that,
-    since the step sizes the continuity tolerance and a vendor scale is
-    wrong by a factor of ten. A file which states no averaging time, or
-    states one this reader cannot size, keeps the bare instant.
+    A file whose averaging time this reader cannot read (see
+    [`_averaging_seconds`](`dascore.io.sr4731.utils._averaging_seconds`))
+    keeps the bare instant, which is no worse than saying nothing.
     """
-    fixed = parsed["fixed"]
-    start = np.datetime64(fixed["timestamp"], "s").astype("datetime64[ns]")
-    averaging_time = fixed.get("averaging_time") or 0.0
-    manufacturer = next(iter(parsed["supplier"]), "").strip().upper()
-    if averaging_time <= 0 or manufacturer not in _STANDARD_AVERAGING_SUPPLIERS:
+    start = np.datetime64(parsed["fixed"]["timestamp"], "s").astype("datetime64[ns]")
+    averaging_time = _averaging_seconds(parsed)
+    if averaging_time is None:
         return get_coord(data=np.asarray([start]))
     step = np.timedelta64(round(averaging_time * 1e9), "ns")
     return get_coord(start=start, stop=start + step, step=step)
@@ -351,7 +368,7 @@ def _get_attr_dict(parsed: dict[str, Any]) -> dict:
         "acquisition_range_m": parsed["fixed"]["acquisition_range_m"],
         "sample_spacing_usec": parsed["fixed"]["sample_spacing_usec"],
         "refractive_index": parsed["fixed"]["refractive_index"],
-        "averaging_time": parsed["fixed"]["averaging_time"],
+        "averaging_time": _averaging_seconds(parsed),
         "n_averages": parsed["fixed"]["n_averages"],
         "trace_count": data_points["trace_count"],
         "sample_scale": data_points["scale"],

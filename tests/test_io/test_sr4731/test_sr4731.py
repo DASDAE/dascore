@@ -14,6 +14,7 @@ from numpy.testing import assert_allclose
 import dascore as dc
 from dascore.io.sr4731 import SR4731V200
 from dascore.io.sr4731.utils import (
+    _get_attr_dict,
     _get_coords,
     _get_format,
     _get_time_coord,
@@ -131,7 +132,7 @@ def _expected_fixed_values(payload):
         "wavelength_nm": struct.unpack_from("<H", payload, 6)[0] / 10,
         "pulse_width": struct.unpack_from("<H", payload, 18)[0] * 1e-9,
         "n_averages": struct.unpack_from("<I", payload, 34)[0],
-        "averaging_time": struct.unpack_from("<H", payload, 38)[0] * 0.1,
+        "averaging_time_raw": struct.unpack_from("<H", payload, 38)[0],
         "sample_spacing_usec": sample_spacing_usec,
         "n_samples": n_samples,
         "refractive_index": refractive_index,
@@ -216,7 +217,7 @@ class TestSR4731:
         assert time.min() == expected_time
         assert time.max() == time.min()
         assert len(time) == 1
-        expected_step = np.timedelta64(round(fixed["averaging_time"] * 1e9), "ns")
+        expected_step = np.timedelta64(fixed["averaging_time_raw"] * 10**8, "ns")
         assert time.step == expected_step
 
     def test_distance_coord(self, sor_path, sor_patch):
@@ -277,19 +278,20 @@ class TestSR4731:
         assert time.step is None
         assert len(time) == 1
 
-    def test_unlisted_supplier_keeps_a_bare_instant(self):
-        """A vendor scale this reader cannot size is never made a step.
+    def test_unlisted_supplier_states_no_averaging_time(self):
+        """A vendor scale this reader cannot read is never made a duration.
 
         The same half minute is written 300 by the standard, 3000 by
-        Noyes and 30 by EXFO, and the step sizes the continuity
-        tolerance, so an unrecognised supplier keeps its instant rather
-        than a duration which may be wrong by a factor of ten.
+        Noyes and 30 by EXFO, so an unrecognised supplier keeps its bare
+        instant and reports no averaging time, rather than an axis and
+        an attr which may each be wrong by a factor of ten.
         """
         data = _make_sor_data(manufacturer=b"NOYES")
         parsed = _parse_sor(BytesIO(data), load_samples=False)
         assert _get_time_coord(parsed).step is None
-        # the value is still reported, just not sized into the axis
-        assert parsed["fixed"]["averaging_time"] == pytest.approx(5.0)
+        assert _get_attr_dict(parsed)["averaging_time"] is None
+        # the number the file states is read, it just names no duration
+        assert parsed["fixed"]["averaging_time_raw"] == 50
 
     def test_separated_traces_report_a_gap(self):
         """Two traces an hour apart are two measurements, not one run.
@@ -417,7 +419,7 @@ class TestSR4731Utils:
             "wavelength_nm": 1550.0,
             "pulse_width": pytest.approx(5e-8),
             "n_averages": 5,
-            "averaging_time": pytest.approx(5.0),
+            "averaging_time_raw": 50,
             "sample_spacing_usec": pytest.approx(0.00125003),
             "n_samples": 16384,
             "refractive_index": pytest.approx(1.46832),
