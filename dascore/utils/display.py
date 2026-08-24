@@ -190,6 +190,16 @@ def indent_text(text: Text, prefix: str = "    ") -> Text:
     return Text("\n").join(Text(prefix) + line for line in text.split("\n"))
 
 
+def elision_text(left_out: int) -> Text:
+    """
+    Say how many of something a repr did not show.
+
+    One wording for every repr which stops early, so a spool's tracks
+    and an inventory's networks say it the same way in one terminal.
+    """
+    return Text(f"... {left_out} more", style=dascore_styles["keys"])
+
+
 def limit_reprs(items, limit: int | None = None) -> list[Text]:
     """
     Render at most ``limit`` items, with a line naming what was left out.
@@ -203,7 +213,7 @@ def limit_reprs(items, limit: int | None = None) -> list[Text]:
     items = list(items)
     texts = [x.__rich__() for x in items[:limit]]
     if left_out := len(items) - len(texts):
-        texts.append(Text(f"... {left_out} more", style=dascore_styles["keys"]))
+        texts.append(elision_text(left_out))
     return texts
 
 
@@ -249,8 +259,10 @@ def group_names(frame, ignore=(), ordinals=None, fallback=None) -> list[str]:
     """
     Name each row of a group frame by what tells it apart from the others.
 
-    The one naming rule a spool has, so the lanes a coverage plot draws
-    and the tracks a spool's repr prints answer to the same names.
+    The one naming rule a spool has, kept apart from the drawing of it
+    so a coverage plot's lanes and a spool repr's tracks are named the
+    same way. The same way, not always the same name: each caller says
+    what to fall back on, and they partition their rows differently.
 
     Parameters
     ----------
@@ -258,7 +270,9 @@ def group_names(frame, ignore=(), ordinals=None, fallback=None) -> list[str]:
         One row per group.
     ignore
         Columns which describe the groups rather than tell them apart,
-        such as the extent each is measured over.
+        such as the extent each is measured over. A column whose name
+        begins with an underscore is skipped whether it is named here
+        or not.
     ordinals
         What to call a group its own values cannot name. The row's
         position by default; a report passes its ``group_id``.
@@ -316,7 +330,7 @@ def counts_to_text(counts, limit: int | None = None) -> Text:
     shown = ", ".join(f"{name}: {count}" for name, count in items[:limit])
     if len(items) <= limit:
         return Text(shown)
-    left_out = Text(f"... {len(items) - limit} more", dascore_styles["keys"])
+    left_out = elision_text(len(items) - limit)
     # A zero limit shows nothing, and nothing needs no comma after it.
     return Text(f"{shown}, ") + left_out if shown else left_out
 

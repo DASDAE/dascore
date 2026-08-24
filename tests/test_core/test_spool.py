@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import functools
 import shutil
+import warnings
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 from unittest import mock
 
@@ -29,12 +30,12 @@ from dascore.exceptions import (
 )
 from dascore.io.index.planned import PlanResolver
 from dascore.io.segy import SegyV1_0
-from dascore.utils.chunk_plan import _REPORT_COLUMNS
-from dascore.utils.display import get_nice_text, group_names
+from dascore.utils.display import get_nice_text
 from dascore.utils.downloader import fetch
 from dascore.utils.misc import suppress_warnings
 from dascore.utils.patch_assembly import _estimate_merge_samples, _get_varying_dim
 from dascore.utils.time import to_datetime64, to_timedelta64
+from dascore.viz.spool import _lane_names
 
 
 def _gigo(garbage):
@@ -1976,17 +1977,23 @@ class TestSpoolRepr:
         """A track and the lane of the same patches carry the same name."""
         spool = dc.get_example_spool("diverse_das")
         rendered = str(spool)
-        report = spool.get_coverage("time")
-        envelope = {f"time_{x}" for x in ("min", "max", "step", "units")}
-        names = group_names(
-            report,
-            ignore=set(_REPORT_COLUMNS) | envelope,
-            ordinals=report["group_id"],
-        )
+        # The plot's own function, not a rebuild of its arguments: a
+        # rebuild agrees with itself no matter how the two drift.
+        lanes = _lane_names(spool.get_coverage("time"), "time")
+        # A lane appends the coverage it measured; a track does not.
+        names = [x.rsplit("  ", 1)[0] for x in lanes]
         # This spool's kinds and its coverage groups partition alike, so
         # here the two sets of names are the same set.
         assert len(names) == len(set(names)) == 7
-        assert all(x in rendered for x in names)
+        # Whole track lines, not substrings: "random" occurs inside
+        # "DAS2.R2D1..RAW · random", so a substring check cannot tell
+        # the two apart, and survives every name being decorated.
+        drawn = [
+            x.strip().split("  ")[0]
+            for x in rendered.splitlines()
+            if x.startswith("    ") and "patch" in x
+        ]
+        assert sorted(drawn) == sorted(names)
 
     def test_coverage_may_cut_a_track_finer(self):
         """A kind of patch is one track, whatever coverage makes of it."""
@@ -1995,15 +2002,24 @@ class TestSpoolRepr:
         spool = dc.spool([first, second])
         # Two sampling rates are two coverage groups of one kind, and a
         # kind is what a track is; the repr does not claim otherwise.
+        rendered = str(spool)
         assert len(spool.get_coverage("time")) == 2
-        assert "➤ Tracks" not in str(spool)
+        # A presence assertion, so the summary failing outright -- which
+        # the repr suppresses -- cannot satisfy the absence below.
+        assert "➤ Dimensions" in rendered
+        assert "➤ Tracks" not in rendered
 
     def test_tracks_are_bounded(self):
         """A repr says how many tracks it did not list."""
         with config_context(display_max_items=3):
             rendered = str(dc.get_example_spool("diverse_das"))
         assert "... 4 more" in rendered
-        assert rendered.count(" patches  ") + rendered.count(" patch  ") == 3
+        drawn = [x for x in rendered.splitlines() if "patch" in x and "➤" not in x]
+        assert len(drawn) == 3
+        # Measured over the lines drawn, not the frame: the widest name
+        # here is "overlaps", so no line is padded out to the elided
+        # "DAS2.R2D1..RAW · random".
+        assert drawn[0] == "    big_gaps  3 patches  2020-01-03 <26 s>"
 
     def test_no_tracks_may_be_listed_at_all(self):
         """A zero limit lists nothing, and still says what it did not list."""
@@ -2015,6 +2031,7 @@ class TestSpoolRepr:
     def test_a_lone_group_shows_no_tracks(self):
         """One track is the whole spool, which the dimensions already state."""
         rendered = str(dc.get_example_spool("random_das"))
+        assert "➤ Dimensions" in rendered
         assert "➤ Tracks" not in rendered
         assert "group 0" not in rendered
 
@@ -2030,13 +2047,31 @@ class TestSpoolRepr:
         assert "display_max_patches=1" in rendered
         assert "➤ Dimensions" not in rendered
 
-    def test_a_realized_frame_is_always_summarized(self):
-        """A frame already paid for is read again however large the spool."""
+    def test_the_limit_holds_whatever_the_spool_was_asked_before(self):
+        """Realizing a frame does not buy a summary the limit refuses."""
         spool = dc.get_example_spool("diverse_das")
         spool.get_contents()  # realize the relation
         with config_context(display_max_patches=1):
             rendered = str(spool)
+        # One object, one repr: a summary which appeared only once
+        # something happened to build the frame would print two.
+        assert "➤ Dimensions" not in rendered
+        assert "display_max_patches=1" in rendered
+
+    def test_a_directory_spool_degrades(self, indexed_directory):
+        """The case the limit exists for: an index too large to realize."""
+        with config_context(display_max_patches=1):
+            rendered = str(indexed_directory)
+        assert "➤ Dimensions" not in rendered
+        assert "display_max_patches=1" in rendered
+
+    def test_a_repr_does_not_warn(self, indexed_directory):
+        """Typing a name asked for a glance, not for advice on pandas."""
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            rendered = str(indexed_directory)
         assert "➤ Dimensions" in rendered
+        assert not caught
 
     def test_repr_never_raises(self, monkeypatch):
         """A summary which fails still leaves an object you can look at."""
@@ -2052,7 +2087,11 @@ class TestSpoolRepr:
     @pytest.mark.parametrize("spool", [Spool(), dc.spool([]), dc.spool(dc.Patch())])
     def test_empty_spools_render(self, spool):
         """A spool with nothing to summarize still says what it is."""
-        assert "Spool" in str(spool)
+        rendered = str(spool)
+        assert "Spool 🧵" in rendered
+        # Nothing to summarize is a header and no blocks, not a header
+        # standing in for blocks which failed.
+        assert "➤ " not in rendered
 
     def test_a_patch_without_the_dimension_is_not_a_track(self):
         """A patch off the axis is dropped, as get_coverage drops it."""
@@ -2070,6 +2109,10 @@ class TestSpoolRepr:
             ]
         )
         rendered = str(spool)
+        # Presence first: removing the filter raises inside the summary
+        # rather than printing NaT, and the repr swallows that.
+        assert "➤ Dimensions" in rendered
+        assert "time:" in rendered
         assert "NaT" not in rendered
         # One kind is left along time, and one track is no track block.
         assert len(spool.get_coverage("time")) == 1
@@ -2092,6 +2135,72 @@ class TestSpoolRepr:
         assert "➤ Tracks (2 along distance)" in rendered
         assert "<5>" in rendered
         assert " s>" not in rendered
+
+    def test_a_track_states_the_unit_its_dimension_agrees_on(self):
+        """Where every patch measures in metres, a width is in metres."""
+        data = np.random.default_rng().random((6, 4))
+        patches = [
+            dc.Patch(
+                data=data,
+                coords={"distance": np.arange(6.0), "frequency": np.arange(4.0)},
+                dims=("distance", "frequency"),
+                attrs={"tag": tag},
+            ).convert_units(distance="m")
+            for tag in ("a", "b")
+        ]
+        assert "<5 m>" in str(dc.spool(patches))
+
+    def test_a_dimension_of_labels_has_ends_and_no_width(self):
+        """A string dimension cannot be subtracted, and must not be."""
+        data = np.random.default_rng().random((3, 4))
+        patches = [
+            dc.Patch(
+                data=data,
+                coords={
+                    "channel_id": np.array(["a", "b", "c"]),
+                    "distance": np.arange(4.0),
+                },
+                dims=("channel_id", "distance"),
+                attrs={"tag": tag},
+            )
+            for tag in ("one", "two")
+        ]
+        # channel_id sorts first, so it is the dimension tracks measure
+        # along -- the path where a width would have to be subtracted.
+        rendered = str(dc.spool(patches))
+        assert "channel_id: a to c" in rendered
+        # The whole summary used to vanish here, suppressed TypeError and all.
+        assert "➤ Dimensions" in rendered
+        assert "distance:" in rendered
+        # Two ends, and no width claimed between them, on both lines.
+        assert "➤ Tracks (2 along channel_id)" in rendered
+        assert "<" not in rendered.split("➤ Tracks")[1]
+
+    def test_an_extent_of_no_duration_states_none(self):
+        """One sample spans an instant, which is not a span of nothing."""
+        patch = dc.get_example_patch().select(time=(0, 1), samples=True)
+        rendered = str(dc.spool([patch]))
+        assert "time:" in rendered
+        # human_duration says nothing of a zero, which read as "<>".
+        assert "<>" not in rendered
+
+    def test_a_track_is_not_labelled_in_a_unit_it_was_not_measured_in(self):
+        """Where patches disagree on a unit, no track claims either one."""
+        data = np.random.default_rng().random((6, 4))
+        patches = [
+            dc.Patch(
+                data=data,
+                coords={"distance": np.arange(6.0), "frequency": np.arange(4.0)},
+                dims=("distance", "frequency"),
+                attrs={"tag": tag},
+            ).convert_units(distance=units)
+            for tag, units in (("metric", "m"), ("imperial", "ft"))
+        ]
+        rendered = str(dc.spool(patches))
+        assert "➤ Tracks (2 along distance)" in rendered
+        # Both tracks read <5 ft> when the first unit stood for every one.
+        assert "ft>" not in rendered
+        assert " m>" not in rendered
 
     def test_a_kind_attr_named_twice_is_one_key(self):
         """A config may repeat an attribute; a groupby may not."""

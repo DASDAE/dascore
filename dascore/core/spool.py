@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import numbers
 import os
 import warnings
 from collections.abc import Callable, Generator, Iterator, Mapping, Sequence
@@ -74,6 +75,7 @@ from dascore.utils.chunk_plan import (
     _SOURCE_COLUMNS,
     ChunkPlan,
     _ensure_patch_id,
+    _resolve_group_attrs,
     build_chunk_plan,
     build_concat_plan,
     build_coverage_frame,
@@ -83,6 +85,7 @@ from dascore.utils.chunk_plan import (
     subdivision_pieces,
 )
 from dascore.utils.display import (
+    elision_text,
     get_header_text,
     get_nice_text,
     group_names,
@@ -92,6 +95,7 @@ from dascore.utils.docs import compose_docstring
 from dascore.utils.misc import (
     _spool_map,
     deep_equality_check,
+    suppress_warnings,
 )
 from dascore.utils.namespace import NamespaceOwner
 from dascore.utils.patch import (
@@ -130,6 +134,12 @@ class _InventoryQuery(NamedTuple):
     # The `_coords` spec and kwargs with the channel names taken out.
     coords: namespace_select_type
     kwargs: dict
+
+
+# What a dimension measured in time is stated as. Both are a duration
+# apart, which is a fact its two ends do not carry; every other
+# dimension states its own magnitude.
+_TIMES = (pd.Timestamp, np.datetime64, pd.Timedelta, np.timedelta64)
 
 
 class Spool(NamespaceOwner):
@@ -2327,14 +2337,20 @@ class Spool(NamespaceOwner):
         blocks = [get_header_text(name, style=self._rich_style)]
         if (path := self.spool_path) is not None:
             blocks.append(Text(f"    Path: {path}"))
-        if self._summarizable(count):
-            # A repr which raises makes an object undebuggable at the one
-            # moment someone needs to look at it, so nothing a summary
-            # does is allowed to stop the header from printing.
-            with suppress(Exception):
+        # The limit is what it says whatever the spool has been asked
+        # before: a repr which summarized only once a frame happened to
+        # be built would print two different things for one object.
+        limit = dc.get_config().display_max_patches
+        if count <= limit:
+            # A repr which raises makes an object undebuggable at the
+            # one moment someone needs to look at it, so nothing a
+            # summary does is allowed to stop the header from printing.
+            # Nor is it allowed to warn: building the relation can say a
+            # great deal about how it was built, and none of that was
+            # asked for by typing a name.
+            with suppress(Exception), suppress_warnings():
                 blocks.extend(self._summary_blocks())
         else:
-            limit = dc.get_config().display_max_patches
             blocks.append(
                 Text(
                     f"    Not summarized: {count:,d} patches exceeds "
@@ -2343,22 +2359,6 @@ class Spool(NamespaceOwner):
                 )
             )
         return Text("\n").join(blocks)
-
-    def _summarizable(self, count: int) -> bool:
-        """
-        Whether summarizing what this spool holds is worth a repr.
-
-        Takes the count the header already asked for: on a view a query
-        cannot resolve in SQL, counting projects the relation, and doing
-        that twice for one repr is once too many.
-        """
-        # A frame already built for this revision costs nothing to read
-        # again, however many rows it holds. Otherwise the count is the
-        # price of the question: it pushes to SQL and never projects, so
-        # asking it of a million-file index is free.
-        if self._catalog.is_realized:
-            return True
-        return count <= dc.get_config().display_max_patches
 
     def _stated_dims(self, df) -> list[str]:
         """The dimensions this spool's patches actually have."""
@@ -2400,11 +2400,12 @@ class Spool(NamespaceOwner):
                 # in, so a min and a max from two of them are not two
                 # ends of one extent. Say so rather than imply otherwise.
                 base += Text(f"  (mixed units: {', '.join(units)})", key_style)
-            elif isinstance(high - low, pd.Timedelta | np.timedelta64):
+            elif isinstance(low, _TIMES):
                 # A time is stated as an instant, so how long the two of
                 # them are apart is a fact the line does not yet carry.
                 # Any other dimension states its own magnitude already.
-                base += Text(f"  <{human_duration(high - low)}>", key_style)
+                if (span := self._duration_text(low, high)) is not None:
+                    base += Text("  ") + span
             elif units:
                 base += Text(" ") + Text(units[0], dascore_styles["units"])
         return base
@@ -2425,16 +2426,33 @@ class Spool(NamespaceOwner):
         return tuple(sorted({str(x) for x in stated.dropna().unique() if str(x)}))
 
     @staticmethod
-    def _span_text(low, high, units: tuple[str, ...]) -> Text:
+    def _duration_text(low, high) -> Text | None:
+        """
+        How long an extent lasted. Only asked of one measured in time.
+
+        None where it lasted no time: `human_duration` says nothing of a
+        zero, which reads as a label on a gap and as an empty pair of
+        brackets here.
+        """
+        if not (said := human_duration(high - low)):
+            return None
+        return Text(f"<{said}>", dascore_styles["keys"])
+
+    def _span_text(self, low, high, units: tuple[str, ...]) -> Text | None:
         """How wide an extent is, measured in what the dimension is."""
-        span = high - low
-        # Only a time span is a duration. Any other dimension is as wide
-        # as its own units say, and calling that many seconds would be a
+        # A time span is a duration. Any other dimension is as wide as
+        # its own units say, and calling that many seconds would be a
         # different claim about a different quantity.
-        if isinstance(span, pd.Timedelta | np.timedelta64):
-            return Text(f"<{human_duration(span)}>", dascore_styles["keys"])
-        stated = f" {units[0]}" if units else ""
-        return Text(f"<{float(span):g}{stated}>", dascore_styles["keys"])
+        if isinstance(low, _TIMES):
+            return self._duration_text(low, high)
+        if isinstance(low, numbers.Number | np.number):
+            # A width is only in a unit where every patch agrees on one;
+            # stating the first of several would label a track in a unit
+            # it was not measured in.
+            stated = f" {units[0]}" if len(units) == 1 else ""
+            return Text(f"<{float(high - low):g}{stated}>", dascore_styles["keys"])
+        # A dimension of labels has two ends and no width between them.
+        return None
 
     def _tracks_text(self, df, dim: str) -> Text | None:
         """
@@ -2443,17 +2461,15 @@ class Spool(NamespaceOwner):
         A track is one kind of patch, which is the partition
         [`chunk`](`dascore.Spool.chunk`) starts from. Coverage may cut a
         kind finer still -- two sampling rates are two lanes of one tag
-        -- so a lane there is a track here or a part of one, and the
-        names agree wherever the partitions do.
+        -- so a lane there is a track here or a part of one, and the two
+        are named by one rule rather than given one name.
         """
-        # dict.fromkeys, not a set: the order is the one the names are
-        # read in, and a config may name an attribute twice, which a
-        # groupby refuses to insert twice.
-        keys = list(
-            dict.fromkeys(
-                x for x in dc.get_config().patch_kind_attrs if x in df.columns
-            )
-        )
+        # The same resolution chunk does, rather than a second reading
+        # of the config which could drift from it. It dedupes, which is
+        # what lets the config name an attribute twice: the groupby
+        # tolerates that, but reset_index will not put one column back
+        # under two labels.
+        keys = list(_resolve_group_attrs(None, set(df.columns)))
         if not keys:
             return None
         low, high = f"{dim}_min", f"{dim}_max"
@@ -2490,9 +2506,10 @@ class Spool(NamespaceOwner):
             base += Text.assemble("\n    ", Text(f"{name:<{width}}", "bold"), "  ")
             base += Text(f"{count:>{held}}", dascore_styles["keys"])
             base += Text("  ") + get_nice_text(row["_low"])
-            base += Text(" ") + self._span_text(row["_low"], row["_high"], units)
+            if (span := self._span_text(row["_low"], row["_high"], units)) is not None:
+                base += Text(" ") + span
         if (left_out := len(frame) - len(shown)) > 0:
-            base += Text(f"\n    ... {left_out} more", dascore_styles["keys"])
+            base += Text("\n    ") + elision_text(left_out)
         base += Text("\n    (coverage: spool.viz.coverage())", dascore_styles["keys"])
         return base
 

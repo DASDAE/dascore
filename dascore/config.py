@@ -62,9 +62,9 @@ class DascoreConfig(BaseModel):
         ge=0,
         description=(
             "Patches a spool may hold before its repr stops summarizing "
-            "what it covers. Summarizing realizes the whole index "
-            "relation, which past this many rows is more work than a "
-            "glance is worth, so the repr states its count and path alone."
+            "what it covers and states its count and path alone. "
+            "Summarizing realizes the whole index relation, which past "
+            "this many rows is more work than a glance is worth."
         ),
     )
     patch_history: Literal["standard", "disabled"] = Field(
