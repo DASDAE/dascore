@@ -1726,6 +1726,15 @@ class TestPrivateColumns:
         )
         assert len(dc.annotations(directory)) == 1
 
+    @pytest.mark.skipif(pyarrow is None, reason="pyarrow is not installed")
+    def test_a_private_document_column(self, tmp_path):
+        """Parquet reads one no further than a CSV does."""
+        frame = pd.DataFrame({"id": ["r1"], "distance": [1.0], "_crew": ["{oops"]})
+        path = tmp_path / "picks.parquet"
+        _forge(frame, path, '["_crew"]')
+        loaded = dc.annotations(path, dims=DIMS)
+        assert "_crew" not in loaded.io.to_dataframe().columns
+
     def test_a_table_of_only_private_columns(self, tmp_path):
         """Rows no column of the set states are refused, not lost."""
         path = tmp_path / "picks.csv"

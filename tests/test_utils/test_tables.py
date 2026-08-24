@@ -285,6 +285,14 @@ class TestParquet:
         out, _ = read_parquet(path)
         assert out.equals(frame)
 
+    def test_a_private_document_column_is_not_read(self, tmp_path):
+        """What a private column holds is not this reader's to parse."""
+        frame = pd.DataFrame({"group": ["rail"], "_crew": ["{oops"]})
+        path = tmp_path / "table.parquet"
+        _forge(frame, path, '["_crew"]')
+        out, _ = read_parquet(path)
+        assert out["_crew"][0] == "{oops"
+
     def test_a_column_of_no_one_type(self, tmp_path):
         """A column parquet has no shape for is written as documents."""
         frame = pd.DataFrame({"value": ["car", True, 3]})

@@ -309,6 +309,11 @@ def read_parquet(
                 "and holds no such column."
             )
             raise ParameterError(msg)
+        # A private column is the author's own, so what its cells hold is
+        # not read here either: a document in one is left as the text it
+        # is, as the same column in a CSV is.
+        if str(name).startswith(PRIVATE_PREFIX):
+            continue
         # Held as object: the cells are whatever their documents state, and
         # letting pandas re-infer a type from them would hand back a column
         # of a type the file never said it had.
