@@ -11,11 +11,13 @@ import pandas as pd
 import pytest
 from matplotlib.backends.backend_pdf import FigureCanvasPdf
 from matplotlib.collections import PatchCollection
+from matplotlib.colors import to_rgba, to_rgba_array
 from matplotlib.figure import Figure
 
 from dascore.exceptions import ParameterError
 from dascore.viz._lanes import (
     _LABEL_PAD,
+    SEPARATOR_COLOR,
     UNCOVERED_COLOR,
     WHEEL_ORDER,
     _pack_rows,
@@ -136,7 +138,9 @@ class TestReadFrame:
         limits = pd.to_datetime(["2024-01-01", "2024-01-06"]).to_numpy()
         ax = plot_lanes(frame, x_limits=limits)
         widths = [w for _, w in _extents(_collections(ax)[0])]
-        assert widths == pytest.approx([1.0, 2.0])
+        # Sorted, since boxes are drawn widest first rather than in the
+        # order the frame states them.
+        assert sorted(widths) == pytest.approx([1.0, 2.0])
 
     def test_timezone_aware_bounds(self):
         """Zoned datetimes are drawn at their UTC instant."""
@@ -695,3 +699,97 @@ class TestColors:
         """legend=False draws none."""
         ax = plot_lanes(string_frame, lane="group", value="value", legend=False)
         assert ax.get_legend() is None
+
+
+class TestSeparator:
+    """The stroke which parts one box from the next."""
+
+    @staticmethod
+    def _edges(frame):
+        """The edge color of each box, as the renderer settles it."""
+        ax = plot_lanes(frame)
+        ax.get_figure().canvas.draw()
+        return _collections(ax)[0].get_edgecolor()
+
+    def test_a_box_with_room_carries_the_separator(self):
+        """Two boxes wide enough to be parted are parted by it."""
+        frame = pd.DataFrame({"start": [0.0, 10.0], "end": [5.0, 15.0]})
+        edges = self._edges(frame)
+        assert np.allclose(edges, to_rgba_array(SEPARATOR_COLOR))
+
+    def test_a_box_without_room_keeps_its_own_color(self):
+        """A box thinner than the separator would be painted out by it.
+
+        Drawing it as the separator says the interval is not there,
+        which for a short gap between two long runs is a lie.
+        """
+        frame = pd.DataFrame({"start": [0.0, 5.0], "end": [5.0, 5.0 + 1e-6]})
+        edges = self._edges(frame)
+        faces = _collections(plot_lanes(frame))[0].get_facecolor()
+        assert np.allclose(edges[0], to_rgba_array(SEPARATOR_COLOR))
+        assert np.allclose(edges[1], faces[1])
+
+    def test_recoloring_a_box_recolors_the_stroke(self):
+        """A box edged in its own color is edged in the one it states now."""
+        frame = pd.DataFrame({"start": [0.0, 5.0], "end": [5.0, 5.0 + 1e-6]})
+        ax = plot_lanes(frame)
+        boxes = _collections(ax)[0]
+        # One color for every box, which is what a caller reaching for
+        # the collection is most likely to set.
+        boxes.set_facecolor("red")
+        ax.get_figure().canvas.draw()
+        assert np.allclose(boxes.get_edgecolor()[1], to_rgba_array("red"))
+
+    @staticmethod
+    def _pixel(ax, x):
+        """The color drawn at one place on the lane, as rendered."""
+        figure = ax.get_figure()
+        figure.canvas.draw()
+        transform = ax.transData
+        buffer = np.asarray(figure.canvas.buffer_rgba())[..., :3].astype(float)
+        column = int(np.round(transform.transform([[x, 0.0]])[0][0]))
+        row = buffer.shape[0] - int(transform.transform([[0.0, 0.0]])[0][1])
+        return buffer[row - 4 : row + 4, column].mean(axis=0) / 255
+
+    @pytest.mark.parametrize("kind", ["first", "last"])
+    def test_a_cramped_box_is_drawn_over_its_neighbours(self, kind):
+        """A separator reaches past the box it borders, onto the next one.
+
+        So a box too narrow to carry one is covered by a neighbour's,
+        whichever of them the frame states first, unless it is drawn
+        last. Both orders occur: a lane of runs and gaps states every
+        run before every gap, which leaves a short run bordered by two
+        separators drawn after it.
+        """
+        wide = pd.DataFrame(
+            {
+                "start": [0.0, 150.0, 100.0, 150.0001],
+                "end": [100.0, 150.0001, 150.0, 300.0],
+                "v": ["a", "a", "b", "b"],
+            }
+        )
+        frame = wide if kind == "first" else wide.iloc[::-1]
+        ax = plot_lanes(frame, value="v", color={"a": "blue", "b": "orange"})
+        assert np.allclose(self._pixel(ax, 150.00005), to_rgba("blue")[:3], atol=0.4)
+
+    def test_a_clipped_box_is_measured_by_what_it_shows(self):
+        """A box reaching off the axis has only the room it is drawn in.
+
+        Measured whole it looks wide enough for a separator, which then
+        covers the sliver of it the window actually holds.
+        """
+        frame = pd.DataFrame(
+            {"start": [0.0, 99.001], "end": [99.001, 200.0], "v": ["a", "b"]}
+        )
+        ax = plot_lanes(frame, value="v", color={"a": "blue", "b": "orange"})
+        ax.set_xlim(99.0, 101.0)
+        assert np.allclose(self._pixel(ax, 99.0005), to_rgba("blue")[:3], atol=0.4)
+
+    def test_zooming_in_gives_a_box_its_separator_back(self):
+        """The room a box has is the room the axis gives it, at each draw."""
+        frame = pd.DataFrame({"start": [0.0, 5.0], "end": [5.0, 5.0 + 1e-6]})
+        ax = plot_lanes(frame)
+        ax.set_xlim(5.0 - 1e-7, 5.0 + 2e-6)
+        ax.get_figure().canvas.draw()
+        edges = _collections(ax)[0].get_edgecolor()
+        assert np.allclose(edges[1], to_rgba_array(SEPARATOR_COLOR))

@@ -43,6 +43,12 @@ _GAP_TICKS = (1.0, 60.0, 600.0, 3_600.0, 6 * 3_600.0, _SECONDS_IN_DAY)
 # is drawn over, so naming the lane with them would repeat the axis.
 _ENVELOPE_SUFFIXES = ("min", "max", "step", "units")
 
+# What names a group which shares every attribute it states with the
+# others, or states none: the key the acquisition is filed under. It is
+# the first of the config's `patch_kind_attrs`, and the one of them
+# which names a place rather than describing it.
+_ACQUISITION_ATTR = "acquisition_key"
+
 # Steps a duration is worth reading in, largest first. A year is the
 # Gregorian mean, the same one numpy converts a timedelta64 with, since
 # a multi-year outage reads as "40.7 y" rather than "14852 d".
@@ -111,11 +117,19 @@ def _lane_names(report: pd.DataFrame, dim: str) -> list[str]:
     telling = [x for x in stated if report[x].astype(str).nunique() > 1]
     described = []
     for _, row in report.iterrows():
-        # A group which recorded nothing is left blank here and named by
-        # its ordinal below; the blank is a value it states, but drawing
-        # it as an empty label would read as a rendering gap.
         stated_values = (str(row[x]) for x in telling if pd.notnull(row[x]))
         parts = [x for x in stated_values if x]
+        # Nothing tells a lone group apart, since there is nothing to
+        # tell it apart from, and every group of a spool of one
+        # acquisition is in that position. It is still a named
+        # acquisition, and its key says what its ordinal cannot.
+        if not parts:
+            key = row.get(_ACQUISITION_ATTR)
+            if pd.notnull(key) and str(key):
+                parts = [str(key)]
+        # A group which states neither is left blank here and named by
+        # its ordinal below; the blank is a value it states, but drawing
+        # it as an empty label would read as a rendering gap.
         described.append(" · ".join(parts))
     # Two groups can state the same attributes and still be two groups —
     # sampling rate and coordinate structure part them without being
