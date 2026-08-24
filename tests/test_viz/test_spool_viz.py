@@ -171,40 +171,35 @@ class TestCoverage:
         ax = diverse.viz.coverage(group=[])
         assert len(_lanes(ax)) < len(diverse.get_coverage("time"))
 
-    def test_window(self, diverse):
-        """A window states the limits, and accepts times as text."""
-        ax = diverse.viz.coverage(time=("2020-01-03", "2020-01-03T00:00:30"))
+    def test_a_window_is_a_selection(self, diverse):
+        """A part of a spool is a smaller spool, and it draws as one."""
+        window = ("2020-01-03", "2020-01-03T00:00:30")
+        ax = diverse.select(time=window).viz.coverage()
+        assert len(_lanes(ax)) == len(diverse.select(time=window).get_coverage("time"))
+        # Only what the selection holds is drawn, so the axis is of it.
         low, high = ax.get_xlim()
-        assert high - low == pytest.approx(30.0 / 86_400, rel=1e-3)
+        assert high - low < 2 * 30.0 / 86_400
 
-    def test_half_open_window(self, diverse):
-        """Either end may be left to the data."""
-        ax = diverse.viz.coverage(time=("2020-01-03", None))
-        assert ax.get_xlim()[1] > ax.get_xlim()[0]
-        plt.close("all")
-        ax = diverse.viz.coverage(time=(None, "2020-01-03"))
-        assert ax.get_xlim()[1] > ax.get_xlim()[0]
-
-    def test_dimension_without_a_window(self, diverse):
-        """An Ellipsis names the dimension and asks for all of it."""
-        ax = diverse.viz.coverage(time=...)
+    def test_default_dimension(self, diverse):
+        """Time is what a spool is measured along unless another is named."""
+        ax = diverse.viz.coverage()
         assert len(_lanes(ax)) == len(diverse.get_coverage("time"))
 
     def test_another_dimension(self, diverse):
         """A spool can be measured along any dimension it states."""
-        ax = diverse.viz.coverage(distance=...)
+        ax = diverse.viz.coverage("distance")
         assert ax.get_xlabel() == "distance"
         assert len(_lanes(ax)) == len(diverse.get_coverage("distance"))
 
     def test_a_dimension_nothing_states(self, whole):
         """The spool's own refusal stands; it names the dimensions there are."""
         with pytest.raises(Exception, match="Cannot report on 'depth'") as info:
-            whole.viz.coverage(depth=...)
+            whole.viz.coverage("depth")
         assert "time" in str(info.value)
 
     def test_every_group_gets_a_lane(self, diverse):
         """Groups which state the same attributes are still separate lanes."""
-        ax = diverse.viz.coverage(distance=...)
+        ax = diverse.viz.coverage("distance")
         report = diverse.get_coverage("distance")
         lanes = _lanes(ax)
         # Along distance these groups share every shown attribute, and are
@@ -212,24 +207,15 @@ class TestCoverage:
         assert len(lanes) == len(report) > 6
         assert len(set(lanes)) == len(lanes)
 
-    @pytest.mark.parametrize(
-        "bad, match",
-        [
-            (dict(time=5), "must be a .start, end. pair"),
-            (dict(time=("2020-01-04", "2020-01-03")), "must be increasing"),
-            # A lane needs a width, so its two ends may not be one point.
-            (dict(time=("2020-01-03", "2020-01-03")), "must be increasing"),
-            (dict(time=..., distance=...), "names 2"),
-        ],
-    )
-    def test_bad_selection(self, diverse, bad, match):
-        """A selection which is not one is explained."""
-        with pytest.raises(ParameterError, match=match):
-            diverse.viz.coverage(**bad)
+    def test_a_window_is_not_a_plotting_argument(self, diverse):
+        """The plot draws a dimension; the spool is what states a window."""
+        with pytest.raises(TypeError, match="time"):
+            diverse.viz.coverage(time=("2020-01-03", "2020-01-04"))
 
     def test_gap_labels(self, diverse):
         """A gap says how long it is, in a unit worth reading."""
-        ax = diverse.viz.coverage(time=("2020-01-03", "2020-01-03T00:00:30"))
+        window = ("2020-01-03", "2020-01-03T00:00:30")
+        ax = diverse.select(time=window).viz.coverage()
         assert any(x.get_text().endswith(" s") for x in ax.texts)
 
     def test_color_override(self, diverse):
@@ -246,10 +232,13 @@ class TestCoverage:
         assert whole.viz.coverage(ax=ax, show=True) is ax
         assert called
 
-    def test_figsize(self, whole):
-        """Figsize sizes the figure built when no ax is given."""
-        ax = whole.viz.coverage(figsize=(5, 2))
-        assert tuple(ax.get_figure().get_size_inches()) == (5.0, 2.0)
+    def test_a_given_ax_sizes_the_plot(self, whole):
+        """The figure a caller built is the figure drawn on, at its size."""
+        _, ax = plt.subplots(figsize=(5, 2))
+        assert tuple(whole.viz.coverage(ax=ax).get_figure().get_size_inches()) == (
+            5.0,
+            2.0,
+        )
 
     def test_module_function(self, whole):
         """The plot is callable without the namespace, as tests need."""
@@ -259,7 +248,7 @@ class TestCoverage:
         """Only time is measured in seconds; distance says metres."""
         first = dc.get_example_patch("random_das", distance_min=0, shape=(10, 5))
         second = dc.get_example_patch("random_das", distance_min=22, shape=(10, 5))
-        ax = dc.spool([first, second]).viz.coverage(distance=...)
+        ax = dc.spool([first, second]).viz.coverage("distance")
         assert [x.get_text() for x in ax.texts if x.get_text()] == ["13 m"]
 
     def test_a_one_sample_run_is_drawn(self):
@@ -502,21 +491,17 @@ class TestCalendar:
         cells = _cells(deployment.viz.calendar())
         assert np.ma.getmaskarray(cells)[1, 29:].all()
 
-    def test_window(self, deployment):
-        """A window states the days to draw."""
-        ax = deployment.viz.calendar(time=("2024-01-05", "2024-01-09"))
+    def test_a_window_is_a_selection(self, deployment):
+        """The days drawn are the days the spool holds, so a select picks them."""
+        ax = deployment.select(time=("2024-01-05", "2024-01-09")).viz.calendar()
         assert np.count_nonzero(~np.ma.getmaskarray(_cells(ax))) == 5
 
-    def test_half_open_window(self, deployment):
-        """Either end may be left to the spool."""
-        ax = deployment.viz.calendar(time=(None, "2024-01-31"))
-        assert np.count_nonzero(~np.ma.getmaskarray(_cells(ax))) == 31
-
-    def test_a_window_of_one_day(self, deployment):
-        """Both ends may name the same day; a calendar cell is a day wide."""
-        ax = deployment.viz.calendar(time=("2024-01-18", "2024-01-18"))
+    def test_a_selection_of_one_day(self, deployment):
+        """A day is a day the spool holds, and a calendar cell is a day wide."""
+        day = deployment.select(time=("2024-01-05", "2024-01-05T23:59:59"))
+        ax = day.viz.calendar()
         assert np.count_nonzero(~np.ma.getmaskarray(_cells(ax))) == 1
-        assert _cell(ax, "2024-01-18") == 0.0
+        assert _cell(ax, "2024-01-05") > 0.0
 
     def test_tolerance_changes_what_counts(self, deployment):
         """A tolerance which closes the gaps fills the days they emptied."""
@@ -531,14 +516,23 @@ class TestCalendar:
         "bad, match",
         [
             (dict(method="nope"), "not a calendar measure"),
-            (dict(time=5), "must be a .start, end. pair"),
-            (dict(time=("2024-02-01", "2024-01-01")), "must be increasing"),
         ],
     )
     def test_bad_arguments(self, deployment, bad, match):
         """An argument which states nothing drawable is explained."""
         with pytest.raises(ParameterError, match=match):
             deployment.viz.calendar(**bad)
+
+    def test_a_window_is_not_a_plotting_argument(self, deployment):
+        """The calendar draws what the spool holds; a spool states the days."""
+        with pytest.raises(TypeError, match="time"):
+            deployment.viz.calendar(time=("2024-01-05", "2024-01-09"))
+
+    def test_a_window_of_pure_outage_says_what_it_is(self, deployment):
+        """A window keeping no patches is a spool of nothing, not of nothing seen."""
+        empty = deployment.select(time=("2024-01-18", "2024-01-20"))
+        with pytest.raises(ParameterError, match="widen the selection"):
+            empty.viz.calendar()
 
     def test_an_empty_spool(self):
         """A spool with no time in it has no calendar."""
@@ -565,10 +559,13 @@ class TestCalendar:
         assert whole.viz.calendar(ax=ax, show=True) is ax
         assert called
 
-    def test_figsize(self, whole):
-        """Figsize sizes the figure built when no ax is given."""
-        ax = whole.viz.calendar(figsize=(4, 3))
-        assert tuple(ax.get_figure().get_size_inches()) == (4.0, 3.0)
+    def test_a_given_ax_sizes_the_plot(self, whole):
+        """The figure a caller built is the figure drawn on, at its size."""
+        _, ax = plt.subplots(figsize=(4, 3))
+        assert tuple(whole.viz.calendar(ax=ax).get_figure().get_size_inches()) == (
+            4.0,
+            3.0,
+        )
 
     def test_module_function(self, whole):
         """The plot is callable without the namespace, as tests need."""

@@ -381,19 +381,22 @@ class TestPath:
         # Components take their fixed colors, so the legend names the types.
         assert "FiberSegment" in _legend_labels(ax)
 
-    def test_a_narrow_figure_keeps_its_legend_on_the_page(self, site):
-        """A figure too small to seat a legend must not be made nonsense of.
+    def test_a_legend_too_big_for_the_page_stays_on_it(self, site):
+        """A legend the figure cannot seat must not be made nonsense of.
 
         The lanes keep some of the figure whatever the legend needs, and
         neither they nor it leave the canvas.
         """
-        crowded = build_labeled_inventory(24, site.coordinate_reference_system)
-        ax = path(crowded, "DAS.L2.00", figsize=(3.0, 2.0))
+        crowded = build_labeled_inventory(24, site.coordinate_reference_system, lines=8)
+        ax = path(crowded, "DAS.L2.00")
         figure = ax.get_figure()
         figure.draw_without_rendering()
         lanes = ax.get_window_extent()
         assert lanes.height > 0 and lanes.y0 >= 0
         assert lanes.y1 <= figure.bbox.height
+        box = figure.legends[0].get_window_extent(figure.canvas.get_renderer())
+        assert box.y0 >= 0 and box.y1 <= figure.bbox.height
+        assert box.x0 >= 0 and box.x1 <= figure.bbox.width
 
     def test_a_value_on_two_lines_is_kept_room_for_both(self, site):
         """A legend entry of two lines stands as tall as two of one.
@@ -536,6 +539,19 @@ class TestPath:
         with pytest.raises(ParameterError, match="builds the figure"):
             path(site, "DAS.L1.00", time="2026-06-10", columns="chainage", ax=ax)
 
+    def test_a_figure_of_panels_is_sized_after_it_is_built(self, site):
+        """Panels take no ax, so their figure is the one asked to resize."""
+        figure = path(
+            site, "DAS.L1.00", time="2026-06-10", columns="chainage"
+        ).get_figure()
+        figure.set_size_inches(5, 4)
+        figure.draw_without_rendering()
+        assert tuple(figure.get_size_inches()) == (5.0, 4.0)
+        # Laid out again at the size asked for: the panels still fit.
+        for axes in figure.axes:
+            box = axes.get_window_extent()
+            assert box.height > 0 and box.y0 >= 0 and box.y1 <= figure.bbox.height
+
     def test_ax_without_columns(self, site):
         """Lanes alone draw onto an axes a caller provides."""
         _, ax = plt.subplots()
@@ -581,19 +597,17 @@ class TestPath:
         with pytest.raises(ParameterError, match="has no length"):
             path(inventory)
 
-    def test_color_override_and_figsize(self, site, shown):
-        """color= reaches the renderer, figsize the figure, show plt.show."""
+    def test_color_override_and_show(self, site, shown):
+        """color= reaches the renderer, and show calls plt.show."""
         ax = path(
             site,
             "DAS.L1.00",
             time="2026-06-10",
             tracks="coupling",
             color="black",
-            figsize=(4, 3),
             show=True,
         )
         assert shown
-        assert tuple(ax.get_figure().get_size_inches()) == (4.0, 3.0)
         assert np.allclose(_boxes(ax)[0].get_facecolors()[0][:3], [0, 0, 0])
 
     def test_components_keep_their_own_colors(self, site):
