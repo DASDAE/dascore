@@ -915,6 +915,18 @@ class PatchCatalog:
 
     # --- realization ------------------------------------------------------
 
+    @property
+    def is_realized(self) -> bool:
+        """
+        Whether the flat relation is already built for this revision.
+
+        What a caller asks before deciding a summary is too expensive:
+        a frame already paid for costs nothing to read again, however
+        many rows it holds.
+        """
+        with self._revision.lock:
+            return self._df_cache.get(self._revision.value) is not None
+
     def to_df(self) -> pd.DataFrame:
         """
         The spool-facing flat patch-row relation under the selection.

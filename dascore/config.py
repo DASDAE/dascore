@@ -57,6 +57,16 @@ class DascoreConfig(BaseModel):
         ge=0,
         description="Maximum children a repr lists per level before eliding.",
     )
+    display_max_patches: int = Field(
+        default=1_000,
+        ge=0,
+        description=(
+            "Patches a spool may hold before its repr stops summarizing "
+            "what it covers. Summarizing realizes the whole index "
+            "relation, which past this many rows is more work than a "
+            "glance is worth, so the repr states its count and path alone."
+        ),
+    )
     patch_history: Literal["standard", "disabled"] = Field(
         default="standard",
         description="Controls whether DASCore appends processing history to patches.",

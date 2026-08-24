@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import warnings
 from collections.abc import Callable, Generator, Iterator, Mapping, Sequence
+from contextlib import suppress
 from dataclasses import replace
 from functools import singledispatch
 from pathlib import Path
@@ -22,6 +23,7 @@ from dascore.constants import (
     ExecutorType,
     PatchType,
     attr_conflict_description,
+    dascore_styles,
     enrich_attrs_description,
     enrich_conflict_description,
     enrich_coords_description,
@@ -80,7 +82,12 @@ from dascore.utils.chunk_plan import (
     samples_adjusted_envelopes,
     subdivision_pieces,
 )
-from dascore.utils.display import get_dascore_text, get_nice_text
+from dascore.utils.display import (
+    get_header_text,
+    get_nice_text,
+    group_names,
+    human_duration,
+)
 from dascore.utils.docs import compose_docstring
 from dascore.utils.misc import (
     _spool_map,
@@ -94,6 +101,7 @@ from dascore.utils.patch import (
 from dascore.utils.paths import coerce_to_upath, requires_local_directory
 from dascore.utils.pd import (
     drop_selector_names,
+    get_dim_names_from_columns,
     present_columns,
     requested_selector_names,
     resolve_selector_namespaces,
@@ -2305,31 +2313,147 @@ class Spool(NamespaceOwner):
         return {"rows": _strip_identity(rows)}
 
     def __rich__(self):
-        """Rich rep. of spool."""
-        base = get_dascore_text() + Text(" ")
-        base += Text(self.__class__.__name__, style=self._rich_style)
-        base += Text(" 🧵 ")
-        patch_len = len(self)
-        base += Text(f"({patch_len:d}")
-        base += Text(" Patches)") if patch_len != 1 else Text(" Patch)")
-        path = self.spool_path
-        if path is not None:
-            base += Text(f"\n    Path: {path}")
-        # Only render a time span when realization is cheap: live
-        # contents, single files, and derived catalogs are in memory; a
-        # huge directory index is not realized for a repr.
-        cheap = self.indexer is None
-        if cheap:
-            df = self._df
-            if df is not None and len(df) and "time_min" in df.columns:
-                t1, t2 = df["time_min"].min(), df["time_min"].max()
-                if pd.notna(t1) and pd.notna(t2):
-                    duration = get_nice_text(t2 - t1)
-                    base += Text(
-                        f"\n    Time Span: <{duration}> "
-                        f"{get_nice_text(t1)} to {get_nice_text(t2)}"
-                    )
+        """
+        What the spool is, what it spans, and the tracks it holds.
+
+        Summarizing realizes the index relation, which a spool of many
+        patches should not do for a glance; `display_max_patches` says
+        how many is too many, and past it the repr states its count and
+        path alone.
+        """
+        count = len(self)
+        plural = "" if count == 1 else "es"
+        name = f"{self.__class__.__name__} 🧵 ({count:,d} Patch{plural})"
+        blocks = [get_header_text(name, style=self._rich_style)]
+        if (path := self.spool_path) is not None:
+            blocks.append(Text(f"    Path: {path}"))
+        if self._summarizable():
+            # A repr which raises makes an object undebuggable at the one
+            # moment someone needs to look at it, so nothing a summary
+            # does is allowed to stop the header from printing.
+            with suppress(Exception):
+                blocks.extend(self._summary_blocks())
+        elif count:
+            limit = dc.get_config().display_max_patches
+            blocks.append(
+                Text(
+                    f"    Not summarized: {count:,d} patches exceeds "
+                    f"display_max_patches={limit:,d}.",
+                    style=dascore_styles["keys"],
+                )
+            )
+        return Text("\n").join(blocks)
+
+    def _summarizable(self) -> bool:
+        """Whether summarizing what this spool holds is worth a repr."""
+        # A frame already built for this revision costs nothing to read
+        # again, however many rows it holds. Otherwise the count is the
+        # price of the question: it pushes to SQL and never projects, so
+        # asking it of a million-file index is free.
+        if self._catalog.is_realized:
+            return True
+        return len(self) <= dc.get_config().display_max_patches
+
+    def _stated_dims(self, df) -> list[str]:
+        """The dimensions this spool's patches actually have."""
+        # Two filters, and both are needed. The relation carries the
+        # envelope columns of every coordinate, dimensional or not, so
+        # `dims` is what says which of them is an axis; and it carries
+        # time_min/time_max whatever the patches state, so a column of
+        # NaT is a dimension nothing here has.
+        named = set()
+        for spelling in df["dims"].dropna().unique():
+            named.update(x for x in str(spelling).split(",") if x)
+        stated = [
+            x
+            for x in get_dim_names_from_columns(df)
+            if x in named and df[f"{x}_min"].notna().any()
+        ]
+        # Time leads where it is one of them: it is the dimension a
+        # reader looks for, and the one the tracks are measured along.
+        return sorted(stated, key=lambda x: (x != "time", x))
+
+    def _dims_text(self, df, dims: list[str]) -> Text:
+        """The extent this spool covers along each of its dimensions."""
+        key_style = dascore_styles["keys"]
+        base = Text("➤ ") + Text("Dimensions", style=dascore_styles["dc_blue"])
+        base += Text(" (") + Text(", ".join(dims), style="bold") + Text(")")
+        width = max(len(x) for x in dims)
+        for dim in dims:
+            low, high = df[f"{dim}_min"].min(), df[f"{dim}_max"].max()
+            base += Text.assemble("\n    ", Text(f"{dim + ':':<{width + 1}} ", "bold"))
+            base += get_nice_text(low) + Text(" to ", key_style) + get_nice_text(high)
+            span = high - low
+            if isinstance(span, pd.Timedelta | np.timedelta64):
+                base += Text(f"  <{human_duration(span)}>", key_style)
+            elif (units := self._dim_units(df, dim)) is not None:
+                base += Text(" ") + Text(units, dascore_styles["units"])
         return base
+
+    @staticmethod
+    def _dim_units(df, dim: str) -> str | None:
+        """
+        What a dimension is measured in, where its patches agree.
+
+        The units column is private in the relation and renamed only on
+        the way out through `present_columns`, so both spellings are
+        asked for: a repr reads the frame before that rename.
+        """
+        for name in (f"{dim}_units", f"_{dim}_units"):
+            if (stated := df.get(name)) is None:
+                continue
+            values = {str(x) for x in stated.dropna().unique() if str(x)}
+            if len(values) == 1:
+                return values.pop()
+        return None
+
+    def _tracks_text(self, df, dim: str) -> Text | None:
+        """The groups this spool holds, named as its coverage plot names them."""
+        keys = [x for x in dc.get_config().patch_kind_attrs if x in df.columns]
+        if not keys:
+            return None
+        low, high = f"{dim}_min", f"{dim}_max"
+        frame = (
+            df.groupby(keys, dropna=False)
+            .agg(_n=(low, "size"), _low=(low, "min"), _high=(high, "max"))
+            .reset_index()
+        )
+        # One track is the whole spool, which the dimensions above
+        # already state; naming it would only repeat them.
+        if len(frame) < 2:
+            return None
+        names = group_names(frame, ignore=("_n", "_low", "_high"))
+        width = max(len(x) for x in names)
+        base = Text("➤ ") + Text("Tracks", style=dascore_styles["dc_red"])
+        base += Text(f" ({len(frame)} along ") + Text(dim, style="bold") + Text(")")
+        limit = dc.get_config().display_max_items
+        counted = [f"{x:,d} patch{'' if x == 1 else 'es'}" for x in frame["_n"]]
+        held = max(len(x) for x in counted)
+        # iterrows, not itertuples: the aggregate columns are named
+        # privately so no attr of that name can collide with them, and
+        # itertuples renames a private column to its position.
+        rows = zip(names[:limit], counted, frame.iterrows(), strict=False)
+        for name, count, (_, row) in rows:
+            base += Text.assemble("\n    ", Text(f"{name:<{width}}", "bold"), "  ")
+            base += Text(f"{count:>{held}}", dascore_styles["keys"])
+            base += Text("  ") + get_nice_text(row["_low"])
+            base += Text(f" <{human_duration(row['_high'] - row['_low'])}>")
+        if (left_out := len(frame) - limit) > 0:
+            base += Text(f"\n    ... {left_out} more", dascore_styles["keys"])
+        base += Text("\n    (coverage: spool.viz.coverage())", dascore_styles["keys"])
+        return base
+
+    def _summary_blocks(self) -> list[Text]:
+        """The blocks stating what this spool spans and what it holds."""
+        df = self._df
+        if df is None or not len(df) or "dims" not in df.columns:
+            return []
+        if not (dims := self._stated_dims(df)):
+            return []
+        blocks = [self._dims_text(df, dims)]
+        if (tracks := self._tracks_text(df, dims[0])) is not None:
+            blocks.append(tracks)
+        return blocks
 
     def __str__(self):
         return str(self.__rich__())

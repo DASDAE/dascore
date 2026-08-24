@@ -6,6 +6,7 @@ import copy
 import functools
 import shutil
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
+from unittest import mock
 
 import numpy as np
 import pandas as pd
@@ -13,6 +14,7 @@ import pytest
 
 import dascore as dc
 import dascore.utils.patch_assembly as assembly_mod
+from dascore.config import config_context
 from dascore.core.coords import get_coord
 from dascore.core.spool import BaseSpool, Spool
 from dascore.examples import ricker_moveout
@@ -27,6 +29,8 @@ from dascore.exceptions import (
 )
 from dascore.io.index.planned import PlanResolver
 from dascore.io.segy import SegyV1_0
+from dascore.utils.chunk_plan import _REPORT_COLUMNS
+from dascore.utils.display import get_nice_text, group_names
 from dascore.utils.downloader import fetch
 from dascore.utils.misc import suppress_warnings
 from dascore.utils.patch_assembly import _estimate_merge_samples, _get_varying_dim
@@ -1052,31 +1056,17 @@ class TestSpoolCoverageEdges:
             out.append(nxt)
         return out
 
-    def test_equality_and_repr(self):
-        """Spool equality strips synthetic identity; repr shows a time span."""
+    def test_equality(self):
+        """Spool equality strips synthetic identity."""
         patch = dc.get_example_patch()
         left, right = dc.spool([patch]), dc.spool([patch])
         left.get_contents()  # realize so equality compares built frames
         right.get_contents()
         assert left == right
-        assert "Time Span" in left.__rich__().__str__()
 
     def test_equality_of_empty_spools(self):
         """Empty spools (None frames) compare equal via the None-strip path."""
         assert Spool() == Spool()
-
-    def test_repr_without_time_coordinate(self):
-        """A spool whose patches have no time coord omits the time-span line."""
-        data = np.random.default_rng().random((6, 4))
-        coords = {"distance": np.arange(6), "frequency": np.arange(4.0)}
-        patch = dc.Patch(data=data, coords=coords, dims=("distance", "frequency"))
-        rendered = dc.spool([patch]).__rich__().__str__()
-        assert "Spool" in rendered
-        assert "Time Span" not in rendered  # no time coordinate to summarize
-
-    def test_repr_with_time_coordinate(self):
-        """A normal spool renders its time span."""
-        assert "Time Span" in dc.spool([dc.get_example_patch()]).__rich__().__str__()
 
     def test_large_merge_dedups(self, many_contiguous):
         """Merging >10 sources into one patch exercises the de-dup branch."""
@@ -1915,3 +1905,139 @@ class TestEmptyConcatenate:
         out = dc.spool([]).concatenate(**kwargs)
         assert len(out) == 0
         assert list(out) == []
+
+
+class TestSpoolRepr:
+    """What a spool says of itself when it is printed."""
+
+    @pytest.fixture(scope="class")
+    def off_the_time_axis(self):
+        """A spool of patches which state no time."""
+        data = np.random.default_rng().random((6, 4))
+        coords = {"distance": np.arange(6), "frequency": np.arange(4.0)}
+        patch = dc.Patch(data=data, coords=coords, dims=("distance", "frequency"))
+        return dc.spool([patch])
+
+    @pytest.fixture(scope="class")
+    def indexed_directory(self, tmp_path_factory):
+        """A directory spool of a few files, indexed."""
+        path = tmp_path_factory.mktemp("repr_directory")
+        spool = dc.get_example_spool("random_das")
+        for index, patch in enumerate(spool):
+            patch.io.write(path / f"patch_{index}.h5", "dasdae")
+        return dc.spool(path).update()
+
+    def test_span_reaches_the_last_patch_end(self):
+        """The span ends where the data does, not where the last patch starts."""
+        spool = dc.get_example_spool("random_das")
+        df = spool.get_contents()
+        # The bug this pins: reading both ends off time_min made every
+        # single-patch spool span zero time.
+        assert df["time_min"].max() != df["time_max"].max()
+        assert str(get_nice_text(df["time_max"].max())) in str(spool)
+
+    def test_a_single_patch_spans_its_own_length(self):
+        """One patch is a span of its duration, not a span of nothing."""
+        rendered = str(dc.spool(dc.get_example_patch()))
+        assert "<8 s>" in rendered
+
+    def test_duration_is_readable(self):
+        """A span of decades reads in years, not in seconds of float."""
+        rendered = str(dc.get_example_spool("diverse_das"))
+        assert "<40.7 y>" in rendered
+        assert "e+09" not in rendered
+
+    def test_directory_spool_is_summarized(self, indexed_directory):
+        """An indexed directory states what it covers; it used to state nothing."""
+        rendered = str(indexed_directory)
+        assert "➤ Dimensions" in rendered
+        assert "time:" in rendered
+
+    def test_a_spool_off_the_time_axis(self, off_the_time_axis):
+        """A spool states the dimensions it has, and only those."""
+        rendered = str(off_the_time_axis)
+        assert "distance:" in rendered
+        assert "frequency:" in rendered
+        # The relation carries time columns whatever the patches state.
+        assert "time:" not in rendered
+
+    def test_a_non_dimensional_coord_is_not_a_dimension(self):
+        """A coord with an envelope is not thereby an axis of the patch."""
+        patch = dc.get_example_patch()
+        size = patch.coords.coord_size("time")
+        # The relation gives every coord an envelope, dimensional or not,
+        # so `dims` is what says which of them the repr may name.
+        patch = patch.update_coords(temperature=("time", np.linspace(10.0, 20.0, size)))
+        rendered = str(dc.spool([patch]))
+        assert "➤ Dimensions (time, distance)" in rendered
+        assert "temperature" not in rendered
+
+    def test_tracks_are_named_as_the_plot_names_lanes(self):
+        """The tracks a repr prints are the lanes a coverage plot draws."""
+        spool = dc.get_example_spool("diverse_das")
+        rendered = str(spool)
+        report = spool.get_coverage("time")
+        envelope = {f"time_{x}" for x in ("min", "max", "step", "units")}
+        names = group_names(
+            report,
+            ignore=set(_REPORT_COLUMNS) | envelope,
+            ordinals=report["group_id"],
+        )
+        assert all(x in rendered for x in names)
+
+    def test_tracks_are_bounded(self):
+        """A repr says how many tracks it did not list."""
+        with config_context(display_max_items=3):
+            rendered = str(dc.get_example_spool("diverse_das"))
+        assert "... 4 more" in rendered
+        assert rendered.count(" patches  ") + rendered.count(" patch  ") == 3
+
+    def test_a_lone_group_shows_no_tracks(self):
+        """One track is the whole spool, which the dimensions already state."""
+        rendered = str(dc.get_example_spool("random_das"))
+        assert "➤ Tracks" not in rendered
+        assert "group 0" not in rendered
+
+    def test_a_big_spool_degrades(self):
+        """Past the limit a repr states its count and never reads the frame."""
+        spool = dc.get_example_spool("diverse_das")
+        with config_context(display_max_patches=1):
+            with mock.patch.object(
+                Spool, "_df", new_callable=mock.PropertyMock
+            ) as realize:
+                rendered = str(spool)
+        realize.assert_not_called()
+        assert "display_max_patches=1" in rendered
+        assert "➤ Dimensions" not in rendered
+
+    def test_a_realized_frame_is_always_summarized(self):
+        """A frame already paid for is read again however large the spool."""
+        spool = dc.get_example_spool("diverse_das")
+        spool.get_contents()  # realize the relation
+        with config_context(display_max_patches=1):
+            rendered = str(spool)
+        assert "➤ Dimensions" in rendered
+
+    def test_repr_never_raises(self, monkeypatch):
+        """A summary which fails still leaves an object you can look at."""
+
+        def _boom(self, df, dims):
+            raise ValueError("nope")
+
+        monkeypatch.setattr(Spool, "_dims_text", _boom)
+        rendered = str(dc.get_example_spool("diverse_das"))
+        assert "Spool" in rendered
+        assert "➤ Dimensions" not in rendered
+
+    @pytest.mark.parametrize("spool", [Spool(), dc.spool([]), dc.spool(dc.Patch())])
+    def test_empty_spools_render(self, spool):
+        """A spool with nothing to summarize still says what it is."""
+        assert "Spool" in str(spool)
+
+    def test_a_dimension_with_no_agreed_units_states_none(self):
+        """Two patches measuring a dimension differently name no unit."""
+        first = dc.get_example_patch().convert_units(distance="m")
+        second = dc.get_example_patch().convert_units(distance="ft")
+        rendered = str(dc.spool([first, second]))
+        assert "distance:" in rendered
+        assert "ft" not in rendered
