@@ -2333,7 +2333,7 @@ class Spool(NamespaceOwner):
             # does is allowed to stop the header from printing.
             with suppress(Exception):
                 blocks.extend(self._summary_blocks())
-        elif count:
+        else:
             limit = dc.get_config().display_max_patches
             blocks.append(
                 Text(
@@ -2422,23 +2422,25 @@ class Spool(NamespaceOwner):
         # already state; naming it would only repeat them.
         if len(frame) < 2:
             return None
-        names = group_names(frame, ignore=("_n", "_low", "_high"))
-        width = max(len(x) for x in names)
         base = Text("➤ ") + Text("Tracks", style=dascore_styles["dc_red"])
         base += Text(f" ({len(frame)} along ") + Text(dim, style="bold") + Text(")")
         limit = dc.get_config().display_max_items
-        counted = [f"{x:,d} patch{'' if x == 1 else 'es'}" for x in frame["_n"]]
-        held = max(len(x) for x in counted)
+        shown = frame.head(limit)
+        names = group_names(frame, ignore=("_n", "_low", "_high"))[:limit]
+        counted = [f"{x:,d} patch{'' if x == 1 else 'es'}" for x in shown["_n"]]
+        # The columns are measured over the lines which are drawn: a name
+        # elided below should not pad the names above it.
+        width = max((len(x) for x in names), default=0)
+        held = max((len(x) for x in counted), default=0)
         # iterrows, not itertuples: the aggregate columns are named
         # privately so no attr of that name can collide with them, and
         # itertuples renames a private column to its position.
-        rows = zip(names[:limit], counted, frame.iterrows(), strict=False)
-        for name, count, (_, row) in rows:
+        for name, count, (_, row) in zip(names, counted, shown.iterrows(), strict=True):
             base += Text.assemble("\n    ", Text(f"{name:<{width}}", "bold"), "  ")
             base += Text(f"{count:>{held}}", dascore_styles["keys"])
             base += Text("  ") + get_nice_text(row["_low"])
             base += Text(f" <{human_duration(row['_high'] - row['_low'])}>")
-        if (left_out := len(frame) - limit) > 0:
+        if (left_out := len(frame) - len(shown)) > 0:
             base += Text(f"\n    ... {left_out} more", dascore_styles["keys"])
         base += Text("\n    (coverage: spool.viz.coverage())", dascore_styles["keys"])
         return base

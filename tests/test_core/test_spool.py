@@ -1992,6 +1992,13 @@ class TestSpoolRepr:
         assert "... 4 more" in rendered
         assert rendered.count(" patches  ") + rendered.count(" patch  ") == 3
 
+    def test_no_tracks_may_be_listed_at_all(self):
+        """A zero limit lists nothing, and still says what it did not list."""
+        with config_context(display_max_items=0):
+            rendered = str(dc.get_example_spool("diverse_das"))
+        assert "➤ Tracks (7 along time)" in rendered
+        assert "... 7 more" in rendered
+
     def test_a_lone_group_shows_no_tracks(self):
         """One track is the whole spool, which the dimensions already state."""
         rendered = str(dc.get_example_spool("random_das"))
