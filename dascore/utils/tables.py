@@ -32,6 +32,40 @@ from dascore.utils.time import to_datetime64, to_timedelta64
 # The metadata key a parquet file names its document columns in.
 DOCUMENT_KEY = "dascore:documents"
 
+# What a column names itself by to state that it is the author's own.
+PRIVATE_PREFIX = "_"
+
+
+def drop_private_columns(frame: pd.DataFrame) -> pd.DataFrame:
+    """
+    Return a table without the columns which say they are not its own.
+
+    A header beginning with an underscore declines to take part in the
+    format reading it: the column is the crew's own record keeping -- who
+    backfilled a trench, which drawing a run came from -- and no reader
+    looks for meaning in it. The name can never collide with a field a
+    model might later add, since pydantic makes a leading underscore a
+    private attribute rather than a field.
+
+    The values live in the file alone. A note which should travel with the
+    data belongs in a field the model has, `description` among them.
+
+    Parameters
+    ----------
+    frame
+        The table to read the private columns out of.
+
+    Examples
+    --------
+    >>> import pandas as pd
+    >>> from dascore.utils.tables import drop_private_columns
+    >>> frame = pd.DataFrame({"group": ["rail"], "_crew": ["mapped by JD"]})
+    >>> list(drop_private_columns(frame).columns)
+    ['group']
+    """
+    private = [x for x in frame.columns if str(x).startswith(PRIVATE_PREFIX)]
+    return frame.drop(columns=private) if private else frame
+
 
 def read_table(path: Path, what: str = "nothing", skip: int = 0) -> pd.DataFrame:
     r"""
@@ -275,6 +309,11 @@ def read_parquet(
                 "and holds no such column."
             )
             raise ParameterError(msg)
+        # A private column is the author's own, so what its cells hold is
+        # not read here either: a document in one is left as the text it
+        # is, as the same column in a CSV is.
+        if str(name).startswith(PRIVATE_PREFIX):
+            continue
         # Held as object: the cells are whatever their documents state, and
         # letting pandas re-infer a type from them would hand back a column
         # of a type the file never said it had.

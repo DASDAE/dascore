@@ -25,7 +25,10 @@ one fact.
 Loading is strict about near-misses and indifferent to clean misses:
 anything which claims to participate in a convention and gets it wrong
 raises, while anything which does not participate -- photos, field notes,
-deployment logs -- is ignored where it lies.
+deployment logs -- is ignored where it lies. A column does the same: a
+header beginning with an underscore is the crew's own record keeping, and
+no table reads it. What it holds stays in the file, so a note which should
+travel with the inventory goes in ``description`` instead.
 """
 
 from __future__ import annotations
@@ -64,6 +67,7 @@ from dascore.utils.documents import read_document
 from dascore.utils.misc import check_code
 from dascore.utils.paths import quote_path as _quote
 from dascore.utils.tables import (
+    drop_private_columns,
     ordered_rows,
     parse_cell,
     read_table,
@@ -885,6 +889,11 @@ def _read_track_table(path: Path, table: _Table, stem: str, crs):
     if frame.empty:
         msg = f"{_quote(path)} states no rows, so it describes no {stem}."
         raise InvalidInventoryError(msg)
+    # Read before any header is: a private column is the author's own, so
+    # a geometry table's numeric rule and the model's unknown-field error
+    # are both none of its business. A table of nothing else keeps its
+    # rows, and is refused by the columns it then fails to state.
+    frame = drop_private_columns(frame)
     units: Mapping[str, str] = {}
     if stem == "geometry":
         frame, units = _geometry_columns(frame, crs, path)

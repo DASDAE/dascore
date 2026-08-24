@@ -14,6 +14,11 @@ times or durations -- since that is what a bound is compared as. Paths
 and polygons keep their vertices in a second, tidy frame keyed by
 annotation id, and every row keeps a bounding region so table operations
 work whatever its geometry is.
+
+Any other column is an extra the annotation carries, with one exception: a
+column whose name begins with an underscore is the author's own record
+keeping. A set never holds one, so it stays where it was written and no
+reader looks for meaning in it.
 """
 
 from __future__ import annotations
@@ -68,6 +73,8 @@ from dascore.utils.mapping import FrozenDict
 from dascore.utils.misc import iterate, to_str, validate_acquisition_key
 from dascore.utils.namespace import NamespaceOwner
 from dascore.utils.tables import (
+    PRIVATE_PREFIX,
+    drop_private_columns,
     parquet_table,
     parse_cell,
     write_parquet,
@@ -695,6 +702,15 @@ class AnnotationSetAttrs(_AnnotationModel):
                 f"a set may not dimension {', '.join(RESERVED_COLUMNS)}."
             )
             raise ValueError(msg)
+        # A dimension is stated by a column, and a private column is the
+        # author's own: dimensioning one would declare a coordinate no
+        # table is allowed to hold.
+        if private := sorted(x for x in self.dims if x.startswith(PRIVATE_PREFIX)):
+            msg = (
+                f"The dimension(s) {', '.join(private)} begin with an "
+                "underscore, which names a column no set reads."
+            )
+            raise ValueError(msg)
         return self
 
     @model_validator(mode="after")
@@ -1036,7 +1052,20 @@ def _coerce_frame(data, what: str) -> pd.DataFrame:
             "than a string, which is what a table names a column by."
         )
         raise ParameterError(msg)
-    return frame
+    # Here rather than where a file is read, so a set holds what a stored
+    # one holds: a private column is the author's own either way, and a set
+    # which kept one from a frame would write a column it could not read
+    # back.
+    kept = drop_private_columns(frame)
+    # A table writes rows by writing their cells, so rows with no cell to
+    # write are rows a saved set comes back without. Refused rather than
+    # counted here, where what went missing can still be named.
+    if len(kept.index) and not len(kept.columns):
+        msg = f"The {what} state rows and no column to hold them."
+        if len(frame.columns):
+            msg += " Every column they state is private, so none is theirs."
+        raise ParameterError(msg)
+    return kept
 
 
 def _read_spellings(frame: pd.DataFrame, dims) -> dict[str, _Spelling]:

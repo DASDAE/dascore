@@ -1685,6 +1685,73 @@ def _forge(frame: pd.DataFrame, path, documents: str) -> None:
     pyarrow.parquet.write_table(table.replace_schema_metadata(kept), path)
 
 
+class TestPrivateColumns:
+    """A column an author kept for themselves is read by nothing."""
+
+    def test_a_bare_table(self, tmp_path):
+        """A note on how something was deployed stays in the file."""
+        path = tmp_path / "picks.csv"
+        path.write_text(
+            "id,group,distance_start,distance_end,_crew\n"
+            "r1,noise,10.0,60.0,north crew\n"
+        )
+        loaded = dc.annotations(path, dims=DIMS)
+        assert "_crew" not in loaded.io.to_dataframe().columns
+        assert loaded[0].group == "noise"
+
+    def test_a_saved_set(self, regions, tmp_path):
+        """One added to a written table changes nothing about the set."""
+        directory = regions.io.save(tmp_path / "picks")
+        table = directory / "annotations.csv"
+        header, *rows = table.read_text().splitlines()
+        written = [f"{header},_crew", *[f"{row},north crew" for row in rows]]
+        table.write_text("\n".join(written) + "\n")
+        assert dc.annotations(directory) == regions
+
+    def test_nothing_reads_what_it_holds(self, tmp_path):
+        """A declaration a private column cannot meet is not checked."""
+        directory = tmp_path / "picks"
+        directory.mkdir()
+        (directory / "annotations.csv").write_text(
+            "id,distance,_count\nr1,1.0,not a number\n"
+        )
+        (directory / "attrs.yaml").write_text(
+            yaml.safe_dump(
+                {
+                    "object_type": "AnnotationSetAttrs",
+                    "dims": list(DIMS),
+                    "columns": {"_count": {"dtype": "Int64"}},
+                }
+            )
+        )
+        assert len(dc.annotations(directory)) == 1
+
+    @pytest.mark.skipif(pyarrow is None, reason="pyarrow is not installed")
+    def test_a_private_document_column(self, tmp_path):
+        """Parquet reads one no further than a CSV does."""
+        frame = pd.DataFrame({"id": ["r1"], "distance": [1.0], "_crew": ["{oops"]})
+        path = tmp_path / "picks.parquet"
+        _forge(frame, path, '["_crew"]')
+        loaded = dc.annotations(path, dims=DIMS)
+        assert "_crew" not in loaded.io.to_dataframe().columns
+
+    def test_a_table_of_only_private_columns(self, tmp_path):
+        """Rows no column of the set states are refused, not lost."""
+        path = tmp_path / "picks.csv"
+        path.write_text("_crew\nnorth crew\n")
+        with pytest.raises(InvalidAnnotationError, match="read by nothing"):
+            dc.annotations(path, dims=DIMS)
+
+    def test_vertices(self, with_vertices, tmp_path):
+        """Vertices are a table like any other, so they take one too."""
+        directory = with_vertices.io.save(tmp_path / "picks")
+        table = directory / "vertices.csv"
+        header, *rows = table.read_text().splitlines()
+        written = [f"{header},_source", *[f"{row},drawing 4" for row in rows]]
+        table.write_text("\n".join(written) + "\n")
+        assert dc.annotations(directory) == with_vertices
+
+
 @pytest.mark.skipif(pyarrow is None, reason="pyarrow is not installed")
 class TestParquet:
     """The same tables, with their types kept, for a set too big to want text."""
