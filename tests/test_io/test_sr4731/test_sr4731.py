@@ -14,7 +14,10 @@ from numpy.testing import assert_allclose
 import dascore as dc
 from dascore.io.sr4731 import SR4731V200
 from dascore.io.sr4731.utils import (
+    _get_attr_dict,
+    _get_coords,
     _get_format,
+    _get_time_coord,
     _parse_blocks,
     _parse_data_points,
     _parse_fixed_params,
@@ -50,14 +53,25 @@ def _make_block(name, payload):
     return name.encode() + b"\0" + payload
 
 
-def _make_sor_data(fixed_n_samples=3, data_n_samples=3):
+def _make_sor_data(
+    fixed_n_samples=3,
+    data_n_samples=3,
+    averaging_raw=50,
+    timestamp=0,
+    manufacturer=b"FIBERCLOUD",
+):
     """Create a minimal supported SOR byte stream."""
     fixed = bytearray(44)
+    fixed[0:4] = np.uint32(timestamp).tobytes()
     fixed[4:6] = b"km"
     fixed[6:8] = np.uint16(15500).tobytes()
+    fixed[16:18] = np.uint16(1).tobytes()
+    fixed[18:20] = np.uint16(50).tobytes()
     fixed[20:24] = np.uint32(125003).tobytes()
     fixed[24:28] = np.uint32(fixed_n_samples).tobytes()
     fixed[28:32] = np.uint32(146832).tobytes()
+    fixed[34:38] = np.uint32(5).tobytes()
+    fixed[38:40] = np.uint16(averaging_raw).tobytes()
     fixed[40:44] = np.uint32(204805).tobytes()
 
     data_points = bytearray(12 + data_n_samples * 2)
@@ -69,7 +83,7 @@ def _make_sor_data(fixed_n_samples=3, data_n_samples=3):
 
     blocks = [
         _make_block("GenParams", b"gen\0"),
-        _make_block("SupParams", b"FIBERCLOUD\0" + b"OFL100\0" + b"0901001\0"),
+        _make_block("SupParams", manufacturer + b"\0OFL100\0" + b"0901001\0"),
         _make_block("FxdParams", bytes(fixed)),
         _make_block("DataPts", bytes(data_points)),
         _make_block("Cksum", b"\0\0"),
@@ -116,6 +130,9 @@ def _expected_fixed_values(payload):
     return {
         "timestamp": struct.unpack_from("<I", payload, 0)[0],
         "wavelength_nm": struct.unpack_from("<H", payload, 6)[0] / 10,
+        "pulse_width": struct.unpack_from("<H", payload, 18)[0] * 1e-9,
+        "n_averages": struct.unpack_from("<I", payload, 34)[0],
+        "averaging_time_raw": struct.unpack_from("<H", payload, 38)[0],
         "sample_spacing_usec": sample_spacing_usec,
         "n_samples": n_samples,
         "refractive_index": refractive_index,
@@ -193,13 +210,15 @@ class TestSR4731:
         assert sor_patch.attrs.data_units == dc.get_quantity("dB")
 
     def test_time_coord(self, sor_path, sor_patch):
-        """The SOR acquisition timestamp is used as singleton time coordinate."""
+        """The timestamp is the sample and the averaging time its extent."""
         fixed = _expected_fixed_values(_get_block_payload(sor_path, "FxdParams"))
         time = sor_patch.get_coord("time")
         expected_time = np.datetime64(fixed["timestamp"], "s").astype("datetime64[ns]")
         assert time.min() == expected_time
         assert time.max() == time.min()
-        assert time.step is None
+        assert len(time) == 1
+        expected_step = np.timedelta64(fixed["averaging_time_raw"] * 10**8, "ns")
+        assert time.step == expected_step
 
     def test_distance_coord(self, sor_path, sor_patch):
         """Distance coordinate is based on sample spacing and refractive index."""
@@ -229,6 +248,9 @@ class TestSR4731:
         distance = patch.get_coord("distance")
         assert patch.shape == (1, 16384)
         assert attrs.wavelength_nm == 1550.0
+        assert attrs.pulse_width == pytest.approx(5e-8)
+        assert attrs.n_averages == 5
+        assert attrs.averaging_time == pytest.approx(5.0)
         assert attrs.refractive_index == pytest.approx(1.46832)
         assert attrs.sample_spacing_usec == pytest.approx(0.00125003)
         assert attrs.acquisition_range_m == pytest.approx(4181.579556111035)
@@ -239,9 +261,60 @@ class TestSR4731:
         assert attrs.get("interrogator.serial_number") == "0901001"
         assert distance.step == pytest.approx(0.2552233615790427)
         assert patch.get_coord("time").min() == np.datetime64("2026-06-12T10:58:14")
+        assert patch.get_coord("time").step == np.timedelta64(5, "s")
         assert_allclose(patch.data[0, :5], [9.064, 10.146, 11.439, 11.98, 12.539])
         assert patch.data.min() == 0.0
         assert patch.data.max() == pytest.approx(20.304)
+
+    def test_no_averaging_time_keeps_a_bare_instant(self):
+        """A file stating no averaging time reads as it always did.
+
+        The step says how much fiber time the sample stands for, and a
+        file which does not say must not have one invented for it.
+        """
+        data = _make_sor_data(averaging_raw=0)
+        parsed = _parse_sor(BytesIO(data), load_samples=False)
+        time = _get_time_coord(parsed)
+        assert time.step is None
+        assert len(time) == 1
+
+    def test_unlisted_supplier_states_no_averaging_time(self):
+        """A vendor scale this reader cannot read is never made a duration.
+
+        The same half minute is written 300 by the standard, 3000 by
+        Noyes and 30 by EXFO, so an unrecognised supplier keeps its bare
+        instant and reports no averaging time, rather than an axis and
+        an attr which may each be wrong by a factor of ten.
+        """
+        data = _make_sor_data(manufacturer=b"NOYES")
+        parsed = _parse_sor(BytesIO(data), load_samples=False)
+        assert _get_time_coord(parsed).step is None
+        assert _get_attr_dict(parsed)["averaging_time"] is None
+        # the number the file states is read, it just names no duration
+        assert parsed["fixed"]["averaging_time_raw"] == 50
+
+    def test_separated_traces_report_a_gap(self):
+        """Two traces an hour apart are two measurements, not one run.
+
+        This is what the averaging time buys: without a step the
+        continuity tolerance has no sample to scale, so the pair reads
+        as one unbroken recording and `get_coverage` calls the hour
+        between them covered.
+        """
+        first = _parse_sor(BytesIO(_make_sor_data(timestamp=1_000_000)))
+        later = _parse_sor(BytesIO(_make_sor_data(timestamp=1_003_600)))
+        patches = [
+            dc.Patch(
+                data=np.zeros((1, 3)),
+                coords=_get_coords(parsed),
+                dims=("time", "distance"),
+            )
+            for parsed in (first, later)
+        ]
+        spool = dc.spool(patches)
+        assert len(spool.get_gaps("time")) == 1
+        coverage = spool.get_coverage("time")["coverage"].iloc[0]
+        assert coverage < 0.01
 
     def test_select(self, sor_path, sor_patch):
         """Partial distance reads reduce coords and data consistently."""
@@ -331,15 +404,22 @@ class TestSR4731Utils:
         payload = bytearray(44)
         payload[4:6] = b"km"
         payload[6:8] = np.uint16(15500).tobytes()
+        payload[16:18] = np.uint16(1).tobytes()
+        payload[18:20] = np.uint16(50).tobytes()
         payload[20:24] = np.uint32(125003).tobytes()
         payload[24:28] = np.uint32(16384).tobytes()
         payload[28:32] = np.uint32(146832).tobytes()
+        payload[34:38] = np.uint32(5).tobytes()
+        payload[38:40] = np.uint16(50).tobytes()
         payload[40:44] = np.uint32(204805).tobytes()
         out = _parse_fixed_params(bytes(payload))
         assert out == {
             "timestamp": 0,
             "distance_unit": "km",
             "wavelength_nm": 1550.0,
+            "pulse_width": pytest.approx(5e-8),
+            "n_averages": 5,
+            "averaging_time_raw": 50,
             "sample_spacing_usec": pytest.approx(0.00125003),
             "n_samples": 16384,
             "refractive_index": pytest.approx(1.46832),
@@ -352,7 +432,34 @@ class TestSR4731Utils:
         """Fixed params require sample spacing and refractive index."""
         payload = bytearray(44)
         payload[4:6] = b"km"
+        payload[16:18] = np.uint16(1).tobytes()
         with pytest.raises(dc.exceptions.InvalidFiberFileError):
+            _parse_fixed_params(bytes(payload))
+
+    def test_several_pulse_width_entries_raise(self):
+        """A second pulse-width entry shifts every field after it.
+
+        The reader trusts fixed offsets past the pulse width, so a file
+        which declares another entry must be refused rather than read
+        into a silently wrong distance axis.
+        """
+        payload = bytearray(44)
+        payload[4:6] = b"km"
+        payload[16:18] = np.uint16(2).tobytes()
+        payload[20:24] = np.uint32(125003).tobytes()
+        payload[28:32] = np.uint32(146832).tobytes()
+        with pytest.raises(dc.exceptions.InvalidFiberFileError, match="pulse-width"):
+            _parse_fixed_params(bytes(payload))
+
+    @pytest.mark.parametrize("entries", [0, 3])
+    def test_pulse_width_count_must_be_one(self, entries):
+        """Any count but one shifts the fields the reader takes on faith."""
+        payload = bytearray(44)
+        payload[4:6] = b"km"
+        payload[16:18] = np.uint16(entries).tobytes()
+        payload[20:24] = np.uint32(125003).tobytes()
+        payload[28:32] = np.uint32(146832).tobytes()
+        with pytest.raises(dc.exceptions.InvalidFiberFileError, match="pulse-width"):
             _parse_fixed_params(bytes(payload))
 
     def test_data_points_use_pyotdr_display_convention(self):

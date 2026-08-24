@@ -150,6 +150,8 @@ VENDOR_ATTRS = frozenset(
         "amppower",
         "api",
         "average",
+        "averaging_time",
+        "n_averages",
         "channel",
         "channel_step",
         "distance_decimation_filter",
