@@ -441,19 +441,41 @@ class _Keep:
 _KEEP = _Keep()
 
 
+def _rides_the_envelopes(value) -> bool:
+    """True when a coord selector is one `adjust_segments` folds in."""
+    # A unit-bearing range arrives as a `_CanonicalRange`, which
+    # `_adjust_unit_segments` folds in per row unit.
+    return getattr(value, "magnitudes", None) is not None or is_range(value)
+
+
+def _residual_cuts_unmarked_rows(residuals) -> bool:
+    """
+    True when a residual selection can trim a row nothing marks trimmed.
+
+    A value range rides along with a query whose bounds `to_df` folds
+    into the presented envelopes, so `_modified` already names every row
+    it cuts. Sample indices have no envelope to fold into, and a
+    selector which is not a range never reached `adjust_segments`;
+    either trims at load with the row still claiming to be whole.
+    """
+    return any(
+        samples or not all(_rides_the_envelopes(x) for x in coords.values())
+        for coords, samples in residuals
+    )
+
+
 def _forget_trimmed_sizes(df: pd.DataFrame, residuals=()) -> pd.DataFrame:
     """
     Blank the stored sample count of every row a selection trims.
 
     A trimmed row describes fewer samples than its source patch holds,
     and how many is known only once the trim is applied, so it states no
-    size rather than the source's. A residual selection is not folded
-    into the envelopes at all — sample indices have no envelope to fold
-    into — so it trims every row it presents.
+    size rather than the source's. A row a selection leaves whole keeps
+    its count: only what a selection actually cuts loses one.
     """
     if "_data_size" not in df.columns:
         return df
-    if residuals:
+    if _residual_cuts_unmarked_rows(residuals):
         trimmed = np.ones(len(df), dtype=bool)
     elif "_modified" in df.columns:
         trimmed = df["_modified"].to_numpy(dtype=bool)

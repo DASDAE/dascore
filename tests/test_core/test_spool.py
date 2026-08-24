@@ -520,6 +520,16 @@ class TestGetContents:
         # a subdivided output is a piece of a patch, not the patch
         assert random_spool.chunk(time=4).get_contents()["data_size"].isnull().all()
 
+    def test_untrimmed_row_of_a_selection_keeps_its_size(self, random_spool):
+        """A selection which leaves a row whole leaves its size alone."""
+        df = random_spool.get_contents()
+        last = df.iloc[-1]
+        cut = last["time_min"] + (last["time_max"] - last["time_min"]) / 2
+        view = random_spool.select(time=(None, cut))
+        sizes = view.get_contents()["data_size"]
+        assert sizes.iloc[:-1].tolist() == df["data_size"].iloc[:-1].tolist()
+        assert pd.isnull(sizes.iloc[-1])
+
     def test_sample_trimmed_row_states_no_size(self, random_spool):
         """A samples selection trims at load, so no row states a size."""
         view = random_spool.select(time=(0, 10), samples=True)

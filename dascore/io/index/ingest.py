@@ -475,7 +475,10 @@ def patch_record(summary: PatchSummary) -> PatchRecord:
         dims=",".join(summary.dims),
         dtype=str(summary.dtype or ""),
         # A summary with no shape states no size; nothing is inferred from
-        # the coords, which can describe a patch the shape does not.
+        # the coords, which can describe a patch the shape does not. An
+        # empty shape is the unstated one, not a zero-dimensional patch:
+        # a patch always has at least one dimension (a coordinate manager
+        # of no dims does not match a 0-d array).
         data_size=math.prod(summary.shape) if summary.shape else None,
         time_min=time_min,
         time_max=time_max,
