@@ -11,11 +11,13 @@ import pandas as pd
 import pytest
 from matplotlib.backends.backend_pdf import FigureCanvasPdf
 from matplotlib.collections import PatchCollection
+from matplotlib.colors import to_rgba_array
 from matplotlib.figure import Figure
 
 from dascore.exceptions import ParameterError
 from dascore.viz._lanes import (
     _LABEL_PAD,
+    SEPARATOR_COLOR,
     UNCOVERED_COLOR,
     WHEEL_ORDER,
     _pack_rows,
@@ -695,3 +697,41 @@ class TestColors:
         """legend=False draws none."""
         ax = plot_lanes(string_frame, lane="group", value="value", legend=False)
         assert ax.get_legend() is None
+
+
+class TestSeparator:
+    """The stroke which parts one box from the next."""
+
+    @staticmethod
+    def _edges(frame):
+        """The edge color of each box, as the renderer settles it."""
+        ax = plot_lanes(frame)
+        ax.get_figure().canvas.draw()
+        return _collections(ax)[0].get_edgecolor()
+
+    def test_a_box_with_room_carries_the_separator(self):
+        """Two boxes wide enough to be parted are parted by it."""
+        frame = pd.DataFrame({"start": [0.0, 10.0], "end": [5.0, 15.0]})
+        edges = self._edges(frame)
+        assert np.allclose(edges, to_rgba_array(SEPARATOR_COLOR))
+
+    def test_a_box_without_room_keeps_its_own_color(self):
+        """A box thinner than the separator would be painted out by it.
+
+        Drawing it as the separator says the interval is not there,
+        which for a short gap between two long runs is a lie.
+        """
+        frame = pd.DataFrame({"start": [0.0, 5.0], "end": [5.0, 5.0 + 1e-6]})
+        edges = self._edges(frame)
+        faces = _collections(plot_lanes(frame))[0].get_facecolor()
+        assert np.allclose(edges[0], to_rgba_array(SEPARATOR_COLOR))
+        assert np.allclose(edges[1], faces[1])
+
+    def test_zooming_in_gives_a_box_its_separator_back(self):
+        """The room a box has is the room the axis gives it, at each draw."""
+        frame = pd.DataFrame({"start": [0.0, 5.0], "end": [5.0, 5.0 + 1e-6]})
+        ax = plot_lanes(frame)
+        ax.set_xlim(5.0 - 1e-7, 5.0 + 2e-6)
+        ax.get_figure().canvas.draw()
+        edges = _collections(ax)[0].get_edgecolor()
+        assert np.allclose(edges[1], to_rgba_array(SEPARATOR_COLOR))

@@ -20,7 +20,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 from matplotlib.collections import PatchCollection
-from matplotlib.colors import BoundaryNorm, ListedColormap
+from matplotlib.colors import BoundaryNorm, ListedColormap, to_rgba_array
 from matplotlib.font_manager import FontProperties
 from matplotlib.layout_engine import ConstrainedLayoutEngine
 from matplotlib.patches import Patch as PatchArtist
@@ -40,6 +40,14 @@ WHEEL_ORDER = (0, 2, 4, 6, 8, 10, 12, 16, 18, 1, 3, 5, 7, 9, 11, 13, 17, 19)
 LANE_CMAP = "tab10"
 NUMERIC_CMAP = "viridis"
 UNCOVERED_COLOR = "0.7"
+
+# One box is parted from the next by a stroke of this width, in points.
+SEPARATOR_COLOR = "white"
+SEPARATOR_WIDTH = 0.5
+# How many separators wide a box must be before it can afford to carry
+# one. Two leaves a box at least as much of itself as it gives away.
+_SEPARATOR_ROOM = 2.0
+
 
 # The wheel holds every color tab20 offers which is not a grey, so a
 # palette past it can only repeat itself. Values then walk the hue circle:
@@ -77,6 +85,52 @@ _MAX_SUB_ROWS = 8
 # Past this many distinct numbers a lane earns a colorbar rather than
 # relying on the value printed in each box.
 _MAX_DISCRETE = 6
+
+
+class _SeparatedBoxes(PatchCollection):
+    """
+    Boxes parted by a stroke which never outgrows the box it borders.
+
+    The separator is a fixed width while a box is however wide the axis
+    makes it, so a box narrower than the stroke is painted out by its
+    own edge: it reads as the background rather than as itself. A short
+    gap between two long runs is exactly that box, and drawing it white
+    says there is no gap. So a box without the room for a separator is
+    stroked in its own color instead, which reads as itself down to the
+    pixel, and takes the separator back up once a zoom gives it room.
+    """
+
+    def __init__(self, patches, *, facecolors, bounds, **kwargs):
+        super().__init__(
+            patches,
+            facecolors=facecolors,
+            linewidth=SEPARATOR_WIDTH,
+            **kwargs,
+        )
+        self._faces = to_rgba_array(facecolors)
+        self._bounds = np.asarray(bounds, dtype=float)
+
+    def draw(self, renderer):
+        # How much room a box has is settled by the axis it is drawn
+        # on, so it is answered again at every draw rather than once.
+        colors = self._edge_colors()
+        self.set_edgecolor(colors)  # ty: ignore[invalid-argument-type]
+        super().draw(renderer)
+
+    def _edge_colors(self) -> np.ndarray:
+        """The separator where a box has room for it, its own color where not."""
+        figure = self.get_figure()
+        # A collection with no figure is not being drawn to a canvas,
+        # and points are what it is measured in until it is.
+        dpi = _MEASURED_DPI if figure is None else figure.dpi
+        flat = np.column_stack([self._bounds.ravel(), np.zeros(self._bounds.size)])
+        drawn = self.get_transform().transform(flat)[:, 0]
+        widths = np.abs(np.diff(drawn.reshape(self._bounds.shape), axis=1)).ravel()
+        stroke = SEPARATOR_WIDTH * dpi / _MEASURED_DPI
+        edges = np.tile(to_rgba_array(SEPARATOR_COLOR), (len(self._faces), 1))
+        cramped = widths < _SEPARATOR_ROOM * stroke
+        edges[cramped] = self._faces[cramped]
+        return edges
 
 
 def _as_numeric(values):
@@ -686,7 +740,8 @@ def plot_lanes(
             legend_entries.update(described[1])
         elif described and described[0] == "colorbar":
             colorbars.append(described[1])
-        boxes, box_colors, points, point_colors = [], [], [], []
+        boxes, box_colors, box_bounds = [], [], []
+        points, point_colors = [], []
         for (_, row), row_color, sub in zip(
             rows.iterrows(), colors, sub_rows, strict=True
         ):
@@ -699,6 +754,7 @@ def plot_lanes(
                 continue
             boxes.append(Rectangle((row["start"], low), width, height))
             box_colors.append(row_color)
+            box_bounds.append((row["start"], row["end"]))
             placements.append(
                 (
                     row["label"],
@@ -710,11 +766,10 @@ def plot_lanes(
             )
         if boxes:
             ax.add_collection(
-                PatchCollection(
+                _SeparatedBoxes(
                     boxes,
                     facecolors=box_colors,
-                    edgecolor="white",
-                    linewidth=0.5,
+                    bounds=box_bounds,
                     zorder=2,
                 )
             )
