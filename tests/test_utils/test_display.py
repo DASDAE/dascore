@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
+import pytest
 from pydantic import BaseModel, ConfigDict
 from rich.text import Text
 
@@ -17,10 +18,13 @@ from dascore.utils.display import (
     counts_to_text,
     get_header_text,
     get_nice_text,
+    group_names,
+    human_duration,
     indent_text,
     limit_reprs,
     mapping_to_text,
     model_to_line,
+    percent,
     stated_fields,
     value_to_text,
 )
@@ -306,3 +310,104 @@ class TestValueToText:
     def test_nat_is_text(self):
         """An unset time renders like every other value, not as a str."""
         assert str(value_to_text("a", np.datetime64("NaT"))) == "NaT"
+
+
+class TestPercent:
+    """How a fraction says itself."""
+
+    @pytest.mark.parametrize(
+        "value, text",
+        [
+            (1.0, "100%"),
+            (0.9993334, "99.9%"),
+            (0.92276, "92%"),
+            (1.246e-08, "0%"),
+            (0.0, "0%"),
+        ],
+    )
+    def test_percent(self, value, text):
+        """A percentage reads at the precision it needs."""
+        assert percent(value) == text
+
+    def test_a_hole_is_never_rounded_away(self):
+        """Only a whole span reads as 100%."""
+        assert percent(0.999999999) == "<100%"
+        assert percent(1.0) == "100%"
+
+
+class TestHumanDuration:
+    """How long something lasted, in the unit which fits."""
+
+    @pytest.mark.parametrize(
+        "seconds, text",
+        [
+            (0.0, ""),
+            (0.008, "8 ms"),
+            (1.004, "1 s"),
+            (90.0, "1.5 m"),
+            (7200.0, "2 h"),
+            (86_400.0 * 3, "3 d"),
+            # A multi-year outage is not worth reading in days.
+            (86_400.0 * 400, "1.1 y"),
+            (86_400.0 * 14_852, "40.7 y"),
+        ],
+    )
+    def test_human_duration(self, seconds, text):
+        """A duration is stated in the largest unit which fits it."""
+        assert human_duration(pd.Timedelta(seconds=seconds)) == text
+
+    def test_duration_of_a_plain_number(self):
+        """A dimension which is not time still measures in seconds."""
+        assert human_duration(12.0) == "12 s"
+
+    def test_duration_smaller_than_any_unit(self):
+        """A span under a microsecond still says how long it is."""
+        assert human_duration(1e-9) == "1e-09 s"
+
+    def test_an_unmeasurable_duration_says_nothing(self):
+        """A duration nothing states is not a duration of zero."""
+        assert human_duration(np.nan) == ""
+
+
+class TestGroupNames:
+    """How a group is named by what tells it apart."""
+
+    def test_only_what_differs_names_a_group(self):
+        """A value every group shares tells none of them apart."""
+        frame = pd.DataFrame({"tag": ["a", "b"], "kind": ["das", "das"]})
+        assert group_names(frame) == ["a", "b"]
+
+    def test_several_values_join(self):
+        """A group stating two telling values is named by both."""
+        frame = pd.DataFrame({"tag": ["a", "b"], "kind": ["das", "dss"]})
+        assert group_names(frame) == ["a · das", "b · dss"]
+
+    def test_a_nameless_group_takes_its_position(self):
+        """A group nothing tells apart falls back to its ordinal."""
+        frame = pd.DataFrame({"tag": ["same", "same"]})
+        assert group_names(frame) == ["group 0", "group 1"]
+
+    def test_ordinals_may_be_given(self):
+        """A caller with its own group ids names by those instead."""
+        frame = pd.DataFrame({"tag": ["same", "same"]})
+        assert group_names(frame, ordinals=[7, 9]) == ["group 7", "group 9"]
+
+    def test_a_shared_description_is_told_apart(self):
+        """Two groups describing themselves alike are still two groups."""
+        frame = pd.DataFrame({"tag": ["a", "a", "b"], "n": [1, 2, 3]})
+        assert group_names(frame, ignore=("n",)) == ["a (0)", "a (1)", "b"]
+
+    def test_ignored_columns_never_name(self):
+        """A column describing the group does not tell it apart."""
+        frame = pd.DataFrame({"tag": ["a", "b"], "span": [1.0, 2.0]})
+        assert group_names(frame, ignore=("span",)) == ["a", "b"]
+
+    def test_a_private_column_never_names(self):
+        """A column the index keeps to itself is not a value a group states."""
+        frame = pd.DataFrame({"tag": ["a", "b"], "_key": ["x", "y"]})
+        assert group_names(frame) == ["a", "b"]
+
+    def test_an_unstated_value_is_not_a_blank(self):
+        """A group which recorded nothing is not named by an empty part."""
+        frame = pd.DataFrame({"tag": ["a", ""], "kind": ["das", "dss"]})
+        assert group_names(frame) == ["a · das", "dss"]

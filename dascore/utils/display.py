@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import textwrap
+from collections import Counter
 from collections.abc import Mapping, Sized
 from contextlib import suppress
 from functools import singledispatch
@@ -18,6 +19,7 @@ import dascore as dc
 from dascore.config import get_config
 from dascore.constants import dascore_styles
 from dascore.units import get_quantity_str
+from dascore.utils.time import to_float
 
 # How wide one value may print before it is elided. A repr is a glance at
 # an object, and a single long field should not push the rest off screen.
@@ -32,6 +34,21 @@ _IDENTITY_FIELDS = frozenset({"object_type", "resource_id"})
 # a Series or a frame is a table, and has a string form of its own which
 # already knows how much of itself to show.
 _SEQUENCE_TYPES = (tuple, list, set, frozenset)
+
+_SECONDS_IN_DAY = 86_400.0
+
+# Steps a duration is worth reading in, largest first. A year is the
+# Gregorian mean, the same one numpy converts a timedelta64 with, since
+# a multi-year outage reads as "40.7 y" rather than "14852 d".
+_UNITS = (
+    ("y", 365.2425 * _SECONDS_IN_DAY),
+    ("d", _SECONDS_IN_DAY),
+    ("h", 3_600.0),
+    ("m", 60.0),
+    ("s", 1.0),
+    ("ms", 1e-3),
+    ("µs", 1e-6),
+)
 
 # The scalar types a model field is left unset as.
 _NULLABLE_TYPES = (
@@ -202,6 +219,89 @@ def _length(value) -> int | None:
     with suppress(TypeError):
         return len(value)
     return None
+
+
+def human_duration(value) -> str:
+    """Say how long something lasted, in the largest unit which fits."""
+    # to_float reads a duration in seconds, whichever time type states
+    # it, and passes a plain number through as itself.
+    seconds = to_float(value)
+    if not np.isfinite(seconds) or seconds == 0:
+        return ""
+    size = abs(seconds)
+    for name, scale in _UNITS:
+        if size >= scale:
+            return f"{size / scale:.1f} {name}".replace(".0 ", " ")
+    return f"{size:.3g} s"
+
+
+def percent(value: float) -> str:
+    """Say a fraction as a percentage, without rounding a hole away."""
+    for places in range(4):
+        text = f"{value:.{places}%}"
+        # 100% is a claim about the whole span, so only a whole span earns it.
+        if value >= 1.0 or float(text.rstrip("%")) < 100.0:
+            return text
+    return "<100%"
+
+
+def group_names(frame, ignore=(), ordinals=None, fallback=None) -> list[str]:
+    """
+    Name each row of a group frame by what tells it apart from the others.
+
+    The one naming rule a spool has, so the lanes a coverage plot draws
+    and the tracks a spool's repr prints answer to the same names.
+
+    Parameters
+    ----------
+    frame
+        One row per group.
+    ignore
+        Columns which describe the groups rather than tell them apart,
+        such as the extent each is measured over.
+    ordinals
+        What to call a group its own values cannot name. The row's
+        position by default; a report passes its ``group_id``.
+    fallback
+        A column to name a group by when nothing tells it apart, asked
+        before the ordinal is.
+    """
+    ignore = set(ignore)
+    ordinals = range(len(frame)) if ordinals is None else list(ordinals)
+    stated = [
+        x for x in frame.columns if x not in ignore and not str(x).startswith("_")
+    ]
+    telling = [x for x in stated if frame[x].astype(str).nunique() > 1]
+    described = []
+    for _, row in frame.iterrows():
+        stated_values = (str(row[x]) for x in telling if pd.notnull(row[x]))
+        parts = [x for x in stated_values if x]
+        # Nothing tells a lone group apart, since there is nothing to
+        # tell it apart from, and every group of a spool of one
+        # acquisition is in that position. It is still a named thing,
+        # and the fallback says what its ordinal cannot.
+        if not parts and fallback is not None:
+            named = row.get(fallback)
+            if pd.notnull(named) and str(named):
+                parts = [str(named)]
+        # A group which states neither is left blank here and named by
+        # its ordinal below; the blank is a value it states, but drawing
+        # it as an empty label would read as a rendering gap.
+        described.append(" · ".join(parts))
+    # Two groups can state the same attributes and still be two groups --
+    # sampling rate and coordinate structure part them without being
+    # shown -- so where a description is shared its ordinal tells them
+    # apart. A lane which named two groups would silently draw one.
+    shared = Counter(described)
+    names = []
+    for description, ordinal in zip(described, ordinals, strict=True):
+        if not description:
+            names.append(f"group {ordinal}")
+        elif shared[description] > 1:
+            names.append(f"{description} ({ordinal})")
+        else:
+            names.append(description)
+    return names
 
 
 def counts_to_text(counts, limit: int | None = None) -> Text:
