@@ -14,7 +14,11 @@ from typing import TYPE_CHECKING, ClassVar, Literal, NamedTuple, Self, TypeVar, 
 
 import numpy as np
 import pandas as pd
-from pandas.errors import OutOfBoundsDatetime, OutOfBoundsTimedelta
+from pandas.errors import (
+    OutOfBoundsDatetime,
+    OutOfBoundsTimedelta,
+    PerformanceWarning,
+)
 from rich.text import Text
 
 import dascore as dc
@@ -77,6 +81,7 @@ from dascore.utils.chunk_plan import (
     ChunkPlan,
     _ensure_patch_id,
     _resolve_group_attrs,
+    _structural,
     build_chunk_plan,
     build_concat_plan,
     build_coverage_frame,
@@ -2348,13 +2353,16 @@ class Spool(NamespaceOwner):
             # A repr which raises makes an object undebuggable at the
             # one moment someone needs to look at it, so nothing a
             # summary does is allowed to stop the header from printing.
-            # Nor is it allowed to warn: building a directory index
-            # makes pandas warn, once per insert, that the frame is
-            # fragmented -- a hundred lines of advice about a frame the
-            # caller never asked for, from typing a name. Every category
-            # goes, since a repr only reads; anything worth warning
-            # about is warned again by the call which does the work.
-            with suppress(Exception), suppress_warnings():
+            # Nor is it allowed to warn about how pandas built the
+            # frame: a directory index warns once per insert that it is
+            # fragmented, a hundred lines of advice about a frame the
+            # caller never asked for, from typing a name.
+            #
+            # Only that category. A realized frame is cached, so the
+            # first reader is the only one who ever warns -- suppress
+            # anything else here and a repr does not delay it, it eats
+            # it, and the `get_contents` after it goes quiet too.
+            with suppress(Exception), suppress_warnings(PerformanceWarning):
                 blocks.extend(self._summary_blocks())
         else:
             blocks.append(
@@ -2380,16 +2388,19 @@ class Spool(NamespaceOwner):
         """
         Which rows have this dimension as an axis and state both its ends.
 
-        Three things are asked. The relation carries an envelope for
-        every coordinate, dimensional or not, and a patch may ride a
-        coordinate of this name along a different axis -- so `dims` is
-        what says whose axis it is, row by row rather than over the
-        frame. `dims` alone is not enough: a patch may name an axis
+        Two things are asked, and the first is asked with the same
+        function `get_coverage` asks it with: the relation carries an
+        envelope for every coordinate, dimensional or not, and a patch
+        may ride a coordinate of this name along a different axis, so
+        `dims` is what says whose axis it is, row by row. A track and
+        the lane of the same patches have to agree on that, which they
+        cannot do from two spellings of one rule.
+
+        Being an axis is not enough on its own: a patch may name one
         whose envelope it never filled in, and an unstated end bounds
         nothing.
         """
-        spelled = df["dims"].astype(str).fillna("")
-        axis = spelled.str.split(",").map(lambda x: dim in [y.strip() for y in x])
+        axis = pd.Series(_structural(df, dim), index=df.index)
         return axis & df[f"{dim}_min"].notna() & df[f"{dim}_max"].notna()
 
     def _comparable(self, df, dim: str) -> bool:
@@ -2417,7 +2428,7 @@ class Spool(NamespaceOwner):
                 kinds.add("instant")
             elif isinstance(value, pd.Timedelta | np.timedelta64):
                 kinds.add("offset")
-            elif isinstance(value, numbers.Number | np.number):
+            elif isinstance(value, numbers.Number):
                 kinds.add("number")
             else:
                 kinds.add("label")
@@ -2497,7 +2508,7 @@ class Spool(NamespaceOwner):
         # different claim about a different quantity.
         if isinstance(low, _TIMES):
             return self._duration_text(low, high)
-        if isinstance(low, numbers.Number | np.number):
+        if isinstance(low, numbers.Number):
             # A width is only in a unit where every patch agrees on one;
             # stating the first of several would label a track in a unit
             # it was not measured in.

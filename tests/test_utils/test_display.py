@@ -413,6 +413,13 @@ class TestGroupNames:
         assert group_names(frame, fallback="acquisition_key") == ["XM.A..HSF"]
         assert group_names(frame) == ["group 0"]
 
+    def test_the_fallback_yields_to_what_does_tell_them_apart(self):
+        """A fallback names a group nothing else can, and only that."""
+        frame = pd.DataFrame(
+            {"tag": ["alpha", "beta"], "acquisition_key": ["XM.A..HSF"] * 2}
+        )
+        assert group_names(frame, fallback="acquisition_key") == ["alpha", "beta"]
+
     def test_a_shared_fallback_still_takes_the_ordinal(self):
         """Two groups the fallback names alike are still two groups."""
         frame = pd.DataFrame({"tag": ["das"] * 2, "acquisition_key": ["XM.A..HSF"] * 2})

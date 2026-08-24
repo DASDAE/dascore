@@ -12,6 +12,7 @@ from unittest import mock
 import numpy as np
 import pandas as pd
 import pytest
+from pandas.errors import PerformanceWarning
 
 import dascore as dc
 import dascore.utils.patch_assembly as assembly_mod
@@ -2065,13 +2066,42 @@ class TestSpoolRepr:
         assert "➤ Dimensions" not in rendered
         assert "display_max_patches=1" in rendered
 
-    def test_a_repr_does_not_warn(self, indexed_directory):
+    def test_a_repr_does_not_advise_on_pandas(self):
         """Typing a name asked for a glance, not for advice on pandas."""
-        with warnings.catch_warnings(record=True) as caught:
-            warnings.simplefilter("always")
-            rendered = str(indexed_directory)
+        spool = dc.get_example_spool("diverse_das")
+        frame = spool.get_contents()
+        real = Spool._df
+
+        def _fragmented(self):
+            # What assembling a directory index does, once per insert.
+            warnings.warn("DataFrame is highly fragmented", PerformanceWarning)
+            return frame
+
+        with mock.patch.object(Spool, "_df", property(_fragmented)):
+            with warnings.catch_warnings(record=True) as caught:
+                warnings.simplefilter("always")
+                rendered = str(spool)
+        assert Spool._df is real  # the patch is undone
         assert "➤ Dimensions" in rendered
-        assert not caught
+        assert not [x for x in caught if issubclass(x.category, PerformanceWarning)]
+
+    def test_a_repr_does_not_eat_a_warning(self):
+        """A realized frame warns once, and a repr must not be who hears it."""
+        spool = dc.get_example_spool("diverse_das")
+        message = "something worth saying"
+
+        def _warn(self):
+            warnings.warn(message, UserWarning, stacklevel=2)
+            return pd.DataFrame()
+
+        # Only pandas' own advice is suppressed. Anything else a repr
+        # provokes is the first and only time it will be said, because
+        # the frame it came from is cached.
+        with mock.patch.object(Spool, "_df", property(_warn)):
+            with warnings.catch_warnings(record=True) as caught:
+                warnings.simplefilter("always")
+                str(spool)
+        assert any(message in str(x.message) for x in caught)
 
     def test_repr_never_raises(self, monkeypatch):
         """A summary which fails still leaves an object you can look at."""
@@ -2252,8 +2282,8 @@ class TestSpoolRepr:
         patches = [
             dc.Patch(
                 data=data,
-                coords={"epoch": epoch, "distance": np.arange(4.0)},
-                dims=("epoch", "distance"),
+                coords={"aepoch": epoch, "distance": np.arange(4.0)},
+                dims=("aepoch", "distance"),
                 attrs={"tag": tag},
             )
             for tag, epoch in (
@@ -2262,8 +2292,9 @@ class TestSpoolRepr:
             )
         ]
         rendered = str(dc.spool(patches))
-        assert "epoch:    mixed value kinds" in rendered
-        # And tracks fall through to a dimension whose ends do compare.
+        assert "aepoch:   mixed value kinds" in rendered
+        # Named to sort first, so it is the dimension tracks would be
+        # measured along and the filter is the only thing moving them.
         assert "➤ Tracks (2 along distance)" in rendered
 
     def test_ends_too_far_apart_to_subtract_still_state_themselves(self):
