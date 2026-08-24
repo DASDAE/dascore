@@ -141,6 +141,8 @@ spool.viz.coverage(show=True);
 
 Both acquisitions lose the four days in the middle of January, which is the site's own outage; the strain acquisition started later and was pulled out earlier, which is why its lane is shorter rather than gappy at the ends.
 
+A lane is named by the values which tell its group apart from the others, with that group's coverage appended. The [spool's own repr](spool.qmd#what-a-spool-says-of-itself) names its tracks by the same rule, so a lane here and a track there refer to the same patches.
+
 Time is measured by default; any other dimension the spool states can be named instead, as `spool.viz.coverage("distance")`. The whole of it is drawn, because part of a spool is a smaller spool: select the window first and the lanes, and the percentages on them, are of that window rather than of a window drawn over percentages of everything.
 
 ```{python}
