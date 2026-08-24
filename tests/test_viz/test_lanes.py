@@ -727,6 +727,17 @@ class TestSeparator:
         assert np.allclose(edges[0], to_rgba_array(SEPARATOR_COLOR))
         assert np.allclose(edges[1], faces[1])
 
+    def test_recoloring_a_box_recolors_the_stroke(self):
+        """A box edged in its own color is edged in the one it states now."""
+        frame = pd.DataFrame({"start": [0.0, 5.0], "end": [5.0, 5.0 + 1e-6]})
+        ax = plot_lanes(frame)
+        boxes = _collections(ax)[0]
+        # One color for every box, which is what a caller reaching for
+        # the collection is most likely to set.
+        boxes.set_facecolor("red")
+        ax.get_figure().canvas.draw()
+        assert np.allclose(boxes.get_edgecolor()[1], to_rgba_array("red"))
+
     def test_zooming_in_gives_a_box_its_separator_back(self):
         """The room a box has is the room the axis gives it, at each draw."""
         frame = pd.DataFrame({"start": [0.0, 5.0], "end": [5.0, 5.0 + 1e-6]})

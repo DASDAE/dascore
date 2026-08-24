@@ -107,29 +107,37 @@ class _SeparatedBoxes(PatchCollection):
             linewidth=SEPARATOR_WIDTH,
             **kwargs,
         )
-        self._faces = to_rgba_array(facecolors)
         self._bounds = np.asarray(bounds, dtype=float)
 
     def draw(self, renderer):
-        # How much room a box has is settled by the axis it is drawn
-        # on, so it is answered again at every draw rather than once.
-        colors = self._edge_colors()
+        # How much room a box has is settled by the axis it is drawn on
+        # and by what the renderer makes of a point, so it is answered
+        # again at every draw rather than once.
+        stale = self.stale
+        colors = self._edge_colors(renderer)
         self.set_edgecolor(colors)  # ty: ignore[invalid-argument-type]
+        # Choosing a color is how this collection draws itself rather
+        # than a change made to it, and a blit which drew it on its own
+        # would otherwise be left with a figure asking to be drawn again.
+        self.stale = stale
         super().draw(renderer)
 
-    def _edge_colors(self) -> np.ndarray:
+    def _edge_colors(self, renderer) -> np.ndarray:
         """The separator where a box has room for it, its own color where not."""
-        figure = self.get_figure()
-        # A collection with no figure is not being drawn to a canvas,
-        # and points are what it is measured in until it is.
-        dpi = _MEASURED_DPI if figure is None else figure.dpi
         flat = np.column_stack([self._bounds.ravel(), np.zeros(self._bounds.size)])
         drawn = self.get_transform().transform(flat)[:, 0]
         widths = np.abs(np.diff(drawn.reshape(self._bounds.shape), axis=1)).ravel()
-        stroke = SEPARATOR_WIDTH * dpi / _MEASURED_DPI
-        edges = np.tile(to_rgba_array(SEPARATOR_COLOR), (len(self._faces), 1))
+        # The renderer says what a point comes to; not every backend
+        # reads it as the figure's dpi over seventy-two.
+        stroke = renderer.points_to_pixels(SEPARATOR_WIDTH)
+        edges = np.tile(to_rgba_array(SEPARATOR_COLOR), (len(widths), 1))
         cramped = widths < _SEPARATOR_ROOM * stroke
-        edges[cramped] = self._faces[cramped]
+        # Read now rather than kept, so a box recolored after it was
+        # built is edged in the color it states now. One color may stand
+        # for every box, as matplotlib lets it, so the colors cycle.
+        faces = self.get_facecolor()
+        if len(faces):
+            edges[cramped] = faces[np.nonzero(cramped)[0] % len(faces)]
         return edges
 
 
