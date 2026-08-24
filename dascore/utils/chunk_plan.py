@@ -2167,7 +2167,8 @@ def build_subdivision_plan(df: pd.DataFrame, pieces, name: str) -> ChunkPlan:
     # Outputs are not file rows: source bookkeeping stays on the members,
     # and the dimension's structural identity described the whole row.
     outputs = df.iloc[positions].drop(
-        columns=["_patch_id", f"_{name}_def_key", *_SOURCE_COLUMNS], errors="ignore"
+        columns=["_patch_id", f"_{name}_def_key", "_data_size", *_SOURCE_COLUMNS],
+        errors="ignore",
     )
     outputs = outputs.assign(**{min_name: lows, max_name: highs, "output_id": ids})
     members = pd.DataFrame(

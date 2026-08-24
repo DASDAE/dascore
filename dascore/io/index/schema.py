@@ -33,10 +33,9 @@ from typing import NamedTuple, get_args, get_type_hints
 # Version of the index schema, independent of dascore's version. Bump it
 # when an index written by an older dascore would be read wrongly rather
 # than merely incompletely -- including when what a *stored value* means
-# changes, not only when a column does. 12 canonicalizes the scalars a
-# coordinate's fingerprint is taken over, so identities written by 11 no
-# longer match the ones computed for the same coordinate.
-INDEX_VERSION = 12
+# changes, not only when a column does. 13 adds the patches table's
+# `data_size` column, which an index written by 12 has no column for.
+INDEX_VERSION = 13
 # Identity string so any tool can sanity-check what it opened.
 WHAT_IS_THIS = "dascore_spool_index"
 
@@ -110,6 +109,9 @@ class PatchRow(NamedTuple):
     source_patch_key: str
     dims: str
     dtype: str  # the data array's dtype, eg "float64"
+    # Samples in the data array (the product of its shape); NULL when the
+    # summary stated no shape.
+    data_size: int | None
     time_min: int | None  # epoch ns; NULL for relative-time patches
     time_max: int | None
     time_step: int | None
@@ -282,6 +284,7 @@ RESERVED_ATTR_COLUMNS = frozenset(
         "path_attrs",
         "dims",
         "dtype",
+        "data_size",
         # These named structural columns until version 9 dropped them.
         # They stay reserved: the spool gives them a meaning whether or
         # not a column holds one, and un-reserving a name silently turns
@@ -326,13 +329,15 @@ RESERVED_ATTR_COLUMNS = frozenset(
 # underscore is load-bearing, not cosmetic: chunk's merge-compatibility
 # grouping and conflict policing both compare all non-private columns, so
 # a public `dtype` would raise CoordMergeError on every merge of patches
-# with differing element types.
+# with differing element types, and a public `data_size` would do the
+# same to every merge of patches of different lengths. `present_columns`
+# gives both back their public spelling on the way out to a caller.
 # `patch_id` is the one of these an attr also legitimately claims: it
 # names a row in this schema and a datum on a patch. It is renamed in the
 # backend, before attr columns land, so the attr finds the public spelling
 # free; the rest are renamed where the spool relation is built.
 SPOOL_EARLY_RENAMES = MappingProxyType({"patch_id": "_patch_id"})
-SPOOL_LATE_RENAMES = MappingProxyType({"dtype": "_dtype"})
+SPOOL_LATE_RENAMES = MappingProxyType({"dtype": "_dtype", "data_size": "_data_size"})
 
 # Explicit secondary indexes. Every other access path is covered by a
 # PRIMARY KEY or UNIQUE autoindex above — patch_coords(patch_id,

@@ -69,20 +69,80 @@ def present_units_columns(df: pd.DataFrame) -> pd.DataFrame:
     return df.rename(columns=renames) if renames else df
 
 
+def _present_private_column(df: pd.DataFrame, private: str) -> pd.DataFrame:
+    """Rename one private column to its public spelling, if it is free."""
+    public = private[1:]
+    if private not in df.columns or public in df.columns:
+        return df
+    return df.rename(columns={private: public})
+
+
+def present_dtype_column(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Expose ``_dtype`` as ``dtype``.
+
+    The element type of a patch's data is private in the relation
+    because chunk groups and polices every public column, and patches of
+    different element types must still merge. It is worth showing: with
+    ``data_size`` it is what the patch costs to load.
+    """
+    return _present_private_column(df, "_dtype")
+
+
+def present_data_size_column(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Expose ``_data_size`` as ``data_size``.
+
+    The sample count is private for the same reason ``_dtype`` is, and
+    more sharply: patches of different lengths are the ordinary case,
+    and a public column would keep chunk from merging any of them.
+
+    A row states no size when it does not know one: a merged or
+    subdivided chunk output, or a patch a selection trims. The column
+    follows the index's convention
+    of staying nullable (Int64) only when it holds nulls; a column of
+    nothing else arrives from SQL untyped.
+    """
+    out = _present_private_column(df, "_data_size")
+    if "data_size" not in out.columns or out is df:
+        return out
+    sizes = out["data_size"]
+    return out.assign(data_size=sizes.astype("Int64" if sizes.isna().any() else int))
+
+
+def drop_private_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """Drop every remaining private (leading underscore) column."""
+    private = [col for col in df.columns if str(col).startswith("_")]
+    return df.drop(columns=private) if private else df
+
+
+# What `present_columns` runs, in order. Each step but the last gives one
+# private column (or family) back its public spelling; dropping the rest
+# is always last, so a private column no step claims simply does not
+# leave. Add a step here to publish another one -- and only when a caller
+# can act on it, since every column added is one more to read past.
+PRESENTERS = (
+    present_units_columns,
+    present_dtype_column,
+    present_data_size_column,
+    drop_private_columns,
+)
+
+
 def present_columns(df: pd.DataFrame) -> pd.DataFrame:
     """
     Return the public view of a flat relation.
 
-    The index carries private columns the spool needs and a caller does
-    not: the row id, per-coordinate identity keys, the element dtype,
-    the raw path attrs. A leading underscore means private everywhere
-    else in DASCore, so a frame handed out publicly should not carry
-    them. The unit columns are the exception and are renamed first, so
-    ``_time_units`` leaves as ``time_units`` rather than being dropped.
+    The relation carries private columns the spool needs and a caller
+    does not: the row id, per-coordinate identity keys, the raw path
+    attrs. A leading underscore means private everywhere else in
+    DASCore, so a frame handed out publicly should not carry them. A few
+    are private only because the planners police public columns, and
+    those are renamed rather than dropped; `PRESENTERS` is the list.
     """
-    df = present_units_columns(df)
-    private = [col for col in df.columns if str(col).startswith("_")]
-    return df.drop(columns=private) if private else df
+    for present in PRESENTERS:
+        df = present(df)
+    return df
 
 
 @cache
