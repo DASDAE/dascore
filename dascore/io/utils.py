@@ -152,6 +152,37 @@ def build_patches(
     return [dc.Patch(data=data[...], coords=coords, attrs=patch_attrs)]
 
 
+def get_gridded_coord(values, units=None) -> BaseCoord:
+    """
+    Return a stored coordinate array forced onto an even grid.
+
+    For axes the instrument samples on a fixed grid, where the stored values
+    only restate that grid and any departure from it is representation noise.
+    Such an array can jitter past the tolerance `get_coord` uses to recognize
+    an even coordinate and leave a monotonic coord with no step.
+
+    Parameters
+    ----------
+    values
+        The stored coordinate values.
+    units
+        Units to attach to the returned coordinate.
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> from dascore.io.utils import get_gridded_coord
+    >>> # an even grid restated in float32, as some formats store it
+    >>> values = np.linspace(4000.0, 4009.9, 100, dtype=np.float32)
+    >>> coord = get_gridded_coord(values.astype(np.float64), units="m")
+    >>> float(round(coord.step, 4))
+    0.1
+    """
+    coord = get_coord(data=np.atleast_1d(np.asarray(values)), units=units)
+    # A lone sample states no spacing, and snap would invent a step of 1.
+    return coord.snap() if len(coord) > 1 else coord
+
+
 def get_exact_coord(values, units=None) -> BaseCoord:
     """Return an exact coordinate, including for non-monotonic values."""
     # atleast_1d matches get_coord(values=...): a squeezed single-sample
