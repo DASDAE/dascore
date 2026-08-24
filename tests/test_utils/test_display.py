@@ -407,6 +407,29 @@ class TestGroupNames:
         frame = pd.DataFrame({"tag": ["a", "b"], "_key": ["x", "y"]})
         assert group_names(frame) == ["a", "b"]
 
+    def test_a_fallback_names_what_nothing_tells_apart(self):
+        """A lone group has nothing to be told apart from, but has a name."""
+        frame = pd.DataFrame({"tag": ["das"], "acquisition_key": ["XM.A..HSF"]})
+        assert group_names(frame, fallback="acquisition_key") == ["XM.A..HSF"]
+        assert group_names(frame) == ["group 0"]
+
+    def test_a_shared_fallback_still_takes_the_ordinal(self):
+        """Two groups the fallback names alike are still two groups."""
+        frame = pd.DataFrame({"tag": ["das"] * 2, "acquisition_key": ["XM.A..HSF"] * 2})
+        assert group_names(frame, fallback="acquisition_key") == [
+            "XM.A..HSF (0)",
+            "XM.A..HSF (1)",
+        ]
+
+    @pytest.mark.parametrize(
+        "frame", [{"tag": ["das"], "acquisition_key": [""]}, {"tag": ["das"]}]
+    )
+    def test_a_fallback_which_says_nothing_is_not_a_name(self, frame):
+        """A blank fallback, or none at all, leaves the ordinal to name it."""
+        assert group_names(pd.DataFrame(frame), fallback="acquisition_key") == [
+            "group 0"
+        ]
+
     def test_an_unstated_value_is_not_a_blank(self):
         """A group which recorded nothing is not named by an empty part."""
         frame = pd.DataFrame({"tag": ["a", ""], "kind": ["das", "dss"]})
