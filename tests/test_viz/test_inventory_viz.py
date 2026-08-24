@@ -394,6 +394,9 @@ class TestPath:
         lanes = ax.get_window_extent()
         assert lanes.height > 0 and lanes.y0 >= 0
         assert lanes.y1 <= figure.bbox.height
+        box = figure.legends[0].get_window_extent(figure.canvas.get_renderer())
+        assert box.y0 >= 0 and box.y1 <= figure.bbox.height
+        assert box.x0 >= 0 and box.x1 <= figure.bbox.width
 
     def test_a_value_on_two_lines_is_kept_room_for_both(self, site):
         """A legend entry of two lines stands as tall as two of one.
@@ -535,6 +538,19 @@ class TestPath:
         _, ax = plt.subplots()
         with pytest.raises(ParameterError, match="builds the figure"):
             path(site, "DAS.L1.00", time="2026-06-10", columns="chainage", ax=ax)
+
+    def test_a_figure_of_panels_is_sized_after_it_is_built(self, site):
+        """Panels take no ax, so their figure is the one asked to resize."""
+        figure = path(
+            site, "DAS.L1.00", time="2026-06-10", columns="chainage"
+        ).get_figure()
+        figure.set_size_inches(5, 4)
+        figure.draw_without_rendering()
+        assert tuple(figure.get_size_inches()) == (5.0, 4.0)
+        # Laid out again at the size asked for: the panels still fit.
+        for axes in figure.axes:
+            box = axes.get_window_extent()
+            assert box.height > 0 and box.y0 >= 0 and box.y1 <= figure.bbox.height
 
     def test_ax_without_columns(self, site):
         """Lanes alone draw onto an axes a caller provides."""

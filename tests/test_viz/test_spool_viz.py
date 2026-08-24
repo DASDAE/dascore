@@ -509,6 +509,12 @@ class TestCalendar:
         with pytest.raises(TypeError, match="time"):
             deployment.viz.calendar(time=("2024-01-05", "2024-01-09"))
 
+    def test_a_window_of_pure_outage_says_what_it_is(self, deployment):
+        """A window keeping no patches is a spool of nothing, not of nothing seen."""
+        empty = deployment.select(time=("2024-01-18", "2024-01-20"))
+        with pytest.raises(ParameterError, match="widen the selection"):
+            empty.viz.calendar()
+
     def test_an_empty_spool(self):
         """A spool with no time in it has no calendar."""
         with pytest.raises(ParameterError, match="no time to draw"):

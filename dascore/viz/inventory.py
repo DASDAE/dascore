@@ -393,7 +393,9 @@ def path(
         An Axes to draw the lanes on; one is created, a lane tall per
         track, when None. Pass one to say how large the plot is. Column
         panels need their own figure, so passing this and naming columns
-        is refused.
+        is refused; size that figure with
+        `path(...).get_figure().set_size_inches(width, height)`, which
+        lays it out again at the size asked for.
     show
         Whether to call plt.show.
 

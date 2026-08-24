@@ -447,7 +447,11 @@ def calendar(
     calendar is of those alone. Days are chosen the same way — the
     calendar runs from the first day the spool holds to the last, so
     `spool.select(time=(start, end)).viz.calendar()` draws that season
-    and measures it.
+    and measures it. It draws the days that selection kept: an outage
+    at either end of the window falls outside the calendar rather than
+    filling it, and a window with no data in it at all is a spool of
+    nothing, which has no calendar. Draw the wider spool to see an
+    outage measured.
 
     A run covers one sample past the last one it states, taken from the
     step its group reports. Patches within `sampling_group_tolerance` of
@@ -481,7 +485,12 @@ def calendar(
         raise ParameterError(msg)
     runs = _runs(report, gaps, dim)
     if not len(runs):
-        msg = "This spool holds no time to draw a calendar of."
+        msg = (
+            "This spool holds no time to draw a calendar of. A window "
+            "which keeps no patches leaves a spool of nothing, which is "
+            "not the same as a spool of days covered by nothing: widen "
+            "the selection, or draw the spool it was made from."
+        )
         raise ParameterError(msg)
     ends = _extended(runs, report, dim)
     days = _calendar_days(runs, ends)
