@@ -9,10 +9,21 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import pytest
+from matplotlib.backends.backend_pdf import FigureCanvasPdf
 from matplotlib.collections import PatchCollection
+from matplotlib.figure import Figure
 
 from dascore.exceptions import ParameterError
-from dascore.viz._lanes import UNCOVERED_COLOR, _pack_rows, plot_lanes
+from dascore.viz._lanes import (
+    _LABEL_PAD,
+    UNCOVERED_COLOR,
+    WHEEL_ORDER,
+    _pack_rows,
+    _text_points,
+    estimate_legend_rows,
+    legend_column_points,
+    plot_lanes,
+)
 
 
 def _collections(ax):
@@ -32,6 +43,45 @@ def _extents(collection):
 def _texts(ax):
     """Every label drawn on the axes."""
     return [x.get_text() for x in ax.texts]
+
+
+def _legend_of(figure, ax):
+    """The legend a figure grew, whichever of the two owns it."""
+    return figure.legends[0] if figure.legends else ax.get_legend()
+
+
+def _many_values(count=30):
+    """A frame of one lane naming more values than an axes is tall."""
+    names = [f"value {x:02d}" for x in range(count)]
+    return names, pd.DataFrame(
+        {
+            "start": np.arange(float(count)),
+            "end": np.arange(float(count)) + 1.0,
+            "v": names,
+        }
+    )
+
+
+def _overflowing(ax):
+    """Labels drawn wider or taller, in pixels, than the box holding them."""
+    figure = ax.get_figure()
+    figure.draw_without_rendering()
+    renderer = figure.canvas.get_renderer()
+    boxes = [x.get_extents() for x in _collections(ax)[0].get_paths()]
+    out = []
+    for text in ax.texts:
+        drawn = text.get_window_extent(renderer)
+        middle = text.get_position()
+        for box in boxes:
+            if not (box.x0 <= middle[0] <= box.x1):
+                continue
+            corner = ax.transData.transform((box.x0, box.y0))
+            far = ax.transData.transform((box.x1, box.y1))
+            if drawn.width > abs(far[0] - corner[0]) or drawn.height > abs(
+                far[1] - corner[1]
+            ):
+                out.append(text.get_text())
+    return out
 
 
 @pytest.fixture()
@@ -240,6 +290,97 @@ class TestLayout:
         ax = plot_lanes(frame, value="v")
         assert _texts(ax) == ["wide"]
 
+    def test_a_narrow_box_turns_its_label(self):
+        """Text too wide for its box is stood on end rather than dropped."""
+        # Boxes narrower than the text but far taller than it is tall.
+        frame = pd.DataFrame(
+            {
+                "start": [0.0, 20.0],
+                "end": [1.6, 21.6],
+                "v": ["alpha zone", "beta zone"],
+            }
+        )
+        _, ax = plt.subplots(figsize=(4, 4))
+        plot_lanes(frame, ax=ax, value="v")
+        assert sorted(_texts(ax)) == ["alpha zone", "beta zone"]
+        assert {x.get_rotation() for x in ax.texts} == {90.0}
+
+    @pytest.mark.parametrize("slack,rotation", [(1.0, 90.0), (_LABEL_PAD + 1.0, 0.0)])
+    def test_a_label_needs_clearance(self, slack, rotation):
+        """A label the exact width of its box would touch the next one.
+
+        A box wider than the text but by less than the clearance is
+        refused the flat label it would otherwise take, which is what
+        keeps two labels in neighboring boxes from reading as one word.
+        """
+        text = "value"
+        needed = _text_points(text, plt.rcParams["font.size"] * 0.8)[0]
+        figure, ax = plt.subplots(figsize=(4, 2), dpi=100)
+        figure.draw_without_rendering()
+        # Scale the axes so one data unit is exactly the room to test.
+        points = ax.get_window_extent().width * 72 / figure.dpi
+        plt.close(figure)
+        _, ax = plt.subplots(figsize=(4, 2), dpi=100)
+        plot_lanes(
+            pd.DataFrame({"start": [0.0], "end": [1.0], "v": [text]}),
+            ax=ax,
+            value="v",
+            x_limits=(0.0, points / (needed + slack)),
+        )
+        assert _texts(ax) == [text]
+        assert ax.texts[0].get_rotation() == rotation
+
+    def test_no_drawn_label_overflows_its_box(self):
+        """Every label kept is measured against the axes it lands in.
+
+        The legend takes its room after the boxes are drawn, so a label
+        judged before that is judged against an axes which no longer
+        exists by the time it is rendered.
+        """
+        frame = pd.DataFrame(
+            {
+                "start": np.arange(20.0),
+                "end": np.arange(20.0) + 0.9,
+                "v": [f"value {x}" for x in range(20)],
+            }
+        )
+        ax = plot_lanes(frame, value="v")
+        # Every label kept sits inside its box -- and they were kept. The
+        # first half of that is true of a figure which drew none at all.
+        assert len(ax.texts) == len(frame)
+        assert _overflowing(ax) == []
+
+    @pytest.mark.parametrize("text", [" ", "  ", "two\nlines", "$x^2$"])
+    def test_labels_matplotlib_lays_out_its_own_way(self, text):
+        """Whitespace, several lines and mathtext are all measurable.
+
+        A label is measured before it is drawn, so a string the measurer
+        cannot read would take the whole figure down with it.
+        """
+        frame = pd.DataFrame({"start": [0.0], "end": [10.0], "v": [text]})
+        ax = plot_lanes(frame, value="v")
+        assert _overflowing(ax) == []
+
+    def test_a_legend_naming_nothing_takes_no_rows(self):
+        """A caller sizing a figure for no legend keeps no room for one."""
+        assert estimate_legend_rows([], 720.0) == 0
+        assert estimate_legend_rows(["one"], 720.0) == 1
+
+    def test_a_legend_estimate_counts_the_lines_it_names(self):
+        """A value written on two lines takes two lines of legend.
+
+        Counting entries rather than lines keeps too little room, and
+        the legend then goes below into space nobody reserved.
+        """
+        assert legend_column_points(["a\nb"]) == legend_column_points(["a", "b"])
+        assert estimate_legend_rows(["a\nb"], 720.0) == 2
+
+    def test_a_label_of_two_lines_is_two_lines_tall(self):
+        """Height is what decides a rotated label, so lines must count."""
+        size = plt.rcParams["font.size"] * 0.8
+        one = _text_points("two", size)[1]
+        assert _text_points("two\nlines", size)[1] > 2 * one
+
     def test_max_labels(self):
         """Past max_labels no text is drawn at all."""
         frame = pd.DataFrame({"start": [0.0, 50.0], "end": [50.0, 100.0]})
@@ -440,21 +581,115 @@ class TestColors:
             _collections(shifted)[0].get_facecolors()[0],
         )
 
-    def test_labels_decided_the_same_at_any_dpi(self):
-        """Whether a label fits is a question about the figure, not its dpi."""
+    def test_no_two_values_share_a_color(self):
+        """Past what the wheel holds a palette must widen, not repeat.
+
+        A legend whose swatch means two things is worse than none.
+        """
+        names = [f"value {x:02d}" for x in range(len(WHEEL_ORDER) + 8)]
         frame = pd.DataFrame(
-            {"start": [0.0], "end": [1.0], "v": ["a rather long label"]}
+            {
+                "start": np.arange(float(len(names))),
+                "end": np.arange(float(len(names))) + 1.0,
+                "v": names,
+            }
         )
+        ax = plot_lanes(frame, value="v")
+        colors = {tuple(x) for x in _collections(ax)[0].get_facecolors()}
+        assert len(colors) == len(names)
+
+    def test_a_wide_palette_is_still_stable(self):
+        """A value keeps its color whether or not the others are drawn."""
+        names = [f"value {x:02d}" for x in range(len(WHEEL_ORDER) + 8)]
+        frame = pd.DataFrame({"start": [0.0], "end": [1.0], "v": [names[0]]})
+        alone = plot_lanes(frame, value="v", vocabulary=names)
+        first = _collections(alone)[0].get_facecolors()[0]
+        plt.close("all")
+        whole = pd.DataFrame(
+            {
+                "start": np.arange(float(len(names))),
+                "end": np.arange(float(len(names))) + 1.0,
+                "v": names,
+            }
+        )
+        together = plot_lanes(whole, value="v")
+        assert np.allclose(first, _collections(together)[0].get_facecolors()[0])
+
+    @pytest.mark.parametrize("length", range(4, 34, 3))
+    def test_labels_decided_the_same_at_any_dpi(self, length):
+        """Whether a label fits is a question about the figure, not its dpi.
+
+        A width is swept because only a label near the edge of its box
+        can be decided two ways, and every width is near some box's edge.
+        """
+        frame = pd.DataFrame({"start": [0.0], "end": [1.0], "v": ["x" * length]})
         drawn = []
-        for dpi in (50, 200):
+        for dpi in (50, 100, 300):
             _, ax = plt.subplots(figsize=(2, 1), dpi=dpi)
             plot_lanes(frame, ax=ax, value="v")
-            drawn.append(_texts(ax))
+            drawn.append((_texts(ax), [x.get_rotation() for x in ax.texts]))
             plt.close("all")
-        # Measuring text in points against a box in pixels answers this
-        # differently at each dpi, which is how the same figure saved at
-        # two resolutions loses its labels.
-        assert drawn[0] == drawn[1]
+        # A renderer rounds each glyph to whole pixels, so measuring what
+        # it drew is how the same figure saved at two resolutions keeps
+        # different labels.
+        assert len(set(map(str, drawn))) == 1
+
+    @pytest.mark.parametrize("engine", [None, "constrained", "tight"])
+    def test_a_tall_legend_stays_on_the_page(self, engine):
+        """A column naming more than the axes is tall runs off the figure.
+
+        Only a constrained layout keeps room for a legend outside the
+        axes, so the other figures have to be given it explicitly.
+        """
+        names, frame = _many_values()
+        figure, ax = plt.subplots(figsize=(8, 3), layout=engine)
+        plot_lanes(frame, ax=ax, value="v")
+        legend = _legend_of(figure, ax)
+        figure.draw_without_rendering()
+        box = legend.get_window_extent(figure.canvas.get_renderer())
+        assert box.x0 >= 0 and box.x1 <= figure.bbox.width
+        assert box.y0 >= 0 and box.y1 <= figure.bbox.height
+        # Every value is still named; none was dropped to make it fit.
+        assert len(legend.get_texts()) == len(names)
+
+    def test_a_legend_below_stays_inside_the_axes_it_was_given(self):
+        """A figure nobody laid out may hold other axes under this one.
+
+        The legend is the axes' own, so it takes the axes' room rather
+        than the space a neighbor below is sitting in.
+        """
+        _, frame = _many_values()
+        figure, (ax, below) = plt.subplots(2, 1, figsize=(8, 6))
+        before = ax.get_window_extent().frozen()
+        plot_lanes(frame, ax=ax, value="v")
+        figure.draw_without_rendering()
+        box = _legend_of(figure, ax).get_window_extent(figure.canvas.get_renderer())
+        # Under the lanes, clear of the neighbor, and neither the lanes
+        # nor the legend pushed off the page to make room.
+        assert box.y1 <= ax.get_window_extent().y0 + 1
+        assert box.y0 >= below.get_window_extent().y1
+        assert ax.get_position().y0 >= 0
+        assert ax.get_window_extent().height >= before.height / 2 - 1
+
+    def test_a_short_legend_stays_beside_them(self, string_frame):
+        """Few enough values still read best in one column at the side."""
+        ax = plot_lanes(string_frame, lane="group", value="value")
+        assert ax.get_figure().legends == []
+        box = ax.get_legend().get_window_extent()
+        assert box.x0 >= ax.get_window_extent().x1
+
+    def test_a_backend_which_renders_no_pixels(self, string_frame):
+        """Not every canvas hands out a renderer when asked for one.
+
+        A vector backend has none until it draws, so a figure bound for
+        a pdf must be laid out without asking the canvas for one.
+        """
+        figure = Figure(figsize=(4, 3), layout="constrained")
+        FigureCanvasPdf(figure)
+        ax = figure.subplots()
+        names, frame = _many_values()
+        plot_lanes(frame, ax=ax, value="v")
+        assert len(_legend_of(figure, ax).get_texts()) == len(names)
 
     def test_legend_off(self, string_frame):
         """legend=False draws none."""

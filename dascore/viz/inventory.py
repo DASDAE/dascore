@@ -387,7 +387,9 @@ def path(
     color
         Passed to the lane renderer to override its colors.
     max_labels
-        Draw no lane text at all past this many intervals.
+        Draw no lane text at all past this many intervals. Below that
+        count, a label too wide for its box is turned on its side, and
+        dropped only if it does not fit that way either.
     ax
         An Axes to draw the lanes on. Column panels need their own
         figure, so passing this and naming columns is refused.
@@ -431,8 +433,31 @@ def path(
     frame = _select_tracks(frame, tracks, chosen)
     lanes = list(dict.fromkeys(frame["lane"]))
     if ax is None:
+        # A legend which goes below the lanes needs height kept for it;
+        # without that the lanes give up the room instead and every bar is
+        # squeezed into a sliver. There is no figure to measure yet, so
+        # both the standing height of one column and the rows it breaks
+        # into are estimated from the labels; guessing low gives back less
+        # room than intended, which is the harmless direction.
+        named = _legend_names(frame, color)
+        width = (figsize or (10.0, 0.0))[0]
+        lane_height = 1.2 + 0.42 * len(lanes)
+        # A legend which would stand nearly as tall as the lanes it names
+        # reads better under them, and short of that it belongs at their
+        # side. Deciding here rather than leaving it to the renderer is
+        # what keeps the two from disagreeing: room kept below would
+        # otherwise be room enough to sit beside, and go unused.
+        column = _lanes.legend_column_points(named) / 72.0
+        legend_rows = (
+            0
+            if column <= 0.8 * lane_height
+            else _lanes.estimate_legend_rows(named, 72.0 * width)
+        )
         # Capped: a figure taller than a page is not more readable.
-        height = min(1.2 + 0.42 * len(lanes) + 1.1 * len(columns), 14.0)
+        height = min(
+            lane_height + 1.1 * len(columns) + 0.3 * legend_rows,
+            14.0,
+        )
         figure, all_axes = plt.subplots(
             1 + len(columns),
             1,
@@ -445,7 +470,7 @@ def path(
         all_axes = all_axes[:, 0]
         ax, panels = all_axes[0], all_axes[1:]
     else:
-        figure, panels = None, []
+        figure, panels, legend_rows = None, [], 0
     pad = 0.02 * (limits[1] - limits[0])
     plot_lanes(
         frame,
@@ -460,6 +485,10 @@ def path(
         x_limits=(limits[0] - pad, limits[1] + pad),
         x_label="" if len(panels) else "Optical distance [m]",
         colorbar_axes=[ax, *panels] if len(panels) else None,
+        manage_figure=figure is not None,
+        # Room was kept below for a legend, so that is where it goes;
+        # letting it choose again would find the room and sit beside it.
+        legend="below" if legend_rows else True,
     )
     named = [address, *([chosen.name] if chosen.name else []), _epoch_label(chosen)]
     ax.set_title(" · ".join(named), loc="left", fontsize="medium")
@@ -509,6 +538,40 @@ def _time_window(asked):
         msg = f"time={asked!r} must be increasing."
         raise ParameterError(msg)
     return low, high
+
+
+def _legend_names(frame, color) -> list[str]:
+    """What a legend of these lanes would name, in the order it names it.
+
+    Only what earns a swatch counts. A single color for the whole figure
+    earns no legend at all; a lane which states no value earns one swatch
+    named for the lane; and a lane of numbers reads from its colorbar, or
+    from the numbers printed in its boxes where there are few enough of
+    them, so it names none. A mapping is the exception: it gives swatches
+    to the values it holds, numbers included, and to no others.
+    """
+    if isinstance(color, str):
+        return []
+    flat, keyed = {}, {}
+    if isinstance(color, Mapping):
+        for name, entry in color.items():
+            # Keyed by lane it holds a mapping of values; keyed by value
+            # the key is the value itself.
+            if isinstance(entry, Mapping):
+                keyed[name] = entry
+            else:
+                flat[name] = entry
+    out = []
+    for lane, rows in frame.groupby("lane", sort=False):
+        values = list(dict.fromkeys(rows["value"]))
+        mapping = keyed.get(lane) or flat
+        if mapping:
+            out.extend(str(x) for x in values if x in mapping)
+        elif all(pd.isnull(x) for x in values):
+            out.append(str(lane))
+        else:
+            out.extend(str(x) for x in values if isinstance(x, str) and x)
+    return list(dict.fromkeys(out))
 
 
 def _lane_colors(color):

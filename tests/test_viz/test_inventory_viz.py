@@ -6,6 +6,7 @@ from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
+import pandas as pd
 import pytest
 from matplotlib.collections import LineCollection, PatchCollection
 
@@ -16,6 +17,7 @@ from dascore.viz import VizInventoryNameSpace
 from dascore.viz.inventory import (
     COMPONENT_COLORS,
     _distance_window,
+    _legend_names,
     map_path,
     path,
     timeline,
@@ -164,6 +166,42 @@ def build_site_inventory() -> inv.Inventory:
         ),
         resources=[inv.Interrogator(resource_id="int-1")],
         networks=(inv.Network(code="DAS", fiber_arrays=(array,)),),
+    ).check()
+
+
+def build_labeled_inventory(values: int, crs, lines: int = 1) -> inv.Inventory:
+    """One path of one label group, stating this many distinct values."""
+    labels = tuple(
+        inv.OpticalPathLabel(
+            start_distance=float(x * 10),
+            end_distance=float(x * 10 + 8),
+            group="hole",
+            value="\n".join([f"H{x % values:02d}"] * lines),
+        )
+        for x in range(24)
+    )
+    return inv.Inventory(
+        coordinate_reference_system=crs,
+        networks=(
+            inv.Network(
+                code="DAS",
+                fiber_arrays=(
+                    inv.FiberArray(
+                        code="L2",
+                        optical_paths=(
+                            inv.OpticalPath(
+                                name="holes",
+                                location_code="00",
+                                optical_components=(
+                                    inv.FiberSegment(name="run", optical_length=300.0),
+                                ),
+                                labels=labels,
+                            ),
+                        ),
+                    ),
+                ),
+            ),
+        ),
     ).check()
 
 
@@ -342,6 +380,100 @@ class TestPath:
         assert ax.get_xlabel() == "Optical distance [m]"
         # Components take their fixed colors, so the legend names the types.
         assert "FiberSegment" in _legend_labels(ax)
+
+    def test_a_narrow_figure_keeps_its_legend_on_the_page(self, site):
+        """A figure too small to seat a legend must not be made nonsense of.
+
+        The lanes keep some of the figure whatever the legend needs, and
+        neither they nor it leave the canvas.
+        """
+        crowded = build_labeled_inventory(24, site.coordinate_reference_system)
+        ax = path(crowded, "DAS.L2.00", figsize=(3.0, 2.0))
+        figure = ax.get_figure()
+        figure.draw_without_rendering()
+        lanes = ax.get_window_extent()
+        assert lanes.height > 0 and lanes.y0 >= 0
+        assert lanes.y1 <= figure.bbox.height
+
+    def test_a_value_on_two_lines_is_kept_room_for_both(self, site):
+        """A legend entry of two lines stands as tall as two of one.
+
+        Counting entries and not lines would keep too little room, and
+        the legend would go below into space nobody reserved.
+        """
+        crs = site.coordinate_reference_system
+        flat = path(build_labeled_inventory(12, crs), "DAS.L2.00")
+        short = flat.get_figure().get_size_inches()[1]
+        plt.close("all")
+        tall = path(build_labeled_inventory(12, crs, lines=2), "DAS.L2.00")
+        figure = tall.get_figure()
+        assert figure.get_size_inches()[1] > short
+        figure.draw_without_rendering()
+        box = figure.legends[0].get_window_extent(figure.canvas.get_renderer())
+        assert box.y0 >= 0 and box.y1 <= tall.get_window_extent().y0
+
+    def test_room_is_kept_for_a_legend_which_names_many_values(self, site):
+        """A path naming more values than it has lanes needs a taller figure.
+
+        The legend goes below the lanes there, and without the rows it
+        takes the lanes give up the room instead.
+        """
+        crs = site.coordinate_reference_system
+        few = path(build_labeled_inventory(2, crs), "DAS.L2.00")
+        few.get_figure().draw_without_rendering()
+        short, lanes = few.get_figure().get_size_inches()[1], _lanes(few)
+        room = few.get_window_extent().height / few.get_figure().dpi
+        plt.close("all")
+        many = path(build_labeled_inventory(24, crs), "DAS.L2.00")
+        figure = many.get_figure()
+        figure.draw_without_rendering()
+        # Same one lane either way, so only the legend can move the height.
+        assert _lanes(many) == lanes == ["components", "hole"]
+        assert figure.get_size_inches()[1] > short
+        # The room is kept for the legend, not taken from the lanes: with
+        # no allowance at all these lanes lose a third of their height.
+        assert many.get_window_extent().height / figure.dpi >= room * 0.9
+        box = figure.legends[0].get_window_extent(figure.canvas.get_renderer())
+        assert box.y0 >= 0 and box.y1 <= figure.bbox.height
+
+    def test_a_mapping_names_its_numbers_and_only_those(self, site):
+        """A number is a colorbar until a mapping gives it a swatch.
+
+        A mapping which names some of them names only those, which is
+        what the legend beside them will show.
+        """
+        frame = pd.DataFrame(
+            {"lane": ["count"] * 3, "value": [0, 1, 2], "start": 0.0, "end": 1.0}
+        )
+        assert _legend_names(frame, None) == []
+        assert _legend_names(frame, "red") == []
+        assert _legend_names(frame, {0: "red", 1: "blue", 2: "green"}) == [
+            "0",
+            "1",
+            "2",
+        ]
+        assert _legend_names(frame, {"count": {0: "red"}}) == ["0"]
+
+    def test_a_flat_mapping_names_only_what_it_holds(self, site):
+        """Room is kept for the swatches drawn, not for every value."""
+        crowded = build_labeled_inventory(24, site.coordinate_reference_system)
+        frame = pd.DataFrame(
+            {"lane": ["hole"] * 3, "value": ["a", "b", "c"], "start": 0.0, "end": 1.0}
+        )
+        assert _legend_names(frame, {"a": "red"}) == ["a"]
+        # And the figure is no taller for the values it does not name.
+        one = path(crowded, "DAS.L2.00", color={"H00": "red"})
+        assert one.get_figure().get_size_inches()[1] < 3.0
+
+    def test_one_color_for_every_lane_needs_no_legend_room(self, site):
+        """A figure which names no value has no legend to keep room for."""
+        crowded = build_labeled_inventory(24, site.coordinate_reference_system)
+        named = path(crowded, "DAS.L2.00")
+        tall = named.get_figure().get_size_inches()[1]
+        plt.close("all")
+        plain = path(crowded, "DAS.L2.00", color="red")
+        assert plain.get_figure().legends == []
+        assert plain.get_figure().get_size_inches()[1] < tall
 
     def test_tracks_selected_in_order(self, site):
         """tracks= picks lanes and orders them."""
