@@ -13,7 +13,7 @@ from matplotlib.colors import LogNorm
 from dascore.exceptions import ParameterError
 from dascore.utils.chunk_plan import _REPORT_COLUMNS
 from dascore.utils.plotting import _format_time_axis, _get_cmap
-from dascore.utils.time import to_datetime64, to_float
+from dascore.utils.time import to_float
 
 from ._lanes import plot_lanes
 
@@ -71,32 +71,6 @@ def _human_duration(value) -> str:
     return f"{size:.3g} s"
 
 
-def _pair(name, window) -> tuple | None:
-    """Read a window as its two ends, or None where all of it is asked for."""
-    if window is None or window is ...:
-        return None
-    try:
-        low, high = window
-    except (TypeError, ValueError):
-        msg = f"{name}={window!r} must be a (start, end) pair, or ... for all of it."
-        raise ParameterError(msg) from None
-    return (low, high)
-
-
-def _read_selection(kwargs) -> tuple[str, tuple | None]:
-    """Take the dimension to measure, and any window, from the kwargs."""
-    if not kwargs:
-        return "time", None
-    if len(kwargs) > 1:
-        msg = (
-            f"A spool is drawn along one dimension; {sorted(kwargs)} names "
-            f"{len(kwargs)}. Call once for each."
-        )
-        raise ParameterError(msg)
-    ((dim, window),) = kwargs.items()
-    return dim, _pair(dim, window)
-
-
 def _lane_names(report: pd.DataFrame, dim: str) -> list[str]:
     """Name each group by what tells it apart, and how complete it is."""
     # Named for the measured dimension rather than by suffix: an
@@ -133,13 +107,11 @@ def _lane_names(report: pd.DataFrame, dim: str) -> list[str]:
     return names
 
 
-def _new_ax(ax, figsize, height: float):
+def _new_ax(ax, height: float):
     """Build the figure a plot of this height needs, unless given one."""
     if ax is not None:
         return ax
-    _, ax = plt.subplots(
-        1, figsize=figsize or (10.0, min(height, 14.0)), layout="constrained"
-    )
+    _, ax = plt.subplots(1, figsize=(10.0, min(height, 14.0)), layout="constrained")
     return ax
 
 
@@ -207,47 +179,15 @@ def _tile(report: pd.DataFrame, gaps: pd.DataFrame, dim: str) -> pd.DataFrame:
     return pd.DataFrame(rows, columns=["lane", "start", "end", "kind", "label"])
 
 
-def _bounds(window, low, high, dated: bool = True) -> tuple:
-    """
-    Resolve a window's two ends, taking either of them from the data.
-
-    Returns the pair in the units the data states, so a caller can
-    compare it against the frame it came from.
-    """
-    asked = (None, None) if window is None else window
-    edges = tuple(
-        fallback
-        if value is None or value is ...
-        else (to_datetime64(value) if dated else float(value))
-        for value, fallback in zip(asked, (low, high), strict=True)
-    )
-    if edges[1] < edges[0]:
-        msg = f"The window {window!r} must be increasing."
-        raise ParameterError(msg)
-    return edges
-
-
-def _x_limits(window, frame: pd.DataFrame, dated: bool):
-    """Resolve the window a lane plot draws between, or None for all of it."""
-    if window is None:
-        return None
-    low, high = _bounds(window, frame["start"].min(), frame["end"].max(), dated)
-    if high <= low:
-        msg = f"The window {window!r} must be increasing."
-        raise ParameterError(msg)
-    return (low, high)
-
-
 def coverage(
     spool,
+    dim: str = "time",
     *,
     tolerance: float = 1.5,
     group: str | Sequence[str] | None = None,
     color=None,
     ax: plt.Axes | None = None,
-    figsize: tuple[float, float] | None = None,
     show: bool = False,
-    **kwargs,
 ) -> plt.Axes:
     """
     Plot what a spool covers along a dimension, and where it does not.
@@ -264,6 +204,8 @@ def coverage(
     ----------
     spool
         The spool to measure.
+    dim
+        The dimension to measure along.
     tolerance
         How many samples patches may be spaced and still count as
         contiguous. Same meaning as chunk's `tolerance`.
@@ -274,18 +216,23 @@ def coverage(
     color
         A mapping of "data" and "gap" to colors, overriding the default.
     ax
-        A matplotlib Axes; one is created when None.
-    figsize
-        Size of the figure built when ax is None.
+        A matplotlib Axes; one is created, a lane tall per group, when
+        None. Pass one to say how large the plot is.
     show
         Whether to call plt.show.
-    **kwargs
-        The dimension to measure along, optionally with the window to
-        draw: `time=("2020-01-01", None)`. `time=...` states the
-        dimension and asks for all of it. Defaults to the whole of time.
 
     Notes
     -----
+    The whole of what the spool holds is drawn. A part of it is a
+    smaller spool: select it first, as
+    `spool.select(time=(start, end)).viz.coverage()`, and the lanes and
+    their percentages are of that window rather than of a window drawn
+    over percentages of everything. To keep the whole picture and look
+    at part of it instead -- where a lane running off the edge says the
+    data does not stop there -- set the limits on the axes this returns.
+    Labels are laid out for the extent drawn, so a zoom made that way
+    shows fewer of them than it has room for.
+
     Coverage is measured between patches, from the envelopes the index
     records, so a hole *inside* a patch is not visible here. A lane
     reading 100% says "nothing chunk would refuse to merge", not
@@ -298,16 +245,16 @@ def coverage(
     >>>
     >>> spool = dc.get_example_spool("diverse_das")
     >>> _ = coverage(spool)
-    >>> _ = coverage(spool, time=("2020-01-03", "2020-01-04"))
+    >>> _ = coverage(spool, "distance")
+    >>> _ = coverage(spool.select(time=("2020-01-03", "2020-01-04")))
     """
-    dim, window = _read_selection(kwargs)
     # get_coverage refuses a dimension the spool does not state, and
     # names the ones it does, so its message is better than any here.
     report = spool.get_coverage(dim, tolerance=tolerance, group=group)
     gaps = spool.get_gaps(dim, tolerance=tolerance, group=group)
     frame = _tile(report, gaps, dim)
     lanes = list(dict.fromkeys(frame["lane"]))
-    ax = _new_ax(ax, figsize, 1.2 + 0.45 * len(lanes))
+    ax = _new_ax(ax, 1.2 + 0.45 * len(lanes))
     dated = pd.api.types.is_datetime64_any_dtype(frame["start"])
     plot_lanes(
         frame,
@@ -317,7 +264,6 @@ def coverage(
         label="label",
         lanes=lanes,
         color=color or COVERAGE_COLORS,
-        x_limits=_x_limits(window, frame, dated),
         x_label="" if dated else dim,
     )
     if dated:
@@ -392,13 +338,13 @@ def _day_counts(contents: pd.DataFrame, days: np.ndarray, dim: str) -> np.ndarra
     )
 
 
-def _calendar_days(window, runs: pd.DataFrame, ends: np.ndarray) -> pd.DatetimeIndex:
+def _calendar_days(runs: pd.DataFrame, ends: np.ndarray) -> pd.DatetimeIndex:
     """Return every day the calendar shows, first and last included."""
     # A run covers up to its extended end without reaching it, so a run
     # stopping at midnight ends on the day before, and one reaching half
     # an hour past it earns the day it reaches into.
-    reach = ends.max() - np.timedelta64(1, "ns")
-    first, last = _bounds(window, runs["start"].min(), reach)
+    first = runs["start"].min()
+    last = ends.max() - np.timedelta64(1, "ns")
     # The last day is a day the spool has data in, so the calendar shows
     # it. An exclusive end would leave a one-day spool with no cells.
     return pd.date_range(
@@ -452,9 +398,7 @@ def calendar(
     method: str = "percent",
     tolerance: float = 1.5,
     group: str | Sequence[str] | None = None,
-    time: tuple | None = None,
     ax: plt.Axes | None = None,
-    figsize: tuple[float, float] | None = None,
     show: bool = False,
 ) -> plt.Axes:
     """
@@ -484,13 +428,9 @@ def calendar(
         to the config option `patch_kind_attrs`. It decides which
         boundaries are gaps; a day is the union of every group's data,
         so regrouping moves a day's total only where it moves a gap.
-    time
-        The days to draw, as a (start, end) pair. Either end may be None
-        to run to what the spool itself states.
     ax
-        A matplotlib Axes; one is created when None.
-    figsize
-        Size of the figure built when ax is None.
+        A matplotlib Axes; one is created, a row tall per month, when
+        None. Pass one to say how large the plot is.
     show
         Whether to call plt.show.
 
@@ -504,7 +444,10 @@ def calendar(
 
     `group` is not a way to pick one of them: select the patches first,
     as `spool.select(tag="temperature").viz.calendar()`, and the
-    calendar is of those alone.
+    calendar is of those alone. Days are chosen the same way — the
+    calendar runs from the first day the spool holds to the last, so
+    `spool.select(time=(start, end)).viz.calendar()` draws that season
+    and measures it.
 
     A run covers one sample past the last one it states, taken from the
     step its group reports. Patches within `sampling_group_tolerance` of
@@ -541,7 +484,7 @@ def calendar(
         msg = "This spool holds no time to draw a calendar of."
         raise ParameterError(msg)
     ends = _extended(runs, report, dim)
-    days = _calendar_days(_pair("time", time), runs, ends)
+    days = _calendar_days(runs, ends)
     stamps = days.to_numpy()
     if method == "count":
         values = _day_counts(spool.get_contents(), stamps, dim)
@@ -553,7 +496,7 @@ def calendar(
             else _SECONDS_IN_DAY - covered
         )
     matrix, labels = _calendar_cells(days, values)
-    ax = _new_ax(ax, figsize, 1.5 + 0.5 * len(labels))
+    ax = _new_ax(ax, 1.5 + 0.5 * len(labels))
     ax.set_facecolor(_UNSTATED_COLOR)
     cmap = _get_cmap(_CALENDAR_CMAPS[method]).copy()
     cmap.set_bad(_UNSTATED_COLOR)

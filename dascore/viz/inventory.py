@@ -345,7 +345,6 @@ def path(
     color: str | Mapping | None = None,
     max_labels: int = 200,
     ax: plt.Axes | None = None,
-    figsize: tuple[float, float] | None = None,
     show: bool = False,
 ) -> plt.Axes:
     """
@@ -391,10 +390,10 @@ def path(
         count, a label too wide for its box is turned on its side, and
         dropped only if it does not fit that way either.
     ax
-        An Axes to draw the lanes on. Column panels need their own
-        figure, so passing this and naming columns is refused.
-    figsize
-        Size of the figure built when ax is None.
+        An Axes to draw the lanes on; one is created, a lane tall per
+        track, when None. Pass one to say how large the plot is. Column
+        panels need their own figure, so passing this and naming columns
+        is refused.
     show
         Whether to call plt.show.
 
@@ -440,7 +439,7 @@ def path(
         # into are estimated from the labels; guessing low gives back less
         # room than intended, which is the harmless direction.
         named = _legend_names(frame, color)
-        width = (figsize or (10.0, 0.0))[0]
+        width = 10.0
         lane_height = 1.2 + 0.42 * len(lanes)
         # A legend which would stand nearly as tall as the lanes it names
         # reads better under them, and short of that it belongs at their
@@ -461,7 +460,7 @@ def path(
         figure, all_axes = plt.subplots(
             1 + len(columns),
             1,
-            figsize=figsize or (10.0, height),
+            figsize=(width, height),
             sharex=True,
             height_ratios=[max(2.0, 0.5 * len(lanes))] + [1] * len(columns),
             squeeze=False,

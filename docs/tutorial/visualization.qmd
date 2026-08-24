@@ -141,10 +141,19 @@ spool.viz.coverage(show=True);
 
 Both acquisitions lose the four days in the middle of January, which is the site's own outage; the strain acquisition started later and was pulled out earlier, which is why its lane is shorter rather than gappy at the ends.
 
-Any dimension the spool states can be measured, and a `(start, end)` pair windows it:
+Time is measured by default; any other dimension the spool states can be named instead, as `spool.viz.coverage("distance")`. The whole of it is drawn, because part of a spool is a smaller spool: select the window first and the lanes, and the percentages on them, are of that window rather than of a window drawn over percentages of everything.
 
 ```{python}
-spool.viz.coverage(time=("2024-01-15", "2024-01-25"), show=True);
+spool.select(time=("2024-01-15", "2024-01-25")).viz.coverage(show=True);
+```
+
+The lanes end where the selection does, which is what a spool of those ten days holds. Keeping the whole picture and looking at part of it is a different question, and one for the axes rather than the spool: a lane which runs off the edge there says the data does not stop at it.
+
+```{python}
+import numpy as np
+
+ax = spool.viz.coverage()
+ax.set_xlim(np.datetime64("2024-01-15"), np.datetime64("2024-01-25"));
 ```
 
 ## Calendar
