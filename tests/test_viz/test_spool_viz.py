@@ -16,8 +16,6 @@ from dascore.viz import VizSpoolNameSpace
 from dascore.viz import spool as spool_viz
 from dascore.viz.spool import (
     COVERAGE_COLORS,
-    _human_duration,
-    _percent,
     _union,
     calendar,
     coverage,
@@ -276,47 +274,6 @@ class TestNaming:
     """How a lane says which group it is and how complete."""
 
     @pytest.mark.parametrize(
-        "value, text",
-        [
-            (1.0, "100%"),
-            (0.9993334, "99.9%"),
-            (0.92276, "92%"),
-            (1.246e-08, "0%"),
-            (0.0, "0%"),
-        ],
-    )
-    def test_percent(self, value, text):
-        """A percentage reads at the precision it needs."""
-        assert _percent(value) == text
-
-    def test_a_hole_is_never_rounded_away(self):
-        """Only a whole span reads as 100%."""
-        assert _percent(0.999999999) == "<100%"
-        assert _percent(1.0) == "100%"
-
-    @pytest.mark.parametrize(
-        "seconds, text",
-        [
-            (0.0, ""),
-            (0.008, "8 ms"),
-            (1.004, "1 s"),
-            (90.0, "1.5 m"),
-            (7200.0, "2 h"),
-            (86_400.0 * 3, "3 d"),
-            # A multi-year outage is not worth reading in days.
-            (86_400.0 * 400, "1.1 y"),
-            (86_400.0 * 14_852, "40.7 y"),
-        ],
-    )
-    def test_human_duration(self, seconds, text):
-        """A gap is stated in the largest unit which fits it."""
-        assert _human_duration(pd.Timedelta(seconds=seconds)) == text
-
-    def test_duration_of_a_plain_number(self):
-        """A dimension which is not time still labels its gaps."""
-        assert _human_duration(12.0) == "12 s"
-
-    @pytest.mark.parametrize(
         "size, units, text",
         [
             (13.0, "m", "13 m"),
@@ -329,10 +286,6 @@ class TestNaming:
     def test_gap_label_off_the_time_axis(self, size, units, text):
         """A gap along another dimension is measured in that dimension."""
         assert spool_viz._gap_label(size, units, dated=False) == text
-
-    def test_duration_smaller_than_any_unit(self):
-        """A gap under a microsecond still says how long it is."""
-        assert _human_duration(1e-9) == "1e-09 s"
 
     def test_an_attr_spelled_like_an_envelope(self):
         """Only the measured dimension owns the envelope column names."""

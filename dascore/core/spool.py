@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import numbers
 import os
 import warnings
 from collections.abc import Callable, Generator, Iterator, Mapping, Sequence
+from contextlib import suppress
 from dataclasses import replace
 from functools import singledispatch
 from pathlib import Path
@@ -12,6 +14,11 @@ from typing import TYPE_CHECKING, ClassVar, Literal, NamedTuple, Self, TypeVar, 
 
 import numpy as np
 import pandas as pd
+from pandas.errors import (
+    OutOfBoundsDatetime,
+    OutOfBoundsTimedelta,
+    PerformanceWarning,
+)
 from rich.text import Text
 
 import dascore as dc
@@ -22,6 +29,7 @@ from dascore.constants import (
     ExecutorType,
     PatchType,
     attr_conflict_description,
+    dascore_styles,
     enrich_attrs_description,
     enrich_conflict_description,
     enrich_coords_description,
@@ -72,6 +80,8 @@ from dascore.utils.chunk_plan import (
     _SOURCE_COLUMNS,
     ChunkPlan,
     _ensure_patch_id,
+    _resolve_group_attrs,
+    _structural,
     build_chunk_plan,
     build_concat_plan,
     build_coverage_frame,
@@ -80,11 +90,19 @@ from dascore.utils.chunk_plan import (
     samples_adjusted_envelopes,
     subdivision_pieces,
 )
-from dascore.utils.display import get_dascore_text, get_nice_text
+from dascore.utils.display import (
+    ACQUISITION_ATTR,
+    elision_text,
+    get_header_text,
+    get_nice_text,
+    group_names,
+    human_duration,
+)
 from dascore.utils.docs import compose_docstring
 from dascore.utils.misc import (
     _spool_map,
     deep_equality_check,
+    suppress_warnings,
 )
 from dascore.utils.namespace import NamespaceOwner
 from dascore.utils.patch import (
@@ -94,6 +112,7 @@ from dascore.utils.patch import (
 from dascore.utils.paths import coerce_to_upath, requires_local_directory
 from dascore.utils.pd import (
     drop_selector_names,
+    get_dim_names_from_columns,
     present_columns,
     requested_selector_names,
     resolve_selector_namespaces,
@@ -122,6 +141,13 @@ class _InventoryQuery(NamedTuple):
     # The `_coords` spec and kwargs with the channel names taken out.
     coords: namespace_select_type
     kwargs: dict
+
+
+# The types a dimension measured in time is stated in, instants and
+# offsets alike. Two such ends are a duration apart, which is a fact
+# neither end carries; every other dimension states its own magnitude
+# in its own units.
+_TIMES = (pd.Timestamp, np.datetime64, pd.Timedelta, np.timedelta64)
 
 
 class Spool(NamespaceOwner):
@@ -2305,31 +2331,272 @@ class Spool(NamespaceOwner):
         return {"rows": _strip_identity(rows)}
 
     def __rich__(self):
-        """Rich rep. of spool."""
-        base = get_dascore_text() + Text(" ")
-        base += Text(self.__class__.__name__, style=self._rich_style)
-        base += Text(" 🧵 ")
-        patch_len = len(self)
-        base += Text(f"({patch_len:d}")
-        base += Text(" Patches)") if patch_len != 1 else Text(" Patch)")
-        path = self.spool_path
-        if path is not None:
-            base += Text(f"\n    Path: {path}")
-        # Only render a time span when realization is cheap: live
-        # contents, single files, and derived catalogs are in memory; a
-        # huge directory index is not realized for a repr.
-        cheap = self.indexer is None
-        if cheap:
-            df = self._df
-            if df is not None and len(df) and "time_min" in df.columns:
-                t1, t2 = df["time_min"].min(), df["time_min"].max()
-                if pd.notna(t1) and pd.notna(t2):
-                    duration = get_nice_text(t2 - t1)
-                    base += Text(
-                        f"\n    Time Span: <{duration}> "
-                        f"{get_nice_text(t1)} to {get_nice_text(t2)}"
-                    )
+        """
+        What the spool is, what it spans, and the tracks it holds.
+
+        Summarizing realizes the index relation, which a spool of many
+        patches should not do for a glance; `display_max_patches` says
+        how many is too many, and past it the repr states its count and
+        path alone.
+        """
+        count = len(self)
+        plural = "" if count == 1 else "es"
+        name = f"{self.__class__.__name__} 🧵 ({count:,d} Patch{plural})"
+        blocks = [get_header_text(name, style=self._rich_style)]
+        if (path := self.spool_path) is not None:
+            blocks.append(Text(f"    Path: {path}"))
+        # The limit is what it says whatever the spool has been asked
+        # before: a repr which summarized only once a frame happened to
+        # be built would print two different things for one object.
+        limit = dc.get_config().display_max_patches
+        if count <= limit:
+            # A repr which raises makes an object undebuggable at the
+            # one moment someone needs to look at it, so nothing a
+            # summary does is allowed to stop the header from printing.
+            # Nor is it allowed to warn about how pandas built the
+            # frame: a directory index warns once per insert that it is
+            # fragmented, a hundred lines of advice about a frame the
+            # caller never asked for, from typing a name.
+            #
+            # Only that category. A realized frame is cached, so the
+            # first reader is the only one who ever warns -- suppress
+            # anything else here and a repr does not delay it, it eats
+            # it, and the `get_contents` after it goes quiet too.
+            with suppress(Exception), suppress_warnings(PerformanceWarning):
+                blocks.extend(self._summary_blocks())
+        else:
+            blocks.append(
+                Text(
+                    f"    Not summarized: {count:,d} patches exceeds "
+                    f"display_max_patches={limit:,d}.",
+                    style=dascore_styles["keys"],
+                )
+            )
+        return Text("\n").join(blocks)
+
+    def _stated_dims(self, df) -> list[str]:
+        """The dimensions this spool's patches actually have."""
+        stated = [
+            x for x in get_dim_names_from_columns(df) if self._measured(df, x).any()
+        ]
+        # Time leads where it is one of them: it is the dimension a
+        # reader looks for, and the one the tracks are measured along.
+        return sorted(stated, key=lambda x: (x != "time", x))
+
+    @staticmethod
+    def _measured(df, dim: str):
+        """
+        Which rows have this dimension as an axis and state both its ends.
+
+        Two things are asked, and the first is asked with the same
+        function `get_coverage` asks it with: the relation carries an
+        envelope for every coordinate, dimensional or not, and a patch
+        may ride a coordinate of this name along a different axis, so
+        `dims` is what says whose axis it is, row by row. A track and
+        the lane of the same patches have to agree on that, which they
+        cannot do from two spellings of one rule.
+
+        Being an axis is not enough on its own: a patch may name one
+        whose envelope it never filled in, and an unstated end bounds
+        nothing.
+        """
+        axis = pd.Series(_structural(df, dim), index=df.index)
+        return axis & df[f"{dim}_min"].notna() & df[f"{dim}_max"].notna()
+
+    def _comparable(self, df, dim: str) -> bool:
+        """Whether this dimension's ends can be measured against each other."""
+        measured = df[self._measured(df, dim)]
+        # Two kinds do not subtract, and neither do two units: a metre
+        # taken from a foot is a number standing for nothing.
+        return (
+            len(self._value_kinds(measured[f"{dim}_min"])) == 1
+            and len(self._dim_units(measured, dim)) <= 1
+        )
+
+    @staticmethod
+    def _value_kinds(values) -> set[str]:
+        """Which kinds of thing an envelope column holds."""
+        # One dimension name can be a time on one patch and a number on
+        # another. Their envelopes share a column and do not compare, so
+        # asking for the extent of the two together raises.
+        kinds = set()
+        for value in values.dropna():
+            # An instant and an offset are both times and still do not
+            # compare: a date is not a length, and asking for the
+            # smaller of the two raises.
+            if isinstance(value, pd.Timestamp | np.datetime64):
+                kinds.add("instant")
+            elif isinstance(value, pd.Timedelta | np.timedelta64):
+                kinds.add("offset")
+            elif isinstance(value, numbers.Number):
+                kinds.add("number")
+            else:
+                kinds.add("label")
+        return kinds
+
+    def _dims_text(self, df, dims: list[str]) -> Text:
+        """The extent this spool covers along each of its dimensions."""
+        key_style = dascore_styles["keys"]
+        base = Text("➤ ") + Text("Dimensions", style=dascore_styles["dc_blue"])
+        base += Text(" (") + Text(", ".join(dims), style="bold") + Text(")")
+        width = max(len(x) for x in dims)
+        for dim in dims:
+            measured = df[self._measured(df, dim)]
+            base += Text.assemble("\n    ", Text(f"{dim + ':':<{width + 1}} ", "bold"))
+            if len(self._value_kinds(measured[f"{dim}_min"])) > 1:
+                # Two kinds do not compare, so there are no two ends to
+                # state. Saying so beats the whole summary disappearing.
+                base += Text("mixed value kinds", key_style)
+                continue
+            low, high = measured[f"{dim}_min"].min(), measured[f"{dim}_max"].max()
+            units = self._dim_units(measured, dim)
+            base += get_nice_text(low) + Text(" to ", key_style) + get_nice_text(high)
+            if len(units) > 1:
+                # Envelopes are stored in the units each patch was read
+                # in, so a min and a max from two of them are not two
+                # ends of one extent. Say so rather than imply otherwise.
+                base += Text(f"  (mixed units: {', '.join(units)})", key_style)
+            elif isinstance(low, _TIMES):
+                # A time is stated as an instant, so how long the two of
+                # them are apart is a fact the line does not yet carry.
+                # Any other dimension states its own magnitude already.
+                if (span := self._duration_text(low, high)) is not None:
+                    base += Text("  ") + span
+            elif units:
+                base += Text(" ") + Text(units[0], dascore_styles["units"])
         return base
+
+    @staticmethod
+    def _dim_units(df, dim: str) -> tuple[str, ...]:
+        """
+        What a dimension is measured in, as its patches state it.
+
+        The units column is private in the relation and renamed only on
+        the way out through `present_columns`, so both spellings are
+        asked for: a repr reads the frame before that rename.
+        """
+        stated = df.get(f"{dim}_units", df.get(f"_{dim}_units"))
+        # Only a dimension the relation describes is ever asked about,
+        # and it describes each of them with a units column, empty or not.
+        assert stated is not None, f"the relation states no units for {dim}"
+        return tuple(sorted({str(x) for x in stated.dropna().unique() if str(x)}))
+
+    @staticmethod
+    def _duration_text(low, high) -> Text | None:
+        """
+        How long an extent lasted. Only asked of one measured in time.
+
+        None where it lasted no time: `human_duration` says nothing of a
+        zero, which reads as a label on a gap and as an empty pair of
+        brackets here.
+        """
+        try:
+            span = high - low
+        except (OutOfBoundsDatetime, OutOfBoundsTimedelta):
+            # Two instants can lie further apart than a Timedelta holds.
+            # How long that is matters less than the extents it would
+            # otherwise take down with it.
+            return None
+        if not (said := human_duration(span)):
+            return None
+        return Text(f"<{said}>", dascore_styles["keys"])
+
+    def _span_text(self, low, high, units: tuple[str, ...]) -> Text | None:
+        """How wide an extent is, measured in what the dimension is."""
+        # A time span is a duration. Any other dimension is as wide as
+        # its own units say, and calling that many seconds would be a
+        # different claim about a different quantity.
+        if isinstance(low, _TIMES):
+            return self._duration_text(low, high)
+        if isinstance(low, numbers.Number):
+            # A width is only in a unit where every patch agrees on one;
+            # stating the first of several would label a track in a unit
+            # it was not measured in.
+            stated = f" {units[0]}" if len(units) == 1 else ""
+            return Text(f"<{float(high - low):g}{stated}>", dascore_styles["keys"])
+        # A dimension of labels has two ends and no width between them.
+        return None
+
+    def _tracks_text(self, df, dim: str) -> Text | None:
+        """
+        The kinds of patch this spool holds, named as its lanes are named.
+
+        A track is one kind of patch, which is the partition
+        [`chunk`](`dascore.Spool.chunk`) starts from. Coverage may cut a
+        kind finer still -- two sampling rates are two lanes of one tag
+        -- so a lane there is a track here or a part of one, and the two
+        are named by one rule rather than given one name.
+        """
+        # The same resolution chunk does, rather than a second reading
+        # of the config which could drift from it. It dedupes, which is
+        # what lets the config name an attribute twice: the groupby
+        # tolerates that, but reset_index will not put one column back
+        # under two labels.
+        keys = list(_resolve_group_attrs(None, set(df.columns)))
+        if not keys:
+            return None
+        low, high = f"{dim}_min", f"{dim}_max"
+        # A patch which does not have this dimension is not a track along
+        # it; get_coverage drops it too rather than report an empty one.
+        df = df[self._measured(df, dim)]
+        # The dimension came from _stated_dims, which is the set of them
+        # some row measures, so something is always left to group.
+        assert len(df), f"no patch measures {dim}"
+        frame = (
+            df.groupby(keys, dropna=False)
+            .agg(_n=(low, "size"), _low=(low, "min"), _high=(high, "max"))
+            .reset_index()
+        )
+        # One track is the whole spool, which the dimensions above
+        # already state; naming it would only repeat them.
+        if len(frame) < 2:
+            return None
+        units = self._dim_units(df, dim)
+        base = Text("➤ ") + Text("Tracks", style=dascore_styles["dc_red"])
+        base += Text(f" ({len(frame)} along ") + Text(dim, style="bold") + Text(")")
+        limit = dc.get_config().display_max_items
+        shown = frame.head(limit)
+        names = group_names(
+            frame,
+            ignore=("_n", "_low", "_high"),
+            # The same fallback the plot names a lane by, or a group
+            # nothing tells apart is a track called "group 0" and a lane
+            # called by its acquisition -- one rule, two names.
+            fallback=ACQUISITION_ATTR,
+        )[:limit]
+        counted = [f"{x:,d} patch{'' if x == 1 else 'es'}" for x in shown["_n"]]
+        # The columns are measured over the lines which are drawn: a name
+        # elided below should not pad the names above it.
+        width = max((len(x) for x in names), default=0)
+        held = max((len(x) for x in counted), default=0)
+        # iterrows, not itertuples: the aggregate columns are named
+        # privately so no attr of that name can collide with them, and
+        # itertuples renames a private column to its position.
+        for name, count, (_, row) in zip(names, counted, shown.iterrows(), strict=True):
+            base += Text.assemble("\n    ", Text(f"{name:<{width}}", "bold"), "  ")
+            base += Text(f"{count:>{held}}", dascore_styles["keys"])
+            base += Text("  ") + get_nice_text(row["_low"])
+            if (span := self._span_text(row["_low"], row["_high"], units)) is not None:
+                base += Text(" ") + span
+        if (left_out := len(frame) - len(shown)) > 0:
+            base += Text("\n    ") + elision_text(left_out)
+        base += Text("\n    (coverage: spool.viz.coverage())", dascore_styles["keys"])
+        return base
+
+    def _summary_blocks(self) -> list[Text]:
+        """The blocks stating what this spool spans and what it holds."""
+        df = self._df
+        if df is None or not len(df) or "dims" not in df.columns:
+            return []
+        if not (dims := self._stated_dims(df)):
+            return []
+        blocks = [self._dims_text(df, dims)]
+        # Tracks are measured along one dimension, which has to be one
+        # whose ends can be compared.
+        measurable = [x for x in dims if self._comparable(df, x)]
+        if measurable and (tracks := self._tracks_text(df, measurable[0])) is not None:
+            blocks.append(tracks)
+        return blocks
 
     def __str__(self):
         return str(self.__rich__())

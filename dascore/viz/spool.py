@@ -12,12 +12,16 @@ from matplotlib.colors import LogNorm
 
 from dascore.exceptions import ParameterError
 from dascore.utils.chunk_plan import _REPORT_COLUMNS
+from dascore.utils.display import (
+    _SECONDS_IN_DAY,
+    ACQUISITION_ATTR,
+    group_names,
+    human_duration,
+    percent,
+)
 from dascore.utils.plotting import _format_time_axis, _get_cmap
-from dascore.utils.time import to_float
 
 from ._lanes import plot_lanes
-
-_SECONDS_IN_DAY = 86_400.0
 
 # Data and its absence are a closed pair, so their colors are pinned
 # rather than drawn from the palette other values share.
@@ -43,39 +47,6 @@ _GAP_TICKS = (1.0, 60.0, 600.0, 3_600.0, 6 * 3_600.0, _SECONDS_IN_DAY)
 # is drawn over, so naming the lane with them would repeat the axis.
 _ENVELOPE_SUFFIXES = ("min", "max", "step", "units")
 
-# What names a group which shares every attribute it states with the
-# others, or states none: the key the acquisition is filed under. It is
-# the first of the config's `patch_kind_attrs`, and the one of them
-# which names a place rather than describing it.
-_ACQUISITION_ATTR = "acquisition_key"
-
-# Steps a duration is worth reading in, largest first. A year is the
-# Gregorian mean, the same one numpy converts a timedelta64 with, since
-# a multi-year outage reads as "40.7 y" rather than "14852 d".
-_UNITS = (
-    ("y", 365.2425 * _SECONDS_IN_DAY),
-    ("d", _SECONDS_IN_DAY),
-    ("h", 3_600.0),
-    ("m", 60.0),
-    ("s", 1.0),
-    ("ms", 1e-3),
-    ("µs", 1e-6),
-)
-
-
-def _human_duration(value) -> str:
-    """Say how long something lasted, in the largest unit which fits."""
-    # to_float reads a duration in seconds, whichever time type states
-    # it, and passes a plain number through as itself.
-    seconds = to_float(value)
-    if not np.isfinite(seconds) or seconds == 0:
-        return ""
-    size = abs(seconds)
-    for name, scale in _UNITS:
-        if size >= scale:
-            return f"{size / scale:.1f} {name}".replace(".0 ", " ")
-    return f"{size:.3g} s"
-
 
 def _lane_names(report: pd.DataFrame, dim: str) -> list[str]:
     """Name each group by what tells it apart, and how complete it is."""
@@ -83,42 +54,16 @@ def _lane_names(report: pd.DataFrame, dim: str) -> list[str]:
     # attribute may legitimately be called `site_min`, and it names its
     # group as any other attribute does.
     envelope = {f"{dim}_{x}" for x in _ENVELOPE_SUFFIXES}
-    stated = [
-        x
-        for x in report.columns
-        if x not in _REPORT_COLUMNS and x not in envelope and not x.startswith("_")
+    names = group_names(
+        report,
+        ignore=set(_REPORT_COLUMNS) | envelope,
+        ordinals=report["group_id"],
+        fallback=ACQUISITION_ATTR,
+    )
+    return [
+        f"{name}  {percent(coverage)}"
+        for name, coverage in zip(names, report["coverage"], strict=True)
     ]
-    telling = [x for x in stated if report[x].astype(str).nunique() > 1]
-    described = []
-    for _, row in report.iterrows():
-        stated_values = (str(row[x]) for x in telling if pd.notnull(row[x]))
-        parts = [x for x in stated_values if x]
-        # Nothing tells a lone group apart, since there is nothing to
-        # tell it apart from, and every group of a spool of one
-        # acquisition is in that position. It is still a named
-        # acquisition, and its key says what its ordinal cannot.
-        if not parts:
-            key = row.get(_ACQUISITION_ATTR)
-            if pd.notnull(key) and str(key):
-                parts = [str(key)]
-        # A group which states neither is left blank here and named by
-        # its ordinal below; the blank is a value it states, but drawing
-        # it as an empty label would read as a rendering gap.
-        described.append(" · ".join(parts))
-    # Two groups can state the same attributes and still be two groups —
-    # sampling rate and coordinate structure part them without being
-    # shown — so where a description is shared its ordinal tells them
-    # apart. A lane which named two groups would silently draw one.
-    shared = {x for x in described if described.count(x) > 1}
-    names = []
-    for description, (_, row) in zip(described, report.iterrows(), strict=True):
-        name = description
-        if not name:
-            name = f"group {row['group_id']}"
-        elif description in shared:
-            name = f"{description} ({row['group_id']})"
-        names.append(f"{name}  {_percent(row['coverage'])}")
-    return names
 
 
 def _new_ax(ax, height: float):
@@ -127,16 +72,6 @@ def _new_ax(ax, height: float):
         return ax
     _, ax = plt.subplots(1, figsize=(10.0, min(height, 14.0)), layout="constrained")
     return ax
-
-
-def _percent(value: float) -> str:
-    """Say a fraction as a percentage, without rounding a hole away."""
-    for places in range(4):
-        text = f"{value:.{places}%}"
-        # 100% is a claim about the whole span, so only a whole span earns it.
-        if value >= 1.0 or float(text.rstrip("%")) < 100.0:
-            return text
-    return "<100%"
 
 
 def _runs(report: pd.DataFrame, gaps: pd.DataFrame, dim: str) -> pd.DataFrame:
@@ -161,7 +96,7 @@ def _runs(report: pd.DataFrame, gaps: pd.DataFrame, dim: str) -> pd.DataFrame:
 def _gap_label(size, units: str, dated: bool) -> str:
     """Say how wide a gap is, in what its own dimension is measured in."""
     if dated:
-        return _human_duration(size)
+        return human_duration(size)
     value = float(size)
     if not np.isfinite(value) or value == 0:
         return ""
@@ -544,7 +479,7 @@ def calendar(
         bar.ax.yaxis.set_major_locator(ticker.MaxNLocator(integer=True))
     if method == "gap":
         bar.set_ticks(list(_GAP_TICKS))
-        bar.set_ticklabels([_human_duration(x) for x in _GAP_TICKS])
+        bar.set_ticklabels([human_duration(x) for x in _GAP_TICKS])
         bar.minorticks_off()
     if show:
         plt.show()
