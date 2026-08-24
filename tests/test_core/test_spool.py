@@ -1973,7 +1973,7 @@ class TestSpoolRepr:
         assert "temperature" not in rendered
 
     def test_tracks_are_named_as_the_plot_names_lanes(self):
-        """The tracks a repr prints are the lanes a coverage plot draws."""
+        """A track and the lane of the same patches carry the same name."""
         spool = dc.get_example_spool("diverse_das")
         rendered = str(spool)
         report = spool.get_coverage("time")
@@ -1983,7 +1983,20 @@ class TestSpoolRepr:
             ignore=set(_REPORT_COLUMNS) | envelope,
             ordinals=report["group_id"],
         )
+        # This spool's kinds and its coverage groups partition alike, so
+        # here the two sets of names are the same set.
+        assert len(names) == len(set(names)) == 7
         assert all(x in rendered for x in names)
+
+    def test_coverage_may_cut_a_track_finer(self):
+        """A kind of patch is one track, whatever coverage makes of it."""
+        first = dc.get_example_patch(time_step=0.004)
+        second = dc.get_example_patch(time_step=0.008)
+        spool = dc.spool([first, second])
+        # Two sampling rates are two coverage groups of one kind, and a
+        # kind is what a track is; the repr does not claim otherwise.
+        assert len(spool.get_coverage("time")) == 2
+        assert "➤ Tracks" not in str(spool)
 
     def test_tracks_are_bounded(self):
         """A repr says how many tracks it did not list."""
@@ -2041,10 +2054,61 @@ class TestSpoolRepr:
         """A spool with nothing to summarize still says what it is."""
         assert "Spool" in str(spool)
 
-    def test_a_dimension_with_no_agreed_units_states_none(self):
-        """Two patches measuring a dimension differently name no unit."""
+    def test_a_patch_without_the_dimension_is_not_a_track(self):
+        """A patch off the axis is dropped, as get_coverage drops it."""
+        data = np.random.default_rng().random((6, 4))
+        coords = {"distance": np.arange(6.0), "frequency": np.arange(4.0)}
+        spool = dc.spool(
+            [
+                dc.get_example_patch().update_attrs(tag="timed"),
+                dc.Patch(
+                    data=data,
+                    coords=coords,
+                    dims=("distance", "frequency"),
+                    attrs={"tag": "untimed"},
+                ),
+            ]
+        )
+        rendered = str(spool)
+        assert "NaT" not in rendered
+        # One kind is left along time, and one track is no track block.
+        assert len(spool.get_coverage("time")) == 1
+        assert "➤ Tracks" not in rendered
+
+    def test_a_track_off_the_time_axis_is_not_measured_in_seconds(self):
+        """A distance span is as wide as distance is, not that many seconds."""
+        data = np.random.default_rng().random((6, 4))
+        coords = {"distance": np.arange(6.0), "frequency": np.arange(4.0)}
+        patches = [
+            dc.Patch(
+                data=data,
+                coords=coords,
+                dims=("distance", "frequency"),
+                attrs={"tag": tag},
+            )
+            for tag in ("a", "b")
+        ]
+        rendered = str(dc.spool(patches))
+        assert "➤ Tracks (2 along distance)" in rendered
+        assert "<5>" in rendered
+        assert " s>" not in rendered
+
+    def test_a_kind_attr_named_twice_is_one_key(self):
+        """A config may repeat an attribute; a groupby may not."""
+        with config_context(patch_kind_attrs=("tag", "tag")):
+            rendered = str(dc.get_example_spool("diverse_das"))
+        assert "➤ Tracks" in rendered
+
+    def test_mixed_units_are_not_one_extent(self):
+        """Two ends read in different units are not two ends of one span."""
         first = dc.get_example_patch().convert_units(distance="m")
         second = dc.get_example_patch().convert_units(distance="ft")
         rendered = str(dc.spool([first, second]))
-        assert "distance:" in rendered
-        assert "ft" not in rendered
+        assert "mixed units: ft, m" in rendered
+
+    def test_the_count_is_asked_for_once(self):
+        """Counting a view can project the relation; a repr does it once."""
+        spool = dc.get_example_spool("diverse_das")
+        with mock.patch.object(Spool, "__len__", return_value=18) as counted:
+            str(spool)
+        assert counted.call_count == 1
