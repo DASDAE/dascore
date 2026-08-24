@@ -10,7 +10,7 @@ import pytest
 from numpy.testing import assert_allclose
 
 import dascore as dc
-from dascore.core.coords import CoordMonotonicArray
+from dascore.core.coords import CoordMonotonicArray, CoordRange
 from dascore.io.febus import FebusT1V1
 from dascore.utils.downloader import fetch
 from dascore.utils.misc import unbyte
@@ -48,8 +48,9 @@ class TestFebusT1:
         assert_allclose(step_minutes, 5.35, rtol=1e-3)
 
     def test_distance_range(self, t1_patch):
-        """Distance should span roughly 0-90 m."""
+        """Distance should span roughly 0-90 m on an even grid."""
         dist = t1_patch.get_coord("distance")
+        assert isinstance(dist, CoordRange)
         assert dist.min() >= 0
         assert_allclose(dist.max(), 89.9, rtol=1e-3)
         assert_allclose(dist.step, 0.0816, rtol=1e-3)
@@ -116,3 +117,62 @@ class TestFebusT1Interrogator:
         attrs = dict(dc.scan(path)[0].attrs)
         assert "interrogator.name" not in attrs
         assert attrs["interrogator.model"] == "T1"
+
+
+class TestFebusT1DistanceGrid:
+    """A read grids the stored distances; snap=False still reports them raw."""
+
+    parser = FebusT1V1()
+
+    @pytest.fixture(scope="class")
+    def t1_path(self):
+        """Path to a 12-reading T1 test file."""
+        return fetch("febus_dts.h5")
+
+    @pytest.fixture(scope="class")
+    def quantized_distance(self):
+        """An even grid restated in float32.
+
+        The registered T1 files are float64-precise, but nothing in the format
+        stops a T1 file carrying the same quantization the G1 files do, and
+        the reader should handle it the same way.
+
+        The offset matters; nearer the origin the quantization is fine enough
+        that get_coord still recognizes the grid on its own.
+        """
+        return np.linspace(2000.0, 2000.0 + 1102 * 0.1, 1103, dtype=np.float32).astype(
+            np.float64
+        )
+
+    def test_fixture_is_uneven_on_its_own(self, quantized_distance):
+        """The array must actually defeat get_coord, or the next test is moot."""
+        coord = dc.get_coord(values=quantized_distance, units="m")
+        assert isinstance(coord, CoordMonotonicArray)
+        assert coord.step is None
+
+    def test_quantized_distance_is_snapped(self, t1_path, tmp_path, quantized_distance):
+        """A float32-quantized distance array still reads as an even grid."""
+        path = tmp_path / "quantized_distance.h5"
+        shutil.copy2(t1_path, path)
+        with h5py.File(path, "r+") as fi:
+            del fi["Data/Distance"]
+            fi.create_dataset("Data/Distance", data=quantized_distance)
+        dist = self.parser.read(path)[0].get_coord("distance")
+        assert isinstance(dist, CoordRange)
+        assert_allclose(dist.step, 0.1, rtol=1e-3)
+        assert dist.min() == quantized_distance[0]
+        assert dist.max() == quantized_distance[-1]
+        assert len(dist) == len(quantized_distance)
+
+    def test_distance_exact_when_snap_false(
+        self, t1_path, tmp_path, quantized_distance
+    ):
+        """snap=False still reports the stored distances exactly."""
+        path = tmp_path / "quantized_distance_exact.h5"
+        shutil.copy2(t1_path, path)
+        with h5py.File(path, "r+") as fi:
+            del fi["Data/Distance"]
+            fi.create_dataset("Data/Distance", data=quantized_distance)
+        payload = dc.scan_payloads(path, snap=False)[0]
+        dist = payload["coords"].coord_map["distance"]
+        assert np.array_equal(dist.values, quantized_distance)
