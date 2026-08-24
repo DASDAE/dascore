@@ -126,6 +126,12 @@ class _SeparatedBoxes(PatchCollection):
         """The separator where a box has room for it, its own color where not."""
         flat = np.column_stack([self._bounds.ravel(), np.zeros(self._bounds.size)])
         drawn = self.get_transform().transform(flat)[:, 0]
+        axes = self.axes
+        if axes is not None:
+            # What a box has room for is what it shows. A run reaching
+            # off the axis is as wide as the part of it drawn, and the
+            # rest is room it does not have here.
+            drawn = np.clip(drawn, axes.bbox.x0, axes.bbox.x1)
         widths = np.abs(np.diff(drawn.reshape(self._bounds.shape), axis=1)).ravel()
         # The renderer says what a point comes to; not every backend
         # reads it as the figure's dpi over seventy-two.
@@ -773,11 +779,20 @@ def plot_lanes(
                 )
             )
         if boxes:
+            # Widest first, so a box which can be covered is drawn over
+            # the ones which would cover it. A separator reaches past
+            # the box it borders, and the narrower the neighbour the
+            # more of it a separator drawn later takes.
+            widest = sorted(
+                range(len(boxes)),
+                key=lambda x: box_bounds[x][1] - box_bounds[x][0],
+                reverse=True,
+            )
             ax.add_collection(
                 _SeparatedBoxes(
-                    boxes,
-                    facecolors=box_colors,
-                    bounds=box_bounds,
+                    [boxes[x] for x in widest],
+                    facecolors=[box_colors[x] for x in widest],
+                    bounds=[box_bounds[x] for x in widest],
                     zorder=2,
                 )
             )
