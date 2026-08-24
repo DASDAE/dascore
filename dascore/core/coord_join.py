@@ -1,0 +1,177 @@
+"""
+Predicting what joining coordinates will produce, from their summaries.
+
+A lazy plan describes each output patch before any patch is loaded. What
+that description says about a coordinate must be what assembly will
+actually build, or the catalog and the patch tell different stories.
+
+The way to guarantee that is to decide it *once*: this module rebuilds
+each member's coordinate from the summary the index stored and runs the
+same [`concat_coords`](`dascore.core.coords.concat_coords`) call assembly
+runs, then states the result as a summary again. Nothing here reimplements
+a joining rule; where a rule cannot be applied to summaries alone the
+answer is None, which means "claim nothing", never a guess.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Sequence
+
+import numpy as np
+
+from dascore.core.coords import CoordSummary, concat_coords, get_coord
+from dascore.exceptions import CoordError
+from dascore.units import get_quantity
+from dascore.utils.misc import get_middle_value
+
+
+def join_summaries(
+    summaries: Sequence[CoordSummary],
+    *,
+    snap_tolerance: float | None = None,
+) -> CoordSummary | None:
+    """
+    Return the summary of the coordinate joining these members would give.
+
+    Parameters
+    ----------
+    summaries
+        The members' coordinate summaries, in the order they will be
+        joined. They are trusted to describe validated coordinates, as
+        the index's do.
+    snap_tolerance
+        Multiplied by the step to bound how far
+        [`simplify`](`dascore.core.coords.BaseCoord.simplify`) may move a
+        value when absorbing a seam, matching what the assembler passes.
+        None performs only exact simplifications.
+
+    Returns
+    -------
+    The joined summary, or None when the join cannot be decided from
+    summaries alone — a member which states no step (an array, a
+    segmented or value-less coordinate, labels), members of different
+    kinds or units, or values which overlap. The caller then states only
+    what it can prove of its own accord.
+
+    Examples
+    --------
+    >>> from dascore.core.coords import get_coord
+    >>> from dascore.core.coord_join import join_summaries
+    >>>
+    >>> first = get_coord(start=0.0, stop=10.0, step=1.0)
+    >>> second = get_coord(start=10.0, stop=20.0, step=1.0)
+    >>> joined = join_summaries([first.to_summary(), second.to_summary()])
+    >>> assert joined.min == 0.0 and joined.max == 19.0
+    """
+    if not summaries:
+        return None
+    if len(summaries) == 1:
+        return summaries[0]
+    if not all(x.is_range_like and x.len for x in summaries):
+        # Values the summary does not carry cannot be joined without
+        # reading them, and reading them is what laziness avoids.
+        return None
+    spellings = {get_quantity(x.units) for x in summaries if x.units is not None}
+    if len(spellings) > 1:
+        # One physical coordinate spelled two ways: which spelling the
+        # output speaks is assembly's choice, made on the values.
+        return None
+    coords = [x.to_coord(on_grid=True) for x in summaries]
+    joining = coords
+    if spellings and any(x.units is None for x in summaries):
+        # A member stating no units is not a member disagreeing about
+        # them: `_concatenate_group` picks a spelling and every unitless
+        # member adopts it, its numbers unchanged. Only the copies being
+        # joined adopt it, so each member is still checked against the
+        # summary it was actually made from.
+        spoken = next(x.units for x in summaries if x.units is not None)
+        joining = [x if x.units is not None else x.set_units(spoken) for x in coords]
+    try:
+        joined = concat_coords(*joining)
+    except CoordError:
+        # Overlapping, contradictory, or otherwise unjoinable members;
+        # loading them will raise, and the row must not pretend otherwise.
+        return None
+    if snap_tolerance:
+        step = joined.step if joined.step is not None else _middle_step(joining)
+        if step is not None:
+            joined = joined.simplify(snap_tolerance * np.abs(step))
+    stated = joined.to_summary()
+    if not _rebuilt_faithfully(summaries, coords):
+        # A member which does not rebuild into the coordinate it was made
+        # from — one written at a precision the index does not store, say
+        # — cannot have the join's identity computed from it. The step
+        # goes with the identity: a summary which still looked evenly
+        # sampled would have the identity recomputed from the very values
+        # which did not survive. The envelope holds either way.
+        stated = stated.model_copy(update=dict(fingerprint=None, step=None, len=None))
+    return stated
+
+
+def raw_join_summary(
+    summaries: Sequence[CoordSummary], joined: CoordSummary
+) -> CoordSummary:
+    """
+    What laying the members' own values end to end actually gives.
+
+    A raw concatenation hands those values to
+    [`get_coord`](`dascore.core.coords.get_coord`), which reads the step
+    back off them, while a fused range is generated from a single start.
+    The two agree in exact arithmetic, so integer and datetime grids are
+    returned untouched; floating members generated from their own starts
+    can drift from the fused grid inside their span even where every
+    boundary matches, and the coordinate which loads is then a different
+    one with a different step and identity.
+
+    Widths promote the same way: a fused range takes the first member's
+    dtype, while `np.concatenate` gives an int32 laid before an int64
+    back as int64. Where either happens the values are already in hand,
+    so the answer is built from them rather than guessed at.
+    """
+    promoted = _promoted_dtype(summaries)
+    if joined.step is None or not joined.len:
+        # nothing structural is claimed either way, but the width still
+        # is: what loads is the concatenation, whatever shape it has
+        return joined.model_copy(update=dict(dtype=str(promoted)))
+    same_dtype = promoted == np.dtype(joined.dtype)
+    if same_dtype and np.dtype(joined.dtype).kind != "f":
+        return joined  # computed exactly, so there is nothing to check
+    raw = np.concatenate([x.to_coord(on_grid=True).values for x in summaries]).astype(
+        promoted
+    )
+    if same_dtype and np.array_equal(raw, joined.to_coord(on_grid=True).values):
+        return joined
+    stated = get_coord(values=raw, units=joined.units).to_summary()
+    return stated.model_copy(update=dict(dims=joined.dims))
+
+
+def _promoted_dtype(summaries: Sequence[CoordSummary]):
+    """
+    The dtype `np.concatenate` gives these members.
+
+    A fused range takes the first member's dtype; laying the values end
+    to end promotes them, so an int32 followed by an int64 loads as
+    int64 -- a different coordinate with a different identity.
+    """
+    # every member here is range-like, and a range states its dtype
+    return np.result_type(*[np.dtype(x.dtype) for x in summaries])
+
+
+def _rebuilt_faithfully(summaries, coords) -> bool:
+    """Whether every member came back as the coordinate it was made from."""
+    return all(
+        x.fingerprint is None or x.fingerprint == y.fingerprint()
+        for x, y in zip(summaries, coords, strict=True)
+    )
+
+
+def _middle_step(coords):
+    """
+    The step a tolerance is scaled by when the join has none of its own.
+
+    The middle of the members' steps, which is what the assembler scales
+    by (`dascore.utils.patch._middle_step`); a wider one would absorb a
+    seam here that the loaded patch keeps.
+    """
+    steps = [x.step for x in coords if x.step is not None]
+    return get_middle_value(steps) if steps else None

@@ -53,32 +53,9 @@ class TestChunk:
         second = random_spool.get_contents().copy()
         assert first.equals(second)
 
-    def test_patches_match_df_contents(self, random_spool):
+    def test_patches_match_df_contents(self, random_spool, assert_contents_match):
         """Ensure the patch content matches the dataframe."""
-        new = random_spool.chunk(time=2)
-        # get contents of chunked spool
-        chunk_df = new.get_contents()
-        new_patches = list(new)
-        new_spool = dc.spool(new_patches)
-        # get content of spool created from patches in chunked spool.
-        new_content = new_spool.get_contents()
-        # these should be (nearly) identical.
-        common = set(chunk_df.columns) & set(new_content.columns)
-        # len fields may differ by ±1 between summary-based and data-based
-        # counts; identity/provenance columns legitimately differ between
-        # plan rows and re-scanned live patches
-        skip = {
-            "history",
-            "source_path",
-            "source_format",
-            "source_version",
-            "source_patch_key",
-        }
-        skip |= {c for c in common if c.endswith("_len")}
-        cols = sorted(common - skip)
-        comp1, comp2 = chunk_df[cols], new_content[cols]
-        equal_cols = (comp1 == comp2) | (pd.isnull(comp1) & pd.isnull(comp2))
-        assert equal_cols.all().all()
+        assert_contents_match(random_spool.chunk(time=2))
 
     def test_merge_empty_spool(self, tmp_path_factory):
         """Ensure merge doesn't raise on empty spools."""
@@ -1465,3 +1442,59 @@ class TestSizeChunk:
         """A chunk length is one value, not an array of them."""
         with pytest.raises(ParameterError, match="single quantity"):
             random_spool.chunk(time=np.array([1.0, 2.0]) * dc.units.MB)
+
+
+class TestRowsMatchPatches:
+    """A plan's rows say what its patches hold, whatever the plan."""
+
+    @pytest.fixture(scope="class")
+    def spool_with_aux(self):
+        """A spool whose patches carry a non-dimensional coordinate."""
+        spool = dc.get_example_spool("random_das")
+        patches = []
+        for patch in spool:
+            n = patch.shape[patch.get_axis("distance")]
+            patches.append(
+                patch.update_coords(latitude=("distance", np.arange(n) * 1.0))
+            )
+        return dc.spool(patches)
+
+    @pytest.mark.parametrize(
+        "operation",
+        [
+            lambda x: x.chunk(time=None),
+            lambda x: x.chunk(time=2),
+            lambda x: x.chunk(time=2, overlap=0.5),
+            lambda x: x.concatenate(time=None),
+            lambda x: x.concatenate(time=2),
+            lambda x: x.chunk(time=None).chunk(time=4),
+        ],
+    )
+    def test_plain_spool(self, random_spool, operation, assert_contents_match):
+        """Every plan kind describes its outputs as they turn out."""
+        assert_contents_match(operation(random_spool))
+
+    @pytest.mark.parametrize(
+        "operation",
+        [
+            lambda x: x.chunk(time=None),
+            lambda x: x.chunk(time=2),
+            lambda x: x.concatenate(time=None),
+        ],
+    )
+    def test_with_an_auxiliary_coordinate(
+        self, spool_with_aux, operation, assert_contents_match
+    ):
+        """A coordinate riding another dimension is described as it lands."""
+        assert_contents_match(operation(spool_with_aux))
+
+    def test_after_a_selection(self, random_spool, assert_contents_match):
+        """A selection applied at load leaves the row honest."""
+        time = random_spool[0].get_coord("time")
+        window = (time.min(), time.min() + (time.max() - time.min()) / 2)
+        selected = random_spool.select(time=window).chunk(time=None)
+        # time_max is excluded: a selection's upper bound is a request, and
+        # the row states the request while the patch ends at the last
+        # sample inside it. That predates this machinery -- `dev` states
+        # the same pair -- and belongs to how residuals clamp envelopes.
+        assert_contents_match(selected, skip={"time_max"})

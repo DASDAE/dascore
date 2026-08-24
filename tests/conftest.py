@@ -730,3 +730,52 @@ def brady_hs_das_dts_coords():
     coord_table = coord_table.iloc[51:]
     coord_table = coord_table.astype(float)
     return coord_table
+
+
+def _assert_contents_match_patches(spool, skip=()):
+    """
+    Assert a spool's catalog says what its patches actually hold.
+
+    A lazy spool describes each patch before loading it. This compares
+    that description against re-indexing the patches themselves, which
+    is the only definition of the row being right.
+
+    Columns which legitimately differ are skipped: provenance (a plan
+    row names a plan, a live patch names nothing), history, and any the
+    caller adds.
+    """
+    described = spool.get_contents()
+    actual = dc.spool(list(spool)).get_contents()
+    common = set(described.columns) & set(actual.columns)
+    ignored = {
+        "history",
+        "source_path",
+        "source_format",
+        "source_version",
+        "source_patch_key",
+        *skip,
+    }
+    claimed = sorted(
+        c
+        for c in set(described.columns) - set(actual.columns) - ignored
+        if described[c].notnull().any()
+    )
+    if claimed:
+        msg = f"the catalog states columns its patches do not hold: {claimed}"
+        raise AssertionError(msg)
+    columns = sorted(common - ignored)
+    left, right = described[columns], actual[columns]
+    same = (left == right) | (pd.isnull(left) & pd.isnull(right))
+    if not same.all().all():
+        bad = [c for c in columns if not same[c].all()]
+        msg = "\n".join(
+            f"  {c}: row says {left[c].tolist()}, patches say {right[c].tolist()}"
+            for c in bad
+        )
+        raise AssertionError(f"the catalog disagrees with its patches:\n{msg}")
+
+
+@pytest.fixture(scope="session")
+def assert_contents_match():
+    """A callable asserting a spool's rows say what its patches hold."""
+    return _assert_contents_match_patches

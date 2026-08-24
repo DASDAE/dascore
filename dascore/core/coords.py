@@ -218,6 +218,35 @@ def _scalar_dtype(dtype: np.dtype, name: str) -> np.dtype:
     return np.dtype(f"timedelta64[{unit}]") if name == "step" else dtype
 
 
+def _grid_range(start, step, length: int, units, fields_set=None, cls=None):
+    """
+    Build a CoordRange on an exactly known grid, skipping re-validation.
+
+    `CoordRange.validate_start_stop_step_len` exists to *derive* shape and a
+    normalized stop from loosely specified inputs. Callers here already know
+    the sample count exactly, so re-deriving costs ~60us and can only
+    reproduce what is passed in. Only use this where start/step/length come
+    from an already-validated coordinate; anything taking user input must go
+    through the validating constructor.
+    """
+    # Mirror check_time_units, which forces time-like coords to seconds.
+    # Note it tests `start` for truthiness, so a coord starting at exactly
+    # zero is left alone; that quirk is reproduced here deliberately.
+    if start and (is_timedelta64(start) or is_datetime64(start)):
+        units = _second_quantity()
+    return (cls or CoordRange).model_construct(
+        # copy; model_construct stores the set by reference.
+        _fields_set=set(fields_set) if fields_set else {"start", "stop", "step"},
+        units=units,
+        step=step,
+        shape=(length,),
+        # matches what the validator stores for dtype.
+        dtype=np.asarray(start + step).dtype,
+        start=start,
+        stop=start + step * length,
+    )
+
+
 class CoordSummary(DascoreBaseModel):
     """
     A summary for coordinates.
@@ -281,13 +310,29 @@ class CoordSummary(DascoreBaseModel):
             object.__setattr__(self, "dtype", str(dtype).split("[")[0])
         return self
 
-    def to_coord(self) -> CoordRange:
-        """Convert to coord range, if possible."""
+    def to_coord(self, *, on_grid: bool = False) -> CoordRange:
+        """
+        Convert to coord range, if possible.
+
+        Parameters
+        ----------
+        on_grid
+            When True the summary is trusted to describe a grid exactly —
+            `len` samples of `step` starting at `min` — and the range is
+            built without re-deriving what it already states, which costs
+            about 60us a call (see `CoordRange._new_grid`). Only pass this
+            for a summary which came from a validated coordinate, such as
+            one the index stored; anything taking user input must not.
+        """
         if not self.is_range_like:
             msg = "Cannot convert summary which is not evenly sampled to coord."
             raise CoordError(msg)
         step = self.step
         assert step is not None  # is_range_like above rules out a null step
+        if on_grid and self.len:
+            # a reverse coord runs from its max
+            start = self.max if np.sign(step) == -1 else self.min
+            return _grid_range(start, step, self.len, self.units)
         # this is a reverse coord
         if np.sign(step) == -1:
             start, stop = self.max, self.min + step
@@ -1509,22 +1554,8 @@ class CoordRange(BaseCoord):
         CoordRange and length is computed from indices; anything taking user
         input must go through the validating constructor.
         """
-        units = self.units
-        # Mirror check_time_units, which forces time-like coords to seconds.
-        # Note it tests `start` for truthiness, so a coord starting at exactly
-        # zero is left alone; that quirk is reproduced here deliberately.
-        if start and (is_timedelta64(start) or is_datetime64(start)):
-            units = _second_quantity()
-        return self.model_construct(
-            # copy; model_construct stores the set by reference.
-            _fields_set=set(self.model_fields_set),
-            units=units,
-            step=step,
-            shape=(length,),
-            # matches what the validator stores for dtype.
-            dtype=np.asarray(start + step).dtype,
-            start=start,
-            stop=start + step * length,
+        return _grid_range(
+            start, step, length, self.units, self.model_fields_set, type(self)
         )
 
     @model_validator(mode="before")
@@ -2118,27 +2149,64 @@ def _maybe_promote_segment(seg: BaseCoord) -> BaseCoord:
     return seg
 
 
+def _reproduces(fused: CoordRange, run: list) -> bool:
+    """Whether one grid lands on every boundary the pieces state."""
+    offset = 0
+    for piece in run:
+        if fused[offset] != piece.start or fused.stop != run[-1].stop:
+            return False
+        offset += len(piece)
+    return True
+
+
 def _fuse_segments(segments: tuple[BaseCoord, ...]) -> tuple[BaseCoord, ...]:
-    """Fuse adjacent segments that continue exactly (normal form)."""
-    out = [segments[0]]
+    """
+    Fuse adjacent segments that continue exactly (normal form).
+
+    Runs are gathered before anything is built. A merge of many
+    contiguous pieces is one run, and the coordinate covering it is
+    constructed once rather than once per piece, which a long merge
+    would otherwise pay thousands of times.
+    """
+    out: list[BaseCoord] = []
+    run: list[BaseCoord] = [segments[0]]
+
+    def flush() -> None:
+        """Add the run gathered so far as a single coordinate."""
+        if len(run) == 1:
+            out.append(run[0])
+        elif isinstance(run[0], CoordRange):
+            # Every piece sits on one grid, so the whole run does too and
+            # its length is theirs added up. Floating point addition is
+            # not associative, though, so the rebuilt grid is checked
+            # against the boundaries it must reproduce; where it cannot,
+            # the pieces stay as they were rather than being altered.
+            length = sum(len(x) for x in run)
+            fused = run[0]._new_grid(run[0].start, run[0].step, length)
+            if _reproduces(fused, run):
+                out.append(fused)
+            else:
+                out.extend(run)
+        else:
+            values = np.concatenate([x.values for x in run])
+            out.append(CoordMonotonicArray(values=values, units=run[0].units))
+        run.clear()
+
     for seg in segments[1:]:
-        prev = out[-1]
+        prev = run[-1]
         both_ranges = isinstance(prev, CoordRange) and isinstance(seg, CoordRange)
-        if both_ranges and prev.step == seg.step and prev.stop == seg.start:
-            out[-1] = CoordRange(
-                start=prev.start, stop=seg.stop, step=prev.step, units=prev.units
-            )
-            continue
+        continues = both_ranges and prev.step == seg.step and prev.stop == seg.start
+        # Adjacent irregular arrays carry no sampling expectation, so the
+        # boundary between them has no meaning; fuse for canonical form.
         both_arrays = isinstance(prev, CoordMonotonicArray) and isinstance(
             seg, CoordMonotonicArray
         )
-        if both_arrays:
-            # Adjacent irregular arrays carry no sampling expectation, so the
-            # boundary between them has no meaning; fuse for canonical form.
-            values = np.concatenate([prev.values, seg.values])
-            out[-1] = CoordMonotonicArray(values=values, units=prev.units)
+        if continues or both_arrays:
+            run.append(seg)
             continue
-        out.append(seg)
+        flush()
+        run.append(seg)
+    flush()
     return tuple(out)
 
 
@@ -2161,10 +2229,15 @@ def _validate_segment_compat(segments: tuple[BaseCoord, ...]) -> None:
         dtypes = {np.dtype(s.dtype) for s in segments}
         msg = f"Segments must share compatible dtypes, got {dtypes}."
         raise CoordError(msg)
-    units = {get_quantity(s.units) for s in segments}
-    if len(units) > 1:
-        msg = "All segments must have the same units."
-        raise CoordError(msg)
+    # Hashing a pint Quantity is expensive and a long merge would do it
+    # once per segment, so the objects are compared first: segments which
+    # share one (or state none) agree without normalizing anything.
+    spellings = {id(s.units) for s in segments}
+    if len(spellings) > 1:
+        units = {get_quantity(s.units) for s in segments}
+        if len(units) > 1:
+            msg = "All segments must have the same units."
+            raise CoordError(msg)
 
 
 def _validate_segment_chain(segments: tuple[BaseCoord, ...]) -> None:

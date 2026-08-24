@@ -17,13 +17,16 @@ import hashlib
 import json
 import re
 import warnings
-from collections.abc import Hashable
+from collections.abc import Hashable, Mapping
+from contextlib import suppress
 from dataclasses import dataclass, field, fields, replace
-from typing import SupportsInt, TypedDict, cast
+from functools import partial
+from typing import Any, SupportsInt, TypedDict, cast
 
 import numpy as np
 import pandas as pd
 
+from dascore.core.coords import CoordSummary
 from dascore.core.summary import PatchSummary, normalize_source_patch_key
 from dascore.exceptions import InvalidInventoryError
 from dascore.io.index.schema import (
@@ -387,6 +390,109 @@ def dump_path_attrs(path_attrs: dict[str, str] | None) -> str | None:
     return json.dumps(path_attrs, sort_keys=True) if path_attrs else None
 
 
+def coord_summary(row: Mapping) -> CoordSummary | None:
+    """
+    Rebuild a coordinate summary from one stored coordinate row.
+
+    The inverse of `_coord_record`: a row of `patch_coords` joined to its
+    `coord_defs` definition (see `SQLiteIndexBackend.coord_frame`) states
+    everything a summary carries, so a member's coordinate can be
+    described without loading the patch it belongs to.
+
+    Returns None for a row whose value kind the index does not represent.
+
+    Built without re-validating: every value is converted here to the type
+    a validator would coerce it to, and this runs per coordinate per member
+    while a plan is made, where validation measured ~28us a call.
+    """
+    kind = row.get("value_kind")
+    units = row.get("units")
+    units = None if units is None or pd.isnull(units) else units
+    fingerprint = row.get("fingerprint")
+    fingerprint = None if pd.isnull(fingerprint) else str(fingerprint)
+    length = row.get("length")
+    length = None if length is None or pd.isnull(length) else int(length)
+    dims = str(row.get("coord_dims") or "")
+    common: dict[str, Any] = dict(
+        dtype=str(row.get("dtype") or "").split("[")[0],
+        units=units,
+        dims=tuple(x for x in dims.split(",") if x),
+        len=length,
+        fingerprint=fingerprint,
+    )
+    if kind == "time":
+        # stored as integer nanoseconds; a relative coord is a duration
+        stamp = _ns_timedelta if row.get("is_relative") else _ns_datetime
+        step = row.get("step_ns")
+        return CoordSummary.model_construct(
+            min=stamp(row.get("min_ns")),
+            max=stamp(row.get("max_ns")),
+            step=None if pd.isnull(step) else _ns_timedelta(step),
+            **common,
+        )
+    if kind == "num":
+        # The envelope is stored as a float whatever the coordinate is, so
+        # it is cast back: an integer coordinate rebuilt from floats would
+        # be a float64 coordinate, with a different identity from the one
+        # the index recorded. An envelope nobody stated is NaN, as
+        # validation would make it; only a step is genuinely absent.
+        dtype = np.dtype(common["dtype"]) if common["dtype"] else np.dtype("float64")
+        low, high = _opt_float(row.get("min_num")), _opt_float(row.get("max_num"))
+        step = _opt_float(row.get("step_num"))
+        cast = partial(_as_dtype, dtype=dtype)
+        return CoordSummary.model_construct(
+            min=np.nan if low is None else cast(low),
+            max=np.nan if high is None else cast(high),
+            step=None if step is None else cast(step),
+            **common,
+        )
+    if kind == "str":
+        low, high = row.get("min_str"), row.get("max_str")
+        return CoordSummary.model_construct(
+            min=None if low is None else str(low),
+            max=None if high is None else str(high),
+            **common,
+        )
+    return None
+
+
+def _as_dtype(value: float, dtype: np.dtype) -> Any:
+    """
+    A stored float as the numeric type the coordinate states.
+
+    Envelopes are stored as float64 whatever the coordinate is, so a
+    float32 or an unsigned one would rebuild as something else and carry
+    a different identity from the patch. The cast is kept only where it
+    round-trips, since restoring a dtype must not alter a value.
+    """
+    if not np.issubdtype(dtype, np.number):
+        return value
+    with suppress(TypeError, ValueError, OverflowError):
+        cast = dtype.type(value)
+        if float(cast) == float(value):
+            return cast
+    return value
+
+
+def _opt_float(value) -> float | None:
+    """A stored number, or None where the row states none."""
+    return None if value is None or pd.isnull(value) else float(value)
+
+
+def _ns_datetime(value) -> np.datetime64:
+    """A stored nanosecond count as a datetime, NaT when the row states none."""
+    if value is None or pd.isnull(value):
+        return np.datetime64("NaT", "ns")
+    return np.datetime64(int(value), "ns")
+
+
+def _ns_timedelta(value) -> np.timedelta64:
+    """A stored nanosecond count as a duration, NaT when the row states none."""
+    if value is None or pd.isnull(value):
+        return np.timedelta64("NaT", "ns")
+    return np.timedelta64(int(value), "ns")
+
+
 def _coord_record(name: str, summary) -> CoordRecord | None:
     """Convert one CoordSummary into a CoordRecord."""
     fingerprint = getattr(summary, "fingerprint", None)
@@ -438,10 +544,12 @@ def _coord_record(name: str, summary) -> CoordRecord | None:
             **common,
         )
     if dtype.kind in "USO":
+        # a summary which states no labels has none to store; stringifying
+        # the missing value would write the label "nan"
         return CoordRecord(
             value_kind="str",
-            min_str=str(summary.min),
-            max_str=str(summary.max),
+            min_str=None if pd.isnull(summary.min) else str(summary.min),
+            max_str=None if pd.isnull(summary.max) else str(summary.max),
             **common,
         )
     return None  # unsupported coord representation: skip, per design

@@ -17,13 +17,16 @@ syncer, and views never write.
 from __future__ import annotations
 
 import secrets
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
+from contextlib import suppress
 
 import numpy as np
 import pandas as pd
 
 import dascore as dc
+from dascore.core.coord_join import join_summaries, raw_join_summary
 from dascore.core.coords import CoordSummary
+from dascore.exceptions import UnitError
 from dascore.io.index.backend import get_backend
 from dascore.io.index.catalog import (
     CompositeResolver,
@@ -38,18 +41,19 @@ from dascore.io.index.ingest import (
     PatchRecord,
     SourceRecord,
     _coord_record,
+    coord_summary,
     typed_value,
 )
-from dascore.units import get_quantity
+from dascore.units import convert_units, get_quantity, get_quantity_str
 from dascore.utils.chunk_plan import (
     _SOURCE_COLUMNS,
-    _concatenated_steps,
     _ensure_patch_id,
 )
 from dascore.utils.misc import _CanonicalRange, is_range
 from dascore.utils.patch import concatenate_planned
 from dascore.utils.patch_assembly import PatchAssembler
 from dascore.utils.pd import adjust_segments
+from dascore.utils.time import to_float
 
 # Row columns which name dc.read's own keyword arguments; passing one along
 # as a trim hint would collide with the value the loader already supplies.
@@ -248,13 +252,477 @@ def _extrema(grouped, how: str) -> np.ndarray:
     return np.array(values, dtype=object)
 
 
+def _member_summaries(backend, members: pd.DataFrame) -> dict:
+    """Every member's coordinates, as the index recorded them."""
+    if not len(members) or backend is None:
+        return {}
+    ids = [int(x) for x in members["_patch_id"].dropna().unique()]
+    assert ids, "a plan's members name the patches they load"
+    out: dict[int, dict[str, CoordSummary]] = {}
+    # one coordinate definition serves every member which shares it: a
+    # coordinate riding along unchanged is stored once and read once,
+    # which is most of them
+    seen: dict[tuple, CoordSummary | None] = {}
+    for row in backend.coord_frame(ids).to_dict("records"):
+        name = str(row["coord_name"])
+        # keyed by the stored definition, not the fingerprint: a
+        # fingerprint normalizes units, so metres and feet holding the
+        # same physical values share one while their stored envelopes and
+        # spellings differ, and reusing either for the other would
+        # misreport what the patch holds
+        key = (name, row.get("def_key"), row.get("coord_dims"))
+        if key[1] is None or key not in seen:
+            seen[key] = coord_summary(row)
+        summary = seen[key]
+        if summary is not None:
+            out.setdefault(int(row["patch_id"]), {})[name] = summary
+    if set(out) != set(ids):
+        # Members this backend does not name describe other patches, so
+        # nothing here says what the outputs hold and the plan's own rows
+        # answer instead. Bare integers from two indexes also overlap by
+        # chance, which this cannot see: the collapse that would ask such
+        # a question is recognized by provenance in `derived_catalog`,
+        # which passes no backend at all.
+        return {}
+    return out
+
+
+def _is_cut(stored: Mapping, row: Mapping, plan_dim: str) -> bool:
+    """Whether this member loads less than the whole of its dimension."""
+    if row.get("_modified"):
+        return True
+    summary = stored.get(int(row["_patch_id"]), {}).get(plan_dim)
+    low, high = row.get(f"{plan_dim}_min"), row.get(f"{plan_dim}_max")
+    if summary is None or (pd.isnull(low) and pd.isnull(high)):
+        return False
+    # The planner states every member in one unit; the index kept each
+    # member's own spelling. Compared as they stand, a member restated
+    # from centimetres into metres looks trimmed to a hundredth of
+    # itself, and everything riding the dimension loses its envelope.
+    stated = row.get(f"_{plan_dim}_units")
+    first, last = summary.min, summary.max
+    if stated is not None and not pd.isnull(stated) and summary.units is not None:
+        with suppress(TypeError, ValueError, UnitError):
+            first = convert_units(first, stated, summary.units)
+            last = convert_units(last, stated, summary.units)
+    return bool(low != first or high != last)
+
+
+def _trimmed_summary(summary: CoordSummary, row: Mapping, name: str) -> CoordSummary:
+    """
+    The member's summary as its trim leaves it.
+
+    A trimmed member holds fewer samples than the index recorded, so the
+    stored envelope, length and identity all describe something the
+    output will not contain; the plan's own range replaces them.
+    """
+    low, high = row.get(f"{name}_min"), row.get(f"{name}_max")
+    if pd.isnull(low) and pd.isnull(high):
+        return summary
+    # The bounds are only the same bounds if they are said in the same
+    # unit: two single-sample members at zero read as equal whatever
+    # they are measured in, and returning each one's native spelling
+    # leaves the join with mixed units and nothing it can state.
+    stated = row.get(f"_{name}_units")
+    spelled_alike = (
+        stated is None
+        or pd.isnull(stated)
+        or summary.units is None
+        or get_quantity(stated) == get_quantity(summary.units)
+    )
+    if spelled_alike and low == summary.min and high == summary.max:
+        return summary  # the whole of it, so its identity still holds
+    step = row.get(f"{name}_step", summary.step)
+    step = summary.step if pd.isnull(step) else step
+    length = None
+    if step is not None and not pd.isnull(step):
+        with suppress(TypeError, ValueError, ZeroDivisionError):
+            span = to_float(high) - to_float(low)
+            length = round(abs(span / to_float(step))) + 1
+    # built rather than copied: these values come from the plan's frame,
+    # so they need the conforming a validated summary does (a pandas
+    # Timestamp where the rest of the join speaks numpy would not compare)
+    units = row.get(f"_{name}_units", summary.units)
+    units = summary.units if units is None or pd.isnull(units) else units
+    # A member restated in another unit is converted when it loads, and
+    # scaling an integer grid by a fraction gives floats: the row's own
+    # numbers already say so, and the record must agree with them or the
+    # identity names a coordinate nobody will load.
+    dtype = summary.dtype if spelled_alike else _stated_dtype(low, summary)
+    return CoordSummary(
+        dtype=dtype,
+        min=low,
+        max=high,
+        step=step,
+        units=units,
+        dims=summary.dims,
+        len=length,
+    )
+
+
+def _stated_dtype(value, summary: CoordSummary) -> str:
+    """The dtype of a bound the plan restated, falling back to the summary."""
+    with suppress(TypeError, ValueError):
+        restated = np.asarray(value).dtype
+        if restated.kind == np.dtype(summary.dtype).kind or restated.kind == "f":
+            return str(restated)
+    return summary.dtype
+
+
+def _union_summary(summaries: Sequence[CoordSummary]) -> CoordSummary:
+    """
+    What can be said of members which cannot be joined from summaries.
+
+    The envelope spans them all — that much any join preserves — and
+    nothing else is claimed: no step, and no identity.
+    """
+    stated = [x for x in summaries if not pd.isnull(x.min)]
+    # a member which states nothing describes nothing, not even its dtype
+    template = stated[0] if stated else summaries[0]
+    blank = dict(step=None, len=None, fingerprint=None)
+    kinds = {_summary_kind(x) for x in stated}
+    spellings = {get_quantity(x.units) for x in stated}
+    silent = len(stated) != len(summaries)
+    if len(kinds) > 1 or len(spellings) > 1 or (silent and "str" in kinds):
+        # No envelope covers these members. Two spellings of one
+        # coordinate (2000 milliseconds beside 3 seconds) cannot be
+        # compared until one is chosen, which only the loaded patch does;
+        # two kinds of value cannot be compared at all; and a member
+        # which states no labels cannot be given one, since text has no
+        # missing value to stand in.
+        null = _null_like(template.min)
+        return template.model_copy(update=dict(min=null, max=null, **blank))
+    # both ends come from the members the checks above inspected: a
+    # member stating only one of them was never compared for kind, and
+    # letting its max through would compare a moment with a number
+    lows = [x.min for x in stated]
+    highs = [x.max for x in stated if not pd.isnull(x.max)]
+    # assembly hands these arrays to numpy, which promotes them: an
+    # int32 laid beside a float64 comes back float64, and a record
+    # naming the first member's dtype would describe neither
+    dtype = template.dtype
+    with suppress(TypeError, ValueError):
+        dtype = str(np.result_type(*[np.dtype(x.dtype) for x in stated if x.dtype]))
+    return template.model_copy(
+        update=dict(
+            min=min(lows) if lows else template.min,
+            max=max(highs) if highs else template.max,
+            dtype=dtype,
+            **blank,
+        )
+    )
+
+
+def _unvouched(trimmed: bool) -> dict:
+    """
+    What a summary may still say once its values are not vouched for.
+
+    A residual selection trims these values when the patch loads, so the
+    step and the sample count describe something the output will not
+    contain — and a summary which still looked evenly sampled would have
+    its identity recomputed from those very values by `_coord_record`.
+    The envelope stays: it still bounds where the output lies.
+    """
+    void: dict = {"fingerprint": None}
+    if trimmed:
+        void.update(step=None, len=None)
+    return void
+
+
+def _joins_in_member_order(
+    summaries: Sequence[CoordSummary], joined: CoordSummary
+) -> bool:
+    """Whether the members already lie in the order the join put them in."""
+    if joined.step is None:
+        # nothing structural is claimed of a join with no step, so the
+        # order the blocks lie in changes nothing this can protect
+        return True
+    # a summary's min is its smallest value whichever way it runs, so the
+    # direction comes from the step; `step - step` is its own zero
+    descending = joined.step < joined.step - joined.step
+    lows = [x.min for x in summaries]
+    return lows == sorted(lows, reverse=descending)
+
+
+def _cut_rider(
+    summary: CoordSummary,
+    whole: CoordSummary | None,
+    row: Mapping,
+    plan_dim: str,
+) -> CoordSummary | None:
+    """
+    A rider as the cut leaves it, where the members say enough to tell.
+
+    A coordinate riding the dimension being cut is sliced along with it,
+    sample for sample, so where both are evenly sampled the slice is
+    exact. Working it out matters: a row which states nothing about a
+    coordinate is not a candidate for any range over it, and the patch it
+    would have loaded is real.
+    """
+    if whole is None or not (whole.is_range_like and whole.len):
+        return None
+    if not (summary.is_range_like and summary.len) or summary.len != whole.len:
+        return None
+    low, high = row.get(f"{plan_dim}_min"), row.get(f"{plan_dim}_max")
+    if pd.isnull(low) or pd.isnull(high):
+        return None
+    # both are evenly sampled and the same length, so the trim which
+    # slices one slices the other at the same samples
+    _, indexer = whole.to_coord(on_grid=True).select((low, high))
+    sliced = summary.to_coord(on_grid=True)[indexer]
+    return sliced.to_summary().model_copy(update=dict(dims=summary.dims))
+
+
+def _summary_kind(summary: CoordSummary) -> str:
+    """Whether a summary holds times, numbers or labels."""
+    kind = np.dtype(summary.dtype).kind if summary.dtype else ""
+    if kind in "mM":
+        # a moment and a duration are both spelled with time units and
+        # cannot be compared with each other, so they are not one kind
+        return "datetime" if kind == "M" else "timedelta"
+    return "str" if kind in "USO" else "num"
+
+
+def _null_like(value):
+    """The missing value of whatever kind this one is."""
+    if isinstance(value, np.datetime64 | pd.Timestamp):
+        return np.datetime64("NaT", "ns")
+    if isinstance(value, np.timedelta64 | pd.Timedelta):
+        return np.timedelta64("NaT", "ns")
+    return np.nan
+
+
+def predicted_coords(
+    backend,
+    members: pd.DataFrame,
+    plan_dim: str,
+    *,
+    trimmed_dims: frozenset[str] = frozenset(),
+    snap_tolerance: float | None = None,
+    mode: str = "chunk",
+    drop_conflicting: bool = False,
+) -> dict[int, dict[str, CoordSummary | None]]:
+    """
+    Per output, the summary of every coordinate its members hold.
+
+    A name mapped to None is one the members hold which the output will
+    not: the assembly drops it, so nothing is claimed about it, but the
+    envelope columns bearing its name are still its own.
+
+    This is what the plan claims about an output, and it is decided by
+    running the *real* join over the members' summaries
+    ([`join_summaries`](`dascore.core.coord_join.join_summaries`)), so a
+    row cannot describe a coordinate differently from the patch assembly
+    will build. Where the join cannot be decided from summaries alone the
+    envelope still spans the members and nothing else is claimed.
+
+    Parameters
+    ----------
+    backend
+        The parent index, which holds the members' coordinate rows.
+    members
+        The plan's member table: which patches feed which output, with
+        each member's trim.
+    plan_dim
+        The dimension being chunked or concatenated. Coordinates riding
+        it are joined along it; the others must already agree.
+    trimmed_dims
+        Dimensions a residual selection trims at load. A coordinate on
+        one of them describes untrimmed values, so it keeps no identity.
+    snap_tolerance
+        Passed to the join, bounding how far a seam may be absorbed.
+    mode
+        Which assembly will build these outputs. A merge drops a
+        coordinate its members do not all share; a concatenation joins
+        raw values, so it can be identified only where they form a range.
+    drop_conflicting
+        Whether the merge drops non-dimensional coordinates its members
+        disagree about, rather than refusing to build the patch.
+    """
+    stored = _member_summaries(backend, members)
+    if not stored:
+        return {}
+    out: dict[int, dict[str, CoordSummary | None]] = {}
+    # the whole table is turned into rows once: doing it per output costs
+    # pandas' fixed overhead thousands of times over on a segment plan
+    by_output: dict[int, list[dict]] = {}
+    for row in members.to_dict("records"):
+        by_output.setdefault(int(row["output_id"]), []).append(row)
+    for output_id, records in sorted(by_output.items()):
+        names: dict[str, None] = {}  # an ordered set
+        for row in records:
+            names.update(dict.fromkeys(stored.get(int(row["_patch_id"]), {})))
+        described: dict[str, CoordSummary | None] = {}
+        # the plan's member rows are what will be *loaded*: they carry each
+        # member's trim, in the unit the plan settled on, so along the
+        # planned dimension they outrank what the index recorded
+        cut = any(_is_cut(stored, row, plan_dim) for row in records)
+        for name in names:
+            summaries = []
+            for row in records:
+                summary = stored.get(int(row["_patch_id"]), {}).get(name)
+                if summary is None:
+                    continue
+                if name == plan_dim:
+                    summary = _trimmed_summary(summary, row, name)
+                elif cut and plan_dim in summary.dims:
+                    # A coordinate riding a dimension being cut keeps only
+                    # the values inside the cut. Where both are evenly
+                    # sampled that slice is exact; where it cannot be
+                    # worked out the envelope goes with the step and the
+                    # identity, rather than advertising values the patch
+                    # does not hold.
+                    sliced = _cut_rider(
+                        summary,
+                        stored.get(int(row["_patch_id"]), {}).get(plan_dim),
+                        row,
+                        plan_dim,
+                    )
+                    if sliced is None:
+                        null = _null_like(summary.min)
+                        sliced = summary.model_copy(
+                            update=dict(
+                                min=null,
+                                max=null,
+                                step=None,
+                                len=None,
+                                fingerprint=None,
+                            )
+                        )
+                    summary = sliced
+                summaries.append(summary)
+            assert summaries, "a name comes from the members which state it"
+            stated = _describe(
+                name,
+                summaries,
+                plan_dim,
+                trimmed_dims,
+                snap_tolerance,
+                mode=mode,
+                every_member=len(summaries) == len(records),
+                drop_conflicting=drop_conflicting,
+            )
+            # None records that the members hold it and the output will
+            # not: no coordinate is written, and the envelope columns it
+            # owns are still recognized as its own rather than as attrs
+            described[name] = stated
+        out[output_id] = described
+    return out
+
+
+def _describe(
+    name: str,
+    summaries: Sequence[CoordSummary],
+    plan_dim: str,
+    trimmed_dims: frozenset[str],
+    snap_tolerance: float | None,
+    *,
+    mode: str = "chunk",
+    every_member: bool = True,
+    drop_conflicting: bool = False,
+) -> CoordSummary | None:
+    """
+    State one coordinate of one output, claiming only what holds.
+
+    None means the output does not carry it at all.
+    """
+    first = summaries[0]
+    if plan_dim == name and name not in first.dims:
+        # the members hold this as an ordinary coordinate and the
+        # concatenation replaces it with a dimension of its own, so
+        # nothing the members say about it survives
+        return None
+    rides = plan_dim == name or plan_dim in first.dims
+    trimmed = bool(set(first.dims) & trimmed_dims)
+    if mode == "chunk" and len({tuple(x.dims) for x in summaries}) > 1:
+        # merge_coord_managers intersects (name, dims), so a coordinate
+        # the members hang on different dimensions is dropped rather than
+        # reconciled -- and where their values agree, nothing else
+        # notices in time to say so
+        return None
+    if mode == "chunk" and not every_member:
+        # A merge keeps only what every member states:
+        # merge_coord_managers drops the rest (see
+        # _drop_unshared_coordinates), so describing it would advertise a
+        # coordinate the patch will not carry. This holds for a rider as
+        # much as for a coordinate standing outside the merged dimension.
+        return None
+    if not rides:
+        # What assembly compares is the coordinate as each member holds
+        # it, so agreement takes the fingerprint *and* the units it is
+        # stated in: a fingerprint is normalized, and metres beside
+        # centimetres share one while `merge_coord_managers` finds them
+        # unequal and drops them. An unidentified coordinate is not
+        # thereby the same one in every member either -- a plan which
+        # could not vouch for its values stored no fingerprint, and two
+        # of those are unknown, not equal. A lone member has nothing to
+        # agree with and keeps what it says.
+        identities = {(x.fingerprint, get_quantity(x.units)) for x in summaries}
+        agreed = len(summaries) == 1 or (
+            not any(fingerprint is None for fingerprint, _ in identities)
+            and len(identities) == 1
+        )
+        if mode == "chunk" and not (agreed or not drop_conflicting):
+            # the members disagree, and a merge told to drop conflicts
+            # will drop this one rather than choose between them
+            return None
+        if agreed and not trimmed:
+            return first
+        # members which disagree leave nothing to vouch for: a step and a
+        # sample count are enough for `_coord_record` to work an identity
+        # back out, so they go with the fingerprint
+        return first.model_copy(update=_unvouched(True))
+    blank = all(pd.isnull(x.min) and pd.isnull(x.max) for x in summaries)
+    if blank and name == plan_dim:
+        # Nobody states any values along the dimension being joined, so
+        # there is nothing to join and nothing to say the plan's own row
+        # does not already say: it carries the identity the planner works
+        # out for such a dimension (see _member_key_digests). An
+        # auxiliary coordinate has no such row, so it is still described.
+        return None
+    # Only the merged dimension is snapped: `_get_merged_coord` simplifies
+    # it, while a rider is raw-concatenated through `get_coord`, which
+    # absorbs no seam. Snapping one here would claim a step the loaded
+    # coordinate does not have.
+    tolerance = snap_tolerance if name == plan_dim else None
+    joined = join_summaries(summaries, snap_tolerance=tolerance)
+    if joined is None:
+        return _union_summary(summaries)
+    raw_join = mode == "concat" or name != plan_dim
+    if raw_join and not _joins_in_member_order(summaries, joined):
+        # The join sorted these blocks; the concatenation will not. Their
+        # values interleave or run backwards once laid end to end, so the
+        # result is an array whose order -- and identity -- the sorted
+        # join does not describe.
+        joined = joined.model_copy(update=dict(step=None))
+    if raw_join:
+        # The join generated one grid from a single start; the
+        # concatenation lays each member's own values end to end, which
+        # for floats is not always the same coordinate.
+        joined = raw_join_summary(summaries, joined)
+    if raw_join and joined.step is None:
+        # Only the merged dimension is built by the join this predicts
+        # with. A concatenation, and a rider on either path, has its raw
+        # values concatenated and handed to get_coord, which for anything
+        # but a single range gives an array whose identity is those
+        # values — unknowable from summaries.
+        joined = joined.model_copy(update=dict(fingerprint=None, len=None))
+    if trimmed and name != plan_dim:
+        # the planned dimension's own trim is already in the member rows
+        # this joined; any other coordinate is cut at load instead
+        joined = joined.model_copy(update=_unvouched(True))
+    return joined.model_copy(update=dict(dims=first.dims))
+
+
 def _aux_coord_info(
     source_rows: pd.DataFrame,
     members: pd.DataFrame,
     plan_dim: str,
     coord_dims_map: Mapping[str, str],
     trimmed_dims: frozenset[str] = frozenset(),
-    concat: bool = False,
+    *,
+    mode: str = "chunk",
+    drop_conflicting: bool = False,
 ) -> dict[int, dict[str, dict]]:
     """
     Aggregate per-output envelope info for auxiliary coordinates.
@@ -268,9 +736,9 @@ def _aux_coord_info(
     always aggregate — the catalog contract is candidacy, with exact
     values re-established at load.
 
-    A concatenation joins a rider's segments rather than merging them, so
-    a rider whose members share one step and meet end to end keeps that
-    step (its values still differ member by member, so not its identity).
+    Used where an output's coordinates cannot be predicted from the
+    members' own summaries — a re-plan whose members this index does not
+    know — so the member rows are all there is to describe them with.
 
     """
     out: dict[int, dict[str, dict]] = {}
@@ -319,36 +787,37 @@ def _aux_coord_info(
         if step_col in joined.columns:
             step_ok = keep & (grouped[step_col].nunique().to_numpy() == 1)
             step_first = grouped[step_col].first().to_numpy()
-            if rides and concat:
-                # the joined coordinate is a range when the segments are
-                # (the members are already in the order they join in)
-                order = {v: i for i, v in enumerate(output_ids)}
-                codes = joined["output_id"].map(order).to_numpy()
-                step_first = _concatenated_steps(joined, codes, name)
-                step_ok = ~pd.isnull(step_first)
         unit_ok, unit_first = no_gate, None
         if unit_col in joined.columns:
             unit_ok = grouped[unit_col].nunique().to_numpy() == 1
             unit_first = grouped[unit_col].first().to_numpy()
-            # members spelling one coordinate two ways (seconds beside
-            # milliseconds) have no envelope in common: the magnitudes mean
-            # different things, and only the loaded patch says which
-            # spelling wins. No units at all is one spelling, not two.
-            undecided = grouped[unit_col].nunique().to_numpy() > 1
-            if undecided.any():
-                lows = np.array(
-                    [None if u else v for v, u in zip(lows, undecided)], dtype=object
-                )
-                highs = np.array(
-                    [None if u else v for v, u in zip(highs, undecided)], dtype=object
-                )
-                step_ok = step_ok & ~undecided
         # a coordinate no member holds contributes nothing; one the members
         # do hold is always named, even when nothing about its values can
         # be stated — the patch will have it, so the catalog says so
         held = grouped[cmin].count().to_numpy() > 0
         if key_col in joined.columns:
             held = held | (grouped[key_col].count().to_numpy() > 0)
+        if mode == "chunk":
+            # A merge keeps only what every member states, and only what
+            # they agree on when told to drop conflicts: assembly drops
+            # the rest, so naming it here would advertise a coordinate
+            # the patch will not carry.
+            stated = grouped[cmin].count().to_numpy()
+            if key_col in joined.columns:
+                stated = np.maximum(stated, grouped[key_col].count().to_numpy())
+            dropped = stated != grouped.size().to_numpy()
+            lone = grouped.size().to_numpy() == 1
+            if drop_conflicting and not rides and key_col in joined.columns:
+                # A rider holds a different segment in every member, so
+                # its definitions differ by design; assembly joins those
+                # values rather than comparing them, and only a
+                # coordinate standing outside the merge is a conflict.
+                # `nunique` counts no nulls, so a lone member holding an
+                # unidentified coordinate counts zero of them; it has
+                # nothing to disagree with either way
+                disagree = grouped[key_col].nunique().to_numpy() != 1
+                dropped = dropped | (disagree & ~lone)
+            held = held & ~dropped
         absent = ~held
         for index in np.flatnonzero(~absent):
             step = step_first[index] if step_first is not None else None
@@ -366,17 +835,123 @@ def _aux_coord_info(
     return out
 
 
+def _clear_dropped_aux(
+    outputs: pd.DataFrame,
+    aux_info: Mapping[int, Mapping[str, Mapping]],
+    coord_dims_map: Mapping[str, str],
+    plan_dim: str,
+) -> pd.DataFrame:
+    """
+    Blank the envelope columns of coordinates the output will not carry.
+
+    A coordinate `_aux_coord_info` does not describe is one assembly
+    drops. Its envelope columns are carried from the members and would
+    otherwise survive as ordinary metadata, so the row would still state
+    values for a coordinate the patch does not hold.
+    """
+    names = [x for x in coord_dims_map if x != plan_dim]
+    if not names:
+        return outputs
+    out = outputs.copy(deep=False)
+    ids = [int(x) for x in out["output_id"]]
+    for name in names:
+        gone = [name not in aux_info.get(x, {}) for x in ids]
+        if not any(gone):
+            continue
+        columns = [f"{name}_min", f"{name}_max", f"{name}_step", f"_{name}_units"]
+        for column in (x for x in columns if x in out.columns):
+            kept = out[column].to_numpy(dtype=object, copy=True)
+            kept[np.array(gone)] = None
+            out[column] = pd.Series(kept, index=out.index, dtype=object)
+    return out
+
+
+def _trimmed_envelopes(
+    predicted: Mapping[int, Mapping[str, CoordSummary | None]],
+    outputs: pd.DataFrame,
+    trimmed_dims: frozenset[str],
+) -> dict[int, dict[str, CoordSummary | None]]:
+    """
+    Restate a trimmed coordinate's envelope from the row holding the trim.
+
+    A residual selection is applied when the patch loads, and the plan's
+    own row is where its adjusted bounds live: the members' stored
+    summaries still describe the whole of what the index recorded.
+    Candidacy is answered from the coordinate record, so a record which
+    kept the untrimmed envelope would keep the row a candidate for values
+    it will not return.
+    """
+    # every described output is one of these rows: both come from the
+    # same plan, and the members were grouped by these very ids
+    rows = {int(x["output_id"]): x for x in outputs.to_dict("records")}
+    out: dict[int, dict[str, CoordSummary | None]] = {}
+    for output_id, described in predicted.items():
+        row = rows[int(output_id)]
+        out[output_id] = {
+            name: summary
+            if summary is None or not (set(summary.dims) & trimmed_dims)
+            else _trimmed_summary(summary, row, name)
+            for name, summary in described.items()
+        }
+    return out
+
+
+def _apply_predictions(
+    outputs: pd.DataFrame,
+    predicted: Mapping[int, Mapping[str, CoordSummary | None]],
+    name: str,
+) -> pd.DataFrame:
+    """
+    Restate the planned dimension's envelope from what the join predicts.
+
+    The frame's envelope columns feed selection and the patches table, so
+    they must say what the records say; otherwise the row and its own
+    coordinate would disagree, which is the drift this predicts away.
+    """
+    if not predicted:
+        return outputs
+    min_name, max_name, step_name = f"{name}_min", f"{name}_max", f"{name}_step"
+    unit_col = f"_{name}_units"
+    out = outputs.copy(deep=False)
+    described = [predicted.get(int(x), {}).get(name) for x in out["output_id"]]
+    if not any(x is not None for x in described):
+        return out
+    fields = {
+        min_name: lambda x: x.min,
+        max_name: lambda x: x.max,
+        step_name: lambda x: x.step,
+        unit_col: lambda x: None if x.units is None else get_quantity_str(x.units),
+    }
+    for column, read in fields.items():
+        if column not in out.columns:
+            continue
+        # an output the join could not describe keeps what the row said;
+        # only what was predicted is restated
+        kept = out[column].to_numpy(dtype=object, copy=True)
+        for index, summary in enumerate(described):
+            if summary is not None:
+                kept[index] = read(summary)
+        out[column] = pd.Series(kept, index=out.index, dtype=object)
+    return out
+
+
 def _output_records(
     outputs: pd.DataFrame,
     token: str,
     aux_info: Mapping[int, Mapping[str, Mapping]] | None = None,
+    predicted: Mapping[int, Mapping[str, CoordSummary | None]] | None = None,
 ) -> list[SourceRecord]:
     """
     Convert plan output rows into ingestible source records.
 
+    `predicted` states what an output's coordinates will be, decided by
+    joining its members' summaries. A coordinate it describes is written
+    from that summary; the row is consulted only for what it cannot know,
+    such as a dimension the plan creates out of the member count.
     """
     records = []
     aux_info = aux_info or {}
+    predicted = predicted or {}
     # Envelope columns belong to coordinates actually present in a row;
     # an attr that merely looks envelope-shaped (channel_step with no
     # channel coord) is ordinary metadata and must be preserved. The
@@ -394,25 +969,38 @@ def _output_records(
         dims = str(row.get("dims") or "")
         dim_names = [d for d in dims.split(",") if d]
         aux = aux_info.get(output_id, {})
+        known = predicted.get(output_id, {})
         coords = []
         for name in dim_names:
-            record = _coord_record_from_row(row, name)
+            summary = known.get(name)
+            if summary is not None:
+                record = _coord_record(
+                    name, summary.model_copy(update={"dims": (name,)})
+                )
+            else:
+                record = _coord_record_from_row(row, name)
+            if record is not None:
+                coords.append(record)
+        for name, summary in known.items():
+            if name in dim_names or summary is None:
+                continue
+            record = _coord_record(name, summary)
             if record is not None:
                 coords.append(record)
         # auxiliary (non-dimension) coordinates remain on the assembled
         # patches, so the catalog must keep describing them
         for name, info in aux.items():
-            if name in dim_names:
+            if name in dim_names or name in known:
                 continue
             record = _coord_record_from_row(
                 info, name, dims=info["dims"], name_is_held=True
             )
             if record is not None:
                 coords.append(record)
-        cache_key = (dims, tuple(aux))
+        cache_key = (dims, tuple(aux), tuple(known))
         envelope_keys = envelope_cache.get(cache_key)
         if envelope_keys is None:
-            coord_names = set(dim_names) | set(aux) | base_names
+            coord_names = set(dim_names) | set(aux) | set(known) | base_names
             envelope_keys = {
                 f"{name}_{sfx}"
                 for name in coord_names
@@ -760,10 +1348,48 @@ def derived_catalog(
     stale_keys = stale_def_keys(parent_residuals, coord_dims_map, outputs.columns)
     if stale_keys:
         outputs = outputs.drop(columns=stale_keys)
-    aux_info = _aux_coord_info(
-        sources, trims, name, coord_dims_map, trimmed_dims, concat=mode == "concat"
+    # what an output will hold is decided by joining its members'
+    # summaries, the same join assembly runs on their values
+    snap = (
+        merge_kwargs.get("tolerance") if merge_kwargs.get("snap_coords", True) else None
     )
-    records = _output_records(outputs, token, aux_info=aux_info)
+    # Re-planning a derived view on its own dimension collapses to the
+    # *grandparent's* members (see `collapse_working_df`), which this
+    # backend holds no coordinates for: its ids name the derived outputs,
+    # and asking it about a member id would describe the wrong patch.
+    collapsed = (
+        parent is not None
+        and isinstance(parent.resolver, PlanResolver)
+        and parent.resolver.dim == name
+        and not parent.resolver.lossy
+    )
+    predicted = predicted_coords(
+        None if parent is None or collapsed else parent.backend,
+        trims,
+        name,
+        trimmed_dims=trimmed_dims,
+        snap_tolerance=snap,
+        mode=mode,
+        drop_conflicting=merge_kwargs.get("conflict") in {"drop", "keep_first"},
+    )
+    if predicted and trimmed_dims:
+        predicted = _trimmed_envelopes(predicted, outputs, trimmed_dims)
+    outputs = _apply_predictions(outputs, predicted, name)
+    aux_info = {}
+    if not predicted:
+        # a re-plan whose members this index does not know: the auxiliary
+        # coordinates are described from the member rows, as before
+        aux_info = _aux_coord_info(
+            sources,
+            trims,
+            name,
+            coord_dims_map,
+            trimmed_dims,
+            mode=mode,
+            drop_conflicting=merge_kwargs.get("conflict") in {"drop", "keep_first"},
+        )
+        outputs = _clear_dropped_aux(outputs, aux_info, coord_dims_map, name)
+    records = _output_records(outputs, token, aux_info=aux_info, predicted=predicted)
     backend.write_sources(records)
     return PatchCatalog(backend=backend, resolver=resolver)
 

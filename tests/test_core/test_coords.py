@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime
+import itertools
 import pickle
 import re
 from collections.abc import Mapping
@@ -28,6 +29,8 @@ from dascore.core.coords import (
     CoordString,
     CoordSummary,
     _get_coord_kind,
+    _reproduces,
+    concat_coords,
     get_coord,
 )
 from dascore.exceptions import CoordError, ParameterError
@@ -2903,3 +2906,131 @@ class TestUnitNoOps:
         """A class which did not implement it gets an error naming itself."""
         with pytest.raises(NotImplementedError, match="unit conversion"):
             BaseCoord._convert_units(evenly_sampled_coord, "m")
+
+
+class TestFusedRangeConstruction:
+    """A fused range must equal the one full validation would build."""
+
+    @pytest.mark.parametrize(
+        "start,stop,step",
+        [
+            (0.0, 10.0, 1.0),
+            (10.0, 0.0, -1.0),
+            (-5.0, 5.0, 0.5),
+        ],
+    )
+    def test_numeric_fuse_matches_validated(self, start, stop, step):
+        """Fusing two ranges gives the range spanning both."""
+        first = get_coord(start=start, stop=stop, step=step)
+        second = get_coord(start=stop, stop=stop + (stop - start), step=step)
+        fused = concat_coords(first, second)
+        expected = CoordRange(start=start, stop=stop + (stop - start), step=step)
+        assert fused == expected
+        assert fused.fingerprint() == expected.fingerprint()
+        assert np.array_equal(fused.values, expected.values)
+
+    def test_time_fuse_keeps_units_and_values(self):
+        """A datetime fuse states seconds, as the validating path does."""
+        t0 = np.datetime64("2020-01-01", "ns")
+        step = np.timedelta64(4, "ms")
+        first = get_coord(start=t0, stop=t0 + 100 * step, step=step)
+        second = get_coord(start=t0 + 100 * step, stop=t0 + 200 * step, step=step)
+        fused = concat_coords(first, second)
+        expected = CoordRange(start=t0, stop=t0 + 200 * step, step=step)
+        assert fused == expected
+        assert fused.units == expected.units
+        assert fused.fingerprint() == expected.fingerprint()
+        assert np.array_equal(fused.values, expected.values)
+
+    def test_unitful_fuse_keeps_the_unit(self):
+        """The fused range speaks the unit its segments spoke."""
+        first = get_coord(start=0.0, stop=10.0, step=1.0, units="m")
+        second = get_coord(start=10.0, stop=20.0, step=1.0, units="m")
+        fused = concat_coords(first, second)
+        assert fused.units == get_quantity("m")
+        assert len(fused) == 20
+
+    def test_a_run_which_cannot_be_rebuilt_keeps_its_pieces(self):
+        """
+        Fusing must not move a value, even by an ulp.
+
+        Floating point addition is not associative, so a grid rebuilt
+        from the first start and the summed length need not land on the
+        boundaries its pieces state; where it does not, the pieces stay
+        as they were rather than being quietly altered.
+        """
+        pieces, start = [], 0.1
+        for _ in range(4):
+            piece = get_coord(start=start, stop=start + 0.3, step=0.1)
+            pieces.append(piece)
+            start = piece.stop
+        # the pieces meet exactly, so they form one run
+        assert all(a.stop == b.start for a, b in itertools.pairwise(pieces))
+        joined = concat_coords(*pieces)
+        assert len(joined) == sum(len(x) for x in pieces)
+        assert np.array_equal(joined.values, np.concatenate([x.values for x in pieces]))
+
+    def test_reproduces_rejects_a_grid_which_misses_a_boundary(self):
+        """The check itself answers both ways."""
+        pieces, start = [], 0.1
+        for _ in range(4):
+            piece = get_coord(start=start, stop=start + 0.3, step=0.1)
+            pieces.append(piece)
+            start = piece.stop
+        length = sum(len(x) for x in pieces)
+        drifting = pieces[0]._new_grid(pieces[0].start, pieces[0].step, length)
+        assert not _reproduces(drifting, pieces)
+        assert _reproduces(pieces[0], [pieces[0]])
+
+    def test_many_segments_fuse_to_one_range(self):
+        """A long run of contiguous ranges collapses to a single range."""
+        pieces = [
+            get_coord(start=i * 10.0, stop=(i + 1) * 10.0, step=1.0) for i in range(50)
+        ]
+        fused = concat_coords(*pieces)
+        assert isinstance(fused, CoordRange)
+        assert len(fused) == 500
+        assert fused.min() == 0.0 and fused.max() == 499.0
+
+
+class TestSummaryOnGrid:
+    """A summary trusted to describe a grid builds the same coord."""
+
+    @pytest.mark.parametrize(
+        "kwargs",
+        [
+            dict(start=0.0, stop=100.0, step=1.0),
+            dict(start=100.0, stop=0.0, step=-1.0),
+            dict(start=-5.0, stop=5.0, step=0.5, units="m"),
+        ],
+    )
+    def test_matches_the_validated_conversion(self, kwargs):
+        """on_grid=True is a shortcut, never a different answer."""
+        summary = get_coord(**kwargs).to_summary()
+        slow, fast = summary.to_coord(), summary.to_coord(on_grid=True)
+        assert slow == fast
+        assert slow.fingerprint() == fast.fingerprint()
+        assert slow.units == fast.units
+        assert np.array_equal(slow.values, fast.values)
+
+    def test_time_summary_matches(self):
+        """Time-like coords keep the seconds their validated twin states."""
+        t0 = np.datetime64("2020-01-01", "ns")
+        step = np.timedelta64(4, "ms")
+        summary = get_coord(start=t0, stop=t0 + 100 * step, step=step).to_summary()
+        slow, fast = summary.to_coord(), summary.to_coord(on_grid=True)
+        assert slow == fast
+        assert slow.units == fast.units
+        assert np.array_equal(slow.values, fast.values)
+
+    def test_without_a_length_falls_back(self):
+        """A summary which does not state its length is validated as before."""
+        summary = CoordSummary(dtype="float64", min=0.0, max=9.0, step=1.0)
+        assert summary.len is None
+        assert summary.to_coord(on_grid=True) == summary.to_coord()
+
+    def test_still_refuses_a_summary_without_a_step(self):
+        """The shortcut does not make an unsampled summary convertible."""
+        summary = CoordSummary(dtype="float64", min=0.0, max=9.0)
+        with pytest.raises(CoordError, match="evenly sampled"):
+            summary.to_coord(on_grid=True)

@@ -1259,6 +1259,30 @@ class SQLiteIndexBackend:
             params.append(json.dumps([int(x) for x in patch_ids]))
         return {int(x) for x in self._fetch_df(sql, params)["patch_id"]}
 
+    def coord_frame(self, patch_ids) -> pd.DataFrame:
+        """
+        Return one row per (patch, coordinate) for the given patches.
+
+        Unlike the pivoted relation, which flattens a coordinate's envelope
+        onto the patch row, this keeps every coordinate's own record: the
+        dims it rides *for that patch* (`coord_dims_map` collapses those to
+        one per name), its dtype, its length, and its typed envelope. That
+        is what a summary needs to be rebuilt without loading anything.
+        """
+        columns = (
+            "pc.patch_id, pc.coord_name, pc.coord_dims, cd.def_key, cd.fingerprint, "
+            "cd.value_kind, cd.dtype, cd.length, cd.units, "
+            "cd.min_num, cd.max_num, cd.step_num, "
+            "cd.min_ns, cd.max_ns, cd.step_ns, cd.min_str, cd.max_str, "
+            "cd.is_relative"
+        )
+        base = (
+            f"SELECT {columns} FROM patch_coords pc "
+            "JOIN coord_defs cd ON cd.coord_def_id = pc.coord_def_id"
+        )
+        ids = [int(x) for x in patch_ids]
+        return self._fetch_in(base, "pc.patch_id", ids)
+
     def coord_dims_map(self) -> dict[str, str]:
         """Return each coord name's dims string (first observed wins)."""
         df = self._fetch_df("SELECT DISTINCT coord_name, coord_dims FROM patch_coords")
