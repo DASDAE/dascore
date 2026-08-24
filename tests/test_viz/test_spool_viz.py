@@ -385,6 +385,25 @@ class TestNaming:
         names = spool_viz._lane_names(spool.get_coverage("time"), "time")
         assert [x.split()[0] for x in names] == ["DAS1.R1..RAW", "DAS2.R2..RAW"]
 
+    def test_a_lone_group_is_named_by_its_key(self):
+        """Nothing tells one group apart, so its key says which it is."""
+        spool = dc.get_example_spool("random_das", acquisition_key="DAS1.R1..RAW")
+        names = spool_viz._lane_names(spool.get_coverage("time"), "time")
+        assert [x.split()[0] for x in names] == ["DAS1.R1..RAW"]
+
+    def test_a_group_without_a_key_falls_back_to_its_ordinal(self):
+        """A group states no key, so only its ordinal is left to name it."""
+        report = pd.DataFrame(
+            {
+                "group_id": [0],
+                "coverage": [1.0],
+                "acquisition_key": [""],
+                "time_min": [0.0],
+                "time_max": [1.0],
+            }
+        )
+        assert spool_viz._lane_names(report, "time") == ["group 0  100%"]
+
     def test_an_unrecorded_attr_is_not_a_value(self, diverse):
         """A group which states no acquisition key is not named by a blank."""
         names = spool_viz._lane_names(diverse.get_coverage("time"), "time")
