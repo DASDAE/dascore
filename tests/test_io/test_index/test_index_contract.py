@@ -255,7 +255,10 @@ class TestDataSize:
             return str(path).replace("\\", "/")
 
         expected = {_key(x.source_path): math.prod(x.shape) for x in make_summaries()}
-        got = {_key(k): int(v) for k, v in zip(df["source_path"], df["data_size"])}
+        got = {
+            _key(k): int(v)
+            for k, v in zip(df["source_path"], df["data_size"], strict=True)
+        }
         assert got == expected
 
     def test_shapeless_summary_states_no_size(self, tmp_path):

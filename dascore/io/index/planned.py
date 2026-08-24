@@ -692,7 +692,7 @@ def _whole_member_sizes(trims: pd.DataFrame, sources: pd.DataFrame) -> dict[int,
     whole = trims[(counts == 1) & ~modified]
     lookup = sources.drop_duplicates("_patch_id").set_index("_patch_id")["_data_size"]
     out = {}
-    for output_id, patch_id in zip(whole["output_id"], whole["_patch_id"]):
+    for output_id, patch_id in zip(whole["output_id"], whole["_patch_id"], strict=True):
         size = lookup.get(patch_id)
         if not pd.isnull(size):
             out[int(output_id)] = int(size)
