@@ -33,6 +33,15 @@ def detrend(
     -------
     The Patch instance after applying the detrend function.
 
+    See Also
+    --------
+    [Patch.taper](`dascore.Patch.taper`)
+        Taper the ends of a signal, often used with detrending before transforms.
+    [Patch.pass_filter](`dascore.Patch.pass_filter`)
+        Apply a Butterworth highpass, lowpass, or bandpass filter.
+    [Patch.savgol_filter](`dascore.Patch.savgol_filter`)
+        Smooth data using a Savitzky-Golay filter while preserving local trends.
+
     Examples
     --------
     >>> import dascore # import dascore library
