@@ -101,6 +101,45 @@ class Raw:
 
 
 @dataclass(frozen=True, slots=True)
+class Row:
+    """
+    One record, as the cells a table draws it in.
+
+    The name is what the row is called; the fields are what it states,
+    each one already rendered. A field a record has nothing to say for
+    is absent rather than blank, so two rows need not state the same
+    ones.
+
+    Every field has a label, which is the column it belongs in, and
+    says whether it wants that label printed as well. A value which
+    already says what it is -- a span, in brackets -- does not, since a
+    line has no heading to say it and a column does.
+    """
+
+    name: Text
+    kind: Text
+    fields: tuple[tuple[str, Text, bool], ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class Table:
+    """
+    Records of one sort, drawn together.
+
+    They need not state the same fields -- only a time coordinate has a
+    span -- so a column exists for every field any row states and a row
+    with nothing for one leaves it empty.
+
+    A terminal draws each record on its own line, which is what keeps
+    `str()` unchanged; a panel draws them in columns, where each label
+    is a heading said once.
+    """
+
+    rows: tuple[Row, ...] = ()
+    numeric: frozenset[str] = frozenset()
+
+
+@dataclass(frozen=True, slots=True)
 class Section:
     """
     A titled block: the line which names it, and what sits under it.
@@ -109,7 +148,7 @@ class Section:
     """
 
     title: Text
-    body: tuple[Raw, ...] = ()
+    body: tuple[Raw | Table, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -132,6 +171,24 @@ def _render_raw(node: Raw) -> Text:
     # A copy, not the node's own Text: a caller which appends to what it
     # rendered would otherwise rewrite the node it just read.
     return node.text.copy()
+
+
+@render_text.register
+def _render_row(node: Row) -> Text:
+    key_style = dascore_styles["keys"]
+    out = Text("\n    ") + node.name + Text(": ") + node.kind + Text("(")
+    for label, value, labelled in node.fields:
+        out += Text(f" {label}: ", key_style) if labelled else Text(" ")
+        out += value
+    return out + Text(" )")
+
+
+@render_text.register
+def _render_table(node: Table) -> Text:
+    # Joined on nothing: a row states the newline which puts it on its
+    # own line, the same way a section body carries the one which
+    # separated it from its title.
+    return Text("").join(render_text(x) for x in node.rows)
 
 
 @render_text.register
@@ -273,19 +330,66 @@ def _html_raw(node: Raw) -> str:
 
 
 @render_html.register
+def _html_table(node: Table) -> str:
+    # Every label any row states, in the order they are first stated, so
+    # a row which says nothing for one leaves that cell empty rather
+    # than shifting the ones after it.
+    labels: list[str] = []
+    for row in node.rows:
+        # Merged rather than collected first-seen, so each row's own
+        # order survives: a span is a time's alone and belongs between
+        # its max and its step, not after every field a distance
+        # states. A new field goes after the last column placed, or
+        # after the last one this row shares, whichever is later.
+        at = len(labels)
+        for label, _, _ in row.fields:
+            if label in labels:
+                at = labels.index(label) + 1
+                continue
+            labels.insert(at, label)
+            at += 1
+    # What each record is, which a terminal states in front of its
+    # fields. A column of its own here rather than nothing at all.
+    head = "<th>kind</th>" + "".join(
+        f"<th>{escape(x, quote=False)}</th>" for x in labels
+    )
+    body = []
+    for row in node.rows:
+        stated = {label: value for label, value, _ in row.fields}
+        name = text_to_html(row.name)
+        cells = [f"<td>{text_to_html(row.kind)}</td>"]
+        for label in labels:
+            css = ' class="dc-num"' if label in node.numeric else ""
+            value = stated.get(label)
+            cells.append(f"<td{css}>{text_to_html(value) if value else ''}</td>")
+        body.append(f'<tr><th scope="row">{name}</th>{"".join(cells)}</tr>')
+    return (
+        f'<table class="dc-table"><thead><tr><th></th>{head}</tr></thead>'
+        f"<tbody>{''.join(body)}</tbody></table>"
+    )
+
+
+@render_html.register
 def _html_section(node: Section) -> str:
     title = node.title
     if title.plain.startswith(_SECTION_MARKER):
         title = title[len(_SECTION_MARKER) :]
     title = text_to_html(title)
-    if not any(_body_text(x.text).plain for x in node.body):
+    if not any(
+        x.rows if isinstance(x, Table) else _body_text(x.text).plain for x in node.body
+    ):
         # Nothing to fold, so nothing to offer folding. A block whose
         # body is only the newline which separated it has none.
         return f'<div class="dc-line">{title}</div>'
     # Counted on what is drawn, not on what was handed over: the body
     # loses the newline which separated it and any it ends on, and a
     # block counted before that folds one line early.
-    lines = sum(_body_text(x.text).plain.count("\n") + 1 for x in node.body)
+    lines = sum(
+        len(x.rows)
+        if isinstance(x, Table)
+        else _body_text(x.text).plain.count("\n") + 1
+        for x in node.body
+    )
     state = " open" if lines <= get_config().display_html_open_lines else ""
     body = "".join(render_html(x) for x in node.body)
     return f"<details{state}><summary>{title}</summary>{body}</details>"

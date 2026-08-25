@@ -216,7 +216,7 @@ class Patch(NodeRepr, NamespaceOwner):
         return Repr(
             header=get_header_text("Patch ⚡"),
             body=(
-                split_block(self.coords.__rich__()),
+                self.coords._repr_section(),
                 split_block(
                     array_to_text(self.data, units=attrs.get("data_units")),
                 ),

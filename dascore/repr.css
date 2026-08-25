@@ -153,6 +153,44 @@ line would push the whole page sideways rather than just this block. */
   max-width: 100%;
 }
 
+/* A section of records, drawn in columns rather than on a line each.
+Every rule here is a reset as much as a style: a table inherits a good
+deal from a docs theme, and a repr should look the same in a notebook. */
+.dc-repr .dc-table {
+  border-collapse: collapse;
+  border: none;
+  margin: 0 0 0.3em 1.1em;
+  width: auto;
+  font-size: 1em;
+  background: none;
+}
+
+.dc-repr .dc-table th,
+.dc-repr .dc-table td {
+  border: none;
+  padding: 0 0.9em 0 0;
+  text-align: left;
+  vertical-align: baseline;
+  white-space: nowrap;
+  font-weight: 400;
+  background: none;
+}
+
+/* The label a column is read by, said once here rather than on every
+row as a terminal has to say it. */
+.dc-repr .dc-table thead th {
+  color: var(--dc-grey50);
+  font-size: 0.9em;
+  padding-bottom: 0.15em;
+  border-bottom: 1px solid var(--dc-rule);
+}
+
+.dc-repr .dc-table tbody th { font-weight: 600; }
+
+/* Numbers line up on the right, where a reader compares them down the
+column; `tabular-nums` on the panel keeps the digits the same width. */
+.dc-repr .dc-table td.dc-num { text-align: right; padding-right: 1.1em; }
+
 /* Print renders a closed `details` closed, so open them all: paper has
 no disclosure triangle to click. */
 @media print {
