@@ -15,8 +15,6 @@ from typing import TYPE_CHECKING, ClassVar, Literal, NamedTuple, Self, TypeVar, 
 import numpy as np
 import pandas as pd
 from pandas.errors import (
-    OutOfBoundsDatetime,
-    OutOfBoundsTimedelta,
     PerformanceWarning,
 )
 from rich.text import Text
@@ -94,11 +92,11 @@ from dascore.utils.display import (
     ACQUISITION_ATTR,
     NodeRepr,
     Repr,
+    duration_text,
     elision_text,
     get_header_text,
     get_nice_text,
     group_names,
-    human_duration,
     split_block,
 )
 from dascore.utils.docs import compose_docstring
@@ -2480,7 +2478,7 @@ class Spool(NodeRepr, NamespaceOwner):
                 # A time is stated as an instant, so how long the two of
                 # them are apart is a fact the line does not yet carry.
                 # Any other dimension states its own magnitude already.
-                if (span := self._duration_text(low, high)) is not None:
+                if (span := duration_text(low, high)) is not None:
                     base += Text("  ") + span
             elif units:
                 base += Text(" ") + Text(units[0], dascore_styles["units"])
@@ -2501,33 +2499,13 @@ class Spool(NodeRepr, NamespaceOwner):
         assert stated is not None, f"the relation states no units for {dim}"
         return tuple(sorted({str(x) for x in stated.dropna().unique() if str(x)}))
 
-    @staticmethod
-    def _duration_text(low, high) -> Text | None:
-        """
-        How long an extent lasted. Only asked of one measured in time.
-
-        None where it lasted no time: `human_duration` says nothing of a
-        zero, which reads as a label on a gap and as an empty pair of
-        brackets here.
-        """
-        try:
-            span = high - low
-        except (OutOfBoundsDatetime, OutOfBoundsTimedelta):
-            # Two instants can lie further apart than a Timedelta holds.
-            # How long that is matters less than the extents it would
-            # otherwise take down with it.
-            return None
-        if not (said := human_duration(span)):
-            return None
-        return Text(f"<{said}>", dascore_styles["keys"])
-
     def _span_text(self, low, high, units: tuple[str, ...]) -> Text | None:
         """How wide an extent is, measured in what the dimension is."""
         # A time span is a duration. Any other dimension is as wide as
         # its own units say, and calling that many seconds would be a
         # different claim about a different quantity.
         if isinstance(low, _TIMES):
-            return self._duration_text(low, high)
+            return duration_text(low, high)
         if isinstance(low, numbers.Number):
             # A width is only in a unit where every patch agrees on one;
             # stating the first of several would label a track in a unit

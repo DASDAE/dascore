@@ -29,15 +29,18 @@ from dascore.utils.display import (
     array_to_text,
     attrs_to_text,
     counts_to_text,
+    duration_text,
     get_header_text,
     get_nice_text,
     group_names,
     human_duration,
+    human_size,
     indent_text,
     limit_reprs,
     mapping_to_text,
     model_to_line,
     percent,
+    rate_text,
     render_text,
     split_block,
     stated_fields,
@@ -725,3 +728,125 @@ class TestSpoolReprNode:
         rendered = str(spool)
         assert "Spool" in rendered
         assert "Dimensions" not in rendered
+
+
+class TestRateText:
+    """Tests for stating a sampling step as the rate it is quoted in."""
+
+    @pytest.mark.parametrize(
+        ("step", "expected"),
+        [
+            (np.timedelta64(4_000_000, "ns"), "250 Hz"),
+            (np.timedelta64(1, "s"), "1 Hz"),
+            (np.timedelta64(1, "ms"), "1000 Hz"),
+            (np.timedelta64(976_562, "ns"), "1024 Hz"),
+        ],
+    )
+    def test_a_time_step_states_its_rate(self, step, expected):
+        """A step in time is quoted in Hz, which is what a rate is."""
+        assert expected in str(rate_text(step))
+
+    def test_a_rate_which_would_not_give_the_step_back(self):
+        """
+        A step which is not a round rate says no rate at all.
+
+        0.0039999998 s is 250.0000125 Hz. Saying "250 Hz" would state a
+        precision the step does not have, and saying all ten digits is
+        the step again in different units.
+        """
+        assert rate_text(np.timedelta64(39_999_998, "ns") / 10) is None
+
+    @pytest.mark.parametrize(
+        "step", [1.0, 300, "not a step", None, np.timedelta64(0, "ns")]
+    )
+    def test_only_a_step_measured_in_time(self, step):
+        """
+        A rate is the reciprocal of a duration.
+
+        One over a distance is not how anyone states channel spacing,
+        and one over zero is not a rate at all.
+        """
+        assert rate_text(step) is None
+
+
+class TestHumanSize:
+    """Tests for saying how much room something takes up."""
+
+    @pytest.mark.parametrize(
+        ("count", "expected"),
+        [
+            (0, "0 B"),
+            (512, "512 B"),
+            (1024, "1 KiB"),
+            (4_800_000, "4.6 MiB"),
+            (2**30, "1 GiB"),
+            (2**40, "1 TiB"),
+            (2**51, "2048 TiB"),
+        ],
+    )
+    def test_size_in_the_largest_unit_which_fits(self, count, expected):
+        """A byte count is read in whatever unit keeps it short."""
+        assert human_size(count) == expected
+
+
+class TestDurationText:
+    """Tests for how long an extent lasted."""
+
+    def test_two_instants_state_their_distance(self):
+        """The fact two times do not carry on their own."""
+        low = np.datetime64("2020-01-01T00:00:00")
+        high = np.datetime64("2020-01-01T00:00:24")
+        assert "24 s" in str(duration_text(low, high))
+
+    def test_no_time_at_all_says_nothing(self):
+        """A zero would read as a label on a gap."""
+        instant = np.datetime64("2020-01-01T00:00:00")
+        assert duration_text(instant, instant) is None
+
+    def test_further_apart_than_a_timedelta_holds(self):
+        """
+        Two instants can lie further apart than a Timedelta holds.
+
+        How long that is matters less than the extents it would
+        otherwise take down with it.
+        """
+        low = np.datetime64("1677-09-21T00:12:44")
+        high = np.datetime64("2262-04-11T23:47:16")
+        assert duration_text(low, high) is None
+
+
+class TestValuesAReaderCanRead:
+    """Tests for the facts a repr states about the things it shows."""
+
+    def test_a_time_coord_states_its_span(self):
+        """Two instants say nothing about how far apart they are."""
+        coord = dc.get_example_patch().coords.coord_map["time"]
+        assert "<8 s>" in str(coord)
+
+    def test_a_time_coord_states_its_rate(self):
+        """DAS acquisition is quoted in Hz, not in seconds per sample."""
+        coord = dc.get_example_patch().coords.coord_map["time"]
+        assert "250 Hz" in str(coord)
+
+    def test_a_distance_coord_states_neither(self):
+        """
+        A distance from 0 to 299 m already says how wide it is, and a
+        rate over it is not a quantity anyone quotes.
+        """
+        rendered = str(dc.get_example_patch().coords.coord_map["distance"])
+        assert "Hz" not in rendered
+        assert "<" not in rendered
+
+    def test_the_data_states_how_much_room_it_takes(self):
+        """Whether it fits in memory is what dtype times shape is for."""
+        assert "4.6 MiB" in str(dc.get_example_patch())
+
+    def test_an_annotation_set_states_its_span(self):
+        """The same fact a spool and a patch coordinate state."""
+        frame = pd.DataFrame(
+            {
+                "time_min": pd.to_datetime(["2020-01-01T00:00:00"]),
+                "time_max": pd.to_datetime(["2020-01-01T00:00:09"]),
+            }
+        )
+        assert "<9 s>" in str(AnnotationSet(frame, dims=("time",)))

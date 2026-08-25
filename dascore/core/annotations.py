@@ -64,6 +64,7 @@ from dascore.utils.display import (
     Repr,
     RichRepr,
     counts_to_text,
+    duration_text,
     get_header_text,
     get_nice_text,
     mapping_to_text,
@@ -947,10 +948,13 @@ class AnnotationSet(NodeRepr, NamespaceOwner):
             if not len(values):
                 base += Text("unstated", key_style)
                 continue
+            low, high = values.min(), values.max()
             base += Text("min: ", key_style)
-            base += get_nice_text(values.min())
+            base += get_nice_text(low)
             base += Text(" max: ", key_style)
-            base += get_nice_text(values.max())
+            base += get_nice_text(high)
+            if (span := duration_text(low, high)) is not None:
+                base += Text(" ") + span
             kind = "point" if spelling.point else "range"
             base += Text(f" ({kind})", key_style)
         return base

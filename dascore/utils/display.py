@@ -11,6 +11,7 @@ from functools import singledispatch
 
 import numpy as np
 import pandas as pd
+from pandas.errors import OutOfBoundsDatetime, OutOfBoundsTimedelta
 from pydantic import BaseModel
 from pydantic_core import PydanticUndefined
 from rich.style import Style
@@ -37,6 +38,10 @@ _IDENTITY_FIELDS = frozenset({"object_type", "resource_id"})
 _SEQUENCE_TYPES = (tuple, list, set, frozenset)
 
 _SECONDS_IN_DAY = 86_400.0
+
+# The resolution a datetime64 step is stored at, and so the closest two
+# rates can be and still describe the same sampling.
+_NANOSECOND = 1e-9
 
 # Steps a duration is worth reading in, largest first. A year is the
 # Gregorian mean, the same one numpy converts a timedelta64 with, since
@@ -366,6 +371,64 @@ def human_duration(value: np.timedelta64 | pd.Timedelta | float) -> str:
     return f"{size:.3g} s"
 
 
+def duration_text(low, high) -> Text | None:
+    """
+    How long an extent lasted, as a repr states it.
+
+    None where it lasted no time: `human_duration` says nothing of a
+    zero, which reads as a label on a gap and as an empty pair of
+    brackets here.
+
+    Asked wherever a repr states two instants. A time is stated as an
+    instant, so how far apart two of them are is a fact the line does
+    not otherwise carry; every other kind of dimension states its own
+    magnitude already, and saying it twice is not saying more.
+    """
+    try:
+        span = high - low
+    except (OutOfBoundsDatetime, OutOfBoundsTimedelta):
+        # Two instants can lie further apart than a Timedelta holds. How
+        # long that is matters less than the extents it would otherwise
+        # take down with it.
+        return None
+    # Or the subtraction wraps instead of raising: two datetime64[s] a
+    # few centuries apart are more nanoseconds than an int64 holds, and
+    # numpy says so by coming back negative rather than by complaining.
+    # `human_duration` takes the size of what it is given, so an
+    # overflowed span would be reported as a plausible short one.
+    if high >= low and to_float(span) < 0:
+        return None
+    if not (said := human_duration(span)):
+        return None
+    return Text(f"<{said}>", dascore_styles["keys"])
+
+
+def rate_text(step) -> Text | None:
+    """
+    A sampling step said the way acquisition is quoted, or nothing.
+
+    Only a step measured in time gets one: a rate is the reciprocal of a
+    duration, and one over a distance is not how anyone states channel
+    spacing. Only an exact one, too -- a step of 0.0039999998 s is
+    250.0000125 Hz, and rounding that to 250 Hz claims a precision the
+    step does not have.
+    """
+    if not isinstance(step, np.timedelta64 | pd.Timedelta):
+        return None
+    seconds = to_float(step)
+    if not np.isfinite(seconds) or seconds <= 0:
+        return None
+    # Say it only if what is said gives the step back. A rate reads as a
+    # round number -- 250 Hz, 1 kHz -- and one which needs ten digits to
+    # be true is not a fact a reader wanted, it is the step again.
+    said = f"{1.0 / seconds:.6g}"
+    if abs(1.0 / float(said) - seconds) > _NANOSECOND / 2:
+        return None
+    return Text(" · ", dascore_styles["keys"]) + Text(
+        f"{said} Hz", dascore_styles["units"]
+    )
+
+
 def percent(value: float) -> str:
     """Say a fraction as a percentage, without rounding a hole away."""
     for places in range(4):
@@ -629,11 +692,27 @@ def mapping_to_text(mapping, header: str, style: str = "dc_yellow") -> Text:
     return txt
 
 
+def human_size(byte_count: int) -> str:
+    """How much room something takes up, in the largest unit which fits."""
+    size = float(byte_count)
+    for name in ("B", "KiB", "MiB", "GiB", "TiB"):
+        if size < 1024 or name == "TiB":
+            return f"{size:.1f} {name}".replace(".0 ", " ")
+        size /= 1024
+    return f"{size:.1f} TiB"
+
+
 def array_to_text(data, units=None) -> Text:
     """Convert a coordinate to string."""
     header = Text("➤ ") + Text("Data", style=dascore_styles["dc_red"])
     unitstr = Text("") if units is None else Text(f", units: {units}")
-    header += Text(f" ({data.dtype}") + unitstr + Text(")")
+    header += Text(f" ({data.dtype}") + unitstr
+    # How much room it takes up. A repr states the dtype and the shape,
+    # which is the size in pieces; whether it fits in memory is the
+    # question those two are usually being multiplied to answer.
+    if (byte_count := getattr(data, "nbytes", None)) is not None:
+        header += Text(", ") + Text(human_size(byte_count), dascore_styles["keys"])
+    header += Text(")")
     config = get_config()
     np_str = np.array2string(
         data,
