@@ -86,7 +86,7 @@ def tau_p(
         func = _jit_taup_general
         dist_val = dist.values
 
-    slowness, tau_p_data = func(patch.data, dist_val, dt, 1.0 / velocities)
+    slowness, tau_p_data = func(patch_cop.data, dist_val, dt, 1.0 / velocities)
 
     attrs = patch.attrs.update(category="taup")
     coords = dict(slowness=slowness, time=time)
