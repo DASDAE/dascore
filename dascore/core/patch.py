@@ -26,12 +26,11 @@ from dascore.utils.array import (
 )
 from dascore.utils.array_api import to_numpy
 from dascore.utils.display import (
+    NodeRepr,
     Repr,
-    RichRepr,
     array_to_text,
     attrs_to_text,
     get_header_text,
-    render_text,
     split_block,
 )
 from dascore.utils.namespace import NamespaceOwner
@@ -40,7 +39,7 @@ from dascore.utils.time import to_float
 from dascore.workflow.identity import with_patch_id
 
 
-class Patch(RichRepr, NamespaceOwner):
+class Patch(NodeRepr, NamespaceOwner):
     """
     A Class for managing data and metadata.
 
@@ -217,18 +216,13 @@ class Patch(RichRepr, NamespaceOwner):
         return Repr(
             header=get_header_text("Patch ⚡"),
             body=(
-                split_block(self.coords.__rich__(), kind="coords"),
+                split_block(self.coords.__rich__()),
                 split_block(
                     array_to_text(self.data, units=attrs.get("data_units")),
-                    kind="data",
                 ),
-                split_block(attrs_to_text(attrs), kind="attrs"),
+                split_block(attrs_to_text(attrs)),
             ),
-            kind="patch",
         )
-
-    def __rich__(self):
-        return render_text(self._repr_node())
 
     def flat_dump(self, exclude=None) -> dict:
         """Return a flat summary dict for dataframe-oriented helpers."""

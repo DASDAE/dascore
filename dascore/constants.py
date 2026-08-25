@@ -305,7 +305,7 @@ conflict
 
 # Rich styles for various object displays. Every value has to be one rich can
 # parse: it resolves an unparsable style to a blank one rather than raising,
-# so a misspelling here does not fail, it silently stops colouring.
+# so a misspelling here does not fail, it silently stops coloring.
 dascore_styles = dict(
     dc_blue="blue",
     dc_red="red",

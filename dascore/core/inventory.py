@@ -54,13 +54,13 @@ from dascore.models import (
     UnitQuantity,
 )
 from dascore.utils.display import (
+    NodeRepr,
     Repr,
     get_header_text,
     indent_text,
     limit_reprs,
     mapping_to_text,
     model_to_line,
-    render_text,
     split_block,
     stated_fields,
 )
@@ -2097,7 +2097,7 @@ def _yaml_label(text: str) -> str:
     return f"{text!r}" if short else "the given YAML text"
 
 
-class Inventory(NamespaceOwner, InventoryModel):
+class Inventory(NodeRepr, NamespaceOwner, InventoryModel):
     """
     Top-level DASDAE inventory manifest.
 
@@ -2305,14 +2305,10 @@ class Inventory(NamespaceOwner, InventoryModel):
         return Repr(
             header=header,
             body=(
-                split_block(networks, kind="tree"),
-                split_block(mapping_to_text(attrs, "Attributes"), kind="attrs"),
+                split_block(networks),
+                split_block(mapping_to_text(attrs, "Attributes")),
             ),
-            kind="inventory",
         )
-
-    def __rich__(self) -> Text:
-        return render_text(self._repr_node())
 
     def get_resource(self, resource_id: str):
         """Return the shareable resource registered under a resource_id."""

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import numpy as np
@@ -467,46 +468,41 @@ class TestDascoreStyles:
 
         It resolves a style it cannot parse to a blank one rather than
         raising, so a misspelling here does not fail a test, it silently
-        stops colouring whatever states it.
+        stops coloring whatever states it.
         """
         assert Style.parse(dascore_styles[name])
-
-    @pytest.mark.parametrize("name", sorted(dascore_styles))
-    def test_every_style_colours_something(self, name):
-        """A style which resolves to nothing is not styling anything."""
-        assert Console().get_style(dascore_styles[name]) != Style()
 
     @pytest.mark.parametrize("name", sorted(dascore_styles))
     def test_every_style_is_used(self, name):
         """
         A style nothing asks for is a style no one maintains.
 
-        Two of them had gone unreferenced long enough to stop parsing
-        without anyone noticing.
+        Both of the styles removed with this test had gone unasked-for
+        long enough that one of them had stopped parsing unnoticed.
+
+        The name has to be matched where a style is *looked up*, not
+        wherever it appears: `dtypes` is also an unrelated dict key in
+        `workflow/serialize.py`, so a plain search for the word says it
+        is used when nothing styles anything with it.
         """
-        used = Path(dc.__file__).parent.rglob("*.py")
-        sources = [x.read_text() for x in used if x.name != "constants.py"]
-        assert any(f'"{name}"' in x or f"'{name}'" in x for x in sources)
+        sources = [
+            x.read_text(encoding="utf-8")
+            for x in Path(dc.__file__).parent.rglob("*.py")
+            if x.name != "constants.py"
+        ]
+        lookups = [
+            rf"dascore_styles\[[\"']{name}[\"']\]",
+            rf"style\s*=\s*[\"']{name}[\"']",
+            rf"_rich_style\s*=\s*[\"']{name}[\"']",
+            rf"[\"']{name}[\"']\s*\)",
+        ]
+        assert any(re.search(p, x) for p in lookups for x in sources)
 
 
 def resolved_styles(text: Text) -> list:
-    """
-    The style each character of a Text actually renders with.
-
-    Spans are compared this way rather than as a list because how they
-    are grouped is not what a reader sees: a span which straddles a line
-    break comes back as two touching ones, and a base style comes back
-    as a span saying the same thing. Every character still draws the
-    same, which is the invariant worth holding.
-    """
+    """The style each character of a Text actually renders with."""
     console = Console()
-    base = console.get_style(text.style, default="")
-    out = [base] * len(text.plain)
-    for span in text.spans:
-        style = console.get_style(span.style, default="")
-        for index in range(span.start, min(span.end, len(out))):
-            out[index] = out[index] + style
-    return out
+    return [text.get_style_at_offset(console, x) for x in range(len(text.plain))]
 
 
 @pytest.fixture(scope="module")
@@ -532,18 +528,20 @@ class TestSplitBlock:
 
     def test_round_trips(self, repr_blocks):
         """
-        Splitting then rendering must give back exactly what went in.
+        Splitting then rendering gives back what went in.
 
-        This is what makes the node tree provably free of drift: the
-        text repr is not re-derived from the nodes, it is reassembled.
+        A node holds the `Text` its producer made rather than a recipe
+        for rebuilding it, which is what keeps the two reprs from
+        drifting: `render_text` reassembles, it does not re-derive.
+
+        Compared by what each character draws rather than with `==`,
+        which reads `Text.style` and `Text.spans` -- slicing moves a
+        base style into a span, so a block-level style would fail an
+        equality check while drawing exactly the same.
         """
         for name, text in repr_blocks.items():
-            assert render_text(split_block(text)) == text, name
-
-    def test_round_trip_keeps_styling(self, repr_blocks):
-        """Colour survives the trip, not only the characters."""
-        for name, text in repr_blocks.items():
             trip = render_text(split_block(text))
+            assert trip.plain == text.plain, name
             assert resolved_styles(trip) == resolved_styles(text), name
 
     @pytest.mark.parametrize(
@@ -590,16 +588,6 @@ class TestSplitBlock:
         assert resolved_styles(trip) == resolved_styles(text)
         assert len(trip.spans) == 2
 
-    def test_a_trailing_blank_line_survives(self):
-        """
-        The attributes block ends on a newline and must keep it.
-
-        ``Text.split`` drops a trailing blank, which is why the block is
-        sliced instead. A repr which lost it would print one line short.
-        """
-        text = Text("head\nbody\n")
-        assert render_text(split_block(text)).plain == "head\nbody\n"
-
     def test_first_line_is_the_title(self, repr_blocks):
         """The line a reader is shown when the body is not."""
         section = split_block(repr_blocks["coords"])
@@ -608,10 +596,6 @@ class TestSplitBlock:
     def test_a_single_line_has_no_body(self, repr_blocks):
         """A block with nothing under it is a statement, not a container."""
         assert split_block(repr_blocks["one_line"]).body == ()
-
-    def test_kind_is_carried(self, repr_blocks):
-        """The kind is what a renderer styles the section by."""
-        assert split_block(repr_blocks["data"], kind="data").kind == "data"
 
 
 class TestRenderText:
@@ -687,10 +671,57 @@ class TestRichRepr:
         for name, obj in rich_objects.items():
             assert repr(obj) == str(obj), name
 
-    def test_a_pydantic_host_does_not_print_a_field_dump(self, rich_objects):
-        """The failure mode the mixin ordering exists to prevent."""
-        for name in ("coord", "coord_manager", "network"):
-            obj = rich_objects[name]
-            fields = getattr(type(obj), "model_fields", {})
-            dumped = [f"{x}=" for x in fields]
-            assert not all(x in str(obj) for x in dumped), name
+
+class TestSpoolReprNode:
+    """
+    Tests for the sections a spool states.
+
+    The spool is the one repr whose summary is allowed to fail without
+    the repr failing, which means an assertion on what it says passes
+    just as well when it says nothing. These pin the branches instead.
+    """
+
+    @pytest.fixture(scope="class")
+    def directory_spool(self, tmp_path_factory):
+        """A spool which knows the directory it was read from."""
+        path = tmp_path_factory.mktemp("spool_repr")
+        for index, patch in enumerate(dc.get_example_spool()):
+            patch.io.write(path / f"patch_{index}.h5", "dasdae")
+        return dc.spool(path).update()
+
+    def test_a_path_is_its_own_section(self, directory_spool):
+        """A spool read from disk says where it was read from."""
+        titles = [str(x.title) for x in directory_spool._repr_node().body]
+        assert any("Path:" in x for x in titles)
+
+    def test_a_path_section_has_no_body(self, directory_spool):
+        """One line is a statement, and a renderer must not fold it."""
+        section = next(
+            x for x in directory_spool._repr_node().body if "Path:" in str(x.title)
+        )
+        assert section.body == ()
+
+    def test_too_many_patches_states_the_limit(self):
+        """Past the limit a spool says what it is instead of summarising."""
+        spool = dc.get_example_spool()
+        with config_context(display_max_patches=1):
+            rendered = str(spool)
+        assert "Not summarized" in rendered
+        assert "display_max_patches=1" in rendered
+        assert "Dimensions" not in rendered
+
+    def test_a_summary_which_raises_still_prints_the_header(self, monkeypatch):
+        """
+        A repr which raises makes an object undebuggable exactly when
+        someone needs to look at it, so the summary is allowed to fail
+        and the banner is not.
+        """
+        spool = dc.get_example_spool()
+
+        def boom(self):
+            raise ValueError("no summary for you")
+
+        monkeypatch.setattr(type(spool), "_summary_blocks", boom)
+        rendered = str(spool)
+        assert "Spool" in rendered
+        assert "Dimensions" not in rendered

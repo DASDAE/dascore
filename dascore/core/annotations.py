@@ -60,6 +60,7 @@ from dascore.models import (
     UnitQuantity,
 )
 from dascore.utils.display import (
+    NodeRepr,
     Repr,
     RichRepr,
     counts_to_text,
@@ -67,7 +68,6 @@ from dascore.utils.display import (
     get_nice_text,
     mapping_to_text,
     model_to_line,
-    render_text,
     split_block,
     stated_fields,
 )
@@ -750,7 +750,7 @@ class _Spelling(NamedTuple):
     high: str | None
 
 
-class AnnotationSet(RichRepr, NamespaceOwner):
+class AnnotationSet(NodeRepr, NamespaceOwner):
     """
     An immutable, dataframe-backed set of annotations over patch dimensions.
 
@@ -921,22 +921,16 @@ class AnnotationSet(RichRepr, NamespaceOwner):
         count = len(self)
         plural = "" if count == 1 else "s"
         name = f"AnnotationSet \U0001f3f7 ({count} Annotation{plural})"
-        blocks = [(self._dims_text(), "coords")]
+        blocks = [self._dims_text()]
         if contents := self._contents():
-            blocks.append(
-                (mapping_to_text(contents, "Contents", style="dc_red"), "contents")
-            )
+            blocks.append(mapping_to_text(contents, "Contents", style="dc_red"))
         attrs = stated_fields(self._attrs, skip=("dims",))
         if attrs:
-            blocks.append((mapping_to_text(attrs, "Attributes"), "attrs"))
+            blocks.append(mapping_to_text(attrs, "Attributes"))
         return Repr(
             header=get_header_text(name),
-            body=tuple(split_block(x, kind=k) for x, k in blocks),
-            kind="annotation_set",
+            body=tuple(split_block(x) for x in blocks),
         )
-
-    def __rich__(self) -> Text:
-        return render_text(self._repr_node())
 
     def _dims_text(self) -> Text:
         """The extent each dimension is annotated over, and how it is spelled."""

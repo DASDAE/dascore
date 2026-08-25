@@ -82,13 +82,11 @@ class Section:
     """
     A titled block: the line which names it, and what sits under it.
 
-    The title is the line a reader is shown when the body is not; a
-    section with no body is a statement rather than a container.
+    A section with no body is a statement rather than a container.
     """
 
     title: Text
     body: tuple[Raw, ...] = ()
-    kind: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -97,7 +95,6 @@ class Repr:
 
     header: Text
     body: tuple[Section, ...] = field(default_factory=tuple)
-    kind: str = ""
 
 
 @singledispatch
@@ -109,12 +106,14 @@ def render_text(node) -> Text:
 
 @render_text.register
 def _render_raw(node: Raw) -> Text:
-    return node.text
+    # A copy, not the node's own Text: a caller which appends to what it
+    # rendered would otherwise rewrite the node it just read.
+    return node.text.copy()
 
 
 @render_text.register
 def _render_section(node: Section) -> Text:
-    out = node.title
+    out = node.title.copy()
     for child in node.body:
         out += render_text(child)
     return out
@@ -126,7 +125,7 @@ def _render_repr(node: Repr) -> Text:
     return Text("\n").join(blocks)
 
 
-def split_block(text: Text, kind: str = "") -> Section:
+def split_block(text: Text) -> Section:
     """
     Turn a block of rendered text into a section.
 
@@ -135,19 +134,16 @@ def split_block(text: Text, kind: str = "") -> Section:
     rather than splitting is deliberate: ``Text.split`` drops a trailing
     blank line, and the attributes block ends on one.
 
-    The body keeps the newline which separates it from the title rather
-    than a renderer supplying one of its own, so a span which straddles
-    the break still covers every character it covered before.
-
-    Rendering the section gives back what came in. Not the same spans --
-    slicing states a base style as a span as well, and a span across the
-    break comes back as two touching ones -- but the same characters,
-    each drawn the same way.
+    The body keeps the newline which separated it, so a span straddling
+    the break still covers what it covered. Rendering the section gives
+    back the same characters drawn the same way, though not the same
+    spans: slicing restates a base style as a span, and a span across
+    the break comes back as two touching ones.
     """
     index = text.plain.find("\n")
     if index == -1:
-        return Section(text, kind=kind)
-    return Section(text[:index], (Raw(text[index:]),), kind=kind)
+        return Section(text)
+    return Section(text[:index], (Raw(text[index:]),))
 
 
 class RichRepr:
@@ -171,6 +167,20 @@ class RichRepr:
         return str(self.__rich__())
 
     __repr__ = __str__
+
+
+class NodeRepr(RichRepr):
+    """
+    Print an object from the repr nodes it states.
+
+    A host states ``_repr_node``; rendering it is the same call every
+    time, so it is made once here.
+    """
+
+    _repr_node: Callable[[], Repr]
+
+    def __rich__(self) -> Text:
+        return render_text(self._repr_node())
 
 
 @singledispatch

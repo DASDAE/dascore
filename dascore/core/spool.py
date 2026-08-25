@@ -92,14 +92,13 @@ from dascore.utils.chunk_plan import (
 )
 from dascore.utils.display import (
     ACQUISITION_ATTR,
+    NodeRepr,
     Repr,
-    RichRepr,
     elision_text,
     get_header_text,
     get_nice_text,
     group_names,
     human_duration,
-    render_text,
     split_block,
 )
 from dascore.utils.docs import compose_docstring
@@ -154,7 +153,7 @@ class _InventoryQuery(NamedTuple):
 _TIMES = (pd.Timestamp, np.datetime64, pd.Timedelta, np.timedelta64)
 
 
-class Spool(RichRepr, NamespaceOwner):
+class Spool(NodeRepr, NamespaceOwner):
     """
     A container of patches: a view over a `PatchCatalog`.
 
@@ -2367,8 +2366,11 @@ class Spool(RichRepr, NamespaceOwner):
         limit = dc.get_config().display_max_patches
         if count <= limit:
             # A repr which raises makes an object undebuggable at the
-            # one moment someone needs to look at it, so nothing a
+            # one moment someone needs to look at it, so nothing the
             # summary does is allowed to stop the header from printing.
+            # Only the summary: counting the spool and asking for its
+            # path happen above, and a catalog which cannot answer
+            # either of those still raises.
             # Nor is it allowed to warn about how pandas built the
             # frame: a directory index warns once per insert that it is
             # fragmented, a hundred lines of advice about a frame the
@@ -2390,10 +2392,7 @@ class Spool(RichRepr, NamespaceOwner):
             )
         header, *rest = blocks
         sections = tuple(split_block(x) for x in rest)
-        return Repr(header=header, body=sections, kind="spool")
-
-    def __rich__(self):
-        return render_text(self._repr_node())
+        return Repr(header=header, body=sections)
 
     def _stated_dims(self, df) -> list[str]:
         """The dimensions this spool's patches actually have."""
