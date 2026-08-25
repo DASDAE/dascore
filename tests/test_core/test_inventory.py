@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import pickle
+import re
 from collections.abc import Mapping
 from pathlib import Path
 
@@ -1956,6 +1957,97 @@ class TestDisplay:
         with config_context(display_max_items=2):
             out = str(network)
         assert "... 3 more" in out
+
+    def test_a_model_holding_nothing_is_one_line(self):
+        """
+        What a model holds is a count on its line unless it says
+        otherwise.
+
+        A station lists no channels for the same reason an acquisition
+        lists no measurements: the count is the useful fact, and three
+        hundred channels would bury the tree they sit in.
+        """
+        station = inv.Station(code="S1", channels=[{"code": f"H{x}"} for x in range(3)])
+        assert str(station).count("\n") == 0
+        assert "channels: 3" in str(station)
+
+    def test_the_tree_is_indented_by_level(self, tunnel):
+        """
+        Each level is set in one step from the one above it.
+
+        Every line is checked rather than one of them: an indent applied
+        at the wrong level puts a fiber array where a network goes and
+        still leaves the object names in the right order.
+        """
+        network = tunnel.networks[0]
+        array = network.fiber_arrays[0]
+        levels = {"Network(": 4, "FiberArray(": 8, "Acquisition(": 12}
+        levels["OpticalPath("] = 12
+        for line in str(tunnel).split("\n"):
+            for name, indent in levels.items():
+                if line.lstrip().startswith(name):
+                    assert len(line) - len(line.lstrip()) == indent, line
+        # And on its own a network opens where it was put, not indented.
+        assert not str(network).startswith(" ")
+        assert str(array).split("\n")[1].startswith("    Acquisition(")
+
+
+class TestPanel:
+    """Tests for the panel a notebook draws an inventory as."""
+
+    @pytest.fixture(scope="class")
+    def tunnel(self):
+        """A populated inventory with two optical paths."""
+        return dc.get_example_inventory("tunnel")
+
+    @pytest.fixture(scope="class")
+    def markup(self, tunnel):
+        """The panel with its stylesheet cut off the front."""
+        html = tunnel._repr_html_()
+        return html[html.index("</style>") + len("</style>") :]
+
+    def test_the_tree_nests(self, markup):
+        """
+        A network holds its arrays rather than standing beside them.
+
+        The blocks a reader folds are what says which thing is inside
+        which, so a flat list of them says nothing at all.
+        """
+        # Networks, then the network, then the array inside it.
+        assert markup.count("<details") == 4
+        network = markup.index('<summary><span class="dc-bold">Network</span>')
+        array = markup.index('<summary><span class="dc-bold">FiberArray</span>')
+        assert network < array < markup.index("</details>")
+
+    def test_a_long_line_is_no_longer_in_the_array_dump(self, markup):
+        """
+        An acquisition's line is a line, and can scroll as one.
+
+        Drawn inside one `pre` with the whole tree it could not: the
+        block scrolls, so the longest line in it decides how far every
+        other line is pushed.
+        """
+        assert "Acquisition" in markup
+        pres = re.findall(r"<pre[^>]*>(.*?)</pre>", markup, re.DOTALL)
+        assert not any("Acquisition" in x for x in pres)
+
+    def test_each_level_says_which_it_is(self, markup):
+        """A reader can tell an array's line from the network's above it."""
+        for depth in range(3):
+            assert f"dc-nest dc-d{depth}" in markup
+
+    def test_a_title_carries_no_indentation(self, markup):
+        """The nesting is the markup here, and `summary` keeps whitespace."""
+        for title in re.findall(r"<summary>(.*?)</summary>", markup, re.DOTALL):
+            assert title == title.lstrip()
+
+    def test_what_is_left_out_is_said(self):
+        """A tree which stops early says so where it stopped."""
+        network = inv.Network(code="XT", stations=[{"code": f"S{x}"} for x in range(5)])
+        inventory = inv.Inventory(networks=(network,))
+        with config_context(display_max_items=2):
+            html = inventory._repr_html_()
+        assert "... 3 more" in html
 
 
 class TestObjectTypeTag:

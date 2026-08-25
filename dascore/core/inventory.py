@@ -56,9 +56,9 @@ from dascore.models import (
 from dascore.utils.display import (
     NodeRepr,
     Repr,
+    Section,
+    child_sections,
     get_header_text,
-    indent_text,
-    limit_reprs,
     mapping_to_text,
     model_to_line,
     split_block,
@@ -237,7 +237,7 @@ class CoordinateReferenceSystem(InventoryModel):
             raise InvalidInventoryError(msg)
         return self
 
-    def __rich__(self) -> Text:
+    def _repr_line(self) -> Text:
         """
         One line naming the frame and its axes.
 
@@ -438,7 +438,7 @@ class _IntervalModel(InventoryModel):
             raise InvalidInventoryError(msg)
         return self
 
-    def __rich__(self) -> Text:
+    def _repr_line(self) -> Text:
         """One line stating the interval this item covers."""
         return _distance_line(self)
 
@@ -912,7 +912,7 @@ class DistanceMap(InventoryModel):
             )
             raise InvalidInventoryError(msg)
 
-    def __rich__(self) -> Text:
+    def _repr_line(self) -> Text:
         """
         One line naming the axes mapped and how many points do it.
 
@@ -1327,7 +1327,7 @@ class OpticalPath(TimeRangedModel):
         """
         return tuple(sorted(value, key=lambda x: x.interval))
 
-    def __rich__(self) -> Text:
+    def _repr_line(self) -> Text:
         """One line naming the path, its extent, and its track sizes."""
         return _distance_line(self)
 
@@ -1859,12 +1859,13 @@ class FiberArray(TimeRangedModel):
         default=(), description="Optical paths associated with this fiber array."
     )
 
-    def __rich__(self) -> Text:
-        """The array's own line, then the reprs of what it holds."""
-        base = model_to_line(self, skip=("acquisitions", "optical_paths"))
-        for child in limit_reprs((*self.acquisitions, *self.optical_paths)):
-            base += Text("\n") + indent_text(child)
-        return base
+    def _repr_line(self) -> Text:
+        """One line naming the array, without the things it holds."""
+        return model_to_line(self, skip=("acquisitions", "optical_paths"))
+
+    def _repr_children(self) -> tuple[InventoryModel, ...]:
+        """What an array holds, each of which prints itself."""
+        return (*self.acquisitions, *self.optical_paths)
 
     def check(self) -> Self:
         """
@@ -1919,12 +1920,13 @@ class Network(TimeRangedModel):
         default=(), description="Stations in this network."
     )
 
-    def __rich__(self) -> Text:
-        """The network's own line, then the reprs of what it holds."""
-        base = model_to_line(self, skip=("fiber_arrays", "stations"))
-        for child in limit_reprs((*self.fiber_arrays, *self.stations)):
-            base += Text("\n") + indent_text(child)
-        return base
+    def _repr_line(self) -> Text:
+        """One line naming the network, without the things it holds."""
+        return model_to_line(self, skip=("fiber_arrays", "stations"))
+
+    def _repr_children(self) -> tuple[InventoryModel, ...]:
+        """What a network holds, each of which prints itself."""
+        return (*self.fiber_arrays, *self.stations)
 
     def check(self) -> Self:
         """
@@ -2284,14 +2286,14 @@ class Inventory(NodeRepr, NamespaceOwner, InventoryModel):
         """
         The banner, the network tree, and what the manifest itself states.
 
-        The tree is the networks' own reprs indented into place, so an
-        inventory says nothing about a network the network does not.
+        The tree is a block per network, each holding a block per thing
+        the network holds, so an inventory says nothing about a network
+        the network does not. A terminal draws that as indentation and a
+        panel draws it as nesting, from the one set of blocks.
         """
         header = get_header_text("Inventory 📖")
-        networks = Text("➤ ") + Text("Networks", style=dascore_styles["dc_blue"])
-        networks += Text(f" ({len(self.networks)})")
-        for network in limit_reprs(self.networks):
-            networks += Text("\n") + indent_text(network)
+        title = Text("➤ ") + Text("Networks", style=dascore_styles["dc_blue"])
+        title += Text(f" ({len(self.networks)})")
         # schema_version, resources and the CRS are stated whether or not
         # they are the defaults: an inventory has a version and a frame,
         # and a blank line for either would read as having neither.
@@ -2305,7 +2307,7 @@ class Inventory(NodeRepr, NamespaceOwner, InventoryModel):
         return Repr(
             header=header,
             body=(
-                split_block(networks),
+                Section(title, child_sections(self.networks, 1)),
                 split_block(mapping_to_text(attrs, "Attributes")),
             ),
         )
