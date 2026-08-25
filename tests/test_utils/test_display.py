@@ -1372,7 +1372,9 @@ class TestCoordinatesAreStated:
             ("max", "299"),
             ("step", "1"),
             ("shape", "(300,)"),
-            ("dtype", "int64"),
+            # Asked of the coordinate rather than stated: an integer is
+            # 32 bits where the suite runs in WebAssembly and 64 here.
+            ("dtype", None),
             ("units", "m"),
         ],
     )
@@ -1383,6 +1385,8 @@ class TestCoordinatesAreStated:
         Stripped from both sides by the parity check -- it compares what
         is said, not what it is called -- so renaming a label passed.
         """
+        if value is None:
+            value = str(patch.coords.coord_map["distance"].dtype)
         assert f"{label}: " in str(patch.coords)
         assert f"<th>{label}</th>" in patch._repr_html_()
         assert value in str(patch.coords)
