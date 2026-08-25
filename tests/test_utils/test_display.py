@@ -26,6 +26,7 @@ from dascore.utils.display import (
     Raw,
     Repr,
     Section,
+    _storage_quantum,
     array_to_text,
     attrs_to_text,
     counts_to_text,
@@ -823,11 +824,38 @@ class TestRateText:
         A step is read at the resolution it is stored at.
 
         1500 ps counted in whole nanoseconds is 1 ns, which would state
-        1 GHz of sampling that happens at 666.7 MHz. The true rate is
-        not a round one, so the honest answer is to say no rate.
+        1 GHz of sampling that happens at 666.7 MHz.
         """
-        assert rate_text(np.timedelta64(1500, "ps")) is None
+        assert "666.7 MHz" in str(rate_text(np.timedelta64(1500, "ps")))
         assert "1 GHz" in str(rate_text(np.timedelta64(1000, "ps")))
+
+    def test_a_quantum_finer_than_a_nanosecond_is_not_zero(self):
+        """
+        The resolution a step is held at is read the same way it is.
+
+        Counted in whole nanoseconds a picosecond quantum is zero, and
+        no rate at all can land inside a tolerance of nothing.
+        """
+        assert _storage_quantum(np.timedelta64(1, "ps")) == pytest.approx(1e-12)
+
+    @pytest.mark.parametrize("unit", ["M", "Y"])
+    def test_a_step_held_in_months_or_years(self, unit):
+        """
+        Neither is a fixed number of seconds.
+
+        So neither is a fixed number of samples per second, and asking
+        numpy raises out of the middle of a repr.
+        """
+        assert rate_text(np.timedelta64(1, unit)) is None
+
+    def test_a_rate_carries_no_float_noise(self):
+        """
+        What is printed is rounded to the figures it was chosen at.
+
+        A day step is 11.57 µHz; the shortest exact form of the float
+        behind it is 11.569999999999999.
+        """
+        assert "11.57 µHz" in str(rate_text(np.timedelta64(1, "D")))
 
     def test_a_rate_never_reads_in_exponent_notation(self):
         """250 Hz needs two figures, and `g` prints those as 2.5e+02."""
@@ -883,6 +911,19 @@ class TestHumanSize:
     def test_size_in_the_largest_unit_which_fits(self, count, expected):
         """A byte count is read in whatever unit keeps it short."""
         assert human_size(count) == expected
+
+    def test_an_unknown_size_draws_no_comma(self):
+        """The comma introduces a size, so it goes when there is none."""
+
+        class UnknownChunks(np.ndarray):
+            """An array which cannot say how much room it takes up."""
+
+            nbytes = float("nan")
+
+        data = np.zeros((2, 2)).view(UnknownChunks)
+        rendered = str(array_to_text(data))
+        assert "float64)" in rendered
+        assert ", )" not in rendered
 
     def test_a_size_which_is_not_a_number(self):
         """

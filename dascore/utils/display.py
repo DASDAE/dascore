@@ -447,7 +447,11 @@ def _storage_quantum(step) -> float:
     if dtype is None:
         return _NANOSECOND
     unit, count = np.datetime_data(dtype)
-    return to_float(np.timedelta64(count, unit))  # ty: ignore[no-matching-overload]
+    # Divided, not read with `to_float`: that counts whole nanoseconds,
+    # so the quantum of a picosecond step came back as zero and no rate
+    # could ever land inside it.
+    quantum = np.timedelta64(count, unit)  # ty: ignore[no-matching-overload]
+    return float(quantum / np.timedelta64(1, "s"))
 
 
 def rate_text(step) -> Text | None:
@@ -465,7 +469,12 @@ def rate_text(step) -> Text | None:
     # Divided rather than read with `to_float`, which counts whole
     # nanoseconds: a step of 1500 ps truncates to 1 ns there, and the
     # repr would state 1 GHz of sampling which happens at 666.7 MHz.
-    seconds = abs(step / np.timedelta64(1, "s"))
+    try:
+        seconds = abs(step / np.timedelta64(1, "s"))
+    except TypeError:
+        # A month is not a fixed number of seconds, so it is not a fixed
+        # number of samples per second either.
+        return None
     if not np.isfinite(seconds) or seconds == 0:
         return None
     # A descending axis samples at the rate an ascending one does; the
@@ -496,7 +505,9 @@ def rate_text(step) -> Text | None:
     # Positional, and only as many figures as the value has: `g` would
     # print 250 Hz as 2.5e+02 at the two figures it needs, and 1953.125
     # as 1.95312 at pint's default six.
-    magnitude = np.format_float_positional(quantity.magnitude, trim="-")
+    magnitude = np.format_float_positional(
+        quantity.magnitude, precision=figures, fractional=False, trim="-"
+    )
     said = f"{magnitude} {quantity.units:~P}"
     return Text(" · ", dascore_styles["keys"]) + Text(said, dascore_styles["units"])
 
@@ -793,8 +804,9 @@ def array_to_text(data, units=None) -> Text:
     # How much room it takes up. A repr states the dtype and the shape,
     # which is the size in pieces; whether it fits in memory is the
     # question those two are usually being multiplied to answer.
-    if (byte_count := getattr(data, "nbytes", None)) is not None:
-        header += Text(", ") + Text(human_size(byte_count), dascore_styles["keys"])
+    byte_count = getattr(data, "nbytes", None)
+    if byte_count is not None and (size := human_size(byte_count)):
+        header += Text(", ") + Text(size, dascore_styles["keys"])
     header += Text(")")
     config = get_config()
     np_str = np.array2string(
