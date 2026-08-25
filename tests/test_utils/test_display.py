@@ -2,19 +2,32 @@
 
 from __future__ import annotations
 
+import re
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 import pytest
 from pydantic import BaseModel, ConfigDict
+from rich.console import Console
+from rich.style import Style
 from rich.text import Text
 
 import dascore as dc
 from dascore.config import config_context
 from dascore.constants import dascore_styles
-from dascore.core.annotations import AnnotationColumn, AnnotationSetAttrs
+from dascore.core.annotations import (
+    AnnotationColumn,
+    AnnotationSet,
+    AnnotationSetAttrs,
+)
 from dascore.core.inventory import Acquisition, Cable, Network
 from dascore.utils.display import (
+    Raw,
+    Repr,
+    Section,
     array_to_text,
+    attrs_to_text,
     counts_to_text,
     get_header_text,
     get_nice_text,
@@ -25,6 +38,8 @@ from dascore.utils.display import (
     mapping_to_text,
     model_to_line,
     percent,
+    render_text,
+    split_block,
     stated_fields,
     value_to_text,
 )
@@ -441,3 +456,272 @@ class TestGroupNames:
         """A group which recorded nothing is not named by an empty part."""
         frame = pd.DataFrame({"tag": ["a", ""], "kind": ["das", "dss"]})
         assert group_names(frame) == ["a · das", "dss"]
+
+
+class TestDascoreStyles:
+    """Tests for the style table every repr draws from."""
+
+    @pytest.mark.parametrize("name", sorted(dascore_styles))
+    def test_every_style_parses(self, name):
+        """
+        Rich must be able to read every style dascore states.
+
+        It resolves a style it cannot parse to a blank one rather than
+        raising, so a misspelling here does not fail a test, it silently
+        stops coloring whatever states it.
+        """
+        assert Style.parse(dascore_styles[name])
+
+    @pytest.mark.parametrize("name", sorted(dascore_styles))
+    def test_every_style_is_used(self, name):
+        """
+        A style nothing asks for is a style no one maintains.
+
+        Both of the styles removed with this test had gone unasked-for
+        long enough that one of them had stopped parsing unnoticed.
+
+        The name has to be matched where a style is *looked up*, not
+        wherever it appears: `dtypes` is also an unrelated dict key in
+        `workflow/serialize.py`, so a plain search for the word says it
+        is used when nothing styles anything with it.
+        """
+        sources = [
+            x.read_text(encoding="utf-8")
+            for x in Path(dc.__file__).parent.rglob("*.py")
+            if x.name != "constants.py"
+        ]
+        lookups = [
+            rf"dascore_styles\[[\"']{name}[\"']\]",
+            rf"style\s*=\s*[\"']{name}[\"']",
+            rf"_rich_style\s*=\s*[\"']{name}[\"']",
+            rf"[\"']{name}[\"']\s*\)",
+        ]
+        assert any(re.search(p, x) for p in lookups for x in sources)
+
+
+def resolved_styles(text: Text) -> list:
+    """The style each character of a Text actually renders with."""
+    console = Console()
+    return [text.get_style_at_offset(console, x) for x in range(len(text.plain))]
+
+
+@pytest.fixture(scope="module")
+def repr_blocks():
+    """Every kind of block a dascore repr is built from."""
+    patch = dc.get_example_patch()
+    inventory = dc.get_example_inventory("tunnel")
+    return {
+        "coords": patch.coords.__rich__(),
+        "coord": patch.coords.coord_map["time"].__rich__(),
+        "data": array_to_text(patch.data),
+        "attrs": attrs_to_text(patch.attrs),
+        "inventory": inventory.__rich__(),
+        "model": inventory.networks[0].__rich__(),
+        "header": get_header_text("Patch ⚡"),
+        "one_line": Text("no newline in this one", style="bold"),
+        "empty": Text(""),
+    }
+
+
+class TestSplitBlock:
+    """Tests for turning a rendered block into a section."""
+
+    def test_round_trips(self, repr_blocks):
+        """
+        Splitting then rendering gives back what went in.
+
+        A node holds the `Text` its producer made rather than a recipe
+        for rebuilding it, which is what keeps the two reprs from
+        drifting: `render_text` reassembles, it does not re-derive.
+
+        Compared by what each character draws rather than with `==`,
+        which reads `Text.style` and `Text.spans` -- slicing moves a
+        base style into a span, so a block-level style would fail an
+        equality check while drawing exactly the same.
+        """
+        for name, text in repr_blocks.items():
+            trip = render_text(split_block(text))
+            assert trip.plain == text.plain, name
+            assert resolved_styles(trip) == resolved_styles(text), name
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            Text(""),
+            Text("\n"),
+            Text("\nbody"),
+            Text("head\n"),
+            Text("head\n\n"),
+            Text("solo"),
+            Text("a\n\nb"),
+            Text("head\nbody", style="bold green"),
+        ],
+        ids=[
+            "empty",
+            "newline",
+            "leading",
+            "trailing",
+            "two_trailing",
+            "no_newline",
+            "blank_middle",
+            "base_style",
+        ],
+    )
+    def test_round_trips_whatever_the_shape(self, text):
+        """Blocks a producer has not written yet still have to survive."""
+        trip = render_text(split_block(text))
+        assert trip.plain == text.plain
+        assert resolved_styles(trip) == resolved_styles(text)
+
+    def test_a_span_across_the_break_still_draws_the_same(self):
+        """
+        A span which straddles the split comes back as two.
+
+        The body carries the newline that split it, so the two spans
+        touch and the break itself keeps its style. What a reader sees
+        is unchanged; only the grouping differs.
+        """
+        text = Text("head\nbody")
+        text.stylize("bold", 2, 7)
+        trip = render_text(split_block(text))
+        assert trip.plain == text.plain
+        assert resolved_styles(trip) == resolved_styles(text)
+        assert len(trip.spans) == 2
+
+    def test_first_line_is_the_title(self, repr_blocks):
+        """The line a reader is shown when the body is not."""
+        section = split_block(repr_blocks["coords"])
+        assert section.title.plain == "➤ Coordinates (distance: 300, time: 2000)"
+
+    def test_a_single_line_has_no_body(self, repr_blocks):
+        """A block with nothing under it is a statement, not a container."""
+        assert split_block(repr_blocks["one_line"]).body == ()
+
+
+class TestRenderText:
+    """Tests for rendering repr nodes as text."""
+
+    def test_raw_is_emitted_as_it_stands(self):
+        """A producer which laid its own text out is not re-laid-out."""
+        text = Text("   already    spaced")
+        assert render_text(Raw(text)) == text
+
+    def test_a_body_carries_its_own_separators(self):
+        """
+        A section concatenates its body rather than spacing it out.
+
+        ``Raw`` means text its producer has already laid out, and that
+        includes the newline which put it on the next line.
+        """
+        node = Section(Text("title"), (Raw(Text("\na")), Raw(Text("\nb"))))
+        assert render_text(node).plain == "title\na\nb"
+
+    def test_repr_joins_header_and_sections(self):
+        """The banner, then each section under it."""
+        node = Repr(Text("banner"), (Section(Text("one")), Section(Text("two"))))
+        assert render_text(node).plain == "banner\none\ntwo"
+
+    def test_a_repr_may_state_no_sections(self):
+        """An object with nothing to show is still an object."""
+        assert render_text(Repr(Text("banner"))).plain == "banner"
+
+    def test_something_which_is_not_a_node(self):
+        """A renderer says what it cannot draw rather than drawing it wrong."""
+        with pytest.raises(NotImplementedError, match="cannot render int"):
+            render_text(42)
+
+
+class TestRichRepr:
+    """Tests for the mixin every rich-rendered class prints through."""
+
+    @pytest.fixture(scope="class")
+    def rich_objects(self):
+        """One of each class which prints through the mixin."""
+        patch = dc.get_example_patch()
+        inventory = dc.get_example_inventory("tunnel")
+        frame = pd.DataFrame(
+            {"time_min": [0.0, 1.0], "time_max": [0.5, 1.5], "group": ["a", "b"]}
+        )
+        return {
+            "patch": patch,
+            "coord_manager": patch.coords,
+            "coord": patch.coords.coord_map["time"],
+            "spool": dc.get_example_spool(),
+            "inventory": inventory,
+            "network": inventory.networks[0],
+            "optical_path": inventory.networks[0].fiber_arrays[0].optical_paths[0],
+            "annotation_set": AnnotationSet(frame, dims=("time",)),
+            "annotation_column": AnnotationColumn(description="a pick", units="s"),
+            "empty_annotation_set": AnnotationSet(frame.iloc[:0], dims=("time",)),
+        }
+
+    def test_str_is_the_rich_rendering(self, rich_objects):
+        """
+        What a plain terminal prints is what a rich one renders.
+
+        This is the assertion which catches a pydantic host listing the
+        mixin after ``BaseModel``: the field dump it would print instead
+        is still a non-empty string, so a weaker test passes.
+        """
+        for name, obj in rich_objects.items():
+            assert str(obj) == str(obj.__rich__()), name
+
+    def test_repr_is_str(self, rich_objects):
+        """Neither form drifts from the other."""
+        for name, obj in rich_objects.items():
+            assert repr(obj) == str(obj), name
+
+
+class TestSpoolReprNode:
+    """
+    Tests for the sections a spool states.
+
+    The spool is the one repr whose summary is allowed to fail without
+    the repr failing, which means an assertion on what it says passes
+    just as well when it says nothing. These pin the branches instead.
+    """
+
+    @pytest.fixture(scope="class")
+    def directory_spool(self, tmp_path_factory):
+        """A spool which knows the directory it was read from."""
+        path = tmp_path_factory.mktemp("spool_repr")
+        for index, patch in enumerate(dc.get_example_spool()):
+            patch.io.write(path / f"patch_{index}.h5", "dasdae")
+        return dc.spool(path).update()
+
+    def test_a_path_is_its_own_section(self, directory_spool):
+        """A spool read from disk says where it was read from."""
+        titles = [str(x.title) for x in directory_spool._repr_node().body]
+        assert any("Path:" in x for x in titles)
+
+    def test_a_path_section_has_no_body(self, directory_spool):
+        """One line is a statement, and a renderer must not fold it."""
+        section = next(
+            x for x in directory_spool._repr_node().body if "Path:" in str(x.title)
+        )
+        assert section.body == ()
+
+    def test_too_many_patches_states_the_limit(self):
+        """Past the limit a spool says what it is instead of summarising."""
+        spool = dc.get_example_spool()
+        with config_context(display_max_patches=1):
+            rendered = str(spool)
+        assert "Not summarized" in rendered
+        assert "display_max_patches=1" in rendered
+        assert "Dimensions" not in rendered
+
+    def test_a_summary_which_raises_still_prints_the_header(self, monkeypatch):
+        """
+        A repr which raises makes an object undebuggable exactly when
+        someone needs to look at it, so the summary is allowed to fail
+        and the banner is not.
+        """
+        spool = dc.get_example_spool()
+
+        def boom(self):
+            raise ValueError("no summary for you")
+
+        monkeypatch.setattr(type(spool), "_summary_blocks", boom)
+        rendered = str(spool)
+        assert "Spool" in rendered
+        assert "Dimensions" not in rendered

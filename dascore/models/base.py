@@ -29,7 +29,7 @@ from dascore.models.registry import (
     register_model,
 )
 from dascore.models.types import DateTime64, FrozenDictType
-from dascore.utils.display import model_to_line
+from dascore.utils.display import RichRepr, model_to_line
 from dascore.utils.misc import _all_null, all_close
 from dascore.utils.time import to_datetime64
 
@@ -199,7 +199,7 @@ class DascoreBaseModel(BaseModel):
     __hash__ = sensible_model_hash
 
 
-class InventoryModel(DascoreBaseModel):
+class InventoryModel(RichRepr, DascoreBaseModel):
     """
     Base class for immutable DASDAE inventory objects.
 
@@ -242,11 +242,6 @@ class InventoryModel(DascoreBaseModel):
     def __rich__(self) -> Text:
         """One line naming the class and what it states."""
         return model_to_line(self)
-
-    def __str__(self) -> str:
-        return str(self.__rich__())
-
-    __repr__ = __str__
 
 
 class TimeRangedModel(InventoryModel):
