@@ -29,7 +29,9 @@ from dascore.utils.display import (
     _STYLE_WORDS,
     Raw,
     Repr,
+    Row,
     Section,
+    Table,
     _storage_quantum,
     array_to_text,
     attrs_to_text,
@@ -1312,6 +1314,205 @@ class TestBodyText:
         assert ">a\n\nb<" in html
 
 
+class TestCoordinatesAreStated:
+    """
+    Tests for what the coordinates block says, rather than for the two
+    renderings of it agreeing.
+
+    Parity is a relative claim: it holds just as well when both reprs
+    say nothing. Deleting every coordinate from the block left it
+    passing, so these say what has to be there.
+    """
+
+    @pytest.fixture(scope="class")
+    def patch(self):
+        """A patch with a dimension coordinate and one riding on it."""
+        return dc.get_example_patch().update_coords(quality=("distance", np.ones(300)))
+
+    def test_the_text_states_every_coordinate(self, patch):
+        """A block which names none of them is not a coordinates block."""
+        rendered = str(patch.coords)
+        for name in ("distance", "time", "quality"):
+            assert name in rendered, name
+
+    def test_the_panel_states_every_coordinate(self, patch):
+        """The same, drawn."""
+        html = patch._repr_html_()
+        for name in ("distance", "time", "quality"):
+            assert name in html, name
+
+    def test_a_dimension_is_marked(self, patch):
+        """
+        The `*` is how a reader tells a dimension from a coordinate
+        which merely rides on one.
+        """
+        assert "*distance" in str(patch.coords)
+        assert "*<span" in patch._repr_html_()
+
+    def test_a_coordinate_which_is_not_a_dimension_states_its_dims(self, patch):
+        """Which axis it lies along is the thing it has to say."""
+        assert "quality ('distance',)" in str(patch.coords)
+
+    def test_a_private_coordinate_is_not_shown(self):
+        """
+        A name starting with an underscore is the manager's business.
+
+        Left in, every patch would print the coordinates it keeps for
+        bookkeeping beside the ones a reader asked for.
+        """
+        patch = dc.get_example_patch()
+        coords = patch.coords.update(_hidden=("distance", np.ones(300)))
+        assert "_hidden" not in str(coords)
+        assert "_hidden" not in render_html(coords._repr_section())
+
+    @pytest.mark.parametrize(
+        ("label", "value"),
+        [
+            ("min", "0"),
+            ("max", "299"),
+            ("step", "1"),
+            ("shape", "(300,)"),
+            # Asked of the coordinate rather than stated: an integer is
+            # 32 bits where the suite runs in WebAssembly and 64 here.
+            ("dtype", None),
+            ("units", "m"),
+        ],
+    )
+    def test_the_facts_a_coordinate_states(self, patch, label, value):
+        """
+        Both the label and the value, in both renderings.
+
+        Stripped from both sides by the parity check -- it compares what
+        is said, not what it is called -- so renaming a label passed.
+        """
+        if value is None:
+            value = str(patch.coords.coord_map["distance"].dtype)
+        assert f"{label}: " in str(patch.coords)
+        assert f"<th>{label}</th>" in patch._repr_html_()
+        assert value in str(patch.coords)
+
+    def test_the_kind_of_each_coordinate(self, patch):
+        """A terminal states it in front of the fields; a panel columns it."""
+        assert "CoordRange(" in str(patch.coords)
+        assert "CoordRange" in patch._repr_html_()
+
+    def test_a_name_which_looks_like_markup(self):
+        """
+        A coordinate name is a value someone else chose, and it is the
+        one cell of the new markup a file can fill.
+        """
+        patch = dc.get_example_patch().update_coords(
+            **{"<script>": ("distance", np.ones(300))}
+        )
+        html = patch._repr_html_()
+        assert "<script>" not in html.replace("<script>alert", "X")
+        assert "&lt;script&gt;" in html
+
+
+class TestTableColumns:
+    """Tests for which column a value is drawn in."""
+
+    @staticmethod
+    def _columns(rows):
+        """The headings a table of these rows draws."""
+        made = tuple(
+            Row(Text(name), Text("K"), tuple((x, Text(x), True) for x in fields))
+            for name, fields in rows
+        )
+        return re.findall(r"<th>(\w+)</th>", render_html(Table(made)))
+
+    def test_rows_which_state_the_same_fields(self):
+        """The order one row states them in is the order they are in."""
+        assert self._columns([("a", "xy"), ("b", "xy")]) == ["kind", "x", "y"]
+
+    def test_a_field_only_one_row_states(self):
+        """
+        It belongs where the row stating it puts it.
+
+        Only a time coordinate has a span, and it states it between its
+        max and its step rather than after everything a distance says.
+        """
+        assert self._columns([("a", "xz"), ("b", "xyz")]) == ["kind", "x", "y", "z"]
+
+    def test_a_row_which_states_part_of_what_a_later_row_does(self):
+        """
+        A record stating a subset which is not a prefix.
+
+        Selecting nothing leaves a coordinate with only a shape and a
+        dtype, and merging by index put the units of the row after it
+        between them -- an order no row states.
+        """
+        assert self._columns([("a", "cd"), ("b", "abcde")]) == [
+            "kind",
+            "a",
+            "b",
+            "c",
+            "d",
+            "e",
+        ]
+
+    def test_rows_which_state_fields_in_conflicting_orders(self):
+        """
+        Two records can disagree outright, which has no answer.
+
+        The order they were first stated in is taken, rather than
+        raising out of the middle of a repr.
+        """
+        assert self._columns([("a", "ab"), ("b", "ba")]) == ["kind", "a", "b"]
+
+    def test_rows_which_share_no_fields(self):
+        """
+        A record sharing nothing with the ones before it adds its fields
+        after theirs, not in front of them.
+        """
+        assert self._columns([("a", "ab"), ("b", "cd")]) == ["kind", "a", "b", "c", "d"]
+
+    def test_a_table_scrolls_inside_its_own_wrapper(self):
+        """
+        `overflow` does nothing on a `display: table`, so without a
+        wrapper a wide coordinates block scrolls the whole panel.
+
+        Asserted on the markup rather than on the panel, since the
+        stylesheet names the class too and a search of the whole panel
+        finds it whether or not anything is wrapped in it.
+        """
+        markup = dc.get_example_patch()._repr_html_().split("</style>", 1)[1]
+        assert '<div class="dc-scroll"><table' in markup
+
+    def test_the_heading_counts_as_a_line(self):
+        """
+        A table of two records draws three lines.
+
+        The limit is what a reader would count, and they count the
+        headings.
+        """
+        section = dc.get_example_patch().coords._repr_section()
+        with config_context(display_html_open_lines=2):
+            assert "<details open>" not in render_html(section)
+        with config_context(display_html_open_lines=3):
+            assert "<details open>" in render_html(section)
+
+    def test_a_value_is_drawn_in_its_own_column(self):
+        """
+        Every row states a cell for every column, so a row which says
+        nothing for one leaves it empty rather than shifting the rest.
+        """
+        rows = (
+            Row(Text("first"), Text("K"), (("x", Text("1"), True),)),
+            Row(
+                Text("second"),
+                Text("K"),
+                (("x", Text("2"), True), ("y", Text("3"), True)),
+            ),
+        )
+        html = render_html(Table(rows))
+        heads = re.findall(r"<th>(\w+)</th>", html)
+        for row in re.findall(r"<tr><th scope=\"row\">.*?</tr>", html, re.DOTALL):
+            assert len(re.findall(r"<td[^>]*>", row)) == len(heads)
+        body = re.search(r"<tbody>(.*)</tbody>", html, re.DOTALL).group(1)
+        assert "<td>1</td><td></td>" in body
+
+
 class TestStylesheet:
     """Tests for the CSS every repr carries."""
 
@@ -1362,7 +1563,13 @@ class TestStylesheet:
             texts = [obj._repr_node().header]
             for section in obj._repr_node().body:
                 texts.append(section.title)
-                texts.extend(x.text for x in section.body)
+                for part in section.body:
+                    if isinstance(part, Table):
+                        for row in part.rows:
+                            texts.extend([row.name, row.kind])
+                            texts.extend(v for _, v, _ in row.fields)
+                    else:
+                        texts.append(part.text)
             for text in texts:
                 for offset in range(len(text.plain)):
                     style = text.get_style_at_offset(console, offset)
@@ -1421,29 +1628,85 @@ class TestStylesheet:
         assert get_stylesheet() is get_stylesheet()
 
 
-def _drawn_lines(html: str) -> list[str]:
+def _decompose(line: str) -> list[str]:
     """
-    The lines a reader sees in a panel, in the order they are drawn.
+    A stated line as the values in it, without the framing.
+
+    Labels, class names and punctuation are how a printed line says
+    which value is which; a table says that with a column heading, so
+    both sides are read this way and compared on what they state.
+    """
+    said = line.strip().removeprefix("\u27a4 ")
+    if not said or set(said) == {"-"}:
+        return []
+    # The name may hold a space: a coordinate which is not a dimension
+    # states the dimensions it rides on, as `quality ('distance',)`.
+    record = re.match(r"(.+?): (\w+)\((.*) \)$", said)
+    if record is None:
+        return [said]
+    name, kind, fields = record.groups()
+    out = [name, kind]
+    for value in re.split(r"\s\w+: ", " " + fields):
+        value = value.strip()
+        if not value:
+            continue
+        # A span states itself in brackets rather than by a label, so a
+        # label does not split it off; a column heading says which
+        # column it is in and the panel gives it a cell of its own.
+        span = re.search(r"\s(<[^>]*>)$", value)
+        if span:
+            out.extend([value[: span.start()].strip(), span.group(1)])
+        else:
+            out.append(value)
+    return out
+
+
+def _drawn_values(html: str) -> list[str]:
+    """
+    What a reader sees in a panel, in the order it is drawn.
 
     Taken block by block rather than by stripping every tag, since the
-    tags inside one are spans which color part of a line and stripping
-    them into newlines would make a line out of each.
+    tags inside one are spans coloring part of a line and stripping them
+    into newlines would make a line out of each.
     """
-    blocks = re.findall(
-        r'<div class="dc-banner">(.*?)</div>'
-        r"|<summary>(.*?)</summary>"
-        r'|<pre class="dc-body">(.*?)</pre>'
-        r'|<div class="dc-line">(.*?)</div>',
+    out: list[str] = []
+    for block in re.finditer(
+        r'<div class="dc-banner">(?P<banner>.*?)</div>'
+        r"|<summary>(?P<summary>.*?)</summary>"
+        r'|<pre class="dc-body">(?P<pre>.*?)</pre>'
+        r'|<div class="dc-line">(?P<line>.*?)</div>'
+        r'|<table class="dc-table">(?P<table>.*?)</table>',
         html,
         re.DOTALL,
-    )
-    out = []
-    for block in blocks:
-        content = next(x for x in block if (x is not None and x != "") or x == "")
-        content = "".join(x for x in block if x)
-        for line in unescape(re.sub(r"<[^>]+>", "", content)).split("\n"):
-            if line.strip():
-                out.append(line.strip())
+    ):
+        [(kind, content)] = [
+            (k, v) for k, v in block.groupdict().items() if v is not None
+        ]
+        if kind == "table":
+            # Already one value per cell, which is what a table is for.
+            for row in re.findall(r"<tr>(.*?)</tr>", content, re.DOTALL):
+                cells = [
+                    _bare(x)
+                    for x in re.findall(r"<t[dh][^>]*>(.*?)</t[dh]>", row, re.DOTALL)
+                ]
+                if cells and cells[0]:
+                    out.extend(x for x in cells if x)
+            continue
+        for line in _bare(content).split("\n"):
+            out.extend(_decompose(line))
+    return out
+
+
+def _bare(html: str) -> str:
+    """The text of an HTML fragment, with its tags and entities read back."""
+    return unescape(re.sub(r"<[^>]+>", "", html)).strip()
+
+
+def _said_values(text: str) -> list[str]:
+    """What a printed repr states, read the same way the panel is."""
+    out: list[str] = []
+    for line in text.split("\n"):
+        out.extend(_decompose(line))
     return out
 
 
@@ -1462,6 +1725,15 @@ class TestHtmlRepr:
             "patch": dc.get_example_patch(),
             "spool": dc.get_example_spool("diverse_das"),
             "inventory": dc.get_example_inventory("tunnel"),
+            # A coordinate which is not a dimension, whose name carries
+            # the dimensions it rides on.
+            "non_dim": dc.get_example_patch().update_coords(
+                quality=("distance", np.ones(300))
+            ),
+            # A coordinate which selected nothing states only a shape
+            # and a dtype, which is a subset of what the one beside it
+            # states and not a prefix of it.
+            "partial": dc.get_example_patch().select(distance=(1e9, 2e9)),
         }
 
     def test_each_states_a_panel(self, html_objects):
@@ -1545,23 +1817,20 @@ class TestHtmlRepr:
         it draws as a disclosure triangle instead.
         """
         for name, obj in html_objects.items():
-            said = [
-                x.strip().removeprefix("\u27a4 ")
-                for x in str(obj).split("\n")
-                if x.strip() and set(x.strip()) != {"-"}
-            ]
             # As a sequence, so a section drawn twice or drawn out of
             # order is a difference rather than a match.
-            assert _drawn_lines(obj._repr_html_()) == said, name
+            assert _drawn_values(obj._repr_html_()) == _said_values(str(obj)), name
 
     def test_the_stylesheet_stays_small(self):
         """
         Every repr carries it, so a notebook carries one copy per cell.
 
         Held on its own rather than on the panel, where growth in one
-        hides growth in the other.
+        hides growth in the other. The ceiling is roughly a quarter
+        above what it holds, so a section's worth of rules trips it
+        rather than a rule or two.
         """
-        assert len(get_stylesheet().encode()) < 6_000
+        assert len(get_stylesheet().encode()) < 8_000
 
     def test_a_panel_is_mostly_the_object(self, html_objects):
         """

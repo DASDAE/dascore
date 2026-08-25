@@ -611,35 +611,53 @@ class BaseCoord(RichRepr, DascoreBaseModel, abc.ABC):
         """Total number of elements."""
         return self.shape[0]
 
+    def _repr_fields(self) -> tuple[tuple[str, Text, bool], ...]:
+        """
+        The facts this coordinate states, in the order it states them.
+
+        One source for the line a terminal prints and the row a panel
+        draws, so the two cannot come to hold different facts. A field
+        the coordinate has nothing to say for is left out rather than
+        stated blank.
+
+        This is the hook a subclass states extra facts through. A
+        manager builds its rows from these rather than from each
+        coordinate's rendered line, so facts added by overriding
+        ``__rich__`` alone would show on the coordinate and nowhere it
+        is held.
+        """
+        fields: list[tuple[str, Text, bool]] = []
+        if not pd.isnull(self.min()):
+            fields.append(("min", get_nice_text(self.min()), True))
+        if not pd.isnull(self.max()):
+            fields.append(("max", get_nice_text(self.max()), True))
+        # Only a time. Two instants say nothing about how far apart they
+        # are; a distance from 0 to 299 m already says 299 m.
+        if dtype_time_like(self.dtype) and not pd.isnull(self.min()):
+            if (span := duration_text(self.min(), self.max())) is not None:
+                # The brackets say what it is, so a line does not
+                # need the label a column heading gives it.
+                fields.append(("span", span, False))
+        if not pd.isnull(self.step):
+            step = get_nice_text(self.step)
+            if (rate := rate_text(self.step)) is not None:
+                step = step + rate
+            fields.append(("step", step, True))
+        fields.append(("shape", get_nice_text(self.shape), True))
+        fields.append(("dtype", get_nice_text(self.dtype), True))
+        if self.units is not None:
+            unit_str = get_quantity_str(self.units)
+            fields.append(("units", get_nice_text(unit_str, style="units"), True))
+        return tuple(fields)
+
     def __rich__(self):
         key_style = dascore_styles["keys"]
         base = Text("")
         base += Text(self.__class__.__name__, style=self._rich_style)
         base += Text("(")
-        if not pd.isnull(self.min()):
-            base += Text(" min: ", key_style)
-            base += get_nice_text(self.min())
-        if not pd.isnull(self.max()):
-            base += Text(" max: ", key_style)
-            base += get_nice_text(self.max())
-        # Only a time. Two instants say nothing about how far apart they
-        # are; a distance from 0 to 299 m already says 299 m.
-        if dtype_time_like(self.dtype) and not pd.isnull(self.min()):
-            if (span := duration_text(self.min(), self.max())) is not None:
-                base += Text(" ") + span
-        if not pd.isnull(self.step):
-            base += Text(" step: ", key_style)
-            base += get_nice_text(self.step)
-            if (rate := rate_text(self.step)) is not None:
-                base += rate
-        base += Text(" shape: ", key_style)
-        base += get_nice_text(self.shape)
-        base += Text(" dtype: ", key_style)
-        base += get_nice_text(self.dtype)
-        if self.units is not None:
-            base += Text(" units: ", key_style)
-            unit_str = get_quantity_str(self.units)
-            base += get_nice_text(unit_str, style="units")
+        for label, value, labelled in self._repr_fields():
+            base += Text(f" {label}: ", key_style) if labelled else Text(" ")
+            base += value
         base += Text(" )")
         return base
 

@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import textwrap
 from collections import Counter
-from collections.abc import Callable, Iterable, Mapping, Sized
+from collections.abc import Callable, Iterable, Mapping, Sequence, Sized
 from contextlib import suppress
 from dataclasses import dataclass, field
 from functools import cache, singledispatch
+from graphlib import CycleError, TopologicalSorter
 from html import escape
 from importlib.resources import files
 from itertools import pairwise
@@ -101,6 +102,45 @@ class Raw:
 
 
 @dataclass(frozen=True, slots=True)
+class Row:
+    """
+    One record, as the cells a table draws it in.
+
+    The name is what the row is called; the fields are what it states,
+    each one already rendered. A field a record has nothing to say for
+    is absent rather than blank, so two rows need not state the same
+    ones.
+
+    Every field has a label, which is the column it belongs in, and
+    says whether it wants that label printed as well. A value which
+    already says what it is -- a span, in brackets -- does not, since a
+    line has no heading to say it and a column does.
+    """
+
+    name: Text
+    kind: Text
+    fields: tuple[tuple[str, Text, bool], ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class Table:
+    """
+    Records of one sort, drawn together.
+
+    They need not state the same fields -- only a time coordinate has a
+    span -- so a column exists for every field any row states and a row
+    with nothing for one leaves it empty.
+
+    A terminal draws each record on its own line, which is what keeps
+    `str()` unchanged; a panel draws them in columns, where each label
+    is a heading said once.
+    """
+
+    rows: tuple[Row, ...] = ()
+    numeric: frozenset[str] = frozenset()
+
+
+@dataclass(frozen=True, slots=True)
 class Section:
     """
     A titled block: the line which names it, and what sits under it.
@@ -109,7 +149,7 @@ class Section:
     """
 
     title: Text
-    body: tuple[Raw, ...] = ()
+    body: tuple[Raw | Table, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -132,6 +172,24 @@ def _render_raw(node: Raw) -> Text:
     # A copy, not the node's own Text: a caller which appends to what it
     # rendered would otherwise rewrite the node it just read.
     return node.text.copy()
+
+
+@render_text.register
+def _render_row(node: Row) -> Text:
+    key_style = dascore_styles["keys"]
+    out = Text("\n    ") + node.name + Text(": ") + node.kind + Text("(")
+    for label, value, labelled in node.fields:
+        out += Text(f" {label}: ", key_style) if labelled else Text(" ")
+        out += value
+    return out + Text(" )")
+
+
+@render_text.register
+def _render_table(node: Table) -> Text:
+    # Joined on nothing: a row states the newline which puts it on its
+    # own line, the same way a section body carries the one which
+    # separated it from its title.
+    return Text("").join(render_text(x) for x in node.rows)
 
 
 @render_text.register
@@ -272,20 +330,100 @@ def _html_raw(node: Raw) -> str:
     return f'<pre class="dc-body">{text_to_html(text)}</pre>'
 
 
+def _merge_columns(rows: Sequence[Row]) -> list[str]:
+    """
+    One column order which every row's own order agrees with.
+
+    Rows state different fields -- only a time coordinate has a span,
+    and a coordinate which selected nothing states neither a min nor a
+    max -- so the columns are the union. Sorted rather than merged by
+    hand: what each row states is an ordering constraint on part of the
+    whole, and reading them in as edges is what keeps a field which
+    appears late in one row and early in another from landing where no
+    row puts it.
+
+    Two rows can disagree outright, which is a cycle and has no answer;
+    the order they were first stated in is the one taken then.
+    """
+    graph: dict[str, set[str]] = {}
+    for row in rows:
+        previous = None
+        for label, _, _ in row.fields:
+            graph.setdefault(label, set())
+            if previous is not None:
+                graph[label].add(previous)
+            previous = label
+    first = {label: index for index, label in enumerate(graph)}
+    sorter = TopologicalSorter(graph)
+    try:
+        sorter.prepare()
+    except CycleError:
+        return list(graph)
+    # Taken one at a time, earliest-stated first, so fields which
+    # constrain nothing in each other -- two records sharing none --
+    # stay in the order they were stated rather than interleaving.
+    ready: list[str] = []
+    out: list[str] = []
+    while sorter.is_active():
+        ready.extend(sorter.get_ready())
+        ready.sort(key=first.__getitem__)
+        label = ready.pop(0)
+        out.append(label)
+        sorter.done(label)
+    return out
+
+
+@render_html.register
+def _html_table(node: Table) -> str:
+    # Every label any row states, in the order they are first stated, so
+    # a row which says nothing for one leaves that cell empty rather
+    # than shifting the ones after it.
+    labels = _merge_columns(node.rows)
+    # What each record is, which a terminal states in front of its
+    # fields. A column of its own here rather than nothing at all.
+    head = "<th>kind</th>" + "".join(
+        f"<th>{escape(x, quote=False)}</th>" for x in labels
+    )
+    body = []
+    for row in node.rows:
+        stated = {label: value for label, value, _ in row.fields}
+        name = text_to_html(row.name)
+        cells = [f"<td>{text_to_html(row.kind)}</td>"]
+        for label in labels:
+            css = ' class="dc-num"' if label in node.numeric else ""
+            value = stated.get(label)
+            cells.append(f"<td{css}>{text_to_html(value) if value else ''}</td>")
+        body.append(f'<tr><th scope="row">{name}</th>{"".join(cells)}</tr>')
+    return (
+        f'<div class="dc-scroll"><table class="dc-table">'
+        f"<thead><tr><th></th>{head}</tr></thead>"
+        f"<tbody>{''.join(body)}</tbody></table></div>"
+    )
+
+
 @render_html.register
 def _html_section(node: Section) -> str:
     title = node.title
     if title.plain.startswith(_SECTION_MARKER):
         title = title[len(_SECTION_MARKER) :]
     title = text_to_html(title)
-    if not any(_body_text(x.text).plain for x in node.body):
+    if not any(
+        x.rows if isinstance(x, Table) else _body_text(x.text).plain for x in node.body
+    ):
         # Nothing to fold, so nothing to offer folding. A block whose
         # body is only the newline which separated it has none.
         return f'<div class="dc-line">{title}</div>'
     # Counted on what is drawn, not on what was handed over: the body
     # loses the newline which separated it and any it ends on, and a
     # block counted before that folds one line early.
-    lines = sum(_body_text(x.text).plain.count("\n") + 1 for x in node.body)
+    lines = sum(
+        # Its heading row is a line a reader sees, so a table of two
+        # records draws three.
+        len(x.rows) + 1
+        if isinstance(x, Table)
+        else _body_text(x.text).plain.count("\n") + 1
+        for x in node.body
+    )
     state = " open" if lines <= get_config().display_html_open_lines else ""
     body = "".join(render_html(x) for x in node.body)
     return f"<details{state}><summary>{title}</summary>{body}</details>"
