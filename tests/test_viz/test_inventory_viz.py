@@ -54,10 +54,10 @@ def _main_path(epoch: int) -> inv.OpticalPath:
         name="main",
         location_code="00",
         optical_components=(
-            inv.FiberSegment(name="lead", optical_length=100.0),
-            inv.Connector(name="patch"),
-            inv.FiberSegment(name="run", optical_length=run),
-            inv.Terminator(name="end"),
+            inv.FiberSegment(name="lead", distance_min=0.0, distance_max=100.0),
+            inv.Connector(name="patch", distance_min=100.0),
+            inv.FiberSegment(name="run", distance_min=100.0, distance_max=100.0 + run),
+            inv.Terminator(name="end", distance_min=100.0 + run),
         ),
         geometry=(
             # Two surveyed runs with an unsurveyed gap from 300 to 350.
@@ -119,7 +119,9 @@ def build_site_inventory() -> inv.Inventory:
     spur = inv.OpticalPath(
         name="spur",
         location_code="01",
-        optical_components=(inv.FiberSegment(name="spur", optical_length=50.0),),
+        optical_components=(
+            inv.FiberSegment(name="spur", distance_min=0.0, distance_max=50.0),
+        ),
     )
     common = dict(data_category="DAS", sample_rate=100.0, gauge_length=10.0)
     acquisitions = (
@@ -189,7 +191,9 @@ def build_labeled_inventory(values: int, crs, lines: int = 1) -> inv.Inventory:
                                 name="holes",
                                 location_code="00",
                                 optical_components=(
-                                    inv.FiberSegment(name="run", optical_length=300.0),
+                                    inv.FiberSegment(
+                                        name="run", distance_min=0.0, distance_max=300.0
+                                    ),
                                 ),
                                 labels=labels,
                             ),
@@ -312,7 +316,9 @@ class TestSelectPath:
             one = inv.OpticalPath(
                 name="main",
                 location_code="00",
-                optical_components=(inv.FiberSegment(name="f", optical_length=100.0),),
+                optical_components=(
+                    inv.FiberSegment(name="f", distance_min=0.0, distance_max=100.0),
+                ),
             )
             array = inv.FiberArray(code="L1", optical_paths=(one,), **times)
             return inv.Network(code=code, fiber_arrays=(array,), **times)
@@ -339,7 +345,9 @@ class TestSelectPath:
             location_code="00",
             time_min="2020-01-01",
             time_max="2021-01-01",
-            optical_components=(inv.FiberSegment(name="f", optical_length=100.0),),
+            optical_components=(
+                inv.FiberSegment(name="f", distance_min=0.0, distance_max=100.0),
+            ),
         )
         array = inv.FiberArray(code="L1", optical_paths=(one,))
         inventory = inv.Inventory(
@@ -584,7 +592,9 @@ class TestPath:
     def test_zero_length_path(self):
         """A path whose components state no length has no axis."""
         stub = inv.OpticalPath(
-            name="stub", location_code="09", optical_components=(inv.Connector(),)
+            name="stub",
+            location_code="09",
+            optical_components=(inv.Connector(distance_min=0.0),),
         )
         array = inv.FiberArray(code="A", optical_paths=(stub,))
         inventory = inv.Inventory(
@@ -662,7 +672,9 @@ class TestPath:
         one = inv.OpticalPath(
             name="main",
             location_code="00",
-            optical_components=(inv.FiberSegment(name="f", optical_length=300.0),),
+            optical_components=(
+                inv.FiberSegment(name="f", distance_min=0.0, distance_max=300.0),
+            ),
             geometry=(
                 inv.Geometry(
                     name="run",
@@ -725,7 +737,9 @@ class TestMap:
         one = inv.OpticalPath(
             name="long",
             location_code="00",
-            optical_components=(inv.FiberSegment(name="f", optical_length=100_000.0),),
+            optical_components=(
+                inv.FiberSegment(name="f", distance_min=0.0, distance_max=100_000.0),
+            ),
             geometry=(
                 inv.Geometry(
                     name="west",
@@ -808,7 +822,9 @@ class TestMap:
         one = inv.OpticalPath(
             name="hole",
             location_code="00",
-            optical_components=(inv.FiberSegment(name="f", optical_length=40.0),),
+            optical_components=(
+                inv.FiberSegment(name="f", distance_min=0.0, distance_max=40.0),
+            ),
             geometry=(
                 inv.Geometry(
                     name="down",
@@ -847,7 +863,9 @@ class TestMap:
             return inv.OpticalPath(
                 name=f"p{location}",
                 location_code=location,
-                optical_components=(inv.FiberSegment(name="f", optical_length=200.0),),
+                optical_components=(
+                    inv.FiberSegment(name="f", distance_min=0.0, distance_max=200.0),
+                ),
                 geometry=(
                     inv.Geometry(
                         name="run",
@@ -945,7 +963,9 @@ class TestMap:
             return inv.OpticalPath(
                 name=f"p{location}",
                 location_code=location,
-                optical_components=(inv.FiberSegment(name="f", optical_length=200.0),),
+                optical_components=(
+                    inv.FiberSegment(name="f", distance_min=0.0, distance_max=200.0),
+                ),
                 geometry=(
                     inv.Geometry(
                         name="run",
@@ -1006,7 +1026,9 @@ class TestMap:
             return inv.OpticalPath(
                 name=f"p{location}",
                 location_code=location,
-                optical_components=(inv.FiberSegment(name="f", optical_length=200.0),),
+                optical_components=(
+                    inv.FiberSegment(name="f", distance_min=0.0, distance_max=200.0),
+                ),
                 geometry=(
                     inv.Geometry(
                         name="run",
@@ -1069,7 +1091,9 @@ class TestMap:
             return inv.OpticalPath(
                 name=f"p{location}",
                 location_code=location,
-                optical_components=(inv.FiberSegment(name="f", optical_length=200.0),),
+                optical_components=(
+                    inv.FiberSegment(name="f", distance_min=0.0, distance_max=200.0),
+                ),
                 geometry=(
                     inv.Geometry(
                         name="run",
@@ -1114,7 +1138,9 @@ class TestMap:
             location_code="00",
             time_min="2020-01-01",
             time_max="2021-01-01",
-            optical_components=(inv.FiberSegment(name="f", optical_length=100.0),),
+            optical_components=(
+                inv.FiberSegment(name="f", distance_min=0.0, distance_max=100.0),
+            ),
             geometry=(
                 inv.Geometry(
                     name="run",

@@ -388,9 +388,72 @@ _Resource: TypeAlias = Annotated[
 ]
 
 
-class _OpticalComponentBase(InventoryModel):
+def _distance_line(model, skip=()) -> Text:
+    """One line for a model covering an interval of optical distance."""
+    span = f"[{model.distance_min:g}, {model.distance_max:g}) m"
+    return model_to_line(
+        model,
+        skip=(*skip, "distance_min", "distance_max"),
+        extra={"distance": span},
+    )
+
+
+class _IntervalModel(InventoryModel):
+    """
+    Base for items covering the half-open interval [start, end) of optical
+    distance, matching the start/end idiom of time epochs and how interval
+    bounds read off OTDR and interrogator displays.
+
+    Equal start and end make the item a point marker (e.g. a clamp or a
+    labeled spot): it documents a location but covers no distance, so it
+    never participates in coverage, enrichment, or overlap checks.
+    """
+
+    distance_min: float = Field(
+        allow_inf_nan=False,
+        description="Start optical distance of this interval in meters.",
+    )
+    distance_max: float = Field(
+        allow_inf_nan=False,
+        description=(
+            "End optical distance of this interval in meters; equal to "
+            "distance_min for a point marker."
+        ),
+    )
+
+    @model_validator(mode="after")
+    def _check_interval_order(self) -> Self:
+        """The end may not precede the start."""
+        if self.distance_max < self.distance_min:
+            msg = (
+                f"distance_max {self.distance_max} must not precede "
+                f"distance_min {self.distance_min}."
+            )
+            raise InvalidInventoryError(msg)
+        return self
+
+    def __rich__(self) -> Text:
+        """One line stating the interval this item covers."""
+        return _distance_line(self)
+
+    @property
+    def optical_length(self) -> float:
+        """The interval length in meters."""
+        return self.distance_max - self.distance_min
+
+    @property
+    def interval(self) -> tuple[float, float]:
+        """The (start, end) optical distance covered by this item."""
+        return (self.distance_min, self.distance_max)
+
+
+class _OpticalComponentBase(_IntervalModel):
     """
     Base class for physical optical components in an optical path.
+
+    A component states the stretch of optical distance it occupies, the
+    way every other track of a path does, rather than a length which only
+    means something after the lengths before it are added up.
 
     Every component carries a unified one-way transmission ``loss_db`` and
     return ``reflectance_db`` (the two quantities an OTDR trace shows per
@@ -400,12 +463,10 @@ class _OpticalComponentBase(InventoryModel):
     """
 
     _identity_field: ClassVar[str] = "name"
-    optical_length: FiniteFloat = Field(
-        default=0.0,
-        ge=0.0,
-        allow_inf_nan=False,
-        description="Optical component length along the optical path in meters.",
-    )
+    # `optical_length` is computed from the bounds rather than stored, but
+    # it is still a fact about the component a channel inside it takes, so
+    # it is named here to keep it selectable and projectable.
+    _derived_value_fields: ClassVar[tuple[str, ...]] = ("optical_length",)
     name: str = Field(default="", description="Human-readable component name.")
     loss_db: FiniteFloat | tuple[FiniteFloat, ...] | None = Field(
         default=None,
@@ -491,7 +552,26 @@ class FiberSegment(_OpticalComponentBase):
         return self.loss_db / km
 
 
-class Connector(_OpticalComponentBase):
+class _PointComponent(_OpticalComponentBase):
+    """
+    A component which sits at a point on the fiber unless it says otherwise.
+
+    A connector, splice or terminator occupies no measurable length, so it
+    states one distance and the end follows. A fiber segment states both:
+    one silently collapsing to a point would lose the fiber it stands for.
+    """
+
+    @model_validator(mode="before")
+    @classmethod
+    def _end_where_it_begins(cls, data):
+        """A stated start with no end is a marker at that distance."""
+        if isinstance(data, Mapping) and "distance_max" not in data:
+            if (start := data.get("distance_min")) is not None:
+                data = {**data, "distance_max": start}
+        return data
+
+
+class Connector(_PointComponent):
     """Optical connector in an optical path."""
 
     object_type: Literal["Connector"] = _object_type_tag("Connector")
@@ -501,7 +581,7 @@ class Connector(_OpticalComponentBase):
     connector_type: str = Field(default="", description="Connector type.")
 
 
-class Splice(_OpticalComponentBase):
+class Splice(_PointComponent):
     """Optical splice in an optical path."""
 
     object_type: Literal["Splice"] = _object_type_tag("Splice")
@@ -511,7 +591,7 @@ class Splice(_OpticalComponentBase):
     splice_type: str = Field(default="", description="Splice type, such as fusion.")
 
 
-class Terminator(_OpticalComponentBase):
+class Terminator(_PointComponent):
     """Optical path terminator."""
 
     object_type: Literal["Terminator"] = _object_type_tag("Terminator")
@@ -645,65 +725,6 @@ class Geometry(InventoryModel):
             )
             out[name] = column
         return out
-
-
-def _distance_line(model, skip=()) -> Text:
-    """One line for a model covering an interval of optical distance."""
-    span = f"[{model.distance_min:g}, {model.distance_max:g}) m"
-    return model_to_line(
-        model,
-        skip=(*skip, "distance_min", "distance_max"),
-        extra={"distance": span},
-    )
-
-
-class _IntervalModel(InventoryModel):
-    """
-    Base for items covering the half-open interval [start, end) of optical
-    distance, matching the start/end idiom of time epochs and how interval
-    bounds read off OTDR and interrogator displays.
-
-    Equal start and end make the item a point marker (e.g. a clamp or a
-    labeled spot): it documents a location but covers no distance, so it
-    never participates in coverage, enrichment, or overlap checks.
-    """
-
-    distance_min: float = Field(
-        allow_inf_nan=False,
-        description="Start optical distance of this interval in meters.",
-    )
-    distance_max: float = Field(
-        allow_inf_nan=False,
-        description=(
-            "End optical distance of this interval in meters; equal to "
-            "distance_min for a point marker."
-        ),
-    )
-
-    @model_validator(mode="after")
-    def _check_interval_order(self) -> Self:
-        """The end may not precede the start."""
-        if self.distance_max < self.distance_min:
-            msg = (
-                f"distance_max {self.distance_max} must not precede "
-                f"distance_min {self.distance_min}."
-            )
-            raise InvalidInventoryError(msg)
-        return self
-
-    def __rich__(self) -> Text:
-        """One line stating the interval this item covers."""
-        return _distance_line(self)
-
-    @property
-    def optical_length(self) -> float:
-        """The interval length in meters."""
-        return self.distance_max - self.distance_min
-
-    @property
-    def interval(self) -> tuple[float, float]:
-        """The (start, end) optical distance covered by this item."""
-        return (self.distance_min, self.distance_max)
 
 
 class CouplingCondition(_IntervalModel):
@@ -1214,23 +1235,14 @@ class OpticalPath(TimeRangedModel):
     """
     Continuous optical path described by independent tracks.
 
-    Optical components tile ``[distance_min, distance_min + optical
-    length)``. Geometry and coupling are function tracks (partial coverage,
-    no overlap); labels overlap as their group's value kind allows. No
-    more than one path per ``(FiberArray, location_code)`` is valid at a
-    time.
+    Optical components tile the path: each begins where the last ended,
+    so they state its extent between them. Geometry and coupling are
+    function tracks (partial coverage, no overlap); labels overlap as
+    their group's value kind allows. No more than one path per
+    ``(FiberArray, location_code)`` is valid at a time.
     """
 
     name: str = Field(default="", description="Human-readable optical path name.")
-    distance_min: float = Field(
-        default=0.0,
-        allow_inf_nan=False,
-        description=(
-            "Origin of this path's optical-distance axis in meters; 0 for "
-            "whole paths. Set by select and split_at so pieces keep absolute "
-            "optical distances."
-        ),
-    )
     location_code: LocationCodeStr = Field(
         default="",
         description=(
@@ -1239,7 +1251,11 @@ class OpticalPath(TimeRangedModel):
         ),
     )
     optical_components: tuple[OpticalComponent, ...] = Field(
-        default=(), description="Ordered optical components on this path."
+        default=(),
+        description=(
+            "Optical components on this path, held in distance order "
+            "whatever order they were stated in."
+        ),
     )
     geometry: tuple[Geometry, ...] = Field(
         default=(), description="Piecewise geometry segments on this path."
@@ -1255,28 +1271,43 @@ class OpticalPath(TimeRangedModel):
         description="OTDR and other optical measurements of this whole path.",
     )
 
+    @model_validator(mode="after")
+    def _order_components(self) -> Self:
+        """
+        Hold the components in the order they lie along the fiber.
+
+        Their distances say where they are, so the order rows were written
+        in decides nothing -- and a point marker sorts before the segment
+        it touches, which is where the fiber puts it.
+        """
+        stated = self.optical_components
+        ordered = tuple(sorted(stated, key=lambda x: x.interval))
+        if ordered != stated:
+            # __dict__, not model_copy: an after-validator returning a copy
+            # re-enters validation, and this one would then never settle.
+            self.__dict__["optical_components"] = ordered
+        return self
+
     def __rich__(self) -> Text:
         """One line naming the path, its extent, and its track sizes."""
         return _distance_line(self)
 
     @property
     def optical_length(self) -> float:
-        """Total optical length, computed from the optical components."""
-        return float(sum(x.optical_length for x in self.optical_components))
+        """The optical distance this path spans."""
+        return self.distance_max - self.distance_min
+
+    @property
+    def distance_min(self) -> float:
+        """The start of this path's optical-distance axis."""
+        components = self.optical_components
+        return components[0].distance_min if components else 0.0
 
     @property
     def distance_max(self) -> float:
         """The end of this path's optical-distance axis."""
-        return self.distance_min + self.optical_length
-
-    def component_intervals(self) -> tuple[tuple[float, float], ...]:
-        """Return each component's (start, end) on the absolute axis."""
-        out, position = [], self.distance_min
-        for comp in self.optical_components:
-            nxt = position + comp.optical_length
-            out.append((position, nxt))
-            position = nxt
-        return tuple(out)
+        components = self.optical_components
+        return components[-1].distance_max if components else 0.0
 
     def coordinates_at(self, distances, crs) -> np.ndarray:
         """
@@ -1338,11 +1369,11 @@ class OpticalPath(TimeRangedModel):
         """
         Check track rules for this path.
 
-        Checks that geometry and coupling stay within path bounds and do not
-        overlap (partial coverage is legal), and that labels stay within
-        bounds. Component tiling is inherent to the cumulative layout.
+        Checks that the components tile the path, that geometry and coupling
+        stay within its bounds and do not overlap (partial coverage is
+        legal), and that labels stay within bounds.
         """
-        errors = []
+        errors = self._check_component_tiling(tolerance)
         start, end = self.distance_min, self.distance_max
         geo_spans = [seg.interval for seg in self.geometry]
         coup_spans = [c.interval for c in self.coupling]
@@ -1370,6 +1401,30 @@ class OpticalPath(TimeRangedModel):
             msg = "Optical path validation failed:\n" + "\n".join(errors)
             raise InvalidInventoryError(msg)
         return self
+
+    def _check_component_tiling(self, tolerance: float) -> list[str]:
+        """
+        Check that the components tile the path, each beginning where the
+        last ended.
+
+        Light passes through every component in turn, so a gap is fiber the
+        path does not account for and an overlap is fiber counted twice.
+        The components are already in distance order, so it is enough to
+        compare each with the one before it.
+        """
+        errors = []
+        for first, second in itertools.pairwise(self.optical_components):
+            gap = second.distance_min - first.distance_max
+            if abs(gap) <= tolerance:
+                continue
+            what = "leaves a gap of" if gap > 0 else "overlaps by"
+            errors.append(
+                f"Components {first.name!r} {first.interval} and "
+                f"{second.name!r} {second.interval} {what} {abs(gap)}; "
+                "components tile the path, each beginning where the last "
+                "ended."
+            )
+        return errors
 
     def _check_geometry_columns(self) -> list[str]:
         """
@@ -1466,8 +1521,8 @@ class OpticalPath(TimeRangedModel):
         """
         Return a new path clipped to a distance interval.
 
-        Absolute optical distances are preserved: the piece's
-        ``distance_min`` becomes the clip start, never zero.
+        Absolute optical distances are preserved: every track keeps the
+        distances it had, clipped to the piece rather than rebased on it.
         """
         lo = self.distance_min if distance[0] is None else float(distance[0])
         hi = self.distance_max if distance[1] is None else float(distance[1])
@@ -1476,15 +1531,8 @@ class OpticalPath(TimeRangedModel):
         if hi <= lo:
             msg = f"Empty distance selection ({distance})."
             raise ParameterError(msg)
-        components = []
-        for comp, (c_lo, c_hi) in zip(
-            self.optical_components, self.component_intervals(), strict=True
-        ):
-            new_lo, new_hi = max(c_lo, lo), min(c_hi, hi)
-            at_outer = c_lo == hi == self.distance_max
-            if new_hi > new_lo or (c_lo == c_hi and (lo <= c_lo < hi or at_outer)):
-                length = max(new_hi - new_lo, 0.0)
-                components.append(comp.model_copy(update={"optical_length": length}))
+        outer = self.distance_max
+        components = clip_intervals(self.optical_components, lo, hi, outer)
         geometry = []
         for seg in self.geometry:
             s_lo, s_hi = seg.interval
@@ -1502,12 +1550,10 @@ class OpticalPath(TimeRangedModel):
             # would leave `columns` a plain mutable dict nothing had
             # checked against the new distance array.
             geometry.append(seg.new(distance=tuple(new_dist), columns=new_columns))
-        outer = self.distance_max
         coupling = clip_intervals(self.coupling, lo, hi, outer)
         labels = clip_intervals(self.labels, lo, hi, outer)
         return self.model_copy(
             update={
-                "distance_min": lo,
                 "optical_components": tuple(components),
                 "geometry": tuple(geometry),
                 "coupling": tuple(coupling),
@@ -1558,20 +1604,20 @@ class OpticalPath(TimeRangedModel):
             }
             return item.model_copy(update=update)
 
-        coupling = sorted(
-            (flip_item(c) for c in self.coupling),
-            key=lambda c: c.distance_min,
-        )
-        labels = sorted(
-            (flip_item(a) for a in self.labels),
-            key=lambda a: a.distance_min,
-        )
+        def flipped(items):
+            return tuple(
+                sorted((flip_item(x) for x in items), key=lambda x: x.interval)
+            )
+
+        # The components are flipped like any other interval track now that
+        # they carry their own distances; reversing the tuple would leave
+        # every one of them where it was.
         return self.model_copy(
             update={
-                "optical_components": tuple(reversed(self.optical_components)),
+                "optical_components": flipped(self.optical_components),
                 "geometry": tuple(geometry),
-                "coupling": tuple(coupling),
-                "labels": tuple(labels),
+                "coupling": flipped(self.coupling),
+                "labels": flipped(self.labels),
             }
         )
 
@@ -1616,12 +1662,12 @@ class OpticalPath(TimeRangedModel):
 
         coupling = tuple(shift_item(c) for c in other.coupling)
         labels = tuple(shift_item(a) for a in other.labels)
+        # The right path's components carry its own distances, so they are
+        # shifted onto the combined axis like every other track of it.
+        components = tuple(shift_item(c) for c in other.optical_components)
         return self.model_copy(
             update={
-                "optical_components": (
-                    *self.optical_components,
-                    *other.optical_components,
-                ),
+                "optical_components": (*self.optical_components, *components),
                 "geometry": (*self.geometry, *geometry),
                 "coupling": (*self.coupling, *coupling),
                 "labels": (*self.labels, *labels),
@@ -1964,16 +2010,23 @@ def _value_field_names(model) -> tuple[str, ...]:
     """
     Return the fields of a model which state a fact about one thing.
 
+    A model may also name values it computes rather than stores, in
+    `_derived_value_fields`. They are taken on the model's word: a stored
+    field is checked against its annotation for holding one value, and a
+    property has no annotation to check. `_value_shape` still refuses a
+    multi-valued one where it is asked for.
+
     Cached on the class: the answer is a property of the model, and an
     inventory asked for its names walks every item of every track.
     """
     structural = frozenset(TimeRangedModel.model_fields) | _IDENTITY_FIELDS
     structural |= _EXTENT_FIELDS
-    return tuple(
+    stored = tuple(
         name
         for name, info in model.model_fields.items()
         if name not in structural and _is_value_field(info)
     )
+    return (*stored, *getattr(model, "_derived_value_fields", ()))
 
 
 TRACK_IDENTITY_FIELDS = _track_identity_fields()

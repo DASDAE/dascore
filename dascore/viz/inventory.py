@@ -211,14 +211,12 @@ def _track_frame(path, acquisitions) -> pd.DataFrame:
                 "label": acquisition.code,
             }
         )
-    for component, (low, high) in zip(
-        path.optical_components, path.component_intervals(), strict=True
-    ):
+    for component in path.optical_components:
         rows.append(
             {
                 "lane": "components",
-                "start": low,
-                "end": high,
+                "start": component.distance_min,
+                "end": component.distance_max,
                 "value": type(component).__name__,
                 "label": component.name or type(component).__name__,
             }

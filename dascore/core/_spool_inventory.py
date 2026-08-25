@@ -728,12 +728,8 @@ def _get_label_coord(path, group, distances):
 
 def _get_track_coord(path, track, field, distances):
     """Return the coordinate values of one field of a typed track."""
-    if track == "optical_components":
-        items = path.optical_components
-        intervals = list(path.component_intervals())
-    else:
-        items = getattr(path, track)
-        intervals = [x.interval for x in items]
+    items = getattr(path, track)
+    intervals = [x.interval for x in items]
     if not items:
         return None
     values = [getattr(x, field, None) for x in items]

@@ -156,8 +156,8 @@ class TestTunnelInventory:
 
     def test_holds_point_markers(self, original):
         """Splices and connectors have no length, so they are points."""
-        intervals = original.component_intervals()
-        assert sum(1 for start, end in intervals if start == end) > 1
+        points = [x for x in original.optical_components if x.optical_length == 0]
+        assert len(points) > 1
 
     def test_coupling_covers_only_part_of_the_path(self, original):
         """Partial coverage is legal and is what a coverage plot must show."""

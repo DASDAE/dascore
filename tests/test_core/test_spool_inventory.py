@@ -1754,7 +1754,8 @@ class TestSharedNames:
                 optical_components=(
                     FiberSegment(
                         name="c",
-                        optical_length=100.0,
+                        distance_min=0.0,
+                        distance_max=100.0,
                         loss_db=loss,
                         loss_measurement=measurement,
                     ),
@@ -3122,7 +3123,9 @@ def _float_grid_pair(distance, span):
     path = OpticalPath(
         name="main",
         location_code="",
-        optical_components=(FiberSegment(name="c", optical_length=span + 10),),
+        optical_components=(
+            FiberSegment(name="c", distance_min=0.0, distance_max=span + 10),
+        ),
         labels=(
             OpticalPathLabel(
                 distance_min=span * 0.23,

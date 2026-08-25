@@ -99,7 +99,7 @@ show("fiber_arrays/XT.TUN1/attrs.yaml")
 
 # The path, as a table
 
-An optical path is the ordered list of things the light passes through. Each component states its own optical length and they tile the path end to end, which is what gives the path its length. No row states a start distance, because the `sequence` column already did.
+An optical path is the list of things the light passes through. Each component states the stretch of optical distance it occupies — `distance_min` to `distance_max` — and they tile the path end to end, which is what gives the path its extent. A splice or a connector occupies no measurable length, so it states one distance and leaves the other blank.
 
 This is @tbl-path with the parts named, and it goes in `path.00` — the directory naming the optical path at location code `00`.
 
@@ -111,16 +111,17 @@ components_csv = files[f"{PATH}/optical_components.csv"]
 table(f"{PATH}/optical_components.csv").head(9)
 ```
 
-Every column but `sequence` is a field of the class the `object_type` column names, so the table is barely a format of its own — it is the objects, written the way rows of the same shape are worth writing. `sequence` belongs to the table, and is dropped once it has put the rows in order. The blank `container` on the terminator is a field left unset; the ones which are filled are `resource_id`s pointing back at the files above.
+Every column is a field of the class the `object_type` column names, so the table is barely a format of its own — it is the objects, written the way rows of the same shape are worth writing. Row order decides nothing: the distances say where each component is, and the path holds them in that order whatever order they were written in. The blank `container` on the terminator is a field left unset; the ones which are filled are `resource_id`s pointing back at the files above.
 
-The other three tables are written against distances along this path, and those distances are the running totals of this one column. Adding them up by hand is how a table stops agreeing with its neighbours, so add them up once:
+The other three tables are written against the same distances, and they are in the table rather than implied by it, so a row can be read on its own:
 
 ```{python}
 def spans(csv_text):
     """Map each component's name to the optical interval it covers."""
     frame = pd.read_csv(io.StringIO(csv_text))
-    end = frame["optical_length"].cumsum()
-    return dict(zip(frame["name"], zip(end - frame["optical_length"], end)))
+    # A point component states one distance; the other end is the same one.
+    ends = frame["distance_max"].fillna(frame["distance_min"])
+    return dict(zip(frame["name"], zip(frame["distance_min"], ends)))
 
 
 at = spans(components_csv)
@@ -289,14 +290,14 @@ index = int(repaired_components.index[repaired_components["name"] == "trench B t
 repaired_components.iloc[index - 1 : index + 5]
 ```
 
-Everything else follows from that table, which is the argument for having written it this way: the three other tracks are regenerated from the new running totals rather than edited row by row.
+The repair leaves two meters more fiber than it replaced, so every component past it moves two meters further along the path. That shift is the price of writing a distance down rather than counting to it, and it is why the tables are generated from one description of the repair rather than edited row by row.
 
 ```{python}
 #| code-fold: true
 #| code-summary: "path.00@2024-09-01 — the same tracks, against the new distances"
 repaired_at = spans(repaired_csv)
 
-# The three other tracks are regenerated from the new running totals
+# The three other tracks are regenerated from the shifted distances
 # rather than edited row by row.
 repaired_geometry = table(f"{EPOCH}/geometry.csv")
 print(repaired_geometry.head(6).to_string(index=False))

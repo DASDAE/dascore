@@ -27,7 +27,7 @@ PATH_DIRECTORY = {
     "fiber_arrays/DAS.L001/path/attrs.yaml": "object_type: OpticalPath\n",
     # A path with length, so a track laid along it is inside the path.
     "fiber_arrays/DAS.L001/path/optical_components.csv": (
-        "sequence,object_type,optical_length,name\n1,FiberSegment,1000.0,fiber 1\n"
+        "object_type,distance_min,distance_max,name\nFiberSegment,0,1000,fiber 1\n"
     ),
 }
 
@@ -1065,9 +1065,9 @@ TRACKS = {
     "fiber_arrays/DAS.L001/attrs.yaml": "object_type: FiberArray\nname: array\n",
     "fiber_arrays/DAS.L001/path/attrs.yaml": "object_type: OpticalPath\nname: main\n",
     "fiber_arrays/DAS.L001/path/optical_components.csv": (
-        "sequence,object_type,optical_length,name,fiber_number,fiber_color\n"
-        "2,Splice,0.1,splice 1,,\n"
-        "1,FiberSegment,1000.0,fiber 1,1,blue\n"
+        "object_type,distance_min,distance_max,name,fiber_number,fiber_color\n"
+        "Splice,1000,1000.1,splice 1,,\n"
+        "FiberSegment,0,1000,fiber 1,1,blue\n"
     ),
     "fiber_arrays/DAS.L001/path/coupling.csv": (
         "distance_min,distance_max,coupling_type,description\n"
@@ -1109,9 +1109,9 @@ class TestTrackTables:
         assert [x.name for x in path.geometry] == ["S100"]
 
     def test_rows_are_read_in_the_order_they_state(self, make_inventory):
-        """Sequence decides the order, never row position."""
+        """Distance decides the order of components, never row position."""
         path = one_path(make_inventory({**MINIMAL, **TRACKS}))
-        # The file lists the splice first; sequence puts it second.
+        # The file lists the splice first; its distance puts it second.
         assert [x.object_type for x in path.optical_components] == [
             "FiberSegment",
             "Splice",
@@ -1472,15 +1472,15 @@ class TestTrackTables:
             make_inventory(files)
 
     def test_a_table_missing_the_column_it_is_read_by(self, make_inventory):
-        """Components are placed by sequence, so a table without one raises."""
+        """Geometry points are placed by distance, so a table needs one."""
         files = {
             **MINIMAL,
             **TRACKS,
-            "fiber_arrays/DAS.L001/path/optical_components.csv": (
-                "object_type,optical_length,name\nFiberSegment,1000.0,fiber 1\n"
+            "fiber_arrays/DAS.L001/path/geometry.csv": (
+                "name,longitude,latitude,elevation\nS100,-117.0,40.0,687.0\n"
             ),
         }
-        with pytest.raises(InvalidInventoryError, match="no sequence column"):
+        with pytest.raises(InvalidInventoryError, match="no distance column"):
             make_inventory(files)
 
     def test_a_column_stated_twice(self, make_inventory):
@@ -1757,12 +1757,13 @@ class TestUnreadableTables:
         files = {
             **MINIMAL,
             **TRACKS,
-            "fiber_arrays/DAS.L001/path/optical_components.csv": (
-                "sequence,object_type,optical_length,name\n"
-                "first,FiberSegment,1000.0,fiber 1\n"
+            "fiber_arrays/DAS.L001/path/geometry.csv": (
+                "name,distance,longitude,latitude,elevation\n"
+                "S100,near,-117.0,40.0,687.0\n"
+                "S100,far,-117.1,40.1,685.0\n"
             ),
         }
-        with pytest.raises(InvalidInventoryError, match="non-numeric sequence"):
+        with pytest.raises(InvalidInventoryError, match="non-numeric distance"):
             make_inventory(files)
 
     def test_a_column_no_row_states(self, make_inventory):
@@ -1853,18 +1854,17 @@ class TestUnreadableTables:
         with pytest.raises(InvalidInventoryError, match="its header names 3 columns"):
             make_inventory(files)
 
-    def test_a_sequence_which_places_two_rows_alike(self, make_inventory):
-        """Components tile the path, so no two may claim one place."""
+    def test_a_retired_sequence_column_says_what_to_write(self, make_inventory):
+        """A table written when order decided placement is told what changed."""
         files = {
             **MINIMAL,
             **TRACKS,
             "fiber_arrays/DAS.L001/path/optical_components.csv": (
-                "sequence,object_type,optical_length,name\n"
-                "1,FiberSegment,100.0,a\n"
-                "1,Splice,0.1,b\n"
+                "sequence,object_type,distance_min,distance_max,name\n"
+                "1,FiberSegment,0,100,a\n"
             ),
         }
-        with pytest.raises(InvalidInventoryError, match="does not say which row"):
+        with pytest.raises(InvalidInventoryError, match="no longer reads"):
             make_inventory(files)
 
     def test_a_cell_which_does_not_pertain_to_its_row(self, make_inventory):
@@ -1873,8 +1873,8 @@ class TestUnreadableTables:
             **MINIMAL,
             **TRACKS,
             "fiber_arrays/DAS.L001/path/optical_components.csv": (
-                "sequence,object_type,optical_length,name,fiber_color\n"
-                "1,Splice,0.1,b,blue\n"
+                "object_type,distance_min,distance_max,name,fiber_color\n"
+                "Splice,0,0.1,b,blue\n"
             ),
         }
         # A splice has no fiber colour; only a segment does.
@@ -1909,12 +1909,12 @@ class TestTableRegistry:
                 assert column is None or column not in loader._TABLES
             assert stem  # every key names something
 
-    def test_only_a_placing_table_drops_its_order_column(self):
-        """A column dropped where it is not scaffolding would vanish unseen."""
-        placing = {k for k, v in loader._TABLES.items() if v.places}
-        assert placing == {"optical_components"}
-        # And that column is the one the model has no field for.
-        assert "sequence" not in inv.OpticalPath.model_fields
+    def test_a_retired_column_names_no_field_of_the_model(self):
+        """A column explained as retired must not still be readable."""
+        for stem, retired in loader._RETIRED_COLUMNS.items():
+            model = inv.OpticalPath.model_fields[stem].annotation
+            for column in retired:
+                assert column not in str(model)
 
 
 class TestSilentlyLostRows:
@@ -1953,10 +1953,10 @@ class TestSilentlyLostRows:
         files = {
             **MINIMAL,
             **TRACKS,
-            "fiber_arrays/DAS.L001/path/optical_components.csv": (
-                "sequence,object_type,optical_length,name\n"
-                "1,FiberSegment,100.0,a\n"
-                ",Splice,0.1,b\n"
+            "fiber_arrays/DAS.L001/path/geometry.csv": (
+                "name,distance,longitude,latitude,elevation\n"
+                "S100,100.0,-117.0,40.0,687.0\n"
+                "S100,,-117.1,40.1,685.0\n"
             ),
         }
         with pytest.raises(InvalidInventoryError, match="state no place"):
@@ -1978,7 +1978,7 @@ class TestSilentlyLostRows:
             make_inventory(files)
 
     def test_a_stray_ordering_column_is_refused(self, make_inventory):
-        """A sequence column is scaffolding only where the table says so."""
+        """No table reads a sequence column, so the model calls it unknown."""
         files = {
             **MINIMAL,
             **TRACKS,
@@ -1986,7 +1986,6 @@ class TestSilentlyLostRows:
                 "sequence,distance_min,distance_max,coupling_type\n1,0,340,conduit\n"
             ),
         }
-        # Coupling is not placed by sequence, so the model calls it unknown.
         with pytest.raises(InvalidInventoryError, match="Could not read OpticalPath"):
             make_inventory(files)
 
@@ -2089,8 +2088,8 @@ class TestGapsMutationTestingFound:
             **MINIMAL,
             **TRACKS,
             "fiber_arrays/DAS.L001/path/optical_components.csv": (
-                "sequence,object_type,optical_length,name,fiber_color\n"
-                "1,Splice,0.1,b,blue\n"
+                "object_type,distance_min,distance_max,name,fiber_color\n"
+                "Splice,0,0.1,b,blue\n"
             ),
         }
         with pytest.raises(InvalidInventoryError, match="fiber_color"):
@@ -2296,7 +2295,7 @@ class TestPRReviewFindings:
             **MINIMAL,
             **TRACKS,
             "fiber_arrays/DAS.L001/path/optical_components.csv": (
-                "sequence,object_type,optical_length,name\n1,FiberSegment,3000.0,a\n"
+                "object_type,distance_min,distance_max,name\nFiberSegment,0,3000,a\n"
             ),
             "fiber_arrays/DAS.L001/path/geometry.csv": (
                 f"name,distance,longitude,latitude,elevation\n{rows}\n"

@@ -458,10 +458,6 @@ class _Table(NamedTuple):
     # harmless; where it does not, the rows keep the order they were
     # written in, which the model reads as a set rather than a sequence.
     order: str | None = None
-    # True where that column is the table's own scaffolding rather than a
-    # field, so nothing else records where a row sits and it must place
-    # each row unambiguously.
-    places: bool = False
     # The field every column but the order gathers into, keyed by header.
     # None where each column names a field of the object directly.
     columns: str | None = None
@@ -472,7 +468,7 @@ class _Table(NamedTuple):
 # property of the attribute, and stating it is shorter than deducing it.
 # TestTableRegistry pins every key to a field of the model declaring it.
 _TABLES: Mapping[str, _Table] = {
-    "optical_components": _Table(order="sequence", places=True),
+    "optical_components": _Table(),
     "coupling": _Table(),
     "labels": _Table(),
     "geometry": _Table(points=True, group="name", order="distance", columns="columns"),
@@ -504,25 +500,18 @@ _GEOMETRY_STRUCTURAL = frozenset(
 # its points into segments at all.
 assert len(_GEOMETRY_STRUCTURAL) == 2, _GEOMETRY_STRUCTURAL
 
-_SEQUENCE = "sequence"
-
-
-def _check_places(keys: pd.Series, column: str, path: Path) -> None:
-    """
-    Refuse an ordering which does not place every row.
-
-    Components tile the path, each starting where the previous ends, so
-    two rows sharing a place would be ordered by where they happen to sit
-    in the file -- which is the one thing this column exists to stop
-    deciding anything.
-    """
-    repeated = sorted({str(x) for x in keys[keys.duplicated()]})
-    if repeated:
-        msg = (
-            f"{_quote(path)} states {column} {', '.join(repeated)} more than "
-            "once, so it does not say which row comes first."
+# Columns this format used to read, by the table which read them. A file
+# written before a rename is this format's own former spelling, so it is
+# told what to write instead rather than having the column reported as a
+# field the model has never heard of.
+_RETIRED_COLUMNS = {
+    "optical_components": {
+        "sequence": (
+            "components state distance_min and distance_max, which say "
+            "where each one is without being counted through"
         )
-        raise InvalidInventoryError(msg)
+    }
+}
 
 
 def _object_rows(frame: pd.DataFrame, table: _Table, path: Path) -> list[dict]:
@@ -530,20 +519,7 @@ def _object_rows(frame: pd.DataFrame, table: _Table, path: Path) -> list[dict]:
     require_columns(frame, [table.order], path)
     require_stated(frame, [table.order], path)
     ordered = ordered_rows(frame, table.order, path)
-    if table.places and table.order is not None:
-        _check_places(ordered[table.order], table.order, path)
-    out = []
-    for _, row in ordered.iterrows():
-        cells = row_cells(row)
-        # The order column is the table's own scaffolding where the object
-        # has no such field, so it is dropped -- but only where the table
-        # says it has one. Dropped everywhere, a stray sequence column in
-        # coupling.csv would vanish instead of being refused as the
-        # unknown field the model calls it.
-        if table.places:
-            cells.pop(table.order, None)
-        out.append(cells)
-    return out
+    return [row_cells(row) for _, row in ordered.iterrows()]
 
 
 def _point_rows(
@@ -885,6 +861,19 @@ def _load_table(path: Path, table: _Table, stem: str, crs):
         raise InvalidInventoryError(str(error)) from error
 
 
+def _refuse_retired_columns(frame: pd.DataFrame, stem: str, path: Path) -> None:
+    """Explain a column this format used to read, rather than shrugging."""
+    retired = _RETIRED_COLUMNS.get(stem, {})
+    for column in frame.columns:
+        if (why := retired.get(str(column))) is None:
+            continue
+        msg = (
+            f"{_quote(path)} states {column}, which this format no longer "
+            f"reads: {why}. Drop the column."
+        )
+        raise InvalidInventoryError(msg)
+
+
 def _read_track_table(path: Path, table: _Table, stem: str, crs):
     """Read one track table, in the table utilities' own error vocabulary."""
     frame = read_table(path, what="no track")
@@ -899,6 +888,7 @@ def _read_track_table(path: Path, table: _Table, stem: str, crs):
     # are both none of its business. A table of nothing else keeps its
     # rows, and is refused by the columns it then fails to state.
     frame = drop_private_columns(frame)
+    _refuse_retired_columns(frame, stem, path)
     units: Mapping[str, str] = {}
     if stem == "geometry":
         frame, units = _geometry_columns(frame, crs, path)
