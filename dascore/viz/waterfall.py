@@ -24,6 +24,12 @@ from dascore.utils.plotting import (
     _get_extents,
 )
 from dascore.utils.time import dtype_time_like, is_datetime64
+from dascore.viz._labels import (
+    draw_labels,
+    image_cell_edges,
+    label_plan,
+    mesh_cell_edges,
+)
 
 
 def _validate_scale_type(scale_type):
@@ -219,6 +225,7 @@ def waterfall(
     gap_factor: float = 1.5,
     log: bool = False,
     cbar: bool = True,
+    label_coord: str | None = None,
     show: bool = False,
 ) -> plt.Axes:
     """
@@ -290,6 +297,16 @@ def waterfall(
     cbar
         If True, plot the colorbar, else do not. This controls only colorbar
         display; use `cmap` to control colormap selection.
+    label_coord
+        The name of a coordinate whose values label stretches of one of the
+        plotted dimensions, such as a label group an inventory projected onto
+        the patch with [`Patch.enrich`](`dascore.proc.inventory.enrich`). A
+        line is drawn wherever its value changes, colored by the labels it
+        parts, and a legend naming them is placed beyond the colorbar. String
+        and numeric coordinates state one label per value; a boolean one
+        states membership, so only its True stretches are marked and the
+        coordinate's own name is what the legend calls them. Absent values
+        (the empty string, NaN, or False) label nothing.
     show
         If True, show the plot, else just return axis.
 
@@ -330,6 +347,12 @@ def waterfall(
     >>> _ = patch.viz.waterfall(scale=0.5, scale_type="absolute", ax=ax2)
     >>> _ = ax2.set_title("Absolute scaling (scale=0.5)")
     >>>
+    >>> # Mark where a label coordinate changes, such as the zones an
+    >>> # inventory places along the fiber.
+    >>> from dascore.examples import inventory_patch_pair
+    >>> zoned, inventory = inventory_patch_pair()
+    >>> _ = zoned.enrich(inventory).viz.waterfall(label_coord="zone")
+    >>>
     >>> # Undo Y axis inversion which occurs when time is on the Y
     >>> ax = patch.viz.waterfall()
     >>> ax.invert_yaxis()
@@ -351,7 +374,9 @@ def waterfall(
     # Validate inputs
     patch = _validate_patch_dims(patch)
     _validate_gap_factor(gap_factor)
-    # Setup axes and data
+    # Setup axes and data. A figure this call built is one whose room a
+    # legend may take; any other belongs to the caller.
+    owned = ax is None
     ax = _get_ax(ax)
     if log:
         data = np.log10(np.abs(patch.data) + np.finfo(np.float64).eps)
@@ -363,6 +388,8 @@ def waterfall(
     coords = {dim: np.asarray(coord) for dim, coord in dim_coords.items()}
     cmap = _get_waterfall_colormap(patch, cmap)
     scale = _get_scale(scale, scale_type, data)
+    plan = label_plan(patch, label_coord, dims_r) if label_coord is not None else None
+    label_edges = None
     use_image = all(coord.evenly_sampled for coord in dim_coords.values())
     if use_image or not all(is_monotonic_and_finite(x) for x in coords.values()):
         extents = _get_extents(dims_r, coords)
@@ -376,6 +403,10 @@ def waterfall(
                 interpolation=interpolation,
                 interpolation_stage=interpolation_stage,
             )
+        if plan is not None:
+            label_edges = image_cell_edges(
+                extents, dims_r, plan.dim, len(coords[plan.dim])
+            )
     else:
         im = _plot_with_mesh(
             ax,
@@ -386,6 +417,8 @@ def waterfall(
             gap_color=gap_color,
             gap_factor=gap_factor,
         )
+        if plan is not None:
+            label_edges = mesh_cell_edges(coords[plan.dim], gap_color, gap_factor)
     if scale is not None and len(scale) == 2 and np.all(np.isfinite(scale)):
         im.set_clim(np.asarray(scale))
     # Format axis labels and handle time-like dimensions
@@ -393,6 +426,18 @@ def waterfall(
     # Add colorbar if requested
     if cbar:
         _add_colorbar(ax, im, data, patch, log, scale)
+    # Label lines come last so the legend is placed beyond a colorbar which
+    # has already taken its room.
+    if plan is not None:
+        assert label_edges is not None, "a plan is only made where edges are"
+        draw_labels(
+            ax,
+            plan,
+            patch.coords.get_array(plan.name),
+            label_edges,
+            colorbars=int(bool(cbar)),
+            owned=owned,
+        )
     if show:
         plt.show()
     return ax

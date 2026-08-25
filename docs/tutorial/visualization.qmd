@@ -45,6 +45,26 @@ plt.tight_layout()
 plt.show()
 ```
 
+### Marking where labels change
+
+An [inventory](inventory.qmd) states its label groups over stretches of the fiber, and [`Patch.enrich`](`dascore.proc.inventory.enrich`) projects each group onto the patch as its own coordinate. Naming one with `label_coord` draws a line wherever it changes and names its labels in a legend beyond the colorbar, so the plot reads in the vocabulary the inventory uses rather than in metres alone.
+
+```{python}
+from dascore.examples import inventory_patch_pair
+
+patch, inventory = inventory_patch_pair()
+
+patch.enrich(inventory).viz.waterfall(label_coord="zone", show=True);
+```
+
+The one line is the boundary between the two zones this path names, and it alternates their two colors because it belongs to neither: north ends where south begins. A boundary with a label on only one side — a stretch the group says nothing about — is drawn solid, in the color of the side which does state something.
+
+A boolean coordinate is a membership group: only the stretches it holds are marked, and the legend calls them by the coordinate's own name.
+
+```{python}
+patch.enrich(inventory).viz.waterfall(label_coord="noisy", show=True);
+```
+
 ## Wiggle
 The [`wiggle patch function`](`dascore.viz.wiggle`) creates a wiggle plot of the patch data. We'll use the same patch as above to model this function.
 

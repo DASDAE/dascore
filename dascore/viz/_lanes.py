@@ -288,16 +288,37 @@ def _wide_colors(values) -> dict:
     return out
 
 
-def _string_colors(frame, vocabulary=None, cmap_name=STRING_CMAP) -> dict:
-    """Map every string value to a stable color.
+def string_colors(values, vocabulary=None, cmap_name=STRING_CMAP) -> dict:
+    """
+    Map every string value to a stable color.
 
-    The vocabulary widens the palette beyond what this frame holds, so a
+    The vocabulary widens the palette beyond what these values hold, so a
     figure of part of a subject colors it as a figure of all of it does.
     Adding a value to the vocabulary itself moves the colors of the ones
     which sort after it, and pushing the count past the wheel moves all
     of them.
+
+    Two figures of one subject share this, so a label group drawn as a
+    lane and the same group drawn over a patch agree on their colors.
+
+    Parameters
+    ----------
+    values
+        The values to color. Anything which is not a non-empty string is
+        skipped, since it states no category to color.
+    vocabulary
+        Further values to reserve colors for.
+    cmap_name
+        The categorical colormap the wheel is drawn from.
+
+    Examples
+    --------
+    >>> from dascore.viz._lanes import string_colors
+    >>> colors = string_colors(["south", "north"])
+    >>> sorted(colors)
+    ['north', 'south']
     """
-    seen = list(frame["value"].tolist()) + list(vocabulary or [])
+    seen = list(values) + list(vocabulary or [])
     values = sorted({x for x in seen if isinstance(x, str) and x != ""})
     if len(values) > len(WHEEL_ORDER):
         # Cycling the wheel here would give two values one color, and a
@@ -308,6 +329,11 @@ def _string_colors(frame, vocabulary=None, cmap_name=STRING_CMAP) -> dict:
         value: cmap(WHEEL_ORDER[index % len(WHEEL_ORDER)])
         for index, value in enumerate(values)
     }
+
+
+def _string_colors(frame, vocabulary=None, cmap_name=STRING_CMAP) -> dict:
+    """Map every string value of an interval frame to a stable color."""
+    return string_colors(frame["value"].tolist(), vocabulary, cmap_name)
 
 
 def numeric_scale(values, cmap_name=NUMERIC_CMAP):
