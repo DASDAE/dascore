@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import random
 import warnings
+from itertools import pairwise
 
 import numpy as np
 import pandas as pd
@@ -1465,3 +1466,60 @@ class TestSizeChunk:
         """A chunk length is one value, not an array of them."""
         with pytest.raises(ParameterError, match="single quantity"):
             random_spool.chunk(time=np.array([1.0, 2.0]) * dc.units.MB)
+
+
+class TestChunkEdgeBetweenPatches:
+    """
+    Chunk lengths that are not a whole number of samples (#1008, #893).
+
+    An output edge then lands between the last sample of one patch and
+    the first of the next; chunking must give the same result as chunking
+    the patches once merged.
+    """
+
+    @pytest.fixture(scope="class")
+    def contiguous_spool(self):
+        """Three exactly contiguous patches of five one-second samples."""
+        step = np.timedelta64(1, "s")
+        t0 = np.datetime64("2026-01-01T00:00:00", "ns")
+        patches = []
+        for _ in range(3):
+            time = t0 + np.arange(5) * step
+            coords = {"time": time, "distance": np.arange(3.0)}
+            data = np.random.default_rng(len(patches)).random((5, 3))
+            patches.append(
+                dc.Patch(data=data, coords=coords, dims=("time", "distance"))
+            )
+            t0 = time[-1] + step
+        return dc.spool(patches)
+
+    @pytest.mark.parametrize(
+        "kwargs",
+        [
+            dict(time=4.5),
+            dict(time=5.5),
+            dict(time=5.5, keep_partial=True),
+            dict(time=6, overlap=1.5),
+            dict(time=2.3, overlap=0.4),
+        ],
+    )
+    def test_matches_chunking_merged_patch(self, contiguous_spool, kwargs):
+        """Patch boundaries must not change what a chunk contains."""
+        merged = contiguous_spool.chunk(time=None)
+        assert len(merged) == 1
+        out, expected = contiguous_spool.chunk(**kwargs), merged.chunk(**kwargs)
+        assert len(out) == len(expected)
+        assert all(a.equals(b) for a, b in zip(out, expected))
+
+    def test_boundary_in_sub_tolerance_gap(self):
+        """A boundary inside a gap the tolerance merges over chunks cleanly."""
+        p1 = dc.get_example_patch(time_min="2020-01-01")
+        time = p1.get_coord("time")
+        p2 = dc.get_example_patch(time_min=time.max() + 1.4 * time.step)
+        span = (time.max() - time.min()) + 0.7 * time.step
+        length = span / np.timedelta64(1, "s") / 2
+        out = dc.spool([p1, p2]).chunk(time=length)
+        assert len(out) == 4
+        coords = [patch.get_coord("time") for patch in out]
+        assert all(len(coord) == len(coords[0]) for coord in coords)
+        assert all(a.max() < b.min() for a, b in pairwise(coords))

@@ -1446,16 +1446,17 @@ def build_chunk_plan(
         rel_src = np.arange(total) - offsets + np.repeat(first_src, m_counts)
         lo = np.maximum(s1[rel_src], starts_p[rel_out])
         hi = np.minimum(s2[rel_src], stops_p[rel_out])
-        # Sources within a partition are continuous (partitioning splits
-        # on gaps) and start-corrected, so searchsorted never offers a
-        # source which does not overlap the output. Assert it rather
-        # than skipping: silently dropping a source would lose data, and
-        # the state cannot be reached from the public API.
+        # No sample lies between one source's stop and the next source's
+        # start, but an output edge can (any length that is not a whole
+        # number of samples). That edge selects an end source whose
+        # samples all fall outside the output, so its trim inverts;
+        # dropping it loses nothing (#1008).
         overlap_ok = lo <= hi
-        assert overlap_ok.all(), (
-            f"source {rel_src[int(np.argmax(~overlap_ok))]} does not "
-            f"overlap output {rel_out[int(np.argmax(~overlap_ok))]}"
-        )
+        if not overlap_ok.all():
+            rel_src, rel_out = rel_src[overlap_ok], rel_out[overlap_ok]
+            lo, hi = lo[overlap_ok], hi[overlap_ok]
+            m_counts = np.bincount(rel_out, minlength=n_out)
+            total = int(m_counts.sum())
         # Plan invariant: every published output has at least one member.
         # An advertised row that cannot assemble is never surfaced as a
         # runtime error; it is not surfaced at all.
