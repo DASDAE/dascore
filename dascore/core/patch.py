@@ -465,6 +465,8 @@ class Patch(NodeRepr, NamespaceOwner):
     all = dascore.proc.agg.all
     first = dascore.proc.agg.first
     last = dascore.proc.agg.last
+    idxmax = dascore.proc.agg.idxmax
+    idxmin = dascore.proc.agg.idxmin
 
     # --- Universal functions
     add = PatchUFunc(np.add)

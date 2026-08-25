@@ -114,6 +114,8 @@ MATRIX_CALLS = {
     "dropna_all": lambda patch: patch.dropna("distance", how="all"),
     "dropna_any": lambda patch: patch.dropna("time", how="any"),
     "fillna_0": lambda patch: patch.fillna(0),
+    "idxmax": lambda patch: patch.idxmax("time"),
+    "idxmin": lambda patch: patch.idxmin("time"),
     "fillna_noinf": lambda patch: patch.fillna(2, include_inf=False),
     "flip_both": lambda patch: patch.flip(*patch.dims),
     "flip_one": lambda patch: patch.flip("time"),
