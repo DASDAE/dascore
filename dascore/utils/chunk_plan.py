@@ -858,19 +858,29 @@ def _member_envelopes(sorted_df: pd.DataFrame, seg_starts: np.ndarray, name: str
     Overlap-corrected source envelopes over the whole sorted relation.
 
     Within each partition (rows ordered by start, patch id) an
-    overlapping source's start moves to just past the previous source's
-    stop, so the earlier source owns the overlap (D3: complete overlaps
-    keep the first member, deterministically). Returns the corrected
-    starts, the row modification flags, and the kept-row mask (sources
-    left degenerate by the correction contribute nothing).
+    overlapping source's start moves to just past the furthest stop of
+    the sources before it, so the earliest source owns the overlap (D3:
+    complete overlaps keep the first member, deterministically). Returns
+    the corrected starts, the row modification flags, and the kept-row
+    mask (sources left degenerate by the correction contribute nothing).
     """
     start, stop, step = (x.to_numpy() for x in get_interval_columns(sorted_df, name))
     is_first = np.zeros(len(sorted_df), dtype=bool)
     is_first[seg_starts] = True
-    prev_stop = np.roll(stop, 1)
-    rolled_step = np.roll(step, 1)
-    isna = pd.isnull(rolled_step)
-    prev_step = np.where(~isna, rolled_step, np.zeros_like(rolled_step))
+    # The owner of the furthest stop so far in the partition: the last
+    # row whose stop set the running maximum. Comparing with the
+    # previous row alone would let a source nested in an earlier one
+    # re-emerge after a shorter neighbor and hand out samples the
+    # earlier source already owns.
+    codes = np.cumsum(is_first) - 1
+    running_max = pd.Series(stop).groupby(codes).cummax().to_numpy()
+    rows = np.arange(len(stop))
+    owner = np.maximum.accumulate(np.where(stop == running_max, rows, 0))
+    prev_owner = np.roll(owner, 1)
+    prev_stop = stop[prev_owner]
+    owner_step = step[prev_owner]
+    isna = pd.isnull(owner_step)
+    prev_step = np.where(~isna, owner_step, np.zeros_like(owner_step))
     # Add the step so consecutive sources do not share one sample; the
     # roll artifact at each partition's first row is masked out.
     overlaps = (start <= prev_stop) & ~is_first
@@ -1446,16 +1456,17 @@ def build_chunk_plan(
         rel_src = np.arange(total) - offsets + np.repeat(first_src, m_counts)
         lo = np.maximum(s1[rel_src], starts_p[rel_out])
         hi = np.minimum(s2[rel_src], stops_p[rel_out])
-        # Sources within a partition are continuous (partitioning splits
-        # on gaps) and start-corrected, so searchsorted never offers a
-        # source which does not overlap the output. Assert it rather
-        # than skipping: silently dropping a source would lose data, and
-        # the state cannot be reached from the public API.
+        # No sample lies between one source's stop and the next source's
+        # start, but an output edge can (any length that is not a whole
+        # number of samples). That edge selects an end source whose
+        # samples all fall outside the output, so its trim inverts;
+        # dropping it loses nothing (#1008).
         overlap_ok = lo <= hi
-        assert overlap_ok.all(), (
-            f"source {rel_src[int(np.argmax(~overlap_ok))]} does not "
-            f"overlap output {rel_out[int(np.argmax(~overlap_ok))]}"
-        )
+        if not overlap_ok.all():
+            rel_src, rel_out = rel_src[overlap_ok], rel_out[overlap_ok]
+            lo, hi = lo[overlap_ok], hi[overlap_ok]
+            m_counts = np.bincount(rel_out, minlength=n_out)
+            total = int(m_counts.sum())
         # Plan invariant: every published output has at least one member.
         # An advertised row that cannot assemble is never surfaced as a
         # runtime error; it is not surfaced at all.
