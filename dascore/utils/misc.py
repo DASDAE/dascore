@@ -200,11 +200,16 @@ def _all_null(maybe_ar):
 
 
 def _get_nullish(dtype=np.floating):
-    """Get nullish values for a given dtype."""
-    if np.issubdtype(dtype, np.datetime64):
-        return np.datetime64("NaT", "ns")
-    elif np.issubdtype(dtype, np.timedelta64):
-        return np.timedelta64("NaT", "ns")
+    """
+    Return the value which stands for a missing entry of this dtype.
+
+    Time-like dtypes get NaT at their own resolution rather than a fixed
+    one, so a datetime64[us] array is filled with microsecond NaT and
+    never has a nanosecond value cast into it. Everything else gets NaN,
+    which means an integer array widens to float to hold the result.
+    """
+    if np.issubdtype(dtype, np.datetime64) or np.issubdtype(dtype, np.timedelta64):
+        return np.array("NaT").astype(dtype)[()]
     return np.nan
 
 
