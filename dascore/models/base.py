@@ -252,15 +252,15 @@ class InventoryModel(DascoreBaseModel):
 class TimeRangedModel(InventoryModel):
     """Base class for inventory objects with time-validity epochs.
 
-    Validity intervals are half-open, ``[start_time, end_time)``; an unset
+    Validity intervals are half-open, ``[time_min, time_max)``; an unset
     (NaT) end time means the epoch is ongoing. All times are UTC.
     """
 
-    start_time: DateTime64 = Field(
+    time_min: DateTime64 = Field(
         default=np.datetime64("NaT", "ns"),
         description="Start time for which this metadata item is valid (UTC).",
     )
-    end_time: DateTime64 = Field(
+    time_max: DateTime64 = Field(
         default=np.datetime64("NaT", "ns"),
         description=(
             "End time for which this metadata item is valid (UTC); NaT while ongoing."
@@ -270,9 +270,9 @@ class TimeRangedModel(InventoryModel):
     @model_validator(mode="after")
     def _check_time_order(self):
         """A set end time must follow the start time."""
-        start, end = self.start_time, self.end_time
+        start, end = self.time_min, self.time_max
         if not pd.isnull(start) and not pd.isnull(end) and end <= start:
-            msg = f"end_time {end} must be after start_time {start}."
+            msg = f"time_max {end} must be after time_min {start}."
             raise InvalidInventoryError(msg)
         return self
 
@@ -281,8 +281,8 @@ class TimeRangedModel(InventoryModel):
         time = to_datetime64(time)
         if pd.isnull(time):
             return True
-        start = self.start_time
-        end = self.end_time
+        start = self.time_min
+        end = self.time_max
         after_start = pd.isnull(start) or start <= time
         before_end = pd.isnull(end) or time < end
         return bool(after_start and before_end)
@@ -294,10 +294,10 @@ class TimeRangedModel(InventoryModel):
         Unset (NaT) starts are unbounded past; unset ends are ongoing.
         """
         s1, e1, s2, e2 = (
-            self.start_time,
-            self.end_time,
-            other.start_time,
-            other.end_time,
+            self.time_min,
+            self.time_max,
+            other.time_min,
+            other.time_max,
         )
         first_starts_before = pd.isnull(e2) or pd.isnull(s1) or s1 < e2
         second_starts_before = pd.isnull(e1) or pd.isnull(s2) or s2 < e1

@@ -7,7 +7,7 @@ itself belong to the inventory instead, in optical distance; see
 [dascore.core.inventory](`dascore.core.inventory`).
 
 A set is dataframe-backed, one row per annotation. Columns name the
-dimensions a row constrains: ``<dim>_start``/``<dim>_end`` state a
+dimensions a row constrains: ``<dim>_min``/``<dim>_max`` state a
 half-open range, a bare ``<dim>`` states a point, and a dimension no
 column names is unconstrained. Those columns hold coordinates -- numbers,
 times or durations -- since that is what a bound is compared as. Paths
@@ -68,7 +68,11 @@ from dascore.utils.display import (
     stated_fields,
 )
 from dascore.utils.documents import write_document
-from dascore.utils.intervals import normalize_value, value_kind
+from dascore.utils.intervals import (
+    interval_value_type,
+    normalize_value,
+    value_kind,
+)
 from dascore.utils.mapping import FrozenDict
 from dascore.utils.misc import iterate, to_str, validate_acquisition_key
 from dascore.utils.namespace import NamespaceOwner
@@ -128,8 +132,15 @@ OBJECT_SUFFIXES = (".json", ".yaml", ".yml")
 # namespaced, so a file may carry both without either reading the other's.
 DIMS_KEY = "dascore:dims"
 
-# What a range column is spelled with.
-_START, _END = "_start", "_end"
+# What a range column is spelled with, as every other range in DASCore
+# spells one: a patch's attrs, the spool index, and the inventory.
+_MIN, _MAX = "_min", "_max"
+
+# What it used to be spelled with. A set written before the rename is
+# this format's own former spelling, not a stranger's columns, so it is
+# told what to write instead -- otherwise its bounds read as extras and
+# the annotation silently covers everything rather than what it states.
+_RETIRED_RANGE = ("_start", "_end")
 
 # The resolution DASCore holds a time and a duration at.
 _NS_TIME = np.dtype("datetime64[ns]")
@@ -144,15 +155,10 @@ _TEXT_KINDS = "OTUS"
 DISTANCE_DIM, TIME_DIM = "distance", "time"
 
 
-def _annotation_value(value):
-    """Normalize an annotation value so its Python type survives validation."""
-    return normalize_value(value, error=ParameterError)
-
-
 # An annotation states membership by carrying no value, so a value, when
-# there is one, is text or a number; its Python type must survive
-# validation, so 1 must not become 1.0.
-AnnotationValue = Annotated[str | int | float, BeforeValidator(_annotation_value)]
+# there is one, is text or a number; the same value an inventory label
+# carries, refused in this subsystem's own vocabulary.
+AnnotationValue = interval_value_type(ParameterError)
 
 
 # Spelled as PatchAttrs spells them, so a set and the data it describes
@@ -319,7 +325,7 @@ class AnnotationBasis(_AnnotationModel):
     time, a distance is a distance -- so it is anchored without a separate
     origin and its vertices drop straight into the vertices frame. A curve
     parameterized in a dimension's raw numbers would put an apex at 1.6e18
-    nanoseconds and a velocity in metres per nanosecond, which nobody can
+    nanoseconds and a velocity in meters per nanosecond, which nobody can
     read, write or check.
     """
 
@@ -392,7 +398,7 @@ class Moveout(AnnotationBasis):
     The arrival time of a wavefront along the fiber, as a function of distance.
 
     Physics rather than geometry, so it is pinned to ``distance`` against
-    ``time``. A source sitting ``standoff`` metres off the cable, abreast of
+    ``time``. A source sitting ``standoff`` meters off the cable, abreast of
     fiber distance ``apex_distance``, arrives everywhere at
 
     ``time = apex_time + (hypot(standoff, distance - apex_distance)
@@ -406,34 +412,34 @@ class Moveout(AnnotationBasis):
 
     object_type: Literal["Moveout"] = _tag("Moveout")
     apex_distance: FiniteFloat = Field(
-        description="Fiber distance the wavefront arrives earliest at, in metres."
+        description="Fiber distance the wavefront arrives earliest at, in meters."
     )
     apex_time: DateTime64 = Field(description="Time of that earliest arrival.")
     velocity: PositiveFiniteFloat = Field(
-        description="Speed the wavefront moves along the fiber, in metres/second."
+        description="Speed the wavefront moves along the fiber, in meters/second."
     )
     standoff: FiniteFloat = Field(
         default=0.0,
         ge=0,
         description=(
-            "Perpendicular distance from the fiber to the source, in metres. "
+            "Perpendicular distance from the fiber to the source, in meters. "
             "Zero is a source on the cable, whose moveout is straight."
         ),
     )
-    distance_start: FiniteFloat = Field(
-        description="Fiber distance the curve is drawn from, in metres."
+    distance_min: FiniteFloat = Field(
+        description="Fiber distance the curve is drawn from, in meters."
     )
-    distance_end: FiniteFloat = Field(
-        description="Fiber distance the curve is drawn to, in metres."
+    distance_max: FiniteFloat = Field(
+        description="Fiber distance the curve is drawn to, in meters."
     )
 
     @model_validator(mode="after")
     def _check_span(self) -> Self:
         """A curve with no span draws no vertices."""
-        if not self.distance_end > self.distance_start:
+        if not self.distance_max > self.distance_min:
             msg = (
-                f"Moveout distance_end {self.distance_end} must exceed "
-                f"distance_start {self.distance_start}."
+                f"Moveout distance_max {self.distance_max} must exceed "
+                f"distance_min {self.distance_min}."
             )
             raise ValueError(msg)
         return self
@@ -446,8 +452,8 @@ class Moveout(AnnotationBasis):
     def vertices(self, count: int = 64) -> dict[str, np.ndarray]:
         """Return ``count`` arrivals evenly spaced along the fiber."""
         fraction = self._fractions(count)
-        distance = self.distance_start + fraction * (
-            self.distance_end - self.distance_start
+        distance = self.distance_min + fraction * (
+            self.distance_max - self.distance_min
         )
         along = np.hypot(self.standoff, distance - self.apex_distance)
         seconds = (along - self.standoff) / self.velocity
@@ -688,7 +694,7 @@ class AnnotationSetAttrs(_AnnotationModel):
             msg = f"Annotation dimensions must be unique; got {list(self.dims)}."
             raise ValueError(msg)
         for dim in self.dims:
-            for end in (_START, _END):
+            for end in (_MIN, _MAX):
                 stem = dim[: -len(end)] if dim.endswith(end) else None
                 if stem and stem in self.dims:
                     msg = (
@@ -741,8 +747,8 @@ class _Spelling(NamedTuple):
 
     dim: str
     point: str | None  # the bare column, where the dimension is a point
-    start: str | None  # the range columns, where it is a span
-    end: str | None
+    low: str | None  # the range columns, where it is a span
+    high: str | None
 
 
 class AnnotationSet(NamespaceOwner):
@@ -780,7 +786,7 @@ class AnnotationSet(NamespaceOwner):
     >>> import pandas as pd
     >>> import dascore as dc
     >>> frame = pd.DataFrame(
-    ...     {"group": ["event"], "distance_start": [10.0], "distance_end": [80.0]}
+    ...     {"group": ["event"], "distance_min": [10.0], "distance_max": [80.0]}
     ... )
     >>> picks = dc.AnnotationSet(frame, dims=("time", "distance"))
     >>> len(picks), picks[0].group
@@ -936,7 +942,7 @@ class AnnotationSet(NamespaceOwner):
         base += Text(" (") + Text(", ".join(self.dims), style="bold") + Text(")")
         for dim in self.dims:
             spelling = self._spellings[dim]
-            spelled = (spelling.point, spelling.start, spelling.end)
+            spelled = (spelling.point, spelling.low, spelling.high)
             names = [x for x in spelled if x and x in self._df.columns]
             columns = [self._df[x] for x in names] or [pd.Series(dtype=float)]
             values = pd.concat(columns, ignore_index=True).dropna()
@@ -1080,17 +1086,17 @@ def _read_spellings(frame: pd.DataFrame, dims) -> dict[str, _Spelling]:
     out = {}
     for dim in dims:
         point = dim if dim in columns else None
-        start = f"{dim}{_START}" if f"{dim}{_START}" in columns else None
-        end = f"{dim}{_END}" if f"{dim}{_END}" in columns else None
+        start = f"{dim}{_MIN}" if f"{dim}{_MIN}" in columns else None
+        end = f"{dim}{_MAX}" if f"{dim}{_MAX}" in columns else None
         if point is not None and (start is not None or end is not None):
             msg = (
                 f"The dimension {dim!r} is spelled both as a point ({dim}) and "
-                f"as a range ({dim}{_START}/{dim}{_END}); it is one or the other."
+                f"as a range ({dim}{_MIN}/{dim}{_MAX}); it is one or the other."
             )
             raise ParameterError(msg)
         if (start is None) != (end is None):
             stated = start or end
-            missing = f"{dim}{_END}" if start is not None else f"{dim}{_START}"
+            missing = f"{dim}{_MAX}" if start is not None else f"{dim}{_MIN}"
             msg = f"{stated} states half a range; {missing} is not a column."
             raise ParameterError(msg)
         out[dim] = _Spelling(dim, point, start, end)
@@ -1101,15 +1107,25 @@ def _check_columns(frame: pd.DataFrame, attrs: AnnotationSetAttrs) -> None:
     """
     Refuse a column which nearly names something, and check stated dtypes.
 
-    An undeclared ``<name>_start``/``<name>_end`` pair is a dimension the
+    An undeclared ``<name>_min``/``<name>_max`` pair is a dimension the
     set forgot to declare rather than two unrelated extras, and reading it
     as extras would quietly drop the constraint it states.
     """
     known = set(RESERVED_COLUMNS) | set(attrs.dims)
-    known |= {f"{dim}{end}" for dim in attrs.dims for end in (_START, _END)}
+    known |= {f"{dim}{end}" for dim in attrs.dims for end in (_MIN, _MAX)}
     extras = [str(x) for x in frame.columns if x not in known]
-    stems = {x[: -len(_START)] for x in extras if x.endswith(_START)}
-    stems &= {x[: -len(_END)] for x in extras if x.endswith(_END)}
+    low, high = _RETIRED_RANGE
+    retired = {x[: -len(low)] for x in extras if x.endswith(low)}
+    retired &= {x[: -len(high)] for x in extras if x.endswith(high)}
+    if named := ", ".join(sorted(retired & set(attrs.dims))):
+        msg = (
+            f"The column(s) {named} state a range as {low}/{high}, which this "
+            f"format now spells {_MIN}/{_MAX}, as every other range in DASCore "
+            "is spelled. Rename the columns."
+        )
+        raise ParameterError(msg)
+    stems = {x[: -len(_MIN)] for x in extras if x.endswith(_MIN)}
+    stems &= {x[: -len(_MAX)] for x in extras if x.endswith(_MAX)}
     if stems:
         named = ", ".join(sorted(stems))
         msg = (
@@ -1179,16 +1195,16 @@ def _check_ranges(frame: pd.DataFrame, spellings) -> None:
     raising later, on whichever operation happened to touch that row.
     """
     for dim, spelling in spellings.items():
-        if spelling.start is None or spelling.end is None:
+        if spelling.low is None or spelling.high is None:
             continue
-        start, end = frame[spelling.start], frame[spelling.end]
+        start, end = frame[spelling.low], frame[spelling.high]
         stated = start.notna() & end.notna()
         half = start.notna() ^ end.notna()
         if half.any():
             first = frame.index[half][0]
             msg = (
                 f"Row {first} states half a {dim} range; a range states both "
-                f"{spelling.start} and {spelling.end}, and neither states an "
+                f"{spelling.low} and {spelling.high}, and neither states an "
                 "unconstrained dimension."
             )
             raise ParameterError(msg)
@@ -1271,7 +1287,7 @@ def _check_values(frame: pd.DataFrame) -> None:
     for name, index in frame.groupby(groups.values, sort=True).groups.items():
         values = [x if _stated(x) else None for x in frame.loc[index, "value"]]
         try:
-            kinds = {value_kind(_annotation_value(x)) for x in values}
+            kinds = {value_kind(normalize_value(x, ParameterError)) for x in values}
         except ParameterError as error:
             msg = f"The annotation group {str(name)!r}: {error}"
             raise ParameterError(msg) from error
@@ -1450,9 +1466,12 @@ def _fill_vertex_bounds(frame, vertices, spellings) -> pd.DataFrame:
         if spelling.point is not None:
             _fill_point_bounds(out, ids, bounds, dim, spelling.point)
             continue
-        for column, side in ((spelling.start, "min"), (spelling.end, "max")):
+        for column, side, suffix in (
+            (spelling.low, "min", _MIN),
+            (spelling.high, "max", _MAX),
+        ):
             if column is None:
-                out[f"{dim}{_START if side == 'min' else _END}"] = pd.Series(
+                out[f"{dim}{suffix}"] = pd.Series(
                     ids.map(bounds[side]), index=out.index
                 )
                 continue
@@ -1484,7 +1503,7 @@ def _fill_point_bounds(out, ids, bounds, dim: str, column: str) -> None:
         msg = (
             f"The path or polygon id(s) {named} span {dim}, which this set "
             f"spells as a point ({column}); a spanning geometry needs "
-            f"{dim}{_START}/{dim}{_END}."
+            f"{dim}{_MIN}/{dim}{_MAX}."
         )
         raise ParameterError(msg)
     derived = ids.map(bounds["min"])
@@ -1509,8 +1528,8 @@ def _read_bounds(row, spellings) -> dict[str, tuple[Any, Any]]:
             if _stated(value):
                 out[dim] = (_scalar(value), _scalar(value))
             continue
-        start = row.get(spelling.start) if spelling.start else None
-        end = row.get(spelling.end) if spelling.end else None
+        start = row.get(spelling.low) if spelling.low else None
+        end = row.get(spelling.high) if spelling.high else None
         if _stated(start) and _stated(end):
             out[dim] = (_scalar(start), _scalar(end))
     return out
@@ -1527,7 +1546,7 @@ def _read_extra(row, dims, spellings) -> dict[str, Any]:
     """Return the columns a row states which the set does not model."""
     known = set(RESERVED_COLUMNS)
     for spelling in spellings.values():
-        known |= {x for x in (spelling.point, spelling.start, spelling.end) if x}
+        known |= {x for x in (spelling.point, spelling.low, spelling.high) if x}
     known |= set(dims)
     return {
         str(k): _freeze(v) for k, v in row.items() if str(k) not in known and _stated(v)
@@ -1699,7 +1718,7 @@ def _is_number(value) -> bool:
 
 def _type_dimensions(frame: pd.DataFrame, spellings) -> pd.DataFrame:
     """Read every column which spells a dimension as the coordinates it states."""
-    named = {x for one in spellings.values() for x in (one.point, one.start, one.end)}
+    named = {x for one in spellings.values() for x in (one.point, one.low, one.high)}
     changed = {}
     for name in frame.columns:
         if name not in named:
@@ -1783,7 +1802,7 @@ def _normalize_times(frame: pd.DataFrame, dims: Sequence[str] = ()) -> pd.DataFr
     the geometry a row builds reads that spelling back, so a frame which
     kept the text would disagree with the region built from it.
     """
-    spelled = {x for dim in dims for x in (dim, f"{dim}{_START}", f"{dim}{_END}")}
+    spelled = {x for dim in dims for x in (dim, f"{dim}{_MIN}", f"{dim}{_MAX}")}
     changed = {}
     for name in frame.columns:
         series = frame[name]
@@ -2109,7 +2128,7 @@ def annotation_set_to_dataframe(annotations: AnnotationSet) -> pd.DataFrame:
     >>> import pandas as pd
     >>> import dascore as dc
     >>> frame = pd.DataFrame(
-    ...     {"group": ["event"], "distance_start": [10.0], "distance_end": [80.0]}
+    ...     {"group": ["event"], "distance_min": [10.0], "distance_max": [80.0]}
     ... )
     >>> annotations = dc.AnnotationSet(frame, dims=("time", "distance"))
     >>> list(annotations.io.to_dataframe()["group"])
@@ -2134,7 +2153,7 @@ def annotation_set_to_vertices(annotations: AnnotationSet) -> pd.DataFrame:
     >>> import pandas as pd
     >>> import dascore as dc
     >>> frame = pd.DataFrame(
-    ...     {"group": ["event"], "distance_start": [10.0], "distance_end": [80.0]}
+    ...     {"group": ["event"], "distance_min": [10.0], "distance_max": [80.0]}
     ... )
     >>> annotations = dc.AnnotationSet(frame, dims=("time", "distance"))
     >>> annotations.io.to_vertices().empty  # a region states no vertices
@@ -2175,7 +2194,7 @@ def annotation_set_to_csv(
     >>> import pandas as pd
     >>> import dascore as dc
     >>> frame = pd.DataFrame(
-    ...     {"group": ["event"], "distance_start": [10.0], "distance_end": [80.0]}
+    ...     {"group": ["event"], "distance_min": [10.0], "distance_max": [80.0]}
     ... )
     >>> annotations = dc.AnnotationSet(frame, dims=("time", "distance"))
     >>> "group" in annotations.io.to_csv()
@@ -2223,7 +2242,7 @@ def annotation_set_to_parquet(
     >>> import pandas as pd
     >>> import dascore as dc
     >>> frame = pd.DataFrame(
-    ...     {"group": ["event"], "distance_start": [10.0], "distance_end": [80.0]}
+    ...     {"group": ["event"], "distance_min": [10.0], "distance_max": [80.0]}
     ... )
     >>> annotations = dc.AnnotationSet(frame, dims=("time", "distance"))
     >>> path = annotations.io.to_parquet("picks.parquet")  # doctest: +SKIP
@@ -2248,7 +2267,7 @@ def _refuse_unwritable_durations(annotations: AnnotationSet) -> None:
     this.
     """
     spelled = {
-        x for dim in annotations.dims for x in (dim, f"{dim}{_START}", f"{dim}{_END}")
+        x for dim in annotations.dims for x in (dim, f"{dim}{_MIN}", f"{dim}{_MAX}")
     }
     named = sorted(
         str(name)
@@ -2330,7 +2349,7 @@ def save_annotation_set(
     >>> import pandas as pd
     >>> import dascore as dc
     >>> frame = pd.DataFrame(
-    ...     {"group": ["event"], "distance_start": [10.0], "distance_end": [80.0]}
+    ...     {"group": ["event"], "distance_min": [10.0], "distance_max": [80.0]}
     ... )
     >>> annotations = dc.AnnotationSet(frame, dims=("time", "distance"))
     >>> directory = annotations.io.save("picks")  # doctest: +SKIP

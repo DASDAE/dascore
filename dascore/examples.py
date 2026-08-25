@@ -856,14 +856,16 @@ def inventory_patch_pair():
     path = OpticalPath(
         name="main",
         location_code="",
-        optical_components=(FiberSegment(name="cable", optical_length=500.0),),
+        optical_components=(
+            FiberSegment(name="cable", distance_min=0.0, distance_max=500.0),
+        ),
         geometry=(
             Geometry(
                 name="trench",
                 distance=(100.0, 400.0),
                 # The canonical axis names, so the segment states the CRS's
                 # axes whatever this inventory's CRS happens to call them.
-                coordinates={
+                columns={
                     "x": (-117.0, -117.0),
                     "y": (40.0, 40.1),
                     "z": (1500.0, 1500.0),
@@ -872,20 +874,20 @@ def inventory_patch_pair():
         ),
         coupling=(
             CouplingCondition(
-                start_distance=100.0,
-                end_distance=250.0,
+                distance_min=100.0,
+                distance_max=250.0,
                 coupling_type="trench",
                 medium="soil",
             ),
         ),
         labels=(
             OpticalPathLabel(
-                start_distance=100.0, end_distance=200.0, group="zone", value="north"
+                distance_min=100.0, distance_max=200.0, group="zone", value="north"
             ),
             OpticalPathLabel(
-                start_distance=200.0, end_distance=400.0, group="zone", value="south"
+                distance_min=200.0, distance_max=400.0, group="zone", value="south"
             ),
-            OpticalPathLabel(start_distance=150.0, end_distance=300.0, group="noisy"),
+            OpticalPathLabel(distance_min=150.0, distance_max=300.0, group="noisy"),
         ),
     )
     inventory = Inventory(
@@ -1022,33 +1024,33 @@ for _label, _name in [
     )
 
 _TUNNEL_COMPONENTS = """\
-sequence,object_type,optical_length,name,container
-1,FiberSegment,1500.0,telemetry lead-in,telemetry-cable
-2,Splice,0.0,splice at box A,splice-box-a
-3,FiberSegment,2.5,drop into the trench,trench-cable
-4,FiberSegment,25.0,trench B to the coil,trench-cable
-5,FiberSegment,10.0,cable coil at C,trench-cable
-6,FiberSegment,25.0,trench from the coil to D,trench-cable
-7,FiberSegment,2.5,rise out of the trench,trench-cable
-8,Splice,0.0,splice at box E,splice-box-e
-9,FiberSegment,15.0,link E to borehole 3,connecting-cable
-10,FiberSegment,20.0,borehole 3 down,borehole-cable
-11,Splice,0.0,borehole 3 turnaround,turnaround-3
-12,FiberSegment,20.0,borehole 3 up,borehole-cable
-13,FiberSegment,15.0,link borehole 3 to coupler G,connecting-cable
-14,Connector,0.0,coupler G,
-15,FiberSegment,15.0,link coupler G to borehole 2,connecting-cable
-16,FiberSegment,20.0,borehole 2 down,borehole-cable
-17,Splice,0.0,borehole 2 turnaround,turnaround-2
-18,FiberSegment,20.0,borehole 2 up,borehole-cable
-19,FiberSegment,15.0,link borehole 2 to coupler H,connecting-cable
-20,Connector,0.0,coupler H,
-21,FiberSegment,15.0,link coupler H to borehole 1,connecting-cable
-22,FiberSegment,20.0,borehole 1 down,borehole-cable
-23,Splice,0.0,borehole 1 turnaround,turnaround-1
-24,FiberSegment,20.0,borehole 1 up,borehole-cable
-25,FiberSegment,15.0,link borehole 1 back to box A,connecting-cable
-26,Terminator,0.0,path end,
+object_type,distance_min,distance_max,name,container
+FiberSegment,0,1500,telemetry lead-in,telemetry-cable
+Splice,1500,,splice at box A,splice-box-a
+FiberSegment,1500,1502.5,drop into the trench,trench-cable
+FiberSegment,1502.5,1527.5,trench B to the coil,trench-cable
+FiberSegment,1527.5,1537.5,cable coil at C,trench-cable
+FiberSegment,1537.5,1562.5,trench from the coil to D,trench-cable
+FiberSegment,1562.5,1565,rise out of the trench,trench-cable
+Splice,1565,,splice at box E,splice-box-e
+FiberSegment,1565,1580,link E to borehole 3,connecting-cable
+FiberSegment,1580,1600,borehole 3 down,borehole-cable
+Splice,1600,,borehole 3 turnaround,turnaround-3
+FiberSegment,1600,1620,borehole 3 up,borehole-cable
+FiberSegment,1620,1635,link borehole 3 to coupler G,connecting-cable
+Connector,1635,,coupler G,
+FiberSegment,1635,1650,link coupler G to borehole 2,connecting-cable
+FiberSegment,1650,1670,borehole 2 down,borehole-cable
+Splice,1670,,borehole 2 turnaround,turnaround-2
+FiberSegment,1670,1690,borehole 2 up,borehole-cable
+FiberSegment,1690,1705,link borehole 2 to coupler H,connecting-cable
+Connector,1705,,coupler H,
+FiberSegment,1705,1720,link coupler H to borehole 1,connecting-cable
+FiberSegment,1720,1740,borehole 1 down,borehole-cable
+Splice,1740,,borehole 1 turnaround,turnaround-1
+FiberSegment,1740,1760,borehole 1 up,borehole-cable
+FiberSegment,1760,1775,link borehole 1 back to box A,connecting-cable
+Terminator,1775,,path end,
 """
 
 # The surveyed waypoints, lettered as the recipe's drawing letters them.
@@ -1081,11 +1083,17 @@ _TUNNEL_REPAIRED_TRENCH = (
 )
 
 
+def _tunnel_components(components_csv):
+    """Read the components table, with each point component's end filled in."""
+    frame = pd.read_csv(io.StringIO(components_csv))
+    frame["distance_max"] = frame["distance_max"].fillna(frame["distance_min"])
+    return frame
+
+
 def _tunnel_spans(components_csv):
     """Map each component's name to the optical interval it covers."""
-    frame = pd.read_csv(io.StringIO(components_csv))
-    end = frame["optical_length"].cumsum()
-    return dict(zip(frame["name"], zip(end - frame["optical_length"], end)))
+    frame = _tunnel_components(components_csv)
+    return dict(zip(frame["name"], zip(frame["distance_min"], frame["distance_max"])))
 
 
 def _tunnel_bottom(number):
@@ -1132,7 +1140,7 @@ def _tunnel_geometry(at, runs):
         first, last = at[name]
         rows.append((name, first, *start))
         rows.append((name, last, *end))
-    frame = pd.DataFrame(rows, columns=["segment", "distance", "x", "y", "z"])
+    frame = pd.DataFrame(rows, columns=["name", "distance", "x", "y", "z"])
     return frame.to_csv(index=False)
 
 
@@ -1156,8 +1164,8 @@ def _tunnel_coupling(at, trench_parts):
     frame = pd.DataFrame(
         rows,
         columns=[
-            "start_distance",
-            "end_distance",
+            "distance_min",
+            "distance_max",
             "coupling_type",
             "medium",
             "attachment",
@@ -1176,51 +1184,60 @@ def _tunnel_labels(at, trench_parts):
         rows.append((*span, "section", "borehole"))
         rows.append((*span, "borehole", number))
     frame = pd.DataFrame(
-        rows, columns=["start_distance", "end_distance", "group", "value"]
+        rows, columns=["distance_min", "distance_max", "group", "value"]
     )
     return frame.to_csv(index=False)
 
 
+# What the contractor put in where the trench cable was cut, as the
+# length of each piece: fifteen meters of the original run, the two
+# splices holding a two-meter patch cord, and the rest of the run.
+_TUNNEL_REPAIR = (
+    ("FiberSegment", 15.0, "trench B to the break", "trench-cable"),
+    ("Splice", 0.0, "repair splice near side", "repair-box"),
+    ("FiberSegment", 2.0, "repair patch cord", "repair-cord"),
+    ("Splice", 0.0, "repair splice far side", "repair-box"),
+    ("FiberSegment", 10.0, "trench from the break to the coil", "trench-cable"),
+)
+
+
 def _tunnel_repaired_components():
-    """One row becomes five where the contractor cut the trench cable."""
-    rows = pd.read_csv(io.StringIO(_TUNNEL_COMPONENTS)).to_dict("records")
+    """
+    One row becomes five where the contractor cut the trench cable.
+
+    The repair leaves two meters more fiber than it replaced, so every
+    component past it sits two meters further along the path. That shift
+    is the price of an absolute distance, and it is applied here once
+    rather than retyped into every row below the break.
+    """
+    rows = _tunnel_components(_TUNNEL_COMPONENTS).to_dict("records")
     index = next(
         i for i, row in enumerate(rows) if row["name"] == "trench B to the coil"
     )
-    rows[index : index + 1] = [
-        dict(
-            object_type="FiberSegment",
-            optical_length=15.0,
-            name="trench B to the break",
-            container="trench-cable",
-        ),
-        dict(
-            object_type="Splice",
-            optical_length=0.0,
-            name="repair splice near side",
-            container="repair-box",
-        ),
-        dict(
-            object_type="FiberSegment",
-            optical_length=2.0,
-            name="repair patch cord",
-            container="repair-cord",
-        ),
-        dict(
-            object_type="Splice",
-            optical_length=0.0,
-            name="repair splice far side",
-            container="repair-box",
-        ),
-        dict(
-            object_type="FiberSegment",
-            optical_length=10.0,
-            name="trench from the break to the coil",
-            container="trench-cable",
-        ),
-    ]
+    cut = rows[index]
+    position = cut["distance_min"]
+    replacement = []
+    for object_type, length, name, container in _TUNNEL_REPAIR:
+        replacement.append(
+            dict(
+                object_type=object_type,
+                distance_min=position,
+                distance_max=position + length,
+                name=name,
+                container=container,
+            )
+        )
+        position += length
+    shift = position - cut["distance_max"]
+    for row in rows[index + 1 :]:
+        row["distance_min"] += shift
+        row["distance_max"] += shift
+    rows[index : index + 1] = replacement
     frame = pd.DataFrame(rows)
-    frame["sequence"] = range(1, len(frame) + 1)
+    # A point component states one distance; writing its end back would
+    # make the repaired table say more than the original one does.
+    point = frame["distance_min"] == frame["distance_max"]
+    frame.loc[point, "distance_max"] = None
     return frame.to_csv(index=False)
 
 

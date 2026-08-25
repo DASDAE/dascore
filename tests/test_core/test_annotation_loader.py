@@ -70,8 +70,8 @@ def curve() -> Moveout:
         apex_time=np.datetime64("2020-01-01T00:00:05"),
         velocity=1500.0,
         standoff=30.0,
-        distance_start=0.0,
-        distance_end=200.0,
+        distance_min=0.0,
+        distance_max=200.0,
     )
 
 
@@ -83,13 +83,13 @@ def regions() -> dc.AnnotationSet:
             "id": ["r1", "r2"],
             "group": ["noise", "noise"],
             "tags": [("road", "car"), None],
-            "distance_start": [120.0, 10.0],
-            "distance_end": [340.0, 60.0],
-            "time_start": [
+            "distance_min": [120.0, 10.0],
+            "distance_max": [340.0, 60.0],
+            "time_min": [
                 np.datetime64("2020-01-01T00:00:10"),
                 np.datetime64("2020-01-01T00:00:20"),
             ],
-            "time_end": [
+            "time_max": [
                 np.datetime64("2020-01-01T00:00:12"),
                 np.datetime64("2020-01-01T00:00:22"),
             ],
@@ -126,8 +126,8 @@ def with_vertices(curve) -> dc.AnnotationSet:
             "group": ["picks", "picks", "noise"],
             "geometry": ["path", "path", "region"],
             "basis": [None, curve, None],
-            "distance_start": [np.nan, np.nan, 5.0],
-            "distance_end": [np.nan, np.nan, 15.0],
+            "distance_min": [np.nan, np.nan, 5.0],
+            "distance_max": [np.nan, np.nan, 15.0],
         }
     )
     return dc.AnnotationSet(frame, dims=DIMS, vertices=vertices)
@@ -141,11 +141,11 @@ def picks() -> dc.AnnotationSet:
             "id": ["m1", "m2"],
             "group": ["arrival", "arrival"],
             "value": ["p", "s"],
-            "time_start": [
+            "time_min": [
                 np.datetime64("2020-01-01T00:00:01"),
                 np.datetime64("2020-01-01T00:00:03"),
             ],
-            "time_end": [
+            "time_max": [
                 np.datetime64("2020-01-01T00:00:02"),
                 np.datetime64("2020-01-01T00:00:04"),
             ],
@@ -189,7 +189,7 @@ class TestRoundTrip:
 
     def test_a_set_of_no_annotations(self, tmp_path):
         """A set with columns and no rows is still that set."""
-        frame = pd.DataFrame({"id": [], "distance_start": [], "distance_end": []})
+        frame = pd.DataFrame({"id": [], "distance_min": [], "distance_max": []})
         out = dc.AnnotationSet(frame, dims=DIMS)
         assert dc.annotations(out.io.save(tmp_path / "picks")) == out
 
@@ -200,7 +200,7 @@ class TestRoundTrip:
             {"id": ["p"] * 2, "seq": [0, 1], "time": TIMES[:2], "distance": [1.0, 5.0]}
         )
         out = dc.AnnotationSet(frame, dims=DIMS, vertices=vertices)
-        held = out.io.to_dataframe()["time_start"]
+        held = out.io.to_dataframe()["time_min"]
         assert held.dtype == np.dtype("datetime64[ns]")
         assert dc.annotations(out.io.save(tmp_path / "picks")) == out
 
@@ -264,8 +264,8 @@ class TestRoundTrip:
         frame = pd.DataFrame(
             {
                 "group": ["a", "b"],
-                "distance_start": [1.0, np.nan],
-                "distance_end": [2.0, np.nan],
+                "distance_min": [1.0, np.nan],
+                "distance_max": [2.0, np.nan],
             }
         )
         annotations = dc.AnnotationSet(frame, dims=("distance",))
@@ -282,8 +282,8 @@ class TestDeclaredDtypes:
         """A set declaring a categorical and a nullable integer column."""
         frame = pd.DataFrame(
             {
-                "distance_start": [0.0, 1.0],
-                "distance_end": [1.0, 2.0],
+                "distance_min": [0.0, 1.0],
+                "distance_max": [1.0, 2.0],
                 "kind": pd.Series(["a", "b"], dtype="category"),
                 "count": pd.Series([1, None], dtype="Int64"),
             }
@@ -315,7 +315,7 @@ class TestDeclaredDtypes:
     def test_a_declared_text_dtype_keeps_blank_cells_unset(self, tmp_path):
         """Text is not cast on reload, so a blank stays a blank, not the word 'nan'."""
         frame = pd.DataFrame(
-            {"distance_start": [0.0, 1.0], "distance_end": [1.0, 2.0], "n": ["a", None]}
+            {"distance_min": [0.0, 1.0], "distance_max": [1.0, 2.0], "n": ["a", None]}
         )
         built = dc.AnnotationSet(
             frame, dims=("distance",), columns={"n": {"dtype": "str"}}
@@ -330,8 +330,8 @@ class TestDeclaredDtypes:
         """
         frame = pd.DataFrame(
             {
-                "distance_start": [0.0, 1.0, 2.0],
-                "distance_end": [1.0, 2.0, 3.0],
+                "distance_min": [0.0, 1.0, 2.0],
+                "distance_max": [1.0, 2.0, 3.0],
                 "label": ["001", "true", "2020-01-01"],
             }
         )
@@ -356,7 +356,7 @@ class TestDeclaredDtypes:
 
     def test_an_unreadable_declared_dtype(self, tmp_path):
         """A dtype naming nothing is refused on reload as it is on building."""
-        frame = pd.DataFrame({"distance_start": [0.0], "distance_end": [1.0], "n": [1]})
+        frame = pd.DataFrame({"distance_min": [0.0], "distance_max": [1.0], "n": [1]})
         directory = dc.AnnotationSet(frame, dims=("distance",)).io.save(
             tmp_path / "set"
         )
@@ -369,7 +369,7 @@ class TestDeclaredDtypes:
 
     def test_a_declaration_which_is_not_one(self, tmp_path):
         """A column spec which is no mapping is refused as a bad attrs file."""
-        frame = pd.DataFrame({"distance_start": [0.0], "distance_end": [1.0], "n": [1]})
+        frame = pd.DataFrame({"distance_min": [0.0], "distance_max": [1.0], "n": [1]})
         directory = dc.AnnotationSet(frame, dims=("distance",)).io.save(
             tmp_path / "set"
         )
@@ -382,9 +382,7 @@ class TestDeclaredDtypes:
 
     def test_a_declaration_the_cells_cannot_hold(self, tmp_path):
         """A declaration edited to something the column is not says so."""
-        frame = pd.DataFrame(
-            {"distance_start": [0.0], "distance_end": [1.0], "n": ["x"]}
-        )
+        frame = pd.DataFrame({"distance_min": [0.0], "distance_max": [1.0], "n": ["x"]})
         directory = dc.AnnotationSet(frame, dims=("distance",)).io.save(
             tmp_path / "set"
         )
@@ -520,7 +518,7 @@ class TestDurationDimensions:
         """A set whose dimension is an offset from something."""
         spans = np.array([1, 3], dtype="timedelta64[s]")
         frame = pd.DataFrame(
-            {"id": ["a"], "offset_start": spans[:1], "offset_end": spans[1:]}
+            {"id": ["a"], "offset_min": spans[:1], "offset_max": spans[1:]}
         )
         return dc.AnnotationSet(frame, dims=("offset",))
 
@@ -881,7 +879,7 @@ class TestTheTables:
     def test_a_dimension_no_row_states(self, tmp_path):
         """A column every row leaves empty constrains nothing."""
         path = tmp_path / "picks.csv"
-        path.write_text("group,time_start,time_end\nquiet,,\n")
+        path.write_text("group,time_min,time_max\nquiet,,\n")
         loaded = dc.annotations(path, dims=("time",))
         assert "time" not in loaded[0].region.bounds
 
@@ -890,8 +888,8 @@ class TestTheTables:
         frame = pd.DataFrame(
             {
                 "group": ["a"],
-                "time_start": [np.datetime64("2020-01-01T12:30")],
-                "time_end": [np.datetime64("2020-01-01T12:35")],
+                "time_min": [np.datetime64("2020-01-01T12:30")],
+                "time_max": [np.datetime64("2020-01-01T12:35")],
             }
         )
         annotations = dc.AnnotationSet(frame, dims=("time",))
@@ -905,8 +903,8 @@ class TestTheTables:
         frame = pd.DataFrame(
             {
                 "group": ["a", "b"],
-                "time_start": ["2020-01-01", blank],
-                "time_end": ["2020-01-02", blank],
+                "time_min": ["2020-01-01", blank],
+                "time_max": ["2020-01-02", blank],
             }
         )
         out = dc.AnnotationSet(frame, dims=("time",))
@@ -915,9 +913,9 @@ class TestTheTables:
 
     def test_a_text_dimension_column_agrees_with_its_region(self):
         """The frame and the geometry built from it say the same thing."""
-        frame = pd.DataFrame({"time_start": ["2020-01-01"], "time_end": ["2020-01-02"]})
+        frame = pd.DataFrame({"time_min": ["2020-01-01"], "time_max": ["2020-01-02"]})
         out = dc.AnnotationSet(frame, dims=("time",))
-        held = out.io.to_dataframe()["time_start"][0]
+        held = out.io.to_dataframe()["time_min"][0]
         assert isinstance(held, pd.Timestamp | np.datetime64)
         assert out[0].region.bounds["time"][0] == np.datetime64("2020-01-01")
 
@@ -1011,14 +1009,14 @@ class TestCollections:
     def test_a_dimension_one_set_leaves_blank(self, tmp_path):
         """A set stating no time beside one which does still holds times."""
         root = tmp_path / "sets"
-        blank = pd.DataFrame({"id": ["a"], "time_start": [None], "time_end": [None]})
+        blank = pd.DataFrame({"id": ["a"], "time_min": [None], "time_max": [None]})
         dc.AnnotationSet(blank, dims=DIMS).io.save(root / "one")
         stated = pd.DataFrame(
-            {"id": ["b"], "time_start": TIMES[:1], "time_end": TIMES[1:2]}
+            {"id": ["b"], "time_min": TIMES[:1], "time_max": TIMES[1:2]}
         )
         dc.AnnotationSet(stated, dims=DIMS).io.save(root / "two")
         merged = dc.annotations(root)
-        held = merged.io.to_dataframe()["time_start"]
+        held = merged.io.to_dataframe()["time_min"]
         assert held.dtype == np.dtype("datetime64[ns]")
         assert dc.annotations(merged.io.save(tmp_path / "flat")) == merged
 
@@ -1116,7 +1114,7 @@ class TestCollections:
             directory = root / name
             directory.mkdir(parents=True)
             (directory / "annotations.csv").write_text(
-                f"id,group,time_start,time_end\n{name},noise,1.0,2.0\n"
+                f"id,group,time_min,time_max\n{name},noise,1.0,2.0\n"
             )
         assert len(dc.annotations(root, dims=("time",))) == 2
         with pytest.raises(InvalidAnnotationError, match="states no dimensions"):
@@ -1127,7 +1125,7 @@ class TestCollections:
         root = tmp_path / "sets"
         directory = root / "hand"
         directory.mkdir(parents=True)
-        (directory / "annotations.csv").write_text("group,time_start,time_end\nq,1,2\n")
+        (directory / "annotations.csv").write_text("group,time_min,time_max\nq,1,2\n")
         (root / "attrs.json").write_text('{"dims": ["time"]}')
         assert dc.annotations(root).dims == ("time",)
         with pytest.raises(
@@ -1182,11 +1180,11 @@ class TestCollections:
             {
                 "id": ["m1", "m2"],
                 "acquisition_key": ["NET.OTHER.00.das", None],
-                "time_start": [
+                "time_min": [
                     np.datetime64("2020-01-01T00:00:31"),
                     np.datetime64("2020-01-01T00:00:33"),
                 ],
-                "time_end": [
+                "time_max": [
                     np.datetime64("2020-01-01T00:00:32"),
                     np.datetime64("2020-01-01T00:00:34"),
                 ],
@@ -1240,7 +1238,7 @@ class TestCollections:
         picks.io.save(root / "phasenet")
         blank = root / "quiet"
         blank.mkdir(parents=True)
-        (blank / "annotations.csv").write_text("group,time_start,time_end\nq,,\n")
+        (blank / "annotations.csv").write_text("group,time_min,time_max\nq,,\n")
         (blank / "attrs.json").write_text('{"dims": ["time"]}')
         assert len(dc.annotations(root)) == len(picks) + 1
 
@@ -1411,14 +1409,14 @@ class TestDeclaringDimensionsInTheTable:
     def test_a_bare_table_declares_them(self, tmp_path):
         """The dimensions travel with the file rather than with the call."""
         path = tmp_path / "picks.csv"
-        path.write_text("# dims: distance, time\ngroup,time_start,time_end\nq,1,2\n")
+        path.write_text("# dims: distance, time\ngroup,time_min,time_max\nq,1,2\n")
         loaded = dc.annotations(path)
         assert loaded.dims == ("distance", "time")
         # The header is the one below the pragma, not the pragma itself.
         assert set(loaded.io.to_dataframe().columns) == {
             "group",
-            "time_start",
-            "time_end",
+            "time_min",
+            "time_max",
         }
         assert loaded[0].group == "q"
         assert loaded[0].region.bounds["time"] == (1.0, 2.0)
@@ -1692,8 +1690,7 @@ class TestPrivateColumns:
         """A note on how something was deployed stays in the file."""
         path = tmp_path / "picks.csv"
         path.write_text(
-            "id,group,distance_start,distance_end,_crew\n"
-            "r1,noise,10.0,60.0,north crew\n"
+            "id,group,distance_min,distance_max,_crew\nr1,noise,10.0,60.0,north crew\n"
         )
         loaded = dc.annotations(path, dims=DIMS)
         assert "_crew" not in loaded.io.to_dataframe().columns
@@ -1765,11 +1762,11 @@ class TestParquet:
                 "group": ["noise", "quiet"],
                 "value": ["car", 3],
                 "tags": [("road", "car"), None],
-                "time_start": [
+                "time_min": [
                     np.datetime64("2020-01-01T00:00:10"),
                     np.datetime64("2020-01-01T00:00:20"),
                 ],
-                "time_end": [
+                "time_max": [
                     np.datetime64("2020-01-01T00:00:12"),
                     np.datetime64("2020-01-01T00:00:22"),
                 ],

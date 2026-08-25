@@ -41,8 +41,8 @@ def region_set():
         {
             "group": ["event", "event", "noisy"],
             "value": ["car", "truck", None],
-            "distance_start": [10.0, 30.0, 0.0],
-            "distance_end": [80.0, 90.0, 100.0],
+            "distance_min": [10.0, 30.0, 0.0],
+            "distance_max": [80.0, 90.0, 100.0],
         }
     )
     return AnnotationSet(frame, dims=DIMS)
@@ -57,8 +57,8 @@ def path_set():
             "group": ["pick", "pick"],
             "value": ["car", "truck"],
             "geometry": ["path", "region"],
-            "distance_start": [np.nan, 10.0],
-            "distance_end": [np.nan, 80.0],
+            "distance_min": [np.nan, 10.0],
+            "distance_max": [np.nan, 80.0],
         }
     )
     vertices = pd.DataFrame(
@@ -156,8 +156,8 @@ class TestConstruction:
             {
                 "id": ["a", "b", "c"],
                 "geometry": ["path", "", None],
-                "distance_start": [np.nan, 10.0, 20.0],
-                "distance_end": [np.nan, 80.0, 90.0],
+                "distance_min": [np.nan, 10.0, 20.0],
+                "distance_max": [np.nan, 80.0, 90.0],
             }
         )
         vertices = pd.DataFrame(
@@ -232,7 +232,7 @@ class TestDimensionSpelling:
     def test_timedelta_endpoints_keep_their_type(self):
         """A bound on a lag dimension is a duration, not the integer behind it."""
         lags = np.array([1, 5], dtype="timedelta64[s]")
-        frame = pd.DataFrame({"time_start": lags[:1], "time_end": lags[1:]})
+        frame = pd.DataFrame({"time_min": lags[:1], "time_max": lags[1:]})
         start, end = AnnotationSet(frame, dims=DIMS)[0].region.bounds["time"]
         assert isinstance(start, np.timedelta64)
         assert isinstance(end, np.timedelta64)
@@ -243,36 +243,36 @@ class TestDimensionSpelling:
 
     def test_unstated_cell_is_unconstrained(self):
         """A blank cell constrains nothing, even where the column exists."""
-        frame = pd.DataFrame({"distance_start": [np.nan], "distance_end": [np.nan]})
+        frame = pd.DataFrame({"distance_min": [np.nan], "distance_max": [np.nan]})
         assert AnnotationSet(frame, dims=DIMS)[0].region.bounds == {}
 
     def test_both_spellings_refused(self):
         """One dimension is spelled one way."""
-        frame = pd.DataFrame({"time": [1], "time_start": [1], "time_end": [2]})
+        frame = pd.DataFrame({"time": [1], "time_min": [1], "time_max": [2]})
         with pytest.raises(ParameterError, match="both as a point"):
             AnnotationSet(frame, dims=DIMS)
 
     def test_half_a_range_refused(self):
         """A start with no end does not bound anything."""
         with pytest.raises(ParameterError, match="half a range"):
-            AnnotationSet(pd.DataFrame({"time_start": [1]}), dims=DIMS)
+            AnnotationSet(pd.DataFrame({"time_min": [1]}), dims=DIMS)
 
     def test_reversed_range_refused(self):
         """An impossible range is structural, so the set does not load."""
-        frame = pd.DataFrame({"distance_start": [9.0], "distance_end": [1.0]})
+        frame = pd.DataFrame({"distance_min": [9.0], "distance_max": [1.0]})
         with pytest.raises(ParameterError, match="ends before it starts"):
             AnnotationSet(frame, dims=DIMS)
 
     def test_reversed_range_names_its_row(self):
         """The refused row is named, so a long set says which one."""
-        frame = pd.DataFrame({"distance_start": [0.0, 9.0], "distance_end": [1.0, 1.0]})
+        frame = pd.DataFrame({"distance_min": [0.0, 9.0], "distance_max": [1.0, 1.0]})
         with pytest.raises(ParameterError, match="Row 1"):
             AnnotationSet(frame, dims=DIMS)
 
-    @pytest.mark.parametrize("side", ["distance_start", "distance_end"])
+    @pytest.mark.parametrize("side", ["distance_min", "distance_max"])
     def test_half_a_range_cell_refused(self, side):
         """A row states both ends or neither; one end bounds nothing."""
-        frame = pd.DataFrame({"distance_start": [np.nan], "distance_end": [np.nan]})
+        frame = pd.DataFrame({"distance_min": [np.nan], "distance_max": [np.nan]})
         frame[side] = [1.0]
         with pytest.raises(ParameterError, match="half a distance range"):
             AnnotationSet(frame, dims=DIMS)
@@ -280,23 +280,23 @@ class TestDimensionSpelling:
     def test_incomparable_range_refused(self):
         """A range whose ends cannot be compared says so, not TypeError."""
         when = np.datetime64("2020-01-01", "ns")
-        frame = pd.DataFrame({"distance_start": [1.0], "distance_end": [when]})
+        frame = pd.DataFrame({"distance_min": [1.0], "distance_max": [when]})
         with pytest.raises(ParameterError, match="cannot be compared"):
             AnnotationSet(frame, dims=DIMS)
 
-    @pytest.mark.parametrize("spelling", ["distance", "distance_start"])
+    @pytest.mark.parametrize("spelling", ["distance", "distance_min"])
     def test_text_in_a_dimension_refused(self, spelling):
         """A dimension is a coordinate, so a word is no place on it."""
         frame = pd.DataFrame({spelling: ["alpha"]})
         if spelling != "distance":
-            frame["distance_end"] = ["omega"]
+            frame["distance_max"] = ["omega"]
         with pytest.raises(ParameterError, match="neither numbers, times"):
             AnnotationSet(frame, dims=DIMS)
 
     def test_numeric_text_in_a_dimension_is_read_as_numbers(self):
         """Read as a stored table reads it, so the two cannot disagree."""
         frame = pd.DataFrame(
-            {"distance_start": ["1.5", None], "distance_end": ["2", None]}
+            {"distance_min": ["1.5", None], "distance_max": ["2", None]}
         )
         out = AnnotationSet(frame, dims=DIMS)
         assert out[0].region.bounds["distance"] == (1.5, 2.0)
@@ -349,9 +349,9 @@ class TestDimensionSpelling:
     def test_a_duration_dimension_is_a_coordinate(self):
         """A dimension may be an offset from something, which is a duration."""
         spans = np.array([1, 3], dtype="timedelta64[s]")
-        frame = pd.DataFrame({"offset_start": spans[:1], "offset_end": spans[1:]})
+        frame = pd.DataFrame({"offset_min": spans[:1], "offset_max": spans[1:]})
         out = AnnotationSet(frame, dims=("offset",))
-        assert out.io.to_dataframe()["offset_start"].dtype == "timedelta64[ns]"
+        assert out.io.to_dataframe()["offset_min"].dtype == "timedelta64[ns]"
 
     def test_a_dimension_mixing_numbers_and_times(self):
         """A number already read as one is not re-read as an epoch."""
@@ -378,7 +378,7 @@ class TestDimensionSpelling:
 
     def test_datetime_endpoints_keep_their_type(self):
         """A time bound is a time, not the integer behind it."""
-        frame = pd.DataFrame({"time_start": TIMES[:1], "time_end": TIMES[2:]})
+        frame = pd.DataFrame({"time_min": TIMES[:1], "time_max": TIMES[2:]})
         start, end = AnnotationSet(frame, dims=DIMS)[0].region.bounds["time"]
         assert isinstance(start, np.datetime64)
         assert isinstance(end, np.datetime64)
@@ -397,16 +397,27 @@ class TestColumns:
         out = AnnotationSet(pd.DataFrame({"score": [np.nan]}), dims=DIMS)
         assert "score" not in out[0].extra
 
+    def test_a_retired_range_spelling_says_what_to_write(self):
+        """A set written before the rename is told its columns' new names.
+
+        Left alone, `<dim>_start`/`<dim>_end` read as two unrelated extras
+        and the annotation covers everything instead of what it states --
+        a wrong answer rather than a refusal.
+        """
+        frame = pd.DataFrame({"group": ["quiet"], "time_start": [0], "time_end": [1]})
+        with pytest.raises(ParameterError, match="now spells _min/_max"):
+            AnnotationSet(frame, dims=DIMS)
+
     def test_undeclared_range_pair_refused(self):
         """A range naming no declared dimension is a forgotten dimension."""
-        frame = pd.DataFrame({"depth_start": [1], "depth_end": [2]})
+        frame = pd.DataFrame({"depth_min": [1], "depth_max": [2]})
         with pytest.raises(ParameterError, match="name no declared dimension"):
             AnnotationSet(frame, dims=DIMS)
 
     def test_lone_range_column_is_an_extra(self):
         """One half of a range names no dimension, so it is just a column."""
-        out = AnnotationSet(pd.DataFrame({"depth_start": [1]}), dims=DIMS)
-        assert out[0].extra["depth_start"] == 1
+        out = AnnotationSet(pd.DataFrame({"depth_min": [1]}), dims=DIMS)
+        assert out[0].extra["depth_min"] == 1
 
     def test_the_set_column_is_a_label(self):
         """A row read with others says which set it came from."""
@@ -429,7 +440,7 @@ class TestColumns:
     def test_a_private_column_states_no_dimension(self):
         """Underscoring a range column makes it nothing, not a bound."""
         frame = pd.DataFrame(
-            {"group": ["a"], "_distance_start": [1.0], "_distance_end": [2.0]}
+            {"group": ["a"], "_distance_min": [1.0], "_distance_max": [2.0]}
         )
         out = AnnotationSet(frame, dims=DIMS)
         assert out[0].region.bounds == {}
@@ -521,8 +532,8 @@ class TestColumns:
         """A categorical extra is carried like any other, blank cells and all."""
         frame = pd.DataFrame(
             {
-                "distance_start": [0.0, 1.0],
-                "distance_end": [1.0, 2.0],
+                "distance_min": [0.0, 1.0],
+                "distance_max": [1.0, 2.0],
                 "note": pd.Series(["a", ""], dtype="category"),
             }
         )
@@ -532,7 +543,7 @@ class TestColumns:
 
     def test_a_column_named_by_something_other_than_a_string(self):
         """A table names a column by a string, so a set does too."""
-        frame = pd.DataFrame({"distance_start": [0.0], "distance_end": [1.0], 1: ["x"]})
+        frame = pd.DataFrame({"distance_min": [0.0], "distance_max": [1.0], 1: ["x"]})
         with pytest.raises(ParameterError, match="other than a string"):
             AnnotationSet(frame, dims=DIMS)
 
@@ -610,8 +621,8 @@ class TestValues:
             {
                 "group": ["g", "g"],
                 "value": ["a", "b"],
-                "distance_start": [0.0, 5.0],
-                "distance_end": [10.0, 15.0],
+                "distance_min": [0.0, 5.0],
+                "distance_max": [10.0, 15.0],
             }
         )
         assert len(AnnotationSet(frame, dims=DIMS)) == 2
@@ -738,7 +749,7 @@ class TestIdentity:
         bounds beside it.
         """
         frame = pd.DataFrame(
-            {"id": [1], "value": [1], "distance_start": [0.0], "distance_end": [1.0]}
+            {"id": [1], "value": [1], "distance_min": [0.0], "distance_max": [1.0]}
         )
         out = AnnotationSet(frame, dims=DIMS)[0]
         assert out.id == "1"
@@ -882,7 +893,7 @@ class TestVertices:
     def test_derived_bounds_reach_the_frame(self, path_set):
         """The derived box is a real column, so table operations see it."""
         row = path_set.io.to_dataframe().iloc[0]
-        assert (row["distance_start"], row["distance_end"]) == (1.0, 9.0)
+        assert (row["distance_min"], row["distance_max"]) == (1.0, 9.0)
 
     def test_stated_bounds_must_agree(self):
         """The vertices are the shape; a box which disagrees is refused."""
@@ -890,8 +901,8 @@ class TestVertices:
             {
                 "id": ["x"],
                 "geometry": ["path"],
-                "distance_start": [99.0],
-                "distance_end": [100.0],
+                "distance_min": [99.0],
+                "distance_max": [100.0],
             }
         )
         vertices = pd.DataFrame(
@@ -1163,9 +1174,9 @@ class TestAttrs:
             AnnotationSetAttrs(dims=("time", "time"))
 
     def test_dim_may_not_alias_another_dims_range(self):
-        """`distance_start` would be both a point and the start of `distance`."""
+        """`distance_min` would be both a point and the start of `distance`."""
         with pytest.raises(ValidationError, match="spelled like the range column"):
-            AnnotationSetAttrs(dims=("distance", "distance_start"))
+            AnnotationSetAttrs(dims=("distance", "distance_min"))
 
     def test_dim_may_not_shadow_a_reserved_column(self):
         """A dimension named `group` would collide with the group column."""
@@ -1281,8 +1292,8 @@ class TestBasis:
             apex_distance=50.0,
             apex_time=TIMES[0],
             velocity=3000.0,
-            distance_start=0.0,
-            distance_end=100.0,
+            distance_min=0.0,
+            distance_max=100.0,
         )
         drawn = out.vertices(11)
         assert drawn["time"].min() == TIMES[0]
@@ -1294,8 +1305,8 @@ class TestBasis:
             apex_distance=50.0,
             apex_time=TIMES[0],
             velocity=3000.0,
-            distance_start=0.0,
-            distance_end=100.0,
+            distance_min=0.0,
+            distance_max=100.0,
         )
         seconds = (out.vertices(3)["time"] - TIMES[0]) / np.timedelta64(1, "s")
         assert np.allclose(seconds, [50 / 3000, 0.0, 50 / 3000])
@@ -1306,8 +1317,8 @@ class TestBasis:
             "apex_distance": 50.0,
             "apex_time": TIMES[0],
             "velocity": 3000.0,
-            "distance_start": 0.0,
-            "distance_end": 100.0,
+            "distance_min": 0.0,
+            "distance_max": 100.0,
         }
         straight = Moveout(**shared).vertices(3)["time"]
         curved = Moveout(**shared, standoff=40.0).vertices(3)["time"]
@@ -1320,8 +1331,8 @@ class TestBasis:
             apex_distance=0.0,
             apex_time=TIMES[0],
             velocity=1000.0,
-            distance_start=0.0,
-            distance_end=10.0,
+            distance_min=0.0,
+            distance_max=10.0,
         )
         assert out.vertices(2)["time"].dtype == np.dtype("datetime64[ns]")
 
@@ -1331,8 +1342,8 @@ class TestBasis:
             apex_distance=0.0,
             apex_time=TIMES[0],
             velocity=1000.0,
-            distance_start=0.0,
-            distance_end=1.0,
+            distance_min=0.0,
+            distance_max=1.0,
         )
         assert out.dims == ("distance", "time")
 
@@ -1343,8 +1354,8 @@ class TestBasis:
                 apex_distance=0.0,
                 apex_time=TIMES[0],
                 velocity=0.0,
-                distance_start=0.0,
-                distance_end=1.0,
+                distance_min=0.0,
+                distance_max=1.0,
             )
 
     def test_moveout_standoff_not_negative(self):
@@ -1355,8 +1366,8 @@ class TestBasis:
                 apex_time=TIMES[0],
                 velocity=1.0,
                 standoff=-1.0,
-                distance_start=0.0,
-                distance_end=1.0,
+                distance_min=0.0,
+                distance_max=1.0,
             )
 
     def test_moveout_span_must_be_positive(self):
@@ -1366,8 +1377,8 @@ class TestBasis:
                 apex_distance=0.0,
                 apex_time=TIMES[0],
                 velocity=1.0,
-                distance_start=1.0,
-                distance_end=1.0,
+                distance_min=1.0,
+                distance_max=1.0,
             )
 
     @pytest.mark.parametrize("count", [0, 1])
@@ -1404,8 +1415,8 @@ class TestBasis:
             apex_time=TIMES[0],
             velocity=3000.0,
             standoff=40.0,
-            distance_start=0.0,
-            distance_end=100.0,
+            distance_min=0.0,
+            distance_max=100.0,
         )
         drawn = basis.vertices(5)
         vertices = pd.DataFrame({"id": ["m"] * 5, "seq": range(5), **drawn})
@@ -1496,8 +1507,8 @@ class TestBasisColumn:
             apex_distance=0.0,
             apex_time=TIMES[0],
             velocity=2.0,
-            distance_start=0.0,
-            distance_end=1.0,
+            distance_min=0.0,
+            distance_max=1.0,
         )
         frame = pd.DataFrame({"id": ["x"], "geometry": ["path"], "basis": [basis]})
         out = AnnotationSet(frame, dims=DIMS, vertices=self._vertices())
@@ -1554,8 +1565,8 @@ class TestSerialization:
                 apex_distance=0.0,
                 apex_time=TIMES[0],
                 velocity=1.0,
-                distance_start=0.0,
-                distance_end=1.0,
+                distance_min=0.0,
+                distance_max=1.0,
             ),
         ],
     )
@@ -1569,8 +1580,8 @@ class TestSerialization:
             apex_distance=0.0,
             apex_time=TIMES[0],
             velocity=2.0,
-            distance_start=0.0,
-            distance_end=1.0,
+            distance_min=0.0,
+            distance_max=1.0,
         )
         path = Path(
             region=Region(bounds={"distance": (0.0, 1.0)}),

@@ -48,7 +48,7 @@ def _effective_epoch(*models):
     """The epoch a model is really valid over, clipped by its containers."""
     start, end = pd.NaT, pd.NaT
     for model in models:
-        low, high = model.start_time, model.end_time
+        low, high = model.time_min, model.time_max
         if not pd.isnull(low):
             start = low if pd.isnull(start) else max(start, low)
         if not pd.isnull(high):
@@ -97,9 +97,9 @@ def _sample_distances(path, low: float, high: float, count: int) -> np.ndarray:
 
 def _epoch_label(path) -> str:
     """Name a path epoch by when it starts, for a chart title."""
-    if pd.isnull(path.start_time):
+    if pd.isnull(path.time_min):
         return "from the beginning"
-    return f"from {str(path.start_time)[:10]}"
+    return f"from {str(path.time_min)[:10]}"
 
 
 def _select_path(inventory, optical_path=None, acquisition_key=None, time=None):
@@ -211,14 +211,12 @@ def _track_frame(path, acquisitions) -> pd.DataFrame:
                 "label": acquisition.code,
             }
         )
-    for component, (low, high) in zip(
-        path.optical_components, path.component_intervals(), strict=True
-    ):
+    for component in path.optical_components:
         rows.append(
             {
                 "lane": "components",
-                "start": low,
-                "end": high,
+                "start": component.distance_min,
+                "end": component.distance_max,
                 "value": type(component).__name__,
                 "label": component.name or type(component).__name__,
             }
@@ -227,8 +225,8 @@ def _track_frame(path, acquisitions) -> pd.DataFrame:
         rows.append(
             {
                 "lane": "coupling",
-                "start": coupling.start_distance,
-                "end": coupling.end_distance,
+                "start": coupling.distance_min,
+                "end": coupling.distance_max,
                 "value": coupling.coupling_type,
                 "label": coupling.coupling_type,
             }
@@ -237,8 +235,8 @@ def _track_frame(path, acquisitions) -> pd.DataFrame:
         rows.append(
             {
                 "lane": item.group,
-                "start": item.start_distance,
-                "end": item.end_distance,
+                "start": item.distance_min,
+                "end": item.distance_max,
                 "value": item.value,
                 # The renderer's own rule for what a value reads as.
                 "label": _default_label(item.value),
@@ -310,13 +308,13 @@ def _select_tracks(frame, tracks, path):
 
 
 def _distance_window(asked, span):
-    """Resolve a (low, high) distance selection against a path's span."""
+    """Resolve a (min, max) distance selection against a path's span."""
     if asked is None:
         return span
     try:
         low, high = asked
     except (TypeError, ValueError):
-        msg = f"distance={asked!r} must be a (low, high) pair."
+        msg = f"distance={asked!r} must be a (min, max) pair."
         raise ParameterError(msg) from None
     low = span[0] if low is None or low is ... else float(low)
     high = span[1] if high is None or high is ... else float(high)
@@ -372,7 +370,7 @@ def path(
         The instant to resolve at, which is how one epoch of a repaired
         path is chosen.
     distance
-        The optical distances to draw between, as (low, high). Either
+        The optical distances to draw between, as (min, max). Either
         end may be None, or ..., to run to the path's own bound. A long
         lead-in otherwise crushes the instrumented part into a corner.
     tracks
@@ -426,7 +424,7 @@ def path(
             "state none, so there is no distance axis to draw."
         )
         raise ParameterError(msg)
-    limits = _distance_window(distance, (chosen.start_distance, chosen.end_distance))
+    limits = _distance_window(distance, (chosen.distance_min, chosen.distance_max))
     frame = _track_frame(chosen, _path_acquisitions(array, chosen, time))
     # The palette is the path's, not this figure's, so drawing some of the
     # tracks colors them as drawing all of them does.
@@ -512,13 +510,13 @@ def path(
 
 
 def _time_window(asked):
-    """Resolve a (start, end) time selection to matplotlib dates."""
+    """Resolve a (min, max) time selection to matplotlib dates."""
     if asked is None:
         return None, None
     try:
         low, high = asked
     except (TypeError, ValueError):
-        msg = f"time={asked!r} must be a (start, end) pair."
+        msg = f"time={asked!r} must be a (min, max) pair."
         raise ParameterError(msg) from None
 
     def one(value):
@@ -701,7 +699,7 @@ def map_path(
     pieces = []
     for address, _, one in chosen:
         distances = _sample_distances(
-            one, one.start_distance, one.end_distance, n_samples
+            one, one.distance_min, one.distance_max, n_samples
         )
         coords = one.coordinates_at(distances, crs)
         points = np.column_stack([coords[:, x_axis], coords[:, y_axis]])
@@ -940,7 +938,7 @@ def timeline(
     color
         "interrogator", "data_type", or "kind".
     time
-        The times to draw between, as (start, end). Either end may be
+        The times to draw between, as (min, max). Either end may be
         None, or ..., to run to what the epochs themselves state.
     ax
         An Axes to draw on.

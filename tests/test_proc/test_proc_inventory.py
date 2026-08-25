@@ -117,8 +117,8 @@ class TestResolution:
         old = inventory.networks[0].fiber_arrays[0]
         acq = old.acquisitions[0]
         middle = patch.get_coord("time").values[len(patch.get_coord("time")) // 2]
-        first = acq.new(end_time=middle, gauge_length=10.0)
-        second = acq.new(start_time=middle, gauge_length=20.0)
+        first = acq.new(time_max=middle, gauge_length=10.0)
+        second = acq.new(time_min=middle, gauge_length=20.0)
         split = inventory.replace(old, old.new(acquisitions=(first, second)))
         with pytest.raises(PatchError, match="spans a change of acquisition"):
             patch.enrich(split, coords=False)
@@ -331,7 +331,7 @@ class TestGeometryColumns:
         segment = Geometry(
             name="hole",
             distance=(100.0, 200.0),
-            coordinates={"borehole_depth": (0.0, 100.0)},
+            columns={"borehole_depth": (0.0, 100.0)},
             units={"borehole_depth": "m"},
             **kwargs,
         )
@@ -381,7 +381,7 @@ class TestGeometryColumns:
         segment = Geometry(
             name="hole",
             distance=(100.0, 200.0),
-            coordinates={"borehole_depth": (0.0, 100.0)},
+            columns={"borehole_depth": (0.0, 100.0)},
         )
         inv = _replace_path(inventory, geometry=(segment,))
         with pytest.raises(PatchError, match="defines no 'x'"):
@@ -396,12 +396,12 @@ class TestGeometryColumns:
         first = Geometry(
             name="hole 1",
             distance=(100.0, 150.0),
-            coordinates={"borehole_depth": (0.0, 50.0)},
+            columns={"borehole_depth": (0.0, 50.0)},
         )
         second = Geometry(
             name="hole 2",
             distance=(300.0, 350.0),
-            coordinates={"borehole_depth": (0.0, 50.0)},
+            columns={"borehole_depth": (0.0, 50.0)},
         )
         path = inventory.networks[0].fiber_arrays[0].optical_paths[0]
         inv = _replace_path(inventory, geometry=(*path.geometry, first, second))
@@ -443,7 +443,7 @@ class TestCoords:
         """A numeric group carries NaN where uncovered."""
         labels = (
             OpticalPathLabel(
-                start_distance=100.0, end_distance=200.0, group="frost", value=1.5
+                distance_min=100.0, distance_max=200.0, group="frost", value=1.5
             ),
         )
         inv = _replace_path(inventory, labels=labels)
@@ -521,7 +521,7 @@ class TestCoords:
         """A label marking a spot documents it without covering it."""
         labels = (
             OpticalPathLabel(
-                start_distance=150.0, end_distance=150.0, group="zone", value="clamp"
+                distance_min=150.0, distance_max=150.0, group="zone", value="clamp"
             ),
         )
         inv = _replace_path(inventory, labels=labels)
@@ -590,8 +590,8 @@ class TestEdgeCases:
         path = array.optical_paths[0]
         time = patch.get_coord("time")
         middle = time.values[len(time) // 2]
-        first = path.new(end_time=middle)
-        second = path.new(start_time=middle, name="repaired")
+        first = path.new(time_max=middle)
+        second = path.new(time_min=middle, name="repaired")
         split = inventory.replace(array, array.new(optical_paths=(first, second)))
         with pytest.raises(PatchError, match="spans a change of optical path"):
             patch.enrich(split, coords=False)
@@ -623,7 +623,7 @@ class TestEdgeCases:
         flat = Geometry(
             name="flat",
             distance=(100.0, 400.0),
-            coordinates={"x": (0.0, 1.0), "y": (0.0, 1.0)},
+            columns={"x": (0.0, 1.0), "y": (0.0, 1.0)},
         )
         crs = CoordinateReferenceSystem(
             coordinate_labels=("easting", "northing"), units=("meter", "meter")
@@ -729,10 +729,10 @@ class TestProjectionDetails:
         inv = _replace_path(
             inventory,
             coupling=(
-                coupling.new(end_distance=200.0),
+                coupling.new(distance_max=200.0),
                 coupling.new(
-                    start_distance=200.0,
-                    end_distance=300.0,
+                    distance_min=200.0,
+                    distance_max=300.0,
                     medium="clay_and_gravel_backfill",
                 ),
             ),
@@ -758,7 +758,7 @@ class TestEnrichContracts:
     def test_endpoint_belongs_to_its_own_run(self, patch, inventory):
         """A track's coverage end is local: a later interval cannot move it."""
         path = inventory.networks[0].fiber_arrays[0].optical_paths[0]
-        far = path.coupling[0].new(start_distance=300.0, end_distance=400.0)
+        far = path.coupling[0].new(distance_min=300.0, distance_max=400.0)
         with_far = _replace_path(inventory, coupling=(path.coupling[0], far))
         near = patch.enrich(inventory, attrs=False, coords=("coupling.medium",))
         both = with_far.networks and patch.enrich(
@@ -771,10 +771,10 @@ class TestEnrichContracts:
     def test_geometry_endpoint_is_local(self, patch, inventory):
         """The same rule holds for the geometry track."""
         columns = {"x": (0.0, 1.0), "y": (0.0, 1.0), "z": (0.0, 1.0)}
-        first = Geometry(distance=(100.0, 200.0), coordinates=columns)
+        first = Geometry(distance=(100.0, 200.0), columns=columns)
         second = Geometry(
             distance=(300.0, 400.0),
-            coordinates={"x": (3.0, 4.0), "y": (3.0, 4.0), "z": (3.0, 4.0)},
+            columns={"x": (3.0, 4.0), "y": (3.0, 4.0), "z": (3.0, 4.0)},
         )
         inv = _replace_path(inventory, geometry=(first, second))
         out = patch.enrich(inv, attrs=False, coords=("x",))
@@ -842,15 +842,15 @@ class TestEnrichContracts:
     def test_reserved_label_group_raises(self, inventory):
         """A group named after a coordinate would shadow it at enrichment."""
         path = inventory.networks[0].fiber_arrays[0].optical_paths[0]
-        label = OpticalPathLabel(start_distance=100.0, end_distance=200.0, group="time")
+        label = OpticalPathLabel(distance_min=100.0, distance_max=200.0, group="time")
         with pytest.raises(InvalidInventoryError, match="reserved name"):
             path.new(labels=(label,)).check()
 
     def test_membership_group_is_a_union(self, patch, inventory):
         """Membership groups overlap; a channel belongs if any interval has it."""
         labels = (
-            OpticalPathLabel(start_distance=100.0, end_distance=250.0, group="wet"),
-            OpticalPathLabel(start_distance=200.0, end_distance=400.0, group="wet"),
+            OpticalPathLabel(distance_min=100.0, distance_max=250.0, group="wet"),
+            OpticalPathLabel(distance_min=200.0, distance_max=400.0, group="wet"),
         )
         inv = _replace_path(inventory, labels=labels)
         out = patch.enrich(inv, attrs=False, coords=("wet",))
@@ -1009,7 +1009,7 @@ class TestEmptyIsUnambiguous:
         """A group saying nothing would read as an uncovered channel."""
         with pytest.raises(ValidationError, match="may not be the empty string"):
             OpticalPathLabel(
-                start_distance=0.0, end_distance=10.0, group="zone", value=""
+                distance_min=0.0, distance_max=10.0, group="zone", value=""
             )
 
     def test_empty_key_is_not_resolvable(self, inventory):
