@@ -64,6 +64,21 @@ with config_context(display_max_patches=100):
     print(spool)  # a bigger spool names the limit rather than its extents
 ```
 
+Where a display can render HTML -- a notebook, or this documentation --
+an object draws a panel whose sections fold, rather than the text above.
+`display_html` turns that off and sends every display back to the text,
+which says the same words. `display_html_open_lines` (12 by default) is
+how many lines a section may hold and still open on its own; a longer
+one, such as a patch's data, starts folded, and `0` folds every section.
+
+```python
+with config_context(display_html=False):
+    patch  # the text repr, even in a notebook
+
+with config_context(display_html_open_lines=0):
+    patch  # every section folded until it is asked for
+```
+
 For remote IO settings such as `allow_remote_cache`,
 `allow_remote_cache_for_metadata`, `warn_on_remote_cache`,
 `remote_hdf5_block_size`, `remote_hdf5_max_blocks`, and `warn_on_gc_pause`,

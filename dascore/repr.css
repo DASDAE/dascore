@@ -21,7 +21,7 @@ each given a value per theme below.
   --dc-cyan: #0e7490;
   --dc-dark_orange: #bc4c00;
   --dc-grey50: #6b7280;
-  --dc-rule: color-mix(in oklab, currentColor 22%, transparent);
+  --dc-rule: color-mix(in oklab, currentcolor 22%, transparent);
   font-family: var(--jp-code-font-family, ui-monospace, SFMono-Regular, Menlo, monospace);
   font-size: var(--jp-code-font-size, 0.8125rem);
   line-height: 1.5;
