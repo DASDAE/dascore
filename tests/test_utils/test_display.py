@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 import pytest
 from pydantic import BaseModel, ConfigDict
+from rich.console import Console
+from rich.style import Style
 from rich.text import Text
 
 import dascore as dc
@@ -441,3 +445,35 @@ class TestGroupNames:
         """A group which recorded nothing is not named by an empty part."""
         frame = pd.DataFrame({"tag": ["a", ""], "kind": ["das", "dss"]})
         assert group_names(frame) == ["a · das", "dss"]
+
+
+class TestDascoreStyles:
+    """Tests for the style table every repr draws from."""
+
+    @pytest.mark.parametrize("name", sorted(dascore_styles))
+    def test_every_style_parses(self, name):
+        """
+        Rich must be able to read every style dascore states.
+
+        It resolves a style it cannot parse to a blank one rather than
+        raising, so a misspelling here does not fail a test, it silently
+        stops colouring whatever states it.
+        """
+        assert Style.parse(dascore_styles[name])
+
+    @pytest.mark.parametrize("name", sorted(dascore_styles))
+    def test_every_style_colours_something(self, name):
+        """A style which resolves to nothing is not styling anything."""
+        assert Console().get_style(dascore_styles[name]) != Style()
+
+    @pytest.mark.parametrize("name", sorted(dascore_styles))
+    def test_every_style_is_used(self, name):
+        """
+        A style nothing asks for is a style no one maintains.
+
+        Two of them had gone unreferenced long enough to stop parsing
+        without anyone noticing.
+        """
+        used = Path(dc.__file__).parent.rglob("*.py")
+        sources = [x.read_text() for x in used if x.name != "constants.py"]
+        assert any(f'"{name}"' in x or f"'{name}'" in x for x in sources)

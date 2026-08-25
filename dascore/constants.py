@@ -303,20 +303,20 @@ conflict
 """.strip()
 
 
-# Rich styles for various object displays.
+# Rich styles for various object displays. Every value has to be one rich can
+# parse: it resolves an unparsable style to a blank one rather than raising,
+# so a misspelling here does not fail, it silently stops colouring.
 dascore_styles = dict(
     dc_blue="blue",
     dc_red="red",
     dc_yellow="yellow",
     default_coord="bold",
     coord_range="bold green",
-    coord_monotonic="bold grey",
+    coord_monotonic="bold grey50",
     coord_segmented="bold cyan",
-    coord_array="bold orange",
-    coord_degenerate="bold red",
+    coord_array="bold dark_orange",
     coord_non="bold red",
-    units="bright blue",
-    dtypes="bright black",
+    units="bright_blue",
     keys="grey50",
     # these are for formatting date times
     ymd="blue",
