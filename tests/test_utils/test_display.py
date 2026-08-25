@@ -15,7 +15,11 @@ from rich.text import Text
 import dascore as dc
 from dascore.config import config_context
 from dascore.constants import dascore_styles
-from dascore.core.annotations import AnnotationColumn, AnnotationSetAttrs
+from dascore.core.annotations import (
+    AnnotationColumn,
+    AnnotationSet,
+    AnnotationSetAttrs,
+)
 from dascore.core.inventory import Acquisition, Cable, Network
 from dascore.utils.display import (
     Raw,
@@ -485,6 +489,26 @@ class TestDascoreStyles:
         assert any(f'"{name}"' in x or f"'{name}'" in x for x in sources)
 
 
+def resolved_styles(text: Text) -> list:
+    """
+    The style each character of a Text actually renders with.
+
+    Spans are compared this way rather than as a list because how they
+    are grouped is not what a reader sees: a span which straddles a line
+    break comes back as two touching ones, and a base style comes back
+    as a span saying the same thing. Every character still draws the
+    same, which is the invariant worth holding.
+    """
+    console = Console()
+    base = console.get_style(text.style, default="")
+    out = [base] * len(text.plain)
+    for span in text.spans:
+        style = console.get_style(span.style, default="")
+        for index in range(span.start, min(span.end, len(out))):
+            out[index] = out[index] + style
+    return out
+
+
 @pytest.fixture(scope="module")
 def repr_blocks():
     """Every kind of block a dascore repr is built from."""
@@ -516,10 +540,55 @@ class TestSplitBlock:
         for name, text in repr_blocks.items():
             assert render_text(split_block(text)) == text, name
 
-    def test_round_trip_keeps_spans(self, repr_blocks):
+    def test_round_trip_keeps_styling(self, repr_blocks):
         """Colour survives the trip, not only the characters."""
         for name, text in repr_blocks.items():
-            assert render_text(split_block(text)).spans == text.spans, name
+            trip = render_text(split_block(text))
+            assert resolved_styles(trip) == resolved_styles(text), name
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            Text(""),
+            Text("\n"),
+            Text("\nbody"),
+            Text("head\n"),
+            Text("head\n\n"),
+            Text("solo"),
+            Text("a\n\nb"),
+            Text("head\nbody", style="bold green"),
+        ],
+        ids=[
+            "empty",
+            "newline",
+            "leading",
+            "trailing",
+            "two_trailing",
+            "no_newline",
+            "blank_middle",
+            "base_style",
+        ],
+    )
+    def test_round_trips_whatever_the_shape(self, text):
+        """Blocks a producer has not written yet still have to survive."""
+        trip = render_text(split_block(text))
+        assert trip.plain == text.plain
+        assert resolved_styles(trip) == resolved_styles(text)
+
+    def test_a_span_across_the_break_still_draws_the_same(self):
+        """
+        A span which straddles the split comes back as two.
+
+        The body carries the newline that split it, so the two spans
+        touch and the break itself keeps its style. What a reader sees
+        is unchanged; only the grouping differs.
+        """
+        text = Text("head\nbody")
+        text.stylize("bold", 2, 7)
+        trip = render_text(split_block(text))
+        assert trip.plain == text.plain
+        assert resolved_styles(trip) == resolved_styles(text)
+        assert len(trip.spans) == 2
 
     def test_a_trailing_blank_line_survives(self):
         """
@@ -553,9 +622,14 @@ class TestRenderText:
         text = Text("   already    spaced")
         assert render_text(Raw(text)) == text
 
-    def test_section_joins_body_with_newlines(self):
-        """A body sits on the lines under the title."""
-        node = Section(Text("title"), (Raw(Text("a")), Raw(Text("b"))))
+    def test_a_body_carries_its_own_separators(self):
+        """
+        A section concatenates its body rather than spacing it out.
+
+        ``Raw`` means text its producer has already laid out, and that
+        includes the newline which put it on the next line.
+        """
+        node = Section(Text("title"), (Raw(Text("\na")), Raw(Text("\nb"))))
         assert render_text(node).plain == "title\na\nb"
 
     def test_repr_joins_header_and_sections(self):
@@ -581,6 +655,9 @@ class TestRichRepr:
         """One of each class which prints through the mixin."""
         patch = dc.get_example_patch()
         inventory = dc.get_example_inventory("tunnel")
+        frame = pd.DataFrame(
+            {"time_min": [0.0, 1.0], "time_max": [0.5, 1.5], "group": ["a", "b"]}
+        )
         return {
             "patch": patch,
             "coord_manager": patch.coords,
@@ -588,6 +665,10 @@ class TestRichRepr:
             "spool": dc.get_example_spool(),
             "inventory": inventory,
             "network": inventory.networks[0],
+            "optical_path": inventory.networks[0].fiber_arrays[0].optical_paths[0],
+            "annotation_set": AnnotationSet(frame, dims=("time",)),
+            "annotation_column": AnnotationColumn(description="a pick", units="s"),
+            "empty_annotation_set": AnnotationSet(frame.iloc[:0], dims=("time",)),
         }
 
     def test_str_is_the_rich_rendering(self, rich_objects):

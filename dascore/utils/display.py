@@ -116,7 +116,7 @@ def _render_raw(node: Raw) -> Text:
 def _render_section(node: Section) -> Text:
     out = node.title
     for child in node.body:
-        out += Text("\n") + render_text(child)
+        out += render_text(child)
     return out
 
 
@@ -128,17 +128,26 @@ def _render_repr(node: Repr) -> Text:
 
 def split_block(text: Text, kind: str = "") -> Section:
     """
-    Turn a block of rendered text into a section, losslessly.
+    Turn a block of rendered text into a section.
 
     The first line names the block and the rest is its body, which is
     how every block a dascore repr is built from already reads. Slicing
     rather than splitting is deliberate: ``Text.split`` drops a trailing
     blank line, and the attributes block ends on one.
+
+    The body keeps the newline which separates it from the title rather
+    than a renderer supplying one of its own, so a span which straddles
+    the break still covers every character it covered before.
+
+    Rendering the section gives back what came in. Not the same spans --
+    slicing states a base style as a span as well, and a span across the
+    break comes back as two touching ones -- but the same characters,
+    each drawn the same way.
     """
     index = text.plain.find("\n")
     if index == -1:
         return Section(text, kind=kind)
-    return Section(text[:index], (Raw(text[index + 1 :]),), kind=kind)
+    return Section(text[:index], (Raw(text[index:]),), kind=kind)
 
 
 class RichRepr:
