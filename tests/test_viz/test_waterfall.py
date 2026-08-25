@@ -870,6 +870,27 @@ class TestLabelCoord:
         assert sum(str(x).startswith(BAR_GID) for x in gids) == 8
         assert sum(str(x).startswith(SEAM_GID) for x in gids) == 3
 
+    def test_ids_are_unique_across_the_whole_figure(self, zone_patch):
+        """An id names one element of the document, not one of a call.
+
+        A figure may carry a labelled plot on every axes, and one axes
+        may be drawn on twice; numbering within the call would repeat.
+        """
+        _, (left, right) = plt.subplots(1, 2)
+        for ax in (left, right, left):
+            zone_patch.viz.waterfall(label_coord="zone", ax=ax, cbar=False)
+        gids = [x.get_gid() for ax in (left, right) for x in ax.lines]
+        assert len(gids) == len(set(gids))
+
+    def test_ids_are_the_same_every_build(self, zone_patch):
+        """The same figure carries the same ids however often it is built."""
+        builds = []
+        for _ in range(2):
+            _, ax = plt.subplots()
+            zone_patch.viz.waterfall(label_coord="zone", ax=ax, cbar=False)
+            builds.append([x.get_gid() for x in ax.lines])
+        assert builds[0] == builds[1]
+
     def test_no_label_coord_draws_nothing(self, zone_patch):
         """The default leaves the plot as it was."""
         ax = zone_patch.viz.waterfall()

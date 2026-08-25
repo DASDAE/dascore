@@ -51,7 +51,8 @@ _SEAM_HALO_WIDTH = 2.0
 _SEAM_HALO_ALPHA = 0.5
 
 # What each artist is, for a caller reading a figure back. Each carries
-# the prefix and its own number, so no two share an id.
+# the prefix, the axes it sits on and its own number, so no two on one
+# figure share an id.
 BAR_GID = "dascore-label-bar"
 SEAM_GID = "dascore-label-change"
 
@@ -260,6 +261,21 @@ def label_runs(values, name: str) -> LabelRuns:
     return LabelRuns(starts, codes, labels, membership)
 
 
+def _artist_ids(ax, prefix: str):
+    """Number artists so no two on the figure share a gid.
+
+    Matplotlib writes a gid out as an SVG id, which has to name one
+    element of the whole document. Numbering within the call is not
+    enough: a figure may carry a labelled plot on every axes, and one
+    axes may be drawn on twice. Counted rather than made up, so the same
+    figure carries the same ids however often it is built.
+    """
+    figure = ax.get_figure()
+    panel = figure.axes.index(ax) if ax in figure.axes else 0
+    already = sum(1 for x in ax.lines if str(x.get_gid()).startswith(prefix))
+    return lambda index: f"{prefix}-{panel}-{already + index}"
+
+
 def _draw_bars(ax, axis: str, edges, starts, codes, labels, colors) -> None:
     """Draw a bar along both spines over the stretch each label covers.
 
@@ -273,6 +289,7 @@ def _draw_bars(ax, axis: str, edges, starts, codes, labels, colors) -> None:
     else:
         transform = blended_transform_factory(ax.transData, ax.transAxes)
     starts_at, ends_at = edges
+    identify = _artist_ids(ax, BAR_GID)
     bounds = np.concatenate([[0], starts, [len(codes)]]).astype(int)
     drawn = 0
     for low, high in pairwise(bounds):
@@ -295,9 +312,7 @@ def _draw_bars(ax, axis: str, edges, starts, codes, labels, colors) -> None:
                 # The half of its width outside the axes goes with that.
                 clip_on=True,
                 zorder=5,
-                # Numbered: matplotlib writes a gid out as an SVG id, and
-                # an id is meant to name one element.
-                gid=f"{BAR_GID}-{drawn}",
+                gid=identify(drawn),
             )
             drawn += 1
 
@@ -331,6 +346,7 @@ def _right_edge(figure) -> float:
 def _draw_changes(ax, axis: str, edges, starts) -> None:
     """Join the two bars with a hairline wherever the label changes."""
     starts_at, _ = edges
+    identify = _artist_ids(ax, SEAM_GID)
     line = ax.axvline if axis == "x" else ax.axhline
     for drawn, index in enumerate(starts):
         line(
@@ -342,7 +358,7 @@ def _draw_changes(ax, axis: str, edges, starts) -> None:
                     alpha=_SEAM_HALO_ALPHA,
                 )
             ],
-            gid=f"{SEAM_GID}-{drawn}",
+            gid=identify(drawn),
             **_SEAM_KWARGS,
         )
 
