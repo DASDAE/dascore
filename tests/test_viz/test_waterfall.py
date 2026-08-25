@@ -561,9 +561,20 @@ class TestLabelCoord:
         ax = zone_patch.viz.waterfall(label_coord="zone")
         figure = ax.get_figure()
         figure.canvas.draw()
-        box = _legend(ax).get_window_extent()
-        assert box.x1 <= figure.bbox.x1
-        assert box.x0 >= max(x.get_position().x1 for x in figure.axes) * figure.bbox.x1
+        assert _legend(ax).get_window_extent().x1 <= figure.bbox.x1
+
+    def test_legend_clears_the_colorbars_own_labels(self, zone_patch):
+        """The names sit past the bar's ticks, not the bar's rectangle.
+
+        A colorbar carries its ticks and its name outside the rectangle
+        it reports as its position, so measuring the rectangle alone
+        would lay the legend over them.
+        """
+        ax = zone_patch.viz.waterfall(label_coord="zone")
+        figure = ax.get_figure()
+        figure.canvas.draw()
+        drawn = max(x.get_tightbbox().x1 for x in figure.axes)
+        assert _legend(ax).get_window_extent().x0 >= drawn
 
     def test_colorbar_still_matches_the_image(self, zone_patch):
         """Making room for the legend moves the image and its bar together."""

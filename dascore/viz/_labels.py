@@ -36,6 +36,11 @@ _LINE_KWARGS = {"linewidth": 1.5, "zorder": 3}
 # the legend and the edge of the page, as a fraction of the figure width.
 _LEGEND_PAD = 0.02
 
+# How many times the figure is narrowed and measured again. Narrowing
+# moves what the legend sits beside, so one pass is a guess; a handful
+# settles it, and stopping short leaves the names on the page regardless.
+_FITTING_PASSES = 4
+
 
 class LabelPlan(NamedTuple):
     """Which coordinate a figure draws as labels, and where it goes."""
@@ -210,6 +215,14 @@ def _draw_lines(ax, axis: str, edges, starts, codes, labels, colors) -> None:
             )
 
 
+def _right_edge(figure) -> float:
+    """How far right anything already drawn on the figure reaches."""
+    return (
+        max(x.get_tightbbox().x1 for x in figure.axes if x.get_tightbbox() is not None)
+        / figure.bbox.width
+    )
+
+
 def _legend_beside(figure, ax, handles, title):
     """Name the labels past everything else, in room made for them.
 
@@ -225,6 +238,9 @@ def _legend_beside(figure, ax, handles, title):
         "fontsize": "small",
         "title": title,
         "title_fontsize": "small",
+        # The room is measured here rather than left to matplotlib, so
+        # its own padding would put the legend past what was measured.
+        "borderaxespad": 0.0,
     }
     # Drawn once to be measured; how tall matplotlib sets its rows and how
     # wide it sets a column are its own affair rather than ours to predict.
@@ -241,18 +257,22 @@ def _legend_beside(figure, ax, handles, title):
         box = legend.get_window_extent()
     wide = box.width / figure.bbox.width
     legend.remove()
-    right = figure.subplotpars.right
-    # Half the figure is as much as the names may take; a legend needing
-    # more would be larger than the picture it names.
-    room = min(wide + 2 * _LEGEND_PAD, right / 2)
-    figure.subplots_adjust(right=right - room)
-    figure.draw_without_rendering()
-    # Whatever ended up furthest right is what the legend sits beside,
-    # so a colorbar is cleared without guessing how wide one is.
-    edge = max(x.get_position().x1 for x in figure.axes)
+    # Asked for again after each move: a colorbar carries its ticks and
+    # its own name outside the rectangle it reports as its position, and
+    # narrowing the figure can relabel the ticks it carries.
+    for _ in range(_FITTING_PASSES):
+        edge = _right_edge(figure)
+        over = edge + 2 * _LEGEND_PAD + wide - 1.0
+        if over <= 0:
+            break
+        right = figure.subplotpars.right
+        # Half the figure is as much as the names may take; a legend
+        # needing more would be larger than the picture it names.
+        figure.subplots_adjust(right=right - min(over, right / 2))
+        figure.draw_without_rendering()
     return figure.legend(
         ncol=columns,
-        bbox_to_anchor=(edge + _LEGEND_PAD, ax.get_position().y1),
+        bbox_to_anchor=(_right_edge(figure) + _LEGEND_PAD, ax.get_position().y1),
         bbox_transform=figure.transFigure,
         **kwargs,
     )
