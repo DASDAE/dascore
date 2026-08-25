@@ -9,6 +9,7 @@ import pandas as pd
 import pytest
 from matplotlib.collections import QuadMesh
 from matplotlib.image import AxesImage
+from matplotlib.legend import Legend
 
 import dascore as dc
 from dascore.examples import inventory_patch_pair
@@ -594,18 +595,29 @@ class TestLabelCoord:
 
     @pytest.mark.parametrize("gap_color", [None, "gray"])
     def test_bar_ends_on_the_mesh_cell_edge(self, zone_gap_patch, gap_color):
-        """The bar ends where the mesh parted the two zones."""
+        """A bar ends where its own last cell ends, not across a gap.
+
+        With a gap band opened the two zones no longer share an edge, and
+        a bar drawn to where the next one starts would state that the
+        near zone covers ground the mesh shows no data for.
+        """
         patch, split = zone_gap_patch
         ax = patch.viz.waterfall(label_coord="zone", gap_color=gap_color)
         assert isinstance(ax.collections[0], QuadMesh)
         values = np.asarray(patch.get_coord("distance"))
+        step = np.median(np.abs(np.diff(values)))
+        near_end, far_start = _spans(ax, "y")[0][1], _spans(ax, "y")[1][0]
         if gap_color is None:
             # The cells bridge the gap, so they meet halfway across it.
-            expected = (values[split - 1] + values[split]) / 2
+            middle = (values[split - 1] + values[split]) / 2
+            assert near_end == pytest.approx(middle)
+            assert far_start == pytest.approx(middle)
         else:
-            # A band was opened, so the far zone starts at its own edge.
-            expected = values[split] - np.median(np.abs(np.diff(values))) / 2
-        assert _spans(ax, "y")[0][1] == pytest.approx(expected)
+            # A band was opened, so each zone stops at its own edge and
+            # the band between them is claimed by neither.
+            assert near_end == pytest.approx(values[split - 1] + step / 2)
+            assert far_start == pytest.approx(values[split] - step / 2)
+            assert near_end < far_start
 
     def test_legend_names_the_labels(self, zone_patch):
         """The legend names each label and is titled by the coordinate."""
@@ -721,14 +733,6 @@ class TestLabelCoord:
         ax = patch.viz.waterfall(label_coord="tag")
         assert all(x.startswith("2020-01-01") for x in _legend_labels(ax))
 
-    def test_close_numbers_keep_distinct_names(self, random_patch):
-        """Two values which round to one name are still named apart."""
-        size = random_patch.coords.coord_size("distance")
-        values = np.where(np.arange(size) < size // 3, 1.0, 1.0000001)
-        patch = random_patch.update_coords(tag=("distance", values))
-        ax = patch.viz.waterfall(label_coord="tag")
-        assert len(set(_legend_labels(ax))) == 2
-
     def test_nulls_beside_booleans_state_membership(self, random_patch):
         """A boolean group carrying nulls is still a membership group."""
         size = random_patch.coords.coord_size("distance")
@@ -760,6 +764,16 @@ class TestLabelCoord:
         assert right.get_position().bounds == before
         assert not figure.legends
         assert ax.get_legend().get_window_extent().x1 <= ax.get_window_extent().x1
+
+    def test_a_callers_own_legend_survives(self, zone_patch):
+        """Naming the labels does not drop what the caller had named."""
+        _, ax = plt.subplots()
+        ax.plot([0, 1], [0, 1], label="expected")
+        ax.legend(loc="lower left")
+        zone_patch.viz.waterfall(label_coord="zone", ax=ax)
+        drawn = [x for x in ax.artists if isinstance(x, Legend)] + [ax.get_legend()]
+        named = {y.get_text() for x in drawn if x for y in x.get_texts()}
+        assert {"expected", "north", "south"} <= named
 
     def test_many_labels_spill_into_columns(self, random_patch):
         """A legend too tall for the page is set in as many columns as fit."""
@@ -803,33 +817,104 @@ class TestLabelCoord:
             patch.viz.waterfall(label_coord="grid")
 
     @pytest.mark.parametrize(
-        "values",
+        ("values", "match"),
         [
-            np.full(300, "", dtype="<U4"),
-            np.full(300, np.nan),
-            np.full(300, False),
+            (np.full(300, "", dtype="<U4"), "states no labels"),
+            (np.full(300, np.nan), "states no labels"),
+            (np.full(300, False), "states no labels"),
+            (np.arange(300).astype(float), "distinct labels"),
+            (np.arange(300) % 2 == 0, "changes value"),
         ],
-        ids=["blank", "nan", "false"],
+        ids=["blank", "nan", "false", "many-labels", "many-runs"],
     )
-    def test_no_labels_raises(self, random_patch, values):
-        """A coordinate stating nothing throughout has nothing to draw."""
+    def test_refusal_leaves_no_figure(self, random_patch, values, match):
+        """What a coordinate states is judged before anything is drawn.
+
+        Refusing after the image and colorbar exist would leave an owned
+        figure open, and a caller's axes half drawn on.
+        """
         size = random_patch.coords.coord_size("distance")
         patch = random_patch.update_coords(tag=("distance", values[:size]))
-        with pytest.raises(ParameterError, match="states no labels"):
+        plt.close("all")
+        with pytest.raises(ParameterError, match=match):
             patch.viz.waterfall(label_coord="tag")
+        assert not plt.get_fignums()
 
-    def test_too_many_labels_raises(self, random_patch):
-        """A coordinate too varied to name is a quantity, not a set of labels."""
+    def test_values_printing_alike_are_told_apart(self, random_patch):
+        """Two values which print the same are named, and colored, apart."""
         size = random_patch.coords.coord_size("distance")
-        patch = random_patch.update_coords(
-            tag=("distance", np.arange(size).astype(float))
-        )
-        with pytest.raises(ParameterError, match="distinct labels"):
-            patch.viz.waterfall(label_coord="tag")
+        values = np.array([1] * (size // 2) + ["1"] * (size - size // 2), dtype=object)
+        patch = random_patch.update_coords(tag=("distance", values))
+        ax = patch.viz.waterfall(label_coord="tag")
+        assert _legend_labels(ax) == ["1 (int)", "1 (str)"]
+        assert len({x[3] for x in _bars(ax, "y")}) == 2
 
-    def test_too_many_runs_raises(self, random_patch):
-        """A coordinate changing every sample states no stretches."""
+    def test_close_numbers_are_not_qualified(self, random_patch):
+        """A name which is already unique is left as it is."""
         size = random_patch.coords.coord_size("distance")
-        patch = random_patch.update_coords(tag=("distance", np.arange(size) % 2 == 0))
-        with pytest.raises(ParameterError, match="changes value"):
-            patch.viz.waterfall(label_coord="tag")
+        values = np.where(np.arange(size) < size // 3, 1.0, 1.0000001)
+        patch = random_patch.update_coords(tag=("distance", values))
+        ax = patch.viz.waterfall(label_coord="tag")
+        assert _legend_labels(ax) == ["1.0", "1.0000001"]
+
+    def test_constrained_layout_reserves_the_room(self, zone_patch):
+        """A figure whose engine holds the margins is asked, not overruled.
+
+        Constrained layout ignores subplots_adjust, so taking the room
+        that way would leave the names hanging off the page.
+        """
+        with plt.rc_context({"figure.constrained_layout.use": True}):
+            ax = zone_patch.viz.waterfall(label_coord="zone")
+            figure = ax.get_figure()
+            figure.canvas.draw()
+            assert figure.get_layout_engine() is not None
+            assert _legend(ax).get_window_extent().x1 <= figure.bbox.x1
+
+    def test_tight_layout_still_reserves_the_room(self, zone_patch):
+        """An engine which is not constrained is stood down, not obeyed.
+
+        Only constrained layout keeps room for a legend outside the axes;
+        any other engine recomputes the margins at draw time and would
+        undo the room made for it.
+        """
+        with plt.rc_context({"figure.autolayout": True}):
+            ax = zone_patch.viz.waterfall(label_coord="zone")
+            figure = ax.get_figure()
+            figure.canvas.draw()
+            drawn = max(x.get_tightbbox().x1 for x in figure.axes)
+            box = _legend(ax).get_window_extent()
+            assert box.x0 >= drawn
+            assert box.x1 <= figure.bbox.x1
+
+    def test_bars_stay_inside_their_axes_after_a_zoom(self, zone_patch):
+        """A bar keeps to its own axes when the limits change.
+
+        Bars are placed in data coordinates along their dimension, so an
+        unclipped one paints across the whole figure once a zoom moves
+        the limits under it -- into a neighbour which was never given a
+        label_coord.
+        """
+        figure, (top, bottom) = plt.subplots(2, 1)
+        zone_patch.viz.waterfall(label_coord="zone", ax=top, cbar=False)
+        zone_patch.viz.waterfall(ax=bottom, cbar=False)
+        size = zone_patch.coords.coord_size("distance")
+        top.set_ylim(size // 3, size // 2)
+        figure.canvas.draw()
+        pixels = np.asarray(figure.canvas.buffer_rgba())[..., :3] / 255.0
+        below = int(pixels.shape[0] - top.get_window_extent().y0) + 3
+        north = np.array(string_colors(["north", "south"])["north"][:3])
+        strays = np.abs(pixels[below:] - north).sum(axis=2) < 0.05
+        assert not strays.any()
+
+    def test_names_too_wide_to_seat_do_not_crash(self, random_patch):
+        """Names wanting more room than there is leave the picture alone.
+
+        Narrowing once per pass without a floor drove the right margin
+        past the left one, which matplotlib refuses outright.
+        """
+        size = random_patch.coords.coord_size("distance")
+        wide = "x" * 80
+        values = np.where(np.arange(size) < size // 2, wide + "_a", wide + "_b")
+        patch = random_patch.update_coords(tag=("distance", values))
+        ax = patch.viz.waterfall(label_coord="tag")
+        assert ax.get_position().width > 0

@@ -28,6 +28,7 @@ from dascore.viz._labels import (
     draw_labels,
     image_cell_edges,
     label_plan,
+    label_runs,
     mesh_cell_edges,
 )
 
@@ -311,18 +312,23 @@ def waterfall(
         The name of a coordinate whose values label stretches of one of the
         plotted dimensions, such as a label group an inventory projected onto
         the patch with [`Patch.enrich`](`dascore.proc.inventory.enrich`). Each
-        stretch is drawn as a bar along the two spines its dimension runs
-        between, colored by its label, and a legend names them beside the
-        axes, beyond any colorbar. The bars sit on the spines rather than over
-        the image, so no data is covered or tinted; a hairline joins them
-        wherever the value changes, faint enough to locate a boundary in the
-        data without competing with it. String and numeric
-        coordinates state one label per distinct value, and more than 20 of
-        them raises a `ParameterError`: a coordinate that varied is a
-        quantity, not a set of labels. A boolean coordinate states membership,
-        so only its True stretches are marked and the legend names them by the
-        coordinate. Absent values (the empty string, NaN, or False) label
-        nothing, and leave bare spine.
+        stretch is drawn as a bar on the two spines its dimension runs along,
+        colored by its label, so no data is covered or tinted; a hairline
+        joins them wherever the value changes, faint enough to locate a
+        boundary in the data without competing with it. A legend names the
+        labels, beyond any colorbar when this call owns the figure, and inside
+        the axes when the caller supplied one, since taking room from
+        someone else's figure would move every other axes on it. String and
+        numeric coordinates state one label per distinct value. A boolean
+        coordinate states membership, so only its True stretches are marked
+        and the legend names them by the coordinate. Absent values (the empty
+        string, NaN, or False) label nothing, and leave bare spine.
+
+        Raises `ParameterError` for a coordinate which is not a set of
+        labels: one stating more than 20 distinct values, one changing more
+        than 200 times, one whose every value is absent, and one which is a
+        dimension or spans both of them. All are judged before anything is
+        drawn, so a refusal leaves no figure behind.
 
     Examples
     --------
@@ -390,8 +396,13 @@ def waterfall(
     _validate_gap_factor(gap_factor)
     dims = patch.dims
     dims_r = tuple(reversed(dims))
-    # Before an axes exists, so a refused label_coord leaves no figure behind.
-    plan = label_plan(patch, label_coord, dims_r) if label_coord is not None else None
+    # Before an axes exists, so a refused label_coord leaves no figure
+    # behind: both what the coordinate is and what it states are settled
+    # here, since either can be grounds for refusing it.
+    plan, runs = None, None
+    if label_coord is not None:
+        plan = label_plan(patch, label_coord, dims_r)
+        runs = label_runs(patch.coords.get_array(plan.name), plan.name)
     # Setup axes and data. A figure this call built is one whose room a
     # legend may take; any other belongs to the caller.
     owned = ax is None
@@ -443,15 +454,9 @@ def waterfall(
         _add_colorbar(ax, im, data, patch, log, scale)
     # Label lines come last so the legend is placed beyond a colorbar which
     # has already taken its room.
-    if plan is not None:
+    if plan is not None and runs is not None:
         assert label_edges is not None, "a plan is only made where edges are"
-        draw_labels(
-            ax,
-            plan,
-            patch.coords.get_array(plan.name),
-            label_edges,
-            owned=owned,
-        )
+        draw_labels(ax, plan, runs, label_edges, owned=owned)
     if show:
         plt.show()
     return ax

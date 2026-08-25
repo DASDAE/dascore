@@ -21,6 +21,7 @@ from typing import NamedTuple
 import matplotlib.patheffects as pe
 import numpy as np
 import pandas as pd
+from matplotlib.layout_engine import ConstrainedLayoutEngine
 from matplotlib.lines import Line2D
 from matplotlib.transforms import blended_transform_factory
 
@@ -30,8 +31,9 @@ from dascore.viz._lanes import _as_numeric, _default_label, string_colors
 # Past this many a legend stops naming and starts listing.
 MAX_LABELS = 20
 
-# Past this many stretches the bars are thinner than the gaps between
-# them, and the gutter reads as hatching rather than as a set of ranges.
+# Past this many changes the bars are narrower than the hairlines
+# parting them, and the spine reads as hatching rather than as a set of
+# ranges.
 MAX_RUNS = 200
 
 # How thick a bar is drawn, in points. Half of it falls outside the axes,
@@ -56,9 +58,17 @@ SEAM_GID = "dascore-label-change"
 _LEGEND_PAD = 0.02
 
 # How many times the figure is narrowed and measured again. Narrowing
-# moves what the legend sits beside, so one pass is a guess; a handful
-# settles it, and stopping short leaves the names on the page regardless.
+# moves what the legend sits beside, so one pass is a guess and a handful
+# settles it. Stopping short leaves the names further right than they
+# want to be, which is a worse picture rather than a broken one.
 _FITTING_PASSES = 4
+
+# The share of the figure width the plotting area keeps whatever the
+# legend asks for -- the image and its colorbar together. Names wanting
+# more than the rest are ones no figure this size can seat beside the
+# picture, and they run off the edge rather than squeezing the picture
+# they name out of existence.
+_MIN_AXES_WIDTH = 0.25
 
 
 class LabelPlan(NamedTuple):
@@ -67,6 +77,19 @@ class LabelPlan(NamedTuple):
     name: str
     dim: str
     axis: str
+
+
+class LabelRuns(NamedTuple):
+    """Where a label coordinate changes, and what it states between.
+
+    Worked out before anything is drawn, so a coordinate this module
+    refuses leaves no half-made figure behind.
+    """
+
+    starts: np.ndarray
+    codes: np.ndarray
+    labels: list[str]
+    membership: bool
 
 
 def label_plan(patch, name: str, dims_r: tuple[str, ...]) -> LabelPlan:
@@ -100,7 +123,7 @@ def label_plan(patch, name: str, dims_r: tuple[str, ...]) -> LabelPlan:
 
 
 def image_cell_edges(extents, dims_r: tuple[str, ...], dim: str, size: int):
-    """Cell edges of one dimension of an image, in axis units.
+    """Where each cell of an image starts and ends, in axis units.
 
     imshow lays its cells evenly across the extent it was handed, so the
     edges are read back from that extent. Reading them from the
@@ -109,18 +132,22 @@ def image_cell_edges(extents, dims_r: tuple[str, ...], dim: str, size: int):
     over a mesh.
     """
     low, high = extents[:2] if dim == dims_r[0] else extents[2:]
-    return np.linspace(low, high, size + 1)
+    edges = np.linspace(low, high, size + 1)
+    return edges[:-1], edges[1:]
 
 
 def mesh_cell_edges(edges, gap_mask):
-    """Cell edges of one dimension of a mesh, in axis units.
+    """Where each cell of a mesh starts and ends, in axis units.
 
-    The very edges the mesh was drawn from, indexed by sample: a gap it
+    The very edges the mesh was drawn from, indexed by sample. A gap it
     opened puts two edges where there was one, so every cell after a gap
-    sits one place further along.
+    sits one place further along -- and a cell bordering a gap ends where
+    the gap begins, rather than where the cell beyond it starts.
     """
-    offsets = np.cumsum(np.concatenate([[0], gap_mask, [False]]))
-    return _as_numeric(edges)[np.arange(len(offsets)) + offsets]
+    edges = _as_numeric(edges)
+    before = np.cumsum(np.concatenate([[0], gap_mask]))
+    index = np.arange(len(before)) + before
+    return edges[index], edges[index + 1]
 
 
 def _stated_mask(values) -> np.ndarray:
@@ -133,8 +160,10 @@ def _stated_mask(values) -> np.ndarray:
     missing = np.asarray(pd.isna(values), dtype=bool)
     if values.dtype.kind in {"U", "S", "O"}:
         blank = np.zeros(values.shape, dtype=bool)
+        # A bytes array holds bytes, and numpy will not compare the two.
+        empty = b"" if values.dtype.kind == "S" else ""
         # Only where a value is present: NA answers a comparison with NA.
-        np.equal(values, "", out=blank, where=~missing)
+        np.equal(values, empty, out=blank, where=~missing)
         missing = missing | blank
     return ~missing
 
@@ -179,11 +208,29 @@ def _label_codes(values, name: str) -> tuple[np.ndarray, list[str], bool]:
         # Two values rounding to one name would share a color and a
         # legend entry, and the figure would call them the same thing.
         labels = [str(x) for x in uniques]
-    return codes, labels, False
+    return codes, _disambiguate(labels, uniques), False
 
 
-def _label_runs(values, name: str):
-    """Return where the label changes, the codes, the labels, and the kind."""
+def _disambiguate(labels: list[str], values) -> list[str]:
+    """Qualify by type any name which two different values still share.
+
+    An object coordinate may hold the number 1 beside the string "1",
+    which print alike however many digits are kept. Sharing the name
+    would share the color too, and the legend would say one swatch
+    means two things.
+    """
+    seen: dict[str, int] = {}
+    for label in labels:
+        seen[label] = seen.get(label, 0) + 1
+    return [
+        f"{label} ({type(value).__name__})" if seen[label] > 1 else label
+        for label, value in zip(labels, values, strict=True)
+    ]
+
+
+def label_runs(values, name: str) -> LabelRuns:
+    """Return where the label changes, what it states, and of which kind."""
+    values = np.asarray(values)
     codes, labels, membership = _label_codes(values, name)
     if not np.any(codes >= 0):
         msg = (
@@ -201,14 +248,14 @@ def _label_runs(values, name: str):
     # Never 0 and never len(codes), so the axes' own spines are left to
     # draw the two boundaries which sit on them.
     starts = np.flatnonzero(np.diff(codes) != 0) + 1
-    if len(starts) >= MAX_RUNS:
+    if len(starts) > MAX_RUNS:
         msg = (
             f"The {name!r} coordinate changes value {len(starts)} times, "
-            f"more than the {MAX_RUNS} stretches a figure can show. It "
+            f"more than the {MAX_RUNS} changes a figure can show. It "
             "states a value per sample rather than a stretch each."
         )
         raise ParameterError(msg)
-    return starts, codes, labels, membership
+    return LabelRuns(starts, codes, labels, membership)
 
 
 def _draw_bars(ax, axis: str, edges, starts, codes, labels, colors) -> None:
@@ -223,12 +270,15 @@ def _draw_bars(ax, axis: str, edges, starts, codes, labels, colors) -> None:
         transform = blended_transform_factory(ax.transAxes, ax.transData)
     else:
         transform = blended_transform_factory(ax.transData, ax.transAxes)
+    starts_at, ends_at = edges
     bounds = np.concatenate([[0], starts, [len(codes)]]).astype(int)
     for low, high in pairwise(bounds):
         code = codes[low]
         if code < 0:
             continue
-        span = (edges[low], edges[high])
+        # Ends where its own last cell ends, which is where a gap band
+        # begins rather than where the cell beyond one starts.
+        span = (starts_at[low], ends_at[high - 1])
         for spine in (0.0, 1.0):
             along = ((spine, spine), span) if axis == "y" else (span, (spine, spine))
             ax.plot(
@@ -237,9 +287,10 @@ def _draw_bars(ax, axis: str, edges, starts, codes, labels, colors) -> None:
                 color=colors[labels[code]],
                 linewidth=_BAR_WIDTH,
                 solid_capstyle="butt",
-                # Half the bar falls outside the axes, and a stretch
-                # reaching an end of the patch reaches the corner.
-                clip_on=False,
+                # Clipped, or a bar keeps its data coordinates when the
+                # limits change and paints across the rest of the figure.
+                # The half of its width outside the axes goes with that.
+                clip_on=True,
                 zorder=5,
                 gid=BAR_GID,
             )
@@ -247,18 +298,17 @@ def _draw_bars(ax, axis: str, edges, starts, codes, labels, colors) -> None:
 
 def _right_edge(figure) -> float:
     """How far right anything already drawn on the figure reaches."""
-    return (
-        max(x.get_tightbbox().x1 for x in figure.axes if x.get_tightbbox() is not None)
-        / figure.bbox.width
-    )
+    boxes = [x.get_tightbbox() for x in figure.axes]
+    return max(x.x1 for x in boxes if x is not None) / figure.bbox.width
 
 
 def _draw_changes(ax, axis: str, edges, starts) -> None:
     """Join the two bars with a hairline wherever the label changes."""
+    starts_at, _ = edges
     line = ax.axvline if axis == "x" else ax.axhline
     for index in starts:
         line(
-            edges[index],
+            starts_at[index],
             path_effects=[
                 pe.withStroke(
                     linewidth=_SEAM_HALO_WIDTH,
@@ -290,6 +340,19 @@ def _legend_beside(figure, ax, handles, title):
         # its own padding would put the legend past what was measured.
         "borderaxespad": 0.0,
     }
+    engine = figure.get_layout_engine()
+    if isinstance(engine, ConstrainedLayoutEngine):
+        # This engine keeps room for a legend placed outside the axes, so
+        # it is asked for the room rather than overruled. No other engine
+        # does, which is why the test is for this one and not for any.
+        return figure.legend(
+            **{**kwargs, "loc": "outside right upper", "borderaxespad": None}
+        )
+    if engine is not None:
+        # Any other engine recomputes the margins when the figure is
+        # drawn, undoing the room made below. This figure is the call's
+        # own and is being laid out here explicitly.
+        figure.set_layout_engine("none")
     # Drawn once to be measured; how tall matplotlib sets its rows and how
     # wide it sets a column are its own affair rather than ours to predict.
     legend = figure.legend(**kwargs)
@@ -313,10 +376,11 @@ def _legend_beside(figure, ax, handles, title):
         over = edge + 2 * _LEGEND_PAD + wide - 1.0
         if over <= 0:
             break
-        right = figure.subplotpars.right
-        # Half the figure is as much as the names may take; a legend
-        # needing more would be larger than the picture it names.
-        figure.subplots_adjust(right=right - min(over, right / 2))
+        pars = figure.subplotpars
+        floor = pars.left + _MIN_AXES_WIDTH
+        if pars.right <= floor:
+            break
+        figure.subplots_adjust(right=max(floor, pars.right - over))
         figure.draw_without_rendering()
     return figure.legend(
         ncol=columns,
@@ -337,7 +401,8 @@ def _add_legend(ax, name, labels, colors, membership, owned):
     # The figure belongs to the caller, and making room in it would move
     # every other axes on it, so the legend takes room from the one axes
     # it was handed rather than being drawn over its neighbour.
-    return ax.legend(
+    previous = ax.get_legend()
+    legend = ax.legend(
         handles=handles,
         loc="upper right",
         fontsize="small",
@@ -345,12 +410,17 @@ def _add_legend(ax, name, labels, colors, membership, owned):
         title_fontsize="small",
         framealpha=0.8,
     )
+    if previous is not None:
+        # An axes holds one legend, so asking for ours drops whatever the
+        # caller had named there; it goes back as a plain artist.
+        ax.add_artist(previous)
+    return legend
 
 
 def draw_labels(
     ax,
     plan: LabelPlan,
-    values,
+    runs: LabelRuns,
     edges,
     *,
     owned: bool = False,
@@ -364,18 +434,18 @@ def draw_labels(
         The axes the data was drawn on.
     plan
         The coordinate to draw and the axis its dimension was drawn on.
-    values
-        The coordinate's values, one per sample along its dimension.
+    runs
+        Where the coordinate changes and what it states, from
+        [`label_runs`](`dascore.viz._labels.label_runs`).
     edges
-        Cell edges along that dimension, in axis units, one more than
-        there are samples.
+        Where each cell along that dimension starts and ends, in axis
+        units, as a pair of arrays one sample long each.
     owned
         Whether the figure is this call's to make room in. False puts the
         legend inside the axes, since taking room from someone else's
         figure would move every other axes on it.
     """
-    values = np.asarray(values)
-    starts, codes, labels, membership = _label_runs(values, plan.name)
+    starts, codes, labels, membership = runs
     colors = string_colors(labels)
     _draw_bars(ax, plan.axis, edges, starts, codes, labels, colors)
     _draw_changes(ax, plan.axis, edges, starts)
