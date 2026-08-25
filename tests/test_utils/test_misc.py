@@ -21,7 +21,6 @@ from dascore.exceptions import MissingOptionalDependencyError, ParameterError
 from dascore.utils.misc import (
     _callable_name,
     _get_install_name,
-    _get_nullish,
     _iter_filesystem,
     _locked,
     _spool_map,
@@ -1257,42 +1256,3 @@ class TestIsStrictlyMonotonic:
         """Values which cannot be ordered are not monotonic."""
         values = np.array([{"a": 1}, {"b": 2}], dtype=object)
         assert not is_strictly_monotonic(values)
-
-
-class TestGetNullish:
-    """Tests for the value which stands in for a missing entry."""
-
-    @pytest.mark.parametrize("dtype", ["float64", "float32", "int64", "bool"])
-    def test_non_time_is_nan(self, dtype):
-        """Everything without a NaT of its own gets NaN."""
-        assert np.isnan(_get_nullish(np.dtype(dtype)))
-
-    def test_default_is_nan(self):
-        """The default covers the plain floating case."""
-        assert np.isnan(_get_nullish())
-
-    @pytest.mark.parametrize("unit", ["ns", "us", "ms", "s"])
-    @pytest.mark.parametrize("kind", ["datetime64", "timedelta64"])
-    def test_time_like_keeps_its_resolution(self, kind, unit):
-        """
-        NaT comes back at the dtype's own resolution.
-
-        A fixed resolution would mean a datetime64[s] array gets a
-        nanosecond NaT cast into it on every fill.
-        """
-        dtype = np.dtype(f"{kind}[{unit}]")
-        null = _get_nullish(dtype)
-        assert np.isnat(null)
-        assert np.array(null).dtype == dtype
-
-    @pytest.mark.parametrize("kind", [np.datetime64, np.timedelta64])
-    def test_abstract_time_type(self, kind):
-        """An unparameterized time type still yields NaT."""
-        assert np.isnat(_get_nullish(kind))
-
-    def test_fills_an_array_of_its_dtype(self):
-        """The value can stand in for a missing entry without casting."""
-        dtype = np.dtype("datetime64[us]")
-        array = np.full(3, _get_nullish(dtype), dtype=dtype)
-        assert array.dtype == dtype
-        assert np.isnat(array).all()

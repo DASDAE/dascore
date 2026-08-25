@@ -999,6 +999,26 @@ class TestConcatenate:
         assert pa_concat.shape[-1] == len(sp)
         assert "time_min" in pa_concat.dims
 
+    @pytest.mark.parametrize("unit", ["us", "ms"])
+    def test_blank_coord_keeps_the_others_resolution(self, unit):
+        """
+        Joining across a patch which states no values holds resolution.
+
+        The blank patch contributes the null that stands in for its
+        missing values; if that null is of a fixed resolution it wins the
+        dtype promotion and quietly rewrites the coordinate.
+        """
+        time = np.arange(4).astype(f"datetime64[{unit}]")
+        patch = dc.Patch(
+            data=np.random.default_rng(0).random((4, 3)),
+            coords={"time": time, "distance": np.arange(3)},
+            dims=("time", "distance"),
+        )
+        blank = patch.max("time")
+        with suppress_warnings(UserWarning):
+            out = dc.spool([blank, patch]).concatenate(time=None)[0]
+        assert out.get_coord("time").dtype == time.dtype
+
 
 class TestStackPatches:
     """Tests for stacking (adding) spool content."""
