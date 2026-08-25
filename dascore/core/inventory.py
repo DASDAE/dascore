@@ -573,22 +573,25 @@ class _PointComponent(_OpticalComponentBase):
         dropped and a YAML one arrives as None, and the two spell the same
         thing.
         """
-        if not isinstance(data, Mapping):
-            return data
-        if data.get("distance_max") is not None:
-            return data
-        if (start := data.get("distance_min")) is None:
-            return data
-        return {**data, "distance_max": start}
+        stated = isinstance(data, Mapping) and data.get("distance_max") is None
+        if stated and (start := data.get("distance_min")) is not None:
+            return {**data, "distance_max": start}
+        return data
 
     def new(self, **kwargs) -> Self:
         """
         Return a copy with some fields updated.
 
-        Moving a point marker moves both its ends. `new` merges the fields
-        already set, so the end would otherwise stay where it was and the
-        marker would silently acquire a length -- or refuse to move past
-        its own end.
+        Moving a marker moves the end which was filled in for it: `new`
+        merges the fields already set, so an end nobody stated would
+        otherwise stay where it was and the marker would silently acquire
+        a length -- or refuse to move past itself.
+
+        Setting ``distance_max`` is not the mirror of this and does not
+        move the start. The end of a marker is filled in, so carrying it
+        keeps the author's one number true; the start is theirs, and a
+        stated end is them giving the item a length. An end before the
+        start is then refused here as it is on every other interval.
         """
         moved = "distance_min" in kwargs and "distance_max" not in kwargs
         if moved and self.distance_min == self.distance_max:
@@ -1070,10 +1073,8 @@ class Acquisition(TimeRangedModel):
         called when it existed, and `distance_min` is what it would be
         called now, so neither reads as an origin the acquisition honors.
         """
-        if not isinstance(data, Mapping):
-            return data
         for name in ("distance_min", "start_distance"):
-            if name not in data:
+            if not isinstance(data, Mapping) or name not in data:
                 continue
             msg = (
                 f"Acquisition no longer takes {name}; the distance_map "

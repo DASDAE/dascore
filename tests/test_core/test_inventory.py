@@ -572,6 +572,19 @@ class TestComponentPlacement:
         marker = inv.Connector(distance_min=5.0)
         assert marker.new(distance_min=moved).interval == (moved, moved)
 
+    def test_stating_an_end_gives_a_marker_a_length(self):
+        """Setting the end is not the mirror of moving the marker.
+
+        A marker's end is filled in, so moving the start carries it. The
+        start is the author's, so stating an end is them giving the item a
+        length rather than moving it -- and an end before the start is
+        refused here as on every other interval.
+        """
+        marker = inv.Connector(distance_min=5.0)
+        assert marker.new(distance_max=8.0).interval == (5.0, 8.0)
+        with pytest.raises(ValidationError, match="must not precede"):
+            marker.new(distance_max=3.0)
+
     def test_a_sized_point_component_keeps_its_length(self):
         """Only a marker's end follows; a stated length is the author's."""
         splice = inv.Splice(distance_min=5.0, distance_max=5.5)
