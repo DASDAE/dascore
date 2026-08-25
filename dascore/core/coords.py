@@ -54,7 +54,12 @@ from dascore.utils.array import (
     _is_text_coercible_array,
     hash_array,
 )
-from dascore.utils.display import RichRepr, get_nice_text
+from dascore.utils.display import (
+    RichRepr,
+    duration_text,
+    get_nice_text,
+    rate_text,
+)
 from dascore.utils.docs import compose_docstring, get_docstring
 from dascore.utils.misc import (
     _get_nullish,
@@ -617,9 +622,16 @@ class BaseCoord(RichRepr, DascoreBaseModel, abc.ABC):
         if not pd.isnull(self.max()):
             base += Text(" max: ", key_style)
             base += get_nice_text(self.max())
+        # Only a time. Two instants say nothing about how far apart they
+        # are; a distance from 0 to 299 m already says 299 m.
+        if dtype_time_like(self.dtype) and not pd.isnull(self.min()):
+            if (span := duration_text(self.min(), self.max())) is not None:
+                base += Text(" ") + span
         if not pd.isnull(self.step):
             base += Text(" step: ", key_style)
             base += get_nice_text(self.step)
+            if (rate := rate_text(self.step)) is not None:
+                base += rate
         base += Text(" shape: ", key_style)
         base += get_nice_text(self.shape)
         base += Text(" dtype: ", key_style)

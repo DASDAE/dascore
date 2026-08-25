@@ -26,18 +26,22 @@ from dascore.utils.display import (
     Raw,
     Repr,
     Section,
+    _storage_quantum,
     array_to_text,
     attrs_to_text,
     counts_to_text,
+    duration_text,
     get_header_text,
     get_nice_text,
     group_names,
     human_duration,
+    human_size,
     indent_text,
     limit_reprs,
     mapping_to_text,
     model_to_line,
     percent,
+    rate_text,
     render_text,
     split_block,
     stated_fields,
@@ -725,3 +729,331 @@ class TestSpoolReprNode:
         rendered = str(spool)
         assert "Spool" in rendered
         assert "Dimensions" not in rendered
+
+
+class TestRateText:
+    """Tests for stating a sampling step as the rate it is quoted in."""
+
+    @pytest.mark.parametrize(
+        ("step", "expected"),
+        [
+            (np.timedelta64(4_000_000, "ns"), "250 Hz"),
+            (np.timedelta64(1, "s"), "1 Hz"),
+            (np.timedelta64(1, "ms"), "1 kHz"),
+            (np.timedelta64(976_562, "ns"), "1.024 kHz"),
+            (np.timedelta64(10_417, "ns"), "96 kHz"),
+            (np.timedelta64(1_000, "ns"), "1 MHz"),
+            (np.timedelta64(1, "ns"), "1 GHz"),
+            (np.timedelta64(6_400_000, "ns"), "156.25 Hz"),
+            (np.timedelta64(512_000, "ns"), "1.953125 kHz"),
+            (np.timedelta64(2_000_000, "ns"), "500 Hz"),
+            # Slow acquisition: a rate under a hertz still reads as one.
+            (np.timedelta64(10, "s"), "100 mHz"),
+        ],
+    )
+    def test_a_time_step_states_its_rate(self, step, expected):
+        """A step in time is quoted in Hz, which is what a rate is."""
+        assert expected in str(rate_text(step))
+
+    @pytest.mark.parametrize(
+        "step",
+        [
+            np.timedelta64(4_000_000, "ns"),
+            np.timedelta64(6_400_000, "ns"),
+            np.timedelta64(512_000, "ns"),
+            np.timedelta64(10_417, "ns"),
+            np.timedelta64(1, "ns"),
+            np.timedelta64(8, "ms"),
+            np.timedelta64(3, "ms"),
+            np.timedelta64(7, "s"),
+            pd.Timedelta(seconds=0.004),
+        ],
+    )
+    def test_the_rate_said_describes_the_step(self, step):
+        """
+        Whatever is printed has to describe the step beside it.
+
+        Held over the printed characters rather than the number they
+        came from, since a rate rounded for the check and then formatted
+        to fewer figures, or into exponent notation, states something
+        the step does not. A rate is quoted to four figures, so four
+        figures is how closely it has to agree -- not to a fixed
+        nanosecond, which only matches the code for steps stored in
+        them.
+        """
+        magnitude, unit = str(rate_text(step)).strip().removeprefix("· ").split(" ")
+        prefixes = {"mHz": 1e-3, "Hz": 1.0, "kHz": 1e3, "MHz": 1e6, "GHz": 1e9}
+        said = float(magnitude) * prefixes[unit]
+        true_rate = 1.0 / (step / np.timedelta64(1, "s"))
+        assert abs(said - true_rate) <= abs(true_rate) * 5e-4
+
+    @pytest.mark.parametrize(
+        ("step", "expected"),
+        [
+            (np.timedelta64(8, "ms"), "125 Hz"),
+            (np.timedelta64(4, "ms"), "250 Hz"),
+            (np.timedelta64(3, "ms"), "333.3 Hz"),
+            (np.timedelta64(13, "ms"), "76.92 Hz"),
+        ],
+    )
+    def test_a_step_stored_coarser_than_a_nanosecond(self, step, expected):
+        """
+        A step held to milliseconds is exact, not rounded.
+
+        An 8 ms step is exactly 125 Hz, and 120 Hz also inverts to
+        within half a millisecond of it. Taking the shortest rate which
+        lands inside the step's resolution states 120 Hz of sampling
+        which happens at 125, so an exact rate is preferred.
+        """
+        assert expected in str(rate_text(step))
+
+    def test_a_descending_axis_samples_at_the_same_rate(self):
+        """
+        Direction is the sign of the step, not of the frequency.
+
+        A time axis which counts down samples exactly as often as the
+        one which counts up.
+        """
+        down = rate_text(np.timedelta64(-4, "ms"))
+        up = rate_text(np.timedelta64(4, "ms"))
+        assert str(down) == str(up)
+        assert "250 Hz" in str(down)
+
+    def test_a_step_finer_than_a_nanosecond(self):
+        """
+        A step is read at the resolution it is stored at.
+
+        1500 ps counted in whole nanoseconds is 1 ns, which would state
+        1 GHz of sampling that happens at 666.7 MHz.
+        """
+        assert "666.7 MHz" in str(rate_text(np.timedelta64(1500, "ps")))
+        assert "1 GHz" in str(rate_text(np.timedelta64(1000, "ps")))
+
+    def test_a_quantum_finer_than_a_nanosecond_is_not_zero(self):
+        """
+        The resolution a step is held at is read the same way it is.
+
+        Counted in whole nanoseconds a picosecond quantum is zero, and
+        no rate at all can land inside a tolerance of nothing.
+        """
+        assert _storage_quantum(np.timedelta64(1, "ps")) == pytest.approx(1e-12)
+
+    @pytest.mark.parametrize("unit", ["M", "Y"])
+    def test_a_step_held_in_months_or_years(self, unit):
+        """
+        Neither is a fixed number of seconds.
+
+        So neither is a fixed number of samples per second, and asking
+        numpy raises out of the middle of a repr.
+        """
+        assert rate_text(np.timedelta64(1, unit)) is None
+
+    def test_a_rate_carries_no_float_noise(self):
+        """
+        What is printed is rounded to the figures it was chosen at.
+
+        A day step is 11.57 µHz; the shortest exact form of the float
+        behind it is 11.569999999999999.
+        """
+        assert "11.57 µHz" in str(rate_text(np.timedelta64(1, "D")))
+
+    def test_a_rate_never_reads_in_exponent_notation(self):
+        """250 Hz needs two figures, and `g` prints those as 2.5e+02."""
+        assert "e+" not in str(rate_text(np.timedelta64(4_000_000, "ns")))
+
+    def test_a_rate_which_would_not_give_the_step_back(self):
+        """
+        A step which is not a round rate says no rate at all.
+
+        3999999 ns is 250.0000625 Hz. Saying "250 Hz" would claim a
+        precision the step does not have, and saying every figure of it
+        is the step again in different units.
+        """
+        assert rate_text(np.timedelta64(3_999_999, "ns")) is None
+
+    @pytest.mark.parametrize(
+        "step",
+        [1.0, 300, "not a step", None, np.timedelta64(0, "ns"), np.timedelta64("NaT")],
+    )
+    def test_only_a_step_measured_in_time(self, step):
+        """
+        A rate is the reciprocal of a duration.
+
+        One over a distance is not how anyone states channel spacing,
+        and one over zero is not a rate at all.
+        """
+        assert rate_text(step) is None
+
+
+class TestHumanSize:
+    """Tests for saying how much room something takes up."""
+
+    @pytest.mark.parametrize(
+        ("count", "expected"),
+        [
+            (0, "0 B"),
+            (512, "512 B"),
+            # A byte count is read in binary, so a thousand of them is
+            # still a thousand bytes and not a kibibyte.
+            (1000, "1000 B"),
+            (1023, "1023 B"),
+            (1024, "1 KiB"),
+            # A hair under a boundary belongs in the unit above it:
+            # "1024 KiB" is the one answer "largest which fits" rules out.
+            (1024**2 - 1, "1 MiB"),
+            (1024**3 - 1, "1 GiB"),
+            (4_800_000, "4.6 MiB"),
+            (2**30, "1 GiB"),
+            (2**40, "1 TiB"),
+            (2**51, "2048 TiB"),
+        ],
+    )
+    def test_size_in_the_largest_unit_which_fits(self, count, expected):
+        """A byte count is read in whatever unit keeps it short."""
+        assert human_size(count) == expected
+
+    def test_an_unknown_size_draws_no_comma(self):
+        """The comma introduces a size, so it goes when there is none."""
+
+        class UnknownChunks(np.ndarray):
+            """An array which cannot say how much room it takes up."""
+
+            nbytes = float("nan")
+
+        data = np.zeros((2, 2)).view(UnknownChunks)
+        rendered = str(array_to_text(data))
+        assert "float64)" in rendered
+        assert ", )" not in rendered
+
+    def test_a_size_which_is_not_a_number(self):
+        """
+        A dask array of unknown chunks reports nan bytes.
+
+        "nan TiB" is a worse answer than not saying.
+        """
+        assert human_size(float("nan")) == ""
+
+
+class TestDurationText:
+    """Tests for how long an extent lasted."""
+
+    def test_two_instants_state_their_distance(self):
+        """The fact two times do not carry on their own."""
+        low = np.datetime64("2020-01-01T00:00:00")
+        high = np.datetime64("2020-01-01T00:00:24")
+        assert "24 s" in str(duration_text(low, high))
+
+    @pytest.mark.parametrize("unit", ["Y", "M"])
+    def test_a_span_of_years_or_months(self, unit):
+        """
+        Neither is a fixed number of seconds.
+
+        numpy refuses to divide one into seconds rather than guessing a
+        calendar, and so does this rather than raising out of a repr.
+        """
+        low, high = np.datetime64("2000", unit), np.datetime64("2010", unit)
+        assert duration_text(low, high) is None
+
+    def test_no_time_at_all_says_nothing(self):
+        """A zero would read as a label on a gap."""
+        instant = np.datetime64("2020-01-01T00:00:00")
+        assert duration_text(instant, instant) is None
+
+    @pytest.mark.parametrize(
+        ("low", "high"),
+        [
+            (0.0, 299.0),
+            (0, 299),
+            ("a", "b"),
+            (None, None),
+            (1, np.datetime64("2020-01-01")),
+            # The other way round: `low` is a time and `high` is not, so
+            # only the second half of the guard can refuse it. Without
+            # that half numpy raises out of the middle of a repr.
+            (np.datetime64("2020-01-01"), 1),
+        ],
+        ids=["floats", "ints", "strings", "none", "mixed_low", "mixed_high"],
+    )
+    def test_only_two_times_have_a_duration(self, low, high):
+        """
+        A duration is read in seconds.
+
+        A distance of 299 handed to this would come back as "5 m" --
+        five minutes, of a span measured in metres.
+        """
+        assert duration_text(low, high) is None
+
+    def test_further_apart_than_a_timedelta_holds(self):
+        """
+        Two instants can lie further apart than a Timedelta holds.
+
+        How long that is matters less than the extents it would
+        otherwise take down with it.
+        """
+        assert duration_text(pd.Timestamp.min, pd.Timestamp.max) is None
+
+    @pytest.mark.parametrize(
+        ("low", "high", "expected"),
+        [
+            ("1677-09-21T00:12:44", "2262-04-11T23:47:16", "584.6 y"),
+            ("0001-01-01", "9999-12-31", "9999 y"),
+        ],
+        ids=["centuries", "millennia"],
+    )
+    def test_a_span_too_long_to_count_in_nanoseconds(self, low, high, expected):
+        """
+        A long span is still said, and said correctly.
+
+        Read as nanoseconds these overflow an int64 silently: the first
+        of them came back as 1.7 seconds, and the second as 61.6 years.
+        """
+        said = duration_text(np.datetime64(low), np.datetime64(high))
+        assert expected in str(said)
+
+
+class TestValuesAReaderCanRead:
+    """Tests for the facts a repr states about the things it shows."""
+
+    def test_a_time_coord_states_its_span(self):
+        """Two instants say nothing about how far apart they are."""
+        coord = dc.get_example_patch().coords.coord_map["time"]
+        assert "<8 s>" in str(coord)
+
+    def test_a_time_coord_states_its_rate(self):
+        """DAS acquisition is quoted in Hz, not in seconds per sample."""
+        coord = dc.get_example_patch().coords.coord_map["time"]
+        assert "250 Hz" in str(coord)
+
+    def test_a_distance_coord_states_neither(self):
+        """
+        A distance from 0 to 299 m already says how wide it is, and a
+        rate over it is not a quantity anyone quotes.
+        """
+        rendered = str(dc.get_example_patch().coords.coord_map["distance"])
+        assert "Hz" not in rendered
+        assert "<" not in rendered
+
+    def test_the_data_states_how_much_room_it_takes(self):
+        """Whether it fits in memory is what dtype times shape is for."""
+        assert "4.6 MiB" in str(dc.get_example_patch())
+
+    def test_an_annotation_set_over_distance_states_no_span(self):
+        """
+        A distance annotation is not measured in time.
+
+        299 metres read as a duration is "5 m", which is five minutes.
+        """
+        frame = pd.DataFrame({"distance_min": [0.0], "distance_max": [299.0]})
+        rendered = str(AnnotationSet(frame, dims=("distance",)))
+        assert "299" in rendered
+        assert "<" not in rendered
+
+    def test_an_annotation_set_states_its_span(self):
+        """The same fact a spool and a patch coordinate state."""
+        frame = pd.DataFrame(
+            {
+                "time_min": pd.to_datetime(["2020-01-01T00:00:00"]),
+                "time_max": pd.to_datetime(["2020-01-01T00:00:09"]),
+            }
+        )
+        assert "<9 s>" in str(AnnotationSet(frame, dims=("time",)))
