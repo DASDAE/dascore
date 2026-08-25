@@ -770,6 +770,9 @@ def limit_items(
     stopping at ten reads as though ten is all there were.
     """
     limit = get_config().display_max_items if limit is None else limit
+    # Config forbids a negative one, so only a caller can state it, and
+    # `items[:-1]` would quietly show all but the last rather than none.
+    assert limit >= 0, f"a display limit is a count, not {limit}"
     items = list(items)
     shown = items[:limit]
     return shown, len(items) - len(shown)
