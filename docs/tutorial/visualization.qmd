@@ -52,17 +52,17 @@ An [inventory](inventory.qmd) states its label groups over stretches of the fibe
 ```{python}
 from dascore.examples import inventory_patch_pair
 
-patch, inventory = inventory_patch_pair()
+zoned, inventory = inventory_patch_pair()
 
-patch.enrich(inventory).viz.waterfall(label_coord="zone", show=True);
+zoned.enrich(inventory).viz.waterfall(label_coord="zone", show=True);
 ```
 
 The one line is the boundary between the two zones this path names, and it alternates their two colors because it belongs to neither: north ends where south begins. A boundary with a label on only one side — a stretch the group says nothing about — is drawn solid, in the color of the side which does state something.
 
-A boolean coordinate is a membership group: only the stretches it holds are marked, and the legend calls them by the coordinate's own name.
+A boolean coordinate is a membership group: only the limits of the stretches it holds are drawn, and the legend calls them by the coordinate's own name. Both lines below are solid, since the group says nothing on the far side of either.
 
 ```{python}
-patch.enrich(inventory).viz.waterfall(label_coord="noisy", show=True);
+zoned.enrich(inventory).viz.waterfall(label_coord="noisy", show=True);
 ```
 
 ## Wiggle

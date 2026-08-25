@@ -298,8 +298,9 @@ def string_colors(values, vocabulary=None, cmap_name=STRING_CMAP) -> dict:
     which sort after it, and pushing the count past the wheel moves all
     of them.
 
-    Two figures of one subject share this, so a label group drawn as a
-    lane and the same group drawn over a patch agree on their colors.
+    Two figures share colors only where they are given the same values:
+    a lane figure colors from every value it draws, so a group drawn
+    alone over a patch matches it only through ``vocabulary``.
 
     Parameters
     ----------

@@ -188,19 +188,26 @@ def _insert_gap_bands(data, gap_mask, axis):
 
 
 def _plot_with_mesh(ax, data, dims, coords, cmap, gap_color, gap_factor):
-    """Plot irregularly sampled data using a quadrilateral mesh."""
+    """Plot irregularly sampled data using a quadrilateral mesh.
+
+    Returns the mesh and, per dimension, the cell edges it was drawn from
+    with the gaps they opened, so a caller marking the same cells reads
+    them off the mesh rather than working them out again.
+    """
     mesh_data = np.ma.asarray(data)
     edges = {}
+    cells = {}
     mesh_gap_factor = gap_factor if gap_color is not None else None
     for axis, dim in enumerate(dims):
         dim_edges, gap_mask = get_gap_edges(coords[dim], mesh_gap_factor)
         if gap_color is not None:
             mesh_data = _insert_gap_bands(mesh_data, gap_mask, axis)
         edges[dim] = dim_edges
+        cells[dim] = (dim_edges, gap_mask)
 
     if gap_color is not None:
         cmap = cmap.with_extremes(bad=gap_color)
-    return ax.pcolormesh(
+    mesh = ax.pcolormesh(
         edges[dims[1]],
         edges[dims[0]],
         mesh_data,
@@ -210,6 +217,7 @@ def _plot_with_mesh(ax, data, dims, coords, cmap, gap_color, gap_factor):
         linewidth=0,
         antialiased=False,
     )
+    return mesh, cells
 
 
 @patch_function()
@@ -225,8 +233,8 @@ def waterfall(
     gap_factor: float = 1.5,
     log: bool = False,
     cbar: bool = True,
-    label_coord: str | None = None,
     show: bool = False,
+    label_coord: str | None = None,
 ) -> plt.Axes:
     """
     Create a waterfall plot of the Patch data.
@@ -297,18 +305,20 @@ def waterfall(
     cbar
         If True, plot the colorbar, else do not. This controls only colorbar
         display; use `cmap` to control colormap selection.
+    show
+        If True, show the plot, else just return axis.
     label_coord
         The name of a coordinate whose values label stretches of one of the
         plotted dimensions, such as a label group an inventory projected onto
         the patch with [`Patch.enrich`](`dascore.proc.inventory.enrich`). A
         line is drawn wherever its value changes, colored by the labels it
-        parts, and a legend naming them is placed beyond the colorbar. String
-        and numeric coordinates state one label per value; a boolean one
-        states membership, so only its True stretches are marked and the
-        coordinate's own name is what the legend calls them. Absent values
-        (the empty string, NaN, or False) label nothing.
-    show
-        If True, show the plot, else just return axis.
+        parts, and a legend names them beside the axes, beyond any colorbar.
+        String and numeric coordinates state one label per distinct value, and
+        more than 20 of them raises a `ParameterError`: a coordinate that
+        varied is a quantity, not a set of labels. A boolean coordinate states
+        membership, so only its True stretches are marked and the legend names
+        them by the coordinate. Absent values (the empty string, NaN, or
+        False) label nothing.
 
     Examples
     --------
@@ -374,6 +384,10 @@ def waterfall(
     # Validate inputs
     patch = _validate_patch_dims(patch)
     _validate_gap_factor(gap_factor)
+    dims = patch.dims
+    dims_r = tuple(reversed(dims))
+    # Before an axes exists, so a refused label_coord leaves no figure behind.
+    plan = label_plan(patch, label_coord, dims_r) if label_coord is not None else None
     # Setup axes and data. A figure this call built is one whose room a
     # legend may take; any other belongs to the caller.
     owned = ax is None
@@ -382,13 +396,10 @@ def waterfall(
         data = np.log10(np.abs(patch.data) + np.finfo(np.float64).eps)
     else:
         data = patch.data
-    dims = patch.dims
-    dims_r = tuple(reversed(dims))
     dim_coords = {dim: patch.get_coord(dim) for dim in dims}
     coords = {dim: np.asarray(coord) for dim, coord in dim_coords.items()}
     cmap = _get_waterfall_colormap(patch, cmap)
     scale = _get_scale(scale, scale_type, data)
-    plan = label_plan(patch, label_coord, dims_r) if label_coord is not None else None
     label_edges = None
     use_image = all(coord.evenly_sampled for coord in dim_coords.values())
     if use_image or not all(is_monotonic_and_finite(x) for x in coords.values()):
@@ -408,7 +419,7 @@ def waterfall(
                 extents, dims_r, plan.dim, len(coords[plan.dim])
             )
     else:
-        im = _plot_with_mesh(
+        im, cells = _plot_with_mesh(
             ax,
             data,
             dims,
@@ -418,7 +429,7 @@ def waterfall(
             gap_factor=gap_factor,
         )
         if plan is not None:
-            label_edges = mesh_cell_edges(coords[plan.dim], gap_color, gap_factor)
+            label_edges = mesh_cell_edges(*cells[plan.dim])
     if scale is not None and len(scale) == 2 and np.all(np.isfinite(scale)):
         im.set_clim(np.asarray(scale))
     # Format axis labels and handle time-like dimensions
@@ -435,7 +446,6 @@ def waterfall(
             plan,
             patch.coords.get_array(plan.name),
             label_edges,
-            colorbars=int(bool(cbar)),
             owned=owned,
         )
     if show:
