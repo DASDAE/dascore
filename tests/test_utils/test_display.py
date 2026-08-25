@@ -1314,6 +1314,97 @@ class TestBodyText:
         assert ">a\n\nb<" in html
 
 
+class TestCoordinatesAreStated:
+    """
+    Tests for what the coordinates block says, rather than for the two
+    renderings of it agreeing.
+
+    Parity is a relative claim: it holds just as well when both reprs
+    say nothing. Deleting every coordinate from the block left it
+    passing, so these say what has to be there.
+    """
+
+    @pytest.fixture(scope="class")
+    def patch(self):
+        """A patch with a dimension coordinate and one riding on it."""
+        return dc.get_example_patch().update_coords(quality=("distance", np.ones(300)))
+
+    def test_the_text_states_every_coordinate(self, patch):
+        """A block which names none of them is not a coordinates block."""
+        rendered = str(patch.coords)
+        for name in ("distance", "time", "quality"):
+            assert name in rendered, name
+
+    def test_the_panel_states_every_coordinate(self, patch):
+        """The same, drawn."""
+        html = patch._repr_html_()
+        for name in ("distance", "time", "quality"):
+            assert name in html, name
+
+    def test_a_dimension_is_marked(self, patch):
+        """
+        The `*` is how a reader tells a dimension from a coordinate
+        which merely rides on one.
+        """
+        assert "*distance" in str(patch.coords)
+        assert "*<span" in patch._repr_html_()
+
+    def test_a_coordinate_which_is_not_a_dimension_states_its_dims(self, patch):
+        """Which axis it lies along is the thing it has to say."""
+        assert "quality ('distance',)" in str(patch.coords)
+
+    def test_a_private_coordinate_is_not_shown(self):
+        """
+        A name starting with an underscore is the manager's business.
+
+        Left in, every patch would print the coordinates it keeps for
+        bookkeeping beside the ones a reader asked for.
+        """
+        patch = dc.get_example_patch()
+        coords = patch.coords.update(_hidden=("distance", np.ones(300)))
+        assert "_hidden" not in str(coords)
+        assert "_hidden" not in render_html(coords._repr_section())
+
+    @pytest.mark.parametrize(
+        ("label", "value"),
+        [
+            ("min", "0"),
+            ("max", "299"),
+            ("step", "1"),
+            ("shape", "(300,)"),
+            ("dtype", "int64"),
+            ("units", "m"),
+        ],
+    )
+    def test_the_facts_a_coordinate_states(self, patch, label, value):
+        """
+        Both the label and the value, in both renderings.
+
+        Stripped from both sides by the parity check -- it compares what
+        is said, not what it is called -- so renaming a label passed.
+        """
+        assert f"{label}: " in str(patch.coords)
+        assert f"<th>{label}</th>" in patch._repr_html_()
+        assert value in str(patch.coords)
+
+    def test_the_kind_of_each_coordinate(self, patch):
+        """A terminal states it in front of the fields; a panel columns it."""
+        assert "CoordRange(" in str(patch.coords)
+        assert "CoordRange" in patch._repr_html_()
+
+    def test_a_name_which_looks_like_markup(self):
+        """
+        A coordinate name is a value someone else chose, and it is the
+        one cell of the new markup a file can fill.
+        """
+        patch = dc.get_example_patch().update_coords(
+            **{"<script>": ("distance", np.ones(300))}
+        )
+        html = patch._repr_html_()
+        assert "<script>" not in html.replace("<script>alert", "X")
+        assert "&lt;script&gt;" in html
+
+
 class TestTableColumns:
     """Tests for which column a value is drawn in."""
 
@@ -1338,6 +1429,32 @@ class TestTableColumns:
         max and its step rather than after everything a distance says.
         """
         assert self._columns([("a", "xz"), ("b", "xyz")]) == ["kind", "x", "y", "z"]
+
+    def test_a_row_which_states_part_of_what_a_later_row_does(self):
+        """
+        A record stating a subset which is not a prefix.
+
+        Selecting nothing leaves a coordinate with only a shape and a
+        dtype, and merging by index put the units of the row after it
+        between them -- an order no row states.
+        """
+        assert self._columns([("a", "cd"), ("b", "abcde")]) == [
+            "kind",
+            "a",
+            "b",
+            "c",
+            "d",
+            "e",
+        ]
+
+    def test_rows_which_state_fields_in_conflicting_orders(self):
+        """
+        Two records can disagree outright, which has no answer.
+
+        The order they were first stated in is taken, rather than
+        raising out of the middle of a repr.
+        """
+        assert self._columns([("a", "ab"), ("b", "ba")]) == ["kind", "a", "b"]
 
     def test_rows_which_share_no_fields(self):
         """
@@ -1493,7 +1610,9 @@ def _decompose(line: str) -> list[str]:
     said = line.strip().removeprefix("\u27a4 ")
     if not said or set(said) == {"-"}:
         return []
-    record = re.match(r"(\S+): (\w+)\((.*) \)$", said)
+    # The name may hold a space: a coordinate which is not a dimension
+    # states the dimensions it rides on, as `quality ('distance',)`.
+    record = re.match(r"(.+?): (\w+)\((.*) \)$", said)
     if record is None:
         return [said]
     name, kind, fields = record.groups()
@@ -1577,6 +1696,15 @@ class TestHtmlRepr:
             "patch": dc.get_example_patch(),
             "spool": dc.get_example_spool("diverse_das"),
             "inventory": dc.get_example_inventory("tunnel"),
+            # A coordinate which is not a dimension, whose name carries
+            # the dimensions it rides on.
+            "non_dim": dc.get_example_patch().update_coords(
+                quality=("distance", np.ones(300))
+            ),
+            # A coordinate which selected nothing states only a shape
+            # and a dtype, which is a subset of what the one beside it
+            # states and not a prefix of it.
+            "partial": dc.get_example_patch().select(distance=(1e9, 2e9)),
         }
 
     def test_each_states_a_panel(self, html_objects):
@@ -1669,9 +1797,11 @@ class TestHtmlRepr:
         Every repr carries it, so a notebook carries one copy per cell.
 
         Held on its own rather than on the panel, where growth in one
-        hides growth in the other.
+        hides growth in the other. The ceiling is roughly a quarter
+        above what it holds, so a section's worth of rules trips it
+        rather than a rule or two.
         """
-        assert len(get_stylesheet().encode()) < 6_000
+        assert len(get_stylesheet().encode()) < 8_000
 
     def test_a_panel_is_mostly_the_object(self, html_objects):
         """

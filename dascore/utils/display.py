@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import textwrap
 from collections import Counter
-from collections.abc import Callable, Iterable, Mapping, Sized
+from collections.abc import Callable, Iterable, Mapping, Sequence, Sized
 from contextlib import suppress
 from dataclasses import dataclass, field
 from functools import cache, singledispatch
+from graphlib import CycleError, TopologicalSorter
 from html import escape
 from importlib.resources import files
 from itertools import pairwise
@@ -329,25 +330,55 @@ def _html_raw(node: Raw) -> str:
     return f'<pre class="dc-body">{text_to_html(text)}</pre>'
 
 
+def _merge_columns(rows: Sequence[Row]) -> list[str]:
+    """
+    One column order which every row's own order agrees with.
+
+    Rows state different fields -- only a time coordinate has a span,
+    and a coordinate which selected nothing states neither a min nor a
+    max -- so the columns are the union. Sorted rather than merged by
+    hand: what each row states is an ordering constraint on part of the
+    whole, and reading them in as edges is what keeps a field which
+    appears late in one row and early in another from landing where no
+    row puts it.
+
+    Two rows can disagree outright, which is a cycle and has no answer;
+    the order they were first stated in is the one taken then.
+    """
+    graph: dict[str, set[str]] = {}
+    for row in rows:
+        previous = None
+        for label, _, _ in row.fields:
+            graph.setdefault(label, set())
+            if previous is not None:
+                graph[label].add(previous)
+            previous = label
+    first = {label: index for index, label in enumerate(graph)}
+    sorter = TopologicalSorter(graph)
+    try:
+        sorter.prepare()
+    except CycleError:
+        return list(graph)
+    # Taken one at a time, earliest-stated first, so fields which
+    # constrain nothing in each other -- two records sharing none --
+    # stay in the order they were stated rather than interleaving.
+    ready: list[str] = []
+    out: list[str] = []
+    while sorter.is_active():
+        ready.extend(sorter.get_ready())
+        ready.sort(key=first.__getitem__)
+        label = ready.pop(0)
+        out.append(label)
+        sorter.done(label)
+    return out
+
+
 @render_html.register
 def _html_table(node: Table) -> str:
     # Every label any row states, in the order they are first stated, so
     # a row which says nothing for one leaves that cell empty rather
     # than shifting the ones after it.
-    labels: list[str] = []
-    for row in node.rows:
-        # Merged rather than collected first-seen, so each row's own
-        # order survives: a span is a time's alone and belongs between
-        # its max and its step, not after every field a distance
-        # states. A new field goes after the last column placed, or
-        # after the last one this row shares, whichever is later.
-        at = len(labels)
-        for label, _, _ in row.fields:
-            if label in labels:
-                at = labels.index(label) + 1
-                continue
-            labels.insert(at, label)
-            at += 1
+    labels = _merge_columns(node.rows)
     # What each record is, which a terminal states in front of its
     # fields. A column of its own here rather than nothing at all.
     head = "<th>kind</th>" + "".join(

@@ -156,18 +156,43 @@ line would push the whole page sideways rather than just this block. */
 /* A section of records, drawn in columns rather than on a line each.
 Every rule here is a reset as much as a style: a table inherits a good
 deal from a docs theme, and a repr should look the same in a notebook. */
+/* The table scrolls inside its own wrapper: `overflow` does nothing on
+a `display: table`, so a wide coordinates block would otherwise scroll
+the whole panel rather than itself. */
+.dc-repr .dc-scroll {
+  margin: 0 0 0.3em 1.1em;
+  overflow-x: auto;
+  max-width: 100%;
+}
+
 .dc-repr .dc-table {
   border-collapse: collapse;
   border: none;
-  margin: 0 0 0.3em 1.1em;
+  margin: 0;
   width: auto;
+  table-layout: auto;
   font-size: 1em;
+  line-height: inherit;
+  color: inherit;
+  background: none;
+}
+
+/* A notebook stripes and highlights the rows of a table it renders --
+`.jp-RenderedHTMLCommon tbody tr:nth-child(even)` and `tr:hover` -- and
+transparent cells let both paint through. A repr is not a data grid. */
+.dc-repr .dc-table tr,
+.dc-repr .dc-table tbody tr:nth-child(even),
+.dc-repr .dc-table tbody tr:nth-child(odd),
+.dc-repr .dc-table tbody tr:hover {
   background: none;
 }
 
 .dc-repr .dc-table th,
 .dc-repr .dc-table td {
   border: none;
+  line-height: inherit;
+  color: inherit;
+  letter-spacing: normal;
   padding: 0 0.9em 0 0;
   text-align: left;
   vertical-align: baseline;
