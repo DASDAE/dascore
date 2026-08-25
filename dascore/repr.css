@@ -120,13 +120,22 @@ panel reads the same in a notebook and on the docs site. */
   display: block;
   list-style: none;
   cursor: pointer;
-  padding: 0.1em 0;
+  /* Room for the triangle, which is pulled back into it below. A line
+  can run to more than one line -- a description usually does -- and
+  given to the triangle alone the rest would start a marker to the left
+  of the first, under the triangle rather than beside it. */
+  padding: 0.1em 0 0.1em 1.1em;
   color: inherit;
   font-size: 1em;
   border-radius: 3px;
   /* A title can carry spaces a producer put there, and HTML would
   collapse runs of them. */
   white-space: pre;
+  /* And it scrolls inside itself, the way every other block here does.
+  A network's line can run to a few hundred characters, and without
+  this one of them pushes the banner and every block below it sideways
+  along with it. */
+  overflow-x: auto;
 }
 
 .dc-repr summary::-webkit-details-marker { display: none; }
@@ -135,6 +144,7 @@ panel reads the same in a notebook and on the docs site. */
   content: "\25B8";
   display: inline-block;
   width: 1.1em;
+  margin-left: -1.1em;
   color: var(--dc-grey50);
 }
 
@@ -170,8 +180,9 @@ custom properties loses nothing a reader needed. */
 }
 
 /* A leaf has no disclosure triangle, so it is given the width of one:
-without it a leaf's text would start where its parent's triangle does
-rather than where its parent's text does, and read as the level above. */
+without it a leaf's text starts where its parent's text starts, a marker
+to the left of where the blocks beside it start, and reads as the level
+above. */
 .dc-repr .dc-line.dc-nest { padding-left: 1.65em; }
 
 .dc-repr .dc-d0 { --dc-rail: var(--dc-d0); }

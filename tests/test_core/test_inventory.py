@@ -1878,13 +1878,14 @@ class TestCoverageCompleteness:
         assert values_equal((1.0, np.nan), (1.0, np.nan))
 
 
+@pytest.fixture(scope="module")
+def tunnel():
+    """A populated inventory with two optical paths."""
+    return dc.get_example_inventory("tunnel")
+
+
 class TestDisplay:
     """Tests for the inventory's text representation."""
-
-    @pytest.fixture(scope="class")
-    def tunnel(self):
-        """A populated inventory with two optical paths."""
-        return dc.get_example_inventory("tunnel")
 
     def test_rich(self, tunnel):
         """An inventory has a rich representation."""
@@ -1975,30 +1976,51 @@ class TestDisplay:
         """
         Each level is set in one step from the one above it.
 
-        Every line is checked rather than one of them: an indent applied
-        at the wrong level puts a fiber array where a network goes and
-        still leaves the object names in the right order.
+        Stated as the whole tree rather than as a rule each line is
+        checked against: a level which stopped being drawn matches no
+        rule and passes one, and dropping a level is exactly what a
+        rewrite of the tree gets wrong.
         """
+        drawn = [
+            (len(x) - len(x.lstrip()), x.strip().split("(")[0])
+            for x in str(tunnel).split("\n")
+            # A model's line, which closes on " )"; the block titles
+            # above them close on a count in brackets instead.
+            if x.endswith(" )")
+        ]
+        assert drawn == [
+            (4, "Network"),
+            (8, "FiberArray"),
+            (12, "Acquisition"),
+            (12, "OpticalPath"),
+            (12, "OpticalPath"),
+            (4, "coordinate_reference_system: CoordinateReferenceSystem"),
+        ]
+
+    def test_a_field_value_which_holds_a_newline(self):
+        """
+        Every line of a model's line is set in, not just the first.
+
+        A description is free text and is routinely written over more
+        than one line. Indented only on its first, the rest falls to
+        column zero and reads as a block of its own -- which is the
+        misreading the indentation exists to prevent.
+        """
+        array = inv.FiberArray(code="FA1", description="line one\nline two")
+        network = inv.Network(code="XT", fiber_arrays=(array,))
+        drawn = str(inv.Inventory(networks=(network,))).split("\n")
+        assert "        FiberArray( description: line one" in drawn
+        assert "        line two code: FA1 )" in drawn
+
+    def test_a_tree_opens_where_it_was_put(self, tunnel):
+        """A model printed on its own is not indented; what it holds is."""
         network = tunnel.networks[0]
-        array = network.fiber_arrays[0]
-        levels = {"Network(": 4, "FiberArray(": 8, "Acquisition(": 12}
-        levels["OpticalPath("] = 12
-        for line in str(tunnel).split("\n"):
-            for name, indent in levels.items():
-                if line.lstrip().startswith(name):
-                    assert len(line) - len(line.lstrip()) == indent, line
-        # And on its own a network opens where it was put, not indented.
         assert not str(network).startswith(" ")
-        assert str(array).split("\n")[1].startswith("    Acquisition(")
+        assert str(network).split("\n")[1].startswith("    FiberArray(")
 
 
 class TestPanel:
     """Tests for the panel a notebook draws an inventory as."""
-
-    @pytest.fixture(scope="class")
-    def tunnel(self):
-        """A populated inventory with two optical paths."""
-        return dc.get_example_inventory("tunnel")
 
     @pytest.fixture(scope="class")
     def markup(self, tunnel):
@@ -2024,22 +2046,20 @@ class TestPanel:
         An acquisition's line is a line, and can scroll as one.
 
         Drawn inside one `pre` with the whole tree it could not: the
-        block scrolls, so the longest line in it decides how far every
-        other line is pushed.
+        longest line in a block sets that block's scroll width, so
+        reading it drags every other line in the tree sideways.
         """
         assert "Acquisition" in markup
         pres = re.findall(r"<pre[^>]*>(.*?)</pre>", markup, re.DOTALL)
+        # The attributes block is still one, so an empty list here would
+        # mean the search stopped working rather than the tree moving.
+        assert len(pres) == 1
         assert not any("Acquisition" in x for x in pres)
 
     def test_each_level_says_which_it_is(self, markup):
         """A reader can tell an array's line from the network's above it."""
         for depth in range(3):
             assert f"dc-nest dc-d{depth}" in markup
-
-    def test_a_title_carries_no_indentation(self, markup):
-        """The nesting is the markup here, and `summary` keeps whitespace."""
-        for title in re.findall(r"<summary>(.*?)</summary>", markup, re.DOTALL):
-            assert title == title.lstrip()
 
     def test_what_is_left_out_is_said(self):
         """A tree which stops early says so where it stopped."""

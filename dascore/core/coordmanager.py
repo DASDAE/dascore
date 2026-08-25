@@ -730,16 +730,19 @@ class CoordManager(RichRepr, DascoreBaseModel):
             msg = f"Cannot use {kwargs} for query; some coords share a dimension."
             raise CoordError(msg)
 
-    def _repr_section(self) -> Section:
+    def _repr_section(self, depth: int = 0) -> Section:
         """
         The coordinates block: its title, and the table under it.
 
         The same rows the text renders on their own lines, so a panel
         draws them in columns without either medium re-deriving what a
-        coordinate says.
+        coordinate says. ``depth`` is how far into a containment tree
+        the block sits, which is nothing today -- it is stated so that
+        every ``_repr_section`` in the package is one protocol, and a
+        container which came to hold coordinates could nest them.
         """
         header, table = self._repr_parts()
-        return Section(header, (table,))
+        return Section(header, (table,), depth)
 
     def __rich__(self) -> Text:
         """Rich formatting for the coordinate manager."""

@@ -35,7 +35,6 @@ from dascore.utils.display import (
     child_sections,
     model_to_line,
     render_text,
-    section_indent,
 )
 from dascore.utils.misc import _all_null, all_close
 from dascore.utils.time import to_datetime64
@@ -270,13 +269,10 @@ class InventoryModel(RichRepr, DascoreBaseModel):
         The block a repr draws this object in.
 
         ``depth`` is how far into a containment tree it sits, which a
-        terminal shows by indenting and a panel shows by nesting. The
-        indentation is stated in the title, for the same reason a section
-        body carries the newline which separated it from one: rendering
-        has then only to concatenate.
+        terminal shows by indenting and a panel shows by nesting.
         """
-        title = section_indent(depth) + self._repr_line()
-        return Section(title, child_sections(self._repr_children(), depth + 1), depth)
+        children = child_sections(self._repr_children(), depth + 1)
+        return Section(self._repr_line(), children, depth)
 
     def __rich__(self) -> Text:
         """The line naming this object, then whatever it holds."""

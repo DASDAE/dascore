@@ -2282,6 +2282,10 @@ class Inventory(NodeRepr, NamespaceOwner, InventoryModel):
         self.__pydantic_fields_set__.update({"resources", "networks"})
         return self
 
+    def _repr_children(self) -> tuple[Network, ...]:
+        """The networks, which are what an inventory's tree is made of."""
+        return self.networks
+
     def _repr_node(self) -> Repr:
         """
         The banner, the network tree, and what the manifest itself states.
@@ -2294,6 +2298,7 @@ class Inventory(NodeRepr, NamespaceOwner, InventoryModel):
         header = get_header_text("Inventory 📖")
         title = Text("➤ ") + Text("Networks", style=dascore_styles["dc_blue"])
         title += Text(f" ({len(self.networks)})")
+        networks = child_sections(self._repr_children(), 1)
         # schema_version, resources and the CRS are stated whether or not
         # they are the defaults: an inventory has a version and a frame,
         # and a blank line for either would read as having neither.
@@ -2307,7 +2312,7 @@ class Inventory(NodeRepr, NamespaceOwner, InventoryModel):
         return Repr(
             header=header,
             body=(
-                Section(title, child_sections(self.networks, 1)),
+                Section(title, networks),
                 split_block(mapping_to_text(attrs, "Attributes")),
             ),
         )

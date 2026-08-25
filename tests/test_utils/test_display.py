@@ -48,14 +48,13 @@ from dascore.utils.display import (
     human_size,
     indent_text,
     limit_items,
-    limit_reprs,
     mapping_to_text,
     model_to_line,
     percent,
     rate_text,
     render_html,
     render_text,
-    section_indent,
+    section_title,
     split_block,
     stated_fields,
     style_classes,
@@ -160,42 +159,6 @@ class TestIndentText:
         """Indenting does not flatten the styles it wraps."""
         text = Text("red", style="red")
         assert indent_text(text).spans
-
-
-class TestLimitReprs:
-    """Tests for capping how many children a repr lists."""
-
-    def test_under_limit_unchanged(self):
-        """Nothing is added while everything fits."""
-        items = [Network(code="A"), Network(code="B")]
-        out = limit_reprs(items, limit=3)
-        assert [str(x) for x in out] == [str(x) for x in items]
-
-    def test_over_limit_says_what_is_missing(self):
-        """The tail is named rather than dropped silently."""
-        items = [Network(code=f"N{x}") for x in range(5)]
-        out = limit_reprs(items, limit=2)
-        assert len(out) == 3
-        assert "3 more" in str(out[-1])
-
-    def test_limit_from_config(self):
-        """The default cap comes from runtime config."""
-        with config_context(display_max_items=1):
-            out = limit_reprs([Network(code="A"), Network(code="B")])
-        assert len(out) == 2
-        assert "1 more" in str(out[-1])
-
-    def test_hidden_children_not_rendered(self):
-        """A child which is not shown is not built, however many there are."""
-        rendered = []
-
-        class Counted:
-            def __rich__(self):
-                rendered.append(1)
-                return Text("x")
-
-        limit_reprs([Counted() for _ in range(50)], limit=2)
-        assert len(rendered) == 2
 
 
 class TestCountsToText:
@@ -1312,23 +1275,51 @@ class TestLimitItems:
             assert limit_items("abc") == (["a"], 2)
 
 
-class TestSectionIndent:
-    """Tests for the indentation a nested title carries."""
+class TestSectionTitle:
+    """Tests for how a terminal sets a nested block's line in."""
 
-    def test_the_top_states_none(self):
+    def test_the_top_is_drawn_as_it_stands(self):
         """A tree's root opens where its container left off."""
-        assert section_indent(0).plain == ""
+        assert section_title(Text("a"), 0).plain == "a"
+
+    def test_the_top_is_not_the_line_it_was_given(self):
+        """A renderer appends to what it drew, and must not rewrite it."""
+        line = Text("a")
+        section_title(line, 0).append("b")
+        assert line.plain == "a"
 
     @pytest.mark.parametrize("depth", [1, 2, 3])
     def test_a_level_starts_a_line(self, depth):
-        """
-        Every level below the top begins on its own line, set in.
+        """Every level below the top begins on its own line, set in."""
+        assert section_title(Text("a"), depth).plain == "\n" + "    " * depth + "a"
 
-        The newline is the title's, not the renderer's, for the same
-        reason a section body carries the one which separated it:
-        rendering is then only concatenation.
+    @pytest.mark.parametrize("depth", [1, 2])
+    def test_every_line_is_set_in(self, depth):
         """
-        assert section_indent(depth).plain == "\n" + "    " * depth
+        A field value may hold a newline -- a description usually does.
+
+        A continuation left at column zero reads as a block of its own,
+        which is the misreading the indentation exists to prevent.
+        """
+        indent = "    " * depth
+        out = section_title(Text("a\nb"), depth).plain
+        assert out == f"\n{indent}a\n{indent}b"
+
+    def test_the_styles_survive(self):
+        """
+        Setting a line in does not repaint it, or paint the indent.
+
+        Read per character, since indenting splits a Text and rejoins
+        it, and a span which came back one character wide of where it
+        started would color the wrong word.
+        """
+        line = Text("ab")
+        line.stylize("bold", 0, 1)
+        drawn = section_title(line, 1)
+        styles = dict(zip(drawn.plain, resolved_styles(drawn), strict=True))
+        assert styles["a"].bold
+        assert not styles["b"].bold
+        assert not styles[" "].bold
 
 
 class _Leaf:
@@ -1338,7 +1329,7 @@ class _Leaf:
         self.name = name
 
     def _repr_section(self, depth=0):
-        return Section(section_indent(depth) + Text(self.name), depth=depth)
+        return Section(Text(self.name), depth=depth)
 
 
 class TestChildSections:
@@ -1347,7 +1338,7 @@ class TestChildSections:
     def test_one_block_per_child(self):
         """Each child draws itself, at the depth it was given."""
         out = child_sections([_Leaf("a"), _Leaf("b")], 2)
-        assert [x.title.plain for x in out] == ["\n        a", "\n        b"]
+        assert [x.title.plain for x in out] == ["a", "b"]
         assert {x.depth for x in out} == {2}
 
     def test_the_tail_is_named(self):
@@ -1355,7 +1346,7 @@ class TestChildSections:
         with config_context(display_max_items=2):
             out = child_sections([_Leaf(str(x)) for x in range(5)], 1)
         assert len(out) == 3
-        assert out[-1].title.plain == "\n    ... 3 more"
+        assert out[-1].title.plain == "... 3 more"
         # The line sits with the children it stands for, not beside them.
         assert out[-1].depth == 1
 
@@ -1409,7 +1400,7 @@ class TestVisibleLines:
         """
         What is folded is one line, whatever it holds.
 
-        Which is what lets a reader open a large tree a level at a time:
+        That is what lets a reader open a large tree a level at a time:
         counted in full, a container of twenty full networks would fold
         the block which lists them, and the panel would open on nothing.
         """
@@ -1420,8 +1411,37 @@ class TestVisibleLines:
             assert _visible_lines(mid) == 1
             assert _visible_lines(top) == 4
             # And so the outer block still opens, on three folded lines.
-            assert "<details open>" in render_html(top)
-            assert render_html(top).count("<details open>") == 1
+            # Counted on " open>", since a nested block carries classes
+            # between the tag and the attribute and "<details open>"
+            # could only ever match the one at the top.
+            html = render_html(top)
+            assert html.count(" open>") == 1
+            assert html.startswith("<details open>")
+
+    def test_a_node_is_counted_once(self, monkeypatch):
+        """
+        Every node is visited once, however deep the tree goes.
+
+        Asking a section how long it is and then asking again after
+        deciding to open it walks the same subtree twice at every level,
+        which doubles per level rather than adding one. Counted rather
+        than timed: the growth is the defect, and a clock only shows it
+        on a tree far larger than one anybody has.
+        """
+        seen = []
+        real = display._visible_lines
+
+        def counted(node):
+            seen.append(node)
+            return real(node)
+
+        monkeypatch.setattr(display, "_visible_lines", counted)
+        node = Section(Text("leaf"), depth=12)
+        for depth in range(11, -1, -1):
+            node = Section(Text(f"n{depth}"), (node,), depth=depth)
+        with config_context(display_html_open_lines=100):
+            counted(node)
+        assert len(seen) == 13
 
     def test_something_which_is_not_a_node(self):
         """A counter says what it cannot count rather than guessing."""
@@ -1435,15 +1455,15 @@ class TestNestedSections:
     @pytest.fixture
     def tree(self):
         """A title, a child, and a grandchild under it."""
-        leaf = Section(Text("\n        leaf"), depth=2)
-        mid = Section(Text("\n    mid"), (leaf,), depth=1)
+        leaf = Section(Text("leaf"), depth=2)
+        mid = Section(Text("mid"), (leaf,), depth=1)
         return Section(Text("\u27a4 top"), (mid,))
 
     def test_text_is_concatenation(self, tree):
         """
         A terminal draws the nesting by the indentation in the titles.
 
-        Which is what keeps `str()` unchanged: the nodes state exactly
+        That is what keeps `str()` unchanged: the nodes state exactly
         the characters the old hand-built text stated.
         """
         assert render_text(tree).plain == "\u27a4 top\n    mid\n        leaf"
@@ -1502,12 +1522,17 @@ class TestNestedSections:
         node = Section(Text("x"), depth=_NEST_COLORS + 1)
         assert f"dc-d{(_NEST_COLORS + 1 - 1) % _NEST_COLORS}" in render_html(node)
 
-    def test_a_deep_tree_folds(self, tree):
-        """A parent folds on everything under it, not on its own children."""
-        with config_context(display_html_open_lines=2):
-            assert "<details open>" in render_html(tree)
-        with config_context(display_html_open_lines=1):
-            assert "<details open>" not in render_html(tree)
+    @pytest.mark.parametrize(("limit", "open_blocks"), [(2, 2), (1, 1), (0, 0)])
+    def test_a_deep_tree_folds_from_the_outside_in(self, tree, limit, open_blocks):
+        """
+        Each level decides for itself, and an outer one counts a folded
+        child as the one line it draws.
+
+        So the block which holds the tree stays open while the levels
+        under it close, and a reader opens as far down as they asked.
+        """
+        with config_context(display_html_open_lines=limit):
+            assert render_html(tree).count(" open>") == open_blocks
 
 
 class TestBodyText:
@@ -1737,6 +1762,30 @@ class TestTableColumns:
         assert "<td>1</td><td></td>" in body
 
 
+def _css_body() -> str:
+    """The stylesheet with its comments taken out.
+
+    A rule and a comment about a rule read the same to a substring
+    search, and a test which cannot tell them apart passes on a rule
+    which was commented out.
+    """
+    return re.sub(r"/\*.*?\*/", "", get_stylesheet(), flags=re.DOTALL)
+
+
+def _css_rule(selector: str) -> str:
+    """
+    What one selector declares, or "" where it declares nothing.
+
+    Matched on the whole selector list a block states, so a rule found
+    here is one a browser would apply rather than a substring of the
+    name of another.
+    """
+    for block, body in re.findall(r"([^{}]+)\{([^{}]*)\}", _css_body()):
+        if any(x.strip() == selector for x in block.split(",")):
+            return body
+    return ""
+
+
 class TestStylesheet:
     """Tests for the CSS every repr carries."""
 
@@ -1747,7 +1796,7 @@ class TestStylesheet:
         The stylesheet travels inside a notebook output cell, where it
         applies to the whole document around it.
         """
-        body = re.sub(r"/\*.*?\*/", "", get_stylesheet(), flags=re.DOTALL)
+        body = _css_body()
         selectors = [
             part.strip()
             for block in re.findall(r"([^{}]+)\{", body)
@@ -1764,7 +1813,7 @@ class TestStylesheet:
         Neither can be written under a class, so a stylesheet which
         travels inside someone else's document must not state one.
         """
-        body = re.sub(r"/\*.*?\*/", "", get_stylesheet(), flags=re.DOTALL)
+        body = _css_body()
         for rule in ("@font-face", "@import", "@page"):
             assert rule not in body, rule
 
@@ -1796,19 +1845,41 @@ class TestStylesheet:
 
     def test_a_rule_exists_for_every_nesting_level(self):
         """A level the renderer can reach and the CSS cannot draws no rail."""
-        css = get_stylesheet()
         for depth in range(_NEST_COLORS):
-            assert f".dc-d{depth} {{" in css, depth
+            rule = _css_rule(f".dc-repr .dc-d{depth}")
+            assert f"--dc-rail: var(--dc-d{depth})" in rule, depth
 
     def test_a_nested_leaf_is_given_a_marker_of_room(self):
         """
         A leaf has no disclosure triangle, and is given the width of one.
 
-        Without it a leaf's text starts where its parent's triangle
-        does rather than where its parent's text does, and the tree
-        reads as though the leaf sits a level higher than it does.
+        Without it a leaf's text starts where its parent's text starts,
+        a marker to the left of the blocks beside it, and the tree reads
+        as though the leaf sat a level higher than it does.
         """
-        assert ".dc-line.dc-nest" in get_stylesheet()
+        assert "padding-left" in _css_rule(".dc-repr .dc-line.dc-nest")
+
+    def test_a_line_which_runs_on_stays_in_its_column(self):
+        """
+        A title can hold a newline, and both its lines start together.
+
+        The triangle is pulled back into a gutter the whole title is
+        set in by, rather than taking room from its first line only:
+        given the latter a continuation starts under the triangle, a
+        marker to the left of the line it continues.
+        """
+        assert "-1.1em" in _css_rule(".dc-repr summary::before")
+        assert "0.1em 0 0.1em 1.1em" in _css_rule(".dc-repr summary")
+
+    def test_a_wide_line_scrolls_inside_its_own_block(self):
+        """
+        A container's line sits in a `summary` now, not in the array dump.
+
+        Without an overflow of its own a long one pushes the whole
+        panel sideways, so the banner and every block below it scroll
+        along with it.
+        """
+        assert "overflow-x: auto" in _css_rule(".dc-repr summary")
 
     def test_every_theme_states_the_whole_ramp(self):
         """
@@ -1818,7 +1889,7 @@ class TestStylesheet:
         but a rail which is there on a light page and gone on a dark one
         is the kind of difference nobody chose.
         """
-        css = get_stylesheet()
+        css = _css_body()
         # A block which defines any of the palette defines all of it:
         # those are the theme blocks, whatever host they are written for.
         blocks = re.findall(r"\{([^{}]*--dc-blue:[^{}]*)\}", css)
@@ -2096,11 +2167,12 @@ class TestHtmlRepr:
         Every repr carries it, so a notebook carries one copy per cell.
 
         Held on its own rather than on the panel, where growth in one
-        hides growth in the other. The ceiling is roughly a quarter
-        above what it holds, so a section's worth of rules trips it
-        rather than a rule or two.
+        hides growth in the other. The ceiling sits about a section's
+        worth of rules above what the sheet holds, so a block of them
+        trips it rather than a rule or two -- which means it has to be
+        raised deliberately whenever a block is added.
         """
-        assert len(get_stylesheet().encode()) < 10_000
+        assert len(get_stylesheet().encode()) < 9_000
 
     def test_a_panel_is_mostly_the_object(self, html_objects):
         """
