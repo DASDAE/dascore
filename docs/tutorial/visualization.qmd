@@ -47,7 +47,7 @@ plt.show()
 
 ### Marking where labels change
 
-An [inventory](inventory.qmd) states its label groups over stretches of the fiber, and [`Patch.enrich`](`dascore.proc.inventory.enrich`) projects each group onto the patch as its own coordinate. Naming one with `label_coord` draws a line wherever it changes and names its labels in a legend beyond the colorbar, so the plot reads in the vocabulary the inventory uses rather than in metres alone.
+An [inventory](inventory.qmd) states its label groups over stretches of the fiber, and [`Patch.enrich`](`dascore.proc.inventory.enrich`) projects each group onto the patch as its own coordinate. Naming one with `label_coord` marks off each stretch and names it in a legend beyond the colorbar, so the plot reads in the vocabulary the inventory uses rather than in metres alone.
 
 ```{python}
 from dascore.examples import inventory_patch_pair
@@ -57,9 +57,11 @@ zoned, inventory = inventory_patch_pair()
 zoned.enrich(inventory).viz.waterfall(label_coord="zone", show=True);
 ```
 
-The one line is the boundary between the two zones this path names, and it alternates their two colors because it belongs to neither: north ends where south begins. A boundary with a label on only one side — a stretch the group says nothing about — is drawn solid, in the color of the side which does state something.
+Each zone is a bar along the left and right spines, covering the channels it applies to. The bars sit on the spines rather than over the image, because a wash over the data would have to be strong enough to see, and a wash that strong has recolored the data under it — which on a diverging colormap is the measurement itself.
 
-A boolean coordinate is a membership group: only the limits of the stretches it holds are drawn, and the legend calls them by the coordinate's own name. Both lines below are solid, since the group says nothing on the far side of either.
+Where a group says nothing the spine is left bare, so what a group covers and what it merely passes over are read off the same edge. A coordinate over `time` rather than `distance` puts its bars on the bottom and top spines instead; which dimension the coordinate belongs to is what decides, and nothing needs to be passed.
+
+A boolean coordinate is a membership group: only the stretches it holds are marked, and the legend calls them by the coordinate's own name.
 
 ```{python}
 zoned.enrich(inventory).viz.waterfall(label_coord="noisy", show=True);

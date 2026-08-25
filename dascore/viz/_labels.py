@@ -4,17 +4,24 @@ Drawing where a label coordinate starts and stops over a patch dimension.
 An inventory's label groups arrive on a patch as ordinary coordinates over
 one dimension: a string naming each sample, a boolean stating membership,
 or a number. Each states a stretch of the dimension rather than a value at
-a point, so what a figure owes it is a line where it changes and a name in
-a legend, not a color per sample.
+a point, so what a figure owes it is that stretch marked off and named:
+a bar along the axis, rather than a color per sample.
+
+The bars sit on the spines rather than over the image. A wash over the
+data would have to be strong enough to see, and a wash that strong has
+recolored the data under it -- which on a diverging colormap is the
+measurement itself.
 """
 
 from __future__ import annotations
 
+from itertools import pairwise
 from typing import NamedTuple
 
 import numpy as np
 import pandas as pd
 from matplotlib.lines import Line2D
+from matplotlib.transforms import blended_transform_factory
 
 from dascore.exceptions import ParameterError
 from dascore.viz._lanes import _as_numeric, _default_label, string_colors
@@ -22,15 +29,13 @@ from dascore.viz._lanes import _as_numeric, _default_label, string_colors
 # Past this many a legend stops naming and starts listing.
 MAX_LABELS = 20
 
-# Past this many boundaries the lines are closer together than the data
-# behind them, and the figure reads as hatching rather than as limits.
-MAX_BOUNDARIES = 200
+# Past this many stretches the bars are thinner than the gaps between
+# them, and the gutter reads as hatching rather than as a set of ranges.
+MAX_RUNS = 200
 
-# Two colors share one boundary line, so each draws half of the dashes.
-_DASH = 5.0
-
-# zorder 3 puts the line over an image and over a mesh alike.
-_LINE_KWARGS = {"linewidth": 1.5, "zorder": 3}
+# How thick a bar is drawn, in points. Half of it falls outside the axes,
+# so the spine it sits on is covered rather than merely traced.
+_BAR_WIDTH = 7.0
 
 # The gap kept between the legend and what it sits beside, and between
 # the legend and the edge of the page, as a fraction of the figure width.
@@ -182,36 +187,46 @@ def _label_runs(values, name: str):
     # Never 0 and never len(codes), so the axes' own spines are left to
     # draw the two boundaries which sit on them.
     starts = np.flatnonzero(np.diff(codes) != 0) + 1
-    if len(starts) > MAX_BOUNDARIES:
+    if len(starts) >= MAX_RUNS:
         msg = (
             f"The {name!r} coordinate changes value {len(starts)} times, "
-            f"more than the {MAX_BOUNDARIES} boundaries a figure can show. "
-            "It states a value per sample rather than a stretch each."
+            f"more than the {MAX_RUNS} stretches a figure can show. It "
+            "states a value per sample rather than a stretch each."
         )
         raise ParameterError(msg)
     return starts, codes, labels, membership
 
 
-def _draw_lines(ax, axis: str, edges, starts, codes, labels, colors) -> None:
-    """Draw a line wherever the label changes, colored by what it parts."""
-    line = ax.axvline if axis == "x" else ax.axhline
-    for index in starts:
-        position = edges[index]
-        before, after = codes[index - 1], codes[index]
-        stated = [x for x in (before, after) if x >= 0]
-        if len(stated) == 1:
-            # One side states nothing, so the boundary belongs wholly to
-            # the other and is drawn solid in its color.
-            line(position, color=colors[labels[stated[0]]], **_LINE_KWARGS)
+def _draw_bars(ax, axis: str, edges, starts, codes, labels, colors) -> None:
+    """Draw a bar along both spines over the stretch each label covers.
+
+    A stretch stating nothing leaves bare spine, so what a group covers
+    and what it merely passes over are read off the same edge.
+    """
+    if axis == "y":
+        # One coordinate puts the bar on a spine and the other runs it
+        # along the stretch; which is which is what the axis decides.
+        transform = blended_transform_factory(ax.transAxes, ax.transData)
+    else:
+        transform = blended_transform_factory(ax.transData, ax.transAxes)
+    bounds = np.concatenate([[0], starts, [len(codes)]]).astype(int)
+    for low, high in pairwise(bounds):
+        code = codes[low]
+        if code < 0:
             continue
-        # A boundary parts two labels and belongs to neither, so it is
-        # drawn twice, each color taking the dashes the other leaves.
-        for offset, code in ((0.0, before), (_DASH, after)):
-            line(
-                position,
+        span = (edges[low], edges[high])
+        for spine in (0.0, 1.0):
+            along = ((spine, spine), span) if axis == "y" else (span, (spine, spine))
+            ax.plot(
+                *along,
+                transform=transform,
                 color=colors[labels[code]],
-                linestyle=(offset, (_DASH, _DASH)),
-                **_LINE_KWARGS,
+                linewidth=_BAR_WIDTH,
+                solid_capstyle="butt",
+                # Half the bar falls outside the axes, and a stretch
+                # reaching an end of the patch reaches the corner.
+                clip_on=False,
+                zorder=5,
             )
 
 
@@ -280,7 +295,7 @@ def _legend_beside(figure, ax, handles, title):
 
 def _add_legend(ax, name, labels, colors, membership, owned):
     """Name the labels, beside the figure where there is room to make."""
-    handles = [Line2D([], [], color=colors[x], linewidth=2.0, label=x) for x in labels]
+    handles = [Line2D([], [], color=colors[x], linewidth=3.0, label=x) for x in labels]
     # Membership names itself in its one entry, and a title would then
     # say the coordinate's name twice.
     title = None if membership else str(name)
@@ -308,7 +323,7 @@ def draw_labels(
     owned: bool = False,
 ) -> None:
     """
-    Mark the limits of every label a coordinate states, and name them.
+    Mark the stretch every label a coordinate states covers, and name them.
 
     Parameters
     ----------
@@ -329,5 +344,5 @@ def draw_labels(
     values = np.asarray(values)
     starts, codes, labels, membership = _label_runs(values, plan.name)
     colors = string_colors(labels)
-    _draw_lines(ax, plan.axis, edges, starts, codes, labels, colors)
+    _draw_bars(ax, plan.axis, edges, starts, codes, labels, colors)
     _add_legend(ax, plan.name, labels, colors, membership, owned)

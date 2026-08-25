@@ -310,15 +310,17 @@ def waterfall(
     label_coord
         The name of a coordinate whose values label stretches of one of the
         plotted dimensions, such as a label group an inventory projected onto
-        the patch with [`Patch.enrich`](`dascore.proc.inventory.enrich`). A
-        line is drawn wherever its value changes, colored by the labels it
-        parts, and a legend names them beside the axes, beyond any colorbar.
-        String and numeric coordinates state one label per distinct value, and
-        more than 20 of them raises a `ParameterError`: a coordinate that
-        varied is a quantity, not a set of labels. A boolean coordinate states
-        membership, so only its True stretches are marked and the legend names
-        them by the coordinate. Absent values (the empty string, NaN, or
-        False) label nothing.
+        the patch with [`Patch.enrich`](`dascore.proc.inventory.enrich`). Each
+        stretch is drawn as a bar along the two spines its dimension runs
+        between, colored by its label, and a legend names them beside the
+        axes, beyond any colorbar. The bars sit on the spines rather than over
+        the image, so no data is covered or tinted. String and numeric
+        coordinates state one label per distinct value, and more than 20 of
+        them raises a `ParameterError`: a coordinate that varied is a
+        quantity, not a set of labels. A boolean coordinate states membership,
+        so only its True stretches are marked and the legend names them by the
+        coordinate. Absent values (the empty string, NaN, or False) label
+        nothing, and leave bare spine.
 
     Examples
     --------

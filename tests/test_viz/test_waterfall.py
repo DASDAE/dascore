@@ -431,33 +431,36 @@ def _legend_labels(ax):
     return [] if legend is None else [x.get_text() for x in legend.get_texts()]
 
 
-def _lines(ax, axis):
-    """Return each line as (position, dash offset, color)."""
-    getter = "get_xdata" if axis == "x" else "get_ydata"
-    return [
-        (float(getattr(x, getter)()[0]), x._dash_pattern[0], x.get_color())
-        for x in ax.lines
-    ]
+def _bars(ax, axis):
+    """Return (low, high, spine, color) for every bar drawn."""
+    out = []
+    for line in ax.lines:
+        across = line.get_xdata() if axis == "y" else line.get_ydata()
+        along = line.get_ydata() if axis == "y" else line.get_xdata()
+        out.append(
+            (float(along[0]), float(along[1]), float(across[0]), line.get_color())
+        )
+    return out
 
 
-def _positions(ax, axis):
-    """Return where each line crosses the other axis."""
-    return [x[0] for x in _lines(ax, axis)]
+def _spans(ax, axis):
+    """Return the stretch each label covers, once however many spines."""
+    return sorted({(x[0], x[1]) for x in _bars(ax, axis)})
 
 
-def _color_of(ax, axis, position, offset):
-    """Return the color of the one line drawn there with that dash offset."""
-    matches = [
-        color
-        for where, dash, color in _lines(ax, axis)
-        if where == pytest.approx(position) and dash == pytest.approx(offset)
-    ]
-    assert len(matches) == 1, f"expected one line, got {len(matches)}"
-    return matches[0]
+def _span_color(ax, axis, low, high):
+    """Return the one color every bar over that stretch is drawn in."""
+    colors = {
+        x[3]
+        for x in _bars(ax, axis)
+        if x[0] == pytest.approx(low) and x[1] == pytest.approx(high)
+    }
+    assert len(colors) == 1, f"expected one color, got {len(colors)}"
+    return colors.pop()
 
 
 class TestLabelCoord:
-    """Tests for marking the limits of a label coordinate."""
+    """Tests for marking the stretches a label coordinate covers."""
 
     # Deliberately not size // 2, the one index where the extent's cell
     # edge and the midpoint between two coordinate values coincide.
@@ -504,40 +507,55 @@ class TestLabelCoord:
             low, high = (mdates.date2num(dc.to_datetime64(x)) for x in (low, high))
         return float(low) + (float(high) - float(low)) * index / len(coord)
 
-    def test_boundary_is_two_lines_in_both_colors(self, zone_patch):
-        """A boundary parting two labels is drawn twice, in both colors."""
+    def test_each_label_gets_a_bar_on_both_spines(self, zone_patch):
+        """Every stretch is marked on the two spines it runs between."""
         ax = zone_patch.viz.waterfall(label_coord="zone")
-        split = zone_patch.coords.coord_size("distance") // self.split_fraction
-        where = self._edge(zone_patch, "distance", split)
-        assert _positions(ax, "y") == [pytest.approx(where)] * 2
-        colors = string_colors(["north", "south"])
-        # The first half of the dashes belongs to the label before the
-        # boundary, the offset half to the label after it.
-        assert _color_of(ax, "y", where, 0.0) == colors["north"]
-        assert _color_of(ax, "y", where, 7.5) == colors["south"]
+        bars = _bars(ax, "y")
+        assert len(bars) == 4
+        # Two stretches, each drawn on the near and the far spine.
+        assert sorted(x[2] for x in bars) == [0.0, 0.0, 1.0, 1.0]
+        assert len(_spans(ax, "y")) == 2
 
-    def test_boundary_lands_on_the_image_cell_edge(self, zone_patch):
-        """The line sits on the cell edge, not the coordinate midpoint."""
+    def test_bars_cover_the_stretch_each_label_holds(self, zone_patch):
+        """A bar runs from where its label starts to where it stops."""
+        ax = zone_patch.viz.waterfall(label_coord="zone")
+        size = zone_patch.coords.coord_size("distance")
+        split = size // self.split_fraction
+        edges = [self._edge(zone_patch, "distance", x) for x in (0, split, size)]
+        assert _spans(ax, "y") == [
+            (pytest.approx(edges[0]), pytest.approx(edges[1])),
+            (pytest.approx(edges[1]), pytest.approx(edges[2])),
+        ]
+        colors = string_colors(["north", "south"])
+        assert _span_color(ax, "y", edges[0], edges[1]) == colors["north"]
+        assert _span_color(ax, "y", edges[1], edges[2]) == colors["south"]
+
+    def test_bar_ends_on_the_image_cell_edge(self, zone_patch):
+        """The bar ends on the cell edge, not the coordinate midpoint."""
         ax = zone_patch.viz.waterfall(label_coord="zone")
         coord = np.asarray(zone_patch.get_coord("distance"))
         split = len(coord) // self.split_fraction
         midpoint = (coord[split - 1] + coord[split]) / 2
-        drawn = _positions(ax, "y")[0]
+        drawn = _spans(ax, "y")[0][1]
         assert drawn == pytest.approx(self._edge(zone_patch, "distance", split))
         # The two genuinely differ here, so the test can tell them apart.
         assert drawn != pytest.approx(midpoint)
 
-    def test_boundary_on_time_lands_on_the_cell_edge(self, phase_patch):
-        """A coordinate over time is marked across the other axis."""
+    def test_label_on_time_runs_along_the_other_spines(self, phase_patch):
+        """A coordinate over time is marked on the bottom and top."""
         ax = phase_patch.viz.waterfall(label_coord="phase")
-        split = phase_patch.coords.coord_size("time") // self.split_fraction
-        expected = self._edge(phase_patch, "time", split)
-        assert _positions(ax, "x") == [pytest.approx(expected)] * 2
-        assert not _positions(ax, "y") or True
+        size = phase_patch.coords.coord_size("time")
+        split = size // self.split_fraction
+        edges = [self._edge(phase_patch, "time", x) for x in (0, split, size)]
+        assert _spans(ax, "x") == [
+            (pytest.approx(edges[0]), pytest.approx(edges[1])),
+            (pytest.approx(edges[1]), pytest.approx(edges[2])),
+        ]
+        assert sorted(x[2] for x in _bars(ax, "x")) == [0.0, 0.0, 1.0, 1.0]
 
     @pytest.mark.parametrize("gap_color", [None, "gray"])
-    def test_boundary_lands_on_the_mesh_cell_edge(self, zone_gap_patch, gap_color):
-        """The line sits where the mesh parted the two zones."""
+    def test_bar_ends_on_the_mesh_cell_edge(self, zone_gap_patch, gap_color):
+        """The bar ends where the mesh parted the two zones."""
         patch, split = zone_gap_patch
         ax = patch.viz.waterfall(label_coord="zone", gap_color=gap_color)
         assert isinstance(ax.collections[0], QuadMesh)
@@ -548,7 +566,7 @@ class TestLabelCoord:
         else:
             # A band was opened, so the far zone starts at its own edge.
             expected = values[split] - np.median(np.abs(np.diff(values))) / 2
-        assert _positions(ax, "y")[0] == pytest.approx(expected)
+        assert _spans(ax, "y")[0][1] == pytest.approx(expected)
 
     def test_legend_names_the_labels(self, zone_patch):
         """The legend names each label and is titled by the coordinate."""
@@ -592,65 +610,74 @@ class TestLabelCoord:
         drawn = dict(zip(_legend_labels(ax), [x.get_color() for x in handles]))
         assert drawn == {"north": expected["north"], "south": expected["south"]}
 
-    def test_membership_marks_only_what_it_holds(self, enriched_patch):
+    def test_membership_covers_only_what_it_holds(self, enriched_patch):
         """A boolean coordinate marks its True stretch and names itself."""
         ax = enriched_patch.viz.waterfall(label_coord="noisy")
         assert _legend_labels(ax) == ["noisy"]
         # A membership entry already carries the name, so no title repeats it.
         assert _legend(ax).get_title().get_text() == ""
         held = np.flatnonzero(enriched_patch.coords.get_array("noisy"))
-        expected = [
+        expected = (
             self._edge(enriched_patch, "distance", held[0]),
             self._edge(enriched_patch, "distance", held[-1] + 1),
+        )
+        assert _spans(ax, "y") == [
+            (pytest.approx(expected[0]), pytest.approx(expected[1]))
         ]
-        # Both limits of the True stretch, each parting a stated side from
-        # an unstated one, so each is drawn once and drawn solid.
-        assert _positions(ax, "y") == [pytest.approx(x) for x in expected]
-        assert all(x.get_linestyle() == "-" for x in ax.lines)
 
-    def test_all_true_membership_states_no_limits(self, random_patch):
-        """A group covering everything is named but bounded by the spines."""
+    def test_all_true_membership_covers_the_patch(self, random_patch):
+        """A group covering everything is marked over the whole spine."""
         size = random_patch.coords.coord_size("distance")
         patch = random_patch.update_coords(tag=("distance", np.full(size, True)))
         ax = patch.viz.waterfall(label_coord="tag")
         assert _legend_labels(ax) == ["tag"]
-        assert not ax.lines
+        whole = (self._edge(patch, "distance", 0), self._edge(patch, "distance", size))
+        assert _spans(ax, "y") == [(pytest.approx(whole[0]), pytest.approx(whole[1]))]
 
     def test_enriched_labels_are_drawn(self, enriched_patch):
         """A label group an inventory projected on a patch reaches the plot."""
         ax = enriched_patch.viz.waterfall(label_coord="zone")
         assert _legend_labels(ax) == ["north", "south"]
 
-    def test_absent_values_get_a_solid_boundary(self, random_patch):
-        """Where a label meets nothing, the line is wholly the label's."""
+    def test_absent_stretches_leave_bare_spine(self, random_patch):
+        """Where a coordinate states nothing, no bar is drawn."""
         size = random_patch.coords.coord_size("distance")
         values = np.full(size, "", dtype="<U5")
-        values[size // 3 : 2 * size // 3] = "mid"
+        low, high = size // 3, 2 * size // 3
+        values[low:high] = "mid"
         patch = random_patch.update_coords(tag=("distance", values))
         ax = patch.viz.waterfall(label_coord="tag")
         assert _legend_labels(ax) == ["mid"]
-        assert len(ax.lines) == 2
-        assert all(x.get_linestyle() == "-" for x in ax.lines)
-        assert all(x.get_color() == string_colors(["mid"])["mid"] for x in ax.lines)
+        # One stretch only: the two unstated ones each side get nothing.
+        expected = (
+            self._edge(patch, "distance", low),
+            self._edge(patch, "distance", high),
+        )
+        assert _spans(ax, "y") == [
+            (pytest.approx(expected[0]), pytest.approx(expected[1]))
+        ]
 
     def test_recurring_label_gets_one_entry(self, random_patch):
         """A label stated in two places is named once and marked twice."""
         size = random_patch.coords.coord_size("distance")
-        values = np.where((np.arange(size) // (size // 4)) % 2, "odd", "even")
+        quarter = size // 4
+        values = np.where((np.arange(size) // quarter) % 2, "odd", "even")
         patch = random_patch.update_coords(tag=("distance", values))
         ax = patch.viz.waterfall(label_coord="tag")
         assert _legend_labels(ax) == ["even", "odd"]
-        # Three interior boundaries, each parting two stated labels.
-        expected = [self._edge(patch, "distance", size // 4 * x) for x in (1, 2, 3)]
-        assert _positions(ax, "y") == [pytest.approx(x) for x in expected for _ in "ab"]
+        # Four stretches, each on two spines.
+        assert len(_spans(ax, "y")) == 4
+        assert len(_bars(ax, "y")) == 8
+        colors = string_colors(["even", "odd"])
+        first = _spans(ax, "y")[0]
+        assert _span_color(ax, "y", *first) == colors["even"]
 
     def test_datetime_labels_read_as_times(self, random_patch):
         """A nanosecond datetime label names a time, not a count of them."""
         size = random_patch.coords.coord_size("distance")
         start = dc.to_datetime64("2020-01-01")
-        values = np.where(
-            np.arange(size) < size // 3, start, start + np.timedelta64(1, "s")
-        )
+        later = start + np.timedelta64(1, "s")
+        values = np.where(np.arange(size) < size // 3, start, later)
         patch = random_patch.update_coords(tag=("distance", values))
         ax = patch.viz.waterfall(label_coord="tag")
         assert all(x.startswith("2020-01-01") for x in _legend_labels(ax))
@@ -672,6 +699,7 @@ class TestLabelCoord:
         patch = random_patch.update_coords(tag=("distance", values))
         ax = patch.viz.waterfall(label_coord="tag")
         assert _legend_labels(ax) == ["tag"]
+        assert len(_spans(ax, "y")) == 1
 
     def test_null_strings_do_not_raise(self, random_patch):
         """A string group carrying nulls plots rather than failing on them."""
@@ -681,6 +709,7 @@ class TestLabelCoord:
         patch = random_patch.update_coords(tag=("distance", values))
         ax = patch.viz.waterfall(label_coord="tag")
         assert _legend_labels(ax) == ["a"]
+        assert len(_spans(ax, "y")) == 2
 
     def test_caller_axes_keeps_its_legend_inside(self, zone_patch):
         """A figure this call did not build keeps the room it had."""
@@ -759,7 +788,7 @@ class TestLabelCoord:
         with pytest.raises(ParameterError, match="distinct labels"):
             patch.viz.waterfall(label_coord="tag")
 
-    def test_too_many_boundaries_raises(self, random_patch):
+    def test_too_many_runs_raises(self, random_patch):
         """A coordinate changing every sample states no stretches."""
         size = random_patch.coords.coord_size("distance")
         patch = random_patch.update_coords(tag=("distance", np.arange(size) % 2 == 0))
