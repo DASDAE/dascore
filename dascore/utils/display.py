@@ -12,6 +12,7 @@ from graphlib import CycleError, TopologicalSorter
 from html import escape
 from importlib.resources import files
 from itertools import pairwise
+from typing import TypeVar
 
 import numpy as np
 import pandas as pd
@@ -27,6 +28,10 @@ from dascore.config import get_config
 from dascore.constants import dascore_styles
 from dascore.units import get_quantity, get_quantity_str
 from dascore.utils.time import to_float
+
+# What a container holds, whatever that is: `limit_items` takes any of
+# them and hands back the same kind.
+_Item = TypeVar("_Item")
 
 # How wide one value may print before it is elided. A repr is a glance at
 # an object, and a single long field should not push the rest off screen.
@@ -444,6 +449,16 @@ def _table_lines(node: Table) -> int:
     return len(node.rows) + 1 if node.rows else 0
 
 
+def _title_lines(node: Section) -> int:
+    """How many lines the line which names a block runs to.
+
+    Usually one. A field value may hold a newline -- a description
+    often does -- and both a `summary` and a `.dc-line` keep it, so a
+    block which counted its title as one line would fold a level late.
+    """
+    return node.title.plain.count("\n") + 1
+
+
 @_visible_lines.register
 def _section_lines(node: Section) -> int:
     # A folded section is one line, whatever it holds. That is what lets
@@ -455,7 +470,8 @@ def _section_lines(node: Section) -> int:
     # same subtree a second time at every level, which is exponential in
     # how deep the tree goes.
     lines = _body_lines(node)
-    return 1 + (lines if lines <= get_config().display_html_open_lines else 0)
+    shown = lines if lines <= get_config().display_html_open_lines else 0
+    return _title_lines(node) + shown
 
 
 def _body_lines(node: Section) -> int:
@@ -743,7 +759,9 @@ def elision_text(left_out: int) -> Text:
     return Text(f"... {left_out} more", style=dascore_styles["keys"])
 
 
-def limit_items(items, limit: int | None = None) -> tuple[list, int]:
+def limit_items(
+    items: Iterable[_Item], limit: int | None = None
+) -> tuple[list[_Item], int]:
     """
     Take at most ``limit`` items, and say how many were left behind.
 

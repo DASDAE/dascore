@@ -33,6 +33,7 @@ from dascore.utils.display import (
     Row,
     Section,
     Table,
+    _body_lines,
     _storage_quantum,
     _visible_lines,
     array_to_text,
@@ -1390,8 +1391,8 @@ class TestVisibleLines:
 
     def test_an_open_section_counts_what_it_holds(self):
         """A parent counts everything below it while it is open."""
-        leaf = Section(Text("\n        leaf"), depth=2)
-        mid = Section(Text("\n    mid"), (leaf, leaf), depth=1)
+        leaf = Section(Text("leaf"), depth=2)
+        mid = Section(Text("mid"), (leaf, leaf), depth=1)
         with config_context(display_html_open_lines=12):
             assert _visible_lines(mid) == 3
             assert _visible_lines(Section(Text("top"), (mid,))) == 4
@@ -1404,8 +1405,8 @@ class TestVisibleLines:
         counted in full, a container of twenty full networks would fold
         the block which lists them, and the panel would open on nothing.
         """
-        leaf = Section(Text("\n        leaf"), depth=2)
-        mid = Section(Text("\n    mid"), (leaf,) * 6, depth=1)
+        leaf = Section(Text("leaf"), depth=2)
+        mid = Section(Text("mid"), (leaf,) * 6, depth=1)
         top = Section(Text("top"), (mid,) * 3)
         with config_context(display_html_open_lines=3):
             assert _visible_lines(mid) == 1
@@ -1417,6 +1418,24 @@ class TestVisibleLines:
             html = render_html(top)
             assert html.count(" open>") == 1
             assert html.startswith("<details open>")
+
+    def test_a_title_which_runs_on_counts_every_line(self):
+        """
+        A folded block still draws all of its title.
+
+        A value may hold a newline, and both a `summary` and a
+        `.dc-line` keep it, so seven two-line blocks draw fourteen
+        lines. Counted as seven, the block holding them opens under a
+        limit it is really twice the size of.
+        """
+        leaf = Section(Text("first\nsecond"), depth=1)
+        assert _visible_lines(leaf) == 2
+        top = Section(Text("top"), (leaf,) * 7)
+        assert _body_lines(top) == 14
+        with config_context(display_html_open_lines=12):
+            assert " open>" not in render_html(top)
+        with config_context(display_html_open_lines=14):
+            assert " open>" in render_html(top)
 
     def test_a_node_is_counted_once(self, monkeypatch):
         """
