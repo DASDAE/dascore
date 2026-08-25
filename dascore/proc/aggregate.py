@@ -320,71 +320,55 @@ IDX_DOC_STR = f"""
 patch
     The input Patch.
 dim
-    The name of the dimension along which to find the extreme value.
-    Unlike the other aggregations this takes exactly one dimension;
-    None or a sequence raises a ParameterError.
+    The name of the single dimension to reduce. None or a sequence,
+    which the other aggregations accept, raises here.
 {DIM_REDUCE_DOCS}
 """
 
 IDX_NOTES = """
 Notes
 -----
-- The returned data are coordinate values, not the data values found
-  there, so they take the coordinate's dtype and units. Use
+- The data become coordinate values rather than the values found there,
+  so they take the coordinate's dtype. Use
   [`Patch.max`](`dascore.proc.aggregate.max`) or
   [`Patch.min`](`dascore.proc.aggregate.min`) for the values themselves.
 
-- Missing samples (NaN in float data, NaT in time-like data) are skipped.
-  A slice which is missing everywhere has no coordinate to point at, so
-  it yields NaT for a time-like coordinate and NaN otherwise. An integer
-  coordinate is widened to float64 to hold that NaN, which loses
-  exactness above 2**53; a coordinate which can hold neither, such as a
-  string one, raises instead.
+- NaN and NaT samples are skipped. A slice with none left has no
+  coordinate to point at, so it yields a null; an integer coordinate is
+  widened to float64 to hold one, which loses exactness above 2**53, and
+  a coordinate which can hold no null, such as a string one, raises.
 
-- Ties go to the first occurrence along the dimension, as in NumPy.
+- Ties go to the first occurrence, as in NumPy.
 """
-
-
-def _missing_mask(data):
-    """Return a mask of missing samples, or None if the dtype has none."""
-    if dtype_time_like(data.dtype):
-        return np.isnat(data)
-    if np.issubdtype(data.dtype, np.inexact):
-        return np.isnan(data)
-    # Integers and booleans have no value which means "missing".
-    return None
-
-
-def _comparable(data):
-    """Return data in a form NumPy can order, and its extreme fills."""
-    if dtype_time_like(data.dtype):
-        # NaT does not compare, but its int64 view is simply the smallest
-        # int64, so the view orders correctly once NaT is filled.
-        info = np.iinfo(np.int64)
-        return data.view(np.int64), info.min, info.max
-    return data, -np.inf, np.inf
 
 
 def _extreme_index(data, axis, want_max):
     """
     Return the index of the extreme along axis, and the all-missing slices.
 
-    The index for an all-missing slice is arbitrary; the mask says which
-    ones those are so the caller can null them out.
+    The index of an all-missing slice is arbitrary; the mask says which
+    those are so the caller can null them out.
     """
-    missing = _missing_mask(data)
+    if dtype_time_like(data.dtype):
+        # NaT does not compare, but its int64 view is the smallest int64,
+        # so the view orders correctly once the missing are filled away.
+        info = np.iinfo(np.int64)
+        missing, values = np.isnat(data), data.view(np.int64)
+        fill = info.min if want_max else info.max
+    else:
+        values, fill = data, (-np.inf if want_max else np.inf)
+        # Integers and booleans have no value which means "missing".
+        inexact = np.issubdtype(data.dtype, np.inexact)
+        missing = np.isnan(data) if inexact else None
     if missing is None or not missing.any():
-        arg = np.argmax if want_max else np.argmin
-        return arg(_comparable(data)[0], axis=axis), None
-    values, least, most = _comparable(data)
-    filled = np.where(missing, least if want_max else most, values)
+        return (np.argmax if want_max else np.argmin)(values, axis=axis), None
+    filled = np.where(missing, fill, values)
     extreme = filled.max(axis=axis) if want_max else filled.min(axis=axis)
-    # Match the extreme in the unfilled data rather than taking the arg of
-    # the filled data: a genuine -inf equals the fill for a max, and an arg
-    # reduction breaking that tie first-wins would point at the missing
-    # sample instead of the real one. A missing sample cannot match here,
-    # since NaN equals nothing and NaT views as the smallest int64, which
-    # is only ever the extreme when the whole slice is missing.
+    # Match the extreme against the unfilled data rather than taking the
+    # arg of the filled data: a real -inf equals the fill for a max, and a
+    # first-wins tie would then answer with the missing sample. Nothing
+    # missing can match here, since NaN equals nothing and NaT is only the
+    # extreme when the whole slice is missing.
     hit = values == np.expand_dims(extreme, axis)
     return hit.argmax(axis=axis), missing.all(axis=axis)
 
@@ -392,57 +376,48 @@ def _extreme_index(data, axis, want_max):
 def _fill_empty(values, empty):
     """Put a null where a slice had nothing to point at."""
     dtype = values.dtype
-    if dtype_time_like(dtype) or np.issubdtype(dtype, np.inexact):
-        return np.where(empty, _get_nullish(dtype), values)
-    if np.issubdtype(dtype, np.integer) and not np.issubdtype(dtype, np.bool_):
-        # Integers cannot hold a null, so widen as Patch.pad does.
-        return np.where(empty, np.nan, values.astype(np.float64))
-    msg = (
-        f"A slice with no valid sample has no {dtype} coordinate to point "
-        "at. Drop or fill the empty slices before calling idxmax/idxmin."
-    )
-    raise ParameterError(msg)
+    if not (dtype_time_like(dtype) or np.issubdtype(dtype, np.number)):
+        msg = (
+            f"A slice with no valid sample has no {dtype} coordinate to "
+            "point at. Drop or fill the empty slices first."
+        )
+        raise ParameterError(msg)
+    # An integer coordinate cannot hold NaN, so where widens it to float.
+    return np.where(empty, _get_nullish(dtype), values)
 
 
-def _index_to_coord(coord, want_max, name):
-    """Build a reduction mapping data to the coord value at its extreme."""
-    coord_values = coord.values
-
-    def _func(data, axis):
-        original = data
-        if not is_numpy(data):
-            # The index gymnastics below are numpy only, so say so rather
-            # than quietly pulling a lazy or device array into memory.
-            warn_numpy_fallback(name, backend_name(data))
-            data = to_numpy(data)
-        index, empty = _extreme_index(data, axis, want_max)
-        out = coord_values[index]
-        if empty is not None:
-            out = _fill_empty(out, empty)
-        return out if data is original else asarray_like(out, original)
-
-    return _func
-
-
-def _idx_aggregate(patch, dim, want_max, name, dim_reduce):
+def _idx_aggregate(patch, dim, want_max, dim_reduce):
     """Shared implementation of idxmax and idxmin."""
+    name = "idxmax" if want_max else "idxmin"
     if not isinstance(dim, str):
         msg = f"{name} reduces a single dimension; dim must be its name."
         raise ParameterError(msg)
     coord = patch.get_coord(dim)
     if isinstance(coord, CoordPartial):
-        # A partial coord, such as the one the default dim_reduce leaves
-        # behind, would index as NaN and quietly null the whole result.
+        # The coord the default dim_reduce leaves behind holds no values,
+        # so indexing it would quietly null the whole result.
         msg = (
-            f"The '{dim}' coordinate holds no values for {name} to return. "
-            "This happens when the dimension has already been reduced."
+            f"The '{dim}' coordinate holds no values for {name} to return; "
+            "the dimension has already been reduced."
         )
         raise ParameterError(msg)
-    func = _index_to_coord(coord, want_max, name)
-    out = _apply_aggregator(patch, dim, func, dim_reduce)
-    # datetime64 and timedelta64 carry their unit in the dtype, and the
-    # coord's unit describes the step rather than the magnitude, so
-    # labelling nanoseconds "s" would silently scale any unit maths.
+    coord_values = coord.values
+
+    def _func(data, axis):
+        original = data
+        if not is_numpy(data):
+            # The indexing below is numpy only, so say so rather than
+            # quietly pulling a lazy or device array into memory.
+            warn_numpy_fallback(name, backend_name(data))
+            data = to_numpy(data)
+        index, empty = _extreme_index(data, axis, want_max)
+        out = coord_values[index]
+        out = out if empty is None else _fill_empty(out, empty)
+        return out if data is original else asarray_like(out, original)
+
+    out = _apply_aggregator(patch, dim, _func, dim_reduce)
+    # A time coord's units describe its step, not its magnitude, so
+    # labelling nanoseconds "s" would scale any unit maths by a billion.
     units = None if dtype_time_like(coord.dtype) else coord.units
     return out.update_attrs(data_units=units)
 
@@ -480,7 +455,7 @@ def idxmax(
     - [`Patch.idxmin`](`dascore.proc.aggregate.idxmin`)
     - [`Patch.max`](`dascore.proc.aggregate.max`)
     """
-    return _idx_aggregate(patch, dim, True, "idxmax", dim_reduce)
+    return _idx_aggregate(patch, dim, True, dim_reduce)
 
 
 @patch_function(data_type="")
@@ -503,14 +478,11 @@ def idxmin(
     --------
     >>> import dascore as dc
     >>>
-    >>> patch = dc.get_example_patch()
-    >>>
-    >>> # The time of each channel's smallest sample.
-    >>> trough_time = patch.idxmin("time")
+    >>> trough_time = dc.get_example_patch().idxmin("time")
 
     See Also
     --------
     - [`Patch.idxmax`](`dascore.proc.aggregate.idxmax`)
     - [`Patch.min`](`dascore.proc.aggregate.min`)
     """
-    return _idx_aggregate(patch, dim, False, "idxmin", dim_reduce)
+    return _idx_aggregate(patch, dim, False, dim_reduce)

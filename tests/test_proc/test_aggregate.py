@@ -266,22 +266,10 @@ class TestApplyOperators:
         assert isinstance(out1, dc.Patch)
 
 
-@pytest.fixture(scope="module")
-def offset_patch():
-    """A patch whose coordinate values are never equal to their indices."""
-    rng = np.random.default_rng(42)
-    return dc.Patch(
-        data=rng.random((5, 7)),
-        coords={"distance": np.arange(5) * 10 + 100, "time": np.arange(7) * 3 + 50},
-        dims=("distance", "time"),
-    )
-
-
-def _one_row(data, time_values):
+def _row(data, time_values):
     """Build a one channel patch from a single row of data."""
-    array = np.asarray(data).reshape(1, -1)
     return dc.Patch(
-        data=array,
+        data=np.asarray(data).reshape(1, -1),
         coords={"distance": np.arange(1), "time": np.asarray(time_values)},
         dims=("distance", "time"),
     )
@@ -302,41 +290,34 @@ class TestIdxMaxMin:
     @pytest.mark.parametrize("name,arg", [("idxmax", np.argmax), ("idxmin", np.argmin)])
     def test_matches_numpy(self, random_patch, dim, name, arg):
         """The values are the coord values numpy's arg reduction picks."""
-        axis = random_patch.get_axis(dim)
         values = random_patch.get_coord(dim).values
         out = getattr(random_patch, name)(dim, dim_reduce="squeeze")
-        expected = values[arg(random_patch.data, axis=axis)]
+        expected = values[arg(random_patch.data, axis=random_patch.get_axis(dim))]
         assert np.array_equal(np.asarray(out.data), expected)
 
-    @pytest.mark.parametrize("name", ["idxmax", "idxmin"])
-    def test_returns_coord_values_not_indices(self, offset_patch, name):
+    def test_returns_coord_values_not_indices(self):
         """The output holds coordinate values, which are not the indices."""
-        out = getattr(offset_patch, name)("time", dim_reduce="squeeze")
-        values = np.asarray(out.data)
-        time = offset_patch.get_coord("time").values
-        assert set(values.tolist()).issubset(set(time.tolist()))
-        # Every coord value is >= 50, so an index would be out of range.
-        assert values.min() >= time.min()
+        # Every coord value is far past the last index, so the two differ.
+        out = _row([3.0, 9.0, 1.0], [50, 60, 70]).idxmax("time")
+        assert np.asarray(out.data).ravel()[0] == 60
 
-    def test_squeeze_drops_dimension(self, random_patch):
-        """dim_reduce='squeeze' removes the reduced dimension."""
-        out = random_patch.idxmax("time", dim_reduce="squeeze")
-        assert "time" not in out.dims
-        assert out.dims == ("distance",)
+    def test_dim_reduce_shapes(self, random_patch):
+        """The default keeps the reduced dimension; squeeze drops it."""
+        kept = random_patch.idxmax("time")
+        assert kept.dims == random_patch.dims
+        assert kept.shape[random_patch.get_axis("time")] == 1
+        assert random_patch.idxmax("time", dim_reduce="squeeze").dims == ("distance",)
 
-    def test_empty_keeps_dimension(self, random_patch):
-        """The default keeps the reduced dimension with length one."""
-        out = random_patch.idxmax("time")
-        assert out.dims == random_patch.dims
-        assert out.shape[random_patch.get_axis("time")] == 1
-
-    def test_data_takes_coord_dtype(self, random_patch):
-        """Output data are coordinate values, so they carry its dtype."""
-        coord = random_patch.get_coord("time")
-        out = random_patch.idxmax("time")
-        assert out.data.dtype == coord.dtype
+    def test_output_dtype_and_units(self, random_patch):
+        """A time coord's unit describes its step, so it must not be copied."""
+        time = random_patch.idxmax("time")
+        assert time.data.dtype == random_patch.get_coord("time").dtype
+        # Labelling a nanosecond magnitude "s" would scale unit maths by 1e9.
+        assert time.attrs.data_units is None
         # The values are no longer whatever the patch measured.
-        assert not out.attrs.data_type
+        assert not time.attrs.data_type
+        distance = random_patch.idxmax("distance")
+        assert distance.attrs.data_units == random_patch.get_coord("distance").units
 
     @pytest.mark.parametrize(
         "name,agg", [("idxmax", np.nanargmax), ("idxmin", np.nanargmin)]
@@ -345,8 +326,7 @@ class TestIdxMaxMin:
         """NaN samples are skipped rather than winning the comparison."""
         data = np.asarray(random_patch.data).astype(float).copy()
         data[0, :3] = np.nan
-        patch = random_patch.new(data=data)
-        out = getattr(patch, name)("time", dim_reduce="squeeze")
+        out = getattr(random_patch.new(data=data), name)("time", dim_reduce="squeeze")
         values = random_patch.get_coord("time").values
         assert np.asarray(out.data)[0] == values[agg(data[0])]
 
@@ -363,21 +343,19 @@ class TestIdxMaxMin:
     )
     def test_nan_does_not_beat_infinity(self, name, data, expected):
         """A missing sample never outranks a genuine infinity."""
-        patch = _one_row(data, [10, 20])
-        out = getattr(patch, name)("time", dim_reduce="squeeze")
-        assert np.asarray(out.data)[0] == expected
+        out = getattr(_row(data, [10, 20]), name)("time")
+        assert np.asarray(out.data).ravel()[0] == expected
 
     @pytest.mark.parametrize("name", ["idxmax", "idxmin"])
     def test_nat_in_time_like_data_is_skipped(self, name):
         """NaT is missing data too, not the largest or smallest value."""
         start = dc.to_datetime64("2020-01-01")
-        nat = np.datetime64("NaT", "ns")
-        data = np.array([[start + dc.to_timedelta64(5), nat]])
-        out = getattr(_one_row(data, [10, 20]), name)("time", dim_reduce="squeeze")
-        assert np.asarray(out.data)[0] == 10
+        data = np.array([[start + dc.to_timedelta64(5), np.datetime64("NaT", "ns")]])
+        out = getattr(_row(data, [10, 20]), name)("time")
+        assert np.asarray(out.data).ravel()[0] == 10
 
     def test_chained_calls_skip_the_null(self, dead_channel_patch):
-        """The NaT this leaves behind is skipped by a second call."""
+        """The NaT one call leaves behind is skipped by the next."""
         peaks = dead_channel_patch.idxmax("time")
         assert np.isnat(np.asarray(peaks.data)).any()
         out = peaks.idxmin("distance", dim_reduce="squeeze")
@@ -386,8 +364,9 @@ class TestIdxMaxMin:
 
     def test_all_nan_slice_is_null(self, dead_channel_patch):
         """A slice with no valid sample yields NaT for a time coordinate."""
-        out = dead_channel_patch.idxmax("time", dim_reduce="squeeze")
-        values = np.asarray(out.data)
+        values = np.asarray(
+            dead_channel_patch.idxmax("time", dim_reduce="squeeze").data
+        )
         assert np.isnat(values[0])
         assert not np.isnat(values[1:]).any()
 
@@ -396,8 +375,7 @@ class TestIdxMaxMin:
         assert np.issubdtype(random_patch.get_coord("distance").dtype, np.integer)
         # Blank one whole time sample so reducing distance has nothing to pick.
         data = np.asarray(random_patch.data).astype(float).copy()
-        axis = random_patch.get_axis("time")
-        data[broadcast_for_index(data.ndim, axis, 0)] = np.nan
+        data[broadcast_for_index(data.ndim, random_patch.get_axis("time"), 0)] = np.nan
         out = random_patch.new(data=data).idxmin("distance", dim_reduce="squeeze")
         values = np.asarray(out.data)
         assert np.issubdtype(values.dtype, np.floating)
@@ -407,26 +385,21 @@ class TestIdxMaxMin:
     @pytest.mark.parametrize("coord", [np.array(["a", "b"]), np.array([True, False])])
     def test_null_needs_a_coord_which_can_hold_it(self, coord):
         """A coordinate with no null value says so rather than crashing."""
-        patch = _one_row([np.nan, np.nan], coord)
         with pytest.raises(ParameterError, match="no valid sample"):
-            patch.idxmax("time")
+            _row([np.nan, np.nan], coord).idxmax("time")
 
     def test_ties_take_first(self):
         """Equal extremes resolve to the first along the dimension."""
         # The max appears at index 1 and 3; the min at index 0 and 2.
-        patch = _one_row([0.0, 1.0, 0.0, 1.0], [10, 20, 30, 40])
+        patch = _row([0.0, 1.0, 0.0, 1.0], [10, 20, 30, 40])
         assert np.asarray(patch.idxmax("time").data).ravel()[0] == 20
         assert np.asarray(patch.idxmin("time").data).ravel()[0] == 10
 
-    @pytest.mark.parametrize("name,arg", [("idxmax", np.argmax), ("idxmin", np.argmin)])
-    def test_integer_data(self, name, arg):
+    def test_integer_data(self):
         """Integer data have no missing value, so no masking is needed."""
-        data = np.array([[3, 9, 1, 9]])
-        out = getattr(_one_row(data, [10, 20, 30, 40]), name)(
-            "time", dim_reduce="squeeze"
-        )
-        expected = np.array([10, 20, 30, 40])[arg(data[0])]
-        assert np.asarray(out.data)[0] == expected
+        patch = _row([3, 9, 1, 9], [10, 20, 30, 40])
+        assert np.asarray(patch.idxmax("time").data).ravel()[0] == 20
+        assert np.asarray(patch.idxmin("time").data).ravel()[0] == 30
 
     @pytest.mark.parametrize("dim", [None, ["time"], ("time", "distance")])
     def test_non_string_dim_raises(self, random_patch, dim):
@@ -439,24 +412,10 @@ class TestIdxMaxMin:
         with pytest.raises(CoordError, match="not found"):
             random_patch.idxmax("not_a_dim")
 
-    def test_time_like_coord_leaves_units_unset(self, random_patch):
-        """A nanosecond magnitude must not be labelled with the coord's unit."""
-        out = random_patch.idxmax("time")
-        assert np.issubdtype(out.data.dtype, np.datetime64)
-        assert out.attrs.data_units is None
-
-    def test_numeric_coord_keeps_units(self, random_patch):
-        """A numeric coordinate's values do carry its units."""
-        coord = random_patch.get_coord("distance")
-        out = random_patch.idxmax("distance")
-        assert out.attrs.data_units == coord.units
-
-    @pytest.mark.parametrize("name", ["idxmax", "idxmin"])
-    def test_reduced_dimension_raises(self, random_patch, name):
+    def test_reduced_dimension_raises(self, random_patch):
         """The partial coord left behind has no values to point at."""
-        once = getattr(random_patch, name)("time")
         with pytest.raises(ParameterError, match="holds no values"):
-            getattr(once, name)("time")
+            random_patch.idxmax("time").idxmax("time")
 
     def test_non_numpy_backend_warns(self, random_patch):
         """A lazy or device array is pulled to numpy, and says so."""
