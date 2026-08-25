@@ -314,7 +314,9 @@ def waterfall(
         stretch is drawn as a bar along the two spines its dimension runs
         between, colored by its label, and a legend names them beside the
         axes, beyond any colorbar. The bars sit on the spines rather than over
-        the image, so no data is covered or tinted. String and numeric
+        the image, so no data is covered or tinted; a hairline joins them
+        wherever the value changes, faint enough to locate a boundary in the
+        data without competing with it. String and numeric
         coordinates state one label per distinct value, and more than 20 of
         them raises a `ParameterError`: a coordinate that varied is a
         quantity, not a set of labels. A boolean coordinate states membership,

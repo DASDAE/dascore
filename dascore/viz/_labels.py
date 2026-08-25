@@ -18,6 +18,7 @@ from __future__ import annotations
 from itertools import pairwise
 from typing import NamedTuple
 
+import matplotlib.patheffects as pe
 import numpy as np
 import pandas as pd
 from matplotlib.lines import Line2D
@@ -36,6 +37,19 @@ MAX_RUNS = 200
 # How thick a bar is drawn, in points. Half of it falls outside the axes,
 # so the spine it sits on is covered rather than merely traced.
 _BAR_WIDTH = 7.0
+
+# A hairline joining the two bars, so a change can be traced through the
+# image rather than only read off its edges. Faint on purpose: it locates
+# a boundary and does not compete with the data. The white stroke beneath
+# is what keeps it visible over a busy image, where a grey line of this
+# weight disappears into the noise.
+_SEAM_KWARGS = {"color": "0.1", "linewidth": 0.7, "alpha": 0.55, "zorder": 4}
+_SEAM_HALO_WIDTH = 2.0
+_SEAM_HALO_ALPHA = 0.5
+
+# What each artist is, for a caller reading a figure back.
+BAR_GID = "dascore-label-bar"
+SEAM_GID = "dascore-label-change"
 
 # The gap kept between the legend and what it sits beside, and between
 # the legend and the edge of the page, as a fraction of the figure width.
@@ -227,6 +241,7 @@ def _draw_bars(ax, axis: str, edges, starts, codes, labels, colors) -> None:
                 # reaching an end of the patch reaches the corner.
                 clip_on=False,
                 zorder=5,
+                gid=BAR_GID,
             )
 
 
@@ -236,6 +251,24 @@ def _right_edge(figure) -> float:
         max(x.get_tightbbox().x1 for x in figure.axes if x.get_tightbbox() is not None)
         / figure.bbox.width
     )
+
+
+def _draw_changes(ax, axis: str, edges, starts) -> None:
+    """Join the two bars with a hairline wherever the label changes."""
+    line = ax.axvline if axis == "x" else ax.axhline
+    for index in starts:
+        line(
+            edges[index],
+            path_effects=[
+                pe.withStroke(
+                    linewidth=_SEAM_HALO_WIDTH,
+                    foreground="white",
+                    alpha=_SEAM_HALO_ALPHA,
+                )
+            ],
+            gid=SEAM_GID,
+            **_SEAM_KWARGS,
+        )
 
 
 def _legend_beside(figure, ax, handles, title):
@@ -345,4 +378,5 @@ def draw_labels(
     starts, codes, labels, membership = _label_runs(values, plan.name)
     colors = string_colors(labels)
     _draw_bars(ax, plan.axis, edges, starts, codes, labels, colors)
+    _draw_changes(ax, plan.axis, edges, starts)
     _add_legend(ax, plan.name, labels, colors, membership, owned)

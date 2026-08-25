@@ -15,7 +15,7 @@ from dascore.examples import inventory_patch_pair
 from dascore.exceptions import ParameterError
 from dascore.units import get_quantity_str, percent
 from dascore.utils.time import is_datetime64, to_timedelta64
-from dascore.viz._labels import MAX_LABELS
+from dascore.viz._labels import BAR_GID, MAX_LABELS, SEAM_GID
 from dascore.viz._lanes import string_colors
 
 
@@ -435,12 +435,22 @@ def _bars(ax, axis):
     """Return (low, high, spine, color) for every bar drawn."""
     out = []
     for line in ax.lines:
+        if line.get_gid() != BAR_GID:
+            continue
         across = line.get_xdata() if axis == "y" else line.get_ydata()
         along = line.get_ydata() if axis == "y" else line.get_xdata()
         out.append(
             (float(along[0]), float(along[1]), float(across[0]), line.get_color())
         )
     return out
+
+
+def _changes(ax, axis):
+    """Return where a hairline was drawn across the image."""
+    getter = "get_xdata" if axis == "x" else "get_ydata"
+    return sorted(
+        float(getattr(x, getter)()[0]) for x in ax.lines if x.get_gid() == SEAM_GID
+    )
 
 
 def _spans(ax, axis):
@@ -512,6 +522,8 @@ class TestLabelCoord:
         ax = zone_patch.viz.waterfall(label_coord="zone")
         bars = _bars(ax, "y")
         assert len(bars) == 4
+        # The hairline is a separate artist and is not counted as a bar.
+        assert len(ax.lines) == len(bars) + len(_changes(ax, "y"))
         # Two stretches, each drawn on the near and the far spine.
         assert sorted(x[2] for x in bars) == [0.0, 0.0, 1.0, 1.0]
         assert len(_spans(ax, "y")) == 2
@@ -529,6 +541,33 @@ class TestLabelCoord:
         colors = string_colors(["north", "south"])
         assert _span_color(ax, "y", edges[0], edges[1]) == colors["north"]
         assert _span_color(ax, "y", edges[1], edges[2]) == colors["south"]
+
+    def test_a_hairline_joins_the_bars_at_each_change(self, zone_patch):
+        """Where the label changes, a faint line crosses the image."""
+        ax = zone_patch.viz.waterfall(label_coord="zone")
+        size = zone_patch.coords.coord_size("distance")
+        split = size // self.split_fraction
+        # One change only: the two outer ends are the patch's own edges.
+        assert _changes(ax, "y") == [
+            pytest.approx(self._edge(zone_patch, "distance", split))
+        ]
+        hair = next(x for x in ax.lines if x.get_gid() == SEAM_GID)
+        # Faint enough to locate a boundary without competing with data.
+        assert hair.get_linewidth() < 1.0
+        assert hair.get_alpha() < 0.7
+
+    def test_a_hairline_marks_the_edge_of_an_absent_stretch(self, random_patch):
+        """A label meeting a stretch stating nothing is still a change."""
+        size = random_patch.coords.coord_size("distance")
+        values = np.full(size, "", dtype="<U5")
+        low, high = size // 3, 2 * size // 3
+        values[low:high] = "mid"
+        patch = random_patch.update_coords(tag=("distance", values))
+        ax = patch.viz.waterfall(label_coord="tag")
+        assert _changes(ax, "y") == [
+            pytest.approx(self._edge(patch, "distance", low)),
+            pytest.approx(self._edge(patch, "distance", high)),
+        ]
 
     def test_bar_ends_on_the_image_cell_edge(self, zone_patch):
         """The bar ends on the cell edge, not the coordinate midpoint."""
