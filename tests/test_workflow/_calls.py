@@ -187,6 +187,8 @@ CALLS: tuple[tuple[str, str, tuple, dict], ...] = (
     ("all", "default", (), {"dim": "time"}),
     ("any", "default", (), {"dim": "time"}),
     ("first", "default", (), {"dim": "time"}),
+    ("idxmax", "default", ("time",), {}),
+    ("idxmin", "default", ("time",), {}),
     ("last", "default", (), {"dim": "time"}),
     ("max", "default", (), {"dim": "time"}),
     ("mean", "default", (), {"dim": "time"}),

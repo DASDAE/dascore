@@ -263,3 +263,112 @@ class TestApplyOperators:
         agg = random_patch.first("time")
         out1 = random_patch + agg
         assert isinstance(out1, dc.Patch)
+
+
+class TestIdxMaxMin:
+    """Tests for idxmax and idxmin."""
+
+    @pytest.fixture(scope="class")
+    def nan_patch(self, random_patch):
+        """A patch whose first channel is NaN for every time."""
+        data = np.asarray(random_patch.data).astype(float).copy()
+        axis = random_patch.get_axis("distance")
+        index = broadcast_for_index(data.ndim, axis, 0)
+        data[index] = np.nan
+        return random_patch.new(data=data)
+
+    @pytest.mark.parametrize("dim", ["time", "distance"])
+    def test_matches_numpy(self, random_patch, dim):
+        """The returned values are the coord values numpy's argmax picks."""
+        axis = random_patch.get_axis(dim)
+        values = random_patch.get_coord(dim).values
+        for name, arg in (("idxmax", np.argmax), ("idxmin", np.argmin)):
+            out = getattr(random_patch, name)(dim, dim_reduce="squeeze")
+            expected = values[arg(random_patch.data, axis=axis)]
+            assert np.array_equal(np.asarray(out.data), expected)
+
+    def test_squeeze_drops_dimension(self, random_patch):
+        """dim_reduce='squeeze' removes the reduced dimension."""
+        out = random_patch.idxmax("time", dim_reduce="squeeze")
+        assert "time" not in out.dims
+        assert out.dims == ("distance",)
+
+    def test_empty_keeps_dimension(self, random_patch):
+        """The default keeps the reduced dimension with length one."""
+        out = random_patch.idxmax("time")
+        assert out.dims == random_patch.dims
+        assert out.shape[random_patch.get_axis("time")] == 1
+
+    def test_data_takes_coord_dtype_and_units(self, random_patch):
+        """Output data are coordinate values, so they carry its dtype/units."""
+        coord = random_patch.get_coord("time")
+        out = random_patch.idxmax("time")
+        assert out.data.dtype == coord.dtype
+        assert out.attrs.data_units == coord.units
+
+    def test_partial_nan_ignored(self, random_patch):
+        """NaN samples are skipped rather than winning the comparison."""
+        data = np.asarray(random_patch.data).astype(float).copy()
+        data[0, :3] = np.nan
+        patch = random_patch.new(data=data)
+        out = patch.idxmax("time", dim_reduce="squeeze")
+        values = random_patch.get_coord("time").values
+        assert np.asarray(out.data)[0] == values[np.nanargmax(data[0])]
+
+    def test_all_nan_slice_is_null(self, nan_patch):
+        """A slice with no valid sample yields NaT for a time coordinate."""
+        out = nan_patch.idxmax("time", dim_reduce="squeeze")
+        values = np.asarray(out.data)
+        assert np.isnat(values[0])
+        assert not np.isnat(values[1:]).any()
+
+    def test_all_nan_slice_upcasts_int_coord(self, random_patch):
+        """An integer coordinate widens to float so it can hold the null."""
+        coord = random_patch.get_coord("distance")
+        assert np.issubdtype(coord.dtype, np.integer)
+        # Blank one whole time sample so reducing distance has nothing to pick.
+        data = np.asarray(random_patch.data).astype(float).copy()
+        axis = random_patch.get_axis("time")
+        data[broadcast_for_index(data.ndim, axis, 0)] = np.nan
+        out = random_patch.new(data=data).idxmin("distance", dim_reduce="squeeze")
+        values = np.asarray(out.data)
+        assert np.issubdtype(values.dtype, np.floating)
+        assert np.isnan(values[0])
+        assert not np.isnan(values[1:]).any()
+
+    def test_ties_take_first(self):
+        """Equal values resolve to the first along the dimension, as numpy does."""
+        data = np.ones((2, 4))
+        patch = dc.Patch(
+            data=data,
+            coords={"distance": np.arange(2), "time": np.arange(4)},
+            dims=("distance", "time"),
+        )
+        out = patch.idxmax("time", dim_reduce="squeeze")
+        assert np.array_equal(np.asarray(out.data), np.zeros(2))
+
+    @pytest.mark.parametrize("dim", [None, ["time"], ("time", "distance")])
+    def test_non_string_dim_raises(self, random_patch, dim):
+        """These reduce exactly one dimension, named by a string."""
+        with pytest.raises(ParameterError, match="single dimension"):
+            random_patch.idxmax(dim)
+
+    def test_bad_dim_raises(self, random_patch):
+        """A dimension the patch does not have is an error."""
+        with pytest.raises(Exception):
+            random_patch.idxmax("not_a_dim")
+
+    def test_recovers_a_known_slope(self):
+        """A linear moveout is recovered exactly by idxmax."""
+        n_dist, n_time, shift = 8, 50, 2
+        data = np.zeros((n_dist, n_time))
+        for i in range(n_dist):
+            data[i, 5 + i * shift] = 1.0
+        patch = dc.Patch(
+            data=data,
+            coords={"distance": np.arange(n_dist), "time": np.arange(n_time)},
+            dims=("distance", "time"),
+        )
+        out = patch.idxmax("time", dim_reduce="squeeze")
+        expected = 5 + np.arange(n_dist) * shift
+        assert np.array_equal(np.asarray(out.data), expected)
