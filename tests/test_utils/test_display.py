@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import time
 from html import unescape
 from pathlib import Path
 
@@ -1067,7 +1068,7 @@ class TestValuesAReaderCanRead:
 
 
 class TestStyleClasses:
-    """Tests for the classes a rich style is drawn with."""
+    """Tests for the classes a resolved rich style is drawn with."""
 
     @pytest.mark.parametrize(
         ("style", "expected"),
@@ -1080,44 +1081,32 @@ class TestStyleClasses:
             ("", ()),
         ],
     )
-    def test_a_style_string(self, style, expected):
+    def test_the_words_of_a_style(self, style, expected):
         """Each word a class exists for becomes one."""
-        assert style_classes(style) == expected
+        assert style_classes(Style.parse(style)) == expected
 
-    def test_a_style_object_says_what_its_string_says(self):
+    def test_a_background_is_not_a_foreground(self):
         """
-        The banner states real Style objects where the rest state words.
+        "red on blue" paints blue behind red text.
 
-        Both have to draw the same, or the object's name would be styled
-        one way and everything else another.
+        Rich resolves that; reading the words would take the background
+        for the color of the text.
         """
-        assert style_classes(Style(color="blue", bold=True)) == style_classes(
-            "bold blue"
-        )
+        assert style_classes(Style.parse("red on blue")) == ("dc-red",)
 
-    @pytest.mark.parametrize("style", ["not bold", "red on blue", "on green"])
-    def test_a_style_which_changes_what_follows(self, style):
-        """
-        Read word by word, "not bold" is bold and "red on blue" is red.
+    def test_a_style_which_turns_something_off(self):
+        """Rich resolves "not bold" to not bold."""
+        assert style_classes(Style.parse("not bold")) == ()
 
-        Neither is what the style says, so it is drawn unstyled rather
-        than drawn wrong.
+    @pytest.mark.parametrize("color", ["#ff0000", "purple4", "rgb(1,2,3)"])
+    def test_a_color_no_class_exists_for(self, color):
         """
-        assert style_classes(style) == ()
-
-    @pytest.mark.parametrize("style", ["chartreuse", "#ff0000", None])
-    def test_a_style_no_class_exists_for(self, style):
-        """
-        Dropped, which is what rich does with a word it cannot parse.
+        Drawn as the host's own ink rather than drawn wrong.
 
         Nothing an object states reaches a CSS attribute this way, so
         the stylesheet stays the only thing which says what a color is.
         """
-        assert style_classes(style) == ()
-
-    def test_a_truecolor_style(self):
-        """A hex color names no class, so it draws as the host's ink."""
-        assert style_classes(Style(color="#ff0000")) == ()
+        assert style_classes(Style.parse(color)) == ()
 
 
 class TestTextToHtml:
@@ -1143,6 +1132,54 @@ class TestTextToHtml:
     def test_unstyled_text_emits_no_span(self):
         """A span which says nothing is bytes in every repr forever."""
         assert "<span" not in text_to_html(Text("plain"))
+
+    def test_a_later_span_wins_a_color(self):
+        """
+        Two spans can both state a color, and rich says which wins.
+
+        Stacking both classes and letting the stylesheet's source order
+        pick made the sampling rate grey in a panel and blue in a
+        terminal.
+        """
+        text = Text("250 Hz")
+        text.stylize("grey50", 0, 6)
+        text.stylize("bright_blue", 0, 6)
+        assert 'class="dc-bright_blue"' in text_to_html(text)
+        assert "dc-grey50" not in text_to_html(text)
+
+    def test_a_repr_with_many_spans_is_not_slow(self):
+        """
+        A style is added to the runs it covers, not asked about each.
+
+        The other way round a few thousand spans -- a patch of many
+        coordinates -- took over a second to draw.
+        """
+        text = Text("")
+        for index in range(2000):
+            part = Text(f"field{index}: value{index} ")
+            part.stylize("grey50", 0, 7)
+            part.stylize("bright_blue", 8, 14)
+            text += part
+        start = time.perf_counter()
+        text_to_html(text)
+        assert time.perf_counter() - start < 1.0
+
+    def test_a_style_reaches_only_the_runs_it_covers(self):
+        """
+        A span states a style for its own characters and no others.
+
+        Applied to every run instead, the banner smears: DAS, C and ore
+        each take all three colors, and every value bleeds across its
+        line.
+        """
+        text = Text("abcdef")
+        text.stylize("bold", 0, 2)
+        text.stylize("blue", 4, 6)
+        html = text_to_html(text)
+        assert '<span class="dc-bold">ab</span>' in html
+        assert "cd" in html.replace('<span class="dc-bold">ab</span>', "")
+        assert '<span class="dc-blue">ef</span>' in html
+        assert "dc-blue" not in html.split("cd")[0]
 
     def test_overlapping_spans_compose(self):
         """
@@ -1182,6 +1219,46 @@ class TestRenderHtml:
         with config_context(display_html_open_lines=0):
             assert "<details>" in render_html(split_block(repr_blocks["coords"]))
 
+    def test_a_short_section_starts_open(self, repr_blocks):
+        """
+        What a reader would have opened anyway is opened for them.
+
+        The coordinates block is two lines; the limit is what says two
+        is few enough, so it is asked for rather than assumed.
+        """
+        with config_context(display_html_open_lines=2):
+            assert "<details open>" in render_html(split_block(repr_blocks["coords"]))
+
+    @pytest.mark.parametrize("block", ["coords", "attrs"])
+    def test_the_limit_counts_body_lines(self, repr_blocks, block):
+        """
+        One line either side of the limit decides differently.
+
+        A section is folded by how much it holds, so the count has to be
+        of what is drawn rather than of what was handed over. Both
+        blocks draw two lines; `attrs` is the one which also ends on a
+        newline, and counting that as a third folded it a line early.
+        """
+        section = split_block(repr_blocks[block])
+        with config_context(display_html_open_lines=1):
+            assert "<details>" in render_html(section)
+        with config_context(display_html_open_lines=2):
+            assert "<details open>" in render_html(section)
+
+    def test_the_count_is_the_lines_a_reader_sees(self, repr_blocks):
+        """The limit means what a reader would count, not what a Text holds."""
+        for name, block in repr_blocks.items():
+            section = split_block(block)
+            if not section.body:
+                continue
+            html = render_html(section)
+            body = re.search(r"<pre[^>]*>(.*?)</pre>", html, re.DOTALL).group(1)
+            drawn = re.sub(r"<[^>]+>", "", body).count("\n") + 1
+            with config_context(display_html_open_lines=drawn):
+                assert "<details open>" in render_html(section), name
+            with config_context(display_html_open_lines=drawn - 1):
+                assert "<details open>" not in render_html(section), name
+
     def test_the_banner_drops_its_underline(self):
         """
         A terminal underlines the banner with dashes, drawn in columns.
@@ -1197,7 +1274,7 @@ class TestRenderHtml:
         Everything the stylesheet says is said about this class.
 
         A repr is emitted into a notebook output, where a `style`
-        applies to the whole document.
+        applies to the whole document around it.
         """
         assert render_html(Repr(Text("x"))).startswith('<div class="dc-repr">')
 
@@ -1205,6 +1282,34 @@ class TestRenderHtml:
         """A renderer says what it cannot draw rather than drawing it wrong."""
         with pytest.raises(NotImplementedError, match="cannot render int"):
             render_html(42)
+
+
+class TestBodyText:
+    """Tests for the whitespace which frames a section body."""
+
+    def test_a_body_which_is_only_the_separator(self):
+        """
+        A block whose body is the newline which split it has no body.
+
+        Offering to fold nothing draws a triangle over an empty box.
+        """
+        html = render_html(split_block(Text("title\n")))
+        assert "<details" not in html
+        assert 'class="dc-line"' in html
+
+    def test_a_trailing_newline_draws_no_blank_line(self):
+        """
+        `attrs_to_text` ends on a newline so a printed patch does.
+
+        In a panel that is a blank line inside the block instead.
+        """
+        html = dc.get_example_patch()._repr_html_()
+        assert "\n</pre>" not in html
+
+    def test_a_body_keeps_the_lines_between(self):
+        """Only the framing goes; a blank line inside the body stays."""
+        html = render_html(split_block(Text("title\na\n\nb\n")))
+        assert ">a\n\nb<" in html
 
 
 class TestStylesheet:
@@ -1227,6 +1332,46 @@ class TestStylesheet:
         assert stated
         assert all(".dc-repr" in x for x in stated)
 
+    def test_it_states_no_rule_which_reaches_outside(self):
+        """
+        `@font-face` and `@import` are scoped to nothing at all.
+
+        Neither can be written under a class, so a stylesheet which
+        travels inside someone else's document must not state one.
+        """
+        body = re.sub(r"/\*.*?\*/", "", get_stylesheet(), flags=re.DOTALL)
+        for rule in ("@font-face", "@import", "@page"):
+            assert rule not in body, rule
+
+    def test_a_class_exists_for_every_style_a_repr_states(self):
+        """
+        A word which draws in a terminal and not in a browser is a
+        difference between the two reprs that nobody chose.
+
+        Walked from what the objects actually state, which is the
+        direction that bites: a word dropped from the list stops
+        coloring most of a panel and no test of the list notices.
+        """
+        console = Console()
+        seen = set()
+        for obj in (
+            dc.get_example_patch(),
+            dc.get_example_spool("diverse_das"),
+            dc.get_example_inventory("tunnel"),
+        ):
+            texts = [obj._repr_node().header]
+            for section in obj._repr_node().body:
+                texts.append(section.title)
+                texts.extend(x.text for x in section.body)
+            for text in texts:
+                for offset in range(len(text.plain)):
+                    style = text.get_style_at_offset(console, offset)
+                    if style.color or style.bold or style.underline:
+                        seen.add(style)
+        assert seen
+        for style in seen:
+            assert style_classes(style), style
+
     def test_a_class_exists_for_every_style_word(self):
         """
         A word which draws in a terminal and not in a browser is a
@@ -1236,9 +1381,70 @@ class TestStylesheet:
         for word in _STYLE_WORDS:
             assert f".dc-{word}" in css, word
 
+    def test_a_title_draws_one_marker(self):
+        """
+        A terminal opens a title with an arrow because it has no
+        triangle to draw; a panel draws the triangle, and both is two
+        markers for one thing.
+        """
+        html = dc.get_example_patch()._repr_html_()
+        assert "\u27a4" not in html
+        assert "Coordinates" in html
+
+    def test_a_line_and_a_summary_keep_their_spaces(self):
+        """
+        A producer's indent is content: the spool states its path
+        indented, and HTML collapses runs of spaces by default.
+        """
+        css = get_stylesheet()
+        for selector in (".dc-repr .dc-line", ".dc-repr summary"):
+            block = css[css.index(selector) : css.index("}", css.index(selector))]
+            assert "white-space: pre" in block, selector
+
+    def test_a_host_which_states_a_light_theme(self):
+        """
+        Every host which can say it is dark can say it is light.
+
+        One named in the dark rule and not the light one keeps dark ink
+        on a light page whenever the reader's system is dark.
+        """
+        css = get_stylesheet()
+        dark = css[css.index('data-jp-theme-light="false"') :]
+        dark = dark[: dark.index("}")]
+        light = css[css.index('data-jp-theme-light="true"') :]
+        light = light[: light.index("}")]
+        for host in ("vscode-theme-kind", "quarto-"):
+            assert host in dark and host in light, host
+
     def test_it_is_read_once(self):
         """Every repr carries it, so every repr should not read it."""
         assert get_stylesheet() is get_stylesheet()
+
+
+def _drawn_lines(html: str) -> list[str]:
+    """
+    The lines a reader sees in a panel, in the order they are drawn.
+
+    Taken block by block rather than by stripping every tag, since the
+    tags inside one are spans which color part of a line and stripping
+    them into newlines would make a line out of each.
+    """
+    blocks = re.findall(
+        r'<div class="dc-banner">(.*?)</div>'
+        r"|<summary>(.*?)</summary>"
+        r'|<pre class="dc-body">(.*?)</pre>'
+        r'|<div class="dc-line">(.*?)</div>',
+        html,
+        re.DOTALL,
+    )
+    out = []
+    for block in blocks:
+        content = next(x for x in block if (x is not None and x != "") or x == "")
+        content = "".join(x for x in block if x)
+        for line in unescape(re.sub(r"<[^>]+>", "", content)).split("\n"):
+            if line.strip():
+                out.append(line.strip())
+    return out
 
 
 def _boom(node):
@@ -1313,10 +1519,10 @@ class TestHtmlRepr:
         `_repr_node` breaks the text repr too, and an object which
         cannot be printed cannot be reported on either.
 
-        Debug is asked for explicitly because the suite runs with it on
-        (`tests/conftest.py`), which is the right way round -- a panel
-        which cannot be drawn should fail here and stay quiet for a
-        reader -- but it means this is the path CI never takes.
+        Debug is turned off here because the suite runs with it on
+        (`tests/conftest.py`), which is the right way round: a panel
+        which cannot be drawn should fail in CI and stay quiet for a
+        reader. So this is a path only a reader takes.
         """
         monkeypatch.setattr(display, "render_html", _boom)
         with config_context(debug=False):
@@ -1333,19 +1539,37 @@ class TestHtmlRepr:
         The two reprs are one repr shown two ways.
 
         Tags stripped and entities read back, the panel holds every line
-        the text holds -- leading space aside, which the panel states
-        with a margin rather than with characters.
+        the text holds. Two things it legitimately does not: the leading
+        space, which it states with a margin rather than with
+        characters, and the arrow a terminal opens a title with, which
+        it draws as a disclosure triangle instead.
         """
         for name, obj in html_objects.items():
-            stripped = unescape(re.sub(r"<[^>]+>", "", obj._repr_html_()))
-            for line in str(obj).split("\n"):
-                if line.strip() and not set(line.strip()) <= {"-"}:
-                    assert line.strip() in stripped, (name, line)
+            said = [
+                x.strip().removeprefix("\u27a4 ")
+                for x in str(obj).split("\n")
+                if x.strip() and set(x.strip()) != {"-"}
+            ]
+            # As a sequence, so a section drawn twice or drawn out of
+            # order is a difference rather than a match.
+            assert _drawn_lines(obj._repr_html_()) == said, name
 
-    def test_the_panel_stays_small(self, html_objects):
+    def test_the_stylesheet_stays_small(self):
         """
-        Every repr carries the stylesheet, so a notebook carries one
-        copy of it per output cell.
+        Every repr carries it, so a notebook carries one copy per cell.
+
+        Held on its own rather than on the panel, where growth in one
+        hides growth in the other.
         """
+        assert len(get_stylesheet().encode()) < 6_000
+
+    def test_a_panel_is_mostly_the_object(self, html_objects):
+        """
+        What a panel adds to the stylesheet is what it says.
+
+        Held apart from the sheet, so a section drawn twice is over the
+        ceiling rather than lost inside the headroom.
+        """
+        overhead = len(get_stylesheet().encode())
         for name, obj in html_objects.items():
-            assert len(obj._repr_html_().encode()) < 12_000, name
+            assert len(obj._repr_html_().encode()) - overhead < 4_000, name

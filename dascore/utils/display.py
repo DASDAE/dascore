@@ -17,6 +17,7 @@ import pandas as pd
 from pandas.errors import OutOfBoundsDatetime, OutOfBoundsTimedelta
 from pydantic import BaseModel
 from pydantic_core import PydanticUndefined
+from rich.console import Console
 from rich.style import Style
 from rich.text import Text
 
@@ -170,14 +171,17 @@ def split_block(text: Text) -> Section:
 
 # --- Rendering a repr as HTML -------------------------------------------
 
-# The one class every fragment is wrapped in. Every rule in repr.css is
-# scoped under it, so a stylesheet which lands in a notebook output --
-# where it applies to the whole document -- cannot restyle anything else.
+# The one class every fragment is wrapped in, and what every rule in
+# repr.css is scoped under. See that file for why.
+# What a block title opens with in a terminal, where there is no
+# disclosure triangle to draw one. A panel draws one, and both is two
+# markers for one thing.
+_SECTION_MARKER = "\u27a4 "
 _HTML_ROOT = "dc-repr"
 
-# Style words a class exists for. Anything else is dropped, which is what
-# rich does with a word it cannot parse, so an unmappable style is
-# uncolored in a browser and in a terminal alike.
+# Style words a class exists for. A color outside this list still draws
+# in a terminal, where rich knows every color it can parse; here it
+# draws as the host's own ink, which is the safe way to be wrong.
 _STYLE_WORDS = frozenset(
     {
         "bold",
@@ -193,44 +197,40 @@ _STYLE_WORDS = frozenset(
     }
 )
 
-# Words which change what follows rather than describing it: "not bold"
-# is not bold, and "red on blue" paints a background. Read word by word
-# the first would invert and the second would be mistaken, so a style
-# using either is left unstyled.
-_STYLE_QUALIFIERS = frozenset({"not", "on"})
 
-
-def style_classes(style: str | Style | None) -> tuple[str, ...]:
-    """Return the CSS classes a rich style is drawn with."""
-    if style is None:
-        return ()
-    if isinstance(style, Style):
-        words = [
-            x for x, on in (("bold", style.bold), ("underline", style.underline)) if on
-        ]
-        if style.color is not None:
-            words.append(style.color.name)
-    else:
-        words = str(style).split()
-        if _STYLE_QUALIFIERS.intersection(words):
-            return ()
+def style_classes(style: Style) -> tuple[str, ...]:
+    """Return the CSS classes a resolved rich style is drawn with."""
+    words = [
+        x for x, on in (("bold", style.bold), ("underline", style.underline)) if on
+    ]
+    if style.color is not None:
+        words.append(style.color.name)
     return tuple(f"dc-{x}" for x in words if x in _STYLE_WORDS)
 
 
 def text_to_html(text: Text) -> str:
     """Render a rich Text as an inline HTML fragment."""
     plain = text.plain
-    cuts = {0, len(plain)}
+    bounds = sorted({0, len(plain)}.union(*((x.start, x.end) for x in text.spans)))
+    console = Console()
+    # One style per run, built by adding each span to the runs it covers
+    # rather than by asking every span about every run. A repr with a
+    # few thousand spans -- a patch of many coordinates, a spool of many
+    # tracks -- took over a second the other way round.
+    at = {position: index for index, position in enumerate(bounds)}
+    styles = [console.get_style(text.style, default="")] * max(len(bounds) - 1, 0)
     for span in text.spans:
-        cuts.update((span.start, span.end))
-    base = style_classes(text.style)
+        style = console.get_style(span.style, default="")
+        for index in range(at[span.start], at[span.end]):
+            # Added, not gathered: two spans can both state a color, and
+            # which one wins is rich's arithmetic. Stacking both classes
+            # and letting the stylesheet's source order pick made a
+            # units string grey in a panel and blue in a terminal.
+            styles[index] = styles[index] + style
     out = []
-    for start, end in pairwise(sorted(cuts)):
-        classes = list(base)
-        for span in text.spans:
-            if span.start <= start and end <= span.end:
-                classes.extend(x for x in style_classes(span.style) if x not in classes)
+    for index, (start, end) in enumerate(pairwise(bounds)):
         chunk = escape(plain[start:end], quote=False)
+        classes = style_classes(styles[index])
         out.append(
             f'<span class="{" ".join(classes)}">{chunk}</span>' if classes else chunk
         )
@@ -250,25 +250,42 @@ def render_html(node) -> str:
     raise NotImplementedError(msg)
 
 
+def _body_text(text: Text) -> Text:
+    """
+    What sits under a title, without the whitespace which framed it.
+
+    The leading newline separated the body from its title and belongs to
+    neither, and a trailing one drew a blank line inside the block --
+    `attrs_to_text` ends on one so a printed patch ends on one.
+    """
+    plain = text.plain
+    start = 1 if plain.startswith("\n") else 0
+    return text[start : len(plain.rstrip("\n"))]
+
+
 @render_html.register
 def _html_raw(node: Raw) -> str:
     # A `pre`, because what a producer laid out is laid out in columns:
     # an array printed by numpy, a track list padded to line up. HTML
     # would collapse the runs of spaces which do that work.
-    text = node.text
-    # The newline which separated this from its title belongs to neither.
-    if text.plain.startswith("\n"):
-        text = text[1:]
+    text = _body_text(node.text)
     return f'<pre class="dc-body">{text_to_html(text)}</pre>'
 
 
 @render_html.register
 def _html_section(node: Section) -> str:
-    title = text_to_html(node.title)
-    if not node.body:
-        # Nothing to fold, so nothing to offer folding.
+    title = node.title
+    if title.plain.startswith(_SECTION_MARKER):
+        title = title[len(_SECTION_MARKER) :]
+    title = text_to_html(title)
+    if not any(_body_text(x.text).plain for x in node.body):
+        # Nothing to fold, so nothing to offer folding. A block whose
+        # body is only the newline which separated it has none.
         return f'<div class="dc-line">{title}</div>'
-    lines = sum(x.text.plain.count("\n") for x in node.body)
+    # Counted on what is drawn, not on what was handed over: the body
+    # loses the newline which separated it and any it ends on, and a
+    # block counted before that folds one line early.
+    lines = sum(_body_text(x.text).plain.count("\n") + 1 for x in node.body)
     state = " open" if lines <= get_config().display_html_open_lines else ""
     body = "".join(render_html(x) for x in node.body)
     return f"<details{state}><summary>{title}</summary>{body}</details>"
@@ -315,8 +332,9 @@ class NodeRepr(RichRepr):
     Print an object from the repr nodes it states.
 
     A host states ``_repr_node``; rendering it is the same call every
-    time, so it is made once here -- as text for a terminal, and as
-    HTML for a display which draws it.
+    time, so it is written once here -- as text for a terminal, and as
+    HTML for a display which draws one. A notebook asks for both, so a
+    host whose nodes are expensive to build should cache them.
     """
 
     _repr_node: Callable[[], Repr]

@@ -5,10 +5,11 @@ notebook output cell, where a <style> applies to the whole document, so
 one bare `pre` or `details` rule here would restyle every code block on
 the page around it.
 
-Color is inherited, never stated. A repr lands on grounds it cannot see
--- a light notebook, a dark one, a themed docs page -- and no color
-clears WCAG AA against both white and near-black, so the ink is the
-host's and the hues only ever draw rules and marks beside it.
+The body ink is inherited, never stated. A repr lands on grounds it
+cannot see -- a light notebook, a dark one, a themed docs page -- and no
+color clears WCAG AA against both white and near-black, so what a repr
+does not need to color it leaves to the host. The hues it does state are
+each given a value per theme below.
 */
 
 .dc-repr {
@@ -47,6 +48,7 @@ host's and the hues only ever draw rules and marks beside it.
 /* A host which states its theme outranks the reader's operating system:
 a light page on a dark laptop is a light page. */
 body[data-jp-theme-light="true"] .dc-repr,
+body[data-vscode-theme-kind*="light"] .dc-repr,
 body.quarto-light .dc-repr {
   --dc-blue: #0969da;
   --dc-bright_blue: #0a7ea4;
@@ -89,7 +91,7 @@ body[data-vscode-theme-kind*="dark"] .dc-repr {
 }
 
 /* Bootstrap gives a bare `details` a bottom margin and a bare `pre` a
-grey card with a border; JupyterLab gives neither. Reset both so the
+gray card with a border; JupyterLab gives neither. Reset both so the
 panel reads the same in a notebook and on the docs site. */
 .dc-repr details {
   margin: 0;
@@ -106,6 +108,9 @@ panel reads the same in a notebook and on the docs site. */
   color: inherit;
   font-size: 1em;
   border-radius: 3px;
+  /* A title can carry spaces a producer put there, and HTML would
+  collapse runs of them. */
+  white-space: pre;
 }
 
 .dc-repr summary::-webkit-details-marker { display: none; }
@@ -124,10 +129,17 @@ panel reads the same in a notebook and on the docs site. */
   outline-offset: 1px;
 }
 
-.dc-repr .dc-line { padding: 0.1em 0 0.1em 1.1em; }
+/* Both can carry leading spaces a producer put there -- the spool
+states its path indented -- and HTML would collapse them. */
+.dc-repr .dc-line {
+  padding: 0.1em 0 0.1em 1.1em;
+  white-space: pre;
+  overflow-x: auto;
+}
 
-/* The scroll container is the body's own: removing the host's would let
-a hundred-column line push the page sideways instead of itself. */
+
+/* This scrolls itself. Without `overflow-x` a hundred-column coordinate
+line would push the whole page sideways rather than just this block. */
 .dc-repr .dc-body {
   margin: 0 0 0.3em 1.1em;
   padding: 0;
@@ -144,6 +156,10 @@ a hundred-column line push the page sideways instead of itself. */
 /* Print renders a closed `details` closed, so open them all: paper has
 no disclosure triangle to click. */
 @media print {
+  /* Paper has no triangle to click, so nothing stays folded. The
+  first rule is what older engines honor and the second is what
+  Chromium honors; neither alone covers both. */
   .dc-repr details > *:not(summary) { display: block; }
+  .dc-repr details::details-content { content-visibility: visible; }
   .dc-repr summary::before { content: ""; }
 }
