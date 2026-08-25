@@ -395,8 +395,9 @@ def _html_table(node: Table) -> str:
             cells.append(f"<td{css}>{text_to_html(value) if value else ''}</td>")
         body.append(f'<tr><th scope="row">{name}</th>{"".join(cells)}</tr>')
     return (
-        f'<table class="dc-table"><thead><tr><th></th>{head}</tr></thead>'
-        f"<tbody>{''.join(body)}</tbody></table>"
+        f'<div class="dc-scroll"><table class="dc-table">'
+        f"<thead><tr><th></th>{head}</tr></thead>"
+        f"<tbody>{''.join(body)}</tbody></table></div>"
     )
 
 
@@ -416,7 +417,9 @@ def _html_section(node: Section) -> str:
     # loses the newline which separated it and any it ends on, and a
     # block counted before that folds one line early.
     lines = sum(
-        len(x.rows)
+        # Its heading row is a line a reader sees, so a table of two
+        # records draws three.
+        len(x.rows) + 1
         if isinstance(x, Table)
         else _body_text(x.text).plain.count("\n") + 1
         for x in node.body

@@ -1467,6 +1467,31 @@ class TestTableColumns:
         """
         assert self._columns([("a", "ab"), ("b", "cd")]) == ["kind", "a", "b", "c", "d"]
 
+    def test_a_table_scrolls_inside_its_own_wrapper(self):
+        """
+        `overflow` does nothing on a `display: table`, so without a
+        wrapper a wide coordinates block scrolls the whole panel.
+
+        Asserted on the markup rather than on the panel, since the
+        stylesheet names the class too and a search of the whole panel
+        finds it whether or not anything is wrapped in it.
+        """
+        markup = dc.get_example_patch()._repr_html_().split("</style>", 1)[1]
+        assert '<div class="dc-scroll"><table' in markup
+
+    def test_the_heading_counts_as_a_line(self):
+        """
+        A table of two records draws three lines.
+
+        The limit is what a reader would count, and they count the
+        headings.
+        """
+        section = dc.get_example_patch().coords._repr_section()
+        with config_context(display_html_open_lines=2):
+            assert "<details open>" not in render_html(section)
+        with config_context(display_html_open_lines=3):
+            assert "<details open>" in render_html(section)
+
     def test_a_value_is_drawn_in_its_own_column(self):
         """
         Every row states a cell for every column, so a row which says
