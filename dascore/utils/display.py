@@ -20,7 +20,7 @@ from rich.text import Text
 import dascore as dc
 from dascore.config import get_config
 from dascore.constants import dascore_styles
-from dascore.units import get_quantity_str
+from dascore.units import get_quantity, get_quantity_str
 from dascore.utils.time import to_float
 
 # How wide one value may print before it is elided. A repr is a glance at
@@ -39,21 +39,23 @@ _SEQUENCE_TYPES = (tuple, list, set, frozenset)
 
 _SECONDS_IN_DAY = 86_400.0
 
-# The resolution a datetime64 step is stored at, and so the closest two
-# rates can be and still describe the same sampling.
+# What a step is stored to when it does not say, as a pandas Timedelta
+# does not. Two steps closer together than one of these are the same
+# sampling as far as anything can tell.
 _NANOSECOND = 1e-9
 
 # What counts as a time, and so what has a duration between two of it.
 _TIME_TYPES = (pd.Timestamp, np.datetime64, pd.Timedelta, np.timedelta64)
 
-# How many figures a rate may need and still read as one. 96 kHz stored
-# as a whole number of nanoseconds is 95996.9 Hz exactly; six figures of
-# it is the step again, not the rate anyone would recognise.
+# The most figures a rate is quoted to when it cannot state its step
+# exactly. A rate which can gets as many as that takes, up to the point
+# where it has stopped being a rate and become the step in other units.
 _RATE_FIGURES = 4
+_RATE_EXACT_FIGURES = 9
 
-# What a rate is read in, largest first -- the same rule a duration and a
-# byte count are read by. Nobody says 96000 Hz.
-_RATE_UNITS = (("MHz", 1e6), ("kHz", 1e3), ("Hz", 1.0))
+# What a byte count is read in, smallest first.
+_SIZE_UNITS = ("B", "KiB", "MiB", "GiB", "TiB")
+
 
 # Steps a duration is worth reading in, largest first. A year is the
 # Gregorian mean, the same one numpy converts a timedelta64 with, since
@@ -409,16 +411,43 @@ def duration_text(low, high) -> Text | None:
         # long that is matters less than the extents it would otherwise
         # take down with it.
         return None
-    # Or the subtraction wraps instead of raising: two datetime64[s] a
-    # few centuries apart are more nanoseconds than an int64 holds, and
-    # numpy says so by coming back negative rather than by complaining.
-    # `human_duration` takes the size of what it is given, so an
-    # overflowed span would be reported as a plausible short one.
-    if high >= low and to_float(span) < 0:
+    # Divided by a second rather than read with `to_float`, which counts
+    # nanoseconds: a span of centuries is more of those than an int64
+    # holds, and the wrap is silent. Ten thousand years read that way
+    # came back as sixty one.
+    try:
+        seconds = span / np.timedelta64(1, "s")
+    except TypeError:
+        # A span held in years or months is not a fixed number of
+        # seconds, so numpy refuses to say how many. Neither will this.
         return None
-    if not (said := human_duration(span)):
+    if not (said := human_duration(seconds)):
         return None
     return Text(f"<{said}>", dascore_styles["keys"])
+
+
+def _fewest_figures(value: float, accept) -> int | None:
+    """The fewest significant figures of a value which `accept` allows."""
+    for figures in range(1, _RATE_EXACT_FIGURES + 1):
+        if accept(float(f"{value:.{figures}g}")):
+            return figures
+    return None
+
+
+def _storage_quantum(step) -> float:
+    """
+    How finely the step is stored, in seconds.
+
+    What counts as the same sampling: a step held to nanoseconds and a
+    rate which inverts to within half of one cannot be told apart, while
+    the same slack on a step held to picoseconds would hide a real
+    difference.
+    """
+    dtype = getattr(step, "dtype", None)
+    if dtype is None:
+        return _NANOSECOND
+    unit, count = np.datetime_data(dtype)
+    return to_float(np.timedelta64(count, unit))  # ty: ignore[no-matching-overload]
 
 
 def rate_text(step) -> Text | None:
@@ -433,21 +462,43 @@ def rate_text(step) -> Text | None:
     """
     if not isinstance(step, np.timedelta64 | pd.Timedelta):
         return None
-    seconds = to_float(step)
-    if not np.isfinite(seconds) or seconds <= 0:
+    # Divided rather than read with `to_float`, which counts whole
+    # nanoseconds: a step of 1500 ps truncates to 1 ns there, and the
+    # repr would state 1 GHz of sampling which happens at 666.7 MHz.
+    seconds = abs(step / np.timedelta64(1, "s"))
+    if not np.isfinite(seconds) or seconds == 0:
         return None
-    # Say it only if what is said gives the step back. A rate reads as a
-    # round number -- 250 Hz, 1 kHz -- and one which needs six figures to
-    # be true is not a fact a reader wanted, it is the step again.
-    hertz = float(f"{1.0 / seconds:.{_RATE_FIGURES}g}")
-    if abs(1.0 / hertz - seconds) > _NANOSECOND / 2:
-        return None
-    name, scale = next(((x, y) for x, y in _RATE_UNITS if hertz >= y), _RATE_UNITS[-1])
-    scaled = hertz / scale
-    said = f"{scaled:g}" if scaled != int(scaled) else f"{int(scaled)}"
-    return Text(" · ", dascore_styles["keys"]) + Text(
-        f"{said} {name}", dascore_styles["units"]
-    )
+    # A descending axis samples at the rate an ascending one does; the
+    # direction is the sign of the step, not of the frequency.
+    quantum = _storage_quantum(step)
+    # Say it only if what is said gives the step back, in as few figures
+    # as that takes. An exact rate is preferred over a shorter one which
+    # merely lands inside the step's own resolution: an 8 ms step held
+    # to milliseconds is exactly 125 Hz, and 120 Hz also inverts to
+    # within half a millisecond of it, so taking the shortest first
+    # states 120 Hz for sampling which happens at 125.
+    exact = 1.0 / seconds
+    figures = _fewest_figures(exact, lambda x: x == exact)
+    if figures is None:
+        # Not a rate any short number states exactly, so it is quoted to
+        # the figures a rate is quoted to and has to land inside the
+        # step's own resolution. Taking the fewest figures here instead
+        # would say 300 Hz of a 3 ms step, which samples at 333.3.
+        figures = _RATE_FIGURES
+        if abs(1 / float(f"{exact:.{figures}g}") - seconds) > quantum / 2:
+            return None
+    hertz = float(f"{exact:.{figures}g}")
+    # pint picks the prefix, so this reaches GHz and past it without a
+    # table of its own to keep in step with.
+    quantity = get_quantity(f"{hertz} Hz")
+    assert quantity is not None  # a literal frequency always parses
+    quantity = quantity.to_compact()
+    # Positional, and only as many figures as the value has: `g` would
+    # print 250 Hz as 2.5e+02 at the two figures it needs, and 1953.125
+    # as 1.95312 at pint's default six.
+    magnitude = np.format_float_positional(quantity.magnitude, trim="-")
+    said = f"{magnitude} {quantity.units:~P}"
+    return Text(" · ", dascore_styles["keys"]) + Text(said, dascore_styles["units"])
 
 
 def percent(value: float) -> str:
@@ -716,11 +767,22 @@ def mapping_to_text(mapping, header: str, style: str = "dc_yellow") -> Text:
 def human_size(byte_count: int) -> str:
     """How much room something takes up, in the largest unit which fits."""
     size = float(byte_count)
-    for name in ("B", "KiB", "MiB", "GiB", "TiB"):
-        if size < 1024 or name == "TiB":
+    if not np.isfinite(size):
+        # A dask array of unknown chunks reports nan bytes, and
+        # "nan TiB" is a worse answer than not saying.
+        return ""
+    # The largest name takes whatever is left however big, so it is the
+    # one the loop never has to decide about -- and the line after a
+    # loop which always returns is a line no test can reach.
+    *smaller, largest = _SIZE_UNITS
+    for name in smaller:
+        # Rounded before it is compared: a count a hair under a boundary
+        # prints as 1024 of the smaller unit otherwise, which is the one
+        # answer "the largest unit which fits" rules out.
+        if round(size, 1) < 1024:
             return f"{size:.1f} {name}".replace(".0 ", " ")
         size /= 1024
-    return f"{size:.1f} TiB"
+    return f"{size:.1f} {largest}".replace(".0 ", " ")
 
 
 def array_to_text(data, units=None) -> Text:

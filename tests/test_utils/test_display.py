@@ -742,32 +742,106 @@ class TestRateText:
             (np.timedelta64(976_562, "ns"), "1.024 kHz"),
             (np.timedelta64(10_417, "ns"), "96 kHz"),
             (np.timedelta64(1_000, "ns"), "1 MHz"),
+            (np.timedelta64(1, "ns"), "1 GHz"),
+            (np.timedelta64(6_400_000, "ns"), "156.25 Hz"),
+            (np.timedelta64(512_000, "ns"), "1.953125 kHz"),
+            (np.timedelta64(2_000_000, "ns"), "500 Hz"),
+            # Slow acquisition: a rate under a hertz still reads as one.
+            (np.timedelta64(10, "s"), "100 mHz"),
         ],
     )
     def test_a_time_step_states_its_rate(self, step, expected):
         """A step in time is quoted in Hz, which is what a rate is."""
         assert expected in str(rate_text(step))
 
-    def test_a_rate_is_read_in_the_unit_it_is_spoken_in(self):
+    @pytest.mark.parametrize(
+        "step",
+        [
+            np.timedelta64(4_000_000, "ns"),
+            np.timedelta64(6_400_000, "ns"),
+            np.timedelta64(512_000, "ns"),
+            np.timedelta64(10_417, "ns"),
+            np.timedelta64(1, "ns"),
+            np.timedelta64(8, "ms"),
+            np.timedelta64(3, "ms"),
+            np.timedelta64(7, "s"),
+            pd.Timedelta(seconds=0.004),
+        ],
+    )
+    def test_the_rate_said_describes_the_step(self, step):
         """
-        Nobody says 96000 Hz.
+        Whatever is printed has to describe the step beside it.
 
-        A whole number of nanoseconds is rarely a whole number of hertz,
-        so the rate is rounded to the figures a rate is quoted to and
-        then checked against the step it came from.
+        Held over the printed characters rather than the number they
+        came from, since a rate rounded for the check and then formatted
+        to fewer figures, or into exponent notation, states something
+        the step does not. A rate is quoted to four figures, so four
+        figures is how closely it has to agree -- not to a fixed
+        nanosecond, which only matches the code for steps stored in
+        them.
         """
-        assert "96 kHz" in str(rate_text(np.timedelta64(10_417, "ns")))
-        assert "95996" not in str(rate_text(np.timedelta64(10_417, "ns")))
+        magnitude, unit = str(rate_text(step)).strip().removeprefix("· ").split(" ")
+        prefixes = {"mHz": 1e-3, "Hz": 1.0, "kHz": 1e3, "MHz": 1e6, "GHz": 1e9}
+        said = float(magnitude) * prefixes[unit]
+        true_rate = 1.0 / (step / np.timedelta64(1, "s"))
+        assert abs(said - true_rate) <= abs(true_rate) * 5e-4
+
+    @pytest.mark.parametrize(
+        ("step", "expected"),
+        [
+            (np.timedelta64(8, "ms"), "125 Hz"),
+            (np.timedelta64(4, "ms"), "250 Hz"),
+            (np.timedelta64(3, "ms"), "333.3 Hz"),
+            (np.timedelta64(13, "ms"), "76.92 Hz"),
+        ],
+    )
+    def test_a_step_stored_coarser_than_a_nanosecond(self, step, expected):
+        """
+        A step held to milliseconds is exact, not rounded.
+
+        An 8 ms step is exactly 125 Hz, and 120 Hz also inverts to
+        within half a millisecond of it. Taking the shortest rate which
+        lands inside the step's resolution states 120 Hz of sampling
+        which happens at 125, so an exact rate is preferred.
+        """
+        assert expected in str(rate_text(step))
+
+    def test_a_descending_axis_samples_at_the_same_rate(self):
+        """
+        Direction is the sign of the step, not of the frequency.
+
+        A time axis which counts down samples exactly as often as the
+        one which counts up.
+        """
+        down = rate_text(np.timedelta64(-4, "ms"))
+        up = rate_text(np.timedelta64(4, "ms"))
+        assert str(down) == str(up)
+        assert "250 Hz" in str(down)
+
+    def test_a_step_finer_than_a_nanosecond(self):
+        """
+        A step is read at the resolution it is stored at.
+
+        1500 ps counted in whole nanoseconds is 1 ns, which would state
+        1 GHz of sampling that happens at 666.7 MHz. The true rate is
+        not a round one, so the honest answer is to say no rate.
+        """
+        assert rate_text(np.timedelta64(1500, "ps")) is None
+        assert "1 GHz" in str(rate_text(np.timedelta64(1000, "ps")))
+
+    def test_a_rate_never_reads_in_exponent_notation(self):
+        """250 Hz needs two figures, and `g` prints those as 2.5e+02."""
+        assert "e+" not in str(rate_text(np.timedelta64(4_000_000, "ns")))
 
     def test_a_rate_which_would_not_give_the_step_back(self):
         """
         A step which is not a round rate says no rate at all.
 
-        0.0039999998 s is 250.0000125 Hz. Saying "250 Hz" would state a
-        precision the step does not have, and saying all ten digits is
-        the step again in different units.
+        3999999 ns is 250.0000625 Hz. Saying "250 Hz" would claim a
+        precision the step does not have, and saying every figure of it
+        is the step again in different units.
         """
-        assert rate_text(np.timedelta64(39_999_998, "ns") / 10) is None
+        assert rate_text(np.timedelta64(3_999_999, "ns")) is None
 
     @pytest.mark.parametrize(
         "step",
@@ -791,7 +865,15 @@ class TestHumanSize:
         [
             (0, "0 B"),
             (512, "512 B"),
+            # A byte count is read in binary, so a thousand of them is
+            # still a thousand bytes and not a kibibyte.
+            (1000, "1000 B"),
+            (1023, "1023 B"),
             (1024, "1 KiB"),
+            # A hair under a boundary belongs in the unit above it:
+            # "1024 KiB" is the one answer "largest which fits" rules out.
+            (1024**2 - 1, "1 MiB"),
+            (1024**3 - 1, "1 GiB"),
             (4_800_000, "4.6 MiB"),
             (2**30, "1 GiB"),
             (2**40, "1 TiB"),
@@ -801,6 +883,14 @@ class TestHumanSize:
     def test_size_in_the_largest_unit_which_fits(self, count, expected):
         """A byte count is read in whatever unit keeps it short."""
         assert human_size(count) == expected
+
+    def test_a_size_which_is_not_a_number(self):
+        """
+        A dask array of unknown chunks reports nan bytes.
+
+        "nan TiB" is a worse answer than not saying.
+        """
+        assert human_size(float("nan")) == ""
 
 
 class TestDurationText:
@@ -812,6 +902,17 @@ class TestDurationText:
         high = np.datetime64("2020-01-01T00:00:24")
         assert "24 s" in str(duration_text(low, high))
 
+    @pytest.mark.parametrize("unit", ["Y", "M"])
+    def test_a_span_of_years_or_months(self, unit):
+        """
+        Neither is a fixed number of seconds.
+
+        numpy refuses to divide one into seconds rather than guessing a
+        calendar, and so does this rather than raising out of a repr.
+        """
+        low, high = np.datetime64("2000", unit), np.datetime64("2010", unit)
+        assert duration_text(low, high) is None
+
     def test_no_time_at_all_says_nothing(self):
         """A zero would read as a label on a gap."""
         instant = np.datetime64("2020-01-01T00:00:00")
@@ -819,8 +920,18 @@ class TestDurationText:
 
     @pytest.mark.parametrize(
         ("low", "high"),
-        [(0.0, 299.0), (0, 299), ("a", "b"), (None, None), (1, np.datetime64("now"))],
-        ids=["floats", "ints", "strings", "none", "mixed"],
+        [
+            (0.0, 299.0),
+            (0, 299),
+            ("a", "b"),
+            (None, None),
+            (1, np.datetime64("2020-01-01")),
+            # The other way round: `low` is a time and `high` is not, so
+            # only the second half of the guard can refuse it. Without
+            # that half numpy raises out of the middle of a repr.
+            (np.datetime64("2020-01-01"), 1),
+        ],
+        ids=["floats", "ints", "strings", "none", "mixed_low", "mixed_high"],
     )
     def test_only_two_times_have_a_duration(self, low, high):
         """
@@ -838,9 +949,25 @@ class TestDurationText:
         How long that is matters less than the extents it would
         otherwise take down with it.
         """
-        low = np.datetime64("1677-09-21T00:12:44")
-        high = np.datetime64("2262-04-11T23:47:16")
-        assert duration_text(low, high) is None
+        assert duration_text(pd.Timestamp.min, pd.Timestamp.max) is None
+
+    @pytest.mark.parametrize(
+        ("low", "high", "expected"),
+        [
+            ("1677-09-21T00:12:44", "2262-04-11T23:47:16", "584.6 y"),
+            ("0001-01-01", "9999-12-31", "9999 y"),
+        ],
+        ids=["centuries", "millennia"],
+    )
+    def test_a_span_too_long_to_count_in_nanoseconds(self, low, high, expected):
+        """
+        A long span is still said, and said correctly.
+
+        Read as nanoseconds these overflow an int64 silently: the first
+        of them came back as 1.7 seconds, and the second as 61.6 years.
+        """
+        said = duration_text(np.datetime64(low), np.datetime64(high))
+        assert expected in str(said)
 
 
 class TestValuesAReaderCanRead:
