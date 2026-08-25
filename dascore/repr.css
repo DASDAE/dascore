@@ -1,0 +1,165 @@
+/* Styles for the HTML repr of dascore objects.
+
+Every selector is scoped under .dc-repr. A repr is emitted into a
+notebook output cell, where a <style> applies to the whole document, so
+one bare `pre` or `details` rule here would restyle every code block on
+the page around it.
+
+The body ink is inherited, never stated. A repr lands on grounds it
+cannot see -- a light notebook, a dark one, a themed docs page -- and no
+color clears WCAG AA against both white and near-black, so what a repr
+does not need to color it leaves to the host. The hues it does state are
+each given a value per theme below.
+*/
+
+.dc-repr {
+  --dc-blue: #0969da;
+  --dc-bright_blue: #0a7ea4;
+  --dc-red: #b03050;
+  --dc-yellow: #9a5b00;
+  --dc-green: #0f7a6c;
+  --dc-cyan: #0e7490;
+  --dc-dark_orange: #bc4c00;
+  --dc-grey50: #6b7280;
+  --dc-rule: color-mix(in oklab, currentcolor 22%, transparent);
+  font-family: var(--jp-code-font-family, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: var(--jp-code-font-size, 0.8125rem);
+  line-height: 1.5;
+  color: inherit;
+  background: transparent;
+  max-width: 100%;
+  overflow-x: auto;
+  font-variant-numeric: tabular-nums;
+}
+
+@media (prefers-color-scheme: dark) {
+  .dc-repr {
+    --dc-blue: #7fb2ff;
+    --dc-bright_blue: #7dcfff;
+    --dc-red: #ff8fa8;
+    --dc-yellow: #f0a94e;
+    --dc-green: #4fd0bd;
+    --dc-cyan: #7dcfff;
+    --dc-dark_orange: #ffa657;
+    --dc-grey50: #9ca3af;
+  }
+}
+
+/* A host which states its theme outranks the reader's operating system:
+a light page on a dark laptop is a light page. */
+body[data-jp-theme-light="true"] .dc-repr,
+body[data-vscode-theme-kind*="light"] .dc-repr,
+body.quarto-light .dc-repr {
+  --dc-blue: #0969da;
+  --dc-bright_blue: #0a7ea4;
+  --dc-red: #b03050;
+  --dc-yellow: #9a5b00;
+  --dc-green: #0f7a6c;
+  --dc-cyan: #0e7490;
+  --dc-dark_orange: #bc4c00;
+  --dc-grey50: #6b7280;
+}
+
+body[data-jp-theme-light="false"] .dc-repr,
+body.quarto-dark .dc-repr,
+body[data-vscode-theme-kind*="dark"] .dc-repr {
+  --dc-blue: #7fb2ff;
+  --dc-bright_blue: #7dcfff;
+  --dc-red: #ff8fa8;
+  --dc-yellow: #f0a94e;
+  --dc-green: #4fd0bd;
+  --dc-cyan: #7dcfff;
+  --dc-dark_orange: #ffa657;
+  --dc-grey50: #9ca3af;
+}
+
+.dc-repr .dc-bold { font-weight: 600; }
+.dc-repr .dc-underline { text-decoration: underline; }
+.dc-repr .dc-blue { color: var(--dc-blue); }
+.dc-repr .dc-bright_blue { color: var(--dc-bright_blue); }
+.dc-repr .dc-red { color: var(--dc-red); }
+.dc-repr .dc-yellow { color: var(--dc-yellow); }
+.dc-repr .dc-green { color: var(--dc-green); }
+.dc-repr .dc-cyan { color: var(--dc-cyan); }
+.dc-repr .dc-dark_orange { color: var(--dc-dark_orange); }
+.dc-repr .dc-grey50 { color: var(--dc-grey50); }
+
+.dc-repr .dc-banner {
+  padding-bottom: 0.25em;
+  margin-bottom: 0.35em;
+  border-bottom: 1px solid var(--dc-rule);
+}
+
+/* Bootstrap gives a bare `details` a bottom margin and a bare `pre` a
+gray card with a border; JupyterLab gives neither. Reset both so the
+panel reads the same in a notebook and on the docs site. */
+.dc-repr details {
+  margin: 0;
+  padding: 0;
+  border: none;
+  background: none;
+}
+
+.dc-repr summary {
+  display: block;
+  list-style: none;
+  cursor: pointer;
+  padding: 0.1em 0;
+  color: inherit;
+  font-size: 1em;
+  border-radius: 3px;
+  /* A title can carry spaces a producer put there, and HTML would
+  collapse runs of them. */
+  white-space: pre;
+}
+
+.dc-repr summary::-webkit-details-marker { display: none; }
+
+.dc-repr summary::before {
+  content: "\25B8";
+  display: inline-block;
+  width: 1.1em;
+  color: var(--dc-grey50);
+}
+
+.dc-repr details[open] > summary::before { content: "\25BE"; }
+
+.dc-repr summary:focus-visible {
+  outline: 2px solid var(--dc-blue);
+  outline-offset: 1px;
+}
+
+/* Both can carry leading spaces a producer put there -- the spool
+states its path indented -- and HTML would collapse them. */
+.dc-repr .dc-line {
+  padding: 0.1em 0 0.1em 1.1em;
+  white-space: pre;
+  overflow-x: auto;
+}
+
+
+/* This scrolls itself. Without `overflow-x` a hundred-column coordinate
+line would push the whole page sideways rather than just this block. */
+.dc-repr .dc-body {
+  margin: 0 0 0.3em 1.1em;
+  padding: 0;
+  border: none;
+  background: none;
+  color: inherit;
+  font-size: 1em;
+  line-height: inherit;
+  white-space: pre;
+  overflow-x: auto;
+  max-width: 100%;
+}
+
+/* Print renders a closed `details` closed, so open them all: paper has
+no disclosure triangle to click. */
+@media print {
+  /* Paper has no triangle to click, so nothing stays folded. The
+  first rule is what older engines honor and the second is what
+  Chromium honors; neither alone covers both. */
+  .dc-repr details > *:not(summary) { display: block; }
+  .dc-repr details::details-content { content-visibility: visible; }
+  .dc-repr summary::before { content: ""; }
+}

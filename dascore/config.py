@@ -69,6 +69,24 @@ class DascoreConfig(BaseModel):
             "that relation happens to be realized already."
         ),
     )
+    display_html: bool = Field(
+        default=True,
+        description=(
+            "Whether a display which renders HTML -- a notebook, the docs "
+            "site -- is offered the collapsible repr. False sends every "
+            "display back to the text repr, which says the same words."
+        ),
+    )
+    display_html_open_lines: int = Field(
+        default=12,
+        ge=0,
+        description=(
+            "Body lines a section of an HTML repr may hold and still open "
+            "on its own. A short section is worth a glance; a long one -- "
+            "an array, a deep tree -- is folded until it is asked for. "
+            "0 folds every section."
+        ),
+    )
     patch_history: Literal["standard", "disabled"] = Field(
         default="standard",
         description="Controls whether DASCore appends processing history to patches.",
