@@ -37,7 +37,6 @@ from uuid import uuid4
 import numpy as np
 from pydantic import (
     AfterValidator,
-    BeforeValidator,
     Field,
     field_validator,
     model_validator,
@@ -70,8 +69,8 @@ from dascore.utils.documents import (
 from dascore.utils.intervals import (
     clip_intervals,
     interval_masks,
+    interval_value_type,
     intervals_overlap,
-    normalize_value,
     value_kind,
 )
 from dascore.utils.mapping import FrozenDict
@@ -129,14 +128,9 @@ ResourceIdStr = Annotated[
 ]
 
 
-def _label_value(value):
-    """Normalize a label value so its Python type survives validation."""
-    return normalize_value(value, error=InvalidInventoryError)
-
-
 # A label states membership by carrying no value, so a value, when there is
 # one, is text or a number; its kind decides the group's shape.
-LabelValue = Annotated[str | int | float, BeforeValidator(_label_value)]
+LabelValue = interval_value_type(InvalidInventoryError)
 
 
 def _object_type_tag(name: str):
@@ -566,14 +560,14 @@ class Geometry(InventoryModel):
     >>> trench = Geometry(
     ...     name="trench",
     ...     distance=(0.0, 100.0),
-    ...     coordinates={"x": (0.0, 86.6), "y": (0.0, 0.0), "z": (-0.5, -0.5)},
+    ...     columns={"x": (0.0, 86.6), "y": (0.0, 0.0), "z": (-0.5, -0.5)},
     ... )
     >>>
     >>> # A curve which is not a position at all.
     >>> chainage = Geometry(
     ...     name="chainage",
     ...     distance=(0.0, 100.0),
-    ...     coordinates={"chainage": (1200.0, 1290.0)},
+    ...     columns={"chainage": (1200.0, 1290.0)},
     ...     units={"chainage": "m"},
     ... )
     """
@@ -586,7 +580,7 @@ class Geometry(InventoryModel):
             "increasing values whose span is the segment's coverage."
         ),
     )
-    coordinates: FrozenDictType[str, tuple[float, ...]] = Field(
+    columns: FrozenDictType[str, tuple[float, ...]] = Field(
         description=(
             "Columns measured along this segment, keyed by name; each holds "
             "one value per distance."
@@ -601,12 +595,12 @@ class Geometry(InventoryModel):
     def _validate_geometry(self) -> Self:
         """Enforce paired, strictly increasing control points."""
         _check_control_points(self.distance, "Geometry distance", minimum=2)
-        if not self.coordinates:
+        if not self.columns:
             msg = "Geometry states no columns, so it describes nothing."
             raise InvalidInventoryError(msg)
         wrong = sorted(
             name
-            for name, values in self.coordinates.items()
+            for name, values in self.columns.items()
             if len(values) != len(self.distance)
         )
         if wrong:
@@ -615,13 +609,13 @@ class Geometry(InventoryModel):
                 f"distance; distance states {len(self.distance)}."
             )
             raise InvalidInventoryError(msg)
-        for name, values in self.coordinates.items():
+        for name, values in self.columns.items():
             if not np.all(np.isfinite(np.asarray(values, dtype=float))):
                 msg = f"Geometry column {name!r} must hold finite values."
                 raise InvalidInventoryError(msg)
         # Units name a column or nothing; the alternative is a unit sitting
         # on a column the segment never states, which no reader would find.
-        if orphaned := sorted(set(self.units) - set(self.coordinates)):
+        if orphaned := sorted(set(self.units) - set(self.columns)):
             msg = f"Geometry states units for {orphaned}, which it has no column for."
             raise InvalidInventoryError(msg)
         return self
@@ -644,7 +638,7 @@ class Geometry(InventoryModel):
         inside = (dist >= start) & (dist < end)
         knots = np.asarray(self.distance, dtype=float)
         out = {}
-        for name, values in self.coordinates.items():
+        for name, values in self.columns.items():
             column = np.full(len(dist), np.nan)
             column[inside] = np.interp(
                 dist[inside], knots, np.asarray(values, dtype=float)
@@ -655,10 +649,10 @@ class Geometry(InventoryModel):
 
 def _distance_line(model, skip=()) -> Text:
     """One line for a model covering an interval of optical distance."""
-    span = f"[{model.start_distance:g}, {model.end_distance:g}) m"
+    span = f"[{model.distance_min:g}, {model.distance_max:g}) m"
     return model_to_line(
         model,
-        skip=(*skip, "start_distance", "end_distance"),
+        skip=(*skip, "distance_min", "distance_max"),
         extra={"distance": span},
     )
 
@@ -674,25 +668,25 @@ class _IntervalModel(InventoryModel):
     never participates in coverage, enrichment, or overlap checks.
     """
 
-    start_distance: float = Field(
+    distance_min: float = Field(
         allow_inf_nan=False,
         description="Start optical distance of this interval in meters.",
     )
-    end_distance: float = Field(
+    distance_max: float = Field(
         allow_inf_nan=False,
         description=(
             "End optical distance of this interval in meters; equal to "
-            "start_distance for a point marker."
+            "distance_min for a point marker."
         ),
     )
 
     @model_validator(mode="after")
     def _check_interval_order(self) -> Self:
         """The end may not precede the start."""
-        if self.end_distance < self.start_distance:
+        if self.distance_max < self.distance_min:
             msg = (
-                f"end_distance {self.end_distance} must not precede "
-                f"start_distance {self.start_distance}."
+                f"distance_max {self.distance_max} must not precede "
+                f"distance_min {self.distance_min}."
             )
             raise InvalidInventoryError(msg)
         return self
@@ -704,19 +698,19 @@ class _IntervalModel(InventoryModel):
     @property
     def optical_length(self) -> float:
         """The interval length in meters."""
-        return self.end_distance - self.start_distance
+        return self.distance_max - self.distance_min
 
     @property
     def interval(self) -> tuple[float, float]:
         """The (start, end) optical distance covered by this item."""
-        return (self.start_distance, self.end_distance)
+        return (self.distance_min, self.distance_max)
 
 
 class CouplingCondition(_IntervalModel):
     """
     Acoustic coupling condition for an interval of an optical path.
 
-    Covers ``[start_distance, end_distance)``. Coverage may be partial
+    Covers ``[distance_min, distance_max)``. Coverage may be partial
     and conditions may not overlap.
     """
 
@@ -803,7 +797,7 @@ class DistanceMap(InventoryModel):
     piecewise-linearly interpolated; channels outside the covered range are
     undefined (NaN). A single-point map states an origin and takes its
     slope from the axis it is read on: the acquisition's nominal
-    ``spatial_interval`` on the channel axis, and one meter of path per
+    ``distance_step`` on the channel axis, and one meter of path per
     interrogator meter on the instrument_distance axis.
     """
 
@@ -928,7 +922,7 @@ class DistanceMap(InventoryModel):
             if slope is None:
                 msg = (
                     "A single-point DistanceMap requires a slope "
-                    "(the acquisition's spatial_interval)."
+                    "(the acquisition's distance_step)."
                 )
                 raise InvalidInventoryError(msg)
             return dist[0] + (vals - source[0]) * slope
@@ -945,7 +939,7 @@ class Acquisition(TimeRangedModel):
     overlapping time ranges. The ``location_code`` names the optical path
     lineage this acquisition interrogates. The ``distance_map`` is the one
     channel-resolution mechanism: a single control point states an origin
-    (and, on the channel axis, takes ``spatial_interval`` as its slope),
+    (and, on the channel axis, takes ``distance_step`` as its slope),
     and more points describe a measured, bending relationship.
     On export to FDSN DAS metadata, ``extra_fields`` maps to native_headers.
     """
@@ -1001,7 +995,7 @@ class Acquisition(TimeRangedModel):
     sample_rate: FiniteFloat | None = Field(
         default=None, description="FDSN-style acquisition sample rate in Hz."
     )
-    spatial_interval: FiniteFloat | None = Field(
+    distance_step: FiniteFloat | None = Field(
         default=None,
         description=(
             "Nominal spatial sampling interval between channels in meters. "
@@ -1024,14 +1018,23 @@ class Acquisition(TimeRangedModel):
     @model_validator(mode="before")
     @classmethod
     def _reject_start_distance(cls, data):
-        """Explain the removed affine form rather than 'extra inputs'."""
-        if isinstance(data, Mapping) and "start_distance" in data:
+        """Explain the removed affine form rather than 'extra inputs'.
+
+        Both spellings are refused: `start_distance` is what the field was
+        called when it existed, and `distance_min` is what it would be
+        called now, so neither reads as an origin the acquisition honours.
+        """
+        if not isinstance(data, Mapping):
+            return data
+        for name in ("distance_min", "start_distance"):
+            if name not in data:
+                continue
             msg = (
-                "Acquisition no longer takes start_distance; the distance_map "
+                f"Acquisition no longer takes {name}; the distance_map "
                 "is the one channel-resolution mechanism. Write "
-                f"start_distance: {data['start_distance']} as distance_map: "
-                f"{{channel: [0], distance: [{data['start_distance']}]}}, which "
-                "states the same origin and takes spatial_interval as its slope."
+                f"{name}: {data[name]} as distance_map: "
+                f"{{channel: [0], distance: [{data[name]}]}}, which "
+                "states the same origin and takes distance_step as its slope."
             )
             raise InvalidInventoryError(msg)
         return data
@@ -1058,7 +1061,7 @@ class Acquisition(TimeRangedModel):
         # The slope carries the units of the axis being read: meters of path
         # per channel on the channel axis, and per interrogator meter --
         # nominally one -- on the instrument_distance axis.
-        slope = self.spatial_interval if axis == "channel" else 1.0
+        slope = self.distance_step if axis == "channel" else 1.0
         return dist_map.map_to_distance(values, axis=axis, slope=slope)
 
 
@@ -1077,8 +1080,8 @@ def _overlapping_epochs(items, key) -> list[tuple]:
 
 def _epoch_span(item) -> str:
     """Name an epoch's range the way an error can show it."""
-    start = "the beginning" if np.isnat(item.start_time) else str(item.start_time)
-    end = "ongoing" if np.isnat(item.end_time) else str(item.end_time)
+    start = "the beginning" if np.isnat(item.time_min) else str(item.time_min)
+    end = "ongoing" if np.isnat(item.time_max) else str(item.time_max)
     return f"{start} to {end}"
 
 
@@ -1093,13 +1096,13 @@ def _containment_errors(parent, children, what: str, name) -> list[str]:
     not happen -- and since resolution walks down from the container, that
     is metadata no query can reach.
     """
-    start, end = parent.start_time, parent.end_time
+    start, end = parent.time_min, parent.time_max
     errors = []
     for child in children:
-        before = not np.isnat(start) and not np.isnat(child.start_time)
-        before = before and child.start_time < start
-        after = not np.isnat(end) and not np.isnat(child.end_time)
-        after = after and child.end_time > end
+        before = not np.isnat(start) and not np.isnat(child.time_min)
+        before = before and child.time_min < start
+        after = not np.isnat(end) and not np.isnat(child.time_max)
+        after = after and child.time_max > end
         if before or after or not child.overlaps(parent):
             errors.append(
                 f"{what} {name(child)} is valid {_epoch_span(child)}, outside "
@@ -1117,7 +1120,7 @@ def axis_columns(segment, crs) -> dict[str, int]:
     other column is a quantity along the fiber rather than a position.
     """
     out = {}
-    for name in segment.coordinates:
+    for name in segment.columns:
         with suppress(InvalidInventoryError):
             out[name] = crs.axis_index(name)
     return out
@@ -1132,7 +1135,7 @@ def _placed(segment, name: str, distances) -> np.ndarray:
     point rather than left NaN.
     """
     column = segment.interpolate(distances)[name]
-    column[np.isnan(column)] = segment.coordinates[name][-1]
+    column[np.isnan(column)] = segment.columns[name][-1]
     return column
 
 
@@ -1211,7 +1214,7 @@ class OpticalPath(TimeRangedModel):
     """
     Continuous optical path described by independent tracks.
 
-    Optical components tile ``[start_distance, start_distance + optical
+    Optical components tile ``[distance_min, distance_min + optical
     length)``. Geometry and coupling are function tracks (partial coverage,
     no overlap); labels overlap as their group's value kind allows. No
     more than one path per ``(FiberArray, location_code)`` is valid at a
@@ -1219,7 +1222,7 @@ class OpticalPath(TimeRangedModel):
     """
 
     name: str = Field(default="", description="Human-readable optical path name.")
-    start_distance: float = Field(
+    distance_min: float = Field(
         default=0.0,
         allow_inf_nan=False,
         description=(
@@ -1262,13 +1265,13 @@ class OpticalPath(TimeRangedModel):
         return float(sum(x.optical_length for x in self.optical_components))
 
     @property
-    def end_distance(self) -> float:
+    def distance_max(self) -> float:
         """The end of this path's optical-distance axis."""
-        return self.start_distance + self.optical_length
+        return self.distance_min + self.optical_length
 
     def component_intervals(self) -> tuple[tuple[float, float], ...]:
         """Return each component's (start, end) on the absolute axis."""
-        out, position = [], self.start_distance
+        out, position = [], self.distance_min
         for comp in self.optical_components:
             nxt = position + comp.optical_length
             out.append((position, nxt))
@@ -1313,7 +1316,7 @@ class OpticalPath(TimeRangedModel):
         `OpticalPath.coordinates_at`, and values never bridge two segments:
         distance between them is uncovered, whatever either side holds.
         """
-        stating = [x for x in self.geometry if name in x.coordinates]
+        stating = [x for x in self.geometry if name in x.columns]
         if not stating:
             return None
         dist = np.atleast_1d(np.asarray(distances, dtype=float))
@@ -1328,7 +1331,7 @@ class OpticalPath(TimeRangedModel):
         """Return every column name this path's geometry segments state."""
         seen: dict[str, None] = {}
         for segment in self.geometry:
-            seen.update(dict.fromkeys(segment.coordinates))
+            seen.update(dict.fromkeys(segment.columns))
         return tuple(seen)
 
     def check(self, tolerance: float = 1e-9) -> Self:
@@ -1340,7 +1343,7 @@ class OpticalPath(TimeRangedModel):
         bounds. Component tiling is inherent to the cumulative layout.
         """
         errors = []
-        start, end = self.start_distance, self.end_distance
+        start, end = self.distance_min, self.distance_max
         geo_spans = [seg.interval for seg in self.geometry]
         coup_spans = [c.interval for c in self.coupling]
         label_spans = [a.interval for a in self.labels]
@@ -1382,7 +1385,7 @@ class OpticalPath(TimeRangedModel):
         spans: dict[str, list[tuple[float, float]]] = {}
         units: dict[str, set[str]] = {}
         for segment in self.geometry:
-            for name in segment.coordinates:
+            for name in segment.columns:
                 spans.setdefault(name, []).append(segment.interval)
                 if name in segment.units:
                     units.setdefault(name, set()).add(segment.units[name])
@@ -1464,12 +1467,12 @@ class OpticalPath(TimeRangedModel):
         Return a new path clipped to a distance interval.
 
         Absolute optical distances are preserved: the piece's
-        ``start_distance`` becomes the clip start, never zero.
+        ``distance_min`` becomes the clip start, never zero.
         """
-        lo = self.start_distance if distance[0] is None else float(distance[0])
-        hi = self.end_distance if distance[1] is None else float(distance[1])
-        lo = max(lo, self.start_distance)
-        hi = min(hi, self.end_distance)
+        lo = self.distance_min if distance[0] is None else float(distance[0])
+        hi = self.distance_max if distance[1] is None else float(distance[1])
+        lo = max(lo, self.distance_min)
+        hi = min(hi, self.distance_max)
         if hi <= lo:
             msg = f"Empty distance selection ({distance})."
             raise ParameterError(msg)
@@ -1478,7 +1481,7 @@ class OpticalPath(TimeRangedModel):
             self.optical_components, self.component_intervals(), strict=True
         ):
             new_lo, new_hi = max(c_lo, lo), min(c_hi, hi)
-            at_outer = c_lo == hi == self.end_distance
+            at_outer = c_lo == hi == self.distance_max
             if new_hi > new_lo or (c_lo == c_hi and (lo <= c_lo < hi or at_outer)):
                 length = max(new_hi - new_lo, 0.0)
                 components.append(comp.model_copy(update={"optical_length": length}))
@@ -1491,20 +1494,20 @@ class OpticalPath(TimeRangedModel):
             dist = np.asarray(seg.distance, dtype=float)
             inside = (dist > new_lo) & (dist < new_hi)
             new_dist = np.concatenate([[new_lo], dist[inside], [new_hi]])
-            new_coords = {
+            new_columns = {
                 name: tuple(np.interp(new_dist, dist, np.asarray(values, dtype=float)))
-                for name, values in seg.coordinates.items()
+                for name, values in seg.columns.items()
             }
             # new(), not model_copy(): a copy skips the validators, and
-            # would leave `coordinates` a plain mutable dict whose columns
-            # nothing had checked against the new distance array.
-            geometry.append(seg.new(distance=tuple(new_dist), coordinates=new_coords))
-        outer = self.end_distance
+            # would leave `columns` a plain mutable dict nothing had
+            # checked against the new distance array.
+            geometry.append(seg.new(distance=tuple(new_dist), columns=new_columns))
+        outer = self.distance_max
         coupling = clip_intervals(self.coupling, lo, hi, outer)
         labels = clip_intervals(self.labels, lo, hi, outer)
         return self.model_copy(
             update={
-                "start_distance": lo,
+                "distance_min": lo,
                 "optical_components": tuple(components),
                 "geometry": tuple(geometry),
                 "coupling": tuple(coupling),
@@ -1529,7 +1532,7 @@ class OpticalPath(TimeRangedModel):
         the left, exact interval endpoints swap membership under reversal
         (measure-zero; ``reverse().reverse()`` is exact).
         """
-        start, end = self.start_distance, self.end_distance
+        start, end = self.distance_min, self.distance_max
 
         def flip(d):
             return start + end - d
@@ -1540,9 +1543,9 @@ class OpticalPath(TimeRangedModel):
             geometry.append(
                 seg.new(
                     distance=tuple(flip(dist)[::-1]),
-                    coordinates={
+                    columns={
                         name: tuple(values[::-1])
-                        for name, values in seg.coordinates.items()
+                        for name, values in seg.columns.items()
                     },
                 )
             )
@@ -1550,18 +1553,18 @@ class OpticalPath(TimeRangedModel):
 
         def flip_item(item):
             update = {
-                "start_distance": flip(item.end_distance),
-                "end_distance": flip(item.start_distance),
+                "distance_min": flip(item.distance_max),
+                "distance_max": flip(item.distance_min),
             }
             return item.model_copy(update=update)
 
         coupling = sorted(
             (flip_item(c) for c in self.coupling),
-            key=lambda c: c.start_distance,
+            key=lambda c: c.distance_min,
         )
         labels = sorted(
             (flip_item(a) for a in self.labels),
-            key=lambda a: a.start_distance,
+            key=lambda a: a.distance_min,
         )
         return self.model_copy(
             update={
@@ -1577,7 +1580,7 @@ class OpticalPath(TimeRangedModel):
         Concatenate paths, rewriting the second onto the combined axis.
 
         Both paths must share a lineage and an epoch: the result carries the
-        left path's ``location_code``, ``start_time``, and ``end_time``, so
+        left path's ``location_code``, ``time_min``, and ``time_max``, so
         combining across either would misattribute the right path's metadata.
         """
         if not isinstance(other, OpticalPath):
@@ -1586,8 +1589,8 @@ class OpticalPath(TimeRangedModel):
             name
             for name, same in (
                 ("location_code", self.location_code == other.location_code),
-                ("start_time", _times_equal(self.start_time, other.start_time)),
-                ("end_time", _times_equal(self.end_time, other.end_time)),
+                ("time_min", _times_equal(self.time_min, other.time_min)),
+                ("time_max", _times_equal(self.time_max, other.time_max)),
             )
             if not same
         ]
@@ -1598,7 +1601,7 @@ class OpticalPath(TimeRangedModel):
                 "left path's identity for both."
             )
             raise InvalidInventoryError(msg)
-        offset = self.end_distance - other.start_distance
+        offset = self.distance_max - other.distance_min
         geometry = tuple(
             seg.model_copy(update={"distance": tuple(d + offset for d in seg.distance)})
             for seg in other.geometry
@@ -1606,8 +1609,8 @@ class OpticalPath(TimeRangedModel):
 
         def shift_item(item):
             update = {
-                "start_distance": item.start_distance + offset,
-                "end_distance": item.end_distance + offset,
+                "distance_min": item.distance_min + offset,
+                "distance_max": item.distance_max + offset,
             }
             return item.model_copy(update=update)
 
@@ -2279,7 +2282,7 @@ class Inventory(NamespaceOwner, InventoryModel):
             for segment in path.geometry:
                 axes = axis_columns(segment, crs)
                 columns.update(
-                    dict.fromkeys(x for x in segment.coordinates if x not in axes)
+                    dict.fromkeys(x for x in segment.columns if x not in axes)
                 )
             for track in TRACK_IDENTITY_FIELDS:
                 for item in getattr(path, track):

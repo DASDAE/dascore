@@ -191,12 +191,12 @@ class TestStatedFields:
 
     def test_unset_times_dropped(self):
         """An unset (NaT) epoch is not a fact about the object."""
-        assert "start_time" not in stated_fields(Network(code="XT"))
+        assert "time_min" not in stated_fields(Network(code="XT"))
 
     def test_set_times_kept(self):
         """A stated epoch is."""
-        network = Network(code="XT", start_time="2020-01-01")
-        assert "start_time" in stated_fields(network)
+        network = Network(code="XT", time_min="2020-01-01")
+        assert "time_min" in stated_fields(network)
 
     def test_uncomparable_default_is_stated(self):
         """A default which cannot be compared is shown rather than hidden."""

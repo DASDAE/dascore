@@ -49,7 +49,7 @@ def _legend_labels(ax):
 def _main_path(epoch: int) -> inv.OpticalPath:
     """One epoch of the surveyed path; the second is the repaired fiber."""
     run = 400.0 if epoch == 1 else 402.0
-    times = {"end_time": "2026-07-01"} if epoch == 1 else {"start_time": "2026-07-01"}
+    times = {"time_max": "2026-07-01"} if epoch == 1 else {"time_min": "2026-07-01"}
     return inv.OpticalPath(
         name="main",
         location_code="00",
@@ -64,54 +64,50 @@ def _main_path(epoch: int) -> inv.OpticalPath:
             inv.Geometry(
                 name="west",
                 distance=(100.0, 300.0),
-                coordinates={"x": (0.0, 200.0), "y": (0.0, 0.0), "z": (0.0, -1.0)},
+                columns={"x": (0.0, 200.0), "y": (0.0, 0.0), "z": (0.0, -1.0)},
             ),
             inv.Geometry(
                 name="east",
                 distance=(350.0, 500.0),
-                coordinates={"x": (250.0, 400.0), "y": (0.0, 5.0), "z": (-1.0, 0.0)},
+                columns={"x": (250.0, 400.0), "y": (0.0, 5.0), "z": (-1.0, 0.0)},
             ),
             # Columns of those same stretches, so they share the runs' names.
             inv.Geometry(
                 name="west",
                 distance=(100.0, 300.0),
-                coordinates={"chainage": (0.0, 200.0), "depth": (0.5, 1.5)},
+                columns={"chainage": (0.0, 200.0), "depth": (0.5, 1.5)},
                 units={"chainage": "m"},
             ),
             inv.Geometry(
                 name="east",
                 distance=(350.0, 500.0),
-                coordinates={"chainage": (250.0, 400.0)},
+                columns={"chainage": (250.0, 400.0)},
                 units={"chainage": "m"},
             ),
         ),
         coupling=(
             inv.CouplingCondition(
-                start_distance=100.0, end_distance=300.0, coupling_type="trench"
+                distance_min=100.0, distance_max=300.0, coupling_type="trench"
             ),
             inv.CouplingCondition(
-                start_distance=350.0, end_distance=500.0, coupling_type="conduit"
+                distance_min=350.0, distance_max=500.0, coupling_type="conduit"
             ),
         ),
         labels=(
             inv.OpticalPathLabel(
-                start_distance=100.0, end_distance=200.0, group="zone", value="north"
+                distance_min=100.0, distance_max=200.0, group="zone", value="north"
             ),
             inv.OpticalPathLabel(
-                start_distance=200.0, end_distance=400.0, group="zone", value="south"
+                distance_min=200.0, distance_max=400.0, group="zone", value="south"
             ),
             # A label group states membership by stating no value.
+            inv.OpticalPathLabel(distance_min=150.0, distance_max=300.0, group="noisy"),
+            inv.OpticalPathLabel(distance_min=300.0, distance_max=400.0, group="noisy"),
             inv.OpticalPathLabel(
-                start_distance=150.0, end_distance=300.0, group="noisy"
+                distance_min=100.0, distance_max=200.0, group="count", value=0
             ),
             inv.OpticalPathLabel(
-                start_distance=300.0, end_distance=400.0, group="noisy"
-            ),
-            inv.OpticalPathLabel(
-                start_distance=100.0, end_distance=200.0, group="count", value=0
-            ),
-            inv.OpticalPathLabel(
-                start_distance=200.0, end_distance=300.0, group="count", value=2.5
+                distance_min=200.0, distance_max=300.0, group="count", value=2.5
             ),
         ),
         **times,
@@ -130,10 +126,10 @@ def build_site_inventory() -> inv.Inventory:
         inv.Acquisition(
             code="RAW",
             location_code="00",
-            start_time="2026-06-01",
-            end_time="2026-06-15",
+            time_min="2026-06-01",
+            time_max="2026-06-15",
             data_type="strain_rate",
-            spatial_interval=1.0,
+            distance_step=1.0,
             interrogator=inv.Interrogator(manufacturer="Fake", model="FI-1"),
             distance_map=inv.DistanceMap(channel=(0.0, 300.0), distance=(100.0, 400.0)),
             **common,
@@ -141,8 +137,8 @@ def build_site_inventory() -> inv.Inventory:
         inv.Acquisition(
             code="RAW",
             location_code="00",
-            start_time="2026-07-01",
-            spatial_interval=1.0,
+            time_min="2026-07-01",
+            distance_step=1.0,
             interrogator=inv.Interrogator(serial_number="sn-9"),
             # One point states an origin but no extent, so it draws as a tick.
             distance_map=inv.DistanceMap(channel=(0.0,), distance=(100.0,)),
@@ -173,8 +169,8 @@ def build_labeled_inventory(values: int, crs, lines: int = 1) -> inv.Inventory:
     """One path of one label group, stating this many distinct values."""
     labels = tuple(
         inv.OpticalPathLabel(
-            start_distance=float(x * 10),
-            end_distance=float(x * 10 + 8),
+            distance_min=float(x * 10),
+            distance_max=float(x * 10 + 8),
             group="hole",
             value="\n".join([f"H{x % values:02d}"] * lines),
         )
@@ -323,8 +319,8 @@ class TestSelectPath:
 
         inventory = inv.Inventory(
             networks=(
-                build("AA", start_time="2020-01-01", end_time="2021-01-01"),
-                build("BB", start_time="2021-01-01"),
+                build("AA", time_min="2020-01-01", time_max="2021-01-01"),
+                build("BB", time_min="2021-01-01"),
             )
         ).check()
         # Neither path states a bound, so only their containers can tell
@@ -341,8 +337,8 @@ class TestSelectPath:
         one = inv.OpticalPath(
             name="main",
             location_code="00",
-            start_time="2020-01-01",
-            end_time="2021-01-01",
+            time_min="2020-01-01",
+            time_max="2021-01-01",
             optical_components=(inv.FiberSegment(name="f", optical_length=100.0),),
         )
         array = inv.FiberArray(code="L1", optical_paths=(one,))
@@ -570,7 +566,7 @@ class TestPath:
     @pytest.mark.parametrize(
         "asked, match",
         [
-            (5, "must be a .low, high. pair"),
+            (5, "must be a .min, max. pair"),
             ((10, 5), "must be increasing"),
             ((900, 1000), "clips everything away"),
         ],
@@ -655,8 +651,8 @@ class TestPath:
         """A colorbar must not steal width from the lanes alone."""
         readings = tuple(
             inv.OpticalPathLabel(
-                start_distance=100.0 + 10 * index,
-                end_distance=110.0 + 10 * index,
+                distance_min=100.0 + 10 * index,
+                distance_max=110.0 + 10 * index,
                 group="reading",
                 value=float(index),
             )
@@ -671,7 +667,7 @@ class TestPath:
                 inv.Geometry(
                     name="run",
                     distance=(100.0, 300.0),
-                    coordinates={"chainage": (0.0, 200.0)},
+                    columns={"chainage": (0.0, 200.0)},
                     units={"chainage": "m"},
                 ),
             ),
@@ -734,12 +730,12 @@ class TestMap:
                 inv.Geometry(
                     name="west",
                     distance=(0.0, 50_000.0),
-                    coordinates={"x": (0.0, 500.0), "y": (0.0, 0.0), "z": (0.0, 0.0)},
+                    columns={"x": (0.0, 500.0), "y": (0.0, 0.0), "z": (0.0, 0.0)},
                 ),
                 inv.Geometry(
                     name="east",
                     distance=(50_010.0, 100_000.0),
-                    coordinates={
+                    columns={
                         "x": (600.0, 1000.0),
                         "y": (0.0, 0.0),
                         "z": (0.0, 0.0),
@@ -818,7 +814,7 @@ class TestMap:
                     name="down",
                     distance=(0.0, 40.0),
                     # Straight down: nothing to see in plan view at all.
-                    coordinates={"x": (5.0, 5.0), "y": (2.0, 2.0), "z": (0.0, -40.0)},
+                    columns={"x": (5.0, 5.0), "y": (2.0, 2.0), "z": (0.0, -40.0)},
                 ),
             ),
         )
@@ -856,7 +852,7 @@ class TestMap:
                     inv.Geometry(
                         name="run",
                         distance=(0.0, 200.0),
-                        coordinates={
+                        columns={
                             "x": (0.0, 100.0),
                             "y": (float(location), float(location)),
                             "z": (0.0, 0.0),
@@ -866,8 +862,8 @@ class TestMap:
                 labels=(
                     (
                         inv.OpticalPathLabel(
-                            start_distance=0.0,
-                            end_distance=200.0,
+                            distance_min=0.0,
+                            distance_max=200.0,
                             group=group,
                             value=value,
                         ),
@@ -954,7 +950,7 @@ class TestMap:
                     inv.Geometry(
                         name="run",
                         distance=(0.0, 200.0),
-                        coordinates={
+                        columns={
                             "x": (0.0, 100.0),
                             "y": (float(location), float(location)),
                             "z": (0.0, 0.0),
@@ -963,8 +959,8 @@ class TestMap:
                 ),
                 labels=tuple(
                     inv.OpticalPathLabel(
-                        start_distance=100.0 * index,
-                        end_distance=100.0 * (index + 1),
+                        distance_min=100.0 * index,
+                        distance_max=100.0 * (index + 1),
                         group="zone",
                         value=value,
                     )
@@ -1015,7 +1011,7 @@ class TestMap:
                     inv.Geometry(
                         name="run",
                         distance=(0.0, 200.0),
-                        coordinates={
+                        columns={
                             "x": (0.0, 100.0),
                             "y": (float(location), float(location)),
                             "z": (0.0, 0.0),
@@ -1024,14 +1020,14 @@ class TestMap:
                 ),
                 labels=(
                     inv.OpticalPathLabel(
-                        start_distance=0.0,
-                        end_distance=100.0,
+                        distance_min=0.0,
+                        distance_max=100.0,
                         group="reading",
                         value=value,
                     ),
                     inv.OpticalPathLabel(
-                        start_distance=100.0,
-                        end_distance=200.0,
+                        distance_min=100.0,
+                        distance_max=200.0,
                         group="reading",
                         value=value + 1.0,
                     ),
@@ -1078,7 +1074,7 @@ class TestMap:
                     inv.Geometry(
                         name="run",
                         distance=(0.0, 200.0),
-                        coordinates={
+                        columns={
                             "x": (0.0, 100.0),
                             "y": (float(location), float(location)),
                             "z": (0.0, 0.0),
@@ -1092,7 +1088,7 @@ class TestMap:
             "01",
             (
                 inv.OpticalPathLabel(
-                    start_distance=0.0, end_distance=200.0, group="zone", value="north"
+                    distance_min=0.0, distance_max=200.0, group="zone", value="north"
                 ),
             ),
         )
@@ -1116,14 +1112,14 @@ class TestMap:
         one = inv.OpticalPath(
             name="main",
             location_code="00",
-            start_time="2020-01-01",
-            end_time="2021-01-01",
+            time_min="2020-01-01",
+            time_max="2021-01-01",
             optical_components=(inv.FiberSegment(name="f", optical_length=100.0),),
             geometry=(
                 inv.Geometry(
                     name="run",
                     distance=(0.0, 100.0),
-                    coordinates={"x": (0.0, 1.0), "y": (0.0, 0.0), "z": (0.0, 0.0)},
+                    columns={"x": (0.0, 1.0), "y": (0.0, 0.0), "z": (0.0, 0.0)},
                 ),
             ),
         )
@@ -1247,7 +1243,7 @@ class TestTimeline:
         "bad, match",
         [
             (("2026-07-01", "2026-06-01"), "must be increasing"),
-            ("nope", "must be a .start, end. pair"),
+            ("nope", "must be a .min, max. pair"),
             (("not a time", None), "not a time"),
         ],
     )
@@ -1276,8 +1272,8 @@ class TestTimeline:
         acquisition = inv.Acquisition(
             code="RAW",
             location_code="00",
-            start_time="2026-06-01",
-            end_time="2026-06-15",
+            time_min="2026-06-01",
+            time_max="2026-06-15",
             data_category="DAS",
             sample_rate=1.0,
             gauge_length=1.0,
@@ -1297,8 +1293,8 @@ class TestTimeline:
         acquisition = inv.Acquisition(
             code="RAW",
             location_code="00",
-            start_time="2026-06-01",
-            end_time="2026-06-15",
+            time_min="2026-06-01",
+            time_max="2026-06-15",
             data_category="DAS",
             sample_rate=1.0,
             gauge_length=1.0,

@@ -138,8 +138,8 @@ class TestDropPrivateColumns:
 
     def test_an_underscore_inside_a_name_stays(self):
         """The prefix states the intent; a name merely holding one does not."""
-        frame = pd.DataFrame({"start_distance": [0.0], "mid_": [1.0]})
-        assert list(drop_private_columns(frame).columns) == ["start_distance", "mid_"]
+        frame = pd.DataFrame({"distance_min": [0.0], "mid_": [1.0]})
+        assert list(drop_private_columns(frame).columns) == ["distance_min", "mid_"]
 
 
 class TestRowCells:

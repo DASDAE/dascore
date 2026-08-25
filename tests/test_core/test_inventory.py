@@ -29,39 +29,39 @@ def build_inventory() -> inv.Inventory:
     acquisition = inv.Acquisition(
         code="RAW",
         location_code="00",
-        start_time="2026-06-01",
+        time_min="2026-06-01",
         data_category="DAS",
         data_type="strain_rate",
         sample_rate=500.0,
         gauge_length=10.0,
-        spatial_interval=1.0,
+        distance_step=1.0,
         distance_map=inv.DistanceMap(channel=(0.0,), distance=(0.0,)),
     )
     geometry = inv.Geometry(
         name="survey",
         distance=(0.0, 100.0, 200.0),
-        coordinates={"x": (0.0, 1.0, 2.0), "y": (0.0, 0.0, 0.0), "z": (0.0, 0.0, 1.0)},
+        columns={"x": (0.0, 1.0, 2.0), "y": (0.0, 0.0, 0.0), "z": (0.0, 0.0, 1.0)},
     )
     path = inv.OpticalPath(
         name="main",
         location_code="00",
-        start_time="2026-06-01",
+        time_min="2026-06-01",
         optical_components=(inv.FiberSegment(name="fiber", optical_length=250.0),),
         geometry=(geometry,),
         coupling=(
             inv.CouplingCondition(
-                start_distance=0.0, end_distance=200.0, coupling_type="trench"
+                distance_min=0.0, distance_max=200.0, coupling_type="trench"
             ),
         ),
         labels=(
             inv.OpticalPathLabel(
-                start_distance=0.0, end_distance=100.0, group="zone", value="east"
+                distance_min=0.0, distance_max=100.0, group="zone", value="east"
             ),
         ),
     )
     array = inv.FiberArray(
         code="L001",
-        start_time="2026-06-01",
+        time_min="2026-06-01",
         acquisitions=(acquisition,),
         optical_paths=(path,),
     )
@@ -81,7 +81,7 @@ def build_full_inventory() -> inv.Inventory:
     path = inv.OpticalPath(
         name="main",
         location_code="00",
-        start_time="2026-06-01",
+        time_min="2026-06-01",
         optical_components=(
             inv.FiberSegment(
                 name="lead",
@@ -100,7 +100,7 @@ def build_full_inventory() -> inv.Inventory:
             inv.Geometry(
                 name="trench",
                 distance=(100.0, 400.0),
-                coordinates={
+                columns={
                     "x": (-117.0, -117.0),
                     "y": (40.0, 40.1),
                     "z": (1500.0, 1500.0),
@@ -109,8 +109,8 @@ def build_full_inventory() -> inv.Inventory:
         ),
         coupling=(
             inv.CouplingCondition(
-                start_distance=100.0,
-                end_distance=250.0,
+                distance_min=100.0,
+                distance_max=250.0,
                 coupling_type="trench",
                 medium="soil",
                 depth=1.0,
@@ -118,16 +118,14 @@ def build_full_inventory() -> inv.Inventory:
         ),
         labels=(
             inv.OpticalPathLabel(
-                start_distance=100.0, end_distance=200.0, group="zone", value="north"
+                distance_min=100.0, distance_max=200.0, group="zone", value="north"
+            ),
+            inv.OpticalPathLabel(distance_min=150.0, distance_max=300.0, group="noisy"),
+            inv.OpticalPathLabel(
+                distance_min=100.0, distance_max=200.0, group="count", value=0
             ),
             inv.OpticalPathLabel(
-                start_distance=150.0, end_distance=300.0, group="noisy"
-            ),
-            inv.OpticalPathLabel(
-                start_distance=100.0, end_distance=200.0, group="count", value=0
-            ),
-            inv.OpticalPathLabel(
-                start_distance=200.0, end_distance=300.0, group="offset", value=0.0
+                distance_min=200.0, distance_max=300.0, group="offset", value=0.0
             ),
         ),
         measurements=(measurement,),
@@ -135,13 +133,13 @@ def build_full_inventory() -> inv.Inventory:
     acquisition = inv.Acquisition(
         code="RAW",
         location_code="00",
-        start_time="2026-06-01",
+        time_min="2026-06-01",
         data_category="DAS",
         data_type="strain_rate",
         data_units="strain/s",
         sample_rate=500.0,
         gauge_length=10.0,
-        spatial_interval=1.0,
+        distance_step=1.0,
         interrogator=interrogator,
         interrogator_port="1",
         extra_fields={"native_key": "", "count": 0},
@@ -164,14 +162,14 @@ def build_full_inventory() -> inv.Inventory:
     array = inv.FiberArray(
         code="R2D1",
         name="array one",
-        start_time="2026-06-01",
+        time_min="2026-06-01",
         acquisitions=(acquisition,),
         optical_paths=(path,),
     )
     network = inv.Network(
         code="DAS",
         name="network one",
-        start_time="2026-06-01",
+        time_min="2026-06-01",
         fiber_arrays=(array,),
         stations=(station,),
     )
@@ -205,7 +203,7 @@ class TestGeometryColumns:
         chainage = inv.Geometry(
             name="chainage",
             distance=(0.0, 100.0),
-            coordinates={"chainage": (1200.0, 1300.0)},
+            columns={"chainage": (1200.0, 1300.0)},
             units={"chainage": "m"},
         )
         assert self._inventory(chainage).check() is not None
@@ -215,7 +213,7 @@ class TestGeometryColumns:
     def test_a_segment_with_no_axes_is_legal(self):
         """A path may be described without ever being placed in space."""
         depth = inv.Geometry(
-            distance=(0.0, 40.0), coordinates={"borehole_depth": (0.0, 40.0)}
+            distance=(0.0, 40.0), columns={"borehole_depth": (0.0, 40.0)}
         )
         inventory = self._inventory(depth)
         assert inventory.check() is inventory
@@ -226,7 +224,7 @@ class TestGeometryColumns:
     def test_axes_are_all_or_none(self):
         """Half a position is not a position."""
         partial = inv.Geometry(
-            name="partial", distance=(0.0, 10.0), coordinates={"x": (0.0, 1.0)}
+            name="partial", distance=(0.0, 10.0), columns={"x": (0.0, 1.0)}
         )
         with pytest.raises(InvalidInventoryError, match="every axis or none"):
             self._inventory(partial).check()
@@ -239,7 +237,7 @@ class TestGeometryColumns:
         doubled = inv.Geometry(
             name="doubled",
             distance=(0.0, 10.0),
-            coordinates={
+            columns={
                 "x": (0.0, 1.0),
                 "easting": (0.0, 1.0),
                 "northing": (0.0, 1.0),
@@ -250,18 +248,18 @@ class TestGeometryColumns:
 
     def test_overlap_is_refused_per_column(self):
         """Two segments may overlap unless they state the same column."""
-        first = inv.Geometry(distance=(0.0, 60.0), coordinates={"depth": (0.0, 6.0)})
-        second = inv.Geometry(distance=(50.0, 80.0), coordinates={"depth": (5.0, 8.0)})
+        first = inv.Geometry(distance=(0.0, 60.0), columns={"depth": (0.0, 6.0)})
+        second = inv.Geometry(distance=(50.0, 80.0), columns={"depth": (5.0, 8.0)})
         with pytest.raises(InvalidInventoryError, match="for column 'depth'"):
             self._inventory(first, second).check()
 
     def test_different_columns_may_overlap(self):
         """Each column is its own function track, so they are independent."""
         depth = inv.Geometry(
-            name="hole 1", distance=(0.0, 60.0), coordinates={"depth": (0.0, 6.0)}
+            name="hole 1", distance=(0.0, 60.0), columns={"depth": (0.0, 6.0)}
         )
         azimuth = inv.Geometry(
-            name="hole 1", distance=(50.0, 80.0), coordinates={"azimuth": (5.0, 8.0)}
+            name="hole 1", distance=(50.0, 80.0), columns={"azimuth": (5.0, 8.0)}
         )
         inventory = self._inventory(depth, azimuth)
         assert inventory.check() is inventory
@@ -271,27 +269,27 @@ class TestGeometryColumns:
         depth = inv.Geometry(
             name="depth survey",
             distance=(0.0, 60.0),
-            coordinates={"depth": (0.0, 6.0)},
+            columns={"depth": (0.0, 6.0)},
         )
         azimuth = inv.Geometry(
             name="azimuth survey",
             distance=(50.0, 80.0),
-            coordinates={"azimuth": (5.0, 8.0)},
+            columns={"azimuth": (5.0, 8.0)},
         )
         with pytest.raises(InvalidInventoryError, match="share its name"):
             self._inventory(depth, azimuth).check()
 
     def test_a_reserved_column_name(self):
         """A column becomes a coordinate, so it cannot shadow one."""
-        clash = inv.Geometry(distance=(0.0, 10.0), coordinates={"time": (0.0, 1.0)})
+        clash = inv.Geometry(distance=(0.0, 10.0), columns={"time": (0.0, 1.0)})
         with pytest.raises(InvalidInventoryError, match="reserved name"):
             self._inventory(clash).check()
 
     def test_a_column_which_is_also_a_label_group(self):
         """One name is one coordinate, whichever track would define it."""
-        column = inv.Geometry(distance=(0.0, 10.0), coordinates={"zone": (0.0, 1.0)})
+        column = inv.Geometry(distance=(0.0, 10.0), columns={"zone": (0.0, 1.0)})
         label = inv.OpticalPathLabel(
-            start_distance=0.0, end_distance=10.0, group="zone", value=1.0
+            distance_min=0.0, distance_max=10.0, group="zone", value=1.0
         )
         with pytest.raises(InvalidInventoryError, match="one name is one coordinate"):
             self._inventory(column, labels=(label,)).check()
@@ -301,7 +299,7 @@ class TestGeometryColumns:
         segment = inv.Geometry(
             name="axed",
             distance=(0.0, 10.0),
-            coordinates={"x": (0.0, 1.0), "y": (0.0, 1.0), "z": (0.0, 1.0)},
+            columns={"x": (0.0, 1.0), "y": (0.0, 1.0), "z": (0.0, 1.0)},
             units={"x": "furlong"},
         )
         with pytest.raises(InvalidInventoryError, match="states the units of its own"):
@@ -312,7 +310,7 @@ class TestGeometryColumns:
         with pytest.raises(ValidationError, match="has no column"):
             inv.Geometry(
                 distance=(0.0, 10.0),
-                coordinates={"depth": (0.0, 1.0)},
+                columns={"depth": (0.0, 1.0)},
                 units={"dpeth": "m"},
             )
 
@@ -320,12 +318,12 @@ class TestGeometryColumns:
         """Two segments cannot measure one column in two units."""
         meters = inv.Geometry(
             distance=(0.0, 10.0),
-            coordinates={"depth": (0.0, 1.0)},
+            columns={"depth": (0.0, 1.0)},
             units={"depth": "m"},
         )
         feet = inv.Geometry(
             distance=(20.0, 30.0),
-            coordinates={"depth": (0.0, 1.0)},
+            columns={"depth": (0.0, 1.0)},
             units={"depth": "ft"},
         )
         with pytest.raises(InvalidInventoryError, match="has one unit"):
@@ -339,7 +337,7 @@ class TestGeometryColumns:
         )
         segment = inv.Geometry(
             distance=(0.0, 40.0),
-            coordinates={"depth": (0.0, 40.0)},
+            columns={"depth": (0.0, 40.0)},
             units={"depth": "m"},
         )
         inventory = self._inventory(segment, crs=crs)
@@ -348,8 +346,8 @@ class TestGeometryColumns:
 
     def test_a_column_never_bridges_two_segments(self):
         """Distance between two segments is uncovered, whatever they hold."""
-        first = inv.Geometry(distance=(0.0, 10.0), coordinates={"depth": (0.0, 1.0)})
-        second = inv.Geometry(distance=(20.0, 30.0), coordinates={"depth": (2.0, 3.0)})
+        first = inv.Geometry(distance=(0.0, 10.0), columns={"depth": (0.0, 1.0)})
+        second = inv.Geometry(distance=(20.0, 30.0), columns={"depth": (2.0, 3.0)})
         path = self._inventory(first, second).networks[0].fiber_arrays[0]
         values = path.optical_paths[0].column_at("depth", [5.0, 15.0, 25.0])
         assert not np.isnan(values[0]) and not np.isnan(values[2])
@@ -357,7 +355,7 @@ class TestGeometryColumns:
 
     def test_a_column_no_segment_states(self):
         """None, so the caller's on_missing policy rules rather than a nan."""
-        segment = inv.Geometry(distance=(0.0, 10.0), coordinates={"depth": (0.0, 1.0)})
+        segment = inv.Geometry(distance=(0.0, 10.0), columns={"depth": (0.0, 1.0)})
         path = self._inventory(segment).networks[0].fiber_arrays[0].optical_paths[0]
         assert path.column_at("azimuth", [5.0]) is None
 
@@ -384,12 +382,12 @@ class TestGeometryColumnReviewFindings:
         canonical = inv.Geometry(
             name="a",
             distance=(0.0, 10.0),
-            coordinates={"x": (0.0, 10.0), "y": (0.0, 10.0), "z": (0.0, 10.0)},
+            columns={"x": (0.0, 10.0), "y": (0.0, 10.0), "z": (0.0, 10.0)},
         )
         labelled = inv.Geometry(
             name="b",
             distance=(5.0, 15.0),
-            coordinates={
+            columns={
                 "longitude": (100.0, 110.0),
                 "latitude": (100.0, 110.0),
                 "elevation": (100.0, 110.0),
@@ -403,7 +401,7 @@ class TestGeometryColumnReviewFindings:
         doubled = inv.Geometry(
             name="doubled",
             distance=(0.0, 10.0),
-            coordinates={
+            columns={
                 "x": (0.0, 10.0),
                 "longitude": (100.0, 110.0),
                 "y": (0.0, 1.0),
@@ -419,12 +417,12 @@ class TestGeometryColumnReviewFindings:
         placed = inv.Geometry(
             name="placed",
             distance=(0.0, 10.0),
-            coordinates={"x": (0.0, 1.0), "y": (0.0, 1.0), "z": (0.0, 1.0)},
+            columns={"x": (0.0, 1.0), "y": (0.0, 1.0), "z": (0.0, 1.0)},
         )
         measured = inv.Geometry(
             name="measured",
             distance=(10.0, 20.0),
-            coordinates={"borehole_depth": (0.0, 10.0)},
+            columns={"borehole_depth": (0.0, 10.0)},
         )
         crs = inv.CoordinateReferenceSystem()
         out = self._path(placed, measured).coordinates_at([10.0], crs)
@@ -433,7 +431,7 @@ class TestGeometryColumnReviewFindings:
     def test_a_dotted_column_name(self):
         """A dotted name is how a field of a typed track is asked for."""
         dotted = inv.Geometry(
-            distance=(0.0, 10.0), coordinates={"coupling.depth": (0.0, 1.0)}
+            distance=(0.0, 10.0), columns={"coupling.depth": (0.0, 1.0)}
         )
         with pytest.raises(InvalidInventoryError, match="dotted name"):
             self._inventory(dotted).check()
@@ -443,13 +441,13 @@ class TestGeometryColumnReviewFindings:
         segment = inv.Geometry(
             name="run",
             distance=(0.0, 10.0),
-            coordinates={"x": (0.0, 1.0), "y": (0.0, 1.0), "z": (0.0, 1.0)},
+            columns={"x": (0.0, 1.0), "y": (0.0, 1.0), "z": (0.0, 1.0)},
         )
         out = self._path(segment).select(distance=(2.0, 8.0))
-        coordinates = out.geometry[0].coordinates
-        assert isinstance(coordinates, Mapping)
+        columns = out.geometry[0].columns
+        assert isinstance(columns, Mapping)
         with pytest.raises(TypeError):
-            coordinates["x"] = (0.0,)
+            columns["x"] = (0.0,)
 
     def test_a_canonical_name_the_crs_has_no_axis_for(self):
         """`z` is a column of its own where the CRS declares two axes."""
@@ -457,7 +455,7 @@ class TestGeometryColumnReviewFindings:
             coordinate_labels=("easting", "northing"), units=("meter", "meter")
         )
         segment = inv.Geometry(
-            distance=(0.0, 10.0), coordinates={"z": (0.0, 1.0)}, units={"z": "m"}
+            distance=(0.0, 10.0), columns={"z": (0.0, 1.0)}, units={"z": "m"}
         )
         inventory = self._inventory(segment, crs=crs)
         assert inventory.check() is inventory
@@ -470,25 +468,25 @@ class TestGeometry:
     def test_requires_two_points(self):
         """Requires two points."""
         with pytest.raises(ValidationError, match="at least 2 control points"):
-            inv.Geometry(distance=(1.0,), coordinates={"x": (0.0,), "y": (0.0,)})
+            inv.Geometry(distance=(1.0,), columns={"x": (0.0,), "y": (0.0,)})
 
     def test_strictly_increasing(self):
         """Strictly increasing."""
         with pytest.raises(ValidationError, match="strictly increasing"):
             inv.Geometry(
-                distance=(1.0, 1.0), coordinates={"x": (0.0, 1.0), "y": (0.0, 1.0)}
+                distance=(1.0, 1.0), columns={"x": (0.0, 1.0), "y": (0.0, 1.0)}
             )
 
     def test_paired_lengths(self):
         """Paired lengths."""
         with pytest.raises(ValidationError, match="one value per distance"):
-            inv.Geometry(distance=(0.0, 1.0), coordinates={"x": (0.0,), "y": (0.0,)})
+            inv.Geometry(distance=(0.0, 1.0), columns={"x": (0.0,), "y": (0.0,)})
 
     def test_coil_repeated_coordinates(self):
         """A coil interpolates to a constant coordinate."""
         coil = inv.Geometry(
             distance=(1200.0, 1300.0),
-            coordinates={"x": (500.0, 500.0), "y": (120.0, 120.0)},
+            columns={"x": (500.0, 500.0), "y": (120.0, 120.0)},
         )
         out = coil.interpolate([1200.0, 1250.0, 1299.0])
         assert np.allclose(out["x"], [500.0] * 3)
@@ -497,7 +495,7 @@ class TestGeometry:
     def test_uncovered_is_nan(self):
         """Uncovered is nan."""
         geo = inv.Geometry(
-            distance=(10.0, 20.0), coordinates={"x": (0.0, 1.0), "y": (0.0, 1.0)}
+            distance=(10.0, 20.0), columns={"x": (0.0, 1.0), "y": (0.0, 1.0)}
         )
         out = geo.interpolate([5.0, 25.0])
         assert all(np.all(np.isnan(x)) for x in out.values())
@@ -517,10 +515,10 @@ class TestPathTracks:
             optical_components=(inv.FiberSegment(optical_length=100.0),),
             coupling=(
                 inv.CouplingCondition(
-                    start_distance=0.0, end_distance=60.0, coupling_type="trench"
+                    distance_min=0.0, distance_max=60.0, coupling_type="trench"
                 ),
                 inv.CouplingCondition(
-                    start_distance=50.0, end_distance=70.0, coupling_type="conduit"
+                    distance_min=50.0, distance_max=70.0, coupling_type="conduit"
                 ),
             ),
         )
@@ -529,7 +527,7 @@ class TestPathTracks:
 
     def test_geometry_overlap_raises(self):
         """Geometry overlap raises."""
-        seg = dict(coordinates={"x": (0.0, 1.0), "y": (0.0, 1.0)})
+        seg = dict(columns={"x": (0.0, 1.0), "y": (0.0, 1.0)})
         path = inv.OpticalPath(
             optical_components=(inv.FiberSegment(optical_length=100.0),),
             geometry=(
@@ -546,13 +544,13 @@ class TestPathTracks:
             optical_components=(inv.FiberSegment(optical_length=100.0),),
             labels=(
                 inv.OpticalPathLabel(
-                    start_distance=0.0, end_distance=60.0, group="noisy"
+                    distance_min=0.0, distance_max=60.0, group="noisy"
                 ),
                 inv.OpticalPathLabel(
-                    start_distance=50.0, end_distance=70.0, group="noisy"
+                    distance_min=50.0, distance_max=70.0, group="noisy"
                 ),
                 inv.OpticalPathLabel(
-                    start_distance=40.0, end_distance=80.0, group="repaired"
+                    distance_min=40.0, distance_max=80.0, group="repaired"
                 ),
             ),
         )
@@ -564,14 +562,14 @@ class TestPathTracks:
             optical_components=(inv.FiberSegment(optical_length=100.0),),
             labels=(
                 inv.OpticalPathLabel(
-                    start_distance=0.0,
-                    end_distance=60.0,
+                    distance_min=0.0,
+                    distance_max=60.0,
                     group="rock_type",
                     value="granite",
                 ),
                 inv.OpticalPathLabel(
-                    start_distance=50.0,
-                    end_distance=70.0,
+                    distance_min=50.0,
+                    distance_max=70.0,
                     group="rock_type",
                     value="shale",
                 ),
@@ -586,10 +584,10 @@ class TestPathTracks:
             optical_components=(inv.FiberSegment(optical_length=100.0),),
             labels=(
                 inv.OpticalPathLabel(
-                    start_distance=0.0, end_distance=10.0, group="zone", value="east"
+                    distance_min=0.0, distance_max=10.0, group="zone", value="east"
                 ),
                 inv.OpticalPathLabel(
-                    start_distance=20.0, end_distance=30.0, group="zone"
+                    distance_min=20.0, distance_max=30.0, group="zone"
                 ),
             ),
         )
@@ -604,8 +602,8 @@ class TestPathTracks:
             optical_components=(inv.FiberSegment(optical_length=100.0),),
             labels=(
                 inv.OpticalPathLabel(
-                    start_distance=0.0,
-                    end_distance=10.0,
+                    distance_min=0.0,
+                    distance_max=10.0,
                     group="acquisition_key",
                     value="bad",
                 ),
@@ -620,14 +618,14 @@ class TestPathTracks:
             optical_components=(inv.FiberSegment(optical_length=100.0),),
             labels=(
                 inv.OpticalPathLabel(
-                    start_distance=0.0,
-                    end_distance=40.0,
+                    distance_min=0.0,
+                    distance_max=40.0,
                     group="frost_depth",
                     value=1.2,
                 ),
                 inv.OpticalPathLabel(
-                    start_distance=40.0,
-                    end_distance=90.0,
+                    distance_min=40.0,
+                    distance_max=90.0,
                     group="frost_depth",
                     value=0.8,
                 ),
@@ -641,7 +639,7 @@ class TestPathTracks:
             optical_components=(inv.FiberSegment(optical_length=100.0),),
             coupling=(
                 inv.CouplingCondition(
-                    start_distance=90.0, end_distance=150.0, coupling_type="trench"
+                    distance_min=90.0, distance_max=150.0, coupling_type="trench"
                 ),
             ),
         )
@@ -740,15 +738,15 @@ class TestAcquisition:
     """Acquisition resolution mechanisms and code rules."""
 
     def test_single_point_channel_map_is_affine(self):
-        """One point states an origin; spatial_interval is the slope."""
+        """One point states an origin; distance_step is the slope."""
         dmap = inv.DistanceMap(channel=(0.0,), distance=(10.0,))
-        acq = inv.Acquisition(code="RAW", spatial_interval=2.0, distance_map=dmap)
+        acq = inv.Acquisition(code="RAW", distance_step=2.0, distance_map=dmap)
         assert np.allclose(acq.channel_to_distance([0, 5]), [10.0, 20.0])
 
     def test_single_point_instrument_map_is_an_offset(self):
         """Interrogator meters map onto path meters one for one."""
         dmap = inv.DistanceMap(instrument_distance=(-120.5,), distance=(0.0,))
-        acq = inv.Acquisition(code="RAW", spatial_interval=2.0, distance_map=dmap)
+        acq = inv.Acquisition(code="RAW", distance_step=2.0, distance_map=dmap)
         assert np.allclose(acq.channel_to_distance([-120.5, -20.5]), [0.0, 100.0])
 
     def test_map_mapping_used_when_present(self):
@@ -791,15 +789,15 @@ class TestEpochContainment:
 
     def test_a_path_starting_before_its_array(self):
         """The array did not exist then, so nothing can resolve to the path."""
-        array = self._array({"start_time": "2024-01-01"}, {"start_time": "2020-01-01"})
+        array = self._array({"time_min": "2024-01-01"}, {"time_min": "2020-01-01"})
         with pytest.raises(InvalidInventoryError, match="outside its container"):
             array.check()
 
     def test_a_path_ending_after_its_array(self):
         """The far bound is checked the same way as the near one."""
         array = self._array(
-            {"start_time": "2024-01-01", "end_time": "2025-01-01"},
-            {"start_time": "2024-06-01", "end_time": "2030-01-01"},
+            {"time_min": "2024-01-01", "time_max": "2025-01-01"},
+            {"time_min": "2024-06-01", "time_max": "2030-01-01"},
         )
         with pytest.raises(InvalidInventoryError, match="outside its container"):
             array.check()
@@ -807,22 +805,22 @@ class TestEpochContainment:
     def test_a_path_entirely_after_its_array(self):
         """Neither bound is out of order, and the whole epoch is elsewhere."""
         array = self._array(
-            {"start_time": "2024-01-01", "end_time": "2025-01-01"},
-            {"start_time": "2026-01-01"},
+            {"time_min": "2024-01-01", "time_max": "2025-01-01"},
+            {"time_min": "2026-01-01"},
         )
         with pytest.raises(InvalidInventoryError, match="outside its container"):
             array.check()
 
     def test_an_unset_bound_defers_to_the_container(self):
         """A path stating no start begins when its fiber array does."""
-        array = self._array({"start_time": "2024-01-01"}, {})
+        array = self._array({"time_min": "2024-01-01"}, {})
         assert array.check() is array
 
     def test_a_contained_epoch_is_legal(self):
         """The ordinary case: a path living inside its array's lifetime."""
         array = self._array(
-            {"start_time": "2024-01-01", "end_time": "2026-01-01"},
-            {"start_time": "2024-06-01", "end_time": "2025-01-01"},
+            {"time_min": "2024-01-01", "time_max": "2026-01-01"},
+            {"time_min": "2024-06-01", "time_max": "2025-01-01"},
         )
         assert array.check() is array
 
@@ -830,16 +828,16 @@ class TestEpochContainment:
         """Acquisitions are contained by the same rule as paths."""
         array = inv.FiberArray(
             code="L001",
-            start_time="2024-01-01",
-            acquisitions=(inv.Acquisition(code="RAW", start_time="2020-01-01"),),
+            time_min="2024-01-01",
+            acquisitions=(inv.Acquisition(code="RAW", time_min="2020-01-01"),),
         )
         with pytest.raises(InvalidInventoryError, match="outside its container"):
             array.check()
 
     def test_a_fiber_array_outside_its_network(self):
         """And the rule holds one level up, for what a network contains."""
-        array = inv.FiberArray(code="L001", start_time="2020-01-01")
-        network = inv.Network(code="XX", start_time="2024-01-01", fiber_arrays=(array,))
+        array = inv.FiberArray(code="L001", time_min="2020-01-01")
+        network = inv.Network(code="XX", time_min="2024-01-01", fiber_arrays=(array,))
         with pytest.raises(InvalidInventoryError, match="outside its container"):
             network.check()
 
@@ -847,15 +845,15 @@ class TestEpochContainment:
         """Stations contain channels the same way."""
         station = inv.Station(
             code="STA1",
-            start_time="2024-01-01",
-            channels=(inv.Channel(code="BHZ", start_time="2020-01-01"),),
+            time_min="2024-01-01",
+            channels=(inv.Channel(code="BHZ", time_min="2020-01-01"),),
         )
         with pytest.raises(InvalidInventoryError, match="outside its container"):
             station.check()
 
     def test_the_error_names_both_epochs(self):
         """A reader has to see which range reaches outside which."""
-        array = self._array({"start_time": "2024-01-01"}, {"start_time": "2020-01-01"})
+        array = self._array({"time_min": "2024-01-01"}, {"time_min": "2020-01-01"})
         with pytest.raises(InvalidInventoryError) as info:
             array.check()
         message = str(info.value)
@@ -871,8 +869,8 @@ class TestEpochs:
         array = inv.FiberArray(
             code="L001",
             optical_paths=(
-                inv.OpticalPath(name="a", start_time="2020-01-01"),
-                inv.OpticalPath(name="b", start_time="2021-01-01"),
+                inv.OpticalPath(name="a", time_min="2020-01-01"),
+                inv.OpticalPath(name="b", time_min="2021-01-01"),
             ),
         )
         with pytest.raises(InvalidInventoryError, match="overlap in time"):
@@ -883,8 +881,8 @@ class TestEpochs:
         array = inv.FiberArray(
             code="L001",
             optical_paths=(
-                inv.OpticalPath(name="a", location_code="00", start_time="2020-01-01"),
-                inv.OpticalPath(name="b", location_code="01", start_time="2020-01-01"),
+                inv.OpticalPath(name="a", location_code="00", time_min="2020-01-01"),
+                inv.OpticalPath(name="b", location_code="01", time_min="2020-01-01"),
             ),
         )
         assert array.check() is array
@@ -894,10 +892,8 @@ class TestEpochs:
         array = inv.FiberArray(
             code="L001",
             optical_paths=(
-                inv.OpticalPath(
-                    name="a", start_time="2020-01-01", end_time="2021-01-01"
-                ),
-                inv.OpticalPath(name="b", start_time="2021-01-01"),
+                inv.OpticalPath(name="a", time_min="2020-01-01", time_max="2021-01-01"),
+                inv.OpticalPath(name="b", time_min="2021-01-01"),
             ),
         )
         assert array.check() is array
@@ -907,8 +903,8 @@ class TestEpochs:
         array = inv.FiberArray(
             code="L001",
             acquisitions=(
-                inv.Acquisition(code="RAW", start_time="2020-01-01"),
-                inv.Acquisition(code="RAW", start_time="2020-06-01"),
+                inv.Acquisition(code="RAW", time_min="2020-01-01"),
+                inv.Acquisition(code="RAW", time_min="2020-06-01"),
             ),
         )
         with pytest.raises(InvalidInventoryError, match="overlap in time"):
@@ -920,9 +916,9 @@ class TestEpochs:
             code="L001",
             acquisitions=(
                 inv.Acquisition(
-                    code="RAW", start_time="2020-01-01", end_time="2020-06-01"
+                    code="RAW", time_min="2020-01-01", time_max="2020-06-01"
                 ),
-                inv.Acquisition(code="RAW", start_time="2020-07-15"),
+                inv.Acquisition(code="RAW", time_min="2020-07-15"),
             ),
         )
         assert array.check() is array
@@ -931,8 +927,8 @@ class TestEpochs:
         """Station fiber code collision raises."""
         network = inv.Network(
             code="DAS",
-            fiber_arrays=(inv.FiberArray(code="L001", start_time="2020-01-01"),),
-            stations=(inv.Station(code="L001", start_time="2020-06-01"),),
+            fiber_arrays=(inv.FiberArray(code="L001", time_min="2020-01-01"),),
+            stations=(inv.Station(code="L001", time_min="2020-06-01"),),
         )
         with pytest.raises(InvalidInventoryError, match="share code"):
             network.check()
@@ -956,11 +952,11 @@ class TestResolution:
             acquisitions=(
                 inv.Acquisition(
                     code="RAW",
-                    start_time="2020-01-01",
-                    end_time="2021-01-01",
+                    time_min="2020-01-01",
+                    time_max="2021-01-01",
                     gauge_length=10.0,
                 ),
-                inv.Acquisition(code="RAW", start_time="2021-01-01", gauge_length=20.0),
+                inv.Acquisition(code="RAW", time_min="2021-01-01", gauge_length=20.0),
             ),
         )
         inventory = inv.Inventory(
@@ -1004,7 +1000,7 @@ class TestPathOperations:
     def test_component_intervals(self, path):
         """Components tile the absolute axis cumulatively."""
         two = inv.OpticalPath(
-            start_distance=100.0,
+            distance_min=100.0,
             optical_components=(
                 inv.FiberSegment(optical_length=50.0),
                 inv.Splice(optical_length=0.5),
@@ -1015,7 +1011,7 @@ class TestPathOperations:
     def test_select_preserves_absolute_distances(self, path):
         """Select preserves absolute distances."""
         piece = path.select(distance=(50.0, 150.0))
-        assert piece.start_distance == 50.0
+        assert piece.distance_min == 50.0
         assert np.isclose(piece.optical_length, 100.0)
         assert piece.geometry[0].distance[0] == 50.0
         piece.check()
@@ -1023,7 +1019,7 @@ class TestPathOperations:
     def test_split_and_rejoin(self, path):
         """Split and rejoin."""
         left, right = path.split_at(100.0)
-        assert left.end_distance == right.start_distance == 100.0
+        assert left.distance_max == right.distance_min == 100.0
         joined = left + right
         assert np.isclose(joined.optical_length, path.optical_length)
         joined.check()
@@ -1110,14 +1106,14 @@ class TestReviewRegressions:
 
     def test_far_future_open_epochs_overlap(self):
         """Ongoing epochs overlap finite epochs beyond any sentinel date."""
-        a = inv.OpticalPath(name="a", start_time="2259-01-01")
-        b = inv.OpticalPath(name="b", start_time="2261-01-01", end_time="2262-01-01")
+        a = inv.OpticalPath(name="a", time_min="2259-01-01")
+        b = inv.OpticalPath(name="b", time_min="2261-01-01", time_max="2262-01-01")
         assert a.overlaps(b) and b.overlaps(a)
 
     def test_reversed_epoch_raises(self):
         """End before start fails at construction."""
         with pytest.raises(ValidationError, match="must be after"):
-            inv.Acquisition(code="RAW", start_time="2022-01-01", end_time="2021-01-01")
+            inv.Acquisition(code="RAW", time_min="2022-01-01", time_max="2021-01-01")
 
     def test_replace_type_mismatch_raises(self):
         """Replace type mismatch raises."""
@@ -1155,7 +1151,7 @@ class TestReviewRegressions:
     def test_columnless_geometry_raises(self):
         """A segment which measures nothing describes nothing."""
         with pytest.raises(ValidationError, match="states no columns"):
-            inv.Geometry(distance=(0.0, 1.0), coordinates={})
+            inv.Geometry(distance=(0.0, 1.0), columns={})
 
     def test_station_extra_fields_forbidden(self):
         """Coordinates are canonical (x, y, z); label fields are not stored."""
@@ -1396,8 +1392,8 @@ class TestInternalReviewRegressions:
         net = inv.Network(
             code="DAS",
             fiber_arrays=(
-                inv.FiberArray(code="L001", start_time="2020-01-01"),
-                inv.FiberArray(code="L001", start_time="2021-01-01"),
+                inv.FiberArray(code="L001", time_min="2020-01-01"),
+                inv.FiberArray(code="L001", time_min="2021-01-01"),
             ),
         )
         with pytest.raises(InvalidInventoryError, match="Duplicate fiber array"):
@@ -1409,11 +1405,11 @@ class TestInternalReviewRegressions:
             optical_components=(inv.FiberSegment(optical_length=100.0),),
             geometry=(
                 inv.Geometry(
-                    distance=(0.0, 10.0), coordinates={"x": (0.0, 1.0), "y": (0.0, 1.0)}
+                    distance=(0.0, 10.0), columns={"x": (0.0, 1.0), "y": (0.0, 1.0)}
                 ),
                 inv.Geometry(
                     distance=(20.0, 30.0),
-                    coordinates={"x": (0.0, 1.0), "y": (0.0, 1.0), "z": (0.0, 1.0)},
+                    columns={"x": (0.0, 1.0), "y": (0.0, 1.0), "z": (0.0, 1.0)},
                 ),
             ),
         )
@@ -1473,11 +1469,11 @@ class TestCodexReviewRegressions:
         """Nonfinite interval values raise."""
         with pytest.raises(ValidationError):
             inv.CouplingCondition(
-                start_distance=np.nan, end_distance=10.0, coupling_type="trench"
+                distance_min=np.nan, distance_max=10.0, coupling_type="trench"
             )
         with pytest.raises(ValidationError, match="finite"):
             inv.Geometry(
-                distance=(0.0, np.inf), coordinates={"x": (0.0, 1.0), "y": (0.0, 1.0)}
+                distance=(0.0, np.inf), columns={"x": (0.0, 1.0), "y": (0.0, 1.0)}
             )
         with pytest.raises(ValidationError, match="finite"):
             inv.DistanceMap(channel=(0.0, np.inf), distance=(0.0, 1.0))
@@ -1499,7 +1495,7 @@ class TestCoverageCompleteness:
     def test_interval_optical_length(self):
         """Interval items report their length from start/end distances."""
         cond = inv.CouplingCondition(
-            start_distance=10.0, end_distance=60.0, coupling_type="trench"
+            distance_min=10.0, distance_max=60.0, coupling_type="trench"
         )
         assert cond.optical_length == 50.0
 
@@ -1553,7 +1549,7 @@ class TestCoverageCompleteness:
 
     def test_select_drops_out_of_range_geometry(self):
         """Selection drops segments entirely outside the clip."""
-        seg = dict(coordinates={"x": (0.0, 1.0), "y": (0.0, 1.0)})
+        seg = dict(columns={"x": (0.0, 1.0), "y": (0.0, 1.0)})
         path = inv.OpticalPath(
             optical_components=(inv.FiberSegment(optical_length=100.0),),
             geometry=(
@@ -1580,8 +1576,8 @@ class TestCoverageCompleteness:
             code="L001",
             acquisitions=(inv.Acquisition(code="RAW"),),
             optical_paths=(
-                inv.OpticalPath(name="a", start_time="2020-01-01"),
-                inv.OpticalPath(name="b", start_time="2021-01-01"),
+                inv.OpticalPath(name="a", time_min="2020-01-01"),
+                inv.OpticalPath(name="b", time_min="2021-01-01"),
             ),
         )
         inventory = inv.Inventory(
@@ -1593,7 +1589,7 @@ class TestCoverageCompleteness:
     def test_replace_network_and_station_and_path(self):
         """Replace works at network, station, and path levels."""
         station = inv.Station(code="S1")
-        path = inv.OpticalPath(name="p", start_time="2020-01-01")
+        path = inv.OpticalPath(name="p", time_min="2020-01-01")
         array = inv.FiberArray(code="L001", optical_paths=(path,))
         net = inv.Network(code="DAS", fiber_arrays=(array,), stations=(station,))
         inventory = inv.Inventory(networks=(net,))
@@ -1690,13 +1686,13 @@ class TestDisplay:
     def test_path_states_its_extent(self, tunnel):
         """An optical path shows the distances it covers."""
         path = tunnel.networks[0].fiber_arrays[0].optical_paths[0]
-        assert f"[{path.start_distance:g}, {path.end_distance:g}) m" in str(path)
+        assert f"[{path.distance_min:g}, {path.distance_max:g}) m" in str(path)
 
     def test_interval_states_its_extent(self, tunnel):
         """So does anything else which covers an interval of distance."""
         label = tunnel.networks[0].fiber_arrays[0].optical_paths[0].labels[0]
         assert "distance: [" in str(label)
-        assert "start_distance" not in str(label)  # stated by the interval
+        assert "distance_min" not in str(label)  # stated by the interval
 
     def test_distance_map_counts_points(self, tunnel):
         """A measured map names its axes rather than listing its points."""
@@ -1901,18 +1897,18 @@ class TestStationXmlAlignment:
         array = inv.FiberArray(code="L001", acquisitions=(acquisition,))
         first = inv.Network(
             code="XX",
-            start_time="2020-01-01",
-            end_time="2021-01-01",
+            time_min="2020-01-01",
+            time_max="2021-01-01",
             fiber_arrays=(array,),
         )
-        second = first.new(start_time="2021-01-01", end_time="")
+        second = first.new(time_min="2021-01-01", time_max="")
         inventory = inv.Inventory(networks=(first, second)).check()
         context = inventory.resolve("XX.L001..RAW", time="2022-06-01")
-        assert context.network.start_time == np.datetime64("2021-01-01")
+        assert context.network.time_min == np.datetime64("2021-01-01")
 
     def test_network_epochs(self):
         """Networks carry validity epochs like every other container."""
-        net = inv.Network(code="XX", start_time="2020-01-01", end_time="2022-01-01")
+        net = inv.Network(code="XX", time_min="2020-01-01", time_max="2022-01-01")
         assert net.is_effective_at("2021-06-01")
         assert not net.is_effective_at("2022-01-01")
 
@@ -1936,7 +1932,7 @@ class TestPointMarkers:
     def test_aerial_coupling_type(self):
         """Aerial coupling type."""
         cond = inv.CouplingCondition(
-            start_distance=0.0, end_distance=100.0, coupling_type="aerial"
+            distance_min=0.0, distance_max=100.0, coupling_type="aerial"
         )
         assert cond.coupling_type == "aerial"
 
@@ -1946,11 +1942,11 @@ class TestPointMarkers:
             optical_components=(inv.FiberSegment(optical_length=100.0),),
             coupling=(
                 inv.CouplingCondition(
-                    start_distance=0.0, end_distance=80.0, coupling_type="trench"
+                    distance_min=0.0, distance_max=80.0, coupling_type="trench"
                 ),
                 inv.CouplingCondition(
-                    start_distance=40.0,
-                    end_distance=40.0,
+                    distance_min=40.0,
+                    distance_max=40.0,
                     coupling_type="other",
                     description="clamp point",
                 ),
@@ -1961,7 +1957,7 @@ class TestPointMarkers:
     def test_point_label(self):
         """Point label."""
         label = inv.OpticalPathLabel(
-            start_distance=350.0, end_distance=350.0, group="wellhead"
+            distance_min=350.0, distance_max=350.0, group="wellhead"
         )
         assert label.interval == (350.0, 350.0)
 
@@ -1971,12 +1967,12 @@ class TestPointMarkers:
             optical_components=(inv.FiberSegment(optical_length=100.0),),
             labels=(
                 inv.OpticalPathLabel(
-                    start_distance=50.0, end_distance=50.0, group="clamp"
+                    distance_min=50.0, distance_max=50.0, group="clamp"
                 ),
             ),
             coupling=(
                 inv.CouplingCondition(
-                    start_distance=25.0, end_distance=25.0, coupling_type="other"
+                    distance_min=25.0, distance_max=25.0, coupling_type="other"
                 ),
             ),
         )
@@ -1990,7 +1986,7 @@ class TestPointMarkers:
             optical_components=(inv.FiberSegment(optical_length=100.0),),
             labels=(
                 inv.OpticalPathLabel(
-                    start_distance=95.0, end_distance=95.0, group="clamp"
+                    distance_min=95.0, distance_max=95.0, group="clamp"
                 ),
             ),
         )
@@ -2002,7 +1998,7 @@ class TestPointMarkers:
             optical_components=(inv.FiberSegment(optical_length=100.0),),
             labels=(
                 inv.OpticalPathLabel(
-                    start_distance=100.0, end_distance=100.0, group="end_cap"
+                    distance_min=100.0, distance_max=100.0, group="end_cap"
                 ),
             ),
         )
@@ -2013,7 +2009,7 @@ class TestPointMarkers:
         """An end before the start is rejected."""
         with pytest.raises(ValidationError, match="must not precede"):
             inv.CouplingCondition(
-                start_distance=10.0, end_distance=5.0, coupling_type="trench"
+                distance_min=10.0, distance_max=5.0, coupling_type="trench"
             )
 
 
@@ -2145,15 +2141,20 @@ class TestCrsShape:
 class TestPrReviewFindings:
     """Regressions for findings raised while reviewing the model PR."""
 
-    def test_non_finite_spatial_interval_rejected(self):
+    def test_non_finite_distance_step_rejected(self):
         """A nan interval would silently poison every resolved distance."""
         with pytest.raises(ValidationError):
-            inv.Acquisition(code="RAW", spatial_interval=np.nan)
+            inv.Acquisition(code="RAW", distance_step=np.nan)
 
-    def test_start_distance_explains_its_removal(self):
-        """An inventory written against the affine form says what to do."""
-        with pytest.raises(ValidationError, match="no longer takes start_distance"):
-            inv.Acquisition(code="RAW", start_distance=100.0)
+    @pytest.mark.parametrize("name", ["distance_min", "start_distance"])
+    def test_removed_origin_explains_itself(self, name):
+        """An inventory written against the affine form says what to do.
+
+        Both spellings are refused: the field's old name, and the name it
+        would carry now.
+        """
+        with pytest.raises(ValidationError, match=f"no longer takes {name}"):
+            inv.Acquisition(code="RAW", **{name: 100.0})
 
     def test_duplicate_channel_identity_raises(self):
         """Channel (location_code, code) names a stream; it must be unique."""
@@ -2175,8 +2176,8 @@ class TestPrReviewFindings:
         station = inv.Station(
             code="VA01",
             channels=(
-                inv.Channel(code="BHZ", start_time="2020-01-01", end_time="2021-01-01"),
-                inv.Channel(code="BHZ", start_time="2021-01-01"),
+                inv.Channel(code="BHZ", time_min="2020-01-01", time_max="2021-01-01"),
+                inv.Channel(code="BHZ", time_min="2021-01-01"),
             ),
         )
         assert station.check() is station
@@ -2194,17 +2195,17 @@ class TestPrReviewFindings:
     def test_add_rejects_different_epoch(self):
         """Concatenating across epochs would advertise the wrong validity."""
         left = inv.OpticalPath(
-            start_time="2020-01-01",
+            time_min="2020-01-01",
             optical_components=(inv.FiberSegment(optical_length=10.0),),
         )
-        right = left.new(start_time="2021-01-01")
+        right = left.new(time_min="2021-01-01")
         with pytest.raises(InvalidInventoryError, match="one lineage and"):
             _ = left + right
 
     def test_add_allows_matching_ongoing_epochs(self):
         """Two unset end times are the same epoch, not two unknowns."""
         path = inv.OpticalPath(
-            start_time="2020-01-01",
+            time_min="2020-01-01",
             optical_components=(inv.FiberSegment(optical_length=10.0),),
         )
         assert (path + path).optical_length == 20.0
@@ -2256,11 +2257,11 @@ class TestPrReviewFindings:
             optical_components=(inv.FiberSegment(optical_length=100.0),),
             geometry=(
                 inv.Geometry(
-                    distance=(0.0, 10.0), coordinates={"x": (0.0, 1.0), "y": (0.0, 1.0)}
+                    distance=(0.0, 10.0), columns={"x": (0.0, 1.0), "y": (0.0, 1.0)}
                 ),
                 inv.Geometry(
                     distance=(20.0, 30.0),
-                    coordinates={"x": (0.0, 1.0), "y": (0.0, 1.0), "z": (0.0, 1.0)},
+                    columns={"x": (0.0, 1.0), "y": (0.0, 1.0), "z": (0.0, 1.0)},
                 ),
             ),
         )
@@ -2276,7 +2277,7 @@ class TestPrReviewFindings:
                 inv.Geometry(
                     name="flat",
                     distance=(0.0, 10.0),
-                    coordinates={"x": (0.0, 1.0), "y": (0.0, 1.0)},
+                    columns={"x": (0.0, 1.0), "y": (0.0, 1.0)},
                 ),
             ),
         )
@@ -2328,7 +2329,7 @@ class TestConstraintsMatchDescriptions:
         """A nan control point would read as uncovered distance."""
         with pytest.raises(ValidationError, match="must hold finite"):
             inv.Geometry(
-                distance=(0.0, 1.0), coordinates={"x": (np.nan, 1.0), "y": (0.0, 1.0)}
+                distance=(0.0, 1.0), columns={"x": (np.nan, 1.0), "y": (0.0, 1.0)}
             )
 
     def test_point_coordinates_must_be_finite(self):
@@ -2351,7 +2352,7 @@ class TestConstraintsMatchDescriptions:
     def test_label_value_keeps_numpy_type(self):
         """A numpy int is an identifier, not a measurement."""
         counted = inv.OpticalPathLabel(
-            start_distance=0.0, end_distance=1.0, group="shots", value=np.int64(5)
+            distance_min=0.0, distance_max=1.0, group="shots", value=np.int64(5)
         )
         assert isinstance(counted.value, int) and not isinstance(counted.value, bool)
 
@@ -2360,7 +2361,7 @@ class TestConstraintsMatchDescriptions:
         """Membership is stated by having no value, so a boolean states nothing."""
         with pytest.raises(ValidationError, match="true and false are not"):
             inv.OpticalPathLabel(
-                start_distance=0.0, end_distance=1.0, group="noisy", value=value
+                distance_min=0.0, distance_max=1.0, group="noisy", value=value
             )
 
     def test_physical_quantities_must_be_finite(self):
@@ -2374,7 +2375,7 @@ class TestConstraintsMatchDescriptions:
         """A non-finite value cannot survive a JSON round trip."""
         with pytest.raises(ValidationError, match="must be finite"):
             inv.OpticalPathLabel(
-                start_distance=0.0, end_distance=1.0, group="g", value=np.inf
+                distance_min=0.0, distance_max=1.0, group="g", value=np.inf
             )
 
 
@@ -2392,14 +2393,14 @@ def _sample_inventories() -> dict[str, inv.Inventory]:
     segment = inv.FiberSegment(name="run", optical_length=100.0, container=cable)
     labels = (
         inv.OpticalPathLabel(
-            start_distance=0.0, end_distance=50.0, group="zone", value="east"
+            distance_min=0.0, distance_max=50.0, group="zone", value="east"
         ),
-        inv.OpticalPathLabel(start_distance=0.0, end_distance=50.0, group="noisy"),
+        inv.OpticalPathLabel(distance_min=0.0, distance_max=50.0, group="noisy"),
         inv.OpticalPathLabel(
-            start_distance=0.0, end_distance=50.0, group="shots", value=0
+            distance_min=0.0, distance_max=50.0, group="shots", value=0
         ),
         inv.OpticalPathLabel(
-            start_distance=50.0, end_distance=100.0, group="offset", value=0.0
+            distance_min=50.0, distance_max=100.0, group="offset", value=0.0
         ),
     )
 
@@ -2560,10 +2561,10 @@ class TestSerializationIsLossless:
             optical_components=(inv.FiberSegment(optical_length=100.0),),
             labels=(
                 inv.OpticalPathLabel(
-                    start_distance=0.0, end_distance=10.0, group="hole", value=1
+                    distance_min=0.0, distance_max=10.0, group="hole", value=1
                 ),
                 inv.OpticalPathLabel(
-                    start_distance=20.0, end_distance=30.0, group="hole", value=2
+                    distance_min=20.0, distance_max=30.0, group="hole", value=2
                 ),
             ),
         )
@@ -2650,7 +2651,7 @@ class TestSerializationIsLossless:
         """
         with pytest.raises(ValidationError, match="may not be the empty string"):
             inv.OpticalPathLabel(
-                start_distance=0.0, end_distance=50.0, group="rock", value=""
+                distance_min=0.0, distance_max=50.0, group="rock", value=""
             )
 
 
@@ -2774,7 +2775,7 @@ class TestGetNames:
         the distance map and interrogator hold whole records rather than
         values; none of them is something a patch could carry as an attr.
         """
-        excluded = {"code", "location_code", "start_time", "end_time"}
+        excluded = {"code", "location_code", "time_min", "time_max"}
         excluded |= {"distance_map", "interrogator", "extra_fields", "description"}
         assert not set(names.attrs) & excluded
 
@@ -2816,8 +2817,8 @@ class TestGetNames:
         geometry's control points are the segment itself; neither is a
         number a channel inside it carries.
         """
-        excluded = {"coupling.start_distance", "coupling.end_distance"}
-        excluded |= {"geometry.distance", "geometry.coordinates"}
+        excluded = {"coupling.distance_min", "coupling.distance_max"}
+        excluded |= {"geometry.distance", "geometry.columns"}
         assert not set(names.coords) & excluded
 
     def test_coords_omit_absent_tracks(self):

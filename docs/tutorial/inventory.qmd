@@ -75,7 +75,7 @@ files = {
         "data_category: DAS\n"
         "data_type: velocity\n"
         "gauge_length: 10.0\n"
-        "spatial_interval: 1.0\n"
+        "distance_step: 1.0\n"
         "interrogator: fi-1\n"
         # Where the interrogator's own axis lands on the optical path.
         "distance_map:\n"
@@ -97,14 +97,14 @@ files = {
         "3,FiberSegment,400.0,trench cable\n"
     ),
     "fiber_arrays/DAS.R2D1/path/coupling.csv": (
-        "start_distance,end_distance,coupling_type,medium\n"
+        "distance_min,distance_max,coupling_type,medium\n"
         "100,400,trench,soil\n"
     ),
     # A geometry column is any number measured along the fiber. This one
     # is the trench's own chainage, and the middle segment is a coil: the
     # chainage stands still while ten meters of fiber goes by.
     "fiber_arrays/DAS.R2D1/path/geometry.csv": (
-        "segment,distance,chainage (m)\n"
+        "name,distance,chainage (m)\n"
         "to the coil,100,1200\n"
         "to the coil,240,1340\n"
         "slack coil,240,1340\n"
@@ -113,7 +113,7 @@ files = {
         "past the coil,400,1490\n"
     ),
     "fiber_arrays/DAS.R2D1/path/labels.csv": (
-        "start_distance,end_distance,group,value\n"
+        "distance_min,distance_max,group,value\n"
         "100,250,zone,north\n"
         "250,400,zone,south\n"
         "150,300,noisy,\n"
@@ -139,7 +139,7 @@ A few rules make that directory readable without a schema in front of you:
 
 Two tracks can hold something that varies along the fiber, and which one to use is decided by how a value behaves between the points which state it. **A quantity which interpolates goes in `geometry.csv`**, one column per quantity, read as a curve through its control points; a column may name its units in its header, `chainage (m)`. **A value which holds over a stretch and then stops goes in `labels.csv`**, a set of intervals rather than a curve — a zone name has no meaning between two of them, and neither does a borehole number. Labels are usually words, then, but a number which identifies rather than measures is a label too. A column of text in a geometry table is refused, and says so.
 
-Position is not a separate kind of thing: a column whose name the coordinate reference system declares — or its canonical `x`, `y`, `z` alias — *is* that axis, takes its units from the CRS, and must be stated with all its siblings, since half a position is not a position. A segment which names none of them, like the chainage above, states no position at all and is perfectly valid. The `segment` names themselves are for humans; what a channel gets is the columns.
+Position is not a separate kind of thing: a column whose name the coordinate reference system declares — or its canonical `x`, `y`, `z` alias — *is* that axis, takes its units from the CRS, and must be stated with all its siblings, since half a position is not a position. A segment which names none of them, like the chainage above, states no position at all and is perfectly valid. The segment `name`s themselves are for humans; what a channel gets is the columns.
 
 # The shape of a track
 

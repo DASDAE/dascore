@@ -303,7 +303,7 @@ print(repaired_geometry.head(6).to_string(index=False))
 
 repaired = dc.inventory(root)
 for epoch in repaired.networks[0].fiber_arrays[0].optical_paths:
-    began = "the beginning" if np.isnat(epoch.start_time) else str(epoch.start_time)[:10]
+    began = "the beginning" if np.isnat(epoch.time_min) else str(epoch.time_min)[:10]
     print(f"from {began}: {epoch.optical_length:.1f} m")
 ```
 

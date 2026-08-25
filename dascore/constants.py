@@ -136,6 +136,7 @@ max_lens = {
 # Tested against the models in tests/test_core/test_attrs.py.
 INVENTORY_ATTRS = (
     "closed_fiber_loop",
+    "distance_step",
     "firmware_version",
     "gauge_length",
     "interrogator.instrument_type",
@@ -148,7 +149,6 @@ INVENTORY_ATTRS = (
     "pulse_width",
     "sample_rate",
     "software_version",
-    "spatial_interval",
 )
 
 # Methods FileFormatter needs to support
@@ -266,7 +266,7 @@ attrs
     is authoritative for, a tuple of names to copy exactly those, or
     False to copy none. The blanket form excludes `data_type`,
     `data_category`, and `data_units`, which describe the data as it
-    now stands, and `sample_rate` and `spatial_interval`, which the
+    now stands, and `sample_rate` and `distance_step`, which the
     patch's own coordinates already state; naming one restores the
     as-acquired value.
 """.strip()

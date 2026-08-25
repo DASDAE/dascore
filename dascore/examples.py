@@ -842,7 +842,7 @@ def inventory_patch_pair():
         data_type="velocity",
         data_category="DAS",
         gauge_length=10.0,
-        spatial_interval=1.0,
+        distance_step=1.0,
         sample_rate=1.0 / dc.to_float(patch.get_coord("time").step),
         pulse_width=1e-8,
         interrogator=Interrogator(
@@ -863,7 +863,7 @@ def inventory_patch_pair():
                 distance=(100.0, 400.0),
                 # The canonical axis names, so the segment states the CRS's
                 # axes whatever this inventory's CRS happens to call them.
-                coordinates={
+                columns={
                     "x": (-117.0, -117.0),
                     "y": (40.0, 40.1),
                     "z": (1500.0, 1500.0),
@@ -872,20 +872,20 @@ def inventory_patch_pair():
         ),
         coupling=(
             CouplingCondition(
-                start_distance=100.0,
-                end_distance=250.0,
+                distance_min=100.0,
+                distance_max=250.0,
                 coupling_type="trench",
                 medium="soil",
             ),
         ),
         labels=(
             OpticalPathLabel(
-                start_distance=100.0, end_distance=200.0, group="zone", value="north"
+                distance_min=100.0, distance_max=200.0, group="zone", value="north"
             ),
             OpticalPathLabel(
-                start_distance=200.0, end_distance=400.0, group="zone", value="south"
+                distance_min=200.0, distance_max=400.0, group="zone", value="south"
             ),
-            OpticalPathLabel(start_distance=150.0, end_distance=300.0, group="noisy"),
+            OpticalPathLabel(distance_min=150.0, distance_max=300.0, group="noisy"),
         ),
     )
     inventory = Inventory(
@@ -1132,7 +1132,7 @@ def _tunnel_geometry(at, runs):
         first, last = at[name]
         rows.append((name, first, *start))
         rows.append((name, last, *end))
-    frame = pd.DataFrame(rows, columns=["segment", "distance", "x", "y", "z"])
+    frame = pd.DataFrame(rows, columns=["name", "distance", "x", "y", "z"])
     return frame.to_csv(index=False)
 
 
@@ -1156,8 +1156,8 @@ def _tunnel_coupling(at, trench_parts):
     frame = pd.DataFrame(
         rows,
         columns=[
-            "start_distance",
-            "end_distance",
+            "distance_min",
+            "distance_max",
             "coupling_type",
             "medium",
             "attachment",
@@ -1176,7 +1176,7 @@ def _tunnel_labels(at, trench_parts):
         rows.append((*span, "section", "borehole"))
         rows.append((*span, "borehole", number))
     frame = pd.DataFrame(
-        rows, columns=["start_distance", "end_distance", "group", "value"]
+        rows, columns=["distance_min", "distance_max", "group", "value"]
     )
     return frame.to_csv(index=False)
 
@@ -1262,7 +1262,7 @@ def tunnel_inventory_files(repaired: bool = True) -> dict[str, str]:
             "data_units: 1/s\n"
             "interrogator: das-interrogator\n"
             "gauge_length: 10.0\n"
-            "spatial_interval: 1.0\n"
+            "distance_step: 1.0\n"
             "sample_rate: 250.0\n"
             "distance_map:\n"
             "  instrument_distance: [0.0, 2000.0]\n"
