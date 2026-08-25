@@ -10,6 +10,7 @@ import pytest
 from matplotlib.collections import QuadMesh
 from matplotlib.image import AxesImage
 from matplotlib.legend import Legend
+from matplotlib.lines import Line2D
 
 import dascore as dc
 from dascore.examples import inventory_patch_pair
@@ -436,7 +437,7 @@ def _bars(ax, axis):
     """Return (low, high, spine, color) for every bar drawn."""
     out = []
     for line in ax.lines:
-        if line.get_gid() != BAR_GID:
+        if not str(line.get_gid()).startswith(BAR_GID):
             continue
         across = line.get_xdata() if axis == "y" else line.get_ydata()
         along = line.get_ydata() if axis == "y" else line.get_xdata()
@@ -456,7 +457,9 @@ def _changes(ax, axis):
     """Return where a hairline was drawn across the image."""
     getter = "get_xdata" if axis == "x" else "get_ydata"
     return sorted(
-        float(getattr(x, getter)()[0]) for x in ax.lines if x.get_gid() == SEAM_GID
+        float(getattr(x, getter)()[0])
+        for x in ax.lines
+        if str(x.get_gid()).startswith(SEAM_GID)
     )
 
 
@@ -570,7 +573,7 @@ class TestLabelCoord:
         assert _changes(ax, "y") == [
             pytest.approx(self._edge(zone_patch, "distance", split))
         ]
-        hair = next(x for x in ax.lines if x.get_gid() == SEAM_GID)
+        hair = next(x for x in ax.lines if str(x.get_gid()).startswith(SEAM_GID))
         # Faint enough to locate a boundary without competing with data.
         assert hair.get_linewidth() < 1.0
         assert hair.get_alpha() < 0.7
@@ -598,7 +601,7 @@ class TestLabelCoord:
         ax = zone_patch.viz.waterfall(label_coord="zone")
         ax.get_figure().canvas.draw()
         box = ax.get_window_extent()
-        for line in [x for x in ax.lines if x.get_gid() == BAR_GID]:
+        for line in [x for x in ax.lines if str(x.get_gid()).startswith(BAR_GID)]:
             points = _on_canvas(line)
             across, along = points[:, 0], points[:, 1]
             # Upright on the page, and on one of the two upright edges.
@@ -843,6 +846,76 @@ class TestLabelCoord:
         assert len(_legend_labels(ax)) == MAX_LABELS
         assert legend._ncols > 1
         assert legend.get_window_extent().height <= ax.get_figure().bbox.height
+
+    def test_the_image_is_put_back_after_measuring(self, zone_patch):
+        """Hiding the image to measure the legend does not leave it hidden.
+
+        Seating the legend lays the figure out several times, and the
+        image is hidden across those passes so it is not rastered each
+        time. It has to come back, whatever happened in between.
+        """
+        ax = zone_patch.viz.waterfall(label_coord="zone")
+        assert ax.images
+        assert all(x.get_visible() for x in ax.images)
+        assert all(x.get_visible() for x in ax.collections)
+
+    def test_every_artist_carries_its_own_id(self, random_patch):
+        """No two artists share a gid, which is written out as an SVG id."""
+        size = random_patch.coords.coord_size("distance")
+        quarter = size // 4
+        values = np.where((np.arange(size) // quarter) % 2, "odd", "even")
+        patch = random_patch.update_coords(tag=("distance", values))
+        ax = patch.viz.waterfall(label_coord="tag")
+        gids = [x.get_gid() for x in ax.lines]
+        assert len(gids) == len(set(gids))
+        assert sum(str(x).startswith(BAR_GID) for x in gids) == 8
+        assert sum(str(x).startswith(SEAM_GID) for x in gids) == 3
+
+    def test_ids_are_unique_across_the_whole_figure(self, zone_patch):
+        """An id names one element of the document, not one of a call.
+
+        A figure may carry a labelled plot on every axes, and one axes
+        may be drawn on twice; numbering within the call would repeat.
+        """
+        _, (left, right) = plt.subplots(1, 2)
+        for ax in (left, right, left):
+            zone_patch.viz.waterfall(label_coord="zone", ax=ax, cbar=False)
+        gids = [x.get_gid() for ax in (left, right) for x in ax.lines]
+        assert len(gids) == len(set(gids))
+
+    @pytest.mark.parametrize("occupied", [(0, 2), (1,), ()])
+    def test_ids_skip_numbers_already_in_use(self, zone_patch, occupied):
+        """A number already on the figure is passed over, not reused.
+
+        Counting artists would land on an occupied number wherever the
+        ones in use are not a run from zero -- which is what removing an
+        artist and drawing again leaves behind.
+        """
+        _, ax = plt.subplots()
+        for number in occupied:
+            ax.add_line(Line2D([0, 1], [0, 1], gid=f"{BAR_GID}-0-{number}"))
+        zone_patch.viz.waterfall(label_coord="zone", ax=ax, cbar=False)
+        gids = [x.get_gid() for x in ax.lines]
+        assert len(gids) == len(set(gids))
+
+    def test_ids_survive_an_artist_being_removed(self, zone_patch):
+        """Drawing again after a removal does not reuse the freed number."""
+        _, ax = plt.subplots()
+        zone_patch.viz.waterfall(label_coord="zone", ax=ax, cbar=False)
+        bars = [x for x in ax.lines if str(x.get_gid()).startswith(BAR_GID)]
+        bars[0].remove()
+        zone_patch.viz.waterfall(label_coord="zone", ax=ax, cbar=False)
+        gids = [x.get_gid() for x in ax.lines]
+        assert len(gids) == len(set(gids))
+
+    def test_ids_are_the_same_every_build(self, zone_patch):
+        """The same figure carries the same ids however often it is built."""
+        builds = []
+        for _ in range(2):
+            _, ax = plt.subplots()
+            zone_patch.viz.waterfall(label_coord="zone", ax=ax, cbar=False)
+            builds.append([x.get_gid() for x in ax.lines])
+        assert builds[0] == builds[1]
 
     def test_no_label_coord_draws_nothing(self, zone_patch):
         """The default leaves the plot as it was."""

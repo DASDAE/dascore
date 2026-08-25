@@ -15,7 +15,8 @@ measurement itself.
 
 from __future__ import annotations
 
-from itertools import pairwise
+from contextlib import contextmanager
+from itertools import count, pairwise
 from typing import NamedTuple
 
 import matplotlib.patheffects as pe
@@ -49,7 +50,9 @@ _SEAM_KWARGS = {"color": "0.1", "linewidth": 0.7, "alpha": 0.55, "zorder": 4}
 _SEAM_HALO_WIDTH = 2.0
 _SEAM_HALO_ALPHA = 0.5
 
-# What each artist is, for a caller reading a figure back.
+# What each artist is, for a caller reading a figure back. Each carries
+# the prefix, the axes it sits on and its own number, so no two on one
+# figure share an id.
 BAR_GID = "dascore-label-bar"
 SEAM_GID = "dascore-label-change"
 
@@ -258,6 +261,35 @@ def label_runs(values, name: str) -> LabelRuns:
     return LabelRuns(starts, codes, labels, membership)
 
 
+def _artist_ids(ax, prefix: str):
+    """Hand out gids no artist on the figure already carries.
+
+    Matplotlib writes a gid out as an SVG id, which has to name one
+    element of the whole document. Numbering within the call is not
+    enough: a figure may carry a labelled plot on every axes, and one
+    axes may be drawn on twice.
+
+    Each candidate is checked against what the figure holds rather than
+    counted from it, so removing an artist and drawing again cannot land
+    on a number still in use. The count starts from nothing every time,
+    which keeps a figure built twice carrying the same ids -- a running
+    counter would make a rendered document differ from itself.
+    """
+    figure = ax.get_figure()
+    panel = figure.axes.index(ax) if ax in figure.axes else 0
+    taken = {str(y.get_gid()) for x in figure.axes for y in x.get_children()}
+    counter = count()
+
+    def name() -> str:
+        while True:
+            candidate = f"{prefix}-{panel}-{next(counter)}"
+            if candidate not in taken:
+                taken.add(candidate)
+                return candidate
+
+    return name
+
+
 def _draw_bars(ax, axis: str, edges, starts, codes, labels, colors) -> None:
     """Draw a bar along both spines over the stretch each label covers.
 
@@ -271,6 +303,7 @@ def _draw_bars(ax, axis: str, edges, starts, codes, labels, colors) -> None:
     else:
         transform = blended_transform_factory(ax.transData, ax.transAxes)
     starts_at, ends_at = edges
+    identify = _artist_ids(ax, BAR_GID)
     bounds = np.concatenate([[0], starts, [len(codes)]]).astype(int)
     for low, high in pairwise(bounds):
         code = codes[low]
@@ -292,8 +325,28 @@ def _draw_bars(ax, axis: str, edges, starts, codes, labels, colors) -> None:
                 # The half of its width outside the axes goes with that.
                 clip_on=True,
                 zorder=5,
-                gid=BAR_GID,
+                gid=identify(),
             )
+
+
+@contextmanager
+def _measuring(ax):
+    """Hide what is costly to draw while the legend is being measured.
+
+    Seating the legend means laying the figure out several times over,
+    and each pass would otherwise raster the image again -- four fifths
+    of the time a labelled waterfall takes on a large patch. Nothing the
+    measurements read is drawn from it: the tick labels, the axes' own
+    box and the legend are all laid out the same either way.
+    """
+    hidden = [x for x in (*ax.images, *ax.collections) if x.get_visible()]
+    for artist in hidden:
+        artist.set_visible(False)
+    try:
+        yield
+    finally:
+        for artist in hidden:
+            artist.set_visible(True)
 
 
 def _right_edge(figure) -> float:
@@ -305,6 +358,7 @@ def _right_edge(figure) -> float:
 def _draw_changes(ax, axis: str, edges, starts) -> None:
     """Join the two bars with a hairline wherever the label changes."""
     starts_at, _ = edges
+    identify = _artist_ids(ax, SEAM_GID)
     line = ax.axvline if axis == "x" else ax.axhline
     for index in starts:
         line(
@@ -316,9 +370,43 @@ def _draw_changes(ax, axis: str, edges, starts) -> None:
                     alpha=_SEAM_HALO_ALPHA,
                 )
             ],
-            gid=SEAM_GID,
+            gid=identify(),
             **_SEAM_KWARGS,
         )
+
+
+def _measure(figure, ax, kwargs) -> int:
+    """Make room for the legend, and say how many columns it wants.
+
+    Drawn rather than predicted: how tall matplotlib sets its rows and
+    how wide it sets a column are its own affair. The figure is narrowed
+    and asked again after each move, since a colorbar carries its ticks
+    and its own name outside the rectangle it reports as its position,
+    and narrowing can relabel the ticks it carries.
+    """
+    legend = figure.legend(**kwargs)
+    figure.draw_without_rendering()
+    box = legend.get_window_extent()
+    # A column taller than the page is spilled into as many as it takes.
+    columns = max(1, int(np.ceil(box.height / figure.bbox.height)))
+    if columns > 1:
+        legend.remove()
+        legend = figure.legend(ncol=columns, **kwargs)
+        figure.draw_without_rendering()
+        box = legend.get_window_extent()
+    wide = box.width / figure.bbox.width
+    legend.remove()
+    for _ in range(_FITTING_PASSES):
+        over = _right_edge(figure) + 2 * _LEGEND_PAD + wide - 1.0
+        if over <= 0:
+            break
+        pars = figure.subplotpars
+        floor = pars.left + _MIN_AXES_WIDTH
+        if pars.right <= floor:
+            break
+        figure.subplots_adjust(right=max(floor, pars.right - over))
+        figure.draw_without_rendering()
+    return columns
 
 
 def _legend_beside(figure, ax, handles, title):
@@ -353,35 +441,8 @@ def _legend_beside(figure, ax, handles, title):
         # drawn, undoing the room made below. This figure is the call's
         # own and is being laid out here explicitly.
         figure.set_layout_engine("none")
-    # Drawn once to be measured; how tall matplotlib sets its rows and how
-    # wide it sets a column are its own affair rather than ours to predict.
-    legend = figure.legend(**kwargs)
-    figure.draw_without_rendering()
-    box = legend.get_window_extent()
-    tall = box.height / figure.bbox.height
-    # A column taller than the page is spilled into as many as it takes.
-    columns = max(1, int(np.ceil(tall)))
-    if columns > 1:
-        legend.remove()
-        legend = figure.legend(ncol=columns, **kwargs)
-        figure.draw_without_rendering()
-        box = legend.get_window_extent()
-    wide = box.width / figure.bbox.width
-    legend.remove()
-    # Asked for again after each move: a colorbar carries its ticks and
-    # its own name outside the rectangle it reports as its position, and
-    # narrowing the figure can relabel the ticks it carries.
-    for _ in range(_FITTING_PASSES):
-        edge = _right_edge(figure)
-        over = edge + 2 * _LEGEND_PAD + wide - 1.0
-        if over <= 0:
-            break
-        pars = figure.subplotpars
-        floor = pars.left + _MIN_AXES_WIDTH
-        if pars.right <= floor:
-            break
-        figure.subplots_adjust(right=max(floor, pars.right - over))
-        figure.draw_without_rendering()
+    with _measuring(ax):
+        columns = _measure(figure, ax, kwargs)
     return figure.legend(
         ncol=columns,
         bbox_to_anchor=(_right_edge(figure) + _LEGEND_PAD, ax.get_position().y1),
