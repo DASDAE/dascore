@@ -16,7 +16,7 @@ from dascore.examples import inventory_patch_pair
 from dascore.exceptions import ParameterError
 from dascore.units import get_quantity_str, percent
 from dascore.utils.time import is_datetime64, to_timedelta64
-from dascore.viz._labels import BAR_GID, MAX_LABELS, SEAM_GID
+from dascore.viz._labels import BAR_GID, MAX_LABELS, MAX_RUNS, SEAM_GID
 from dascore.viz._lanes import string_colors
 
 
@@ -446,6 +446,12 @@ def _bars(ax, axis):
     return out
 
 
+def _on_canvas(line):
+    """Where a line actually lands, in display pixels."""
+    points = np.column_stack([line.get_xdata(), line.get_ydata()])
+    return line.get_transform().transform(points)
+
+
 def _changes(ax, axis):
     """Return where a hairline was drawn across the image."""
     getter = "get_xdata" if axis == "x" else "get_ydata"
@@ -483,6 +489,18 @@ class TestLabelCoord:
         size = random_patch.coords.coord_size("distance")
         split = size // self.split_fraction
         zones = np.where(np.arange(size) < split, "north", "south")
+        return random_patch.update_coords(zone=("distance", zones))
+
+    @pytest.fixture(scope="class")
+    def unsorted_zone_patch(self, random_patch):
+        """A patch whose first label is not the first alphabetically.
+
+        Codes run in order of appearance and colors are keyed by sorted
+        name, so a fixture where the two agree cannot tell them apart.
+        """
+        size = random_patch.coords.coord_size("distance")
+        split = size // self.split_fraction
+        zones = np.where(np.arange(size) < split, "south", "north")
         return random_patch.update_coords(zone=("distance", zones))
 
     @pytest.fixture(scope="class")
@@ -570,6 +588,37 @@ class TestLabelCoord:
             pytest.approx(self._edge(patch, "distance", high)),
         ]
 
+    def test_bars_land_on_the_spines_on_the_canvas(self, zone_patch):
+        """The bars reach the axes edges, not merely claim to.
+
+        The data handed to matplotlib is the same whichever way the
+        blended transform is built, so only where a bar lands can tell
+        the two apart.
+        """
+        ax = zone_patch.viz.waterfall(label_coord="zone")
+        ax.get_figure().canvas.draw()
+        box = ax.get_window_extent()
+        for line in [x for x in ax.lines if x.get_gid() == BAR_GID]:
+            points = _on_canvas(line)
+            across, along = points[:, 0], points[:, 1]
+            # Upright on the page, and on one of the two upright edges.
+            assert across[0] == pytest.approx(across[1])
+            assert min(abs(across[0] - box.x0), abs(across[0] - box.x1)) < 1.0
+            # Running along part of the axes, neither collapsed nor loose.
+            assert box.y0 - 1 <= min(along)
+            assert max(along) <= box.y1 + 1
+            assert max(along) - min(along) > 1.0
+
+    def test_a_label_keeps_its_color_whatever_its_order(self, unsorted_zone_patch):
+        """Colors follow the label, not the order it first appears in."""
+        ax = unsorted_zone_patch.viz.waterfall(label_coord="zone")
+        colors = string_colors(["north", "south"])
+        first, second = _spans(ax, "y")
+        # South is stated first here, and is still south's color.
+        assert _span_color(ax, "y", *first) == colors["south"]
+        assert _span_color(ax, "y", *second) == colors["north"]
+        assert _legend_labels(ax) == ["south", "north"]
+
     def test_bar_ends_on_the_image_cell_edge(self, zone_patch):
         """The bar ends on the cell edge, not the coordinate midpoint."""
         ax = zone_patch.viz.waterfall(label_coord="zone")
@@ -646,12 +695,20 @@ class TestLabelCoord:
         assert _legend(ax).get_window_extent().x0 >= drawn
 
     def test_colorbar_still_matches_the_image(self, zone_patch):
-        """Making room for the legend moves the image and its bar together."""
-        ax = zone_patch.viz.waterfall(label_coord="zone")
-        figure = ax.get_figure()
-        cax = next(x for x in figure.axes if x is not ax)
-        assert cax.get_position().y0 == pytest.approx(ax.get_position().y0)
-        assert cax.get_position().height == pytest.approx(ax.get_position().height)
+        """Making room for the legend moves the image and its bar together.
+
+        The two hang off one gridspec; repositioning either alone parts
+        them, which is why the room is taken from the figure margin.
+        """
+        plain = zone_patch.viz.waterfall()
+        named = zone_patch.viz.waterfall(label_coord="zone")
+        # Room really was taken, or the alignment below proves nothing.
+        assert named.get_position().width < plain.get_position().width
+        figure = named.get_figure()
+        cax = next(x for x in figure.axes if x is not named)
+        assert cax.get_position().x0 > named.get_position().x1
+        assert cax.get_position().y0 == pytest.approx(named.get_position().y0)
+        assert cax.get_position().height == pytest.approx(named.get_position().height)
 
     def test_each_label_keeps_its_own_color(self, zone_patch):
         """A label is drawn in the color the palette gives that label."""
@@ -885,6 +942,38 @@ class TestLabelCoord:
             box = _legend(ax).get_window_extent()
             assert box.x0 >= drawn
             assert box.x1 <= figure.bbox.x1
+
+    @pytest.mark.parametrize("over", [False, True])
+    def test_label_ceiling_is_inclusive(self, random_patch, over):
+        """Exactly MAX_LABELS is allowed; one more is refused."""
+        size = random_patch.coords.coord_size("distance")
+        count = MAX_LABELS + int(over)
+        values = np.asarray([f"g{x * count // size}" for x in range(size)])
+        assert len(set(values)) == count
+        patch = random_patch.update_coords(tag=("distance", values))
+        if over:
+            with pytest.raises(ParameterError, match="distinct labels"):
+                patch.viz.waterfall(label_coord="tag")
+        else:
+            assert len(_legend_labels(patch.viz.waterfall(label_coord="tag")))
+
+    @pytest.mark.parametrize("over", [False, True])
+    def test_change_ceiling_is_inclusive(self, random_patch, over):
+        """Exactly MAX_RUNS changes is allowed; one more is refused."""
+        size = random_patch.coords.coord_size("distance")
+        changes = MAX_RUNS + int(over)
+        # Alternating over the head gives one change per element there;
+        # the tail repeats the last of them and adds none.
+        head = np.arange(changes + 1) % 2 == 0
+        values = np.full(size, head[-1], dtype=bool)
+        values[: changes + 1] = head
+        assert int(np.count_nonzero(np.diff(values))) == changes
+        patch = random_patch.update_coords(tag=("distance", values))
+        if over:
+            with pytest.raises(ParameterError, match="changes value"):
+                patch.viz.waterfall(label_coord="tag")
+        else:
+            assert patch.viz.waterfall(label_coord="tag") is not None
 
     def test_bars_stay_inside_their_axes_after_a_zoom(self, zone_patch):
         """A bar keeps to its own axes when the limits change.
