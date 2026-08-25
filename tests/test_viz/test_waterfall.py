@@ -10,6 +10,7 @@ import pytest
 from matplotlib.collections import QuadMesh
 from matplotlib.image import AxesImage
 from matplotlib.legend import Legend
+from matplotlib.lines import Line2D
 
 import dascore as dc
 from dascore.examples import inventory_patch_pair
@@ -880,6 +881,31 @@ class TestLabelCoord:
         for ax in (left, right, left):
             zone_patch.viz.waterfall(label_coord="zone", ax=ax, cbar=False)
         gids = [x.get_gid() for ax in (left, right) for x in ax.lines]
+        assert len(gids) == len(set(gids))
+
+    @pytest.mark.parametrize("occupied", [(0, 2), (1,), ()])
+    def test_ids_skip_numbers_already_in_use(self, zone_patch, occupied):
+        """A number already on the figure is passed over, not reused.
+
+        Counting artists would land on an occupied number wherever the
+        ones in use are not a run from zero -- which is what removing an
+        artist and drawing again leaves behind.
+        """
+        _, ax = plt.subplots()
+        for number in occupied:
+            ax.add_line(Line2D([0, 1], [0, 1], gid=f"{BAR_GID}-0-{number}"))
+        zone_patch.viz.waterfall(label_coord="zone", ax=ax, cbar=False)
+        gids = [x.get_gid() for x in ax.lines]
+        assert len(gids) == len(set(gids))
+
+    def test_ids_survive_an_artist_being_removed(self, zone_patch):
+        """Drawing again after a removal does not reuse the freed number."""
+        _, ax = plt.subplots()
+        zone_patch.viz.waterfall(label_coord="zone", ax=ax, cbar=False)
+        bars = [x for x in ax.lines if str(x.get_gid()).startswith(BAR_GID)]
+        bars[0].remove()
+        zone_patch.viz.waterfall(label_coord="zone", ax=ax, cbar=False)
+        gids = [x.get_gid() for x in ax.lines]
         assert len(gids) == len(set(gids))
 
     def test_ids_are_the_same_every_build(self, zone_patch):

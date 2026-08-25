@@ -16,7 +16,7 @@ measurement itself.
 from __future__ import annotations
 
 from contextlib import contextmanager
-from itertools import pairwise
+from itertools import count, pairwise
 from typing import NamedTuple
 
 import matplotlib.patheffects as pe
@@ -262,18 +262,32 @@ def label_runs(values, name: str) -> LabelRuns:
 
 
 def _artist_ids(ax, prefix: str):
-    """Number artists so no two on the figure share a gid.
+    """Hand out gids no artist on the figure already carries.
 
     Matplotlib writes a gid out as an SVG id, which has to name one
     element of the whole document. Numbering within the call is not
     enough: a figure may carry a labelled plot on every axes, and one
-    axes may be drawn on twice. Counted rather than made up, so the same
-    figure carries the same ids however often it is built.
+    axes may be drawn on twice.
+
+    Each candidate is checked against what the figure holds rather than
+    counted from it, so removing an artist and drawing again cannot land
+    on a number still in use. The count starts from nothing every time,
+    which keeps a figure built twice carrying the same ids -- a running
+    counter would make a rendered document differ from itself.
     """
     figure = ax.get_figure()
     panel = figure.axes.index(ax) if ax in figure.axes else 0
-    already = sum(1 for x in ax.lines if str(x.get_gid()).startswith(prefix))
-    return lambda index: f"{prefix}-{panel}-{already + index}"
+    taken = {str(y.get_gid()) for x in figure.axes for y in x.get_children()}
+    counter = count()
+
+    def name() -> str:
+        while True:
+            candidate = f"{prefix}-{panel}-{next(counter)}"
+            if candidate not in taken:
+                taken.add(candidate)
+                return candidate
+
+    return name
 
 
 def _draw_bars(ax, axis: str, edges, starts, codes, labels, colors) -> None:
@@ -291,7 +305,6 @@ def _draw_bars(ax, axis: str, edges, starts, codes, labels, colors) -> None:
     starts_at, ends_at = edges
     identify = _artist_ids(ax, BAR_GID)
     bounds = np.concatenate([[0], starts, [len(codes)]]).astype(int)
-    drawn = 0
     for low, high in pairwise(bounds):
         code = codes[low]
         if code < 0:
@@ -312,9 +325,8 @@ def _draw_bars(ax, axis: str, edges, starts, codes, labels, colors) -> None:
                 # The half of its width outside the axes goes with that.
                 clip_on=True,
                 zorder=5,
-                gid=identify(drawn),
+                gid=identify(),
             )
-            drawn += 1
 
 
 @contextmanager
@@ -348,7 +360,7 @@ def _draw_changes(ax, axis: str, edges, starts) -> None:
     starts_at, _ = edges
     identify = _artist_ids(ax, SEAM_GID)
     line = ax.axvline if axis == "x" else ax.axhline
-    for drawn, index in enumerate(starts):
+    for index in starts:
         line(
             starts_at[index],
             path_effects=[
@@ -358,7 +370,7 @@ def _draw_changes(ax, axis: str, edges, starts) -> None:
                     alpha=_SEAM_HALO_ALPHA,
                 )
             ],
-            gid=identify(drawn),
+            gid=identify(),
             **_SEAM_KWARGS,
         )
 
