@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import numpy as np
+import pandas as pd
 import pytest
-from pydantic import BaseModel
+from pydantic import BaseModel, TypeAdapter, ValidationError
 
+from dascore.core import annotations, inventory
+from dascore.core.annotations import AnnotationSet
 from dascore.exceptions import ParameterError
 from dascore.utils.intervals import (
     clip_intervals,
@@ -171,3 +174,32 @@ class TestNormalizeValue:
 
         with pytest.raises(_MyError, match="must be finite"):
             normalize_value(np.nan, error=_MyError)
+
+
+class TestIntervalValueType:
+    """One value type, refused in each subsystem's own vocabulary."""
+
+    @pytest.mark.parametrize("annotated", ["LabelValue", "AnnotationValue"])
+    def test_the_refusal_reaches_the_caller(self, annotated):
+        """Both subsystems refuse a boolean, and say why.
+
+        The type each raises is not observable here: pydantic wraps
+        whatever a validator raises, keeping the message. The message is
+        therefore what the caller actually gets, so it is what is pinned.
+        """
+        module = inventory if annotated == "LabelValue" else annotations
+        adapter = TypeAdapter(getattr(module, annotated))
+        with pytest.raises(ValidationError, match="true and false are not values"):
+            adapter.validate_python(True)
+
+    def test_a_direct_call_raises_the_stated_error(self):
+        """Where the value is checked outside pydantic, the type survives.
+
+        `AnnotationSet` checks its own frame, so this is the path on which
+        the factory's `error` argument is the difference it claims to be.
+        """
+        frame = pd.DataFrame(
+            {"group": ["g"], "value": [True], "time_min": [0], "time_max": [1]}
+        )
+        with pytest.raises(ParameterError, match="true and false are not values"):
+            AnnotationSet(frame, dims=("time",))

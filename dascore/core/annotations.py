@@ -136,6 +136,12 @@ DIMS_KEY = "dascore:dims"
 # spells one: a patch's attrs, the spool index, and the inventory.
 _MIN, _MAX = "_min", "_max"
 
+# What it used to be spelled with. A set written before the rename is
+# this format's own former spelling, not a stranger's columns, so it is
+# told what to write instead -- otherwise its bounds read as extras and
+# the annotation silently covers everything rather than what it states.
+_RETIRED_RANGE = ("_start", "_end")
+
 # The resolution DASCore holds a time and a duration at.
 _NS_TIME = np.dtype("datetime64[ns]")
 _NS_SPAN = np.dtype("timedelta64[ns]")
@@ -1108,6 +1114,16 @@ def _check_columns(frame: pd.DataFrame, attrs: AnnotationSetAttrs) -> None:
     known = set(RESERVED_COLUMNS) | set(attrs.dims)
     known |= {f"{dim}{end}" for dim in attrs.dims for end in (_MIN, _MAX)}
     extras = [str(x) for x in frame.columns if x not in known]
+    low, high = _RETIRED_RANGE
+    retired = {x[: -len(low)] for x in extras if x.endswith(low)}
+    retired &= {x[: -len(high)] for x in extras if x.endswith(high)}
+    if named := ", ".join(sorted(retired & set(attrs.dims))):
+        msg = (
+            f"The column(s) {named} state a range as {low}/{high}, which this "
+            f"format now spells {_MIN}/{_MAX}, as every other range in DASCore "
+            "is spelled. Rename the columns."
+        )
+        raise ParameterError(msg)
     stems = {x[: -len(_MIN)] for x in extras if x.endswith(_MIN)}
     stems &= {x[: -len(_MAX)] for x in extras if x.endswith(_MAX)}
     if stems:
@@ -1450,9 +1466,14 @@ def _fill_vertex_bounds(frame, vertices, spellings) -> pd.DataFrame:
         if spelling.point is not None:
             _fill_point_bounds(out, ids, bounds, dim, spelling.point)
             continue
-        for column, side in ((spelling.low, "min"), (spelling.high, "max")):
+        for column, side, suffix in (
+            (spelling.low, "min", _MIN),
+            (spelling.high, "max", _MAX),
+        ):
             if column is None:
-                out[f"{dim}_{side}"] = pd.Series(ids.map(bounds[side]), index=out.index)
+                out[f"{dim}{suffix}"] = pd.Series(
+                    ids.map(bounds[side]), index=out.index
+                )
                 continue
             derived = ids.map(bounds[side])
             stated = out[column]

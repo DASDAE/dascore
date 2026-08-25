@@ -397,6 +397,17 @@ class TestColumns:
         out = AnnotationSet(pd.DataFrame({"score": [np.nan]}), dims=DIMS)
         assert "score" not in out[0].extra
 
+    def test_a_retired_range_spelling_says_what_to_write(self):
+        """A set written before the rename is told its columns' new names.
+
+        Left alone, `<dim>_start`/`<dim>_end` read as two unrelated extras
+        and the annotation covers everything instead of what it states --
+        a wrong answer rather than a refusal.
+        """
+        frame = pd.DataFrame({"group": ["quiet"], "time_start": [0], "time_end": [1]})
+        with pytest.raises(ParameterError, match="now spells _min/_max"):
+            AnnotationSet(frame, dims=DIMS)
+
     def test_undeclared_range_pair_refused(self):
         """A range naming no declared dimension is a forgotten dimension."""
         frame = pd.DataFrame({"depth_min": [1], "depth_max": [2]})

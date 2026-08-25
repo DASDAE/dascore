@@ -278,7 +278,7 @@ def normalize_enrich_kwargs(kwargs) -> dict:
 # decimating changes both. Nothing should be redundant between coords and
 # attrs, so a blanket request leaves these alone; naming one restores the
 # as-acquired value.
-COORD_REDUNDANT_ATTRS = ("sample_rate", "distance_step")
+COORD_REDUNDANT_ATTRS = ("sample_rate", "spatial_interval")
 
 # Attrs describing the data as it now stands rather than the system which
 # recorded it. Processing functions maintain them, so blanket enrichment

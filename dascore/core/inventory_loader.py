@@ -453,10 +453,10 @@ class _Table(NamedTuple):
     # The column assigning points to objects, for a collection of them.
     # None where the attribute is a single object, or a row is an object.
     group: str | None = None
-    # The column rows are read in the order of. Where a table names one,
-    # row position decides nothing and re-sorting a spreadsheet is
-    # harmless; where it does not, the rows keep the order they were
-    # written in, which the model reads as a set rather than a sequence.
+    # The axis a point table's parallel arrays are built along, which its
+    # rows are sorted by so re-sorting a spreadsheet cannot change what it
+    # means. An object table names none: each of its rows states where it
+    # sits, so the model reads them as a set.
     order: str | None = None
     # The field every column but the order gathers into, keyed by header.
     # None where each column names a field of the object directly.
@@ -475,8 +475,6 @@ _TABLES: Mapping[str, _Table] = {
     "distance_map": _Table(points=True, order="distance"),
 }
 
-# The one column of a point table which is not a field of the object it
-# builds; components order by it and drop it.
 # The one suffix a table takes, and the table stems folded once so the
 # near-miss check can match a shouted name without folding them per file.
 _CSV_SUFFIX = ".csv"
@@ -493,12 +491,8 @@ _RETIRED_TABLES = {"annotations": "labels"}
 # The columns of geometry.csv which are not columns of the segment: the one
 # naming it and the one placing each row along it. Read off the registry so
 # the headers and the fields they fill cannot drift apart.
-_GEOMETRY_STRUCTURAL = frozenset(
-    x for x in (_TABLES["geometry"].group, _TABLES["geometry"].order) if x is not None
-)
-# Both are set above; a geometry table which named neither could not gather
-# its points into segments at all.
-assert len(_GEOMETRY_STRUCTURAL) == 2, _GEOMETRY_STRUCTURAL
+_GEOMETRY_STRUCTURAL = frozenset({"name", "distance"})
+assert _GEOMETRY_STRUCTURAL == {_TABLES["geometry"].group, _TABLES["geometry"].order}
 
 # Columns this format used to read, by the table which read them. A file
 # written before a rename is this format's own former spelling, so it is
@@ -508,18 +502,32 @@ _RETIRED_COLUMNS = {
     "optical_components": {
         "sequence": (
             "components state distance_min and distance_max, which say "
-            "where each one is without being counted through"
+            "where each one is without being counted through. Drop the "
+            "column."
+        ),
+        "optical_length": (
+            "a component's length is the span between its distance_min "
+            "and distance_max, which place it as well. State those."
+        ),
+    },
+    "geometry": {
+        "segment": (
+            "the column naming a segment is now name, which is the field "
+            "it fills. Rename the column."
         )
-    }
+    },
 }
 
 
 def _object_rows(frame: pd.DataFrame, table: _Table, path: Path) -> list[dict]:
-    """Read a table whose every row is one object."""
-    require_columns(frame, [table.order], path)
-    require_stated(frame, [table.order], path)
-    ordered = ordered_rows(frame, table.order, path)
-    return [row_cells(row) for _, row in ordered.iterrows()]
+    """
+    Read a table whose every row is one object.
+
+    Row order carries nothing: each row states where it sits, so the model
+    reads them as a set. Only a point table orders its rows, and it does
+    so by the axis its arrays are built along.
+    """
+    return [row_cells(row) for _, row in frame.iterrows()]
 
 
 def _point_rows(
@@ -862,14 +870,21 @@ def _load_table(path: Path, table: _Table, stem: str, crs):
 
 
 def _refuse_retired_columns(frame: pd.DataFrame, stem: str, path: Path) -> None:
-    """Explain a column this format used to read, rather than shrugging."""
+    """
+    Explain a column this format used to read, rather than shrugging.
+
+    A file written before a rename is this format's own former spelling,
+    not a crew's own file which owes it nothing, so it is told what to
+    write instead. Without this a dropped column reports as a field the
+    model has never heard of, and a renamed one as the column now missing.
+    """
     retired = _RETIRED_COLUMNS.get(stem, {})
     for column in frame.columns:
-        if (why := retired.get(str(column))) is None:
+        if (advice := retired.get(str(column))) is None:
             continue
         msg = (
             f"{_quote(path)} states {column}, which this format no longer "
-            f"reads: {why}. Drop the column."
+            f"reads: {advice}"
         )
         raise InvalidInventoryError(msg)
 

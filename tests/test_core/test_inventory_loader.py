@@ -1340,7 +1340,7 @@ class TestTrackTables:
         """A map has no grouping column: every point belongs to the one map."""
         files = {
             "acquisitions/DAS.L001.02.DEC/attrs.yaml": (
-                "object_type: Acquisition\ndistance_step: 1.0\n"
+                "object_type: Acquisition\nspatial_interval: 1.0\n"
             ),
             "acquisitions/DAS.L001.02.DEC/distance_map.csv": (
                 "channel,distance\n512,500.0\n1710,1698.0\n"
@@ -1770,7 +1770,7 @@ class TestUnreadableTables:
         """A column every row leaves empty states nothing, and is not empty."""
         files = {
             "acquisitions/DAS.L001.02.DEC/attrs.yaml": (
-                "object_type: Acquisition\ndistance_step: 1.0\n"
+                "object_type: Acquisition\nspatial_interval: 1.0\n"
             ),
             "acquisitions/DAS.L001.02.DEC/distance_map.csv": (
                 "channel,instrument_distance,distance\n512,,500.0\n1710,,1698.0\n"
@@ -1864,7 +1864,51 @@ class TestUnreadableTables:
                 "1,FiberSegment,0,100,a\n"
             ),
         }
-        with pytest.raises(InvalidInventoryError, match="no longer reads"):
+        with pytest.raises(InvalidInventoryError, match="Drop the column"):
+            make_inventory(files)
+
+    def test_a_components_table_which_does_not_tile_is_refused(self, make_inventory):
+        """The loader checks what it builds, or a bad table loads fine.
+
+        The tiling rule lives on `OpticalPath.check`; this holds the read
+        path to calling it, which is what makes the rule reach a file.
+        """
+        files = {
+            **MINIMAL,
+            **TRACKS,
+            "fiber_arrays/DAS.L001/path/optical_components.csv": (
+                "object_type,distance_min,distance_max,name\n"
+                "FiberSegment,0,100,a\n"
+                "FiberSegment,120,500,b\n"
+            ),
+        }
+        with pytest.raises(InvalidInventoryError, match="leaves a gap of 20"):
+            make_inventory(files)
+
+    def test_a_retired_length_column_says_what_to_write(self, make_inventory):
+        """The other column the components table lost is explained too."""
+        files = {
+            **MINIMAL,
+            **TRACKS,
+            "fiber_arrays/DAS.L001/path/optical_components.csv": (
+                "object_type,optical_length,name\nFiberSegment,100,a\n"
+            ),
+        }
+        with pytest.raises(InvalidInventoryError, match="State those"):
+            make_inventory(files)
+
+    def test_a_retired_segment_column_says_what_to_write(self, make_inventory):
+        """A renamed column is told its new name, not that one is missing."""
+        files = {
+            **MINIMAL,
+            **TRACKS,
+            "fiber_arrays/DAS.L001/path/geometry.csv": (
+                "segment,distance,longitude,latitude,elevation\n"
+                "S100,100.0,-117.0,40.0,687.0\n"
+                "S100,102.0,-117.1,40.1,685.0\n"
+            ),
+        }
+        with pytest.raises(InvalidInventoryError, match="now name"):
             make_inventory(files)
 
     def test_a_cell_which_does_not_pertain_to_its_row(self, make_inventory):
@@ -1910,11 +1954,18 @@ class TestTableRegistry:
             assert stem  # every key names something
 
     def test_a_retired_column_names_no_field_of_the_model(self):
-        """A column explained as retired must not still be readable."""
+        """A column explained as retired must not still be readable.
+
+        A name which is still a field would be refused by the explanation
+        rather than read, which is a worse failure than the bare unknown
+        field the explanation exists to replace.
+        """
         for stem, retired in loader._RETIRED_COLUMNS.items():
-            model = inv.OpticalPath.model_fields[stem].annotation
-            for column in retired:
-                assert column not in str(model)
+            track = inv.OpticalPath.model_fields[stem].annotation
+            members = inv._annotation_members(inv.get_args(track)[0])
+            assert members  # a track holds models, or this checks nothing
+            for model in members:
+                assert not (set(retired) & set(model.model_fields))
 
 
 class TestSilentlyLostRows:
@@ -1966,7 +2017,7 @@ class TestSilentlyLostRows:
         """Columns become parallel arrays, so a gap would pair the unpaired."""
         files = {
             "acquisitions/DAS.L001.02.DEC/attrs.yaml": (
-                "object_type: Acquisition\ndistance_step: 1.0\n"
+                "object_type: Acquisition\nspatial_interval: 1.0\n"
             ),
             # Channel 5 states no distance and 100 states no channel; read
             # column by column they would pair up as though they had.
@@ -2229,7 +2280,7 @@ class TestPRReviewFindings:
         """The frame is sorted and split by then, so positions lie."""
         files = {
             "acquisitions/DAS.L001.02.DEC/attrs.yaml": (
-                "object_type: Acquisition\ndistance_step: 1.0\n"
+                "object_type: Acquisition\nspatial_interval: 1.0\n"
             ),
             # Sorted by distance these rows reverse, so a position within
             # the sorted frame is not the line the author would open.
@@ -2249,7 +2300,7 @@ class TestPRReviewFindings:
         """A header and no rows describes no map, rather than raising bare."""
         files = {
             "acquisitions/DAS.L001.02.DEC/attrs.yaml": (
-                "object_type: Acquisition\ndistance_step: 1.0\n"
+                "object_type: Acquisition\nspatial_interval: 1.0\n"
             ),
             "acquisitions/DAS.L001.02.DEC/distance_map.csv": "channel,distance\n",
         }

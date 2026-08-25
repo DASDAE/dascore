@@ -34,7 +34,7 @@ def build_inventory() -> inv.Inventory:
         data_type="strain_rate",
         sample_rate=500.0,
         gauge_length=10.0,
-        distance_step=1.0,
+        spatial_interval=1.0,
         distance_map=inv.DistanceMap(channel=(0.0,), distance=(0.0,)),
     )
     geometry = inv.Geometry(
@@ -147,7 +147,7 @@ def build_full_inventory() -> inv.Inventory:
         data_units="strain/s",
         sample_rate=500.0,
         gauge_length=10.0,
-        distance_step=1.0,
+        spatial_interval=1.0,
         interrogator=interrogator,
         interrogator_port="1",
         extra_fields={"native_key": "", "count": 0},
@@ -562,6 +562,32 @@ class TestComponentPlacement:
         with pytest.raises(ValidationError, match="distance_max"):
             inv.FiberSegment(distance_min=0.0)
 
+    @pytest.mark.parametrize("moved", [3.0, 9.0])
+    def test_moving_a_point_marker_moves_both_ends(self, moved):
+        """`new` merges the fields already set, so the end must follow.
+
+        Left alone, moving one back silently gives the marker a length,
+        and moving one forward past its own end refuses outright.
+        """
+        marker = inv.Connector(distance_min=5.0)
+        assert marker.new(distance_min=moved).interval == (moved, moved)
+
+    def test_a_sized_point_component_keeps_its_length(self):
+        """Only a marker's end follows; a stated length is the author's."""
+        splice = inv.Splice(distance_min=5.0, distance_max=5.5)
+        assert splice.new(distance_min=5.2).interval == (5.2, 5.5)
+
+    @pytest.mark.parametrize("blank", [None, {}])
+    def test_a_blank_end_is_an_unstated_one(self, blank):
+        """A CSV cell arrives dropped and a YAML one as None; both are blank."""
+        kwargs = {"distance_max": blank} if blank is None else blank
+        assert inv.Splice(distance_min=1.0, **kwargs).interval == (1.0, 1.0)
+
+    def test_a_segment_end_may_not_be_blank(self):
+        """Blank is unstated only where the item is a point by nature."""
+        with pytest.raises(ValidationError, match="distance_max"):
+            inv.FiberSegment(distance_min=0.0, distance_max=None)
+
     def test_components_are_held_in_distance_order(self):
         """Row order decides nothing; a point sorts before what it touches."""
         path = self._path(
@@ -572,6 +598,27 @@ class TestComponentPlacement:
         assert [x.name for x in path.optical_components] == ["a", "s", "b"]
         assert path.check() is path
 
+    def test_the_removed_origin_explains_itself(self):
+        """A path written against the old layout says what to write now."""
+        with pytest.raises(ValidationError, match="no longer takes start_distance"):
+            inv.OpticalPath(start_distance=100.0)
+
+    def test_extent_survives_a_copy_which_skips_validation(self):
+        """`model_copy` skips the ordering validator; the span must hold.
+
+        The extent is asked for before anything has checked that the
+        components tile, so reading the first and last would report a
+        path spanning (100, 100) for one covering [0, 200).
+        """
+        path = self._path(
+            inv.FiberSegment(distance_min=0.0, distance_max=100.0),
+            inv.FiberSegment(distance_min=100.0, distance_max=200.0),
+        )
+        jumbled = path.model_copy(
+            update={"optical_components": tuple(reversed(path.optical_components))}
+        )
+        assert (jumbled.distance_min, jumbled.distance_max) == (0.0, 200.0)
+
     def test_a_path_with_no_components_spans_nothing(self):
         """An empty path has no extent to take from anything."""
         path = inv.OpticalPath()
@@ -579,27 +626,16 @@ class TestComponentPlacement:
         assert path.optical_length == 0.0
 
     def test_optical_length_stays_selectable(self):
-        """A computed length is still a fact about the component."""
-        names = inv.Inventory(
-            networks=(
-                inv.Network(
-                    code="XX",
-                    fiber_arrays=(
-                        inv.FiberArray(
-                            code="L001",
-                            optical_paths=(
-                                self._path(
-                                    inv.FiberSegment(
-                                        distance_min=0.0, distance_max=500.0
-                                    )
-                                ),
-                            ),
-                        ),
-                    ),
-                ),
-            )
-        ).get_names()
-        assert "optical_components.optical_length" in names.coords
+        """A computed length is still a fact about the component.
+
+        `optical_length` is a property rather than a field now, so it is
+        only in the vocabulary because the model names it as one it
+        derives. The bounds it comes from are deliberately not: they place
+        the component rather than say anything about the fiber in it.
+        """
+        coords = build_inventory().get_names().coords
+        assert "optical_components.optical_length" in coords
+        assert "optical_components.distance_min" not in coords
 
 
 class TestPathTracks:
@@ -855,15 +891,15 @@ class TestAcquisition:
     """Acquisition resolution mechanisms and code rules."""
 
     def test_single_point_channel_map_is_affine(self):
-        """One point states an origin; distance_step is the slope."""
+        """One point states an origin; spatial_interval is the slope."""
         dmap = inv.DistanceMap(channel=(0.0,), distance=(10.0,))
-        acq = inv.Acquisition(code="RAW", distance_step=2.0, distance_map=dmap)
+        acq = inv.Acquisition(code="RAW", spatial_interval=2.0, distance_map=dmap)
         assert np.allclose(acq.channel_to_distance([0, 5]), [10.0, 20.0])
 
     def test_single_point_instrument_map_is_an_offset(self):
         """Interrogator meters map onto path meters one for one."""
         dmap = inv.DistanceMap(instrument_distance=(-120.5,), distance=(0.0,))
-        acq = inv.Acquisition(code="RAW", distance_step=2.0, distance_map=dmap)
+        acq = inv.Acquisition(code="RAW", spatial_interval=2.0, distance_map=dmap)
         assert np.allclose(acq.channel_to_distance([-120.5, -20.5]), [0.0, 100.0])
 
     def test_map_mapping_used_when_present(self):
@@ -1132,22 +1168,56 @@ class TestPathOperations:
         assert (two.distance_min, two.distance_max) == (100.0, 150.5)
         assert "distance_min" not in inv.OpticalPath.model_fields
 
+    @pytest.fixture()
+    def tiled(self):
+        """A path of three components, asymmetric so reversal shows.
+
+        The fixture path holds one component spanning its whole extent,
+        which maps onto itself under reversal and so cannot tell a working
+        `reverse` from one which only re-orders the tuple.
+        """
+        return inv.OpticalPath(
+            optical_components=(
+                inv.FiberSegment(name="a", distance_min=0.0, distance_max=100.0),
+                inv.Splice(name="s", distance_min=100.0),
+                inv.FiberSegment(name="b", distance_min=100.0, distance_max=250.0),
+            )
+        )
+
     @pytest.mark.parametrize(
-        "operation",
+        ("operation", "expected"),
         [
-            lambda p: p.select(distance=(50.0, 150.0)),
-            lambda p: p.split_at(100.0)[1],
-            lambda p: p.reverse(),
-            lambda p: p + p,
+            (
+                lambda p: p.select(distance=(50.0, 150.0)),
+                [("a", (50.0, 100.0)), ("s", (100.0, 100.0)), ("b", (100.0, 150.0))],
+            ),
+            (
+                lambda p: p.split_at(100.0)[1],
+                [("s", (100.0, 100.0)), ("b", (100.0, 250.0))],
+            ),
+            (
+                lambda p: p.reverse(),
+                [("b", (0.0, 150.0)), ("s", (150.0, 150.0)), ("a", (150.0, 250.0))],
+            ),
+            (
+                lambda p: p + p,
+                [
+                    ("a", (0.0, 100.0)),
+                    ("s", (100.0, 100.0)),
+                    ("b", (100.0, 250.0)),
+                    ("a", (250.0, 350.0)),
+                    ("s", (350.0, 350.0)),
+                    ("b", (350.0, 500.0)),
+                ],
+            ),
         ],
         ids=["select", "split_at", "reverse", "add"],
     )
-    def test_components_keep_absolute_distances(self, path, operation):
-        """However a path is cut about, its components still tile it."""
-        out = operation(path)
-        components = out.optical_components
-        assert components[0].distance_min == out.distance_min
-        assert components[-1].distance_max == out.distance_max
+    def test_components_keep_absolute_distances(self, tiled, operation, expected):
+        """However a path is cut about, its components land where they are."""
+        out = operation(tiled)
+        assert [(x.name, x.interval) for x in out.optical_components] == expected
+        # And the result is still a path: the pieces tile what they span.
         assert out.check() is out
 
     def test_select_preserves_absolute_distances(self, path):
@@ -2311,10 +2381,10 @@ class TestCrsShape:
 class TestPrReviewFindings:
     """Regressions for findings raised while reviewing the model PR."""
 
-    def test_non_finite_distance_step_rejected(self):
+    def test_non_finite_spatial_interval_rejected(self):
         """A nan interval would silently poison every resolved distance."""
         with pytest.raises(ValidationError):
-            inv.Acquisition(code="RAW", distance_step=np.nan)
+            inv.Acquisition(code="RAW", spatial_interval=np.nan)
 
     @pytest.mark.parametrize("name", ["distance_min", "start_distance"])
     def test_removed_origin_explains_itself(self, name):

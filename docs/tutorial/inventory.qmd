@@ -36,7 +36,7 @@ flowchart LR
   OpticalPath -->|labels| OpticalPathLabel
 ```
 
-The components are the physical pieces the light passes through, and they are what gives the path its extent: each one states the stretch of optical distance it occupies, and they tile — each begins where the last ended — so the path runs from the first to the last. They are read in distance order whatever order the rows are written in, so a component states where it is rather than being counted through to it. The other three describe intervals of that length — the geometry holds the measured curves along the fiber, of which the columns the coordinate reference system names are position; the coupling says how the fiber is attached to the ground there; and the labels name anything else worth recording per interval. Each of those covers what it covers, and none of them has to cover the whole path.
+The components are the physical pieces the light passes through, and they are what gives the path its extent: each one states the stretch of optical distance it occupies, and they tile — each begins where the last ended — so the path runs from the first to the last. They are read in distance order whatever order the rows are written in, so a component states where it is rather than being counted through to it. The other three describe intervals of that extent — the geometry holds the measured curves along the fiber, of which the columns the coordinate reference system names are position; the coupling says how the fiber is attached to the ground there; and the labels name anything else worth recording per interval. Each of those covers what it covers, and none of them has to cover the whole path.
 
 Objects reused in several places — interrogators, cables, enclosures, measurements — are written once under the inventory's `resources` and referred to elsewhere by their `resource_id`. Such a field accepts either the object itself or that string, which is what the dashed edges below mean.
 
@@ -75,7 +75,7 @@ files = {
         "data_category: DAS\n"
         "data_type: velocity\n"
         "gauge_length: 10.0\n"
-        "distance_step: 1.0\n"
+        "spatial_interval: 1.0\n"
         "interrogator: fi-1\n"
         # Where the interrogator's own axis lands on the optical path.
         "distance_map:\n"

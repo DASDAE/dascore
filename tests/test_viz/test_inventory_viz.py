@@ -18,6 +18,7 @@ from dascore.viz.inventory import (
     COMPONENT_COLORS,
     _distance_window,
     _legend_names,
+    _track_frame,
     map_path,
     path,
     timeline,
@@ -131,7 +132,7 @@ def build_site_inventory() -> inv.Inventory:
             time_min="2026-06-01",
             time_max="2026-06-15",
             data_type="strain_rate",
-            distance_step=1.0,
+            spatial_interval=1.0,
             interrogator=inv.Interrogator(manufacturer="Fake", model="FI-1"),
             distance_map=inv.DistanceMap(channel=(0.0, 300.0), distance=(100.0, 400.0)),
             **common,
@@ -140,7 +141,7 @@ def build_site_inventory() -> inv.Inventory:
             code="RAW",
             location_code="00",
             time_min="2026-07-01",
-            distance_step=1.0,
+            spatial_interval=1.0,
             interrogator=inv.Interrogator(serial_number="sn-9"),
             # One point states an origin but no extent, so it draws as a tick.
             distance_map=inv.DistanceMap(channel=(0.0,), distance=(100.0,)),
@@ -369,6 +370,23 @@ class TestSelectPath:
 
 class TestPath:
     """The tracks along one path."""
+
+    def test_the_component_lane_is_where_the_components_are(self):
+        """The lane frame reads each component's own bounds.
+
+        Every fixture path here begins at zero, where a running total and
+        an absolute distance agree; a path which does not is what tells
+        the two apart.
+        """
+        one = inv.OpticalPath(
+            optical_components=(
+                inv.FiberSegment(name="lead", distance_min=100.0, distance_max=200.0),
+                inv.FiberSegment(name="run", distance_min=200.0, distance_max=350.0),
+            )
+        )
+        frame = _track_frame(one, ())
+        lane = frame[frame["lane"] == "components"]
+        assert list(zip(lane["start"], lane["end"])) == [(100.0, 200.0), (200.0, 350.0)]
 
     def test_all_tracks(self, site):
         """Every track becomes a lane, channels first."""

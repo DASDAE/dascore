@@ -842,7 +842,7 @@ def inventory_patch_pair():
         data_type="velocity",
         data_category="DAS",
         gauge_length=10.0,
-        distance_step=1.0,
+        spatial_interval=1.0,
         sample_rate=1.0 / dc.to_float(patch.get_coord("time").step),
         pulse_width=1e-8,
         interrogator=Interrogator(
@@ -1279,7 +1279,7 @@ def tunnel_inventory_files(repaired: bool = True) -> dict[str, str]:
             "data_units: 1/s\n"
             "interrogator: das-interrogator\n"
             "gauge_length: 10.0\n"
-            "distance_step: 1.0\n"
+            "spatial_interval: 1.0\n"
             "sample_rate: 250.0\n"
             "distance_map:\n"
             "  instrument_distance: [0.0, 2000.0]\n"

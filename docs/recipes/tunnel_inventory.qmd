@@ -113,7 +113,7 @@ table(f"{PATH}/optical_components.csv").head(9)
 
 Every column is a field of the class the `object_type` column names, so the table is barely a format of its own — it is the objects, written the way rows of the same shape are worth writing. Row order decides nothing: the distances say where each component is, and the path holds them in that order whatever order they were written in. The blank `container` on the terminator is a field left unset; the ones which are filled are `resource_id`s pointing back at the files above.
 
-The other three tables are written against the same distances, and they are in the table rather than implied by it, so a row can be read on its own:
+The other three tables are written against these same distances, which the components state outright rather than imply, so a component row can be read on its own. Reading them out is then a matter of pairing the two columns:
 
 ```{python}
 def spans(csv_text):
@@ -272,7 +272,7 @@ In September a contractor puts a bucket through the trench cable, fifteen meters
 
 This is what epochs are for. The old description is not edited. A second directory is added, named for the day of the repair, and the first path runs until the second begins.
 
-The components table is where the repair happens: one row becomes five, and the table is renumbered.
+The components table is where the repair happens: one row becomes five, and everything past them moves along the fiber.
 
 ```{python}
 EPOCH = "fiber_arrays/XT.TUN1/path.00@2024-09-01"
@@ -297,8 +297,6 @@ The repair leaves two meters more fiber than it replaced, so every component pas
 #| code-summary: "path.00@2024-09-01 — the same tracks, against the new distances"
 repaired_at = spans(repaired_csv)
 
-# The three other tracks are regenerated from the shifted distances
-# rather than edited row by row.
 repaired_geometry = table(f"{EPOCH}/geometry.csv")
 print(repaired_geometry.head(6).to_string(index=False))
 

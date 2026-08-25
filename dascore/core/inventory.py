@@ -400,23 +400,26 @@ def _distance_line(model, skip=()) -> Text:
 
 class _IntervalModel(InventoryModel):
     """
-    Base for items covering the half-open interval [start, end) of optical
-    distance, matching the start/end idiom of time epochs and how interval
-    bounds read off OTDR and interrogator displays.
+    Base for items covering the half-open interval [distance_min,
+    distance_max) of optical distance, spelled the way DASCore spells
+    every other range and the way interval bounds read off OTDR and
+    interrogator displays.
 
-    Equal start and end make the item a point marker (e.g. a clamp or a
-    labeled spot): it documents a location but covers no distance, so it
-    never participates in coverage, enrichment, or overlap checks.
+    Equal bounds make the item a point marker (e.g. a clamp or a labeled
+    spot): it documents a location but covers no distance, so it takes no
+    channel and never overlaps anything. A component is the exception --
+    it is a point in a track which must tile, so where it sits still has
+    to be where its neighbours meet.
     """
 
     distance_min: float = Field(
         allow_inf_nan=False,
-        description="Start optical distance of this interval in meters.",
+        description="Lower optical distance of this interval in meters.",
     )
     distance_max: float = Field(
         allow_inf_nan=False,
         description=(
-            "End optical distance of this interval in meters; equal to "
+            "Upper optical distance of this interval in meters; equal to "
             "distance_min for a point marker."
         ),
     )
@@ -452,8 +455,8 @@ class _OpticalComponentBase(_IntervalModel):
     Base class for physical optical components in an optical path.
 
     A component states the stretch of optical distance it occupies, the
-    way every other track of a path does, rather than a length which only
-    means something after the lengths before it are added up.
+    way every other track of a path does; ``optical_length`` is what that
+    pair implies.
 
     Every component carries a unified one-way transmission ``loss_db`` and
     return ``reflectance_db`` (the two quantities an OTDR trace shows per
@@ -564,11 +567,33 @@ class _PointComponent(_OpticalComponentBase):
     @model_validator(mode="before")
     @classmethod
     def _end_where_it_begins(cls, data):
-        """A stated start with no end is a marker at that distance."""
-        if isinstance(data, Mapping) and "distance_max" not in data:
-            if (start := data.get("distance_min")) is not None:
-                data = {**data, "distance_max": start}
-        return data
+        """A start with no end stated is a marker at that distance.
+
+        Blank counts as unstated, not as an error: a CSV cell arrives
+        dropped and a YAML one arrives as None, and the two spell the same
+        thing.
+        """
+        if not isinstance(data, Mapping):
+            return data
+        if data.get("distance_max") is not None:
+            return data
+        if (start := data.get("distance_min")) is None:
+            return data
+        return {**data, "distance_max": start}
+
+    def new(self, **kwargs) -> Self:
+        """
+        Return a copy with some fields updated.
+
+        Moving a point marker moves both its ends. `new` merges the fields
+        already set, so the end would otherwise stay where it was and the
+        marker would silently acquire a length -- or refuse to move past
+        its own end.
+        """
+        moved = "distance_min" in kwargs and "distance_max" not in kwargs
+        if moved and self.distance_min == self.distance_max:
+            kwargs["distance_max"] = kwargs["distance_min"]
+        return super().new(**kwargs)
 
 
 class Connector(_PointComponent):
@@ -818,7 +843,7 @@ class DistanceMap(InventoryModel):
     piecewise-linearly interpolated; channels outside the covered range are
     undefined (NaN). A single-point map states an origin and takes its
     slope from the axis it is read on: the acquisition's nominal
-    ``distance_step`` on the channel axis, and one meter of path per
+    ``spatial_interval`` on the channel axis, and one meter of path per
     interrogator meter on the instrument_distance axis.
     """
 
@@ -943,7 +968,7 @@ class DistanceMap(InventoryModel):
             if slope is None:
                 msg = (
                     "A single-point DistanceMap requires a slope "
-                    "(the acquisition's distance_step)."
+                    "(the acquisition's spatial_interval)."
                 )
                 raise InvalidInventoryError(msg)
             return dist[0] + (vals - source[0]) * slope
@@ -960,7 +985,7 @@ class Acquisition(TimeRangedModel):
     overlapping time ranges. The ``location_code`` names the optical path
     lineage this acquisition interrogates. The ``distance_map`` is the one
     channel-resolution mechanism: a single control point states an origin
-    (and, on the channel axis, takes ``distance_step`` as its slope),
+    (and, on the channel axis, takes ``spatial_interval`` as its slope),
     and more points describe a measured, bending relationship.
     On export to FDSN DAS metadata, ``extra_fields`` maps to native_headers.
     """
@@ -1016,7 +1041,7 @@ class Acquisition(TimeRangedModel):
     sample_rate: FiniteFloat | None = Field(
         default=None, description="FDSN-style acquisition sample rate in Hz."
     )
-    distance_step: FiniteFloat | None = Field(
+    spatial_interval: FiniteFloat | None = Field(
         default=None,
         description=(
             "Nominal spatial sampling interval between channels in meters. "
@@ -1043,7 +1068,7 @@ class Acquisition(TimeRangedModel):
 
         Both spellings are refused: `start_distance` is what the field was
         called when it existed, and `distance_min` is what it would be
-        called now, so neither reads as an origin the acquisition honours.
+        called now, so neither reads as an origin the acquisition honors.
         """
         if not isinstance(data, Mapping):
             return data
@@ -1055,7 +1080,7 @@ class Acquisition(TimeRangedModel):
                 "is the one channel-resolution mechanism. Write "
                 f"{name}: {data[name]} as distance_map: "
                 f"{{channel: [0], distance: [{data[name]}]}}, which "
-                "states the same origin and takes distance_step as its slope."
+                "states the same origin and takes spatial_interval as its slope."
             )
             raise InvalidInventoryError(msg)
         return data
@@ -1082,7 +1107,7 @@ class Acquisition(TimeRangedModel):
         # The slope carries the units of the axis being read: meters of path
         # per channel on the channel axis, and per interrogator meter --
         # nominally one -- on the instrument_distance axis.
-        slope = self.distance_step if axis == "channel" else 1.0
+        slope = self.spatial_interval if axis == "channel" else 1.0
         return dist_map.map_to_distance(values, axis=axis, slope=slope)
 
 
@@ -1243,6 +1268,21 @@ class OpticalPath(TimeRangedModel):
     """
 
     name: str = Field(default="", description="Human-readable optical path name.")
+
+    @model_validator(mode="before")
+    @classmethod
+    def _reject_start_distance(cls, data):
+        """Explain the removed origin rather than 'extra inputs'."""
+        if isinstance(data, Mapping) and "start_distance" in data:
+            msg = (
+                "OpticalPath no longer takes start_distance; its components "
+                "carry absolute distances, so the path spans whatever they "
+                "do. Give the first component a distance_min of "
+                f"{data['start_distance']} instead."
+            )
+            raise InvalidInventoryError(msg)
+        return data
+
     location_code: LocationCodeStr = Field(
         default="",
         description=(
@@ -1271,8 +1311,9 @@ class OpticalPath(TimeRangedModel):
         description="OTDR and other optical measurements of this whole path.",
     )
 
-    @model_validator(mode="after")
-    def _order_components(self) -> Self:
+    @field_validator("optical_components")
+    @classmethod
+    def _order_components(cls, value):
         """
         Hold the components in the order they lie along the fiber.
 
@@ -1280,13 +1321,7 @@ class OpticalPath(TimeRangedModel):
         in decides nothing -- and a point marker sorts before the segment
         it touches, which is where the fiber puts it.
         """
-        stated = self.optical_components
-        ordered = tuple(sorted(stated, key=lambda x: x.interval))
-        if ordered != stated:
-            # __dict__, not model_copy: an after-validator returning a copy
-            # re-enters validation, and this one would then never settle.
-            self.__dict__["optical_components"] = ordered
-        return self
+        return tuple(sorted(value, key=lambda x: x.interval))
 
     def __rich__(self) -> Text:
         """One line naming the path, its extent, and its track sizes."""
@@ -1300,14 +1335,17 @@ class OpticalPath(TimeRangedModel):
     @property
     def distance_min(self) -> float:
         """The start of this path's optical-distance axis."""
+        # The outermost bound rather than the first component's: model_copy
+        # skips the ordering validator, and a path is asked its extent
+        # before anything has checked that its components tile.
         components = self.optical_components
-        return components[0].distance_min if components else 0.0
+        return min((x.distance_min for x in components), default=0.0)
 
     @property
     def distance_max(self) -> float:
         """The end of this path's optical-distance axis."""
         components = self.optical_components
-        return components[-1].distance_max if components else 0.0
+        return max((x.distance_max for x in components), default=0.0)
 
     def coordinates_at(self, distances, crs) -> np.ndarray:
         """

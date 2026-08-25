@@ -214,7 +214,10 @@ def interval_value_type(error: type[Exception] = ParameterError):
     ----------
     error
         The exception raised for a value the interval cannot carry, so
-        each caller refuses in the vocabulary of its own subsystem.
+        each caller refuses in the vocabulary of its own subsystem. It
+        surfaces as itself only where `normalize_value` is called
+        directly; pydantic wraps whatever a validator raises in a
+        `ValidationError`, keeping the message but not the type.
 
     Examples
     --------

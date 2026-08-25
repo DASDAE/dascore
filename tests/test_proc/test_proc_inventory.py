@@ -140,7 +140,7 @@ class TestAttrs:
         decimated = patch.decimate(time=2)
         out = decimated.enrich(inventory, coords=False)
         assert "sample_rate" not in dict(out.attrs)
-        assert "distance_step" not in dict(out.attrs)
+        assert "spatial_interval" not in dict(out.attrs)
 
     def test_named_coord_redundant_restores(self, patch, inventory):
         """Naming one restores the as-acquired value, as for data state."""
@@ -831,7 +831,7 @@ class TestEnrichContracts:
         """Interrogator meters map onto path meters one for one."""
         acq = inventory.networks[0].fiber_arrays[0].acquisitions[0]
         one_point = acq.new(
-            distance_step=2.0,
+            spatial_interval=2.0,
             distance_map=DistanceMap(instrument_distance=(0.0,), distance=(100.0,)),
         )
         inv = inventory.replace(acq, one_point)
@@ -927,7 +927,7 @@ class TestEnrichContracts:
         """A channel axis with no spacing does not veto the other axis."""
         no_slope = _replace_acquisition(
             inventory,
-            distance_step=None,
+            spatial_interval=None,
             distance_map=DistanceMap(
                 channel=(0.0,), instrument_distance=(0.0,), distance=(100.0,)
             ),
@@ -941,7 +941,7 @@ class TestEnrichContracts:
         """When no axis can be read, the reasons are reported together."""
         no_slope = _replace_acquisition(
             inventory,
-            distance_step=None,
+            spatial_interval=None,
             distance_map=DistanceMap(channel=(0.0,), distance=(100.0,)),
         )
         channels = np.arange(len(patch.get_coord("distance")))
