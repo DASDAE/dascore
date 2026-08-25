@@ -8,7 +8,6 @@ from typing import Any, Final
 from uuid import uuid4
 
 import numpy as np
-from rich.text import Text
 
 import dascore as dc
 import dascore.proc.coords
@@ -26,14 +25,22 @@ from dascore.utils.array import (
     patch_array_ufunc,
 )
 from dascore.utils.array_api import to_numpy
-from dascore.utils.display import array_to_text, attrs_to_text, get_header_text
+from dascore.utils.display import (
+    Repr,
+    RichRepr,
+    array_to_text,
+    attrs_to_text,
+    get_header_text,
+    render_text,
+    split_block,
+)
 from dascore.utils.namespace import NamespaceOwner
 from dascore.utils.patch import check_patch_attrs, check_patch_coords, get_patch_names
 from dascore.utils.time import to_float
 from dascore.workflow.identity import with_patch_id
 
 
-class Patch(NamespaceOwner):
+class Patch(RichRepr, NamespaceOwner):
     """
     A Class for managing data and metadata.
 
@@ -204,20 +211,24 @@ class Patch(NamespaceOwner):
         out = out if not copy else np.copy(out)
         return out
 
-    def __rich__(self):
-        header = get_header_text("Patch ⚡")
-        coords = self.coords.__rich__()
+    def _repr_node(self) -> Repr:
+        """The banner, the coordinates, the data and the attributes."""
         attrs = self.attrs
-        data = array_to_text(self.data, units=attrs.get("data_units"))
-        attrs = attrs_to_text(self.attrs)
-        out = Text("\n").join([header, coords, data, attrs])
-        return out
+        return Repr(
+            header=get_header_text("Patch ⚡"),
+            body=(
+                split_block(self.coords.__rich__(), kind="coords"),
+                split_block(
+                    array_to_text(self.data, units=attrs.get("data_units")),
+                    kind="data",
+                ),
+                split_block(attrs_to_text(attrs), kind="attrs"),
+            ),
+            kind="patch",
+        )
 
-    def __str__(self):
-        out = self.__rich__()
-        return str(out)
-
-    __repr__ = __str__
+    def __rich__(self):
+        return render_text(self._repr_node())
 
     def flat_dump(self, exclude=None) -> dict:
         """Return a flat summary dict for dataframe-oriented helpers."""

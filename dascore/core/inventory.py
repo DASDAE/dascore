@@ -54,11 +54,14 @@ from dascore.models import (
     UnitQuantity,
 )
 from dascore.utils.display import (
+    Repr,
     get_header_text,
     indent_text,
     limit_reprs,
     mapping_to_text,
     model_to_line,
+    render_text,
+    split_block,
     stated_fields,
 )
 from dascore.utils.documents import (
@@ -2277,7 +2280,7 @@ class Inventory(NamespaceOwner, InventoryModel):
         self.__pydantic_fields_set__.update({"resources", "networks"})
         return self
 
-    def __rich__(self) -> Text:
+    def _repr_node(self) -> Repr:
         """
         The banner, the network tree, and what the manifest itself states.
 
@@ -2299,12 +2302,17 @@ class Inventory(NamespaceOwner, InventoryModel):
             **stated_fields(self, skip=shown),
             "coordinate_reference_system": self.coordinate_reference_system,
         }
-        return Text("\n").join([header, networks, mapping_to_text(attrs, "Attributes")])
+        return Repr(
+            header=header,
+            body=(
+                split_block(networks, kind="tree"),
+                split_block(mapping_to_text(attrs, "Attributes"), kind="attrs"),
+            ),
+            kind="inventory",
+        )
 
-    def __str__(self) -> str:
-        return str(self.__rich__())
-
-    __repr__ = __str__
+    def __rich__(self) -> Text:
+        return render_text(self._repr_node())
 
     def get_resource(self, resource_id: str):
         """Return the shareable resource registered under a resource_id."""

@@ -18,7 +18,11 @@ from dascore.constants import dascore_styles
 from dascore.core.annotations import AnnotationColumn, AnnotationSetAttrs
 from dascore.core.inventory import Acquisition, Cable, Network
 from dascore.utils.display import (
+    Raw,
+    Repr,
+    Section,
     array_to_text,
+    attrs_to_text,
     counts_to_text,
     get_header_text,
     get_nice_text,
@@ -29,6 +33,8 @@ from dascore.utils.display import (
     mapping_to_text,
     model_to_line,
     percent,
+    render_text,
+    split_block,
     stated_fields,
     value_to_text,
 )
@@ -477,3 +483,133 @@ class TestDascoreStyles:
         used = Path(dc.__file__).parent.rglob("*.py")
         sources = [x.read_text() for x in used if x.name != "constants.py"]
         assert any(f'"{name}"' in x or f"'{name}'" in x for x in sources)
+
+
+@pytest.fixture(scope="module")
+def repr_blocks():
+    """Every kind of block a dascore repr is built from."""
+    patch = dc.get_example_patch()
+    inventory = dc.get_example_inventory("tunnel")
+    return {
+        "coords": patch.coords.__rich__(),
+        "coord": patch.coords.coord_map["time"].__rich__(),
+        "data": array_to_text(patch.data),
+        "attrs": attrs_to_text(patch.attrs),
+        "inventory": inventory.__rich__(),
+        "model": inventory.networks[0].__rich__(),
+        "header": get_header_text("Patch ⚡"),
+        "one_line": Text("no newline in this one", style="bold"),
+        "empty": Text(""),
+    }
+
+
+class TestSplitBlock:
+    """Tests for turning a rendered block into a section."""
+
+    def test_round_trips(self, repr_blocks):
+        """
+        Splitting then rendering must give back exactly what went in.
+
+        This is what makes the node tree provably free of drift: the
+        text repr is not re-derived from the nodes, it is reassembled.
+        """
+        for name, text in repr_blocks.items():
+            assert render_text(split_block(text)) == text, name
+
+    def test_round_trip_keeps_spans(self, repr_blocks):
+        """Colour survives the trip, not only the characters."""
+        for name, text in repr_blocks.items():
+            assert render_text(split_block(text)).spans == text.spans, name
+
+    def test_a_trailing_blank_line_survives(self):
+        """
+        The attributes block ends on a newline and must keep it.
+
+        ``Text.split`` drops a trailing blank, which is why the block is
+        sliced instead. A repr which lost it would print one line short.
+        """
+        text = Text("head\nbody\n")
+        assert render_text(split_block(text)).plain == "head\nbody\n"
+
+    def test_first_line_is_the_title(self, repr_blocks):
+        """The line a reader is shown when the body is not."""
+        section = split_block(repr_blocks["coords"])
+        assert section.title.plain == "➤ Coordinates (distance: 300, time: 2000)"
+
+    def test_a_single_line_has_no_body(self, repr_blocks):
+        """A block with nothing under it is a statement, not a container."""
+        assert split_block(repr_blocks["one_line"]).body == ()
+
+    def test_kind_is_carried(self, repr_blocks):
+        """The kind is what a renderer styles the section by."""
+        assert split_block(repr_blocks["data"], kind="data").kind == "data"
+
+
+class TestRenderText:
+    """Tests for rendering repr nodes as text."""
+
+    def test_raw_is_emitted_as_it_stands(self):
+        """A producer which laid its own text out is not re-laid-out."""
+        text = Text("   already    spaced")
+        assert render_text(Raw(text)) == text
+
+    def test_section_joins_body_with_newlines(self):
+        """A body sits on the lines under the title."""
+        node = Section(Text("title"), (Raw(Text("a")), Raw(Text("b"))))
+        assert render_text(node).plain == "title\na\nb"
+
+    def test_repr_joins_header_and_sections(self):
+        """The banner, then each section under it."""
+        node = Repr(Text("banner"), (Section(Text("one")), Section(Text("two"))))
+        assert render_text(node).plain == "banner\none\ntwo"
+
+    def test_a_repr_may_state_no_sections(self):
+        """An object with nothing to show is still an object."""
+        assert render_text(Repr(Text("banner"))).plain == "banner"
+
+    def test_something_which_is_not_a_node(self):
+        """A renderer says what it cannot draw rather than drawing it wrong."""
+        with pytest.raises(NotImplementedError, match="cannot render int"):
+            render_text(42)
+
+
+class TestRichRepr:
+    """Tests for the mixin every rich-rendered class prints through."""
+
+    @pytest.fixture(scope="class")
+    def rich_objects(self):
+        """One of each class which prints through the mixin."""
+        patch = dc.get_example_patch()
+        inventory = dc.get_example_inventory("tunnel")
+        return {
+            "patch": patch,
+            "coord_manager": patch.coords,
+            "coord": patch.coords.coord_map["time"],
+            "spool": dc.get_example_spool(),
+            "inventory": inventory,
+            "network": inventory.networks[0],
+        }
+
+    def test_str_is_the_rich_rendering(self, rich_objects):
+        """
+        What a plain terminal prints is what a rich one renders.
+
+        This is the assertion which catches a pydantic host listing the
+        mixin after ``BaseModel``: the field dump it would print instead
+        is still a non-empty string, so a weaker test passes.
+        """
+        for name, obj in rich_objects.items():
+            assert str(obj) == str(obj.__rich__()), name
+
+    def test_repr_is_str(self, rich_objects):
+        """Neither form drifts from the other."""
+        for name, obj in rich_objects.items():
+            assert repr(obj) == str(obj), name
+
+    def test_a_pydantic_host_does_not_print_a_field_dump(self, rich_objects):
+        """The failure mode the mixin ordering exists to prevent."""
+        for name in ("coord", "coord_manager", "network"):
+            obj = rich_objects[name]
+            fields = getattr(type(obj), "model_fields", {})
+            dumped = [f"{x}=" for x in fields]
+            assert not all(x in str(obj) for x in dumped), name

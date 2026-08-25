@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import textwrap
 from collections import Counter
-from collections.abc import Iterable, Mapping, Sized
+from collections.abc import Callable, Iterable, Mapping, Sized
 from contextlib import suppress
+from dataclasses import dataclass, field
 from functools import singledispatch
 
 import numpy as np
@@ -60,6 +61,107 @@ _NULLABLE_TYPES = (
     pd.Timedelta,
     type(pd.NaT),
 )
+
+
+@dataclass(frozen=True, slots=True)
+class Raw:
+    """
+    Text whose producer has already laid it out.
+
+    A renderer emits it as it stands. This is what lets a class which
+    states no nodes of its own still render correctly inside one which
+    does, and it stays the home of anything whose spacing is load
+    bearing, such as an array printed in columns.
+    """
+
+    text: Text
+
+
+@dataclass(frozen=True, slots=True)
+class Section:
+    """
+    A titled block: the line which names it, and what sits under it.
+
+    The title is the line a reader is shown when the body is not; a
+    section with no body is a statement rather than a container.
+    """
+
+    title: Text
+    body: tuple[Raw, ...] = ()
+    kind: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class Repr:
+    """A whole repr: the banner which names the object, then its sections."""
+
+    header: Text
+    body: tuple[Section, ...] = field(default_factory=tuple)
+    kind: str = ""
+
+
+@singledispatch
+def render_text(node) -> Text:
+    """Render a repr node as rich text."""
+    msg = f"cannot render {type(node).__name__} as text"
+    raise NotImplementedError(msg)
+
+
+@render_text.register
+def _render_raw(node: Raw) -> Text:
+    return node.text
+
+
+@render_text.register
+def _render_section(node: Section) -> Text:
+    out = node.title
+    for child in node.body:
+        out += Text("\n") + render_text(child)
+    return out
+
+
+@render_text.register
+def _render_repr(node: Repr) -> Text:
+    blocks = [node.header, *(render_text(x) for x in node.body)]
+    return Text("\n").join(blocks)
+
+
+def split_block(text: Text, kind: str = "") -> Section:
+    """
+    Turn a block of rendered text into a section, losslessly.
+
+    The first line names the block and the rest is its body, which is
+    how every block a dascore repr is built from already reads. Slicing
+    rather than splitting is deliberate: ``Text.split`` drops a trailing
+    blank line, and the attributes block ends on one.
+    """
+    index = text.plain.find("\n")
+    if index == -1:
+        return Section(text, kind=kind)
+    return Section(text[:index], (Raw(text[index + 1 :]),), kind=kind)
+
+
+class RichRepr:
+    """
+    Print an object the way its ``__rich__`` renders it.
+
+    One definition for every class which has a rich rendering, so a plain
+    terminal and a rich one say the same thing and neither drifts from the
+    other. A host states ``__rich__``; this states the rest.
+
+    List this before any base which defines its own ``__str__``, as a
+    pydantic model does. The one the MRO reaches first is the only one
+    called, and a host which lists this last prints a field dump.
+    """
+
+    # No ``__rich__`` stub here on purpose: every host states one, so a
+    # guard for its absence is a branch no test can reach.
+    __rich__: Callable[[], Text]
+
+    def __str__(self) -> str:
+        return str(self.__rich__())
+
+    __repr__ = __str__
 
 
 @singledispatch

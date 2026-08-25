@@ -54,7 +54,7 @@ from dascore.utils.array import (
     _is_text_coercible_array,
     hash_array,
 )
-from dascore.utils.display import get_nice_text
+from dascore.utils.display import RichRepr, get_nice_text
 from dascore.utils.docs import compose_docstring, get_docstring
 from dascore.utils.misc import (
     _get_nullish,
@@ -350,7 +350,7 @@ def get_compatible_values(val, dtype):
     return val
 
 
-class BaseCoord(DascoreBaseModel, abc.ABC):
+class BaseCoord(RichRepr, DascoreBaseModel, abc.ABC):
     """
     Coordinate interface.
 
@@ -630,11 +630,6 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
             base += get_nice_text(unit_str, style="units")
         base += Text(" )")
         return base
-
-    def __str__(self):
-        return str(self.__rich__())
-
-    __repr__ = __str__
 
     def __array__(self, dtype=None, copy=False):
         """Numpy method for getting array data with `np.array(coord)`."""

@@ -60,11 +60,15 @@ from dascore.models import (
     UnitQuantity,
 )
 from dascore.utils.display import (
+    Repr,
+    RichRepr,
     counts_to_text,
     get_header_text,
     get_nice_text,
     mapping_to_text,
     model_to_line,
+    render_text,
+    split_block,
     stated_fields,
 )
 from dascore.utils.documents import write_document
@@ -289,7 +293,7 @@ def _tag(name: str):
     return Field(default=name, repr=False)
 
 
-class _AnnotationModel(DascoreBaseModel):
+class _AnnotationModel(RichRepr, DascoreBaseModel):
     """Base for the immutable models an annotation set hands out."""
 
     model_config = ConfigDict(
@@ -303,11 +307,6 @@ class _AnnotationModel(DascoreBaseModel):
     def __rich__(self) -> Text:
         """One line naming the class and what it states."""
         return model_to_line(self)
-
-    def __str__(self) -> str:
-        return str(self.__rich__())
-
-    __repr__ = __str__
 
 
 # --- Curves ---------------------------------------------------------------
@@ -751,7 +750,7 @@ class _Spelling(NamedTuple):
     high: str | None
 
 
-class AnnotationSet(NamespaceOwner):
+class AnnotationSet(RichRepr, NamespaceOwner):
     """
     An immutable, dataframe-backed set of annotations over patch dimensions.
 
@@ -917,23 +916,27 @@ class AnnotationSet(NamespaceOwner):
             )
         )
 
-    def __rich__(self) -> Text:
+    def _repr_node(self) -> Repr:
         """The banner, then what the set spans, holds, and says of itself."""
         count = len(self)
         plural = "" if count == 1 else "s"
         name = f"AnnotationSet \U0001f3f7 ({count} Annotation{plural})"
-        blocks = [get_header_text(name), self._dims_text()]
+        blocks = [(self._dims_text(), "coords")]
         if contents := self._contents():
-            blocks.append(mapping_to_text(contents, "Contents", style="dc_red"))
+            blocks.append(
+                (mapping_to_text(contents, "Contents", style="dc_red"), "contents")
+            )
         attrs = stated_fields(self._attrs, skip=("dims",))
         if attrs:
-            blocks.append(mapping_to_text(attrs, "Attributes"))
-        return Text("\n").join(blocks)
+            blocks.append((mapping_to_text(attrs, "Attributes"), "attrs"))
+        return Repr(
+            header=get_header_text(name),
+            body=tuple(split_block(x, kind=k) for x, k in blocks),
+            kind="annotation_set",
+        )
 
-    def __str__(self) -> str:
-        return str(self.__rich__())
-
-    __repr__ = __str__
+    def __rich__(self) -> Text:
+        return render_text(self._repr_node())
 
     def _dims_text(self) -> Text:
         """The extent each dimension is annotated over, and how it is spelled."""

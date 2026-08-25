@@ -73,6 +73,7 @@ from dascore.models import (
     frozen_dict_validator,
 )
 from dascore.utils.array_api import array_namespace
+from dascore.utils.display import RichRepr
 from dascore.utils.docs import compose_docstring
 from dascore.utils.mapping import FrozenDict
 from dascore.utils.misc import (
@@ -159,7 +160,7 @@ def _get_indexers_and_new_coords_dict(
     return new_coords, indexers
 
 
-class CoordManager(DascoreBaseModel):
+class CoordManager(RichRepr, DascoreBaseModel):
     """
     Class for managing coordinates.
 
@@ -763,11 +764,6 @@ class CoordManager(DascoreBaseModel):
         except (ValueError, IndexError):
             msg = f"Patch has no dimension: {dim}. Its dimensions are: {self.dims}"
             raise CoordError(msg)
-
-    def __str__(self):
-        return str(self.__rich__())
-
-    __repr__ = __str__
 
     def equals(self, other) -> bool:
         """Return True if other coordinates are approx equal."""

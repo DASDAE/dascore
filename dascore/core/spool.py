@@ -92,11 +92,15 @@ from dascore.utils.chunk_plan import (
 )
 from dascore.utils.display import (
     ACQUISITION_ATTR,
+    Repr,
+    RichRepr,
     elision_text,
     get_header_text,
     get_nice_text,
     group_names,
     human_duration,
+    render_text,
+    split_block,
 )
 from dascore.utils.docs import compose_docstring
 from dascore.utils.misc import (
@@ -150,7 +154,7 @@ class _InventoryQuery(NamedTuple):
 _TIMES = (pd.Timestamp, np.datetime64, pd.Timedelta, np.timedelta64)
 
 
-class Spool(NamespaceOwner):
+class Spool(RichRepr, NamespaceOwner):
     """
     A container of patches: a view over a `PatchCatalog`.
 
@@ -2342,7 +2346,7 @@ class Spool(NamespaceOwner):
             rows = samples_adjusted_envelopes(rows, catalog.residuals, drop_empty=False)
         return {"rows": _strip_identity(rows)}
 
-    def __rich__(self):
+    def _repr_node(self) -> Repr:
         """
         What the spool is, what it spans, and the tracks it holds.
 
@@ -2384,7 +2388,12 @@ class Spool(NamespaceOwner):
                     style=dascore_styles["keys"],
                 )
             )
-        return Text("\n").join(blocks)
+        header, *rest = blocks
+        sections = tuple(split_block(x) for x in rest)
+        return Repr(header=header, body=sections, kind="spool")
+
+    def __rich__(self):
+        return render_text(self._repr_node())
 
     def _stated_dims(self, df) -> list[str]:
         """The dimensions this spool's patches actually have."""
@@ -2609,11 +2618,6 @@ class Spool(NamespaceOwner):
         if measurable and (tracks := self._tracks_text(df, measurable[0])) is not None:
             blocks.append(tracks)
         return blocks
-
-    def __str__(self):
-        return str(self.__rich__())
-
-    __repr__ = __str__
 
 
 # There is one spool class; the old ABC name stays as an alias so
