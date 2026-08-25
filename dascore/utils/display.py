@@ -43,6 +43,18 @@ _SECONDS_IN_DAY = 86_400.0
 # rates can be and still describe the same sampling.
 _NANOSECOND = 1e-9
 
+# What counts as a time, and so what has a duration between two of it.
+_TIME_TYPES = (pd.Timestamp, np.datetime64, pd.Timedelta, np.timedelta64)
+
+# How many figures a rate may need and still read as one. 96 kHz stored
+# as a whole number of nanoseconds is 95996.9 Hz exactly; six figures of
+# it is the step again, not the rate anyone would recognise.
+_RATE_FIGURES = 4
+
+# What a rate is read in, largest first -- the same rule a duration and a
+# byte count are read by. Nobody says 96000 Hz.
+_RATE_UNITS = (("MHz", 1e6), ("kHz", 1e3), ("Hz", 1.0))
+
 # Steps a duration is worth reading in, largest first. A year is the
 # Gregorian mean, the same one numpy converts a timedelta64 with, since
 # a multi-year outage reads as "40.7 y" rather than "14852 d".
@@ -383,7 +395,13 @@ def duration_text(low, high) -> Text | None:
     instant, so how far apart two of them are is a fact the line does
     not otherwise carry; every other kind of dimension states its own
     magnitude already, and saying it twice is not saying more.
+
+    Only of two times. A duration is read in seconds, so a distance of
+    299 handed to this would come back as "5 m" -- five minutes, of a
+    span measured in metres.
     """
+    if not isinstance(low, _TIME_TYPES) or not isinstance(high, _TIME_TYPES):
+        return None
     try:
         span = high - low
     except (OutOfBoundsDatetime, OutOfBoundsTimedelta):
@@ -419,13 +437,16 @@ def rate_text(step) -> Text | None:
     if not np.isfinite(seconds) or seconds <= 0:
         return None
     # Say it only if what is said gives the step back. A rate reads as a
-    # round number -- 250 Hz, 1 kHz -- and one which needs ten digits to
+    # round number -- 250 Hz, 1 kHz -- and one which needs six figures to
     # be true is not a fact a reader wanted, it is the step again.
-    said = f"{1.0 / seconds:.6g}"
-    if abs(1.0 / float(said) - seconds) > _NANOSECOND / 2:
+    hertz = float(f"{1.0 / seconds:.{_RATE_FIGURES}g}")
+    if abs(1.0 / hertz - seconds) > _NANOSECOND / 2:
         return None
+    name, scale = next(((x, y) for x, y in _RATE_UNITS if hertz >= y), _RATE_UNITS[-1])
+    scaled = hertz / scale
+    said = f"{scaled:g}" if scaled != int(scaled) else f"{int(scaled)}"
     return Text(" · ", dascore_styles["keys"]) + Text(
-        f"{said} Hz", dascore_styles["units"]
+        f"{said} {name}", dascore_styles["units"]
     )
 
 

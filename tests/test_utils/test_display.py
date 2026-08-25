@@ -738,13 +738,26 @@ class TestRateText:
         [
             (np.timedelta64(4_000_000, "ns"), "250 Hz"),
             (np.timedelta64(1, "s"), "1 Hz"),
-            (np.timedelta64(1, "ms"), "1000 Hz"),
-            (np.timedelta64(976_562, "ns"), "1024 Hz"),
+            (np.timedelta64(1, "ms"), "1 kHz"),
+            (np.timedelta64(976_562, "ns"), "1.024 kHz"),
+            (np.timedelta64(10_417, "ns"), "96 kHz"),
+            (np.timedelta64(1_000, "ns"), "1 MHz"),
         ],
     )
     def test_a_time_step_states_its_rate(self, step, expected):
         """A step in time is quoted in Hz, which is what a rate is."""
         assert expected in str(rate_text(step))
+
+    def test_a_rate_is_read_in_the_unit_it_is_spoken_in(self):
+        """
+        Nobody says 96000 Hz.
+
+        A whole number of nanoseconds is rarely a whole number of hertz,
+        so the rate is rounded to the figures a rate is quoted to and
+        then checked against the step it came from.
+        """
+        assert "96 kHz" in str(rate_text(np.timedelta64(10_417, "ns")))
+        assert "95996" not in str(rate_text(np.timedelta64(10_417, "ns")))
 
     def test_a_rate_which_would_not_give_the_step_back(self):
         """
@@ -757,7 +770,8 @@ class TestRateText:
         assert rate_text(np.timedelta64(39_999_998, "ns") / 10) is None
 
     @pytest.mark.parametrize(
-        "step", [1.0, 300, "not a step", None, np.timedelta64(0, "ns")]
+        "step",
+        [1.0, 300, "not a step", None, np.timedelta64(0, "ns"), np.timedelta64("NaT")],
     )
     def test_only_a_step_measured_in_time(self, step):
         """
@@ -803,6 +817,20 @@ class TestDurationText:
         instant = np.datetime64("2020-01-01T00:00:00")
         assert duration_text(instant, instant) is None
 
+    @pytest.mark.parametrize(
+        ("low", "high"),
+        [(0.0, 299.0), (0, 299), ("a", "b"), (None, None), (1, np.datetime64("now"))],
+        ids=["floats", "ints", "strings", "none", "mixed"],
+    )
+    def test_only_two_times_have_a_duration(self, low, high):
+        """
+        A duration is read in seconds.
+
+        A distance of 299 handed to this would come back as "5 m" --
+        five minutes, of a span measured in metres.
+        """
+        assert duration_text(low, high) is None
+
     def test_further_apart_than_a_timedelta_holds(self):
         """
         Two instants can lie further apart than a Timedelta holds.
@@ -840,6 +868,17 @@ class TestValuesAReaderCanRead:
     def test_the_data_states_how_much_room_it_takes(self):
         """Whether it fits in memory is what dtype times shape is for."""
         assert "4.6 MiB" in str(dc.get_example_patch())
+
+    def test_an_annotation_set_over_distance_states_no_span(self):
+        """
+        A distance annotation is not measured in time.
+
+        299 metres read as a duration is "5 m", which is five minutes.
+        """
+        frame = pd.DataFrame({"distance_min": [0.0], "distance_max": [299.0]})
+        rendered = str(AnnotationSet(frame, dims=("distance",)))
+        assert "299" in rendered
+        assert "<" not in rendered
 
     def test_an_annotation_set_states_its_span(self):
         """The same fact a spool and a patch coordinate state."""

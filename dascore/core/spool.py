@@ -89,6 +89,7 @@ from dascore.utils.chunk_plan import (
     subdivision_pieces,
 )
 from dascore.utils.display import (
+    _TIME_TYPES,
     ACQUISITION_ATTR,
     NodeRepr,
     Repr,
@@ -148,7 +149,7 @@ class _InventoryQuery(NamedTuple):
 # offsets alike. Two such ends are a duration apart, which is a fact
 # neither end carries; every other dimension states its own magnitude
 # in its own units.
-_TIMES = (pd.Timestamp, np.datetime64, pd.Timedelta, np.timedelta64)
+_TIMES = _TIME_TYPES
 
 
 class Spool(NodeRepr, NamespaceOwner):
