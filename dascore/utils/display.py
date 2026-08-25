@@ -7,7 +7,10 @@ from collections import Counter
 from collections.abc import Callable, Iterable, Mapping, Sized
 from contextlib import suppress
 from dataclasses import dataclass, field
-from functools import singledispatch
+from functools import cache, singledispatch
+from html import escape
+from importlib.resources import files
+from itertools import pairwise
 
 import numpy as np
 import pandas as pd
@@ -165,6 +168,125 @@ def split_block(text: Text) -> Section:
     return Section(text[:index], (Raw(text[index:]),))
 
 
+# --- Rendering a repr as HTML -------------------------------------------
+
+# The one class every fragment is wrapped in. Every rule in repr.css is
+# scoped under it, so a stylesheet which lands in a notebook output --
+# where it applies to the whole document -- cannot restyle anything else.
+_HTML_ROOT = "dc-repr"
+
+# Style words a class exists for. Anything else is dropped, which is what
+# rich does with a word it cannot parse, so an unmappable style is
+# uncolored in a browser and in a terminal alike.
+_STYLE_WORDS = frozenset(
+    {
+        "bold",
+        "underline",
+        "blue",
+        "bright_blue",
+        "red",
+        "yellow",
+        "green",
+        "cyan",
+        "dark_orange",
+        "grey50",
+    }
+)
+
+# Words which change what follows rather than describing it: "not bold"
+# is not bold, and "red on blue" paints a background. Read word by word
+# the first would invert and the second would be mistaken, so a style
+# using either is left unstyled.
+_STYLE_QUALIFIERS = frozenset({"not", "on"})
+
+
+def style_classes(style: str | Style | None) -> tuple[str, ...]:
+    """Return the CSS classes a rich style is drawn with."""
+    if style is None:
+        return ()
+    if isinstance(style, Style):
+        words = [
+            x for x, on in (("bold", style.bold), ("underline", style.underline)) if on
+        ]
+        if style.color is not None:
+            words.append(style.color.name)
+    else:
+        words = str(style).split()
+        if _STYLE_QUALIFIERS.intersection(words):
+            return ()
+    return tuple(f"dc-{x}" for x in words if x in _STYLE_WORDS)
+
+
+def text_to_html(text: Text) -> str:
+    """Render a rich Text as an inline HTML fragment."""
+    plain = text.plain
+    cuts = {0, len(plain)}
+    for span in text.spans:
+        cuts.update((span.start, span.end))
+    base = style_classes(text.style)
+    out = []
+    for start, end in pairwise(sorted(cuts)):
+        classes = list(base)
+        for span in text.spans:
+            if span.start <= start and end <= span.end:
+                classes.extend(x for x in style_classes(span.style) if x not in classes)
+        chunk = escape(plain[start:end], quote=False)
+        out.append(
+            f'<span class="{" ".join(classes)}">{chunk}</span>' if classes else chunk
+        )
+    return "".join(out)
+
+
+@cache
+def get_stylesheet() -> str:
+    """Return the CSS every HTML repr carries."""
+    return files("dascore").joinpath("repr.css").read_text(encoding="utf-8")
+
+
+@singledispatch
+def render_html(node) -> str:
+    """Render a repr node as an HTML fragment."""
+    msg = f"cannot render {type(node).__name__} as html"
+    raise NotImplementedError(msg)
+
+
+@render_html.register
+def _html_raw(node: Raw) -> str:
+    # A `pre`, because what a producer laid out is laid out in columns:
+    # an array printed by numpy, a track list padded to line up. HTML
+    # would collapse the runs of spaces which do that work.
+    text = node.text
+    # The newline which separated this from its title belongs to neither.
+    if text.plain.startswith("\n"):
+        text = text[1:]
+    return f'<pre class="dc-body">{text_to_html(text)}</pre>'
+
+
+@render_html.register
+def _html_section(node: Section) -> str:
+    title = text_to_html(node.title)
+    if not node.body:
+        # Nothing to fold, so nothing to offer folding.
+        return f'<div class="dc-line">{title}</div>'
+    lines = sum(x.text.plain.count("\n") for x in node.body)
+    state = " open" if lines <= get_config().display_html_open_lines else ""
+    body = "".join(render_html(x) for x in node.body)
+    return f"<details{state}><summary>{title}</summary>{body}</details>"
+
+
+@render_html.register
+def _html_repr(node: Repr) -> str:
+    # The banner underlines itself with dashes in a terminal, drawn in
+    # columns; here that is a border, and an emoji is not two columns
+    # wide in every font a browser might choose.
+    banner = text_to_html(node.header.split("\n")[0])
+    body = "".join(render_html(x) for x in node.body)
+    return (
+        f'<div class="{_HTML_ROOT}"><style>{get_stylesheet()}</style>'
+        f'<div class="dc-banner">{banner}</div>{body}</div>'
+    )
+
+
 class RichRepr:
     """
     Print an object the way its ``__rich__`` renders it.
@@ -193,13 +315,35 @@ class NodeRepr(RichRepr):
     Print an object from the repr nodes it states.
 
     A host states ``_repr_node``; rendering it is the same call every
-    time, so it is made once here.
+    time, so it is made once here -- as text for a terminal, and as
+    HTML for a display which draws it.
     """
 
     _repr_node: Callable[[], Repr]
 
     def __rich__(self) -> Text:
         return render_text(self._repr_node())
+
+    def _repr_html_(self) -> str | None:
+        """
+        The panel a notebook draws, or None to fall back to the text.
+
+        None is how the display protocol says "not this time", and it is
+        what a repr should say when it cannot draw itself: a traceback
+        out of a formatter is printed into the cell on every echo of the
+        object, which makes it undebuggable at the one moment someone is
+        looking at it. Debug mode wants the traceback instead, which is
+        what the test suite runs with, so a panel which cannot be drawn
+        fails there and stays quiet for a reader.
+        """
+        if not get_config().display_html:
+            return None
+        try:
+            return render_html(self._repr_node())
+        except Exception:
+            if get_config().debug:
+                raise
+            return None
 
 
 @singledispatch

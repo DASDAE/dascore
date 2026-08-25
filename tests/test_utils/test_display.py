@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from html import unescape
 from pathlib import Path
 
 import numpy as np
@@ -22,7 +23,9 @@ from dascore.core.annotations import (
     AnnotationSetAttrs,
 )
 from dascore.core.inventory import Acquisition, Cable, Network
+from dascore.utils import display
 from dascore.utils.display import (
+    _STYLE_WORDS,
     Raw,
     Repr,
     Section,
@@ -33,6 +36,7 @@ from dascore.utils.display import (
     duration_text,
     get_header_text,
     get_nice_text,
+    get_stylesheet,
     group_names,
     human_duration,
     human_size,
@@ -42,9 +46,12 @@ from dascore.utils.display import (
     model_to_line,
     percent,
     rate_text,
+    render_html,
     render_text,
     split_block,
     stated_fields,
+    style_classes,
+    text_to_html,
     value_to_text,
 )
 from dascore.utils.patch import _format_values
@@ -1057,3 +1064,288 @@ class TestValuesAReaderCanRead:
             }
         )
         assert "<9 s>" in str(AnnotationSet(frame, dims=("time",)))
+
+
+class TestStyleClasses:
+    """Tests for the classes a rich style is drawn with."""
+
+    @pytest.mark.parametrize(
+        ("style", "expected"),
+        [
+            ("blue", ("dc-blue",)),
+            ("bold green", ("dc-bold", "dc-green")),
+            ("bright_blue", ("dc-bright_blue",)),
+            ("bold dark_orange", ("dc-bold", "dc-dark_orange")),
+            ("underline", ("dc-underline",)),
+            ("", ()),
+        ],
+    )
+    def test_a_style_string(self, style, expected):
+        """Each word a class exists for becomes one."""
+        assert style_classes(style) == expected
+
+    def test_a_style_object_says_what_its_string_says(self):
+        """
+        The banner states real Style objects where the rest state words.
+
+        Both have to draw the same, or the object's name would be styled
+        one way and everything else another.
+        """
+        assert style_classes(Style(color="blue", bold=True)) == style_classes(
+            "bold blue"
+        )
+
+    @pytest.mark.parametrize("style", ["not bold", "red on blue", "on green"])
+    def test_a_style_which_changes_what_follows(self, style):
+        """
+        Read word by word, "not bold" is bold and "red on blue" is red.
+
+        Neither is what the style says, so it is drawn unstyled rather
+        than drawn wrong.
+        """
+        assert style_classes(style) == ()
+
+    @pytest.mark.parametrize("style", ["chartreuse", "#ff0000", None])
+    def test_a_style_no_class_exists_for(self, style):
+        """
+        Dropped, which is what rich does with a word it cannot parse.
+
+        Nothing an object states reaches a CSS attribute this way, so
+        the stylesheet stays the only thing which says what a color is.
+        """
+        assert style_classes(style) == ()
+
+    def test_a_truecolor_style(self):
+        """A hex color names no class, so it draws as the host's ink."""
+        assert style_classes(Style(color="#ff0000")) == ()
+
+
+class TestTextToHtml:
+    """Tests for rendering a rich Text as an HTML fragment."""
+
+    @pytest.mark.parametrize(
+        ("plain", "expected"),
+        [("a & b", "a &amp; b"), ("<script>", "&lt;script&gt;"), ("x > y", "x &gt; y")],
+    )
+    def test_content_is_escaped(self, plain, expected):
+        """
+        A tag, a unit or a path is a value someone else chose.
+
+        A trusted notebook does not sanitize what a repr emits, so what
+        the repr emits has to be safe on its own.
+        """
+        assert text_to_html(Text(plain)) == expected
+
+    def test_quotes_are_left_alone(self):
+        """Nothing is written into an attribute, so nothing needs it."""
+        assert text_to_html(Text('say "hi"')) == 'say "hi"'
+
+    def test_unstyled_text_emits_no_span(self):
+        """A span which says nothing is bytes in every repr forever."""
+        assert "<span" not in text_to_html(Text("plain"))
+
+    def test_overlapping_spans_compose(self):
+        """
+        A styled value inside a styled field keeps both.
+
+        `get_nice_text` stylizes a Text which already carries spans, so
+        this is how a date inside a coordinate line is drawn.
+        """
+        text = Text("abcdef")
+        text.stylize("bold", 0, 4)
+        text.stylize("blue", 2, 6)
+        html = text_to_html(text)
+        assert 'class="dc-bold dc-blue"' in html
+
+    def test_an_empty_text(self):
+        """An object may state a block with nothing in it."""
+        assert text_to_html(Text("")) == ""
+
+
+class TestRenderHtml:
+    """Tests for rendering repr nodes as HTML."""
+
+    def test_a_section_folds(self, repr_blocks):
+        """A block with a body is what a reader opens and closes."""
+        html = render_html(split_block(repr_blocks["coords"]))
+        assert html.startswith("<details")
+        assert "<summary>" in html
+
+    def test_a_section_with_no_body_does_not(self, repr_blocks):
+        """One line is a statement; offering to fold it says otherwise."""
+        html = render_html(split_block(repr_blocks["one_line"]))
+        assert "<details" not in html
+        assert 'class="dc-line"' in html
+
+    def test_a_long_section_starts_closed(self, repr_blocks):
+        """An array is not read at a glance, so it does not open at one."""
+        with config_context(display_html_open_lines=0):
+            assert "<details>" in render_html(split_block(repr_blocks["coords"]))
+
+    def test_the_banner_drops_its_underline(self):
+        """
+        A terminal underlines the banner with dashes, drawn in columns.
+
+        Here that is a border, and an emoji is not two columns wide in
+        every font a browser might choose.
+        """
+        node = Repr(get_header_text("Patch ⚡"))
+        assert "---" not in render_html(node)
+
+    def test_the_fragment_is_scoped(self):
+        """
+        Everything the stylesheet says is said about this class.
+
+        A repr is emitted into a notebook output, where a `style`
+        applies to the whole document.
+        """
+        assert render_html(Repr(Text("x"))).startswith('<div class="dc-repr">')
+
+    def test_something_which_is_not_a_node(self):
+        """A renderer says what it cannot draw rather than drawing it wrong."""
+        with pytest.raises(NotImplementedError, match="cannot render int"):
+            render_html(42)
+
+
+class TestStylesheet:
+    """Tests for the CSS every repr carries."""
+
+    def test_every_selector_is_scoped(self):
+        """
+        A bare `pre` rule here restyles every code block on the page.
+
+        The stylesheet travels inside a notebook output cell, where it
+        applies to the whole document around it.
+        """
+        body = re.sub(r"/\*.*?\*/", "", get_stylesheet(), flags=re.DOTALL)
+        selectors = [
+            part.strip()
+            for block in re.findall(r"([^{}]+)\{", body)
+            for part in block.split(",")
+        ]
+        stated = [x for x in selectors if x and not x.startswith("@")]
+        assert stated
+        assert all(".dc-repr" in x for x in stated)
+
+    def test_a_class_exists_for_every_style_word(self):
+        """
+        A word which draws in a terminal and not in a browser is a
+        difference between the two reprs that nobody chose.
+        """
+        css = get_stylesheet()
+        for word in _STYLE_WORDS:
+            assert f".dc-{word}" in css, word
+
+    def test_it_is_read_once(self):
+        """Every repr carries it, so every repr should not read it."""
+        assert get_stylesheet() is get_stylesheet()
+
+
+def _boom(node):
+    """Stand in for a renderer which cannot draw what it is given."""
+    raise ValueError("no panel for you")
+
+
+class TestHtmlRepr:
+    """Tests for the panel a notebook draws."""
+
+    @pytest.fixture(scope="class")
+    def html_objects(self):
+        """One of each class which states a panel."""
+        return {
+            "patch": dc.get_example_patch(),
+            "spool": dc.get_example_spool("diverse_das"),
+            "inventory": dc.get_example_inventory("tunnel"),
+        }
+
+    def test_each_states_a_panel(self, html_objects):
+        """The hook a display looks for, on the objects people echo."""
+        for name, obj in html_objects.items():
+            assert obj._repr_html_().startswith('<div class="dc-repr">'), name
+
+    def test_the_panel_is_deterministic(self, html_objects):
+        """
+        No uuid, no counter, no timestamp.
+
+        A notebook is a file in version control, and a repr which drew
+        itself differently every time would rewrite it on every run.
+        """
+        for name, obj in html_objects.items():
+            assert obj._repr_html_() == obj._repr_html_(), name
+            assert "id=" not in obj._repr_html_(), name
+
+    def test_the_panel_carries_no_inline_styles(self, html_objects):
+        """
+        Every color goes through a class, so the stylesheet is the only
+        thing which says what one is and both themes stay reachable.
+        """
+        for name, obj in html_objects.items():
+            assert 'style="' not in obj._repr_html_(), name
+
+    def test_a_value_which_looks_like_markup(self):
+        """A tag is a value someone else chose."""
+        patch = dc.get_example_patch().update_attrs(
+            tag="<script>alert(1)</script>", station="a & b"
+        )
+        html = patch._repr_html_()
+        assert "<script>alert" not in html
+        assert "&lt;script&gt;" in html
+        assert "a &amp; b" in html
+
+    def test_no_panel_when_it_is_turned_off(self, html_objects):
+        """
+        None is how the protocol says "not this time".
+
+        The display falls back to the text repr, which says the same
+        words.
+        """
+        with config_context(display_html=False):
+            for name, obj in html_objects.items():
+                assert obj._repr_html_() is None, name
+
+    def test_a_panel_which_cannot_be_drawn(self, monkeypatch):
+        """
+        A traceback out of a formatter is printed into the cell on every
+        echo of the object, which makes it undebuggable exactly when
+        someone is looking at it.
+
+        Only the drawing is broken here, not the object: breaking
+        `_repr_node` breaks the text repr too, and an object which
+        cannot be printed cannot be reported on either.
+
+        Debug is asked for explicitly because the suite runs with it on
+        (`tests/conftest.py`), which is the right way round -- a panel
+        which cannot be drawn should fail here and stay quiet for a
+        reader -- but it means this is the path CI never takes.
+        """
+        monkeypatch.setattr(display, "render_html", _boom)
+        with config_context(debug=False):
+            assert dc.get_example_patch()._repr_html_() is None
+
+    def test_debug_mode_wants_the_traceback(self, monkeypatch):
+        """Swallowing it in CI is how a broken repr ships unnoticed."""
+        monkeypatch.setattr(display, "render_html", _boom)
+        with config_context(debug=True), pytest.raises(ValueError, match="no panel"):
+            dc.get_example_patch()._repr_html_()
+
+    def test_the_panel_says_what_the_text_says(self, html_objects):
+        """
+        The two reprs are one repr shown two ways.
+
+        Tags stripped and entities read back, the panel holds every line
+        the text holds -- leading space aside, which the panel states
+        with a margin rather than with characters.
+        """
+        for name, obj in html_objects.items():
+            stripped = unescape(re.sub(r"<[^>]+>", "", obj._repr_html_()))
+            for line in str(obj).split("\n"):
+                if line.strip() and not set(line.strip()) <= {"-"}:
+                    assert line.strip() in stripped, (name, line)
+
+    def test_the_panel_stays_small(self, html_objects):
+        """
+        Every repr carries the stylesheet, so a notebook carries one
+        copy of it per output cell.
+        """
+        for name, obj in html_objects.items():
+            assert len(obj._repr_html_().encode()) < 12_000, name
