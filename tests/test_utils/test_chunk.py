@@ -319,6 +319,24 @@ class TestEdgeInWindow:
         assert not ((starts > 9.0) & (starts < 10.4)).any()
         assert set(plan.outputs["output_id"]) == set(plan.members["output_id"])
 
+    def test_nested_sources_belong_to_the_first(self):
+        """
+        A source nested in an earlier one contributes nothing, even after
+        a shorter nested neighbor: the start correction is against the
+        furthest stop so far, not the previous row's.
+        """
+        df = pd.DataFrame(
+            {
+                "time_min": [0.0, 10.0, 30.0],
+                "time_max": [100.0, 20.0, 40.0],
+                "time_step": [1.0, 1.0, 1.0],
+            }
+        )
+        plan = build_chunk_plan(df, time=35, keep_partial=True)
+        self._check_members(plan)
+        assert plan.members["_patch_id"].unique().tolist() == [0]
+        assert plan.members["time_max"].tolist() == [34.0, 69.0, 100.0]
+
     def test_mixed_dtypes_resolve_per_output(self, contiguous_three):
         """Dropping an end source still resolves each output's dtype."""
         df = contiguous_three.assign(

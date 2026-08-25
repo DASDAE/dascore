@@ -1511,6 +1511,24 @@ class TestChunkEdgeBetweenPatches:
         assert len(out) == len(expected)
         assert all(a.equals(b) for a, b in zip(out, expected))
 
+    @pytest.mark.parametrize("length", [25, 35, 50])
+    def test_nested_patches_chunk_as_the_outer_one(self, length):
+        """Patches inside a longer one must not add or remove samples."""
+
+        def _patch(first, samples):
+            step = np.timedelta64(1, "s")
+            t0 = np.datetime64("2026-01-01", "ns") + first * step
+            data = np.arange(samples * 2, dtype=float).reshape(samples, 2)
+            coords = {"time": t0 + np.arange(samples) * step, "distance": [0.0, 1.0]}
+            return dc.Patch(data=data, coords=coords, dims=("time", "distance"))
+
+        outer = _patch(0, 101)
+        nested = dc.spool([outer, _patch(10, 11), _patch(30, 11)])
+        out = nested.chunk(time=length, keep_partial=True)
+        expected = dc.spool([outer]).chunk(time=length, keep_partial=True)
+        assert len(out) == len(expected)
+        assert all(a.equals(b) for a, b in zip(out, expected))
+
     def test_boundary_in_sub_tolerance_gap(self):
         """A boundary inside a gap the tolerance merges over chunks cleanly."""
         p1 = dc.get_example_patch(time_min="2020-01-01")

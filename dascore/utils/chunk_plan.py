@@ -858,19 +858,29 @@ def _member_envelopes(sorted_df: pd.DataFrame, seg_starts: np.ndarray, name: str
     Overlap-corrected source envelopes over the whole sorted relation.
 
     Within each partition (rows ordered by start, patch id) an
-    overlapping source's start moves to just past the previous source's
-    stop, so the earlier source owns the overlap (D3: complete overlaps
-    keep the first member, deterministically). Returns the corrected
-    starts, the row modification flags, and the kept-row mask (sources
-    left degenerate by the correction contribute nothing).
+    overlapping source's start moves to just past the furthest stop of
+    the sources before it, so the earliest source owns the overlap (D3:
+    complete overlaps keep the first member, deterministically). Returns
+    the corrected starts, the row modification flags, and the kept-row
+    mask (sources left degenerate by the correction contribute nothing).
     """
     start, stop, step = (x.to_numpy() for x in get_interval_columns(sorted_df, name))
     is_first = np.zeros(len(sorted_df), dtype=bool)
     is_first[seg_starts] = True
-    prev_stop = np.roll(stop, 1)
-    rolled_step = np.roll(step, 1)
-    isna = pd.isnull(rolled_step)
-    prev_step = np.where(~isna, rolled_step, np.zeros_like(rolled_step))
+    # The owner of the furthest stop so far in the partition: the last
+    # row whose stop set the running maximum. Comparing with the
+    # previous row alone would let a source nested in an earlier one
+    # re-emerge after a shorter neighbor and hand out samples the
+    # earlier source already owns.
+    codes = np.cumsum(is_first) - 1
+    running_max = pd.Series(stop).groupby(codes).cummax().to_numpy()
+    rows = np.arange(len(stop))
+    owner = np.maximum.accumulate(np.where(stop == running_max, rows, 0))
+    prev_owner = np.roll(owner, 1)
+    prev_stop = stop[prev_owner]
+    owner_step = step[prev_owner]
+    isna = pd.isnull(owner_step)
+    prev_step = np.where(~isna, owner_step, np.zeros_like(owner_step))
     # Add the step so consecutive sources do not share one sample; the
     # roll artifact at each partition's first row is masked out.
     overlaps = (start <= prev_stop) & ~is_first
