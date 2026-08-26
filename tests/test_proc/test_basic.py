@@ -534,6 +534,16 @@ class TestPad:
         assert out.get_array("label")[0] == ""
         assert not out.get_array("flag")[0]
 
+    def test_padded_coords_keep_their_units(self, random_patch):
+        """Growing a coordinate does not change what it was measured in."""
+        shape = random_patch.coord_shapes["distance"]
+        patch = random_patch.update_coords(
+            depth=("distance", np.arange(shape[0]) * 1.0)
+        ).set_units(depth="m", distance="m")
+        out = patch.pad(distance=(1, 0), samples=True, expand_coords=False)
+        assert out.get_coord("depth").units == patch.get_coord("depth").units
+        assert out.get_coord("distance").units == patch.get_coord("distance").units
+
     def test_pad_time_dimension_samples_true(self, random_patch, samples=True):
         """Test padding the time dimension with zeros before and after."""
         padded_patch = random_patch.pad(time=(2, 3), samples=samples)

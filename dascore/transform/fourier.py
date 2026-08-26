@@ -131,10 +131,19 @@ def _get_dft_new_coords(patch, dxs, dims, axes, real, original_cm=None):
     new_coords = old_cm.get_coord_tuple_map()
     for name, dim in stashed.items():
         parked = f"{_associated_prefix(dim)}{name}"
-        # The name is dascore's, like the unpadded coordinate beside it,
-        # so nothing should already be sitting under it; idft would read
-        # whatever was back onto the dimension as this coordinate.
-        assert parked not in new_coords, f"{parked} is not a name to park under"
+        # A dimension and a coordinate name can be anything, so the two
+        # of them joined is not one name only they could make: a
+        # coordinate `b_associated_c` on dimension `a` parks where a
+        # coordinate `c` on dimension `a_associated_b` would. Nobody
+        # names a fiber axis that, but idft would read one of them back
+        # as the other, so it is refused rather than resolved.
+        if parked in new_coords:
+            msg = (
+                f"The coordinate {name!r} of dimension {dim!r} cannot be "
+                f"kept for the inverse transform: {parked!r} is where it "
+                "would go, and that is taken. Rename one of them."
+            )
+            raise PatchError(msg)
         new_coords[parked] = new_coords.pop(name)
     ft = FourierTransformatter()
     for i, dim in enumerate(dims):

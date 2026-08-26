@@ -786,7 +786,10 @@ def pad(
             added_nan_values = np.pad(
                 old_values, pad_width=pad_tuple, constant_values=null_value
             )
-            new_coord = coord.update(data=added_nan_values)
+            # Units passed rather than updated onto the coordinate: a
+            # coordinate built from new data starts with none, so the
+            # meters a distance was measured in would come off here.
+            new_coord = get_coord(data=added_nan_values, units=coord.units)
         return new_coord
 
     if isinstance(constant_values, Sequence):
@@ -819,7 +822,8 @@ def pad(
             padded = np.pad(
                 values, pad_width=widths, constant_values=_pad_fill(values.dtype)
             )
-            out[name] = (coord_dims, coord.update(data=padded))
+            grown = get_coord(data=padded, units=coord.units)
+            out[name] = (coord_dims, grown)
         return out
 
     pad_width = [(0, 0)] * len(patch.shape)

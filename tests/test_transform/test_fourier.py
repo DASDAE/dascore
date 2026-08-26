@@ -8,6 +8,7 @@ from scipy.fft import next_fast_len
 
 import dascore as dc
 import dascore.proc.coords
+from dascore.compat import random_state
 from dascore.exceptions import ParameterError, PatchError
 from dascore.transform.fourier import dft, idft
 from dascore.units import get_quantity, get_quantity_str, second
@@ -468,6 +469,20 @@ class TestInverseDiscreteFourierTransform:
         idft = dft_patch.idft()
         assert idft.shape == sin_patch_trimmed.shape
         assert np.allclose(np.real(idft.data), sin_patch_trimmed.data)
+
+    def test_two_coords_wanting_one_parking_space(self):
+        """A pair of names which park in the same place is refused."""
+        patch = dc.Patch(
+            data=random_state.random((4, 5)),
+            coords={"a": np.arange(4), "a_associated_b": np.arange(5)},
+            dims=("a", "a_associated_b"),
+        )
+        patch = patch.update_coords(
+            b_associated_c=("a", np.arange(4) * 1.0),
+            c=("a_associated_b", np.arange(5) * 1.0),
+        )
+        with pytest.raises(PatchError, match="is where it would go"):
+            patch.dft(("a", "a_associated_b"))
 
     def test_associated_coords_restored(self, random_patch_many_coords):
         """Coordinates on a transformed dim come back with it. See #1041."""

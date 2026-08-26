@@ -17,7 +17,7 @@ from dascore.utils.patch import (
     get_start_stop_step,
     patch_function,
 )
-from dascore.utils.time import to_int, to_timedelta64
+from dascore.utils.time import dtype_time_like, to_int, to_timedelta64
 
 scipy_decimate = lazy_import("scipy.signal", "decimate")
 
@@ -112,10 +112,10 @@ def _interpolate_associated(cm, dim, coord_num, samples_num, kind) -> dict:
 
     A coordinate of numbers is a function of the dimension, so it is
     interpolated the way the data is. Anything else is dropped, by
-    updating it to None: a label has nothing between its values, and an
-    instant does not survive the trip through floating point -- a
-    nanosecond of the present is 1.6e18 of them, where the nearest
-    float64 is hundreds of nanoseconds away. Dropped explicitly, because
+    updating it to None: a label has nothing between its values, and a
+    time does not survive the trip through floating point -- a nanosecond
+    of the present is 1.6e18 of them, where the nearest float64 is
+    hundreds of nanoseconds away. Dropped explicitly, because
     interpolating onto the same number of samples in different places
     would otherwise leave the old values sitting on the new ones.
     """
@@ -124,7 +124,10 @@ def _interpolate_associated(cm, dim, coord_num, samples_num, kind) -> dict:
         coord = cm.coord_map[name]
         if name == dim or dim not in coord_dims:
             continue
-        if not np.issubdtype(coord.dtype, np.number):
+        # Asked before the number test, not after: numpy counts a
+        # timedelta64 as a number, and interpolating one gives back a
+        # float in whatever resolution it was stored in.
+        if dtype_time_like(coord.dtype) or not np.issubdtype(coord.dtype, np.number):
             out[name] = None
             continue
         func = compat.interp1d(
@@ -167,7 +170,7 @@ def interpolate(patch: PatchType, kind: str | int = "linear", **kwargs) -> Patch
 
     Coordinates measured on the interpolated dimension are interpolated
     with it where they are numbers, and dropped otherwise: a label has
-    nothing between its values, and an instant does not survive the trip
+    nothing between its values, and a time does not survive the trip
     through floating point.
 
     See Also

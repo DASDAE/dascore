@@ -80,6 +80,7 @@ class TestInterpolate:
         new_coord = np.arange(start, stop, step / 2)
         out = patch.interpolate(distance=new_coord)
         assert out.coords.dim_map["lat"] == ("distance",)
+        assert out.get_coord("lat").units == patch.get_coord("lat").units
         assert len(out.get_array("lat")) == len(new_coord)
         # The samples which did not move keep the values they had.
         kept = out.get_array("lat")[::2]
@@ -98,11 +99,13 @@ class TestInterpolate:
             label=("distance", np.full(shape, "a")),
             flag=("distance", np.ones(shape, dtype=bool)),
             stamp=("distance", stamps),
+            # numpy counts a duration as a number; it is still a time.
+            lag=("distance", np.arange(shape[0]).astype("timedelta64[ns]")),
         )
         start, stop, step = get_start_stop_step(patch, "distance")
         new_coord = np.arange(start, stop, step * factor) + step / 4
         out = patch.interpolate(distance=new_coord)
-        assert {"label", "flag", "stamp"}.isdisjoint(out.coords.coord_map)
+        assert {"label", "flag", "stamp", "lag"}.isdisjoint(out.coords.coord_map)
 
     def test_multidimensional_coords_interpolated(self, random_patch_many_coords):
         """A coordinate spanning both dimensions rides the one being set."""
