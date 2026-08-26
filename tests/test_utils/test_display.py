@@ -54,7 +54,7 @@ from dascore.utils.display import (
     mapping_to_text,
     model_to_line,
     percent,
-    range_end_text,
+    range_texts,
     rate_text,
     render_html,
     render_text,
@@ -993,34 +993,83 @@ class TestDurationText:
         assert expected in str(said)
 
 
-class TestRangeEndText:
-    """Tests for the far end of a range, with what it repeats elided."""
+class TestRangeTexts:
+    """Tests for the two ends of a range, drawn as one range."""
 
     @pytest.mark.parametrize(
-        ("low", "high", "expected"),
+        ("low", "high", "near", "far"),
         [
-            # A start at midnight is drawn as a bare date, so the date
-            # is all the far end may leave out.
-            ("2017-09-18T00:00:00", "2017-09-18T00:00:07.996", "…00:00:07.996"),
-            ("2023-06-01T14:23:11", "2023-06-01T18:00:00", "…18:00:00"),
-            ("2023-06-01T14:23:11", "2023-06-01T14:00:41.5", "…:00:41.5"),
-            ("2023-06-01T14:23:11", "2023-06-01T14:23:41.5", "…:41.5"),
-            ("2023-06-01T14:23:11", "2023-06-01T14:23:11.5", "….5"),
-            # Both drawn as times of the epoch day, which is no less a
-            # head for being one neither of them prints.
-            ("1970-01-01T00:00:11", "1970-01-01T00:00:41.5", "…:41.5"),
+            # A start at midnight is drawn with its time, so the stop
+            # can be read against it down to the field which differs.
+            (
+                "2017-09-18T00:00:00",
+                "2017-09-18T00:00:07.996",
+                "2017-09-18T00:00:00",
+                "…:07.996",
+            ),
+            (
+                "2023-06-01T14:23:11",
+                "2023-06-01T18:00:00",
+                "2023-06-01T14:23:11",
+                "…18:00:00",
+            ),
+            (
+                "2023-06-01T14:23:11",
+                "2023-06-01T14:00:41.5",
+                "2023-06-01T14:23:11",
+                "…:00:41.5",
+            ),
+            (
+                "2023-06-01T14:23:11",
+                "2023-06-01T14:23:41.5",
+                "2023-06-01T14:23:11",
+                "…:41.5",
+            ),
+            (
+                "2023-06-01T14:23:11",
+                "2023-06-01T14:23:11.5",
+                "2023-06-01T14:23:11",
+                "….5",
+            ),
+            # Both are of the epoch day, which neither of them draws,
+            # and which is no less a head for that.
+            (
+                "1970-01-01T00:00:11",
+                "1970-01-01T00:00:41.5",
+                "00:00:11",
+                "…:41.5",
+            ),
+            # Neither end has a time to state, so neither states one and
+            # the date is all there is to repeat.
+            ("2017-09-18", "2017-09-18", "2017-09-18", "…"),
         ],
-        ids=["date", "hour", "hour_kept", "minute", "second", "epoch"],
+        ids=["date", "hour", "hour_kept", "minute", "second", "epoch", "days"],
     )
-    def test_a_shared_head_is_said_once(self, low, high, expected):
+    def test_a_shared_head_is_said_once(self, low, high, near, far):
         """What the near end already said is a mark on the far one."""
-        said = range_end_text(np.datetime64(low), np.datetime64(high))
-        assert str(said) == expected
+        drawn = range_texts(np.datetime64(low), np.datetime64(high))
+        assert [str(x) for x in drawn] == [near, far]
 
     def test_two_ends_of_one_instant(self):
         """A coordinate of one sample repeats its start entirely."""
         instant = np.datetime64("2017-09-18T00:00:03")
-        assert str(range_end_text(instant, instant)) == "…"
+        near, far = range_texts(instant, instant)
+        assert str(near) == "2017-09-18T00:00:03"
+        assert str(far) == "…"
+
+    def test_a_block_either_end_needs_is_drawn_on_both(self):
+        """
+        A date of the epoch is dropped from a value drawn on its own.
+
+        Dropped from one end of a range it leaves a bare time beside a
+        bare date, which reads as two unrelated values rather than as
+        the fifty years between them.
+        """
+        low, high = dc.to_datetime64(0), np.datetime64("2020-01-01T00:00:00")
+        assert str(get_nice_text(low)) == "00:00:00"
+        near, far = range_texts(low, high)
+        assert str(near) == "1970-01-01"
+        assert str(far) == "2020-01-01"
 
     @pytest.mark.parametrize(
         ("low", "high"),
@@ -1039,23 +1088,28 @@ class TestRangeEndText:
         day on its own, against a year and month they must take on
         trust.
         """
-        said = range_end_text(np.datetime64(low), np.datetime64(high))
-        assert str(said) == str(get_nice_text(np.datetime64(high)))
+        _, far = range_texts(np.datetime64(low), np.datetime64(high))
+        assert str(far) == str(get_nice_text(np.datetime64(high)))
 
-    def test_a_far_end_which_states_less_than_the_near_one(self):
+    def test_a_far_end_earlier_than_the_near_one(self):
         """
-        A far end drawn as a bare date states no field the near end did
-        not, so there is nothing left of it to draw but the mark.
+        Neither end is asked to be the larger.
+
+        A far end which states less is still drawn in the blocks the
+        pair states, so what it repeats can still be seen to repeat.
         """
         low = np.datetime64("2017-09-18T00:00:03")
         high = np.datetime64("2017-09-18T00:00:00")
-        assert str(range_end_text(low, high)) == "…"
+        assert [str(x) for x in range_texts(low, high)] == [
+            "2017-09-18T00:00:03",
+            "…:00",
+        ]
 
     def test_an_end_which_repeats_nothing(self):
         """A far end sharing no field is drawn as it always was."""
         low = np.datetime64("2023-06-01T14:23:11")
         high = np.datetime64("2024-11-30T09:00:00")
-        assert str(range_end_text(low, high)) == "2024-11-30T09:00:00"
+        assert str(range_texts(low, high)[1]) == "2024-11-30T09:00:00"
 
     @pytest.mark.parametrize(
         ("low", "high"),
@@ -1081,16 +1135,17 @@ class TestRangeEndText:
             "offsets",
         ],
     )
-    def test_only_two_instants_share_a_head(self, low, high):
+    def test_only_two_instants_are_drawn_as_a_range(self, low, high):
         """Anything else is drawn as it would have been anyway."""
-        assert str(range_end_text(low, high)) == str(get_nice_text(high))
+        drawn = [str(x) for x in range_texts(low, high)]
+        assert drawn == [str(get_nice_text(low)), str(get_nice_text(high))]
 
     @pytest.mark.parametrize("null", [np.datetime64("NaT"), pd.NaT])
     def test_a_null_end_repeats_nothing(self, null):
         """An end which is not a time cannot be a head for the other."""
         instant = np.datetime64("2020-01-01T00:00:00")
-        assert str(range_end_text(null, instant)) == str(get_nice_text(instant))
-        assert str(range_end_text(instant, null)) == str(get_nice_text(null))
+        assert str(range_texts(null, instant)[1]) == str(get_nice_text(instant))
+        assert str(range_texts(instant, null)[1]) == str(get_nice_text(null))
 
     def test_what_is_left_keeps_its_styles(self):
         """
@@ -1101,8 +1156,8 @@ class TestRangeEndText:
         """
         low = np.datetime64("2017-09-18T00:00:00")
         high = np.datetime64("2017-09-18T00:00:07.996")
-        said = range_end_text(low, high)
-        assert said.plain == "…00:00:07.996"
+        said = range_texts(low, high)[1]
+        assert said.plain == "…:07.996"
         # Read at an offset, not off the spans: a style can also arrive
         # as the base of the whole text, which is how it would bleed.
         console = Console()
@@ -1121,7 +1176,10 @@ class TestRangeEndText:
         """A frame states its extents as Timestamps, and a repr reads them."""
         low = pd.Timestamp("2020-01-03T00:00:00")
         high = pd.Timestamp("2020-01-03T00:00:23.996")
-        assert str(range_end_text(low, high)) == "…00:00:23.996"
+        assert [str(x) for x in range_texts(low, high)] == [
+            "2020-01-03T00:00:00",
+            "…:23.996",
+        ]
 
 
 class TestValuesAReaderCanRead:
@@ -1153,7 +1211,7 @@ class TestValuesAReaderCanRead:
     def test_a_time_coord_says_the_day_once(self):
         """The far end of a range starts where it stops repeating."""
         coord = dc.get_example_patch().coords.coord_map["time"]
-        assert "min: 2017-09-18 max: …00:00:07.996" in str(coord)
+        assert "min: 2017-09-18T00:00:00 max: …:07.996" in str(coord)
 
     def test_an_annotation_set_says_the_day_once(self):
         """The same elision a coordinate and a spool state."""
@@ -1164,7 +1222,7 @@ class TestValuesAReaderCanRead:
             }
         )
         rendered = str(AnnotationSet(frame, dims=("time",)))
-        assert "min: 2020-01-01 max: …00:00:09" in rendered
+        assert "min: 2020-01-01T00:00:00 max: …:09" in rendered
 
     def test_an_annotation_set_over_distance_states_no_span(self):
         """

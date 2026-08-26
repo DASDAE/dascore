@@ -98,7 +98,7 @@ from dascore.utils.display import (
     get_header_text,
     get_nice_text,
     group_names,
-    range_end_text,
+    range_texts,
     split_block,
 )
 from dascore.utils.docs import compose_docstring
@@ -2470,8 +2470,8 @@ class Spool(NodeRepr, NamespaceOwner):
                 continue
             low, high = measured[f"{dim}_min"].min(), measured[f"{dim}_max"].max()
             units = self._dim_units(measured, dim)
-            base += get_nice_text(low) + Text(" to ", key_style)
-            base += range_end_text(low, high)
+            near, far = range_texts(low, high)
+            base += near + Text(" to ", key_style) + far
             if len(units) > 1:
                 # Envelopes are stored in the units each patch was read
                 # in, so a min and a max from two of them are not two
