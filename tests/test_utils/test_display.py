@@ -54,6 +54,7 @@ from dascore.utils.display import (
     mapping_to_text,
     model_to_line,
     percent,
+    range_texts,
     rate_text,
     render_html,
     render_text,
@@ -82,6 +83,24 @@ class TestGetNiceText:
         # Decimals are displayed if present
         txt3 = get_nice_text(dc.to_datetime64(1.111111111))
         assert str(txt3).endswith(".111111111")
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            pd.Timestamp("2020-01-01T00:00:00+00:00"),
+            np.datetime64("10000-01-01T00:00:00"),
+        ],
+        ids=["offset", "expanded_year"],
+    )
+    def test_an_instant_which_cannot_be_taken_apart(self, value):
+        """
+        A value is drawn as it states itself where it says too much.
+
+        An offset and a five digit year both push every field along, and
+        slicing them by position drew an instant which was not the one
+        handed over: "2020-01-01T00:00:00.00:" for the first of these.
+        """
+        assert str(get_nice_text(value)) == str(value)
 
     def test_nat(self):
         """Tests for NaT."""
@@ -992,6 +1011,206 @@ class TestDurationText:
         assert expected in str(said)
 
 
+class TestRangeTexts:
+    """Tests for the two ends of a range, drawn as one range."""
+
+    @pytest.mark.parametrize(
+        ("low", "high", "near", "far"),
+        [
+            # A start at midnight is drawn with its time, so the stop
+            # can be read against it down to the field which differs.
+            (
+                "2017-09-18T00:00:00",
+                "2017-09-18T00:00:07.996",
+                "2017-09-18T00:00:00",
+                "…:07.996",
+            ),
+            (
+                "2023-06-01T14:23:11",
+                "2023-06-01T18:00:00",
+                "2023-06-01T14:23:11",
+                "…18:00:00",
+            ),
+            (
+                "2023-06-01T14:23:11",
+                "2023-06-01T14:00:41.5",
+                "2023-06-01T14:23:11",
+                "…:00:41.5",
+            ),
+            (
+                "2023-06-01T14:23:11",
+                "2023-06-01T14:23:41.5",
+                "2023-06-01T14:23:11",
+                "…:41.5",
+            ),
+            (
+                "2023-06-01T14:23:11",
+                "2023-06-01T14:23:11.5",
+                "2023-06-01T14:23:11",
+                "….5",
+            ),
+            # Both are of the epoch day, which neither of them draws,
+            # and which is no less a head for that.
+            (
+                "1970-01-01T00:00:11",
+                "1970-01-01T00:00:41.5",
+                "00:00:11",
+                "…:41.5",
+            ),
+            # Neither end has a time to state, so neither states one and
+            # the date is all there is to repeat.
+            ("2017-09-18", "2017-09-18", "2017-09-18", "…"),
+        ],
+        ids=["date", "hour", "hour_kept", "minute", "second", "epoch", "days"],
+    )
+    def test_a_shared_head_is_said_once(self, low, high, near, far):
+        """What the near end already said is a mark on the far one."""
+        drawn = range_texts(np.datetime64(low), np.datetime64(high))
+        assert [str(x) for x in drawn] == [near, far]
+
+    def test_two_ends_of_one_instant(self):
+        """A coordinate of one sample repeats its start entirely."""
+        instant = np.datetime64("2017-09-18T00:00:03")
+        near, far = range_texts(instant, instant)
+        assert str(near) == "2017-09-18T00:00:03"
+        assert str(far) == "…"
+
+    def test_a_block_either_end_needs_is_drawn_on_both(self):
+        """
+        A date of the epoch is dropped from a value drawn on its own.
+
+        Dropped from one end of a range it leaves a bare time beside a
+        bare date, which reads as two unrelated values rather than as
+        the fifty years between them.
+        """
+        low, high = dc.to_datetime64(0), np.datetime64("2020-01-01T00:00:00")
+        assert str(get_nice_text(low)) == "00:00:00"
+        near, far = range_texts(low, high)
+        assert str(near) == "1970-01-01"
+        assert str(far) == "2020-01-01"
+
+    @pytest.mark.parametrize(
+        ("low", "high"),
+        [
+            ("2023-06-01T23:59:59", "2023-06-02T00:00:30"),
+            ("2023-06-01T00:00:00", "2023-07-01T00:00:00"),
+            ("2023-06-01T00:00:00", "2024-06-01T00:00:00"),
+        ],
+        ids=["day", "month", "year"],
+    )
+    def test_a_date_is_elided_whole_or_not_at_all(self, low, high):
+        """
+        Eliding the year of two different days says less, not more.
+
+        A far end of "…-02T00:00:30" leaves the reader to notice the
+        day on its own, against a year and month they must take on
+        trust.
+        """
+        _, far = range_texts(np.datetime64(low), np.datetime64(high))
+        assert str(far) == str(get_nice_text(np.datetime64(high)))
+
+    def test_a_far_end_earlier_than_the_near_one(self):
+        """
+        Neither end is asked to be the larger.
+
+        A far end which states less is still drawn in the blocks the
+        pair states, so what it repeats can still be seen to repeat.
+        """
+        low = np.datetime64("2017-09-18T00:00:03")
+        high = np.datetime64("2017-09-18T00:00:00")
+        assert [str(x) for x in range_texts(low, high)] == [
+            "2017-09-18T00:00:03",
+            "…:00",
+        ]
+
+    def test_ends_which_cannot_be_taken_apart(self):
+        """
+        A pair says nothing about a head it cannot measure.
+
+        Both ends are drawn as they state themselves, which is what a
+        value drawn on its own does with the same string.
+        """
+        low = pd.Timestamp("2020-01-01T00:00:00+00:00")
+        high = pd.Timestamp("2020-01-01T00:00:09+00:00")
+        assert [str(x) for x in range_texts(low, high)] == [str(low), str(high)]
+
+    def test_an_end_which_repeats_nothing(self):
+        """A far end sharing no field is drawn as it always was."""
+        low = np.datetime64("2023-06-01T14:23:11")
+        high = np.datetime64("2024-11-30T09:00:00")
+        assert str(range_texts(low, high)[1]) == "2024-11-30T09:00:00"
+
+    @pytest.mark.parametrize(
+        ("low", "high"),
+        [
+            (0.0, 299.0),
+            (0, 299),
+            ("a", "b"),
+            (None, None),
+            (1, np.datetime64("2020-01-01")),
+            (np.datetime64("2020-01-01"), 1),
+            # Offsets, not instants. The "1" they lead with is not a
+            # field either of them states, and eliding it would leave
+            # 1.25s drawn as a fraction of nothing.
+            (np.timedelta64(1500, "ms"), np.timedelta64(1250, "ms")),
+        ],
+        ids=[
+            "floats",
+            "ints",
+            "strings",
+            "none",
+            "mixed_low",
+            "mixed_high",
+            "offsets",
+        ],
+    )
+    def test_only_two_instants_are_drawn_as_a_range(self, low, high):
+        """Anything else is drawn as it would have been anyway."""
+        drawn = [str(x) for x in range_texts(low, high)]
+        assert drawn == [str(get_nice_text(low)), str(get_nice_text(high))]
+
+    @pytest.mark.parametrize("null", [np.datetime64("NaT"), pd.NaT])
+    def test_a_null_end_repeats_nothing(self, null):
+        """An end which is not a time cannot be a head for the other."""
+        instant = np.datetime64("2020-01-01T00:00:00")
+        assert str(range_texts(null, instant)[1]) == str(get_nice_text(instant))
+        assert str(range_texts(instant, null)[1]) == str(get_nice_text(null))
+
+    def test_what_is_left_keeps_its_styles(self):
+        """
+        The mark takes the place of fields, not of their colouring.
+
+        A repr colours a date, a time and a fraction differently, and
+        what survives the elision is coloured as it was before it.
+        """
+        low = np.datetime64("2017-09-18T00:00:00")
+        high = np.datetime64("2017-09-18T00:00:07.996")
+        said = range_texts(low, high)[1]
+        assert said.plain == "…:07.996"
+        # Read at an offset, not off the spans: a style can also arrive
+        # as the base of the whole text, which is how it would bleed.
+        console = Console()
+
+        def style_at(offset):
+            return str(said.get_style_at_offset(console, offset))
+
+        assert style_at(0) == dascore_styles["keys"]
+        assert style_at(said.plain.index("07")) == dascore_styles["hms"]
+        assert style_at(said.plain.index("996")) == dascore_styles["dec"]
+        # The separators are what the elision left behind, and belong to
+        # neither the mark nor the fields around them.
+        assert style_at(said.plain.index(":")) == "none"
+
+    def test_a_pandas_timestamp_is_an_instant(self):
+        """A frame states its extents as Timestamps, and a repr reads them."""
+        low = pd.Timestamp("2020-01-03T00:00:00")
+        high = pd.Timestamp("2020-01-03T00:00:23.996")
+        assert [str(x) for x in range_texts(low, high)] == [
+            "2020-01-03T00:00:00",
+            "…:23.996",
+        ]
+
+
 class TestValuesAReaderCanRead:
     """Tests for the facts a repr states about the things it shows."""
 
@@ -1017,6 +1236,22 @@ class TestValuesAReaderCanRead:
     def test_the_data_states_how_much_room_it_takes(self):
         """Whether it fits in memory is what dtype times shape is for."""
         assert "4.6 MiB" in str(dc.get_example_patch())
+
+    def test_a_time_coord_says_the_day_once(self):
+        """The far end of a range starts where it stops repeating."""
+        coord = dc.get_example_patch().coords.coord_map["time"]
+        assert "min: 2017-09-18T00:00:00 max: …:07.996" in str(coord)
+
+    def test_an_annotation_set_says_the_day_once(self):
+        """The same elision a coordinate and a spool state."""
+        frame = pd.DataFrame(
+            {
+                "time_min": pd.to_datetime(["2020-01-01T00:00:00"]),
+                "time_max": pd.to_datetime(["2020-01-01T00:00:09"]),
+            }
+        )
+        rendered = str(AnnotationSet(frame, dims=("time",)))
+        assert "min: 2020-01-01T00:00:00 max: …:09" in rendered
 
     def test_an_annotation_set_over_distance_states_no_span(self):
         """

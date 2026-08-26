@@ -58,6 +58,27 @@ _NANOSECOND = 1e-9
 # What counts as a time, and so what has a duration between two of it.
 _TIME_TYPES = (pd.Timestamp, np.datetime64, pd.Timedelta, np.timedelta64)
 
+# What an instant is, and so what is stated in calendar fields a range
+# can share. An offset is not one: 1.5s and 1.25s have a leading "1" in
+# common and it is not a field either of them states.
+_INSTANT_TYPES = (pd.Timestamp, np.datetime64)
+
+# What stands in a range's far end for the fields its near end already
+# stated. Read as "and the rest of it is what you just read".
+_REPEAT_MARK = "…"
+
+# What divides one field of a rendered time from the next, kept so a
+# head can be measured in whole fields. The date is not split here: it
+# is one field, elided whole or not at all.
+_TIME_FIELDS = re.compile(r"([:.])")
+
+# What an instant has to say to be taken apart by position: a four digit
+# year, a divider numpy writes as T and pandas as a space, and nothing
+# after the fraction. One which says more -- a timezone offset, or a
+# year of five digits -- is drawn as it states itself rather than sliced
+# into fields which would then be wrong.
+_INSTANT_LAYOUT = re.compile(r"\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(\.\d+)?")
+
 # The most figures a rate is quoted to when it cannot state its step
 # exactly. A rate which can gets as many as that takes, up to the point
 # where it has stopped being a rate and become the step in other units.
@@ -649,57 +670,87 @@ def _nice_timedelta(value, style=None):
     return get_nice_text(Text(f"{sec:.9}s"), style)
 
 
+def _instant_string(value) -> str | None:
+    """
+    An instant as the ISO string its blocks are read out of.
+
+    A value of coarser precision states less than that -- a date has no
+    time on it at all -- so it is read back at the precision everything
+    else here assumes.
+
+    None where what it states cannot be taken apart by position at all.
+    A timezone offset and a five digit year both push every field along
+    by a character or two, and slicing them anyway draws an instant
+    which is not the one handed over.
+    """
+    stated = str(value)
+    if len(stated) < 20:  # no room for a time, so it states none
+        stated = str(dc.to_datetime64(stated))
+    return stated if _INSTANT_LAYOUT.fullmatch(stated) else None
+
+
+@cache
+def _empty_instant() -> str:
+    """The epoch, which is what a block saying nothing looks like."""
+    stated = _instant_string(dc.to_datetime64(0))
+    # The epoch is an instant of this library's own making, and states
+    # itself in the layout everything here is measured against.
+    assert stated is not None
+    return stated
+
+
+def _instant_blocks(*stated: str) -> tuple[bool, bool]:
+    """
+    Which blocks instants are drawn in: the date, and the time.
+
+    A block is drawn where any of them needs it, so the two ends of one
+    range come out in one shape and can be read against each other. A
+    midnight start drawn beside a stop seconds later would otherwise be
+    a bare date beside a full instant, and the fields they have in
+    common could not be seen to be in common.
+
+    An instant of the epoch needs neither block, and is drawn as a time.
+    """
+    empty = _empty_instant()
+    date = any(x[:10] != empty[:10] for x in stated)
+    time = any(x[11:] != empty[11:] for x in stated)
+    return date, time or not date
+
+
+def _instant_text(stated: str, date: bool, time: bool) -> Text:
+    """
+    An instant drawn in the blocks asked for, each field styled.
+
+    The string is ISO 8601 but for its divider, which a pandas timestamp
+    states as a space; every field is taken by position, and the divider
+    is written rather than copied.
+    """
+    ymd = dascore_styles["ymd"]
+    hms = dascore_styles["hms"]
+    dec = dascore_styles["dec"]
+    out = Text("")
+    if date:
+        parts = (stated[:4], stated[5:7], stated[8:10])
+        out += Text("-").join([Text(x, ymd) for x in parts])
+    if time:
+        if date:
+            out += Text("T")
+        parts = (stated[11:13], stated[14:16], stated[17:19])
+        out += Text(":").join([Text(x, hms) for x in parts])
+        # Only what the fraction says. A step of a millisecond leaves
+        # six digits of nothing behind it at nanosecond precision.
+        if fraction := stated[20:].rstrip("0"):
+            out += Text(".") + Text(fraction, dec)
+    return out
+
+
 @get_nice_text.register(np.datetime64)
 @get_nice_text.register(pd.Timestamp)
 def _nice_datetime(value, style=None):
-    """Get a nice timedelta value."""
-
-    def simplify_str(dt_str):
-        """Simplify the string to only show needed parts."""
-        empty = str(dc.to_datetime64(0))
-        original_str = str(dt_str)
-        trimmed_str = original_str
-        # strip off YEAR-MONTH-DAY if they aren't used.
-        if empty.split("T")[0] == trimmed_str.split("T")[0]:
-            trimmed_str = trimmed_str.split("T")[-1]
-        # strip off HOUR-MIN-SEC if it isnt used
-        elif empty.split("T")[-1] == trimmed_str.split("T")[-1]:
-            trimmed_str = trimmed_str.split("T")[0]
-        if "." in trimmed_str:  # strip trailing 0s.
-            trimmed_str = trimmed_str.rstrip("0").rstrip(".")
-        ind = original_str.find(trimmed_str)
-        return dt_str[ind : ind + len(trimmed_str)]
-
-    def stylize_str(dt_str):
-        """
-        Apply color/style to strings. This assumes the string is formatted
-        in the standard ISO 8601 format.
-        """
-        # get relevant styles.
-        ymd = dascore_styles["ymd"]
-        hms = dascore_styles["hms"]
-        dec = dascore_styles["dec"]
-        if len(dt_str) < 20:  # this might be a timestamp string
-            dt_str = str(dc.to_datetime64(dt_str))
-        # parse out string components
-        assert len(dt_str) >= 20  # need chars at least up to decimal
-        year, month, day = dt_str[:4], dt_str[5:7], dt_str[8:10]
-        hour, minute, second = dt_str[11:13], dt_str[14:16], dt_str[17:19]
-        decimal_bit = dt_str[20:]
-        # assemble text with styling
-        out = Text("")
-        out += Text("-").join([Text(x, ymd) for x in [year, month, day]])
-        out += Text("T")
-        out += Text(":").join([Text(x, hms) for x in [hour, minute, second]])
-        out += Text(".") + Text(decimal_bit, dec)
-        return out
-
-    if pd.isnull(value):
+    """Get a nice datetime value, in the blocks which say something."""
+    if pd.isnull(value) or (stated := _instant_string(value)) is None:
         return get_nice_text(Text(str(value)), style)
-
-    stylized_text = stylize_str(str(value))
-    simplified_text = simplify_str(stylized_text)
-    return get_nice_text(simplified_text, style)
+    return get_nice_text(_instant_text(stated, *_instant_blocks(stated)), style)
 
 
 def get_dascore_text():
@@ -873,6 +924,102 @@ def duration_text(low, high) -> Text | None:
     if not (said := human_duration(seconds)):
         return None
     return Text(f"<{said}>", dascore_styles["keys"])
+
+
+def _split_instant(rendered: str) -> tuple[str, str]:
+    """
+    A rendered instant, as the date it states and the time it states.
+
+    One of the two is empty where the value did not need it: a repr
+    drops a date of the epoch and a time of midnight, so the two ends
+    of one range can arrive in different shapes.
+    """
+    date, divider, time = rendered.partition("T")
+    if divider:
+        return date, time
+    # No divider, so it is one or the other. A date has dashes in it, a
+    # time has colons, and neither has the other's.
+    return (date, "") if "-" in date else ("", date)
+
+
+def _shared_head(low: str, high: str) -> int:
+    """
+    How many leading characters of `high` repeat what `low` already says.
+
+    Measured in whole fields, so a mark never stands for the first digit
+    of one. The date is a single field: two instants on different days
+    share nothing, since eliding the year of 2023-06-01 and 2023-07-01
+    would leave the month to be noticed on its own.
+    """
+    low_date, low_time = _split_instant(low)
+    high_date, high_time = _split_instant(high)
+    # A date one end states and the other does not is not a date they
+    # share, whatever the characters under it say.
+    if bool(low_date) != bool(high_date) or low_date != high_date:
+        return 0
+    shared = len(high_date)
+    # The divider sits between the date and the fields below it, and is
+    # part of neither.
+    at = shared + 1 if high_date and high_time else shared
+    low_fields = _TIME_FIELDS.split(low_time)
+    high_fields = _TIME_FIELDS.split(high_time)
+    # Field, separator, field, at even indices and odd: a separator
+    # counts toward the head like anything else, but the head only ends
+    # at a field, so what is left starts with the separator before it.
+    for index, (stated, repeated) in enumerate(zip(low_fields, high_fields)):
+        if stated != repeated:
+            break
+        at += len(repeated)
+        if index % 2 == 0:
+            shared = at
+    return shared
+
+
+def range_texts(low, high) -> tuple[Text, Text]:
+    """
+    The two ends of a range, drawn as one range rather than as two values.
+
+    Two things happen here which drawing each end on its own cannot do.
+
+    They are drawn in one shape: a block either end needs is drawn on
+    both, so a start at midnight comes out as ``2017-09-18T00:00:00``
+    beside its stop rather than as a bare date. What each states is then
+    in the same place, which is what lets the second be read against the
+    first.
+
+    And the far end states only what differs. The fields it repeats
+    stand next to it already, so they are replaced by one mark: a range
+    inside one day states that day once. A leading ``T`` goes with them,
+    since with the date gone it divides nothing, while a leading ``:``
+    or ``.`` stays -- it says which field the number after it is, so
+    41.5 cannot be read as an hour.
+
+    Only of two instants. An offset of 1.25s repeats nothing of one of
+    1.5s -- the digit they lead with is not a field either of them
+    states -- and any other pair is drawn as it would have been anyway.
+    """
+    drawn = (get_nice_text(low), get_nice_text(high))
+    if not isinstance(low, _INSTANT_TYPES) or not isinstance(high, _INSTANT_TYPES):
+        return drawn
+    if pd.isnull(low) or pd.isnull(high):
+        return drawn
+    near_stated, far_stated = _instant_string(low), _instant_string(high)
+    if near_stated is None or far_stated is None:
+        return drawn
+    stated = (near_stated, far_stated)
+    blocks = _instant_blocks(*stated)
+    near, far = (_instant_text(x, *blocks) for x in stated)
+    if not (shared := _shared_head(near.plain, far.plain)):
+        return near, far
+    rest = far[shared:]
+    if rest.plain.startswith("T"):
+        rest = rest[1:]
+    # Started empty and appended to: a Text built as Text(x, style=...)
+    # makes that style the base of everything appended after it, so the
+    # mark's grey would bleed onto the fields which survived it.
+    said = Text("")
+    said += Text(_REPEAT_MARK, dascore_styles["keys"])
+    return near, said + rest
 
 
 def _fewest_figures(value: float, accept) -> int | None:

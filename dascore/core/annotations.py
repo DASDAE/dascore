@@ -66,9 +66,9 @@ from dascore.utils.display import (
     counts_to_text,
     duration_text,
     get_header_text,
-    get_nice_text,
     mapping_to_text,
     model_to_line,
+    range_texts,
     split_block,
     stated_fields,
 )
@@ -949,10 +949,14 @@ class AnnotationSet(NodeRepr, NamespaceOwner):
                 base += Text("unstated", key_style)
                 continue
             low, high = values.min(), values.max()
+            near, far = range_texts(low, high)
+            # Appended one at a time: a Text built as Text(x, style=...)
+            # makes that style the base of anything added to it, so the
+            # label's grey would bleed onto the value after it.
             base += Text("min: ", key_style)
-            base += get_nice_text(low)
+            base += near
             base += Text(" max: ", key_style)
-            base += get_nice_text(high)
+            base += far
             if (span := duration_text(low, high)) is not None:
                 base += Text(" ") + span
             kind = "point" if spelling.point else "range"

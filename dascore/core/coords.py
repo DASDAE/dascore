@@ -58,6 +58,7 @@ from dascore.utils.display import (
     RichRepr,
     duration_text,
     get_nice_text,
+    range_texts,
     rate_text,
 )
 from dascore.utils.docs import compose_docstring, get_docstring
@@ -626,10 +627,13 @@ class BaseCoord(RichRepr, DascoreBaseModel, abc.ABC):
         is held.
         """
         fields: list[tuple[str, Text, bool]] = []
+        # Drawn as one range: the two ends state the same blocks, and
+        # the second states only what the first did not already.
+        near, far = range_texts(self.min(), self.max())
         if not pd.isnull(self.min()):
-            fields.append(("min", get_nice_text(self.min()), True))
+            fields.append(("min", near, True))
         if not pd.isnull(self.max()):
-            fields.append(("max", get_nice_text(self.max()), True))
+            fields.append(("max", far, True))
         # Only a time. Two instants say nothing about how far apart they
         # are; a distance from 0 to 299 m already says 299 m.
         if dtype_time_like(self.dtype) and not pd.isnull(self.min()):

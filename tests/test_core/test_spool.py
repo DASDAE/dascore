@@ -31,7 +31,7 @@ from dascore.exceptions import (
 )
 from dascore.io.index.planned import PlanResolver
 from dascore.io.segy import SegyV1_0
-from dascore.utils.display import get_nice_text
+from dascore.utils.display import range_texts
 from dascore.utils.downloader import fetch
 from dascore.utils.misc import suppress_warnings
 from dascore.utils.patch_assembly import _estimate_merge_samples, _get_varying_dim
@@ -1984,7 +1984,12 @@ class TestSpoolRepr:
         # The bug this pins: reading both ends off time_min made every
         # single-patch spool span zero time.
         assert df["time_min"].max() != df["time_max"].max()
-        assert str(get_nice_text(df["time_max"].max())) in str(spool)
+        # Written out rather than rendered here: an expectation built by
+        # the same helper the repr uses would follow it into a wrong
+        # answer, which is what a regression test is for catching.
+        assert "2020-01-03T00:00:00 to …:23.996" in str(spool)
+        stated = range_texts(df["time_min"].min(), df["time_max"].max())[1]
+        assert str(stated) in str(spool)
 
     def test_a_single_patch_spans_its_own_length(self):
         """One patch is a span of its duration, not a span of nothing."""
@@ -2359,7 +2364,7 @@ class TestSpoolRepr:
         )
         rendered = str(spool)
         # 500 years overflows a Timedelta; the extents survive it.
-        assert "1700-01-01 to 2200-01-01" in rendered
+        assert "1700-01-01T00:00:00 to 2200-01-01T00:00:07.996" in rendered
         assert "distance: 0.000 to 299.000 m" in rendered
 
     def test_a_dimension_states_the_units_of_its_own_rows(self):
