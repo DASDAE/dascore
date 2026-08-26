@@ -1318,6 +1318,10 @@ class TestQuantityTolerance:
             delta = spool.chunk(shot=None, tolerance=to_timedelta64(4))
             quantity = spool.chunk(shot=None, tolerance=get_quantity("4 s"))
         assert len(delta) == len(quantity) == 1
+        # materialized, since the merge converts the tolerance a second
+        # time to bound the snap, and a raw timedelta cannot bound a
+        # numeric coordinate's deviations
+        assert delta[0].get_coord("shot") == quantity[0].get_coord("shot")
         assert len(spool.chunk(shot=None, tolerance=to_timedelta64(1))) == 2
 
     def test_sub_step_tolerance_keeps_contiguity(self, random_spool):
