@@ -2082,6 +2082,22 @@ class TestSpoolRepr:
         assert "➤ Tracks (7 along time)" in rendered
         assert "... 7 more" in rendered
 
+    def test_a_track_says_its_category_once(self):
+        """A tag repeating the category is not printed twice. See #1044."""
+        spool = dc.spool(
+            [
+                dc.get_example_patch("random_das", tag="DSS").update_attrs(
+                    data_category="DSS"
+                ),
+                dc.get_example_patch("random_das", tag="DAS_LF").update_attrs(
+                    data_category="DAS"
+                ),
+            ]
+        )
+        rendered = str(spool)
+        assert "DSS · DSS" not in rendered
+        assert "DAS · DAS_LF" in rendered
+
     def test_a_lone_group_shows_no_tracks(self):
         """One track is the whole spool, which the dimensions already state."""
         rendered = str(dc.get_example_spool("random_das"))

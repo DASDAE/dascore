@@ -12,7 +12,7 @@ from functools import cache, singledispatch
 from graphlib import CycleError, TopologicalSorter
 from html import escape
 from importlib.resources import files
-from itertools import pairwise
+from itertools import groupby, pairwise
 from typing import TypeVar
 
 import numpy as np
@@ -1167,6 +1167,9 @@ def group_names(
     for _, row in frame.iterrows():
         stated_values = (str(row[x]) for x in telling if pd.notnull(row[x]))
         parts = [x for x in stated_values if x]
+        # A part repeating the one before it says the same thing twice:
+        # DSS data tagged "DSS" named its track "XM.MINE1.03.WSF · DSS · DSS".
+        parts = [value for value, _ in groupby(parts)]
         # Nothing tells a lone group apart, since there is nothing to
         # tell it apart from, and every group of a spool of one
         # acquisition is in that position. It is still a named thing,
