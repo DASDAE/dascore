@@ -134,6 +134,20 @@ If you need to change the structure of the site, like adding a new section/subse
 Do not modify docs/_quarto.yml because it will be overwritten.
 :::
 
+## Measuring the build
+
+The documentation is by far the slowest thing CI builds, so each phase of it is timed and what it produced is measured. `scripts/_doc_report.py` collects that into one JSON report, which the doc workflows upload and summarize in the job summary. It runs the same way locally:
+
+```bash
+python scripts/_doc_report.py time quarto_render -- quarto render docs
+python scripts/_doc_report.py site
+python scripts/_doc_report.py summary
+```
+
+The report keeps the page phase, quarto's wall time, and the end-to-end build apart, since they differ by several minutes, and it splits the rendered site into content pages, redirects, and everything else.
+
+`scripts/_baselines/api_urls.tsv` records where every documented object is published. Moving a page breaks the link anyone saved to it, so the report says which URLs moved or vanished against that baseline; regenerate it with `python scripts/_api_urls.py freeze` and say in the pull request why each one moved.
+
 ## Runnable tutorials
 
 Every tutorial page with runnable code carries an "Open in JupyterLite" link, which opens the same content as a live notebook in a [JupyterLite](https://jupyterlite.readthedocs.io) site. DASCore runs there through WebAssembly, so readers need nothing installed.
