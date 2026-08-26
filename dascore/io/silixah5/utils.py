@@ -83,13 +83,15 @@ def _get_time_coord(attr_dict, shape):
 
 
 def _get_distance_coord(attr_dict, data_shape):
-    """Get distance coordinate from AP sensing data."""
-    # Note: To be consistent with TDMS reader (see tdms.utils.get_distance_coord)
-    # We use this method for calculating distance, although start distance
-    # and stop distance are included.
+    """
+    Get the distance coordinate.
+
+    Channel i sits at ``start_distance + i * spatial_resolution *
+    fiber_length_multiplier``, the same convention as the Carina variant;
+    it lands on the file's Stop Distance to within the multiplier's rounding.
+    """
     multiplier = float(attr_dict["fiber_length_multiplier"])
-    total_length = float(attr_dict["measured_length"]) * multiplier
-    start = float(attr_dict["start_position"]) + total_length
+    start = float(attr_dict["start_distance"])
     step = float(attr_dict["spatial_resolution"]) * multiplier
     return get_coord(start=start, step=step, shape=(data_shape[1],), units="m")
 
