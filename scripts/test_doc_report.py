@@ -407,3 +407,28 @@ class TestProgressLine:
     def test_not_a_progress_line(self):
         """Other output quarto writes is not mistaken for a page."""
         assert _doc_report._PROGRESS.match("Output created: _site/index.html") is None
+
+
+class TestQuartoTiming:
+    """Tests for finding whichever quarto phase a build timed."""
+
+    def test_render(self, report_path):
+        """The workflows which render name it quarto_render."""
+        _doc_report.update_report("timings", {"quarto_render": {"pages": {"a": 1.0}}})
+
+        assert _doc_report._quarto_timing(_doc_report.load_report())["pages"]
+
+    def test_publish(self, report_path):
+        """The netlify workflow renders inside the publish and names it so."""
+        _doc_report.update_report("timings", {"quarto_publish": {"pages": {"a": 1.0}}})
+        _doc_report.update_report("index", {"qmd": {"executable_pages": {}}})
+
+        summary = _doc_report.build_summary(_doc_report.load_report())
+
+        assert "| Page kind | Pages | Mean | Total |" in summary
+
+    def test_neither(self, report_path):
+        """A build which rendered nothing has no page table to write."""
+        _doc_report.update_report("timings", {"build_api_docs": {"wall": 1.0}})
+
+        assert _doc_report._quarto_timing(_doc_report.load_report()) == {}

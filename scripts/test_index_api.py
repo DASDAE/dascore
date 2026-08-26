@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 from _index_api import (
     _get_base_address,
@@ -68,3 +70,15 @@ class TestAssertDocumentingThisCheckout:
         """A dascore installed elsewhere is named in the error."""
         with pytest.raises(RuntimeError, match="PYTHONPATH"):
             assert_documenting_this_checkout(dc, tmp_path)
+
+    def test_nested_environment_raises(self, tmp_path):
+        """A .venv in the checkout holds a copy, not the checkout's own."""
+        installed = tmp_path / ".venv" / "lib" / "site-packages" / "dascore"
+        installed.mkdir(parents=True)
+        (installed / "__init__.py").write_text("")
+        module = SimpleNamespace(
+            __name__="dascore", __file__=str(installed / "__init__.py")
+        )
+
+        with pytest.raises(RuntimeError, match="PYTHONPATH"):
+            assert_documenting_this_checkout(module, tmp_path)

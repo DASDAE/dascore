@@ -139,10 +139,14 @@ Do not modify docs/_quarto.yml because it will be overwritten.
 The documentation is by far the slowest thing CI builds, so each phase of it is timed and what it produced is measured. `scripts/_doc_report.py` collects that into one JSON report, which the doc workflows upload and summarize in the job summary. It runs the same way locally:
 
 ```bash
+python scripts/_doc_report.py time build_api_docs -- python scripts/build_api_docs.py
+python scripts/_doc_report.py index
 python scripts/_doc_report.py time quarto_render -- quarto render docs
 python scripts/_doc_report.py site
 python scripts/_doc_report.py summary
 ```
+
+Run them in that order. `index` is what classifies each page by the output it produces, and `site` checks the rendered pages against that classification; skipping it leaves every page that printed something looking like a surprise.
 
 The report keeps the page phase, quarto's wall time, and the end-to-end build apart, since they differ by several minutes, and it splits the rendered site into content pages, redirects, and everything else.
 
