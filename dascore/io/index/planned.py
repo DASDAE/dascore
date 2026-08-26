@@ -523,10 +523,10 @@ class PlanResolver(PatchResolver):
         return nested
 
     def _assembler(self):
-
         return PatchAssembler(
             load_patch=self._load_member,
             merge_kwargs=self.merge_kwargs,
+            plan_dim=self.dim,
         )
 
     def _load_member(self, kwargs: Mapping) -> dc.Patch:
