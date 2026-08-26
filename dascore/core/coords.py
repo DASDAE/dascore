@@ -1419,6 +1419,10 @@ class CoordPartial(BaseCoord):
     def values(self):
         """Return the internal data. Same as values attribute."""
         null_val = np.asarray(_get_nullish(self.dtype))
+        # NaN is a plain python float, so a narrower floating dtype has to
+        # be asked for by name or the values contradict the recorded dtype.
+        if self.dtype is not None and np.dtype(self.dtype).kind == "f":
+            null_val = null_val.astype(self.dtype)
         data = np.broadcast_to(null_val, self.shape)
         return data
 

@@ -1855,6 +1855,22 @@ class TestPartialCoord:
         assert coord.dtype == dtype
         assert coord.values.dtype == dtype
 
+    @pytest.mark.parametrize("dtype", ["float32", "float64"])
+    def test_all_null_floats_keep_their_width(self, dtype):
+        """
+        A recorded floating dtype is one the values actually have.
+
+        NaN is a plain python float, so a narrower dtype has to be asked
+        for by name; without that the coord reports float32 while its
+        values report float64, and anything promoting against them, such
+        as concatenation, takes the wrong one.
+        """
+        dtype = np.dtype(dtype)
+        coord = get_coord(data=np.full(3, np.nan, dtype=dtype))
+        assert isinstance(coord, CoordPartial)
+        assert coord.dtype == dtype
+        assert coord.values.dtype == dtype
+
     def test_all_null_object_array_claims_no_dtype(self):
         """
         A dtype is only worth recording when the values can honor it.
