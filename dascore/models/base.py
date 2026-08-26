@@ -29,7 +29,13 @@ from dascore.models.registry import (
     register_model,
 )
 from dascore.models.types import DateTime64, FrozenDictType
-from dascore.utils.display import RichRepr, model_to_line
+from dascore.utils.display import (
+    RichRepr,
+    Section,
+    child_sections,
+    model_to_line,
+    render_text,
+)
 from dascore.utils.misc import _all_null, all_close
 from dascore.utils.time import to_datetime64
 
@@ -239,9 +245,38 @@ class InventoryModel(RichRepr, DascoreBaseModel):
         out.update(kwargs)
         return self.__class__(**out)
 
-    def __rich__(self) -> Text:
-        """One line naming the class and what it states."""
+    def _repr_line(self) -> Text:
+        """
+        The one line which names this object and what it states.
+
+        What a container puts on the line it gives this object, and the
+        whole of the repr for one which holds nothing.
+        """
         return model_to_line(self)
+
+    def _repr_children(self) -> tuple[InventoryModel, ...]:
+        """
+        The objects this one holds, each of which prints itself.
+
+        Empty by default: a model whose children are worth a count in its
+        own line rather than a line each says nothing here, which is why
+        a station shows ``channels: 3`` and not three channels.
+        """
+        return ()
+
+    def _repr_section(self, depth: int = 0) -> Section:
+        """
+        The block a repr draws this object in.
+
+        ``depth`` is how far into a containment tree it sits, which a
+        terminal shows by indenting and a panel shows by nesting.
+        """
+        children = child_sections(self._repr_children(), depth + 1)
+        return Section(self._repr_line(), children, depth)
+
+    def __rich__(self) -> Text:
+        """The line naming this object, then whatever it holds."""
+        return render_text(self._repr_section())
 
 
 class TimeRangedModel(InventoryModel):

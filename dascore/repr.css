@@ -21,6 +21,10 @@ each given a value per theme below.
   --dc-cyan: #0e7490;
   --dc-dark_orange: #bc4c00;
   --dc-grey50: #6b7280;
+  --dc-d0: #32709d;
+  --dc-d1: #6d5acb;
+  --dc-d2: #a83ab9;
+  --dc-d3: #9a5c31;
   --dc-rule: color-mix(in oklab, currentcolor 22%, transparent);
   font-family: var(--jp-code-font-family, ui-monospace, SFMono-Regular, Menlo, monospace);
   font-size: var(--jp-code-font-size, 0.8125rem);
@@ -42,6 +46,10 @@ each given a value per theme below.
     --dc-cyan: #7dcfff;
     --dc-dark_orange: #ffa657;
     --dc-grey50: #9ca3af;
+    --dc-d0: #73abd3;
+    --dc-d1: #a79ce0;
+    --dc-d2: #d08cdb;
+    --dc-d3: #d29870;
   }
 }
 
@@ -58,6 +66,10 @@ body.quarto-light .dc-repr {
   --dc-cyan: #0e7490;
   --dc-dark_orange: #bc4c00;
   --dc-grey50: #6b7280;
+  --dc-d0: #32709d;
+  --dc-d1: #6d5acb;
+  --dc-d2: #a83ab9;
+  --dc-d3: #9a5c31;
 }
 
 body[data-jp-theme-light="false"] .dc-repr,
@@ -71,6 +83,10 @@ body[data-vscode-theme-kind*="dark"] .dc-repr {
   --dc-cyan: #7dcfff;
   --dc-dark_orange: #ffa657;
   --dc-grey50: #9ca3af;
+  --dc-d0: #73abd3;
+  --dc-d1: #a79ce0;
+  --dc-d2: #d08cdb;
+  --dc-d3: #d29870;
 }
 
 .dc-repr .dc-bold { font-weight: 600; }
@@ -104,13 +120,22 @@ panel reads the same in a notebook and on the docs site. */
   display: block;
   list-style: none;
   cursor: pointer;
-  padding: 0.1em 0;
+  /* Room for the triangle, which is pulled back into it below. A line
+  can run to more than one line -- a description usually does -- and
+  given to the triangle alone the rest would start a marker to the left
+  of the first, under the triangle rather than beside it. */
+  padding: 0.1em 0 0.1em 1.1em;
   color: inherit;
   font-size: 1em;
   border-radius: 3px;
   /* A title can carry spaces a producer put there, and HTML would
   collapse runs of them. */
   white-space: pre;
+  /* And it scrolls inside itself, the way every other block here does.
+  A network's line can run to a few hundred characters, and without
+  this one of them pushes the banner and every block below it sideways
+  along with it. */
+  overflow-x: auto;
 }
 
 .dc-repr summary::-webkit-details-marker { display: none; }
@@ -119,6 +144,7 @@ panel reads the same in a notebook and on the docs site. */
   content: "\25B8";
   display: inline-block;
   width: 1.1em;
+  margin-left: -1.1em;
   color: var(--dc-grey50);
 }
 
@@ -137,6 +163,36 @@ states its path indented -- and HTML would collapse them. */
   overflow-x: auto;
 }
 
+
+/* A block which sits inside another. The nesting is the markup here, so
+the indentation a terminal has to write into the text is set instead --
+one step per level, which compounds down the tree on its own.
+
+The rail is what a reader follows back to the thing a line belongs to,
+and its color says which level that is. It is decoration, not
+information: which network an array is under is legible from the nesting
+whether or not the colors resolve, so a printer or a host which drops
+custom properties loses nothing a reader needed. */
+.dc-repr .dc-nest {
+  margin-left: 0.55em;
+  padding-left: 0.55em;
+  border-left: 2px solid color-mix(in oklab, var(--dc-rail) 50%, transparent);
+}
+
+/* A leaf has no disclosure triangle, so it is given the width of one:
+without it a leaf's text starts where its parent's text starts, a marker
+to the left of where the blocks beside it start, and reads as the level
+above. */
+.dc-repr .dc-line.dc-nest { padding-left: 1.65em; }
+
+.dc-repr .dc-d0 { --dc-rail: var(--dc-d0); }
+.dc-repr .dc-d1 { --dc-rail: var(--dc-d1); }
+.dc-repr .dc-d2 { --dc-rail: var(--dc-d2); }
+.dc-repr .dc-d3 { --dc-rail: var(--dc-d3); }
+
+/* The triangle takes the rail's color so the level reads from the line
+itself, not only from the margin beside it. */
+.dc-repr .dc-nest > summary::before { color: var(--dc-rail); }
 
 /* This scrolls itself. Without `overflow-x` a hundred-column coordinate
 line would push the whole page sideways rather than just this block. */

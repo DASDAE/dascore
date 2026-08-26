@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import pickle
+import re
 from collections.abc import Mapping
 from pathlib import Path
 
@@ -1877,13 +1878,14 @@ class TestCoverageCompleteness:
         assert values_equal((1.0, np.nan), (1.0, np.nan))
 
 
+@pytest.fixture(scope="module")
+def tunnel():
+    """A populated inventory with two optical paths."""
+    return dc.get_example_inventory("tunnel")
+
+
 class TestDisplay:
     """Tests for the inventory's text representation."""
-
-    @pytest.fixture(scope="class")
-    def tunnel(self):
-        """A populated inventory with two optical paths."""
-        return dc.get_example_inventory("tunnel")
 
     def test_rich(self, tunnel):
         """An inventory has a rich representation."""
@@ -1956,6 +1958,116 @@ class TestDisplay:
         with config_context(display_max_items=2):
             out = str(network)
         assert "... 3 more" in out
+
+    def test_a_model_holding_nothing_is_one_line(self):
+        """
+        What a model holds is a count on its line unless it says
+        otherwise.
+
+        A station lists no channels for the same reason an acquisition
+        lists no measurements: the count is the useful fact, and three
+        hundred channels would bury the tree they sit in.
+        """
+        station = inv.Station(code="S1", channels=[{"code": f"H{x}"} for x in range(3)])
+        assert str(station).count("\n") == 0
+        assert "channels: 3" in str(station)
+
+    def test_the_tree_is_indented_by_level(self, tunnel):
+        """
+        Each level is set in one step from the one above it.
+
+        Stated as the whole tree rather than as a rule each line is
+        checked against: a level which stopped being drawn matches no
+        rule and passes one, and dropping a level is exactly what a
+        rewrite of the tree gets wrong.
+        """
+        drawn = [
+            (len(x) - len(x.lstrip()), x.strip().split("(")[0])
+            for x in str(tunnel).split("\n")
+            # A model's line, which closes on " )"; the block titles
+            # above them close on a count in brackets instead.
+            if x.endswith(" )")
+        ]
+        assert drawn == [
+            (4, "Network"),
+            (8, "FiberArray"),
+            (12, "Acquisition"),
+            (12, "OpticalPath"),
+            (12, "OpticalPath"),
+            (4, "coordinate_reference_system: CoordinateReferenceSystem"),
+        ]
+
+    def test_a_field_value_which_holds_a_newline(self):
+        """
+        Every line of a model's line is set in, not just the first.
+
+        A description is free text and is routinely written over more
+        than one line. Indented only on its first, the rest falls to
+        column zero and reads as a block of its own -- which is the
+        misreading the indentation exists to prevent.
+        """
+        array = inv.FiberArray(code="FA1", description="line one\nline two")
+        network = inv.Network(code="XT", fiber_arrays=(array,))
+        drawn = str(inv.Inventory(networks=(network,))).split("\n")
+        assert "        FiberArray( description: line one" in drawn
+        assert "        line two code: FA1 )" in drawn
+
+    def test_a_tree_opens_where_it_was_put(self, tunnel):
+        """A model printed on its own is not indented; what it holds is."""
+        network = tunnel.networks[0]
+        assert not str(network).startswith(" ")
+        assert str(network).split("\n")[1].startswith("    FiberArray(")
+
+
+class TestPanel:
+    """Tests for the panel a notebook draws an inventory as."""
+
+    @pytest.fixture(scope="class")
+    def markup(self, tunnel):
+        """The panel with its stylesheet cut off the front."""
+        html = tunnel._repr_html_()
+        return html[html.index("</style>") + len("</style>") :]
+
+    def test_the_tree_nests(self, markup):
+        """
+        A network holds its arrays rather than standing beside them.
+
+        The blocks a reader folds are what says which thing is inside
+        which, so a flat list of them says nothing at all.
+        """
+        # Networks, then the network, then the array inside it.
+        assert markup.count("<details") == 4
+        network = markup.index('<summary><span class="dc-bold">Network</span>')
+        array = markup.index('<summary><span class="dc-bold">FiberArray</span>')
+        assert network < array < markup.index("</details>")
+
+    def test_a_long_line_is_no_longer_in_the_array_dump(self, markup):
+        """
+        An acquisition's line is a line, and can scroll as one.
+
+        Drawn inside one `pre` with the whole tree it could not: the
+        longest line in a block sets that block's scroll width, so
+        reading it drags every other line in the tree sideways.
+        """
+        assert "Acquisition" in markup
+        pres = re.findall(r"<pre[^>]*>(.*?)</pre>", markup, re.DOTALL)
+        # The attributes block is still one, so an empty list here would
+        # mean the search stopped working rather than the tree moving.
+        assert len(pres) == 1
+        assert not any("Acquisition" in x for x in pres)
+
+    def test_each_level_says_which_it_is(self, markup):
+        """A reader can tell an array's line from the network's above it."""
+        for depth in range(3):
+            assert f"dc-nest dc-d{depth}" in markup
+
+    def test_what_is_left_out_is_said(self):
+        """A tree which stops early says so where it stopped."""
+        network = inv.Network(code="XT", stations=[{"code": f"S{x}"} for x in range(5)])
+        inventory = inv.Inventory(networks=(network,))
+        with config_context(display_max_items=2):
+            html = inventory._repr_html_()
+        assert "... 3 more" in html
 
 
 class TestObjectTypeTag:

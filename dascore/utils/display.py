@@ -12,6 +12,7 @@ from graphlib import CycleError, TopologicalSorter
 from html import escape
 from importlib.resources import files
 from itertools import pairwise
+from typing import TypeVar
 
 import numpy as np
 import pandas as pd
@@ -27,6 +28,10 @@ from dascore.config import get_config
 from dascore.constants import dascore_styles
 from dascore.units import get_quantity, get_quantity_str
 from dascore.utils.time import to_float
+
+# What a container holds, whatever that is: `limit_items` takes any of
+# them and hands back the same kind.
+_Item = TypeVar("_Item")
 
 # How wide one value may print before it is elided. A repr is a glance at
 # an object, and a single long field should not push the rest off screen.
@@ -146,10 +151,18 @@ class Section:
     A titled block: the line which names it, and what sits under it.
 
     A section with no body is a statement rather than a container.
+
+    Sections nest, which is what an inventory is: its networks hold
+    fiber arrays and stations, and its fiber arrays hold acquisitions
+    and optical paths. ``depth`` says how far down one sits. The title
+    is the bare line either way; a terminal sets it in by its depth,
+    since indentation is the only nesting it has, and a panel puts it
+    in a block inside its parent's.
     """
 
     title: Text
-    body: tuple[Raw | Table, ...] = ()
+    body: tuple[Raw | Table | Section, ...] = ()
+    depth: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -194,7 +207,7 @@ def _render_table(node: Table) -> Text:
 
 @render_text.register
 def _render_section(node: Section) -> Text:
-    out = node.title.copy()
+    out = section_title(node.title, node.depth)
     for child in node.body:
         out += render_text(child)
     return out
@@ -236,6 +249,12 @@ def split_block(text: Text) -> Section:
 # markers for one thing.
 _SECTION_MARKER = "\u27a4 "
 _HTML_ROOT = "dc-repr"
+
+# How many colors the nesting ramp holds before it repeats. An inventory
+# nests three levels -- network, fiber array, then what an array holds --
+# and one spare covers a tree which grows a fourth; past that it reads by
+# its rails rather than by a hue nobody could name.
+_NEST_COLORS = 4
 
 # Style words a class exists for. A color outside this list still draws
 # in a terminal, where rich knows every color it can parse; here it
@@ -401,32 +420,96 @@ def _html_table(node: Table) -> str:
     )
 
 
+@singledispatch
+def _visible_lines(node) -> int:
+    """
+    How many lines a reader sees of a node as it is drawn.
+
+    Zero where a node draws nothing, which is what says a block has no
+    body to fold: a section whose only child is the newline which
+    separated it from its title is a statement, not a container.
+    """
+    msg = f"cannot count {type(node).__name__}"
+    raise NotImplementedError(msg)
+
+
+@_visible_lines.register
+def _raw_lines(node: Raw) -> int:
+    # Counted on what is drawn, not on what was handed over: the body
+    # loses the newline which separated it from its title and any it
+    # ends on, and a block counted before that folds one line early.
+    plain = _body_text(node.text).plain
+    return plain.count("\n") + 1 if plain else 0
+
+
+@_visible_lines.register
+def _table_lines(node: Table) -> int:
+    # Its heading row is a line a reader sees, so a table of two records
+    # draws three.
+    return len(node.rows) + 1 if node.rows else 0
+
+
+def _title_lines(node: Section) -> int:
+    """How many lines the line which names a block runs to.
+
+    Usually one. A field value may hold a newline -- a description
+    often does -- and both a `summary` and a `.dc-line` keep it, so a
+    block which counted its title as one line would fold a level late.
+    """
+    return node.title.plain.count("\n") + 1
+
+
+@_visible_lines.register
+def _section_lines(node: Section) -> int:
+    # A folded section is one line, whatever it holds. That is what lets
+    # a reader open a large tree a level at a time: an inventory of
+    # twenty networks counts twenty lines here rather than every
+    # acquisition under all of them, so its own block still opens.
+    #
+    # Counted once and held: asking again after deciding would walk the
+    # same subtree a second time at every level, which is exponential in
+    # how deep the tree goes.
+    lines = _body_lines(node)
+    shown = lines if lines <= get_config().display_html_open_lines else 0
+    return _title_lines(node) + shown
+
+
+def _body_lines(node: Section) -> int:
+    """How many lines opening a section would show."""
+    return sum(_visible_lines(x) for x in node.body)
+
+
+def _nest_classes(depth: int) -> tuple[str, ...]:
+    """
+    What says how deep in a nesting something sits.
+
+    A top-level block sits in no nesting and is given nothing. The color
+    ramp wraps rather than deepening forever: past a few levels it is the
+    rails which tell them apart, not which color they are.
+    """
+    if not depth:
+        return ()
+    return ("dc-nest", f"dc-d{(depth - 1) % _NEST_COLORS}")
+
+
 @render_html.register
 def _html_section(node: Section) -> str:
+    # A title is the bare line: the indentation a terminal draws nesting
+    # with is added when a terminal draws it, and here the nesting is
+    # the markup.
     title = node.title
     if title.plain.startswith(_SECTION_MARKER):
         title = title[len(_SECTION_MARKER) :]
     title = text_to_html(title)
-    if not any(
-        x.rows if isinstance(x, Table) else _body_text(x.text).plain for x in node.body
-    ):
-        # Nothing to fold, so nothing to offer folding. A block whose
-        # body is only the newline which separated it has none.
-        return f'<div class="dc-line">{title}</div>'
-    # Counted on what is drawn, not on what was handed over: the body
-    # loses the newline which separated it and any it ends on, and a
-    # block counted before that folds one line early.
-    lines = sum(
-        # Its heading row is a line a reader sees, so a table of two
-        # records draws three.
-        len(x.rows) + 1
-        if isinstance(x, Table)
-        else _body_text(x.text).plain.count("\n") + 1
-        for x in node.body
-    )
+    nest = _nest_classes(node.depth)
+    lines = _body_lines(node)
+    if not lines:
+        # Nothing to fold, so nothing to offer folding.
+        return f'<div class="{" ".join(("dc-line", *nest))}">{title}</div>'
     state = " open" if lines <= get_config().display_html_open_lines else ""
     body = "".join(render_html(x) for x in node.body)
-    return f"<details{state}><summary>{title}</summary>{body}</details>"
+    css = f' class="{" ".join(nest)}"' if nest else ""
+    return f"<details{css}{state}><summary>{title}</summary>{body}</details>"
 
 
 @render_html.register
@@ -620,7 +703,43 @@ def get_header_text(name: str, style: str = "bold") -> Text:
     return header + Text("\n") + Text("-" * header.cell_len)
 
 
-def indent_text(text: Text, prefix: str = "    ") -> Text:
+# What one level of a containment tree is set in from the one above, in
+# a terminal. A panel nests instead, and drops it.
+_INDENT = "    "
+
+
+def section_title(line: Text, depth: int) -> Text:
+    """
+    How a terminal draws the line which names a block.
+
+    A block below the top starts on a line of its own, set in by how deep
+    it sits; the top of a tree opens wherever its container left off, so
+    it is drawn as it stands. Every line is set in, not just the first: a
+    field value may hold a newline -- a description usually does -- and a
+    continuation left at column zero reads as a block of its own.
+    """
+    if not depth:
+        # A copy, not the node's own line: a renderer which appends to
+        # what it drew would otherwise rewrite the node it read.
+        return line.copy()
+    return Text("\n") + indent_text(line, _INDENT * depth)
+
+
+def child_sections(items, depth: int) -> tuple[Section, ...]:
+    """
+    The blocks a container's children draw, and a line for any left out.
+
+    Only what is shown is rendered, so the cost of a repr is what it
+    prints rather than what the tree holds.
+    """
+    shown, left_out = limit_items(items)
+    out = [x._repr_section(depth) for x in shown]
+    if left_out:
+        out.append(Section(elision_text(left_out), depth=depth))
+    return tuple(out)
+
+
+def indent_text(text: Text, prefix: str = _INDENT) -> Text:
     """
     Indent every line of a rich Text, keeping its styles.
 
@@ -640,21 +759,23 @@ def elision_text(left_out: int) -> Text:
     return Text(f"... {left_out} more", style=dascore_styles["keys"])
 
 
-def limit_reprs(items, limit: int | None = None) -> list[Text]:
+def limit_items(
+    items: Iterable[_Item], limit: int | None = None
+) -> tuple[list[_Item], int]:
     """
-    Render at most ``limit`` items, with a line naming what was left out.
+    Take at most ``limit`` items, and say how many were left behind.
 
-    Only the items which are shown are rendered, so the cost of a repr is
-    what it prints rather than what the object holds. A repr also says how
-    much it is not showing; silently stopping at ten reads as though ten
-    is all there were.
+    Where a repr stops early it says how much it is not showing, so the
+    count is as much a part of the answer as the items are; silently
+    stopping at ten reads as though ten is all there were.
     """
     limit = get_config().display_max_items if limit is None else limit
+    # Config forbids a negative one, so only a caller can state it, and
+    # `items[:-1]` would quietly show all but the last rather than none.
+    assert limit >= 0, f"a display limit is a count, not {limit}"
     items = list(items)
-    texts = [x.__rich__() for x in items[:limit]]
-    if left_out := len(items) - len(texts):
-        texts.append(elision_text(left_out))
-    return texts
+    shown = items[:limit]
+    return shown, len(items) - len(shown)
 
 
 def _length(value) -> int | None:
