@@ -27,6 +27,7 @@ from dascore.utils.array import (
     PatchUFunc,
     _BoundPatchUFunc,
     _is_offset_unit,
+    _needs_equal_units,
     apply_array_func,
     apply_ufunc,
     convert_bytes_to_strings,
@@ -494,6 +495,135 @@ class TestApplyUfunc:
         assert isinstance(out, dc.Patch)
         assert out.shape[1] == 1
         assert out2.equals(out)
+
+
+class TestDimensionlessUnits:
+    """Tests for units whose base units are dimensionless (µϵ, mrad, %)."""
+
+    units = ("µϵ", "mrad", "percent", "ϵ", "mm")
+    # The operators which need both sides in the same units.
+    equal_unit_ops = (
+        np.add,
+        np.subtract,
+        np.maximum,
+        np.minimum,
+        np.hypot,
+        np.copysign,
+        np.nextafter,
+    )
+    # The operators which want their operands dimensionless outright.
+    dimensionless_ops = (np.logaddexp, np.logaddexp2, np.power)
+    # A level survives these, but not being added to; see _is_logarithmic_unit.
+    level_ops = (np.maximum, np.minimum, np.hypot, np.copysign, np.nextafter)
+
+    @pytest.mark.parametrize("unit", units)
+    @pytest.mark.parametrize("operator", equal_unit_ops)
+    @pytest.mark.parametrize("flipped", (False, True))
+    def test_bare_operand_adopts_units(self, random_patch, unit, operator, flipped):
+        """
+        A bare number takes the patch's units rather than being scaled into them.
+
+        The registry coerces a bare number into a unit whose base is
+        dimensionless instead of refusing it, which would make the units of
+        one unit of output the unit's magnitude (1 µϵ became 428572 µϵ).
+        """
+        patch = random_patch.set_units(unit)
+        data = random_patch.data
+        out = operator(1.5, patch) if flipped else operator(patch, 1.5)
+        expected = operator(1.5, data) if flipped else operator(data, 1.5)
+        assert np.allclose(out.data, expected)
+        assert get_quantity(out.attrs.data_units) == get_quantity(unit)
+
+    @pytest.mark.parametrize("unit", units)
+    def test_comparison_drops_units(self, random_patch, unit):
+        """A comparison against a bare number is boolean and has no units."""
+        patch = random_patch.set_units(unit)
+        out = patch > 0.5
+        assert out.attrs.data_units is None
+        assert np.array_equal(out.data, random_patch.data > 0.5)
+
+    @pytest.mark.parametrize("unit", units)
+    def test_products_keep_the_bare_side_dimensionless(self, random_patch, unit):
+        """A bare number in a product or a power is dimensionless, as it was."""
+        patch = random_patch.set_units(unit)
+        quantity = get_quantity(unit)
+        assert get_quantity((patch * 2).attrs.data_units) == quantity
+        assert get_quantity((patch / 2).attrs.data_units) == quantity
+        assert get_quantity((2 / patch).attrs.data_units) == 1 / quantity
+        assert get_quantity((patch**2).attrs.data_units) == quantity**2
+
+    def test_units_do_not_accumulate(self, random_patch):
+        """The label stays put, so a later conversion is still right."""
+        patch = random_patch.set_units("µϵ")
+        data = random_patch.data
+        out = (patch + 1) + 1
+        assert get_quantity(out.attrs.data_units) == get_quantity("µϵ")
+        assert np.allclose(out.data, data + 2)
+        assert np.allclose((patch + 1).convert_units("ϵ").data, (data + 1) * 1e-6)
+
+    def test_operators_are_told_apart(self):
+        """
+        Only an operator which wants one unit on both sides gets the bare side.
+
+        An operator which wants dimensionless operands (logaddexp, an
+        exponent) already has them, so it is left as the registry finds it.
+        """
+        for operator in (*self.equal_unit_ops, np.arctan2):
+            assert _needs_equal_units(operator)
+        for operator in (*self.dimensionless_ops, np.multiply, np.divide):
+            assert not _needs_equal_units(operator)
+
+    def test_operator_the_registry_lacks(self, random_patch):
+        """A ufunc the registry does not implement keeps the patch's units."""
+        patch = random_patch.set_units("µϵ")
+        out = np.fmax(patch, 1.5)
+        assert get_quantity(out.attrs.data_units) == get_quantity("µϵ")
+        assert np.allclose(out.data, np.fmax(random_patch.data, 1.5))
+        # a gufunc cannot be probed on scalars either
+        square = dc.get_example_patch(shape=(10, 10)).set_units("µϵ")
+        out = np.matmul(square, np.eye(10))
+        assert get_quantity(out.attrs.data_units) == get_quantity("µϵ")
+
+    @pytest.mark.parametrize("unit", units)
+    def test_arctan2_is_an_angle(self, random_patch, unit):
+        """An operator with units of its own still gets an unscaled operand."""
+        patch = random_patch.set_units(unit)
+        out = np.arctan2(patch, 1.5)
+        assert get_quantity(out.attrs.data_units) == get_quantity("rad")
+        assert np.allclose(out.data, np.arctan2(random_patch.data, 1.5))
+
+    def test_scaled_dimensionless_units_keep_their_scale(self, random_patch):
+        """A magnitude in the units rides along, as it does for "100 cm"."""
+        patch = random_patch.set_units("2 percent")
+        out = patch + 1
+        assert np.allclose(out.data, random_patch.data + 1)
+        assert get_quantity(out.attrs.data_units) == get_quantity("2 percent")
+        out = random_patch.set_units("100 cm") + 1
+        assert get_quantity(out.attrs.data_units) == get_quantity("100 cm")
+
+    def test_units_only_on_the_other_side(self, random_patch):
+        """A patch without units adopts a dimensionless operand's units."""
+        for other in (3 * get_quantity("µϵ"), "3 µϵ"):
+            out = random_patch + other
+            assert np.allclose(out.data, random_patch.data + 3)
+            assert get_quantity(out.attrs.data_units) == get_quantity("µϵ")
+
+    @pytest.mark.parametrize("operator", (*level_ops, np.arctan2))
+    @pytest.mark.parametrize("flipped", (False, True))
+    def test_logarithmic_units_adopt_too(self, random_patch, operator, flipped):
+        """
+        A level in dB is dimensionless, so it is one of these units.
+
+        Only for the operators a level survives: adding a bare number to
+        one is refused before the units are ever probed.
+        """
+        level = random_patch.set_units("dB")
+        data = random_patch.data
+        out = operator(1.5, level) if flipped else operator(level, 1.5)
+        expected = operator(1.5, data) if flipped else operator(data, 1.5)
+        assert np.allclose(out.data, expected)
+        units = get_quantity("rad" if operator is np.arctan2 else "dB")
+        assert get_quantity(out.attrs.data_units) == units
 
 
 class TestPatchUFunc:
