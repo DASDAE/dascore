@@ -317,8 +317,13 @@ def text_to_html(text: Text) -> str:
 
 # A quoted string, or a comment. A string is matched first on purpose:
 # `content: "/*"` is a value, and a stripper which read it as the start
-# of a comment would swallow every declaration up to the next `*/`.
-_CSS_STRING_OR_COMMENT = re.compile(r"\"[^\"\n]*\"|'[^'\n]*'|/\*.*?\*/", re.DOTALL)
+# of a comment would swallow every declaration up to the next `*/`. A
+# string runs over an escaped quote (`content: "\""`), which otherwise
+# ends it early and leaves the rest of the value read as CSS.
+_CSS_STRING_OR_COMMENT = re.compile(
+    r'"(?:\\.|[^"\\\n])*"' r"|'(?:\\.|[^'\\\n])*'" r"|/\*.*?\*/",
+    re.DOTALL,
+)
 
 
 def _strip_css_comments(css: str) -> str:

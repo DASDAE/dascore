@@ -216,6 +216,19 @@ class TestNoPrintedPanels:
             builtins.print(random_patch, file=buffer)
         assert buffer.getvalue() == f"{random_patch}\n"
 
+    def test_naming_the_cell_s_own_stream_does_not(self, conftest_module, random_patch):
+        """
+        `file=sys.stdout` is still the cell's output, whatever it says.
+
+        A `file` is only a way past the guard when it points somewhere
+        the reader will not see; naming the standard streams points at
+        exactly where a bare print already went.
+        """
+        for stream in (sys.stdout, sys.stderr):
+            with conftest_module.no_printed_panels(_QMD):
+                with pytest.raises(AssertionError, match="Patch"):
+                    builtins.print(random_patch, file=stream)
+
     def test_both_names_are_put_back(self, conftest_module):
         """The guard belongs to the doc example, not to the session."""
         before = (builtins.print, dc.print)

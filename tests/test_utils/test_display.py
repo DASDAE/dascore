@@ -1917,13 +1917,16 @@ class TestStylesheet:
         The stripper is told about quotes for that reason: reading
         `"/*"` as the start of a comment would swallow every declaration
         up to the next `*/`, which is a stylesheet that no longer
-        parses rather than one which lost a note.
+        parses rather than one which lost a note. And about escapes,
+        since an escaped quote inside a string would otherwise end it
+        early and leave the rest of the value read as CSS.
         """
-        css = 'a { content: "/*"; }\n/* gone */\nb { color: red }\n'
-        stripped = _strip_css_comments(css)
-        assert 'content: "/*"' in stripped
-        assert "b { color: red }" in stripped
-        assert "gone" not in stripped
+        for value in ('"/*"', '"\\"/*"'):
+            css = f"a {{ content: {value}; }}\n/* gone */\nb {{ color: red }}\n"
+            stripped = _strip_css_comments(css)
+            assert f"content: {value}" in stripped
+            assert "b { color: red }" in stripped
+            assert "gone" not in stripped
 
     def test_a_row_is_not_striped_by_the_host(self):
         """
