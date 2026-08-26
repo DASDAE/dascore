@@ -999,6 +999,10 @@ sin_patch = np.sin(patch)
 
 # Add patches together using numpy ufuncs
 sum_patch = np.add(patch, patch)
+
+# Or name the ufunc, with the patch as its first operand
+same_abs_patch = patch.apply_ufunc(np.abs)
+scaled_patch = patch.apply_ufunc(np.multiply, 10)
 ```
 
 Some of the Patch methods are ufuncs which means they support accumulation and reduction along specified dimensions.

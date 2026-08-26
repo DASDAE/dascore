@@ -390,10 +390,42 @@ class Patch(NodeRepr, NamespaceOwner):
     drop_private_coords = dascore.proc.drop_private_coords
     coords_from_df = dascore.proc.coords_from_df
     make_broadcastable_to = dascore.proc.make_broadcastable_to
-    apply_ufunc = apply_ufunc
     get_patch_names = get_patch_names
     get_axis = dascore.proc.get_axis
     full = dascore.proc.full
+
+    def apply_ufunc(self, ufunc, *args, **kwargs) -> Patch:
+        """
+        Apply a ufunc with the patch as its first operand.
+
+        Parameters
+        ----------
+        ufunc
+            The ufunc to apply.
+        *args
+            The remaining operands, which can contain patches.
+        **kwargs
+            Keyword arguments which configure the operation, such as `dim`
+            for a reduction or accumulation.
+
+        Examples
+        --------
+        >>> import numpy as np
+        >>> import dascore as dc
+        >>> patch = dc.get_example_patch()
+        >>>
+        >>> # Take the absolute value of the patch.
+        >>> abs_patch = patch.apply_ufunc(np.abs)
+        >>>
+        >>> # Multiply the patch by 10.
+        >>> scaled_patch = patch.apply_ufunc(np.multiply, 10)
+
+        See Also
+        --------
+        [`apply_ufunc`](`dascore.utils.array.apply_ufunc`)
+        """
+        # The module-level function, not this method.
+        return apply_ufunc(ufunc, self, *args, **kwargs)
 
     def get_patch_name(self, *args, **kwargs) -> str:
         """

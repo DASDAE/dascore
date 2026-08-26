@@ -30,6 +30,7 @@ from dascore.io.core import (
     _select_patch_from_spool,
 )
 from dascore.proc.basic import apply_operator
+from dascore.utils.array import apply_ufunc
 from dascore.utils.misc import suppress_warnings
 
 
@@ -1301,6 +1302,52 @@ class TestNumpyFuncs:
         # Test ufunc accumulate
         out = func.accumulate("time")
         assert isinstance(out, dc.Patch)
+
+
+class TestApplyUfunc:
+    """Tests for the apply_ufunc patch method."""
+
+    def test_unary_ufunc(self, random_patch):
+        """The patch should be the ufunc's only operand."""
+        out = random_patch.apply_ufunc(np.abs)
+        assert isinstance(out, dc.Patch)
+        assert np.allclose(out.data, np.abs(random_patch.data))
+
+    def test_binary_ufunc_patch(self, random_patch):
+        """A second patch operand should follow the patch."""
+        out = random_patch.apply_ufunc(np.add, random_patch)
+        assert np.allclose(out.data, random_patch.data * 2)
+
+    def test_binary_ufunc_scalar(self, random_patch):
+        """A scalar operand should also follow the patch."""
+        out = random_patch.apply_ufunc(np.multiply, 10)
+        assert np.allclose(out.data, random_patch.data * 10)
+
+    def test_binary_ufunc_not_reversed(self, random_patch):
+        """The patch is the first operand, not the second."""
+        out = random_patch.apply_ufunc(np.subtract, 1)
+        assert np.allclose(out.data, random_patch.data - 1)
+
+    def test_keywords(self, random_patch):
+        """`dim` is consumed on the reduce path, other keywords reach the ufunc."""
+        axis = random_patch.get_axis("time")
+        reduced = random_patch.apply_ufunc(np.add.reduce, dim="time")
+        assert reduced.shape[axis] == 1
+        assert np.allclose(
+            reduced.data, random_patch.data.sum(axis=axis, keepdims=True)
+        )
+        cast = random_patch.apply_ufunc(np.multiply, 2, dtype="float32")
+        assert cast.data.dtype == np.float32
+
+    def test_function_form(self, random_patch):
+        """The function form should still work and agree with the method."""
+        out = apply_ufunc(np.abs, random_patch)
+        assert out.equals(random_patch.apply_ufunc(np.abs))
+
+    def test_unbound_form(self, random_patch):
+        """The method should also work unbound, called off the class."""
+        out = dc.Patch.apply_ufunc(random_patch, np.abs)
+        assert out.equals(random_patch.apply_ufunc(np.abs))
 
 
 class TestStringCoordinatePatch:
