@@ -641,15 +641,18 @@ def _get_istft_coord(coords, frequency_axis, time_axis):
     Get the coordinate manager for the inverse of the short time fourier transform.
     """
     dims = coords.dims
-    # Create new time coordinate.
-    coord_map = dict(coords.coord_map)
+    freq_name, time_name = dims[frequency_axis], dims[time_axis]
+    # Drop the transformed dims and any coords associated with them; those
+    # coords are indexed by frequency or window and cannot survive the inverse.
+    stripped = coords.drop_coords(freq_name, time_name)[0]
+    # Use the tuple map so associated coords keep their dimensions.
+    coord_map = stripped.get_coord_tuple_map()
     coord_map.pop("_stft_window")
-    time = coord_map.pop("_stft_old_coord")
-    coord_map.pop(coords.dims[frequency_axis])
-    coord_map[dims[time_axis]] = time
+    time = coord_map.pop("_stft_old_coord")[1]
+    coord_map[time_name] = (time_name, time)
     # Get new dimensions
     new_dims = list(dims)
-    new_dims[frequency_axis] = dims[time_axis]
+    new_dims[frequency_axis] = time_name
     new_dims.pop(time_axis)
     return get_coord_manager(coords=coord_map, dims=tuple(new_dims)), time
 
@@ -688,6 +691,17 @@ def istft(patch) -> dc.Patch:
     >>> pa1 = patch.stft(time=10*second, overlap=4*second)
     >>> pa2 = pa1.istft()
     >>> assert pa2.equals(patch, close=True)
+
+    Notes
+    -----
+    - Non-dimensional coordinates associated with un-transformed dimensions
+      are restored. Those associated with the transformed dimension are
+      already dropped by [stft](`dascore.transform.fourier.stft`) so they
+      cannot be restored.
+
+    See Also
+    --------
+    [Patch.stft](`dascore.Patch.stft`), [Patch.idft](`dascore.Patch.idft`)
     """
     time_axis, frequency_axis = _get_inverse_axes(patch)
     detrended = patch.attrs.get("_stft_detrended")
