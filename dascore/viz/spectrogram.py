@@ -145,7 +145,11 @@ def spectrogram(
             spec = _spectrogram_patch(patch_aggr, dim, **kwargs)
         elif aggr_domain == "frequency":
             _spec = _spectrogram_patch(patch, dim, **kwargs).squeeze()
-            spec = _spec.aggregate(other_dim, method="mean").squeeze()
+            # A length one other_dim is squeezed out above, and a dimension
+            # of one sample has nothing to average over anyway.
+            if other_dim in _spec.dims:
+                _spec = _spec.aggregate(other_dim, method="mean").squeeze()
+            spec = _spec
         else:
             raise ValueError(
                 f"The aggr_domain '{aggr_domain}' should be 'time' or 'frequency'."
