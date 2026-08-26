@@ -30,7 +30,7 @@ from dascore.constants import dascore_styles
 from dascore.units import get_quantity, get_quantity_str
 from dascore.utils.time import to_float
 
-# What a container holds, whatever that is: `limit_items` takes any of
+# What a container holds, whatever that is: `_limit_items` takes any of
 # them and hands back the same kind.
 _Item = TypeVar("_Item")
 
@@ -229,7 +229,7 @@ def _render_table(node: Table) -> Text:
 
 @render_text.register
 def _render_section(node: Section) -> Text:
-    out = section_title(node.title, node.depth)
+    out = _section_title(node.title, node.depth)
     for child in node.body:
         out += render_text(child)
     return out
@@ -297,7 +297,7 @@ _STYLE_WORDS = frozenset(
 )
 
 
-def style_classes(style: Style) -> tuple[str, ...]:
+def _style_classes(style: Style) -> tuple[str, ...]:
     """Return the CSS classes a resolved rich style is drawn with."""
     words = [
         x for x, on in (("bold", style.bold), ("underline", style.underline)) if on
@@ -307,7 +307,7 @@ def style_classes(style: Style) -> tuple[str, ...]:
     return tuple(f"dc-{x}" for x in words if x in _STYLE_WORDS)
 
 
-def text_to_html(text: Text) -> str:
+def _text_to_html(text: Text) -> str:
     """Render a rich Text as an inline HTML fragment."""
     plain = text.plain
     bounds = sorted({0, len(plain)}.union(*((x.start, x.end) for x in text.spans)))
@@ -329,7 +329,7 @@ def text_to_html(text: Text) -> str:
     out = []
     for index, (start, end) in enumerate(pairwise(bounds)):
         chunk = escape(plain[start:end], quote=False)
-        classes = style_classes(styles[index])
+        classes = _style_classes(styles[index])
         out.append(
             f'<span class="{" ".join(classes)}">{chunk}</span>' if classes else chunk
         )
@@ -356,7 +356,7 @@ def _strip_css_comments(css: str) -> str:
 
 
 @cache
-def get_stylesheet() -> str:
+def _get_stylesheet() -> str:
     """
     Return the CSS every HTML repr carries, without its comments.
 
@@ -370,7 +370,7 @@ def get_stylesheet() -> str:
 
 
 @singledispatch
-def render_html(node) -> str:
+def _render_html(node) -> str:
     """Render a repr node as an HTML fragment."""
     msg = f"cannot render {type(node).__name__} as html"
     raise NotImplementedError(msg)
@@ -389,13 +389,13 @@ def _body_text(text: Text) -> Text:
     return text[start : len(plain.rstrip("\n"))]
 
 
-@render_html.register
+@_render_html.register
 def _html_raw(node: Raw) -> str:
     # A `pre`, because what a producer laid out is laid out in columns:
     # an array printed by numpy, a track list padded to line up. HTML
     # would collapse the runs of spaces which do that work.
     text = _body_text(node.text)
-    return f'<pre class="dc-body">{text_to_html(text)}</pre>'
+    return f'<pre class="dc-body">{_text_to_html(text)}</pre>'
 
 
 def _merge_columns(rows: Sequence[Row]) -> list[str]:
@@ -441,7 +441,7 @@ def _merge_columns(rows: Sequence[Row]) -> list[str]:
     return out
 
 
-@render_html.register
+@_render_html.register
 def _html_table(node: Table) -> str:
     # Every label any row states, in the order they are first stated, so
     # a row which says nothing for one leaves that cell empty rather
@@ -455,12 +455,12 @@ def _html_table(node: Table) -> str:
     body = []
     for row in node.rows:
         stated = {label: value for label, value, _ in row.fields}
-        name = text_to_html(row.name)
-        cells = [f"<td>{text_to_html(row.kind)}</td>"]
+        name = _text_to_html(row.name)
+        cells = [f"<td>{_text_to_html(row.kind)}</td>"]
         for label in labels:
             css = ' class="dc-num"' if label in node.numeric else ""
             value = stated.get(label)
-            cells.append(f"<td{css}>{text_to_html(value) if value else ''}</td>")
+            cells.append(f"<td{css}>{_text_to_html(value) if value else ''}</td>")
         body.append(f'<tr><th scope="row">{name}</th>{"".join(cells)}</tr>')
     return (
         f'<div class="dc-scroll"><table class="dc-table">'
@@ -541,7 +541,7 @@ def _nest_classes(depth: int) -> tuple[str, ...]:
     return ("dc-nest", f"dc-d{(depth - 1) % _NEST_COLORS}")
 
 
-@render_html.register
+@_render_html.register
 def _html_section(node: Section) -> str:
     # A title is the bare line: the indentation a terminal draws nesting
     # with is added when a terminal draws it, and here the nesting is
@@ -549,27 +549,27 @@ def _html_section(node: Section) -> str:
     title = node.title
     if title.plain.startswith(_SECTION_MARKER):
         title = title[len(_SECTION_MARKER) :]
-    title = text_to_html(title)
+    title = _text_to_html(title)
     nest = _nest_classes(node.depth)
     lines = _body_lines(node)
     if not lines:
         # Nothing to fold, so nothing to offer folding.
         return f'<div class="{" ".join(("dc-line", *nest))}">{title}</div>'
     state = " open" if lines <= get_config().display_html_open_lines else ""
-    body = "".join(render_html(x) for x in node.body)
+    body = "".join(_render_html(x) for x in node.body)
     css = f' class="{" ".join(nest)}"' if nest else ""
     return f"<details{css}{state}><summary>{title}</summary>{body}</details>"
 
 
-@render_html.register
+@_render_html.register
 def _html_repr(node: Repr) -> str:
     # The banner underlines itself with dashes in a terminal, drawn in
     # columns; here that is a border, and an emoji is not two columns
     # wide in every font a browser might choose.
-    banner = text_to_html(node.header.split("\n")[0])
-    body = "".join(render_html(x) for x in node.body)
+    banner = _text_to_html(node.header.split("\n")[0])
+    body = "".join(_render_html(x) for x in node.body)
     return (
-        f'<div class="{_HTML_ROOT}"><style>{get_stylesheet()}</style>'
+        f'<div class="{_HTML_ROOT}"><style>{_get_stylesheet()}</style>'
         f'<div class="dc-banner">{banner}</div>{body}</div>'
     )
 
@@ -627,7 +627,7 @@ class NodeRepr(RichRepr):
         if not get_config().display_html:
             return None
         try:
-            return render_html(self._repr_node())
+            return _render_html(self._repr_node())
         except Exception:
             if get_config().debug:
                 raise
@@ -787,7 +787,7 @@ def get_header_text(name: str, style: str = "bold") -> Text:
 _INDENT = "    "
 
 
-def section_title(line: Text, depth: int) -> Text:
+def _section_title(line: Text, depth: int) -> Text:
     """
     How a terminal draws the line which names a block.
 
@@ -801,7 +801,7 @@ def section_title(line: Text, depth: int) -> Text:
         # A copy, not the node's own line: a renderer which appends to
         # what it drew would otherwise rewrite the node it read.
         return line.copy()
-    return Text("\n") + indent_text(line, _INDENT * depth)
+    return Text("\n") + _indent_text(line, _INDENT * depth)
 
 
 def child_sections(items, depth: int) -> tuple[Section, ...]:
@@ -811,14 +811,14 @@ def child_sections(items, depth: int) -> tuple[Section, ...]:
     Only what is shown is rendered, so the cost of a repr is what it
     prints rather than what the tree holds.
     """
-    shown, left_out = limit_items(items)
+    shown, left_out = _limit_items(items)
     out = [x._repr_section(depth) for x in shown]
     if left_out:
         out.append(Section(elision_text(left_out), depth=depth))
     return tuple(out)
 
 
-def indent_text(text: Text, prefix: str = _INDENT) -> Text:
+def _indent_text(text: Text, prefix: str = _INDENT) -> Text:
     """
     Indent every line of a rich Text, keeping its styles.
 
@@ -838,7 +838,7 @@ def elision_text(left_out: int) -> Text:
     return Text(f"... {left_out} more", style=dascore_styles["keys"])
 
 
-def limit_items(
+def _limit_items(
     items: Iterable[_Item], limit: int | None = None
 ) -> tuple[list[_Item], int]:
     """
@@ -1265,7 +1265,7 @@ def stated_fields(model, skip=()) -> dict:
     return out
 
 
-def value_to_text(name: str, value, style=None, truncate: bool = True) -> Text:
+def _value_to_text(name: str, value, style=None, truncate: bool = True) -> Text:
     """
     Get the text one value prints as, given the name it is stated under.
 
@@ -1338,7 +1338,7 @@ def model_to_line(model, skip=(), style=None, extra=None) -> Text:
     fields = {**stated_fields(model, skip=skip), **dict(extra or {})}
     for name, value in fields.items():
         base += Text(f" {name}: ", key_style)
-        base += value_to_text(name, value)
+        base += _value_to_text(name, value)
     base += Text(" )")
     return base
 
@@ -1365,7 +1365,7 @@ def mapping_to_text(mapping, header: str, style: str = "dc_yellow") -> Text:
         txt += Text(f"{name}: ", dascore_styles["keys"])
         # A block gives each value its own line, so it is not elided; a
         # one-line summary packs many values and has to bound each.
-        txt += value_to_text(
+        txt += _value_to_text(
             name, value, style=dascore_styles.get(name, None), truncate=False
         )
     return txt

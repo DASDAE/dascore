@@ -35,8 +35,16 @@ from dascore.utils.display import (
     Section,
     Table,
     _body_lines,
+    _get_stylesheet,
+    _indent_text,
+    _limit_items,
+    _render_html,
+    _section_title,
     _storage_quantum,
     _strip_css_comments,
+    _style_classes,
+    _text_to_html,
+    _value_to_text,
     _visible_lines,
     array_to_text,
     attrs_to_text,
@@ -45,25 +53,17 @@ from dascore.utils.display import (
     duration_text,
     get_header_text,
     get_nice_text,
-    get_stylesheet,
     group_names,
     human_duration,
     human_size,
-    indent_text,
-    limit_items,
     mapping_to_text,
     model_to_line,
     percent,
     range_texts,
     rate_text,
-    render_html,
     render_text,
-    section_title,
     split_block,
     stated_fields,
-    style_classes,
-    text_to_html,
-    value_to_text,
 )
 from dascore.utils.patch import _format_values
 
@@ -174,13 +174,13 @@ class TestIndentText:
 
     def test_every_line_indented(self):
         """Each line gains the prefix, including the first."""
-        out = str(indent_text(Text("a\nb"), "  "))
+        out = str(_indent_text(Text("a\nb"), "  "))
         assert out == "  a\n  b"
 
     def test_styles_kept(self):
         """Indenting does not flatten the styles it wraps."""
         text = Text("red", style="red")
-        assert indent_text(text).spans
+        assert _indent_text(text).spans
 
 
 class TestCountsToText:
@@ -308,27 +308,27 @@ class TestValueToText:
 
     def test_long_value_elided(self):
         """A value sharing a line with others is bounded."""
-        out = str(value_to_text("a", "x" * 500))
+        out = str(_value_to_text("a", "x" * 500))
         assert len(out) < 500
         assert out.endswith("…")
 
     def test_pre_rendered_text_kept(self):
         """Text the caller built is used as-is, not re-read as a sequence."""
-        assert str(value_to_text("a", Text("a: 2, b: 1"))) == "a: 2, b: 1"
+        assert str(_value_to_text("a", Text("a: 2, b: 1"))) == "a: 2, b: 1"
 
     def test_array_keeps_its_own_repr(self):
         """An array states how much of itself to show; it is not unrolled."""
-        out = str(value_to_text("a", np.arange(10_000)))
+        out = str(_value_to_text("a", np.arange(10_000)))
         assert "..." in out and len(out) < 100
 
     def test_frame_keeps_its_own_repr(self):
         """Nor is a frame read as a sequence of its column names."""
-        out = str(value_to_text("a", pd.DataFrame({"a": [1, 2]}), truncate=False))
+        out = str(_value_to_text("a", pd.DataFrame({"a": [1, 2]}), truncate=False))
         assert "1" in out and "2" in out
 
     def test_nat_is_text(self):
         """An unset time renders like every other value, not as a str."""
-        assert str(value_to_text("a", np.datetime64("NaT"))) == "NaT"
+        assert str(_value_to_text("a", np.datetime64("NaT"))) == "NaT"
 
 
 class TestPercent:
@@ -1291,7 +1291,7 @@ class TestStyleClasses:
     )
     def test_the_words_of_a_style(self, style, expected):
         """Each word a class exists for becomes one."""
-        assert style_classes(Style.parse(style)) == expected
+        assert _style_classes(Style.parse(style)) == expected
 
     def test_a_background_is_not_a_foreground(self):
         """
@@ -1300,11 +1300,11 @@ class TestStyleClasses:
         Rich resolves that; reading the words would take the background
         for the color of the text.
         """
-        assert style_classes(Style.parse("red on blue")) == ("dc-red",)
+        assert _style_classes(Style.parse("red on blue")) == ("dc-red",)
 
     def test_a_style_which_turns_something_off(self):
         """Rich resolves "not bold" to not bold."""
-        assert style_classes(Style.parse("not bold")) == ()
+        assert _style_classes(Style.parse("not bold")) == ()
 
     @pytest.mark.parametrize("color", ["#ff0000", "purple4", "rgb(1,2,3)"])
     def test_a_color_no_class_exists_for(self, color):
@@ -1314,7 +1314,7 @@ class TestStyleClasses:
         Nothing an object states reaches a CSS attribute this way, so
         the stylesheet stays the only thing which says what a color is.
         """
-        assert style_classes(Style.parse(color)) == ()
+        assert _style_classes(Style.parse(color)) == ()
 
 
 class TestTextToHtml:
@@ -1331,15 +1331,15 @@ class TestTextToHtml:
         A trusted notebook does not sanitize what a repr emits, so what
         the repr emits has to be safe on its own.
         """
-        assert text_to_html(Text(plain)) == expected
+        assert _text_to_html(Text(plain)) == expected
 
     def test_quotes_are_left_alone(self):
         """Nothing is written into an attribute, so nothing needs it."""
-        assert text_to_html(Text('say "hi"')) == 'say "hi"'
+        assert _text_to_html(Text('say "hi"')) == 'say "hi"'
 
     def test_unstyled_text_emits_no_span(self):
         """A span which says nothing is bytes in every repr forever."""
-        assert "<span" not in text_to_html(Text("plain"))
+        assert "<span" not in _text_to_html(Text("plain"))
 
     def test_a_later_span_wins_a_color(self):
         """
@@ -1352,8 +1352,8 @@ class TestTextToHtml:
         text = Text("250 Hz")
         text.stylize("grey50", 0, 6)
         text.stylize("bright_blue", 0, 6)
-        assert 'class="dc-bright_blue"' in text_to_html(text)
-        assert "dc-grey50" not in text_to_html(text)
+        assert 'class="dc-bright_blue"' in _text_to_html(text)
+        assert "dc-grey50" not in _text_to_html(text)
 
     def test_a_repr_with_many_spans_is_not_slow(self):
         """
@@ -1369,7 +1369,7 @@ class TestTextToHtml:
             part.stylize("bright_blue", 8, 14)
             text += part
         start = time.perf_counter()
-        text_to_html(text)
+        _text_to_html(text)
         assert time.perf_counter() - start < 1.0
 
     def test_a_style_reaches_only_the_runs_it_covers(self):
@@ -1383,7 +1383,7 @@ class TestTextToHtml:
         text = Text("abcdef")
         text.stylize("bold", 0, 2)
         text.stylize("blue", 4, 6)
-        html = text_to_html(text)
+        html = _text_to_html(text)
         assert '<span class="dc-bold">ab</span>' in html
         assert "cd" in html.replace('<span class="dc-bold">ab</span>', "")
         assert '<span class="dc-blue">ef</span>' in html
@@ -1399,12 +1399,12 @@ class TestTextToHtml:
         text = Text("abcdef")
         text.stylize("bold", 0, 4)
         text.stylize("blue", 2, 6)
-        html = text_to_html(text)
+        html = _text_to_html(text)
         assert 'class="dc-bold dc-blue"' in html
 
     def test_an_empty_text(self):
         """An object may state a block with nothing in it."""
-        assert text_to_html(Text("")) == ""
+        assert _text_to_html(Text("")) == ""
 
 
 class TestRenderHtml:
@@ -1412,20 +1412,20 @@ class TestRenderHtml:
 
     def test_a_section_folds(self, repr_blocks):
         """A block with a body is what a reader opens and closes."""
-        html = render_html(split_block(repr_blocks["coords"]))
+        html = _render_html(split_block(repr_blocks["coords"]))
         assert html.startswith("<details")
         assert "<summary>" in html
 
     def test_a_section_with_no_body_does_not(self, repr_blocks):
         """One line is a statement; offering to fold it says otherwise."""
-        html = render_html(split_block(repr_blocks["one_line"]))
+        html = _render_html(split_block(repr_blocks["one_line"]))
         assert "<details" not in html
         assert 'class="dc-line"' in html
 
     def test_a_long_section_starts_closed(self, repr_blocks):
         """An array is not read at a glance, so it does not open at one."""
         with config_context(display_html_open_lines=0):
-            assert "<details>" in render_html(split_block(repr_blocks["coords"]))
+            assert "<details>" in _render_html(split_block(repr_blocks["coords"]))
 
     def test_a_short_section_starts_open(self, repr_blocks):
         """
@@ -1435,7 +1435,7 @@ class TestRenderHtml:
         is few enough, so it is asked for rather than assumed.
         """
         with config_context(display_html_open_lines=2):
-            assert "<details open>" in render_html(split_block(repr_blocks["coords"]))
+            assert "<details open>" in _render_html(split_block(repr_blocks["coords"]))
 
     @pytest.mark.parametrize("block", ["coords", "attrs"])
     def test_the_limit_counts_body_lines(self, repr_blocks, block):
@@ -1449,9 +1449,9 @@ class TestRenderHtml:
         """
         section = split_block(repr_blocks[block])
         with config_context(display_html_open_lines=1):
-            assert "<details>" in render_html(section)
+            assert "<details>" in _render_html(section)
         with config_context(display_html_open_lines=2):
-            assert "<details open>" in render_html(section)
+            assert "<details open>" in _render_html(section)
 
     def test_the_count_is_the_lines_a_reader_sees(self, repr_blocks):
         """The limit means what a reader would count, not what a Text holds."""
@@ -1459,13 +1459,13 @@ class TestRenderHtml:
             section = split_block(block)
             if not section.body:
                 continue
-            html = render_html(section)
+            html = _render_html(section)
             body = re.search(r"<pre[^>]*>(.*?)</pre>", html, re.DOTALL).group(1)
             drawn = re.sub(r"<[^>]+>", "", body).count("\n") + 1
             with config_context(display_html_open_lines=drawn):
-                assert "<details open>" in render_html(section), name
+                assert "<details open>" in _render_html(section), name
             with config_context(display_html_open_lines=drawn - 1):
-                assert "<details open>" not in render_html(section), name
+                assert "<details open>" not in _render_html(section), name
 
     def test_the_banner_drops_its_underline(self):
         """
@@ -1475,7 +1475,7 @@ class TestRenderHtml:
         every font a browser might choose.
         """
         node = Repr(get_header_text("Patch ⚡"))
-        assert "---" not in render_html(node)
+        assert "---" not in _render_html(node)
 
     def test_the_fragment_is_scoped(self):
         """
@@ -1484,12 +1484,12 @@ class TestRenderHtml:
         A repr is emitted into a notebook output, where a `style`
         applies to the whole document around it.
         """
-        assert render_html(Repr(Text("x"))).startswith('<div class="dc-repr">')
+        assert _render_html(Repr(Text("x"))).startswith('<div class="dc-repr">')
 
     def test_something_which_is_not_a_node(self):
         """A renderer says what it cannot draw rather than drawing it wrong."""
         with pytest.raises(NotImplementedError, match="cannot render int"):
-            render_html(42)
+            _render_html(42)
 
 
 class TestLimitItems:
@@ -1497,20 +1497,20 @@ class TestLimitItems:
 
     def test_everything_fits(self):
         """Nothing is left behind while everything fits."""
-        assert limit_items([1, 2, 3], limit=3) == ([1, 2, 3], 0)
+        assert _limit_items([1, 2, 3], limit=3) == ([1, 2, 3], 0)
 
     def test_the_tail_is_counted(self):
         """What is not shown is counted rather than dropped silently."""
-        assert limit_items(range(10), limit=4) == ([0, 1, 2, 3], 6)
+        assert _limit_items(range(10), limit=4) == ([0, 1, 2, 3], 6)
 
     def test_nothing_is_shown(self):
         """A limit of none still says how much there was."""
-        assert limit_items([1, 2], limit=0) == ([], 2)
+        assert _limit_items([1, 2], limit=0) == ([], 2)
 
     def test_the_limit_comes_from_config(self):
         """The default cap is a runtime setting, not a constant here."""
         with config_context(display_max_items=1):
-            assert limit_items("abc") == (["a"], 2)
+            assert _limit_items("abc") == (["a"], 2)
 
 
 class TestSectionTitle:
@@ -1518,18 +1518,18 @@ class TestSectionTitle:
 
     def test_the_top_is_drawn_as_it_stands(self):
         """A tree's root opens where its container left off."""
-        assert section_title(Text("a"), 0).plain == "a"
+        assert _section_title(Text("a"), 0).plain == "a"
 
     def test_the_top_is_not_the_line_it_was_given(self):
         """A renderer appends to what it drew, and must not rewrite it."""
         line = Text("a")
-        section_title(line, 0).append("b")
+        _section_title(line, 0).append("b")
         assert line.plain == "a"
 
     @pytest.mark.parametrize("depth", [1, 2, 3])
     def test_a_level_starts_a_line(self, depth):
         """Every level below the top begins on its own line, set in."""
-        assert section_title(Text("a"), depth).plain == "\n" + "    " * depth + "a"
+        assert _section_title(Text("a"), depth).plain == "\n" + "    " * depth + "a"
 
     @pytest.mark.parametrize("depth", [1, 2])
     def test_every_line_is_set_in(self, depth):
@@ -1540,7 +1540,7 @@ class TestSectionTitle:
         which is the misreading the indentation exists to prevent.
         """
         indent = "    " * depth
-        out = section_title(Text("a\nb"), depth).plain
+        out = _section_title(Text("a\nb"), depth).plain
         assert out == f"\n{indent}a\n{indent}b"
 
     def test_the_styles_survive(self):
@@ -1553,7 +1553,7 @@ class TestSectionTitle:
         """
         line = Text("ab")
         line.stylize("bold", 0, 1)
-        drawn = section_title(line, 1)
+        drawn = _section_title(line, 1)
         styles = dict(zip(drawn.plain, resolved_styles(drawn), strict=True))
         assert styles["a"].bold
         assert not styles["b"].bold
@@ -1652,7 +1652,7 @@ class TestVisibleLines:
             # Counted on " open>", since a nested block carries classes
             # between the tag and the attribute and "<details open>"
             # could only ever match the one at the top.
-            html = render_html(top)
+            html = _render_html(top)
             assert html.count(" open>") == 1
             assert html.startswith("<details open>")
 
@@ -1670,9 +1670,9 @@ class TestVisibleLines:
         top = Section(Text("top"), (leaf,) * 7)
         assert _body_lines(top) == 14
         with config_context(display_html_open_lines=12):
-            assert " open>" not in render_html(top)
+            assert " open>" not in _render_html(top)
         with config_context(display_html_open_lines=14):
-            assert " open>" in render_html(top)
+            assert " open>" in _render_html(top)
 
     def test_a_node_is_counted_once(self, monkeypatch):
         """
@@ -1732,7 +1732,7 @@ class TestNestedSections:
         would sit past the `</details>` which ends it, and the tree
         would read as three blocks side by side rather than one.
         """
-        html = render_html(tree)
+        html = _render_html(tree)
         assert html.count("<details") == 2
         opened = html.index("<summary>top</summary>") + len("<summary>top</summary>")
         closed = html.index("</details>")
@@ -1747,7 +1747,7 @@ class TestNestedSections:
         whitespace, so a title drawn as handed over would open on a
         blank line.
         """
-        html = render_html(tree)
+        html = _render_html(tree)
         for title in re.findall(r"<summary>(.*?)</summary>", html, re.DOTALL):
             assert title == title.lstrip()
         assert '<div class="dc-line dc-nest dc-d1">leaf</div>' in html
@@ -1759,13 +1759,13 @@ class TestNestedSections:
         A host which drops the stylesheet still nests, so this says only
         that the depth reaches the markup at all.
         """
-        html = render_html(tree)
+        html = _render_html(tree)
         assert 'class="dc-nest dc-d0"' in html
         assert "dc-d1" in html
 
     def test_the_top_is_in_no_nesting(self):
         """A block at the top of a repr sits inside nothing."""
-        html = render_html(Section(Text("top"), (Raw(Text("\nbody")),)))
+        html = _render_html(Section(Text("top"), (Raw(Text("\nbody")),)))
         assert "dc-nest" not in html
 
     def test_the_ramp_wraps(self):
@@ -1776,7 +1776,7 @@ class TestNestedSections:
         which ran off the end would draw an undefined color there.
         """
         node = Section(Text("x"), depth=_NEST_COLORS + 1)
-        assert f"dc-d{(_NEST_COLORS + 1 - 1) % _NEST_COLORS}" in render_html(node)
+        assert f"dc-d{(_NEST_COLORS + 1 - 1) % _NEST_COLORS}" in _render_html(node)
 
     @pytest.mark.parametrize(("limit", "open_blocks"), [(2, 2), (1, 1), (0, 0)])
     def test_a_deep_tree_folds_from_the_outside_in(self, tree, limit, open_blocks):
@@ -1788,7 +1788,7 @@ class TestNestedSections:
         under it close, and a reader opens as far down as they asked.
         """
         with config_context(display_html_open_lines=limit):
-            assert render_html(tree).count(" open>") == open_blocks
+            assert _render_html(tree).count(" open>") == open_blocks
 
 
 class TestBodyText:
@@ -1800,7 +1800,7 @@ class TestBodyText:
 
         Offering to fold nothing draws a triangle over an empty box.
         """
-        html = render_html(split_block(Text("title\n")))
+        html = _render_html(split_block(Text("title\n")))
         assert "<details" not in html
         assert 'class="dc-line"' in html
 
@@ -1815,7 +1815,7 @@ class TestBodyText:
 
     def test_a_body_keeps_the_lines_between(self):
         """Only the framing goes; a blank line inside the body stays."""
-        html = render_html(split_block(Text("title\na\n\nb\n")))
+        html = _render_html(split_block(Text("title\na\n\nb\n")))
         assert ">a\n\nb<" in html
 
 
@@ -1868,7 +1868,7 @@ class TestCoordinatesAreStated:
         patch = dc.get_example_patch()
         coords = patch.coords.update(_hidden=("distance", np.ones(300)))
         assert "_hidden" not in str(coords)
-        assert "_hidden" not in render_html(coords._repr_section())
+        assert "_hidden" not in _render_html(coords._repr_section())
 
     @pytest.mark.parametrize(
         ("label", "value"),
@@ -1924,7 +1924,7 @@ class TestTableColumns:
             Row(Text(name), Text("K"), tuple((x, Text(x), True) for x in fields))
             for name, fields in rows
         )
-        return re.findall(r"<th>(\w+)</th>", render_html(Table(made)))
+        return re.findall(r"<th>(\w+)</th>", _render_html(Table(made)))
 
     def test_rows_which_state_the_same_fields(self):
         """The order one row states them in is the order they are in."""
@@ -1993,9 +1993,9 @@ class TestTableColumns:
         """
         section = dc.get_example_patch().coords._repr_section()
         with config_context(display_html_open_lines=2):
-            assert "<details open>" not in render_html(section)
+            assert "<details open>" not in _render_html(section)
         with config_context(display_html_open_lines=3):
-            assert "<details open>" in render_html(section)
+            assert "<details open>" in _render_html(section)
 
     def test_a_value_is_drawn_in_its_own_column(self):
         """
@@ -2010,7 +2010,7 @@ class TestTableColumns:
                 (("x", Text("2"), True), ("y", Text("3"), True)),
             ),
         )
-        html = render_html(Table(rows))
+        html = _render_html(Table(rows))
         heads = re.findall(r"<th>(\w+)</th>", html)
         for row in re.findall(r"<tr><th scope=\"row\">.*?</tr>", html, re.DOTALL):
             assert len(re.findall(r"<td[^>]*>", row)) == len(heads)
@@ -2027,7 +2027,7 @@ def _css_body() -> str:
     ships is already stripped; ``test_the_sheet_ships_without_its_prose``
     is what holds that true.
     """
-    return get_stylesheet()
+    return _get_stylesheet()
 
 
 def _css_rule(selector: str) -> str:
@@ -2099,7 +2099,7 @@ class TestStylesheet:
                         seen.add(style)
         assert seen
         for style in seen:
-            assert style_classes(style), style
+            assert _style_classes(style), style
 
     def test_a_rule_exists_for_every_nesting_level(self):
         """A level the renderer can reach and the CSS cannot draws no rail."""
@@ -2140,10 +2140,10 @@ class TestStylesheet:
         source = files("dascore").joinpath("repr.css").read_text(encoding="utf-8")
         # A control: what is stripped is something the file really holds.
         assert "/*" in source
-        assert "/*" not in get_stylesheet()
+        assert "/*" not in _get_stylesheet()
         # And nothing else went with them.
-        assert ".dc-repr .dc-banner" in get_stylesheet()
-        assert len(get_stylesheet()) < len(source) / 1.5
+        assert ".dc-repr .dc-banner" in _get_stylesheet()
+        assert len(_get_stylesheet()) < len(source) / 1.5
 
     def test_a_value_which_reads_like_a_comment_is_kept(self):
         """
@@ -2207,7 +2207,7 @@ class TestStylesheet:
         A word which draws in a terminal and not in a browser is a
         difference between the two reprs that nobody chose.
         """
-        css = get_stylesheet()
+        css = _get_stylesheet()
         for word in _STYLE_WORDS:
             assert f".dc-{word}" in css, word
 
@@ -2226,7 +2226,7 @@ class TestStylesheet:
         A producer's indent is content: the spool states its path
         indented, and HTML collapses runs of spaces by default.
         """
-        css = get_stylesheet()
+        css = _get_stylesheet()
         for selector in (".dc-repr .dc-line", ".dc-repr summary"):
             block = css[css.index(selector) : css.index("}", css.index(selector))]
             assert "white-space: pre" in block, selector
@@ -2238,7 +2238,7 @@ class TestStylesheet:
         One named in the dark rule and not the light one keeps dark ink
         on a light page whenever the reader's system is dark.
         """
-        css = get_stylesheet()
+        css = _get_stylesheet()
         dark = css[css.index('data-jp-theme-light="false"') :]
         dark = dark[: dark.index("}")]
         light = css[css.index('data-jp-theme-light="true"') :]
@@ -2248,7 +2248,7 @@ class TestStylesheet:
 
     def test_it_is_read_once(self):
         """Every repr carries it, so every repr should not read it."""
-        assert get_stylesheet() is get_stylesheet()
+        assert _get_stylesheet() is _get_stylesheet()
 
 
 def _decompose(line: str) -> list[str]:
@@ -2441,13 +2441,13 @@ class TestHtmlRepr:
         which cannot be drawn should fail in CI and stay quiet for a
         reader. So this is a path only a reader takes.
         """
-        monkeypatch.setattr(display, "render_html", _boom)
+        monkeypatch.setattr(display, "_render_html", _boom)
         with config_context(debug=False):
             assert dc.get_example_patch()._repr_html_() is None
 
     def test_debug_mode_wants_the_traceback(self, monkeypatch):
         """Swallowing it in CI is how a broken repr ships unnoticed."""
-        monkeypatch.setattr(display, "render_html", _boom)
+        monkeypatch.setattr(display, "_render_html", _boom)
         with config_context(debug=True), pytest.raises(ValueError, match="no panel"):
             dc.get_example_patch()._repr_html_()
 
@@ -2477,7 +2477,7 @@ class TestHtmlRepr:
         deliberately whenever a block is added. It counts the sheet as
         it goes out, so a comment is free and a rule is not.
         """
-        assert len(get_stylesheet().encode()) < 6_000
+        assert len(_get_stylesheet().encode()) < 6_000
 
     def test_a_panel_is_mostly_the_object(self, html_objects):
         """
@@ -2486,6 +2486,6 @@ class TestHtmlRepr:
         Held apart from the sheet, so a section drawn twice is over the
         ceiling rather than lost inside the headroom.
         """
-        overhead = len(get_stylesheet().encode())
+        overhead = len(_get_stylesheet().encode())
         for name, obj in html_objects.items():
             assert len(obj._repr_html_().encode()) - overhead < 4_000, name
