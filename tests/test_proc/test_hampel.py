@@ -11,6 +11,7 @@ import pytest
 
 import dascore as dc
 from dascore.exceptions import ParameterError
+from dascore.utils.misc import suppress_warnings
 
 
 def _get_interior_data(data, edge_size=5):
@@ -493,3 +494,16 @@ class TestHampelFilter:
         # Just in case, make sure the filter actually did something, otherwise
         # the check above is pointless.
         assert not np.all(original == out.data)
+
+    def test_no_warning_on_modest_window(self, patch_with_spikes):
+        """The approximate filter is flat in window size, so it shouldn't warn."""
+        with suppress_warnings(action="error"):
+            out = patch_with_spikes.hampel_filter(time=25, samples=True)
+        assert out.shape == patch_with_spikes.shape
+
+    def test_warns_on_large_exact_window(self, patch_with_spikes):
+        """Only the exact filter, whose cost grows with the window, warns."""
+        with pytest.warns(UserWarning, match="Large window size"):
+            patch_with_spikes.hampel_filter(
+                time=11, distance=11, samples=True, approximate=False
+            )

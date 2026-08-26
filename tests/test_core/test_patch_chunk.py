@@ -152,9 +152,16 @@ class TestChunk:
 
     def test_raise_increment_too_big(self, diverse_spool):
         """Ensure code raises an error if the increment is too large."""
-        msg = "No segments with sufficient length"
+        msg = "longest contiguous segment along 'time'"
         with pytest.raises(ChunkError, match=msg):
             diverse_spool.chunk(time=10000)
+
+    def test_increment_too_big_names_knobs(self, diverse_spool):
+        """The error should point at tolerance and keep_partial (#1046)."""
+        with pytest.raises(ChunkError) as info:
+            diverse_spool.chunk(time=10000)
+        msg = str(info.value)
+        assert "tolerance" in msg and "keep_partial" in msg
 
     def test_too_big_partial(self, diverse_spool):
         """When chunk is too large, all contiguous blocks should merge."""

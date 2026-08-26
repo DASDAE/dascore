@@ -8,6 +8,8 @@ import numpy as np
 import pytest
 
 from dascore.exceptions import ParameterError
+from dascore.utils import moving
+from dascore.utils.misc import suppress_warnings
 from dascore.utils.moving import (
     OPERATION_REGISTRY,
     _get_available_engines,
@@ -197,6 +199,19 @@ class TestMovingWindow:
         # It should also return an array.
         assert isinstance(out, np.ndarray)
         assert out.shape == test_data["1d"].shape
+
+    def test_auto_engine_does_not_warn(self, test_data, monkeypatch):
+        """Auto asks for what is installed, so a fallback is not a warning."""
+        monkeypatch.setattr(moving, "_get_available_engines", lambda: ("scipy",))
+        with suppress_warnings(action="error"):
+            out = moving_window(test_data["1d"], 3, "median", engine="auto")
+        assert isinstance(out, np.ndarray)
+
+    def test_explicit_missing_engine_warns(self, test_data, monkeypatch):
+        """Naming an engine which is not installed still warns."""
+        monkeypatch.setattr(moving, "_get_available_engines", lambda: ("scipy",))
+        with pytest.warns(UserWarning, match="not available"):
+            moving_window(test_data["1d"], 3, "median", engine="bottleneck")
 
     def test_large_window_warning(self, test_data):
         """Test warning for window larger than data."""

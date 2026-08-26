@@ -181,7 +181,7 @@ class TestSegmentPlan:
         df = _flat([p1, p2])
         plan = build_chunk_plan(df, time=5)
         assert len(plan.outputs) == 2  # one 5s chunk per 8s partition
-        with pytest.raises(ChunkError, match="sufficient length"):
+        with pytest.raises(ChunkError, match="longest contiguous segment"):
             build_chunk_plan(df, time=100)
 
     def test_middle_value_step(self):

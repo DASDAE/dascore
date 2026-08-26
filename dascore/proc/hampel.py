@@ -125,8 +125,8 @@ def hampel_filter(
 
     Warning
     -------
-    Selecting windows with many samples can be *very* slow. It is recommended
-    window size in each dimension be <10 samples.
+    With `approximate=False`, runtime scales with the window's area, so
+    large multi-dimensional windows can be *very* slow.
 
     Returns
     -------
@@ -145,8 +145,10 @@ def hampel_filter(
 
     **Performance:**
     - `approximate=True` provides 3-4x speedup over exact calculations
-    - Installing `bottleneck` package can further improve approximate-mode
-      performance.
+    - `approximate=True` is also insensitive to window size, while the
+      exact filter's cost grows with the window's area.
+    - Installing the `bottleneck` package can further improve
+      approximate-mode performance. Without it scipy is used instead.
 
     See Also
     --------
@@ -186,8 +188,11 @@ def hampel_filter(
     # For now we just hardcode mode as it is probably the only one that
     # makes sense in a DAS data context.
     mode = "reflect"
+    # Only the exact filter's cost grows with the window; the separable
+    # approximation is nearly flat in window size.
+    warn_above = None if approximate else 100
     size = get_patch_window_size(
-        patch, kwargs, samples, require_odd=True, warn_above=10, min_samples=3
+        patch, kwargs, samples, require_odd=True, warn_above=warn_above, min_samples=3
     )
     # Need to convert ints to float for calculations to avoid roundoff error.
     # There were issues using np.issubdtype not working so this uses kind.

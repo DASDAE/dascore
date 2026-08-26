@@ -30,7 +30,7 @@ def _apply_scipy_decimation(patch, factor, ftype, axis):
         data = scipy_decimate(patch.data, factor, ftype=ftype, axis=axis)
     except ValueError as e:
         msg = (
-            "Scipy decimation failed. This can happen for dimensions with"
+            "Scipy decimation failed. This can happen for dimensions with "
             "few elements. Consider setting filter_type to False. The raised "
             f"exception was {e}"
         )

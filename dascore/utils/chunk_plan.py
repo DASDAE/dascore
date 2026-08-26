@@ -1530,6 +1530,22 @@ def build_chunk_plan(
             warnings.warn(msg, UserWarning, stacklevel=_user_stacklevel())
     if not fed_counts.sum():
         msg = "Could not chunk. No segments with sufficient length found."
+        # Say how short the data actually is, and name the two knobs which
+        # make an over-long request work. Size chunks are excluded; their
+        # request is in bytes, not comparable to a coordinate duration.
+        if not merge_mode and not (isinstance(value, Quantity) and is_data_size(value)):
+            assert value is not None  # a null value is merge_mode
+            longest = ((g_stops - g_starts) + np.abs(part_steps)).max()
+            # durations in seconds, which is what a time value would be
+            # given in; other dimensions in their own units
+            fmt = (lambda x: f"{to_float(x)} s") if is_timedelta64(longest) else str
+            msg = (
+                f"Could not chunk. The longest contiguous segment along "
+                f"{name!r} is {fmt(longest)}, shorter than the requested "
+                f"chunk value of {fmt(value)}. Use a smaller chunk value, a "
+                f"larger tolerance to join segments separated by gaps, or "
+                f"keep_partial=True to keep the short segments."
+            )
         raise ChunkError(msg)
     # Assemble the outputs table: envelopes and step, then the carried
     # columns (each partition's single value repeated over its outputs),
