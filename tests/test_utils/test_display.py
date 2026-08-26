@@ -120,6 +120,48 @@ class TestGetNiceText:
             txt = get_nice_text(1.234)
         assert str(txt) == "1.2"
 
+    @pytest.mark.parametrize(
+        ("value", "expected"),
+        (
+            (8e-08, "8e-08"),
+            (-8e-08, "-8e-08"),
+            (0.00125003, "0.00125"),
+            (1.5e-4, "0.00015"),
+            (0.0, "0.000"),
+            (1.468, "1.468"),
+            (1550.0, "1550.000"),
+        ),
+    )
+    def test_small_floats_keep_their_figures(self, value, expected):
+        """A value under the last decimal is said in figures, not rounded off.
+
+        Fixed decimals drew a pulse width of 8e-08 s as 0.000, which is
+        the scale it is under rather than the value.
+        """
+        assert str(get_nice_text(value)) == expected
+
+    def test_nonfinite_floats(self):
+        """Nan and inf have no figures to fall back on."""
+        assert str(get_nice_text(float("nan"))) == "nan"
+        assert str(get_nice_text(float("inf"))) == "inf"
+        assert str(get_nice_text(float("-inf"))) == "-inf"
+
+    @pytest.mark.parametrize(
+        ("precision", "expected"),
+        (
+            # A precision of zero asks for a whole number, not for no
+            # number, so the small value still gets its one figure.
+            (0, ("8e-08", "1", "0.001")),
+            (1, ("8e-08", "1.2", "0.001")),
+            (5, ("8e-08", "1.23400", "0.00140")),
+        ),
+    )
+    def test_the_configured_precision_rules(self, precision, expected):
+        """The fallback says the value in as many figures as are asked for."""
+        with config_context(display_float_precision=precision):
+            said = tuple(str(get_nice_text(x)) for x in (8e-08, 1.234, 0.0014))
+        assert said == expected
+
 
 class TestArrayFormatting:
     """Tests for config-backed array formatting behavior."""

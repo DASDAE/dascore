@@ -654,12 +654,37 @@ def get_nice_text(value, style=None) -> Text:
     return txt
 
 
+def _fixed_point_digits(text: str) -> int:
+    """
+    How many digits a fixed-point rendering says the value in.
+
+    Only of a fixed-point rendering: the sign and the zeros standing for
+    the scale come off the front as characters, which is exactly what
+    they are there, and nowhere else.
+    """
+    return len(text.lstrip("-0.").replace(".", ""))
+
+
 @get_nice_text.register(float)
 @get_nice_text.register(np.float64)
 def _nice_float_string(value, style=None):
-    """Nice print value for floats."""
-    fmt_str = f".{get_config().display_float_precision}f"
-    return get_nice_text(Text(f"{float(value):{fmt_str}}"), style)
+    """
+    Nice print value for floats.
+
+    The configured precision counts decimals, which a value smaller than
+    the last of them rounds away entirely: a pulse width of 8e-08 s drew
+    as 0.000. Where fixed decimals have that little of the value left,
+    it is said in as many figures instead, so what is printed is the
+    number rather than the scale it is under. At least one figure: a
+    precision of zero asks for a whole number, not for no number.
+    """
+    value = float(value)
+    precision = get_config().display_float_precision
+    figures = max(precision, 1)
+    text = f"{value:.{precision}f}"
+    if float(text) != value and _fixed_point_digits(text) < figures:
+        text = f"{value:.{figures}g}"
+    return get_nice_text(Text(text), style)
 
 
 @get_nice_text.register(np.timedelta64)
