@@ -16,6 +16,7 @@ import pandas as pd
 import pytest
 
 import dascore as dc
+import dascore.examples as ex
 import dascore.utils.patch_assembly as assembly_module
 from dascore.exceptions import ChunkError, CoordMergeError, ParameterError, UnitError
 from dascore.units import get_quantity
@@ -742,7 +743,7 @@ class TestChunkMerge:
 
 def _bare_assembler():
     """An assembler with no frames, for direct streaming-merge tests."""
-    return PatchAssembler(load_patch=None, merge_kwargs={})
+    return PatchAssembler(load_patch=None, merge_kwargs={}, plan_dim="time")
 
 
 class TestStreamingMerge:
@@ -1541,3 +1542,87 @@ class TestChunkEdgeBetweenPatches:
         coords = [patch.get_coord("time") for patch in out]
         assert all(len(coord) == len(coords[0]) for coord in coords)
         assert all(a.max() < b.min() for a, b in pairwise(coords))
+
+
+class TestChunkWithAssociatedCoords:
+    """Chunking must not trim on coordinates riding another dimension."""
+
+    @pytest.fixture(scope="class")
+    def base_patch(self):
+        """A patch whose distance coordinate carries the associated ones."""
+        return dc.get_example_patch()
+
+    @pytest.fixture(scope="class")
+    def string_patch(self, base_patch):
+        """A patch with a three-valued string coordinate on distance."""
+        dist = base_patch.get_array("distance")
+        third = len(dist) // 3
+        label = np.full(len(dist), "middle", dtype="<U6")
+        label[:third], label[-third:] = "start", "end"
+        return base_patch.update_coords(label=("distance", label))
+
+    @pytest.fixture(scope="class")
+    def nan_patch(self, base_patch):
+        """A patch with a numeric coordinate missing on some channels."""
+        dist = base_patch.get_array("distance")
+        values = np.where(dist > dist.mean(), dist * 2.0, np.nan)
+        return base_patch.update_coords(hole_depth=("distance", values))
+
+    @pytest.fixture(scope="class")
+    def numeric_patch(self, base_patch):
+        """A patch with a plain numeric coordinate on distance."""
+        dist = base_patch.get_array("distance")
+        return base_patch.update_coords(depth=("distance", dist * 2.0))
+
+    def test_string_coord_keeps_all_channels(self, string_patch):
+        """A string coordinate is not a range the trim may select on."""
+        out = list(dc.spool(string_patch).chunk(time=2))
+        assert len(out) > 1
+        expected = set(np.unique(string_patch.get_array("label")))
+        for patch in out:
+            assert patch.shape[0] == string_patch.shape[0]
+            assert set(np.unique(patch.get_array("label"))) == expected
+
+    def test_nan_coord_keeps_all_channels(self, nan_patch):
+        """Channels the coordinate says nothing about must survive."""
+        expected = np.isnan(nan_patch.get_array("hole_depth")).sum()
+        assert expected  # the fixture must actually hold missing values
+        out = list(dc.spool(nan_patch).chunk(time=2))
+        assert len(out) > 1
+        for patch in out:
+            assert patch.shape[0] == nan_patch.shape[0]
+            assert np.isnan(patch.get_array("hole_depth")).sum() == expected
+
+    def test_numeric_coord_keeps_all_channels(self, numeric_patch):
+        """The well-behaved case must keep working."""
+        out = list(dc.spool(numeric_patch).chunk(time=2))
+        assert len(out) > 1
+        for patch in out:
+            assert patch.shape[0] == numeric_patch.shape[0]
+
+    def test_chunk_along_shared_dim(self, nan_patch, string_patch):
+        """Chunking the dimension the coordinate rides must not raise."""
+        for patch in (nan_patch, string_patch):
+            out = list(dc.spool(patch).chunk(distance=100))
+            assert len(out) > 1
+            total = sum(x.shape[0] for x in out)
+            assert total == patch.shape[0]
+            assert all(x.shape[1] == patch.shape[1] for x in out)
+
+    @pytest.mark.parametrize("kwargs", [{"time": 2}, {"distance": 100}])
+    def test_matches_file_backed_spool(self, string_patch, tmp_path_factory, kwargs):
+        """An in-memory spool must chunk like a spool of the same file."""
+        path = tmp_path_factory.mktemp("associated_coord_chunk")
+        ex.spool_to_directory(dc.spool(string_patch), path=path)
+        memory = list(dc.spool(string_patch).chunk(**kwargs))
+        file_backed = list(dc.spool(path).update().chunk(**kwargs))
+        assert len(memory) == len(file_backed) > 1
+        labels = set(np.unique(string_patch.get_array("label")))
+        for patch, other in zip(memory, file_backed):
+            assert patch.shape == other.shape
+            assert np.all(patch.get_array("label") == other.get_array("label"))
+            # pin the file-backed result outright: matching a broken
+            # in-memory result would otherwise read as agreement
+            if "time" in kwargs:
+                assert other.shape[0] == string_patch.shape[0]
+                assert set(np.unique(other.get_array("label"))) == labels
