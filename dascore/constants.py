@@ -186,6 +186,11 @@ progress
 # "ignore", which every policy argument in the library also spells.
 WARN_LEVELS = Literal["warn", "raise", "ignore"]
 
+# What `enrich` does about a name the inventory leaves undefined: the warn
+# levels, spelled by reference so the two sets cannot drift apart, plus the
+# fourth answer only this question has -- fill the missing marker.
+ON_MISSING = Literal[WARN_LEVELS, "null"]
+
 # The actions warnings.simplefilter and warnings.filterwarnings accept.
 # Spelled out because the standard library's alias for them is stub-only.
 # "all" is deliberately absent: Python only began accepting it in 3.14, and

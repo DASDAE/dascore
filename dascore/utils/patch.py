@@ -1318,7 +1318,7 @@ def check_kind(
     >>> # but is a value of its own where patches are partitioned.
     >>> assert not check_kind(patch, keyed, check_behavior="ignore", strict=True)
     """
-    validate_warn_level(check_behavior)
+    validate_warn_level(check_behavior, "check_behavior")
     kind1, kind2 = get_patch_kind(patch1), get_patch_kind(patch2)
 
     def _equal(value1, value2) -> bool:
@@ -1360,7 +1360,7 @@ def check_data_units(patch1, patch2, check_behavior: WARN_LEVELS = "raise") -> b
         [`IncompatiblePatchError`](`dascore.exceptions.IncompatiblePatchError`),
         'warn' warns and returns False, 'ignore' returns False quietly.
     """
-    validate_warn_level(check_behavior)
+    validate_warn_level(check_behavior, "check_behavior")
     units1 = get_quantity(patch1.attrs.data_units)
     units2 = get_quantity(patch2.attrs.data_units)
     if units1 == units2:
@@ -1396,7 +1396,7 @@ def check_dims(
         when only broadcastability needs to be checked. If false require dims
         to be equal.
     """
-    validate_warn_level(check_behavior)
+    validate_warn_level(check_behavior, "check_behavior")
     dims1, dims2 = patch1.dims, patch2.dims
     if not intersection and patch1.dims == patch2.dims:
         return True
@@ -1446,7 +1446,7 @@ def check_coords(
         If True, the ignored dims must be equal shape to pass check.
         If dim_to_ignore is None this has no effect.
     """
-    validate_warn_level(check_behavior)
+    validate_warn_level(check_behavior, "check_behavior")
     cm1 = patch1.coords
     cm2 = patch2.coords
     cset1, cset2 = set(cm1.coord_map), set(cm2.coord_map)

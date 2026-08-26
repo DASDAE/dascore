@@ -9,6 +9,7 @@ import numpy as np
 import dascore as dc
 from dascore.constants import (
     INVENTORY_ATTRS,
+    ON_MISSING,
     PatchType,
     enrich_attrs_description,
     enrich_conflict_description,
@@ -47,8 +48,6 @@ from dascore.utils.docs import compose_docstring
 from dascore.utils.misc import iterate, validate_acquisition_key, warn_or_raise
 from dascore.utils.patch import patch_function
 from dascore.utils.time import to_datetime64
-
-OnMissing = Literal["raise", "warn", "ignore", "null"]
 
 
 def _get_acquisition_key(patch, acquisition_key) -> str:
@@ -415,7 +414,7 @@ def enrich(
     coords: bool | tuple[str, ...] = True,
     acquisition_key: str | None = None,
     time=None,
-    on_missing: OnMissing = "raise",
+    on_missing: ON_MISSING = "raise",
     conflict: Literal["drop", "raise", "keep_first"] = "keep_first",
 ) -> PatchType:
     """
