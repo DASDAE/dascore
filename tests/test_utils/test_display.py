@@ -54,6 +54,7 @@ from dascore.utils.display import (
     mapping_to_text,
     model_to_line,
     percent,
+    range_end_text,
     rate_text,
     render_html,
     render_text,
@@ -990,6 +991,118 @@ class TestDurationText:
         """
         said = duration_text(np.datetime64(low), np.datetime64(high))
         assert expected in str(said)
+
+
+class TestRangeEndText:
+    """Tests for the far end of a range, with what it repeats elided."""
+
+    @pytest.mark.parametrize(
+        ("low", "high", "expected"),
+        [
+            # A start at midnight is drawn as a bare date, so the date
+            # is all the far end may leave out.
+            ("2017-09-18T00:00:00", "2017-09-18T00:00:07.996", "…00:00:07.996"),
+            ("2023-06-01T14:23:11", "2023-06-01T18:00:00", "…18:00:00"),
+            ("2023-06-01T14:23:11", "2023-06-01T14:00:41.5", "…:00:41.5"),
+            ("2023-06-01T14:23:11", "2023-06-01T14:23:41.5", "…:41.5"),
+            ("2023-06-01T14:23:11", "2023-06-01T14:23:11.5", "….5"),
+            # Both drawn as times of the epoch day, which is no less a
+            # head for being one neither of them prints.
+            ("1970-01-01T00:00:11", "1970-01-01T00:00:41.5", "…:41.5"),
+        ],
+        ids=["date", "hour", "hour_kept", "minute", "second", "epoch"],
+    )
+    def test_a_shared_head_is_said_once(self, low, high, expected):
+        """What the near end already said is a mark on the far one."""
+        said = range_end_text(np.datetime64(low), np.datetime64(high))
+        assert str(said) == expected
+
+    def test_two_ends_of_one_instant(self):
+        """A coordinate of one sample repeats its start entirely."""
+        instant = np.datetime64("2017-09-18T00:00:03")
+        assert str(range_end_text(instant, instant)) == "…"
+
+    @pytest.mark.parametrize(
+        ("low", "high"),
+        [
+            ("2023-06-01T23:59:59", "2023-06-02T00:00:30"),
+            ("2023-06-01T00:00:00", "2023-07-01T00:00:00"),
+            ("2023-06-01T00:00:00", "2024-06-01T00:00:00"),
+        ],
+        ids=["day", "month", "year"],
+    )
+    def test_a_date_is_elided_whole_or_not_at_all(self, low, high):
+        """
+        Eliding the year of two different days says less, not more.
+
+        A far end of "…-02T00:00:30" leaves the reader to notice the
+        day on its own, against a year and month they must take on
+        trust.
+        """
+        said = range_end_text(np.datetime64(low), np.datetime64(high))
+        assert str(said) == str(get_nice_text(np.datetime64(high)))
+
+    def test_an_end_which_repeats_nothing(self):
+        """A far end sharing no field is drawn as it always was."""
+        low = np.datetime64("2023-06-01T14:23:11")
+        high = np.datetime64("2024-11-30T09:00:00")
+        assert str(range_end_text(low, high)) == "2024-11-30T09:00:00"
+
+    @pytest.mark.parametrize(
+        ("low", "high"),
+        [
+            (0.0, 299.0),
+            (0, 299),
+            ("a", "b"),
+            (None, None),
+            (1, np.datetime64("2020-01-01")),
+            (np.datetime64("2020-01-01"), 1),
+            # Offsets, not instants. The "1" they lead with is not a
+            # field either of them states, and eliding it would leave
+            # 1.25s drawn as a fraction of nothing.
+            (np.timedelta64(1500, "ms"), np.timedelta64(1250, "ms")),
+        ],
+        ids=[
+            "floats",
+            "ints",
+            "strings",
+            "none",
+            "mixed_low",
+            "mixed_high",
+            "offsets",
+        ],
+    )
+    def test_only_two_instants_share_a_head(self, low, high):
+        """Anything else is drawn as it would have been anyway."""
+        assert str(range_end_text(low, high)) == str(get_nice_text(high))
+
+    @pytest.mark.parametrize("null", [np.datetime64("NaT"), pd.NaT])
+    def test_a_null_end_repeats_nothing(self, null):
+        """An end which is not a time cannot be a head for the other."""
+        instant = np.datetime64("2020-01-01T00:00:00")
+        assert str(range_end_text(null, instant)) == str(get_nice_text(instant))
+        assert str(range_end_text(instant, null)) == str(get_nice_text(null))
+
+    def test_what_is_left_keeps_its_styles(self):
+        """
+        The mark takes the place of fields, not of their colouring.
+
+        A repr colours a date, a time and a fraction differently, and
+        what survives the elision is coloured as it was before it.
+        """
+        low = np.datetime64("2017-09-18T00:00:00")
+        high = np.datetime64("2017-09-18T00:00:07.996")
+        said = range_end_text(low, high)
+        styles = {str(span.style) for span in said.spans}
+        assert dascore_styles["hms"] in styles
+        assert dascore_styles["dec"] in styles
+        assert said.spans[0].style == dascore_styles["keys"]
+
+    def test_a_pandas_timestamp_is_an_instant(self):
+        """A frame states its extents as Timestamps, and a repr reads them."""
+        low = pd.Timestamp("2020-01-03T00:00:00")
+        high = pd.Timestamp("2020-01-03T00:00:23.996")
+        assert str(range_end_text(low, high)) == "…00:00:23.996"
 
 
 class TestValuesAReaderCanRead:

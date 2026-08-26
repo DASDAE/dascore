@@ -58,6 +58,20 @@ _NANOSECOND = 1e-9
 # What counts as a time, and so what has a duration between two of it.
 _TIME_TYPES = (pd.Timestamp, np.datetime64, pd.Timedelta, np.timedelta64)
 
+# What an instant is, and so what is stated in calendar fields a range
+# can share. An offset is not one: 1.5s and 1.25s have a leading "1" in
+# common and it is not a field either of them states.
+_INSTANT_TYPES = (pd.Timestamp, np.datetime64)
+
+# What stands in a range's far end for the fields its near end already
+# stated. Read as "and the rest of it is what you just read".
+_REPEAT_MARK = "…"
+
+# What divides one field of a rendered time from the next, kept so a
+# head can be measured in whole fields. The date is not split here: it
+# is one field, elided whole or not at all.
+_TIME_FIELDS = re.compile(r"([:.])")
+
 # The most figures a rate is quoted to when it cannot state its step
 # exactly. A rate which can gets as many as that takes, up to the point
 # where it has stopped being a rate and become the step in other units.
@@ -873,6 +887,95 @@ def duration_text(low, high) -> Text | None:
     if not (said := human_duration(seconds)):
         return None
     return Text(f"<{said}>", dascore_styles["keys"])
+
+
+def _split_instant(rendered: str) -> tuple[str, str]:
+    """
+    A rendered instant, as the date it states and the time it states.
+
+    One of the two is empty where the value did not need it: a repr
+    drops a date of the epoch and a time of midnight, so the two ends
+    of one range can arrive in different shapes.
+    """
+    date, divider, time = rendered.partition("T")
+    if divider:
+        return date, time
+    # No divider, so it is one or the other. A date has dashes in it, a
+    # time has colons, and neither has the other's.
+    return (date, "") if "-" in date else ("", date)
+
+
+def _shared_head(low: str, high: str) -> int:
+    """
+    How many leading characters of `high` repeat what `low` already says.
+
+    Measured in whole fields, so a mark never stands for the first digit
+    of one. The date is a single field: two instants on different days
+    share nothing, since eliding the year of 2023-06-01 and 2023-07-01
+    would leave the month to be noticed on its own.
+    """
+    low_date, low_time = _split_instant(low)
+    high_date, high_time = _split_instant(high)
+    # A date one end states and the other does not is not a date they
+    # share, whatever the characters under it say.
+    if bool(low_date) != bool(high_date) or low_date != high_date:
+        return 0
+    shared = len(high_date)
+    # The divider sits between the date and the fields below it, and is
+    # part of neither.
+    at = shared + 1 if high_date and high_time else shared
+    low_fields = _TIME_FIELDS.split(low_time)
+    high_fields = _TIME_FIELDS.split(high_time)
+    # Field, separator, field, at even indices and odd: a separator
+    # counts toward the head like anything else, but the head only ends
+    # at a field, so what is left starts with the separator before it.
+    for index, (stated, repeated) in enumerate(zip(low_fields, high_fields)):
+        if stated != repeated:
+            break
+        at += len(repeated)
+        if index % 2 == 0:
+            shared = at
+    return shared
+
+
+def range_end_text(low, high) -> Text:
+    """
+    The far end of a range, with what it repeats of the near end elided.
+
+    The two ends of a time range stand next to each other, so the
+    leading fields of the second are a fact the reader has just read.
+    They are replaced by one mark, which says the rest is as stated: a
+    range inside one day states that day once.
+
+    Compared on what the near end is drawn as, not on what it holds.
+    A repr trims each instant on its own -- a start at midnight comes
+    out as a bare date -- and a mark may not stand for a field which is
+    then nowhere to be read.
+
+    Only of two instants, and only where they share a field. An offset
+    of 1.25s repeats nothing of one of 1.5s -- the digit they lead with
+    is not a field either of them states -- and anything else comes
+    back as it would have been drawn anyway.
+    """
+    high_text = get_nice_text(high)
+    if not isinstance(low, _INSTANT_TYPES) or not isinstance(high, _INSTANT_TYPES):
+        return high_text
+    if pd.isnull(low) or pd.isnull(high):
+        return high_text
+    if not (shared := _shared_head(get_nice_text(low).plain, high_text.plain)):
+        return high_text
+    rest = high_text[shared:]
+    # The divider only tells a date from a time, and the date is what
+    # was just elided. A colon or a point stays: it says which field
+    # the number after it is, so 41.5 cannot be read as an hour.
+    if rest.plain.startswith("T"):
+        rest = rest[1:]
+    # Started empty and appended to: a Text built as Text(x, style=...)
+    # makes that style the base of everything appended after it, so the
+    # mark's grey would bleed onto the fields which survived it.
+    said = Text("")
+    said += Text(_REPEAT_MARK, dascore_styles["keys"])
+    return said + rest
 
 
 def _fewest_figures(value: float, accept) -> int | None:

@@ -31,7 +31,7 @@ from dascore.exceptions import (
 )
 from dascore.io.index.planned import PlanResolver
 from dascore.io.segy import SegyV1_0
-from dascore.utils.display import get_nice_text
+from dascore.utils.display import range_end_text
 from dascore.utils.downloader import fetch
 from dascore.utils.misc import suppress_warnings
 from dascore.utils.patch_assembly import _estimate_merge_samples, _get_varying_dim
@@ -1984,7 +1984,11 @@ class TestSpoolRepr:
         # The bug this pins: reading both ends off time_min made every
         # single-patch spool span zero time.
         assert df["time_min"].max() != df["time_max"].max()
-        assert str(get_nice_text(df["time_max"].max())) in str(spool)
+        stated = range_end_text(df["time_min"].min(), df["time_max"].max())
+        assert str(stated) in str(spool)
+        # An end which repeats the start entirely draws as the mark and
+        # nothing else, which is the shape the bug would leave behind.
+        assert str(stated).lstrip("…")
 
     def test_a_single_patch_spans_its_own_length(self):
         """One patch is a span of its duration, not a span of nothing."""

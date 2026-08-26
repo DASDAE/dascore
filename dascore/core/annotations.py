@@ -69,6 +69,7 @@ from dascore.utils.display import (
     get_nice_text,
     mapping_to_text,
     model_to_line,
+    range_end_text,
     split_block,
     stated_fields,
 )
@@ -952,7 +953,7 @@ class AnnotationSet(NodeRepr, NamespaceOwner):
             base += Text("min: ", key_style)
             base += get_nice_text(low)
             base += Text(" max: ", key_style)
-            base += get_nice_text(high)
+            base += range_end_text(low, high)
             if (span := duration_text(low, high)) is not None:
                 base += Text(" ") + span
             kind = "point" if spelling.point else "range"

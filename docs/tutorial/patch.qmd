@@ -384,6 +384,8 @@ The `data_type` attribute is an optional label for the kind of data in the patch
 
 A patch says what it holds. Where a display can render HTML — a notebook, or this page — it draws a panel whose sections fold; everywhere else, and with `display_html` off, it says the same words as text.
 
+A time range is stated from the first field which differs: the `…` on the far end stands for whatever it repeats of the near one, so a patch inside one day says that day once.
+
 ```{python}
 import dascore as dc
 
