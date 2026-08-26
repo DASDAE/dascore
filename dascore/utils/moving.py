@@ -207,6 +207,11 @@ def _get_available_engines() -> tuple[str, ...]:
     return tuple(["scipy", *bottle_list])
 
 
+def has_engine(engine: str) -> bool:
+    """Return True if the named moving window engine is installed."""
+    return engine in _get_available_engines()
+
+
 def _get_engine_function(engine: str, func_name: str) -> Callable:
     """Get and cache engine function."""
     spec = OPERATION_REGISTRY[func_name][engine]

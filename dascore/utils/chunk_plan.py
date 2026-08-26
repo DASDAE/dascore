@@ -387,6 +387,13 @@ def _normalize_chunk_units(df: pd.DataFrame, name: str) -> pd.DataFrame:
     return df
 
 
+def _partition_unit(df: pd.DataFrame, name: str, row: int) -> str:
+    """The unit a partition's envelope is stated in, or "" if it states none."""
+    col = df.get(f"_{name}_units")
+    unit = None if col is None else col.iloc[row]
+    return "" if pd.isnull(unit) else str(unit)
+
+
 def _validate_missing_dim(missing_dim) -> None:
     """Reject a missing_dim value that is neither policy."""
     if missing_dim not in ("raise", "drop"):
@@ -1535,15 +1542,23 @@ def build_chunk_plan(
         # request is in bytes, not comparable to a coordinate duration.
         if not merge_mode and not (isinstance(value, Quantity) and is_data_size(value)):
             assert value is not None  # a null value is merge_mode
-            longest = ((g_stops - g_starts) + np.abs(part_steps)).max()
-            # durations in seconds, which is what a time value would be
-            # given in; other dimensions in their own units
-            fmt = (lambda x: f"{to_float(x)} s") if is_timedelta64(longest) else str
+            spans = (g_stops - g_starts) + np.abs(part_steps)
+            best = int(np.argmax(spans))
+            longest, requested = spans[best], value
+            if is_timedelta64(longest):
+                # seconds, which is what a time value is given in
+                longest = f"{to_float(longest)} s"
+                requested = f"{to_float(requested)} s"
+            else:
+                # the envelope is in the longest partition's own unit, so
+                # name it; the request may be stated in another (#1058)
+                unit = _partition_unit(sorted_df, name, seg_starts[best])
+                longest = f"{longest} {unit}".strip()
             msg = (
                 f"Could not chunk. The longest contiguous segment along "
-                f"{name!r} is {fmt(longest)}, shorter than the requested "
-                f"chunk value of {fmt(value)}. Use a smaller chunk value, a "
-                f"larger tolerance to join segments separated by gaps, or "
+                f"{name!r} is {longest}, shorter than the requested chunk "
+                f"value of {requested}. Use a smaller chunk value, a larger "
+                f"tolerance to join segments separated by gaps, or "
                 f"keep_partial=True to keep the short segments."
             )
         raise ChunkError(msg)

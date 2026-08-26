@@ -11,6 +11,7 @@ import pytest
 
 import dascore as dc
 from dascore.exceptions import ParameterError
+from dascore.proc import hampel
 from dascore.utils.misc import suppress_warnings
 
 
@@ -496,10 +497,21 @@ class TestHampelFilter:
         assert not np.all(original == out.data)
 
     def test_no_warning_on_modest_window(self, patch_with_spikes):
-        """The approximate filter is flat in window size, so it shouldn't warn."""
+        """A modest window is fast on any engine, so it shouldn't warn."""
         with suppress_warnings(action="error"):
             out = patch_with_spikes.hampel_filter(time=25, samples=True)
         assert out.shape == patch_with_spikes.shape
+
+    def test_bottleneck_makes_large_windows_free(self, patch_with_spikes, monkeypatch):
+        """Only bottleneck's moving median is flat in window size."""
+        big = {"time": 51, "distance": 51, "samples": True}
+        monkeypatch.setattr(hampel, "has_engine", lambda engine: True)
+        with suppress_warnings(action="error"):
+            patch_with_spikes.hampel_filter(**big)
+        # Without it the approximate path falls back to scipy, which is not.
+        monkeypatch.setattr(hampel, "has_engine", lambda engine: False)
+        with pytest.warns(UserWarning, match="Large window size"):
+            patch_with_spikes.hampel_filter(**big)
 
     def test_warns_on_large_exact_window(self, patch_with_spikes):
         """Only the exact filter, whose cost grows with the window, warns."""

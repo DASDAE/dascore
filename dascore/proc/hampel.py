@@ -9,7 +9,7 @@ from scipy.ndimage import median_filter
 
 from dascore.constants import PatchType
 from dascore.exceptions import ParameterError
-from dascore.utils.moving import move_median
+from dascore.utils.moving import has_engine, move_median
 from dascore.utils.patch import get_patch_window_size, patch_function
 
 
@@ -125,8 +125,10 @@ def hampel_filter(
 
     Warning
     -------
-    With `approximate=False`, runtime scales with the window's area, so
-    large multi-dimensional windows can be *very* slow.
+    Runtime scales with the window's area when `approximate=False`, and
+    with the sum of its sides when `approximate=True`, so large windows
+    can be *very* slow. Installing `bottleneck` makes the approximate
+    filter nearly insensitive to window size.
 
     Returns
     -------
@@ -145,10 +147,9 @@ def hampel_filter(
 
     **Performance:**
     - `approximate=True` provides 3-4x speedup over exact calculations
-    - `approximate=True` is also insensitive to window size, while the
-      exact filter's cost grows with the window's area.
-    - Installing the `bottleneck` package can further improve
-      approximate-mode performance. Without it scipy is used instead.
+    - Installing the `bottleneck` package further improves
+      approximate-mode performance, and makes it nearly insensitive to
+      window size. Without it scipy is used instead.
 
     See Also
     --------
@@ -188,9 +189,10 @@ def hampel_filter(
     # For now we just hardcode mode as it is probably the only one that
     # makes sense in a DAS data context.
     mode = "reflect"
-    # Only the exact filter's cost grows with the window; the separable
-    # approximation is nearly flat in window size.
-    warn_above = None if approximate else 100
+    # Only bottleneck's moving median is flat in window size; the exact
+    # filter and scipy's median_filter both grow with the window.
+    fast = approximate and has_engine("bottleneck")
+    warn_above = None if fast else 100
     size = get_patch_window_size(
         patch, kwargs, samples, require_odd=True, warn_above=warn_above, min_samples=3
     )

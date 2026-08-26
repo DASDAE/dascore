@@ -163,6 +163,14 @@ class TestChunk:
         msg = str(info.value)
         assert "tolerance" in msg and "keep_partial" in msg
 
+    def test_increment_too_big_names_units(self):
+        """The segment length carries the unit its coordinate states."""
+        p1 = dc.get_example_patch().set_units(distance="mm")
+        gap = p1.get_coord("time").max() + to_timedelta64(1000)
+        p2 = dc.get_example_patch(time_min=gap).set_units(distance="mm")
+        with pytest.raises(ChunkError, match=r"is 300\.0 mm,"):
+            dc.spool([p1, p2]).chunk(distance=2 * get_quantity("m"))
+
     def test_too_big_partial(self, diverse_spool):
         """When chunk is too large, all contiguous blocks should merge."""
         spool1 = diverse_spool.chunk(time=100000, keep_partial=True)
