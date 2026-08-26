@@ -1,0 +1,4 @@
+# Every page under api/ uses the API sidebar. Only the 16 section pages
+# are listed in it, and quarto gives an unlisted page the first sidebar
+# it finds, which would be the one for the front matter.
+sidebar: API
