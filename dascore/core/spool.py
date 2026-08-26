@@ -200,7 +200,7 @@ class Spool(NodeRepr, NamespaceOwner):
     # patch the inventory does not describe.
     _inventory = None
     _enrich_kwargs: dict | None = None
-    _on_unresolved: str = "warn"
+    _on_unresolved: WARN_LEVELS = "warn"
     # Whether this spool has already said its inventory covers only part of
     # it; the warning is worth making once, not once per patch.
     _warned_unresolved: bool = False
@@ -1050,7 +1050,7 @@ class Spool(NodeRepr, NamespaceOwner):
     def enrich(
         self,
         *,
-        on_unresolved: Literal["warn", "raise", "ignore"] = "warn",
+        on_unresolved: WARN_LEVELS = "warn",
         **kwargs,
     ) -> Self:
         """
@@ -1235,7 +1235,7 @@ class Spool(NodeRepr, NamespaceOwner):
     def conform_to_inventory(
         self,
         *,
-        on_unresolved: Literal["raise", "warn", "ignore"] = "raise",
+        on_unresolved: WARN_LEVELS = "raise",
     ) -> Self:
         """
         Return a spool the inventory describes exactly, patch for patch.
