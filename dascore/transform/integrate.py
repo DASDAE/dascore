@@ -11,6 +11,7 @@ from dascore.compat import is_array
 from dascore.constants import PatchType
 from dascore.utils.misc import broadcast_for_index, iterate
 from dascore.utils.patch import (
+    _get_data_type_from_dims,
     _get_data_units_from_dims,
     _get_dx_or_spacing_and_axes,
     patch_function,
@@ -81,7 +82,7 @@ def _get_indefinite_integral(patch, dxs_or_vals, axes):
     return array, patch.coords  # coords shouldn't change
 
 
-@patch_function(data_type="")
+@patch_function(version="1.1")
 def integrate(
     patch: PatchType,
     dim: Sequence[str] | str | None,
@@ -110,6 +111,14 @@ def integrate(
     value. To remove dimensions with length 1, use
     [`Patch.squeeze`](`dascore.Patch.squeeze`).
 
+    The output `data_type` is mapped through the pairs an integral is
+    known to relate, which are those of
+    [differentiate](`dascore.Patch.differentiate`) read backwards: along
+    `time` strain_rate becomes strain and acceleration becomes velocity;
+    along `distance` strain becomes displacement. An integral the pairs
+    cannot name all the way through clears `data_type` rather than
+    leaving a stale one on it.
+
     Examples
     --------
     >>> import dascore as dc
@@ -128,5 +137,6 @@ def integrate(
     else:
         array, coords = _get_indefinite_integral(patch, dxs_or_vals, axes)
     new_units = _get_data_units_from_dims(patch, dims, mul)
-    attrs = patch.attrs.update(data_units=new_units)
+    data_type = _get_data_type_from_dims(patch, dims, differentiate=False)
+    attrs = patch.attrs.update(data_units=new_units, data_type=data_type)
     return patch.new(data=array, attrs=attrs, coords=coords)

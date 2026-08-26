@@ -1094,6 +1094,50 @@ def get_window_axis_step(
     return win_samp, axis, step
 
 
+# What a derivative along a dimension makes of the data. Read forward to
+# differentiate and backward to integrate; the same physics either way,
+# so one table states both.
+_DATA_TYPE_DERIVATIVES = {
+    "time": {
+        "displacement": "velocity",
+        "velocity": "acceleration",
+        "strain": "strain_rate",
+        "phase": "phase_rate",
+    },
+    # A derivative along the fiber is what makes strain out of motion,
+    # which is the operation `velocity_to_strain_rate` performs.
+    "distance": {
+        "displacement": "strain",
+        "velocity": "strain_rate",
+    },
+}
+
+_DATA_TYPE_INTEGRALS = {
+    dim: {v: k for k, v in table.items()}
+    for dim, table in _DATA_TYPE_DERIVATIVES.items()
+}
+
+
+def _get_data_type_from_dims(patch, dims, differentiate: bool) -> str:
+    """Get the data_type of a patch differentiated or integrated over dims."""
+    tables = _DATA_TYPE_DERIVATIVES if differentiate else _DATA_TYPE_INTEGRALS
+    data_type = patch.attrs.data_type
+    for dim in iterate(dims):
+        table = tables.get(dim, {})
+        if data_type not in table:
+            # A derivative is a different quantity than what it was taken
+            # of, so a step the vocabulary cannot name leaves the patch
+            # with no label it can honestly carry: the note on patch
+            # attrs says a stale data_type is worse than an empty one.
+            # It also settles the whole chain at once, which mapping only
+            # the steps that are named would not -- velocity over time
+            # then distance would be acceleration, and over distance then
+            # time strain rate, for one and the same mixed derivative.
+            return ""
+        data_type = table[data_type]
+    return data_type
+
+
 def _get_data_units_from_dims(patch, dims, operator):
     """Get new data units from some operation on dimensions."""
     if (data_units := get_quantity(patch.attrs.data_units)) is None:
