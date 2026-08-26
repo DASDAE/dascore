@@ -1248,9 +1248,17 @@ class TestSelectSeesPendingEnrichment:
             wrong[0]
 
     @pytest.mark.parametrize("attrs", [("pulse_width",), False])
-    def test_a_name_enrichment_leaves_alone_keeps_the_header(self, disagreeing, attrs):
-        """Only the attrs enrichment writes change hands."""
-        spool = disagreeing.enrich(attrs=attrs, coords=False)
+    @pytest.mark.parametrize("conflict", ["keep_first", "keep_last"])
+    def test_a_name_enrichment_leaves_alone_keeps_the_header(
+        self, disagreeing, attrs, conflict
+    ):
+        """Only the attrs enrichment writes change hands.
+
+        Under either policy: one which rewrites nothing rewrites this
+        name too, whether because it writes no attrs at all or because
+        the name is not among the ones it writes.
+        """
+        spool = disagreeing.enrich(attrs=attrs, coords=False, conflict=conflict)
         selected = spool.select(gauge_length=20.0)
         assert selected.get_contents()["tag"].tolist() == ["wrong"]
         assert selected[0].attrs.gauge_length == 20.0
