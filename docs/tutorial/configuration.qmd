@@ -58,10 +58,10 @@ How objects print is configurable as well: `display_float_precision` sets the de
 
 ```python
 with config_context(display_max_items=3):
-    print(inventory)  # at most three networks, arrays or paths per level
+    display(inventory)  # at most three networks, arrays or paths per level
 
 with config_context(display_max_patches=100):
-    print(spool)  # a bigger spool names the limit rather than its extents
+    display(spool)  # a bigger spool names the limit rather than its extents
 ```
 
 Where a display can render HTML -- a notebook, or this documentation --
@@ -71,12 +71,18 @@ which says the same words. `display_html_open_lines` (12 by default) is
 how many lines a section may hold and still open on its own; a longer
 one, such as a patch's data, starts folded, and `0` folds every section.
 
+A setting only holds while its block does, and a notebook echoes the
+last thing a cell states rather than anything inside a block, so these
+ask for the display while the setting is still in force. `display` is a
+name Jupyter puts in the namespace; elsewhere it comes from
+`IPython.display`.
+
 ```python
 with config_context(display_html=False):
-    patch  # the text repr, even in a notebook
+    display(patch)  # the text repr, even in a notebook
 
 with config_context(display_html_open_lines=0):
-    patch  # every section folded until it is asked for
+    display(patch)  # every section folded until it is asked for
 ```
 
 For remote IO settings such as `allow_remote_cache`,

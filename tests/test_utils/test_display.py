@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 import time
 from html import unescape
+from importlib.resources import files
 from pathlib import Path
 
 import numpy as np
@@ -35,6 +36,7 @@ from dascore.utils.display import (
     Table,
     _body_lines,
     _storage_quantum,
+    _strip_css_comments,
     _visible_lines,
     array_to_text,
     attrs_to_text,
@@ -1782,13 +1784,15 @@ class TestTableColumns:
 
 
 def _css_body() -> str:
-    """The stylesheet with its comments taken out.
+    """The stylesheet as it ships, which is to say with no comments in it.
 
     A rule and a comment about a rule read the same to a substring
     search, and a test which cannot tell them apart passes on a rule
-    which was commented out.
+    which was commented out. Nothing is stripped here because what
+    ships is already stripped; ``test_the_sheet_ships_without_its_prose``
+    is what holds that true.
     """
-    return re.sub(r"/\*.*?\*/", "", get_stylesheet(), flags=re.DOTALL)
+    return get_stylesheet()
 
 
 def _css_rule(selector: str) -> str:
@@ -1889,6 +1893,52 @@ class TestStylesheet:
         """
         assert "-1.1em" in _css_rule(".dc-repr summary::before")
         assert "0.1em 0 0.1em 1.1em" in _css_rule(".dc-repr summary")
+
+    def test_the_sheet_ships_without_its_prose(self):
+        """
+        The comments explain the sheet to whoever edits it, not to a reader.
+
+        They are near half the file by weight, and a notebook carries
+        the whole sheet once per cell, so the copy which goes out has
+        them taken off.
+        """
+        source = files("dascore").joinpath("repr.css").read_text(encoding="utf-8")
+        # A control: what is stripped is something the file really holds.
+        assert "/*" in source
+        assert "/*" not in get_stylesheet()
+        # And nothing else went with them.
+        assert ".dc-repr .dc-banner" in get_stylesheet()
+        assert len(get_stylesheet()) < len(source) / 1.5
+
+    def test_a_value_which_reads_like_a_comment_is_kept(self):
+        """
+        `content` takes a string, and a string may hold a comment marker.
+
+        The stripper is told about quotes for that reason: reading
+        `"/*"` as the start of a comment would swallow every declaration
+        up to the next `*/`, which is a stylesheet that no longer
+        parses rather than one which lost a note. And about escapes,
+        since an escaped quote inside a string would otherwise end it
+        early and leave the rest of the value read as CSS.
+        """
+        for value in ('"/*"', '"\\"/*"'):
+            css = f"a {{ content: {value}; }}\n/* gone */\nb {{ color: red }}\n"
+            stripped = _strip_css_comments(css)
+            assert f"content: {value}" in stripped
+            assert "b { color: red }" in stripped
+            assert "gone" not in stripped
+
+    def test_a_row_is_not_striped_by_the_host(self):
+        """
+        A host may restyle a table it did not write.
+
+        Quarto hands a cell's output through pandoc, which re-emits the
+        coordinates table with bootstrap's `table-striped` on it, and
+        bootstrap stripes a row with an inset shadow rather than a
+        background -- so clearing the background is not enough, and
+        every other row of the docs site's panel comes out grey.
+        """
+        assert "box-shadow: none" in _css_rule(".dc-repr .dc-table td")
 
     def test_a_wide_line_scrolls_inside_its_own_block(self):
         """
@@ -2187,11 +2237,12 @@ class TestHtmlRepr:
 
         Held on its own rather than on the panel, where growth in one
         hides growth in the other. The ceiling sits about a section's
-        worth of rules above what the sheet holds, so a block of them
-        trips it rather than a rule or two -- which means it has to be
-        raised deliberately whenever a block is added.
+        worth of rules above what ships, so a block of them trips it
+        rather than a rule or two -- which means it has to be raised
+        deliberately whenever a block is added. It counts the sheet as
+        it goes out, so a comment is free and a rule is not.
         """
-        assert len(get_stylesheet().encode()) < 9_000
+        assert len(get_stylesheet().encode()) < 6_000
 
     def test_a_panel_is_mostly_the_object(self, html_objects):
         """

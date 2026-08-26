@@ -380,15 +380,15 @@ print(row["distance_max"])
 
 The `data_type` attribute is an optional label for the kind of data in the patch. It is useful for display defaults and quick inspection, but physical interpretation should come from `data_units`, coordinate units, and `history`. See the [PatchAttrs note](../notes/patch_attrs.qmd) for more detail.
 
-## String representation
+## Seeing a patch
 
-DASCore Patches have a useful string representation:
+A patch says what it holds. Where a display can render HTML — a notebook, or this page — it draws a panel whose sections fold; everywhere else, and with `display_html` off, it says the same words as text.
 
 ```{python}
 import dascore as dc
 
 patch = dc.get_example_patch()
-print(patch)
+patch
 ```
 
 ## Shortcuts

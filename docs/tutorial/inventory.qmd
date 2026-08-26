@@ -203,10 +203,10 @@ Listing a name is not promising a value for it. This example's geometry states c
 
 # Seeing an inventory
 
-Printing an inventory summarizes what it holds. Each line is the repr of one object in the tree, so the same line you see nested here is what you get printing that network, fiber array or optical path on its own:
+An inventory summarizes what it holds. Each object in the tree states one line, so the line you see nested here is the line that network, fiber array or optical path leads with when you show it on its own:
 
 ```{python}
-print(inventory)
+inventory
 ```
 
 Only what an object states is shown, so a field left at its default does not take up a line. `Networks` lists at most `display_max_items` children per level (see the [configuration](configuration.qmd) page) and says how many it left out.

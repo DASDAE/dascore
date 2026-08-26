@@ -255,6 +255,9 @@ transparent cells let both paint through. A repr is not a data grid. */
   white-space: nowrap;
   font-weight: 400;
   background: none;
+  /* Quarto re-emits this table with bootstrap's `table-striped`, which
+  stripes a row with an inset shadow rather than a background. */
+  box-shadow: none;
 }
 
 /* The label a column is read by, said once here rather than on every
