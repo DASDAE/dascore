@@ -534,6 +534,23 @@ class TestPad:
         assert out.get_array("label")[0] == ""
         assert not out.get_array("flag")[0]
 
+    @pytest.mark.parametrize("expand_coords", (True, False))
+    def test_padding_no_samples_changes_nothing(self, random_patch, expand_coords):
+        """A pad of no samples is not a pad.
+
+        `pad(time="fft")` asks for one whenever the patch is already of a
+        fast length, and widening an integer coordinate there would
+        change it to hold a NaN nothing is going to write.
+        """
+        shape = random_patch.coord_shapes["distance"]
+        # Above 2**53, where a float64 can no longer count by ones.
+        counts = np.arange(shape[0], dtype="int64") + 2**53
+        patch = random_patch.update_coords(idx=("distance", counts))
+        out = patch.pad(distance=0, samples=True, expand_coords=expand_coords)
+        for name in ("idx", "distance"):
+            assert out.get_coord(name).dtype == patch.get_coord(name).dtype
+            assert np.array_equal(out.get_array(name), patch.get_array(name))
+
     def test_padded_coords_keep_their_units(self, random_patch):
         """Growing a coordinate does not change what it was measured in."""
         shape = random_patch.coord_shapes["distance"]

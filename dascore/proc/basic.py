@@ -770,6 +770,11 @@ def pad(
 
     def _get_new_coord(coord, pad_tuple, expand_coords):
         """Get the new coordinate along the expanded axis."""
+        # A pad of no samples leaves the coordinate exactly as it was,
+        # rather than rebuilding it from its values -- which would widen
+        # an integer coordinate to hold a NaN nothing is going to write.
+        if not any(pad_tuple):
+            return coord
         if expand_coords and coord.evenly_sampled:
             new_start = coord.min() - pad_tuple[0] * coord.step
             new_end = coord.max() + (pad_tuple[1] + 1) * coord.step
@@ -811,6 +816,12 @@ def pad(
         for name, coord_dims in patch.coords.dim_map.items():
             if name in pad_tuples or pad_tuples.keys().isdisjoint(coord_dims):
                 continue
+            widths = [pad_tuples.get(x, (0, 0)) for x in coord_dims]
+            # A pad of no samples is not a pad: `pad(time="fft")` on a
+            # patch already of a fast length asks for one, and widening
+            # an integer coordinate there would change it for nothing.
+            if not any(any(x) for x in widths):
+                continue
             coord = patch.coords.coord_map[name]
             values = coord.values
             # An integer coordinate has to widen to hold the NaN which
@@ -818,7 +829,6 @@ def pad(
             # does above.
             if np.issubdtype(values.dtype, np.integer):
                 values = values.astype(np.float64)
-            widths = [pad_tuples.get(x, (0, 0)) for x in coord_dims]
             padded = np.pad(
                 values, pad_width=widths, constant_values=_pad_fill(values.dtype)
             )
