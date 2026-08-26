@@ -32,7 +32,10 @@ env:
   # and the preview misleads the reviewer.
   DASCORE_DOC_SITE_URL: https://dascore.netlify.app
   # Empty unless a manual run asked for the section level sidebar.
-  DASCORE_DOC_COMPACT_SIDEBAR: ${{ inputs.compact_sidebar && '1' || '' }}
+  # This branch exists to measure the section level sidebar on a full build;
+  # it is the paired run for the baseline on the branch it came from, and is
+  # not meant to merge.
+  DASCORE_DOC_COMPACT_SIDEBAR: "1"
 
 jobs:
   test_build_docs:
