@@ -1824,6 +1824,21 @@ class TestPartialCoord:
         """A partial coord coerces an int shape like every other coord."""
         assert CoordPartial(shape=5, dtype="float64").shape == (5,)
 
+    @pytest.mark.parametrize("unit", ["us", "ms", "s"])
+    @pytest.mark.parametrize("kind", ["datetime64", "timedelta64"])
+    def test_values_keep_the_declared_resolution(self, kind, unit):
+        """
+        The nulls a partial coord stands for are of its own dtype.
+
+        A fixed resolution here leaks out of the coordinate: the values
+        report one dtype while the coord reports another, and anything
+        which promotes against them, such as concatenation, takes the
+        wrong one.
+        """
+        dtype = np.dtype(f"{kind}[{unit}]")
+        coord = CoordPartial(shape=(3,), dtype=dtype)
+        assert coord.values.dtype == dtype
+
     def test_set_units_positionally(self, basic_non_coord):
         """Units are set the same way as on any other coord."""
         out = basic_non_coord.set_units("m")

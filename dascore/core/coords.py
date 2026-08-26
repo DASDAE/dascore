@@ -147,8 +147,7 @@ def _reduce_time_like(func, data):
     data = np.asarray(data)
     valid = data[~pd.isnull(data)]
     if not valid.size:
-        nfunc = np.datetime64 if is_datetime64(data) else np.timedelta64
-        return np.atleast_1d(nfunc("NaT", "ns"))
+        return np.atleast_1d(_get_nullish(data.dtype))
 
     # Some reducers cannot operate directly on time-like dtypes. If direct
     # reduction fails, or returns only nulls despite valid input, fall back to

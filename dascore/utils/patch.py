@@ -53,6 +53,7 @@ from dascore.utils.docs import compose_docstring
 from dascore.utils.mapping import FrozenDict
 from dascore.utils.misc import (
     _apply_union_indexers,
+    _get_nullish,
     _merge_tuples,
     get_middle_value,
     iterate,
@@ -1818,7 +1819,7 @@ def _joinable(coords, dim: str) -> list[np.ndarray]:
             "stand in for them."
         )
         raise CoordMergeError(msg)
-    null = np.array("NaT").astype(target)
+    null = _get_nullish(target)
     return [
         np.full(x.shape, null, dtype=target) if b else x for x, b in zip(arrays, blank)
     ]
