@@ -247,6 +247,13 @@ class TestNoPrintedPanels:
         assert (builtins.print, dc.print) == before
 
 
+# Pyodide has no processes at all -- `subprocess.run` raises there --
+# and running this in the one process is what the class below exists to
+# avoid. It is the same check on every platform, so a browser skipping
+# it loses nothing the other five cells do not already say.
+@pytest.mark.skipif(
+    sys.platform == "emscripten", reason="emscripten does not support processes"
+)
 class TestAGeneratedTestRunsUnderTheGuard:
     """Tests the whole chain, from a generated module to the guard."""
 
