@@ -54,7 +54,7 @@ with config_context(patch_kind_attrs=("acquisition_key",)):
     ...  # tag and data_category no longer separate patches
 ```
 
-How objects print is configurable as well: `display_float_precision` sets the decimals shown for floats, `display_array_threshold` how much of an array is printed before it is elided, `display_max_items` how many children a repr lists per level before saying how many it left out, and `display_max_patches` how large a spool may be before its repr stops summarizing what it covers and names the limit it exceeded instead.
+How objects print is configurable as well: `display_float_precision` sets the decimals shown for floats (a value smaller than the last of them is shown in that many significant figures instead, so it reads as a number rather than as 0.000), `display_array_threshold` how much of an array is printed before it is elided, `display_max_items` how many children a repr lists per level before saying how many it left out, and `display_max_patches` how large a spool may be before its repr stops summarizing what it covers and names the limit it exceeded instead.
 
 ```python
 with config_context(display_max_items=3):
