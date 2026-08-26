@@ -517,7 +517,7 @@ def optional_import(
 
 def optional_import(
     package_name: str,
-    on_missing: Literal["raise", "warn", "ignore"] = "raise",
+    on_missing: WARN_LEVELS = "raise",
     required_for: str = "the requested functionality",
 ) -> ModuleType | None:
     """
