@@ -89,7 +89,9 @@ ONE_SECOND_IN_NS = np.timedelta64(ONE_BILLION, "ns")
 # Valid strings for "datatype" attribute
 DataType = Literal[
     "",  # unspecified
+    "displacement",
     "velocity",
+    "acceleration",
     "strain_rate",
     "phase",
     "phase_difference",

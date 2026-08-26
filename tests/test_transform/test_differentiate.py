@@ -182,3 +182,45 @@ class TestCompareOrders:
         p1 = x_times_y_patch.differentiate(dim=None, order=order)
         # since dxdy(3x * 2y) = 6
         assert np.allclose(p1.data, 6.0)
+
+
+class TestDataType:
+    """A derivative changes what the data is, where the vocabulary says so."""
+
+    @pytest.mark.parametrize(
+        ("dim", "start", "expected"),
+        (
+            ("time", "displacement", "velocity"),
+            ("time", "velocity", "acceleration"),
+            ("time", "strain", "strain_rate"),
+            ("time", "phase", "phase_rate"),
+            ("distance", "displacement", "strain"),
+            ("distance", "velocity", "strain_rate"),
+        ),
+    )
+    def test_known_pairs(self, random_patch, dim, start, expected):
+        """A derivative of a known type is the type it is known to give."""
+        patch = random_patch.update_attrs(data_type=start)
+        assert patch.differentiate(dim).attrs.data_type == expected
+
+    def test_unknown_type_is_kept(self, random_patch):
+        """A type no pair names says what it said before, not nothing."""
+        patch = random_patch.update_attrs(data_type="temperature")
+        assert patch.differentiate("time").attrs.data_type == "temperature"
+
+    def test_each_dim_maps_in_turn(self, random_patch):
+        """Differentiating over both dims applies both of their pairs."""
+        patch = random_patch.update_attrs(data_type="displacement")
+        assert patch.differentiate(None).attrs.data_type == "strain_rate"
+
+    @pytest.mark.parametrize("data_type", ("displacement", "velocity", "temperature"))
+    def test_the_dimension_order_does_not_matter(self, random_patch, data_type):
+        """A mixed derivative is what it is whichever axis came first."""
+        patch = random_patch.update_attrs(data_type=data_type)
+        first = patch.differentiate(None).attrs.data_type
+        assert first == patch.transpose().differentiate(None).attrs.data_type
+
+    def test_an_unnamed_step_leaves_the_chain_alone(self, random_patch):
+        """Velocity over both dims is a derivative no word here states."""
+        patch = random_patch.update_attrs(data_type="velocity")
+        assert patch.differentiate(None).attrs.data_type == "velocity"
