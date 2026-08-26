@@ -73,6 +73,46 @@ class TestInterpolate:
         time = patch.coords.coord_map["time"]
         assert time.evenly_sampled and time.sorted
 
+    def test_associated_coords_interpolated(self, random_patch_many_coords):
+        """A numeric coord on the dim is interpolated with it. See #1041."""
+        patch = random_patch_many_coords
+        start, stop, step = get_start_stop_step(patch, "distance")
+        new_coord = np.arange(start, stop, step / 2)
+        out = patch.interpolate(distance=new_coord)
+        assert out.coords.dim_map["lat"] == ("distance",)
+        assert len(out.get_array("lat")) == len(new_coord)
+        # The samples which did not move keep the values they had.
+        kept = out.get_array("lat")[::2]
+        assert np.allclose(kept, patch.get_array("lat")[: len(kept)])
+
+    @pytest.mark.parametrize("factor", (0.5, 1.0))
+    def test_uninterpolatable_coords_dropped(self, random_patch, factor):
+        """What cannot be resampled is dropped, however many samples remain.
+
+        At factor 1.0 the coordinate is the same length as before, which
+        is exactly when a stale one would go unnoticed.
+        """
+        shape = random_patch.coord_shapes["distance"]
+        stamps = np.arange(shape[0]).astype("datetime64[s]")
+        patch = random_patch.update_coords(
+            label=("distance", np.full(shape, "a")),
+            flag=("distance", np.ones(shape, dtype=bool)),
+            stamp=("distance", stamps),
+        )
+        start, stop, step = get_start_stop_step(patch, "distance")
+        new_coord = np.arange(start, stop, step * factor) + step / 4
+        out = patch.interpolate(distance=new_coord)
+        assert {"label", "flag", "stamp"}.isdisjoint(out.coords.coord_map)
+
+    def test_multidimensional_coords_interpolated(self, random_patch_many_coords):
+        """A coordinate spanning both dimensions rides the one being set."""
+        patch = random_patch_many_coords
+        start, stop, step = get_start_stop_step(patch, "distance")
+        new_coord = np.arange(start, stop, step / 2)
+        out = patch.interpolate(distance=new_coord)
+        assert out.coords.dim_map["quality"] == ("distance", "time")
+        assert out.get_array("quality").shape == out.shape
+
 
 class TestDecimate:
     """Ensure Patch can be decimated."""
@@ -154,6 +194,16 @@ class TestDecimate:
         patch, factor, _, axis = calls[0]
         assert patch is random_patch
         assert out.shape[axis] == random_patch.shape[axis] // factor
+
+    @pytest.mark.parametrize("filter_type", ("iir", None))
+    def test_associated_coords_decimated(self, random_patch_many_coords, filter_type):
+        """Coords on the decimated dim are subsampled with it. See #1041."""
+        patch = random_patch_many_coords
+        out = patch.decimate(distance=2, filter_type=filter_type)
+        assert np.allclose(out.get_array("lat"), patch.get_array("lat")[::2])
+        assert np.allclose(out.get_array("quality"), patch.get_array("quality")[::2])
+        assert np.allclose(out.get_array("time2"), patch.get_array("time2"))
+        assert out.coords.dim_map == patch.coords.dim_map
 
 
 class TestResample:

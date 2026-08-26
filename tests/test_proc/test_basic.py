@@ -501,6 +501,39 @@ class TestFillNa:
 class TestPad:
     """Tests for the padding functionality in a patch."""
 
+    def test_associated_coords_padded(self, random_patch_many_coords):
+        """A coord on a padded dim grows with it, saying nothing new. See #1041."""
+        patch = random_patch_many_coords
+        out = patch.pad(distance=(2, 3), samples=True)
+        lat = out.get_array("lat")
+        assert len(lat) == len(patch.get_array("lat")) + 5
+        assert np.all(np.isnan(lat[:2])) and np.all(np.isnan(lat[-3:]))
+        assert np.allclose(lat[2:-3], patch.get_array("lat"))
+        # One measured on another dimension is untouched.
+        assert np.allclose(out.get_array("time2"), patch.get_array("time2"))
+        # A coordinate spanning both grows along the padded one only.
+        assert out.get_array("quality").shape == out.shape
+
+    def test_padding_two_dimensions_at_once(self, random_patch_many_coords):
+        """A coordinate spanning both padded dims grows along both."""
+        patch = random_patch_many_coords
+        out = patch.pad(distance=(1, 0), time=(0, 2), samples=True)
+        quality = out.get_array("quality")
+        assert quality.shape == out.shape
+        assert np.all(np.isnan(quality[0, :])) and np.all(np.isnan(quality[:, -2:]))
+        assert np.allclose(quality[1:, :-2], patch.get_array("quality"))
+
+    def test_associated_coords_of_other_kinds(self, random_patch):
+        """What is said of the added samples is the dtype's own blank."""
+        shape = random_patch.coord_shapes["distance"]
+        patch = random_patch.update_coords(
+            label=("distance", np.full(shape, "a")),
+            flag=("distance", np.ones(shape, dtype=bool)),
+        )
+        out = patch.pad(distance=(1, 0), samples=True)
+        assert out.get_array("label")[0] == ""
+        assert not out.get_array("flag")[0]
+
     def test_pad_time_dimension_samples_true(self, random_patch, samples=True):
         """Test padding the time dimension with zeros before and after."""
         padded_patch = random_patch.pad(time=(2, 3), samples=samples)

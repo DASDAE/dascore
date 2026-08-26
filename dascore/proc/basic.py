@@ -731,6 +731,12 @@ def pad(
         2*n - 1 where n is the current dimension length by adding values
         to the end of the axis.
 
+    Notes
+    -----
+    A coordinate measured on a padded dimension grows with it, saying
+    nothing over the samples which were added: NaN or NaT for a number
+    or a time, blank for text, and False for a membership flag.
+
     Examples
     --------
     >>> import dascore as dc
@@ -786,15 +792,48 @@ def pad(
     if isinstance(constant_values, Sequence):
         raise ParameterError("constant_values must be a scalar, not a sequence.")
 
+    def _pad_fill(dtype):
+        """What a padded coordinate holds where nothing was measured."""
+        # The spellings a projection onto uncovered channels already
+        # uses: blank text, an unset number, and not a member.
+        if dtype.kind in "US":
+            return ""
+        if dtype.kind == "b":
+            return False
+        return _get_nullish(dtype)
+
+    def _get_associated_coords(pad_tuples):
+        """Grow the coordinates measured on a padded dimension with it."""
+        out = {}
+        for name, coord_dims in patch.coords.dim_map.items():
+            if name in pad_tuples or pad_tuples.keys().isdisjoint(coord_dims):
+                continue
+            coord = patch.coords.coord_map[name]
+            values = coord.values
+            # An integer coordinate has to widen to hold the NaN which
+            # says nothing is known there, as the padded dimension's own
+            # does above.
+            if np.issubdtype(values.dtype, np.integer):
+                values = values.astype(np.float64)
+            widths = [pad_tuples.get(x, (0, 0)) for x in coord_dims]
+            padded = np.pad(
+                values, pad_width=widths, constant_values=_pad_fill(values.dtype)
+            )
+            out[name] = (coord_dims, coord.update(data=padded))
+        return out
+
     pad_width = [(0, 0)] * len(patch.shape)
     dimfo = get_dim_axis_value(patch, kwargs=kwargs, allow_multiple=True)
     new_coords = {}
+    pad_tuples = {}
 
     for dim, axis, value in dimfo:
         coord = patch.get_coord(dim, require_evenly_sampled=not samples)
         pad_tuple = _get_pad_tuple(value, samples, coord)
         pad_width[axis] = pad_tuple
+        pad_tuples[dim] = pad_tuple
         new_coords[dim] = _get_new_coord(coord, pad_tuple, expand_coords)
+    new_coords |= _get_associated_coords(pad_tuples)
 
     # Pad data, update coord manager, and return.
     new_data = np.pad(patch.data, pad_width, mode=mode, constant_values=constant_values)
