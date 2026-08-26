@@ -33,6 +33,7 @@ from itertools import pairwise
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+from _api_urls import compare, current_urls, load_baseline
 from _index_api import parse_project
 
 import dascore as dc
@@ -286,6 +287,19 @@ def find_case_collisions(api_path: Path = API_DOC_PATH) -> list[list[str]]:
     return sorted(sorted(x) for x in groups.values() if len(x) > 1)
 
 
+def measure_urls() -> dict:
+    """Compare the URLs this build publishes against the frozen baseline."""
+    baseline = load_baseline()
+    if not baseline:
+        return {"baseline": 0}
+    difference = compare(current_urls(), baseline)
+    out = {"baseline": len(baseline)}
+    out.update({k: len(v) for k, v in difference.items()})
+    out["removed_examples"] = difference["removed"][:20]
+    out["moved_examples"] = dict(list(difference["moved"].items())[:20])
+    return out
+
+
 def measure_index(path: Path | None = None) -> dict:
     """Measure everything the pre-render phase produced."""
     values = {
@@ -294,6 +308,7 @@ def measure_index(path: Path | None = None) -> dict:
         "sidebar": measure_sidebar(),
         "cross_ref": measure_cross_ref(),
         "case_collisions": find_case_collisions(),
+        "urls": measure_urls(),
     }
     update_report("index", values, path=path)
     return values
@@ -433,6 +448,7 @@ def build_summary(report: dict) -> str:
     if index:
         objects, qmd = index.get("objects", {}), index.get("qmd", {})
         sidebar_kib = index.get("sidebar", {}).get("bytes", 0) / 1024
+        urls = index.get("urls", {})
         lines += [
             "",
             "| Content | Value |",
@@ -442,6 +458,8 @@ def build_summary(report: dict) -> str:
             f"| API sidebar | {sidebar_kib:.1f} KiB |",
             f"| cross reference keys | {index.get('cross_ref', {}).get('keys', 0)} |",
             f"| case collisions | {len(index.get('case_collisions', []))} |",
+            f"| URLs removed since baseline | {urls.get('removed', 0)} |",
+            f"| URLs moved since baseline | {urls.get('moved', 0)} |",
         ]
         for kind, count in sorted(qmd.get("kinds", {}).items()):
             lines.append(f"| pages, {kind} | {count} |")
