@@ -731,6 +731,48 @@ class TestConcatenate:
         assert len(out) == 1
         assert out[0].get_coord("time").max() == patch_2.get_coord("time").max()
 
+    def test_aggregated_patches_keep_their_dim_kind(self, random_spool):
+        """
+        Joining patches which state no values leaves the kind behind.
+
+        An aggregation with the default dim_reduce leaves a coordinate
+        holding no values but still knowing its dtype. Concatenating such
+        patches must not turn missing datetimes into untyped NaN.
+        """
+        means = [patch.mean("time") for patch in random_spool]
+        assert all(x.get_coord("time").dtype.kind == "M" for x in means)
+
+        out = concatenate_patches(means, time=None)[0]
+        coord = out.get_coord("time")
+        assert coord.dtype.kind == "M", "the axis is still made of times"
+        assert coord.values.dtype.kind == "M"
+
+    @pytest.mark.parametrize(("other", "expected"), [("datetime", "M"), ("float", "f")])
+    def test_blank_member_takes_the_stated_kind(self, random_patch, other, expected):
+        """A patch stating no times joins one that does, as its own null."""
+        size = len(random_patch.get_array("time"))
+        blank = random_patch.update_coords(
+            time=np.full(size, "NaT", dtype="datetime64[ns]")
+        )
+        values = (
+            random_patch.get_array("time")
+            if other == "datetime"
+            else np.arange(size, dtype=float)
+        )
+        stated = random_patch.update_coords(time=values)
+        out = concatenate_patches([blank, stated], time=None)[0]
+        assert out.get_coord("time").values.dtype.kind == expected
+
+    def test_blank_member_against_a_kind_with_no_null_raises(self, random_patch):
+        """Whole numbers have no missing value, so the join is refused."""
+        size = len(random_patch.get_array("time"))
+        blank = random_patch.update_coords(
+            time=np.full(size, "NaT", dtype="datetime64[ns]")
+        )
+        stated = random_patch.update_coords(time=np.arange(size))
+        with pytest.raises(CoordMergeError, match="states no values there"):
+            concatenate_patches([blank, stated], time=None)
+
     def test_different_dims_raises(self, random_patch):
         """Patches can't be concated when they have different dims."""
         p1 = random_patch

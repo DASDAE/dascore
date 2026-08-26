@@ -1839,6 +1839,40 @@ class TestPartialCoord:
         coord = CoordPartial(shape=(3,), dtype=dtype)
         assert coord.values.dtype == dtype
 
+    @pytest.mark.parametrize("dtype", ["datetime64[ns]", "timedelta64[us]"])
+    def test_all_null_array_keeps_its_dtype(self, dtype):
+        """
+        An array of nulls says nothing about when, but still says what.
+
+        The values are gone, the kind of thing they were is not, and a
+        partial coord has a dtype to record it. Dropping it turned missing
+        datetimes into untyped NaN. Float is left out of the parameters:
+        an unset dtype already reads as float64, so it cannot regress.
+        """
+        dtype = np.dtype(dtype)
+        coord = get_coord(data=np.full(3, "NaT", dtype=dtype))
+        assert isinstance(coord, CoordPartial)
+        assert coord.dtype == dtype
+        assert coord.values.dtype == dtype
+
+    def test_all_null_object_array_claims_no_dtype(self):
+        """
+        A dtype is only worth recording when the values can honor it.
+
+        The null of an object array is NaN, so its values are floats;
+        saying "object" would state a dtype which `values` contradicts.
+        """
+        coord = get_coord(data=np.array([None, None, None]))
+        assert isinstance(coord, CoordPartial)
+        assert coord.values.dtype == np.dtype("float64")
+        assert coord.dtype in (None, np.dtype("float64"))
+
+    def test_given_dtype_beats_the_array(self):
+        """A caller who names a dtype is not overruled by the values."""
+        data = np.full(3, "NaT", dtype="datetime64[ns]")
+        coord = get_coord(data=data, dtype="timedelta64[ns]")
+        assert coord.dtype == np.dtype("timedelta64[ns]")
+
     def test_set_units_positionally(self, basic_non_coord):
         """Units are set the same way as on any other coord."""
         out = basic_non_coord.set_units("m")

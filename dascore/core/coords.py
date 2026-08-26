@@ -3234,6 +3234,14 @@ def get_coord(
         elif monotonic:
             return CoordMonotonicArray(values=data, units=units)
         elif np.all(pd.isnull(data)):
+            # The values say nothing, but their type still does: an array of
+            # NaT came from datetimes and should stay datetimes, as the
+            # empty case above also keeps. Only a kind whose null the
+            # values can actually hold is recorded; an object array of
+            # Nones has no null but NaN, so claiming "object" would state
+            # a dtype which `values` then contradicts.
+            if dtype is None and data.dtype.kind in "fmM":
+                dtype = data.dtype
             return CoordPartial(
                 shape=data.shape,
                 units=units,

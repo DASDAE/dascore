@@ -1799,20 +1799,24 @@ def _joinable(coords, dim: str) -> list[np.ndarray]:
     """
     The coordinates' values, the value-less ones taking the others' kind.
 
-    A member with no values along the dimension holds placeholders whose
-    dtype says nothing (floating NaN); numpy cannot join those with, say,
-    datetimes, so they are recast as the stated members' own nulls. Where
-    the stated kind has no null to write — whole numbers, booleans, text —
-    the join is refused rather than inventing zeros or empty labels.
+    A member with no values along the dimension holds nothing but
+    placeholders. Its own dtype cannot be trusted to join with the others'
+    — floating NaN will not concatenate with datetimes, and neither will
+    NaT with floats — so a blank member is rewritten as the stated
+    members' own null. Where the stated kind has no null to write — whole
+    numbers, booleans, text — the join is refused rather than inventing
+    zeros or empty labels.
+
+    Blankness is a question about values, not about type: a coordinate
+    which states no values is blank whether it remembers being made of
+    times or has forgotten.
     """
     arrays = [x.values for x in coords]
-    blank = [x.dtype.kind == "f" and bool(np.all(pd.isnull(x))) for x in arrays]
+    blank = [bool(np.all(pd.isnull(x))) for x in arrays]
     if all(blank) or not any(blank):
         return arrays
     target = np.result_type(*[x.dtype for x, b in zip(arrays, blank) if not b])
-    if target.kind == "f":
-        return arrays
-    if target.kind not in "mM":
+    if target.kind not in "fmM":
         msg = (
             f"Cannot concatenate along {dim!r}: a patch states no values "
             f"there, and a {target} coordinate has no missing value to "
