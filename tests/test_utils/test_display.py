@@ -84,6 +84,24 @@ class TestGetNiceText:
         txt3 = get_nice_text(dc.to_datetime64(1.111111111))
         assert str(txt3).endswith(".111111111")
 
+    @pytest.mark.parametrize(
+        "value",
+        [
+            pd.Timestamp("2020-01-01T00:00:00+00:00"),
+            np.datetime64("10000-01-01T00:00:00"),
+        ],
+        ids=["offset", "expanded_year"],
+    )
+    def test_an_instant_which_cannot_be_taken_apart(self, value):
+        """
+        A value is drawn as it states itself where it says too much.
+
+        An offset and a five digit year both push every field along, and
+        slicing them by position drew an instant which was not the one
+        handed over: "2020-01-01T00:00:00.00:" for the first of these.
+        """
+        assert str(get_nice_text(value)) == str(value)
+
     def test_nat(self):
         """Tests for NaT."""
         dt = np.datetime64("NaT")
@@ -1104,6 +1122,17 @@ class TestRangeTexts:
             "2017-09-18T00:00:03",
             "…:00",
         ]
+
+    def test_ends_which_cannot_be_taken_apart(self):
+        """
+        A pair says nothing about a head it cannot measure.
+
+        Both ends are drawn as they state themselves, which is what a
+        value drawn on its own does with the same string.
+        """
+        low = pd.Timestamp("2020-01-01T00:00:00+00:00")
+        high = pd.Timestamp("2020-01-01T00:00:09+00:00")
+        assert [str(x) for x in range_texts(low, high)] == [str(low), str(high)]
 
     def test_an_end_which_repeats_nothing(self):
         """A far end sharing no field is drawn as it always was."""

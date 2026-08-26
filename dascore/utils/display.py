@@ -72,6 +72,13 @@ _REPEAT_MARK = "…"
 # is one field, elided whole or not at all.
 _TIME_FIELDS = re.compile(r"([:.])")
 
+# What an instant has to say to be taken apart by position: a four digit
+# year, a divider numpy writes as T and pandas as a space, and nothing
+# after the fraction. One which says more -- a timezone offset, or a
+# year of five digits -- is drawn as it states itself rather than sliced
+# into fields which would then be wrong.
+_INSTANT_LAYOUT = re.compile(r"\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(\.\d+)?")
+
 # The most figures a rate is quoted to when it cannot state its step
 # exactly. A rate which can gets as many as that takes, up to the point
 # where it has stopped being a rate and become the step in other units.
@@ -663,27 +670,33 @@ def _nice_timedelta(value, style=None):
     return get_nice_text(Text(f"{sec:.9}s"), style)
 
 
-def _instant_string(value) -> str:
+def _instant_string(value) -> str | None:
     """
     An instant as the ISO string its blocks are read out of.
 
     A value of coarser precision states less than that -- a date has no
     time on it at all -- so it is read back at the precision everything
     else here assumes.
+
+    None where what it states cannot be taken apart by position at all.
+    A timezone offset and a five digit year both push every field along
+    by a character or two, and slicing them anyway draws an instant
+    which is not the one handed over.
     """
     stated = str(value)
     if len(stated) < 20:  # no room for a time, so it states none
         stated = str(dc.to_datetime64(stated))
-    # Enough characters to reach the decimal, which every block below is
-    # sliced against.
-    assert len(stated) >= 20
-    return stated
+    return stated if _INSTANT_LAYOUT.fullmatch(stated) else None
 
 
 @cache
 def _empty_instant() -> str:
     """The epoch, which is what a block saying nothing looks like."""
-    return _instant_string(dc.to_datetime64(0))
+    stated = _instant_string(dc.to_datetime64(0))
+    # The epoch is an instant of this library's own making, and states
+    # itself in the layout everything here is measured against.
+    assert stated is not None
+    return stated
 
 
 def _instant_blocks(*stated: str) -> tuple[bool, bool]:
@@ -735,9 +748,8 @@ def _instant_text(stated: str, date: bool, time: bool) -> Text:
 @get_nice_text.register(pd.Timestamp)
 def _nice_datetime(value, style=None):
     """Get a nice datetime value, in the blocks which say something."""
-    if pd.isnull(value):
+    if pd.isnull(value) or (stated := _instant_string(value)) is None:
         return get_nice_text(Text(str(value)), style)
-    stated = _instant_string(value)
     return get_nice_text(_instant_text(stated, *_instant_blocks(stated)), style)
 
 
@@ -991,7 +1003,10 @@ def range_texts(low, high) -> tuple[Text, Text]:
         return drawn
     if pd.isnull(low) or pd.isnull(high):
         return drawn
-    stated = (_instant_string(low), _instant_string(high))
+    near_stated, far_stated = _instant_string(low), _instant_string(high)
+    if near_stated is None or far_stated is None:
+        return drawn
+    stated = (near_stated, far_stated)
     blocks = _instant_blocks(*stated)
     near, far = (_instant_text(x, *blocks) for x in stated)
     if not (shared := _shared_head(near.plain, far.plain)):
