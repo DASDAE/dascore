@@ -616,7 +616,7 @@ class TestCheckKind:
 
     def test_retired_check_behavior_raises(self, random_patch):
         """The behavior argument is validated up front."""
-        with pytest.raises(ParameterError, match="behavior must be one of"):
+        with pytest.raises(ParameterError, match="check_behavior must be one of"):
             check_kind(random_patch, random_patch, check_behavior=None)
 
 
@@ -1062,12 +1062,12 @@ class TestStackPatches:
         patch1, patch2 = random_spool[0], random_spool[1]
         patch2 = patch2.select(time=(1, 30), samples=True)
         spool = dc.spool([patch1, patch2])
-        with pytest.raises(ParameterError, match="behavior must be one of"):
+        with pytest.raises(ParameterError, match="check_behavior must be one of"):
             stack_patches(spool, dim_vary="time", check_behavior=None)
 
     def test_retired_check_behavior_raises_on_compatible_patches(self, random_patch):
         """Acceptance must not wait for data which happens to disagree."""
-        with pytest.raises(ParameterError, match="behavior must be one of"):
+        with pytest.raises(ParameterError, match="check_behavior must be one of"):
             check_dims(random_patch, random_patch, check_behavior=None)
 
     def test_different_dimensions(self, random_spool):

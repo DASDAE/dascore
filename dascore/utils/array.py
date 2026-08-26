@@ -307,6 +307,38 @@ def _is_offset_unit(quantity) -> bool:
     return np.isclose(two - one, one - zero) and not np.isclose(zero, 0)
 
 
+# Bounded rather than unbounded: a ufunc can be made at runtime
+# (np.frompyfunc) and the cache holds a reference to whatever it is given.
+@functools.lru_cache(maxsize=64)
+def _needs_equal_units(operator) -> bool:
+    """
+    Return True when an operator wants both of its operands in one unit.
+
+    Metres are the yardstick: the registry refuses a bare number beside
+    them, so what comes back is the operator's own requirement rather than
+    the unit's. An operator which wants dimensionless operands refuses
+    metres beside metres too, which is how the two are told apart. The
+    registry decides by dimensionality, so the operand order does not
+    change the answer.
+    """
+    meter, dimensionless = get_quantity("meter"), get_quantity("dimensionless")
+    assert meter is not None and dimensionless is not None
+
+    def _refuses(other):
+        # DimensionalityError is a TypeError, so these clauses may not be
+        # reordered. The second catches every other way the registry can
+        # decline (an unimplemented ufunc, a dtype, a gufunc's shapes).
+        try:
+            operator(2.0 * meter, other)
+        except DimensionalityError:
+            return True
+        except (TypeError, ValueError):
+            return False
+        return False
+
+    return _refuses(1.5 * dimensionless) and not _refuses(1.5 * meter)
+
+
 def _is_logarithmic_unit(quantity) -> bool:
     """
     Return True for a logarithmic unit (dB), whose base conversion is not linear.
@@ -439,12 +471,16 @@ def _apply_binary_ufunc(
         The side without units conflicts with nothing: it is taken as
         dimensionless first (right for products and quotients) and, if the
         operator rejects that, as sharing the other side's units (right for
-        sums, differences, and comparisons). The units of one unit of output
-        are settled on scalars — the probe's result over the bare result —
-        so the data stay bare, a scale in the units ("100 cm") rides along
-        unchanged, and nothing large is ever wrapped by the unit registry.
-        A ufunc the registry does not implement falls through to numpy with
-        the units left as they were.
+        sums, differences, and comparisons). A unit whose base is itself
+        dimensionless (µϵ) is one the registry coerces the bare side into
+        rather than rejecting, so there the operator is asked outright and
+        the bare side adopts the units wherever it wants one unit on both
+        sides. The units of one unit of output are settled on scalars —
+        the probe's result over the bare result — so the data stay bare, a
+        scale in the units ("100 cm") rides along unchanged, and nothing
+        large is ever wrapped by the unit registry. A ufunc the registry
+        does not implement falls through to numpy with the units left as
+        they were.
         """
         known = data_units if data_units is not None else other_units
         if _is_offset_unit(known):
@@ -488,6 +524,10 @@ def _apply_binary_ufunc(
         assert dimensionless is not None
         patch_q = data_units if data_units is not None else dimensionless
         other_q = other_units if other_units is not None else dimensionless
+        # µϵ is dimensionless, so the registry would coerce the bare side
+        # into it (1.5 becomes 1.5e6 µϵ) instead of asking it to adopt.
+        if known.dimensionless and _needs_equal_units(operator):
+            patch_q = other_q = known
 
         def _probe(value, probe_other):
             pair = (value * patch_q, probe_other * other_q)

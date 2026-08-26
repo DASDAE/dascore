@@ -89,7 +89,9 @@ ONE_SECOND_IN_NS = np.timedelta64(ONE_BILLION, "ns")
 # Valid strings for "datatype" attribute
 DataType = Literal[
     "",  # unspecified
+    "displacement",
     "velocity",
+    "acceleration",
     "strain_rate",
     "phase",
     "phase_difference",
@@ -185,6 +187,11 @@ progress
 # Options for handling specific warnings. One spelling of "do nothing":
 # "ignore", which every policy argument in the library also spells.
 WARN_LEVELS = Literal["warn", "raise", "ignore"]
+
+# What `enrich` does about a name the inventory leaves undefined: the warn
+# levels, spelled by reference so the two sets cannot drift apart, plus the
+# fourth answer only this question has -- fill the missing marker.
+ON_MISSING = Literal[WARN_LEVELS, "null"]
 
 # The actions warnings.simplefilter and warnings.filterwarnings accept.
 # Spelled out because the standard library's alias for them is stub-only.

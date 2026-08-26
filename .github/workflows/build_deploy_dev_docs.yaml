@@ -66,4 +66,7 @@ jobs:
           QUARTO_PRINT_STACK: true
           NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
         run: |
-            quarto publish docs --no-prompt --no-browser
+            python scripts/_doc_report.py time quarto_publish -- \
+              quarto publish docs --no-prompt --no-browser
+
+      - uses: ./.github/actions/report_doc_build

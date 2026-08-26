@@ -2,7 +2,13 @@
 
 from __future__ import annotations
 
-from _index_api import _get_base_address, _is_environment_path, parse_project
+import pytest
+from _index_api import (
+    _get_base_address,
+    _is_environment_path,
+    assert_documenting_this_checkout,
+    parse_project,
+)
 
 import dascore as dc
 
@@ -49,3 +55,16 @@ class TestAliases:
         """A name matching its object's own name is not treated as an alias."""
         data = parse_project(dc)
         assert data[str(id(dc.Patch))]["name"] == "Patch"
+
+
+class TestAssertDocumentingThisCheckout:
+    """Tests for catching a build which imported another checkout."""
+
+    def test_this_checkout_passes(self):
+        """The dascore in this checkout is the one the docs describe."""
+        assert_documenting_this_checkout(dc)
+
+    def test_other_checkout_raises(self, tmp_path):
+        """A dascore installed elsewhere is named in the error."""
+        with pytest.raises(RuntimeError, match="PYTHONPATH"):
+            assert_documenting_this_checkout(dc, tmp_path)
