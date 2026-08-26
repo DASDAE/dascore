@@ -731,6 +731,114 @@ class TestConcatenate:
         assert len(out) == 1
         assert out[0].get_coord("time").max() == patch_2.get_coord("time").max()
 
+    def test_aggregated_patches_keep_their_dim_kind(self, random_spool):
+        """
+        Joining patches which state no values leaves the kind behind.
+
+        An aggregation with the default dim_reduce leaves a coordinate
+        holding no values but still knowing its dtype. Concatenating such
+        patches must not turn missing datetimes into untyped NaN.
+        """
+        means = [patch.mean("time") for patch in random_spool]
+        assert all(x.get_coord("time").dtype.kind == "M" for x in means)
+
+        out = concatenate_patches(means, time=None)[0]
+        coord = out.get_coord("time")
+        assert coord.dtype.kind == "M", "the axis is still made of times"
+        assert coord.values.dtype.kind == "M"
+
+    @pytest.mark.parametrize(("other", "expected"), [("datetime", "M"), ("float", "f")])
+    def test_blank_member_takes_the_stated_kind(self, random_patch, other, expected):
+        """A patch stating no times joins one that does, as its own null."""
+        size = len(random_patch.get_array("time"))
+        blank = random_patch.update_coords(
+            time=np.full(size, "NaT", dtype="datetime64[ns]")
+        )
+        values = (
+            random_patch.get_array("time")
+            if other == "datetime"
+            else np.arange(size, dtype=float)
+        )
+        stated = random_patch.update_coords(time=values)
+        out = concatenate_patches([blank, stated], time=None)[0]
+        assert out.get_coord("time").values.dtype.kind == expected
+
+    def test_blank_member_against_a_kind_with_no_null_raises(self, random_patch):
+        """Whole numbers have no missing value, so the join is refused."""
+        size = len(random_patch.get_array("time"))
+        blank = random_patch.update_coords(
+            time=np.full(size, "NaT", dtype="datetime64[ns]")
+        )
+        stated = random_patch.update_coords(time=np.arange(size))
+        with pytest.raises(CoordMergeError, match="states no values there"):
+            concatenate_patches([blank, stated], time=None)
+
+    def test_every_member_blank_with_clashing_kinds(self, random_patch):
+        """
+        Members which all state nothing fall back to the floating null.
+
+        No kind is the right one when a blank datetime axis meets a blank
+        floating axis, and no values are lost by degrading to NaN; handing
+        numpy the two arrays as they stand only raises.
+        """
+        size = len(random_patch.get_array("time"))
+        nat = random_patch.update_coords(
+            time=np.full(size, "NaT", dtype="datetime64[ns]")
+        )
+        nan = random_patch.update_coords(time=np.full(size, np.nan))
+        out = concatenate_patches([nat, nan], time=None)[0]
+        values = out.get_coord("time").values
+        assert values.dtype.kind == "f"
+        assert len(values) == 2 * size
+        assert np.all(pd.isnull(values))
+
+    def test_empty_dim_joins_a_stated_one(self, random_patch):
+        """
+        A dimension with no entries states nothing and refuses nothing.
+
+        Every value of an empty array is null, but there are none to write
+        a null into, so the kinds which have no null must still join.
+        """
+        size = len(random_patch.get_array("distance"))
+        labeled = random_patch.update_coords(
+            distance=np.array([f"d{i}" for i in range(size)])
+        )
+        empty = labeled.select(distance=(0, 0), samples=True)
+        assert len(empty.get_array("distance")) == 0
+
+        out = concatenate_patches([empty, labeled], distance=None)[0]
+        assert out.get_coord("distance").dtype.kind == "U"
+        assert np.all(out.get_array("distance") == labeled.get_array("distance"))
+
+    @pytest.mark.parametrize(("other", "expected"), [("datetime", "M"), ("float", "f")])
+    def test_blank_rider_takes_the_stated_kind(self, random_patch, other, expected):
+        """A coordinate riding the dimension is joined as the dimension is."""
+        size = len(random_patch.get_array("time"))
+        blank = random_patch.update_coords(
+            rider=("time", np.full(size, "NaT", dtype="datetime64[ns]"))
+        )
+        values = (
+            random_patch.get_array("time")
+            if other == "datetime"
+            else np.arange(size, dtype=float)
+        )
+        stated = random_patch.update_coords(rider=("time", values))
+        out = concatenate_patches([blank, stated], time=None)[0]
+        joined = out.get_array("rider")
+        assert joined.dtype.kind == expected
+        assert np.all(pd.isnull(joined[:size]))
+        assert np.all(joined[size:] == values)
+
+    def test_blank_rider_against_a_kind_with_no_null_raises(self, random_patch):
+        """A rider is refused for the same reason its dimension would be."""
+        size = len(random_patch.get_array("time"))
+        blank = random_patch.update_coords(
+            rider=("time", np.full(size, "NaT", dtype="datetime64[ns]"))
+        )
+        stated = random_patch.update_coords(rider=("time", np.arange(size)))
+        with pytest.raises(CoordMergeError, match="states no values there"):
+            concatenate_patches([blank, stated], time=None)
+
     def test_different_dims_raises(self, random_patch):
         """Patches can't be concated when they have different dims."""
         p1 = random_patch

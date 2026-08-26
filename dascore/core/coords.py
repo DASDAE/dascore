@@ -1419,6 +1419,10 @@ class CoordPartial(BaseCoord):
     def values(self):
         """Return the internal data. Same as values attribute."""
         null_val = np.asarray(_get_nullish(self.dtype))
+        # NaN is a plain python float, so a narrower floating dtype has to
+        # be asked for by name or the values contradict the recorded dtype.
+        if self.dtype is not None and np.dtype(self.dtype).kind == "f":
+            null_val = null_val.astype(self.dtype)
         data = np.broadcast_to(null_val, self.shape)
         return data
 
@@ -3234,6 +3238,14 @@ def get_coord(
         elif monotonic:
             return CoordMonotonicArray(values=data, units=units)
         elif np.all(pd.isnull(data)):
+            # The values say nothing, but their type still does: an array of
+            # NaT came from datetimes and should stay datetimes, as the
+            # empty case above also keeps. Only a kind whose null the
+            # values can actually hold is recorded; an object array of
+            # Nones has no null but NaN, so claiming "object" would state
+            # a dtype which `values` then contradicts.
+            if dtype is None and data.dtype.kind in "fmM":
+                dtype = data.dtype
             return CoordPartial(
                 shape=data.shape,
                 units=units,

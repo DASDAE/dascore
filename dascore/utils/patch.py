@@ -1829,7 +1829,9 @@ def _concatenate_group(
                 )
                 raise CoordMergeError(msg) from err
             rider_axis = cdims.index(dim)
-            joined = np.concatenate([x.values for x in members], axis=rider_axis)
+            # a rider joins the same way its dimension does: a member which
+            # states nothing takes the kind of the members which do
+            joined = np.concatenate(_joinable(members, dim), axis=rider_axis)
             riders[name] = (cdims, dc.core.coords.get_coord(data=joined, units=units))
         if riders:
             coords = coords.update(**riders)
@@ -1843,20 +1845,38 @@ def _joinable(coords, dim: str) -> list[np.ndarray]:
     """
     The coordinates' values, the value-less ones taking the others' kind.
 
-    A member with no values along the dimension holds placeholders whose
-    dtype says nothing (floating NaN); numpy cannot join those with, say,
-    datetimes, so they are recast as the stated members' own nulls. Where
-    the stated kind has no null to write — whole numbers, booleans, text —
-    the join is refused rather than inventing zeros or empty labels.
+    A member with no values along the dimension holds nothing but
+    placeholders. Its own dtype cannot be trusted to join with the others'
+    — floating NaN will not concatenate with datetimes, and neither will
+    NaT with floats — so a blank member is rewritten as the stated
+    members' own null. Where the stated kind has no null to write — whole
+    numbers, booleans, text — the join is refused rather than inventing
+    zeros or empty labels.
+
+    Blankness is a question about values, not about type: a coordinate
+    which states no values is blank whether it remembers being made of
+    times or has forgotten. A member with no entries at all is blank too,
+    but nothing is written into it, so it never forces a refusal.
     """
     arrays = [x.values for x in coords]
-    blank = [x.dtype.kind == "f" and bool(np.all(pd.isnull(x))) for x in arrays]
-    if all(blank) or not any(blank):
+    blank = [bool(np.all(pd.isnull(x))) for x in arrays]
+    if not any(blank):
         return arrays
-    target = np.result_type(*[x.dtype for x, b in zip(arrays, blank) if not b])
-    if target.kind == "f":
-        return arrays
-    if target.kind not in "mM":
+    # Only the members which state something choose the kind. When none
+    # do, the blanks choose among themselves, the empty ones last.
+    stated = [x.dtype for x, b in zip(arrays, blank) if not b]
+    if stated:
+        target = np.result_type(*stated)
+    else:
+        voters = [x.dtype for x in arrays if x.size] or [x.dtype for x in arrays]
+        try:
+            target = np.result_type(*voters)
+        except TypeError:
+            # NaT beside NaN and nothing stated either way: no kind is the
+            # right one, and no values are lost by falling back to floats.
+            target = np.dtype("float64")
+    written = any(b and x.size for x, b in zip(arrays, blank))
+    if written and target.kind not in "fmM":
         msg = (
             f"Cannot concatenate along {dim!r}: a patch states no values "
             f"there, and a {target} coordinate has no missing value to "
