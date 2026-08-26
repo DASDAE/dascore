@@ -108,6 +108,7 @@ def _get_context() -> dict:
         "dascore_path": str(Path(dc.__file__).absolute().parent),
         "platform": sys.platform,
         "runner": os.environ.get("RUNNER_NAME", ""),
+        "compact_sidebar": os.environ.get("DASCORE_DOC_COMPACT_SIDEBAR", ""),
         "run_id": os.environ.get("GITHUB_RUN_ID", ""),
         "workflow": os.environ.get("GITHUB_WORKFLOW", ""),
     }
