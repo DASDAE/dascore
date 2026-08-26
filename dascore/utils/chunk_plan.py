@@ -291,6 +291,14 @@ def _is_absolute_tolerance(tolerance) -> bool:
 def _check_tolerance_value(value, name, shown=None):
     """Reject a tolerance no gap could be measured against."""
     shown = value if shown is None else shown
+    # One tolerance, not one per patch: a one-element array passes every
+    # test below and then broadcasts through the gap comparison.
+    if np.asarray(value).ndim:
+        msg = (
+            f"The tolerance for {name!r} must be a single value, got an "
+            f"array of {np.asarray(value).size}."
+        )
+        raise ParameterError(msg)
     try:
         finite = not pd.isnull(value) and np.isfinite(value)
     except TypeError:

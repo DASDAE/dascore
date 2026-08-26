@@ -133,7 +133,7 @@ A size measures the data array alone; coordinates, attrs, and copies made by lat
 
 ## Merged coordinates
 
-Assembly builds the chunked dimension's coordinate by exact concatenation of the member coordinates: contiguous members fuse to a plain evenly sampled range, and every real seam is recorded. When `snap_coords=True` (default) the result is then simplified with **bounded error** — no coordinate value moves more than `tolerance * step`. A within-tolerance gap therefore comes back as an evenly sampled range whose worst label error is about half the gap (never more than the tolerance); this is the honest replacement for the old unconditional snap, whose error was unbounded. With `snap_coords=False`, or when accumulated gaps exceed the bound, the coordinate stays segmented — exactly non-uniform, with every gap queryable.
+Assembly builds the chunked dimension's coordinate by exact concatenation of the member coordinates: contiguous members fuse to a plain evenly sampled range, and every real seam is recorded. When `snap_coords=True` (default) the result is then simplified with **bounded error** — no coordinate value moves more than `tolerance * step`, or more than the tolerance itself when it states a distance. A within-tolerance gap therefore comes back as an evenly sampled range whose worst label error is about half the gap (never more than the tolerance); this is the honest replacement for the old unconditional snap, whose error was unbounded. With `snap_coords=False`, or when accumulated gaps exceed the bound, the coordinate stays segmented — exactly non-uniform, with every gap queryable.
 
 ```{python}
 from dascore.core.coords import CoordRange, CoordSegmented

@@ -20,7 +20,7 @@ import dascore.utils.patch_assembly as assembly_module
 from dascore.core.coords import CoordSegmented
 from dascore.exceptions import ChunkError, CoordMergeError, ParameterError, UnitError
 from dascore.units import get_quantity
-from dascore.utils.misc import get_middle_value
+from dascore.utils.misc import get_middle_value, suppress_warnings
 from dascore.utils.patch import _get_merged_coord
 from dascore.utils.patch_assembly import PatchAssembler, _match_merge_units
 from dascore.utils.time import to_timedelta64
@@ -1230,8 +1230,7 @@ class TestQuantityTolerance:
         """The same limit stated either way partitions identically."""
         step = dc.to_float(random_patch.get_coord("time").step)
         spool = self._gapped(random_patch, 5)
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
+        with suppress_warnings(UserWarning):
             quantity = spool.chunk(time=None, tolerance=get_quantity(f"{6 * step} s"))
             samples = spool.chunk(time=None, tolerance=6)
         assert len(quantity) == len(samples) == 1
@@ -1253,8 +1252,7 @@ class TestQuantityTolerance:
         )
         spool = dc.spool([patch, shifted])
         hole = float(step) * 4  # the distance from one patch's end to the next
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
+        with suppress_warnings(UserWarning):
             wide = 2 * hole
             feet = spool.chunk(distance=None, tolerance=wide / 0.3048 * dc.units.ft)
             metres = spool.chunk(distance=None, tolerance=wide * dc.units.m)
@@ -1264,8 +1262,7 @@ class TestQuantityTolerance:
     def test_dimensionless_is_a_sample_count(self, random_patch):
         """A dimensionless quantity means what the bare number means."""
         spool = self._gapped(random_patch, 5)
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
+        with suppress_warnings(UserWarning):
             quantity = spool.chunk(time=None, tolerance=get_quantity("6 dimensionless"))
             number = spool.chunk(time=None, tolerance=6)
         assert len(quantity) == len(number) == 1
@@ -1325,8 +1322,7 @@ class TestQuantityTolerance:
         """A timedelta says the same thing as a time quantity."""
         step = random_patch.get_coord("time").step
         spool = self._gapped(random_patch, 5)
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
+        with suppress_warnings(UserWarning):
             delta = spool.chunk(time=None, tolerance=6 * step)
             quantity = spool.chunk(
                 time=None, tolerance=get_quantity(f"{6 * dc.to_float(step)} s")
@@ -1431,6 +1427,12 @@ class TestQuantityTolerance:
         assert len(default) == len(absolute) == 2
         # the same count, but not the same split
         assert default[0].get_coord("time").max() != absolute[0].get_coord("time").max()
+
+    def test_array_tolerance_raises(self, random_spool):
+        """One tolerance, not one per patch, even wrapped in an array."""
+        for tolerance in (np.array([2]), np.array([1.0, 2.0])):
+            with pytest.raises(ParameterError, match="single value"):
+                random_spool.chunk(time=None, tolerance=tolerance)
 
     def test_string_tolerance_says_what_to_do(self, random_spool):
         """A unit-bearing string names the call which makes it a quantity."""

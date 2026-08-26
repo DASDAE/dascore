@@ -1789,8 +1789,9 @@ class Spool(NodeRepr, NamespaceOwner):
         boundary is measured against the furthest point reached so far,
         not the previous row.
 
-        Patches whose step is unknown report no gaps, since the tolerance
-        has no sample to scale.
+        Patches whose step is unknown report no gaps against a sample
+        count, which has no sample to scale. An absolute tolerance needs
+        none, so it reports their gaps like any others.
 
         See Also
         --------
@@ -1869,9 +1870,10 @@ class Spool(NodeRepr, NamespaceOwner):
         Coverage is measured between patches, from the envelopes the
         index records; a hole *inside* a patch is not visible here. Nor
         is one in a group whose step is unknown, which reports no gaps
-        and so counts as fully covered. Both are what `chunk` would
-        make of the data, so a `coverage` of 1.0 says "nothing chunk
-        would refuse to merge", not "nothing missing".
+        against a sample count and so counts as fully covered — an
+        absolute tolerance measures those groups too. Both are what
+        `chunk` would make of the data, so a `coverage` of 1.0 says
+        "nothing chunk would refuse to merge", not "nothing missing".
 
         See Also
         --------
