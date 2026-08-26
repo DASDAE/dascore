@@ -124,3 +124,6 @@ docs/lite_contents/
 docs/tutorial/lite_tmp_*
 # `jupyter lite build` keeps its incremental-build state here.
 .jupyterlite.doit.db
+
+# Written by scripts/_doc_report.py; a build artifact, not a page.
+doc_build_report.json

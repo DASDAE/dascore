@@ -1,0 +1,34 @@
+name: "Report DASCore Doc Build"
+description: >
+  Measures the rendered documentation and writes the build report to the job
+  summary. Runs after whichever step produced docs/_site, so the render and
+  the publish paths report the same numbers. The report is a build artifact,
+  not a page of the site: nothing under docs/ is written.
+
+inputs:
+  archive:
+    description: "Also measure the site compressed the way an upload is."
+    required: false
+    default: "false"
+
+runs:
+  using: "composite"
+  steps:
+    - name: measure rendered site
+      shell: bash
+      env:
+        ARCHIVE_FLAG: ${{ inputs.archive == 'true' && '--archive' || '' }}
+      run: |
+        python scripts/_doc_report.py site $ARCHIVE_FLAG
+
+    - name: write build report
+      shell: bash
+      run: |
+        python scripts/_doc_report.py summary
+
+    - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+      with:
+        name: doc_build_report
+        path: doc_build_report.json
+        retention-days: 14
+        if-no-files-found: error

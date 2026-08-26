@@ -5,7 +5,11 @@ from __future__ import annotations
 import sys
 from contextlib import suppress
 
-from _index_api import get_alias_mapping, parse_project
+from _index_api import (
+    assert_documenting_this_checkout,
+    get_alias_mapping,
+    parse_project,
+)
 from _qmd_builder import create_quarto_qmd
 from _render_api import render_project
 from _validate_links import validate_all_links
@@ -18,6 +22,7 @@ with suppress(AttributeError):
 
 if __name__ == "__main__":
     print("Building documentation")  # noqa
+    assert_documenting_this_checkout(dc)
     print(f"Parsing project {dc.__name__}")  # noqa
     data_dict = parse_project(dc)
     obj_dict = get_alias_mapping(dc)

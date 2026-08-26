@@ -14,6 +14,9 @@ API_PATH = Path(__file__).absolute().parent.parent / "docs" / "api"
 # separation for each level of toc tree
 LEVEL_SEP = "    "
 
+# What an environment variable which means yes can say.
+_TRUE = frozenset({"1", "true", "yes", "on"})
+
 
 def _build_content_string(path, api_path):
     """Build a content string."""
@@ -40,8 +43,31 @@ def _get_level(path, base_path):
     return level
 
 
+def _use_compact_sidebar() -> bool:
+    """Return True if the build asked for a section level API sidebar."""
+    return os.environ.get("DASCORE_DOC_COMPACT_SIDEBAR", "").lower() in _TRUE
+
+
+def build_compact_toc_tree(api_path=API_PATH):
+    """
+    Build a toc tree with one entry per top level section.
+
+    The exhaustive tree names every documented object, which is most of the
+    generated config and, repeated into every page, most of the published
+    html. This is what the sidebar costs when it names sections instead;
+    it is measured before it is proposed, so it is off unless asked for.
+    """
+    base_path = api_path.parent
+    out = []
+    for path in sorted((api_path / "dascore").glob("*.qmd")):
+        out.extend(_build_content_string(path, base_path))
+    return out
+
+
 def build_amp_toc_tree(api_path=API_PATH):
     """Build the toc tree for the API."""
+    if _use_compact_sidebar():
+        return build_compact_toc_tree(api_path)
     # get all sub directories
     base_path = api_path.parent
     sub_dirs = sorted(x for x in api_path.rglob("*") if x.is_dir())
