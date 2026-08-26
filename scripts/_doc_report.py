@@ -53,9 +53,11 @@ _SIDEBAR_MARKER = "    - id: API\n"
 _NEXT_TOP_KEY = re.compile(r"\n(?=\S)")
 
 # Quarto names a page when it starts rendering it, in a line like
-# "[42/1395] api/dascore/core/patch/Patch.qmd", wrapped in color codes.
+# "[  42/1395] api/dascore/core/patch/Patch.qmd", wrapped in color codes.
+# The counter is padded to the width of the total, so the space after the
+# bracket is not optional for all but the last decade of a large project.
 _ANSI = re.compile(r"\x1b\[[0-9;]*m")
-_PROGRESS = re.compile(r"^\[\d+/\d+\]\s+(?P<path>.+?)\s*$")
+_PROGRESS = re.compile(r"^\[\s*\d+\s*/\s*\d+\]\s+(?P<path>.+?)\s*$")
 
 _CODE_BLOCK = re.compile(r"^```\{python\}$(?P<code>.*?)^```$", re.M | re.S)
 

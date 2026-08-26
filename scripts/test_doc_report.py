@@ -75,7 +75,7 @@ class TestTimeCommand:
         script = (
             "import sys, time\n"
             "for num, name in enumerate(['a.qmd', 'b.qmd', 'c.qmd'], start=1):\n"
-            "    sys.stdout.write(f'\\x1b[1m\\r[{num}/3] {name}\\x1b[0m\\n')\n"
+            "    sys.stdout.write(f'\\x1b[1m\\r[{num:>4}/1395] {name}\\x1b[0m\\n')\n"
             "    sys.stdout.flush()\n"
             "    time.sleep(0.05)\n"
         )
@@ -90,7 +90,7 @@ class TestTimeCommand:
             pytest.approx(timing["wall"], abs=0.01)
         )
         # The command's own output still reaches the build log.
-        assert "[1/3] a.qmd" in capsys.readouterr().out
+        assert "a.qmd" in capsys.readouterr().out
 
 
 class TestClassifyPage:
@@ -389,3 +389,21 @@ class TestUnattributedPage:
 
         assert "timed phases" in summary
         assert "end to end" not in summary
+
+
+class TestProgressLine:
+    """Tests for reading quarto's progress lines."""
+
+    def test_padded_counter(self):
+        """Quarto pads the counter to the width of the total."""
+        line = "[ 980/1395] api/dascore/utils/display/Table.qmd"
+
+        assert _doc_report._PROGRESS.match(line)["path"].endswith("Table.qmd")
+
+    def test_unpadded_counter(self):
+        """A small project's counter needs no padding."""
+        assert _doc_report._PROGRESS.match("[1/3] a.qmd")["path"] == "a.qmd"
+
+    def test_not_a_progress_line(self):
+        """Other output quarto writes is not mistaken for a page."""
+        assert _doc_report._PROGRESS.match("Output created: _site/index.html") is None
