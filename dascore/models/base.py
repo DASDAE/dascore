@@ -17,6 +17,7 @@ from pydantic import (
     model_serializer,
     model_validator,
 )
+from rich.text import Text
 
 from dascore.compat import is_array_like
 from dascore.exceptions import InvalidInventoryError
@@ -28,6 +29,13 @@ from dascore.models.registry import (
     register_model,
 )
 from dascore.models.types import DateTime64, FrozenDictType
+from dascore.utils.display import (
+    RichRepr,
+    Section,
+    child_sections,
+    model_to_line,
+    render_text,
+)
 from dascore.utils.misc import _all_null, all_close
 from dascore.utils.time import to_datetime64
 
@@ -197,7 +205,7 @@ class DascoreBaseModel(BaseModel):
     __hash__ = sensible_model_hash
 
 
-class InventoryModel(DascoreBaseModel):
+class InventoryModel(RichRepr, DascoreBaseModel):
     """
     Base class for immutable DASDAE inventory objects.
 
@@ -237,19 +245,52 @@ class InventoryModel(DascoreBaseModel):
         out.update(kwargs)
         return self.__class__(**out)
 
+    def _repr_line(self) -> Text:
+        """
+        The one line which names this object and what it states.
+
+        What a container puts on the line it gives this object, and the
+        whole of the repr for one which holds nothing.
+        """
+        return model_to_line(self)
+
+    def _repr_children(self) -> tuple[InventoryModel, ...]:
+        """
+        The objects this one holds, each of which prints itself.
+
+        Empty by default: a model whose children are worth a count in its
+        own line rather than a line each says nothing here, which is why
+        a station shows ``channels: 3`` and not three channels.
+        """
+        return ()
+
+    def _repr_section(self, depth: int = 0) -> Section:
+        """
+        The block a repr draws this object in.
+
+        ``depth`` is how far into a containment tree it sits, which a
+        terminal shows by indenting and a panel shows by nesting.
+        """
+        children = child_sections(self._repr_children(), depth + 1)
+        return Section(self._repr_line(), children, depth)
+
+    def __rich__(self) -> Text:
+        """The line naming this object, then whatever it holds."""
+        return render_text(self._repr_section())
+
 
 class TimeRangedModel(InventoryModel):
     """Base class for inventory objects with time-validity epochs.
 
-    Validity intervals are half-open, ``[start_time, end_time)``; an unset
+    Validity intervals are half-open, ``[time_min, time_max)``; an unset
     (NaT) end time means the epoch is ongoing. All times are UTC.
     """
 
-    start_time: DateTime64 = Field(
+    time_min: DateTime64 = Field(
         default=np.datetime64("NaT", "ns"),
         description="Start time for which this metadata item is valid (UTC).",
     )
-    end_time: DateTime64 = Field(
+    time_max: DateTime64 = Field(
         default=np.datetime64("NaT", "ns"),
         description=(
             "End time for which this metadata item is valid (UTC); NaT while ongoing."
@@ -259,9 +300,9 @@ class TimeRangedModel(InventoryModel):
     @model_validator(mode="after")
     def _check_time_order(self):
         """A set end time must follow the start time."""
-        start, end = self.start_time, self.end_time
+        start, end = self.time_min, self.time_max
         if not pd.isnull(start) and not pd.isnull(end) and end <= start:
-            msg = f"end_time {end} must be after start_time {start}."
+            msg = f"time_max {end} must be after time_min {start}."
             raise InvalidInventoryError(msg)
         return self
 
@@ -270,8 +311,8 @@ class TimeRangedModel(InventoryModel):
         time = to_datetime64(time)
         if pd.isnull(time):
             return True
-        start = self.start_time
-        end = self.end_time
+        start = self.time_min
+        end = self.time_max
         after_start = pd.isnull(start) or start <= time
         before_end = pd.isnull(end) or time < end
         return bool(after_start and before_end)
@@ -283,10 +324,10 @@ class TimeRangedModel(InventoryModel):
         Unset (NaT) starts are unbounded past; unset ends are ongoing.
         """
         s1, e1, s2, e2 = (
-            self.start_time,
-            self.end_time,
-            other.start_time,
-            other.end_time,
+            self.time_min,
+            self.time_max,
+            other.time_min,
+            other.time_max,
         )
         first_starts_before = pd.isnull(e2) or pd.isnull(s1) or s1 < e2
         second_starts_before = pd.isnull(e1) or pd.isnull(s2) or s2 < e1

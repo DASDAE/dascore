@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import random
 import warnings
+from itertools import pairwise
 
 import numpy as np
 import pandas as pd
@@ -507,71 +508,80 @@ class TestChunkMerge:
         assert time_max <= time_tup[1]
         assert (time_max + time_step) > time_tup[1]
 
-    def test_missing_attr_merges_and_carries(self):
-        """A member lacking an attr merges; the output carries the known value."""
+    def test_missing_attr_is_a_conflict(self):
+        """A member lacking an attr conflicts with one which states it."""
         p1 = dc.get_example_patch().update_attrs(data_type="velocity")
         time = p1.get_coord("time")
         p2 = dc.get_example_patch(time_min=time.max() + time.step)
         assert p2.attrs.data_type == ""
-        out = dc.spool([p1, p2]).chunk(time=None)
+        with pytest.raises(CoordMergeError, match="data_type"):
+            dc.spool([p1, p2]).chunk(time=None)
+        out = dc.spool([p1, p2]).chunk(time=None, conflict="drop")
         assert len(out) == 1
-        assert out.get_contents()["data_type"].iloc[0] == "velocity"
-        assert out[0].attrs.data_type == "velocity"
+        assert out[0].attrs.data_type == ""
 
     def test_surviving_member_takes_the_rows_attrs(self):
         """Whichever duplicate survives overlap removal, patch and row agree."""
         p1 = dc.get_example_patch().update_attrs(foo="a", data_type="velocity")
         p2 = dc.get_example_patch()  # same span, knows neither
-        for patches in ([p1, p2], [p2, p1]):
-            out = dc.spool(patches).chunk(time=None)
-            assert len(out) == 1
-            row = out.get_contents().iloc[0]
-            assert row["foo"] == "a" and row["data_type"] == "velocity"
-            assert out[0].attrs.foo == "a"
-            assert out[0].attrs.data_type == "velocity"
+        with pytest.raises(CoordMergeError, match=r"\bfoo\b|\bdata_type\b"):
+            dc.spool([p1, p2]).chunk(time=None)
+        # keep_first takes the first member's values, stated or not, and
+        # the assembled patch says exactly what its row does.
+        out = dc.spool([p1, p2]).chunk(time=None, conflict="keep_first")
+        assert len(out) == 1
+        assert out.get_contents().iloc[0]["foo"] == "a"
+        assert out[0].attrs.foo == "a"
+        # the other order keeps the first member's silence
+        out = dc.spool([p2, p1]).chunk(time=None, conflict="keep_first")
+        assert len(out) == 1
+        assert pd.isnull(out.get_contents().iloc[0].get("foo"))
+        assert out[0].attrs.get("foo") is None
 
-    def test_attr_held_in_two_kinds_takes_the_numeric_units(self):
-        """An attr stored as text in one patch and a quantity in another."""
-        p1 = dc.get_example_patch().update_attrs(foo=2 * dc.get_quantity("m"))
-        p2 = dc.get_example_patch(time_min=p1.get_coord("time").max()).update_attrs(
-            foo="text"
-        )
-        spool = dc.spool([p1, p2])
-        assert spool._catalog.backend.attr_units_map()["foo"] == "m"
-        assert "foo" not in spool._catalog.backend.attr_units_map(kind="bool")
-        # the quantity member dropped by overlap removal still stamps metres
-        dup = dc.get_example_patch()
-        out = dc.spool([dup, p1]).chunk(time=None)
-        assert out[0].attrs.foo == 2 * dc.get_quantity("m")
+    def test_attrs_named_like_coordinates_are_policed_as_attrs(self):
+        """Attrs which look like coordinate metadata are policed by `conflict`.
 
-    def test_attr_named_like_another_patches_coordinate(self):
-        """An attr is not suppressed because some other patch has such a coordinate."""
-        p1 = dc.get_example_patch().update_attrs(latitude="north")
-        p2 = dc.get_example_patch()
+        A column a coordinate owns is refused whatever `conflict` says,
+        so keeping the first value is what proves these are read as
+        ordinary attrs rather than as the envelope of some coordinate.
+        """
+        # values differ, so only the conflict policy can decide them
+        first = {
+            "latitude": "north",  # a coordinate another patch has
+            "foo_min": "a",  # an envelope pair with no foo coordinate
+            "foo_max": "b",
+            "time_zone": "UTC",  # a name prefixed by a real dimension
+            "gauge": 10 * dc.get_quantity("m"),  # a quantity
+            "shots": 7,  # a plain number
+        }
+        second = {
+            "latitude": "south",
+            "foo_min": "c",
+            "foo_max": "d",
+            "time_zone": "MST",
+            "gauge": 20 * dc.get_quantity("m"),
+            "shots": 9,
+        }
+        p1 = dc.get_example_patch().update_attrs(**first)
         time = p1.get_coord("time")
+        p2 = dc.get_example_patch(time_min=time.max() + time.step)
+        p2 = p2.update_attrs(**second)
         n = p1.shape[p1.get_axis("distance")]
+        # a patch which holds latitude as a coordinate rather than an attr
         elsewhere = dc.get_example_patch(
             time_min=time.max() + 10 * time.step, tag="other"
         ).update_coords(latitude=("distance", np.arange(n, dtype=float)))
-        out = dc.spool([p2, p1, elsewhere]).chunk(time=None)
-        first = out.select(tag="random")[0]
-        assert first.attrs.latitude == "north"
-
-    def test_attr_pair_named_like_an_envelope_is_stamped(self):
-        """foo_min and foo_max attrs, with no foo coordinate, are attrs."""
-        p1 = dc.get_example_patch().update_attrs(foo_min="a", foo_max="b")
-        p2 = dc.get_example_patch()
-        out = dc.spool([p2, p1]).chunk(time=None)
-        assert out[0].attrs.foo_min == "a"
-        assert out[0].attrs.foo_max == "b"
-
-    def test_attr_named_like_a_coordinate_is_stamped(self):
-        """An attr such as time_zone is not coordinate metadata."""
-        p1 = dc.get_example_patch().update_attrs(time_zone="UTC")
-        p2 = dc.get_example_patch()
-        out = dc.spool([p2, p1]).chunk(time=None)
-        assert out.get_contents()["time_zone"].iloc[0] == "UTC"
-        assert out[0].attrs.time_zone == "UTC"
+        spool = dc.spool([p1, p2, elsewhere])
+        # they are attrs, so they conflict rather than being coordinate metadata
+        with pytest.raises(CoordMergeError, match=r"latitude|foo_min|time_zone"):
+            spool.chunk(time=None)
+        out = spool.chunk(time=None, conflict="keep_first")
+        merged = out.select(tag="random")[0]
+        row = out.get_contents().set_index("tag").loc["random"]
+        for name, value in first.items():
+            assert merged.attrs.get(name) == value
+            assert name in row or name == "gauge"
+        assert row["time_zone"] == "UTC" and row["latitude"] == "north"
 
     def test_dropped_coordinate_envelope_is_not_an_attr(self):
         """A coordinate only one member has leaves no stray attrs behind."""
@@ -584,17 +594,6 @@ class TestChunkMerge:
         patch = out[0]
         assert patch.attrs.get("latitude_min") is None
         assert patch.attrs.get("latitude_max") is None
-
-    def test_numeric_attrs_are_stamped_with_their_units(self):
-        """A number comes back a number; a quantity comes back with its units."""
-        p1 = dc.get_example_patch().update_attrs(
-            gauge=10 * dc.get_quantity("m"), shots=7
-        )
-        p2 = dc.get_example_patch()
-        for patches in ([p1, p2], [p2, p1]):
-            patch = dc.spool(patches).chunk(time=None)[0]
-            assert patch.attrs.gauge == 10 * dc.get_quantity("m")
-            assert patch.attrs.shots == 7
 
     def test_history_warns_not_raises(self):
         """Differing histories merge with a warning, carrying the first's."""
@@ -1467,3 +1466,78 @@ class TestSizeChunk:
         """A chunk length is one value, not an array of them."""
         with pytest.raises(ParameterError, match="single quantity"):
             random_spool.chunk(time=np.array([1.0, 2.0]) * dc.units.MB)
+
+
+class TestChunkEdgeBetweenPatches:
+    """
+    Chunk lengths that are not a whole number of samples (#1008, #893).
+
+    An output edge then lands between the last sample of one patch and
+    the first of the next; chunking must give the same result as chunking
+    the patches once merged.
+    """
+
+    @pytest.fixture(scope="class")
+    def contiguous_spool(self):
+        """Three exactly contiguous patches of five one-second samples."""
+        step = np.timedelta64(1, "s")
+        t0 = np.datetime64("2026-01-01T00:00:00", "ns")
+        patches = []
+        for _ in range(3):
+            time = t0 + np.arange(5) * step
+            coords = {"time": time, "distance": np.arange(3.0)}
+            data = np.random.default_rng(len(patches)).random((5, 3))
+            patches.append(
+                dc.Patch(data=data, coords=coords, dims=("time", "distance"))
+            )
+            t0 = time[-1] + step
+        return dc.spool(patches)
+
+    @pytest.mark.parametrize(
+        "kwargs",
+        [
+            dict(time=4.5),
+            dict(time=5.5),
+            dict(time=5.5, keep_partial=True),
+            dict(time=6, overlap=1.5),
+            dict(time=2.3, overlap=0.4),
+        ],
+    )
+    def test_matches_chunking_merged_patch(self, contiguous_spool, kwargs):
+        """Patch boundaries must not change what a chunk contains."""
+        merged = contiguous_spool.chunk(time=None)
+        assert len(merged) == 1
+        out, expected = contiguous_spool.chunk(**kwargs), merged.chunk(**kwargs)
+        assert len(out) == len(expected)
+        assert all(a.equals(b) for a, b in zip(out, expected))
+
+    @pytest.mark.parametrize("length", [25, 35, 50])
+    def test_nested_patches_chunk_as_the_outer_one(self, length):
+        """Patches inside a longer one must not add or remove samples."""
+
+        def _patch(first, samples):
+            step = np.timedelta64(1, "s")
+            t0 = np.datetime64("2026-01-01", "ns") + first * step
+            data = np.arange(samples * 2, dtype=float).reshape(samples, 2)
+            coords = {"time": t0 + np.arange(samples) * step, "distance": [0.0, 1.0]}
+            return dc.Patch(data=data, coords=coords, dims=("time", "distance"))
+
+        outer = _patch(0, 101)
+        nested = dc.spool([outer, _patch(10, 11), _patch(30, 11)])
+        out = nested.chunk(time=length, keep_partial=True)
+        expected = dc.spool([outer]).chunk(time=length, keep_partial=True)
+        assert len(out) == len(expected)
+        assert all(a.equals(b) for a, b in zip(out, expected))
+
+    def test_boundary_in_sub_tolerance_gap(self):
+        """A boundary inside a gap the tolerance merges over chunks cleanly."""
+        p1 = dc.get_example_patch(time_min="2020-01-01")
+        time = p1.get_coord("time")
+        p2 = dc.get_example_patch(time_min=time.max() + 1.4 * time.step)
+        span = (time.max() - time.min()) + 0.7 * time.step
+        length = span / np.timedelta64(1, "s") / 2
+        out = dc.spool([p1, p2]).chunk(time=length)
+        assert len(out) == 4
+        coords = [patch.get_coord("time") for patch in out]
+        assert all(len(coord) == len(coords[0]) for coord in coords)
+        assert all(a.max() < b.min() for a, b in pairwise(coords))

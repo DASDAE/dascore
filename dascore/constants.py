@@ -224,11 +224,13 @@ same units as the specified dimension, or have units attached.
 attr_conflict_description = """
 Indicates how to handle attributes which hold conflicting values across
 the patches being combined (eg data_type, data_units, custom attrs). A
-missing value (None, NaN, "") conflicts with nothing: the known value is
-carried. History and the ids are never compared. If "raise" (default)
-raise an [AttributeMergeError](`dascore.exceptions.AttributeMergeError`)
-for conflicting known values. If "drop", omit the conflicting attributes
-from the output. If "keep_first", keep the first known value of each.
+missing value (None, NaN, "") is a value like any other: it equals
+another missing one and nothing else, so a patch which never stated an
+attribute conflicts with one which did. History and the ids are never
+compared. If "raise" (default) raise an
+[AttributeMergeError](`dascore.exceptions.AttributeMergeError`) for
+conflicting values. If "drop", omit the conflicting attributes from the
+output. If "keep_first", keep the first patch's value of each.
 """
 
 
@@ -301,20 +303,20 @@ conflict
 """.strip()
 
 
-# Rich styles for various object displays.
+# Rich styles for various object displays. Every value has to be one rich can
+# parse: it resolves an unparsable style to a blank one rather than raising,
+# so a misspelling here does not fail, it silently stops coloring.
 dascore_styles = dict(
     dc_blue="blue",
     dc_red="red",
     dc_yellow="yellow",
     default_coord="bold",
     coord_range="bold green",
-    coord_monotonic="bold grey",
+    coord_monotonic="bold grey50",
     coord_segmented="bold cyan",
-    coord_array="bold orange",
-    coord_degenerate="bold red",
+    coord_array="bold dark_orange",
     coord_non="bold red",
-    units="bright blue",
-    dtypes="bright black",
+    units="bright_blue",
     keys="grey50",
     # these are for formatting date times
     ymd="blue",

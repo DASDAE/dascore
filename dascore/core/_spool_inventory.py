@@ -728,12 +728,8 @@ def _get_label_coord(path, group, distances):
 
 def _get_track_coord(path, track, field, distances):
     """Return the coordinate values of one field of a typed track."""
-    if track == "optical_components":
-        items = path.optical_components
-        intervals = list(path.component_intervals())
-    else:
-        items = getattr(path, track)
-        intervals = [x.interval for x in items]
+    items = getattr(path, track)
+    intervals = [x.interval for x in items]
     if not items:
         return None
     values = [getattr(x, field, None) for x in items]
@@ -822,22 +818,22 @@ def _epoch_bounds(inventory, acquisition_key: Sequence[str]) -> np.ndarray:
     for network in inventory.networks:
         if network.code != net_code:
             continue
-        times += [network.start_time, network.end_time]
+        times += [network.time_min, network.time_max]
         for array in network.fiber_arrays:
             if array.code != array_code:
                 continue
-            times += [array.start_time, array.end_time]
+            times += [array.time_min, array.time_max]
             times += [
                 x
                 for acq in array.acquisitions
                 if acq.code == acq_code and acq.location_code == location
-                for x in (acq.start_time, acq.end_time)
+                for x in (acq.time_min, acq.time_max)
             ]
             times += [
                 x
                 for path in array.optical_paths
                 if path.location_code == location
-                for x in (path.start_time, path.end_time)
+                for x in (path.time_min, path.time_max)
             ]
     stamps = [x for x in times if not np.isnat(x)]
     return np.unique(np.array(stamps, dtype="datetime64[ns]"))

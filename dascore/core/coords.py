@@ -54,7 +54,12 @@ from dascore.utils.array import (
     _is_text_coercible_array,
     hash_array,
 )
-from dascore.utils.display import get_nice_text
+from dascore.utils.display import (
+    RichRepr,
+    duration_text,
+    get_nice_text,
+    rate_text,
+)
 from dascore.utils.docs import compose_docstring, get_docstring
 from dascore.utils.misc import (
     _get_nullish,
@@ -142,8 +147,7 @@ def _reduce_time_like(func, data):
     data = np.asarray(data)
     valid = data[~pd.isnull(data)]
     if not valid.size:
-        nfunc = np.datetime64 if is_datetime64(data) else np.timedelta64
-        return np.atleast_1d(nfunc("NaT", "ns"))
+        return np.atleast_1d(_get_nullish(data.dtype))
 
     # Some reducers cannot operate directly on time-like dtypes. If direct
     # reduction fails, or returns only nulls despite valid input, fall back to
@@ -182,6 +186,40 @@ def _get_dtype(value, dtype):
         return str(dtype)
     value = type(value)
     return str(np.dtype(value))
+
+
+def _conformed(value, dtype: np.dtype):
+    """
+    The value as the given dtype, or unchanged where that would lose it.
+
+    Conforming is only ever a change of spelling. A coordinate whose
+    metadata does not fit the dtype it declares — a partial one stating
+    an integer dtype and a fractional start — would otherwise have the
+    difference truncated away, and two coordinates which are not equal
+    would share an identity.
+    """
+    with suppress(TypeError, ValueError, OverflowError):
+        original = np.asarray(value)
+        converted = original.astype(dtype)
+        if converted.astype(original.dtype) == original:
+            return converted
+    return value
+
+
+def _scalar_dtype(dtype: np.dtype, name: str) -> np.dtype:
+    """
+    The dtype a coordinate's own scalar is conformed to before hashing.
+
+    The coordinate's dtype, at its own precision — a coordinate keeping
+    picoseconds must not have them rounded away, or two coordinates a
+    picosecond apart would share an identity. A step is the duration
+    between values, so it takes the matching time unit rather than the
+    time kind itself.
+    """
+    if dtype.kind not in "mM":
+        return dtype
+    unit = np.datetime_data(dtype)[0]
+    return np.dtype(f"timedelta64[{unit}]") if name == "step" else dtype
 
 
 class CoordSummary(DascoreBaseModel):
@@ -316,7 +354,7 @@ def get_compatible_values(val, dtype):
     return val
 
 
-class BaseCoord(DascoreBaseModel, abc.ABC):
+class BaseCoord(RichRepr, DascoreBaseModel, abc.ABC):
     """
     Coordinate interface.
 
@@ -572,35 +610,55 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
         """Total number of elements."""
         return self.shape[0]
 
+    def _repr_fields(self) -> tuple[tuple[str, Text, bool], ...]:
+        """
+        The facts this coordinate states, in the order it states them.
+
+        One source for the line a terminal prints and the row a panel
+        draws, so the two cannot come to hold different facts. A field
+        the coordinate has nothing to say for is left out rather than
+        stated blank.
+
+        This is the hook a subclass states extra facts through. A
+        manager builds its rows from these rather than from each
+        coordinate's rendered line, so facts added by overriding
+        ``__rich__`` alone would show on the coordinate and nowhere it
+        is held.
+        """
+        fields: list[tuple[str, Text, bool]] = []
+        if not pd.isnull(self.min()):
+            fields.append(("min", get_nice_text(self.min()), True))
+        if not pd.isnull(self.max()):
+            fields.append(("max", get_nice_text(self.max()), True))
+        # Only a time. Two instants say nothing about how far apart they
+        # are; a distance from 0 to 299 m already says 299 m.
+        if dtype_time_like(self.dtype) and not pd.isnull(self.min()):
+            if (span := duration_text(self.min(), self.max())) is not None:
+                # The brackets say what it is, so a line does not
+                # need the label a column heading gives it.
+                fields.append(("span", span, False))
+        if not pd.isnull(self.step):
+            step = get_nice_text(self.step)
+            if (rate := rate_text(self.step)) is not None:
+                step = step + rate
+            fields.append(("step", step, True))
+        fields.append(("shape", get_nice_text(self.shape), True))
+        fields.append(("dtype", get_nice_text(self.dtype), True))
+        if self.units is not None:
+            unit_str = get_quantity_str(self.units)
+            fields.append(("units", get_nice_text(unit_str, style="units"), True))
+        return tuple(fields)
+
     def __rich__(self):
         key_style = dascore_styles["keys"]
         base = Text("")
         base += Text(self.__class__.__name__, style=self._rich_style)
         base += Text("(")
-        if not pd.isnull(self.min()):
-            base += Text(" min: ", key_style)
-            base += get_nice_text(self.min())
-        if not pd.isnull(self.max()):
-            base += Text(" max: ", key_style)
-            base += get_nice_text(self.max())
-        if not pd.isnull(self.step):
-            base += Text(" step: ", key_style)
-            base += get_nice_text(self.step)
-        base += Text(" shape: ", key_style)
-        base += get_nice_text(self.shape)
-        base += Text(" dtype: ", key_style)
-        base += get_nice_text(self.dtype)
-        if self.units is not None:
-            base += Text(" units: ", key_style)
-            unit_str = get_quantity_str(self.units)
-            base += get_nice_text(unit_str, style="units")
+        for label, value, labelled in self._repr_fields():
+            base += Text(f" {label}: ", key_style) if labelled else Text(" ")
+            base += value
         base += Text(" )")
         return base
-
-    def __str__(self):
-        return str(self.__rich__())
-
-    __repr__ = __str__
 
     def __array__(self, dtype=None, copy=False):
         """Numpy method for getting array data with `np.array(coord)`."""
@@ -624,11 +682,22 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
         _, units = get_factor_and_unit(self.units, simplify=True)
         return self._convert_units(units)
 
-    @staticmethod
-    def _hash_scalar(value) -> tuple[str, str | None]:
-        """Return a dtype-aware scalar hash token."""
+    def _hash_scalar(self, value, name: str = "start") -> tuple[str, str | None]:
+        """
+        Return a dtype-aware scalar hash token.
+
+        The value is first conformed to the coordinate's own dtype, since
+        a fingerprint identifies *values*, not how they were spelled: a
+        range whose start was given as `0` holds the same coordinate as
+        one given `0.0`, and a step of four milliseconds is the step of
+        four million nanoseconds. Without this they would be stored under
+        different identities and never deduplicate.
+        """
         if value is None:
             return ("none", None)
+        dtype = np.dtype(self.dtype) if self.dtype else None
+        if dtype is not None:
+            value = _conformed(value, _scalar_dtype(dtype, name))
         return ("scalar", hash_array(np.asarray([value])))
 
     @staticmethod
@@ -1419,9 +1488,9 @@ class CoordPartial(BaseCoord):
         return (
             self.shape,
             str(np.dtype(self.dtype)),
-            self._hash_scalar(self.start),
-            self._hash_scalar(self.stop),
-            self._hash_scalar(self.step),
+            self._hash_scalar(self.start, "start"),
+            self._hash_scalar(self.stop, "stop"),
+            self._hash_scalar(self.step, "step"),
         )
 
 
@@ -1562,9 +1631,9 @@ class CoordRange(BaseCoord):
         """Return the scalar payload needed to fingerprint range coords."""
         return (
             self.shape,
-            self._hash_scalar(self.start),
-            self._hash_scalar(self.stop),
-            self._hash_scalar(self.step),
+            self._hash_scalar(self.start, "start"),
+            self._hash_scalar(self.stop, "stop"),
+            self._hash_scalar(self.step, "step"),
         )
 
     def __getitem__(self, item):

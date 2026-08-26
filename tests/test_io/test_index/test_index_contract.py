@@ -8,6 +8,7 @@ index design doc (see discussion #648).
 
 from __future__ import annotations
 
+import math
 import re
 
 import numpy as np
@@ -16,6 +17,7 @@ import pytest
 
 import dascore as dc
 from dascore.config import config_context
+from dascore.core.coords import get_coord
 from dascore.core.summary import PatchSummary
 from dascore.exceptions import UnitError
 from dascore.io.index.backend import get_backend
@@ -237,6 +239,60 @@ class TestElementDtype:
             df = back.query()
             # the structural column keeps the element dtype, not the attr
             assert df["dtype"].iloc[0] == summary.dtype
+        finally:
+            back.close()
+
+
+class TestDataSize:
+    """The samples a patch holds are recorded per patch."""
+
+    def test_data_size_round_trips(self, backend):
+        """Each patch keeps the sample count its summary's shape implied."""
+        df = backend.query()
+
+        def _key(path):
+            """Compare path-independently; Windows round-trips backslashes."""
+            return str(path).replace("\\", "/")
+
+        expected = {_key(x.source_path): math.prod(x.shape) for x in make_summaries()}
+        got = {
+            _key(k): int(v)
+            for k, v in zip(df["source_path"], df["data_size"], strict=True)
+        }
+        assert got == expected
+
+    def test_shapeless_summary_states_no_size(self, tmp_path):
+        """A summary with no shape states no size; none is inferred."""
+        summary = make_summaries()[0]
+        shapeless = summary.new(shape=())
+        path = tmp_path / "shapeless.sqlite3"
+        back = get_backend(path)
+        try:
+            back.write_sources(summaries_to_records([shapeless]))
+            assert pd.isnull(back.query()["data_size"].iloc[0])
+        finally:
+            back.close()
+
+    def test_data_size_attr_does_not_shadow_column(self, tmp_path):
+        """A patch attr named `data_size` is skipped, not written."""
+        summary = make_summaries()[0]
+        shadowed = PatchSummary(
+            attrs=dict(summary.attrs.model_dump(), data_size="not a size"),
+            coords={k: v.model_dump() for k, v in summary.coords.items()},
+            dims=summary.dims,
+            shape=summary.shape,
+            dtype=summary.dtype,
+            source_path=summary.source_path,
+            source_format=summary.source_format,
+            source_version=summary.source_version,
+        )
+        path = tmp_path / "shadow.sqlite3"
+        back = get_backend(path)
+        try:
+            with pytest.warns(UserWarning, match="data_size"):
+                back.write_sources(summaries_to_records([shadowed]))
+            df = back.query()
+            assert df["data_size"].iloc[0] == math.prod(summary.shape)
         finally:
             back.close()
 
@@ -678,3 +734,54 @@ class TestLineageIds:
         """Every patch states a different id; none of them blocks a merge."""
         assert len(set(written_spool.get_contents()["patch_id"])) == 3
         assert len(written_spool.chunk(time=None)) == 1
+
+
+class TestCoordDefinitionDedup:
+    """One coordinate is stored once, however its values were written."""
+
+    def _definitions(self, spool, name):
+        """The def keys stored for one coordinate name."""
+        sql = (
+            "SELECT cd.def_key FROM patch_coords pc "
+            "JOIN coord_defs cd ON cd.coord_def_id = pc.coord_def_id "
+            "WHERE pc.coord_name = ?"
+        )
+        frame = spool._catalog.backend._fetch_df(sql, [name])
+        return frame["def_key"].tolist()
+
+    def test_scalar_spelling_shares_one_definition(self):
+        """A range written with an int start is the one written with a float."""
+        base = dc.get_example_patch()
+        n = base.shape[base.get_axis("distance")]
+        as_ints = base.update_coords(distance=get_coord(start=0, stop=n, step=1.0))
+        as_floats = base.update_coords(
+            distance=get_coord(start=0.0, stop=float(n), step=1.0)
+        )
+        keys = self._definitions(dc.spool([as_ints, as_floats]), "distance")
+        assert len(keys) == 2
+        assert len(set(keys)) == 1
+
+    def test_time_precision_shares_one_definition(self):
+        """A step in milliseconds is the same step in nanoseconds."""
+        t0 = np.datetime64("2020-01-01", "ns")
+        data = np.random.default_rng(0).random((2, 100))
+        coarse = get_coord(
+            start=t0, stop=t0 + np.timedelta64(400, "ms"), step=np.timedelta64(4, "ms")
+        )
+        fine = get_coord(
+            start=t0,
+            stop=t0 + np.timedelta64(400_000_000, "ns"),
+            step=np.timedelta64(4_000_000, "ns"),
+        )
+        distance = get_coord(values=np.array([0.0, 1.0]))
+        patches = [
+            dc.Patch(
+                data=data,
+                coords={"distance": distance, "time": x},
+                dims=("distance", "time"),
+            )
+            for x in (coarse, fine)
+        ]
+        keys = self._definitions(dc.spool(patches), "time")
+        assert len(keys) == 2
+        assert len(set(keys)) == 1

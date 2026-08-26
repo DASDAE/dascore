@@ -695,8 +695,8 @@ class TestOnUnresolved:
             array,
             array.new(
                 acquisitions=(
-                    acquisition.new(end_time=middle),
-                    acquisition.new(start_time=middle, gauge_length=20.0),
+                    acquisition.new(time_max=middle),
+                    acquisition.new(time_min=middle, gauge_length=20.0),
                 )
             ),
         )
@@ -1068,8 +1068,8 @@ class TestInventorySelect:
             old,
             old.new(
                 acquisitions=(
-                    acq.new(end_time=middle, gauge_length=10.0),
-                    acq.new(start_time=middle, gauge_length=20.0),
+                    acq.new(time_max=middle, gauge_length=10.0),
+                    acq.new(time_min=middle, gauge_length=20.0),
                 )
             ),
         )
@@ -1442,9 +1442,9 @@ class TestInventorySelectCoverage:
         array = network.fiber_arrays[0]
         elsewhere = network.new(
             code="ZZ",
-            fiber_arrays=(array.new(code="L999", start_time="2001-01-01"),),
+            fiber_arrays=(array.new(code="L999", time_min="2001-01-01"),),
         )
-        sibling = array.new(code="L998", start_time="2001-01-02")
+        sibling = array.new(code="L998", time_min="2001-01-02")
         crowded = inventory.new(
             networks=(
                 elsewhere,
@@ -1541,8 +1541,8 @@ class TestNothingToResolveWith:
             array,
             array.new(
                 acquisitions=(
-                    acquisition.new(end_time=split, gauge_length=10.0),
-                    acquisition.new(start_time=split, gauge_length=20.0),
+                    acquisition.new(time_max=split, gauge_length=10.0),
+                    acquisition.new(time_min=split, gauge_length=20.0),
                 )
             ),
         )
@@ -1719,8 +1719,8 @@ class TestSharedNames:
                 labels=(
                     *path.labels,
                     OpticalPathLabel(
-                        start_distance=0.0,
-                        end_distance=100.0,
+                        distance_min=0.0,
+                        distance_max=100.0,
                         group="gauge_length",
                         value="odd",
                     ),
@@ -1754,7 +1754,8 @@ class TestSharedNames:
                 optical_components=(
                     FiberSegment(
                         name="c",
-                        optical_length=100.0,
+                        distance_min=0.0,
+                        distance_max=100.0,
                         loss_db=loss,
                         loss_measurement=measurement,
                     ),
@@ -1786,7 +1787,7 @@ def _split_epochs(inventory, when, *, acquisitions=False, second=None):
     array = inventory.networks[0].fiber_arrays[0]
     old = array.acquisitions[0] if acquisitions else array.optical_paths[0]
     changed = {} if second is None else second
-    halves = (old.new(end_time=when), old.new(start_time=when, **changed))
+    halves = (old.new(time_max=when), old.new(time_min=when, **changed))
     field = "acquisitions" if acquisitions else "optical_paths"
     return inventory.replace(array, array.new(**{field: halves})).check()
 
@@ -2081,7 +2082,7 @@ class TestConformSubdivision:
             when,
             second={
                 "labels": (
-                    moved.new(value="moved", start_distance=100.0, end_distance=400.0),
+                    moved.new(value="moved", distance_min=100.0, distance_max=400.0),
                 )
             },
         )
@@ -2099,9 +2100,9 @@ class TestConformSubdivision:
         old = array.optical_paths[0]
         edges = [coord.min() + coord.step * x for x in (500, 1000)]
         paths = (
-            old.new(end_time=edges[0]),
-            old.new(start_time=edges[0], end_time=edges[1], name="middle"),
-            old.new(start_time=edges[1], name="last"),
+            old.new(time_max=edges[0]),
+            old.new(time_min=edges[0], time_max=edges[1], name="middle"),
+            old.new(time_min=edges[1], name="last"),
         )
         split = inventory.replace(array, array.new(optical_paths=paths)).check()
         out = dc.spool(patch).attach_inventory(split).conform_to_inventory()
@@ -2122,9 +2123,9 @@ class TestConformSubdivision:
         old = array.optical_paths[0]
         edges = [coord.min() + coord.step * 500 + x for x in (-coord.step / 3, 0)]
         paths = (
-            old.new(end_time=edges[0]),
-            old.new(start_time=edges[0], end_time=edges[1], name="blink"),
-            old.new(start_time=edges[1], name="after"),
+            old.new(time_max=edges[0]),
+            old.new(time_min=edges[0], time_max=edges[1], name="blink"),
+            old.new(time_min=edges[1], name="after"),
         )
         split = inventory.replace(array, array.new(optical_paths=paths)).check()
         out = dc.spool(patch).attach_inventory(split).conform_to_inventory()
@@ -2158,8 +2159,8 @@ class TestConformSubdivision:
             network,
             network.new(
                 fiber_arrays=(
-                    array.new(end_time=when),
-                    array.new(start_time=when, description="renamed"),
+                    array.new(time_max=when),
+                    array.new(time_min=when, description="renamed"),
                 )
             ),
         ).check()
@@ -2189,8 +2190,8 @@ class TestConformSubdivision:
             network,
             network.new(
                 fiber_arrays=(
-                    array.new(end_time=when),
-                    array.new(start_time=when, description="renamed"),
+                    array.new(time_max=when),
+                    array.new(time_min=when, description="renamed"),
                 )
             ),
         ).check()
@@ -2302,7 +2303,7 @@ class TestConformPartialCoverage:
         lapsed = inventory.replace(
             array,
             array.new(
-                acquisitions=(array.acquisitions[0].new(end_time=off_grid_boundary),)
+                acquisitions=(array.acquisitions[0].new(time_max=off_grid_boundary),)
             ),
         ).check()
         spool = dc.spool(patch).attach_inventory(lapsed)
@@ -2327,7 +2328,7 @@ class TestConformPartialCoverage:
         lapsed = inventory.replace(
             array,
             array.new(
-                optical_paths=(array.optical_paths[0].new(end_time=off_grid_boundary),)
+                optical_paths=(array.optical_paths[0].new(time_max=off_grid_boundary),)
             ),
         ).check()
         out = dc.spool(patch).attach_inventory(lapsed).conform_to_inventory()
@@ -2397,10 +2398,10 @@ def two_zones(inventory):
             labels=(
                 *path.labels,
                 OpticalPathLabel(
-                    start_distance=110.0, end_distance=150.0, group="hole", value="a"
+                    distance_min=110.0, distance_max=150.0, group="hole", value="a"
                 ),
                 OpticalPathLabel(
-                    start_distance=300.0, end_distance=340.0, group="hole", value="a"
+                    distance_min=300.0, distance_max=340.0, group="hole", value="a"
                 ),
             )
         ),
@@ -2926,8 +2927,8 @@ class TestChannelSelectEdges:
                 labels=(
                     *path.labels,
                     OpticalPathLabel(
-                        start_distance=100.0,
-                        end_distance=200.0,
+                        distance_min=100.0,
+                        distance_max=200.0,
                         group="frost_depth",
                         value=1.5,
                     ),
@@ -3014,10 +3015,10 @@ def uneven_spool(patch, inventory):
     acquisition, path = array.acquisitions[0], array.optical_paths[0]
     holes = (
         OpticalPathLabel(
-            start_distance=110.0, end_distance=150.0, group="hole", value="a"
+            distance_min=110.0, distance_max=150.0, group="hole", value="a"
         ),
         OpticalPathLabel(
-            start_distance=300.0, end_distance=340.0, group="hole", value="a"
+            distance_min=300.0, distance_max=340.0, group="hole", value="a"
         ),
     )
     both = inventory.replace(
@@ -3122,11 +3123,13 @@ def _float_grid_pair(distance, span):
     path = OpticalPath(
         name="main",
         location_code="",
-        optical_components=(FiberSegment(name="c", optical_length=span + 10),),
+        optical_components=(
+            FiberSegment(name="c", distance_min=0.0, distance_max=span + 10),
+        ),
         labels=(
             OpticalPathLabel(
-                start_distance=span * 0.23,
-                end_distance=span * 0.61,
+                distance_min=span * 0.23,
+                distance_max=span * 0.61,
                 group="zone",
                 value="mid",
             ),
@@ -3192,8 +3195,8 @@ class TestChannelSelectContracts:
             path.new(
                 coupling=(
                     CouplingCondition(
-                        start_distance=100.0,
-                        end_distance=250.0,
+                        distance_min=100.0,
+                        distance_max=250.0,
                         coupling_type="trench",
                         medium="soil",
                         depth=2.0,
@@ -3286,8 +3289,8 @@ class TestChannelSelectContracts:
             path.new(
                 labels=(
                     OpticalPathLabel(
-                        start_distance=100.0,
-                        end_distance=200.0,
+                        distance_min=100.0,
+                        distance_max=200.0,
                         group="output_id",
                         value="a",
                     ),
@@ -3312,8 +3315,8 @@ class TestChannelSelectContracts:
             path.new(
                 labels=(
                     OpticalPathLabel(
-                        start_distance=100.0,
-                        end_distance=400.0,
+                        distance_min=100.0,
+                        distance_max=400.0,
                         group="acquisition_key",
                         value="bad",
                     ),

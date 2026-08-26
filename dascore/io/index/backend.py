@@ -593,6 +593,7 @@ class SQLiteIndexBackend:
                             patch.source_patch_key,
                             patch.dims,
                             patch.dtype,
+                            patch.data_size,
                             patch.time_min,
                             patch.time_max,
                             patch.time_step,
@@ -1228,22 +1229,6 @@ class SQLiteIndexBackend:
         """Return coord names known to the index."""
         df = self._fetch_df("SELECT DISTINCT coord_name FROM patch_coords")
         return set(df["coord_name"])
-
-    def attr_units_map(self, kind: str = "num") -> dict[str, str | None]:
-        """
-        Return the canonical units the index stores each attr of one kind in.
-
-        Units belong to an (attr name, value kind) pair, and only numbers
-        carry any, so the default asks about the numeric kind; an attr the
-        index holds in that kind without units maps to None, and one it
-        does not hold in that kind is absent. One read of the metadata.
-        """
-        rows = self._attr_meta()
-        rows = rows[rows["value_kind"] == kind]
-        return {
-            str(name): _normalize_unit(unit)
-            for name, unit in zip(rows["attr_name"], rows["units"], strict=True)
-        }
 
     def attr_units(self, name: str) -> dict[str, str | None]:
         """Return the canonical units the index stores one attr's kinds in."""

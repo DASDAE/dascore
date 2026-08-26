@@ -74,6 +74,12 @@ def decimate(
     - If the decimation dimension is small, this can fail due to lack of
       padding values.
 
+    See Also
+    --------
+    [resample](`dascore.proc.resample.resample`)
+        Change sampling to a specified interval or number of samples, rather
+        than by an integer decimation factor.
+
     Examples
     --------
     # Simple example using iir
@@ -122,7 +128,12 @@ def interpolate(patch: PatchType, kind: str | int = "linear", **kwargs) -> Patch
     This function just uses scipy's interp1d function under the hood.
     See scipy.interpolate.interp1d for information.
 
-    See also [snap](`dascore.core.Patch.snap_coords`).
+    See Also
+    --------
+    [Patch.snap_coords](`dascore.Patch.snap_coords`)
+        Snap coordinates to evenly sampled values without interpolating data.
+    [resample](`dascore.proc.resample.resample`)
+        Resample data to a target sampling interval or number of samples.
 
     Examples
     --------

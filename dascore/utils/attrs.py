@@ -85,23 +85,25 @@ def combine_patch_attrs(
 
     def _handle_other_attrs(mod_dict_list):
         """
-        Fold the attrs: a missing value never conflicts, known ones must agree.
+        Fold the attrs: the members' values must agree, missing included.
 
-        Attrs are scalars, and an empty one (None, NaN, "") is an attr
-        nobody recorded rather than a recorded emptiness, so it is
-        satisfied by whatever another member knows. Only two differing
-        known values are a conflict, handled per `conflict`.
+        Attrs are scalars, and an empty one (None, NaN, "") is a value
+        like any other: it equals another empty one and nothing else. A
+        merge combines a collection, which needs one value per attr, so
+        differing values are a conflict handled per `conflict`.
         """
         keys = list(dict.fromkeys(key for model in mod_dict_list for key in model))
         out, conflicts = {}, []
         for key in keys:
-            known = [x[key] for x in mod_dict_list if not _is_missing(x.get(key))]
-            if not known:
-                continue
-            first = known[0]
-            agree = all(_values_equal(first, x) for x in known[1:])
+            values = [
+                None if _is_missing(value) else value
+                for value in (x.get(key) for x in mod_dict_list)
+            ]
+            first = values[0]
+            agree = all(_values_equal(first, x) for x in values[1:])
             if agree or conflict == "keep_first":
-                out[key] = first
+                if first is not None:
+                    out[key] = first
             else:
                 conflicts.append(key)
         if conflicts and conflict == "raise":
@@ -139,8 +141,10 @@ def _is_missing(value) -> bool:
     """
     True for an attr nobody recorded: None, NaN/NaT, or an empty string.
 
-    The one spelling of "missing" for every rule which lets a missing
-    value match a known one (kind, the merge conflict policy, units).
+    A patch which never stated an attr, one which stated null, and one
+    which stated "" compare equal everywhere. Kind and the merge conflict
+    policy reach that through this function; `known_only` spells the same
+    predicate for frames and `get_quantity` for units.
     """
     return value is None or (np.ndim(value) == 0 and (pd.isnull(value) or value == ""))
 

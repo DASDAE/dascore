@@ -12,7 +12,7 @@ import pytest
 
 import dascore as dc
 from dascore.io.index import PatchCatalog
-from dascore.io.index.catalog import _adjust_unit_segments
+from dascore.io.index.catalog import _adjust_unit_segments, _forget_trimmed_sizes
 from dascore.io.index.query import InvalidSpoolQueryError, glob_to_regex
 from dascore.units import m
 from dascore.utils.misc import _canonical_range, _CanonicalRange
@@ -347,6 +347,46 @@ class TestAdjustUnitSegments:
         out = _adjust_unit_segments(df, "x", canonical)
         assert float(out["x_min"].iloc[0]) == 1.0
         assert float(out["x_max"].iloc[0]) == 2.0
+
+
+class TestForgetTrimmedSizes:
+    """Which rows keep the sample count the index stored for them."""
+
+    @pytest.fixture()
+    def sized(self):
+        """Two rows carrying a stored size, neither of them trimmed."""
+        return pd.DataFrame({"_data_size": [10, 20], "_modified": [False, False]})
+
+    def test_frame_without_sizes_passes_through(self):
+        """A relation which states no size has none to forget."""
+        df = pd.DataFrame({"time_min": [0.0]})
+        assert _forget_trimmed_sizes(df, ()).equals(df)
+
+    def test_frame_without_modified_passes_through(self):
+        """Nothing marks a trim, so nothing is forgotten."""
+        df = pd.DataFrame({"_data_size": [10]})
+        assert _forget_trimmed_sizes(df, ()).equals(df)
+
+    def test_untrimmed_rows_keep_their_size(self, sized):
+        """A selection which cuts no row leaves every size alone."""
+        assert _forget_trimmed_sizes(sized, ()).equals(sized)
+
+    def test_trimmed_row_forgets_its_size(self, sized):
+        """The row a selection cut no longer states a count."""
+        df = sized.assign(_modified=[False, True])
+        out = _forget_trimmed_sizes(df, ())
+        assert out["_data_size"].tolist() == [10, pd.NA]
+
+    def test_selector_off_the_envelopes_forgets_every_size(self, sized):
+        """A selector `adjust_segments` never saw marks no row, so all go."""
+        residuals = ((({"time": [1, 2, 3]}), False),)
+        out = _forget_trimmed_sizes(sized, residuals)
+        assert out["_data_size"].isnull().all()
+
+    def test_unit_bearing_range_rides_the_envelopes(self, sized):
+        """A canonical range is folded in, so `_modified` still decides."""
+        residuals = (({"distance": _canonical_range((1 * m, 2 * m))}, False),)
+        assert _forget_trimmed_sizes(sized, residuals).equals(sized)
 
 
 class TestViewSerialization:

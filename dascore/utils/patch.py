@@ -53,6 +53,7 @@ from dascore.utils.docs import compose_docstring
 from dascore.utils.mapping import FrozenDict
 from dascore.utils.misc import (
     _apply_union_indexers,
+    _get_nullish,
     _merge_tuples,
     get_middle_value,
     iterate,
@@ -66,6 +67,7 @@ from dascore.utils.time import to_float
 from dascore.workflow.builtin import Concatenate, Stack
 from dascore.workflow.checks import attr_type, check_patch_attrs, check_patch_coords
 from dascore.workflow.identity import (
+    _ID_FIELDS,
     advance,
     fold_patch_ids,
     fold_processing_ids,
@@ -1242,9 +1244,10 @@ def get_patch_kind(patch: PatchType | dc.PatchAttrs) -> FrozenDict:
 
     The attribute names come from the config option `patch_kind_attrs`.
     A name the patch lacks, or holds a null or empty string for, maps to
-    None, which conflicts with nothing: an attribute left at its empty
-    default is the same as no attribute, which is also how spool metadata
-    records it.
+    None: an attribute left at its empty default is the same as no
+    attribute, which is also how spool metadata records it.
+    [`check_kind`](`dascore.utils.patch.check_kind`) decides what None
+    then compares equal to.
 
     Parameters
     ----------
@@ -1258,7 +1261,7 @@ def get_patch_kind(patch: PatchType | dc.PatchAttrs) -> FrozenDict:
     >>> patch = dc.get_example_patch()
     >>> kind = get_patch_kind(patch)
     >>> assert kind["tag"] == patch.attrs.tag
-    >>> assert kind["acquisition_key"] is None  # not set, so matches any
+    >>> assert kind["acquisition_key"] is None  # not set
     """
     attrs = patch.attrs if isinstance(patch, dc.Patch) else patch
     names = get_config().patch_kind_attrs
@@ -1270,52 +1273,24 @@ def _kind_value(value):
     return None if _is_missing(value) else value
 
 
-def _kind_values_equal(value1, value2) -> bool:
-    """True unless both values are known and differ."""
-    if value1 is None or value2 is None:
-        return True
-    return _values_equal(value1, value2)
-
-
-class _KindRun:
-    """
-    The kind a run of combined patches has settled on so far.
-
-    A missing value matches anything, so "same kind" is not transitive;
-    a run resolves that by accumulating: a value any admitted patch knows
-    binds the patches after it, so the run never holds two values for
-    one attribute. Callers admit a patch only once it has passed every
-    other gate, so a patch rejected for its coordinates binds nothing.
-    """
-
-    def __init__(self):
-        self.kind: dict = {}
-
-    def admits(self, kind: Mapping, check_behavior: WARN_LEVELS) -> bool:
-        """Return True if `kind` conflicts with nothing admitted so far."""
-        return not self.kind or _check_kinds(self.kind, kind, check_behavior)
-
-    def add(self, kind: Mapping) -> None:
-        """Admit a kind, filling values the run was missing."""
-        if not self.kind:
-            self.kind = dict(kind)
-        else:
-            self.kind = {
-                x: (self.kind[x] if self.kind[x] is not None else kind[x])
-                for x in self.kind
-            }
-
-
-def check_kind(patch1, patch2, check_behavior: WARN_LEVELS = "raise") -> bool:
+def check_kind(
+    patch1, patch2, check_behavior: WARN_LEVELS = "raise", *, strict: bool = False
+) -> bool:
     """
     Return True if two patches are the same kind.
 
     Kind is decided by the attributes named in the config option
     `patch_kind_attrs` and nothing else: coordinates, units, history, and
-    the remaining attributes never enter. Two patches are the same kind
-    unless they hold conflicting values for one of these attributes; a
-    missing or empty value conflicts with nothing. Patches of different
-    kinds are never combined, whatever their coordinates.
+    the remaining attributes never enter. Patches of different kinds are
+    never combined, whatever their coordinates.
+
+    Two-operand callers -- operators, ufuncs,
+    [`Patch.where`](`dascore.Patch.where`) -- leave `strict` False: a
+    missing value is a wildcard matching anything, and the result carries
+    the union of what the two knew. Callers combining a *collection* --
+    concatenate, stack, the spool operations -- pass `strict`, because a
+    wildcard is not transitive (`"a"` matches `""` matches `"b"`, yet
+    `"a"` and `"b"` conflict) and a partition needs it to be.
 
     Parameters
     ----------
@@ -1327,6 +1302,8 @@ def check_kind(patch1, patch2, check_behavior: WARN_LEVELS = "raise") -> bool:
         What to do when the kinds differ: 'raise' (default) raises
         [`IncompatiblePatchError`](`dascore.exceptions.IncompatiblePatchError`),
         'warn' warns and returns False, 'ignore' returns False quietly.
+    strict
+        If True, a missing value equals only another missing value.
 
     Examples
     --------
@@ -1336,21 +1313,22 @@ def check_kind(patch1, patch2, check_behavior: WARN_LEVELS = "raise") -> bool:
     >>> assert check_kind(patch, patch.pass_filter(time=(None, 10)))
     >>> other = patch.update_attrs(tag="other")
     >>> assert not check_kind(patch, other, check_behavior="ignore")
-    >>> # An unset attribute matches any value.
-    >>> assert check_kind(patch, patch.update_attrs(acquisition_key="A.B.C.D"))
+    >>> # An unset attribute matches any value for a two-patch operation,
+    >>> keyed = patch.update_attrs(acquisition_key="A.B.C.D")
+    >>> assert check_kind(patch, keyed)
+    >>> # but is a value of its own where patches are partitioned.
+    >>> assert not check_kind(patch, keyed, check_behavior="ignore", strict=True)
     """
     validate_warn_level(check_behavior)
     kind1, kind2 = get_patch_kind(patch1), get_patch_kind(patch2)
-    return _check_kinds(kind1, kind2, check_behavior)
 
+    def _equal(value1, value2) -> bool:
+        """A missing value is a wildcard unless the caller is strict."""
+        if not strict and (value1 is None or value2 is None):
+            return True
+        return _values_equal(value1, value2)
 
-def _check_kinds(kind1: Mapping, kind2: Mapping, check_behavior) -> bool:
-    """Compare two kind mappings, warning or raising per check_behavior."""
-    diffs = {
-        x: (kind1[x], kind2[x])
-        for x in kind1
-        if not _kind_values_equal(kind1[x], kind2[x])
-    }
+    diffs = {x: (kind1[x], kind2[x]) for x in kind1 if not _equal(kind1[x], kind2[x])}
     if not diffs:
         return True
     msg = (
@@ -1362,22 +1340,15 @@ def _check_kinds(kind1: Mapping, kind2: Mapping, check_behavior) -> bool:
     return False
 
 
-def _with_kind(attrs: dc.PatchAttrs, kind: Mapping) -> dc.PatchAttrs:
-    """Fill the attrs' missing kind values from a run's accumulated kind."""
-    fill = {
-        x: y for x, y in kind.items() if y is not None and _is_missing(attrs.get(x))
-    }
-    return attrs.update(**fill) if fill else attrs
-
-
 def check_data_units(patch1, patch2, check_behavior: WARN_LEVELS = "raise") -> bool:
     """
-    Return True unless the patches hold known, different data units.
+    Return True unless the patches hold different data units.
 
-    Splicing or summing data demands one unit: a patch without units
-    adopts the other's, but metres beside kilometres are not converted
-    for the caller — convert with
-    [`Patch.convert_units`](`dascore.Patch.convert_units`) first.
+    Splicing or summing data demands one unit, and none is converted for
+    the caller: metres beside kilometres, or beside a patch with no units
+    at all, must be reconciled first with
+    [`Patch.convert_units`](`dascore.Patch.convert_units`) or
+    [`Patch.set_units`](`dascore.Patch.set_units`).
 
     Parameters
     ----------
@@ -1393,27 +1364,14 @@ def check_data_units(patch1, patch2, check_behavior: WARN_LEVELS = "raise") -> b
     validate_warn_level(check_behavior)
     units1 = get_quantity(patch1.attrs.data_units)
     units2 = get_quantity(patch2.attrs.data_units)
-    return _data_units_agree(units1, units2, check_behavior)
-
-
-def _data_units_agree(known, units, check_behavior) -> bool:
-    """Known, different units disagree; a missing one agrees with anything."""
-    if known is None or units is None or known == units:
+    if units1 == units2:
         return True
     msg = (
-        f"Patches are not compatible: data units differ ({known} and {units}); "
+        f"Patches are not compatible: data units differ ({units1} and {units2}); "
         "convert one with Patch.convert_units first."
     )
     warn_or_raise(msg, exception=IncompatiblePatchError, behavior=check_behavior)
     return False
-
-
-def _with_data_units(attrs: dc.PatchAttrs, members: Sequence[dc.PatchAttrs]):
-    """Fill missing data units from the first member which knows them."""
-    if not _is_missing(attrs.data_units):
-        return attrs
-    known = next((x.data_units for x in members if not _is_missing(x.data_units)), None)
-    return attrs.update(data_units=known) if known is not None else attrs
 
 
 def check_dims(
@@ -1550,15 +1508,30 @@ def _merge_models(attrs1, attrs2):
 
     The caller has already checked kind; nothing here refuses a merge. An
     attribute the first leaves empty takes the second's value, so the
-    result's kind is the union of the two.
+    result's kind is the union of the two. This is the two-operand fold,
+    not `combine_patch_attrs`, which combines a collection and so treats
+    a missing value as a value rather than as something to fill.
     """
     if attrs1 == attrs2:
         return attrs1
+    # keep_first gives the first patch's value for everything, folds the
+    # ids, and keeps the history and the attrs subclass; the data units of
+    # the output are decided by the operation from each operand's own, so
+    # the first's stand here whether or not it has any.
     merged = combine_patch_attrs([attrs1, attrs2], conflict="keep_first")
-    # keep_first folds over set values only, so a first patch without
-    # units would inherit the second's. The operation decides the units
-    # of its output from each operand's own, so the first's must stand.
-    return merged.update(data_units=attrs1.data_units)
+    # It does not fill, though, which is the one thing two operands do:
+    # what the first left empty the second supplies.
+    dump1 = attrs1.model_dump(exclude_defaults=True)
+    fill = {
+        key: value
+        for key, value in attrs2.model_dump(exclude_defaults=True).items()
+        if key not in _ID_FIELDS  # fold_ids returns {} when ids are disabled
+        and key not in ("history", "data_units")
+        and not key.startswith("_")
+        and not _is_missing(value)
+        and _is_missing(dump1.get(key))
+    }
+    return merged.update(**fill) if fill else merged
 
 
 def merge_compatible_coords_attrs(
@@ -1655,10 +1628,10 @@ def concatenate_patches(
 
     Only patches compatible with the first patch are concatenated together:
     the same kind (see [`check_kind`](`dascore.utils.patch.check_kind`);
-    a value any kept patch holds binds the patches after it), the same
-    dimensions, and equal coordinates other than the concatenated one. The
-    output carries the first patch's attributes, with kind values the first
-    patch lacks filled from the others.
+    compared strictly, so a missing value equals only another missing
+    value), the same data units, the same dimensions, and equal
+    coordinates other than the concatenated one. The output carries the
+    first patch's attributes.
 
     Parameters
     ----------
@@ -1716,16 +1689,11 @@ def concatenate_patches(
         patches = list(x.drop_private_coords() for x in patches)
         first_patch = patches[0]
         compat_patches = []
-        # Different kinds are skipped before anything else is asked of them;
-        # a patch binds the run's kind only once its coordinates pass too.
-        run = _KindRun()
-        # the units the run has settled on: the first admitted member's known ones
-        units_run = None
         first_dims = first_patch.dims
-        # Get patches compatible with first.
+        # Get patches compatible with first. Kind is compared strictly:
+        # this combines a collection, so a missing value is a value.
         for p in patches:
-            kind = get_patch_kind(p)
-            kind_ok = run.admits(kind, check_behavior)
+            kind_ok = check_kind(first_patch, p, check_behavior, strict=True)
             if kind_ok and p.dims != first_dims:
                 # a same-kind patch with other dimensions is never skipped
                 msg = "Cannot concatenate patches with different dimensions."
@@ -1738,11 +1706,7 @@ def concatenate_patches(
                 ignore_dim_eq_shape=False,
                 riders_vary=True,
             )
-            units = get_quantity(p.attrs.data_units)
-            units_ok = coords_ok and _data_units_agree(units_run, units, check_behavior)
-            if units_ok:
-                run.add(kind)
-                units_run = units_run if units_run is not None else units
+            if coords_ok and check_data_units(first_patch, p, check_behavior):
                 compat_patches.append(p)
         return compat_patches
 
@@ -1751,12 +1715,8 @@ def concatenate_patches(
     fingerprint = Concatenate.from_kwargs(check_behavior=check_behavior, **kwargs)
     out = []
     for patch_list in yield_sub_sequences(patches, val):
-        # An output's kind is the union over its own members only.
-        run = _KindRun()
-        for p in patch_list:
-            run.add(get_patch_kind(p))
-        attrs = _with_kind(patch_list[0].attrs, run.kind)
-        attrs = _with_data_units(attrs, [x.attrs for x in patch_list])
+        # The members agree on kind and units, so the first states them.
+        attrs = patch_list[0].attrs
         out.append(_concatenate_group(patch_list, dim, attrs, fingerprint.fingerprint))
     return out
 
@@ -1859,7 +1819,7 @@ def _joinable(coords, dim: str) -> list[np.ndarray]:
             "stand in for them."
         )
         raise CoordMergeError(msg)
-    null = np.array("NaT").astype(target)
+    null = _get_nullish(target)
     return [
         np.full(x.shape, null, dtype=target) if b else x for x, b in zip(arrays, blank)
     ]
@@ -1888,8 +1848,7 @@ def concatenate_planned(
     A concat plan (`dascore.utils.chunk_plan.build_concat_plan`) has
     already decided kind, dimensions, and the dimensions' identities, so
     none of that is asked again. The attrs fold as a merge folds them
-    (`combine_patch_attrs`, a missing value matching anything and known
-    conflicts policed by `conflict`).
+    (`combine_patch_attrs`, differing values policed by `conflict`).
 
     Coordinates are not policed by `conflict`; they are reconciled or
     refused. A coordinate riding `dim` is joined along it, provided every
@@ -1934,13 +1893,22 @@ def concatenate_planned(
         )
         raise CoordMergeError(msg)
     attrs = combine_patch_attrs([x.attrs for x in patches], conflict=conflict)
-    if (kept := attrs.data_units) is not None:
-        # keep_first keeps one spelling of the data units; the data must
-        # then say the same thing, so members stated otherwise convert
+    # Data units scale the data rather than labelling it, so they are
+    # reconciled rather than policed by `conflict` (the plan says the same,
+    # see `_carried_columns`): the output speaks the first units any member
+    # states and the rest convert to them. Letting a unitless first member
+    # stand would splice metre- and kilometre-scaled samples into one array.
+    units = (x.attrs.data_units for x in patches)
+    stated = [x for x in units if not _is_missing(x)]
+    if stated:
+        kept = stated[0]
         patches = [
-            x if x.attrs.data_units in (None, kept) else x.convert_units(kept)
+            x
+            if _is_missing(x.attrs.data_units) or x.attrs.data_units == kept
+            else x.convert_units(kept)
             for x in patches
         ]
+        attrs = attrs.update(data_units=kept)
     task = Concatenate(
         arguments=((dim, count),), check_behavior=None, conflict=conflict
     )
@@ -1954,10 +1922,10 @@ def stack_patches(
     Stack (add) all patches compatible with first patch together.
 
     Compatible means the same kind (see
-    [`check_kind`](`dascore.utils.patch.check_kind`); a value any kept
-    patch holds binds the patches after it), the same dimensions, and equal
-    coordinates other than `dim_vary`. The output carries the first patch's
-    attributes, with kind values the first patch lacks filled from the others.
+    [`check_kind`](`dascore.utils.patch.check_kind`); compared strictly,
+    so a missing value equals only another missing value), the same data
+    units, the same dimensions, and equal coordinates other than
+    `dim_vary`. The output carries the first patch's attributes.
 
     Parameters
     ----------
@@ -1986,26 +1954,20 @@ def stack_patches(
         raise PatchCoordinateError(msg)
 
     kept = []
-    run, units_run = _KindRun(), None
     for p in patches:
-        # check kind, then dimensions and coords of patch against init_patch;
-        # a patch binds the run's kind only once everything passes.
-        kind = get_patch_kind(p)
-        kind_ok = run.admits(kind, check_behavior)
+        # check kind, then dimensions and coords of patch against init_patch.
+        # Kind is compared strictly: a collection is being combined, so a
+        # missing value is a value.
+        kind_ok = check_kind(init_patch, p, check_behavior, strict=True)
         dims_ok = kind_ok and check_dims(init_patch, p, check_behavior)
         coords_ok = dims_ok and check_coords(init_patch, p, check_behavior, dim_vary)
-        units = get_quantity(p.attrs.data_units)
-        units_ok = coords_ok and _data_units_agree(units_run, units, check_behavior)
         # actually do the stacking of data
-        if units_ok:
-            run.add(kind)
-            units_run = units_run if units_run is not None else units
+        if coords_ok and check_data_units(init_patch, p, check_behavior):
             stack_arr = stack_arr + p.data
             kept.append(p.attrs)
 
     # create attributes for the stack with adjusted history
-    stack_attrs = _with_data_units(_with_kind(init_patch.attrs, run.kind), kept)
-    stack_attrs = _maybe_add_history_str(stack_attrs, "stack")
+    stack_attrs = _maybe_add_history_str(init_patch.attrs, "stack")
     # The kept members only: one dropped for being incompatible did not
     # contribute its data, so it is not part of what this data is.
     stack_attrs = stamp_combination(

@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import re
 import warnings
 from collections.abc import Hashable
@@ -149,6 +150,7 @@ class PatchRecord:
     source_patch_key: str
     dims: str
     dtype: str
+    data_size: int | None
     time_min: int | None
     time_max: int | None
     time_step: int | None
@@ -472,6 +474,12 @@ def patch_record(summary: PatchSummary) -> PatchRecord:
         source_patch_key=normalize_source_patch_key(summary.source_patch_key),
         dims=",".join(summary.dims),
         dtype=str(summary.dtype or ""),
+        # A summary with no shape states no size; nothing is inferred from
+        # the coords, which can describe a patch the shape does not. An
+        # empty shape is the unstated one, not a zero-dimensional patch:
+        # a patch always has at least one dimension (a coordinate manager
+        # of no dims does not match a 0-d array).
+        data_size=math.prod(summary.shape) if summary.shape else None,
         time_min=time_min,
         time_max=time_max,
         time_step=time_step,

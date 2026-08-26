@@ -8,7 +8,7 @@ import dascore as dc
 from dascore import get_coord_manager
 from dascore.constants import timeable_types
 from dascore.io.core import make_scan_payload
-from dascore.io.utils import drop_blank_attrs, get_exact_coord
+from dascore.io.utils import drop_blank_attrs, get_exact_coord, get_gridded_coord
 from dascore.utils.hdf5 import H5Reader
 from dascore.utils.misc import maybe_get_items
 
@@ -27,10 +27,15 @@ def _is_t1_file(fi: H5Reader) -> bool:
 
 
 def _get_distance_coord(fi, snap=True):
-    """Get the distances from the T1 file"""
+    """
+    Get the distances from the T1 file.
+
+    The interrogator fixes the spatial sampling, so the snapped path puts the
+    stored values back on the grid they restate.
+    """
     dist = fi["Data/Distance"][()]
     if snap:
-        return dc.get_coord(values=dist, units="m")
+        return get_gridded_coord(dist, units="m")
     return get_exact_coord(dist, units="m")
 
 
@@ -44,6 +49,7 @@ def _get_time_coord(fi, snap=True):
 
 
 def _get_coords(fi, snap=True) -> dc.CoordManager:
+    """Return the T1 coord manager."""
     time_coord = _get_time_coord(fi, snap=snap)
     distance_coord = _get_distance_coord(fi, snap=snap)
     dims = ("time", "distance")

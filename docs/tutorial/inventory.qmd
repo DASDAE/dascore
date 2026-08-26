@@ -36,7 +36,7 @@ flowchart LR
   OpticalPath -->|labels| OpticalPathLabel
 ```
 
-The components are the ordered physical pieces the light passes through, and they are what gives the path its length: each one tiles the interval after the last, so the path ends where the final component does. The other three describe intervals of that length — the geometry holds the measured curves along the fiber, of which the columns the coordinate reference system names are position; the coupling says how the fiber is attached to the ground there; and the labels name anything else worth recording per interval. Each of those covers what it covers, and none of them has to cover the whole path.
+The components are the physical pieces the light passes through, and they are what gives the path its extent: each one states the stretch of optical distance it occupies, and they tile — each begins where the last ended — so the path runs from the first to the last. They are read in distance order whatever order the rows are written in, so a component states where it is rather than being counted through to it. The other three describe intervals of that extent — the geometry holds the measured curves along the fiber, of which the columns the coordinate reference system names are position; the coupling says how the fiber is attached to the ground there; and the labels name anything else worth recording per interval. Each of those covers what it covers, and none of them has to cover the whole path.
 
 Objects reused in several places — interrogators, cables, enclosures, measurements — are written once under the inventory's `resources` and referred to elsewhere by their `resource_id`. Such a field accepts either the object itself or that string, which is what the dashed edges below mean.
 
@@ -91,20 +91,20 @@ files = {
     ),
     # The tracks along the path, as tables.
     "fiber_arrays/DAS.R2D1/path/optical_components.csv": (
-        "sequence,object_type,optical_length,name\n"
-        "1,FiberSegment,100.0,lead-in\n"
-        "2,Splice,0.0,wellhead splice\n"
-        "3,FiberSegment,400.0,trench cable\n"
+        "object_type,distance_min,distance_max,name\n"
+        "FiberSegment,0,100,lead-in\n"
+        "Splice,100,,wellhead splice\n"
+        "FiberSegment,100,500,trench cable\n"
     ),
     "fiber_arrays/DAS.R2D1/path/coupling.csv": (
-        "start_distance,end_distance,coupling_type,medium\n"
+        "distance_min,distance_max,coupling_type,medium\n"
         "100,400,trench,soil\n"
     ),
     # A geometry column is any number measured along the fiber. This one
     # is the trench's own chainage, and the middle segment is a coil: the
     # chainage stands still while ten meters of fiber goes by.
     "fiber_arrays/DAS.R2D1/path/geometry.csv": (
-        "segment,distance,chainage (m)\n"
+        "name,distance,chainage (m)\n"
         "to the coil,100,1200\n"
         "to the coil,240,1340\n"
         "slack coil,240,1340\n"
@@ -113,7 +113,7 @@ files = {
         "past the coil,400,1490\n"
     ),
     "fiber_arrays/DAS.R2D1/path/labels.csv": (
-        "start_distance,end_distance,group,value\n"
+        "distance_min,distance_max,group,value\n"
         "100,250,zone,north\n"
         "250,400,zone,south\n"
         "150,300,noisy,\n"
@@ -129,16 +129,19 @@ for name, text in files.items():
 inventory = dc.inventory(inventory_path)
 ```
 
+A point component — a splice, a connector, a terminator — occupies no measurable length, so it states one distance and leaves `distance_max` blank; the wellhead splice above is one. A fiber segment states both, since one silently collapsing to a point would lose the fiber it stands for.
+
 A few rules make that directory readable without a schema in front of you:
 
 - **The file declares what it is.** Every object file states its `object_type`, and its container checks that statement rather than supplying it.
 - **The name states the identity.** `acquisitions/DAS.R2D1..RAW.yaml` *is* the acquisition `DAS.R2D1..RAW` — network `DAS`, fiber array `R2D1`, blank location code, code `RAW`. Restating a part of it inside the file is allowed, as long as the two agree; there is never a precedence rule between two spellings of one fact.
 - **`path` is the one reserved *container* name.** A directory called `path` addresses an optical path rather than serializing an attribute named "path". (`attrs` and `inventory` are reserved as file stems — an entity's own object file, and the envelope — and the top-level directory names above are fixed.)
 - **Files that participate in no convention are ignored.** Photos, field notes, and deployment logs can live in the inventory directory undisturbed.
+- **Columns that participate in no convention are ignored too.** A CSV header beginning with an underscore — `_crew`, `_drawing` — is the crew's own record keeping, and nothing reads it. It stays in the file it was written in, so a note which should travel with the inventory goes in a `description` column instead, which every object has.
 
 Two tracks can hold something that varies along the fiber, and which one to use is decided by how a value behaves between the points which state it. **A quantity which interpolates goes in `geometry.csv`**, one column per quantity, read as a curve through its control points; a column may name its units in its header, `chainage (m)`. **A value which holds over a stretch and then stops goes in `labels.csv`**, a set of intervals rather than a curve — a zone name has no meaning between two of them, and neither does a borehole number. Labels are usually words, then, but a number which identifies rather than measures is a label too. A column of text in a geometry table is refused, and says so.
 
-Position is not a separate kind of thing: a column whose name the coordinate reference system declares — or its canonical `x`, `y`, `z` alias — *is* that axis, takes its units from the CRS, and must be stated with all its siblings, since half a position is not a position. A segment which names none of them, like the chainage above, states no position at all and is perfectly valid. The `segment` names themselves are for humans; what a channel gets is the columns.
+Position is not a separate kind of thing: a column whose name the coordinate reference system declares — or its canonical `x`, `y`, `z` alias — *is* that axis, takes its units from the CRS, and must be stated with all its siblings, since half a position is not a position. A segment which names none of them, like the chainage above, states no position at all and is perfectly valid. The segment `name`s themselves are for humans; what a channel gets is the columns.
 
 # The shape of a track
 
@@ -200,7 +203,15 @@ Listing a name is not promising a value for it. This example's geometry states c
 
 # Seeing an inventory
 
-An inventory draws itself through its `viz` namespace, and each of the three plots looks along one coordinate.
+An inventory summarizes what it holds. Each object in the tree states one line, so the line you see nested here is the line that network, fiber array or optical path leads with when you show it on its own:
+
+```{python}
+inventory
+```
+
+Only what an object states is shown, so a field left at its default does not take up a line. `Networks` lists at most `display_max_items` children per level (see the [configuration](configuration.qmd) page) and says how many it left out.
+
+An inventory also draws itself through its `viz` namespace, and each of the three plots looks along one coordinate.
 
 [`Inventory.viz.path`](`dascore.viz.inventory.path`) looks along **optical distance**, which is the coordinate the data is in. Every track the path describes becomes a lane, so the channels an acquisition places, the components, the coupling, and each label group line up against the same axis:
 

@@ -6,6 +6,7 @@ from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
+import pandas as pd
 import pytest
 from matplotlib.collections import LineCollection, PatchCollection
 
@@ -16,6 +17,8 @@ from dascore.viz import VizInventoryNameSpace
 from dascore.viz.inventory import (
     COMPONENT_COLORS,
     _distance_window,
+    _legend_names,
+    _track_frame,
     map_path,
     path,
     timeline,
@@ -47,69 +50,65 @@ def _legend_labels(ax):
 def _main_path(epoch: int) -> inv.OpticalPath:
     """One epoch of the surveyed path; the second is the repaired fiber."""
     run = 400.0 if epoch == 1 else 402.0
-    times = {"end_time": "2026-07-01"} if epoch == 1 else {"start_time": "2026-07-01"}
+    times = {"time_max": "2026-07-01"} if epoch == 1 else {"time_min": "2026-07-01"}
     return inv.OpticalPath(
         name="main",
         location_code="00",
         optical_components=(
-            inv.FiberSegment(name="lead", optical_length=100.0),
-            inv.Connector(name="patch"),
-            inv.FiberSegment(name="run", optical_length=run),
-            inv.Terminator(name="end"),
+            inv.FiberSegment(name="lead", distance_min=0.0, distance_max=100.0),
+            inv.Connector(name="patch", distance_min=100.0),
+            inv.FiberSegment(name="run", distance_min=100.0, distance_max=100.0 + run),
+            inv.Terminator(name="end", distance_min=100.0 + run),
         ),
         geometry=(
             # Two surveyed runs with an unsurveyed gap from 300 to 350.
             inv.Geometry(
                 name="west",
                 distance=(100.0, 300.0),
-                coordinates={"x": (0.0, 200.0), "y": (0.0, 0.0), "z": (0.0, -1.0)},
+                columns={"x": (0.0, 200.0), "y": (0.0, 0.0), "z": (0.0, -1.0)},
             ),
             inv.Geometry(
                 name="east",
                 distance=(350.0, 500.0),
-                coordinates={"x": (250.0, 400.0), "y": (0.0, 5.0), "z": (-1.0, 0.0)},
+                columns={"x": (250.0, 400.0), "y": (0.0, 5.0), "z": (-1.0, 0.0)},
             ),
             # Columns of those same stretches, so they share the runs' names.
             inv.Geometry(
                 name="west",
                 distance=(100.0, 300.0),
-                coordinates={"chainage": (0.0, 200.0), "depth": (0.5, 1.5)},
+                columns={"chainage": (0.0, 200.0), "depth": (0.5, 1.5)},
                 units={"chainage": "m"},
             ),
             inv.Geometry(
                 name="east",
                 distance=(350.0, 500.0),
-                coordinates={"chainage": (250.0, 400.0)},
+                columns={"chainage": (250.0, 400.0)},
                 units={"chainage": "m"},
             ),
         ),
         coupling=(
             inv.CouplingCondition(
-                start_distance=100.0, end_distance=300.0, coupling_type="trench"
+                distance_min=100.0, distance_max=300.0, coupling_type="trench"
             ),
             inv.CouplingCondition(
-                start_distance=350.0, end_distance=500.0, coupling_type="conduit"
+                distance_min=350.0, distance_max=500.0, coupling_type="conduit"
             ),
         ),
         labels=(
             inv.OpticalPathLabel(
-                start_distance=100.0, end_distance=200.0, group="zone", value="north"
+                distance_min=100.0, distance_max=200.0, group="zone", value="north"
             ),
             inv.OpticalPathLabel(
-                start_distance=200.0, end_distance=400.0, group="zone", value="south"
+                distance_min=200.0, distance_max=400.0, group="zone", value="south"
             ),
             # A label group states membership by stating no value.
+            inv.OpticalPathLabel(distance_min=150.0, distance_max=300.0, group="noisy"),
+            inv.OpticalPathLabel(distance_min=300.0, distance_max=400.0, group="noisy"),
             inv.OpticalPathLabel(
-                start_distance=150.0, end_distance=300.0, group="noisy"
+                distance_min=100.0, distance_max=200.0, group="count", value=0
             ),
             inv.OpticalPathLabel(
-                start_distance=300.0, end_distance=400.0, group="noisy"
-            ),
-            inv.OpticalPathLabel(
-                start_distance=100.0, end_distance=200.0, group="count", value=0
-            ),
-            inv.OpticalPathLabel(
-                start_distance=200.0, end_distance=300.0, group="count", value=2.5
+                distance_min=200.0, distance_max=300.0, group="count", value=2.5
             ),
         ),
         **times,
@@ -121,15 +120,17 @@ def build_site_inventory() -> inv.Inventory:
     spur = inv.OpticalPath(
         name="spur",
         location_code="01",
-        optical_components=(inv.FiberSegment(name="spur", optical_length=50.0),),
+        optical_components=(
+            inv.FiberSegment(name="spur", distance_min=0.0, distance_max=50.0),
+        ),
     )
     common = dict(data_category="DAS", sample_rate=100.0, gauge_length=10.0)
     acquisitions = (
         inv.Acquisition(
             code="RAW",
             location_code="00",
-            start_time="2026-06-01",
-            end_time="2026-06-15",
+            time_min="2026-06-01",
+            time_max="2026-06-15",
             data_type="strain_rate",
             spatial_interval=1.0,
             interrogator=inv.Interrogator(manufacturer="Fake", model="FI-1"),
@@ -139,7 +140,7 @@ def build_site_inventory() -> inv.Inventory:
         inv.Acquisition(
             code="RAW",
             location_code="00",
-            start_time="2026-07-01",
+            time_min="2026-07-01",
             spatial_interval=1.0,
             interrogator=inv.Interrogator(serial_number="sn-9"),
             # One point states an origin but no extent, so it draws as a tick.
@@ -164,6 +165,44 @@ def build_site_inventory() -> inv.Inventory:
         ),
         resources=[inv.Interrogator(resource_id="int-1")],
         networks=(inv.Network(code="DAS", fiber_arrays=(array,)),),
+    ).check()
+
+
+def build_labeled_inventory(values: int, crs, lines: int = 1) -> inv.Inventory:
+    """One path of one label group, stating this many distinct values."""
+    labels = tuple(
+        inv.OpticalPathLabel(
+            distance_min=float(x * 10),
+            distance_max=float(x * 10 + 8),
+            group="hole",
+            value="\n".join([f"H{x % values:02d}"] * lines),
+        )
+        for x in range(24)
+    )
+    return inv.Inventory(
+        coordinate_reference_system=crs,
+        networks=(
+            inv.Network(
+                code="DAS",
+                fiber_arrays=(
+                    inv.FiberArray(
+                        code="L2",
+                        optical_paths=(
+                            inv.OpticalPath(
+                                name="holes",
+                                location_code="00",
+                                optical_components=(
+                                    inv.FiberSegment(
+                                        name="run", distance_min=0.0, distance_max=300.0
+                                    ),
+                                ),
+                                labels=labels,
+                            ),
+                        ),
+                    ),
+                ),
+            ),
+        ),
     ).check()
 
 
@@ -278,15 +317,17 @@ class TestSelectPath:
             one = inv.OpticalPath(
                 name="main",
                 location_code="00",
-                optical_components=(inv.FiberSegment(name="f", optical_length=100.0),),
+                optical_components=(
+                    inv.FiberSegment(name="f", distance_min=0.0, distance_max=100.0),
+                ),
             )
             array = inv.FiberArray(code="L1", optical_paths=(one,), **times)
             return inv.Network(code=code, fiber_arrays=(array,), **times)
 
         inventory = inv.Inventory(
             networks=(
-                build("AA", start_time="2020-01-01", end_time="2021-01-01"),
-                build("BB", start_time="2021-01-01"),
+                build("AA", time_min="2020-01-01", time_max="2021-01-01"),
+                build("BB", time_min="2021-01-01"),
             )
         ).check()
         # Neither path states a bound, so only their containers can tell
@@ -303,9 +344,11 @@ class TestSelectPath:
         one = inv.OpticalPath(
             name="main",
             location_code="00",
-            start_time="2020-01-01",
-            end_time="2021-01-01",
-            optical_components=(inv.FiberSegment(name="f", optical_length=100.0),),
+            time_min="2020-01-01",
+            time_max="2021-01-01",
+            optical_components=(
+                inv.FiberSegment(name="f", distance_min=0.0, distance_max=100.0),
+            ),
         )
         array = inv.FiberArray(code="L1", optical_paths=(one,))
         inventory = inv.Inventory(
@@ -328,6 +371,23 @@ class TestSelectPath:
 class TestPath:
     """The tracks along one path."""
 
+    def test_the_component_lane_is_where_the_components_are(self):
+        """The lane frame reads each component's own bounds.
+
+        Every fixture path here begins at zero, where a running total and
+        an absolute distance agree; a path which does not is what tells
+        the two apart.
+        """
+        one = inv.OpticalPath(
+            optical_components=(
+                inv.FiberSegment(name="lead", distance_min=100.0, distance_max=200.0),
+                inv.FiberSegment(name="run", distance_min=200.0, distance_max=350.0),
+            )
+        )
+        frame = _track_frame(one, ())
+        lane = frame[frame["lane"] == "components"]
+        assert list(zip(lane["start"], lane["end"])) == [(100.0, 200.0), (200.0, 350.0)]
+
     def test_all_tracks(self, site):
         """Every track becomes a lane, channels first."""
         ax = path(site, "DAS.L1.00", time="2026-06-10")
@@ -342,6 +402,103 @@ class TestPath:
         assert ax.get_xlabel() == "Optical distance [m]"
         # Components take their fixed colors, so the legend names the types.
         assert "FiberSegment" in _legend_labels(ax)
+
+    def test_a_legend_too_big_for_the_page_stays_on_it(self, site):
+        """A legend the figure cannot seat must not be made nonsense of.
+
+        The lanes keep some of the figure whatever the legend needs, and
+        neither they nor it leave the canvas.
+        """
+        crowded = build_labeled_inventory(24, site.coordinate_reference_system, lines=8)
+        ax = path(crowded, "DAS.L2.00")
+        figure = ax.get_figure()
+        figure.draw_without_rendering()
+        lanes = ax.get_window_extent()
+        assert lanes.height > 0 and lanes.y0 >= 0
+        assert lanes.y1 <= figure.bbox.height
+        box = figure.legends[0].get_window_extent(figure.canvas.get_renderer())
+        assert box.y0 >= 0 and box.y1 <= figure.bbox.height
+        assert box.x0 >= 0 and box.x1 <= figure.bbox.width
+
+    def test_a_value_on_two_lines_is_kept_room_for_both(self, site):
+        """A legend entry of two lines stands as tall as two of one.
+
+        Counting entries and not lines would keep too little room, and
+        the legend would go below into space nobody reserved.
+        """
+        crs = site.coordinate_reference_system
+        flat = path(build_labeled_inventory(12, crs), "DAS.L2.00")
+        short = flat.get_figure().get_size_inches()[1]
+        plt.close("all")
+        tall = path(build_labeled_inventory(12, crs, lines=2), "DAS.L2.00")
+        figure = tall.get_figure()
+        assert figure.get_size_inches()[1] > short
+        figure.draw_without_rendering()
+        box = figure.legends[0].get_window_extent(figure.canvas.get_renderer())
+        assert box.y0 >= 0 and box.y1 <= tall.get_window_extent().y0
+
+    def test_room_is_kept_for_a_legend_which_names_many_values(self, site):
+        """A path naming more values than it has lanes needs a taller figure.
+
+        The legend goes below the lanes there, and without the rows it
+        takes the lanes give up the room instead.
+        """
+        crs = site.coordinate_reference_system
+        few = path(build_labeled_inventory(2, crs), "DAS.L2.00")
+        few.get_figure().draw_without_rendering()
+        short, lanes = few.get_figure().get_size_inches()[1], _lanes(few)
+        room = few.get_window_extent().height / few.get_figure().dpi
+        plt.close("all")
+        many = path(build_labeled_inventory(24, crs), "DAS.L2.00")
+        figure = many.get_figure()
+        figure.draw_without_rendering()
+        # Same one lane either way, so only the legend can move the height.
+        assert _lanes(many) == lanes == ["components", "hole"]
+        assert figure.get_size_inches()[1] > short
+        # The room is kept for the legend, not taken from the lanes: with
+        # no allowance at all these lanes lose a third of their height.
+        assert many.get_window_extent().height / figure.dpi >= room * 0.9
+        box = figure.legends[0].get_window_extent(figure.canvas.get_renderer())
+        assert box.y0 >= 0 and box.y1 <= figure.bbox.height
+
+    def test_a_mapping_names_its_numbers_and_only_those(self, site):
+        """A number is a colorbar until a mapping gives it a swatch.
+
+        A mapping which names some of them names only those, which is
+        what the legend beside them will show.
+        """
+        frame = pd.DataFrame(
+            {"lane": ["count"] * 3, "value": [0, 1, 2], "start": 0.0, "end": 1.0}
+        )
+        assert _legend_names(frame, None) == []
+        assert _legend_names(frame, "red") == []
+        assert _legend_names(frame, {0: "red", 1: "blue", 2: "green"}) == [
+            "0",
+            "1",
+            "2",
+        ]
+        assert _legend_names(frame, {"count": {0: "red"}}) == ["0"]
+
+    def test_a_flat_mapping_names_only_what_it_holds(self, site):
+        """Room is kept for the swatches drawn, not for every value."""
+        crowded = build_labeled_inventory(24, site.coordinate_reference_system)
+        frame = pd.DataFrame(
+            {"lane": ["hole"] * 3, "value": ["a", "b", "c"], "start": 0.0, "end": 1.0}
+        )
+        assert _legend_names(frame, {"a": "red"}) == ["a"]
+        # And the figure is no taller for the values it does not name.
+        one = path(crowded, "DAS.L2.00", color={"H00": "red"})
+        assert one.get_figure().get_size_inches()[1] < 3.0
+
+    def test_one_color_for_every_lane_needs_no_legend_room(self, site):
+        """A figure which names no value has no legend to keep room for."""
+        crowded = build_labeled_inventory(24, site.coordinate_reference_system)
+        named = path(crowded, "DAS.L2.00")
+        tall = named.get_figure().get_size_inches()[1]
+        plt.close("all")
+        plain = path(crowded, "DAS.L2.00", color="red")
+        assert plain.get_figure().legends == []
+        assert plain.get_figure().get_size_inches()[1] < tall
 
     def test_tracks_selected_in_order(self, site):
         """tracks= picks lanes and orders them."""
@@ -404,6 +561,19 @@ class TestPath:
         with pytest.raises(ParameterError, match="builds the figure"):
             path(site, "DAS.L1.00", time="2026-06-10", columns="chainage", ax=ax)
 
+    def test_a_figure_of_panels_is_sized_after_it_is_built(self, site):
+        """Panels take no ax, so their figure is the one asked to resize."""
+        figure = path(
+            site, "DAS.L1.00", time="2026-06-10", columns="chainage"
+        ).get_figure()
+        figure.set_size_inches(5, 4)
+        figure.draw_without_rendering()
+        assert tuple(figure.get_size_inches()) == (5.0, 4.0)
+        # Laid out again at the size asked for: the panels still fit.
+        for axes in figure.axes:
+            box = axes.get_window_extent()
+            assert box.height > 0 and box.y0 >= 0 and box.y1 <= figure.bbox.height
+
     def test_ax_without_columns(self, site):
         """Lanes alone draw onto an axes a caller provides."""
         _, ax = plt.subplots()
@@ -422,7 +592,7 @@ class TestPath:
     @pytest.mark.parametrize(
         "asked, match",
         [
-            (5, "must be a .low, high. pair"),
+            (5, "must be a .min, max. pair"),
             ((10, 5), "must be increasing"),
             ((900, 1000), "clips everything away"),
         ],
@@ -440,7 +610,9 @@ class TestPath:
     def test_zero_length_path(self):
         """A path whose components state no length has no axis."""
         stub = inv.OpticalPath(
-            name="stub", location_code="09", optical_components=(inv.Connector(),)
+            name="stub",
+            location_code="09",
+            optical_components=(inv.Connector(distance_min=0.0),),
         )
         array = inv.FiberArray(code="A", optical_paths=(stub,))
         inventory = inv.Inventory(
@@ -449,21 +621,17 @@ class TestPath:
         with pytest.raises(ParameterError, match="has no length"):
             path(inventory)
 
-    def test_color_override_and_figsize(self, site, monkeypatch):
-        """color= reaches the renderer, figsize the figure, show plt.show."""
-        called = []
-        monkeypatch.setattr(plt, "show", lambda: called.append(True))
+    def test_color_override_and_show(self, site, shown):
+        """color= reaches the renderer, and show calls plt.show."""
         ax = path(
             site,
             "DAS.L1.00",
             time="2026-06-10",
             tracks="coupling",
             color="black",
-            figsize=(4, 3),
             show=True,
         )
-        assert called
-        assert tuple(ax.get_figure().get_size_inches()) == (4.0, 3.0)
+        assert shown
         assert np.allclose(_boxes(ax)[0].get_facecolors()[0][:3], [0, 0, 0])
 
     def test_components_keep_their_own_colors(self, site):
@@ -511,8 +679,8 @@ class TestPath:
         """A colorbar must not steal width from the lanes alone."""
         readings = tuple(
             inv.OpticalPathLabel(
-                start_distance=100.0 + 10 * index,
-                end_distance=110.0 + 10 * index,
+                distance_min=100.0 + 10 * index,
+                distance_max=110.0 + 10 * index,
                 group="reading",
                 value=float(index),
             )
@@ -522,12 +690,14 @@ class TestPath:
         one = inv.OpticalPath(
             name="main",
             location_code="00",
-            optical_components=(inv.FiberSegment(name="f", optical_length=300.0),),
+            optical_components=(
+                inv.FiberSegment(name="f", distance_min=0.0, distance_max=300.0),
+            ),
             geometry=(
                 inv.Geometry(
                     name="run",
                     distance=(100.0, 300.0),
-                    coordinates={"chainage": (0.0, 200.0)},
+                    columns={"chainage": (0.0, 200.0)},
                     units={"chainage": "m"},
                 ),
             ),
@@ -585,17 +755,19 @@ class TestMap:
         one = inv.OpticalPath(
             name="long",
             location_code="00",
-            optical_components=(inv.FiberSegment(name="f", optical_length=100_000.0),),
+            optical_components=(
+                inv.FiberSegment(name="f", distance_min=0.0, distance_max=100_000.0),
+            ),
             geometry=(
                 inv.Geometry(
                     name="west",
                     distance=(0.0, 50_000.0),
-                    coordinates={"x": (0.0, 500.0), "y": (0.0, 0.0), "z": (0.0, 0.0)},
+                    columns={"x": (0.0, 500.0), "y": (0.0, 0.0), "z": (0.0, 0.0)},
                 ),
                 inv.Geometry(
                     name="east",
                     distance=(50_010.0, 100_000.0),
-                    coordinates={
+                    columns={
                         "x": (600.0, 1000.0),
                         "y": (0.0, 0.0),
                         "z": (0.0, 0.0),
@@ -668,13 +840,15 @@ class TestMap:
         one = inv.OpticalPath(
             name="hole",
             location_code="00",
-            optical_components=(inv.FiberSegment(name="f", optical_length=40.0),),
+            optical_components=(
+                inv.FiberSegment(name="f", distance_min=0.0, distance_max=40.0),
+            ),
             geometry=(
                 inv.Geometry(
                     name="down",
                     distance=(0.0, 40.0),
                     # Straight down: nothing to see in plan view at all.
-                    coordinates={"x": (5.0, 5.0), "y": (2.0, 2.0), "z": (0.0, -40.0)},
+                    columns={"x": (5.0, 5.0), "y": (2.0, 2.0), "z": (0.0, -40.0)},
                 ),
             ),
         )
@@ -707,12 +881,14 @@ class TestMap:
             return inv.OpticalPath(
                 name=f"p{location}",
                 location_code=location,
-                optical_components=(inv.FiberSegment(name="f", optical_length=200.0),),
+                optical_components=(
+                    inv.FiberSegment(name="f", distance_min=0.0, distance_max=200.0),
+                ),
                 geometry=(
                     inv.Geometry(
                         name="run",
                         distance=(0.0, 200.0),
-                        coordinates={
+                        columns={
                             "x": (0.0, 100.0),
                             "y": (float(location), float(location)),
                             "z": (0.0, 0.0),
@@ -722,8 +898,8 @@ class TestMap:
                 labels=(
                     (
                         inv.OpticalPathLabel(
-                            start_distance=0.0,
-                            end_distance=200.0,
+                            distance_min=0.0,
+                            distance_max=200.0,
                             group=group,
                             value=value,
                         ),
@@ -805,12 +981,14 @@ class TestMap:
             return inv.OpticalPath(
                 name=f"p{location}",
                 location_code=location,
-                optical_components=(inv.FiberSegment(name="f", optical_length=200.0),),
+                optical_components=(
+                    inv.FiberSegment(name="f", distance_min=0.0, distance_max=200.0),
+                ),
                 geometry=(
                     inv.Geometry(
                         name="run",
                         distance=(0.0, 200.0),
-                        coordinates={
+                        columns={
                             "x": (0.0, 100.0),
                             "y": (float(location), float(location)),
                             "z": (0.0, 0.0),
@@ -819,8 +997,8 @@ class TestMap:
                 ),
                 labels=tuple(
                     inv.OpticalPathLabel(
-                        start_distance=100.0 * index,
-                        end_distance=100.0 * (index + 1),
+                        distance_min=100.0 * index,
+                        distance_max=100.0 * (index + 1),
                         group="zone",
                         value=value,
                     )
@@ -866,12 +1044,14 @@ class TestMap:
             return inv.OpticalPath(
                 name=f"p{location}",
                 location_code=location,
-                optical_components=(inv.FiberSegment(name="f", optical_length=200.0),),
+                optical_components=(
+                    inv.FiberSegment(name="f", distance_min=0.0, distance_max=200.0),
+                ),
                 geometry=(
                     inv.Geometry(
                         name="run",
                         distance=(0.0, 200.0),
-                        coordinates={
+                        columns={
                             "x": (0.0, 100.0),
                             "y": (float(location), float(location)),
                             "z": (0.0, 0.0),
@@ -880,14 +1060,14 @@ class TestMap:
                 ),
                 labels=(
                     inv.OpticalPathLabel(
-                        start_distance=0.0,
-                        end_distance=100.0,
+                        distance_min=0.0,
+                        distance_max=100.0,
                         group="reading",
                         value=value,
                     ),
                     inv.OpticalPathLabel(
-                        start_distance=100.0,
-                        end_distance=200.0,
+                        distance_min=100.0,
+                        distance_max=200.0,
                         group="reading",
                         value=value + 1.0,
                     ),
@@ -929,12 +1109,14 @@ class TestMap:
             return inv.OpticalPath(
                 name=f"p{location}",
                 location_code=location,
-                optical_components=(inv.FiberSegment(name="f", optical_length=200.0),),
+                optical_components=(
+                    inv.FiberSegment(name="f", distance_min=0.0, distance_max=200.0),
+                ),
                 geometry=(
                     inv.Geometry(
                         name="run",
                         distance=(0.0, 200.0),
-                        coordinates={
+                        columns={
                             "x": (0.0, 100.0),
                             "y": (float(location), float(location)),
                             "z": (0.0, 0.0),
@@ -948,7 +1130,7 @@ class TestMap:
             "01",
             (
                 inv.OpticalPathLabel(
-                    start_distance=0.0, end_distance=200.0, group="zone", value="north"
+                    distance_min=0.0, distance_max=200.0, group="zone", value="north"
                 ),
             ),
         )
@@ -972,14 +1154,16 @@ class TestMap:
         one = inv.OpticalPath(
             name="main",
             location_code="00",
-            start_time="2020-01-01",
-            end_time="2021-01-01",
-            optical_components=(inv.FiberSegment(name="f", optical_length=100.0),),
+            time_min="2020-01-01",
+            time_max="2021-01-01",
+            optical_components=(
+                inv.FiberSegment(name="f", distance_min=0.0, distance_max=100.0),
+            ),
             geometry=(
                 inv.Geometry(
                     name="run",
                     distance=(0.0, 100.0),
-                    coordinates={"x": (0.0, 1.0), "y": (0.0, 0.0), "z": (0.0, 0.0)},
+                    columns={"x": (0.0, 1.0), "y": (0.0, 0.0), "z": (0.0, 0.0)},
                 ),
             ),
         )
@@ -1032,12 +1216,10 @@ class TestMap:
         ax = map_path(tunnel, x="x", y="z", color="section", time="2024-07-01")
         assert "borehole" in _legend_labels(ax)
 
-    def test_show(self, site, monkeypatch):
+    def test_show(self, site, shown):
         """Show calls plt.show."""
-        called = []
-        monkeypatch.setattr(plt, "show", lambda: called.append(True))
         map_path(site, show=True)
-        assert called
+        assert shown
 
 
 class TestTimeline:
@@ -1105,7 +1287,7 @@ class TestTimeline:
         "bad, match",
         [
             (("2026-07-01", "2026-06-01"), "must be increasing"),
-            ("nope", "must be a .start, end. pair"),
+            ("nope", "must be a .min, max. pair"),
             (("not a time", None), "not a time"),
         ],
     )
@@ -1134,8 +1316,8 @@ class TestTimeline:
         acquisition = inv.Acquisition(
             code="RAW",
             location_code="00",
-            start_time="2026-06-01",
-            end_time="2026-06-15",
+            time_min="2026-06-01",
+            time_max="2026-06-15",
             data_category="DAS",
             sample_rate=1.0,
             gauge_length=1.0,
@@ -1155,8 +1337,8 @@ class TestTimeline:
         acquisition = inv.Acquisition(
             code="RAW",
             location_code="00",
-            start_time="2026-06-01",
-            end_time="2026-06-15",
+            time_min="2026-06-01",
+            time_max="2026-06-15",
             data_category="DAS",
             sample_rate=1.0,
             gauge_length=1.0,
@@ -1186,13 +1368,11 @@ class TestTimeline:
         with pytest.raises(ParameterError, match="nothing with a time epoch"):
             timeline(empty)
 
-    def test_ax_and_show(self, site, monkeypatch):
+    def test_ax_and_show(self, site, shown):
         """A given ax is drawn on; show calls plt.show."""
-        called = []
-        monkeypatch.setattr(plt, "show", lambda: called.append(True))
         _, ax = plt.subplots()
         assert timeline(site, ax=ax, show=True) is ax
-        assert called
+        assert shown
 
     def test_tunnel_repair(self, tunnel):
         """The tunnel's path lane holds two epochs split at the repair."""

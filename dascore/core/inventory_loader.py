@@ -25,7 +25,10 @@ one fact.
 Loading is strict about near-misses and indifferent to clean misses:
 anything which claims to participate in a convention and gets it wrong
 raises, while anything which does not participate -- photos, field notes,
-deployment logs -- is ignored where it lies.
+deployment logs -- is ignored where it lies. A column does the same: a
+header beginning with an underscore is the crew's own record keeping, and
+no table reads it. What it holds stays in the file, so a note which should
+travel with the inventory goes in ``description`` instead.
 """
 
 from __future__ import annotations
@@ -64,6 +67,7 @@ from dascore.utils.documents import read_document
 from dascore.utils.misc import check_code
 from dascore.utils.paths import quote_path as _quote
 from dascore.utils.tables import (
+    drop_private_columns,
     ordered_rows,
     parse_cell,
     read_table,
@@ -422,17 +426,17 @@ def _load_entry(entry: Path, data_source: Path, container: _Container, crs) -> _
     _refuse_supplied(data, container.supplied, data_source, "an object file")
     name, epoch = _split_epoch(entry, container.epochs)
     address = _apply_identity(data, container, name, data_source)
-    if epoch is not None and "start_time" not in data:
-        data["start_time"] = epoch
+    if epoch is not None and "time_min" not in data:
+        data["time_min"] = epoch
     # After the epoch, not before: an entity's first path epoch starts
     # where the entity does, so its own start has to be known by then.
     if entry.is_dir():
         _merge_tables(data, entry, model, crs, data_source)
-        _merge_paths(data, entry, model, crs, data_source, data.get("start_time"))
+        _merge_paths(data, entry, model, crs, data_source, data.get("time_min"))
     built = _build(model, data, data_source)
-    if epoch is not None and built.start_time != epoch:
+    if epoch is not None and built.time_min != epoch:
         msg = (
-            f"{_quote(data_source)} states start_time {built.start_time} but "
+            f"{_quote(data_source)} states time_min {built.time_min} but "
             f"its name says {epoch}. A restated address must agree with the "
             "name."
         )
@@ -449,15 +453,11 @@ class _Table(NamedTuple):
     # The column assigning points to objects, for a collection of them.
     # None where the attribute is a single object, or a row is an object.
     group: str | None = None
-    # The column rows are read in the order of. Where a table names one,
-    # row position decides nothing and re-sorting a spreadsheet is
-    # harmless; where it does not, the rows keep the order they were
-    # written in, which the model reads as a set rather than a sequence.
+    # The axis a point table's parallel arrays are built along, which its
+    # rows are sorted by so re-sorting a spreadsheet cannot change what it
+    # means. An object table names none: each of its rows states where it
+    # sits, so the model reads them as a set.
     order: str | None = None
-    # True where that column is the table's own scaffolding rather than a
-    # field, so nothing else records where a row sits and it must place
-    # each row unambiguously.
-    places: bool = False
     # The field every column but the order gathers into, keyed by header.
     # None where each column names a field of the object directly.
     columns: str | None = None
@@ -468,17 +468,13 @@ class _Table(NamedTuple):
 # property of the attribute, and stating it is shorter than deducing it.
 # TestTableRegistry pins every key to a field of the model declaring it.
 _TABLES: Mapping[str, _Table] = {
-    "optical_components": _Table(order="sequence", places=True),
+    "optical_components": _Table(),
     "coupling": _Table(),
     "labels": _Table(),
-    "geometry": _Table(
-        points=True, group="segment", order="distance", columns="coordinates"
-    ),
+    "geometry": _Table(points=True, group="name", order="distance", columns="columns"),
     "distance_map": _Table(points=True, order="distance"),
 }
 
-# The one column of a point table which is not a field of the object it
-# builds; components order by it and drop it.
 # The one suffix a table takes, and the table stems folded once so the
 # near-miss check can match a shouted name without folding them per file.
 _CSV_SUFFIX = ".csv"
@@ -492,46 +488,46 @@ _TABLES_BY_FOLD = {x.casefold(): x for x in _TABLES}
 # one stored inventory from breaking two different ways.
 _RETIRED_TABLES = {"annotations": "labels"}
 
-_SEQUENCE = "sequence"
+# The columns of geometry.csv which are not columns of the segment: the one
+# naming it and the one placing each row along it. Read off the registry so
+# the headers and the fields they fill cannot drift apart.
+_GEOMETRY_STRUCTURAL = frozenset({"name", "distance"})
+assert _GEOMETRY_STRUCTURAL == {_TABLES["geometry"].group, _TABLES["geometry"].order}
 
-
-def _check_places(keys: pd.Series, column: str, path: Path) -> None:
-    """
-    Refuse an ordering which does not place every row.
-
-    Components tile the path, each starting where the previous ends, so
-    two rows sharing a place would be ordered by where they happen to sit
-    in the file -- which is the one thing this column exists to stop
-    deciding anything.
-    """
-    repeated = sorted({str(x) for x in keys[keys.duplicated()]})
-    if repeated:
-        msg = (
-            f"{_quote(path)} states {column} {', '.join(repeated)} more than "
-            "once, so it does not say which row comes first."
+# Columns this format used to read, by the table which read them. A file
+# written before a rename is this format's own former spelling, so it is
+# told what to write instead rather than having the column reported as a
+# field the model has never heard of.
+_RETIRED_COLUMNS = {
+    "optical_components": {
+        "sequence": (
+            "components state distance_min and distance_max, which say "
+            "where each one is without being counted through. Drop the "
+            "column."
+        ),
+        "optical_length": (
+            "a component's length is the span between its distance_min "
+            "and distance_max, which place it as well. State those."
+        ),
+    },
+    "geometry": {
+        "segment": (
+            "the column naming a segment is now name, which is the field "
+            "it fills. Rename the column."
         )
-        raise InvalidInventoryError(msg)
+    },
+}
 
 
 def _object_rows(frame: pd.DataFrame, table: _Table, path: Path) -> list[dict]:
-    """Read a table whose every row is one object."""
-    require_columns(frame, [table.order], path)
-    require_stated(frame, [table.order], path)
-    ordered = ordered_rows(frame, table.order, path)
-    if table.places and table.order is not None:
-        _check_places(ordered[table.order], table.order, path)
-    out = []
-    for _, row in ordered.iterrows():
-        cells = row_cells(row)
-        # The order column is the table's own scaffolding where the object
-        # has no such field, so it is dropped -- but only where the table
-        # says it has one. Dropped everywhere, a stray sequence column in
-        # coupling.csv would vanish instead of being refused as the
-        # unknown field the model calls it.
-        if table.places:
-            cells.pop(table.order, None)
-        out.append(cells)
-    return out
+    """
+    Read a table whose every row is one object.
+
+    Row order carries nothing: each row states where it sits, so the model
+    reads them as a set. Only a point table orders its rows, and it does
+    so by the axis its arrays are built along.
+    """
+    return [row_cells(row) for _, row in frame.iterrows()]
 
 
 def _point_rows(
@@ -553,14 +549,13 @@ def _point_rows(
     # dropna=False: a blank grouping cell would otherwise take its row out
     # of the table without a word. require_stated has already refused one,
     # and this keeps that the reason nothing is missing.
-    groups = (
-        frame.groupby(table.group, sort=True, dropna=False)
-        if table.group
-        else [(None, frame)]
-    )
+    group = table.group
+    groups = frame.groupby(group, sort=True, dropna=False) if group else [(None, frame)]
     out = []
     for name, rows in groups:
-        point: dict[str, Any] = {} if name is None else {"name": str(name)}
+        # A name only comes back where the table names a grouping column,
+        # which is the field each group's name fills.
+        point: dict[str, Any] = {} if group is None else {group: str(name)}
         gathered: dict[str, tuple] = {}
         for column in rows.columns:
             if column == table.group:
@@ -660,18 +655,18 @@ def _load_path(directory: Path, crs, begins):
             "with the name."
         )
         raise InvalidInventoryError(msg)
-    if epoch is not None and "start_time" not in data:
-        data["start_time"] = epoch
+    if epoch is not None and "time_min" not in data:
+        data["time_min"] = epoch
     # The bare `path` directory is the first epoch, and it starts where the
     # fiber array holding it does -- left unset it would claim the
     # unbounded past, which is before the array it belongs to exists.
-    if epoch is None and "start_time" not in data and not pd.isnull(begins):
-        data["start_time"] = begins
+    if epoch is None and "time_min" not in data and not pd.isnull(begins):
+        data["time_min"] = begins
     _merge_tables(data, directory, OpticalPath, crs, attrs)
     built = _build(OpticalPath, data, attrs)
-    if epoch is not None and built.start_time != epoch:
+    if epoch is not None and built.time_min != epoch:
         msg = (
-            f"{_quote(attrs)} states start_time {built.start_time} but its "
+            f"{_quote(attrs)} states time_min {built.time_min} but its "
             f"directory says {epoch}. A restated address must agree with "
             "the name."
         )
@@ -697,27 +692,25 @@ def _close_lineages(paths: list, sources: dict) -> list:
         # An unset start is the unbounded past, so the bare `path` directory
         # sorts before every epoch which names an instant, rather than after
         # them as a null ordinarily would.
-        ordered = sorted(
-            lineage, key=lambda x: (not pd.isnull(x.start_time), x.start_time)
-        )
+        ordered = sorted(lineage, key=lambda x: (not pd.isnull(x.time_min), x.time_min))
         for first, second in itertools.pairwise(ordered):
             # _times_equal, not ==: NaT equals nothing, itself included,
             # so two undated epochs of one lineage would never collide.
-            if _times_equal(first.start_time, second.start_time):
+            if _times_equal(first.time_min, second.time_min):
                 msg = (
                     f"{_quote(sources[id(first)])} and "
                     f"{_quote(sources[id(second)])} start at the same instant, "
                     "so they are two spellings of one epoch."
                 )
                 raise InvalidInventoryError(msg)
-            if pd.isnull(first.end_time):
-                out.append(first.new(end_time=second.start_time))
+            if pd.isnull(first.time_max):
+                out.append(first.new(time_max=second.time_min))
                 continue
-            if first.end_time > second.start_time:
+            if first.time_max > second.time_min:
                 msg = (
-                    f"{_quote(sources[id(first)])} ends at {first.end_time}, "
+                    f"{_quote(sources[id(first)])} ends at {first.time_max}, "
                     f"after the epoch which follows it begins at "
-                    f"{second.start_time}."
+                    f"{second.time_min}."
                 )
                 raise InvalidInventoryError(msg)
             out.append(first)
@@ -876,6 +869,26 @@ def _load_table(path: Path, table: _Table, stem: str, crs):
         raise InvalidInventoryError(str(error)) from error
 
 
+def _refuse_retired_columns(frame: pd.DataFrame, stem: str, path: Path) -> None:
+    """
+    Explain a column this format used to read, rather than shrugging.
+
+    A file written before a rename is this format's own former spelling,
+    not a crew's own file which owes it nothing, so it is told what to
+    write instead. Without this a dropped column reports as a field the
+    model has never heard of, and a renamed one as the column now missing.
+    """
+    retired = _RETIRED_COLUMNS.get(stem, {})
+    for column in frame.columns:
+        if (advice := retired.get(str(column))) is None:
+            continue
+        msg = (
+            f"{_quote(path)} states {column}, which this format no longer "
+            f"reads: {advice}"
+        )
+        raise InvalidInventoryError(msg)
+
+
 def _read_track_table(path: Path, table: _Table, stem: str, crs):
     """Read one track table, in the table utilities' own error vocabulary."""
     frame = read_table(path, what="no track")
@@ -885,6 +898,12 @@ def _read_track_table(path: Path, table: _Table, stem: str, crs):
     if frame.empty:
         msg = f"{_quote(path)} states no rows, so it describes no {stem}."
         raise InvalidInventoryError(msg)
+    # Read before any header is: a private column is the author's own, so
+    # a geometry table's numeric rule and the model's unknown-field error
+    # are both none of its business. A table of nothing else keeps its
+    # rows, and is refused by the columns it then fails to state.
+    frame = drop_private_columns(frame)
+    _refuse_retired_columns(frame, stem, path)
     units: Mapping[str, str] = {}
     if stem == "geometry":
         frame, units = _geometry_columns(frame, crs, path)
@@ -927,7 +946,7 @@ def _geometry_columns(frame: pd.DataFrame, crs, path: Path):
     labels = tuple(crs.coordinate_labels)
     renamed, units = {}, {}
     for header in frame.columns:
-        if header in {"segment", "distance"}:
+        if header in _GEOMETRY_STRUCTURAL:
             continue
         name, unit = header, ""
         if (match := _UNIT_SUFFIX.match(header)) is not None:
@@ -944,7 +963,7 @@ def _geometry_columns(frame: pd.DataFrame, crs, path: Path):
     # Counted against the structural columns as well: `distance (m)` renames
     # to a column the table already has, and two of them would reach pandas
     # rather than this message.
-    written = [*renamed.values(), "segment", "distance"]
+    written = [*renamed.values(), *_GEOMETRY_STRUCTURAL]
     if repeated := sorted({x for x in written if written.count(x) > 1}):
         msg = (
             f"{_quote(path)} names the column(s) {repeated} more than once; "
@@ -1164,12 +1183,12 @@ def _escapes(child, parent) -> str:
     end -- which is how a child with no epoch of its own escapes a parent
     which has one.
     """
-    if not pd.isnull(parent.start_time) and (
-        pd.isnull(child.start_time) or child.start_time < parent.start_time
+    if not pd.isnull(parent.time_min) and (
+        pd.isnull(child.time_min) or child.time_min < parent.time_min
     ):
         return "starts before"
-    if not pd.isnull(parent.end_time) and (
-        pd.isnull(child.end_time) or child.end_time > parent.end_time
+    if not pd.isnull(parent.time_max) and (
+        pd.isnull(child.time_max) or child.time_max > parent.time_max
     ):
         return "runs past"
     return ""
@@ -1196,10 +1215,10 @@ def _place(children: list[_Entry], parents: list[_Entry], kind: str):
         matches = [
             index
             for index, parent in enumerate(parents)
-            if parent.model.is_effective_at(child.model.start_time)
+            if parent.model.is_effective_at(child.model.time_min)
         ]
         if len(matches) != 1:
-            start = child.model.start_time
+            start = child.model.time_min
             when = "at any time" if pd.isnull(start) else f"at {start}"
             named = ".".join(child.address)
             msg = (
@@ -1209,10 +1228,10 @@ def _place(children: list[_Entry], parents: list[_Entry], kind: str):
             raise InvalidInventoryError(msg)
         parent = parents[matches[0]]
         if escape := _escapes(child.model, parent.model):
-            span = f"{parent.model.start_time} to {parent.model.end_time}"
+            span = f"{parent.model.time_min} to {parent.model.time_max}"
             msg = (
-                f"{_quote(child.source)} is valid from {child.model.start_time} "
-                f"to {child.model.end_time}, so it {escape} the {kind} epoch "
+                f"{_quote(child.source)} is valid from {child.model.time_min} "
+                f"to {child.model.time_max}, so it {escape} the {kind} epoch "
                 f"holding it, which runs {span}. State it once per epoch it "
                 "spans."
             )

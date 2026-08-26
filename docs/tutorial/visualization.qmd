@@ -45,6 +45,30 @@ plt.tight_layout()
 plt.show()
 ```
 
+### Marking where labels change
+
+An [inventory](inventory.qmd) states its label groups over stretches of the fiber, and [`Patch.enrich`](`dascore.proc.inventory.enrich`) projects each group onto the patch as its own coordinate. Naming one with `label_coord` marks off each stretch and names it in a legend beyond the colorbar, so the plot reads in the vocabulary the inventory uses rather than in metres alone.
+
+```{python}
+from dascore.examples import inventory_patch_pair
+
+zoned, inventory = inventory_patch_pair()
+
+zoned.enrich(inventory).viz.waterfall(label_coord="zone", show=True);
+```
+
+Each zone is a bar along the left and right spines, covering the channels it applies to. The bars sit on the spines rather than over the image, because a wash over the data would have to be strong enough to see, and a wash that strong has recolored the data under it — which on a diverging colormap is the measurement itself.
+
+Joining the two bars wherever the value changes is a hairline, so a boundary can still be traced through the image rather than only read off its edges. It is drawn faint, over a white stroke which keeps it visible on a busy image without letting it compete with the data.
+
+Where a group says nothing the spine is left bare, so what a group covers and what it merely passes over are read off the same edge. A coordinate over `time` rather than `distance` puts its bars on the bottom and top spines instead; which dimension the coordinate belongs to is what decides, and nothing needs to be passed.
+
+A boolean coordinate is a membership group: only the stretches it holds are marked, and the legend calls them by the coordinate's own name.
+
+```{python}
+zoned.enrich(inventory).viz.waterfall(label_coord="noisy", show=True);
+```
+
 ## Wiggle
 The [`wiggle patch function`](`dascore.viz.wiggle`) creates a wiggle plot of the patch data. We'll use the same patch as above to model this function.
 
@@ -141,10 +165,21 @@ spool.viz.coverage(show=True);
 
 Both acquisitions lose the four days in the middle of January, which is the site's own outage; the strain acquisition started later and was pulled out earlier, which is why its lane is shorter rather than gappy at the ends.
 
-Any dimension the spool states can be measured, and a `(start, end)` pair windows it:
+A lane is named by the values which tell its group apart from the others, with that group's coverage appended. The [spool's own repr](spool.qmd#what-a-spool-says-of-itself) names its tracks by the same rule, so the two can be read against each other. A track is one kind of patch, which is where the grouping here starts; a lane can be finer, because sampling rate and coordinate structure part two lanes of one kind.
+
+Time is measured by default; any other dimension the spool states can be named instead, as `spool.viz.coverage("distance")`. The whole of it is drawn, because part of a spool is a smaller spool: select the window first and the lanes, and the percentages on them, are of that window rather than of a window drawn over percentages of everything.
 
 ```{python}
-spool.viz.coverage(time=("2024-01-15", "2024-01-25"), show=True);
+spool.select(time=("2024-01-15", "2024-01-25")).viz.coverage(show=True);
+```
+
+The lanes end where the selection does, which is what a spool of those ten days holds. Keeping the whole picture and looking at part of it is a different question, and one for the axes rather than the spool: a lane which runs off the edge there says the data does not stop at it.
+
+```{python}
+import numpy as np
+
+ax = spool.viz.coverage()
+ax.set_xlim(np.datetime64("2024-01-15"), np.datetime64("2024-01-25"));
 ```
 
 ## Calendar

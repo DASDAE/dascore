@@ -10,9 +10,17 @@ files and makes these specific assumptions:
 - The map block version is ``200``.
 - ``SupParams`` stores manufacturer, model, and serial number in the first
   three null-separated fields.
-- ``FxdParams`` exposes the timestamp, distance unit, wavelength, sample
-  spacing, index of refraction, and display range fields documented in
-  ``_parse_fixed_params``.
+- ``FxdParams`` exposes the timestamp, distance unit, wavelength, pulse
+  width, sample spacing, index of refraction, averaging, and display range
+  fields documented in ``_parse_fixed_params``.
+- ``FxdParams`` carries exactly one pulse-width entry. The fields after it
+  sit at fixed offsets which a second entry would shift, so a file
+  declaring another count is refused rather than silently misread.
+- The averaging time is read as the standard's tenths of a second. Several
+  vendors write that field on their own scale, so only a supplier known to
+  keep the standard has it read as a duration, which is then both reported
+  and promoted to the time coordinate's step. Every other file keeps the
+  bare instant and states no averaging time.
 - ``DataPts`` is a single unsegmented trace with unsigned little-endian
   16-bit samples and the display scale documented in ``_parse_data_points``.
 - Trace samples follow pyotdr's SR-4731 display convention:
@@ -43,6 +51,11 @@ REQUIRED_BLOCKS = frozenset(
 )
 SPEED_OF_LIGHT_KM_PER_USEC = 0.299792458
 
+# Suppliers whose averaging time is known to be the standard's tenths of
+# a second. Noyes writes hundredths and EXFO whole seconds, so the field
+# an unlisted supplier states names no duration this reader can size.
+_STANDARD_AVERAGING_SUPPLIERS = frozenset({"FIBERCLOUD"})
+
 
 @dataclass(frozen=True)
 class Block:
@@ -58,9 +71,12 @@ class SR4731PatchAttrs(PatchAttrs):
     """Patch attributes for supported SR-4731 SOR files."""
 
     wavelength_nm: OptionalFiniteFloat = None
+    pulse_width: OptionalFiniteFloat = None
     acquisition_range_m: OptionalFiniteFloat = None
     sample_spacing_usec: OptionalFiniteFloat = None
     refractive_index: OptionalFiniteFloat = None
+    averaging_time: OptionalFiniteFloat = None
+    n_averages: int = 0
     trace_count: int = 0
     sample_scale: int = 0
 
@@ -150,16 +166,40 @@ def _parse_fixed_params(payload: bytes) -> dict[str, Any]:
     # OFL100/FIBERCLOUD FxdParams fields used here:
     #   0: uint32 unix timestamp, 4: 2-byte distance unit,
     #   6: uint16 wavelength in tenths of nm,
+    #   16: uint16 pulse-width entry count,
+    #   18: uint16 pulse width in ns,
     #   20: uint32 sample spacing in 1e-8 microseconds,
     #   24: uint32 sample count,
     #   28: uint32 group index of refraction in 1e-5,
+    #   34: uint32 number of averages,
+    #   38: uint16 averaging time in tenths of a second,
     #   40: uint32 display range in 2e-5 km.
+    # Every offset past 18 assumes the single pulse-width entry the
+    # subset declares; a second entry would shift all of them, so the
+    # count is checked rather than trusted.
     timestamp = _unpack_from("<I", payload, 0)[0]
     unit = payload[4:6].decode("ascii", "replace")
     wavelength_nm = _unpack_from("<H", payload, 6)[0] / 10
+    pulse_width_entries = _unpack_from("<H", payload, 16)[0]
+    if pulse_width_entries != 1:
+        msg = (
+            "SR-4731 SOR FxdParams block declares "
+            f"{pulse_width_entries} pulse-width entries; this reader "
+            "supports the single-entry subset, whose later fields sit at "
+            "offsets another entry would shift."
+        )
+        raise InvalidFiberFileError(msg)
+    pulse_width = _unpack_from("<H", payload, 18)[0] * 1e-9
     sample_spacing_usec = _unpack_from("<I", payload, 20)[0] * 1e-8
     n_samples = _unpack_from("<I", payload, 24)[0]
     refractive_index = _unpack_from("<I", payload, 28)[0] * 1e-5
+    n_averages = _unpack_from("<I", payload, 34)[0]
+    # Kept as the number the file states, since what it counts depends
+    # on who wrote it: the standard's tenths of a second, which pyotdr
+    # and otdrs both assume, but hundredths for Noyes and whole seconds
+    # for EXFO. Only `_averaging_seconds`, which knows the supplier,
+    # can turn it into a duration.
+    averaging_time_raw = _unpack_from("<H", payload, 38)[0]
     display_range_km = _unpack_from("<I", payload, 40)[0] * 2e-5
     if sample_spacing_usec <= 0 or refractive_index <= 0:
         msg = "SR-4731 SOR FxdParams block has invalid distance scaling fields."
@@ -171,6 +211,9 @@ def _parse_fixed_params(payload: bytes) -> dict[str, Any]:
         "timestamp": timestamp,
         "distance_unit": unit,
         "wavelength_nm": wavelength_nm,
+        "pulse_width": pulse_width,
+        "n_averages": n_averages,
+        "averaging_time_raw": averaging_time_raw,
         "sample_spacing_usec": sample_spacing_usec,
         "n_samples": n_samples,
         "refractive_index": refractive_index,
@@ -253,11 +296,45 @@ def _parse_sor(resource, load_samples: bool = True) -> dict[str, Any]:
     }
 
 
+def _averaging_seconds(parsed: dict[str, Any]) -> float | None:
+    """
+    Return the averaging time in seconds, or None when it cannot be read.
+
+    The field is the standard's tenths of a second, but vendors write
+    it on their own scale -- the same half minute is 300 here, 3000 for
+    Noyes and 30 for EXFO -- and `get_format` accepts any version-200
+    file, not only the subset this module documents. A number scaled by
+    the wrong vendor's rule is wrong by a factor of ten, so a supplier
+    this reader does not know states no averaging time at all rather
+    than one which reads as physical and is not.
+    """
+    raw = parsed["fixed"]["averaging_time_raw"]
+    manufacturer = next(iter(parsed["supplier"]), "").strip().upper()
+    if raw <= 0 or manufacturer not in _STANDARD_AVERAGING_SUPPLIERS:
+        return None
+    return raw * 0.1
+
+
 def _get_time_coord(parsed: dict[str, Any]) -> BaseCoord:
-    """Create a singleton time coordinate from the fixed-params timestamp."""
-    timestamp = parsed["fixed"]["timestamp"]
-    time = np.asarray([timestamp], dtype="datetime64[s]").astype("datetime64[ns]")
-    return get_coord(data=time)
+    """
+    Create the singleton time coordinate from the fixed-params timestamp.
+
+    A trace is one sample, and the averaging time is the span of fiber
+    time it was built from, which is what a step states: the extent the
+    sample stands for. Saying it keeps two traces taken weeks apart two
+    measurements rather than one unbroken recording, which is what a
+    stepless instant reads as.
+
+    A file whose averaging time this reader cannot read (see
+    [`_averaging_seconds`](`dascore.io.sr4731.utils._averaging_seconds`))
+    keeps the bare instant, which is no worse than saying nothing.
+    """
+    start = np.datetime64(parsed["fixed"]["timestamp"], "s").astype("datetime64[ns]")
+    averaging_time = _averaging_seconds(parsed)
+    if averaging_time is None:
+        return get_coord(data=np.asarray([start]))
+    step = np.timedelta64(round(averaging_time * 1e9), "ns")
+    return get_coord(start=start, stop=start + step, step=step)
 
 
 def _get_distance_coord(parsed: dict[str, Any]) -> BaseCoord:
@@ -287,9 +364,12 @@ def _get_attr_dict(parsed: dict[str, Any]) -> dict:
         "data_type": "otdr",
         "data_units": "dB",
         "wavelength_nm": parsed["fixed"]["wavelength_nm"],
+        "pulse_width": parsed["fixed"]["pulse_width"],
         "acquisition_range_m": parsed["fixed"]["acquisition_range_m"],
         "sample_spacing_usec": parsed["fixed"]["sample_spacing_usec"],
         "refractive_index": parsed["fixed"]["refractive_index"],
+        "averaging_time": _averaging_seconds(parsed),
+        "n_averages": parsed["fixed"]["n_averages"],
         "trace_count": data_points["trace_count"],
         "sample_scale": data_points["scale"],
         "interrogator.manufacturer": manufacturer,

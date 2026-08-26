@@ -217,6 +217,64 @@ class _MissingOptionalFormatter(FiberIO):
         return False
 
 
+class _ScanBehaviorFormatter(FiberIO):
+    """A reader whose scan misbehaves in whichever way its file name asks.
+
+    Module level, because registration is permanent and keyed by
+    (name, version): a second definition of the same pair inside a test
+    function is ignored and this one keeps answering. It claims only its
+    own suffix, so no other get_format in the process changes.
+
+    The alternative -- patching `scan` on the live terra15 reader -- edits
+    an object every other test in the session shares.
+    """
+
+    name = "_scan_behavior_formatter"
+    version = "1"
+
+    def get_format(self, resource: Path, **kwargs) -> tuple[str, str] | Literal[False]:
+        """Claim only this test's sentinel files."""
+        return (
+            (self.name, self.version)
+            if Path(resource).suffix == ".scanbehavior"
+            else False
+        )
+
+    def scan(self, resource: Path, **kwargs):
+        """Do what the file name says, rather than scanning it."""
+        behavior = Path(resource).stem
+        if behavior == "os_error":
+            raise OSError("Simulated OS issue")
+        if behavior == "remote_cache_error":
+            raise RemoteCacheError("metadata cache blocked")
+        if behavior == "patch_attrs":  # the pre-ScanPayload return type
+            return [dc.PatchAttrs(tag="legacy")]
+        if behavior == "missing_keys":
+            return [{"unexpected": 1}]
+        if behavior == "non_mapping":
+            return ["not a payload"]
+        if behavior == "summary_coords":  # coords collapsed to summaries
+            patch = dc.get_example_patch()
+            return [
+                {
+                    "attrs": patch.attrs,
+                    "coords": patch.coords.to_summary_dict(),
+                    "dims": patch.dims,
+                    "shape": patch.shape,
+                    "dtype": str(patch.data.dtype),
+                }
+            ]
+        msg = f"no scan behavior called {behavior!r}"
+        raise LookupError(msg)
+
+
+def _misbehaving_scan_path(tmp_path, behavior: str) -> Path:
+    """Return a path _ScanBehaviorFormatter will scan in the named way."""
+    path = tmp_path / f"{behavior}.scanbehavior"
+    path.write_text("placeholder")
+    return path
+
+
 class _DependencyErrorFormatter(FiberIO):
     """A formatter whose scan path hits a dependency/compatibility problem."""
 
@@ -1228,110 +1286,50 @@ class TestReloadableSourcePath:
         with pytest.raises(NotImplementedError):
             fio.scan(bad_input)
 
-    def test_bad_checksum(self, monkeypatch, terra15_v6_path):
+    def test_bad_checksum(self, tmp_path):
         """Test for when format is identified but can't read part of file #346"""
-        # Monkey patch scan to raise OSError. This simulates observed behavior.
-        fname, ver = FiberIO.manager._get_format(path=terra15_v6_path)
-        fiber_io = FiberIO.manager.get_fiberio(format=fname, version=ver)
-
-        def raise_os_error(*args, **kwargs):
-            raise OSError("Simulated OS issue")
-
-        monkeypatch.setattr(fiber_io, "scan", raise_os_error)
-
+        path = _misbehaving_scan_path(tmp_path, "os_error")
         # Ensure scanning doesn't raise and warns
         msg = "Failed to scan"
         with pytest.warns(UserWarning, match=msg):
-            scan = dc.scan(terra15_v6_path)
+            scan = dc.scan(path)
         assert not len(scan)
 
-    def test_remote_cache_error_is_not_swallowed(self, monkeypatch, terra15_v6_path):
+    def test_remote_cache_error_is_not_swallowed(self, tmp_path):
         """Remote cache policy errors during scan should propagate to callers."""
-        fname, ver = FiberIO.manager._get_format(path=terra15_v6_path)
-        fiber_io = FiberIO.manager.get_fiberio(format=fname, version=ver)
-
-        def raise_remote_cache_error(*args, **kwargs):
-            raise RemoteCacheError("metadata cache blocked")
-
-        monkeypatch.setattr(fiber_io, "scan", raise_remote_cache_error)
-
+        path = _misbehaving_scan_path(tmp_path, "remote_cache_error")
         with pytest.raises(RemoteCacheError, match="metadata cache blocked"):
-            dc.scan(terra15_v6_path)
+            dc.scan(path)
 
-    def test_scan_legacy_patch_attrs_raises(self, monkeypatch, terra15_v6_path):
+    def test_scan_legacy_patch_attrs_raises(self, tmp_path):
         """FiberIO returning PatchAttrs should now fail loudly."""
-        fname, ver = FiberIO.manager._get_format(path=terra15_v6_path)
-        fiber_io = FiberIO.manager.get_fiberio(format=fname, version=ver)
-
-        def return_patch_attrs(*args, **kwargs):
-            return [dc.PatchAttrs(tag="legacy")]
-
-        monkeypatch.setattr(fiber_io, "scan", return_patch_attrs)
-
+        path = _misbehaving_scan_path(tmp_path, "patch_attrs")
         with pytest.raises(ValueError, match=r"PatchAttrs from FiberIO\.scan"):
-            dc.scan(terra15_v6_path)
+            dc.scan(path)
 
-    def test_scan_payloads_legacy_patch_attrs_raises(
-        self, monkeypatch, terra15_v6_path
-    ):
+    def test_scan_payloads_legacy_patch_attrs_raises(self, tmp_path):
         """Raw payload scans should reject legacy summary-only results."""
-        fname, ver = FiberIO.manager._get_format(path=terra15_v6_path)
-        fiber_io = FiberIO.manager.get_fiberio(format=fname, version=ver)
-
-        def return_patch_attrs(*args, **kwargs):
-            return [dc.PatchAttrs(tag="legacy")]
-
-        monkeypatch.setattr(fiber_io, "scan", return_patch_attrs)
-
+        path = _misbehaving_scan_path(tmp_path, "patch_attrs")
         with pytest.raises(ValueError, match="no longer accepts PatchAttrs"):
-            dc.scan_payloads(terra15_v6_path)
+            dc.scan_payloads(path)
 
-    def test_scan_payloads_missing_keys_raises(self, monkeypatch, terra15_v6_path):
+    def test_scan_payloads_missing_keys_raises(self, tmp_path):
         """Raw payload scans should validate all required payload keys."""
-        fname, ver = FiberIO.manager._get_format(path=terra15_v6_path)
-        fiber_io = FiberIO.manager.get_fiberio(format=fname, version=ver)
-
-        def return_malformed_payload(*args, **kwargs):
-            return [{"unexpected": 1}]
-
-        monkeypatch.setattr(fiber_io, "scan", return_malformed_payload)
-
+        path = _misbehaving_scan_path(tmp_path, "missing_keys")
         with pytest.raises(TypeError, match="missing required keys"):
-            dc.scan_payloads(terra15_v6_path)
+            dc.scan_payloads(path)
 
-    def test_scan_payloads_non_mapping_raises(self, monkeypatch, terra15_v6_path):
+    def test_scan_payloads_non_mapping_raises(self, tmp_path):
         """Raw payload scans should reject unsupported result types."""
-        fname, ver = FiberIO.manager._get_format(path=terra15_v6_path)
-        fiber_io = FiberIO.manager.get_fiberio(format=fname, version=ver)
-
-        def return_non_mapping(*args, **kwargs):
-            return ["not a payload"]
-
-        monkeypatch.setattr(fiber_io, "scan", return_non_mapping)
-
+        path = _misbehaving_scan_path(tmp_path, "non_mapping")
         with pytest.raises(TypeError, match="must return ScanPayload mappings"):
-            dc.scan_payloads(terra15_v6_path)
+            dc.scan_payloads(path)
 
-    def test_scan_payloads_requires_coord_manager(self, monkeypatch, terra15_v6_path):
+    def test_scan_payloads_requires_coord_manager(self, tmp_path):
         """Raw payload scans should reject collapsed coordinate summaries."""
-        fname, ver = FiberIO.manager._get_format(path=terra15_v6_path)
-        fiber_io = FiberIO.manager.get_fiberio(format=fname, version=ver)
-        patch = dc.get_example_patch()
-        payload = {
-            "attrs": patch.attrs,
-            "coords": patch.coords.to_summary_dict(),
-            "dims": patch.dims,
-            "shape": patch.shape,
-            "dtype": str(patch.data.dtype),
-        }
-
-        def return_summary_coords(*args, **kwargs):
-            return [payload]
-
-        monkeypatch.setattr(fiber_io, "scan", return_summary_coords)
-
+        path = _misbehaving_scan_path(tmp_path, "summary_coords")
         with pytest.raises(TypeError, match="must be a CoordManager"):
-            dc.scan_payloads(terra15_v6_path)
+            dc.scan_payloads(path)
 
     @pytest.mark.parametrize(
         ("key", "value"),

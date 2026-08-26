@@ -8,7 +8,6 @@ from typing import Any, Final
 from uuid import uuid4
 
 import numpy as np
-from rich.text import Text
 
 import dascore as dc
 import dascore.proc.coords
@@ -26,14 +25,21 @@ from dascore.utils.array import (
     patch_array_ufunc,
 )
 from dascore.utils.array_api import to_numpy
-from dascore.utils.display import array_to_text, attrs_to_text, get_dascore_text
+from dascore.utils.display import (
+    NodeRepr,
+    Repr,
+    array_to_text,
+    attrs_to_text,
+    get_header_text,
+    split_block,
+)
 from dascore.utils.namespace import NamespaceOwner
 from dascore.utils.patch import check_patch_attrs, check_patch_coords, get_patch_names
 from dascore.utils.time import to_float
 from dascore.workflow.identity import with_patch_id
 
 
-class Patch(NamespaceOwner):
+class Patch(NodeRepr, NamespaceOwner):
     """
     A Class for managing data and metadata.
 
@@ -204,24 +210,19 @@ class Patch(NamespaceOwner):
         out = out if not copy else np.copy(out)
         return out
 
-    def __rich__(self):
-        dascore_text = get_dascore_text()
-        name = "Patch ⚡"
-        patch_text = Text(name, style="bold")
-        header = Text.assemble(dascore_text, " ", patch_text)
-        line = Text("-" * len(header))
-        coords = self.coords.__rich__()
+    def _repr_node(self) -> Repr:
+        """The banner, the coordinates, the data and the attributes."""
         attrs = self.attrs
-        data = array_to_text(self.data, units=attrs.get("data_units"))
-        attrs = attrs_to_text(self.attrs)
-        out = Text("\n").join([header, line, coords, data, attrs])
-        return out
-
-    def __str__(self):
-        out = self.__rich__()
-        return str(out)
-
-    __repr__ = __str__
+        return Repr(
+            header=get_header_text("Patch ⚡"),
+            body=(
+                self.coords._repr_section(),
+                split_block(
+                    array_to_text(self.data, units=attrs.get("data_units")),
+                ),
+                split_block(attrs_to_text(attrs)),
+            ),
+        )
 
     def flat_dump(self, exclude=None) -> dict:
         """Return a flat summary dict for dataframe-oriented helpers."""
@@ -464,6 +465,8 @@ class Patch(NamespaceOwner):
     all = dascore.proc.agg.all
     first = dascore.proc.agg.first
     last = dascore.proc.agg.last
+    idxmax = dascore.proc.agg.idxmax
+    idxmin = dascore.proc.agg.idxmin
 
     # --- Universal functions
     add = PatchUFunc(np.add)

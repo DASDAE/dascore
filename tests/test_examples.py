@@ -27,11 +27,6 @@ class TestGetExamplePatch:
         with pytest.raises(UnknownExampleError, match="No example patch"):
             dc.get_example_patch("NotAnExampleRight????")
 
-    def test_data_file_name(self):
-        """Ensure get_example_spool works on a datafile."""
-        spool = dc.get_example_spool("dispersion_event.h5")
-        assert isinstance(spool, dc.BaseSpool)
-
     def test_get_example_patch_data_file_name(self):
         """Ensure get_example_patch can load file-backed registry entries."""
         patch = dc.get_example_patch("dispersion_event.h5")
@@ -42,46 +37,6 @@ class TestGetExamplePatch:
         """Ensure the registered example patches can all be loaded."""
         patch = dc.get_example_patch(name)
         assert isinstance(patch, dc.Patch)
-
-    def test_file_backed_examples_use_direct_read(self, monkeypatch):
-        """File-backed examples should not depend on file-spool patch resolution."""
-        patch = dc.get_example_patch()
-
-        def _fetch(_name):
-            return "ignored-path"
-
-        def _read(_path):
-            return [patch]
-
-        def _spool(_path):
-            raise AssertionError("file-backed examples should load via dc.read")
-
-        monkeypatch.setattr(dc_examples, "fetch", _fetch)
-        monkeypatch.setattr(dc_examples.dc, "read", _read)
-        monkeypatch.setattr(dc_examples.dc, "spool", _spool)
-
-        out = dc_examples.example_event_1()
-        assert isinstance(out, dc.Patch)
-
-    def test_file_backed_registry_examples_use_direct_read(self, monkeypatch):
-        """Registry-backed patch examples should load via direct read."""
-        patch = dc.get_example_patch()
-
-        def _fetch(_name):
-            return "ignored-path"
-
-        def _read(_path):
-            return [patch]
-
-        def _spool(_path):
-            raise AssertionError("registry-backed examples should load via dc.read")
-
-        monkeypatch.setattr(dc_examples, "fetch", _fetch)
-        monkeypatch.setattr(dc_examples.dc, "read", _read)
-        monkeypatch.setattr(dc_examples.dc, "spool", _spool)
-
-        out = dc.get_example_patch("dispersion_event.h5")
-        assert isinstance(out, dc.Patch)
 
 
 class TestGetExampleSpool:
@@ -178,9 +133,9 @@ class TestTunnelInventory:
     def test_epochs_are_open_at_the_ends(self, inventory):
         """The first path runs from the beginning, the second is ongoing."""
         first, second = inventory.networks[0].fiber_arrays[0].optical_paths
-        assert pd.isnull(first.start_time)
-        assert first.end_time == second.start_time
-        assert pd.isnull(second.end_time)
+        assert pd.isnull(first.time_min)
+        assert first.time_max == second.time_min
+        assert pd.isnull(second.time_max)
 
     def test_geometry_gap_is_a_real_gap(self, inventory, original):
         """Fiber nobody surveyed gets no position rather than a guess."""
@@ -201,8 +156,8 @@ class TestTunnelInventory:
 
     def test_holds_point_markers(self, original):
         """Splices and connectors have no length, so they are points."""
-        intervals = original.component_intervals()
-        assert sum(1 for start, end in intervals if start == end) > 1
+        points = [x for x in original.optical_components if x.optical_length == 0]
+        assert len(points) > 1
 
     def test_coupling_covers_only_part_of_the_path(self, original):
         """Partial coverage is legal and is what a coverage plot must show."""

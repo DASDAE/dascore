@@ -47,11 +47,42 @@ with config_context(patch_history="disabled"):
     ...
 ```
 
-Which patches may be combined is configurable too: `patch_kind_attrs` names the attributes that decide whether two patches are the same kind (patches with conflicting values for any of them are never combined; a missing value conflicts with nothing). See the [Patch Compatibility](../notes/patch_compatibility.qmd) note.
+Which patches may be combined is configurable too: `patch_kind_attrs` names the attributes that decide whether two patches are the same kind (patches with differing values for any of them are never combined; a missing value is a wildcard for operators and a value of its own where patches are partitioned). See the [Patch Compatibility](../notes/patch_compatibility.qmd) note.
 
 ```python
 with config_context(patch_kind_attrs=("acquisition_key",)):
     ...  # tag and data_category no longer separate patches
+```
+
+How objects print is configurable as well: `display_float_precision` sets the decimals shown for floats, `display_array_threshold` how much of an array is printed before it is elided, `display_max_items` how many children a repr lists per level before saying how many it left out, and `display_max_patches` how large a spool may be before its repr stops summarizing what it covers and names the limit it exceeded instead.
+
+```python
+with config_context(display_max_items=3):
+    display(inventory)  # at most three networks, arrays or paths per level
+
+with config_context(display_max_patches=100):
+    display(spool)  # a bigger spool names the limit rather than its extents
+```
+
+Where a display can render HTML -- a notebook, or this documentation --
+an object draws a panel whose sections fold, rather than the text above.
+`display_html` turns that off and sends every display back to the text,
+which says the same words. `display_html_open_lines` (12 by default) is
+how many lines a section may hold and still open on its own; a longer
+one, such as a patch's data, starts folded, and `0` folds every section.
+
+A setting only holds while its block does, and a notebook echoes the
+last thing a cell states rather than anything inside a block, so these
+ask for the display while the setting is still in force. `display` is a
+name Jupyter puts in the namespace; elsewhere it comes from
+`IPython.display`.
+
+```python
+with config_context(display_html=False):
+    display(patch)  # the text repr, even in a notebook
+
+with config_context(display_html_open_lines=0):
+    display(patch)  # every section folded until it is asked for
 ```
 
 For remote IO settings such as `allow_remote_cache`,

@@ -242,6 +242,111 @@ class TestChunkPlanDF:
         assert np.all(pd.isnull(chunk_df["time_step"]))
 
 
+class TestEdgeInWindow:
+    """
+    An output edge inside the window between two sources (#1008, #893).
+
+    No sample lies between one source's stop and the next source's start,
+    but a chunk length that is not a whole number of samples puts output
+    edges there. The end source those edges select holds no sample of the
+    output and must be dropped, not asserted on.
+    """
+
+    @pytest.fixture()
+    def contiguous_three(self):
+        """Three exactly contiguous sources of five unit samples each."""
+        return pd.DataFrame(
+            {
+                "time_min": [0.0, 5.0, 10.0],
+                "time_max": [4.0, 9.0, 14.0],
+                "time_step": [1.0, 1.0, 1.0],
+            }
+        )
+
+    @pytest.fixture()
+    def sub_tolerance_gap(self):
+        """Two sources with a 1.4 sample gap, which the default tolerance merges."""
+        return pd.DataFrame(
+            {"time_min": [0.0, 10.4], "time_max": [9.0, 19.4], "time_step": [1.0, 1.0]}
+        )
+
+    @staticmethod
+    def _check_members(plan):
+        """Every member trim is upright and inside its output."""
+        joined = plan.members.merge(plan.outputs, on="output_id", suffixes=("", "_out"))
+        assert (joined["time_min"] <= joined["time_max"]).all()
+        assert (joined["time_min"] >= joined["time_min_out"]).all()
+        assert (joined["time_max"] <= joined["time_max_out"]).all()
+
+    def test_start_in_window_drops_leading_source(self, contiguous_three):
+        """A start at 4.5 must not pull in the source ending at 4."""
+        plan = build_chunk_plan(contiguous_three, time=4.5)
+        self._check_members(plan)
+        second = plan.members[plan.members["output_id"] == 1]
+        assert second["_patch_id"].tolist() == [1]
+        assert second[["time_min", "time_max"]].to_numpy().tolist() == [[5.0, 8.0]]
+
+    def test_stop_in_window_drops_trailing_source(self, contiguous_three):
+        """A stop at 4.5 must not pull in the source starting at 5."""
+        plan = build_chunk_plan(contiguous_three, time=5.5)
+        self._check_members(plan)
+        first = plan.members[plan.members["output_id"] == 0]
+        assert first["_patch_id"].tolist() == [0]
+        assert not first["_modified"].any()
+
+    def test_output_spanning_window_keeps_both_sides(self, contiguous_three):
+        """An output crossing the window draws from both its sources."""
+        plan = build_chunk_plan(contiguous_three, time=4.5)
+        third = plan.members[plan.members["output_id"] == 2]
+        assert third["_patch_id"].tolist() == [1, 2]
+        assert third[["time_min", "time_max"]].to_numpy().tolist() == [
+            [9.0, 9.0],
+            [10.0, 12.5],
+        ]
+
+    def test_sub_tolerance_gap(self, sub_tolerance_gap):
+        """A boundary inside a merged gap drops the source before it."""
+        plan = build_chunk_plan(sub_tolerance_gap, time=5)
+        self._check_members(plan)
+        third = plan.members[plan.members["output_id"] == 2]
+        assert third["_patch_id"].tolist() == [1]
+        assert third["time_min"].tolist() == [10.4]
+
+    def test_output_inside_gap_is_not_published(self, sub_tolerance_gap):
+        """An output with no sample in any source has no row."""
+        plan = build_chunk_plan(sub_tolerance_gap, time=1)
+        starts = plan.outputs["time_min"].to_numpy()
+        assert not ((starts > 9.0) & (starts < 10.4)).any()
+        assert set(plan.outputs["output_id"]) == set(plan.members["output_id"])
+
+    def test_nested_sources_belong_to_the_first(self):
+        """
+        A source nested in an earlier one contributes nothing, even after
+        a shorter nested neighbor: the start correction is against the
+        furthest stop so far, not the previous row's.
+        """
+        df = pd.DataFrame(
+            {
+                "time_min": [0.0, 10.0, 30.0],
+                "time_max": [100.0, 20.0, 40.0],
+                "time_step": [1.0, 1.0, 1.0],
+            }
+        )
+        plan = build_chunk_plan(df, time=35, keep_partial=True)
+        self._check_members(plan)
+        assert plan.members["_patch_id"].unique().tolist() == [0]
+        assert plan.members["time_max"].tolist() == [34.0, 69.0, 100.0]
+
+    def test_mixed_dtypes_resolve_per_output(self, contiguous_three):
+        """Dropping an end source still resolves each output's dtype."""
+        df = contiguous_three.assign(
+            _dtype=["float32", "float64", "float32"], dims="time"
+        )
+        plan = build_chunk_plan(df, time=4.5)
+        self._check_members(plan)
+        assert plan.outputs["_dtype"].tolist() == ["float32", "float64", "float64"]
+
+
 class TestChunkPlanToMerge:
     """Merge-mode planning on raw dataframes."""
 
@@ -838,20 +943,17 @@ class TestBuildGapFrame:
         assert out["gap_size"].iloc[0] == 993
         assert out["x_min"].dtype == df["x_min"].dtype
 
-    def test_cell_states_its_known_value(self, gapy_df):
-        """A cell reports the attr its members know, not the first row's.
+    def test_rows_of_different_kinds_are_different_cells(self, gapy_df):
+        """A row which never recorded an attr is not the kind of one which did.
 
-        Kind matching admits a row which never recorded an attr into the
-        cell of one that did, so the first row is not always the one
-        that knows.
+        The two are unrelated, so the hole between them is not a gap: a
+        report never bridges cells.
         """
         df = gapy_df.iloc[:2].copy()
         df["tag"] = ["", "sta1"]
-        # kind matching keeps them one cell, so the hole is a real gap
-        out = build_gap_frame(df, "time")
-        assert len(out) == 1
-        assert out["tag"].tolist() == ["sta1"]
-        assert build_coverage_frame(df, "time")["tag"].tolist() == ["sta1"]
+        assert len(build_gap_frame(df, "time")) == 0
+        coverage = build_coverage_frame(df, "time")
+        assert sorted(coverage["tag"].fillna("")) == ["", "sta1"]
 
     def test_integer_dimension_beyond_float_precision(self):
         """A gap survives an integer coordinate too large for float64.

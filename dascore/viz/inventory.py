@@ -48,7 +48,7 @@ def _effective_epoch(*models):
     """The epoch a model is really valid over, clipped by its containers."""
     start, end = pd.NaT, pd.NaT
     for model in models:
-        low, high = model.start_time, model.end_time
+        low, high = model.time_min, model.time_max
         if not pd.isnull(low):
             start = low if pd.isnull(start) else max(start, low)
         if not pd.isnull(high):
@@ -97,9 +97,9 @@ def _sample_distances(path, low: float, high: float, count: int) -> np.ndarray:
 
 def _epoch_label(path) -> str:
     """Name a path epoch by when it starts, for a chart title."""
-    if pd.isnull(path.start_time):
+    if pd.isnull(path.time_min):
         return "from the beginning"
-    return f"from {str(path.start_time)[:10]}"
+    return f"from {str(path.time_min)[:10]}"
 
 
 def _select_path(inventory, optical_path=None, acquisition_key=None, time=None):
@@ -211,14 +211,12 @@ def _track_frame(path, acquisitions) -> pd.DataFrame:
                 "label": acquisition.code,
             }
         )
-    for component, (low, high) in zip(
-        path.optical_components, path.component_intervals(), strict=True
-    ):
+    for component in path.optical_components:
         rows.append(
             {
                 "lane": "components",
-                "start": low,
-                "end": high,
+                "start": component.distance_min,
+                "end": component.distance_max,
                 "value": type(component).__name__,
                 "label": component.name or type(component).__name__,
             }
@@ -227,8 +225,8 @@ def _track_frame(path, acquisitions) -> pd.DataFrame:
         rows.append(
             {
                 "lane": "coupling",
-                "start": coupling.start_distance,
-                "end": coupling.end_distance,
+                "start": coupling.distance_min,
+                "end": coupling.distance_max,
                 "value": coupling.coupling_type,
                 "label": coupling.coupling_type,
             }
@@ -237,8 +235,8 @@ def _track_frame(path, acquisitions) -> pd.DataFrame:
         rows.append(
             {
                 "lane": item.group,
-                "start": item.start_distance,
-                "end": item.end_distance,
+                "start": item.distance_min,
+                "end": item.distance_max,
                 "value": item.value,
                 # The renderer's own rule for what a value reads as.
                 "label": _default_label(item.value),
@@ -310,13 +308,13 @@ def _select_tracks(frame, tracks, path):
 
 
 def _distance_window(asked, span):
-    """Resolve a (low, high) distance selection against a path's span."""
+    """Resolve a (min, max) distance selection against a path's span."""
     if asked is None:
         return span
     try:
         low, high = asked
     except (TypeError, ValueError):
-        msg = f"distance={asked!r} must be a (low, high) pair."
+        msg = f"distance={asked!r} must be a (min, max) pair."
         raise ParameterError(msg) from None
     low = span[0] if low is None or low is ... else float(low)
     high = span[1] if high is None or high is ... else float(high)
@@ -345,7 +343,6 @@ def path(
     color: str | Mapping | None = None,
     max_labels: int = 200,
     ax: plt.Axes | None = None,
-    figsize: tuple[float, float] | None = None,
     show: bool = False,
 ) -> plt.Axes:
     """
@@ -373,7 +370,7 @@ def path(
         The instant to resolve at, which is how one epoch of a repaired
         path is chosen.
     distance
-        The optical distances to draw between, as (low, high). Either
+        The optical distances to draw between, as (min, max). Either
         end may be None, or ..., to run to the path's own bound. A long
         lead-in otherwise crushes the instrumented part into a corner.
     tracks
@@ -387,12 +384,16 @@ def path(
     color
         Passed to the lane renderer to override its colors.
     max_labels
-        Draw no lane text at all past this many intervals.
+        Draw no lane text at all past this many intervals. Below that
+        count, a label too wide for its box is turned on its side, and
+        dropped only if it does not fit that way either.
     ax
-        An Axes to draw the lanes on. Column panels need their own
-        figure, so passing this and naming columns is refused.
-    figsize
-        Size of the figure built when ax is None.
+        An Axes to draw the lanes on; one is created, a lane tall per
+        track, when None. Pass one to say how large the plot is. Column
+        panels need their own figure, so passing this and naming columns
+        is refused; size that figure with
+        `path(...).get_figure().set_size_inches(width, height)`, which
+        lays it out again at the size asked for.
     show
         Whether to call plt.show.
 
@@ -423,7 +424,7 @@ def path(
             "state none, so there is no distance axis to draw."
         )
         raise ParameterError(msg)
-    limits = _distance_window(distance, (chosen.start_distance, chosen.end_distance))
+    limits = _distance_window(distance, (chosen.distance_min, chosen.distance_max))
     frame = _track_frame(chosen, _path_acquisitions(array, chosen, time))
     # The palette is the path's, not this figure's, so drawing some of the
     # tracks colors them as drawing all of them does.
@@ -431,12 +432,35 @@ def path(
     frame = _select_tracks(frame, tracks, chosen)
     lanes = list(dict.fromkeys(frame["lane"]))
     if ax is None:
+        # A legend which goes below the lanes needs height kept for it;
+        # without that the lanes give up the room instead and every bar is
+        # squeezed into a sliver. There is no figure to measure yet, so
+        # both the standing height of one column and the rows it breaks
+        # into are estimated from the labels; guessing low gives back less
+        # room than intended, which is the harmless direction.
+        named = _legend_names(frame, color)
+        width = 10.0
+        lane_height = 1.2 + 0.42 * len(lanes)
+        # A legend which would stand nearly as tall as the lanes it names
+        # reads better under them, and short of that it belongs at their
+        # side. Deciding here rather than leaving it to the renderer is
+        # what keeps the two from disagreeing: room kept below would
+        # otherwise be room enough to sit beside, and go unused.
+        column = _lanes.legend_column_points(named) / 72.0
+        legend_rows = (
+            0
+            if column <= 0.8 * lane_height
+            else _lanes.estimate_legend_rows(named, 72.0 * width)
+        )
         # Capped: a figure taller than a page is not more readable.
-        height = min(1.2 + 0.42 * len(lanes) + 1.1 * len(columns), 14.0)
+        height = min(
+            lane_height + 1.1 * len(columns) + 0.3 * legend_rows,
+            14.0,
+        )
         figure, all_axes = plt.subplots(
             1 + len(columns),
             1,
-            figsize=figsize or (10.0, height),
+            figsize=(width, height),
             sharex=True,
             height_ratios=[max(2.0, 0.5 * len(lanes))] + [1] * len(columns),
             squeeze=False,
@@ -445,7 +469,7 @@ def path(
         all_axes = all_axes[:, 0]
         ax, panels = all_axes[0], all_axes[1:]
     else:
-        figure, panels = None, []
+        figure, panels, legend_rows = None, [], 0
     pad = 0.02 * (limits[1] - limits[0])
     plot_lanes(
         frame,
@@ -460,6 +484,10 @@ def path(
         x_limits=(limits[0] - pad, limits[1] + pad),
         x_label="" if len(panels) else "Optical distance [m]",
         colorbar_axes=[ax, *panels] if len(panels) else None,
+        manage_figure=figure is not None,
+        # Room was kept below for a legend, so that is where it goes;
+        # letting it choose again would find the room and sit beside it.
+        legend="below" if legend_rows else True,
     )
     named = [address, *([chosen.name] if chosen.name else []), _epoch_label(chosen)]
     ax.set_title(" · ".join(named), loc="left", fontsize="medium")
@@ -482,13 +510,13 @@ def path(
 
 
 def _time_window(asked):
-    """Resolve a (start, end) time selection to matplotlib dates."""
+    """Resolve a (min, max) time selection to matplotlib dates."""
     if asked is None:
         return None, None
     try:
         low, high = asked
     except (TypeError, ValueError):
-        msg = f"time={asked!r} must be a (start, end) pair."
+        msg = f"time={asked!r} must be a (min, max) pair."
         raise ParameterError(msg) from None
 
     def one(value):
@@ -509,6 +537,40 @@ def _time_window(asked):
         msg = f"time={asked!r} must be increasing."
         raise ParameterError(msg)
     return low, high
+
+
+def _legend_names(frame, color) -> list[str]:
+    """What a legend of these lanes would name, in the order it names it.
+
+    Only what earns a swatch counts. A single color for the whole figure
+    earns no legend at all; a lane which states no value earns one swatch
+    named for the lane; and a lane of numbers reads from its colorbar, or
+    from the numbers printed in its boxes where there are few enough of
+    them, so it names none. A mapping is the exception: it gives swatches
+    to the values it holds, numbers included, and to no others.
+    """
+    if isinstance(color, str):
+        return []
+    flat, keyed = {}, {}
+    if isinstance(color, Mapping):
+        for name, entry in color.items():
+            # Keyed by lane it holds a mapping of values; keyed by value
+            # the key is the value itself.
+            if isinstance(entry, Mapping):
+                keyed[name] = entry
+            else:
+                flat[name] = entry
+    out = []
+    for lane, rows in frame.groupby("lane", sort=False):
+        values = list(dict.fromkeys(rows["value"]))
+        mapping = keyed.get(lane) or flat
+        if mapping:
+            out.extend(str(x) for x in values if x in mapping)
+        elif all(pd.isnull(x) for x in values):
+            out.append(str(lane))
+        else:
+            out.extend(str(x) for x in values if isinstance(x, str) and x)
+    return list(dict.fromkeys(out))
 
 
 def _lane_colors(color):
@@ -637,7 +699,7 @@ def map_path(
     pieces = []
     for address, _, one in chosen:
         distances = _sample_distances(
-            one, one.start_distance, one.end_distance, n_samples
+            one, one.distance_min, one.distance_max, n_samples
         )
         coords = one.coordinates_at(distances, crs)
         points = np.column_stack([coords[:, x_axis], coords[:, y_axis]])
@@ -876,7 +938,7 @@ def timeline(
     color
         "interrogator", "data_type", or "kind".
     time
-        The times to draw between, as (start, end). Either end may be
+        The times to draw between, as (min, max). Either end may be
         None, or ..., to run to what the epochs themselves state.
     ax
         An Axes to draw on.

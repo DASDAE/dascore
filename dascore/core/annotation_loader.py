@@ -19,6 +19,10 @@ A table may declare the dimensions it is stated in itself, in a
 carries the annotations made on it under the hidden name ``.annotations``, as
 it carries its inventory under ``.inventory``.
 
+A column whose header begins with an underscore is the author's own -- a
+crew's notes on how something was deployed, say -- and is read by nothing:
+the set does not carry it, so it stays in the file it was written in.
+
 CSV has no types, so this module decides what each column holds before the
 models see it: a ``basis`` cell is the JSON document its curve dumps, and
 every other cell is read the way it was written. A dimension column is
@@ -42,8 +46,8 @@ import pandas as pd
 from pydantic import ValidationError
 
 from dascore.core.annotations import (
-    _END,
-    _START,
+    _MAX,
+    _MIN,
     _VERTEX_COLUMNS,
     ANNOTATION_STEM,
     ATTRS_STEM,
@@ -66,6 +70,7 @@ from dascore.utils.documents import read_document
 from dascore.utils.misc import iterate
 from dascore.utils.paths import quote_path
 from dascore.utils.tables import (
+    drop_private_columns,
     parse_cell,
     read_parquet,
     read_parquet_metadata,
@@ -197,7 +202,7 @@ def _read_basis(series: pd.Series, path: Path) -> pd.Series:
 
 def _dimension_spellings(dims: Sequence[str]) -> frozenset[str]:
     """Every column name a declared dimension may be spelled with."""
-    return frozenset(x for dim in dims for x in (dim, f"{dim}{_START}", f"{dim}{_END}"))
+    return frozenset(x for dim in dims for x in (dim, f"{dim}{_MIN}", f"{dim}{_MAX}"))
 
 
 def _is_text(series: pd.Series) -> bool:
@@ -261,7 +266,10 @@ def _read_cells(
             out[name] = series
         else:
             out[name] = series.map(_read_extra)
-    return pd.DataFrame(out)
+    # The index the table was read with: a file whose every column is the
+    # author's own still stated rows, and building from the columns alone
+    # would drop them where nothing would say they had gone.
+    return pd.DataFrame(out, index=frame.index)
 
 
 def _check_kind(series: pd.Series, name, path: Path, kinds: str, what: str) -> None:
@@ -306,11 +314,32 @@ def _read_set_table(
         frame, _ = read_parquet(path, what=what, empty=True)
         if not len(frame.columns):
             return None
+        frame = _kept_columns(frame, path)
         return _read_cells(frame, dims, path, ordered=ordered, typed=True, text=text)
     if _is_blank(path):
         return None
-    frame = read_table(path, what=what, skip=skip)
+    frame = _kept_columns(read_table(path, what=what, skip=skip), path)
     return _read_cells(frame, dims, path, ordered=ordered, text=text)
+
+
+def _kept_columns(frame: pd.DataFrame, path: Path) -> pd.DataFrame:
+    """
+    Return a table without the columns its author kept for themselves.
+
+    Read before any cell is: what a private column holds is not this
+    format's to type, to check against a declaration, or to refuse. A
+    table of nothing else states rows no column of the set can hold, and
+    is named here rather than left to the set, which would no longer know
+    which file they were in.
+    """
+    kept = drop_private_columns(frame)
+    if len(kept.index) and not len(kept.columns):
+        msg = (
+            f"{quote_path(path)} states rows and no column but its author's "
+            "own; a header beginning with an underscore is read by nothing."
+        )
+        raise ParameterError(msg)
+    return kept
 
 
 def _is_parquet(path: Path) -> bool:
@@ -364,7 +393,7 @@ def _read_pragma(path: Path) -> tuple[tuple[str, ...] | None, int]:
 
         # dims: distance, time
         # picked by hand
-        group,time_start,time_end
+        group,time_min,time_max
 
     Nothing above the header is skipped unless one of those lines is the
     declaration. A column name may begin with the comment mark -- `# note`
@@ -810,7 +839,7 @@ def _refuse_undeclared_dims(
     for name, frame in frames.items():
         undeclared = set(dims) - set(loaded[name].dims)
         for dim in sorted(undeclared):
-            spelled = [dim, f"{dim}{_START}", f"{dim}{_END}"]
+            spelled = [dim, f"{dim}{_MIN}", f"{dim}{_MAX}"]
             held = sorted(x for x in spelled if x in frame.columns)
             if not held:
                 continue
@@ -829,14 +858,14 @@ def _refuse_mixed_spellings(frames: Mapping[str, pd.DataFrame], dims) -> None:
     Refuse a dimension two sets spell differently.
 
     A set holds one spelling of a dimension, so a merged table cannot hold
-    both a bare ``time`` and a ``time_start``/``time_end`` pair; the
+    both a bare ``time`` and a ``time_min``/``time_max`` pair; the
     constructor refuses that too, but without naming the sets. Neither
     spelling stands in for the other: a half-open range of no width holds
     nothing, so a point is not a range and cannot be rewritten as one.
     """
     for dim in dims:
         points = [name for name, x in frames.items() if dim in x.columns]
-        ranges = [name for name, x in frames.items() if f"{dim}{_START}" in x.columns]
+        ranges = [name for name, x in frames.items() if f"{dim}{_MIN}" in x.columns]
         if points and ranges:
             msg = (
                 f"The dimension {dim!r} is spelled as a point in "
@@ -884,7 +913,7 @@ def _refuse_mixed_kinds(frames: Mapping[str, pd.DataFrame], dims, what: str) -> 
     kinds: dict[str, dict[str, str]] = {}
     for name, frame in frames.items():
         for dim in dims:
-            for column in (dim, f"{dim}{_START}", f"{dim}{_END}"):
+            for column in (dim, f"{dim}{_MIN}", f"{dim}{_MAX}"):
                 if column not in frame.columns:
                     continue
                 kind = _kind(frame[column])
