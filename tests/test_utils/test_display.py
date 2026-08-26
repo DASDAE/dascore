@@ -456,6 +456,21 @@ class TestGroupNames:
             "group 0"
         ]
 
+    def test_a_repeated_part_is_said_once(self):
+        """Two columns agreeing on a word name the group with it once."""
+        frame = pd.DataFrame({"kind": ["DSS", "DAS"], "tag": ["DSS", "DAS_LF"]})
+        assert group_names(frame) == ["DSS", "DAS · DAS_LF"]
+
+    def test_groups_collapsing_alike_take_their_ordinals(self):
+        """Saying a word once cannot make two groups into one."""
+        frame = pd.DataFrame({"a": ["x", "x", "z"], "b": ["x", "", "w"]})
+        assert group_names(frame, ordinals=[7, 9, 11]) == ["x (7)", "x (9)", "z · w"]
+
+    def test_only_a_neighboring_repeat_is_collapsed(self):
+        """A word said again after another word is said again."""
+        frame = pd.DataFrame({"a": ["x", "y"], "b": ["z", "w"], "c": ["x", "q"]})
+        assert group_names(frame) == ["x · z · x", "y · w · q"]
+
     def test_an_unstated_value_is_not_a_blank(self):
         """A group which recorded nothing is not named by an empty part."""
         frame = pd.DataFrame({"tag": ["a", ""], "kind": ["das", "dss"]})
