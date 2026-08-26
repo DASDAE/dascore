@@ -6,11 +6,20 @@ on:
   pull_request:
     types: [labeled, synchronize]
 
+  # A manual run is how the sidebar experiment is measured: the same build,
+  # on the same runner class, with only the navigation changed.
+  workflow_dispatch:
+    inputs:
+      compact_sidebar:
+        description: "Build the API sidebar with one entry per section"
+        type: boolean
+        default: false
+
 permissions:
   contents: read
 
 concurrency:
-  group: TestDocBuild-${{ github.event.pull_request.number }}
+  group: TestDocBuild-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 env:
@@ -22,13 +31,16 @@ env:
   # point at the released site, where a page added since the last release 404s
   # and the preview misleads the reviewer.
   DASCORE_DOC_SITE_URL: https://dascore.netlify.app
+  # Empty unless a manual run asked for the section level sidebar.
+  DASCORE_DOC_COMPACT_SIDEBAR: ${{ inputs.compact_sidebar && '1' || '' }}
 
 jobs:
   test_build_docs:
     if: |
-      github.event.pull_request.state == 'open'
+      github.event_name == 'workflow_dispatch'
+      || (github.event.pull_request.state == 'open'
       && ((github.event.action == 'labeled' && github.event.label.name == 'documentation')
-      || (github.event.action == 'synchronize' && contains(github.event.pull_request.labels.*.name, 'documentation')))
+      || (github.event.action == 'synchronize' && contains(github.event.pull_request.labels.*.name, 'documentation'))))
     runs-on: ubuntu-latest
     permissions:
       contents: read
