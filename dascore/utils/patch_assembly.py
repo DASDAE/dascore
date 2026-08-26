@@ -106,18 +106,16 @@ def _drop_associated_ranges(row, kwargs, plan_dim) -> dict:
     """
     Drop the ranges of coordinates which merely ride a dimension.
 
-    `_convert_min_max_in_kwargs` turns every `<name>_min`/`<name>_max`
-    pair the row carries into a `<name>: [min, max]` range, and those
-    ranges travel on as read hints. Only the planned dimension's range
-    is a trim; an associated (non-dimensional) coordinate's is its whole
-    extent, and asking a reader to select on it drops the channels a
-    string coordinate labels with neither endpoint, or a numeric one
-    leaves NaN.
+    `_convert_min_max_in_kwargs` collapses the row's `<name>_min`/
+    `<name>_max` pairs into `<name>: [min, max]` ranges, which travel on
+    as read hints. Only the planned dimension's range is a trim; an
+    associated (non-dimensional) coordinate's is its whole extent, and
+    asking a reader to select on it drops the channels a string
+    coordinate labels with neither endpoint, or a numeric one leaves NaN.
     """
-    # a row which doesn't name its dimensions keeps only the plan's range,
-    # costing the reader a hint rather than risking a wrong trim
-    raw = row.get("dims")
-    dims = {x for x in raw.split(",") if x} if isinstance(raw, str) else set()
+    raw_dims = row["dims"]
+    assert isinstance(raw_dims, str), "a member row always names its dimensions"
+    dims = {x for x in raw_dims.split(",") if x}
     ranged = {x.rsplit("_", 1)[0] for x in row if x.endswith(("_min", "_max"))}
     drop = ranged - dims - {plan_dim}
     return {k: v for k, v in kwargs.items() if k not in drop}
@@ -135,11 +133,10 @@ def _plan_trim_kwargs(patch, kwargs, plan_dim) -> dict:
     labels), one holding NaN (missing values fall outside every range),
     or one which cannot be range-selected at all.
     """
-    # an unmodified member states no range, and a patch without the
-    # planned coordinate has nothing of that name to trim
-    coord_map = patch.coords.coord_map
-    if plan_dim is None or plan_dim not in kwargs or plan_dim not in coord_map:
+    if plan_dim not in kwargs:  # an unmodified member states no range
         return {}
+    coord_map = patch.coords.coord_map
+    assert plan_dim in coord_map, "the plan's dimension is on every member"
     return {plan_dim: kwargs[plan_dim]}
 
 
@@ -194,7 +191,7 @@ class PatchAssembler:
 
     load_patch: Callable[[Mapping], dc.Patch]
     merge_kwargs: Mapping
-    plan_dim: str | None = None
+    plan_dim: str
 
     def _patch_from_instruction_df(self, joined):
         """Get the patches joined columns of instruction df."""

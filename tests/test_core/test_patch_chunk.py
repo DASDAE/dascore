@@ -743,7 +743,7 @@ class TestChunkMerge:
 
 def _bare_assembler():
     """An assembler with no frames, for direct streaming-merge tests."""
-    return PatchAssembler(load_patch=None, merge_kwargs={})
+    return PatchAssembler(load_patch=None, merge_kwargs={}, plan_dim="time")
 
 
 class TestStreamingMerge:
@@ -1617,6 +1617,12 @@ class TestChunkWithAssociatedCoords:
         memory = list(dc.spool(string_patch).chunk(**kwargs))
         file_backed = list(dc.spool(path).update().chunk(**kwargs))
         assert len(memory) == len(file_backed) > 1
+        labels = set(np.unique(string_patch.get_array("label")))
         for patch, other in zip(memory, file_backed):
             assert patch.shape == other.shape
             assert np.all(patch.get_array("label") == other.get_array("label"))
+            # pin the file-backed result outright: matching a broken
+            # in-memory result would otherwise read as agreement
+            if "time" in kwargs:
+                assert other.shape[0] == string_patch.shape[0]
+                assert set(np.unique(other.get_array("label"))) == labels
