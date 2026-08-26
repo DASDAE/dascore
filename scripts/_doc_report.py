@@ -34,7 +34,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from _api_urls import compare, current_urls, load_baseline
-from _index_api import parse_project
+from _index_api import assert_documenting_this_checkout, parse_project
 
 import dascore as dc
 
@@ -105,6 +105,7 @@ def _get_context() -> dict:
         "commit": _run(["git", "-C", str(REPO_PATH), "rev-parse", "HEAD"]),
         "quarto_version": _run(["quarto", "--version"]),
         "python_version": sys.version.split()[0],
+        "dascore_path": str(Path(dc.__file__).absolute().parent),
         "platform": sys.platform,
         "runner": os.environ.get("RUNNER_NAME", ""),
         "run_id": os.environ.get("GITHUB_RUN_ID", ""),
@@ -237,6 +238,7 @@ def measure_qmd(api_path: Path = API_DOC_PATH) -> dict:
 
 def measure_objects() -> dict:
     """Count the objects the API index holds, by kind and by package."""
+    assert_documenting_this_checkout(dc)
     data = parse_project(dc).values()
     keys = [x["key"] for x in data]
     packages = Counter(".".join(x.split(".")[:2]) for x in keys)

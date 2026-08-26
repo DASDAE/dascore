@@ -96,6 +96,29 @@ def _yield_get_submodules(obj, base_path):
             yield mod_name, mod
 
 
+def assert_documenting_this_checkout(module, repo_path=None) -> None:
+    """
+    Raise if the imported module is not the one in this checkout.
+
+    Running a script from the scripts directory puts that directory first on
+    the path, not the working directory, so an editable install elsewhere on
+    the machine wins and the docs describe someone else's branch. Prefix the
+    command with `PYTHONPATH=$PWD` to document the checkout you are in.
+    """
+    if repo_path is None:
+        repo_path = Path(__file__).parent.parent
+    repo_path = Path(repo_path).resolve()
+    module_path = Path(getattr(module, "__file__", "")).resolve()
+    if repo_path in module_path.parents:
+        return
+    msg = (
+        f"{module.__name__} was imported from {module_path}, which is not in "
+        f"{repo_path}. Run the command with PYTHONPATH set to the checkout "
+        f"you mean to document."
+    )
+    raise RuntimeError(msg)
+
+
 def parse_project(obj, key=None):
     """Parse the project create dict of data and data_type."""
 
