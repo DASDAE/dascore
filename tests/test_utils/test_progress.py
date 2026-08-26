@@ -11,7 +11,12 @@ from rich.progress import Progress
 import dascore as dc
 from dascore.config import config_context
 from dascore.exceptions import ParameterError
-from dascore.utils.progress import get_progress_instance, get_track_length, track
+from dascore.utils.progress import (
+    get_progress_instance,
+    get_track_length,
+    track,
+    validate_progress_level,
+)
 
 
 class TestGetTrackLength:
@@ -70,18 +75,50 @@ class TestProgressBar:
         with config_context(debug=False):
             assert list(track([1, 2, 3], "off_tracker", None)) == [1, 2, 3]
 
-    @pytest.mark.parametrize("bad", [False, True, "quiet"])
+    def test_false_disables_the_bar(self):
+        """False is the other off switch, and iteration is unaffected."""
+        with config_context(debug=False):
+            assert list(track([1, 2, 3], "off_tracker", False)) == [1, 2, 3]
+
+    def test_false_disables_the_bar_in_map(self):
+        """The off switch has to survive the trip through Spool.map."""
+        spool = dc.get_example_spool()
+        with config_context(debug=False):
+            assert len(spool.map(lambda patch: patch.shape, progress=False)) == 3
+
+    def test_false_is_normalized_rather_than_passed_on(self):
+        """Passed on unchanged it would fall through to the standard bar."""
+        assert validate_progress_level(False) is None
+
+    @pytest.mark.parametrize("bad", [True, "quiet"])
     def test_a_value_outside_the_levels_raises(self, bad):
         """Anything else would fall through to the standard bar."""
         with pytest.raises(ParameterError, match="progress must be one of"):
             list(track([1, 2, 3], "bad_tracker", bad))
+
+    @pytest.mark.parametrize("zero", [0, 0.0, np.False_])
+    def test_something_merely_equal_to_false_is_not_a_level(self, zero):
+        """False is a level by identity only; zero equals it but is not one."""
+        with pytest.raises(ParameterError, match="progress must be one of"):
+            validate_progress_level(zero)
 
     def test_an_empty_spool_still_refuses_a_bad_level(self):
         """Acceptance must not depend on there being data to track."""
         client = ThreadPoolExecutor()
         try:
             with pytest.raises(ParameterError, match="progress must be one of"):
+                dc.spool([]).map(lambda patch: patch, client=client, progress="quiet")
+        finally:
+            client.shutdown()
+
+    def test_an_empty_spool_still_takes_the_off_switch(self):
+        """False is a level, so it must be accepted on the same path."""
+        client = ThreadPoolExecutor()
+        try:
+            assert (
                 dc.spool([]).map(lambda patch: patch, client=client, progress=False)
+                == []
+            )
         finally:
             client.shutdown()
 

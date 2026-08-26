@@ -886,10 +886,10 @@ def _spool_map(
     **kwargs
         Keywords passed to func.
     """
-    # Checked before branching: with a client and an empty spool no
-    # patch is ever tracked, so a retired `progress=False` would be
-    # accepted or refused depending on how much data there was.
-    validate_progress_level(progress)
+    # Normalized before branching: with a client and an empty spool no
+    # patch is ever tracked, so an unsupported level would be accepted or
+    # refused depending on how much data there was.
+    progress = validate_progress_level(progress)
     # no client; simple for loop.
     if client is None:
         desc = f"Applying {_callable_name(func)} to spool"
