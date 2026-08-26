@@ -17,7 +17,7 @@ from dascore.utils.patch import (
     get_start_stop_step,
     patch_function,
 )
-from dascore.utils.time import to_int, to_timedelta64
+from dascore.utils.time import dtype_time_like, to_int, to_timedelta64
 
 scipy_decimate = lazy_import("scipy.signal", "decimate")
 
@@ -74,6 +74,10 @@ def decimate(
     - If the decimation dimension is small, this can fail due to lack of
       padding values.
 
+    - Coordinates measured on the decimated dimension are decimated with
+      it: taking every nth value of a dimension takes every nth value of
+      everything indexed by it.
+
     See Also
     --------
     [resample](`dascore.proc.resample.resample`)
@@ -102,6 +106,42 @@ def decimate(
     return patch.new(data=data, coords=coords)
 
 
+def _interpolate_associated(cm, dim, coord_num, samples_num, kind) -> dict:
+    """
+    Interpolate the coordinates which ride the interpolated dimension.
+
+    A coordinate of numbers is a function of the dimension, so it is
+    interpolated the way the data is. Anything else is dropped, by
+    updating it to None: a label has nothing between its values, and a
+    time does not survive the trip through floating point -- a nanosecond
+    of the present is 1.6e18 of them, where the nearest float64 is
+    hundreds of nanoseconds away. Dropped explicitly, because
+    interpolating onto the same number of samples in different places
+    would otherwise leave the old values sitting on the new ones.
+    """
+    out = {}
+    for name, coord_dims in cm.dim_map.items():
+        coord = cm.coord_map[name]
+        if name == dim or dim not in coord_dims:
+            continue
+        # Asked before the number test, not after: numpy counts a
+        # timedelta64 as a number, and interpolating one gives back a
+        # float in whatever resolution it was stored in.
+        if dtype_time_like(coord.dtype) or not np.issubdtype(coord.dtype, np.number):
+            out[name] = None
+            continue
+        func = compat.interp1d(
+            coord_num,
+            coord.values,
+            axis=coord_dims.index(dim),
+            kind=kind,
+            fill_value="extrapolate",
+        )
+        values = func(samples_num)
+        out[name] = (coord_dims, dc.core.get_coord(data=values, units=coord.units))
+    return out
+
+
 @patch_function()
 def interpolate(patch: PatchType, kind: str | int = "linear", **kwargs) -> PatchType:
     """
@@ -127,6 +167,11 @@ def interpolate(patch: PatchType, kind: str | int = "linear", **kwargs) -> Patch
     -----
     This function just uses scipy's interp1d function under the hood.
     See scipy.interpolate.interp1d for information.
+
+    Coordinates measured on the interpolated dimension are interpolated
+    with it where they are numbers, and dropped otherwise: a label has
+    nothing between its values, and a time does not survive the trip
+    through floating point.
 
     See Also
     --------
@@ -165,7 +210,9 @@ def interpolate(patch: PatchType, kind: str | int = "linear", **kwargs) -> Patch
     cm = patch.coords
     associated_dims = cm.dim_map[dim]
     coord_new = dc.core.get_coord(data=samples)
-    cm_new = cm.update(**{dim: (associated_dims, coord_new)})
+    updates = {dim: (associated_dims, coord_new)}
+    updates |= _interpolate_associated(cm, dim, coord_num, samples_num, kind)
+    cm_new = cm.update(**updates)
     return patch.new(data=out, coords=cm_new)
 
 

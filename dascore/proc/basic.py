@@ -731,6 +731,12 @@ def pad(
         2*n - 1 where n is the current dimension length by adding values
         to the end of the axis.
 
+    Notes
+    -----
+    A coordinate measured on a padded dimension grows with it, saying
+    nothing over the samples which were added: NaN or NaT for a number
+    or a time, blank for text, and False for a membership flag.
+
     Examples
     --------
     >>> import dascore as dc
@@ -764,6 +770,11 @@ def pad(
 
     def _get_new_coord(coord, pad_tuple, expand_coords):
         """Get the new coordinate along the expanded axis."""
+        # A pad of no samples leaves the coordinate exactly as it was,
+        # rather than rebuilding it from its values -- which would widen
+        # an integer coordinate to hold a NaN nothing is going to write.
+        if not any(pad_tuple):
+            return coord
         if expand_coords and coord.evenly_sampled:
             new_start = coord.min() - pad_tuple[0] * coord.step
             new_end = coord.max() + (pad_tuple[1] + 1) * coord.step
@@ -780,21 +791,63 @@ def pad(
             added_nan_values = np.pad(
                 old_values, pad_width=pad_tuple, constant_values=null_value
             )
-            new_coord = coord.update(data=added_nan_values)
+            # Units passed rather than updated onto the coordinate: a
+            # coordinate built from new data starts with none, so the
+            # meters a distance was measured in would come off here.
+            new_coord = get_coord(data=added_nan_values, units=coord.units)
         return new_coord
 
     if isinstance(constant_values, Sequence):
         raise ParameterError("constant_values must be a scalar, not a sequence.")
 
+    def _pad_fill(dtype):
+        """What a padded coordinate holds where nothing was measured."""
+        # The spellings a projection onto uncovered channels already
+        # uses: blank text, an unset number, and not a member.
+        if dtype.kind in "US":
+            return ""
+        if dtype.kind == "b":
+            return False
+        return _get_nullish(dtype)
+
+    def _get_associated_coords(pad_tuples):
+        """Grow the coordinates measured on a padded dimension with it."""
+        out = {}
+        for name, coord_dims in patch.coords.dim_map.items():
+            if name in pad_tuples or pad_tuples.keys().isdisjoint(coord_dims):
+                continue
+            widths = [pad_tuples.get(x, (0, 0)) for x in coord_dims]
+            # A pad of no samples is not a pad: `pad(time="fft")` on a
+            # patch already of a fast length asks for one, and widening
+            # an integer coordinate there would change it for nothing.
+            if not any(any(x) for x in widths):
+                continue
+            coord = patch.coords.coord_map[name]
+            values = coord.values
+            # An integer coordinate has to widen to hold the NaN which
+            # says nothing is known there, as the padded dimension's own
+            # does above.
+            if np.issubdtype(values.dtype, np.integer):
+                values = values.astype(np.float64)
+            padded = np.pad(
+                values, pad_width=widths, constant_values=_pad_fill(values.dtype)
+            )
+            grown = get_coord(data=padded, units=coord.units)
+            out[name] = (coord_dims, grown)
+        return out
+
     pad_width = [(0, 0)] * len(patch.shape)
     dimfo = get_dim_axis_value(patch, kwargs=kwargs, allow_multiple=True)
     new_coords = {}
+    pad_tuples = {}
 
     for dim, axis, value in dimfo:
         coord = patch.get_coord(dim, require_evenly_sampled=not samples)
         pad_tuple = _get_pad_tuple(value, samples, coord)
         pad_width[axis] = pad_tuple
+        pad_tuples[dim] = pad_tuple
         new_coords[dim] = _get_new_coord(coord, pad_tuple, expand_coords)
+    new_coords |= _get_associated_coords(pad_tuples)
 
     # Pad data, update coord manager, and return.
     new_data = np.pad(patch.data, pad_width, mode=mode, constant_values=constant_values)

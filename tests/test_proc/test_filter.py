@@ -419,6 +419,13 @@ class TestSlopeFilter:
         assert filtered_patch.shape == example_patch.shape
         assert not np.array_equal(filtered_patch.data, example_patch.data)
 
+    def test_associated_coords_kept(self, example_patch):
+        """The round trip through the fk domain keeps coords. See #1041."""
+        depth = example_patch.get_array("distance") * 2.0
+        patch = example_patch.update_coords(depth=("distance", depth))
+        out = patch.slope_filter(filt=[2e3, 2.2e3, 8e3, 2e4])
+        assert np.allclose(out.get_array("depth"), depth)
+
     def test_attenuated_slopes(self, event_patch_1):
         """Ensure attenuated slopes are much lower in absolute values."""
         # For some reason when padding isn't performed the attenuation can

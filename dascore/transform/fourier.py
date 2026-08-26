@@ -51,6 +51,13 @@ DFT_OUTPUT_DATA_TYPE_MAP = {
 DFT_OUTPUT_TYPES = ("FFT", *DFT_OUTPUT_DATA_TYPE_MAP)
 
 
+def _associated_prefix(dim: str) -> str:
+    """Where dft parks the coordinates measured on a dimension it takes."""
+    # Private, like the unpadded coordinate parked beside them, and named
+    # after the dimension so idft knows what to put each one back on.
+    return f"_{dim}_associated_"
+
+
 def _get_dft_coord_units(units):
     """Get units for DFT coordinates."""
     new_units = invert_quantity(units)
@@ -110,8 +117,34 @@ def _get_dft_new_coords(patch, dxs, dims, axes, real, original_cm=None):
 
     # first disassociate old coordinates. We do this rather than drop them
     # so the idft can find them and exactly restore old coords.
-    old_cm = patch.coords.disassociate_coord(*dims)
+    # A coordinate on a transformed dimension goes the same way, under a
+    # private name saying which dimension it came off, since it cannot
+    # ride the frequency axis -- a real transform is not even the same
+    # length. One spanning several dimensions has no such name, so it is
+    # dropped by the disassociation as it always was.
+    stashed = {
+        name: cdims[0]
+        for name, cdims in patch.coords.dim_map.items()
+        if name not in dims and len(cdims) == 1 and cdims[0] in dims
+    }
+    old_cm = patch.coords.disassociate_coord(*dims, *stashed)
     new_coords = old_cm.get_coord_tuple_map()
+    for name, dim in stashed.items():
+        parked = f"{_associated_prefix(dim)}{name}"
+        # A dimension and a coordinate name can be anything, so the two
+        # of them joined is not one name only they could make: a
+        # coordinate `b_associated_c` on dimension `a` parks where a
+        # coordinate `c` on dimension `a_associated_b` would. Nobody
+        # names a fiber axis that, but idft would read one of them back
+        # as the other, so it is refused rather than resolved.
+        if parked in new_coords:
+            msg = (
+                f"The coordinate {name!r} of dimension {dim!r} cannot be "
+                f"kept for the inverse transform: {parked!r} is where it "
+                "would go, and that is taken. Rename one of them."
+            )
+            raise PatchError(msg)
+        new_coords[parked] = new_coords.pop(name)
     ft = FourierTransformatter()
     for i, dim in enumerate(dims):
         old_coord = patch.get_coord(dim)
@@ -248,6 +281,12 @@ def dft(
 
     - Each transformed dimension has units of 1/original units.
 
+    - A non-dimensional coordinate measured on a transformed dimension is
+      not a coordinate of the output -- the frequency axis is not what it
+      was measured on, and a real transform is not even the same length --
+      but it is kept for [idft](`dascore.transform.fourier.idft`) to
+      restore. One spanning more than one dimension is dropped.
+
     - For ``output='FFT'``, output data units are the original data units
       multiplied by the units of each transformed dimension. Other output
       types are normalized as described in the ``output`` parameter.
@@ -375,6 +414,10 @@ def _get_idft_coords_and_sizes(patch, dims, new_dims, axes, real):
         if (len(potential_coord) == ax_len) or (real and old_dim == dims[-1]):
             sizes.append(len(potential_coord))
         coord_map[new_dim] = (new_dim, potential_coord)
+        # Put back the coordinates dft parked when it took the dim away.
+        prefix = _associated_prefix(new_dim)
+        for name in [x for x in coord_map if x.startswith(prefix)]:
+            coord_map[name[len(prefix) :]] = (new_dim, coord_map.pop(name)[1])
         if not padded:  # No padding, go to next dim.
             continue
         old_len = len(coord_map.pop(f"_{new_dim}_unpadded")[1])
@@ -435,6 +478,12 @@ def idft(patch: PatchType, dim: str | Sequence[str] | None = None) -> PatchType:
     -----
     - Real transforms are determined by transformed coordinates which have
       no negative values.
+
+    - Non-dimensional coordinates measured on a transformed dimension are
+      restored with it, provided the patch still carries what
+      [dft](`dascore.transform.fourier.dft`) parked for them. One
+      spanning more than one dimension is not parked, so it does not come
+      back.
 
     - See the [FFT note](dascore.org/notes/fft_notes.html) in Notes section
       of DASCore's documentation.

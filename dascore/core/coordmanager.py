@@ -1017,14 +1017,21 @@ class CoordManager(RichRepr, DascoreBaseModel):
 
         Notes
         -----
-        Removes any coordinate which depended on the decimated dimension.
+        Coordinates which depend on the decimated dimension are subsampled
+        along with it, since taking every nth value of the dimension is
+        taking every nth value of everything indexed by it.
         """
         assert len(kwargs) == 1
         (dim, value) = next(iter(kwargs.items()))
         assert dim in self.dims
         dim_slice = slice(None, None, int(value))
-        new_array = self.coord_map[dim][dim_slice]
-        new = self.update(**{dim: new_array})
+        updates = {}
+        for name, coord_dims in self.dim_map.items():
+            if dim not in coord_dims:
+                continue
+            coord = self.coord_map[name].index(dim_slice, axis=coord_dims.index(dim))
+            updates[name] = (coord_dims, coord)
+        new = self.update(**updates)
         slices = tuple(
             slice(None, None) if d != dim else slice(None, None, value)
             for d in new.dims

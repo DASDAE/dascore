@@ -8,6 +8,7 @@ from scipy.fft import next_fast_len
 
 import dascore as dc
 import dascore.proc.coords
+from dascore.compat import random_state
 from dascore.exceptions import ParameterError, PatchError
 from dascore.transform.fourier import dft, idft
 from dascore.units import get_quantity, get_quantity_str, second
@@ -135,6 +136,9 @@ class TestDiscreteFourierTransform:
         """
         Non-dimensional coordinates associated with transformed axis should
         be dropped, but those associated with non-transformed axis should remain.
+
+        A dropped one is parked under a private name for idft to restore;
+        it is not a coordinate of the transformed patch either way.
         """
         patch = random_patch_many_coords
         # every coord associated with time should be dropped in output.
@@ -465,6 +469,59 @@ class TestInverseDiscreteFourierTransform:
         idft = dft_patch.idft()
         assert idft.shape == sin_patch_trimmed.shape
         assert np.allclose(np.real(idft.data), sin_patch_trimmed.data)
+
+    def test_two_coords_wanting_one_parking_space(self):
+        """A pair of names which park in the same place is refused."""
+        patch = dc.Patch(
+            data=random_state.random((4, 5)),
+            coords={"a": np.arange(4), "a_associated_b": np.arange(5)},
+            dims=("a", "a_associated_b"),
+        )
+        patch = patch.update_coords(
+            b_associated_c=("a", np.arange(4) * 1.0),
+            c=("a_associated_b", np.arange(5) * 1.0),
+        )
+        with pytest.raises(PatchError, match="is where it would go"):
+            patch.dft(("a", "a_associated_b"))
+
+    def test_associated_coords_restored(self, random_patch_many_coords):
+        """Coordinates on a transformed dim come back with it. See #1041."""
+        patch = random_patch_many_coords
+        out = patch.dft(dim=None).idft()
+        # time2 rides time and lat rides distance; quality spans both, which
+        # no single name can park, so it is dropped as it always was.
+        for name in ("time2", "lat"):
+            assert out.coords.dim_map[name] == patch.coords.dim_map[name]
+            assert np.allclose(out.get_array(name), patch.get_array(name))
+        assert "quality" not in out.coords.coord_map
+
+    def test_associated_coords_wait_for_their_dim(self, random_patch_many_coords):
+        """A dim still in the frequency domain keeps its coords parked."""
+        patch = random_patch_many_coords
+        out = patch.dft(dim=None).idft("ft_time")
+        assert "time2" in out.coords.coord_map
+        assert "lat" not in out.coords.coord_map
+        assert "lat" in out.idft().coords.coord_map
+
+    def test_padded_round_trip_restores_associated_coords(self, event_patch_1):
+        """A transform which pads restores what padding said nothing about."""
+        count = event_patch_1.coord_shapes["distance"][0]
+        labels = np.array([f"c{x}" for x in range(count)])
+        patch = event_patch_1.update_coords(
+            label=("distance", labels), idx=("distance", np.arange(count))
+        )
+        out = patch.dft(("time", "distance")).idft().real()
+        assert np.array_equal(out.get_array("label"), labels)
+        # Padding widened the integers to hold the NaN it added, and the
+        # trim which follows cannot narrow them again.
+        assert np.allclose(out.get_array("idx"), np.arange(count))
+
+    def test_real_transform_restores_associated_coords(self, sin_patch):
+        """A real transform is a different length, but restores its coords."""
+        depth = np.arange(len(sin_patch.get_coord("distance"))) * 2.0
+        patch = sin_patch.update_coords(depth=("distance", depth))
+        out = patch.dft(("time", "distance"), real="time").idft()
+        assert np.allclose(out.get_array("depth"), depth)
 
     def test_no_extra_attrs_or_coords(self, sin_patch):
         """Ensure no extra attrs or coords remain after round trip."""
