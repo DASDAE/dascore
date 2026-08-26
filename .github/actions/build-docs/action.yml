@@ -10,4 +10,5 @@ runs:
     - name: build quarto project
       shell: bash
       run: |
-        quarto render docs
+        python scripts/_doc_report.py time quarto_render -- \
+          quarto render docs

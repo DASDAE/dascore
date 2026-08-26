@@ -671,3 +671,67 @@ class TestInverseSTFT:
         msg = "Inverse stft not possible"
         with pytest.raises(PatchError, match=msg):
             chirp_stft_detrend_patch.istft()
+
+
+class TestInverseSTFTAssociatedCoords:
+    """Tests that istft round-trips patches with associated coordinates."""
+
+    @pytest.fixture(scope="class")
+    def patch_with_coords(self):
+        """A patch with coords on each dimension and one on no dimension."""
+        patch = dc.get_example_patch("random_das", shape=(10, 200))
+        dist_len = len(patch.get_coord("distance"))
+        time_len = len(patch.get_coord("time"))
+        return patch.update_coords(
+            depth=("distance", np.arange(dist_len, dtype=float) * 2.0),
+            tlabel=("time", np.arange(time_len, dtype=float)),
+            note=(None, np.array(["a", "b"])),
+        )
+
+    def test_coord_on_untransformed_dim(self, patch_with_coords):
+        """A coord on an untransformed dim survives the round trip. See #1039."""
+        patch = patch_with_coords.drop_coords("tlabel", "note")
+        out = patch.stft(time=0.1).istft()
+        assert out.dims == patch.dims
+        assert out.coords == patch.coords
+        assert np.allclose(out.data, patch.data)
+
+    def test_coord_on_transformed_dim(self, patch_with_coords):
+        """A coord on the transformed dim is dropped by stft, not restored."""
+        patch = patch_with_coords.drop_coords("depth", "note")
+        stft_patch = patch.stft(time=0.1)
+        assert "tlabel" not in stft_patch.coords.coord_map
+        out = stft_patch.istft()
+        assert "tlabel" not in out.coords.coord_map
+        assert out.dims == patch.dims
+        assert np.allclose(out.data, patch.data)
+
+    def test_multiple_associated_coords(self, patch_with_coords):
+        """Several associated coords round trip, minus the transformed one."""
+        patch = patch_with_coords
+        out = patch.stft(time=0.1).istft()
+        expected = patch.drop_coords("tlabel")
+        assert out.dims == patch.dims
+        assert out.coords == expected.coords
+        assert np.allclose(out.data, patch.data)
+
+    def test_coord_on_untransformed_time(self, patch_with_coords):
+        """Transforming distance leaves the time-associated coord intact."""
+        patch = patch_with_coords
+        out = patch.stft(distance=4).istft()
+        assert out.dims == patch.dims
+        assert out.coords == patch.drop_coords("depth").coords
+        assert np.allclose(out.data, patch.data)
+
+    def test_coords_on_stft_dims_dropped(self, patch_with_coords):
+        """Coords on the frequency or window dims cannot survive the inverse."""
+        stft_patch = patch_with_coords.drop_coords("tlabel", "note").stft(time=0.1)
+        freq_len = len(stft_patch.get_coord("ft_time"))
+        win_len = len(stft_patch.get_coord("time"))
+        marked = stft_patch.update_coords(
+            snr=("ft_time", np.arange(freq_len, dtype=float)),
+            wlabel=("time", np.arange(win_len, dtype=float)),
+        )
+        out = marked.istft()
+        assert {"snr", "wlabel"}.isdisjoint(out.coords.coord_map)
+        assert out.coords == stft_patch.istft().coords

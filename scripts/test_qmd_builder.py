@@ -46,3 +46,42 @@ class TestGetRepoBranch:
         monkeypatch.setenv("DASCORE_DOC_BRANCH", "dev")
 
         assert _qmd_builder._get_repo_branch() == "dev"
+
+
+class TestCompactTocTree:
+    """Tests for the section level API sidebar."""
+
+    def test_one_entry_per_section(self, tmp_path):
+        """A compact tree names sections, not the objects inside them."""
+        api_path = tmp_path / "api"
+        (api_path / "dascore" / "core").mkdir(parents=True)
+        (api_path / "dascore" / "core.qmd").write_text("")
+        (api_path / "dascore" / "io.qmd").write_text("")
+        (api_path / "dascore" / "core" / "Patch.qmd").write_text("")
+
+        out = _qmd_builder.build_compact_toc_tree(api_path)
+
+        assert out == [
+            "- text: core",
+            "  href: api/dascore/core.qmd",
+            "- text: io",
+            "  href: api/dascore/io.qmd",
+        ]
+
+    def test_off_by_default(self, monkeypatch):
+        """The exhaustive tree is what a build gets unless it asks."""
+        monkeypatch.delenv("DASCORE_DOC_COMPACT_SIDEBAR", raising=False)
+
+        assert not _qmd_builder._use_compact_sidebar()
+
+    def test_environment_switch(self, monkeypatch, tmp_path):
+        """The benchmark switches trees without a code change."""
+        monkeypatch.setenv("DASCORE_DOC_COMPACT_SIDEBAR", "1")
+        api_path = tmp_path / "api"
+        (api_path / "dascore").mkdir(parents=True)
+        (api_path / "dascore" / "core.qmd").write_text("")
+
+        assert _qmd_builder.build_amp_toc_tree(api_path) == [
+            "- text: core",
+            "  href: api/dascore/core.qmd",
+        ]

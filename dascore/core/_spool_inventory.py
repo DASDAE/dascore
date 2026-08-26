@@ -19,14 +19,14 @@ import threading
 import warnings
 from collections.abc import Sequence, Sized
 from itertools import pairwise
-from typing import Any, NamedTuple
+from typing import Any, NamedTuple, get_args
 
 import numpy as np
 import pandas as pd
 from pydantic import ValidationError
 
 import dascore as dc
-from dascore.constants import INVENTORY_ATTRS
+from dascore.constants import INVENTORY_ATTRS, ON_MISSING, WARN_LEVELS
 from dascore.core.coords import BaseCoord, get_coord
 from dascore.core.inventory import (
     DISTANCE_MAP_AXES,
@@ -56,10 +56,12 @@ from dascore.utils.time import to_datetime64
 # One vocabulary for both fiber verbs. What the quiet option leaves
 # behind still differs -- enrich leaves the patch as it was, conform
 # removes it -- but that is the verb's business rather than the value's.
-VALID_ON_UNRESOLVED = ("raise", "warn", "ignore")
+# Read off the annotation the verbs declare so a value cannot be accepted
+# by one and refused by the other.
+VALID_ON_UNRESOLVED = get_args(WARN_LEVELS)
 
 # What `Patch.enrich` does about a named attr the inventory leaves unset.
-VALID_ON_MISSING = ("raise", "warn", "ignore", "null")
+VALID_ON_MISSING = get_args(ON_MISSING)
 
 # Written once because both fiber verbs refuse for it, and two spellings
 # would let them start explaining the same refusal differently.

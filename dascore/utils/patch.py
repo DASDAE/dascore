@@ -1094,6 +1094,50 @@ def get_window_axis_step(
     return win_samp, axis, step
 
 
+# What a derivative along a dimension makes of the data. Read forward to
+# differentiate and backward to integrate; the same physics either way,
+# so one table states both.
+_DATA_TYPE_DERIVATIVES = {
+    "time": {
+        "displacement": "velocity",
+        "velocity": "acceleration",
+        "strain": "strain_rate",
+        "phase": "phase_rate",
+    },
+    # A derivative along the fiber is what makes strain out of motion,
+    # which is the operation `velocity_to_strain_rate` performs.
+    "distance": {
+        "displacement": "strain",
+        "velocity": "strain_rate",
+    },
+}
+
+_DATA_TYPE_INTEGRALS = {
+    dim: {v: k for k, v in table.items()}
+    for dim, table in _DATA_TYPE_DERIVATIVES.items()
+}
+
+
+def _get_data_type_from_dims(patch, dims, differentiate: bool) -> str:
+    """Get the data_type of a patch differentiated or integrated over dims."""
+    tables = _DATA_TYPE_DERIVATIVES if differentiate else _DATA_TYPE_INTEGRALS
+    data_type = patch.attrs.data_type
+    for dim in iterate(dims):
+        table = tables.get(dim, {})
+        if data_type not in table:
+            # A derivative is a different quantity than what it was taken
+            # of, so a step the vocabulary cannot name leaves the patch
+            # with no label it can honestly carry: the note on patch
+            # attrs says a stale data_type is worse than an empty one.
+            # It also settles the whole chain at once, which mapping only
+            # the steps that are named would not -- velocity over time
+            # then distance would be acceleration, and over distance then
+            # time strain rate, for one and the same mixed derivative.
+            return ""
+        data_type = table[data_type]
+    return data_type
+
+
 def _get_data_units_from_dims(patch, dims, operator):
     """Get new data units from some operation on dimensions."""
     if (data_units := get_quantity(patch.attrs.data_units)) is None:
@@ -1319,7 +1363,7 @@ def check_kind(
     >>> # but is a value of its own where patches are partitioned.
     >>> assert not check_kind(patch, keyed, check_behavior="ignore", strict=True)
     """
-    validate_warn_level(check_behavior)
+    validate_warn_level(check_behavior, "check_behavior")
     kind1, kind2 = get_patch_kind(patch1), get_patch_kind(patch2)
 
     def _equal(value1, value2) -> bool:
@@ -1361,7 +1405,7 @@ def check_data_units(patch1, patch2, check_behavior: WARN_LEVELS = "raise") -> b
         [`IncompatiblePatchError`](`dascore.exceptions.IncompatiblePatchError`),
         'warn' warns and returns False, 'ignore' returns False quietly.
     """
-    validate_warn_level(check_behavior)
+    validate_warn_level(check_behavior, "check_behavior")
     units1 = get_quantity(patch1.attrs.data_units)
     units2 = get_quantity(patch2.attrs.data_units)
     if units1 == units2:
@@ -1397,7 +1441,7 @@ def check_dims(
         when only broadcastability needs to be checked. If false require dims
         to be equal.
     """
-    validate_warn_level(check_behavior)
+    validate_warn_level(check_behavior, "check_behavior")
     dims1, dims2 = patch1.dims, patch2.dims
     if not intersection and patch1.dims == patch2.dims:
         return True
@@ -1447,7 +1491,7 @@ def check_coords(
         If True, the ignored dims must be equal shape to pass check.
         If dim_to_ignore is None this has no effect.
     """
-    validate_warn_level(check_behavior)
+    validate_warn_level(check_behavior, "check_behavior")
     cm1 = patch1.coords
     cm2 = patch2.coords
     cset1, cset2 = set(cm1.coord_map), set(cm2.coord_map)
