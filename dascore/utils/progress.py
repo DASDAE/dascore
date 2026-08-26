@@ -5,7 +5,7 @@ from __future__ import annotations
 import sys
 from collections.abc import Iterable, Sized
 from contextlib import suppress
-from typing import get_args
+from typing import Literal, get_args
 
 import rich.progress as prog
 
@@ -14,8 +14,16 @@ from dascore.config import get_config
 from dascore.constants import PROGRESS_LEVELS
 from dascore.exceptions import ParameterError
 
+#: The levels which actually produce a bar; the others turn it off.
+BAR_LEVELS = Literal["standard", "basic"]
 
-def get_progress_instance(progress: PROGRESS_LEVELS | Progress = "standard"):
+#: The levels safe to compare by equality. False is accepted, but only by
+#: identity: it is equal to 0, so leaving it here would accept any zero as
+#: a level and hand it on to be turned into a standard bar.
+_EQUATABLE_LEVELS = tuple(x for x in get_args(PROGRESS_LEVELS) if x is not False)
+
+
+def get_progress_instance(progress: BAR_LEVELS | Progress = "standard"):
     """
     Get the Rich progress bar instance based on complexity level.
     """
@@ -59,12 +67,17 @@ def get_track_length(sequence: Iterable, length: int | None, min_length: int) ->
 
 def validate_progress_level(progress):
     """
-    Ensure a progress argument is a supported level, or a caller's own bar.
+    Return a supported progress level, or the caller's own bar.
 
-    Anything else falls through to the standard bar, so a stale
-    `progress=False` would turn one on rather than off.
+    `False` is the obvious way to ask for no bar, so it is accepted and
+    returned as None. Callers must use the returned value: anything else
+    falls through to the standard bar, so a `False` passed on unchanged
+    would turn one on rather than off. `True` is not accepted, having no
+    one obvious meaning where there are two bars to choose between.
     """
-    if isinstance(progress, Progress) or progress in get_args(PROGRESS_LEVELS):
+    if progress is False:
+        return None
+    if isinstance(progress, Progress) or progress in _EQUATABLE_LEVELS:
         return progress
     msg = (
         f"progress must be one of {get_args(PROGRESS_LEVELS)} or a "
@@ -91,7 +104,7 @@ def track(
         A string describing the operation
     progress
         options are
-            None- disable progress bar,
+            None (or False) - disable progress bar,
             "basic" reduced refresh rate,
             "standard" - the normal progress bar
         can also accept a subclass of rich.progress.Progress.
@@ -100,7 +113,7 @@ def track(
     min_length
         The minimum length to emit a progress bar.
     """
-    validate_progress_level(progress)
+    progress = validate_progress_level(progress)
     total = get_track_length(sequence, length, min_length)
     # This is a dirty hack to allow debugging while running tests.
     # Otherwise, pdb doesn't work in any tracking scope.

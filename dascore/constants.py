@@ -173,13 +173,14 @@ STORAGE_PROVENANCE_ATTRS = (
 )
 
 # Level of progress bar
-PROGRESS_LEVELS = Literal["standard", "basic", None]
+PROGRESS_LEVELS = Literal["standard", "basic", None, False]
 
 progress_description = """
 progress
     Controls the progress bar. "standard" produces the standard progress
     bar. "basic" is a simplified version with lower refresh rates, best
-    for high-latency environments, and None disables the progress bar.
+    for high-latency environments, and None (or False) disables the
+    progress bar.
 """.strip()
 
 # Options for handling specific warnings. One spelling of "do nothing":
