@@ -48,7 +48,6 @@ from dascore.exceptions import (
 )
 from dascore.models import values_equal
 from dascore.units import get_quantity_str
-from dascore.utils.attrs import validate_conflict
 from dascore.utils.intervals import interval_masks, value_kind
 from dascore.utils.misc import iterate, validate_acquisition_key
 from dascore.utils.time import to_datetime64
@@ -60,6 +59,13 @@ VALID_ON_UNRESOLVED = ("raise", "warn", "ignore")
 
 # What `Patch.enrich` does about a named attr the inventory leaves unset.
 VALID_ON_MISSING = ("raise", "warn", "ignore", "null")
+
+# What `Patch.enrich` does when the patch and the inventory both state an
+# attr and disagree. The merge vocabulary plus `keep_last`: enrichment
+# combines two sources rather than a sequence of patches, so which of the
+# two wins has to be sayable, and `keep_first` means what it means
+# everywhere else -- the value which was there first, the patch's own.
+VALID_ENRICH_CONFLICT = ("drop", "raise", "keep_first", "keep_last")
 
 # Written once because both fiber verbs refuse for it, and two spellings
 # would let them start explaining the same refusal differently.
@@ -224,6 +230,14 @@ def combine_inventories(first, second) -> tuple:
     return inventory, enrichment
 
 
+def validate_enrich_conflict(conflict: str) -> str:
+    """Ensure enrich's conflict argument is one it supports."""
+    if conflict not in VALID_ENRICH_CONFLICT:
+        msg = f"conflict must be one of {VALID_ENRICH_CONFLICT}, got {conflict!r}."
+        raise ParameterError(msg)
+    return conflict
+
+
 def validate_enrich_selection(attrs, coords) -> None:
     """Refuse None, the retired spelling of enrich's False off switch."""
     for label, value in (("attrs", attrs), ("coords", coords)):
@@ -259,7 +273,7 @@ def normalize_enrich_kwargs(kwargs) -> dict:
     validate_enrich_selection(
         arguments.get("attrs", False), arguments.get("coords", False)
     )
-    validate_conflict(arguments.get("conflict", "keep_first"))
+    validate_enrich_conflict(arguments.get("conflict", "keep_first"))
     if (on_missing := arguments.get("on_missing", "raise")) not in VALID_ON_MISSING:
         msg = f"on_missing must be one of {VALID_ON_MISSING}, got {on_missing!r}."
         raise ParameterError(msg)
@@ -276,14 +290,16 @@ def normalize_enrich_kwargs(kwargs) -> dict:
 # Facts the patch's own coordinates already state: the time coordinate has
 # the sample rate and the distance coordinate the channel spacing, and
 # decimating changes both. Nothing should be redundant between coords and
-# attrs, so a blanket request leaves these alone; naming one restores the
-# as-acquired value.
+# attrs, so a blanket request leaves these alone; naming one asks for the
+# as-acquired value, which `conflict` then settles as it does any other.
 COORD_REDUNDANT_ATTRS = ("sample_rate", "spatial_interval")
 
 # Attrs describing the data as it now stands rather than the system which
 # recorded it. Processing functions maintain them, so blanket enrichment
-# leaves them alone; naming one explicitly restores the as-acquired value.
-DATA_STATE_ATTRS = ("data_type", "data_category", "data_units")
+# leaves them alone; naming one explicitly asks for the as-acquired value.
+# `data_category` is not one of them: the family of instrument is a fact
+# about the acquisition, and no processing function rewrites it.
+DATA_STATE_ATTRS = ("data_type", "data_units")
 
 
 def enriched_attr_names(attrs) -> frozenset[str]:
@@ -557,18 +573,20 @@ def effective_matches(
 
     An unstated row holds whatever the inventory answers, so its verdict
     is the inventory's. A stated row keeps the index's verdict unless a
-    pending enrichment rewrites the name: under `keep_first` the
+    pending enrichment rewrites the name: under `keep_last` the
     inventory's answer replaces the header where it has one, and under
     `drop` a header disagreeing with the answer comes out blank, which
-    nothing selects. `resolved` is given when `on_missing="null"` is
-    pending on a named attr: a resolved row the inventory has no answer
-    for then comes out blank too. `conflict` is None when nothing rewrites.
+    nothing selects. `keep_first` keeps the header, so it rewrites
+    nothing and never reaches here. `resolved` is given when
+    `on_missing="null"` is pending on a named attr: a resolved row the
+    inventory has no answer for then comes out blank too. `conflict` is
+    None when nothing rewrites.
     """
     out = np.where(stated, by_index, by_inventory)
     if conflict is None:
         return out
     rewritten = stated & ~_unstated(answers)
-    if conflict == "keep_first":
+    if conflict == "keep_last":
         out[rewritten] = by_inventory[rewritten]
     else:
         assert conflict == "drop" and headers is not None

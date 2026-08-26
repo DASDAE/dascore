@@ -341,5 +341,8 @@ class TestInventoryAttrs:
 
         Processing rewrites them, so blanket enrichment must not carry
         them even though the inventory records their as-acquired values.
+        `data_category` is not one: no processing function rewrites which
+        family of instrument recorded the data.
         """
-        assert not set(INVENTORY_ATTRS) & {"data_type", "data_category", "data_units"}
+        assert not set(INVENTORY_ATTRS) & {"data_type", "data_units"}
+        assert "data_category" in INVENTORY_ATTRS

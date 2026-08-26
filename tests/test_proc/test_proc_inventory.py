@@ -143,7 +143,7 @@ class TestAttrs:
         assert "spatial_interval" not in dict(out.attrs)
 
     def test_named_coord_redundant_restores(self, patch, inventory):
-        """Naming one restores the as-acquired value, as for data state."""
+        """Naming one asks for the as-acquired value, as for data state."""
         out = patch.enrich(inventory, attrs=("sample_rate",), coords=False)
         assert out.attrs.sample_rate == 250.0
 
@@ -154,10 +154,30 @@ class TestAttrs:
         assert out.attrs.data_type == "strain_rate"
 
     def test_named_data_state_restores(self, patch, inventory):
-        """Naming one means exactly that: restore the as-acquired value."""
+        """Naming one asks for it; who wins a disagreement is `conflict`."""
         processed = patch.update_attrs(data_type="strain_rate")
-        out = processed.enrich(inventory, attrs=("data_type",), coords=False)
+        kwargs = dict(attrs=("data_type",), coords=False)
+        # The patch stated it, so by default the patch keeps it.
+        assert processed.enrich(inventory, **kwargs).attrs.data_type == "strain_rate"
+        out = processed.enrich(inventory, conflict="keep_last", **kwargs)
         assert out.attrs.data_type == "velocity"
+
+    def test_blanket_copies_data_category(self, patch, inventory):
+        """The instrument family is a system fact, not a data state. See #1043."""
+        bare = patch.update_attrs(data_category="")
+        assert bare.enrich(inventory, coords=False).attrs.data_category == "DAS"
+
+    def test_a_stated_data_category_is_settled_by_conflict(self, patch, inventory):
+        """Now that it is copied, it disagrees like any other attr."""
+        stated = patch.update_attrs(data_category="DTS")
+        kwargs = dict(coords=False)
+        assert stated.enrich(inventory, **kwargs).attrs.data_category == "DTS"
+        keep_last = stated.enrich(inventory, conflict="keep_last", **kwargs)
+        assert keep_last.attrs.data_category == "DAS"
+        dropped = stated.enrich(inventory, conflict="drop", **kwargs)
+        assert not dict(dropped.attrs).get("data_category")
+        with pytest.raises(PatchError, match="inventory says"):
+            stated.enrich(inventory, conflict="raise", **kwargs)
 
     def test_attrs_false(self, patch, inventory):
         """No attrs are copied when none are wanted."""
@@ -212,10 +232,27 @@ class TestAttrs:
 class TestConflicts:
     """How disagreements between patch and inventory are settled."""
 
-    def test_keep_first_prefers_inventory(self, patch, inventory):
-        """Enrichment puts the inventory's value first, so it wins."""
+    def test_keep_first_prefers_the_patch(self, patch, inventory):
+        """The patch stated it first, so it keeps it. See #1043."""
         out = patch.update_attrs(gauge_length=99.0).enrich(inventory, coords=False)
+        assert out.attrs.gauge_length == 99.0
+
+    def test_keep_last_prefers_inventory(self, patch, inventory):
+        """The inventory is asked to correct the file, so it wins."""
+        stale = patch.update_attrs(gauge_length=99.0)
+        out = stale.enrich(inventory, coords=False, conflict="keep_last")
         assert out.attrs.gauge_length == 10.0
+
+    def test_an_unset_attr_is_filled_either_way(self, patch, inventory):
+        """Filling an empty attr is not a disagreement, so both fill it."""
+        for conflict in ("keep_first", "keep_last"):
+            out = patch.enrich(inventory, coords=False, conflict=conflict)
+            assert out.attrs.gauge_length == 10.0
+
+    def test_a_bad_conflict_is_refused(self, patch, inventory):
+        """The vocabulary is closed, so a typo says so."""
+        with pytest.raises(ParameterError, match="must be one of"):
+            patch.enrich(inventory, coords=False, conflict="keep_both")
 
     def test_raise_names_both_values(self, patch, inventory):
         """The misresolution guard says what disagreed and how."""
@@ -420,6 +457,43 @@ class TestCoords:
         out = patch.enrich(inventory, attrs=False)
         names = set(out.coords.coord_map)
         assert {"x", "y", "z", "zone", "noisy"}.issubset(names)
+
+    def test_blanket_adds_coupling(self, patch, inventory):
+        """How a channel is coupled is a per-channel fact. See #1043."""
+        out = patch.enrich(inventory, attrs=False)
+        named = patch.enrich(inventory, attrs=False, coords=("coupling",))
+        assert "coupling" in set(out.coords.coord_map)
+        blanket, by_name = (x.get_array("coupling") for x in (out, named))
+        assert np.all(blanket == by_name)
+        # Which is what makes the grouted-versus-hanging comparison a select.
+        selected = out.select(coupling=blanket[0])
+        assert set(np.unique(selected.get_array("coupling"))) == {blanket[0]}
+
+    def test_a_patch_coupling_coordinate_collides(self, patch, inventory):
+        """A blanket name the patch already holds is a collision, as ever."""
+        held = patch.update_coords(
+            coupling=("distance", np.full(patch.coord_shapes["distance"], "mine"))
+        )
+        with pytest.raises(PatchError, match="already has a 'coupling'"):
+            held.enrich(inventory, attrs=False)
+        # Naming the coordinates wanted is the way past it, as it is for
+        # a label group of the same name.
+        out = held.enrich(inventory, attrs=False, coords=("x", "y", "z"))
+        assert np.all(out.get_array("coupling") == "mine")
+
+    def test_re_enriching_coupling_is_a_refresh(self, patch, inventory):
+        """The projection agreeing with itself is not a collision."""
+        once = patch.enrich(inventory, attrs=False)
+        assert np.array_equal(
+            once.enrich(inventory, attrs=False).get_array("coupling"),
+            once.get_array("coupling"),
+        )
+
+    def test_blanket_without_coupling(self, patch, inventory):
+        """A path stating no coupling conditions projects none."""
+        inv = _replace_path(inventory, coupling=())
+        out = patch.enrich(inv, attrs=False)
+        assert "coupling" not in set(out.coords.coord_map)
 
     def test_coords_false(self, patch, inventory):
         """No coordinates are added when none are wanted."""
@@ -694,7 +768,7 @@ class TestProjectionDetails:
     def test_blanket_needs_no_map_when_path_is_bare(self, patch, inventory):
         """A path with nothing to project asks nothing of the map either."""
         no_map = _replace_acquisition(inventory, distance_map=None)
-        bare = _replace_path(no_map, geometry=(), labels=())
+        bare = _replace_path(no_map, geometry=(), labels=(), coupling=())
         out = patch.enrich(bare)
         assert set(out.coords.coord_map) == set(patch.coords.coord_map)
 

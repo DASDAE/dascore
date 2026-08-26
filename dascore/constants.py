@@ -136,6 +136,10 @@ max_lens = {
 # Tested against the models in tests/test_core/test_attrs.py.
 INVENTORY_ATTRS = (
     "closed_fiber_loop",
+    # The family of instrument, which is a fact about the acquisition
+    # rather than about the state the data is now in: processing turns
+    # velocity into strain rate, but DAS data stays DAS data.
+    "data_category",
     "firmware_version",
     "gauge_length",
     "interrogator.instrument_type",
@@ -264,20 +268,26 @@ enrich_attrs_description = """
 attrs
     True (the default) to copy the observing-system facts the inventory
     is authoritative for, a tuple of names to copy exactly those, or
-    False to copy none. The blanket form excludes `data_type`,
-    `data_category`, and `data_units`, which describe the data as it
-    now stands, and `sample_rate` and `spatial_interval`, which the
-    patch's own coordinates already state; naming one restores the
-    as-acquired value.
+    False to copy none. The blanket form is every scalar field of the
+    resolved acquisition (and of its interrogator) except `data_type`
+    and `data_units`, which describe the data as it now stands rather
+    than the system, and `sample_rate` and `spatial_interval`, which the
+    patch's own coordinates already state and a decimated patch would
+    contradict. Naming one of those four asks for the as-acquired value;
+    whether it lands over one the patch already states is `conflict`'s
+    business, as it is for every other name.
 """.strip()
 
 enrich_coords_description = """
 coords
     True (the default) to add the geometry axes and label groups of
     the resolved optical path, a tuple of names to add exactly those, or
-    False to add none. Names may be `distance` for optical distance, one
-    of the axes the inventory's CRS names, a label group, or a qualified
-    track field such as `coupling.medium`.
+    False to add none. The blanket form adds the geometry axes, the
+    label groups, and `coupling`, whose values are the coupling type of
+    each channel. Names may be `distance` for optical distance, one of
+    the axes the inventory's CRS names, a label group, a typed track
+    (`coupling`, `geometry`, `optical_components`), or a qualified track
+    field such as `coupling.medium`.
 """.strip()
 
 enrich_on_missing_description = """
@@ -295,11 +305,15 @@ on_missing
 enrich_conflict_description = f"""
 conflict
 {textwrap.indent(attr_conflict_description.strip(), "    ")}
-    Enrichment combines the inventory's values with the patch's own, so
-    the default `keep_first` lets the inventory win and re-enriching is
-    a refresh. `raise` is the misresolution guard: a header disagreeing
-    with the resolved acquisition usually means the `acquisition_key`
-    resolved to the wrong place.
+    Enrichment combines the inventory's values with the patch's own
+    rather than a sequence of patches, so it also accepts `keep_last`,
+    which is the inventory correcting the file. The default `keep_first`
+    keeps what the patch already stated: an attr a reader read out of the
+    file header was there first. Either way an attr the patch leaves
+    unset is filled, which is most of what enrichment does. `raise` is
+    the misresolution guard: a header disagreeing with the resolved
+    acquisition usually means the `acquisition_key` resolved to the
+    wrong place.
 """.strip()
 
 

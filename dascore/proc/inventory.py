@@ -25,6 +25,7 @@ from dascore.core._spool_inventory import (
     is_unset,
     map_axis_coords,
     readable_on,
+    validate_enrich_conflict,
     validate_enrich_selection,
 )
 from dascore.core.coords import BaseCoord, get_coord
@@ -42,7 +43,6 @@ from dascore.exceptions import (
 )
 from dascore.models import values_equal
 from dascore.proc.coords import update_coords
-from dascore.utils.attrs import validate_conflict
 from dascore.utils.docs import compose_docstring
 from dascore.utils.misc import iterate, validate_acquisition_key, warn_or_raise
 from dascore.utils.patch import patch_function
@@ -222,8 +222,11 @@ def _apply_conflict(patch, new_attrs, conflict) -> tuple[dict, list]:
             raise PatchError(msg)
         elif conflict == "drop":
             drops.append(name)
-        else:  # keep_first: enrichment puts the inventory's value first
+        elif conflict == "keep_last":
+            # The inventory is asked to correct the header rather than to
+            # agree with it, so its value is the one which stands.
             updates[name] = value
+        # keep_first: the patch stated it first, so the patch keeps it.
     return updates, drops
 
 
@@ -316,10 +319,13 @@ def _get_blanket_coord_names(inventory, path) -> list[str]:
     """
     Return the coordinate names a blanket request copies.
 
-    The geometry columns and the label groups: what the path says about
-    each channel. Optical distance and the typed-track fields are asked for
-    by name, since they restate what the patch's own axis and the inventory
-    already record.
+    The geometry columns, the label groups, and how each channel is
+    coupled: what the path says about each channel. Optical distance and
+    the other typed tracks are asked for by name, since they restate what
+    the patch's own axis and the inventory already record; a coupling
+    condition states something about the fiber's surroundings which
+    nothing else does, and is the first thing a deployment comparing
+    grouted with hanging fiber has to select on.
     """
     crs = inventory.coordinate_reference_system
     axis_names = crs.coordinate_labels
@@ -329,7 +335,10 @@ def _get_blanket_coord_names(inventory, path) -> list[str]:
     out = ["x", "y", "z"][: len(axis_names)] if axes else []
     out += [x for x in path.geometry_columns() if x not in axes]
     seen = dict.fromkeys(x.group for x in path.labels)
-    return out + [x for x in seen if x]
+    out += [x for x in seen if x]
+    # A path with no coupling conditions resolves to nothing here, and a
+    # blanket request asks only for what the path itself states.
+    return out + (["coupling"] if path.coupling else [])
 
 
 def _coords_equal(existing, values) -> bool:
@@ -416,7 +425,7 @@ def enrich(
     acquisition_key: str | None = None,
     time=None,
     on_missing: OnMissing = "raise",
-    conflict: Literal["drop", "raise", "keep_first"] = "keep_first",
+    conflict: Literal["drop", "raise", "keep_first", "keep_last"] = "keep_first",
 ) -> PatchType:
     """
     Copy inventory metadata onto a patch.
@@ -457,7 +466,7 @@ def enrich(
     ...     inventory, attrs=("gauge_length",), coords=("x", "y", "z"),
     ... )
     """
-    validate_conflict(conflict)
+    validate_enrich_conflict(conflict)
     if on_missing not in VALID_ON_MISSING:
         msg = f"on_missing must be one of {VALID_ON_MISSING}, got {on_missing!r}."
         raise ParameterError(msg)

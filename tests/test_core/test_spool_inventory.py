@@ -1181,9 +1181,10 @@ class TestSelectSeesPendingEnrichment:
     """
     Selection judges the patch extraction will yield, not only the header.
 
-    `enrich` defaults to `conflict="keep_first"`, under which the inventory
-    rewrites a stated header; a selection which read the header would keep
-    a patch that comes out not matching it.
+    Under `conflict="keep_last"` or `"drop"` the inventory rewrites a
+    stated header; a selection which read the header would keep a patch
+    that comes out not matching it. The default `keep_first` leaves the
+    header standing, so there the header is what to read.
     """
 
     @pytest.fixture(scope="class")
@@ -1204,14 +1205,24 @@ class TestSelectSeesPendingEnrichment:
             inventory, when, acquisitions=True, second={"gauge_length": 12.0}
         )
 
-    def test_keep_first_judges_by_the_inventory(self, disagreeing):
+    def test_keep_last_judges_by_the_inventory(self, disagreeing):
         """The inventory's value is what comes out, so it is what is matched."""
-        spool = disagreeing.enrich(coords=False)
+        spool = disagreeing.enrich(coords=False, conflict="keep_last")
         assert len(spool.select(gauge_length=20.0)) == 0
         selected = spool.select(gauge_length=10.0)
         assert sorted(selected.get_contents()["tag"]) == ["right", "wrong"]
         assert all(x.attrs.gauge_length == 10.0 for x in selected)
         assert len(spool.unselect(gauge_length=10.0)) == 0
+
+    def test_keep_first_judges_by_the_header(self, disagreeing):
+        """The header stated it first, so it stands and is what is matched."""
+        spool = disagreeing.enrich(coords=False)
+        selected = spool.select(gauge_length=20.0)
+        assert selected.get_contents()["tag"].tolist() == ["wrong"]
+        assert selected[0].attrs.gauge_length == 20.0
+        assert spool.select(gauge_length=10.0).get_contents()["tag"].tolist() == [
+            "right"
+        ]
 
     def test_drop_leaves_a_disagreeing_row_unselectable(self, disagreeing):
         """A dropped attr is no value at all, which no selector matches."""
@@ -1249,11 +1260,11 @@ class TestSelectSeesPendingEnrichment:
         selected = disagreeing.select(gauge_length=20.0)
         assert selected.get_contents()["tag"].tolist() == ["wrong"]
 
-    @pytest.mark.parametrize("conflict", ["keep_first", "drop"])
+    @pytest.mark.parametrize("conflict", ["keep_last", "drop"])
     def test_null_on_missing_blanks_a_stated_header(self, patch, inventory, conflict):
         """
         `on_missing="null"` answers with a missing marker, which disagrees
-        with a stated header: `keep_first` writes the marker over it and
+        with a stated header: `keep_last` writes the marker over it and
         `drop` removes it, and either way the row is not selected by what
         it stated.
         """
@@ -1271,7 +1282,7 @@ class TestSelectSeesPendingEnrichment:
         assert len(blanket.select(pulse_rate=1.25)) == 1
 
     @pytest.mark.parametrize(
-        "bad", [{"conflict": "keep_last"}, {"on_missing": "blank"}]
+        "bad", [{"conflict": "keep_both"}, {"on_missing": "blank"}]
     )
     def test_a_bad_policy_is_refused_at_once(self, patch, inventory, bad):
         """Selection reads the policies, so a typo cannot wait for extraction."""
