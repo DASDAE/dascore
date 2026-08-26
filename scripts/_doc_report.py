@@ -118,7 +118,8 @@ def update_report(section: str, values: dict, path: Path | None = None) -> dict:
     """Merge values into one section of the report and write it back."""
     path = report_path() if path is None else path
     report = load_report(path)
-    report.setdefault("context", _get_context())
+    if "context" not in report:
+        report["context"] = _get_context()
     report.setdefault(section, {}).update(values)
     path.write_text(json.dumps(report, indent=2, sort_keys=True))
     return report
@@ -374,7 +375,9 @@ def measure_site(
         size = file_path.stat().st_size
         total += size
         relative = file_path.relative_to(site_path)
-        if file_path.suffix != ".html":
+        # The JupyterLite site is copied in whole, application pages and
+        # all. None of it is a documentation page.
+        if file_path.suffix != ".html" or relative.parts[0] == "lite":
             resources[relative.parts[0] if len(relative.parts) > 1 else "root"] += size
             continue
         text = file_path.read_text(errors="replace")

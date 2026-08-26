@@ -325,3 +325,19 @@ class TestClassificationCrossCheck:
         assert out["unclassified_pages"] == {"unexpected": 1, "missing": 1}
         assert out["unclassified_examples"]["unexpected"] == ["api/quiet.html"]
         assert out["unclassified_examples"]["missing"] == ["api/loud.html"]
+
+
+class TestJupyterLiteIsNotContent:
+    """Tests for keeping the bundled JupyterLite site out of the page counts."""
+
+    def test_lite_pages_are_resources(self, tmp_path, report_path):
+        """The lite app's own html pages are not documentation pages."""
+        site = tmp_path / "_site"
+        (site / "lite").mkdir(parents=True)
+        (site / "index.html").write_text("<html>a page</html>")
+        (site / "lite" / "index.html").write_text("<html>the lite app</html>")
+
+        out = _doc_report.measure_site(site)
+
+        assert out["content_html"]["count"] == 1
+        assert out["resource_bytes"]["lite"] > 0
