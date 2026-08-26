@@ -74,6 +74,7 @@ from dascore.exceptions import (
     ParameterError,
     UnresolvedPatchError,
 )
+from dascore.units import Quantity
 from dascore.utils.chunk_plan import (
     _SOURCE_COLUMNS,
     ChunkPlan,
@@ -1678,7 +1679,7 @@ class Spool(NodeRepr, NamespaceOwner):
         overlap: numeric_types | timeable_types | None = None,
         keep_partial: bool = False,
         snap_coords: bool = True,
-        tolerance: float = 1.5,
+        tolerance: float | Quantity | np.timedelta64 = 1.5,
         conflict: Literal["drop", "raise", "keep_first"] = "raise",
         group: str | Sequence[str] | None = None,
         missing_dim: Literal["raise", "drop"] = "raise",
@@ -1739,7 +1740,7 @@ class Spool(NodeRepr, NamespaceOwner):
         self,
         dim: str = "time",
         *,
-        tolerance: float = 1.5,
+        tolerance: float | Quantity | np.timedelta64 = 1.5,
         group: str | Sequence[str] | None = None,
         missing_dim: Literal["raise", "drop"] = "drop",
     ) -> pd.DataFrame:
@@ -1756,7 +1757,9 @@ class Spool(NodeRepr, NamespaceOwner):
             The dimension to look for gaps along.
         tolerance
             The maximum number of samples patches can be spaced and still
-            count as contiguous. Same meaning as chunk's `tolerance`.
+            count as contiguous, or a quantity or timedelta stating that
+            limit as a distance (eg `1 * s`). Same meaning as chunk's
+            `tolerance`.
         group
             Attributes which separate patches into unrelated groups; a gap
             is never reported between two groups. Defaults to the config
@@ -1821,7 +1824,7 @@ class Spool(NodeRepr, NamespaceOwner):
         self,
         dim: str = "time",
         *,
-        tolerance: float = 1.5,
+        tolerance: float | Quantity | np.timedelta64 = 1.5,
         group: str | Sequence[str] | None = None,
         missing_dim: Literal["raise", "drop"] = "drop",
     ) -> pd.DataFrame:
@@ -1840,7 +1843,9 @@ class Spool(NodeRepr, NamespaceOwner):
             The dimension to measure along.
         tolerance
             The maximum number of samples patches can be spaced and still
-            count as contiguous. Same meaning as chunk's `tolerance`.
+            count as contiguous, or a quantity or timedelta stating that
+            limit as a distance (eg `1 * s`). Same meaning as chunk's
+            `tolerance`.
         group
             Attributes which separate patches into unrelated groups.
             Defaults to the config option `patch_kind_attrs`; sampling
@@ -1901,7 +1906,7 @@ class Spool(NodeRepr, NamespaceOwner):
         overlap: numeric_types | timeable_types | None = None,
         keep_partial: bool = False,
         snap_coords: bool = True,
-        tolerance: float = 1.5,
+        tolerance: float | Quantity | np.timedelta64 = 1.5,
         conflict: Literal["drop", "raise", "keep_first"] = "raise",
         group: str | Sequence[str] | None = None,
         missing_dim: Literal["raise", "drop"] = "raise",
@@ -1921,11 +1926,15 @@ class Spool(NodeRepr, NamespaceOwner):
         snap_coords
             If True (default), simplify the coordinates of joined patches to
             an evenly sampled range when doing so moves no coordinate value
-            by more than `tolerance` samples. Merges whose gaps exceed that
-            keep an exact segmented coordinate instead.
+            by more than `tolerance` (samples, or the distance itself when
+            it states one). Merges whose gaps exceed that keep an exact
+            segmented coordinate instead.
         tolerance
             The maximum number of samples a block of data can be spaced (gap)
-            and still be considered contiguous.
+            and still be considered contiguous. A quantity or timedelta
+            states the same limit as a distance instead of a sample count
+            (eg `tolerance=1 * s`), which also works for patches whose
+            sampling interval is unknown.
         conflict
             {conflict_desc}
         group
@@ -2000,7 +2009,9 @@ class Spool(NodeRepr, NamespaceOwner):
         merge_kwargs = {
             "conflict": conflict,
             "snap_coords": snap_coords,
-            "tolerance": tolerance,
+            # the plan's copy is normalized (eg a dimensionless quantity
+            # has become the plain multiple it means)
+            "tolerance": plan.params["tolerance"],
         }
         catalog = derived_catalog(
             source_rows=source_rows,
