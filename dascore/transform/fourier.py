@@ -695,9 +695,12 @@ def istft(patch) -> dc.Patch:
     Notes
     -----
     - Non-dimensional coordinates associated with un-transformed dimensions
-      are restored. Those associated with the transformed dimension are
+      are preserved. Those associated with the transformed dimension are
       already dropped by [stft](`dascore.transform.fourier.stft`) so they
       cannot be restored.
+    - Coordinates associated with the frequency or window dimensions the
+      stft created are dropped, since neither dimension survives the
+      inverse. [idft](`dascore.Patch.idft`) behaves the same way.
 
     See Also
     --------

@@ -621,7 +621,7 @@ class TestInverseSTFTAssociatedCoords:
 
     @pytest.fixture(scope="class")
     def patch_with_coords(self):
-        """A patch with associated coords on each dimension."""
+        """A patch with coords on each dimension and one on no dimension."""
         patch = dc.get_example_patch("random_das", shape=(10, 200))
         dist_len = len(patch.get_coord("distance"))
         time_len = len(patch.get_coord("time"))
@@ -654,6 +654,7 @@ class TestInverseSTFTAssociatedCoords:
         patch = patch_with_coords
         out = patch.stft(time=0.1).istft()
         expected = patch.drop_coords("tlabel")
+        assert out.dims == patch.dims
         assert out.coords == expected.coords
         assert np.allclose(out.data, patch.data)
 
@@ -661,5 +662,19 @@ class TestInverseSTFTAssociatedCoords:
         """Transforming distance leaves the time-associated coord intact."""
         patch = patch_with_coords
         out = patch.stft(distance=4).istft()
+        assert out.dims == patch.dims
         assert out.coords == patch.drop_coords("depth").coords
         assert np.allclose(out.data, patch.data)
+
+    def test_coords_on_stft_dims_dropped(self, patch_with_coords):
+        """Coords on the frequency or window dims cannot survive the inverse."""
+        stft_patch = patch_with_coords.drop_coords("tlabel", "note").stft(time=0.1)
+        freq_len = len(stft_patch.get_coord("ft_time"))
+        win_len = len(stft_patch.get_coord("time"))
+        marked = stft_patch.update_coords(
+            snr=("ft_time", np.arange(freq_len, dtype=float)),
+            wlabel=("time", np.arange(win_len, dtype=float)),
+        )
+        out = marked.istft()
+        assert {"snr", "wlabel"}.isdisjoint(out.coords.coord_map)
+        assert out.coords == stft_patch.istft().coords
