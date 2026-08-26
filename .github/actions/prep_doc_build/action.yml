@@ -5,6 +5,8 @@ description: >
   a project resource, so this must run before `quarto render`/`publish`.
   Each phase is timed into the build report; preparation is a large enough
   share of the end-to-end build to be worth keeping separate from the render.
+  The lite site is built without sourcemaps: they are half of what it weighs
+  and a browser asks for one only with its developer tools open.
 
 runs:
   using: "composite"
@@ -56,4 +58,5 @@ runs:
           jupyter lite build \
             --contents docs/lite_contents \
             --output-dir docs/lite \
-            --piplite-wheels dist/dascore-*.whl
+            --piplite-wheels dist/dascore-*.whl \
+            --no-sourcemaps
