@@ -1984,11 +1984,12 @@ class TestSpoolRepr:
         # The bug this pins: reading both ends off time_min made every
         # single-patch spool span zero time.
         assert df["time_min"].max() != df["time_max"].max()
+        # Written out rather than rendered here: an expectation built by
+        # the same helper the repr uses would follow it into a wrong
+        # answer, which is what a regression test is for catching.
+        assert "2020-01-03 to …00:00:23.996" in str(spool)
         stated = range_end_text(df["time_min"].min(), df["time_max"].max())
         assert str(stated) in str(spool)
-        # An end which repeats the start entirely draws as the mark and
-        # nothing else, which is the shape the bug would leave behind.
-        assert str(stated).lstrip("…")
 
     def test_a_single_patch_spans_its_own_length(self):
         """One patch is a span of its duration, not a span of nothing."""

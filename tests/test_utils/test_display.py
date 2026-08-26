@@ -1042,6 +1042,15 @@ class TestRangeEndText:
         said = range_end_text(np.datetime64(low), np.datetime64(high))
         assert str(said) == str(get_nice_text(np.datetime64(high)))
 
+    def test_a_far_end_which_states_less_than_the_near_one(self):
+        """
+        A far end drawn as a bare date states no field the near end did
+        not, so there is nothing left of it to draw but the mark.
+        """
+        low = np.datetime64("2017-09-18T00:00:03")
+        high = np.datetime64("2017-09-18T00:00:00")
+        assert str(range_end_text(low, high)) == "…"
+
     def test_an_end_which_repeats_nothing(self):
         """A far end sharing no field is drawn as it always was."""
         low = np.datetime64("2023-06-01T14:23:11")
@@ -1093,10 +1102,20 @@ class TestRangeEndText:
         low = np.datetime64("2017-09-18T00:00:00")
         high = np.datetime64("2017-09-18T00:00:07.996")
         said = range_end_text(low, high)
-        styles = {str(span.style) for span in said.spans}
-        assert dascore_styles["hms"] in styles
-        assert dascore_styles["dec"] in styles
-        assert said.spans[0].style == dascore_styles["keys"]
+        assert said.plain == "…00:00:07.996"
+        # Read at an offset, not off the spans: a style can also arrive
+        # as the base of the whole text, which is how it would bleed.
+        console = Console()
+
+        def style_at(offset):
+            return str(said.get_style_at_offset(console, offset))
+
+        assert style_at(0) == dascore_styles["keys"]
+        assert style_at(said.plain.index("07")) == dascore_styles["hms"]
+        assert style_at(said.plain.index("996")) == dascore_styles["dec"]
+        # The separators are what the elision left behind, and belong to
+        # neither the mark nor the fields around them.
+        assert style_at(said.plain.index(":")) == "none"
 
     def test_a_pandas_timestamp_is_an_instant(self):
         """A frame states its extents as Timestamps, and a repr reads them."""
@@ -1130,6 +1149,22 @@ class TestValuesAReaderCanRead:
     def test_the_data_states_how_much_room_it_takes(self):
         """Whether it fits in memory is what dtype times shape is for."""
         assert "4.6 MiB" in str(dc.get_example_patch())
+
+    def test_a_time_coord_says_the_day_once(self):
+        """The far end of a range starts where it stops repeating."""
+        coord = dc.get_example_patch().coords.coord_map["time"]
+        assert "min: 2017-09-18 max: …00:00:07.996" in str(coord)
+
+    def test_an_annotation_set_says_the_day_once(self):
+        """The same elision a coordinate and a spool state."""
+        frame = pd.DataFrame(
+            {
+                "time_min": pd.to_datetime(["2020-01-01T00:00:00"]),
+                "time_max": pd.to_datetime(["2020-01-01T00:00:09"]),
+            }
+        )
+        rendered = str(AnnotationSet(frame, dims=("time",)))
+        assert "min: 2020-01-01 max: …00:00:09" in rendered
 
     def test_an_annotation_set_over_distance_states_no_span(self):
         """
