@@ -804,7 +804,7 @@ class Spool(NodeRepr, NamespaceOwner):
 
         Pending enrichment changes what a stated row comes out holding,
         so stated rows are resolved too where it would write the name:
-        `conflict="keep_first"` makes the inventory's answer the row's
+        `conflict="keep_last"` makes the inventory's answer the row's
         value, `conflict="drop"` leaves a disagreeing row with none, and
         `on_missing="null"` on named attrs blanks a resolved row the
         inventory cannot answer. A row extraction refuses rather than
@@ -821,12 +821,12 @@ class Spool(NodeRepr, NamespaceOwner):
         contexts = None
         mask = np.ones(len(ids), dtype=bool)
         # How pending enrichment rewrites a stated header, if at all; the
-        # `raise` policy refuses rather than rewrites, and `on_missing`
-        # applies to named attrs only.
+        # `raise` policy refuses rather than rewrites, `keep_first` leaves
+        # the header standing, and `on_missing` applies to named attrs only.
         pending = self._enrich_kwargs or {}
         conflict = pending.get("conflict")
         rewritten = frozenset()
-        if conflict is not None and conflict != "raise":
+        if conflict is not None and conflict not in ("raise", "keep_first"):
             rewritten = enriched_attr_names(pending["attrs"])
         nulls_missing = (
             pending.get("on_missing") == "null" and pending.get("attrs") is not True

@@ -274,6 +274,28 @@ assert "zone" in patch_out.coords.coord_map
 
 Enrichment never removes a patch. One the inventory does not describe comes out unchanged rather than missing, with a warning, so an inventory that deliberately covers part of an archive needs no pruning first. Deciding membership is a separate step, below.
 
+What it copies follows one rule on each side. Every scalar fact the resolved acquisition states — and its interrogator's, under `interrogator.` — becomes an attr, and every per-channel fact the optical path states becomes a coordinate: the geometry axes, the label groups, and how each channel is coupled. Four names are left out of the blanket form: `data_type` and `data_units`, which describe the data as it now stands rather than the system that recorded it, and `sample_rate` and `spatial_interval`, which the patch's own coordinates already state and which a decimated patch would contradict. Naming one asks for it anyway.
+
+```{python}
+enriched_patch = spool.enrich()[0]
+
+# A fact about the acquisition, and one about each channel.
+assert enriched_patch.attrs.data_category == "DAS"
+assert set(enriched_patch.get_array("coupling")) == {"trench", ""}
+
+# Which makes the comparison everyone wants a selection.
+trenched = enriched_patch.select(coupling="trench")
+```
+
+Where the patch and the inventory both state an attr and disagree, `conflict` decides. The default `keep_first` keeps what the file said, because it said it first; `keep_last` lets the inventory correct it; `drop` leaves neither; and `raise` treats the disagreement as the misresolution it usually is — a header contradicting the resolved acquisition normally means the `acquisition_key` resolved to the wrong place. Filling an attr the patch leaves unset is not a disagreement, and happens under every policy.
+
+```{python}
+stale = patch.update_attrs(gauge_length=99.0)
+
+assert stale.enrich(example_inventory).attrs.gauge_length == 99.0
+assert stale.enrich(example_inventory, conflict="keep_last").attrs.gauge_length == 10.0
+```
+
 A single patch can be enriched directly with [`Patch.enrich`](`dascore.proc.inventory.enrich`), which takes the same arguments apart from `on_unresolved` — one patch either resolves or raises, so there is no policy to state. It takes the inventory as an argument, since only a spool carries one:
 
 ```{python}
