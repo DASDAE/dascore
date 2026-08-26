@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import textwrap
 from collections import Counter
 from collections.abc import Callable, Iterable, Mapping, Sequence, Sized
@@ -314,10 +315,32 @@ def text_to_html(text: Text) -> str:
     return "".join(out)
 
 
+# A quoted string, or a comment. A string is matched first on purpose:
+# `content: "/*"` is a value, and a stripper which read it as the start
+# of a comment would swallow every declaration up to the next `*/`.
+_CSS_STRING_OR_COMMENT = re.compile(r"\"[^\"\n]*\"|'[^'\n]*'|/\*.*?\*/", re.DOTALL)
+
+
+def _strip_css_comments(css: str) -> str:
+    """Return the CSS with its comments, and the blank lines they leave, gone."""
+    kept = _CSS_STRING_OR_COMMENT.sub(
+        lambda m: "" if m.group().startswith("/*") else m.group(), css
+    )
+    return re.sub(r"\n{2,}", "\n", kept).strip() + "\n"
+
+
 @cache
 def get_stylesheet() -> str:
-    """Return the CSS every HTML repr carries."""
-    return files("dascore").joinpath("repr.css").read_text(encoding="utf-8")
+    """
+    Return the CSS every HTML repr carries, without its comments.
+
+    They are near half the sheet by weight, and they are written for
+    whoever edits it. A panel carries the whole sheet and a notebook
+    carries one panel per cell, so they are dropped on the way out
+    rather than sent to every reader of every cell.
+    """
+    css = files("dascore").joinpath("repr.css").read_text(encoding="utf-8")
+    return _strip_css_comments(css)
 
 
 @singledispatch

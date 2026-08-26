@@ -75,10 +75,68 @@ from __future__ import annotations
 
 import os
 from contextlib import contextmanager
+from functools import wraps
 from pathlib import Path
 import sys
 
 import matplotlib
+
+
+@contextmanager
+def no_printed_panels(source_qmd: str):
+    """
+    Refuse a doc example which prints an object that draws a panel.
+
+    A panel is what a reader of the docs site should get, and printing
+    an object is how a document hides it: `print` writes to stdout,
+    which no display hook reaches.
+
+    What it catches is an object handed straight to `print`, which is
+    the shape the tutorials use. An object formatted first --
+    `print(f"{patch}")`, `print(str(patch))` -- arrives as a string and
+    goes through, since by then there is nothing left to tell apart
+    from any other text a document means to print.
+    """
+    # Both names are wrapped because a document may bind `print` to
+    # either: docs/tutorial/patch.qmd imports dascore's, which is rich's,
+    # and that draws the text repr just as the builtin does.
+    import builtins
+
+    import dascore
+    from dascore.utils.display import NodeRepr
+
+    def guard(wrapped):
+        """Wrap one print so a panel object raises rather than prints."""
+
+        @wraps(wrapped)
+        def guarded(*args, **kwargs):
+            # Somewhere other than the cell's output, so there is no
+            # panel it could be hiding -- a file, or a buffer an example
+            # goes on to show the contents of.
+            if kwargs.get("file") is None:
+                for arg in args:
+                    if isinstance(arg, NodeRepr):
+                        msg = (
+                            f"{source_qmd} prints a {type(arg).__name__}, so "
+                            "the docs show its text rather than the panel it "
+                            "draws. Make it the cell's last expression "
+                            "instead, which is what a document displays."
+                        )
+                        raise AssertionError(msg)
+            return wrapped(*args, **kwargs)
+
+        return guarded
+
+    # Built before the first assignment, so the restore below puts back
+    # what was there rather than a guard installed part way through.
+    originals = {builtins: builtins.print, dascore: dascore.print}
+    try:
+        for module, original in originals.items():
+            module.print = guard(original)
+        yield
+    finally:
+        for module, original in originals.items():
+            module.print = original
 
 
 @contextmanager
@@ -110,7 +168,8 @@ def qmd_test_context(source_qmd: str):
         plt.show = lambda *args, **kwargs: None
         Figure.show = lambda self, *args, **kwargs: None
         os.chdir(source_path.parent)
-        yield
+        with no_printed_panels(source_qmd):
+            yield
     finally:
         os.chdir(old)
         plt.show = original_show

@@ -58,10 +58,10 @@ How objects print is configurable as well: `display_float_precision` sets the de
 
 ```python
 with config_context(display_max_items=3):
-    print(inventory)  # at most three networks, arrays or paths per level
+    inventory  # at most three networks, arrays or paths per level
 
 with config_context(display_max_patches=100):
-    print(spool)  # a bigger spool names the limit rather than its extents
+    spool  # a bigger spool names the limit rather than its extents
 ```
 
 Where a display can render HTML -- a notebook, or this documentation --
