@@ -30,6 +30,7 @@ import time
 import zipfile
 from collections import Counter, defaultdict
 from itertools import pairwise
+from math import ceil
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -134,7 +135,8 @@ def _page_timings(stamps: list[tuple[str, float]], wall: float) -> dict:
 
     Quarto names a page when it starts rendering it, so a page costs the gap
     to the next name. The last page has no next name, so its cost lands in
-    `finalize` along with the post processing.
+    `finalize` along with the post processing; it is named here rather than
+    left to be read as one of the pages that were timed.
     """
     if not stamps:
         return {}
@@ -144,6 +146,7 @@ def _page_timings(stamps: list[tuple[str, float]], wall: float) -> dict:
         "page_phase": round(stamps[-1][1] - stamps[0][1], 3),
         "finalize": round(wall - stamps[-1][1], 3),
         "page_count": len(stamps),
+        "unattributed_page": stamps[-1][0],
         "pages": pages,
     }
 
@@ -174,11 +177,17 @@ def time_command(name: str, command: list[str], path: Path | None = None) -> int
 
 
 def _percentile(sizes, fraction: float) -> int:
-    """Return the value a fraction of the way through the sorted sizes."""
+    """
+    Return the nearest rank percentile of the sizes.
+
+    The smallest value at or above the fraction, so the p50 of two values is
+    the smaller one and the p95 of twenty is the nineteenth, not the largest.
+    """
     if not sizes:
         return 0
     ordered = sorted(sizes)
-    return ordered[min(int(fraction * len(ordered)), len(ordered) - 1)]
+    rank = max(ceil(fraction * len(ordered)), 1)
+    return ordered[min(rank, len(ordered)) - 1]
 
 
 def _size_stats(sizes) -> dict:
@@ -421,7 +430,8 @@ def _minutes(value) -> str:
 
 def _kernel_lines(report: dict) -> list[str]:
     """Report the page phase split by whether a page ran a kernel."""
-    pages = report.get("timings", {}).get("quarto_render", {}).get("pages", {})
+    render = report.get("timings", {}).get("quarto_render", {})
+    pages = render.get("pages", {})
     kinds = report.get("index", {}).get("qmd", {}).get("executable_pages", {})
     if not pages:
         return []
@@ -432,6 +442,12 @@ def _kernel_lines(report: dict) -> list[str]:
     for kind, times in sorted(grouped.items()):
         mean = sum(times) / len(times)
         out.append(f"| {kind} | {len(times)} | {mean:.2f} s | {_minutes(sum(times))} |")
+    if last := render.get("unattributed_page"):
+        out.append("")
+        out.append(
+            f"The last page rendered, {last}, is not in that table: nothing "
+            "names the end of it, so its time is part of finalize."
+        )
     return out
 
 
@@ -449,7 +465,13 @@ def build_summary(report: dict) -> str:
             lines.append(f"| {name} | {_minutes(timing.get('wall', 0))} |")
             if "page_phase" in timing:
                 lines.append(f"| {name} (pages) | {_minutes(timing['page_phase'])} |")
-        lines.append(f"| **end to end** | **{_minutes(total)}** |")
+        lines.append(f"| **timed phases** | **{_minutes(total)}** |")
+        lines.append("")
+        lines.append(
+            "Timed phases are the commands the workflow wraps, not the whole "
+            "job: installing quarto and the build tooling, and measuring the "
+            "site, are not in the total."
+        )
     lines += _kernel_lines(report)
     if index:
         objects, qmd = index.get("objects", {}), index.get("qmd", {})

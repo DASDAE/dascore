@@ -341,3 +341,51 @@ class TestJupyterLiteIsNotContent:
 
         assert out["content_html"]["count"] == 1
         assert out["resource_bytes"]["lite"] > 0
+
+
+class TestPercentile:
+    """Tests for the percentile convention the report uses."""
+
+    def test_nearest_rank(self):
+        """The p50 of two values is the smaller one, not the larger."""
+        assert _doc_report._percentile([1, 100], 0.5) == 1
+
+    def test_p95_is_not_the_maximum(self):
+        """A twenty page site's p95 is its nineteenth page, not its worst."""
+        sizes = list(range(1, 21))
+
+        assert _doc_report._percentile(sizes, 0.95) == 19
+
+    def test_empty(self):
+        """Nothing measured is reported as zero rather than raising."""
+        assert _doc_report._percentile([], 0.5) == 0
+
+
+class TestUnattributedPage:
+    """Tests for naming the page whose time could not be measured."""
+
+    def test_last_page_named(self, report_path):
+        """The summary says which page is missing from the page table."""
+        _doc_report.update_report(
+            "timings",
+            {
+                "quarto_render": {
+                    "wall": 10.0,
+                    "pages": {"a.qmd": 8.0},
+                    "unattributed_page": "b.qmd",
+                }
+            },
+        )
+
+        summary = _doc_report.build_summary(_doc_report.load_report())
+
+        assert "b.qmd, is not in that table" in summary
+
+    def test_timed_phases_are_not_the_whole_job(self, report_path):
+        """The total is named for what it holds, not called end to end."""
+        _doc_report.update_report("timings", {"quarto_render": {"wall": 60.0}})
+
+        summary = _doc_report.build_summary(_doc_report.load_report())
+
+        assert "timed phases" in summary
+        assert "end to end" not in summary
