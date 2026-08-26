@@ -123,9 +123,10 @@ def differentiate(
     follow one another and strain becomes strain_rate (phase becomes
     phase_rate); along `distance` motion becomes strain, which is what
     [velocity_to_strain_rate](`dascore.Patch.velocity_to_strain_rate`)
-    does. A `data_type` no pair names is left as it was, as is one
-    whose chain the pairs do not name all the way through -- velocity
-    differentiated along both dimensions at once, say.
+    does. A derivative the pairs cannot name all the way through --
+    of an unknown `data_type`, or over both dimensions at once -- is a
+    quantity with no label here, and clears `data_type` rather than
+    leaving a stale one on it.
 
     Examples
     --------

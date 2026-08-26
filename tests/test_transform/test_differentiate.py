@@ -203,10 +203,14 @@ class TestDataType:
         patch = random_patch.update_attrs(data_type=start)
         assert patch.differentiate(dim).attrs.data_type == expected
 
-    def test_unknown_type_is_kept(self, random_patch):
-        """A type no pair names says what it said before, not nothing."""
+    def test_unknown_type_is_cleared(self, random_patch):
+        """A derivative with no name here carries no label at all.
+
+        The note on patch attrs: a stale data_type is worse than an
+        empty one, and this is no longer a temperature.
+        """
         patch = random_patch.update_attrs(data_type="temperature")
-        assert patch.differentiate("time").attrs.data_type == "temperature"
+        assert patch.differentiate("time").attrs.data_type == ""
 
     def test_each_dim_maps_in_turn(self, random_patch):
         """Differentiating over both dims applies both of their pairs."""
@@ -220,7 +224,7 @@ class TestDataType:
         first = patch.differentiate(None).attrs.data_type
         assert first == patch.transpose().differentiate(None).attrs.data_type
 
-    def test_an_unnamed_step_leaves_the_chain_alone(self, random_patch):
+    def test_an_unnamed_step_clears_the_chain(self, random_patch):
         """Velocity over both dims is a derivative no word here states."""
         patch = random_patch.update_attrs(data_type="velocity")
-        assert patch.differentiate(None).attrs.data_type == "velocity"
+        assert patch.differentiate(None).attrs.data_type == ""

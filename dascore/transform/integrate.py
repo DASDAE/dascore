@@ -115,9 +115,9 @@ def integrate(
     known to relate, which are those of
     [differentiate](`dascore.Patch.differentiate`) read backwards: along
     `time` strain_rate becomes strain and acceleration becomes velocity;
-    along `distance` strain becomes displacement. A `data_type` no pair
-    names is left as it was, as is one whose chain the pairs do not name
-    all the way through.
+    along `distance` strain becomes displacement. An integral the pairs
+    cannot name all the way through clears `data_type` rather than
+    leaving a stale one on it.
 
     Examples
     --------

@@ -1096,9 +1096,7 @@ def get_window_axis_step(
 
 # What a derivative along a dimension makes of the data. Read forward to
 # differentiate and backward to integrate; the same physics either way,
-# so one table states both. A type neither direction names is passed
-# through: the vocabulary has nothing better to say about it, and saying
-# nothing loses what was correct a moment before.
+# so one table states both.
 _DATA_TYPE_DERIVATIVES = {
     "time": {
         "displacement": "velocity",
@@ -1123,17 +1121,19 @@ _DATA_TYPE_INTEGRALS = {
 def _get_data_type_from_dims(patch, dims, differentiate: bool) -> str:
     """Get the data_type of a patch differentiated or integrated over dims."""
     tables = _DATA_TYPE_DERIVATIVES if differentiate else _DATA_TYPE_INTEGRALS
-    original = data_type = patch.attrs.data_type
+    data_type = patch.attrs.data_type
     for dim in iterate(dims):
         table = tables.get(dim, {})
         if data_type not in table:
-            # A step the vocabulary cannot name leaves the whole chain
-            # unnamed. Mapping the steps it does name would make the
-            # answer depend on the order the dimensions arrived in:
-            # velocity differentiated over time and then distance would
-            # be acceleration, and over distance and then time strain
-            # rate, for the one mixed derivative neither word states.
-            return original
+            # A derivative is a different quantity than what it was taken
+            # of, so a step the vocabulary cannot name leaves the patch
+            # with no label it can honestly carry: the note on patch
+            # attrs says a stale data_type is worse than an empty one.
+            # It also settles the whole chain at once, which mapping only
+            # the steps that are named would not -- velocity over time
+            # then distance would be acceleration, and over distance then
+            # time strain rate, for one and the same mixed derivative.
+            return ""
         data_type = table[data_type]
     return data_type
 

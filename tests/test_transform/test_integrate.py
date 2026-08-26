@@ -156,10 +156,10 @@ class TestDataType:
         patch = random_patch.update_attrs(data_type=start)
         assert patch.integrate(dim).attrs.data_type == expected
 
-    def test_unknown_type_is_kept(self, random_patch):
-        """A type no pair names says what it said before, not nothing."""
+    def test_unknown_type_is_cleared(self, random_patch):
+        """An integral with no name here carries no label at all."""
         patch = random_patch.update_attrs(data_type="temperature")
-        assert patch.integrate("time").attrs.data_type == "temperature"
+        assert patch.integrate("time").attrs.data_type == ""
 
     def test_definite_integral_maps_too(self, random_patch):
         """Collapsing a dimension is still an integral along it."""
