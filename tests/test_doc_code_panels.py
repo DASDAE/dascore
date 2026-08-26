@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import builtins
 import importlib.util
+import io
 import os
 import subprocess
 import sys
@@ -105,6 +106,10 @@ def _run_generated(shown: str) -> subprocess.CompletedProcess:
         [sys.executable, "-c", _RUN_GENERATED, str(_REPO_ROOT), shown],
         capture_output=True,
         text=True,
+        # Named, since a repr holds characters the default encoding on
+        # Windows cannot read back, and a failure is what carries them.
+        encoding="utf-8",
+        errors="replace",
         cwd=_REPO_ROOT,
         env=env,
         check=False,
@@ -199,19 +204,17 @@ class TestNoPrintedPanels:
         with conftest_module.no_printed_panels(_QMD):
             builtins.print(f"{random_patch}")  # noqa: T201
 
-    def test_printing_somewhere_else_goes_through(
-        self, conftest_module, random_patch, tmp_path
-    ):
+    def test_printing_somewhere_else_goes_through(self, conftest_module, random_patch):
         """
         A print with a `file` hides nothing: the cell shows no output at all.
 
         Which is what an example writing a repr to a file, or building
         one in a buffer to show afterwards, is doing.
         """
-        path = tmp_path / "patch.txt"
-        with conftest_module.no_printed_panels(_QMD), path.open("w") as handle:
-            builtins.print(random_patch, file=handle)
-        assert path.read_text() == f"{random_patch}\n"
+        buffer = io.StringIO()
+        with conftest_module.no_printed_panels(_QMD):
+            builtins.print(random_patch, file=buffer)
+        assert buffer.getvalue() == f"{random_patch}\n"
 
     def test_both_names_are_put_back(self, conftest_module):
         """The guard belongs to the doc example, not to the session."""
