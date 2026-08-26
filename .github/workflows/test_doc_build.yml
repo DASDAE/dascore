@@ -54,6 +54,12 @@ jobs:
 
       - uses: ./.github/actions/build-docs
 
+      # The artifact this job uploads is the size gate the plan measures
+      # against, so this build is the one which pays to compress the site.
+      - uses: ./.github/actions/report_doc_build
+        with:
+          archive: "true"
+
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
           name: documentation_build_test
