@@ -2597,7 +2597,12 @@ class CoordSegmented(BaseCoord):
             tolerance = 0
         if hasattr(tolerance, "units"):  # pint quantity tolerances
             target = "s" if dtype_time_like(self.dtype) else self.units
-            tolerance = convert_units(tolerance.magnitude, target, tolerance.units)
+            # A tolerance is a DELTA, so it converts between two anchor
+            # points: 20 degC of deviation is 36 degF, never 68.
+            anchor = convert_units(0.0, target, tolerance.units)
+            tolerance = (
+                convert_units(tolerance.magnitude, target, tolerance.units) - anchor
+            )
         if dtype_time_like(self.dtype):
             tolerance = dc.to_timedelta64(tolerance)
             zero = dc.to_timedelta64(0)

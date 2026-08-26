@@ -34,7 +34,7 @@ Patches may only combine when they agree on all of:
 1. **Kind** — the config option `patch_kind_attrs` by default (conventional categorical identity: acquisition key, data category, and tag; see [Patch Compatibility](patch_compatibility.qmd)), overridden per call with `group=`. Differing values are never an error; the patches simply land in separate outputs. A missing value is a value: patches which never recorded an attribute partition together, and apart from those which did. Explicitly passed names must exist somewhere in the spool; config names are best-effort.
 2. **Structure** — the dimensions tuple, the coordinate identity of every non-chunked dimension, and the chunked dimension's units (a metre patch can never plan into one output with a seconds patch, or a unitful with a unitless one; compatible spellings such as metres and feet are normalized to one unit per dimensionality before partitioning, so they plan together, and assembly converts each member to the first member's units).
 3. **Sampling** — step magnitudes within the relative tolerance `config.sampling_group_tolerance` (default 5%) of the group's smallest member, with matching orientation (ascending never merges with descending; contiguous descending patches merge with each other).
-4. **Continuity** — patches within `tolerance` samples of each other, evaluated within each group so unrelated patches can never bridge a gap. `tolerance` may also be a quantity (`1 * s`, `2 * m`) or a timedelta, which states the same limit as a distance in the coordinate's own units rather than as a sample count. Since it needs no sampling interval, an absolute tolerance also measures gaps between patches whose step is unknown, which a sample count cannot scale and so never splits.
+4. **Continuity** — patches within `tolerance` samples of each other, evaluated within each group so unrelated patches can never bridge a gap. `tolerance` may also be a quantity (`1 * s`, `2 * m`) or a timedelta, which states the same limit in the coordinate's own units rather than as a sample count; it is never read as narrower than one sample, so adjacent patches stay contiguous under any tolerance. Since it needs no sampling interval, an absolute tolerance also measures gaps between patches whose step is unknown — patches a sample-count tolerance has nothing to scale, and so never splits.
 
 [`Spool.get_gaps`](`dascore.core.spool.Spool.get_gaps`) and [`Spool.get_coverage`](`dascore.core.spool.Spool.get_coverage`) read this same partition: a `get_coverage` row is one cell of criteria 1-3, and a `get_gaps` row is a boundary criterion 4 declines to close. So on a spool of unplanned patches the counts tie — merging yields one patch per coverage row plus one per gap reported. The reports read the rows a spool presents rather than a plan's members, so a spool that has already been chunked reports on the patches it now holds, and re-chunking it need not reproduce those counts.
 
@@ -133,7 +133,7 @@ A size measures the data array alone; coordinates, attrs, and copies made by lat
 
 ## Merged coordinates
 
-Assembly builds the chunked dimension's coordinate by exact concatenation of the member coordinates: contiguous members fuse to a plain evenly sampled range, and every real seam is recorded. When `snap_coords=True` (default) the result is then simplified with **bounded error** — no coordinate value moves more than `tolerance * step`, or more than the tolerance itself when it states a distance. A within-tolerance gap therefore comes back as an evenly sampled range whose worst label error is about half the gap (never more than the tolerance); this is the honest replacement for the old unconditional snap, whose error was unbounded. With `snap_coords=False`, or when accumulated gaps exceed the bound, the coordinate stays segmented — exactly non-uniform, with every gap queryable.
+Assembly builds the chunked dimension's coordinate by exact concatenation of the member coordinates: contiguous members fuse to a plain evenly sampled range, and every real seam is recorded. When `snap_coords=True` (default) the result is then simplified with **bounded error** — no coordinate value moves more than `tolerance * step`, or more than the tolerance itself when it states the limit in the coordinate's own units. A within-tolerance gap therefore comes back as an evenly sampled range whose worst label error is about half the gap (never more than the tolerance); this is the honest replacement for the old unconditional snap, whose error was unbounded. With `snap_coords=False`, or when accumulated gaps exceed the bound, the coordinate stays segmented — exactly non-uniform, with every gap queryable.
 
 ```{python}
 from dascore.core.coords import CoordRange, CoordSegmented
@@ -164,7 +164,7 @@ deviation = abs(snapped_coord.values - coord.values).max()
 assert deviation <= 5 * time.step
 
 # An absolute tolerance -- a quantity, or a timedelta -- bounds the
-# same movement, stated as a distance rather than a sample count.
+# same movement, stated in the coordinate's units rather than in samples.
 with pytest.warns(UserWarning, match="force merging"):
     absolute = dc.spool([p1, p_gap]).chunk(time=None, tolerance=5 * time.step)[0]
 assert absolute.get_coord("time") == snapped_coord

@@ -347,7 +347,7 @@ gappy = random_spool(time_gap=np.timedelta64(1, "s"), length=3)
 gappy.get_gaps()
 ```
 
-`time_min` is the last sample before the gap and `time_max` the first sample after it, so `gap_size` is one step wider than the extent actually missing; subtract the magnitude of the `time_step` column for the extent itself. Overlapping patches are never a gap, and neither is a hole the `tolerance` covers — a boundary is a gap once it exceeds `tolerance` samples, so at the default 1.5 a single missing sample already counts. A quantity or timedelta states the same limit as a distance instead — `get_gaps(tolerance=1 * s)` reports every hole wider than a second, whatever the sampling rate. It is the same `tolerance` `chunk` takes, so widening it here predicts exactly which merges will succeed.
+`time_min` is the last sample before the gap and `time_max` the first sample after it, so `gap_size` is one step wider than the extent actually missing; subtract the magnitude of the `time_step` column for the extent itself. Overlapping patches are never a gap, and neither is a hole the `tolerance` covers — a boundary is a gap once it exceeds `tolerance` samples, so at the default 1.5 a single missing sample already counts. A quantity or timedelta states the same limit in the coordinate's own units instead — `get_gaps(tolerance=1 * s)` reports every boundary wider than a second, whatever the sampling rate — and never reports one narrower than a single sample, so contiguous patches stay contiguous. It is the same `tolerance` `chunk` takes, so widening it here predicts exactly which merges will succeed.
 
 Pass another dimension to ask about it instead; `time` is only the default.
 

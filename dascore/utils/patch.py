@@ -32,7 +32,7 @@ from dascore.exceptions import (
     PatchCoordinateError,
     UnitError,
 )
-from dascore.units import Quantity, convert_units, get_quantity, is_percent
+from dascore.units import carries_units, convert_units, get_quantity, is_percent
 from dascore.utils.array_api import (
     asarray_like,
     backend_name,
@@ -63,7 +63,7 @@ from dascore.utils.misc import (
     yield_sub_sequences,
 )
 from dascore.utils.paths import is_memory_uri
-from dascore.utils.time import is_timedelta64, to_float
+from dascore.utils.time import to_float
 from dascore.workflow.builtin import Concatenate, Stack
 from dascore.workflow.checks import attr_type, check_patch_attrs, check_patch_coords
 from dascore.workflow.identity import (
@@ -625,9 +625,9 @@ def _get_merged_coord(
             coords, dim=merge_dim, drop_conflicting=drop_conflicting
         )
     step = _middle_step(coords, merge_dim, merged.units)
-    if snap_coords and (isinstance(tolerance, Quantity) or is_timedelta64(tolerance)):
-        # An absolute tolerance needs no step: simplify reads it in the
-        # coordinate's own units itself.
+    if snap_coords and carries_units(tolerance):
+        # A tolerance which states its own units needs no step: simplify
+        # reads it in the coordinate's units itself.
         merged = merged.simplify(tolerance)
     elif snap_coords and step is not None:
         merged = merged.simplify(tolerance * np.abs(step))

@@ -1758,8 +1758,8 @@ class Spool(NodeRepr, NamespaceOwner):
         tolerance
             The maximum number of samples patches can be spaced and still
             count as contiguous, or a quantity or timedelta stating that
-            limit as a distance (eg `1 * s`). Same meaning as chunk's
-            `tolerance`.
+            limit in the coordinate's own units (eg `1 * s`). Same
+            meaning as chunk's `tolerance`.
         group
             Attributes which separate patches into unrelated groups; a gap
             is never reported between two groups. Defaults to the config
@@ -1789,9 +1789,9 @@ class Spool(NodeRepr, NamespaceOwner):
         boundary is measured against the furthest point reached so far,
         not the previous row.
 
-        Patches whose step is unknown report no gaps against a sample
-        count, which has no sample to scale. An absolute tolerance needs
-        none, so it reports their gaps like any others.
+        A sample-count tolerance scales the step, so patches whose step
+        is unknown report no gaps. An absolute tolerance needs no step,
+        so it reports their gaps like any other patch's.
 
         See Also
         --------
@@ -1845,8 +1845,8 @@ class Spool(NodeRepr, NamespaceOwner):
         tolerance
             The maximum number of samples patches can be spaced and still
             count as contiguous, or a quantity or timedelta stating that
-            limit as a distance (eg `1 * s`). Same meaning as chunk's
-            `tolerance`.
+            limit in the coordinate's own units (eg `1 * s`). Same
+            meaning as chunk's `tolerance`.
         group
             Attributes which separate patches into unrelated groups.
             Defaults to the config option `patch_kind_attrs`; sampling
@@ -1869,11 +1869,12 @@ class Spool(NodeRepr, NamespaceOwner):
 
         Coverage is measured between patches, from the envelopes the
         index records; a hole *inside* a patch is not visible here. Nor
-        is one in a group whose step is unknown, which reports no gaps
-        against a sample count and so counts as fully covered — an
-        absolute tolerance measures those groups too. Both are what
-        `chunk` would make of the data, so a `coverage` of 1.0 says
-        "nothing chunk would refuse to merge", not "nothing missing".
+        is one in a group whose step is unknown: a sample-count tolerance
+        has nothing to scale there, so the group reports no gaps and
+        counts as fully covered. An absolute tolerance does measure it.
+        Both are what `chunk` would make of the data, so a `coverage` of
+        1.0 says "nothing chunk would refuse to merge", not "nothing
+        missing".
 
         See Also
         --------
@@ -1928,15 +1929,17 @@ class Spool(NodeRepr, NamespaceOwner):
         snap_coords
             If True (default), simplify the coordinates of joined patches to
             an evenly sampled range when doing so moves no coordinate value
-            by more than `tolerance` (samples, or the distance itself when
-            it states one). Merges whose gaps exceed that keep an exact
-            segmented coordinate instead.
+            by more than `tolerance` (samples, or the length itself when
+            the tolerance states one). Merges whose gaps exceed that keep
+            an exact segmented coordinate instead.
         tolerance
             The maximum number of samples a block of data can be spaced (gap)
             and still be considered contiguous. A quantity or timedelta
-            states the same limit as a distance instead of a sample count
-            (eg `tolerance=1 * s`), which also works for patches whose
-            sampling interval is unknown.
+            states that limit in the coordinate's own units instead (eg
+            `tolerance=1 * s`), which also works for patches whose
+            sampling interval is unknown. Either way a boundary of one
+            sample is contiguous, so a tolerance below one sample never
+            splits adjacent patches.
         conflict
             {conflict_desc}
         group

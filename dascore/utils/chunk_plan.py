@@ -21,6 +21,7 @@ import math
 import warnings
 from collections.abc import Sequence
 from dataclasses import dataclass, field
+from datetime import timedelta
 from pathlib import Path
 from typing import Any, Literal
 
@@ -39,10 +40,12 @@ from dascore.exceptions import (
 from dascore.units import (
     DimensionalityError,
     Quantity,
+    carries_units,
     convert_units,
     get_byte_count,
     get_quantity,
     is_data_size,
+    is_percent,
 )
 from dascore.utils.attrs import known_only, validate_conflict
 from dascore.utils.chunk import get_intervals
@@ -71,13 +74,12 @@ _DEFAULT_TOLERANCE = 1.5
 @dataclass(frozen=True)
 class _AbsoluteTolerance:
     """
-    A continuity tolerance stated as a distance, not a sample count.
+    A continuity tolerance stated in the coordinate's units, not in samples.
 
-    A quantity (or timedelta) tolerance resolves to one of these per
-    cell, since the cell fixes the units and dtype the distance is in.
-    Wrapped rather than passed bare so the gap test can tell an absolute
-    margin from a relative multiplier, which for a unitless coordinate
-    are both just numbers.
+    A quantity or timedelta tolerance resolves to one of these per cell,
+    since only the cell fixes the units and dtype to express it in. The
+    wrapper lets the gap test tell an absolute tolerance from a sample
+    count; on a unitless coordinate both are plain numbers.
     """
 
     value: Any
@@ -283,13 +285,14 @@ def _sampling_group(step: pd.Series, tolerance: float) -> pd.Series:
     return pd.Series(labels, index=step.index)
 
 
-def _is_absolute_tolerance(tolerance) -> bool:
-    """True when a tolerance states a distance rather than a sample count."""
-    return isinstance(tolerance, Quantity) or is_timedelta64(tolerance)
+def _check_tolerance_value(value, name, shown=None, *, allow_infinite=False):
+    """
+    Reject a tolerance no gap could be measured against.
 
-
-def _check_tolerance_value(value, name, shown=None):
-    """Reject a tolerance no gap could be measured against."""
+    An infinite sample count is a coherent request — no boundary is ever
+    a gap — but an infinite distance is not a distance, so only the
+    count is allowed to be one.
+    """
     shown = value if shown is None else shown
     # One tolerance, not one per patch: a one-element array passes every
     # test below and then broadcasts through the gap comparison.
@@ -300,7 +303,8 @@ def _check_tolerance_value(value, name, shown=None):
         )
         raise ParameterError(msg)
     try:
-        finite = not pd.isnull(value) and np.isfinite(value)
+        null = bool(pd.isnull(value))
+        negative = not null and value < 0
     except TypeError:
         msg = (
             f"The tolerance for {name!r} must be a sample count, a quantity, "
@@ -308,11 +312,10 @@ def _check_tolerance_value(value, name, shown=None):
             "quantity with dascore.get_quantity."
         )
         raise ParameterError(msg) from None
-    if not finite:
+    if null or (not allow_infinite and not np.isfinite(value)):
         msg = f"The tolerance for {name!r} must be finite, got {shown}."
         raise ParameterError(msg)
-    # a timedelta compares against a bare zero as its own zero
-    if value < 0:
+    if negative:
         msg = f"The tolerance for {name!r} must not be negative, got {shown}."
         raise ParameterError(msg)
 
@@ -322,21 +325,28 @@ def _normalize_tolerance(tolerance, name):
     Validate a continuity tolerance and reduce it to one of two forms.
 
     A number is a multiple of the sampling interval; a quantity or
-    timedelta is an absolute distance, which only a cell can resolve (it
-    fixes the units and dtype), so it passes through to be resolved
-    there. A dimensionless quantity *is* the multiple, so it becomes a
-    number.
+    timedelta states the limit in the coordinate's own units, which only
+    a cell can resolve (it fixes the units and dtype), so it passes
+    through to be resolved there. A dimensionless quantity *is* the
+    multiple, so it becomes a number.
     """
-    if is_timedelta64(tolerance):
+    if isinstance(tolerance, timedelta) or is_timedelta64(tolerance):
+        # to_timedelta64 takes the several spellings of a timedelta
         tolerance = to_timedelta64(tolerance)
         _check_tolerance_value(tolerance, name)
         return tolerance
     if isinstance(tolerance, Quantity):
-        _validate_quantity("tolerance", tolerance, name)
         if is_data_size(tolerance):
             msg = (
                 f"Cannot use a tolerance of {tolerance} for {name!r}: a data "
                 "size does not measure a gap along a coordinate."
+            )
+            raise UnitError(msg)
+        if is_percent(tolerance):
+            msg = (
+                f"Cannot use a tolerance of {tolerance} for {name!r}: a "
+                "percentage is neither a sample count nor a length. Pass the "
+                "count itself, or a length in the coordinate's units."
             )
             raise UnitError(msg)
         if not tolerance.dimensionless:
@@ -344,23 +354,27 @@ def _normalize_tolerance(tolerance, name):
             return tolerance
         # a dimensionless quantity is the sample count it spells out
         tolerance = float(tolerance.m_as("dimensionless"))
-    _check_tolerance_value(tolerance, name)
+    _check_tolerance_value(tolerance, name, allow_infinite=True)
     return tolerance
 
 
 def _cell_tolerance(tolerance, sub, name):
     """Resolve an absolute tolerance into one cell's own units."""
-    if not _is_absolute_tolerance(tolerance):
+    if not carries_units(tolerance):
         return tolerance
     start, _, _ = get_interval_columns(sub, name)
-    prefix = f"Cannot use a tolerance of {tolerance} for {name!r}"
-    if not isinstance(tolerance, Quantity):
-        # A timedelta is already the distance the cell measures in, but
-        # only a time-like coordinate measures in it.
-        if not (is_datetime64(start.dtype) or is_timedelta64(start.dtype)):
-            msg = f"{prefix}: the coordinate is not time-like."
-            raise UnitError(msg)
-        return _AbsoluteTolerance(tolerance)
+    if isinstance(tolerance, Quantity):
+        shown = tolerance
+    else:
+        # said in seconds, which is what a timedelta measures and how
+        # the message reads back
+        shown = f"{to_float(tolerance)} s"
+        if is_datetime64(start.dtype) or is_timedelta64(start.dtype):
+            return _AbsoluteTolerance(tolerance)
+        # A numeric coordinate can still be measured in time (a relative
+        # time axis, say), so the timedelta converts like any quantity.
+        tolerance = get_quantity(f"{to_float(tolerance)} s")
+    prefix = f"Cannot use a tolerance of {shown} for {name!r}"
     value = _quantity_to_dim_value(tolerance, sub, name, start.dtype, prefix=prefix)
     return _AbsoluteTolerance(value)
 
@@ -373,11 +387,11 @@ def _gap_boundaries(start, stop, step, tolerance):
     `reach` is the furthest stop seen *before* each row, so an
     overlapping or fully-nested row can never open a gap behind it, and
     `has_gap` marks each row whose start clears that reach by more than
-    the continuity margin: `tolerance` steps for a plain number, or the
-    tolerance itself when it is an
+    the margin: `tolerance` steps for a sample count, or the tolerance
+    itself (never under one step) for an
     [`_AbsoluteTolerance`](`dascore.utils.chunk_plan._AbsoluteTolerance`).
     The first row has nothing behind it, and a row whose step is unknown
-    compares False against a relative margin, so neither reports a gap.
+    compares False against a sample count, so neither reports a gap.
 
     Arrays rather than a frame, and an explicit first-row mask rather
     than `shift`, whose NaN fill would upcast integer envelopes to
@@ -403,7 +417,15 @@ def _gap_boundaries(start, stop, step, tolerance):
     ahead = starts > reach
     if ahead.any():
         if isinstance(tolerance, _AbsoluteTolerance):
-            margin = tolerance.value
+            # Adjacent patches sit exactly one step apart, so a margin
+            # narrower than the step would open a gap where no sample is
+            # missing. An unknown step has no floor to apply.
+            step_ahead = steps[ahead]
+            margin = np.where(
+                pd.isnull(step_ahead),
+                tolerance.value,
+                np.maximum(step_ahead, tolerance.value),
+            )
         else:
             margin = steps[ahead] * tolerance
         has_gap[ahead] = (starts[ahead] - reach[ahead]) > margin
@@ -596,6 +618,21 @@ def _cell_labels(df, name, group_attrs, sampling_tolerance) -> pd.Series:
     return base.astype(str) + "_" + samp.astype(str)
 
 
+def _may_exceed_default(tol, step: pd.Series) -> bool:
+    """True when an absolute margin can exceed the default anywhere in a cell.
+
+    The margin is `max(step, tol)` against the default's `1.5 * step`, so
+    the tolerance is looser exactly where it passes 1.5 steps — which is
+    at the cell's *smallest* step, since a cell may mix steps within the
+    sampling tolerance. A cell with no known step is never forced: the
+    default cannot close a boundary there at all.
+    """
+    steps = np.abs(to_float(step.to_numpy()))
+    if not np.isfinite(steps).any():
+        return False
+    return to_float(tol.value) > _DEFAULT_TOLERANCE * np.nanmin(steps)
+
+
 def _partition(
     df, name, group_attrs, tolerance, sampling_tolerance
 ) -> tuple[pd.Series, bool]:
@@ -612,23 +649,26 @@ def _partition(
     cell = _cell_labels(df, name, group_attrs, sampling_tolerance)
     cont = pd.Series(0, index=df.index, dtype=np.int64)
     forced_merge = False
-    # An absolute tolerance has no sample count to compare against the
-    # default, so whether it forced a merge is only knowable by running
-    # the default too.
-    loose = _is_absolute_tolerance(tolerance) or tolerance > _DEFAULT_TOLERANCE
+    absolute = carries_units(tolerance)
     for _, index in df.groupby(cell, sort=False).groups.items():
         sub = df.loc[index]
         s, e, st = get_interval_columns(sub, name)
         tol = _cell_tolerance(tolerance, sub, name)
         labels = _continuity_group(s, e, st, tol).astype(np.int64)
         cont.loc[index] = labels
-        if loose and not forced_merge:
-            # A partition which holds more than one of the default's is
-            # one the tolerance forced together. Counting partitions
-            # instead would miss a tolerance which merges one boundary
-            # while splitting another, which an absolute one can.
-            default = _continuity_group(s, e, st, _DEFAULT_TOLERANCE)
-            forced_merge = bool(default.groupby(labels).nunique().gt(1).any())
+        if forced_merge or not (absolute or tolerance > _DEFAULT_TOLERANCE):
+            continue
+        # An absolute tolerance can be looser than the default at one
+        # boundary and tighter at another, so it is checked against the
+        # default partition -- but only where it can be looser at all,
+        # since the second pass is not free.
+        if absolute and not _may_exceed_default(tol, st):
+            continue
+        # By containment, not by count: a partition holding more than one
+        # of the default's is one the tolerance forced together, even
+        # when the counts match.
+        default = _continuity_group(s, e, st, _DEFAULT_TOLERANCE)
+        forced_merge = bool(default.groupby(labels).nunique().gt(1).any())
     return cell + "_" + cont.astype(str), forced_merge
 
 
@@ -661,7 +701,7 @@ def _coerce_length_overlap(value, overlap, start_dtype):
 
 
 def _validate_quantity(label: str, quant, name: str) -> None:
-    """Reject quantity chunk lengths that cannot describe a length."""
+    """Reject a quantity chunk length or overlap that cannot describe one."""
     if not isinstance(quant, Quantity):
         return
     magnitude = np.asarray(quant.magnitude)
@@ -838,8 +878,8 @@ def _quantity_to_dim_value(quant, sub, name, start_dtype, prefix=None):
     Convert a (non-size) quantity into the chunked dimension's units.
 
     `prefix` opens the error messages; it names what the quantity was
-    for, since the same conversion serves both a chunk length and a
-    continuity tolerance.
+    for, since the same conversion serves a chunk length and a
+    continuity tolerance alike.
     """
     prefix = prefix if prefix is not None else f"Cannot chunk {name!r} by {quant}"
     if is_datetime64(start_dtype) or is_timedelta64(start_dtype):
@@ -851,7 +891,11 @@ def _quantity_to_dim_value(quant, sub, name, start_dtype, prefix=None):
                 "value must have units of time."
             )
             raise UnitError(msg) from None
-        return to_timedelta64(seconds)
+        try:
+            return to_timedelta64(seconds)
+        except OverflowError:
+            msg = f"{prefix}: it is too large to express as a time."
+            raise ParameterError(msg) from None
     units_col = f"_{name}_units"
     if units_col in sub.columns:
         units = sub[units_col].iloc[0]
