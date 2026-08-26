@@ -104,16 +104,18 @@ def suppress_warnings(
         yield caught if record else None
 
 
-def validate_warn_level(behavior) -> WARN_LEVELS:
+def validate_warn_level(behavior, name: str = "behavior") -> WARN_LEVELS:
     """
     Ensure a warn-level argument is one of the supported values.
 
     Called where the argument arrives rather than where it is acted on:
     only an incompatible patch reaches `warn_or_raise`, so validating
     there would accept a retired spelling until the data made it matter.
+    `name` is the parameter the caller spells it as, so the refusal names
+    the argument the user actually passed.
     """
     if behavior not in get_args(WARN_LEVELS):
-        msg = f"behavior must be one of {get_args(WARN_LEVELS)}, got {behavior!r}."
+        msg = f"{name} must be one of {get_args(WARN_LEVELS)}, got {behavior!r}."
         raise ParameterError(msg)
     return behavior
 
@@ -520,7 +522,7 @@ def optional_import(
 
 def optional_import(
     package_name: str,
-    on_missing: Literal["raise", "warn", "ignore"] = "raise",
+    on_missing: WARN_LEVELS = "raise",
     required_for: str = "the requested functionality",
 ) -> ModuleType | None:
     """
