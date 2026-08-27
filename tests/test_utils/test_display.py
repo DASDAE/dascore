@@ -1046,10 +1046,30 @@ class TestDurationText:
         """
         Two instants can lie further apart than a Timedelta holds.
 
-        How long that is matters less than the extents it would
-        otherwise take down with it.
+        Subtracting them raises, so each is read on its own instead --
+        the whole of what pandas can say is 584.6 years wide.
         """
-        assert duration_text(pd.Timestamp.min, pd.Timestamp.max) is None
+        assert "584.6 y" in str(duration_text(pd.Timestamp.min, pd.Timestamp.max))
+
+    def test_a_span_wider_than_the_nanoseconds_it_is_held_in(self):
+        """
+        An int64 of nanoseconds holds about 584 years.
+
+        numpy wraps past that without saying so, and five centuries
+        came back as 84.6 of them.
+        """
+        low = np.datetime64("1700-01-01", "ns")
+        high = np.datetime64("2200-01-01", "ns")
+        assert "500 y" in str(duration_text(low, high))
+
+    def test_two_times_which_do_not_share_a_timezone(self):
+        """
+        One aware and one naive do not subtract.
+
+        Which matters less than the repr they would raise out of.
+        """
+        low = pd.Timestamp("2020-01-01", tz="UTC")
+        assert duration_text(low, pd.Timestamp("2020-01-02")) is None
 
     @pytest.mark.parametrize(
         ("low", "high", "expected"),

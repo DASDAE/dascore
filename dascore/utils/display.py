@@ -932,23 +932,39 @@ def duration_text(low, high) -> Text | None:
     # of a repr in one order and gives an instant back in the other.
     if isinstance(low, _INSTANT_TYPES) != isinstance(high, _INSTANT_TYPES):
         return None
+    # Read from the two ends together, which is exact, and from each of
+    # them on its own where that cannot be done. An int64 of
+    # nanoseconds holds about 584 years and two instants can lie
+    # further apart than that: pandas raises over it, and numpy raises
+    # over it on some versions and wraps on others -- five centuries
+    # came back as 84.6 of them, pointing the other way from the ends
+    # they were read off.
+    seconds = None
     try:
         span = high - low
-    except (OutOfBoundsDatetime, OutOfBoundsTimedelta):
-        # Two instants can lie further apart than a Timedelta holds. How
-        # long that is matters less than the extents it would otherwise
-        # take down with it.
-        return None
-    # Divided by a second rather than read with `to_float`, which counts
-    # nanoseconds: a span of centuries is more of those than an int64
-    # holds, and the wrap is silent. Ten thousand years read that way
-    # came back as sixty one.
-    try:
-        seconds = span / np.timedelta64(1, "s")
+    except (OutOfBoundsDatetime, OutOfBoundsTimedelta, OverflowError):
+        pass
     except TypeError:
-        # A span held in years or months is not a fixed number of
-        # seconds, so numpy refuses to say how many. Neither will this.
+        # Two times which do not agree on a timezone do not subtract at
+        # all, and neither end can be read as the other's clock.
         return None
+    else:
+        # Divided by a second rather than read with `to_float`, which
+        # counts nanoseconds: the same int64 the ends were held in, and
+        # ten thousand years read that way came back as sixty one.
+        try:
+            seconds = span / np.timedelta64(1, "s")
+        except TypeError:
+            # A span held in years or months is not a fixed number of
+            # seconds, so numpy refuses to say how many. Neither will
+            # this.
+            return None
+        if (seconds < 0) != (high < low):
+            seconds = None
+    if seconds is None:
+        # Each end on its own, which fits where the span between them
+        # does -- to a precision only a far shorter span would miss.
+        seconds = to_float(high) - to_float(low)
     if not (said := human_duration(seconds)):
         return None
     return Text(f"<{said}>", dascore_styles["keys"])
