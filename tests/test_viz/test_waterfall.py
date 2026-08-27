@@ -353,6 +353,11 @@ class TestWaterfall:
         with pytest.raises(ParameterError, match=msg):
             random_patch.viz.waterfall(scale=(0.1, 0.2, 0.9), scale_type="relative")
 
+    def test_long_absolute_scale_raises(self, random_patch):
+        """Three absolute values are limits for nothing, so say so."""
+        with pytest.raises(ParameterError, match="scale must be"):
+            random_patch.viz.waterfall(scale=(0.1, 0.2, 0.9), scale_type="absolute")
+
     def test_invalid_scale_type_raises(self, random_patch):
         """Ensure invalid scale_type values raise ParameterError."""
         msg = "scale_type must be one of"
@@ -392,6 +397,11 @@ class TestWaterfall:
         # Verify colorbar limits are not identical
         clim = ax.images[0].get_clim()
         assert clim[0] != clim[1], "Colorbar limits should not be identical"
+
+    def test_negative_relative_scale_raises(self, random_patch):
+        """A negative relative scale would put the limits in the wrong order."""
+        with pytest.raises(ParameterError, match="greater than 0"):
+            random_patch.viz.waterfall(scale=-0.5, scale_type="relative")
 
     def test_scale_zero_raises(self, random_patch):
         """Ensure scale=0 with relative scaling raises ParameterError."""
