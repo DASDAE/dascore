@@ -27,6 +27,7 @@ from dascore.core._spool_inventory import (
     is_unset,
     map_axis_coords,
     readable_on,
+    to_axis_units,
     validate_enrich_conflict,
     validate_enrich_selection,
 )
@@ -266,7 +267,8 @@ def _get_channel_distances(patch, acquisition) -> tuple[str, str, np.ndarray]:
         if len(dims) != 1:
             msg = f"The {name!r} coordinate must belong to exactly one dimension."
             raise PatchError(msg)
-        values = patch.coords.coord_map[name].values
+        coord = patch.coords.coord_map[name]
+        values = to_axis_units(coord.values, coord.units, axis, name)
         try:
             distances = acquisition.channel_to_distance(values, axis=axis)
         except InvalidInventoryError as error:

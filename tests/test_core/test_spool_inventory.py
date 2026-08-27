@@ -32,7 +32,12 @@ from dascore.constants import (
     enrich_coords_description,
     enrich_on_missing_description,
 )
-from dascore.core._spool_inventory import InventoryRef, is_unset, resolve_row_epochs
+from dascore.core._spool_inventory import (
+    InventoryRef,
+    _frame_units,
+    is_unset,
+    resolve_row_epochs,
+)
 from dascore.core.inventory import (
     _SYSTEM_FACT_NAMES,
     Acquisition,
@@ -3168,6 +3173,76 @@ def _float_grid_pair(distance, span):
             ),
         )
     ).check()
+
+
+class TestFrameUnits:
+    """Reading a frame's stated units under either spelling."""
+
+    def test_private_column(self):
+        """A planning frame keeps the units private."""
+        frame = pd.DataFrame({"_distance_units": ["m", "ft"]})
+
+        assert _frame_units(frame, "distance") == ["m", "ft"]
+
+    def test_public_column(self):
+        """A presented one makes them public."""
+        frame = pd.DataFrame({"distance_units": ["m", "ft"]})
+
+        assert _frame_units(frame, "distance") == ["m", "ft"]
+
+    def test_unstated_units_are_none(self):
+        """A row which states no units answers None, not NaN."""
+        frame = pd.DataFrame({"_distance_units": ["m", None]})
+
+        assert _frame_units(frame, "distance") == ["m", None]
+
+    def test_no_units_column(self):
+        """A frame with neither spelling states units for no row."""
+        frame = pd.DataFrame({"distance_min": [0.0, 0.0]})
+
+        assert _frame_units(frame, "distance") == [None, None]
+
+
+class TestChannelUnits:
+    """Placing an index row's channels reads its stated units."""
+
+    def test_selection_is_invariant_to_the_axis_units(self, patch, inventory):
+        """The same channels answer whether the row is in meters or feet."""
+        shapes = []
+        for candidate in (patch, patch.convert_units(distance="ft")):
+            spool = dc.spool(candidate).attach_inventory(inventory).enrich()
+            shapes.append(spool.select(zone="north")[0].shape)
+        assert shapes[0] == shapes[1]
+
+    def test_expansion_is_invariant_to_the_axis_units(self, patch, inventory):
+        """As is expanding by a group, which places the same channels."""
+        expanded = []
+        for candidate in (patch, patch.convert_units(distance="ft")):
+            spool = dc.spool(candidate).attach_inventory(inventory).enrich()
+            expanded.append([x.shape for x in spool.expand_by("zone")])
+        assert expanded[0] == expanded[1]
+
+    def test_rows_in_different_units_are_placed_apart(self, patch, inventory):
+        """
+        Envelope columns hold each row's own magnitudes, so two rows
+        stating the same numbers in different units are different
+        channels and may not share a cached placement.
+        """
+        feet = patch.set_units(distance="ft").update_attrs(tag="feet")
+        spool = dc.spool([patch, feet]).attach_inventory(inventory).enrich()
+        out = spool.select(zone="north")
+        assert len(out) == 2
+        # The whole feet patch is north: 299 feet is 91 meters.
+        shapes = {x.attrs.tag: x.shape for x in out}
+        assert shapes["feet"] == patch.shape
+        assert shapes["random"] == (100, patch.shape[1])
+
+    def test_incompatible_units_raise(self, patch, inventory):
+        """A coordinate which is not a length cannot be a distance."""
+        seconds = patch.set_units(distance="s")
+        spool = dc.spool(seconds).attach_inventory(inventory)
+        with pytest.raises(UnitError, match="instrument_distance"):
+            spool.select(zone="north")
 
 
 class TestChannelSelectContracts:
