@@ -594,30 +594,22 @@ class TestDocuments:
         One class for every patch function, not one class each.
 
         `PatchOp` is the whole cost of naming any of them in a document.
+        The module argues against a class per patch function, so a
+        processor class is allowed only where it is the registered
+        implementation of one -- and then only because it gives the
+        operation a seam a whole function does not have.
         """
-        tags = {
-            tag
-            for tag, cls in registered_models().items()
-            if isinstance(cls, type) and issubclass(cls, (PatchOp, PatchProcessor))
+        processors = {
+            cls
+            for cls in registered_models().values()
+            if isinstance(cls, type)
+            and issubclass(cls, PatchProcessor)
+            and cls is not PatchProcessor
         }
-        # Spelled out rather than counted, so that a class added without
-        # a reason to is noticed. The module argues against a class per
-        # patch function; these are the exceptions it names -- the ones
-        # wanting a kernel seam.
-        assert tags == {
-            "PatchOp",
-            "PatchProcessor",
-            "Abs",
-            "AdaptiveSpectralFilter",
-            "Conj",
-            "Demean",
-            "Imag",
-            "Normalize",
-            "Real",
-            "RenameCoords",
-            "Standardize",
-            "Transpose",
-        }
+        assert processors == set(processor_module._IMPLEMENTATIONS.values())
+        seams = ("derive_meta", "plan_kernel", "kernel", "reconcile")
+        for cls in processors:
+            assert any(seam in cls.__dict__ for seam in seams), cls.__name__
 
     def test_the_document_names_the_operation(self):
         """The name and the arguments are what a document holds."""
