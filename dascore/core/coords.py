@@ -627,31 +627,47 @@ class BaseCoord(RichRepr, DascoreBaseModel, abc.ABC):
         is held.
         """
         fields: list[tuple[str, Text, bool]] = []
+        # What the values are measured in, said on each of them rather
+        # than in a field of its own: how far the fiber runs and what
+        # that is measured in are one fact, and reading the second of
+        # them off the end of the line is not how it is read. A time
+        # states its units in the way it is written -- an instant, a
+        # step of "0.0005s" -- and says nothing here.
+        stated = None
+        if self.units is not None and not dtype_time_like(self.dtype):
+            stated = get_quantity_str(self.units)
+
+        def measured(value: Text) -> Text:
+            """The value, and what it is measured in where it says."""
+            if not stated:
+                return value
+            return value + Text(f" {stated}", dascore_styles["units"])
+
         # Drawn as one range: the two ends state the same blocks, and
         # the second states only what the first did not already.
         near, far = range_texts(self.min(), self.max())
         if not pd.isnull(self.min()):
-            fields.append(("min", near, True))
+            fields.append(("min", measured(near), True))
         if not pd.isnull(self.max()):
-            fields.append(("max", far, True))
+            fields.append(("max", measured(far), True))
         # How far the two ends lie apart, which they do not otherwise
         # say: a fiber run from 1212.4 m to 1636.7 m is 424.3 m of it.
-        # Said bare, since the units field below states them once.
         if not (pd.isnull(self.min()) or pd.isnull(self.max())):
-            if (span := span_text(self.min(), self.max())) is not None:
+            if (span := span_text(self.min(), self.max(), stated)) is not None:
                 # The brackets say what it is, so a line does not
                 # need the label a column heading gives it.
                 fields.append(("span", span, False))
         if not pd.isnull(self.step):
-            step = get_nice_text(self.step)
+            step = measured(get_nice_text(self.step))
             if (rate := rate_text(self.step)) is not None:
                 step = step + rate
             fields.append(("step", step, True))
+        # A coordinate which states no value has nothing to hang its
+        # units on, and they are a fact of it either way.
+        if stated and not fields:
+            fields.append(("units", get_nice_text(stated, style="units"), True))
         fields.append(("shape", get_nice_text(self.shape), True))
         fields.append(("dtype", get_nice_text(self.dtype), True))
-        if self.units is not None:
-            unit_str = get_quantity_str(self.units)
-            fields.append(("units", get_nice_text(unit_str, style="units"), True))
         return tuple(fields)
 
     def __rich__(self):

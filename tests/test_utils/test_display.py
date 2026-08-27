@@ -24,6 +24,7 @@ from dascore.core.annotations import (
     AnnotationSet,
     AnnotationSetAttrs,
 )
+from dascore.core.coords import get_coord
 from dascore.core.inventory import Acquisition, Cable, Network
 from dascore.utils import display
 from dascore.utils.display import (
@@ -1111,6 +1112,34 @@ class TestSpanText:
         """
         assert span_text(low, high) is None
 
+    def test_ends_no_float_holds_state_nothing(self):
+        """A repr says nothing rather than raising out of the middle of itself."""
+        assert span_text(0, 10**400) is None
+
+    def test_a_width_wider_than_its_own_dtype_holds(self):
+        """
+        Two int64 ends can lie further apart than an int64 holds.
+
+        Subtracted as they are stored the width wraps and comes back
+        negative, so each end is read as a float first.
+        """
+        low, high = np.int64(-(2**63)), np.int64(2**63 - 1)
+        assert str(span_text(low, high)) == "<1.84467e+19>"
+
+    def test_a_width_finer_than_a_float_resolves(self):
+        """
+        Two int64 ends one apart up near 2**60 are the same float.
+
+        Subtracted as floats their width reads as zero, which states no
+        span at all for two ends which really do lie apart.
+        """
+        low = np.int64(2**60)
+        assert str(span_text(low, low + 1)) == "<1>"
+
+    def test_a_width_is_not_which_end_came_first(self):
+        """How far apart two ends lie, the way a duration is read."""
+        assert str(span_text(5, 2)) == "<3>"
+
     def test_a_mixed_pair_is_not_read_as_a_duration(self):
         """
         One end a time and the other not is not an extent at all.
@@ -1340,7 +1369,7 @@ class TestValuesAReaderCanRead:
         subtraction the reader should not be left to do.
         """
         rendered = str(dc.get_example_patch().coords.coord_map["distance"])
-        assert "<299>" in rendered
+        assert "<299 m>" in rendered
 
     def test_a_distance_coord_states_no_rate(self):
         """One over a distance is not a quantity anyone quotes."""
@@ -1349,7 +1378,29 @@ class TestValuesAReaderCanRead:
     def test_a_span_off_the_time_axis_is_not_read_in_seconds(self):
         """299 metres read as a duration is "5 m", which is five minutes."""
         rendered = str(dc.get_example_patch().coords.coord_map["distance"])
-        assert " s>" not in rendered and " m>" not in rendered
+        assert " s>" not in rendered
+
+    def test_a_coord_states_its_units_on_its_values(self):
+        """
+        What a value is measured in is part of reading it.
+
+        Said in a field of its own it sat at the end of the line, a
+        column away from every number it applied to.
+        """
+        rendered = str(dc.get_example_patch().coords.coord_map["distance"])
+        assert "min: 0 m max: 299 m" in rendered
+        assert "step: 1 m" in rendered
+        assert "units: " not in rendered
+
+    def test_a_time_coord_states_no_units_of_its_own(self):
+        """An instant, and a step of "0.004s", say it in the writing."""
+        rendered = str(dc.get_example_patch().coords.coord_map["time"])
+        assert "units" not in rendered
+
+    def test_a_coord_with_no_values_still_states_its_units(self):
+        """Nothing is left to hang them on, and they are a fact of it."""
+        coord = get_coord(shape=(10,), units="m")
+        assert "units: m" in str(coord)
 
     def test_a_coord_of_one_sample_states_no_span(self):
         """Two ends which meet lie no distance apart."""
@@ -2005,7 +2056,6 @@ class TestCoordinatesAreStated:
             # Asked of the coordinate rather than stated: an integer is
             # 32 bits where the suite runs in WebAssembly and 64 here.
             ("dtype", None),
-            ("units", "m"),
         ],
     )
     def test_the_facts_a_coordinate_states(self, patch, label, value):

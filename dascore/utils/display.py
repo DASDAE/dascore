@@ -978,7 +978,22 @@ def span_text(low, high, units: str | None = None) -> Text | None:
     # a bool is not a quantity two of which are apart by anything.
     if not (isinstance(low, numbers.Real) and isinstance(high, numbers.Real)):
         return None
-    width = float(high) - float(low)
+    try:
+        if isinstance(low, numbers.Integral) and isinstance(high, numbers.Integral):
+            # Subtracted as integers, which is exact and does not wrap:
+            # two int64 ends one apart up near 2**60 are the same float,
+            # so a width of one would come back as no width at all.
+            width = float(int(high) - int(low))
+        else:
+            width = float(high) - float(low)
+    except (OverflowError, ValueError, TypeError):
+        # An end no float holds, a Python int of four hundred digits
+        # among them. A repr states nothing rather than raising out of
+        # the middle of itself.
+        return None
+    # A width, like a duration, is how far apart the two ends lie and
+    # not which of them was handed over first.
+    width = abs(width)
     if not np.isfinite(width) or width == 0:
         return None
     stated = f" {units}" if units else ""
