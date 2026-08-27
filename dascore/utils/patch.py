@@ -64,7 +64,7 @@ from dascore.utils.misc import (
     yield_sub_sequences,
 )
 from dascore.utils.paths import is_memory_uri
-from dascore.utils.time import is_timedelta64, to_float
+from dascore.utils.time import is_timedelta64, to_float, to_timedelta64
 from dascore.workflow.builtin import Concatenate, Stack
 from dascore.workflow.checks import attr_type, check_patch_attrs, check_patch_coords
 from dascore.workflow.identity import (
@@ -1077,7 +1077,9 @@ def get_window_axis_step(
     def _check_not_negative(val, name):
         """Ensure a step or overlap value isn't negative."""
         magnitude = val.magnitude if isinstance(val, dc.units.Quantity) else val
-        if magnitude is not None and magnitude < 0:
+        # A bare 0 would make numpy cast the timedelta to a generic unit.
+        zero = to_timedelta64(0) if is_timedelta64(magnitude) else 0
+        if magnitude is not None and magnitude < zero:
             msg = f"{name} must be non-negative"
             raise ParameterError(msg)
 

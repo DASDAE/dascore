@@ -304,7 +304,9 @@ def _check_tolerance_value(value, name, shown=None, *, allow_infinite=False):
         raise ParameterError(msg)
     try:
         null = bool(pd.isnull(value))
-        negative = not null and value < 0
+        # A bare 0 would make numpy cast the timedelta to a generic unit.
+        zero = to_timedelta64(0) if is_timedelta64(value) else 0
+        negative = not null and value < zero
     except TypeError:
         msg = (
             f"The tolerance for {name!r} must be a sample count, a quantity, "
