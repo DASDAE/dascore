@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import numbers
 import re
 import textwrap
 from collections import Counter
@@ -154,9 +155,10 @@ class Table:
     """
     Records of one sort, drawn together.
 
-    They need not state the same fields -- only a time coordinate has a
-    span -- so a column exists for every field any row states and a row
-    with nothing for one leaves it empty.
+    They need not state the same fields -- a coordinate of one sample
+    has no span, and one read off a file may have no step -- so a
+    column exists for every field any row states and a row with
+    nothing for one leaves it empty.
 
     A terminal draws each record on its own line, which is what keeps
     `str()` unchanged; a panel draws them in columns, where each label
@@ -402,13 +404,13 @@ def _merge_columns(rows: Sequence[Row]) -> list[str]:
     """
     One column order which every row's own order agrees with.
 
-    Rows state different fields -- only a time coordinate has a span,
-    and a coordinate which selected nothing states neither a min nor a
-    max -- so the columns are the union. Sorted rather than merged by
-    hand: what each row states is an ordering constraint on part of the
-    whole, and reading them in as edges is what keeps a field which
-    appears late in one row and early in another from landing where no
-    row puts it.
+    Rows state different fields -- a coordinate of one sample has no
+    span, and a coordinate which selected nothing states neither a min
+    nor a max -- so the columns are the union. Sorted rather than
+    merged by hand: what each row states is an ordering constraint on
+    part of the whole, and reading them in as edges is what keeps a
+    field which appears late in one row and early in another from
+    landing where no row puts it.
 
     Two rows can disagree outright, which is a cycle and has no answer;
     the order they were first stated in is the one taken then.
@@ -918,14 +920,10 @@ def duration_text(low, high) -> Text | None:
     zero, which reads as a label on a gap and as an empty pair of
     brackets here.
 
-    Asked wherever a repr states two instants. A time is stated as an
-    instant, so how far apart two of them are is a fact the line does
-    not otherwise carry; every other kind of dimension states its own
-    magnitude already, and saying it twice is not saying more.
-
     Only of two times. A duration is read in seconds, so a distance of
     299 handed to this would come back as "5 m" -- five minutes, of a
-    span measured in metres.
+    span measured in metres. `span_text` is what an extent of any kind
+    is asked through; this is the arm of it which reads a clock.
     """
     if not isinstance(low, _TIME_TYPES) or not isinstance(high, _TIME_TYPES):
         return None
@@ -949,6 +947,42 @@ def duration_text(low, high) -> Text | None:
     if not (said := human_duration(seconds)):
         return None
     return Text(f"<{said}>", dascore_styles["keys"])
+
+
+def span_text(low, high, units: str | None = None) -> Text | None:
+    """
+    How wide an extent is, as a repr states it.
+
+    Asked wherever a repr states two ends. How far apart they lie is a
+    fact those two numbers do not carry: fiber running from 1212.4 m to
+    1636.7 m is 424.3 m of it, and the subtraction which says so is not
+    work a reader should be left to do.
+
+    A time span is a duration, said in the largest unit which fits.
+    Every other extent is as wide as its own numbers say, since reading
+    one in seconds would state a different quantity than the one
+    measured.
+
+    ``units`` is what to say that width in, and is for a line which
+    states them nowhere else. A line which already names its units --
+    a coordinate row with a units field, a dimension with its unit
+    after it -- passes nothing rather than say them twice.
+
+    None where there is no width to state: two ends which meet, which
+    is one sample and not a span of nothing, and a dimension of labels,
+    which has two ends and nothing measurable between them.
+    """
+    if isinstance(low, _TIME_TYPES) or isinstance(high, _TIME_TYPES):
+        return duration_text(low, high)
+    # Real, not Number: a complex pair has no width along one axis, and
+    # a bool is not a quantity two of which are apart by anything.
+    if not (isinstance(low, numbers.Real) and isinstance(high, numbers.Real)):
+        return None
+    width = float(high) - float(low)
+    if not np.isfinite(width) or width == 0:
+        return None
+    stated = f" {units}" if units else ""
+    return Text(f"<{width:g}{stated}>", dascore_styles["keys"])
 
 
 def _split_instant(rendered: str) -> tuple[str, str]:

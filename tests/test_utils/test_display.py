@@ -62,6 +62,7 @@ from dascore.utils.display import (
     range_texts,
     rate_text,
     render_text,
+    span_text,
     split_block,
     stated_fields,
 )
@@ -1068,6 +1069,58 @@ class TestDurationText:
         assert expected in str(said)
 
 
+class TestSpanText:
+    """Tests for how wide an extent is, whatever it is measured in."""
+
+    def test_two_numbers_state_how_far_apart_they_lie(self):
+        """The fact a min and a max do not carry on their own."""
+        assert str(span_text(1212.381, 1636.714)) == "<424.333>"
+
+    def test_two_instants_are_a_duration(self):
+        """A time is the one kind of extent said in units of its own."""
+        low = np.datetime64("2020-01-01T00:00:00")
+        high = np.datetime64("2020-01-01T00:00:24")
+        assert str(span_text(low, high)) == "<24 s>"
+
+    def test_a_width_is_said_in_the_units_asked_for(self):
+        """A line which names its units nowhere else names them here."""
+        assert str(span_text(0.0, 5.0, "m")) == "<5 m>"
+
+    def test_ends_which_meet_have_no_width(self):
+        """One sample spans an instant, which is not a span of nothing."""
+        assert span_text(5.0, 5.0) is None
+
+    @pytest.mark.parametrize(
+        ("low", "high"),
+        [
+            ("a", "c"),
+            (None, None),
+            (np.bool_(False), np.bool_(True)),
+            (complex(0, 0), complex(1, 1)),
+            (0.0, float("nan")),
+            (0.0, float("inf")),
+        ],
+        ids=["strings", "none", "bools", "complex", "nan", "infinite"],
+    )
+    def test_what_has_no_width_states_none(self, low, high):
+        """
+        A dimension of labels has two ends and nothing between them.
+
+        Neither has a pair which cannot be subtracted into one real
+        number, or whose difference is not a number a reader can read.
+        """
+        assert span_text(low, high) is None
+
+    def test_a_mixed_pair_is_not_read_as_a_duration(self):
+        """
+        One end a time and the other not is not an extent at all.
+
+        Without the guard numpy raises out of the middle of a repr.
+        """
+        assert span_text(np.datetime64("2020-01-01"), 1) is None
+        assert span_text(1, np.datetime64("2020-01-01")) is None
+
+
 class TestRangeTexts:
     """Tests for the two ends of a range, drawn as one range."""
 
@@ -1281,13 +1334,27 @@ class TestValuesAReaderCanRead:
         coord = dc.get_example_patch().coords.coord_map["time"]
         assert "250 Hz" in str(coord)
 
-    def test_a_distance_coord_states_neither(self):
+    def test_a_distance_coord_states_its_span(self):
         """
-        A distance from 0 to 299 m already says how wide it is, and a
-        rate over it is not a quantity anyone quotes.
+        A run of fiber is as long as its two ends lie apart, which is a
+        subtraction the reader should not be left to do.
         """
         rendered = str(dc.get_example_patch().coords.coord_map["distance"])
-        assert "Hz" not in rendered
+        assert "<299>" in rendered
+
+    def test_a_distance_coord_states_no_rate(self):
+        """One over a distance is not a quantity anyone quotes."""
+        assert "Hz" not in str(dc.get_example_patch().coords.coord_map["distance"])
+
+    def test_a_span_off_the_time_axis_is_not_read_in_seconds(self):
+        """299 metres read as a duration is "5 m", which is five minutes."""
+        rendered = str(dc.get_example_patch().coords.coord_map["distance"])
+        assert " s>" not in rendered and " m>" not in rendered
+
+    def test_a_coord_of_one_sample_states_no_span(self):
+        """Two ends which meet lie no distance apart."""
+        patch = dc.get_example_patch().select(distance=(0, 1), samples=True)
+        rendered = str(patch.coords.coord_map["distance"])
         assert "<" not in rendered
 
     def test_the_data_states_how_much_room_it_takes(self):
@@ -1310,16 +1377,17 @@ class TestValuesAReaderCanRead:
         rendered = str(AnnotationSet(frame, dims=("time",)))
         assert "min: 2020-01-01T00:00:00 max: …:09" in rendered
 
-    def test_an_annotation_set_over_distance_states_no_span(self):
+    def test_an_annotation_set_over_distance_states_its_width(self):
         """
-        A distance annotation is not measured in time.
+        A distance annotation is as wide as distance is.
 
-        299 metres read as a duration is "5 m", which is five minutes.
+        Not as many seconds: 299 metres read as a duration is "5 m",
+        which is five minutes.
         """
         frame = pd.DataFrame({"distance_min": [0.0], "distance_max": [299.0]})
         rendered = str(AnnotationSet(frame, dims=("distance",)))
-        assert "299" in rendered
-        assert "<" not in rendered
+        assert "<299>" in rendered
+        assert " m>" not in rendered
 
     def test_an_annotation_set_states_its_span(self):
         """The same fact a spool and a patch coordinate state."""

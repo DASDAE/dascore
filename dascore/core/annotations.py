@@ -64,11 +64,11 @@ from dascore.utils.display import (
     Repr,
     RichRepr,
     counts_to_text,
-    duration_text,
     get_header_text,
     mapping_to_text,
     model_to_line,
     range_texts,
+    span_text,
     split_block,
     stated_fields,
 )
@@ -957,7 +957,7 @@ class AnnotationSet(NodeRepr, NamespaceOwner):
             base += near
             base += Text(" max: ", key_style)
             base += far
-            if (span := duration_text(low, high)) is not None:
+            if (span := span_text(low, high)) is not None:
                 base += Text(" ") + span
             kind = "point" if spelling.point else "range"
             base += Text(f" ({kind})", key_style)

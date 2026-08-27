@@ -56,10 +56,10 @@ from dascore.utils.array import (
 )
 from dascore.utils.display import (
     RichRepr,
-    duration_text,
     get_nice_text,
     range_texts,
     rate_text,
+    span_text,
 )
 from dascore.utils.docs import compose_docstring, get_docstring
 from dascore.utils.misc import (
@@ -634,10 +634,11 @@ class BaseCoord(RichRepr, DascoreBaseModel, abc.ABC):
             fields.append(("min", near, True))
         if not pd.isnull(self.max()):
             fields.append(("max", far, True))
-        # Only a time. Two instants say nothing about how far apart they
-        # are; a distance from 0 to 299 m already says 299 m.
-        if dtype_time_like(self.dtype) and not pd.isnull(self.min()):
-            if (span := duration_text(self.min(), self.max())) is not None:
+        # How far the two ends lie apart, which they do not otherwise
+        # say: a fiber run from 1212.4 m to 1636.7 m is 424.3 m of it.
+        # Said bare, since the units field below states them once.
+        if not (pd.isnull(self.min()) or pd.isnull(self.max())):
+            if (span := span_text(self.min(), self.max())) is not None:
                 # The brackets say what it is, so a line does not
                 # need the label a column heading gives it.
                 fields.append(("span", span, False))
