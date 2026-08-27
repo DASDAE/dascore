@@ -206,6 +206,51 @@ def build_labeled_inventory(values: int, crs, lines: int = 1) -> inv.Inventory:
     ).check()
 
 
+# The address of the one path build_grouped_inventory draws.
+PATH = "DAS.L3.00"
+
+
+def build_grouped_inventory(group: str, codes=("RAW",)) -> inv.Inventory:
+    """One path of one label group, interrogated by an acquisition per code."""
+    optical_path = inv.OpticalPath(
+        name="main",
+        location_code="00",
+        optical_components=(
+            inv.FiberSegment(name="run", distance_min=0.0, distance_max=300.0),
+        ),
+        labels=(
+            inv.OpticalPathLabel(
+                distance_min=0.0, distance_max=150.0, group=group, value="dark"
+            ),
+        ),
+    )
+    acquisitions = tuple(
+        inv.Acquisition(
+            code=code,
+            location_code="00",
+            data_category="DAS",
+            sample_rate=100.0,
+            gauge_length=10.0,
+            distance_map=inv.DistanceMap(channel=(0.0, 300.0), distance=(0.0, 300.0)),
+        )
+        for code in codes
+    )
+    return inv.Inventory(
+        networks=(
+            inv.Network(
+                code="DAS",
+                fiber_arrays=(
+                    inv.FiberArray(
+                        code="L3",
+                        acquisitions=acquisitions,
+                        optical_paths=(optical_path,),
+                    ),
+                ),
+            ),
+        )
+    ).check()
+
+
 @pytest.fixture(scope="module")
 def site():
     """The inventory most tests draw."""
@@ -389,10 +434,10 @@ class TestPath:
         assert list(zip(lane["start"], lane["end"])) == [(100.0, 200.0), (200.0, 350.0)]
 
     def test_all_tracks(self, site):
-        """Every track becomes a lane, channels first."""
+        """Every track becomes a lane, the acquisition first."""
         ax = path(site, "DAS.L1.00", time="2026-06-10")
         assert _lanes(ax) == [
-            "channels (RAW)",
+            "acquisition (RAW)",
             "components",
             "coupling",
             "zone",
@@ -504,8 +549,67 @@ class TestPath:
         """tracks= picks lanes and orders them."""
         ax = path(site, "DAS.L1.00", time="2026-06-10", tracks=("zone", "coupling"))
         assert _lanes(ax) == ["zone", "coupling"]
-        ax = path(site, "DAS.L1.00", time="2026-06-10", tracks="channels")
-        assert _lanes(ax) == ["channels (RAW)"]
+        ax = path(site, "DAS.L1.00", time="2026-06-10", tracks="acquisition")
+        assert _lanes(ax) == ["acquisition (RAW)"]
+
+    def test_track_name_shared_with_label_group(self):
+        """A group named for the track is drawn, not shadowed by it."""
+        ax = path(build_grouped_inventory("acquisition"), PATH, tracks="acquisition")
+        assert _lanes(ax) == ["acquisition (RAW)", "acquisition"]
+
+    def test_track_name_only_prefixed(self):
+        """A group whose name merely starts with the track's is its own."""
+        inventory = build_grouped_inventory("acquisition zone")
+        assert _lanes(path(inventory, PATH, tracks="acquisition")) == [
+            "acquisition (RAW)"
+        ]
+        assert _lanes(path(inventory, PATH, tracks="acquisition zone")) == [
+            "acquisition zone"
+        ]
+
+    def test_track_does_not_claim_a_lane_shaped_group(self):
+        """A group named like a lane is a group, not an acquisition."""
+        inventory = build_grouped_inventory("acquisition (FOO)")
+        assert _lanes(path(inventory, PATH, tracks="acquisition")) == [
+            "acquisition (RAW)"
+        ]
+        assert _lanes(path(inventory, PATH, tracks="acquisition (FOO)")) == [
+            "acquisition (FOO)"
+        ]
+        # With no acquisition to draw, the track finds nothing rather
+        # than answering with the group which looks like one.
+        bare = build_grouped_inventory("acquisition (FOO)", codes=())
+        with pytest.raises(ParameterError, match="nothing to draw for tracks"):
+            path(bare, PATH, tracks="acquisition")
+
+    def test_one_lane_per_acquisition(self):
+        """Acquisitions of different codes are a lane each, and select together."""
+        inventory = build_grouped_inventory("zone", codes=("RAW", "AUX"))
+        assert _lanes(path(inventory, PATH, tracks="acquisition")) == [
+            "acquisition (RAW)",
+            "acquisition (AUX)",
+        ]
+
+    def test_shared_name_keeps_the_track_position(self):
+        """A group named for a track travels with it, not to the end."""
+        inventory = build_grouped_inventory("acquisition")
+        ax = path(inventory, PATH, tracks=("components", "acquisition"))
+        assert _lanes(ax) == ["components", "acquisition (RAW)", "acquisition"]
+
+    def test_lane_name_is_not_a_track_name(self, site):
+        """Typing the lane read off the plot says which name to use."""
+        with pytest.raises(ParameterError, match="asked for by the track's name"):
+            path(site, "DAS.L1.00", time="2026-06-10", tracks="acquisition (RAW)")
+
+    def test_repeated_track_drawn_where_first_asked(self, site):
+        """A lane named twice keeps the position of its first mention."""
+        ax = path(
+            site,
+            "DAS.L1.00",
+            time="2026-06-10",
+            tracks=("coupling", "zone", "coupling"),
+        )
+        assert _lanes(ax) == ["coupling", "zone"]
 
     def test_unknown_track(self, site):
         """A track which is not a track nor a label group is refused."""
@@ -515,16 +619,16 @@ class TestPath:
     def test_tracks_with_nothing(self, site):
         """Asking for a lane the path has no rows for is an error."""
         with pytest.raises(ParameterError, match="nothing to draw for tracks"):
-            path(site, "spur", tracks="channels")
+            path(site, "spur", tracks="acquisition")
 
     def test_acquisition_not_effective(self, site):
         """An acquisition which overlaps the path but not the time is left out."""
         ax = path(site, "DAS.L1.00", time="2026-06-20")
-        assert not any(x.startswith("channels") for x in _lanes(ax))
+        assert not any(x.startswith("acquisition") for x in _lanes(ax))
 
     def test_point_distance_map(self, site):
         """A single-point distance map draws as a tick, not a guessed span."""
-        ax = path(site, "DAS.L1.00", time="2026-08-01", tracks="channels")
+        ax = path(site, "DAS.L1.00", time="2026-08-01", tracks="acquisition")
         assert ax.lines
         assert ax.lines[0].get_xdata()[0] == 100.0
 
