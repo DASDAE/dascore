@@ -398,6 +398,11 @@ class TestWaterfall:
         clim = ax.images[0].get_clim()
         assert clim[0] != clim[1], "Colorbar limits should not be identical"
 
+    def test_negative_relative_scale_raises(self, random_patch):
+        """A negative relative scale would put the limits in the wrong order."""
+        with pytest.raises(ParameterError, match="greater than 0"):
+            random_patch.viz.waterfall(scale=-0.5, scale_type="relative")
+
     def test_scale_zero_raises(self, random_patch):
         """Ensure scale=0 with relative scaling raises ParameterError."""
         msg = "Relative scale value of 0"

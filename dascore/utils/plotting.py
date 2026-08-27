@@ -67,10 +67,10 @@ def _get_scale(scale, scale_type, data):
         # Scale is symmetric around the mean, using fraction of dynamic range
         case (scale, "relative") if len(scale) == 1:
             scale = scale[0]
-            if scale == 0:
-                msg = (
-                    "Relative scale value of 0 would produce degenerate colorbar limits"
-                )
+            # Zero gives one limit twice, and less than zero puts them in the
+            # wrong order.
+            if scale <= 0:
+                msg = f"Relative scale value of {scale} must be greater than 0"
                 raise ParameterError(msg)
             mod = 0.5 * (np.nanmax(data) - np.nanmin(data))
             if mod == 0:
