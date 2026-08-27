@@ -1166,10 +1166,26 @@ class TestSpanText:
             (None, None),
             (np.bool_(False), np.bool_(True)),
             (complex(0, 0), complex(1, 1)),
+            # Only complex128 subclasses Python's complex, so the rest
+            # came through as numbers and stated the modulus of the
+            # difference as though it were a width.
+            (np.complex64(0), np.complex64(3 + 4j)),
+            (np.complex128(0), np.complex128(3 + 4j)),
+            (np.clongdouble(0), np.clongdouble(3 + 4j)),
             (0.0, float("nan")),
             (0.0, float("inf")),
         ],
-        ids=["strings", "none", "bools", "complex", "nan", "infinite"],
+        ids=[
+            "strings",
+            "none",
+            "bools",
+            "complex",
+            "complex64",
+            "complex128",
+            "clongdouble",
+            "nan",
+            "infinite",
+        ],
     )
     def test_what_has_no_width_states_none(self, low, high):
         """

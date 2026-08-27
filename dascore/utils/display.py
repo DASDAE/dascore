@@ -1040,9 +1040,12 @@ def _measurable(value) -> bool:
     """Whether a value is a quantity two of which lie a width apart."""
     # A bool is an integer to Python and a quantity to nobody: a true
     # which is one more than a false is arithmetic, not a width. A
-    # complex pair has no width along one axis. Every other kind of
-    # number has one, a Decimal and a Fraction among them.
-    if isinstance(value, bool | complex):
+    # complex pair has no width along one axis, and numpy's own kinds
+    # are asked for by name -- only complex128 subclasses Python's,
+    # so complex64 came through as a number and stated the modulus of
+    # the difference. Every other kind of number has a width, a
+    # Decimal and a Fraction among them.
+    if isinstance(value, bool | complex | np.complexfloating):
         return False
     return isinstance(value, numbers.Number)
 
