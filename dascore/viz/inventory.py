@@ -204,7 +204,7 @@ def _track_frame(path, acquisitions) -> pd.DataFrame:
         distances = dist_map.distance
         rows.append(
             {
-                "lane": f"channels ({acquisition.code})",
+                "lane": f"acquisition ({acquisition.code})",
                 "start": float(distances[0]),
                 "end": float(distances[-1]),
                 "value": acquisition.code,
@@ -245,7 +245,7 @@ def _track_frame(path, acquisitions) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-TRACKS = ("channels", "components", "coupling")
+TRACKS = ("acquisition", "components", "coupling")
 
 
 def _column_panels(path, columns, crs) -> list[str]:
@@ -287,9 +287,9 @@ def _select_tracks(frame, tracks, path):
     wanted = [tracks] if isinstance(tracks, str) else list(tracks)
     keep = []
     for name in wanted:
-        if name == "channels":
+        if name == "acquisition":
             keep.extend(
-                x for x in dict.fromkeys(frame["lane"]) if x.startswith("channels")
+                x for x in dict.fromkeys(frame["lane"]) if x.startswith("acquisition")
             )
         elif name in TRACKS or name in groups:
             keep.append(name)
@@ -374,7 +374,7 @@ def path(
         end may be None, or ..., to run to the path's own bound. A long
         lead-in otherwise crushes the instrumented part into a corner.
     tracks
-        Which lanes to draw, in order: any of "channels", "components",
+        Which lanes to draw, in order: any of "acquisition", "components",
         "coupling", and the path's label group names. None draws all.
     columns
         Geometry columns to draw as line panels beneath the lanes. The

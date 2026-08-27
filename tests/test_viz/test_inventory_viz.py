@@ -389,10 +389,10 @@ class TestPath:
         assert list(zip(lane["start"], lane["end"])) == [(100.0, 200.0), (200.0, 350.0)]
 
     def test_all_tracks(self, site):
-        """Every track becomes a lane, channels first."""
+        """Every track becomes a lane, the acquisition first."""
         ax = path(site, "DAS.L1.00", time="2026-06-10")
         assert _lanes(ax) == [
-            "channels (RAW)",
+            "acquisition (RAW)",
             "components",
             "coupling",
             "zone",
@@ -504,8 +504,8 @@ class TestPath:
         """tracks= picks lanes and orders them."""
         ax = path(site, "DAS.L1.00", time="2026-06-10", tracks=("zone", "coupling"))
         assert _lanes(ax) == ["zone", "coupling"]
-        ax = path(site, "DAS.L1.00", time="2026-06-10", tracks="channels")
-        assert _lanes(ax) == ["channels (RAW)"]
+        ax = path(site, "DAS.L1.00", time="2026-06-10", tracks="acquisition")
+        assert _lanes(ax) == ["acquisition (RAW)"]
 
     def test_unknown_track(self, site):
         """A track which is not a track nor a label group is refused."""
@@ -515,16 +515,16 @@ class TestPath:
     def test_tracks_with_nothing(self, site):
         """Asking for a lane the path has no rows for is an error."""
         with pytest.raises(ParameterError, match="nothing to draw for tracks"):
-            path(site, "spur", tracks="channels")
+            path(site, "spur", tracks="acquisition")
 
     def test_acquisition_not_effective(self, site):
         """An acquisition which overlaps the path but not the time is left out."""
         ax = path(site, "DAS.L1.00", time="2026-06-20")
-        assert not any(x.startswith("channels") for x in _lanes(ax))
+        assert not any(x.startswith("acquisition") for x in _lanes(ax))
 
     def test_point_distance_map(self, site):
         """A single-point distance map draws as a tick, not a guessed span."""
-        ax = path(site, "DAS.L1.00", time="2026-08-01", tracks="channels")
+        ax = path(site, "DAS.L1.00", time="2026-08-01", tracks="acquisition")
         assert ax.lines
         assert ax.lines[0].get_xdata()[0] == 100.0
 
