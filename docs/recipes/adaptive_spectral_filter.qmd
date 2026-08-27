@@ -6,11 +6,7 @@ execute:
 
 [`Patch.adaptive_spectral_filter`](`dascore.Patch.adaptive_spectral_filter`) suppresses energy which is not coherent within a small window of the data. Over time and distance together it is the adaptive frequency-wavenumber (AFK) filter of @isken2022denoising, as implemented in Pyrocko's [Lightguide](https://github.com/pyrocko/lightguide), and it is a good first tool for pulling arrivals out of DAS data whose noise is not organized along any particular moveout.
 
-The filter walks the patch in overlapping windows. Each window is Fourier transformed, every coefficient is multiplied by its own magnitude raised to `exponent`, and the window is transformed back and blended into the output. An arrival which is coherent across the window concentrates its energy in a few large coefficients, which the weighting keeps; noise spread across the spectrum is suppressed everywhere.
-
-## A synthetic event
-
-Two linear-moveout wavelets and one hyperbola, buried in white noise at half their amplitude:
+The filter walks the patch in overlapping windows. Each window is Fourier transformed, every coefficient is multiplied by its own magnitude raised to `exponent`, and the window is transformed back and blended into the output. An arrival which is coherent across the window concentrates its energy in a few large coefficients, which the weighting favours over everything spread thinly across the spectrum.
 
 ```{python}
 import numpy as np
@@ -18,27 +14,8 @@ import matplotlib.pyplot as plt
 
 import dascore as dc
 
-rng = np.random.default_rng(0)
-time = np.arange(1024) * 0.002
-distance = np.arange(256) * 2.0
-
-
-def ricker(t, frequency=25.0):
-    width = (np.pi * frequency * t) ** 2
-    return (1 - 2 * width) * np.exp(-width)
-
-
-clean = np.zeros((256, 1024), dtype=np.float32)
-for start, velocity in [(0.4, 1500.0), (0.9, -3000.0), (1.3, 800.0)]:
-    clean += ricker(time[None, :] - (start + distance[:, None] / velocity))
-clean += 0.8 * ricker(
-    time[None, :] - np.sqrt(1.6**2 + (distance[:, None] - 250) ** 2 / 2000**2)
-)
-coords = {"distance": distance, "time": dc.to_datetime64(time)}
-clean_patch = dc.Patch(data=clean, coords=coords, dims=("distance", "time"))
-noisy_patch = clean_patch.new(
-    data=clean + rng.normal(0, 0.5, clean.shape).astype(np.float32)
-)
+patch = dc.get_example_patch("example_event_2").pass_filter(time=(1, 300))
+filtered = patch.adaptive_spectral_filter(time=16, distance=16, samples=True)
 
 
 def show(axes, patches, titles):
@@ -50,31 +27,19 @@ def show(axes, patches, titles):
     axes[0].figure.tight_layout()
 
 
-filtered = noisy_patch.adaptive_spectral_filter(time=16, distance=16, samples=True)
-
-fig, axes = plt.subplots(1, 3, figsize=(15, 5), sharey=True)
-show(axes, [clean_patch, noisy_patch, filtered], ["clean", "noisy", "filtered"])
-```
-
-Only the window sizes were given; `overlap` defaults to the largest the window allows and `exponent` to 0.8, the settings Lightguide uses.
-
-## A real event
-
-```{python}
-patch = dc.get_example_patch("example_event_2").pass_filter(time=(1, 300))
-filtered = patch.adaptive_spectral_filter(time=16, distance=16, samples=True)
-
 fig, axes = plt.subplots(1, 2, figsize=(12, 5), sharey=True)
 show(axes, [patch, filtered], ["band-passed", "filtered"])
 ```
 
-## Choosing the parameters
+Only the window sizes were given; `overlap` defaults to the largest the window allows and `exponent` to 0.8, the settings Lightguide uses. Windows must be powers of two greater than 4 samples and can also be given in coordinate units, as in `patch.adaptive_spectral_filter(time=1.6e-3 * s, distance=16 * m)`. Selecting a single dimension weights each trace's spectrum on its own, which favours the strong arrivals but cannot see coherence across the fiber.
 
-`exponent` is the filter's strength. At 0 the data pass through unchanged; near 1 the weighting is the magnitude itself, and above 1 weak but coherent arrivals start to go with the noise. The default of 0.8 is a good starting point.
+## Choosing the exponent
+
+`exponent` is the filter's strength. At 0 the data pass through unchanged; near 1 the weighting is the magnitude itself, and above 1 weak but coherent arrivals start to go with the noise.
 
 ```{python}
-fig, axes = plt.subplots(1, 4, figsize=(20, 5), sharey=True)
 exponents = [0.2, 0.5, 0.8, 1.2]
+fig, axes = plt.subplots(1, 4, figsize=(20, 5), sharey=True)
 show(
     axes,
     [
@@ -87,52 +52,8 @@ show(
 )
 ```
 
-The windows must be powers of two greater than 4 samples. A window should hold a few cycles of the arrivals to keep and stay short against the distance over which their moveout changes; 16 samples along each dimension serves most data, and 32 sharpens straight, long arrivals. Windows can also be given in coordinate units:
-
-```{python}
-from dascore.units import s, m
-
-filtered = patch.adaptive_spectral_filter(time=1.6e-3 * s, distance=16 * m)
-```
-
-Selecting one dimension weights each trace's spectrum on its own. That still favours the strong arrivals, but a single trace carries no information about coherence across the fiber, so noise which shares an arrival's frequencies stays:
-
-```{python}
-fig, axes = plt.subplots(1, 2, figsize=(12, 5), sharey=True)
-show(
-    axes,
-    [
-        patch.adaptive_spectral_filter(time=16, samples=True),
-        patch.adaptive_spectral_filter(time=16, distance=16, samples=True),
-    ],
-    ["time only", "time and distance"],
-)
-```
-
 ## What it does not do
 
 The filter is not amplitude preserving: every coefficient is scaled by a power of its own magnitude, so the output's units are not the input's and its amplitudes grow with the input's. Compare arrivals within one filtered patch, not across patches, and do not read the output as strain.
 
-Nor does it remove coherent noise. Energy which is organized within a window is kept whatever its origin, so per-channel offsets, instrument ringing, or a strong surface wave must be removed first. The first example event carries low-frequency per-channel striping, which the filter keeps as faithfully as it keeps the arrivals; band-passing it away beforehand is what leaves the event alone:
-
-```{python}
-event = dc.get_example_patch("example_event_1").detrend("time").taper(time=0.05)
-striped = event.pass_filter(time=(1, 300))
-unstriped = event.pass_filter(time=(50, 1000))
-
-fig, axes = plt.subplots(2, 2, figsize=(12, 10), sharex=True, sharey=True)
-show(
-    axes.ravel(),
-    [
-        striped,
-        striped.adaptive_spectral_filter(time=16, distance=16, samples=True),
-        unstriped,
-        unstriped.adaptive_spectral_filter(time=16, distance=16, samples=True),
-    ],
-    ["1-300 Hz", "filtered", "50-1000 Hz", "filtered"],
-)
-```
-
-## Performance
-
-Two-dimensional filtering runs on an optional compiled engine when `numba` and `rocket-fft` are installed, which is about ten times faster than the SciPy path on large patches; `engine="scipy"` forces the reference implementation.
+Nor does it remove coherent noise. Energy which is organized within a window is kept whatever its origin, so per-channel offsets, instrument ringing, or a strong surface wave must be removed first. The first example event carries low-frequency per-channel striping which the filter keeps as faithfully as the arrivals; a band-pass above 50 Hz before filtering is what leaves the event alone.

@@ -16,6 +16,7 @@ from dascore.exceptions import (
 )
 from dascore.proc import adaptive_spectral_filter as adaptive_spectral_filter_func
 from dascore.proc.adaptive_spectral_filter import (
+    AdaptiveSpectralFilter,
     _adaptive_spectral_filter_scipy,
     _get_engine,
     _validate_window_and_overlap,
@@ -492,6 +493,34 @@ class TestAdaptiveSpectralFilter:
                 samples=True,
                 engine="bad",  # type: ignore[arg-type]
             )
+
+    def test_negative_exponent_is_refused(self) -> None:
+        """A negative power of a silent coefficient is zero times infinity."""
+        patch = _patch((64, 64), ("distance", "time"), dtype=np.float32)
+
+        with pytest.raises(ParameterError, match="non-negative"):
+            patch.adaptive_spectral_filter(
+                time=16, distance=16, samples=True, exponent=-0.5
+            )
+
+    def test_float16_comes_back_as_float32(self) -> None:
+        """Output grows as input to the 1.8, which float16 cannot hold."""
+        patch = _patch((64, 64), ("distance", "time"), dtype=np.float32)
+        patch = patch.update(data=(patch.data * 100).astype(np.float16))
+
+        out = patch.adaptive_spectral_filter(time=16, distance=16, samples=True)
+
+        assert out.data.dtype == np.float32
+        assert np.isfinite(out.data).all()
+
+    def test_op_is_the_processor(self) -> None:
+        """The seam: the call names the processor, and the two routes agree."""
+        patch = _patch((64, 64), ("distance", "time"), dtype=np.float32)
+        op = adaptive_spectral_filter_func.op(time=16, distance=16, samples=True)
+
+        assert isinstance(op, AdaptiveSpectralFilter)
+        expected = patch.adaptive_spectral_filter(time=16, distance=16, samples=True)
+        assert op(patch).equals(expected)
 
     def test_proc_export_is_function(self) -> None:
         """The processing module should expose the direct patch function."""

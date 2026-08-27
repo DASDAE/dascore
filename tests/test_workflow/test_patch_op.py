@@ -608,6 +608,7 @@ class TestDocuments:
             "PatchOp",
             "PatchProcessor",
             "Abs",
+            "AdaptiveSpectralFilter",
             "Conj",
             "Demean",
             "Imag",

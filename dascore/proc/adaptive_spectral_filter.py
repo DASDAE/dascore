@@ -27,19 +27,26 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from itertools import product
 from math import prod
-from typing import Any, Literal
+from typing import Any, Literal, NamedTuple
 
 import numpy as np
+from pydantic import ConfigDict
 from scipy import fft as sp_fft
 
 from dascore.constants import PatchType
-from dascore.exceptions import MissingOptionalDependencyError, ParameterError
+from dascore.exceptions import (
+    MissingOptionalDependencyError,
+    ParameterError,
+    PatchCoordinateError,
+)
 from dascore.utils.misc import is_power_of_two
-from dascore.utils.patch import get_dim_axis_value, patch_function
+from dascore.utils.patch import patch_function
 from dascore.utils.signal import _triangular_taper
+from dascore.workflow.meta import PatchMeta
+from dascore.workflow.processor import PatchProcessor, register_implementation
 
 _AdaptiveSpectralEngine = Literal["auto", "numba", "scipy"]
-__all__ = ("adaptive_spectral_filter",)
+__all__ = ("AdaptiveSpectralFilter", "adaptive_spectral_filter")
 
 
 def _check_window(window: Any, overlap: Any, label: str) -> None:
@@ -64,9 +71,11 @@ def _check_window(window: Any, overlap: Any, label: str) -> None:
 
 
 def _check_exponent(exponent: float) -> None:
-    """Raise ValueError unless the exponent is finite."""
-    if not np.isfinite(exponent):
-        msg = "exponent must be finite."
+    """Raise ValueError unless the exponent is finite and non-negative."""
+    # Negative: a silent coefficient would be raised to a negative power,
+    # and zero times infinity is the NaN every sample of the tile becomes.
+    if not np.isfinite(exponent) or exponent < 0:
+        msg = f"exponent must be finite and non-negative; got {exponent!r}."
         raise ValueError(msg)
 
 
@@ -140,10 +149,20 @@ def _finalize_output(
     dtype: np.dtype,
     stride: tuple[int, ...],
 ) -> np.ndarray:
-    """Crop the padding away and restore a floating input dtype."""
+    """Crop the padding away and restore the input dtype where that is safe."""
     inner = tuple(slice(step, length + step) for length, step in zip(shape, stride))
-    out = filtered[inner]
-    if np.issubdtype(dtype, np.floating):
+    return _restore_dtype(filtered[inner], dtype)
+
+
+def _restore_dtype(out: np.ndarray, dtype: np.dtype) -> np.ndarray:
+    """
+    Return float32 output in the input's dtype, if that is a wide enough float.
+
+    The output grows as the input to the power of one plus the exponent,
+    which overflows float16 at the default exponent for inputs of a few
+    hundred; those, and integers, come back as float32.
+    """
+    if np.issubdtype(dtype, np.floating) and np.dtype(dtype).itemsize >= 4:
         return out.astype(dtype, copy=False)
     return out
 
@@ -264,22 +283,38 @@ def _adaptive_spectral_filter_scipy(
     return _finalize_output(filtered, data.shape, data.dtype, stride)
 
 
-def _dim_values_to_samples(
-    patch: PatchType,
-    dim_axis_values,
+class _Geometry(NamedTuple):
+    """The selected axes and their windows and overlaps, all in samples."""
+
+    axes: tuple[int, ...]
+    windows: tuple[int, ...]
+    overlaps: tuple[int, ...]
+
+
+def _axes(meta: PatchMeta, dims: tuple[str, ...]) -> tuple[int, ...]:
+    """Return the axis of each dimension named, refusing one the patch lacks."""
+    for dim in dims:
+        if dim not in meta.dims:
+            msg = f"Dimension {dim!r} not found in patch dimensions {meta.dims}."
+            raise PatchCoordinateError(msg)
+    return tuple(meta.get_axis(dim) for dim in dims)
+
+
+def _sample_counts(
+    meta: PatchMeta,
+    values: Mapping[str, Any],
     *,
     samples: bool,
     name: str,
-    force_sample_dims: frozenset[str] = frozenset(),
+    sample_dims: frozenset[str] = frozenset(),
 ) -> tuple[int, ...]:
-    """Convert DASCore dimension values from units or samples into sample counts."""
+    """Convert per-dimension values in samples or coordinate units to sample counts."""
     out: list[int] = []
-    for dim, _, value in dim_axis_values:
-        if samples or dim in force_sample_dims:
+    for dim, value in values.items():
+        if samples or dim in sample_dims:
             count = int(value)
         else:
-            coord = patch.get_coord(dim, require_evenly_sampled=True)
-            count = coord.get_sample_count(value, samples=False)
+            count = meta.coords.get_coord(dim).get_sample_count(value)
         invalid = count < 0 if name == "overlap" else count <= 0
         if invalid:
             requirement = "non-negative" if name == "overlap" else "positive"
@@ -313,7 +348,7 @@ def _normalize_overlap(
     return dict.fromkeys(dims, overlap), frozenset()
 
 
-def _get_engine(engine: _AdaptiveSpectralEngine, selected_ndim: int) -> Callable:
+def _get_engine(engine: str, selected_ndim: int) -> Callable:
     """Return the requested adaptive spectral array filter implementation."""
     if engine == "scipy" or (engine == "auto" and selected_ndim == 1):
         return _adaptive_spectral_filter_scipy
@@ -368,7 +403,7 @@ def adaptive_spectral_filter(
         Spectral magnitude exponent used as the adaptive weighting power.
         Larger values suppress incoherent energy harder; ``0`` leaves the
         spectrum unweighted, and values above 1 begin to remove weak coherent
-        arrivals along with the noise.
+        arrivals along with the noise. Must be non-negative.
     normalize_power
         If ``True``, normalize each tile's spectral magnitudes by that tile's
         maximum magnitude before applying ``exponent``. This keeps the
@@ -391,13 +426,14 @@ def adaptive_spectral_filter(
     -------
     Patch
         A new patch with filtered data and original dimensions and coordinates.
+        The data are ``float32``, or ``float64`` for ``float64`` input.
 
     Raises
     ------
     ParameterError
         If one or two dimensions are not selected, if selected window or overlap
-        values are invalid, if ``exponent`` is not finite, or if an invalid
-        engine name is requested.
+        values are invalid, if ``exponent`` is not finite and non-negative, or
+        if an invalid engine name is requested.
     MissingOptionalDependencyError
         If ``engine="numba"`` is requested for two selected dimensions but the
         optional fast-engine dependencies are not installed.
@@ -428,49 +464,79 @@ def adaptive_spectral_filter(
       hold a few cycles of the arrivals to keep and be short against the
       distance over which their moveout changes.
     """
-    if len(kwargs) not in {1, 2}:
-        msg = (
-            "adaptive_spectral_filter requires one or two dimension window kwargs, "
-            "e.g. patch.adaptive_spectral_filter(time=32, samples=True)."
-        )
-        raise ParameterError(msg)
-    dim_axis_values = get_dim_axis_value(patch, kwargs=kwargs, allow_multiple=True)
-    dims = tuple(x.dim for x in dim_axis_values)
-    axes = tuple(x.axis for x in dim_axis_values)
-    windows = _dim_values_to_samples(
-        patch, dim_axis_values, samples=samples, name="window"
-    )
-    overlap_values, default_overlap_dims = _normalize_overlap(overlap, dims, windows)
-    overlap_dim_axis_values = get_dim_axis_value(
-        patch, kwargs=overlap_values, allow_multiple=True
-    )
-    overlaps = _dim_values_to_samples(
-        patch,
+    return AdaptiveSpectralFilter(
+        overlap=overlap,
+        exponent=exponent,
+        normalize_power=normalize_power,
         samples=samples,
-        dim_axis_values=overlap_dim_axis_values,
-        name="overlap",
-        force_sample_dims=default_overlap_dims,
-    )
-    _validate_window_and_overlap(dims, windows, overlaps, float(exponent))
+        engine=engine,
+        **kwargs,
+    )._apply(patch)
 
-    data = np.asarray(patch.data)
-    selected_ndim = len(axes)
-    moved = np.moveaxis(data, axes, tuple(range(-selected_ndim, 0)))
-    batch_shape = moved.shape[:-selected_ndim]
-    selected_shape = moved.shape[-selected_ndim:]
-    working = moved.reshape((-1, *selected_shape))
-    filtered = np.empty_like(working, dtype=np.float32)
-    engine_func = _get_engine(engine, selected_ndim)
-    for ind, array in enumerate(working):
-        filtered[ind] = engine_func(
-            array,
-            window_size=windows,
-            overlap=overlaps,
-            exponent=float(exponent),
-            normalize_power=bool(normalize_power),
+
+class AdaptiveSpectralFilter(PatchProcessor):
+    """
+    Weight every window's spectrum by a power of its own magnitude.
+
+    The dimensions to filter arrive as extras carrying their window sizes,
+    as the patch function takes them. Windows and overlaps may be given in
+    coordinate units, so they are only sample counts once the coordinates
+    are known: `geometry` is that conversion, and where a kernel for any
+    backend starts.
+    """
+
+    model_config = ConfigDict(extra="allow", frozen=True)
+
+    overlap: Any = None
+    exponent: float = 0.8
+    normalize_power: bool = False
+    samples: bool = False
+    # A str rather than the Literal, so a wrong name is refused by
+    # `_get_engine` as a ParameterError like every other bad argument.
+    engine: str = "auto"
+
+    def geometry(self, meta: PatchMeta) -> _Geometry:
+        """Return the selected axes and their windows and overlaps, in samples."""
+        selected = self.model_extra or {}
+        if len(selected) not in {1, 2}:
+            msg = (
+                "adaptive_spectral_filter requires one or two dimension window "
+                "kwargs, e.g. patch.adaptive_spectral_filter(time=32, samples=True)."
+            )
+            raise ParameterError(msg)
+        dims = tuple(selected)
+        axes = _axes(meta, dims)
+        windows = _sample_counts(meta, selected, samples=self.samples, name="window")
+        overlap_values, sample_dims = _normalize_overlap(self.overlap, dims, windows)
+        overlaps = _sample_counts(
+            meta,
+            overlap_values,
+            samples=self.samples,
+            name="overlap",
+            sample_dims=sample_dims,
         )
-    filtered = filtered.reshape((*batch_shape, *selected_shape))
-    filtered = np.moveaxis(filtered, tuple(range(-selected_ndim, 0)), axes)
-    if np.issubdtype(data.dtype, np.floating):
-        filtered = filtered.astype(data.dtype, copy=False)
-    return patch.update(data=filtered)
+        _validate_window_and_overlap(dims, windows, overlaps, float(self.exponent))
+        return _Geometry(axes, windows, overlaps)
+
+    def kernel(self, data, meta, out_meta):
+        """Filter every batch over the selected axes and stack the results."""
+        axes, windows, overlaps = self.geometry(meta)
+        engine = _get_engine(self.engine, len(axes))
+        data = np.asarray(data)
+        tail = tuple(range(-len(axes), 0))
+        moved = np.moveaxis(data, axes, tail)
+        working = moved.reshape((-1, *moved.shape[-len(axes) :]))
+        filtered = np.empty_like(working, dtype=np.float32)
+        for ind, array in enumerate(working):
+            filtered[ind] = engine(
+                array,
+                window_size=windows,
+                overlap=overlaps,
+                exponent=float(self.exponent),
+                normalize_power=bool(self.normalize_power),
+            )
+        filtered = np.moveaxis(filtered.reshape(moved.shape), tail, axes)
+        return _restore_dtype(filtered, data.dtype)
+
+
+register_implementation("adaptive_spectral_filter", AdaptiveSpectralFilter)
