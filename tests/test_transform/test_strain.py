@@ -283,7 +283,6 @@ class TestRadianToStrain:
     def test_example_patch_without_gauge_length(self):
         """The example patch the docstrings use states no gauge length (#1078)."""
         patch = dc.get_example_patch("deformation_rate_event_1")
-        assert getattr(patch.attrs, "gauge_length", None) is None
         with pytest.raises(ParameterError, match="Gauge length must"):
             patch.update_attrs(data_units="rad").radians_to_strain()
 

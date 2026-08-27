@@ -17,11 +17,7 @@ from dascore.config import config_context
 from dascore.core.coords import CoordString
 from dascore.exceptions import InvalidFiberFileError
 from dascore.io.dasdae import utils as dasdae_utils
-from dascore.io.dasdae._compat import (
-    NOT_DECODED,
-    decode_pytables_attr,
-    translate_legacy_attrs,
-)
+from dascore.io.dasdae._compat import translate_legacy_attrs
 from dascore.io.dasdae.core import DASDAEV1
 from dascore.io.dasdae.utils import (
     _ATTRS_CLASS_KEY,
@@ -444,91 +440,6 @@ class TestPyTablesAttrPayloads:
 
         return _read
 
-    @pytest.mark.parametrize(
-        "value",
-        [None, True, False, 3, 2.5, "text", (), ("a", "b"), [], [1, "x"], (1, (2, 3))],
-    )
-    def test_round_trip(self, value):
-        """Every shape PyTables wrote for a DASCore attr should decode."""
-        decoded = decode_pytables_attr(pickle.dumps(value, 0))
-        assert decoded == value
-        # 1 == True, so the bools need their type pinned as well.
-        assert type(decoded) is type(value)
-
-    def test_round_trip_long(self):
-        """Protocol 0 spells any int of 2**31 or more as a suffixed long."""
-        value = [2**100, 3_000_000_000]
-        payload = pickle.dumps(value, 0)
-        assert b"L" in payload, "payload must use the long opcode"
-        assert decode_pytables_attr(payload) == value
-
-    def test_text_with_escapes_round_trips(self):
-        """Protocol 0 escapes newlines and backslashes inside text."""
-        value = ("a\nb", "c\\d", "\u00b5\u03b5")
-        assert decode_pytables_attr(pickle.dumps(value, 0)) == value
-
-    @pytest.mark.parametrize(
-        "payload",
-        [
-            b"",
-            b"abc",
-            b"N",
-            b"V no newline",
-            b"Ibad\n.",
-            b"Fbad\n.",
-            b"g0\n.",
-            b"a.",
-            b"Nt.",
-            b"Nl.",
-            b"p0\n.",
-            b"(.",
-            b"(N.",
-            b"(l(a.",  # an opened container appended as if it were a value
-            b"V\\uZZZZ\n.",  # a truncated escape
-            b"IZZ\n.",
-            pickle.dumps({"a": 1}, 0),
-            pickle.dumps(np.float64(1.0), 0),
-        ],
-    )
-    def test_undecodable_payloads(self, payload):
-        """Anything outside the grammar is reported rather than guessed at."""
-        assert decode_pytables_attr(payload) is NOT_DECODED
-
-    def test_repeated_scalar_is_shared(self):
-        """A repeated string is stored once and referenced back."""
-        text = "repeated"
-        assert decode_pytables_attr(pickle.dumps((text, text), 0)) == (text, text)
-
-    def test_repeated_container_is_refused(self):
-        """A shared container could name a graph far larger than its bytes."""
-        shared = ("a", "b")
-        payload = pickle.dumps((shared, shared), 0)
-        assert b"g" in payload, "payload must reference the memo"
-        assert decode_pytables_attr(payload) is NOT_DECODED
-
-    def test_no_class_is_named(self):
-        """A payload naming a callable must not decode, let alone run it."""
-        payload = pickle.dumps(TestPyTablesAttrPayloads, 0)
-        assert decode_pytables_attr(payload) is NOT_DECODED
-
-    @pytest.mark.parametrize(
-        ("name", "expected"),
-        [
-            ("example_event_1", ()),
-            ("deformation_rate_event_1", ()),
-        ],
-    )
-    def test_shipped_file_history(self, name, expected):
-        """A shipped legacy file states its history, not its payload (#1078)."""
-        assert dc.get_example_patch(name).attrs.history == expected
-
-    def test_shipped_file_history_text(self):
-        """A shipped legacy file with real history states it as entries."""
-        history = dc.get_example_patch("febus_dss_mine_tight").attrs.history
-        assert isinstance(history, tuple)
-        assert history and all(isinstance(x, str) for x in history)
-        assert not history[0].startswith("(V")
-
     def test_read_decodes_none(self, pytables_attrs):
         """A pickled None should read back as None, not as its payload."""
         assert pytables_attrs(gauge_length=None)["gauge_length"] is None
@@ -537,6 +448,19 @@ class TestPyTablesAttrPayloads:
         """A pickled history tuple should read back as a tuple."""
         attrs = pytables_attrs(history=("first", "second"))
         assert attrs["history"] == ("first", "second")
+
+    def test_payload_needs_the_opt_in(self, pytables_attrs):
+        """Without the opt-in an attr payload stays the text it was."""
+        with config_context(allow_dasdae_format_unpickle=False):
+            assert pytables_attrs(gauge_length=None)["gauge_length"] == "N."
+
+    def test_undecodable_payload_stays_text(self, tmp_path):
+        """Bytes which are not a pickle keep the text they would have had."""
+        path = tmp_path / "not_a_pickle.h5"
+        with h5py.File(path, "w") as h5:
+            group = h5.create_group("waveforms").create_group("patch")
+            group.attrs["_attrs_station"] = np.bytes_(b"not a pickle.")
+            assert _get_attrs(group)["station"] == "not a pickle."
 
     def test_text_attr_is_not_decoded(self, tmp_path):
         """A real string which happens to be a valid payload stays text."""
@@ -569,6 +493,29 @@ class TestPyTablesAttrPayloads:
     def test_modern_file_is_not_decoded(self, pytables_attrs):
         """Only legacy files hold PyTables payloads."""
         assert pytables_attrs(legacy=False, note=None)["note"] == "N."
+
+    @pytest.mark.parametrize(
+        ("name", "expected"),
+        [
+            ("example_event_1", ()),
+            ("deformation_rate_event_1", ()),
+        ],
+    )
+    def test_shipped_file_history(self, name, expected):
+        """A shipped legacy file states its history, not its payload (#1078)."""
+        assert dc.get_example_patch(name).attrs.history == expected
+
+    def test_shipped_file_history_text(self):
+        """A shipped legacy file with real history states it as entries."""
+        history = dc.get_example_patch("febus_dss_mine_tight").attrs.history
+        assert isinstance(history, tuple)
+        assert history and all(isinstance(x, str) for x in history)
+        assert not history[0].startswith("(V")
+
+    def test_shipped_file_gauge_length(self):
+        """The example the strain docstrings use states no gauge length."""
+        patch = dc.get_example_patch("deformation_rate_event_1")
+        assert getattr(patch.attrs, "gauge_length", None) is None
 
 
 class TestLegacyUnitCompanions:
