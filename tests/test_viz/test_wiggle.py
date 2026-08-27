@@ -319,6 +319,13 @@ class TestWiggleOrientation:
         (_, offset_y), (_, peak_y) = ax.transData.transform([(x, offset), (x, peak)])
         assert peak_y > offset_y
 
+    def test_inversion_is_idempotent(self, small_patch):
+        """Drawing on an already time-down axis must not flip it back."""
+        _, ax = plt.subplots(1)
+        for _ in range(2):
+            small_patch.viz.wiggle(dim="distance", ax=ax)
+            assert ax.yaxis_inverted()
+
     @pytest.mark.parametrize("trace_dim", ["distance", "time"])
     def test_agrees_with_waterfall(self, small_patch, trace_dim):
         """Both plots invert the y axis under the same conditions."""

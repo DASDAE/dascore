@@ -74,7 +74,9 @@ def _maybe_invert_yaxis(ax, patch, dim):
     dim
         The name of the dimension displayed on the y axis.
     """
-    if dtype_time_like(patch.get_coord(dim).dtype):
+    # invert_yaxis toggles, so check first; a caller can pass an axis which
+    # is already time-down, and drawing on it must not flip it back.
+    if dtype_time_like(patch.get_coord(dim).dtype) and not ax.yaxis_inverted():
         ax.invert_yaxis()
 
 
