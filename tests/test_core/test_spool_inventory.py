@@ -32,7 +32,12 @@ from dascore.constants import (
     enrich_coords_description,
     enrich_on_missing_description,
 )
-from dascore.core._spool_inventory import InventoryRef, is_unset, resolve_row_epochs
+from dascore.core._spool_inventory import (
+    InventoryRef,
+    _frame_units,
+    is_unset,
+    resolve_row_epochs,
+)
 from dascore.core.inventory import (
     _SYSTEM_FACT_NAMES,
     Acquisition,
@@ -3168,6 +3173,34 @@ def _float_grid_pair(distance, span):
             ),
         )
     ).check()
+
+
+class TestFrameUnits:
+    """Reading a frame's stated units under either spelling."""
+
+    def test_private_column(self):
+        """A planning frame keeps the units private."""
+        frame = pd.DataFrame({"_distance_units": ["m", "ft"]})
+
+        assert _frame_units(frame, "distance") == ["m", "ft"]
+
+    def test_public_column(self):
+        """A presented one makes them public."""
+        frame = pd.DataFrame({"distance_units": ["m", "ft"]})
+
+        assert _frame_units(frame, "distance") == ["m", "ft"]
+
+    def test_unstated_units_are_none(self):
+        """A row which states no units answers None, not NaN."""
+        frame = pd.DataFrame({"_distance_units": ["m", None]})
+
+        assert _frame_units(frame, "distance") == ["m", None]
+
+    def test_no_units_column(self):
+        """A frame with neither spelling states units for no row."""
+        frame = pd.DataFrame({"distance_min": [0.0, 0.0]})
+
+        assert _frame_units(frame, "distance") == [None, None]
 
 
 class TestChannelUnits:
