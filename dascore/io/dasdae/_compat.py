@@ -175,3 +175,47 @@ def translate_legacy_attrs(attrs, coord_names: Iterable[str] = ()):
             continue
         convert_attr_units(out, name, to_units)
     return out
+
+
+# --- PyTables attr payloads
+
+# Returned for a payload this reader may not, or cannot, decode.
+NOT_DECODED = object()
+
+
+def decode_pytables_attr(payload: bytes):
+    """
+    Return the value a PyTables attr payload holds.
+
+    PyTables stored every attr value HDF5 had no native type for -- None,
+    tuples, lists -- as a pickle, and unpickled it on read; a reader using
+    h5py gets the payload bytes instead. Decoding it is the same opt-in as
+    the coord payload above, and a file holding one usually holds both.
+
+    Parameters
+    ----------
+    payload
+        The raw bytes stored in the HDF5 attribute.
+
+    Returns
+    -------
+    The decoded value, which may itself be None, or ``NOT_DECODED`` when
+    the opt-in is off or the bytes do not decode. Unlike a coord payload,
+    which the patch cannot be built without, an attr is informational, so
+    a caller keeps the text it would have had rather than failing.
+    """
+    if not get_config().allow_dasdae_format_unpickle:
+        return NOT_DECODED
+    with contextlib.suppress(
+        AttributeError,
+        EOFError,
+        ImportError,
+        IndexError,
+        KeyError,
+        pickle.PickleError,
+        TypeError,
+        UnicodeError,
+        ValueError,
+    ):
+        return pickle.loads(payload)
+    return NOT_DECODED

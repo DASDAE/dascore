@@ -33,9 +33,10 @@ from typing import NamedTuple, get_args, get_type_hints
 # Version of the index schema, independent of dascore's version. Bump it
 # when an index written by an older dascore would be read wrongly rather
 # than merely incompletely -- including when what a *stored value* means
-# changes, not only when a column does. 13 adds the patches table's
-# `data_size` column, which an index written by 12 has no column for.
-INDEX_VERSION = 13
+# changes, not only when a column does. 14 reads a legacy DASDAE file's
+# PyTables attr payloads, so 13 stored the payload text where a value
+# is now stored (`gauge_length` of "N." rather than nothing).
+INDEX_VERSION = 14
 # Identity string so any tool can sanity-check what it opened.
 WHAT_IS_THIS = "dascore_spool_index"
 
