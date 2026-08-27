@@ -1140,6 +1140,32 @@ class TestSpanText:
         """How far apart two ends lie, the way a duration is read."""
         assert str(span_text(5, 2)) == "<3>"
 
+    @pytest.mark.parametrize(
+        ("low", "high"),
+        [
+            (np.datetime64("2020-01-01"), np.timedelta64(1, "D")),
+            (np.timedelta64(1, "D"), np.datetime64("2020-01-01")),
+            (pd.Timestamp("2020-01-01"), pd.Timedelta("1D")),
+        ],
+        ids=["numpy", "numpy_reversed", "pandas"],
+    )
+    def test_an_instant_and_a_duration_are_not_one_extent(self, low, high):
+        """
+        Two kinds of time do not make two ends.
+
+        Subtracted they raise out of the middle of a repr in one order,
+        and give an instant back in the other.
+        """
+        assert span_text(low, high) is None
+
+    def test_a_pair_of_bools_has_no_width(self):
+        """
+        A true which is one more than a false is arithmetic.
+
+        Python counts a bool as an integer, so nothing else refuses it.
+        """
+        assert span_text(False, True) is None
+
     def test_a_mixed_pair_is_not_read_as_a_duration(self):
         """
         One end a time and the other not is not an extent at all.

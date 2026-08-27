@@ -927,6 +927,11 @@ def duration_text(low, high) -> Text | None:
     """
     if not isinstance(low, _TIME_TYPES) or not isinstance(high, _TIME_TYPES):
         return None
+    # Both the same kind of time. An instant and a duration are not two
+    # ends of one extent, and subtracting them raises out of the middle
+    # of a repr in one order and gives an instant back in the other.
+    if isinstance(low, _INSTANT_TYPES) != isinstance(high, _INSTANT_TYPES):
+        return None
     try:
         span = high - low
     except (OutOfBoundsDatetime, OutOfBoundsTimedelta):
@@ -974,8 +979,11 @@ def span_text(low, high, units: str | None = None) -> Text | None:
     """
     if isinstance(low, _TIME_TYPES) or isinstance(high, _TIME_TYPES):
         return duration_text(low, high)
-    # Real, not Number: a complex pair has no width along one axis, and
-    # a bool is not a quantity two of which are apart by anything.
+    # Real, not Number: a complex pair has no width along one axis.
+    # Nor is a bool a quantity, though Python counts one as an integer;
+    # a true which is one more than a false is arithmetic, not a width.
+    if isinstance(low, bool) or isinstance(high, bool):
+        return None
     if not (isinstance(low, numbers.Real) and isinstance(high, numbers.Real)):
         return None
     try:
