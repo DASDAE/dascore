@@ -33,6 +33,12 @@ def _peak_is_above_offset(ax):
     return high_y > low_y
 
 
+def _trace_display_y(ax, index):
+    """Where a trace is drawn, in display coordinates, which grow upward."""
+    trace = _get_traces(ax)[index]
+    return ax.transData.transform([(trace[0, 0], trace[:, 1].mean())])[0][1]
+
+
 class TestWiggle:
     """Tests for wiggle plot."""
 
@@ -305,16 +311,6 @@ class TestWiggleOrientation:
             time=(0, 20), samples=True
         )
 
-    def test_distance_traces_not_inverted(self, small_patch):
-        """Traces stacked along distance leave distance increasing upward."""
-        ax = small_patch.viz.wiggle()
-        assert not ax.yaxis_inverted()
-
-    def test_time_traces_inverted(self, small_patch):
-        """Traces stacked along time keep the time increases downward convention."""
-        ax = small_patch.viz.wiggle(dim="distance")
-        assert ax.yaxis_inverted()
-
     def test_positive_data_deflects_up(self, small_patch):
         """An all positive patch, like an envelope, must deflect up."""
         patch = small_patch.envelope("time")
@@ -329,6 +325,26 @@ class TestWiggleOrientation:
         """
         patch = small_patch.envelope("time")
         assert not _peak_is_above_offset(patch.viz.wiggle(dim="distance"))
+
+    @pytest.mark.parametrize("reverse", [False, True])
+    def test_distance_runs_upward(self, small_patch, reverse):
+        """Distance increases upward however its coordinate is sorted."""
+        patch = small_patch.sort_coords("distance", reverse=reverse)
+        distance = patch.get_array("distance")
+        ax = patch.viz.wiggle()
+        far = _trace_display_y(ax, int(np.argmax(distance)))
+        near = _trace_display_y(ax, int(np.argmin(distance)))
+        assert far > near
+
+    @pytest.mark.parametrize("reverse", [False, True])
+    def test_time_runs_downward(self, small_patch, reverse):
+        """Time increases downward however its coordinate is sorted."""
+        patch = small_patch.sort_coords("time", reverse=reverse)
+        time = patch.get_array("time")
+        ax = patch.viz.wiggle(dim="distance")
+        late = _trace_display_y(ax, int(np.argmax(time)))
+        early = _trace_display_y(ax, int(np.argmin(time)))
+        assert late < early
 
     def test_inversion_is_idempotent(self, small_patch):
         """Drawing on an already time-down axis must not flip it back."""

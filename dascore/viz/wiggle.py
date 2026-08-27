@@ -171,7 +171,10 @@ def _wiggle_2d(patch, ax, dim, scale, alpha, color, shade):
     if np.issubdtype(patch.get_coord(dim).dtype, np.datetime64):
         _format_time_axis(ax, dim, "x")
     # The y axis holds the trace offsets, so it is other_dim which decides.
-    _maybe_invert_yaxis(ax, patch, other_dim)
+    # The offsets follow the array, so a reverse sorted coordinate already
+    # runs the other way and the axis must be flipped back.
+    other_coord = patch.get_coord(other_dim)
+    _maybe_invert_yaxis(ax, patch, other_dim, ascending=not other_coord.reverse_sorted)
     return ax
 
 
