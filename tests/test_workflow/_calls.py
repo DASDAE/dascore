@@ -205,6 +205,7 @@ CALLS: tuple[tuple[str, str, tuple, dict], ...] = (
     ("slope_filter", "default", (Lazy(_slope_filter),), {}),
     ("wiener_filter", "default", (), {"time": 5, "samples": True}),
     ("hampel_filter", "default", (), {"time": 5, "samples": True}),
+    ("adaptive_spectral_filter", "default", (), {"time": 32, "samples": True}),
     ("select", "default", (), {"distance": (10, 40)}),
     ("unselect", "default", (), {"distance": (10, 40)}),
     ("order", "default", (), {"distance": (30, 10, 20), "samples": True}),

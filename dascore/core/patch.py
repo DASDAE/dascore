@@ -463,6 +463,7 @@ class Patch(NodeRepr, NamespaceOwner):
     gaussian_filter = dascore.proc.gaussian_filter
     slope_filter = dascore.proc.slope_filter
     wiener_filter = dascore.proc.wiener_filter
+    adaptive_spectral_filter = dascore.proc.adaptive_spectral_filter
     abs = dascore.proc.abs
     conj = dascore.proc.conj
     real = dascore.proc.real

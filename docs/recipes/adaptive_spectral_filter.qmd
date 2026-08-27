@@ -1,0 +1,59 @@
+---
+title: Adaptive Spectral (AFK) Filtering
+execute:
+    warning: False
+---
+
+[`Patch.adaptive_spectral_filter`](`dascore.Patch.adaptive_spectral_filter`) suppresses energy which is not coherent within a small window of the data. Over time and distance together it is the adaptive frequency-wavenumber (AFK) filter of @isken2022denoising, as implemented in Pyrocko's [Lightguide](https://github.com/pyrocko/lightguide), and it is a good first tool for pulling arrivals out of DAS data whose noise is not organized along any particular moveout.
+
+The filter walks the patch in overlapping windows. Each window is Fourier transformed, every coefficient is multiplied by its own magnitude raised to `exponent`, and the window is transformed back and blended into the output. An arrival which is coherent across the window concentrates its energy in a few large coefficients, which the weighting favours over everything spread thinly across the spectrum.
+
+```{python}
+import numpy as np
+import matplotlib.pyplot as plt
+
+import dascore as dc
+
+patch = dc.get_example_patch("example_event_2").pass_filter(time=(1, 300))
+filtered = patch.adaptive_spectral_filter(time=16, distance=16, samples=True)
+
+
+def show(axes, patches, titles):
+    """Draw each patch on its own colour scale; the filter does not keep amplitude."""
+    for ax, patch, title in zip(axes, patches, titles):
+        scale = np.percentile(np.abs(patch.data), 99)
+        patch.viz.waterfall(ax=ax, scale=scale, scale_type="absolute", cmap="bwr")
+        ax.set_title(title)
+    axes[0].figure.tight_layout()
+
+
+fig, axes = plt.subplots(1, 2, figsize=(12, 5), sharey=True)
+show(axes, [patch, filtered], ["band-passed", "filtered"])
+```
+
+Only the window sizes were given; `overlap` defaults to the largest the window allows and `exponent` to 0.8, the settings Lightguide uses. Windows must be powers of two greater than 4 samples and can also be given in coordinate units, as in `patch.adaptive_spectral_filter(time=1.6e-3 * s, distance=16 * m)`. Selecting a single dimension weights each trace's spectrum on its own, which favours the strong arrivals but cannot see coherence across the fiber.
+
+## Choosing the exponent
+
+`exponent` is the filter's strength. At 0 the data pass through unchanged; near 1 the weighting is the magnitude itself, and above 1 weak but coherent arrivals start to go with the noise.
+
+```{python}
+exponents = [0.2, 0.5, 0.8, 1.2]
+fig, axes = plt.subplots(1, 4, figsize=(20, 5), sharey=True)
+show(
+    axes,
+    [
+        patch.adaptive_spectral_filter(
+            time=16, distance=16, samples=True, exponent=exponent
+        )
+        for exponent in exponents
+    ],
+    [f"exponent={exponent}" for exponent in exponents],
+)
+```
+
+## What it does not do
+
+The filter is not amplitude preserving: every coefficient is scaled by a power of its own magnitude, so the output's units are not the input's and its amplitudes grow with the input's. Compare arrivals within one filtered patch, not across patches, and do not read the output as strain.
+
+Nor does it remove coherent noise. Energy which is organized within a window is kept whatever its origin, so per-channel offsets, instrument ringing, or a strong surface wave must be removed first. The first example event carries low-frequency per-channel striping which the filter keeps as faithfully as the arrivals; a band-pass above 50 Hz before filtering is what leaves the event alone.
