@@ -666,6 +666,21 @@ class TestAdaptiveSpectralCore:
 
         assert _get_engine("auto", 2) is _adaptive_spectral_filter_scipy
 
+    def test_auto_engine_falls_back_when_deps_are_absent(self, monkeypatch) -> None:
+        """The engine module imports without numba; the flag says it cannot run."""
+        module = pytest.importorskip("dascore.proc._adaptive_spectral_filter_numba")
+        monkeypatch.setattr(module, "_NUMBA_ENGINE_AVAILABLE", False)
+
+        assert _get_engine("auto", 2) is _adaptive_spectral_filter_scipy
+
+    def test_numba_engine_raises_when_deps_are_absent(self, monkeypatch) -> None:
+        """Asking for it by name says which dependencies are wanted."""
+        module = pytest.importorskip("dascore.proc._adaptive_spectral_filter_numba")
+        monkeypatch.setattr(module, "_NUMBA_ENGINE_AVAILABLE", False)
+
+        with pytest.raises(MissingOptionalDependencyError, match="engine='numba'"):
+            _get_engine("numba", 2)
+
     def test_numba_engine_raises_when_missing(self, monkeypatch) -> None:
         """Explicit numba engine should raise when optional deps are absent."""
         real_import = builtins.__import__

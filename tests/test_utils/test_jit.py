@@ -48,6 +48,52 @@ class TestMaybeNumbaJit:
         with pytest.raises(ImportError, match=match):
             _jit_test_func(np.array([1, 2, 3]))
 
+    def test_extra_dep_present(self):
+        """A dep which imports leaves the jit available."""
+
+        @maybe_numba_jit(deps="json")
+        def _jit_test_func(ar):
+            return ar
+
+        assert _jit_test_func.missing_jit_deps == ()
+
+    def test_missing_extra_dep_warns(self):
+        """A dep which does not import is named, numba being fine."""
+
+        @maybe_numba_jit(deps="rocket_fft", _missing_deps="rocket_fft")
+        def _jit_test_func(ar):
+            return ar
+
+        assert not _jit_test_func.jit_available
+        assert _jit_test_func.missing_jit_deps == ("rocket_fft",)
+        with pytest.warns(UserWarning, match="rocket_fft"):
+            _jit_test_func(np.array([1, 2, 3]))
+
+    def test_missing_extra_dep_raises(self):
+        """Every missing module is named, and said how to install."""
+
+        @maybe_numba_jit(
+            required=True,
+            deps=("rocket_fft",),
+            _missing_numba=True,
+            _missing_deps=("rocket_fft",),
+        )
+        def _jit_test_func(ar):
+            return ar
+
+        with pytest.raises(ImportError, match="numba, rocket_fft") as info:
+            _jit_test_func(np.array([1, 2, 3]))
+        assert "pip install numba rocket_fft" in str(info.value)
+
+    def test_absent_dep_is_found_without_simulating_it(self):
+        """A module which really is not installed is reported as missing."""
+
+        @maybe_numba_jit(deps="dascore_not_a_real_module")
+        def _jit_test_func(ar):
+            return ar
+
+        assert _jit_test_func.missing_jit_deps == ("dascore_not_a_real_module",)
+
     def test_example(self):
         """Test docstring examples."""
         pytest.importorskip("numba")
