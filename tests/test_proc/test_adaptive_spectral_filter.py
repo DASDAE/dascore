@@ -24,6 +24,21 @@ from dascore.proc.adaptive_spectral_filter import (
 from dascore.utils.signal import _triangular_taper
 
 
+def _numba_engine():
+    """
+    Return the optional numba engine module, or skip the test.
+
+    The module imports whether or not numba is installed -- that is what
+    lets `engine="auto"` fall back -- so importing it proves nothing. Only
+    the flag says whether its functions can actually run.
+    """
+    name = "dascore.proc._adaptive_spectral_filter_numba"
+    module = pytest.importorskip(name)
+    if not module._NUMBA_ENGINE_AVAILABLE:
+        pytest.skip("numba and rocket-fft are not installed")
+    return module
+
+
 def _patch(
     shape: tuple[int, ...],
     dims: tuple[str, ...],
@@ -682,7 +697,7 @@ class TestAdaptiveSpectralCore:
     @pytest.mark.parametrize("exponent", [0.0, 0.3])
     def test_numba_and_scipy_match_when_numba_available(self, exponent) -> None:
         """The optional Numba 2D path should match the SciPy implementation."""
-        numba_mod = pytest.importorskip("dascore.proc._adaptive_spectral_filter_numba")
+        numba_mod = _numba_engine()
         rng = np.random.default_rng(20260511)
         data = rng.normal(size=(32, 32)).astype(np.float32)
 
@@ -705,13 +720,13 @@ class TestAdaptiveSpectralCore:
 
     def test_auto_engine_uses_numba_when_available(self) -> None:
         """Auto engine should use the Numba 2D path when optional deps import."""
-        numba_mod = pytest.importorskip("dascore.proc._adaptive_spectral_filter_numba")
+        numba_mod = _numba_engine()
 
         assert _get_engine("auto", 2) is numba_mod._adaptive_spectral_filter_numba
 
     def test_numba_private_helpers_run_in_python(self) -> None:
         """The fast-engine helpers should be directly testable in Python."""
-        numba_mod = pytest.importorskip("dascore.proc._adaptive_spectral_filter_numba")
+        numba_mod = _numba_engine()
         padded = np.arange(16, dtype=np.float32).reshape(4, 4)
         tile = np.zeros((2, 2), dtype=np.float32)
 
@@ -755,7 +770,7 @@ class TestAdaptiveSpectralCore:
 
     def test_numba_private_tile_group_runs_in_python(self) -> None:
         """The tile group algorithm should run without JIT for coverage."""
-        numba_mod = pytest.importorskip("dascore.proc._adaptive_spectral_filter_numba")
+        numba_mod = _numba_engine()
         data = np.ones((8, 8), dtype=np.float32)
         working, _, stride, taper, padded, filtered, n_tiles = (
             numba_mod._prepare_work_arrays(data, window_size=(8, 8), overlap=(3, 3))
