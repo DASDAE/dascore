@@ -104,12 +104,17 @@ def assert_documenting_this_checkout(module, repo_path=None) -> None:
     the path, not the working directory, so an editable install elsewhere on
     the machine wins and the docs describe someone else's branch. Prefix the
     command with `PYTHONPATH=$PWD` to document the checkout you are in.
+
+    An environment nested in the checkout, like a .venv, holds a copy of the
+    package rather than the checkout's own, so being inside the repository is
+    not enough.
     """
     if repo_path is None:
         repo_path = Path(__file__).parent.parent
     repo_path = Path(repo_path).resolve()
     module_path = Path(getattr(module, "__file__", "")).resolve()
-    if repo_path in module_path.parents:
+    inside = repo_path in module_path.parents
+    if inside and not _is_environment_path(module_path.relative_to(repo_path)):
         return
     msg = (
         f"{module.__name__} was imported from {module_path}, which is not in "

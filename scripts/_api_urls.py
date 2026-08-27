@@ -59,35 +59,60 @@ def write_baseline(urls: dict[str, str], path: Path = BASELINE_PATH) -> None:
 
 
 def compare(current: dict[str, str], baseline: dict[str, str]) -> dict:
-    """Say which keys were added, which moved, and which vanished."""
+    """
+    Say how the published URLs differ from the frozen ones.
+
+    A key and a URL break differently. A key which vanishes breaks a cross
+    reference written as [name](`dotted.key`), which the link validator
+    catches at build time. A URL which vanishes breaks the link someone
+    saved, and nothing else notices, so the two are counted apart: an alias
+    can be dropped while the page it named is still published under another
+    key, and no saved link is broken.
+
+    A key which moves is its own case. The page it left may still be served
+    for some other key, so it does not show up as unpublished, but it no
+    longer documents the object the key names, which is what the reader who
+    saved the link came for.
+    """
     moved = {k: (v, current[k]) for k, v in baseline.items() if current.get(k, v) != v}
+    published = set(current.values())
     return {
         "added": sorted(set(current) - set(baseline)),
         "removed": sorted(set(baseline) - set(current)),
         "moved": {k: list(v) for k, v in sorted(moved.items())},
+        "unpublished": sorted(set(baseline.values()) - published),
     }
+
+
+_KINDS = ("added", "removed", "moved", "unpublished")
 
 
 def _summarize(difference: dict) -> str:
     """Describe a comparison in one line."""
-    counts = ", ".join(
-        f"{len(difference[x])} {x}" for x in ("added", "removed", "moved")
-    )
-    return f"API URLs against the baseline: {counts}"
+    counts = ", ".join(f"{len(difference[x])} {x}" for x in _KINDS)
+    return f"API keys against the baseline: {counts}"
 
 
 def check(strict: bool = False, path: Path = BASELINE_PATH) -> int:
-    """Report how the current URLs differ from the frozen ones."""
+    """
+    Report how the current URLs differ from the frozen ones.
+
+    A key which moved and a page which is no longer published both fail the
+    strict check; a key which was added or dropped does not, because neither
+    changes where an existing key resolves. A move which is meant to happen
+    is acknowledged by freezing the baseline again in the same commit and
+    saying in the pull request why it moved.
+    """
     baseline = load_baseline(path)
     if not baseline:
         _echo(f"No frozen API URLs at {path}; run `_api_urls.py freeze` first.")
         return 1 if strict else 0
     difference = compare(current_urls(), baseline)
     _echo(_summarize(difference))
-    for name in ("removed", "moved"):
+    for name in ("removed", "moved", "unpublished"):
         for key in list(difference[name])[:20]:
             _echo(f"  {name}: {key}")
-    broken = len(difference["removed"]) + len(difference["moved"])
+    broken = difference["unpublished"] or difference["moved"]
     return 1 if strict and broken else 0
 
 

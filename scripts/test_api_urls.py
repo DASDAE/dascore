@@ -74,6 +74,16 @@ class TestCompare:
 
         assert not any(difference.values())
 
+    def test_dropped_alias_publishes_the_same_page(self):
+        """An alias can go while the page it named is still served."""
+        baseline = {"dascore.read": "/api/read.qmd", "dascore.io.read": "/api/read.qmd"}
+        current = {"dascore.io.read": "/api/read.qmd"}
+
+        difference = _api_urls.compare(current, baseline)
+
+        assert difference["removed"] == ["dascore.read"]
+        assert difference["unpublished"] == []
+
     def test_added_removed_and_moved(self):
         """Each kind of change is reported apart from the others."""
         baseline = {"gone": "/api/gone.qmd", "moved": "/api/old.qmd"}
@@ -99,6 +109,28 @@ class TestCheck:
         path = tmp_path / "api_urls.tsv"
         _api_urls.write_baseline({"gone": "/api/gone.qmd"}, path)
         monkeypatch.setattr(_api_urls, "current_urls", lambda: {})
+
+        assert _api_urls.check(path=path) == 0
+        assert _api_urls.check(strict=True, path=path) == 1
+
+    def test_strict_allows_a_dropped_alias(self, tmp_path, monkeypatch):
+        """Dropping an alias breaks a cross reference, not a saved link."""
+        path = tmp_path / "api_urls.tsv"
+        baseline = {"alias": "/api/read.qmd", "canonical": "/api/read.qmd"}
+        _api_urls.write_baseline(baseline, path)
+        monkeypatch.setattr(
+            _api_urls, "current_urls", lambda: {"canonical": "/api/read.qmd"}
+        )
+
+        assert _api_urls.check(strict=True, path=path) == 0
+
+    def test_strict_fails_on_a_move(self, tmp_path, monkeypatch):
+        """A key which moved fails even though its old page is still served."""
+        path = tmp_path / "api_urls.tsv"
+        baseline = {"method": "/api/function.qmd", "function": "/api/function.qmd"}
+        _api_urls.write_baseline(baseline, path)
+        moved = {"method": "/api/method.qmd", "function": "/api/function.qmd"}
+        monkeypatch.setattr(_api_urls, "current_urls", lambda: moved)
 
         assert _api_urls.check(path=path) == 0
         assert _api_urls.check(strict=True, path=path) == 1
