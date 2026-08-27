@@ -33,7 +33,7 @@ from dascore.exceptions import (
     PatchCoordinateError,
     UnitError,
 )
-from dascore.units import convert_units, get_quantity, is_percent
+from dascore.units import carries_units, convert_units, get_quantity, is_percent
 from dascore.utils.array_api import (
     asarray_like,
     backend_name,
@@ -610,8 +610,10 @@ def _get_merged_coord(
     concatenation of the member coords (exactly contiguous members fuse to
     a plain range; recorded seams otherwise), then — when `snap_coords` —
     simplified with bounded error: no value moves more than
-    `tolerance * step`. Merges whose gaps exceed that stay segmented
-    (honestly non-uniform) rather than being relabeled.
+    `tolerance * step`, or than the tolerance itself when it is a
+    quantity or timedelta, which states the bound outright. Merges whose
+    gaps exceed that stay segmented (honestly non-uniform) rather than
+    being relabeled.
     """
     from dascore.core.coords import concat_coords  # noqa: PLC0415
 
@@ -624,7 +626,11 @@ def _get_merged_coord(
             coords, dim=merge_dim, drop_conflicting=drop_conflicting
         )
     step = _middle_step(coords, merge_dim, merged.units)
-    if snap_coords and step is not None:
+    if snap_coords and carries_units(tolerance):
+        # A tolerance which states its own units needs no step: simplify
+        # reads it in the coordinate's units itself.
+        merged = merged.simplify(tolerance)
+    elif snap_coords and step is not None:
         merged = merged.simplify(tolerance * np.abs(step))
     # Passing the pre-built dim coord avoids materializing the members'
     # concatenated values only to discard them.

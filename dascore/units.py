@@ -367,6 +367,17 @@ def _validate_quantity_str(quant_str: str) -> None:
         raise UnitError(msg) from e
 
 
+def carries_units(value) -> bool:
+    """
+    Return True if a value states its own units.
+
+    A quantity says them outright; a timedelta is a time by construction.
+    Anything else is a bare number, which only means something against a
+    unit the caller supplies.
+    """
+    return isinstance(value, Quantity) or is_timedelta64(value)
+
+
 def get_inverted_quant(quant: Quantity | None, data_units):
     """Convert to inverted units."""
     if quant is None:

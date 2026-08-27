@@ -21,6 +21,7 @@ import math
 import warnings
 from collections.abc import Sequence
 from dataclasses import dataclass, field
+from datetime import timedelta
 from pathlib import Path
 from typing import Any, Literal
 
@@ -39,10 +40,12 @@ from dascore.exceptions import (
 from dascore.units import (
     DimensionalityError,
     Quantity,
+    carries_units,
     convert_units,
     get_byte_count,
     get_quantity,
     is_data_size,
+    is_percent,
 )
 from dascore.utils.attrs import known_only, validate_conflict
 from dascore.utils.chunk import get_intervals
@@ -66,6 +69,20 @@ _SOURCE_COLUMNS = (
 # The default continuity tolerance; looser values warn when they force
 # merges (#662).
 _DEFAULT_TOLERANCE = 1.5
+
+
+@dataclass(frozen=True)
+class _AbsoluteTolerance:
+    """
+    A continuity tolerance stated in the coordinate's units, not in samples.
+
+    A quantity or timedelta tolerance resolves to one of these per cell,
+    since only the cell fixes the units and dtype to express it in. The
+    wrapper lets the gap test tell an absolute tolerance from a sample
+    count; on a unitless coordinate both are plain numbers.
+    """
+
+    value: Any
 
 
 @dataclass(frozen=True)
@@ -268,6 +285,100 @@ def _sampling_group(step: pd.Series, tolerance: float) -> pd.Series:
     return pd.Series(labels, index=step.index)
 
 
+def _check_tolerance_value(value, name, shown=None, *, allow_infinite=False):
+    """
+    Reject a tolerance no gap could be measured against.
+
+    An infinite sample count is a coherent request — no boundary is ever
+    a gap — but an infinite distance is not a distance, so only the
+    count is allowed to be one.
+    """
+    shown = value if shown is None else shown
+    # One tolerance, not one per patch: a one-element array passes every
+    # test below and then broadcasts through the gap comparison.
+    if np.asarray(value).ndim:
+        msg = (
+            f"The tolerance for {name!r} must be a single value, got an "
+            f"array of {np.asarray(value).size}."
+        )
+        raise ParameterError(msg)
+    try:
+        null = bool(pd.isnull(value))
+        negative = not null and value < 0
+    except TypeError:
+        msg = (
+            f"The tolerance for {name!r} must be a sample count, a quantity, "
+            f"or a timedelta, got {shown!r}. A unit-bearing string becomes a "
+            "quantity with dascore.get_quantity."
+        )
+        raise ParameterError(msg) from None
+    if null or (not allow_infinite and not np.isfinite(value)):
+        msg = f"The tolerance for {name!r} must be finite, got {shown}."
+        raise ParameterError(msg)
+    if negative:
+        msg = f"The tolerance for {name!r} must not be negative, got {shown}."
+        raise ParameterError(msg)
+
+
+def _normalize_tolerance(tolerance, name):
+    """
+    Validate a continuity tolerance and reduce it to one of two forms.
+
+    A number is a multiple of the sampling interval; a quantity or
+    timedelta states the limit in the coordinate's own units, which only
+    a cell can resolve (it fixes the units and dtype), so it passes
+    through to be resolved there. A dimensionless quantity *is* the
+    multiple, so it becomes a number.
+    """
+    if isinstance(tolerance, timedelta) or is_timedelta64(tolerance):
+        # to_timedelta64 takes the several spellings of a timedelta
+        tolerance = to_timedelta64(tolerance)
+        _check_tolerance_value(tolerance, name)
+        return tolerance
+    if isinstance(tolerance, Quantity):
+        if is_data_size(tolerance):
+            msg = (
+                f"Cannot use a tolerance of {tolerance} for {name!r}: a data "
+                "size does not measure a gap along a coordinate."
+            )
+            raise UnitError(msg)
+        if is_percent(tolerance):
+            msg = (
+                f"Cannot use a tolerance of {tolerance} for {name!r}: a "
+                "percentage is neither a sample count nor a length. Pass the "
+                "count itself, or a length in the coordinate's units."
+            )
+            raise UnitError(msg)
+        if not tolerance.dimensionless:
+            _check_tolerance_value(tolerance.magnitude, name, shown=tolerance)
+            return tolerance
+        # a dimensionless quantity is the sample count it spells out
+        tolerance = float(tolerance.m_as("dimensionless"))
+    _check_tolerance_value(tolerance, name, allow_infinite=True)
+    return tolerance
+
+
+def _cell_tolerance(tolerance, sub, name):
+    """Resolve an absolute tolerance into one cell's own units."""
+    if not carries_units(tolerance):
+        return tolerance
+    start, _, _ = get_interval_columns(sub, name)
+    if isinstance(tolerance, Quantity):
+        shown = tolerance
+    else:
+        # said in seconds, which is what a timedelta measures and how
+        # the message reads back
+        shown = f"{to_float(tolerance)} s"
+        if is_datetime64(start.dtype) or is_timedelta64(start.dtype):
+            return _AbsoluteTolerance(tolerance)
+        # A numeric coordinate can still be measured in time (a relative
+        # time axis, say), so the timedelta converts like any quantity.
+        tolerance = get_quantity(f"{to_float(tolerance)} s")
+    prefix = f"Cannot use a tolerance of {shown} for {name!r}"
+    value = _quantity_to_dim_value(tolerance, sub, name, start.dtype, prefix=prefix)
+    return _AbsoluteTolerance(value)
+
+
 def _gap_boundaries(start, stop, step, tolerance):
     """
     Locate the discontinuities in one cell (spec 2.4).
@@ -276,8 +387,11 @@ def _gap_boundaries(start, stop, step, tolerance):
     `reach` is the furthest stop seen *before* each row, so an
     overlapping or fully-nested row can never open a gap behind it, and
     `has_gap` marks each row whose start clears that reach by more than
-    `tolerance` steps. The first row has nothing behind it, and a row
-    whose step is unknown compares False, so neither reports a gap.
+    the margin: `tolerance` steps for a sample count, or the tolerance
+    itself (never under one step) for an
+    [`_AbsoluteTolerance`](`dascore.utils.chunk_plan._AbsoluteTolerance`).
+    The first row has nothing behind it, and a row whose step is unknown
+    compares False against a sample count, so neither reports a gap.
 
     Arrays rather than a frame, and an explicit first-row mask rather
     than `shift`, whose NaN fill would upcast integer envelopes to
@@ -302,7 +416,19 @@ def _gap_boundaries(start, stop, step, tolerance):
     has_gap = np.zeros(len(starts), dtype=bool)
     ahead = starts > reach
     if ahead.any():
-        has_gap[ahead] = (starts[ahead] - reach[ahead]) > steps[ahead] * tolerance
+        if isinstance(tolerance, _AbsoluteTolerance):
+            # Adjacent patches sit exactly one step apart, so a margin
+            # narrower than the step would open a gap where no sample is
+            # missing. An unknown step has no floor to apply.
+            step_ahead = steps[ahead]
+            margin = np.where(
+                pd.isnull(step_ahead),
+                tolerance.value,
+                np.maximum(step_ahead, tolerance.value),
+            )
+        else:
+            margin = steps[ahead] * tolerance
+        has_gap[ahead] = (starts[ahead] - reach[ahead]) > margin
     has_gap[:1] = False
     return order, reach, has_gap
 
@@ -499,6 +625,21 @@ def _cell_labels(df, name, group_attrs, sampling_tolerance) -> pd.Series:
     return base.astype(str) + "_" + samp.astype(str)
 
 
+def _may_exceed_default(tol, step: pd.Series) -> bool:
+    """True when an absolute margin can exceed the default anywhere in a cell.
+
+    The margin is `max(step, tol)` against the default's `1.5 * step`, so
+    the tolerance is looser exactly where it passes 1.5 steps — which is
+    at the cell's *smallest* step, since a cell may mix steps within the
+    sampling tolerance. A cell with no known step is never forced: the
+    default cannot close a boundary there at all.
+    """
+    steps = np.abs(to_float(step.to_numpy()))
+    if not np.isfinite(steps).any():
+        return False
+    return to_float(tol.value) > _DEFAULT_TOLERANCE * np.nanmin(steps)
+
+
 def _partition(
     df, name, group_attrs, tolerance, sampling_tolerance
 ) -> tuple[pd.Series, bool]:
@@ -515,14 +656,26 @@ def _partition(
     cell = _cell_labels(df, name, group_attrs, sampling_tolerance)
     cont = pd.Series(0, index=df.index, dtype=np.int64)
     forced_merge = False
+    absolute = carries_units(tolerance)
     for _, index in df.groupby(cell, sort=False).groups.items():
         sub = df.loc[index]
         s, e, st = get_interval_columns(sub, name)
-        labels = _continuity_group(s, e, st, tolerance).astype(np.int64)
+        tol = _cell_tolerance(tolerance, sub, name)
+        labels = _continuity_group(s, e, st, tol).astype(np.int64)
         cont.loc[index] = labels
-        if tolerance > _DEFAULT_TOLERANCE and not forced_merge:
-            default = _continuity_group(s, e, st, _DEFAULT_TOLERANCE)
-            forced_merge = default.nunique() > labels.nunique()
+        if forced_merge or not (absolute or tolerance > _DEFAULT_TOLERANCE):
+            continue
+        # An absolute tolerance can be looser than the default at one
+        # boundary and tighter at another, so it is checked against the
+        # default partition -- but only where it can be looser at all,
+        # since the second pass is not free.
+        if absolute and not _may_exceed_default(tol, st):
+            continue
+        # By containment, not by count: a partition holding more than one
+        # of the default's is one the tolerance forced together, even
+        # when the counts match.
+        default = _continuity_group(s, e, st, _DEFAULT_TOLERANCE)
+        forced_merge = bool(default.groupby(labels).nunique().gt(1).any())
     return cell + "_" + cont.astype(str), forced_merge
 
 
@@ -555,7 +708,7 @@ def _coerce_length_overlap(value, overlap, start_dtype):
 
 
 def _validate_quantity(label: str, quant, name: str) -> None:
-    """Reject quantity chunk lengths that cannot describe a length."""
+    """Reject a quantity chunk length or overlap that cannot describe one."""
     if not isinstance(quant, Quantity):
         return
     magnitude = np.asarray(quant.magnitude)
@@ -727,25 +880,36 @@ def _packing_factor(sub: pd.DataFrame, name: str, step_float: float) -> float:
     return 1.0 if packing < 1 + 1e-9 else packing
 
 
-def _quantity_to_dim_value(quant, sub, name, start_dtype):
-    """Convert a (non-size) quantity into the chunked dimension's units."""
+def _quantity_to_dim_value(quant, sub, name, start_dtype, prefix=None):
+    """
+    Convert a (non-size) quantity into the chunked dimension's units.
+
+    `prefix` opens the error messages; it names what the quantity was
+    for, since the same conversion serves a chunk length and a
+    continuity tolerance alike.
+    """
+    prefix = prefix if prefix is not None else f"Cannot chunk {name!r} by {quant}"
     if is_datetime64(start_dtype) or is_timedelta64(start_dtype):
         try:
             seconds = quant.to("s").magnitude
         except DimensionalityError:
             msg = (
-                f"Cannot chunk {name!r} by {quant}: the coordinate is "
-                "time-like, so the value must have units of time."
+                f"{prefix}: the coordinate is time-like, so the "
+                "value must have units of time."
             )
             raise UnitError(msg) from None
-        return to_timedelta64(seconds)
+        try:
+            return to_timedelta64(seconds)
+        except OverflowError:
+            msg = f"{prefix}: it is too large to express as a time."
+            raise ParameterError(msg) from None
     units_col = f"_{name}_units"
     if units_col in sub.columns:
         units = sub[units_col].iloc[0]
         if units is None or pd.isnull(units) or units == "":
             msg = (
-                f"Cannot chunk {name!r} by {quant}: the coordinate has no "
-                "units, so a unit-bearing length is ambiguous."
+                f"{prefix}: the coordinate has no units, so a "
+                "unit-bearing length is ambiguous."
             )
             raise UnitError(msg)
         try:
@@ -759,16 +923,13 @@ def _quantity_to_dim_value(quant, sub, name, start_dtype):
             end = convert_units(magnitude, to_units=units, from_units=from_units)
             return end - anchor
         except (DimensionalityError, UnitError):
-            msg = (
-                f"Cannot chunk {name!r} by {quant}: incompatible with the "
-                f"coordinate's units of {units}."
-            )
+            msg = f"{prefix}: incompatible with the coordinate's units of {units}."
             raise UnitError(msg) from None
     # A frame with no units column states no units at all; envelopes are
     # native magnitudes, so there is nothing to convert the quantity to.
     msg = (
-        f"Cannot chunk {name!r} by {quant}: the frame records no units "
-        "for the coordinate, so a unit-bearing length is ambiguous."
+        f"{prefix}: the frame records no units for the coordinate, "
+        "so a unit-bearing length is ambiguous."
     )
     raise UnitError(msg)
 
@@ -1099,7 +1260,7 @@ def _gap_carried_columns(df: pd.DataFrame, name: str, group_attrs) -> list[str]:
     return list(dict.fromkeys(cols))
 
 
-def _cell_gaps(df: pd.DataFrame, name: str, group_attrs, tolerance: float):
+def _cell_gaps(df: pd.DataFrame, name: str, group_attrs, tolerance):
     """
     Yield `(cell rows, gaps in that cell)` for every cell in `df`.
 
@@ -1129,7 +1290,8 @@ def _cell_gaps(df: pd.DataFrame, name: str, group_attrs, tolerance: float):
     for group_id, label in enumerate(order):
         sub = df.loc[groups[label]]
         start, stop, step = get_interval_columns(sub, name)
-        row_order, reach, has_gap = _gap_boundaries(start, stop, step, tolerance)
+        tol = _cell_tolerance(tolerance, sub, name)
+        row_order, reach, has_gap = _gap_boundaries(start, stop, step, tol)
         found = np.flatnonzero(has_gap)
         # the row opening each gap states the step, signed as the
         # coordinate is -- only the continuity margin needs a magnitude
@@ -1163,7 +1325,7 @@ def build_gap_frame(
     df: pd.DataFrame,
     name: str,
     *,
-    tolerance: float = _DEFAULT_TOLERANCE,
+    tolerance: float | Quantity | np.timedelta64 = _DEFAULT_TOLERANCE,
     group: str | Sequence[str] | None = None,
     missing_dim: Literal["raise", "drop"] = "drop",
 ) -> pd.DataFrame:
@@ -1178,6 +1340,7 @@ def build_gap_frame(
     """
     df, group_attrs, carried, names = _report_preamble(df, name, group, missing_dim)
     min_name, max_name, step_name = names
+    tolerance = _normalize_tolerance(tolerance, name)
     columns = [min_name, max_name, step_name, "gap_size", "group_id", *carried]
     # Contiguous cells are dropped rather than concatenated: their empty
     # frames carry object-dtype attr columns, which would widen the
@@ -1202,7 +1365,7 @@ def build_coverage_frame(
     df: pd.DataFrame,
     name: str,
     *,
-    tolerance: float = _DEFAULT_TOLERANCE,
+    tolerance: float | Quantity | np.timedelta64 = _DEFAULT_TOLERANCE,
     group: str | Sequence[str] | None = None,
     missing_dim: Literal["raise", "drop"] = "drop",
 ) -> pd.DataFrame:
@@ -1217,6 +1380,7 @@ def build_coverage_frame(
     """
     df, group_attrs, carried, names = _report_preamble(df, name, group, missing_dim)
     min_name, max_name, step_name = names
+    tolerance = _normalize_tolerance(tolerance, name)
     columns = [
         min_name,
         max_name,
@@ -1280,7 +1444,7 @@ def build_chunk_plan(
     overlap=None,
     keep_partial: bool = False,
     snap_coords: bool = True,
-    tolerance: float = 1.5,
+    tolerance: float | Quantity | np.timedelta64 = 1.5,
     conflict: Literal["drop", "raise", "keep_first"] = "raise",
     group=None,
     missing_dim: Literal["raise", "drop"] = "raise",
@@ -1302,6 +1466,7 @@ def build_chunk_plan(
     # offending chunk call. See #804.
     validate_conflict(conflict)
     ((name, value),) = kwargs.items()
+    tolerance = _normalize_tolerance(tolerance, name)
     value = None if value is Ellipsis else value
     # Police quantities before merge_mode is decided: a NaN magnitude is
     # null, so a nan-valued size would silently merge the whole spool

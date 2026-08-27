@@ -12,7 +12,7 @@ import pytest
 
 import dascore as dc
 from dascore.examples import random_spool
-from dascore.exceptions import ChunkError, ParameterError
+from dascore.exceptions import ChunkError, ParameterError, UnitError
 
 ONE_SECOND = np.timedelta64(1, "s")
 
@@ -168,6 +168,53 @@ class TestGetGaps:
         """An unknown dimension names the ones which exist."""
         with pytest.raises(ParameterError, match="Cannot report on"):
             gappy_spool.get_gaps("not_a_dim")
+
+
+class TestQuantityTolerance:
+    """Reports whose tolerance is stated in the coordinate's own units."""
+
+    def test_gaps_respect_absolute_tolerance(self, gappy_spool):
+        """A tolerance wider than the holes leaves nothing to report."""
+        assert len(gappy_spool.get_gaps()) == len(gappy_spool) - 1
+        assert gappy_spool.get_gaps(tolerance=dc.get_quantity("2 s")).empty
+        wide = gappy_spool.get_gaps(tolerance=dc.get_quantity("0.5 s"))
+        assert len(wide) == len(gappy_spool) - 1
+
+    def test_timedelta_says_the_same(self, gappy_spool):
+        """A timedelta reports what the equivalent quantity reports."""
+        delta = gappy_spool.get_gaps(tolerance=2 * ONE_SECOND)
+        assert delta.empty
+        tight = gappy_spool.get_gaps(tolerance=ONE_SECOND / 2)
+        assert len(tight) == len(gappy_spool) - 1
+
+    def test_coverage_respects_absolute_tolerance(self, gappy_spool):
+        """Holes the tolerance closes are not missing coverage."""
+        loose = gappy_spool.get_coverage(tolerance=dc.get_quantity("2 s"))
+        assert (loose["coverage"] == 1).all()
+        assert (gappy_spool.get_coverage()["coverage"] < 1).all()
+
+    def test_distance_units_convert(self, distance_tiled_spool):
+        """A distance report reads the tolerance in its own units, not as metres."""
+        gaps = distance_tiled_spool.get_gaps("distance", tolerance=10 * dc.units.m)
+        assert len(gaps) == 1
+        hole = float(gaps["gap_size"].iloc[0])
+        # a foot is 0.3048 m, so a magnitude between the hole in feet and
+        # the hole in metres reports one way under each reading
+        between = (hole + float(gaps["distance_step"].iloc[0])) * 2
+        assert 0.3048 * between < hole < between
+        feet = distance_tiled_spool.get_gaps(
+            "distance", tolerance=between * dc.units.ft
+        )
+        assert len(feet) == 1
+        metres = distance_tiled_spool.get_gaps(
+            "distance", tolerance=between * dc.units.m
+        )
+        assert metres.empty
+
+    def test_wrong_dimensionality_raises(self, gappy_spool):
+        """A tolerance must measure the dimension it is applied to."""
+        with pytest.raises(UnitError, match="must have units of time"):
+            gappy_spool.get_gaps(tolerance=10 * dc.units.m)
 
 
 class TestGetCoverage:

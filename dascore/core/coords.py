@@ -2599,9 +2599,20 @@ class CoordSegmented(BaseCoord):
         """Coerce the tolerance to the dtype expected for value deviations."""
         if tolerance is None:
             tolerance = 0
-        if hasattr(tolerance, "units"):  # pint quantity tolerances
+        stated = None
+        if is_timedelta64(tolerance) and not dtype_time_like(self.dtype):
+            # A timedelta against a numeric coordinate is a length in
+            # seconds, which only the coordinate's units can place.
+            stated = (to_float(tolerance), "s")
+        elif hasattr(tolerance, "units"):  # pint quantity tolerances
+            stated = (tolerance.magnitude, tolerance.units)
+        if stated is not None:
+            magnitude, from_units = stated
             target = "s" if dtype_time_like(self.dtype) else self.units
-            tolerance = convert_units(tolerance.magnitude, target, tolerance.units)
+            # A tolerance is a DELTA, so it converts between two anchor
+            # points: 20 degC of deviation is 36 degF, never 68.
+            anchor = convert_units(0.0, target, from_units)
+            tolerance = convert_units(magnitude, target, from_units) - anchor
         if dtype_time_like(self.dtype):
             tolerance = dc.to_timedelta64(tolerance)
             zero = dc.to_timedelta64(0)

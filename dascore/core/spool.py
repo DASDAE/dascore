@@ -74,6 +74,7 @@ from dascore.exceptions import (
     ParameterError,
     UnresolvedPatchError,
 )
+from dascore.units import Quantity
 from dascore.utils.chunk_plan import (
     _SOURCE_COLUMNS,
     ChunkPlan,
@@ -1678,7 +1679,7 @@ class Spool(NodeRepr, NamespaceOwner):
         overlap: numeric_types | timeable_types | None = None,
         keep_partial: bool = False,
         snap_coords: bool = True,
-        tolerance: float = 1.5,
+        tolerance: float | Quantity | np.timedelta64 = 1.5,
         conflict: Literal["drop", "raise", "keep_first"] = "raise",
         group: str | Sequence[str] | None = None,
         missing_dim: Literal["raise", "drop"] = "raise",
@@ -1739,7 +1740,7 @@ class Spool(NodeRepr, NamespaceOwner):
         self,
         dim: str = "time",
         *,
-        tolerance: float = 1.5,
+        tolerance: float | Quantity | np.timedelta64 = 1.5,
         group: str | Sequence[str] | None = None,
         missing_dim: Literal["raise", "drop"] = "drop",
     ) -> pd.DataFrame:
@@ -1756,7 +1757,9 @@ class Spool(NodeRepr, NamespaceOwner):
             The dimension to look for gaps along.
         tolerance
             The maximum number of samples patches can be spaced and still
-            count as contiguous. Same meaning as chunk's `tolerance`.
+            count as contiguous, or a quantity or timedelta stating that
+            limit in the coordinate's own units (eg `1 * s`). Same
+            meaning as chunk's `tolerance`.
         group
             Attributes which separate patches into unrelated groups; a gap
             is never reported between two groups. Defaults to the config
@@ -1786,8 +1789,9 @@ class Spool(NodeRepr, NamespaceOwner):
         boundary is measured against the furthest point reached so far,
         not the previous row.
 
-        Patches whose step is unknown report no gaps, since the tolerance
-        has no sample to scale.
+        A sample-count tolerance scales the step, so patches whose step
+        is unknown report no gaps. An absolute tolerance needs no step,
+        so it reports their gaps like any other patch's.
 
         See Also
         --------
@@ -1821,7 +1825,7 @@ class Spool(NodeRepr, NamespaceOwner):
         self,
         dim: str = "time",
         *,
-        tolerance: float = 1.5,
+        tolerance: float | Quantity | np.timedelta64 = 1.5,
         group: str | Sequence[str] | None = None,
         missing_dim: Literal["raise", "drop"] = "drop",
     ) -> pd.DataFrame:
@@ -1840,7 +1844,9 @@ class Spool(NodeRepr, NamespaceOwner):
             The dimension to measure along.
         tolerance
             The maximum number of samples patches can be spaced and still
-            count as contiguous. Same meaning as chunk's `tolerance`.
+            count as contiguous, or a quantity or timedelta stating that
+            limit in the coordinate's own units (eg `1 * s`). Same
+            meaning as chunk's `tolerance`.
         group
             Attributes which separate patches into unrelated groups.
             Defaults to the config option `patch_kind_attrs`; sampling
@@ -1863,10 +1869,12 @@ class Spool(NodeRepr, NamespaceOwner):
 
         Coverage is measured between patches, from the envelopes the
         index records; a hole *inside* a patch is not visible here. Nor
-        is one in a group whose step is unknown, which reports no gaps
-        and so counts as fully covered. Both are what `chunk` would
-        make of the data, so a `coverage` of 1.0 says "nothing chunk
-        would refuse to merge", not "nothing missing".
+        is one in a group whose step is unknown: a sample-count tolerance
+        has nothing to scale there, so the group reports no gaps and
+        counts as fully covered. An absolute tolerance does measure it.
+        Both are what `chunk` would make of the data, so a `coverage` of
+        1.0 says "nothing chunk would refuse to merge", not "nothing
+        missing".
 
         See Also
         --------
@@ -1901,7 +1909,7 @@ class Spool(NodeRepr, NamespaceOwner):
         overlap: numeric_types | timeable_types | None = None,
         keep_partial: bool = False,
         snap_coords: bool = True,
-        tolerance: float = 1.5,
+        tolerance: float | Quantity | np.timedelta64 = 1.5,
         conflict: Literal["drop", "raise", "keep_first"] = "raise",
         group: str | Sequence[str] | None = None,
         missing_dim: Literal["raise", "drop"] = "raise",
@@ -1921,11 +1929,17 @@ class Spool(NodeRepr, NamespaceOwner):
         snap_coords
             If True (default), simplify the coordinates of joined patches to
             an evenly sampled range when doing so moves no coordinate value
-            by more than `tolerance` samples. Merges whose gaps exceed that
-            keep an exact segmented coordinate instead.
+            by more than `tolerance` (samples, or the length itself when
+            the tolerance states one). Merges whose gaps exceed that keep
+            an exact segmented coordinate instead.
         tolerance
             The maximum number of samples a block of data can be spaced (gap)
-            and still be considered contiguous.
+            and still be considered contiguous. A quantity or timedelta
+            states that limit in the coordinate's own units instead (eg
+            `tolerance=1 * s`), which also works for patches whose
+            sampling interval is unknown. Either way a boundary of one
+            sample is contiguous, so a tolerance below one sample never
+            splits adjacent patches.
         conflict
             {conflict_desc}
         group
@@ -2000,7 +2014,9 @@ class Spool(NodeRepr, NamespaceOwner):
         merge_kwargs = {
             "conflict": conflict,
             "snap_coords": snap_coords,
-            "tolerance": tolerance,
+            # the plan's copy is normalized (eg a dimensionless quantity
+            # has become the plain multiple it means)
+            "tolerance": plan.params["tolerance"],
         }
         catalog = derived_catalog(
             source_rows=source_rows,

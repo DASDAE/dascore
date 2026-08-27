@@ -164,6 +164,15 @@ class TestCoverage:
         loose = _kinds(diverse.viz.coverage(tolerance=1e6))["gap"]
         assert loose < tight
 
+    def test_absolute_tolerance(self, diverse):
+        """A tolerance in the coordinate's own units closes gaps too."""
+        tight = _kinds(diverse.viz.coverage(tolerance=dc.get_quantity("0.001 s")))[
+            "gap"
+        ]
+        plt.close("all")
+        loose = _kinds(diverse.viz.coverage(tolerance=dc.get_quantity("1000 s")))["gap"]
+        assert loose < tight
+
     def test_group_argument(self, diverse):
         """Grouping by nothing at all puts every patch in one lane."""
         ax = diverse.viz.coverage(group=[])
