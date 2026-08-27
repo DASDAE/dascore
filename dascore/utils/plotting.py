@@ -12,6 +12,7 @@ import pandas as pd
 from dascore.units import Hz, get_quantity_str
 from dascore.units import s as seconds
 from dascore.utils.misc import suppress_warnings
+from dascore.utils.time import dtype_time_like
 
 
 def _get_dim_label(patch, dim):
@@ -50,6 +51,31 @@ def _get_ax(ax):
     if ax is None:
         _, ax = plt.subplots(1)
     return ax
+
+
+def _maybe_invert_yaxis(ax, patch, dim):
+    """
+    Invert the y axis if the dimension it displays is time-like.
+
+    Every patch plot uses this rule, so a patch is oriented the same way
+    however it is drawn. Seismic displays put time on a downward axis (shot
+    gathers, record sections), so a time-like y axis is flipped and any
+    other dimension is left alone. Distance in particular must not be
+    flipped: a wiggle plot draws its traces as offsets along the y axis, so
+    inverting it would point positive amplitudes down, which no wiggle
+    convention does.
+
+    Parameters
+    ----------
+    ax
+        The axis whose y axis may be inverted.
+    patch
+        The patch being plotted.
+    dim
+        The name of the dimension displayed on the y axis.
+    """
+    if dtype_time_like(patch.get_coord(dim).dtype):
+        ax.invert_yaxis()
 
 
 def _get_extents(dims_r, coords):

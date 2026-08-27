@@ -284,3 +284,46 @@ class TestWiggle:
         patch = patch_1d + 10  # everything well above zero
         ax = patch.viz.wiggle(shade=True)
         assert min(ax.get_ylim()) <= 0
+
+
+class TestWiggleOrientation:
+    """Tests for which direction the wiggle plot's y axis runs."""
+
+    @pytest.fixture()
+    def small_patch(self, random_patch):
+        """A small patch to cut back on plot time."""
+        return random_patch.select(distance=(10, 15), samples=True).select(
+            time=(0, 20), samples=True
+        )
+
+    def test_distance_traces_not_inverted(self, small_patch):
+        """Traces stacked along distance leave distance increasing upward."""
+        ax = small_patch.viz.wiggle()
+        assert not ax.yaxis_inverted()
+
+    def test_time_traces_inverted(self, small_patch):
+        """Traces stacked along time keep the time increases downward convention."""
+        ax = small_patch.viz.wiggle(dim="distance")
+        assert ax.yaxis_inverted()
+
+    def test_positive_data_deflects_up(self, small_patch):
+        """An all positive patch, like an envelope, must deflect up."""
+        patch = small_patch.envelope("time")
+        assert np.all(patch.data >= 0)
+        ax = patch.viz.wiggle()
+        trace = _get_traces(ax)[0]
+        x = trace[0, 0]
+        offset, peak = trace[:, 1].min(), trace[:, 1].max()
+        assert peak > offset
+        # Display coordinates grow upward on the screen, whatever the axis does.
+        (_, offset_y), (_, peak_y) = ax.transData.transform([(x, offset), (x, peak)])
+        assert peak_y > offset_y
+
+    @pytest.mark.parametrize("trace_dim", ["distance", "time"])
+    def test_agrees_with_waterfall(self, small_patch, trace_dim):
+        """Both plots invert the y axis under the same conditions."""
+        connected_dim = next(iter(set(small_patch.dims) - {trace_dim}))
+        wiggle_ax = small_patch.viz.wiggle(dim=connected_dim)
+        # Waterfall puts the patch's first dimension on the y axis.
+        water_ax = small_patch.transpose(trace_dim, connected_dim).viz.waterfall()
+        assert wiggle_ax.yaxis_inverted() == water_ax.yaxis_inverted()

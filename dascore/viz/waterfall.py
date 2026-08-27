@@ -22,8 +22,9 @@ from dascore.utils.plotting import (
     _get_data_label,
     _get_dim_label,
     _get_extents,
+    _maybe_invert_yaxis,
 )
-from dascore.utils.time import dtype_time_like, is_datetime64
+from dascore.utils.time import is_datetime64
 from dascore.viz._labels import (
     draw_labels,
     image_cell_edges,
@@ -127,10 +128,8 @@ def _format_axis_labels(ax, patch, dims_r):
         dtype = patch.get_coord(dim).dtype
         if is_datetime64(dtype):
             _format_time_axis(ax, dim, x)
-        # Invert the y axis so origin is at the top. This follows the
-        # convention for seismic shot gathers where time increases downward.
-        if x == "y" and dtype_time_like(dtype):
-            ax.invert_yaxis()
+        if x == "y":
+            _maybe_invert_yaxis(ax, patch, dim)
 
 
 def _add_colorbar(ax, im, data, patch, log, scale):

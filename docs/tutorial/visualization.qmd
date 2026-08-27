@@ -70,7 +70,7 @@ zoned.enrich(inventory).viz.waterfall(label_coord="noisy", show=True);
 ```
 
 ## Wiggle
-The [`wiggle patch function`](`dascore.viz.wiggle`) creates a wiggle plot of the patch data. We'll use the same patch as above to model this function.
+The [`wiggle patch function`](`dascore.viz.wiggle`) creates a wiggle plot of the patch data. Each trace is drawn as an offset along the y axis and positive amplitudes point up, just as they point right in a conventional (time down) wiggle display. Like the waterfall plot, the y axis is only inverted when it is time-like, which for a wiggle means the traces are stacked along time rather than along distance. We'll use the same patch as above to model this function.
 
 ```{python}
 import dascore as dc
