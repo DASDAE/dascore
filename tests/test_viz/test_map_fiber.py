@@ -70,6 +70,21 @@ class TestPlotMap:
 
         assert isinstance(ax, plt.Axes)
 
+    def test_masked_arrays_keep_their_mask(self, random_patch_with_lat_lon):
+        """A masked point stays out of the drawing, as scatter would leave it."""
+        patch = random_patch_with_lat_lon
+        lats = patch.coords.get_array("latitude")
+        lons = patch.coords.get_array("longitude")
+        mask = np.zeros(len(lats), dtype=bool)
+        mask[::3] = True
+        color = np.ma.array(np.arange(len(lats), dtype=float), mask=mask)
+        ax = patch.viz.map_fiber(np.ma.array(lats, mask=mask), lons, color)
+        drawn = ax.collections[0].get_array()
+        assert np.array_equal(np.ma.getmaskarray(drawn), mask)
+        assert np.array_equal(
+            np.ma.getmaskarray(ax.collections[0].get_offsets())[:, 0], mask
+        )
+
     def test_default_parameters(self, random_patch):
         """Call map_fiber plot, return."""
         ax = random_patch.viz.map_fiber()

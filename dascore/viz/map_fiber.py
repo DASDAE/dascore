@@ -26,11 +26,11 @@ def _get_position(patch, position):
     """
     The values drawn along one axis, and the coordinate they came from.
 
-    An array is drawn as given and belongs to no coordinate, so its axis
-    gets no label.
+    An array is drawn as given, masked points and all, and belongs to no
+    coordinate, so its axis gets no label.
     """
     if not isinstance(position, str):
-        return np.asarray(position), None
+        return np.asanyarray(position), None
     if position not in patch.coords:
         msg = f"{position} not found in patch coordinates"
         raise ParameterError(msg)
@@ -60,7 +60,7 @@ def _get_data_to_color(patch, x):
 def _get_color(patch, color, x):
     """The values to color by, and what the colorbar calls them."""
     if not isinstance(color, str):
-        return np.asarray(color), ""
+        return np.asanyarray(color), ""
     if color in patch.coords:
         units = patch.coords.coord_map[color].units
         return patch.coords.get_array(color), _get_label(color, units)
