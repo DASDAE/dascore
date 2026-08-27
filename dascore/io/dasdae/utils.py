@@ -16,7 +16,12 @@ from dascore.core.attrs import PatchAttrs
 from dascore.core.coordmanager import get_coord_manager
 from dascore.core.coords import get_coord
 from dascore.io.core import STORED_PATCH_ID, make_scan_payload
-from dascore.io.dasdae._compat import strip_legacy_coord_fields, translate_legacy_attrs
+from dascore.io.dasdae._compat import (
+    NOT_DECODED,
+    decode_pytables_attr,
+    strip_legacy_coord_fields,
+    translate_legacy_attrs,
+)
 from dascore.io.utils import get_exact_coord
 from dascore.models.registry import get_model_tag, resolve_tagged_model
 from dascore.utils.array import (
@@ -172,13 +177,15 @@ def _save_patch(patch, wave_group, name):
 # --- Functions for reading
 
 
-def _get_attrs(patch_group):
+def _get_attrs(patch_group, legacy: bool = True):
     """Get the saved attributes from the group attrs."""
     out = {}
     attrs = [x for x in patch_group.attrs if x.startswith(_ATTR_PREFIX)]
     for attr_name in attrs:
         key = attr_name.replace(_ATTR_PREFIX, "")
-        val = _decode_attr_value(patch_group.attrs, key, patch_group.attrs[attr_name])
+        val = _decode_attr_value(
+            patch_group.attrs, key, patch_group.attrs[attr_name], legacy=legacy
+        )
         # need to unpack one value arrays
         if isinstance(val, np.ndarray) and not val.shape:
             val = np.asarray([val])[0]
@@ -305,7 +312,7 @@ def _matches_attr_filters(attrs, kwargs):
 
 def _get_patch_attrs(patch_group, legacy: bool) -> dict:
     """Get the true patch attrs, cleaning legacy coord metadata if needed."""
-    attrs = _get_attrs(patch_group)
+    attrs = _get_attrs(patch_group, legacy=legacy)
     if legacy:
         dims = _get_dims(patch_group)
         coord_names = _get_group_coord_names(patch_group)
@@ -317,7 +324,7 @@ def _get_patch_attrs(patch_group, legacy: bool) -> dict:
 
 def _read_patch(patch_group, legacy: bool = True, **kwargs):
     """Read a patch group, return Patch."""
-    attrs = _get_attrs(patch_group)
+    attrs = _get_attrs(patch_group, legacy=legacy)
     dims = _get_dims(patch_group)
     if legacy:
         attrs["dims"] = ",".join(dims)
@@ -374,7 +381,9 @@ def _get_scan_payload_from_group(group, legacy: bool = True, snap=True):
     for key in attrs:
         if not key.startswith(_ATTR_PREFIX):
             continue
-        value = _decode_attr_value(attrs, key.replace(_ATTR_PREFIX, ""), attrs[key])
+        value = _decode_attr_value(
+            attrs, key.replace(_ATTR_PREFIX, ""), attrs[key], legacy=legacy
+        )
         new_key = key.replace(_ATTR_PREFIX, "")
         # need to unpack 0 dim arrays.
         if isinstance(value, np.ndarray) and not value.shape:
@@ -432,11 +441,11 @@ def _encode_attr_value(key, value):
     return value, None
 
 
-def _decode_attr_value(attrs, key, value):
+def _decode_attr_value(attrs, key, value, legacy: bool = True):
     """Decode one stored attr value using saved type metadata when present."""
     attr_type = unbyte(attrs.get(f"{_ATTR_TYPE_PREFIX}{key}", None))
     if attr_type is None:
-        return _decode_legacy_attr_value(value)
+        return _decode_legacy_attr_value(attrs, key, value, legacy=legacy)
     if attr_type == "none":
         return None
     if attr_type == "datetime64[ns]":
@@ -448,12 +457,36 @@ def _decode_attr_value(attrs, key, value):
     return value
 
 
-def _decode_legacy_attr_value(value):
+def _holds_pytables_payload(attrs, key, value) -> bool:
+    """
+    Whether a legacy attr holds a PyTables pickle rather than text.
+
+    Nothing in the bytes separates the two -- a string attr of "N." is
+    byte-identical to a pickled None -- but PyTables wrote real strings as
+    UTF-8 and pickled payloads as raw bytes, which HDF5 records as the
+    attribute's character set.
+    """
+    if not isinstance(value, np.bytes_ | bytes):
+        return False
+    # Only an h5py attrs manager records the character set; a plain
+    # mapping of values cannot tell a payload from text.
+    get_id = getattr(attrs, "get_id", None)
+    if get_id is None:
+        return False
+    get_cset = getattr(get_id(f"{_ATTR_PREFIX}{key}").get_type(), "get_cset", None)
+    return get_cset is not None and get_cset() == 0
+
+
+def _decode_legacy_attr_value(attrs, key, value, legacy: bool = True):
     """Decode legacy DASDAE attrs still used by the shipped fixture files."""
     if value.__class__.__name__ == "Empty":
         return ""
     if isinstance(value, np.ndarray) and not value.shape:
         value = np.asarray([value])[0]
+    if legacy and _holds_pytables_payload(attrs, key, value):
+        decoded = decode_pytables_attr(bytes(value))
+        if decoded is not NOT_DECODED:
+            return decoded
     if isinstance(value, np.bytes_ | bytes):
         try:
             return unbyte(value)

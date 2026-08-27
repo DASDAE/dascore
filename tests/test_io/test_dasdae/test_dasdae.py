@@ -17,7 +17,11 @@ from dascore.config import config_context
 from dascore.core.coords import CoordString
 from dascore.exceptions import InvalidFiberFileError
 from dascore.io.dasdae import utils as dasdae_utils
-from dascore.io.dasdae._compat import translate_legacy_attrs
+from dascore.io.dasdae._compat import (
+    NOT_DECODED,
+    decode_pytables_attr,
+    translate_legacy_attrs,
+)
 from dascore.io.dasdae.core import DASDAEV1
 from dascore.io.dasdae.utils import (
     _ATTRS_CLASS_KEY,
@@ -409,16 +413,104 @@ class TestLegacyFixtureCompatibility:
 
     def test_decode_legacy_attr_bytes_falls_back_to_text(self):
         """Undecodable legacy bytes should fall back to plain text."""
-        assert _decode_legacy_attr_value(b"abc") == "abc"
+        assert _decode_legacy_attr_value({}, "key", b"abc") == "abc"
 
-    def test_decode_legacy_attr_pickled_bytes_fall_back_to_text(self):
-        """Legacy pickled attrs should no longer be unpickled."""
-        payload = pickle.dumps(("a", "b"))
-        assert isinstance(_decode_legacy_attr_value(payload), str)
+    def test_decode_legacy_attr_pickled_bytes_need_the_attrs(self):
+        """A payload can only be told from text by the stored attribute."""
+        payload = pickle.dumps(("a", "b"), 0)
+        assert isinstance(_decode_legacy_attr_value({}, "history", payload), str)
 
     def test_decode_legacy_attr_unboxes_scalar_arrays(self):
         """Scalar legacy arrays should be unpacked back to scalars."""
-        assert _decode_legacy_attr_value(np.asarray(5)) == 5
+        assert _decode_legacy_attr_value({}, "key", np.asarray(5)) == 5
+
+
+class TestPyTablesAttrPayloads:
+    """PyTables pickled attr values HDF5 had no native type for."""
+
+    @pytest.fixture
+    def pytables_attrs(self, tmp_path):
+        """Read attrs back from a group whose attrs mimic PyTables output."""
+
+        def _read(legacy=True, **values):
+            path = tmp_path / "pytables_attrs.h5"
+            with h5py.File(path, "w") as h5:
+                group = h5.create_group("waveforms").create_group("patch")
+                for name, value in values.items():
+                    # PyTables wrote payloads as bytes, which HDF5 records
+                    # with the ASCII character set, and text as UTF-8.
+                    group.attrs[f"_attrs_{name}"] = np.bytes_(pickle.dumps(value, 0))
+                return _get_attrs(group, legacy=legacy)
+
+        return _read
+
+    @pytest.mark.parametrize(
+        "value",
+        [None, True, False, 3, 2.5, "text", (), ("a", "b"), [], [1, "x"], (1, (2, 3))],
+    )
+    def test_round_trip(self, value):
+        """Every shape PyTables wrote for a DASCore attr should decode."""
+        assert decode_pytables_attr(pickle.dumps(value, 0)) == value
+
+    @pytest.mark.parametrize(
+        "payload",
+        [
+            b"",
+            b"abc",
+            b"N",
+            b"V no newline",
+            b"Ibad\n.",
+            b"Fbad\n.",
+            b"g0\n.",
+            b"a.",
+            b"Nt.",
+            b"Nl.",
+            b"p0\n.",
+            b"(.",
+            b"(N.",
+            pickle.dumps({"a": 1}, 0),
+            pickle.dumps(np.float64(1.0), 0),
+        ],
+    )
+    def test_undecodable_payloads(self, payload):
+        """Anything outside the grammar is reported rather than guessed at."""
+        assert decode_pytables_attr(payload) is NOT_DECODED
+
+    def test_repeated_value_is_shared(self):
+        """A repeated object is stored once and referenced, and must decode."""
+        shared = ("a", "b")
+        assert decode_pytables_attr(pickle.dumps((shared, shared), 0)) == (
+            shared,
+            shared,
+        )
+
+    def test_no_class_is_named(self):
+        """A payload naming a callable must not decode, let alone run it."""
+        payload = pickle.dumps(TestPyTablesAttrPayloads, 0)
+        assert decode_pytables_attr(payload) is NOT_DECODED
+
+    def test_read_decodes_none(self, pytables_attrs):
+        """A pickled None should read back as None, not as its payload."""
+        assert pytables_attrs(gauge_length=None)["gauge_length"] is None
+
+    def test_read_decodes_history(self, pytables_attrs):
+        """A pickled history tuple should read back as a tuple."""
+        attrs = pytables_attrs(history=("first", "second"))
+        assert attrs["history"] == ("first", "second")
+
+    def test_text_attr_is_not_decoded(self, tmp_path):
+        """A real string which happens to be a valid payload stays text."""
+        path = tmp_path / "text_attr.h5"
+        with h5py.File(path, "w") as h5:
+            group = h5.create_group("waveforms").create_group("patch")
+            # PyTables stored real strings as UTF-8; "N." is byte-identical
+            # to a pickled None and only the character set separates them.
+            group.attrs["_attrs_station"] = "N."
+            assert _get_attrs(group)["station"] == "N."
+
+    def test_modern_file_is_not_decoded(self, pytables_attrs):
+        """Only legacy files hold PyTables payloads."""
+        assert pytables_attrs(legacy=False, note=None)["note"] == "N."
 
 
 class TestLegacyUnitCompanions:

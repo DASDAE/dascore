@@ -175,3 +175,112 @@ def translate_legacy_attrs(attrs, coord_names: Iterable[str] = ()):
             continue
         convert_attr_units(out, name, to_units)
     return out
+
+
+# --- PyTables attr payloads
+#
+# PyTables stored every attr value HDF5 had no native type for -- None,
+# tuples, lists -- as ``pickle.dumps(value, 0)`` and unpickled it on read.
+# A reader using h5py gets those bytes themselves, so the payload is read
+# here instead. It is parsed rather than unpickled: the loop below knows
+# the protocol-0 opcodes which build None, numbers, text, lists and
+# tuples, and no others. None of them can name a class, so a hostile
+# payload has nothing to reach, and anything outside the grammar is
+# reported as undecoded rather than guessed at. Mappings (``(d``/``s``)
+# are deliberately absent -- the one mapping DASCore ever stored is the
+# coord payload, which keeps its opt-in gate in translate_legacy_attrs.
+
+# Returned when a payload uses anything outside the grammar above.
+NOT_DECODED = object()
+
+# Marks a stack position a list or tuple is later built from.
+_MARK = object()
+
+# Protocol 0 spells the two bools as ints.
+_BOOL_ARGUMENTS = {b"00": False, b"01": True}
+
+
+def _take_items_after_mark(stack: list) -> list | None:
+    """Remove and return everything pushed since the last mark."""
+    for index in range(len(stack) - 1, -1, -1):
+        if stack[index] is _MARK:
+            items = stack[index + 1 :]
+            del stack[index:]
+            return items
+    return None
+
+
+def decode_pytables_attr(payload: bytes):
+    """
+    Return the value a PyTables protocol-0 attr payload holds.
+
+    Parameters
+    ----------
+    payload
+        The raw bytes stored in the HDF5 attribute.
+
+    Returns
+    -------
+    The decoded value, or ``NOT_DECODED`` when the payload is not one of
+    the shapes PyTables wrote for a DASCore attr, which leaves the caller
+    with the text it would have had anyway.
+    """
+    stack: list = []
+    memo: dict[bytes, object] = {}
+    position, end = 0, len(payload)
+    while position < end:
+        code, position = payload[position : position + 1], position + 1
+        if code == b".":  # STOP
+            # A mark can only survive at the top of the stack, where it
+            # means the payload opened a container it never closed.
+            done = len(stack) == 1 and stack[0] is not _MARK
+            return stack[0] if done else NOT_DECODED
+        if code == b"(":  # MARK
+            stack.append(_MARK)
+            continue
+        if code == b"N":  # NONE
+            stack.append(None)
+            continue
+        if code in (b"l", b"t"):  # LIST, TUPLE
+            items = _take_items_after_mark(stack)
+            if items is None:
+                return NOT_DECODED
+            stack.append(items if code == b"l" else tuple(items))
+            continue
+        if code == b"a":  # APPEND
+            if len(stack) < 2 or not isinstance(stack[-2], list):
+                return NOT_DECODED
+            stack[-2].append(stack.pop())
+            continue
+        # Everything left takes a newline-terminated argument. Protocol 0
+        # escapes newlines inside text, so the first one always ends it.
+        stop = payload.find(b"\n", position)
+        if stop < 0:
+            return NOT_DECODED
+        argument, position = payload[position:stop], stop + 1
+        if code == b"p":  # PUT
+            if not stack:
+                return NOT_DECODED
+            memo[argument] = stack[-1]
+        elif code == b"g":  # GET
+            if argument not in memo:
+                return NOT_DECODED
+            stack.append(memo[argument])
+        elif code == b"V":  # UNICODE
+            stack.append(argument.decode("raw_unicode_escape"))
+        elif code == b"I":  # INT, which also spells the bools
+            if argument in _BOOL_ARGUMENTS:
+                stack.append(_BOOL_ARGUMENTS[argument])
+                continue
+            try:
+                stack.append(int(argument))
+            except ValueError:
+                return NOT_DECODED
+        elif code == b"F":  # FLOAT
+            try:
+                stack.append(float(argument))
+            except ValueError:
+                return NOT_DECODED
+        else:
+            return NOT_DECODED
+    return NOT_DECODED

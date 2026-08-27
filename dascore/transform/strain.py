@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import math
 import warnings
+from numbers import Real
 
 import numpy as np
 
@@ -207,6 +209,28 @@ def _get_strain_data_type(units) -> str:
     return "strain_rate" if units.dimensionality.get("[time]") == -1 else "strain"
 
 
+def _get_gauge_length(patch: PatchType, gauge_length) -> float:
+    """
+    Return the gauge length in meters, from the argument or the patch attrs.
+
+    Attrs read from a file carry whatever the file held, so a gauge length
+    which is not a positive number is rejected here rather than left to
+    fail on the arithmetic below.
+    """
+    stored = getattr(patch.attrs, "gauge_length", None)
+    gauge = convert_units(gauge_length if gauge_length is not None else stored, "m")
+    # bool is a Real, and True would otherwise pass as a one meter gauge.
+    if isinstance(gauge, Real) and not isinstance(gauge, bool):
+        meters = float(gauge)
+        if math.isfinite(meters) and meters > 0:
+            return meters
+    msg = (
+        f"Gauge length must be a positive number, got {gauge!r}. Pass it with "
+        "the gauge_length argument or set it in the patch attrs."
+    )
+    raise ParameterError(msg)
+
+
 @patch_function()
 def radians_to_strain(
     patch: PatchType,
@@ -254,14 +278,7 @@ def radians_to_strain(
     strain/s) and "strain" otherwise.
     """
     # First get gauge length, using gl passed into function or attached to attrs.
-    gl = getattr(patch.attrs, "gauge_length", None)
-    gauge = convert_units(gauge_length if gauge_length is not None else gl, "m")
-    if gauge is None or gauge <= 0:
-        msg = (
-            "Gauge length must be non-zero positive and provided "
-            "or defined in patch attrs."
-        )
-        raise ParameterError(msg)
+    gauge = _get_gauge_length(patch, gauge_length)
     # If units doesn't contain radians just return so function is idempotent
     quant = dc.get_quantity(patch.attrs.data_units)
     if str(dc.get_unit("radians")) not in str(quant):
