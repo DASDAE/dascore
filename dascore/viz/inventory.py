@@ -291,6 +291,11 @@ def _select_tracks(frame, tracks, path):
             keep.extend(
                 x for x in dict.fromkeys(frame["lane"]) if x.startswith("acquisition (")
             )
+            # A label group may be named for the track, since the name is
+            # not reserved. The two lanes are then both meant, rather than
+            # the track's reading putting the group out of reach.
+            if name in groups:
+                keep.append(name)
         elif name in TRACKS or name in groups:
             keep.append(name)
         else:
@@ -376,6 +381,8 @@ def path(
     tracks
         Which lanes to draw, in order: any of "acquisition", "components",
         "coupling", and the path's label group names. None draws all.
+        "acquisition" draws a lane per acquisition, and also the label
+        group of that name where a path states one.
     columns
         Geometry columns to draw as line panels beneath the lanes. The
         CRS's position axes are refused, since they belong on a map.

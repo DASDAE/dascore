@@ -507,6 +507,46 @@ class TestPath:
         ax = path(site, "DAS.L1.00", time="2026-06-10", tracks="acquisition")
         assert _lanes(ax) == ["acquisition (RAW)"]
 
+    def test_track_name_shared_with_label_group(self):
+        """A group named for the track is drawn, not shadowed by it."""
+        labels = (
+            inv.OpticalPathLabel(
+                distance_min=0.0, distance_max=150.0, group="acquisition", value="dark"
+            ),
+        )
+        optical_path = inv.OpticalPath(
+            name="main",
+            location_code="00",
+            optical_components=(
+                inv.FiberSegment(name="run", distance_min=0.0, distance_max=300.0),
+            ),
+            labels=labels,
+        )
+        acquisition = inv.Acquisition(
+            code="RAW",
+            location_code="00",
+            data_category="DAS",
+            sample_rate=100.0,
+            gauge_length=10.0,
+            distance_map=inv.DistanceMap(channel=(0.0, 300.0), distance=(0.0, 300.0)),
+        )
+        inventory = inv.Inventory(
+            networks=(
+                inv.Network(
+                    code="DAS",
+                    fiber_arrays=(
+                        inv.FiberArray(
+                            code="L3",
+                            acquisitions=(acquisition,),
+                            optical_paths=(optical_path,),
+                        ),
+                    ),
+                ),
+            )
+        ).check()
+        ax = path(inventory, "DAS.L3.00", tracks="acquisition")
+        assert _lanes(ax) == ["acquisition (RAW)", "acquisition"]
+
     def test_unknown_track(self, site):
         """A track which is not a track nor a label group is refused."""
         with pytest.raises(ParameterError, match="'nope' is not a track"):
