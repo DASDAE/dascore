@@ -221,6 +221,13 @@ class TestWaterfall:
         assert random_patch.dims[1] in ax.get_xlabel().lower()
         assert isinstance(ax, plt.Axes)
 
+    def test_y_axis_inverted_only_when_time_like(self, random_patch):
+        """Time on the y axis increases downward; other dimensions do not."""
+        ax = random_patch.viz.waterfall()  # distance on the y axis
+        assert not ax.yaxis_inverted()
+        ax = random_patch.transpose("time", "distance").viz.waterfall()
+        assert ax.yaxis_inverted()
+
     def test_colorbar_scale(self, random_patch):
         """Tests for the scaling parameter."""
         ax_scalar = random_patch.viz.waterfall(scale=0.2)
