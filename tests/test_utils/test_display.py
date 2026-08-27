@@ -42,6 +42,7 @@ from dascore.utils.display import (
     _indent_text,
     _limit_items,
     _render_html,
+    _seconds_apart,
     _section_title,
     _storage_quantum,
     _strip_css_comments,
@@ -1070,6 +1071,23 @@ class TestDurationText:
         the whole of what pandas can say is 584.6 years wide.
         """
         assert "584.6 y" in str(duration_text(pd.Timestamp.min, pd.Timestamp.max))
+
+    def test_a_span_which_points_the_other_way_from_its_ends(self):
+        """
+        A wrap is a span whose sign its two ends disagree with.
+
+        Asked of `_seconds_apart` directly: whether numpy wraps here or
+        raises is a version away either way, and the reading which
+        rescues the wrap has to hold on both.
+        """
+        low = np.datetime64("1700-01-01", "ns")
+        high = np.datetime64("2200-01-01", "ns")
+        # What the wrapped subtraction says: 84.6 years, and negative.
+        wrapped = -2.668289673709552e9
+        assert _seconds_apart(wrapped, low, high) > 1.5e10
+        assert _seconds_apart(None, low, high) > 1.5e10
+        # A span its ends agree with is the span, to the nanosecond.
+        assert _seconds_apart(0.5, low, high) == 0.5
 
     def test_a_span_wider_than_the_nanoseconds_it_is_held_in(self):
         """

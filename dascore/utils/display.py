@@ -912,6 +912,29 @@ def human_duration(value: np.timedelta64 | pd.Timedelta | float) -> str:
     return f"{size:.3g} s"
 
 
+def _seconds_apart(seconds: float | None, low, high) -> float:
+    """
+    How far apart two times lie, from the span between them or the ends.
+
+    The span, where it is one: subtracting two instants is exact, and
+    nothing else says how far apart they are to the nanosecond.
+
+    Each end on its own where it is not. An int64 of nanoseconds holds
+    about 584 years and two instants can lie further apart than that:
+    pandas raises over it, numpy raises over it on some versions and
+    wraps on others, and a wrap shows as a span pointing the other way
+    from the ends it was read off -- five centuries came back as 84.6
+    of them. Reading the ends costs a precision only a far shorter span
+    would miss, and a span that short is never one of these. It is held
+    in nanoseconds itself, though, so a pair stated in a coarser unit
+    and further apart than any instant a nanosecond can reach is read
+    no better here than it was subtracted.
+    """
+    if seconds is not None and (seconds < 0) == (high < low):
+        return seconds
+    return to_float(high) - to_float(low)
+
+
 def duration_text(low, high) -> Text | None:
     """
     How long an extent lasted, as a repr states it.
@@ -932,17 +955,14 @@ def duration_text(low, high) -> Text | None:
     # not a question with an answer.
     if pd.isnull(low) or pd.isnull(high):
         return None
-    # Read from the two ends together, which is exact, and from each of
-    # them on its own where that cannot be done. An int64 of
-    # nanoseconds holds about 584 years and two instants can lie
-    # further apart than that: pandas raises over it, and numpy raises
-    # over it on some versions and wraps on others -- five centuries
-    # came back as 84.6 of them, pointing the other way from the ends
-    # they were read off.
     seconds = None
     try:
         span = high - low
     except (OutOfBoundsDatetime, OutOfBoundsTimedelta, OverflowError):
+        # Two instants can lie further apart than the int64 of
+        # nanoseconds holding them, which pandas raises over and numpy
+        # raises over on some versions. `_seconds_apart` says how far
+        # apart they are without them.
         pass
     except TypeError:
         # Two times which do not agree on a timezone do not subtract at
@@ -959,16 +979,7 @@ def duration_text(low, high) -> Text | None:
             # seconds, so numpy refuses to say how many. Neither will
             # this.
             return None
-        if (seconds < 0) != (high < low):
-            seconds = None
-    if seconds is None:
-        # Each end on its own, which fits where the span between them
-        # does -- to a precision only a far shorter span would miss.
-        # Held in nanoseconds itself, so a pair stated in a coarser unit
-        # and further apart than any instant a nanosecond can reach is
-        # read no better here than it was subtracted.
-        seconds = to_float(high) - to_float(low)
-    if not (said := human_duration(seconds)):
+    if not (said := human_duration(_seconds_apart(seconds, low, high))):
         return None
     return Text(f"<{said}>", dascore_styles["keys"])
 
