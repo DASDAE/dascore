@@ -124,6 +124,17 @@ class TestCheck:
 
         assert _api_urls.check(strict=True, path=path) == 0
 
+    def test_strict_fails_on_a_move(self, tmp_path, monkeypatch):
+        """A key which moved fails even though its old page is still served."""
+        path = tmp_path / "api_urls.tsv"
+        baseline = {"method": "/api/function.qmd", "function": "/api/function.qmd"}
+        _api_urls.write_baseline(baseline, path)
+        moved = {"method": "/api/method.qmd", "function": "/api/function.qmd"}
+        monkeypatch.setattr(_api_urls, "current_urls", lambda: moved)
+
+        assert _api_urls.check(path=path) == 0
+        assert _api_urls.check(strict=True, path=path) == 1
+
     def test_strict_allows_additions(self, tmp_path, monkeypatch):
         """A new public object breaks no link, so it passes."""
         path = tmp_path / "api_urls.tsv"

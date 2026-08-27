@@ -68,6 +68,11 @@ def compare(current: dict[str, str], baseline: dict[str, str]) -> dict:
     saved, and nothing else notices, so the two are counted apart: an alias
     can be dropped while the page it named is still published under another
     key, and no saved link is broken.
+
+    A key which moves is its own case. The page it left may still be served
+    for some other key, so it does not show up as unpublished, but it no
+    longer documents the object the key names, which is what the reader who
+    saved the link came for.
     """
     moved = {k: (v, current[k]) for k, v in baseline.items() if current.get(k, v) != v}
     published = set(current.values())
@@ -92,8 +97,11 @@ def check(strict: bool = False, path: Path = BASELINE_PATH) -> int:
     """
     Report how the current URLs differ from the frozen ones.
 
-    Only a page which is no longer published fails the strict check. A key
-    which moved to a page that is still served has broken no saved link.
+    A key which moved and a page which is no longer published both fail the
+    strict check; a key which was added or dropped does not, because neither
+    changes where an existing key resolves. A move which is meant to happen
+    is acknowledged by freezing the baseline again in the same commit and
+    saying in the pull request why it moved.
     """
     baseline = load_baseline(path)
     if not baseline:
@@ -104,7 +112,8 @@ def check(strict: bool = False, path: Path = BASELINE_PATH) -> int:
     for name in ("removed", "moved", "unpublished"):
         for key in list(difference[name])[:20]:
             _echo(f"  {name}: {key}")
-    return 1 if strict and difference["unpublished"] else 0
+    broken = difference["unpublished"] or difference["moved"]
+    return 1 if strict and broken else 0
 
 
 def _get_parser() -> argparse.ArgumentParser:
