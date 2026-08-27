@@ -1,35 +1,25 @@
 """
 Adaptive spectral filtering for DASCore patches.
 
-The adaptive spectral filter suppresses incoherent energy by processing a patch
-in overlapping windows along one or two selected dimensions. Each window is
-transformed to the spectral domain, weighted by a power of its spectral
-magnitude, transformed back to the original domain, and accumulated with
-tapered overlap-add reconstruction.
+The filter walks a patch in overlapping windows along one or two dimensions.
+Each window is transformed to the spectral domain, every coefficient is
+weighted by a power of its own magnitude, and the window is transformed back
+and added into the output under a tapered overlap-add. Energy which is
+coherent within a window concentrates in a few large coefficients, which the
+weighting keeps; energy spread across the spectrum is suppressed.
 
-With one selected dimension, this is an adaptive frequency-domain normalization
-applied independently to every trace over the remaining patch dimensions. With
-two selected dimensions, this is the adaptive frequency-wavenumber filter
-described by @isken2022denoising and exposed by Pyrocko
-[Lightguide](https://github.com/pyrocko/lightguide). Coherent plane-wave energy
-tends to concentrate in the frequency-wavenumber spectrum, so the weighting
-emphasizes locally coherent arrivals relative to diffuse or randomly
-distributed energy.
+Over two dimensions this is the adaptive frequency-wavenumber filter of
+@isken2022denoising as implemented by Pyrocko
+[Lightguide](https://github.com/pyrocko/lightguide), which the SciPy engine
+here matches to floating-point precision. Over one dimension it is the same
+weighting applied to each trace on its own.
 
-This module exposes a single public patch method,
-:func:`adaptive_spectral_filter`. The public function resolves one or two
-DASCore dimensions, converts window and overlap values to sample counts, moves
-those dimensions to the array tail, and processes every remaining leading index
-as an independent batch. The lower-level SciPy and Numba implementations are
-private because they operate on raw arrays and do not perform DASCore
-coordinate handling.
-
-The SciPy engine handles one- and two-dimensional selected windows using
-``rfftn``/``irfftn``. The optional Numba/rocket-fft engine currently handles
-the two-dimensional case only, using parity-separated tile groups so neighboring
-writes do not overlap within each parallel loop. Both engines share validation,
-padding, tapering, and dtype-restoration logic so two-dimensional outputs remain
-directly comparable.
+The public patch function converts dimension names and coordinate units to
+axes and sample counts and batches over every dimension not selected. The
+engines work on raw one- or two-dimensional arrays; the optional
+Numba/rocket-fft engine in `_adaptive_spectral_filter_numba` handles the
+two-dimensional case and shares this module's validation, padding, and taper
+so the two produce the same output.
 """
 
 from __future__ import annotations
@@ -52,6 +42,34 @@ _AdaptiveSpectralEngine = Literal["auto", "numba", "scipy"]
 __all__ = ("adaptive_spectral_filter",)
 
 
+def _check_window(window: Any, overlap: Any, label: str) -> None:
+    """Raise ValueError unless a window and its overlap can tile an axis."""
+    if not isinstance(window, int | np.integer):
+        msg = f"window for {label} must be an integer; got {window!r}."
+        raise ValueError(msg)
+    if not isinstance(overlap, int | np.integer):
+        msg = f"overlap for {label} must be an integer; got {overlap!r}."
+        raise ValueError(msg)
+    if window <= 4 or not is_power_of_two(window):
+        msg = (
+            f"window for {label} must be a power of two greater than 4; got {window!r}."
+        )
+        raise ValueError(msg)
+    if overlap < 0:
+        msg = f"overlap for {label} must be non-negative; got {overlap!r}."
+        raise ValueError(msg)
+    if overlap >= window / 2:
+        msg = f"overlap for {label} is too large; maximum is {window // 2 - 1} samples."
+        raise ValueError(msg)
+
+
+def _check_exponent(exponent: float) -> None:
+    """Raise ValueError unless the exponent is finite."""
+    if not np.isfinite(exponent):
+        msg = "exponent must be finite."
+        raise ValueError(msg)
+
+
 def _validate_filter_inputs(
     data: np.ndarray,
     *,
@@ -68,32 +86,24 @@ def _validate_filter_inputs(
     if len(window_size) != data.ndim or len(overlap) != data.ndim:
         msg = "window_size and overlap must match the input dimensionality."
         raise ValueError(msg)
-    if not np.isfinite(exponent):
-        msg = "exponent must be finite."
-        raise ValueError(msg)
-
+    _check_exponent(exponent)
     for axis, (window, axis_overlap) in enumerate(zip(window_size, overlap)):
-        if not isinstance(window, int | np.integer):
-            msg = f"window_size[{axis}] must be an integer; got {window!r}."
-            raise ValueError(msg)
-        if not isinstance(axis_overlap, int | np.integer):
-            msg = f"overlap[{axis}] must be an integer; got {axis_overlap!r}."
-            raise ValueError(msg)
+        _check_window(window, axis_overlap, f"axis {axis}")
 
-        window = int(window)
-        axis_overlap = int(axis_overlap)
-        if window <= 4 or not is_power_of_two(window):
-            msg = (
-                f"window_size[{axis}] must be a power of two greater than 4; "
-                f"got {window!r}."
-            )
-            raise ValueError(msg)
-        if axis_overlap < 0:
-            msg = f"overlap[{axis}] must be non-negative; got {axis_overlap!r}."
-            raise ValueError(msg)
-        if axis_overlap >= window / 2:
-            msg = f"overlap[{axis}] is too large; maximum is {window // 2 - 1} samples."
-            raise ValueError(msg)
+
+def _validate_window_and_overlap(
+    dims: tuple[str, ...],
+    windows: tuple[int, ...],
+    overlaps: tuple[int, ...],
+    exponent: float,
+) -> None:
+    """Validate the patch-level settings, naming dimensions rather than axes."""
+    try:
+        _check_exponent(exponent)
+        for dim, window, overlap in zip(dims, windows, overlaps):
+            _check_window(window, overlap, repr(dim))
+    except ValueError as exc:
+        raise ParameterError(str(exc)) from exc
 
 
 def _prepare_work_arrays(
@@ -101,59 +111,50 @@ def _prepare_work_arrays(
     *,
     window_size: tuple[int, ...],
     overlap: tuple[int, ...],
-) -> tuple[
-    np.ndarray,
-    np.dtype,
-    tuple[int, ...],
-    np.ndarray,
-    np.ndarray,
-    np.ndarray,
-    tuple[int, ...],
-]:
-    """Prepare ``float32`` padded arrays shared by filter implementations."""
-    data = np.asarray(data)
-    original_dtype = data.dtype
+) -> tuple[np.ndarray, np.ndarray, tuple[int, ...], tuple[int, ...]]:
+    """
+    Return the padded float32 input, the taper, the stride, and the tile grid.
+
+    The input is padded by one stride of zeros on every side so the tiles
+    which straddle its edges see a full taper ramp.
+    """
     working = np.ascontiguousarray(data, dtype=np.float32)
     stride = tuple(win - over for win, over in zip(window_size, overlap))
     plateau = tuple(win - 2 * over for win, over in zip(window_size, overlap))
     taper = _triangular_taper(window_size, plateau)
-
     padded_shape = tuple(
         length + 2 * step for length, step in zip(working.shape, stride)
     )
     padded = np.zeros(padded_shape, dtype=np.float32)
-    inner_slices = tuple(
+    inner = tuple(
         slice(step, length + step) for length, step in zip(working.shape, stride)
     )
-    padded[inner_slices] = working
-    filtered = np.zeros_like(padded)
+    padded[inner] = working
     n_tiles = tuple(pad_len // step for pad_len, step in zip(padded.shape, stride))
-    return working, original_dtype, stride, taper, padded, filtered, n_tiles
+    return padded, taper, stride, n_tiles
 
 
 def _finalize_output(
     filtered: np.ndarray,
-    working: np.ndarray,
-    original_dtype: np.dtype,
+    shape: tuple[int, ...],
+    dtype: np.dtype,
     stride: tuple[int, ...],
 ) -> np.ndarray:
-    """Crop padded output and restore floating dtypes where possible."""
-    slices = tuple(
-        slice(step, length + step) for length, step in zip(working.shape, stride)
-    )
-    out = filtered[slices]
-    if np.issubdtype(original_dtype, np.floating):
-        return out.astype(original_dtype, copy=False)
+    """Crop the padding away and restore a floating input dtype."""
+    inner = tuple(slice(step, length + step) for length, step in zip(shape, stride))
+    out = filtered[inner]
+    if np.issubdtype(dtype, np.floating):
+        return out.astype(dtype, copy=False)
     return out
 
 
-def _extract_tiles_python(
+def _extract_tiles(
     padded: np.ndarray,
     window_size: tuple[int, ...],
     stride: tuple[int, ...],
     n_tiles: tuple[int, ...],
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Extract padded windows into a dense tile stack for batched SciPy FFTs."""
+    """Copy every window into a dense tile stack for batched FFTs."""
     ndim = len(window_size)
     tiles = np.zeros((prod(n_tiles), *window_size), dtype=np.float32)
     begins = np.zeros((*n_tiles, ndim), dtype=np.int64)
@@ -173,14 +174,14 @@ def _extract_tiles_python(
     return tiles, begins, sizes
 
 
-def _overlap_add_tiles_python(
+def _overlap_add_tiles(
     out: np.ndarray,
     tiles: np.ndarray,
     taper: np.ndarray,
     begins: np.ndarray,
     sizes: np.ndarray,
 ) -> None:
-    """Apply tapered overlap-add reconstruction from a dense tile stack."""
+    """Add every tapered tile back into the padded output."""
     grid_shape = begins.shape[:-1]
     for tile_index, tile_inds in enumerate(
         product(*(range(num) for num in grid_shape))
@@ -199,7 +200,7 @@ def _adaptive_spectral_filter_scipy(
     *,
     window_size: tuple[int, ...],
     overlap: tuple[int, ...],
-    exponent: float = 0.3,
+    exponent: float = 0.8,
     normalize_power: bool = False,
 ) -> np.ndarray:
     """
@@ -240,10 +241,10 @@ def _adaptive_spectral_filter_scipy(
     _validate_filter_inputs(
         data, window_size=window_size, overlap=overlap, exponent=float(exponent)
     )
-    working, original_dtype, stride, taper, padded, filtered, n_tiles = (
-        _prepare_work_arrays(data, window_size=window_size, overlap=overlap)
+    padded, taper, stride, n_tiles = _prepare_work_arrays(
+        data, window_size=window_size, overlap=overlap
     )
-    tiles, begins, sizes = _extract_tiles_python(padded, window_size, stride, n_tiles)
+    tiles, begins, sizes = _extract_tiles(padded, window_size, stride, n_tiles)
     axes = tuple(range(-data.ndim, 0))
 
     spec = sp_fft.rfftn(tiles, s=window_size, axes=axes, workers=-1)
@@ -258,19 +259,9 @@ def _adaptive_spectral_filter_scipy(
     tiles = sp_fft.irfftn(spec, s=window_size, axes=axes, workers=-1).astype(
         np.float32, copy=False
     )
-    _overlap_add_tiles_python(filtered, tiles, taper, begins, sizes)
-    return _finalize_output(filtered, working, original_dtype, stride)
-
-
-def _get_dim_axis_values(patch: PatchType, kwargs: Mapping[str, Any]):
-    """Resolve DASCore dimension keyword arguments into dim/axis values."""
-    if len(kwargs) not in {1, 2}:
-        msg = (
-            "adaptive_spectral_filter requires one or two dimension window kwargs, "
-            "e.g. patch.adaptive_spectral_filter(time=32, samples=True)."
-        )
-        raise ParameterError(msg)
-    return get_dim_axis_value(patch, kwargs=dict(kwargs), allow_multiple=True)
+    filtered = np.zeros_like(padded)
+    _overlap_add_tiles(filtered, tiles, taper, begins, sizes)
+    return _finalize_output(filtered, data.shape, data.dtype, stride)
 
 
 def _dim_values_to_samples(
@@ -304,7 +295,8 @@ def _normalize_overlap(
     windows: tuple[int, ...],
 ) -> tuple[dict[str, Any], frozenset[str]]:
     """Return per-dimension overlap values and internally defaulted dimensions."""
-    defaults = {dim: max(window // 2 - 2, 0) for dim, window in zip(dims, windows)}
+    # The largest overlap the window allows, which is what Lightguide uses.
+    defaults = {dim: window // 2 - 1 for dim, window in zip(dims, windows)}
     if overlap is None:
         return defaults, frozenset(dims)
     if isinstance(overlap, Mapping):
@@ -321,31 +313,6 @@ def _normalize_overlap(
     return dict.fromkeys(dims, overlap), frozenset()
 
 
-def _validate_window_and_overlap(
-    dims: tuple[str, ...],
-    windows: tuple[int, ...],
-    overlaps: tuple[int, ...],
-    exponent: float,
-) -> None:
-    """Validate public DASCore window and overlap settings."""
-    if not np.isfinite(exponent):
-        msg = "exponent must be finite."
-        raise ParameterError(msg)
-    for dim, window, overlap in zip(dims, windows, overlaps):
-        if window <= 4 or not is_power_of_two(window):
-            msg = f"window size for {dim!r} must be a power of two and > 4."
-            raise ParameterError(msg)
-        if overlap < 0:
-            msg = f"overlap for {dim!r} must be non-negative."
-            raise ParameterError(msg)
-        if overlap >= window / 2:
-            msg = (
-                f"overlap for {dim!r} is too large. Maximum overlap is "
-                f"{window // 2 - 1} samples."
-            )
-            raise ParameterError(msg)
-
-
 def _get_engine(engine: _AdaptiveSpectralEngine, selected_ndim: int) -> Callable:
     """Return the requested adaptive spectral array filter implementation."""
     if engine == "scipy" or (engine == "auto" and selected_ndim == 1):
@@ -356,30 +323,22 @@ def _get_engine(engine: _AdaptiveSpectralEngine, selected_ndim: int) -> Callable
     if selected_ndim != 2:
         msg = "engine='numba' currently supports exactly two selected dimensions."
         raise ParameterError(msg)
-    try:
-        # Deferred: the numba engine is optional, and importing it eagerly
-        # would make numba and rocket-fft required to import dascore.
-        from dascore.proc._adaptive_spectral_filter_numba import (  # noqa: PLC0415
-            _NUMBA_ENGINE_AVAILABLE,
-            _adaptive_spectral_filter_numba,
+    # Deferred: the numba engine is optional, and importing it eagerly
+    # would compile it whenever dascore is imported.
+    from dascore.proc._adaptive_spectral_filter_numba import (  # noqa: PLC0415
+        _NUMBA_ENGINE_AVAILABLE,
+        _adaptive_spectral_filter_numba,
+    )
+
+    if _NUMBA_ENGINE_AVAILABLE:
+        return _adaptive_spectral_filter_numba
+    if engine == "numba":
+        msg = (
+            "engine='numba' requires optional dependencies numba and "
+            "rocket-fft to be installed."
         )
-    except ImportError as exc:
-        if engine == "numba":
-            msg = (
-                "engine='numba' requires optional dependencies numba and "
-                "rocket-fft to be installed."
-            )
-            raise MissingOptionalDependencyError(msg) from exc
-        return _adaptive_spectral_filter_scipy
-    if not _NUMBA_ENGINE_AVAILABLE:
-        if engine == "numba":
-            msg = (
-                "engine='numba' requires optional dependencies numba and "
-                "rocket-fft to be installed."
-            )
-            raise MissingOptionalDependencyError(msg)
-        return _adaptive_spectral_filter_scipy
-    return _adaptive_spectral_filter_numba
+        raise MissingOptionalDependencyError(msg)
+    return _adaptive_spectral_filter_scipy
 
 
 @patch_function()
@@ -387,7 +346,7 @@ def adaptive_spectral_filter(
     patch: PatchType,
     *,
     overlap: Any = None,
-    exponent: float = 0.3,
+    exponent: float = 0.8,
     normalize_power: bool = False,
     samples: bool = False,
     engine: _AdaptiveSpectralEngine = "auto",
@@ -404,13 +363,17 @@ def adaptive_spectral_filter(
         Window overlap in samples when ``samples=True`` or in coordinate units
         otherwise. A single value applies to all selected dimensions; a mapping
         can specify dimensions independently. When omitted, each dimension
-        defaults to ``window // 2 - 2`` samples.
+        defaults to ``window // 2 - 1`` samples, the largest overlap allowed.
     exponent
-        Spectral magnitude exponent used as the adaptive weighting power. ``0``
-        leaves the spectrum unweighted before overlap-add reconstruction.
+        Spectral magnitude exponent used as the adaptive weighting power.
+        Larger values suppress incoherent energy harder; ``0`` leaves the
+        spectrum unweighted, and values above 1 begin to remove weak coherent
+        arrivals along with the noise.
     normalize_power
         If ``True``, normalize each tile's spectral magnitudes by that tile's
-        maximum magnitude before applying ``exponent``.
+        maximum magnitude before applying ``exponent``. This keeps the
+        amplitude of every window near its input level, at the cost of
+        suppressing much less noise in windows which hold no signal.
     samples
         If ``True``, dimension kwargs and overlap values are interpreted as
         sample counts. If ``False``, values are converted through evenly sampled
@@ -442,22 +405,36 @@ def adaptive_spectral_filter(
     Examples
     --------
     >>> import dascore as dc
-    >>> patch = dc.get_example_patch()
-    >>> filtered_1d = patch.adaptive_spectral_filter(time=32, samples=True)
-    >>> filtered_2d = patch.adaptive_spectral_filter(
-    ...     time=32, distance=32, samples=True
+    >>> patch = dc.get_example_patch("example_event_2").pass_filter(time=(1, 300))
+    >>> # Suppress energy which is not coherent across both time and distance,
+    >>> # in windows of 16 samples along each.
+    >>> filtered = patch.adaptive_spectral_filter(
+    ...     time=16, distance=16, samples=True
     ... )
-    >>> filtered_1d.shape == filtered_2d.shape == patch.shape
-    True
+    >>> # Or weight each trace's spectrum on its own.
+    >>> per_trace = patch.adaptive_spectral_filter(time=32, samples=True)
 
     Notes
     -----
-    With two selected dimensions, this method is equivalent to the adaptive
-    frequency-wavenumber (f-k) filter described in @isken2022denoising and
-    follows the behavior exposed by Pyrocko
-    [Lightguide](https://github.com/pyrocko/lightguide).
+    - With two selected dimensions this is the adaptive frequency-wavenumber
+      (AFK) filter of @isken2022denoising, and matches Pyrocko
+      [Lightguide](https://github.com/pyrocko/lightguide)'s `afk_filter`,
+      whose defaults are ``window_size=16, overlap=7, exponent=0.8``.
+    - The filter is not amplitude preserving. Each coefficient is scaled by
+      its own magnitude to the power of ``exponent``, so the output's units
+      are not the input's and its amplitudes grow with the input's; compare
+      arrivals within one output rather than across inputs.
+    - Windows must be powers of two greater than 4 samples. A window should
+      hold a few cycles of the arrivals to keep and be short against the
+      distance over which their moveout changes.
     """
-    dim_axis_values = _get_dim_axis_values(patch, kwargs)
+    if len(kwargs) not in {1, 2}:
+        msg = (
+            "adaptive_spectral_filter requires one or two dimension window kwargs, "
+            "e.g. patch.adaptive_spectral_filter(time=32, samples=True)."
+        )
+        raise ParameterError(msg)
+    dim_axis_values = get_dim_axis_value(patch, kwargs=kwargs, allow_multiple=True)
     dims = tuple(x.dim for x in dim_axis_values)
     axes = tuple(x.axis for x in dim_axis_values)
     windows = _dim_values_to_samples(

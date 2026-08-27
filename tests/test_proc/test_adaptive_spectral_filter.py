@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import builtins
 from typing import Any
 
 import numpy as np
@@ -244,7 +243,7 @@ class TestAdaptiveSpectralFilter:
         by_samples = patch.adaptive_spectral_filter(
             distance=16,
             time=16,
-            overlap={"distance": 6, "time": 6},
+            overlap={"distance": 7, "time": 7},
             samples=True,
             engine="scipy",
         )
@@ -271,7 +270,7 @@ class TestAdaptiveSpectralFilter:
         by_samples = patch.adaptive_spectral_filter(
             distance=16,
             time=16,
-            overlap={"distance": 6, "time": 6},
+            overlap={"distance": 7, "time": 6},
             samples=True,
             engine="scipy",
         )
@@ -294,7 +293,7 @@ class TestAdaptiveSpectralFilter:
         )
         by_samples = patch.adaptive_spectral_filter(
             time=16,
-            overlap=6,
+            overlap=7,
             samples=True,
             engine="scipy",
         )
@@ -324,7 +323,7 @@ class TestAdaptiveSpectralFilter:
 
         out = patch.adaptive_spectral_filter(
             **kwargs,
-            overlap={dim: max(value // 2 - 2, 0) for dim, value in kwargs.items()},
+            overlap={dim: value // 2 - 1 for dim, value in kwargs.items()},
             samples=True,
             engine="scipy",
         )
@@ -653,19 +652,6 @@ class TestAdaptiveSpectralCore:
         assert out.shape == data.shape
         assert np.isfinite(out).all()
 
-    def test_auto_engine_falls_back_when_numba_missing(self, monkeypatch) -> None:
-        """Auto engine should fall back to SciPy when optional deps are absent."""
-        real_import = builtins.__import__
-
-        def fake_import(name, *args, **kwargs):
-            if name == "dascore.proc._adaptive_spectral_filter_numba":
-                raise ImportError("simulated missing numba engine")
-            return real_import(name, *args, **kwargs)
-
-        monkeypatch.setattr(builtins, "__import__", fake_import)
-
-        assert _get_engine("auto", 2) is _adaptive_spectral_filter_scipy
-
     def test_auto_engine_falls_back_when_deps_are_absent(self, monkeypatch) -> None:
         """The engine module imports without numba; the flag says it cannot run."""
         module = pytest.importorskip("dascore.proc._adaptive_spectral_filter_numba")
@@ -677,20 +663,6 @@ class TestAdaptiveSpectralCore:
         """Asking for it by name says which dependencies are wanted."""
         module = pytest.importorskip("dascore.proc._adaptive_spectral_filter_numba")
         monkeypatch.setattr(module, "_NUMBA_ENGINE_AVAILABLE", False)
-
-        with pytest.raises(MissingOptionalDependencyError, match="engine='numba'"):
-            _get_engine("numba", 2)
-
-    def test_numba_engine_raises_when_missing(self, monkeypatch) -> None:
-        """Explicit numba engine should raise when optional deps are absent."""
-        real_import = builtins.__import__
-
-        def fake_import(name, *args, **kwargs):
-            if name == "dascore.proc._adaptive_spectral_filter_numba":
-                raise ImportError("simulated missing numba engine")
-            return real_import(name, *args, **kwargs)
-
-        monkeypatch.setattr(builtins, "__import__", fake_import)
 
         with pytest.raises(MissingOptionalDependencyError, match="engine='numba'"):
             _get_engine("numba", 2)
@@ -739,104 +711,121 @@ class TestAdaptiveSpectralCore:
 
         assert _get_engine("auto", 2) is numba_mod._adaptive_spectral_filter_numba
 
-    def test_numba_private_helpers_run_in_python(self) -> None:
-        """The fast-engine helpers should be directly testable in Python."""
+    def test_kernel_runs_in_python(self) -> None:
+        """The tile kernel gives SciPy's answer when run uncompiled."""
         numba_mod = _numba_engine()
-        padded = np.arange(16, dtype=np.float32).reshape(4, 4)
-        tile = np.zeros((2, 2), dtype=np.float32)
-
-        assert numba_mod._tile_indices_from_parity_index(3, 2, 1, 0) == (3, 2)
-        assert numba_mod._tile_bounds(1, 1, 2, 2, 1, 1, 4, 4) == (1, 1, 2, 2)
-        numba_mod._copy_padded_tile(padded, tile, 1, 1, 2, 2)
-        np.testing.assert_array_equal(tile, padded[1:3, 1:3])
-        assert numba_mod._complex_power(3 + 4j) == np.float32(5.0)
-
-        spec = np.array([[3 + 4j, 0j]], dtype=np.complex64)
-        assert numba_mod._max_spectral_power(spec) == np.float32(5.0)
-        assert numba_mod._max_spectral_power_numba_impl(spec) == np.float32(5.0)
-        weighted = spec.copy()
-        numba_mod._apply_spectral_weight(weighted, 1.0, False)
-        np.testing.assert_allclose(weighted[0, 0], spec[0, 0] * 5.0)
-
-        weighted = spec.copy()
-        numba_mod._apply_spectral_weight(weighted, 0.3, True)
-        assert np.isfinite(weighted).all()
-
-        weighted = spec.copy()
-        numba_mod._apply_spectral_weight_numba_impl(weighted, 0.3, True)
-        assert np.isfinite(weighted).all()
-
-        weighted = spec.copy()
-        numba_mod._apply_spectral_weight_numba_impl(weighted, 1.0, False)
-        np.testing.assert_allclose(weighted[0, 0], spec[0, 0] * 5.0)
-
-        zeros = np.array([[0j]], dtype=np.complex64)
-        numba_mod._apply_spectral_weight(zeros, 0.3, True)
-        assert zeros[0, 0] == 0j
-
-        zeros = np.array([[0j]], dtype=np.complex64)
-        numba_mod._apply_spectral_weight_numba_impl(zeros, 0.3, True)
-        assert zeros[0, 0] == 0j
-
+        rng = np.random.default_rng(20260511)
+        data = rng.normal(size=(24, 40)).astype(np.float32)
+        kwargs = dict(window_size=(8, 16), overlap=(3, 7))
+        padded, taper, stride, n_tiles = numba_mod._prepare_work_arrays(data, **kwargs)
         filtered = np.zeros_like(padded)
-        taper = np.ones((2, 2), dtype=np.float32)
-        numba_mod._overlap_add_tile(filtered, tile, taper, 1, 1, 2, 2)
-        np.testing.assert_array_equal(filtered[1:3, 1:3], tile)
+        for parity0, parity1 in [(0, 0), (0, 1), (1, 0), (1, 1)]:
+            numba_mod._filter_tile_group.func(
+                padded,
+                filtered,
+                taper,
+                8,
+                16,
+                *stride,
+                *n_tiles,
+                parity0,
+                parity1,
+                0.8,
+                True,
+            )
+        out = numba_mod._finalize_output(filtered, data.shape, data.dtype, stride)
+        expected = _adaptive_spectral_filter_scipy(
+            data, exponent=0.8, normalize_power=True, **kwargs
+        )
 
-    def test_numba_private_tile_group_runs_in_python(self) -> None:
-        """The tile group algorithm should run without JIT for coverage."""
+        np.testing.assert_allclose(out, expected, rtol=1e-5, atol=1e-5)
+
+    def test_silent_tile_normalizes_to_zero(self) -> None:
+        """A tile with no energy has no maximum to divide by, and stays silent."""
         numba_mod = _numba_engine()
-        data = np.ones((8, 8), dtype=np.float32)
-        working, _, stride, taper, padded, filtered, n_tiles = (
-            numba_mod._prepare_work_arrays(data, window_size=(8, 8), overlap=(3, 3))
+        data = np.zeros((32, 32), dtype=np.float32)
+
+        out = numba_mod._adaptive_spectral_filter_numba(
+            data, window_size=(16, 16), overlap=(7, 7), normalize_power=True
         )
 
-        numba_mod._process_tile_group_python(
-            padded,
-            filtered,
-            taper,
-            8,
-            8,
-            stride[0],
-            stride[1],
-            n_tiles[0],
-            n_tiles[1],
-            0,
-            0,
-            0.0,
-            False,
-        )
-        numba_mod._process_tile_group_python(
-            padded,
-            filtered,
-            taper,
-            8,
-            8,
-            stride[0],
-            stride[1],
-            n_tiles[0],
-            n_tiles[1],
-            0,
-            0,
-            0.5,
-            True,
-        )
-        numba_mod._process_tile_group_numba_impl(
-            padded,
-            filtered,
-            taper,
-            8,
-            8,
-            stride[0],
-            stride[1],
-            n_tiles[0],
-            n_tiles[1],
-            0,
-            0,
-            0.5,
-            True,
-        )
-        out = numba_mod._finalize_output(filtered, working, data.dtype, stride)
+        assert not out.any()
 
-        assert out.shape == data.shape
-        assert np.isfinite(out).all()
+    def test_numba_engine_is_two_dimensional(self) -> None:
+        """The kernel's parity trick is written for two axes."""
+        numba_mod = _numba_engine()
+
+        with pytest.raises(ValueError, match="two-dimensional"):
+            numba_mod._adaptive_spectral_filter_numba(
+                np.zeros(64, dtype=np.float32), window_size=(16,), overlap=(7,)
+            )
+
+
+class TestEfficacy:
+    """The filter should recover coherent arrivals from noise, not just run."""
+
+    @pytest.fixture(scope="class")
+    def clean_and_noisy(self) -> tuple[np.ndarray, np.ndarray]:
+        """Two linear-moveout wavelets, and the same under white noise."""
+        rng = np.random.default_rng(20260827)
+        time = np.arange(512) * 0.002
+        distance = np.arange(96) * 2.0
+        clean = np.zeros((96, 512), dtype=np.float32)
+        for start, velocity in [(0.2, 1500.0), (0.6, -2500.0)]:
+            arrival = time[None, :] - (start + distance[:, None] / velocity)
+            width = (np.pi * 25.0 * arrival) ** 2
+            clean += (1 - 2 * width) * np.exp(-width)
+        noisy = clean + rng.normal(0, 0.5, clean.shape).astype(np.float32)
+        return clean, noisy
+
+    @staticmethod
+    def _correlation(a: np.ndarray, b: np.ndarray) -> float:
+        """Correlation with the clean signal; the filter does not keep amplitude."""
+        a, b = a - a.mean(), b - b.mean()
+        return float((a * b).sum() / np.sqrt((a * a).sum() * (b * b).sum()))
+
+    def test_two_dimensional_filter_recovers_arrivals(self, clean_and_noisy) -> None:
+        """Filtering over both dimensions brings the data much closer to clean."""
+        clean, noisy = clean_and_noisy
+        out = _adaptive_spectral_filter_scipy(
+            noisy, window_size=(16, 16), overlap=(7, 7), exponent=0.8
+        )
+
+        before = self._correlation(noisy, clean)
+        after = self._correlation(out, clean)
+        assert before < 0.4
+        assert after > 0.65
+
+    def test_two_dimensions_beat_one(self, clean_and_noisy) -> None:
+        """Coherence across distance is what a single trace cannot see."""
+        clean, noisy = clean_and_noisy
+        both = _adaptive_spectral_filter_scipy(
+            noisy, window_size=(16, 16), overlap=(7, 7), exponent=0.8
+        )
+        per_trace = np.stack(
+            [
+                _adaptive_spectral_filter_scipy(
+                    trace, window_size=(16,), overlap=(7,), exponent=0.8
+                )
+                for trace in noisy
+            ]
+        )
+
+        assert (
+            self._correlation(both, clean) > self._correlation(per_trace, clean) + 0.2
+        )
+
+    def test_larger_exponent_suppresses_more(self, clean_and_noisy) -> None:
+        """The exponent is the filter's strength."""
+        clean, noisy = clean_and_noisy
+        scores = [
+            self._correlation(
+                _adaptive_spectral_filter_scipy(
+                    noisy, window_size=(16, 16), overlap=(7, 7), exponent=exponent
+                ),
+                clean,
+            )
+            for exponent in (0.0, 0.3, 0.8)
+        ]
+
+        assert scores == sorted(scores)
