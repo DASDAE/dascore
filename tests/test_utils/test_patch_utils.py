@@ -1450,6 +1450,22 @@ class TestGetPatchWindowSize:
                 simple_patch, {"time": 15}, samples=True, warn_above=10
             )
 
+    def test_warn_above_uses_total_window(self, simple_patch):
+        """The threshold applies to the window's total size, not each dim."""
+        kwargs = {"time": 5, "distance": 5}
+        with pytest.warns(UserWarning, match="Large window size \\(25 samples\\)"):
+            get_patch_window_size(simple_patch, kwargs, samples=True, warn_above=10)
+
+    def test_min_samples_message_suggests_samples(self, simple_patch):
+        """A too-small window in coord units should mention samples (#1046)."""
+        with pytest.raises(ParameterError, match="samples=True"):
+            get_patch_window_size(simple_patch, {"time": 0.2}, min_samples=3)
+        # When the value is already in samples there is nothing to suggest.
+        with pytest.raises(ParameterError, match="Try increasing"):
+            get_patch_window_size(
+                simple_patch, {"time": 2}, samples=True, min_samples=3
+            )
+
     def test_no_warning_under_threshold(self, simple_patch):
         """Test no warning for window sizes under threshold."""
         with suppress_warnings(action="error"):

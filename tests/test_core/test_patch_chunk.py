@@ -153,9 +153,24 @@ class TestChunk:
 
     def test_raise_increment_too_big(self, diverse_spool):
         """Ensure code raises an error if the increment is too large."""
-        msg = "No segments with sufficient length"
+        msg = "longest contiguous segment along 'time'"
         with pytest.raises(ChunkError, match=msg):
             diverse_spool.chunk(time=10000)
+
+    def test_increment_too_big_names_knobs(self, diverse_spool):
+        """The error should point at tolerance and keep_partial (#1046)."""
+        with pytest.raises(ChunkError) as info:
+            diverse_spool.chunk(time=10000)
+        msg = str(info.value)
+        assert "tolerance" in msg and "keep_partial" in msg
+
+    def test_increment_too_big_names_units(self):
+        """The segment length carries the unit its coordinate states."""
+        p1 = dc.get_example_patch().set_units(distance="mm")
+        gap = p1.get_coord("time").max() + to_timedelta64(1000)
+        p2 = dc.get_example_patch(time_min=gap).set_units(distance="mm")
+        with pytest.raises(ChunkError, match=r"is 300\.0 mm,"):
+            dc.spool([p1, p2]).chunk(distance=2 * get_quantity("m"))
 
     def test_too_big_partial(self, diverse_spool):
         """When chunk is too large, all contiguous blocks should merge."""

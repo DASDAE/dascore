@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import functools
 import inspect
+import math
 import sys
 import warnings
 from collections import namedtuple
@@ -63,7 +64,7 @@ from dascore.utils.misc import (
     yield_sub_sequences,
 )
 from dascore.utils.paths import is_memory_uri
-from dascore.utils.time import to_float
+from dascore.utils.time import is_timedelta64, to_float
 from dascore.workflow.builtin import Concatenate, Stack
 from dascore.workflow.checks import attr_type, check_patch_attrs, check_patch_coords
 from dascore.workflow.identity import (
@@ -946,7 +947,8 @@ def get_patch_window_size(
         If True, require odd window sizes. When samples=False, even sizes
         are adjusted to be odd. When samples=True, even sizes raise ParameterError.
     warn_above
-        If specified, warn when any dimension window size exceeds this value.
+        If specified, warn when the total window size (the product of the
+        sample counts of each dimension) exceeds this value.
     min_samples
         Minimum number of samples required per dimension.
     enforce_lt_coord
@@ -977,9 +979,20 @@ def get_patch_window_size(
 
         # Check minimum samples requirement
         if samps < min_samples:
+            if samples:
+                hint = "Try increasing its value."
+            else:
+                # in seconds, which is what a time value would be given in
+                step = coord.step
+                step = f"{to_float(step)} s" if is_timedelta64(step) else step
+                hint = (
+                    f"The value is in the units of {name}, which is sampled "
+                    f"every {step}; increase it, or use samples=True to give "
+                    "the window in samples."
+                )
             msg = (
                 f"Window must have at least {min_samples} samples along each "
-                f"dimension. {name} has {samps} samples. Try increasing its value."
+                f"dimension. {name} has {samps} samples. {hint}"
             )
             raise ParameterError(msg)
 
@@ -996,15 +1009,18 @@ def get_patch_window_size(
                 )
                 raise ParameterError(msg)
 
-        # Issue warning for large window sizes
-        if warn_above is not None and samps > warn_above:
-            msg = (
-                f"Large window size ({samps} samples) in dimension '{name}' "
-                f"may result in slow performance. Consider reducing the window size."
-            )
-            warnings.warn(msg, UserWarning, stacklevel=3)
-
         size[axis] = samps
+
+    # Warn on the total window, not each dimension: the cost of a windowed
+    # operation tracks the number of samples the window covers, so a 2D
+    # window is as expensive as its area.
+    total = math.prod(size)
+    if warn_above is not None and total > warn_above:
+        msg = (
+            f"Large window size ({total} samples) may result in slow "
+            "performance. Consider reducing the window size."
+        )
+        warnings.warn(msg, UserWarning, stacklevel=3)
 
     return tuple(size)
 

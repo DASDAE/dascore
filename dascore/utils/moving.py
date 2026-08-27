@@ -207,6 +207,11 @@ def _get_available_engines() -> tuple[str, ...]:
     return tuple(["scipy", *bottle_list])
 
 
+def has_engine(engine: str) -> bool:
+    """Return True if the named moving window engine is installed."""
+    return engine in _get_available_engines()
+
+
 def _get_engine_function(engine: str, func_name: str) -> Callable:
     """Get and cache engine function."""
     spec = OPERATION_REGISTRY[func_name][engine]
@@ -219,15 +224,19 @@ def _get_engine_function(engine: str, func_name: str) -> Callable:
 def _select_engine(preferred: str, operation: str) -> str:
     """Select best available engine with fallback."""
     available = _get_available_engines()
+    # "auto" asks for whatever is installed, so falling back is the answer
+    # to the question, not a problem to warn about (see #1046).
+    requested = preferred
     preferred = "bottleneck" if preferred == "auto" else preferred
 
     if preferred not in available:
         engine = available[0]
-        msg = (
-            f"Preferred engine {preferred} is not available; falling back to {engine}. "
-            "It may require an additional installation."
-        )
-        warnings.warn(msg, UserWarning, stacklevel=4)
+        if requested != "auto":
+            msg = (
+                f"Preferred engine {preferred} is not available; falling back "
+                f"to {engine}. It may require an additional installation."
+            )
+            warnings.warn(msg, UserWarning, stacklevel=4)
         preferred = engine
 
     # Check if operation is available in preferred engine
@@ -266,7 +275,8 @@ def moving_window(
     axis : int, default 0
         Axis along which to operate
     engine : {"auto", "scipy", "bottleneck"}, default "auto"
-        Engine to use
+        Engine to use. "auto" prefers bottleneck and quietly uses scipy when
+        bottleneck is not installed; naming an engine which is missing warns.
         Bottleneck non-median windows keep the bottleneck engine for even
         windows. These are shifted toward centered alignment but can differ
         from scipy's even-window convention.

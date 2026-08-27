@@ -175,7 +175,7 @@ class TestDecimate:
     def test_decimate_small_dimension(self, random_patch):
         """Ensure decimation raises helpful error on small dimensions."""
         small_patch = random_patch.select(distance=(0, 10), samples=True)
-        match = "Scipy decimation failed."
+        match = "dimensions with few elements"
         with pytest.raises(FilterValueError, match=match):
             small_patch.decimate(distance=2)
 
