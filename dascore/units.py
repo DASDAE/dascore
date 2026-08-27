@@ -243,8 +243,8 @@ def convert_units(
         follows the input rather than matching it (an int in yields a float
         out) and callers legitimately pass values the checker only knows as
         `object`. Note that data is returned untouched whenever from_units
-        is None, so None survives that path but raises a TypeError once
-        there are real factors to apply.
+        is None or already names to_units, so None survives those paths but
+        raises a TypeError once there are real factors to apply.
     to_units
         The desired units after the conversion
     from_units
@@ -264,6 +264,9 @@ def convert_units(
     elif to_units is None:
         msg = "Cannot convert units to_units are not specified"
         raise UnitError(msg)
+    # Factors of one aren't free: they round a timedelta64 through float.
+    if units_match(from_units, to_units):
+        return data
     try:
         mult1, add, mult2 = _get_conversion_factors(from_units, to_units)
     except DimensionalityError as e:
