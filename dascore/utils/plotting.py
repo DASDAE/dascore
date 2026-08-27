@@ -9,9 +9,10 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
-from dascore.units import Hz, get_quantity_str
+from dascore.exceptions import ParameterError
+from dascore.units import Hz, get_quantity_str, maybe_convert_percent_to_fraction
 from dascore.units import s as seconds
-from dascore.utils.misc import suppress_warnings
+from dascore.utils.misc import suppress_warnings, tukey_fence
 from dascore.utils.time import dtype_time_like
 
 
@@ -20,9 +21,20 @@ def _get_dim_label(patch, dim):
     maybe_units = patch.get_coord(dim).units if dim in patch.coords else None
     if maybe_units == 1 / seconds:
         maybe_units = Hz
-    dim_str = string.capwords(str(dim))
-    unit_str = f" [{get_quantity_str(maybe_units)}]" if maybe_units else ""
-    return dim_str + unit_str
+    return _get_label(string.capwords(str(dim)), maybe_units)
+
+
+def _get_label(name, units, default=""):
+    """
+    Label a quantity as "name [units]", leaving out whichever part is unset.
+
+    Returns default if neither is set.
+    """
+    name = str(name) if name else ""
+    units = get_quantity_str(units) or ""
+    if name and units:
+        return f"{name} [{units}]"
+    return name or units or default
 
 
 def _get_data_label(patch, default=""):
@@ -31,10 +43,104 @@ def _get_data_label(patch, default=""):
 
     Returns default if the patch has neither a data_type nor data_units.
     """
-    data_type = str(patch.attrs.get("data_type", ""))
-    data_units = get_quantity_str(patch.attrs.data_units) or ""
-    dunits = f" [{data_units}]" if (data_type and data_units) else f"{data_units}"
-    return f"{data_type}{dunits}" or default
+    data_type = patch.attrs.get("data_type", "")
+    return _get_label(data_type, patch.attrs.data_units, default)
+
+
+def _validate_scale_type(scale_type):
+    """Validate that scale_type is either 'relative' or 'absolute'."""
+    valid_types = {"relative", "absolute"}
+    if scale_type not in valid_types:
+        msg = f"scale_type must be one of {valid_types}, but got '{scale_type}'"
+        raise ParameterError(msg)
+
+
+def _get_scale(scale, scale_type, data):
+    """
+    Calculate the colorbar limits based on scale and scale_type.
+    """
+    _validate_scale_type(scale_type)
+    # Whatever form scale was given in, this makes it a list.
+    scale = maybe_convert_percent_to_fraction(scale)
+    match (scale, scale_type):
+        # Case 1: Single value with relative scaling
+        # Scale is symmetric around the mean, using fraction of dynamic range
+        case (scale, "relative") if len(scale) == 1:
+            scale = scale[0]
+            if scale == 0:
+                msg = (
+                    "Relative scale value of 0 would produce degenerate colorbar limits"
+                )
+                raise ParameterError(msg)
+            mod = 0.5 * (np.nanmax(data) - np.nanmin(data))
+            if mod == 0:
+                # Constant data, use small epsilon to avoid degenerate limits
+                mod = 1e-10
+            mean = np.nanmean(data)
+            scale = np.asarray([mean - scale * mod, mean + scale * mod])
+        # Case 2: No scale specified with relative scaling
+        # Use Tukey's fence (C*IQR, C is normally 1.5) to exclude outliers.
+        # This prevents a few extreme values from obscuring the majority of the
+        # data at the cost of a slight performance penalty.
+        case ([], "relative"):
+            return tukey_fence(data)
+        # Case 3: Sequence with relative scaling
+        # Scale values represent fractions of the data range [0, 1]
+        # and are mapped to [data_min, data_max]
+        case (scale, "relative"):
+            scale = np.array(scale)
+            # Validate scale parameters
+            if len(scale) != 2:
+                msg = (
+                    "Relative scale must be a number or a length-2 sequence, "
+                    f"got {scale}"
+                )
+                raise ParameterError(msg)
+            if np.any(scale < 0) or scale[0] > scale[1]:
+                msg = (
+                    "Relative scale values cannot be negative and the first "
+                    f"value must be less than the second. You passed {scale}"
+                )
+                raise ParameterError(msg)
+            dmin, dmax = np.nanmin(data), np.nanmax(data)
+            data_range = dmax - dmin
+            # Map [0, 1] to [data_min, data_max]
+            scale = dmin + scale * data_range
+        # Case 4: Absolute scaling
+        case (scale, "absolute") if len(scale) == 1:
+            scale = np.array([-abs(scale[0]), abs(scale[0])])
+        # Case 5: Absolute scaling with a pair is used as the limits as is;
+        # anything longer cannot be.
+        case (scale, "absolute") if len(scale) > 2:
+            msg = f"scale must be a number or a length-2 sequence, got {scale}"
+            raise ParameterError(msg)
+
+    # Scale values are used directly as colorbar limits
+    return scale
+
+
+def _add_colorbar(ax, im, data, label, scale=None):
+    """
+    Add a colorbar with the given label to the plot.
+
+    When the limits leave data above or below them, extend triangles say so.
+    Only a finite pair of limits is ever applied, so only that can clip.
+    """
+    above, below = False, False
+    if scale is not None and len(scale) == 2 and np.all(np.isfinite(scale)):
+        mi, mx = np.nanmin(data), np.nanmax(data)
+        above = (mx > scale[1]) and not np.isclose(scale[1], mx)
+        below = (mi < scale[0]) and not np.isclose(scale[0], mi)
+    extend_map = {
+        (True, True): "both",
+        (True, False): "max",
+        (False, True): "min",
+    }
+    extend = extend_map.get((above, below), "neither")
+    cb = ax.get_figure().colorbar(
+        im, ax=ax, fraction=0.05, pad=0.025, extend=extend, extendfrac=0.025
+    )
+    cb.set_label(label)
 
 
 def _get_cmap(cmap):

@@ -353,6 +353,11 @@ class TestWaterfall:
         with pytest.raises(ParameterError, match=msg):
             random_patch.viz.waterfall(scale=(0.1, 0.2, 0.9), scale_type="relative")
 
+    def test_long_absolute_scale_raises(self, random_patch):
+        """Three absolute values are limits for nothing, so say so."""
+        with pytest.raises(ParameterError, match="scale must be"):
+            random_patch.viz.waterfall(scale=(0.1, 0.2, 0.9), scale_type="absolute")
+
     def test_invalid_scale_type_raises(self, random_patch):
         """Ensure invalid scale_type values raise ParameterError."""
         msg = "scale_type must be one of"

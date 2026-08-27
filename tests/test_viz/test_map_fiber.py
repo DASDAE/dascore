@@ -1,4 +1,4 @@
-"""Tests for waterfall plots."""
+"""Tests for map_fiber plots."""
 
 from __future__ import annotations
 
@@ -126,6 +126,62 @@ class TestPlotMap:
         random_patch.viz.map_fiber(show=True)
         assert shown
 
+    def test_array_x_named_y_labels_y_axis(self, random_patch_with_lat_lon):
+        """A named coordinate labels its own axis, whatever the other one is."""
+        lats = random_patch_with_lat_lon.coords.get_array("latitude")
+        ax = random_patch_with_lat_lon.viz.map_fiber(lats, "longitude")
+        assert "longitude" in ax.get_ylabel().lower()
+        assert ax.get_xlabel() == ""
+
+    def test_coord_label_has_no_magnitude(self, random_patch_with_lat_lon):
+        """The bar reads "distance [m]", not the "1 m" a pint quantity prints as."""
+        patch = random_patch_with_lat_lon.set_units(distance="m")
+        ax = patch.viz.map_fiber("latitude", "longitude", "distance")
+        assert ax.get_figure().axes[-1].get_ylabel() == "distance [m]"
+
+    def test_int_scale(self, random_patch):
+        """An integer scale is read like the same float, not as one limit."""
+        from_int = random_patch.viz.map_fiber(scale=2).collections[0].get_clim()
+        from_float = random_patch.viz.map_fiber(scale=2.0).collections[0].get_clim()
+        assert from_int == from_float
+        # Twice half the range either side of the mean is wider than the data.
+        values = random_patch.coords.get_array("distance")
+        assert from_int[0] < values.min() and from_int[1] > values.max()
+
+    def test_relative_pair_is_a_fraction_of_the_range(self, random_patch):
+        """A relative pair reads as fractions of the color range, as in waterfall."""
+        ax = random_patch.viz.map_fiber(scale=[0, 0.5])
+        values = ax.collections[0].get_array()
+        low, high = ax.collections[0].get_clim()
+        assert np.isclose(low, values.min())
+        assert np.isclose(high, values.min() + 0.5 * np.ptp(values))
+
+    def test_absolute_number_is_symmetric_about_zero(self, random_patch):
+        """A single absolute value is a limit either side of zero, as in waterfall."""
+        ax = random_patch.viz.map_fiber(scale=10, scale_type="absolute")
+        assert ax.collections[0].get_clim() == (-10, 10)
+
+    def test_unusable_absolute_scale_leaves_autoscale(self, random_patch):
+        """An empty or non-finite pair applies no limits rather than failing."""
+        expected = random_patch.viz.map_fiber().collections[0].get_clim()
+        for scale in ([], (np.nan, 1)):
+            ax = random_patch.viz.map_fiber(scale=scale, scale_type="absolute")
+            assert ax.collections[0].get_clim() == expected
+            assert ax.collections[0].colorbar.extend == "neither"
+
+    def test_empty_arrays_draw_an_empty_map(self):
+        """Nothing to draw is still a plot, with its colorbar."""
+        empty = np.array([])
+        ax = dc.get_example_patch().viz.map_fiber(empty, empty, empty)
+        assert len(ax.collections[0].get_offsets()) == 0
+
+    def test_clipped_scale_extends_colorbar(self, random_patch):
+        """Limits inside the data range get extend triangles, as in waterfall."""
+        values = random_patch.coords.get_array("distance")
+        mid = np.mean(values)
+        ax = random_patch.viz.map_fiber(scale=(mid - 1, mid + 1), scale_type="absolute")
+        assert ax.collections[0].colorbar.extend == "both"
+
 
 class TestMapFiberColorByData:
     """Tests for coloring the fiber by the patch's own data."""
@@ -206,6 +262,8 @@ class TestMapFiberErrors:
             random_patch.viz.map_fiber(scale_type="nope", scale=10)
 
     def test_bad_scale_length(self, random_patch):
-        """A scale that is neither a number nor a length-2 sequence should raise."""
+        """Three values are limits for nothing, whichever way they are read."""
         with pytest.raises(ParameterError, match="scale must be"):
             random_patch.viz.map_fiber(scale=(1, 2, 3))
+        with pytest.raises(ParameterError, match="scale must be"):
+            random_patch.viz.map_fiber(scale=(1, 2, 3), scale_type="absolute")

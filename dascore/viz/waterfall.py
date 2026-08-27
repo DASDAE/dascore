@@ -11,17 +11,17 @@ import numpy as np
 
 from dascore.constants import DEFAULT_COLORMAPS, PatchType
 from dascore.exceptions import ParameterError
-from dascore.units import maybe_convert_percent_to_fraction
 from dascore.utils.gaps import get_gap_edges, is_monotonic_and_finite
-from dascore.utils.misc import tukey_fence
 from dascore.utils.patch import patch_function
 from dascore.utils.plotting import (
+    _add_colorbar,
     _format_time_axis,
     _get_ax,
     _get_cmap,
     _get_data_label,
     _get_dim_label,
     _get_extents,
+    _get_scale,
     _maybe_invert_yaxis,
 )
 from dascore.utils.time import is_datetime64
@@ -32,14 +32,6 @@ from dascore.viz._labels import (
     label_runs,
     mesh_cell_edges,
 )
-
-
-def _validate_scale_type(scale_type):
-    """Validate that scale_type is either 'relative' or 'absolute'."""
-    valid_types = {"absolute", "relative"}
-    if scale_type not in valid_types:
-        msg = f"scale_type must be one of {valid_types}, but got '{scale_type}'"
-        raise ParameterError(msg)
 
 
 def _validate_gap_factor(gap_factor):
@@ -64,60 +56,6 @@ def _validate_patch_dims(patch):
     return patch
 
 
-def _get_scale(scale, scale_type, data):
-    """
-    Calculate the color bar scale limits based on scale and scale_type.
-    """
-    _validate_scale_type(scale_type)
-    # This ensures we have a list of the previous scale parameters.
-    scale = maybe_convert_percent_to_fraction(scale)
-    match (scale, scale_type):
-        # Case 1: Single value with relative scaling
-        # Scale is symmetric around the mean, using fraction of dynamic range
-        case (scale, "relative") if len(scale) == 1:
-            scale = scale[0]
-            if scale == 0:
-                msg = (
-                    "Relative scale value of 0 would produce degenerate colorbar limits"
-                )
-                raise ParameterError(msg)
-            mod = 0.5 * (np.nanmax(data) - np.nanmin(data))
-            if mod == 0:
-                # Constant data, use small epsilon to avoid degenerate limits
-                mod = 1e-10
-            mean = np.nanmean(data)
-            scale = np.asarray([mean - scale * mod, mean + scale * mod])
-        # Case 2: No scale specified with relative scaling
-        # Use Tukey's fence (C*IQR, C is normally 1.5) to exclude outliers.
-        # This prevents a few extreme values from obscuring the majority of the
-        # data at the cost of a slight performance penalty.
-        case ([], "relative"):
-            return tukey_fence(data)
-        # Case 3: Sequence with relative scaling
-        # Scale values represent fractions of the data range [0, 1]
-        # and are mapped to [data_min, data_max]
-        case (scale, "relative"):
-            scale = np.array(scale)
-            # Validate scale parameters
-            if len(scale) != 2 or np.any(scale < 0) or scale[0] > scale[1]:
-                msg = (
-                    "Relative scale values cannot be negative and the first "
-                    f"value must be less than the second. You passed {scale}"
-                )
-                raise ParameterError(msg)
-            dmin, dmax = np.nanmin(data), np.nanmax(data)
-            data_range = dmax - dmin
-            # Map [0, 1] to [data_min, data_max]
-            scale = dmin + scale * data_range
-        # Case 4: Absolute scaling
-        case (scale, "absolute") if len(scale) == 1:
-            scale = np.array([-abs(scale[0]), abs(scale[0])])
-        # Case 5: Absolute scaling with sequence: no match needed.
-
-    # Scale values are used directly as colorbar limits
-    return scale
-
-
 def _format_axis_labels(ax, patch, dims_r):
     """
     Format axis labels and handle time-like axes.
@@ -130,33 +68,6 @@ def _format_axis_labels(ax, patch, dims_r):
             _format_time_axis(ax, dim, x)
         if x == "y":
             _maybe_invert_yaxis(ax, patch, dim)
-
-
-def _add_colorbar(ax, im, data, patch, log, scale):
-    """
-    Add a colorbar with appropriate labels to the plot.
-    When auto-scaling, extend-triangles are added if data above or below limits exist
-    """
-    mi = np.nanmin(data)
-    mx = np.nanmax(data)
-
-    above, below = False, False
-    if scale is not None and len(scale) == 2:
-        above = (mx > scale[1]) and not np.isclose(scale[1], mx)
-        below = (mi < scale[0]) and not np.isclose(scale[0], mi)
-    extend_map = {
-        (True, True): "both",
-        (True, False): "max",
-        (False, True): "min",
-    }
-    extend = extend_map.get((above, below), "neither")
-    cb = ax.get_figure().colorbar(
-        im, ax=ax, fraction=0.05, pad=0.025, extend=extend, extendfrac=0.025
-    )
-    label = _get_data_label(patch)
-    if log:
-        label = f"{label} - log_10"
-    cb.set_label(label)
 
 
 def _get_waterfall_colormap(patch, cmap=None):
@@ -255,12 +166,14 @@ def waterfall(
         A matplotlib colormap string or instance. If `None`, a colormap will be
         chosen automatically, depending on the data_type of the patch.
     scale
-        If not None, controls the saturation level of the colorbar.
-        Values can either be a float, to set upper and lower limit to the same
-        value centered around the mean of the data, a length 2 tuple
-        specifying upper and lower limits, or None, which will automatically
-        determine limits based on a quartile fence. (uses q1 - 1.5 * (q3 - q1)
-        and q3 + 1.5 * (q3 - q1)).
+        If not None, controls the saturation level of the colorbar. A single
+        number is symmetric: with `scale_type="relative"` the limits sit that
+        fraction of half the data range either side of the mean, and with
+        `scale_type="absolute"` they are -abs(scale) and abs(scale). A pair
+        of numbers gives the lower and upper limits: fractions of the data
+        range, from 0 to 1, when relative, or the values themselves when
+        absolute. Percent quantities, such as `10 * dc.units.percent`, are
+        converted to fractions.
     scale_type
         Controls the type of scaling specified by `scale` parameter. Options
         are:
@@ -450,7 +363,10 @@ def waterfall(
     _format_axis_labels(ax, patch, dims_r)
     # Add colorbar if requested
     if cbar:
-        _add_colorbar(ax, im, data, patch, log, scale)
+        label = _get_data_label(patch)
+        if log:
+            label = f"{label} - log_10"
+        _add_colorbar(ax, im, data, label, scale)
     # Label lines come last so the legend is placed beyond a colorbar which
     # has already taken its room.
     if plan is not None and runs is not None:
