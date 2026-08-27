@@ -187,6 +187,78 @@ class TestUnevenCoordinates:
             getattr(wacky, name)(time=3)
 
 
+class TestUnevenCoordinatesInSamples:
+    """A window in samples on an uneven coordinate: only AFK ever allowed it."""
+
+    @pytest.fixture(scope="class")
+    def wacky(self):
+        """A patch whose coordinates are not evenly sampled."""
+        return dc.get_example_patch("wacky_dim_coords_patch")
+
+    def test_adaptive_spectral_filter_reads_the_count(self, wacky):
+        """It never consulted the coordinate for a sample count, and still does not."""
+        out = wacky.adaptive_spectral_filter(time=16, samples=True, engine="scipy")
+        assert out.shape == wacky.shape
+
+    @pytest.mark.parametrize("name", ["median_filter", "hampel_filter"])
+    def test_dense_filters_refuse(self, wacky, name):
+        """They asked for an even coordinate whatever the units, and still do."""
+        with pytest.raises(CoordError):
+            getattr(wacky, name)(time=3, samples=True)
+
+    def test_rolling_refuses(self, wacky):
+        """As does rolling."""
+        with pytest.raises(CoordError):
+            wacky.rolling(time=3, samples=True)
+
+
+class TestNoFloor:
+    """The dense filters never had a minimum window."""
+
+    def test_gaussian_zero_is_the_identity(self, patch):
+        """A sigma of zero along an axis smooths nothing; scipy skips it."""
+        out = patch.gaussian_filter(time=0, samples=True)
+        assert np.allclose(out.data, patch.data)
+
+
+class TestChangedOnPurpose:
+    """
+    What the resolver does differently, each a call which used to fail.
+
+    Pinned so the difference is on record rather than discovered; each
+    is named in the pull request which made it.
+    """
+
+    def test_hampel_takes_a_quantity_under_samples(self, patch):
+        """Raised "must be integers" before; a quantity carries its units."""
+        by_quantity = patch.hampel_filter(time=0.016 * s, samples=True)
+        by_units = patch.hampel_filter(time=0.016)
+        assert np.allclose(by_quantity.data, by_units.data)
+
+    def test_rolling_takes_a_mapping(self, patch):
+        """Raised a TypeError before; a mapping is one value per dimension."""
+        mapped = patch.rolling(time=5, samples=True, overlap={"time": 2}).mean()
+        plain = patch.rolling(time=5, samples=True, overlap=2).mean()
+        assert np.allclose(mapped.data, plain.data, equal_nan=True)
+
+    def test_adaptive_spectral_filter_reads_a_percent(self, patch):
+        """Silently took int(25 * percent) == 0 before; 25% of 16 is 4."""
+        by_percent = patch.adaptive_spectral_filter(
+            time=16, distance=16, overlap=25 * percent, samples=True
+        )
+        by_count = patch.adaptive_spectral_filter(
+            time=16, distance=16, overlap=4, samples=True
+        )
+        assert np.allclose(by_percent.data, by_count.data)
+
+    def test_adaptive_spectral_filter_refuses_none_in_a_mapping(self, patch):
+        """Raised a TypeError before; now says what to do instead."""
+        with pytest.raises(ParameterError, match="leave it out"):
+            patch.adaptive_spectral_filter(
+                time=16, distance=16, overlap={"time": None}, samples=True
+            )
+
+
 class TestDimensionOrder:
     """Which order the selected dimensions come back in matters to savgol."""
 

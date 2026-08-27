@@ -336,6 +336,93 @@ class TestOverlap:
         assert out.overlap == (2, 2)
 
 
+class TestPolicies:
+    """The knobs a function turns."""
+
+    def test_min_samples_none_is_no_floor(self, simple_patch):
+        """A zero window passes when a function sets no floor."""
+        window = resolve_window(
+            simple_patch, {"time": 0}, samples=True, min_samples=None
+        )
+        assert window.size == (0,)
+
+    def test_uneven_coordinate_with_sample_counts(self):
+        """Without the even-sampling requirement, sample counts skip the coordinate."""
+        wacky = dc.get_example_patch("wacky_dim_coords_patch")
+        window = resolve_window(
+            wacky, {"time": 16}, samples=True, require_evenly_sampled=False
+        )
+        assert window.size == (16,)
+        # Units still need a step to convert with.
+        with pytest.raises(CoordError):
+            resolve_window(wacky, {"time": 1.0}, require_evenly_sampled=False)
+
+    def test_quantity_under_samples_adjusts_to_odd(self, simple_patch):
+        """A quantity is in units, so an even count is rounded up, not refused."""
+        window = resolve_window(
+            simple_patch, {"time": 0.8 * dc.units.s}, samples=True, require_odd=True
+        )
+        assert window.size == (5,)
+
+    def test_exclusivity_is_checked_first(self, simple_patch):
+        """Both hop spellings at once is the first thing said, before any size."""
+        with pytest.raises(ParameterError, match="mutually exclusive"):
+            resolve_window(
+                simple_patch,
+                {"time": 10_000},
+                samples=True,
+                step=2,
+                overlap=2,
+                enforce_lt_coord=True,
+            )
+
+    def test_default_overlap_is_checked(self, random_patch):
+        """A default which leaves no advance is refused like a given one."""
+        with pytest.raises(ParameterError, match="greater than zero"):
+            resolve_window(
+                random_patch, {"distance": 5}, samples=True, default_overlap=5
+            )
+        with pytest.raises(ParameterError, match="non-negative"):
+            resolve_window(
+                random_patch, {"distance": 5}, samples=True, default_overlap=-1
+            )
+
+    def test_explicit_none_in_mapping_refused(self, random_patch):
+        """None in a mapping is not the same as leaving the dimension out."""
+        with pytest.raises(ParameterError, match="leave it out"):
+            resolve_window(
+                random_patch,
+                {"distance": 16, "time": 8},
+                samples=True,
+                overlap={"time": None},
+                default_overlap=2,
+            )
+
+
+class TestDeprecatedResolvers:
+    """The two public utilities this replaces still answer, with a warning."""
+
+    def test_get_patch_window_size(self, simple_patch):
+        """The full-size tuple, as before."""
+        from dascore.utils.patch import get_patch_window_size  # noqa: PLC0415
+
+        with pytest.warns(DeprecationWarning, match="resolve_window"):
+            size = get_patch_window_size(simple_patch, {"time": 5}, samples=True)
+        assert (
+            size == resolve_window(simple_patch, {"time": 5}, samples=True).full_size()
+        )
+
+    def test_get_window_axis_step(self, random_patch):
+        """Window, axis, and step, as before."""
+        from dascore.utils.patch import get_window_axis_step  # noqa: PLC0415
+
+        with pytest.warns(DeprecationWarning, match="resolve_window"):
+            out = get_window_axis_step(
+                random_patch, distance=16, overlap=50 * percent, samples=True
+            )
+        assert out == (16, random_patch.get_axis("distance"), 8)
+
+
 class TestWindow:
     """The resolved object itself."""
 

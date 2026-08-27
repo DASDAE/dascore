@@ -33,6 +33,10 @@ from dascore.utils.time import is_timedelta64, to_float, to_timedelta64
 # rule for one from the window's size in samples.
 OverlapDefault = Callable[[int], int] | int | None
 
+# Marks a dimension a mapping left out, which is not the same as one it
+# set to None.
+_UNGIVEN = object()
+
 
 @dataclass(frozen=True)
 class Window:
@@ -99,25 +103,47 @@ def _check_not_negative(value: Any, name: str) -> None:
         raise ParameterError(msg)
 
 
-def _to_samples(coord, value: Any, *, samples: bool, enforce_lt_coord: bool) -> int:
-    """Return a value along a coordinate as a sample count."""
-    # A quantity carries its own units, whatever the call said about samples.
+def _to_samples(
+    coord,
+    value: Any,
+    *,
+    samples: bool,
+    enforce_lt_coord: bool,
+    through_coord: bool = True,
+) -> tuple[int, bool]:
+    """
+    Return a value along a coordinate as a sample count, and whether it was one.
+
+    A quantity carries its own units, whatever the call said about samples.
+    A bare sample count need not go through the coordinate at all, and a
+    function which does not require even sampling reads it directly.
+    """
     if isinstance(value, Quantity):
         samples = False
-    return coord.get_sample_count(
+    if samples and not through_coord:
+        return int(value), True
+    count = coord.get_sample_count(
         value, samples=samples, enforce_lt_coord=enforce_lt_coord
     )
+    return count, samples
 
 
 def _spread(value: Any, dims: tuple[str, ...], name: str) -> dict[str, Any]:
     """Return one value per dimension from a scalar or a mapping."""
-    if isinstance(value, Mapping):
-        if extra := set(value) - set(dims):
-            names = sorted(map(str, extra))
-            msg = f"{name} contains dimensions not being windowed: {names}"
+    if not isinstance(value, Mapping):
+        return dict.fromkeys(dims, value)
+    if extra := set(value) - set(dims):
+        names = sorted(map(str, extra))
+        msg = f"{name} contains dimensions not being windowed: {names}"
+        raise ParameterError(msg)
+    for dim, given in value.items():
+        if given is None:
+            msg = (
+                f"{name} for {dim!r} is None; leave it out of the mapping "
+                "to take the default."
+            )
             raise ParameterError(msg)
-        return {dim: value.get(dim) for dim in dims}
-    return dict.fromkeys(dims, value)
+    return {dim: value.get(dim, _UNGIVEN) for dim in dims}
 
 
 def _too_small(name: str, coord, count: int, min_samples: int, samples: bool) -> str:
@@ -151,7 +177,7 @@ def resolve_window(
     allow_empty: bool = False,
     require_evenly_sampled: bool = True,
     require_odd: bool = False,
-    min_samples: int = 1,
+    min_samples: int | None = 1,
     warn_above: int | None = None,
     enforce_lt_coord: bool = False,
 ) -> Window:
@@ -185,13 +211,15 @@ def resolve_window(
         Whether no dimension at all may be, giving an empty window whose
         `full_size` is all ones.
     require_evenly_sampled
-        Whether a windowed coordinate must be evenly sampled. A window in
-        coordinate units cannot be converted without that anyway.
+        Whether a windowed coordinate must be evenly sampled. When it need
+        not be, a window given in samples never consults the coordinate;
+        one in units cannot be converted without an even step anyway.
     require_odd
         Whether the window must have an odd number of samples. Given in
         units, an even count is rounded up; given in samples, refused.
     min_samples
-        The fewest samples a window may have along any dimension.
+        The fewest samples a window may have along any dimension, or None
+        for no floor at all.
     warn_above
         Warn when the window's total sample count -- its area -- exceeds this.
     enforce_lt_coord
@@ -206,6 +234,9 @@ def resolve_window(
     CoordError
         For a coordinate which is not evenly sampled when that is required.
     """
+    if overlap is not None and step is not None:
+        msg = "step and overlap are mutually exclusive."
+        raise ParameterError(msg)
     if not kwargs and allow_empty:
         return Window((), (), (), None, len(patch.dims))
     dim_axis_values = get_dim_axis_value(
@@ -225,13 +256,18 @@ def resolve_window(
     sizes = []
     for dim, _, value in dim_axis_values:
         coord = coords[dim]
-        count = _to_samples(
-            coord, value, samples=samples, enforce_lt_coord=enforce_lt_coord
+        count, in_samples = _to_samples(
+            coord,
+            value,
+            samples=samples,
+            enforce_lt_coord=enforce_lt_coord,
+            through_coord=require_evenly_sampled,
         )
-        if count < min_samples:
-            raise ParameterError(_too_small(dim, coord, count, min_samples, samples))
+        if min_samples is not None and count < min_samples:
+            msg = _too_small(dim, coord, count, min_samples, in_samples)
+            raise ParameterError(msg)
         if require_odd and count % 2 != 1:
-            if samples:
+            if in_samples:
                 msg = (
                     f"For clean median calculation, dimension windows must be odd "
                     f"but {dim} has a value of {count} samples."
@@ -261,6 +297,7 @@ def resolve_window(
         default=default_overlap,
         samples=samples,
         enforce_lt_coord=enforce_lt_coord,
+        through_coord=require_evenly_sampled,
     )
     return Window(dims, axes, size, overlaps, len(patch.dims))
 
@@ -275,31 +312,33 @@ def _resolve_overlap(
     default: OverlapDefault,
     samples: bool,
     enforce_lt_coord: bool,
+    through_coord: bool,
 ) -> tuple[int, ...] | None:
     """Return the overlap along each dimension in samples, or None if none was given."""
-    if overlap is not None and step is not None:
-        msg = "step and overlap are mutually exclusive."
-        raise ParameterError(msg)
     name = "step" if step is not None else "overlap"
     given = _spread(step if step is not None else overlap, dims, name)
     out: list[int | None] = []
     for dim, window in zip(dims, size):
         value = given[dim]
-        if value is None:
+        kind, in_samples, via_coord = name, samples, through_coord
+        if value is _UNGIVEN or value is None:
             if default is None:
                 out.append(None)
                 continue
-            out.append(default if isinstance(default, int) else default(window))
-            continue
+            # A default is a sample count already, and is checked like a
+            # given one: it must not retreat, and must leave an advance.
+            value = default if isinstance(default, int) else default(window)
+            kind, in_samples, via_coord = "overlap", True, False
         value, was_percent = _percent_to_samples(value, window)
-        _check_not_negative(value, name)
-        count = _to_samples(
+        _check_not_negative(value, kind)
+        count, _ = _to_samples(
             coords[dim],
             value,
-            samples=samples or was_percent,
+            samples=in_samples or was_percent,
             enforce_lt_coord=enforce_lt_coord,
+            through_coord=via_coord,
         )
-        advance = count if name == "step" else window - count
+        advance = count if kind == "step" else window - count
         if advance <= 0:
             msg = "Window step must be greater than zero."
             raise ParameterError(msg)

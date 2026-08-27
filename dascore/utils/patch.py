@@ -926,6 +926,71 @@ def get_dim_sampling_rate(patch: PatchType, dim: str) -> float:
     return 1.0 / d_dim
 
 
+@deprecate(
+    info=(
+        "get_patch_window_size is deprecated. Use "
+        "dascore.utils.window.resolve_window(...).full_size() instead."
+    ),
+    removed_in="0.2.0",
+)
+def get_patch_window_size(
+    patch: PatchType,
+    kwargs: dict,
+    samples: bool = False,
+    *,
+    require_odd: bool = False,
+    warn_above: int | None = None,
+    min_samples: int = 1,
+    enforce_lt_coord: bool = False,
+) -> tuple[int, ...]:
+    """Return the window along every patch axis; see `resolve_window`."""
+    # Deferred: dascore.utils.window imports this module.
+    from dascore.utils.window import resolve_window  # noqa: PLC0415
+
+    return resolve_window(
+        patch,
+        kwargs,
+        samples=samples,
+        allow_empty=True,
+        require_odd=require_odd,
+        warn_above=warn_above,
+        min_samples=min_samples,
+        enforce_lt_coord=enforce_lt_coord,
+    ).full_size()
+
+
+@deprecate(
+    info=(
+        "get_window_axis_step is deprecated. Use "
+        "dascore.utils.window.resolve_window instead."
+    ),
+    removed_in="0.2.0",
+)
+def get_window_axis_step(
+    patch,
+    overlap=None,
+    step=None,
+    samples=False,
+    **kwargs,
+) -> tuple[int, int, int | None]:
+    """Return one dimension's window, axis, and step; see `resolve_window`."""
+    # Deferred: dascore.utils.window imports this module.
+    from dascore.utils.window import resolve_window  # noqa: PLC0415
+
+    window = resolve_window(
+        patch,
+        kwargs,
+        samples=samples,
+        overlap=overlap,
+        step=step,
+        allow_multiple=False,
+        min_samples=0,
+        enforce_lt_coord=True,
+    )
+    stride = None if window.stride is None else window.stride[0]
+    return window.size[0], window.axes[0], stride
+
+
 # What a derivative along a dimension makes of the data. Read forward to
 # differentiate and backward to integrate; the same physics either way,
 # so one table states both.

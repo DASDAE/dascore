@@ -449,6 +449,8 @@ class AdaptiveSpectralFilter(PatchProcessor):
             selected,
             samples=self.samples,
             overlap=self.overlap,
+            # Sample counts are read as given, whatever the coordinate is.
+            require_evenly_sampled=False,
             # The most the window allows, which is what Lightguide uses. A
             # default is a sample count whatever `samples` says.
             default_overlap=lambda size: size // 2 - 1,
