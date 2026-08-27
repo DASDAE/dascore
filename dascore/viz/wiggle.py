@@ -231,13 +231,16 @@ def wiggle(
 
     Notes
     -----
-    - Traces are offset along the y axis and positive amplitudes point up,
-      as they point right in a conventional (time down) wiggle display.
+    - Traces are drawn as offsets along the y axis, so which way that axis
+      runs also decides which way positive amplitudes point.
 
-    - As in [waterfall](`dascore.viz.waterfall`), the y axis is
-      inverted only when it is "time-like", meaning when the traces are
-      stacked along time rather than along distance. If you don't want that,
-      invert the y axis of the returned axis object.
+    - As in [waterfall](`dascore.viz.waterfall`), the y axis is inverted
+      only when it is "time-like". Traces stacked along distance (the
+      default) therefore leave it alone, and positive amplitudes point up
+      just as they point right in a conventional (time down) wiggle
+      display. Traces stacked along time (`dim="distance"`) invert it to
+      keep time increasing downward, and the amplitudes follow it down. To
+      undo either, invert the y axis of the returned axis object.
     """
     # A length one dimension has nothing to connect, so drop it rather than
     # drawing a separate (one-sample) wiggle for every sample along the other.

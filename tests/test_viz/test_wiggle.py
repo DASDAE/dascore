@@ -24,6 +24,15 @@ def _get_shade_vertices(ax):
     return poly, np.concatenate([x.vertices for x in poly.get_paths()])
 
 
+def _peak_is_above_offset(ax):
+    """Return True if the first trace's peak is drawn above its offset line."""
+    trace = _get_traces(ax)[0]
+    x, low, high = trace[0, 0], trace[:, 1].min(), trace[:, 1].max()
+    # Display coordinates grow upward on the screen, whatever the axis does.
+    (_, low_y), (_, high_y) = ax.transData.transform([(x, low), (x, high)])
+    return high_y > low_y
+
+
 class TestWiggle:
     """Tests for wiggle plot."""
 
@@ -310,14 +319,16 @@ class TestWiggleOrientation:
         """An all positive patch, like an envelope, must deflect up."""
         patch = small_patch.envelope("time")
         assert np.all(patch.data >= 0)
-        ax = patch.viz.wiggle()
-        trace = _get_traces(ax)[0]
-        x = trace[0, 0]
-        offset, peak = trace[:, 1].min(), trace[:, 1].max()
-        assert peak > offset
-        # Display coordinates grow upward on the screen, whatever the axis does.
-        (_, offset_y), (_, peak_y) = ax.transData.transform([(x, offset), (x, peak)])
-        assert peak_y > offset_y
+        assert _peak_is_above_offset(patch.viz.wiggle())
+
+    def test_time_traces_deflect_with_their_axis(self, small_patch):
+        """
+        Stacking traces along time inverts the axis they are offset along,
+        so their amplitudes point down with it. Documented, not desirable;
+        a time axis running upward would be the greater surprise.
+        """
+        patch = small_patch.envelope("time")
+        assert not _peak_is_above_offset(patch.viz.wiggle(dim="distance"))
 
     def test_inversion_is_idempotent(self, small_patch):
         """Drawing on an already time-down axis must not flip it back."""

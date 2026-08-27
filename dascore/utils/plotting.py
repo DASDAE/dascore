@@ -57,13 +57,14 @@ def _maybe_invert_yaxis(ax, patch, dim):
     """
     Invert the y axis if the dimension it displays is time-like.
 
-    Every patch plot uses this rule, so a patch is oriented the same way
-    however it is drawn. Seismic displays put time on a downward axis (shot
-    gathers, record sections), so a time-like y axis is flipped and any
-    other dimension is left alone. Distance in particular must not be
+    Plots which put a patch dimension on the y axis share this rule, so a
+    dimension is oriented the same way whichever plot draws it. Seismic
+    displays put time on a downward axis (shot gathers, record sections),
+    so a time-like y axis is flipped, taking the coordinate to ascend, and
+    any other dimension is left alone. Distance in particular must not be
     flipped: a wiggle plot draws its traces as offsets along the y axis, so
-    inverting it would point positive amplitudes down, which no wiggle
-    convention does.
+    flipping it would point positive amplitudes down as well, and distance
+    carries no convention which asks for that.
 
     Parameters
     ----------
