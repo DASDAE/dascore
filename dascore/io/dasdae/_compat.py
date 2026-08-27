@@ -182,21 +182,19 @@ def translate_legacy_attrs(attrs, coord_names: Iterable[str] = ()):
 # PyTables stored every attr value HDF5 had no native type for -- None,
 # tuples, lists -- as ``pickle.dumps(value, 0)`` and unpickled it on read.
 # A reader using h5py gets those bytes themselves, so the payload is read
-# here instead. It is parsed rather than unpickled: the loop below knows
-# the protocol-0 opcodes which build None, numbers, text, lists and
-# tuples, and no others. None of them can name a class, so a hostile
-# payload has nothing to reach, and anything outside the grammar is
-# reported as undecoded rather than guessed at. Mappings (``(d``/``s``)
-# are deliberately absent -- the one mapping DASCore ever stored is the
-# coord payload, which keeps its opt-in gate in translate_legacy_attrs.
+# here instead. decode_pytables_attr parses it rather than unpickling it:
+# it knows the protocol-0 opcodes which build None, numbers, text, lists
+# and tuples, and no others. None of them can name a class, so a hostile
+# payload has nothing to reach. Mappings (``(d``/``s``) are absent, which
+# is what leaves a pickled coord payload to the opt-in gate above.
 
-# Returned when a payload uses anything outside the grammar above.
+# Returned for a payload the grammar does not cover.
 NOT_DECODED = object()
 
 # Marks a stack position a list or tuple is later built from.
 _MARK = object()
 
-# Protocol 0 spells the two bools as ints.
+# Protocol 0 spells the two bools as ints, and suffixes a long with "L".
 _BOOL_ARGUMENTS = {b"00": False, b"01": True}
 
 
@@ -221,9 +219,9 @@ def decode_pytables_attr(payload: bytes):
 
     Returns
     -------
-    The decoded value, or ``NOT_DECODED`` when the payload is not one of
-    the shapes PyTables wrote for a DASCore attr, which leaves the caller
-    with the text it would have had anyway.
+    The decoded value, which may itself be None, or ``NOT_DECODED`` when
+    the payload is not one of the shapes PyTables wrote for a DASCore
+    attr, which leaves the caller with the text it would have had anyway.
     """
     stack: list = []
     memo: dict[bytes, object] = {}
@@ -231,8 +229,7 @@ def decode_pytables_attr(payload: bytes):
     while position < end:
         code, position = payload[position : position + 1], position + 1
         if code == b".":  # STOP
-            # A mark can only survive at the top of the stack, where it
-            # means the payload opened a container it never closed.
+            # A surviving mark means a container was opened and never closed.
             done = len(stack) == 1 and stack[0] is not _MARK
             return stack[0] if done else NOT_DECODED
         if code == b"(":  # MARK
@@ -248,9 +245,14 @@ def decode_pytables_attr(payload: bytes):
             stack.append(items if code == b"l" else tuple(items))
             continue
         if code == b"a":  # APPEND
-            if len(stack) < 2 or not isinstance(stack[-2], list):
+            if len(stack) < 2:
                 return NOT_DECODED
-            stack[-2].append(stack.pop())
+            item = stack.pop()
+            # A mark is an opened container rather than a value, and would
+            # otherwise be appended to the list as one.
+            if item is _MARK or not isinstance(stack[-1], list):
+                return NOT_DECODED
+            stack[-1].append(item)
             continue
         # Everything left takes a newline-terminated argument. Protocol 0
         # escapes newlines inside text, so the first one always ends it.
@@ -263,17 +265,25 @@ def decode_pytables_attr(payload: bytes):
                 return NOT_DECODED
             memo[argument] = stack[-1]
         elif code == b"g":  # GET
-            if argument not in memo:
+            shared = memo.get(argument, NOT_DECODED)
+            # Only a scalar may be shared. Sharing a container would let a
+            # short payload name one repeatedly and build a graph whose
+            # size is exponential in its length; refusing it keeps the
+            # result no larger than the bytes which asked for it.
+            if shared is NOT_DECODED or isinstance(shared, list | tuple):
                 return NOT_DECODED
-            stack.append(memo[argument])
+            stack.append(shared)
         elif code == b"V":  # UNICODE
-            stack.append(argument.decode("raw_unicode_escape"))
-        elif code == b"I":  # INT, which also spells the bools
+            try:
+                stack.append(argument.decode("raw_unicode_escape"))
+            except UnicodeDecodeError:  # a truncated escape
+                return NOT_DECODED
+        elif code in (b"I", b"L"):  # INT and LONG; INT also spells the bools
             if argument in _BOOL_ARGUMENTS:
                 stack.append(_BOOL_ARGUMENTS[argument])
                 continue
             try:
-                stack.append(int(argument))
+                stack.append(int(argument.removesuffix(b"L")))
             except ValueError:
                 return NOT_DECODED
         elif code == b"F":  # FLOAT

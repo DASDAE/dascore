@@ -182,7 +182,7 @@ def _get_attrs(patch_group, legacy: bool = True):
     out = {}
     attrs = [x for x in patch_group.attrs if x.startswith(_ATTR_PREFIX)]
     for attr_name in attrs:
-        key = attr_name.replace(_ATTR_PREFIX, "")
+        key = attr_name.removeprefix(_ATTR_PREFIX)
         val = _decode_attr_value(
             patch_group.attrs, key, patch_group.attrs[attr_name], legacy=legacy
         )
@@ -381,10 +381,8 @@ def _get_scan_payload_from_group(group, legacy: bool = True, snap=True):
     for key in attrs:
         if not key.startswith(_ATTR_PREFIX):
             continue
-        value = _decode_attr_value(
-            attrs, key.replace(_ATTR_PREFIX, ""), attrs[key], legacy=legacy
-        )
-        new_key = key.replace(_ATTR_PREFIX, "")
+        new_key = key.removeprefix(_ATTR_PREFIX)
+        value = _decode_attr_value(attrs, new_key, attrs[key], legacy=legacy)
         # need to unpack 0 dim arrays.
         if isinstance(value, np.ndarray) and not value.shape:
             value = np.atleast_1d(value)[0]
@@ -462,13 +460,13 @@ def _holds_pytables_payload(attrs, key, value) -> bool:
     Whether a legacy attr holds a PyTables pickle rather than text.
 
     Nothing in the bytes separates the two -- a string attr of "N." is
-    byte-identical to a pickled None -- but PyTables wrote real strings as
-    UTF-8 and pickled payloads as raw bytes, which HDF5 records as the
-    attribute's character set.
+    byte-identical to a pickled None. PyTables wrote real strings as UTF-8
+    and pickled payloads as raw bytes, and HDF5 stores which of the two an
+    attribute holds as its character set, so that is what decides here.
     """
     if not isinstance(value, np.bytes_ | bytes):
         return False
-    # Only an h5py attrs manager records the character set; a plain
+    # Only an h5py attrs manager exposes the character set; a plain
     # mapping of values cannot tell a payload from text.
     get_id = getattr(attrs, "get_id", None)
     if get_id is None:
@@ -478,7 +476,12 @@ def _holds_pytables_payload(attrs, key, value) -> bool:
 
 
 def _decode_legacy_attr_value(attrs, key, value, legacy: bool = True):
-    """Decode legacy DASDAE attrs still used by the shipped fixture files."""
+    """
+    Decode one attr value from a file written before attr types were stored.
+
+    A legacy file may hold the value as a PyTables payload, which only
+    ``legacy`` files are looked at for.
+    """
     if value.__class__.__name__ == "Empty":
         return ""
     if isinstance(value, np.ndarray) and not value.shape:

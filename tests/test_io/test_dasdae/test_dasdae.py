@@ -450,6 +450,21 @@ class TestPyTablesAttrPayloads:
     )
     def test_round_trip(self, value):
         """Every shape PyTables wrote for a DASCore attr should decode."""
+        decoded = decode_pytables_attr(pickle.dumps(value, 0))
+        assert decoded == value
+        # 1 == True, so the bools need their type pinned as well.
+        assert type(decoded) is type(value)
+
+    def test_round_trip_long(self):
+        """Protocol 0 spells any int of 2**31 or more as a suffixed long."""
+        value = [2**100, 3_000_000_000]
+        payload = pickle.dumps(value, 0)
+        assert b"L" in payload, "payload must use the long opcode"
+        assert decode_pytables_attr(payload) == value
+
+    def test_text_with_escapes_round_trips(self):
+        """Protocol 0 escapes newlines and backslashes inside text."""
+        value = ("a\nb", "c\\d", "\u00b5\u03b5")
         assert decode_pytables_attr(pickle.dumps(value, 0)) == value
 
     @pytest.mark.parametrize(
@@ -468,6 +483,9 @@ class TestPyTablesAttrPayloads:
             b"p0\n.",
             b"(.",
             b"(N.",
+            b"(l(a.",  # an opened container appended as if it were a value
+            b"V\\uZZZZ\n.",  # a truncated escape
+            b"IZZ\n.",
             pickle.dumps({"a": 1}, 0),
             pickle.dumps(np.float64(1.0), 0),
         ],
@@ -476,18 +494,40 @@ class TestPyTablesAttrPayloads:
         """Anything outside the grammar is reported rather than guessed at."""
         assert decode_pytables_attr(payload) is NOT_DECODED
 
-    def test_repeated_value_is_shared(self):
-        """A repeated object is stored once and referenced, and must decode."""
+    def test_repeated_scalar_is_shared(self):
+        """A repeated string is stored once and referenced back."""
+        text = "repeated"
+        assert decode_pytables_attr(pickle.dumps((text, text), 0)) == (text, text)
+
+    def test_repeated_container_is_refused(self):
+        """A shared container could name a graph far larger than its bytes."""
         shared = ("a", "b")
-        assert decode_pytables_attr(pickle.dumps((shared, shared), 0)) == (
-            shared,
-            shared,
-        )
+        payload = pickle.dumps((shared, shared), 0)
+        assert b"g" in payload, "payload must reference the memo"
+        assert decode_pytables_attr(payload) is NOT_DECODED
 
     def test_no_class_is_named(self):
         """A payload naming a callable must not decode, let alone run it."""
         payload = pickle.dumps(TestPyTablesAttrPayloads, 0)
         assert decode_pytables_attr(payload) is NOT_DECODED
+
+    @pytest.mark.parametrize(
+        ("name", "expected"),
+        [
+            ("example_event_1", ()),
+            ("deformation_rate_event_1", ()),
+        ],
+    )
+    def test_shipped_file_history(self, name, expected):
+        """A shipped legacy file states its history, not its payload (#1078)."""
+        assert dc.get_example_patch(name).attrs.history == expected
+
+    def test_shipped_file_history_text(self):
+        """A shipped legacy file with real history states it as entries."""
+        history = dc.get_example_patch("febus_dss_mine_tight").attrs.history
+        assert isinstance(history, tuple)
+        assert history and all(isinstance(x, str) for x in history)
+        assert not history[0].startswith("(V")
 
     def test_read_decodes_none(self, pytables_attrs):
         """A pickled None should read back as None, not as its payload."""
@@ -503,10 +543,28 @@ class TestPyTablesAttrPayloads:
         path = tmp_path / "text_attr.h5"
         with h5py.File(path, "w") as h5:
             group = h5.create_group("waveforms").create_group("patch")
-            # PyTables stored real strings as UTF-8; "N." is byte-identical
-            # to a pickled None and only the character set separates them.
-            group.attrs["_attrs_station"] = "N."
+            # PyTables stored a real string as fixed-length UTF-8 and a
+            # payload as raw bytes. "N." is byte-identical to a pickled
+            # None, so only the character set separates the two, and the
+            # value has to be written the way PyTables wrote text for the
+            # test to reach that comparison at all.
+            group.attrs.create(
+                "_attrs_station",
+                np.bytes_(b"N."),
+                dtype=h5py.string_dtype(encoding="utf-8", length=2),
+            )
+            attrs = group.attrs
+            assert isinstance(attrs["_attrs_station"], np.bytes_ | bytes)
+            assert attrs.get_id("_attrs_station").get_type().get_cset() == 1
             assert _get_attrs(group)["station"] == "N."
+
+    def test_attr_name_repeating_the_prefix(self, tmp_path):
+        """The stored name must be recovered exactly, not by substitution."""
+        path = tmp_path / "repeated_prefix.h5"
+        with h5py.File(path, "w") as h5:
+            group = h5.create_group("waveforms").create_group("patch")
+            group.attrs["_attrs_my_attrs_thing"] = np.bytes_(pickle.dumps(None, 0))
+            assert _get_attrs(group)["my_attrs_thing"] is None
 
     def test_modern_file_is_not_decoded(self, pytables_attrs):
         """Only legacy files hold PyTables payloads."""

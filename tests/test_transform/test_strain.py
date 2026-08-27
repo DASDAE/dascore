@@ -258,12 +258,21 @@ class TestRadianToStrain:
         out = patch.radians_to_strain(gauge_length=1)
         assert isinstance(out, dc.Patch)
 
-    @pytest.mark.parametrize("bad", ["N.", b"10", float("nan"), float("inf"), 0, -5])
+    @pytest.mark.parametrize(
+        "bad", ["N.", b"10", float("nan"), float("inf"), 0, -5, True]
+    )
     def test_non_positive_gauge_length_in_attrs(self, rad_patch, bad):
         """A gauge length which is not a positive number should be rejected."""
         patch = rad_patch.update_attrs(gauge_length=bad)
         with pytest.raises(ParameterError, match="Gauge length must"):
             patch.radians_to_strain()
+
+    @pytest.mark.parametrize("boxed", [np.array(10.0), np.array([10.0])])
+    def test_gauge_length_in_an_array_box(self, rad_patch, boxed):
+        """A scalar left in an array should still be a gauge length."""
+        patch = rad_patch.update_attrs(gauge_length=None)
+        out = patch.radians_to_strain(gauge_length=boxed)
+        assert out.equals(rad_patch.radians_to_strain(gauge_length=10))
 
     def test_gauge_length_quantity(self, rad_patch):
         """A gauge length with units should convert to meters."""

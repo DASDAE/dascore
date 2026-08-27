@@ -213,12 +213,15 @@ def _get_gauge_length(patch: PatchType, gauge_length) -> float:
     """
     Return the gauge length in meters, from the argument or the patch attrs.
 
-    Attrs read from a file carry whatever the file held, so a gauge length
-    which is not a positive number is rejected here rather than left to
-    fail on the arithmetic below.
+    Attrs read from a file carry whatever the file held, so every value
+    which is not a positive number is rejected here. A comparison against
+    zero is not enough on its own: text fails it outright, and nan and inf
+    pass it and go on to make a patch of nan or of zeros.
     """
     stored = getattr(patch.attrs, "gauge_length", None)
     gauge = convert_units(gauge_length if gauge_length is not None else stored, "m")
+    if isinstance(gauge, np.ndarray) and gauge.size == 1:
+        gauge = gauge.item()  # a scalar a caller left in its array box
     # bool is a Real, and True would otherwise pass as a one meter gauge.
     if isinstance(gauge, Real) and not isinstance(gauge, bool):
         meters = float(gauge)
