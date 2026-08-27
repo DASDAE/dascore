@@ -195,7 +195,12 @@ def _path_acquisitions(array, path, time=None):
 
 
 def _track_frame(path, acquisitions) -> pd.DataFrame:
-    """Flatten a path's tracks into one frame of intervals."""
+    """Flatten a path's tracks into one frame of intervals.
+
+    Each row states the track it came from as well as the lane it draws
+    in, since a label group may be named for a track and the two are
+    then told apart by nothing a lane name carries.
+    """
     rows = []
     for acquisition in acquisitions:
         dist_map = acquisition.distance_map
@@ -205,6 +210,7 @@ def _track_frame(path, acquisitions) -> pd.DataFrame:
         rows.append(
             {
                 "lane": f"acquisition ({acquisition.code})",
+                "track": "acquisition",
                 "start": float(distances[0]),
                 "end": float(distances[-1]),
                 "value": acquisition.code,
@@ -215,6 +221,7 @@ def _track_frame(path, acquisitions) -> pd.DataFrame:
         rows.append(
             {
                 "lane": "components",
+                "track": "components",
                 "start": component.distance_min,
                 "end": component.distance_max,
                 "value": type(component).__name__,
@@ -225,6 +232,7 @@ def _track_frame(path, acquisitions) -> pd.DataFrame:
         rows.append(
             {
                 "lane": "coupling",
+                "track": "coupling",
                 "start": coupling.distance_min,
                 "end": coupling.distance_max,
                 "value": coupling.coupling_type,
@@ -235,6 +243,10 @@ def _track_frame(path, acquisitions) -> pd.DataFrame:
         rows.append(
             {
                 "lane": item.group,
+                # Label groups are their own track, whatever they are
+                # named: a group which takes a track's name is still a
+                # group, and the track has no claim on its lane.
+                "track": "labels",
                 "start": item.distance_min,
                 "end": item.distance_max,
                 "value": item.value,
@@ -287,23 +299,32 @@ def _select_tracks(frame, tracks, path):
     wanted = [tracks] if isinstance(tracks, str) else list(tracks)
     keep = []
     for name in wanted:
-        if name == "acquisition":
-            keep.extend(
-                x for x in dict.fromkeys(frame["lane"]) if x.startswith("acquisition (")
+        if name not in TRACKS and name not in groups:
+            # The acquisition lanes are the only ones whose name is not
+            # the name they are asked for, so they are the only ones a
+            # caller can read off the plot and type back in vain.
+            hint = (
+                " The lanes one draws are named for their acquisitions, "
+                "and are asked for by the track's name."
+                if name.startswith("acquisition (")
+                else ""
             )
-            # A label group may be named for the track, since the name is
-            # not reserved. The two lanes are then both meant, rather than
-            # the track's reading putting the group out of reach.
-            if name in groups:
-                keep.append(name)
-        elif name in TRACKS or name in groups:
-            keep.append(name)
-        else:
             msg = (
                 f"{name!r} is not a track of this optical path; the tracks are "
-                f"{TRACKS} and the label groups are {groups}."
+                f"{TRACKS} and the label groups are {groups}.{hint}"
             )
             raise ParameterError(msg)
+        if name in TRACKS:
+            # A track draws a lane per acquisition and one otherwise.
+            keep.extend(frame.loc[frame["track"] == name, "lane"])
+        if name in groups:
+            # A group may take a track's name, since what an inventory
+            # reserves are the coordinate names. Both lanes are then
+            # meant: the track has no claim on the group's.
+            keep.append(name)
+    # First mention wins, so a lane named twice is drawn where it was
+    # first asked for rather than where it was last.
+    keep = list(dict.fromkeys(keep))
     out = frame[frame["lane"].isin(keep)]
     if out.empty:
         msg = f"This optical path has nothing to draw for tracks={tracks!r}."
@@ -353,13 +374,14 @@ def path(
     """
     Plot what lies along one optical path, against optical distance.
 
-    Every track the path describes becomes a lane: the stretch each
-    acquisition places channels on, the optical components which give it
-    its length, how it is coupled to the ground, and one lane per label
-    group. A geometry column such as chainage or depth can be drawn as a
-    line panel beneath, sharing the distance axis; it breaks wherever the
-    path states no value rather than bridging the gap. Where the fiber
-    physically is belongs to map().
+    Every track becomes a lane: one per acquisition recording through
+    the path, spanning the distances its channels cover, the optical
+    components which give the path its length, how it is coupled to the
+    ground, and one lane per label group. A geometry column such as
+    chainage or depth can be drawn as a line panel beneath, sharing the
+    distance axis; it breaks wherever the path states no value rather
+    than bridging the gap. Where the fiber physically is belongs to
+    map().
 
     Parameters
     ----------
@@ -381,8 +403,10 @@ def path(
     tracks
         Which lanes to draw, in order: any of "acquisition", "components",
         "coupling", and the path's label group names. None draws all.
-        "acquisition" draws a lane per acquisition, and also the label
-        group of that name where a path states one.
+        "acquisition" draws one lane per acquisition, named with its
+        code. A label group may take a track's name, since what an
+        inventory reserves are the coordinate names; both lanes are then
+        drawn, and neither can be asked for on its own.
     columns
         Geometry columns to draw as line panels beneath the lanes. The
         CRS's position axes are refused, since they belong on a map.
@@ -435,7 +459,7 @@ def path(
     frame = _track_frame(chosen, _path_acquisitions(array, chosen, time))
     # The palette is the path's, not this figure's, so drawing some of the
     # tracks colors them as drawing all of them does.
-    vocabulary = list(frame.loc[frame["lane"] != "components", "value"])
+    vocabulary = list(frame.loc[frame["track"] != "components", "value"])
     frame = _select_tracks(frame, tracks, chosen)
     lanes = list(dict.fromkeys(frame["lane"]))
     if ax is None:

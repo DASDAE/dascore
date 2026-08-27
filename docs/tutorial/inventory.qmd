@@ -213,7 +213,7 @@ Only what an object states is shown, so a field left at its default does not tak
 
 An inventory also draws itself through its `viz` namespace, and each of the three plots looks along one coordinate.
 
-[`Inventory.viz.path`](`dascore.viz.inventory.path`) looks along **optical distance**, which is the coordinate the data is in. Every track the path describes becomes a lane, so the stretch an acquisition places channels on, the components, the coupling, and each label group line up against the same axis:
+[`Inventory.viz.path`](`dascore.viz.inventory.path`) looks along **optical distance**, which is the coordinate the data is in. Every track becomes a lane, so the distances each acquisition's channels cover, the components, the coupling, and each label group line up against the same axis:
 
 ```{python}
 inventory.viz.path(show=True);
