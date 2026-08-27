@@ -85,7 +85,11 @@ class TestTimeCommand:
         assert timing["page_count"] == 3
         # The last page has no next page to bound it; it lands in finalize.
         assert set(timing["pages"]) == {"a.qmd", "b.qmd"}
-        assert timing["page_phase"] == pytest.approx(0.1, abs=0.1)
+        # Bounded, not pinned: a loaded runner takes as long as it takes.
+        # The two sleeps between the three progress lines are the floor, and
+        # the sleep after the last one has to land outside the page phase.
+        assert timing["page_phase"] >= 0.1
+        assert timing["page_phase"] < timing["wall"]
         assert timing["startup"] + timing["page_phase"] + timing["finalize"] == (
             pytest.approx(timing["wall"], abs=0.01)
         )

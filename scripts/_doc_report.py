@@ -241,7 +241,7 @@ def measure_qmd(api_path: Path = API_DOC_PATH) -> dict:
         kind = classify_page(path.read_text())
         kinds[kind] += 1
         if kind != "static":
-            executable[str(path.relative_to(api_path.parent))] = kind
+            executable[path.relative_to(api_path.parent).as_posix()] = kind
     return {
         "sizes": _size_stats(sizes),
         "kinds": dict(kinds),
@@ -297,7 +297,7 @@ def find_case_collisions(api_path: Path = API_DOC_PATH) -> list[list[str]]:
     """
     groups = defaultdict(list)
     for path in api_path.rglob("*.qmd"):
-        relative = str(path.relative_to(api_path))
+        relative = path.relative_to(api_path).as_posix()
         groups[relative.lower()].append(relative)
     return sorted(sorted(x) for x in groups.values() if len(x) > 1)
 
@@ -346,11 +346,13 @@ _QUIET_KINDS = frozenset({"static", "source_only"})
 
 def _record_surprise(surprises, relative, executable, has_output) -> None:
     """Note a page whose rendered output disagrees with its classification."""
-    kind = executable.get(str(relative.with_suffix(".qmd")), "static")
+    # Posix throughout: these are keys into the index the build wrote and
+    # names printed in a report read next to it, not paths on this disk.
+    kind = executable.get(relative.with_suffix(".qmd").as_posix(), "static")
     if has_output and kind in _QUIET_KINDS:
-        surprises["unexpected"].append(str(relative))
+        surprises["unexpected"].append(relative.as_posix())
     elif not has_output and kind not in _QUIET_KINDS:
-        surprises["missing"].append(str(relative))
+        surprises["missing"].append(relative.as_posix())
 
 
 def _archive_bytes(site_path: Path) -> int:

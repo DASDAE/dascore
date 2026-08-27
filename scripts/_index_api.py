@@ -50,10 +50,12 @@ def _get_base_address(path, base_path):
     if _is_environment_path(path):
         return ""
     try:
-        out = Path(path).relative_to(Path(base_path))
+        out = Path(path).relative_to(Path(base_path)).as_posix()
     except ValueError:
         return ""
-    new = str(out).replace("/__init__.py", "").replace(".py", "")
+    # as_posix, not str: a module address is dotted, and on windows str
+    # would hand back backslashes for the separator this then replaces.
+    new = out.replace("/__init__.py", "").replace(".py", "")
     return new.replace("/", ".")
 
 

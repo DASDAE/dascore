@@ -22,7 +22,8 @@ def _build_content_string(path, api_path):
     """Build a content string."""
     out = [
         f"- text: {path.with_suffix('').name}",
-        f"  href: {path.relative_to(api_path)}",
+        # as_posix: an href is a URL, whatever separator the OS writes.
+        f"  href: {path.relative_to(api_path).as_posix()}",
     ]
     return out
 
