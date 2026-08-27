@@ -4847,7 +4847,6 @@ dascore.utils.display.get_quantity	/api/dascore/units/get_quantity.qmd
 dascore.utils.display.get_quantity_str	/api/dascore/units/get_quantity_str.qmd
 dascore.utils.display.group_names	/api/dascore/utils/display/group_names.qmd
 dascore.utils.display.human_duration	/api/dascore/utils/display/human_duration.qmd
-dascore.utils.display.human_size	/api/dascore/utils/display/human_size.qmd
 dascore.utils.display.mapping_to_text	/api/dascore/utils/display/mapping_to_text.qmd
 dascore.utils.display.model_to_line	/api/dascore/utils/display/model_to_line.qmd
 dascore.utils.display.percent	/api/dascore/utils/display/percent.qmd
@@ -7666,8 +7665,6 @@ docs/api/dascore/utils/display/group_names	/api/dascore/utils/display/group_name
 docs/api/dascore/utils/display/group_names.qmd	/api/dascore/utils/display/group_names.qmd
 docs/api/dascore/utils/display/human_duration	/api/dascore/utils/display/human_duration.qmd
 docs/api/dascore/utils/display/human_duration.qmd	/api/dascore/utils/display/human_duration.qmd
-docs/api/dascore/utils/display/human_size	/api/dascore/utils/display/human_size.qmd
-docs/api/dascore/utils/display/human_size.qmd	/api/dascore/utils/display/human_size.qmd
 docs/api/dascore/utils/display/mapping_to_text	/api/dascore/utils/display/mapping_to_text.qmd
 docs/api/dascore/utils/display/mapping_to_text.qmd	/api/dascore/utils/display/mapping_to_text.qmd
 docs/api/dascore/utils/display/model_to_line	/api/dascore/utils/display/model_to_line.qmd

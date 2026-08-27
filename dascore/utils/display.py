@@ -1498,7 +1498,7 @@ def mapping_to_text(mapping, header: str, style: str = "dc_yellow") -> Text:
     return txt
 
 
-def human_size(byte_count: int) -> str:
+def _human_size(byte_count: int) -> str:
     """How much room something takes up, in the largest unit which fits."""
     size = float(byte_count)
     if not np.isfinite(size):
@@ -1528,7 +1528,7 @@ def array_to_text(data, units=None) -> Text:
     # which is the size in pieces; whether it fits in memory is the
     # question those two are usually being multiplied to answer.
     byte_count = getattr(data, "nbytes", None)
-    if byte_count is not None and (size := human_size(byte_count)):
+    if byte_count is not None and (size := _human_size(byte_count)):
         header += Text(", ") + Text(size, dascore_styles["keys"])
     header += Text(")")
     config = get_config()

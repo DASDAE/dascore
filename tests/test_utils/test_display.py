@@ -39,6 +39,7 @@ from dascore.utils.display import (
     Table,
     _body_lines,
     _get_stylesheet,
+    _human_size,
     _indent_text,
     _limit_items,
     _render_html,
@@ -59,7 +60,6 @@ from dascore.utils.display import (
     get_nice_text,
     group_names,
     human_duration,
-    human_size,
     mapping_to_text,
     model_to_line,
     percent,
@@ -972,7 +972,7 @@ class TestHumanSize:
     )
     def test_size_in_the_largest_unit_which_fits(self, count, expected):
         """A byte count is read in whatever unit keeps it short."""
-        assert human_size(count) == expected
+        assert _human_size(count) == expected
 
     def test_an_unknown_size_draws_no_comma(self):
         """The comma introduces a size, so it goes when there is none."""
@@ -993,7 +993,7 @@ class TestHumanSize:
 
         "nan TiB" is a worse answer than not saying.
         """
-        assert human_size(float("nan")) == ""
+        assert _human_size(float("nan")) == ""
 
 
 class TestDurationText:
