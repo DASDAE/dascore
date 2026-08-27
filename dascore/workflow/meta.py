@@ -8,9 +8,9 @@ what the metadata step works on, and the reason the two halves can be
 told apart -- the metadata step never sees an array, and the kernel never
 sees a coordinate.
 
-That separation is what makes an operation fusible: something which wants
-to compile a chain of them can ask each one what it does to the metadata
-without touching, or even holding, the data.
+That separation is what lets a chain of operations be compiled into one
+pass: something which wants to can ask each one what it does to the
+metadata without touching, or even holding, the data.
 """
 
 from __future__ import annotations

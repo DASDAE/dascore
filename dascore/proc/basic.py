@@ -22,7 +22,16 @@ from dascore.core.coords import get_coord
 from dascore.exceptions import ParameterError
 from dascore.models import ArrayLike
 from dascore.utils.array import _apply_binary_ufunc
-from dascore.utils.array_api import array_namespace, nan_reduce
+from dascore.utils.array_api import (
+    array_namespace,
+    asarray_like,
+    backend_name,
+    device,
+    is_numpy,
+    nan_reduce,
+    to_numpy,
+    warn_numpy_fallback,
+)
 from dascore.utils.misc import _get_nullish
 from dascore.utils.patch import (
     align_patch_coords,
@@ -306,7 +315,7 @@ def abs(patch: PatchType) -> PatchType:
     >>> pa = dascore.get_example_patch() # generate example patch
     >>> out = pa.abs() # take absolute value of generated example patch data
     """
-    return Abs()._apply(patch)
+    return Abs._call(patch)
 
 
 class Abs(PatchProcessor):
@@ -334,7 +343,7 @@ def conj(patch: PatchType) -> PatchType:
     >>> dft = pa.dft(None)  # multi-dim dft
     >>> conj = dft.conj()
     """
-    return Conj()._apply(patch)
+    return Conj._call(patch)
 
 
 class Conj(PatchProcessor):
@@ -366,7 +375,7 @@ def real(patch: PatchType) -> PatchType:
     >>> pa = dascore.get_example_patch()
     >>> out = pa.real()
     """
-    return Real()._apply(patch)
+    return Real._call(patch)
 
 
 class Real(PatchProcessor):
@@ -393,7 +402,7 @@ def imag(patch: PatchType) -> PatchType:
     >>> pa = dascore.get_example_patch()
     >>> out = pa.imag()
     """
-    return Imag()._apply(patch)
+    return Imag._call(patch)
 
 
 class Imag(PatchProcessor):
@@ -470,7 +479,7 @@ def normalize(
     >>> # Bit normalization (sign only)
     >>> bit_norm = patch.normalize(dim="time", norm="bit")
     """
-    return Normalize(dim=dim, norm=norm)._apply(self)
+    return Normalize._call(self, dim=dim, norm=norm)
 
 
 class Normalize(PatchProcessor):
@@ -552,7 +561,7 @@ def standardize(
     standardized_distance = patch.standardize('distance')
     ```
     """
-    return Standardize(dim=dim)._apply(self)
+    return Standardize._call(self, dim=dim)
 
 
 class Standardize(PatchProcessor):
@@ -674,16 +683,83 @@ def fillna(patch: PatchType, value, include_inf=True) -> PatchType:
     >>> # Replace all occurrences of NaN with 5
     >>> out = patch.fillna(5)
     """
-    if include_inf:
-        to_replace = ~np.isfinite(patch.data)
-    else:
-        to_replace = pd.isnull(patch.data)
-    if not np.any(to_replace):  # nothing nullish to fill
-        return patch
-    new_data = patch.data.copy()
-    new_data[to_replace] = value
+    return FillNa._call(patch, value=value, include_inf=include_inf)
 
-    return patch.new(data=new_data)
+
+class FillNa(PatchProcessor):
+    """Put a value where the data has none."""
+
+    value: Any
+    include_inf: bool = True
+
+    @property
+    def needs_numpy(self) -> bool:
+        """
+        Whether the value has a shape, or nothing means more than non-finite.
+
+        A value with a shape is spent positionally, one element per null,
+        which `where` cannot say -- it would broadcast. And
+        `include_inf=False` asks `pandas.isnull` what counts as nothing,
+        which is not a question a backend answers.
+
+        A value `np.ndim` refuses -- a ragged nested list -- is answered
+        for rather than raised on, so that a patch with nothing to fill
+        stays the no-op it has always been and the complaint comes from
+        numpy, at the fill, exactly as it used to.
+        """
+        with suppress(ValueError):
+            return not self.include_inf or bool(np.ndim(self.value))
+        return True
+
+    def kernel(self, data, meta, out_meta):
+        """
+        Return the data with its nulls filled, or the data unchanged.
+
+        `where` rather than assigning into a copy: writing into an array
+        by boolean mask is not something the standard asks a backend for.
+        Handing the data straight back where there is nothing to fill is
+        what says the operation did nothing.
+        """
+        xp = array_namespace(data)
+        replace = self._nulls(data)
+        if not xp.any(replace):
+            return data
+        value = xp.asarray(self.value, dtype=data.dtype, device=device(data))
+        return xp.where(replace, value, data)
+
+    def _nulls(self, data):
+        """
+        Return where the data has nothing, in the backend's own terms.
+
+        A boolean array is not asked: `isfinite` is undefined for one on
+        a strict backend, and where it is defined the answer is that
+        every value is finite, which is also true.
+        """
+        xp = array_namespace(data)
+        if xp.isdtype(data.dtype, "bool"):
+            return xp.zeros(data.shape, dtype=xp.bool, device=device(data))
+        return ~xp.isfinite(data)
+
+    def numpy_kernel(self, data, meta, out_meta):
+        """
+        Fill with numpy, for the two things the standard cannot say.
+
+        A value with a shape is spent positionally, one element per null,
+        where `where` would broadcast it across the whole array. And
+        `pandas.isnull` is what `include_inf=False` means by nothing.
+        """
+        if not is_numpy(data):
+            warn_numpy_fallback("fillna", backend_name(data))
+        array = to_numpy(data)
+        replace = ~np.isfinite(array) if self.include_inf else pd.isnull(array)
+        if not np.any(replace):
+            return data
+        filled = np.array(array)
+        filled[replace] = self.value
+        return asarray_like(filled, data)
+
+
+register_implementation("fillna", FillNa)
 
 
 @patch_function()
@@ -994,12 +1070,44 @@ def flip(patch, *dims, flip_coords=True):
     >>> # Flip patch over all dimensions.
     >>> out = patch.flip(*patch.dims)
     """
-    if not dims:
-        return patch  # no-op
-    axes = tuple(patch.get_axis(name) for name in dims)
-    data = np.flip(patch.data, axis=axes) if dims else patch.data
-    coords = patch.coords.flip(*dims) if flip_coords else patch.coords
-    return patch.new(data=data, coords=coords)
+    return Flip._call(patch, dims=tuple(dims), flip_coords=flip_coords)
+
+
+class Flip(PatchProcessor):
+    """Reverse a patch along one or more of its dimensions."""
+
+    dims: tuple[Any, ...] = ()
+    flip_coords: bool = True
+
+    def derive_meta(self, meta):
+        """
+        Return the coordinates reversed along the same dimensions.
+
+        Named no dimensions, the operation has nothing to reverse: the
+        metadata comes back untouched and so does the data, and it takes
+        both for `_apply` to hand the patch back. `flip_coords=False`
+        leaves the metadata alone too, but the data is still reversed, so
+        that one is a new patch wearing its old coordinates.
+        """
+        if not self.dims:
+            return meta
+        # Resolved even when the coordinates stay put, so that a name the
+        # patch does not have is refused in the same terms either way.
+        for name in self.dims:
+            meta.get_axis(name)
+        if not self.flip_coords:
+            return meta
+        return meta.update(coords=meta.coords.flip(*self.dims))
+
+    def kernel(self, data, meta, out_meta):
+        """Return the data reversed along the axes the dimensions name."""
+        if not self.dims:
+            return data
+        axes = tuple(meta.get_axis(name) for name in self.dims)
+        return array_namespace(data).flip(data, axis=axes)
+
+
+register_implementation("flip", Flip)
 
 
 @patch_function(data_type="")
@@ -1026,8 +1134,54 @@ def full(patch, fill_value):
     >>> # Same thing, except for 0s.
     >>> zero_patch = patch.full(0.0)
     """
-    array = np.full(patch.data.shape, fill_value)
-    return patch.update(data=array)
+    return Full._call(patch, fill_value=fill_value)
+
+
+class Full(PatchProcessor):
+    """Replace every sample with one value."""
+
+    fill_value: Any
+
+    @property
+    def needs_numpy(self) -> bool:
+        """
+        Whether the fill value is one the standard does not promise.
+
+        The standard names which python scalars a namespace must accept.
+        A numpy scalar is not one of them -- numpy fills with it and
+        keeps its dtype where a strict backend refuses it outright -- and
+        neither is an integer too large for a signed 64-bit, which numpy
+        widens to unsigned or to object and a backend overflows on.
+        """
+        value = self.fill_value
+        if type(value) not in (int, float, bool, complex):
+            return True
+        return type(value) is int and not -(2**63) <= value < 2**63
+
+    def kernel(self, data, meta, out_meta):
+        """
+        Return an array of one value, the shape the patch is.
+
+        The data is here for its namespace and its device and nothing
+        else: what comes out depends on the shape and the value alone.
+        """
+        xp = array_namespace(data)
+        return xp.full(meta.shape, self.fill_value, device=device(data))
+
+    def numpy_kernel(self, data, meta, out_meta):
+        """
+        Fill with a value only numpy will take, then hand it back.
+
+        Converted back to the data's own backend afterwards: which of
+        the two kernels ran is decided by the fill value, and that must
+        not decide what the patch is made of.
+        """
+        if not is_numpy(data):
+            warn_numpy_fallback("full", backend_name(data))
+        return asarray_like(np.full(meta.shape, self.fill_value), data)
+
+
+register_implementation("full", Full)
 
 
 @patch_function()
@@ -1081,16 +1235,42 @@ def demedian(patch, dim: str = "time"):
     >>> plt.show()  # doctest: +SKIP
     >>> plt.close(fig)
     """
-    axis = patch.get_axis(dim)
-    data = patch.data
+    return Demedian._call(patch, dim=dim)
 
-    # Compute median along axis, keep dims for broadcasting
-    med = np.nanmedian(data, axis=axis, keepdims=True)
 
-    new_data = data - med
+class Demedian(PatchProcessor):
+    """Remove the median along a dimension."""
 
-    # Return a new patch with updated data
-    return patch.new(data=new_data)
+    dim: str = "time"
+
+    @property
+    def needs_numpy(self) -> bool:
+        """
+        Always: the standard has no median which skips nulls.
+
+        `nan_reduce` says so by not offering one. This is about the
+        kernel written here, not about the operation: a package which
+        registers a median of its own for its backend is chosen ahead of
+        this and is not held to it.
+        """
+        return True
+
+    def numpy_kernel(self, data, meta, out_meta):
+        """
+        Return the data with the median of each slice taken out.
+
+        By `np.nanmedian`; `needs_numpy` says why. The only kernel this
+        class has, so data from another backend make the trip to numpy
+        and back rather than the operation refusing them.
+        """
+        if not is_numpy(data):
+            warn_numpy_fallback("demedian", backend_name(data))
+        array = to_numpy(data)
+        median = np.nanmedian(array, axis=meta.get_axis(self.dim), keepdims=True)
+        return asarray_like(array - median, data)
+
+
+register_implementation("demedian", Demedian)
 
 
 @patch_function()
@@ -1144,7 +1324,7 @@ def demean(patch, dim: str = "time"):
     >>> plt.show()  # doctest: +SKIP
     >>> plt.close(fig)
     """
-    return Demean(dim=dim)._apply(patch)
+    return Demean._call(patch, dim=dim)
 
 
 class Demean(PatchProcessor):

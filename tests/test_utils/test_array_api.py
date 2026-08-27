@@ -20,6 +20,7 @@ from dascore.utils.array_api import (
     to_numpy,
 )
 from dascore.utils.misc import suppress_warnings
+from dascore.warnings import NumpyFallbackWarning
 
 
 @pytest.fixture(scope="module")
@@ -205,6 +206,13 @@ def _identity(patch):
     return patch
 
 
+def _with_a_null(patch):
+    """Return the patch with a null in it, so filling one does something."""
+    data = np.asarray(patch.data).copy()
+    data[0, 0] = np.nan
+    return patch.new(data=data)
+
+
 def _make_complex(patch):
     """Return the patch with complex data, so a conjugate means something."""
     data = np.asarray(patch.data)
@@ -228,6 +236,16 @@ ARRAY_API_CASES = {
         call=lambda patch: patch.rename_coords(time="t")
     ),
     "dascore.proc.basic.abs": _Case(call=lambda patch: patch.abs()),
+    "dascore.proc.basic.flip": _Case(call=lambda patch: patch.flip("time")),
+    "dascore.proc.basic.full": _Case(call=lambda patch: patch.full(1.5)),
+    # fillna is given something to fill; with nothing null it hands the
+    # patch straight back, which says nothing about the backend.
+    "dascore.proc.basic.fillna": _Case(
+        call=lambda patch: patch.fillna(0.0), setup=_with_a_null
+    ),
+    "dascore.proc.coords.update_coords": _Case(
+        call=lambda patch: patch.update_coords(time=patch.get_array("time"))
+    ),
     # conj and real hand a real patch straight back, which says nothing
     # about the backend, so they are given something to actually do.
     "dascore.proc.basic.conj": _Case(
@@ -284,6 +302,51 @@ class TestArrayApiPatchFunctions:
         assert out.coords == expected.coords
         assert out.attrs == expected.attrs
         assert np.allclose(array, np.asarray(expected.data), equal_nan=True)
+
+
+# Operations which are portable for only part of what they accept, with an
+# argument which takes them off the portable path. Unlike ARRAY_API_CASES
+# these are expected to convert to numpy and back, and to say so.
+NUMPY_FALLBACK_CASES = {
+    "full_numpy_scalar": _Case(call=lambda patch: patch.full(np.int8(3))),
+    "fillna_pandas_nulls": _Case(
+        call=lambda patch: patch.fillna(0.0, include_inf=False), setup=_with_a_null
+    ),
+    "demedian": _Case(call=lambda patch: patch.demedian("time")),
+}
+
+
+class TestTheNumpyFallbacks:
+    """
+    What an operation does with the half of its arguments it cannot lower.
+
+    The data make the trip to numpy and back rather than the operation
+    refusing another backend, and the trip is announced: a caller who
+    handed over a dask array has just had the whole of it materialised.
+    """
+
+    @pytest.mark.parametrize("name", sorted(NUMPY_FALLBACK_CASES))
+    def test_it_warns_and_stays_on_the_backend(
+        self, name, random_patch, to_backend, backend
+    ):
+        """The patch comes back as it went in, and the detour is announced."""
+        case = NUMPY_FALLBACK_CASES[name]
+        numpy_patch = case.setup(random_patch)
+        patch = to_backend(numpy_patch)
+        with pytest.warns(NumpyFallbackWarning):
+            out = case.call(patch)
+        assert backend_name(out.data) == backend
+        expected = case.call(numpy_patch)
+        array = np.asarray(out.data)
+        assert array.dtype == expected.data.dtype
+        assert np.allclose(array, np.asarray(expected.data), equal_nan=True)
+
+    @pytest.mark.parametrize("name", sorted(NUMPY_FALLBACK_CASES))
+    def test_numpy_data_is_not_a_fallback(self, name, random_patch):
+        """Nothing was converted, so nothing is said about converting."""
+        case = NUMPY_FALLBACK_CASES[name]
+        with warnings_as_errors():
+            case.call(case.setup(random_patch))
 
 
 class TestNanReduce:

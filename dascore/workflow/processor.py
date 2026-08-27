@@ -49,7 +49,12 @@ from dascore.warnings import DASCoreWarning
 from dascore.workflow.checks import attr_type, check_patch_attrs, check_patch_coords
 from dascore.workflow.meta import PatchMeta
 from dascore.workflow.serialize import digest
-from dascore.workflow.task import _VERSION_KEY, Task, _resolve_default
+from dascore.workflow.task import (
+    _VERSION_KEY,
+    Task,
+    _resolve_default,
+    _take_ownership,
+)
 
 # Stands in for the patch while a call is bound to a signature. The bind
 # only needs something to put in that slot; nothing ever looks at it.
@@ -263,25 +268,79 @@ class PatchProcessor(Task):
         difference between them -- `transpose` wants the permutation which
         takes the old dimension order to the new.
 
-        The default finds a kernel registered for the data's backend, and
-        failing that the class's own `kernel`, which is written to the
-        array API standard and so runs on any of them. A class with no
-        kernel at all is a metadata-only operation and gets None.
+        A kernel registered for the data's backend wins, being someone
+        saying they took this operation on there, arguments and all.
+        Failing that, the class's own `kernel`, written to the array API
+        standard and so able to run on any backend -- unless
+        `needs_numpy` says these arguments are outside what the standard
+        promises, in which case the class's `numpy_kernel` answers for
+        them instead. A class with none of the three is a metadata-only
+        operation and gets None.
+
+        Which kernel runs is settled here rather than inside a kernel so
+        that something reading a chain of operations can see what each
+        one got without running any of them.
         """
-        if (found := _resolve_kernel(type(self), meta.backend)) is None:
+        fallback = self.needs_numpy
+        if (found := _resolve_kernel(type(self), meta.backend, fallback)) is None:
             return None
         return functools.partial(found, self, meta=meta, out_meta=out_meta)
+
+    @property
+    def needs_numpy(self) -> bool:
+        """
+        Whether these arguments are outside what the standard promises.
+
+        Some operations are portable for only part of what they accept:
+        the standard names which python scalars a namespace must take,
+        and `full` given a numpy scalar is asking for something outside
+        that. A class which says yes here supplies a `numpy_kernel` for
+        those arguments; the default is no, since most operations have
+        only the one kernel.
+
+        Answered from the operation's own parameters and never from the
+        data, so the choice is made before anything is read.
+
+        This says nothing about whether the operation can be fused --
+        that is a property of the kernel which ends up running, not of
+        the operation, and it is not this class's to answer. A package
+        which registers its own kernel for a backend may well lower
+        these same arguments happily, and its kernel is chosen ahead of
+        the numpy one precisely so that it can.
+        """
+        return False
 
     def reconcile(self, data, meta: PatchMeta) -> PatchMeta:
         """
         Return the metadata the data actually turned out to have.
 
-        Defining this says the operation cannot be fused: it is the one
-        step which has to see both halves at once. The default only
-        carries the data's dtype back, since a kernel may promote.
+        The one step which sees both halves at once, which is why an
+        operation which needs it cannot be described by metadata alone.
+        The default only carries the data's dtype back, since a kernel
+        may promote.
         """
         dtype = getattr(data, "dtype", meta.dtype)
         return meta if dtype == meta.dtype else meta.update(dtype=dtype)
+
+    @classmethod
+    def _call(cls, patch: PatchType, /, **kwargs) -> PatchType:
+        """
+        Build the operation from a patch function's arguments and run it.
+
+        This is what a patch function's body calls. Built here rather
+        than by the body so that the arrays among the arguments are not
+        taken over: a task freezes what it is handed so its fingerprint
+        cannot come to describe values it no longer holds, but an
+        operation built inside a patch function is run once and thrown
+        away, and freezing would reach back and lock the caller's own
+        array for the rest of its life.
+        """
+        token = _take_ownership.set(False)
+        try:
+            operation = cls(**kwargs)
+        finally:
+            _take_ownership.reset(token)
+        return operation._apply(patch)
 
     def _apply(self, patch: PatchType) -> PatchType:
         """
@@ -471,21 +530,28 @@ def register_kernel(cls: type[PatchProcessor], backend: str):
     return decorate
 
 
-def _resolve_kernel(cls: type[PatchProcessor], backend: str):
+def _resolve_kernel(cls: type[PatchProcessor], backend: str, fallback: bool = False):
     """
     Return the kernel a class runs for one backend, or None if it has none.
 
     A kernel registered for the backend wins; failing that the class's own
     `kernel`, which is written to the array API standard and so runs on
     any of them. A class which defines neither is metadata-only.
+
+    `fallback` says the arguments are outside what the standard promises,
+    so the class's `numpy_kernel` stands in for the generic one. A
+    registered kernel still wins over it: whoever registered it took this
+    backend on and gets to say what it does with these arguments.
     """
-    # One class at a time, both questions asked of it before moving up:
+    # One class at a time, every question asked of it before moving up:
     # a subclass which wrote its own `kernel` means it, and a backend
     # kernel registered against its parent must not answer for it.
     for klass in cls.__mro__:
         contents = klass.__dict__
         if (found := contents.get("_kernels", {}).get(backend)) is not None:
             return found
+        if fallback and (numpy_kernel := contents.get("numpy_kernel")) is not None:
+            return numpy_kernel
         if (generic := contents.get("kernel")) is not None:
             return generic
     return None

@@ -465,6 +465,16 @@ class TestDropNa:
 class TestFillNa:
     """Tests for replacing nullish values in a patch."""
 
+    def test_a_boolean_patch_has_nothing_to_fill(self, random_patch):
+        """
+        A boolean holds nothing which is not a value.
+
+        Answered from the dtype rather than asked of the data, since
+        `isfinite` is undefined for a boolean array on a strict backend.
+        """
+        patch = random_patch.new(data=np.asarray(random_patch.data) > 0)
+        assert patch.fillna(True) is patch
+
     def test_fillna(self, patch_with_null):
         """Ensure we can fillna and keep the other values the same."""
         patch = patch_with_null.fillna(0)

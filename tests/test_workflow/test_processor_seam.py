@@ -10,13 +10,21 @@ for getting wrong, and how a kernel for another array backend is found.
 from __future__ import annotations
 
 import pickle
+from typing import Any
 
 import numpy as np
 import pytest
 
 import dascore as dc
 from dascore.exceptions import CoordDataError, ParameterError
-from dascore.proc.basic import Abs, Normalize, _known_real
+from dascore.proc.basic import (
+    Abs,
+    Demedian,
+    FillNa,
+    Full,
+    Normalize,
+    _known_real,
+)
 from dascore.workflow import PatchMeta, PatchProcessor, Task, register_kernel
 from dascore.workflow.processor import (
     _resolve_kernel,
@@ -166,6 +174,167 @@ class TestKernelResolution:
             """A processor which does nothing at all."""
 
         assert Nothing()._apply(patch) is patch
+
+
+class TestWhichKernelIsPlanned:
+    """
+    Which of a class's kernels a call gets, and why.
+
+    Settled from the operation's parameters before any array is read, so
+    a chain can be inspected without being run.
+    """
+
+    def test_one_kernel_means_no_question(self):
+        """Most operations are portable for everything they accept."""
+        assert not Abs().needs_numpy
+        assert not Normalize(dim="time", norm="l2").needs_numpy
+
+    def test_a_kernel_which_is_numpy_says_so(self):
+        """The standard has no median which skips nulls."""
+        assert Demedian().needs_numpy
+
+    def test_it_can_depend_on_the_arguments(self):
+        """
+        Some operations are portable for only some of what they accept.
+
+        `full` takes any value numpy would; the standard promises only
+        the plain python scalars, and only those which fit a dtype.
+        `fillna` given a value with a shape spends it positionally,
+        which `where` cannot say, and `include_inf=False` asks pandas
+        what counts as nothing, which no backend answers.
+        """
+        assert not Full(fill_value=1.5).needs_numpy
+        assert Full(fill_value=np.float64(1.5)).needs_numpy
+        assert Full(fill_value=2**70).needs_numpy
+        assert not FillNa(value=0).needs_numpy
+        assert FillNa(value=[1, 2]).needs_numpy
+        assert FillNa(value=0, include_inf=False).needs_numpy
+
+    def test_a_value_numpy_cannot_measure(self):
+        """
+        A ragged value is answered for rather than raised on.
+
+        `np.ndim` refuses it, and a property which raised would turn a
+        patch with nothing to fill from a no-op into an error.
+        """
+        assert FillNa(value=[1, [2, 3]]).needs_numpy
+
+    def test_the_answer_needs_no_data(self):
+        """
+        Reached with no array anywhere, which is the whole point.
+
+        A property which read the data would raise here rather than
+        answer, since the operation is never given a patch at all.
+        """
+        assert not Full(fill_value=1.5).needs_numpy
+        assert Demedian(dim="time").needs_numpy
+
+    def test_a_registered_kernel_is_not_held_to_it(self, patch):
+        """
+        Someone else's backend may express what ours cannot.
+
+        `Demedian` says `needs_numpy` because the median written here is
+        numpy's. A package which registers a median for its own backend
+        is answering a different question, and is chosen ahead of the
+        numpy one so that it can -- otherwise registering a kernel for
+        the operations DASCore finds hardest would buy nothing.
+        """
+
+        class Middling(Demedian):
+            """A `demedian` whose backend someone else claimed."""
+
+        @register_kernel(Middling, "numpy")
+        def _theirs(self, data, meta, out_meta):
+            """Answer with something no other kernel would."""
+            return np.zeros(meta.shape)
+
+        operation = Middling(dim="time")
+        meta = PatchMeta.from_patch(patch)
+        assert operation.needs_numpy
+        assert operation.plan_kernel(meta, meta).func is _theirs
+
+
+class TestTheNumpyFallbacks:
+    """
+    What the two half-portable operations do with the other half.
+
+    The parity check covers these, but it is not what the coverage gate
+    runs, and an untested fallback is how a rewrite quietly narrows what
+    an operation accepts.
+    """
+
+    def test_a_value_with_a_shape_is_spent_positionally(self):
+        """One element per null, in order -- not broadcast."""
+        patch = dc.get_example_patch("patch_with_null")
+        data = np.asarray(patch.data)
+        nulls = ~np.isfinite(data)
+        values = np.arange(int(nulls.sum()), dtype="float64")
+        expected = data.copy()
+        expected[nulls] = values
+        assert np.array_equal(np.asarray(patch.fillna(values).data), expected)
+
+    def test_nothing_to_fill_hands_the_patch_back(self, patch):
+        """
+        Whichever of the two fills was planned, an empty mask is a no-op.
+
+        The identity is what the decorator reads as nothing having
+        happened, so no history is written and no id advances.
+        """
+        assert patch.fillna(np.arange(3.0)) is patch
+        assert patch.fillna(0) is patch
+
+    @pytest.mark.parametrize("value", [np.int8(3), 2**70])
+    def test_a_value_the_standard_will_not_take_is_planned_onto_numpy(
+        self, patch, value
+    ):
+        """
+        The plan says numpy, and it says so before any data is read.
+
+        Asserted on the plan rather than on the dtype: on numpy the
+        portable fill answers a numpy scalar identically, so a result
+        cannot tell which kernel produced it.
+        """
+        meta = PatchMeta.from_patch(patch)
+        planned = Full(fill_value=value).plan_kernel(meta, meta)
+        assert planned.func is Full.numpy_kernel
+        # And the dtype numpy keeps for it is what comes out.
+        assert patch.full(value).data.dtype == np.full((1,), value).dtype
+
+
+class TestTheCallersArguments:
+    """
+    What a patch function does to the arguments it was handed.
+
+    A task freezes the arrays it is given so its fingerprint cannot come
+    to describe values it no longer holds. An operation built inside a
+    patch function is run once and thrown away, so there is no such
+    fingerprint -- and freezing would reach back and lock a buffer the
+    caller means to keep writing to.
+    """
+
+    def test_a_fill_array_stays_writable(self, patch):
+        """The values are read, not taken over."""
+        values = np.arange(3.0)
+        patch.fillna(values)
+        assert values.flags.writeable
+
+    def test_a_coordinate_array_stays_writable(self, patch):
+        """`update_coords` copies what it is given, and always has."""
+        values = np.arange(patch.shape[patch.dims.index("time")], dtype="float64")
+        patch.update_coords(time=values)
+        assert values.flags.writeable
+
+    def test_a_task_still_takes_ownership(self):
+        """The policy is off for the one case, not repealed."""
+        values = np.arange(3.0)
+
+        class Holding(Task):
+            """A task which holds whatever it is handed."""
+
+            value: Any = None
+
+        Holding(value=values)
+        assert not values.flags.writeable
 
 
 class TestRegistrationRefuses:
