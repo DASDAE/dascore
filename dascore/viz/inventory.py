@@ -289,7 +289,7 @@ def _select_tracks(frame, tracks, path):
     for name in wanted:
         if name == "acquisition":
             keep.extend(
-                x for x in dict.fromkeys(frame["lane"]) if x.startswith("acquisition")
+                x for x in dict.fromkeys(frame["lane"]) if x.startswith("acquisition (")
             )
         elif name in TRACKS or name in groups:
             keep.append(name)
@@ -348,9 +348,9 @@ def path(
     """
     Plot what lies along one optical path, against optical distance.
 
-    Every track the path describes becomes a lane: the channels each
-    acquisition places on it, the optical components which give it its
-    length, how it is coupled to the ground, and one lane per label
+    Every track the path describes becomes a lane: the stretch each
+    acquisition places channels on, the optical components which give it
+    its length, how it is coupled to the ground, and one lane per label
     group. A geometry column such as chainage or depth can be drawn as a
     line panel beneath, sharing the distance axis; it breaks wherever the
     path states no value rather than bridging the gap. Where the fiber
