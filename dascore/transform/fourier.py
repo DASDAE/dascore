@@ -9,31 +9,93 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from functools import partial
+from math import prod
 from operator import mul, truediv
-from typing import Any
+from typing import TYPE_CHECKING, Any, Literal
 
 import numpy as np
 import numpy.fft as nft
-from scipy.signal import ShortTimeFFT
-from scipy.signal.windows import get_window
 
 import dascore as dc
+from dascore import units
 from dascore.compat import ndarray
 from dascore.constants import PatchType
 from dascore.core.attrs import PatchAttrs
 from dascore.core.coordmanager import get_coord_manager
 from dascore.core.coords import get_coord
-from dascore.exceptions import PatchError
+from dascore.exceptions import ParameterError, PatchError
 from dascore.units import Quantity, invert_quantity, percent
+from dascore.utils.imports import lazy_import
 from dascore.utils.misc import broadcast_for_index, iterate
 from dascore.utils.patch import (
     _get_data_units_from_dims,
     _get_dx_or_spacing_and_axes,
     get_dim_axis_value,
+    get_window_axis_step,
     patch_function,
 )
 from dascore.utils.time import is_datetime64, is_timedelta64, to_float
 from dascore.utils.transformatter import FourierTransformatter
+
+if TYPE_CHECKING:
+    from scipy.signal import ShortTimeFFT
+else:
+    ShortTimeFFT = lazy_import("scipy.signal", "ShortTimeFFT")
+get_window = lazy_import("scipy.signal.windows", "get_window")
+
+DFT_OUTPUT_DATA_TYPE_MAP = {
+    "AS": "amplitude_spectrum",
+    "PS": "power_spectrum",
+    "PSD": "power_spectral_density",
+}
+DFT_OUTPUT_TYPES = ("FFT", *DFT_OUTPUT_DATA_TYPE_MAP)
+
+
+def _associated_prefix(dim: str) -> str:
+    """Where dft parks the coordinates measured on a dimension it takes."""
+    # Private, like the unpadded coordinate parked beside them, and named
+    # after the dimension so idft knows what to put each one back on.
+    return f"_{dim}_associated_"
+
+
+def _get_dft_coord_units(units):
+    """Get units for DFT coordinates."""
+    new_units = invert_quantity(units)
+    # This purposefully converts 1/s to Hz to be more conventional. See #693.
+    if new_units == dc.get_quantity("1/s"):
+        new_units = dc.get_quantity("Hz")
+    return new_units
+
+
+def _get_dft_coord_unit_product(patch, dims, transformed=False, coords=None):
+    """Get the product of original or transformed coordinate units."""
+    coord_source = patch if coords is None else coords
+    names = [f"ft_{dim}" if transformed else dim for dim in iterate(dims)]
+    return prod(
+        unit
+        for name in names
+        if (unit := dc.get_quantity(coord_source.get_coord(name).units)) is not None
+    )
+
+
+def _get_dft_data_units(patch, dims, output="FFT", coords=None):
+    """Get data units for DFT outputs."""
+    data_units = dc.get_quantity(patch.attrs.data_units)
+    if data_units is None:
+        return None
+    domain_units = _get_dft_coord_unit_product(patch, dims)
+    if output == "FFT":
+        return data_units * domain_units
+    original_units = data_units / domain_units
+    spectral_units = _get_dft_coord_unit_product(
+        patch, dims, transformed=True, coords=coords
+    )
+    output_units = {
+        "AS": original_units,
+        "PS": original_units**2,
+        "PSD": original_units**2 / spectral_units,
+    }
+    return output_units[output]
 
 
 def _get_dft_new_coords(patch, dxs, dims, axes, real, original_cm=None):
@@ -45,26 +107,44 @@ def _get_dft_new_coords(patch, dxs, dims, axes, real, original_cm=None):
     # Note: We need original_cm and patch because patch may have undergone
     # padding.
 
-    def _get_fft_coord(x_len, dx, units):
-        """Get coord for normal fft coord."""
+    def _get_fft_coord(x_len, dx, units, is_real=False):
+        """Get coord for fft frequency bins."""
         new_dx = 1.0 / (x_len * dx)
-        stop = ((x_len - 1) // 2 + 1) * new_dx
-        start = -(x_len // 2) * new_dx
-        units = invert_quantity(units)
-        return get_coord(start=start, stop=stop, step=new_dx, units=units)
-
-    def _get_rfft_coord(x_len, dx, units):
-        """Get coord from real fft coord."""
-        new_dx = 1.0 / (x_len * dx)
-        start = 0
-        stop = (x_len // 2 + 1) * new_dx
-        units = invert_quantity(units)
+        start = 0 if is_real else -(x_len // 2) * new_dx
+        stop = (x_len // 2 + 1) * new_dx if is_real else ((x_len - 1) // 2 + 1) * new_dx
+        units = _get_dft_coord_units(units)
         return get_coord(start=start, stop=stop, step=new_dx, units=units)
 
     # first disassociate old coordinates. We do this rather than drop them
     # so the idft can find them and exactly restore old coords.
-    old_cm = patch.coords.disassociate_coord(*dims)
+    # A coordinate on a transformed dimension goes the same way, under a
+    # private name saying which dimension it came off, since it cannot
+    # ride the frequency axis -- a real transform is not even the same
+    # length. One spanning several dimensions has no such name, so it is
+    # dropped by the disassociation as it always was.
+    stashed = {
+        name: cdims[0]
+        for name, cdims in patch.coords.dim_map.items()
+        if name not in dims and len(cdims) == 1 and cdims[0] in dims
+    }
+    old_cm = patch.coords.disassociate_coord(*dims, *stashed)
     new_coords = old_cm.get_coord_tuple_map()
+    for name, dim in stashed.items():
+        parked = f"{_associated_prefix(dim)}{name}"
+        # A dimension and a coordinate name can be anything, so the two
+        # of them joined is not one name only they could make: a
+        # coordinate `b_associated_c` on dimension `a` parks where a
+        # coordinate `c` on dimension `a_associated_b` would. Nobody
+        # names a fiber axis that, but idft would read one of them back
+        # as the other, so it is refused rather than resolved.
+        if parked in new_coords:
+            msg = (
+                f"The coordinate {name!r} of dimension {dim!r} cannot be "
+                f"kept for the inverse transform: {parked!r} is where it "
+                "would go, and that is taken. Rename one of them."
+            )
+            raise PatchError(msg)
+        new_coords[parked] = new_coords.pop(name)
     ft = FourierTransformatter()
     for i, dim in enumerate(dims):
         old_coord = patch.get_coord(dim)
@@ -72,10 +152,7 @@ def _get_dft_new_coords(patch, dxs, dims, axes, real, original_cm=None):
         size = old_coord.shape[0]
         dx = dxs[i]
         new_name = ft.rename_dims(dim)[0]
-        if dim == real:
-            coord = _get_rfft_coord(size, dx, units)
-        else:
-            coord = _get_fft_coord(size, dx, units)
+        coord = _get_fft_coord(size, dx, units, is_real=dim == real)
         new_coords[new_name] = (new_name, coord)
         # Add padded coordinates
         if original_cm is not None:
@@ -85,14 +162,13 @@ def _get_dft_new_coords(patch, dxs, dims, axes, real, original_cm=None):
     return cm
 
 
-def _get_dft_attrs(patch, dims, new_coords, pad=False):
+def _get_dft_attrs(patch, dims, new_coords, pad=False, output="FFT"):
     """Get new attributes for transformed patch."""
     new = dict(patch.attrs)
-    new["dims"] = new_coords.dims
-    new["data_units"] = _get_data_units_from_dims(patch, dims, mul)
-    # As per #390, we also want to remove data_type (eg the patch is no
-    # longer in strain rate after the dft)
-    new["_pre_dft_data_type"] = new.pop("data_type", None)
+    new["data_units"] = _get_dft_data_units(patch, dims)
+    new["_pre_dft_data_type"] = new.get("data_type")
+    new["data_type"] = "fourier_transform"
+    new["_dft_output"] = output
     new["_dft_padded"] = pad
     return PatchAttrs(**new)
 
@@ -109,13 +185,59 @@ def _get_untransformed_dims(patch, dims):
     return out
 
 
+def _get_transformed_domain_extent(patch, dims):
+    """Get the transformed-domain extent from the DFT bin spacing."""
+    extent = 1
+    preserve_units = patch.attrs.data_units is not None
+    for dim in iterate(dims):
+        ft_coord = patch.get_coord(f"ft_{dim}")
+        # df = 1 / (n * dx), so 1 / df is the original-domain extent.
+        # For multi-axis DFTs, the total extent is the product over axes.
+        step = abs(ft_coord.step)
+        if preserve_units and ft_coord.units is not None:
+            step = step * ft_coord.units
+        extent = extent / step
+    return extent
+
+
+def _convert_dft_spectral_amplitudes(patch, output, dims, real, db):
+    """Convert the FFT output to spectral amplitude representations."""
+    amp = patch.abs()
+    extent = _get_transformed_domain_extent(amp, dims)
+    data_units = _get_dft_data_units(patch, dims, output)
+    if output == "AS":
+        # Convert DASCore's dx-scaled Fourier coefficients to harmonic
+        # amplitude.
+        out = amp / extent
+    elif output == "PS":
+        # PS bins sum to mean square.
+        out = amp * amp / (extent * extent)
+    elif output == "PSD":
+        # PSD bins integrate to mean square when multiplied by frequency-bin
+        # volume, which is the reciprocal of the transformed-domain extent.
+        out = amp * amp / extent
+    if db:
+        out = out + np.finfo(out.data.dtype).eps
+        db_scale = 20 if output == "AS" else 10
+        out = db_scale * out.log10()
+        out = out.set_units(units.dB)
+        data_units = out.attrs.data_units
+
+    return out.update_attrs(
+        data_type=DFT_OUTPUT_DATA_TYPE_MAP[output],
+        data_units=data_units,
+    )
+
+
 @patch_function()
 def dft(
     patch: PatchType,
-    dim: str | None | Sequence[str],
+    dim: str | Sequence[str] | None,
     *,
     real: str | bool | None = None,
     pad: bool = True,
+    output: Literal["FFT", "PSD", "PS", "AS"] = "FFT",
+    db: bool = False,
 ) -> PatchType:
     """
     Perform the discrete Fourier transform (dft) on specified dimension(s).
@@ -129,12 +251,24 @@ def dft(
         None, perform dft over all dimensions.
     real
         Either 1) The name of the axis over which to perform a rfft, 2)
-        True, which means the last (possibly only) dimenson should have an
+        True, which means the last (possibly only) dimension should have an
         rfft performed, or 3) None, meaning no rfft.
     pad
         If True, pad patch before performing dft along desired dimensions to
         the next fast length. This can avoid major slow-downs when dimension
         lengths are prime numbers.
+    output
+        Spectral representation to return for each frequency bin
+        - ``'FFT'``: Complex Fourier coefficients scaled by sample spacing.
+        - ``'AS'``: Amplitude spectrum in the original data units.
+        - ``'PS'``: Power spectrum whose bin sum gives mean square.
+        - ``'PSD'``: Spectral density whose bin-width-weighted sum gives
+                     mean square.
+    db
+        If True, converts the output into decibel units, if output is not FFT.
+        This applies ``20 * log10`` to ``'AS'`` and ``10 * log10`` to ``'PS'``
+        or ``'PSD'`` without a reference value.
+
 
     Notes
     -----
@@ -147,8 +281,22 @@ def dft(
 
     - Each transformed dimension has units of 1/original units.
 
-    - Output data units are the original data units multiplied by the units
-      of each transformed dimension.
+    - A non-dimensional coordinate measured on a transformed dimension is
+      not a coordinate of the output -- the frequency axis is not what it
+      was measured on, and a real transform is not even the same length --
+      but it is kept for [idft](`dascore.transform.fourier.idft`) to
+      restore. One spanning more than one dimension is dropped.
+
+    - For ``output='FFT'``, output data units are the original data units
+      multiplied by the units of each transformed dimension. Other output
+      types are normalized as described in the ``output`` parameter.
+
+    - For ``output='AS'``, ``'PS'``, or ``'PSD'`` with ``real=True``, the
+      non-DC and non-Nyquist bins have not been converted to one-sided spectra.
+      Depending on your use case, you may need to multiply non-zero bins by 2.
+
+    - If all requested dimensions are already transformed, ``dft`` returns
+      the input patch unchanged, regardless of the requested ``output``.
 
     - Non-dimensional coordinates associated with transformed coordinates
       will be dropped in the output.
@@ -170,7 +318,17 @@ def dft(
     >>> dft_time_real = patch.dft(dim="time", real=True)
     >>> # dft on specified dimensions, specify real dimension
     >>> dft_some_real = patch.dft(dim=("time", "distance"), real="time")
+    >>> # calculate a power spectral density along time
+    >>> psd = patch.dft(dim="time", real=True, output="PSD")
     """
+    output_type = output.upper()
+    if output_type not in DFT_OUTPUT_TYPES:
+        msg = f"Unknown output={output!r}. Expected one of: {DFT_OUTPUT_TYPES}."
+        raise ValueError(msg)
+    if output_type == "FFT" and db:
+        msg = "db=True is only supported for output='AS', 'PS', or 'PSD'."
+        raise ParameterError(msg)
+
     dims = list(iterate(dim if dim is not None else patch.dims))
     patch.check_coords(coords=dims)
     real = dims[-1] if real is True else real  # if true grab last dim
@@ -199,8 +357,15 @@ def dft(
     shift_slice = slice(None) if real is None else slice(None, -1)
     data = nft.fftshift(fft_data, axes=axes[shift_slice])
     # get attributes
-    attrs = _get_dft_attrs(patch, dims, new_coords, pad=pad)
-    return patch.new(data=data, coords=new_coords, attrs=attrs)
+    attrs = _get_dft_attrs(patch, dims, new_coords, pad=pad, output=output_type)
+    patch_out = patch.new(data=data, coords=new_coords, attrs=attrs)
+
+    if output_type != "FFT":
+        patch_out = _convert_dft_spectral_amplitudes(
+            patch_out, output_type, dims, real, db
+        )
+
+    return patch_out
 
 
 def _get_idft_dims_steps_axis(patch, dim):
@@ -249,6 +414,10 @@ def _get_idft_coords_and_sizes(patch, dims, new_dims, axes, real):
         if (len(potential_coord) == ax_len) or (real and old_dim == dims[-1]):
             sizes.append(len(potential_coord))
         coord_map[new_dim] = (new_dim, potential_coord)
+        # Put back the coordinates dft parked when it took the dim away.
+        prefix = _associated_prefix(new_dim)
+        for name in [x for x in coord_map if x.startswith(prefix)]:
+            coord_map[name[len(prefix) :]] = (new_dim, coord_map.pop(name)[1])
         if not padded:  # No padding, go to next dim.
             continue
         old_len = len(coord_map.pop(f"_{new_dim}_unpadded")[1])
@@ -267,17 +436,25 @@ def _get_idft_attrs(patch, dims, new_coords):
     # add all {dim}_min to new coords to ensure reverse ft can restore dims.
     new = dict(patch.attrs)
     new.pop("coords", None)
-    new["dims"] = new_coords.dims
     new["data_units"] = _get_data_units_from_dims(patch, dims, mul)
     # Restore the pre-dft datatype.
     if "_pre_dft_data_type" in new:
         new["data_type"] = new.pop("_pre_dft_data_type", None)
+    new.pop("_dft_output", None)
     new.pop("_dft_padded", None)
     return PatchAttrs(**new)
 
 
+def _check_dft_output_invertible(patch):
+    """Raise if patch DFT data are not invertible Fourier coefficients."""
+    output = patch.attrs.get("_dft_output", "FFT")
+    if output != "FFT":
+        msg = f"Only dft(output='FFT') can be inverted with idft, not {output!r}."
+        raise ValueError(msg)
+
+
 @patch_function()
-def idft(patch: PatchType, dim: str | None | Sequence[str] = None) -> PatchType:
+def idft(patch: PatchType, dim: str | Sequence[str] | None = None) -> PatchType:
     """
     Perform the inverse discrete Fourier transform (idft) on specified dimension(s).
 
@@ -302,6 +479,12 @@ def idft(patch: PatchType, dim: str | None | Sequence[str] = None) -> PatchType:
     - Real transforms are determined by transformed coordinates which have
       no negative values.
 
+    - Non-dimensional coordinates measured on a transformed dimension are
+      restored with it, provided the patch still carries what
+      [dft](`dascore.transform.fourier.dft`) parked for them. One
+      spanning more than one dimension is not parked, so it does not come
+      back.
+
     - See the [FFT note](dascore.org/notes/fft_notes.html) in Notes section
       of DASCore's documentation.
 
@@ -319,7 +502,8 @@ def idft(patch: PatchType, dim: str | None | Sequence[str] = None) -> PatchType:
     >>> # get inverse dft, transformed axis are ascertained automatically
     >>> idft = dft_time.idft()
     """
-    dims, steps, axes, real = _get_idft_dims_steps_axis(patch, dim)
+    _check_dft_output_invertible(patch)
+    dims, _steps, axes, real = _get_idft_dims_steps_axis(patch, dim)
     new_dims = FourierTransformatter().rename_dims(dims, forward=False)
     func = nft.irfftn if real else nft.ifftn
     # Get new coords, fft sizes, and padding to remove.
@@ -329,8 +513,8 @@ def idft(patch: PatchType, dim: str | None | Sequence[str] = None) -> PatchType:
     # now unshift data and undo scaling
     ax_slice = slice(None, -1) if real else slice(None)
     scale_factor = np.prod([to_float(coords.coord_map[x].step) for x in new_dims])
-    _preped = nft.ifftshift(patch.data / scale_factor, axes=axes[ax_slice])
-    data = func(_preped, s=sizes, axes=axes)
+    _prepped = nft.ifftshift(patch.data / scale_factor, axes=axes[ax_slice])
+    data = func(_prepped, s=sizes, axes=axes)
     attrs = _get_idft_attrs(patch, dims, coords)
     out = patch.new(data=data, attrs=attrs, coords=coords)
     if padding:
@@ -360,8 +544,8 @@ def _get_stft_coords(patch, dim, axis, coord, stft, window):
     new_units = invert_quantity(coord.units)
     coord_map.update(
         {
-            dim: get_coord(values=time + coord.min(), units=coord.units),
-            new_dims[axis]: get_coord(values=stft.f, units=new_units),
+            dim: get_coord(data=time + coord.min(), units=coord.units),
+            new_dims[axis]: get_coord(data=stft.f, units=new_units),
             # Add window array for inverse stft.
             "_stft_window": (None, window),
             "_stft_old_coord": (None, patch.get_coord(dim)),
@@ -371,10 +555,10 @@ def _get_stft_coords(patch, dim, axis, coord, stft, window):
     return out
 
 
-@patch_function()
+@patch_function(data_type="fourier_transform")
 def stft(
     patch: PatchType,
-    taper_window: str | ndarray | tuple[str, Any, ...] = "hann",
+    taper_window: str | ndarray | tuple[str | Any, ...] = "hann",
     overlap: Quantity | int | None = 50 * percent,
     samples: bool = False,
     detrend: bool = False,
@@ -440,26 +624,20 @@ def stft(
     [Patch.dft](`dascore.Patch.dft`), [Patch.istft](`dascore.Patch.istft`)
     """
     # Get coordinate information.
-    (dim, axis, val) = get_dim_axis_value(patch, kwargs=kwargs)[0]
+    (dim, axis, _) = get_dim_axis_value(patch, kwargs=kwargs)[0]
     coord = patch.get_coord(dim, require_evenly_sampled=True)
-    window_samples = coord.get_sample_count(val, samples=samples, enforce_lt_coord=True)
-    step = dc.to_float(coord.step)
-    sampling_rate = 1 / abs(step)
-    # Create window and calculate hop.
+    # Get window count/step in samples
+    window_samples, _, hop = get_window_axis_step(
+        patch, step=None, overlap=overlap, samples=samples, **kwargs
+    )
+    # Default step here is the same size as window (no overlap).
+    hop = hop if hop is not None else window_samples
+    sampling_rate = 1 / abs(dc.to_float(coord.step))
+    # Create window.
     if isinstance(taper_window, ndarray):
         window = taper_window
     else:
         window = get_window(taper_window, window_samples, fftbins=False)
-    # By using a coord and enforce_lt_coord, we guarantee the overlap is lt window.
-    if overlap is not None:
-        overlap = coord[:window_samples].get_sample_count(
-            overlap,
-            samples=samples,
-            enforce_lt_coord=True,
-        )
-    else:
-        overlap = 0
-    hop = window_samples - overlap
     # Perform stft
     fft_mode = "onesided" if np.isrealobj(patch.data) else "centered"
     stft = ShortTimeFFT(
@@ -471,7 +649,8 @@ def stft(
     )
     func = stft.stft if not detrend else partial(stft.stft_detrend, detr="linear")
     # For compatibility with dft, we scale by step. See the DFT note for why.
-    new_data = func(patch.data, axis=axis) * step
+    coord_step = dc.to_float(coord.step)
+    new_data = func(patch.data, axis=axis) * coord_step
     # Get new coordinate manager
     cm = _get_stft_coords(patch, dim, axis, coord, stft, window)
     # Update attrs with metadata needed to invert stft
@@ -484,9 +663,10 @@ def stft(
         "_stft_fft_mode": fft_mode,
         "_stft_mfft": window_samples,
         "_stft_performed": True,
+        "_pre_stft_data_type": patch.attrs.get("data_type"),
         "data_units": _get_data_units_from_dims(patch, dim, mul),
     }
-    attrs = patch.attrs.drop("coords").update(**new_attrs)
+    attrs = patch.attrs.update(**new_attrs)
     return patch.new(data=new_data, coords=cm, attrs=attrs)
 
 
@@ -510,15 +690,18 @@ def _get_istft_coord(coords, frequency_axis, time_axis):
     Get the coordinate manager for the inverse of the short time fourier transform.
     """
     dims = coords.dims
-    # Create new time coordinate.
-    coord_map = dict(coords.coord_map)
+    freq_name, time_name = dims[frequency_axis], dims[time_axis]
+    # Drop the transformed dims and any coords associated with them; those
+    # coords are indexed by frequency or window and cannot survive the inverse.
+    stripped = coords.drop_coords(freq_name, time_name)[0]
+    # Use the tuple map so associated coords keep their dimensions.
+    coord_map = stripped.get_coord_tuple_map()
     coord_map.pop("_stft_window")
-    time = coord_map.pop("_stft_old_coord")
-    coord_map.pop(coords.dims[frequency_axis])
-    coord_map[dims[time_axis]] = time
+    time = coord_map.pop("_stft_old_coord")[1]
+    coord_map[time_name] = (time_name, time)
     # Get new dimensions
     new_dims = list(dims)
-    new_dims[frequency_axis] = dims[time_axis]
+    new_dims[frequency_axis] = time_name
     new_dims.pop(time_axis)
     return get_coord_manager(coords=coord_map, dims=tuple(new_dims)), time
 
@@ -538,7 +721,7 @@ def _get_short_time_fft(patch) -> ShortTimeFFT:
 
 
 @patch_function()
-def istft(patch) -> PatchType:
+def istft(patch) -> dc.Patch:
     """
     Invert a short-time fourier transform.
 
@@ -557,6 +740,20 @@ def istft(patch) -> PatchType:
     >>> pa1 = patch.stft(time=10*second, overlap=4*second)
     >>> pa2 = pa1.istft()
     >>> assert pa2.equals(patch, close=True)
+
+    Notes
+    -----
+    - Non-dimensional coordinates associated with un-transformed dimensions
+      are preserved. Those associated with the transformed dimension are
+      already dropped by [stft](`dascore.transform.fourier.stft`) so they
+      cannot be restored.
+    - Coordinates associated with the frequency or window dimensions the
+      stft created are dropped, since neither dimension survives the
+      inverse. [idft](`dascore.Patch.idft`) behaves the same way.
+
+    See Also
+    --------
+    [Patch.stft](`dascore.Patch.stft`), [Patch.idft](`dascore.Patch.idft`)
     """
     time_axis, frequency_axis = _get_inverse_axes(patch)
     detrended = patch.attrs.get("_stft_detrended")
@@ -579,8 +776,11 @@ def istft(patch) -> PatchType:
     new_data = data_untrimmed[index]
     assert new_data.shape == cm.shape
     # Re-assemble and return new patch.
-    new_attrs = {i: v for i, v in patch.attrs.items() if not i.startswith("_stft")}
+    patch_attrs = dict(patch.attrs)
+    new_attrs = {i: v for i, v in patch_attrs.items() if not i.startswith("_stft")}
+    if "_pre_stft_data_type" in patch_attrs:
+        new_attrs["data_type"] = new_attrs.pop("_pre_stft_data_type")
     dim = patch.dims[time_axis]
     new_attrs["data_units"] = _get_data_units_from_dims(patch, dim, truediv)
-    attrs = dc.PatchAttrs(**new_attrs).drop("coords")
+    attrs = dc.PatchAttrs(**new_attrs)
     return patch.new(data=new_data, coords=cm, attrs=attrs)

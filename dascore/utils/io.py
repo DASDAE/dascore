@@ -4,30 +4,100 @@ from __future__ import annotations
 
 import io
 import typing
+from contextlib import suppress
 from functools import cache
 from inspect import isfunction, ismethod
 from pathlib import Path
+from threading import RLock
 from typing import Any, get_type_hints
 
 import numpy as np
 
 import dascore as dc
+from dascore.compat import UPath
 from dascore.constants import PatchType
 from dascore.exceptions import PatchConversionError
 from dascore.utils.misc import (
     _maybe_make_parent_directory,
-    cached_method,
+    iterate,
     optional_import,
 )
+from dascore.utils.paths import (
+    coerce_to_local_path,
+    coerce_to_upath,
+    is_local_path,
+    is_pathlike,
+)
+from dascore.utils.remote_io import ensure_local_file as _ensure_local_file
+from dascore.utils.remote_io import get_local_handle
 from dascore.utils.time import to_float
 
 HANDLE_FUNCTIONS = {
-    str: lambda x: str(x),
     Path: lambda x: Path(x),
+    UPath: lambda x: coerce_to_upath(x),
 }
 
 
 RequiredType = typing.TypeVar("RequiredType")
+
+
+def ensure_local_file(resource) -> Path:
+    """Return a stable local path for one resource for the current session."""
+    if isinstance(resource, IOResourceManager):
+        resource = resource.source
+    return _ensure_local_file(resource)
+
+
+def _normalize_resource_identity(resource):
+    """Normalize one pathlike input to a local Path or remote UPath."""
+    if is_local_path(resource):
+        return coerce_to_local_path(resource)
+    return coerce_to_upath(resource)
+
+
+def _resolve_resource(resource, required_type):
+    """Resolve resource to a form suitable for required_type."""
+    # already have a resource thing of some kind; just pass through.
+    if not is_pathlike(resource):
+        return resource
+    # Otherwise get Upath or Path, if Path ensure it is downloaded.
+    resource = _normalize_resource_identity(resource)
+    if isinstance(resource, Path):
+        return resource
+    if required_type is Path:
+        return ensure_local_file(resource)
+    return resource
+
+
+def _annotate_handle_path(handle, resource):
+    """Attach lightweight source-path metadata to a remote handle when absent."""
+    path_str = str(resource)
+    # Compatibility hack for readers which inspect handle.name/path. Remote
+    # text handles can come back as TextIOWrapper(name=None) whose name is
+    # not writable, so keep a private fallback for format sniffers.
+    for attr_name in ("_dascore_source_path",):
+        with suppress(AttributeError, TypeError):
+            setattr(handle, attr_name, path_str)
+    if getattr(handle, "name", None) in (None, ""):
+        with suppress(AttributeError, TypeError):
+            setattr(handle, "name", path_str)
+    return handle
+
+
+def _normalize_source_patch_keys(source_patch_key) -> set[str]:
+    """Coerce source patch identifiers into a deduplicated set of strings."""
+    return {
+        str(value) for value in iterate(source_patch_key) if value not in (None, "")
+    }
+
+
+def _read_file_header(path, length: int) -> bytes:
+    """Return the first bytes from a file-like path or empty bytes on IO errors."""
+    try:
+        with open(path, "rb") as fi:
+            return fi.read(length)
+    except OSError:
+        return b""
 
 
 class BinaryReader(io.BytesIO):
@@ -39,10 +109,12 @@ class BinaryReader(io.BytesIO):
     @classmethod
     def get_handle(cls, resource):
         """Get the handle object from various sources."""
-        if isinstance(resource, cls | io.BufferedIOBase):
+        if isinstance(resource, (cls, io.BufferedIOBase)):
             if cls.reset_offset:
                 resource.seek(0)  # reset byte offset
             return resource
+        if isinstance(resource, UPath):
+            return _annotate_handle_path(resource.open(cls.mode), resource)
         try:
             _maybe_make_parent_directory(resource)
             return open(resource, mode=cls.mode)
@@ -51,10 +123,23 @@ class BinaryReader(io.BytesIO):
             raise NotImplementedError(msg)
 
 
+class LocalBinaryReader(BinaryReader):
+    """A binary reader which first materializes remote resources locally."""
+
+    @classmethod
+    def get_handle(cls, resource):
+        """Get the binary handle, materializing remote resources if needed."""
+        if isinstance(resource, (cls, io.BufferedIOBase)):
+            if cls.reset_offset:
+                resource.seek(0)
+            return resource
+        return get_local_handle(resource, super().get_handle)
+
+
 class BinaryWriter(BinaryReader):
     """Dummy class for streams which write binary."""
 
-    mode = "ab"
+    mode = "wb"
     reset_offset = False
 
 
@@ -66,10 +151,14 @@ class TextReader(BinaryReader):
     @classmethod
     def get_handle(cls, resource):
         """Get a text handle from a resource."""
-        if isinstance(resource, cls | io.TextIOBase):
+        if isinstance(resource, (cls, io.TextIOBase)):
             if cls.reset_offset:
                 resource.seek(0)
             return resource
+        if isinstance(resource, UPath):
+            return _annotate_handle_path(
+                resource.open(cls.mode, encoding="utf-8"), resource
+            )
         try:
             _maybe_make_parent_directory(resource)
             return open(resource, mode=cls.mode, encoding="utf-8")
@@ -81,7 +170,16 @@ class TextReader(BinaryReader):
 class TextWriter(BinaryWriter):
     """Base class for writing text files."""
 
-    mode = "a"
+    mode = "w"
+
+
+class LocalPath:
+    """A local path adapter for callsites that require a concrete filename."""
+
+    @classmethod
+    def get_handle(cls, resource):
+        """Return a local path for the supplied resource."""
+        return get_local_handle(resource, Path)
 
 
 @cache
@@ -102,8 +200,8 @@ def get_handle_from_resource(uri, required_type):
     """
     Get a handle for a file of preferred type.
 
-    return uri if required type is not specified or supported in either
-    handle function or has a `get_handle` method.
+    Return uri unchanged if required type is not specified or supported in
+    either handle functions or has no `get_handle` method.
     """
     if hasattr(required_type, "get_handle"):
         uri = required_type.get_handle(uri)
@@ -112,17 +210,40 @@ def get_handle_from_resource(uri, required_type):
     return uri
 
 
+def release_handle(handle, abort: bool = False):
+    """
+    Release a file handle, closing it or discarding its uncommitted work.
+
+    Only a few handles can ``abort``; a remote HDF5 writer does, because
+    closing it uploads whatever was written so far. Everything else is
+    closed, and a handle with no ``close`` needs no release at all.
+    """
+    if abort and hasattr(handle, "abort"):
+        handle.abort()
+    else:
+        getattr(handle, "close", lambda: None)()
+
+
 class IOResourceManager:
-    """A class for managing opening/closing files."""
+    """
+    A class for managing opening/closing files.
+
+    One manager serves one IO operation. Creating and closing its
+    resources is synchronized, so concurrent callers share a single
+    handle per type; a handle it hands back is not itself safe to use
+    from several threads at once.
+    """
 
     def __init__(self, source: Any):
         self._source = source
         self._cache = {}
+        self._lock = RLock()
 
     @property
-    @cached_method
     def source(self):
         """Get the source of the IO manager."""
+        # Not cached: the walk is a couple of isinstance checks, and
+        # memoizing it into _cache would let close_all close the source.
         source = self._source
         # this handles IO managers derived from other IO managers;
         # effectively, we need to go back to the original, non-io manager source
@@ -131,7 +252,7 @@ class IOResourceManager:
         return source
 
     def get_resource(self, required_type: RequiredType) -> RequiredType:
-        """Get the requested resource."""
+        """Get the requested resource, opening each handle exactly once."""
         # no required type, just return source of manager.
         if required_type is None:
             return self.source
@@ -141,32 +262,71 @@ class IOResourceManager:
         if isinstance(self._source, self.__class__):
             return self._source.get_resource(required_type)
         required_type = _get_required_type(required_type)
-        if required_type not in self._cache:
-            out = get_handle_from_resource(self._source, required_type)
-            self._cache[required_type] = out
-        return self._cache[required_type]
+        with self._lock:
+            if required_type not in self._cache:
+                source = _resolve_resource(self._source, required_type)
+                out = get_handle_from_resource(source, required_type)
+                self._cache[required_type] = out
+            return self._cache[required_type]
 
-    def close_all(self):
-        """Close any open file handles."""
-        for handle in self._cache.values():
-            getattr(handle, "close", lambda: None)()
+    def close_all(self, abort: bool = False):
+        """
+        Close any open file handles.
+
+        With ``abort=True``, handles that support it discard uncommitted
+        work (e.g. remote writers skip uploading a partial file). One
+        handle failing must not skip cleanup of the others (remote handles
+        resume garbage collection in close), so the first error is
+        re-raised only after every handle was attempted. BaseException is
+        caught for that reason too: a Ctrl-C mid-close would otherwise
+        strand the GC pause of every handle after it.
+        """
+        first_exc = None
+        with self._lock:
+            for handle in self._cache.values():
+                try:
+                    release_handle(handle, abort=abort)
+                except BaseException as exc:
+                    first_exc = first_exc if first_exc is not None else exc
+        if first_exc is not None:
+            raise first_exc
+
+    def clear_cache(self):
+        """Close and forget any cached resources so they can be reopened fresh."""
+        with self._lock:
+            try:
+                self.close_all()
+            finally:
+                self._cache.clear()
 
     def __enter__(self):
         """Entering context manager."""
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        """Simply ensure all file handles are closed."""
-        self.close_all()
+        """Close all handles; on error, abort uncommitted writes instead."""
+        if exc_type is None:
+            self.close_all()
+            return
+        try:
+            self.close_all(abort=True)
+        except Exception as cleanup_error:
+            # A cleanup failure must not replace the error which caused it.
+            exc_val.add_note(f"Aborting IO resources also failed: {cleanup_error!r}")
 
     def __del__(self):
-        self.close_all()
+        with suppress(Exception):
+            self.close_all()
 
 
 def patch_to_xarray(patch: PatchType):
     """Return a data array with patch contents."""
     xr = optional_import("xarray")
-    attrs = dict(patch.attrs)
+    # Omit None-valued attrs because xarray backends may reject them during
+    # NetCDF serialization, while a missing attr round-trips cleanly.
+    attrs = {
+        key: value for key, value in dict(patch.attrs).items() if value is not None
+    }
     patch_dims = patch.dims
     coords = {}
     for name, coord in patch.coords.coord_map.items():
@@ -178,18 +338,17 @@ def patch_to_xarray(patch: PatchType):
     return xr.DataArray(patch.data, attrs=attrs, dims=patch_dims, coords=coords)
 
 
-def xarray_to_patch(data_array) -> PatchType:
+def xarray_to_patch(data_array) -> dc.Patch:
     """Convert an xarray dataarray to a patch."""
     # this cant work if xarray isn't installed. This ensures it is.
     _ = optional_import("xarray")
 
-    params = dict(
+    return dc.Patch(
         coords={i: (x.dims, x.values) for i, x in data_array.coords.items()},
         attrs=dict(data_array.attrs.items()),
         dims=data_array.dims,
         data=data_array.data,
     )
-    return dc.Patch(**params)
 
 
 def patch_to_obspy(patch: PatchType):
@@ -237,7 +396,6 @@ def patch_to_obspy(patch: PatchType):
     traces = []
     for data, other_val in zip(patch.data, other_vals):
         stats = patch.attrs.model_dump()
-        stats.pop("coords")
         stats.update(base_stats)
         stats[other_dim] = other_val
         trace = obspy.Trace(data=data, header=stats)
@@ -245,7 +403,7 @@ def patch_to_obspy(patch: PatchType):
     return obspy.Stream(traces)
 
 
-def obspy_to_patch(stream, dim="distance") -> PatchType:
+def obspy_to_patch(stream, dim="distance") -> dc.Patch:
     """
     Convert an obspy stream to a patch.
 

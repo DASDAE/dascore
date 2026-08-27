@@ -3,15 +3,20 @@
 
 # import segyio
 import datetime as dt
-from pathlib import Path
 
 import numpy as np
 
 import dascore as dc
 from dascore.io.core import FiberIO
+from dascore.utils.paths import coerce_to_local_path, coerce_to_upath, is_local_path
 from dascore.utils.time import to_float
 
 RSFKEYS_WRITE = ("in", "esize", "data_format")
+
+
+def _coerce_output_path(path):
+    """Return a local Path or remote UPath-like path for writing."""
+    return coerce_to_local_path(path) if is_local_path(path) else coerce_to_upath(path)
 
 
 class RSFV1(FiberIO):
@@ -23,7 +28,7 @@ class RSFV1(FiberIO):
     # just make another class in the same module named rsfV2.
     version = "1"
 
-    def write(self, spool, path, data_path=None, **kwargs):
+    def write(self, spool, resource, data_path=None, **kwargs):
         """
         Write a patch to RSF format.
 
@@ -32,7 +37,7 @@ class RSFV1(FiberIO):
         data_path needs to be bindata_file.rsf or /location/of/bindata_file.rsf
         (NO '@')
 
-        path needs to be hdr_file.rsf or /location/of/hdr_file.rsf
+        resource needs to be hdr_file.rsf or /location/of/hdr_file.rsf
 
         spool needs to have a single patch in it
 
@@ -43,7 +48,7 @@ class RSFV1(FiberIO):
         ----------
         spool
             The input spool to convert to rsf, must have exactly one patch.
-        path
+        resource
             Path to create the rsf file
         data_path
             If data and rsf header information are to be separate, the
@@ -53,11 +58,11 @@ class RSFV1(FiberIO):
         Notes
         -----
         - Patch datatype is converted to float32 for compatibility with
-        Madagascar (may be able to keep dytpe in the future)
+        Madagascar (may be able to keep dtype in the future)
         """
         assert len(spool) == 1
         patch = spool[0]
-        axis_lengs = patch.shape
+        axis_lengths = patch.shape
         axis_origs = [to_float(patch.get_coord(x).start) for x in patch.dims]
         axis_steps = [to_float(patch.get_coord(x).step) for x in patch.dims]
         axis_names = patch.dims
@@ -78,39 +83,37 @@ class RSFV1(FiberIO):
 
         hdr_str = f"DASCORE {dc.__version__}   {dt.datetime.now()} \n"
 
-        length = len(axis_lengs)
+        length = len(axis_lengths)
         hdr_info = [hdr_str, file_format, f"esize={file_esize}"]
         for i in range(length):
-            hdr_info.append(f"n{i+1}={axis_lengs[i]}")
+            hdr_info.append(f"n{i + 1}={axis_lengths[i]}")
             if axis_names[i] == "time":
-                hdr_info.append(f"o{i+1}=0.0")
+                hdr_info.append(f"o{i + 1}=0.0")
                 hdr_info.append(f"starttime={axis_origs[i]}")
             else:
-                hdr_info.append(f"o{i+1}={axis_origs[i]}")
-            hdr_info.append(f"d{i+1}={axis_steps[i]}")
-            hdr_info.append(f'label{i+1}="{axis_names[i]}"')
-            hdr_info.append(f'unit{i+1}="{axis_units[i]}"')
+                hdr_info.append(f"o{i + 1}={axis_origs[i]}")
+            hdr_info.append(f"d{i + 1}={axis_steps[i]}")
+            hdr_info.append(f'label{i + 1}="{axis_names[i]}"')
+            hdr_info.append(f'unit{i + 1}="{axis_units[i]}"')
 
         if data_path is not None:
             # outputs header and binary separately (.rsf and .rsf@)
-            outdatapath = Path(str(data_path) + "@")
+            outdatapath = _coerce_output_path(str(data_path) + "@")
             outdatapath.parent.mkdir(exist_ok=True, parents=True)
             hdr_info.append(f'in="{data_path}@"')
             with outdatapath.open("wb") as fi:
                 fi.write(data_bytes)
             out = "\n".join(hdr_info)
-            outpath = Path(str(path))
+            outpath = _coerce_output_path(resource)
             outpath.parent.mkdir(exist_ok=True, parents=True)
             with outpath.open("w") as fi:
                 fi.write(out)
         else:
             # outputs header and binary combined (.rsf with both hdr and bin)
             hdr_info.append('in="stdin"\n\n')
-            # hdr_info.append(data)
-            out = "\n".join(hdr_info)
-            outpath = Path(str(path))
+            out = "\n".join(hdr_info).encode()
+            outpath = _coerce_output_path(resource)
             outpath.parent.mkdir(exist_ok=True, parents=True)
-            with outpath.open("w") as fi:
+            with outpath.open("wb") as fi:
                 fi.write(out)
-            with outpath.open("ab") as fi:
                 fi.write(data_bytes)

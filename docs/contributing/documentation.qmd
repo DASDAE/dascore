@@ -16,6 +16,8 @@ Use [numpy style docstrings](https://numpydoc.readthedocs.io/en/latest/format.ht
 DASCore makes extensive use of Python 3's [type hints](https://docs.python.org/3/library/typing.html).
 Please make an effort to accurately annotate public functions/classes/methods.
 
+When documenting IO code, make sure the docstring reflects the actual contract boundary. In particular, `FiberIO.scan()` implementations return structured payloads with patch-local attrs and a full `CoordManager`; `snap=False` is the exact stored-value path for formats with per-sample coordinate arrays. Format implementations should not claim responsibility for `source_path`, `source_format`, or `source_version`, which are attached by DASCore's public scan pipeline.
+
 Here is an example:
 
 ```{python}
@@ -131,6 +133,40 @@ quarto preview docs
 If you need to change the structure of the site, like adding a new section/subsection, the file to edit is scripts/_templates/_quarto.yml.
 Do not modify docs/_quarto.yml because it will be overwritten.
 :::
+
+## Measuring the build
+
+The documentation is by far the slowest thing CI builds, so each phase of it is timed and what it produced is measured. `scripts/_doc_report.py` collects that into one JSON report, which the doc workflows upload and summarize in the job summary. It runs the same way locally:
+
+```bash
+python scripts/_doc_report.py time quarto_render -- quarto render docs
+python scripts/_doc_report.py site
+python scripts/_doc_report.py summary
+```
+
+The report keeps the page phase, quarto's wall time, and the end-to-end build apart, since they differ by several minutes, and it splits the rendered site into content pages, redirects, and everything else.
+
+`scripts/_baselines/api_urls.tsv` records where every documented object is published. Moving a page breaks the link anyone saved to it, so the report says which URLs moved or vanished against that baseline; regenerate it with `python scripts/_api_urls.py freeze` and say in the pull request why each one moved.
+
+## Runnable tutorials
+
+Every tutorial page with runnable code carries an "Open in JupyterLite" link, which opens the same content as a live notebook in a [JupyterLite](https://jupyterlite.readthedocs.io) site. DASCore runs there through WebAssembly, so readers need nothing installed.
+
+The `.qmd` files remain the only source; the notebooks are build artifacts. They are produced by rendering each tutorial page to `.ipynb`, rewriting its cross-page links to absolute urls on whichever site is being built, and pointing it at the Pyodide kernel:
+
+```bash
+python -m build --wheel
+python scripts/build_notebooks.py
+jupyter lite build --contents docs/lite_contents --output-dir docs/lite --piplite-wheels dist/dascore-*.whl
+```
+
+CI runs these steps in `.github/actions/prep_doc_build`, before quarto renders the site, and quarto copies `docs/lite` into `_site` as a project resource. A tutorial page only gets the link when a notebook exists for it, so a page with no code cells simply does not show one, and rendering the docs without building the notebooks first drops the links rather than producing broken ones.
+
+The wheel passed to `--piplite-wheels` is bundled into the site and is what the notebooks' first cell installs. That deliberately pins the tutorials to the same DASCore the surrounding docs were built from, rather than whatever is currently on PyPI. It is also load-bearing rather than a nicety: the last release still requires PyTables, which has no WebAssembly build, so without the bundled wheel the install fails outright in the browser.
+
+The example data the tutorials read is mirrored into the site alongside the notebooks, and the setup cell points `DFS_DATA_DIR` at it. The browser kernel mounts the site's files at `/drive`, so `/drive/data/<DATA_VERSION>/<name>` is where pooch looks and nothing is downloaded from GitHub, which rate-limits per IP and would otherwise fail a room full of people sharing one connection. The mirrored files are listed in `MIRRORED_DATA` in `scripts/build_notebooks.py`; a page that reads something outside that list still downloads it as before, so the list falling behind costs a download rather than breaking a notebook.
+
+Links from a notebook back to other doc pages are absolute, so they need to know which deployment they belong to. `DASCORE_DOC_SITE_URL` sets that base url, like `DASCORE_DOC_BRANCH` sets the "edit this page" branch; it defaults to the released site and the dev workflow points it at netlify. Without it, notebooks built from `dev` would link to pages that have not been released yet.
 
 # Cross references
 

@@ -1,38 +1,78 @@
 name: TestDocBuild
 
 on:
-  push:
-    branches:
-      - dev
+  # Pushes to dev are covered by BuildDeployDevDocs, which builds the same
+  # docs and publishes them, so this only guards labeled pull requests.
   pull_request:
     types: [labeled, synchronize]
+
+  # A manual run is how the sidebar experiment is measured: the same build,
+  # on the same runner class, with only the navigation changed.
+  workflow_dispatch:
+    inputs:
+      compact_sidebar:
+        description: "Build the API sidebar with one entry per section"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: TestDocBuild-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Where the test-data cache is restored; pooch reads files from here.
+  # Must match the path used in .github/actions/prime-test-data-cache.
+  DFS_DATA_DIR: ${{ github.workspace }}/.test_data_cache
+  # A pull request builds dev-based content, so the tutorial notebooks should
+  # link to the dev docs like BuildDeployDevDocs does. Left unset they would
+  # point at the released site, where a page added since the last release 404s
+  # and the preview misleads the reviewer.
+  DASCORE_DOC_SITE_URL: https://dascore.netlify.app
+  # Empty unless a manual run asked for the section level sidebar.
+  DASCORE_DOC_COMPACT_SIDEBAR: ${{ inputs.compact_sidebar && '1' || '' }}
 
 jobs:
   test_build_docs:
     if: |
-      github.event_name == 'push'
-      || (github.event.action == 'labeled' && github.event.label.name == 'documentation')
-      || (github.event.action == 'synchronize' && contains(github.event.pull_request.labels.*.name, 'documentation'))
+      github.event_name == 'workflow_dispatch'
+      || (github.event.pull_request.state == 'open'
+      && ((github.event.action == 'labeled' && github.event.label.name == 'documentation')
+      || (github.event.action == 'synchronize' && contains(github.event.pull_request.labels.*.name, 'documentation'))))
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # Needed to look up the uploaded artifact's id.
+      actions: read
+      # Needed to create/update the doc link comment on the PR.
+      pull-requests: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
+          persist-credentials: false
           fetch-tags: "true"
           fetch-depth: '0'
 
       - uses: ./.github/actions/load-shared-vars
+        id: shared-vars
 
-      - uses: ./.github/actions/mamba-install-dascore
+      - uses: ./.github/actions/install-dascore
         with:
           # Defined in .github/actions/load-shared-vars/action.yml
-          python-version: ${{ env.PYTHON_DEFAULT }}
-          environment-file: './.github/doc_environment.yml'
-          cache-number: 1
+          python-version: ${{ steps.shared-vars.outputs.python-default }}
           prepare-test-data: "true"
 
       - uses: ./.github/actions/build-docs
 
-      - uses: actions/upload-artifact@v4
+      # The artifact this job uploads is the size gate the plan measures
+      # against, so this build is the one which pays to compress the site.
+      - uses: ./.github/actions/report_doc_build
+        with:
+          archive: "true"
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
           name: documentation_build_test
           path: ./docs/_site
@@ -63,8 +103,8 @@ jobs:
 
       # Determine if the automated documentation comment exists.
       - name: Find Comment
-        if: github.event_name == 'pull_request'
-        uses: peter-evans/find-comment@v3
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+        uses: peter-evans/find-comment@b30e6a3c0ed37e7c023ccd3f1db5c6c0b0c23aad  # v4.0.0
         id: fc
         with:
           issue-number: ${{ github.event.pull_request.number }}
@@ -73,8 +113,8 @@ jobs:
 
       # Create a comment with a download link to build docs
       - name: Create or update comment
-        if: github.event_name == 'pull_request'
-        uses: peter-evans/create-or-update-comment@v4
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+        uses: peter-evans/create-or-update-comment@e8674b075228eee787fea43ef493e45ece1004c9  # v5.0.0
         with:
           comment-id: ${{ steps.fc.outputs.comment-id }}
           issue-number: ${{ github.event.pull_request.number }}

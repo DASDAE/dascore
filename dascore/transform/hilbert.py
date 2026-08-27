@@ -7,15 +7,17 @@ from __future__ import annotations
 from collections.abc import Callable
 
 import numpy as np
-import scipy.signal
 
 from dascore.constants import DIM_REDUCE_DOCS, PatchType
 from dascore.exceptions import ParameterError
 from dascore.utils.docs import compose_docstring
+from dascore.utils.imports import lazy_import
 from dascore.utils.patch import patch_function
 
+scipy_hilbert = lazy_import("scipy.signal", "hilbert")
 
-@patch_function()
+
+@patch_function(data_type="")
 def hilbert(patch: PatchType, dim: str) -> PatchType:
     """
     Perform a Hilbert transform on a patch.
@@ -51,13 +53,13 @@ def hilbert(patch: PatchType, dim: str) -> PatchType:
     axis = patch.get_axis(dim)
 
     # Apply Hilbert transform
-    analytic_signal = scipy.signal.hilbert(patch.data, axis=axis)
+    analytic_signal = scipy_hilbert(patch.data, axis=axis)
 
     # Return new patch with complex data
     return patch.new(data=analytic_signal)
 
 
-@patch_function()
+@patch_function(data_type="envelope")
 def envelope(patch: PatchType, dim: str) -> PatchType:
     """
     Calculate the envelope of a signal using the Hilbert transform.
@@ -90,7 +92,7 @@ def envelope(patch: PatchType, dim: str) -> PatchType:
     # Get the analytic signal
     patch.get_coord(dim, require_evenly_sampled=True)  # Ensure evenly sampled
     axis = patch.get_axis(dim)
-    data = scipy.signal.hilbert(patch.data, axis=axis)
+    data = scipy_hilbert(patch.data, axis=axis)
     # Calculate envelope as magnitude of analytic signal
     envelope_data = np.abs(data)
     # Return new patch with envelope data
@@ -112,7 +114,7 @@ def __infer_transform_dim(patch, stack_dim):
     return next(iter(dims))
 
 
-@patch_function()
+@patch_function(data_type="phase_weighted_stack")
 @compose_docstring(dim_reduce=DIM_REDUCE_DOCS)
 def phase_weighted_stack(
     patch: PatchType,
@@ -194,15 +196,13 @@ def phase_weighted_stack(
     stack_axis = patch.get_axis(stack_dim)
     data = patch.data
     # Get unit phasors. Use eps here to avoid unstable division by 0.
-    analytic_data = scipy.signal.hilbert(data, axis=transform_axis)
+    analytic_data = scipy_hilbert(data, axis=transform_axis)
     eps = np.finfo(analytic_data.real.dtype).eps
     amp = np.maximum(np.abs(analytic_data), eps)
     unit_phasors = analytic_data / amp
     mean_phasor = np.mean(unit_phasors, axis=stack_axis, keepdims=True)
-    # Get weights based on coherence.
-    # The coherence |mean_phasor| naturally ranges from 0 to 1:
-    # - 0: completely incoherent (random phases)
-    # - 1: perfectly coherent (all phases aligned)
+    # Weight by coherence: |mean_phasor| runs from 0 (random phases) to 1
+    # (all phases aligned).
     weights = np.abs(mean_phasor) ** power
     # Stack original data and apply weights (we can do this since weights
     # are common across all samples)

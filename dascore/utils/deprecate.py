@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import functools
 from collections.abc import Callable
-from typing import Any, TypeVar
+from typing import Any, TypeVar, cast
 
 from typing_extensions import deprecated as dep
 
@@ -47,7 +47,7 @@ def deprecate(
     """
 
     def _build_msg(func):
-        """Build the message to emmit."""
+        """Build the message to emit."""
         # Build a clear message for both runtime and typing hint
         qual = f"{func.__module__}.{getattr(func, '__qualname__', func.__name__)}"
         since_str = f" since {since}" if since else ""
@@ -73,6 +73,9 @@ def deprecate(
 
         # Apply typing-level deprecation *to the wrapper* so editors see it
         msg = _build_msg(func)
-        return dep(msg)(wrapper)  # type: ignore[return-value]
+        # functools.wraps makes the wrapper stand in for func, but the
+        # (*args, **kwargs) signature cannot express that, so the
+        # substitution has to be asserted rather than derived.
+        return cast("F", dep(msg)(wrapper))
 
     return _decorate

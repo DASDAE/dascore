@@ -9,26 +9,43 @@ import matplotlib as mpl
 import matplotlib.pyplot as plt
 import numpy as np
 
-from dascore.constants import PatchType
+from dascore.constants import DEFAULT_COLORMAPS, PatchType
 from dascore.exceptions import ParameterError
-from dascore.units import get_quantity_str, maybe_convert_percent_to_fraction
+from dascore.units import maybe_convert_percent_to_fraction
+from dascore.utils.gaps import get_gap_edges, is_monotonic_and_finite
 from dascore.utils.misc import tukey_fence
 from dascore.utils.patch import patch_function
 from dascore.utils.plotting import (
     _format_time_axis,
     _get_ax,
     _get_cmap,
+    _get_data_label,
     _get_dim_label,
     _get_extents,
+    _maybe_invert_yaxis,
 )
-from dascore.utils.time import dtype_time_like, is_datetime64
+from dascore.utils.time import is_datetime64
+from dascore.viz._labels import (
+    draw_labels,
+    image_cell_edges,
+    label_plan,
+    label_runs,
+    mesh_cell_edges,
+)
 
 
 def _validate_scale_type(scale_type):
     """Validate that scale_type is either 'relative' or 'absolute'."""
     valid_types = {"absolute", "relative"}
     if scale_type not in valid_types:
-        msg = f"scale_type must be one of {valid_types}, " f"but got '{scale_type}'"
+        msg = f"scale_type must be one of {valid_types}, but got '{scale_type}'"
+        raise ParameterError(msg)
+
+
+def _validate_gap_factor(gap_factor):
+    """Validate the factor used to identify coordinate gaps."""
+    if not np.isfinite(gap_factor) or gap_factor <= 1:
+        msg = "gap_factor must be a finite number greater than 1"
         raise ParameterError(msg)
 
 
@@ -111,39 +128,122 @@ def _format_axis_labels(ax, patch, dims_r):
         dtype = patch.get_coord(dim).dtype
         if is_datetime64(dtype):
             _format_time_axis(ax, dim, x)
-        # Invert the y axis so origin is at the top. This follows the
-        # convention for seismic shot gathers where time increases downward.
-        if x == "y" and dtype_time_like(dtype):
-            ax.invert_yaxis()
+        if x == "y":
+            _maybe_invert_yaxis(ax, patch, dim)
 
 
-def _add_colorbar(ax, im, patch, log):
+def _add_colorbar(ax, im, data, patch, log, scale):
     """
     Add a colorbar with appropriate labels to the plot.
+    When auto-scaling, extend-triangles are added if data above or below limits exist
     """
-    cb = ax.get_figure().colorbar(im, ax=ax, fraction=0.05, pad=0.025)
-    data_type = str(patch.attrs.get("data_type", ""))
-    data_units = get_quantity_str(patch.attrs.data_units) or ""
-    dunits = f" ({data_units})" if (data_type and data_units) else f"{data_units}"
+    mi = np.nanmin(data)
+    mx = np.nanmax(data)
+
+    above, below = False, False
+    if scale is not None and len(scale) == 2:
+        above = (mx > scale[1]) and not np.isclose(scale[1], mx)
+        below = (mi < scale[0]) and not np.isclose(scale[0], mi)
+    extend_map = {
+        (True, True): "both",
+        (True, False): "max",
+        (False, True): "min",
+    }
+    extend = extend_map.get((above, below), "neither")
+    cb = ax.get_figure().colorbar(
+        im, ax=ax, fraction=0.05, pad=0.025, extend=extend, extendfrac=0.025
+    )
+    label = _get_data_label(patch)
     if log:
-        dunits = f"{dunits} - log_10"
-    label = f"{data_type}{dunits}"
+        label = f"{label} - log_10"
     cb.set_label(label)
+
+
+def _get_waterfall_colormap(patch, cmap=None):
+    """
+    Select a default colormap based on datatype
+    """
+    if cmap is None:
+        this_type = str(patch.attrs.get("data_type", "")).lower()
+        cmap = DEFAULT_COLORMAPS.get(this_type, "bwr")  # defaults to "bwr"
+    return _get_cmap(cmap)
+
+
+def _insert_gap_bands(data, gap_mask, axis):
+    """Insert masked bands into an array at each coordinate gap."""
+    if not np.any(gap_mask):
+        return data
+    old_size = data.shape[axis]
+    new_size = old_size + np.count_nonzero(gap_mask)
+    new_shape = list(data.shape)
+    new_shape[axis] = new_size
+    out = np.ma.masked_all(new_shape, dtype=data.dtype)
+    new_indices = np.arange(old_size) + np.cumsum(
+        np.concatenate(([0], gap_mask.astype(int)))
+    )
+    indexer = [slice(None)] * data.ndim
+    indexer[axis] = new_indices
+    out[tuple(indexer)] = data
+    return out
+
+
+def _plot_with_mesh(ax, data, dims, coords, cmap, gap_color, gap_factor):
+    """Plot irregularly sampled data using a quadrilateral mesh.
+
+    Returns the mesh and, per dimension, the cell edges it was drawn from
+    with the gaps they opened, so a caller marking the same cells reads
+    them off the mesh rather than working them out again.
+    """
+    mesh_data = np.ma.asarray(data)
+    edges = {}
+    cells = {}
+    mesh_gap_factor = gap_factor if gap_color is not None else None
+    for axis, dim in enumerate(dims):
+        dim_edges, gap_mask = get_gap_edges(coords[dim], mesh_gap_factor)
+        if gap_color is not None:
+            mesh_data = _insert_gap_bands(mesh_data, gap_mask, axis)
+        edges[dim] = dim_edges
+        cells[dim] = (dim_edges, gap_mask)
+
+    if gap_color is not None:
+        cmap = cmap.with_extremes(bad=gap_color)
+    mesh = ax.pcolormesh(
+        edges[dims[1]],
+        edges[dims[0]],
+        mesh_data,
+        cmap=cmap,
+        shading="flat",
+        edgecolors="none",
+        linewidth=0,
+        antialiased=False,
+    )
+    return mesh, cells
 
 
 @patch_function()
 def waterfall(
     patch: PatchType,
     ax: plt.Axes | None = None,
-    cmap: str = "bwr",
+    cmap: str | None = None,
     scale: float | Sequence[float] | None = None,
     scale_type: Literal["relative", "absolute"] = "relative",
     interpolation: str | None = "antialiased",
+    interpolation_stage: str = "auto",
+    gap_color: str | Sequence[float] | None = None,
+    gap_factor: float = 1.5,
     log: bool = False,
+    cbar: bool = True,
     show: bool = False,
+    label_coord: str | None = None,
 ) -> plt.Axes:
     """
     Create a waterfall plot of the Patch data.
+
+    Evenly sampled dimension coordinates are rendered with ``imshow`` for
+    efficient display and image interpolation. Finite, monotonic irregular
+    coordinates are rendered with ``pcolormesh`` so cell geometry follows the
+    coordinate values. Incomplete or nonmonotonic coordinates fall back to
+    ``imshow`` with index-based or minimum/maximum extents.
 
     Parameters
     ----------
@@ -152,8 +252,8 @@ def waterfall(
     ax
         A matplotlib object, if None create one.
     cmap
-        A matplotlib colormap string or instance. Set to None to not plot the
-        colorbar.
+        A matplotlib colormap string or instance. If `None`, a colormap will be
+        chosen automatically, depending on the data_type of the patch.
     scale
         If not None, controls the saturation level of the colorbar.
         Values can either be a float, to set upper and lower limit to the same
@@ -171,10 +271,63 @@ def waterfall(
         which is relevant for DAS. Usually, "antialiased" works well, but if the
         data look smeared disabling interpolation with None might help. Other
         options are available, see matplotlib's documentation for more details.
+        This option does not apply when irregular coordinates select the
+        ``pcolormesh`` renderer.
+    interpolation_stage
+        If 'data', interpolation is carried out on the data provided by the user.
+        If 'rgba', the interpolation is carried out after the colormapping has
+        been applied (visual interpolation).
+        'auto' (default) selects a suitable interpolation stage automatically.
+        See matplotlib's imshow documentation for more details. This option
+        does not apply when ``pcolormesh`` is used.
+    gap_color
+        Matplotlib color used to display gaps in irregular dimension
+        coordinates. When a color is provided, a masked row or column is
+        inserted for each detected gap and displayed with this color. The
+        default of None bridges gaps by extending adjacent cells across them
+        without expanding the data matrix. This option only applies when
+        ``pcolormesh`` is used. Existing masked or NaN data receive the same
+        color as coordinate gaps.
+    gap_factor
+        When ``gap_color`` is provided, coordinate intervals larger than this
+        factor times the median interval are displayed as gaps. With the
+        default ``gap_color=None``, cells bridge intervals and this parameter
+        has no visual effect. Gap detection assumes the median interval
+        represents the sampling interval, so coordinates containing contiguous
+        regions with different sampling rates may classify the more coarsely
+        sampled region as gaps. For such data, use the default
+        ``gap_color=None``, increase ``gap_factor``, or plot/resample the
+        regions separately. Must be greater than 1.
     log
         If True, visualize the common logarithm of the absolute values of patch data.
+        To avoid log(0), the abs(array) is cast to float64 and a small value
+        added.
+    cbar
+        If True, plot the colorbar, else do not. This controls only colorbar
+        display; use `cmap` to control colormap selection.
     show
         If True, show the plot, else just return axis.
+    label_coord
+        The name of a coordinate whose values label stretches of one of the
+        plotted dimensions, such as a label group an inventory projected onto
+        the patch with [`Patch.enrich`](`dascore.proc.inventory.enrich`). Each
+        stretch is drawn as a bar on the two spines its dimension runs along,
+        colored by its label, so no data is covered or tinted; a hairline
+        joins them wherever the value changes, faint enough to locate a
+        boundary in the data without competing with it. A legend names the
+        labels, beyond any colorbar when this call owns the figure, and inside
+        the axes when the caller supplied one, since taking room from
+        someone else's figure would move every other axes on it. String and
+        numeric coordinates state one label per distinct value. A boolean
+        coordinate states membership, so only its True stretches are marked
+        and the legend names them by the coordinate. Absent values (the empty
+        string, NaN, or False) label nothing, and leave bare spine.
+
+        Raises `ParameterError` for a coordinate which is not a set of
+        labels: one stating more than 20 distinct values, one changing more
+        than 200 times, one whose every value is absent, and one which is a
+        dimension or spans both of them. All are judged before anything is
+        drawn, so a refusal leaves no figure behind.
 
     Examples
     --------
@@ -213,6 +366,12 @@ def waterfall(
     >>> _ = patch.viz.waterfall(scale=0.5, scale_type="absolute", ax=ax2)
     >>> _ = ax2.set_title("Absolute scaling (scale=0.5)")
     >>>
+    >>> # Mark where a label coordinate changes, such as the zones an
+    >>> # inventory places along the fiber.
+    >>> from dascore.examples import inventory_patch_pair
+    >>> zoned, inventory = inventory_patch_pair()
+    >>> _ = zoned.enrich(inventory).viz.waterfall(label_coord="zone")
+    >>>
     >>> # Undo Y axis inversion which occurs when time is on the Y
     >>> ax = patch.viz.waterfall()
     >>> ax.invert_yaxis()
@@ -233,37 +392,70 @@ def waterfall(
     """
     # Validate inputs
     patch = _validate_patch_dims(patch)
-    # Setup axes and data
-    ax = _get_ax(ax)
-    cmap = _get_cmap(cmap)
-    data = np.log10(np.absolute(patch.data)) if log else patch.data
+    _validate_gap_factor(gap_factor)
     dims = patch.dims
     dims_r = tuple(reversed(dims))
-    coords = {dim: patch.coords.get_array(dim) for dim in dims}
-    # Plot using imshow and set colorbar limits
-    extents = _get_extents(dims_r, coords)
+    # Before an axes exists, so a refused label_coord leaves no figure
+    # behind: both what the coordinate is and what it states are settled
+    # here, since either can be grounds for refusing it.
+    plan, runs = None, None
+    if label_coord is not None:
+        plan = label_plan(patch, label_coord, dims_r)
+        runs = label_runs(patch.coords.get_array(plan.name), plan.name)
+    # Setup axes and data. A figure this call built is one whose room a
+    # legend may take; any other belongs to the caller.
+    owned = ax is None
+    ax = _get_ax(ax)
+    if log:
+        data = np.log10(np.abs(patch.data) + np.finfo(np.float64).eps)
+    else:
+        data = patch.data
+    dim_coords = {dim: patch.get_coord(dim) for dim in dims}
+    coords = {dim: np.asarray(coord) for dim, coord in dim_coords.items()}
+    cmap = _get_waterfall_colormap(patch, cmap)
     scale = _get_scale(scale, scale_type, data)
-    with mpl.rc_context({"image.resample": True}):
-        im = ax.imshow(
+    label_edges = None
+    use_image = all(coord.evenly_sampled for coord in dim_coords.values())
+    if use_image or not all(is_monotonic_and_finite(x) for x in coords.values()):
+        extents = _get_extents(dims_r, coords)
+        with mpl.rc_context({"image.resample": True}):
+            im = ax.imshow(
+                data,
+                extent=extents,
+                aspect="auto",
+                cmap=cmap,
+                origin="lower",
+                interpolation=interpolation,
+                interpolation_stage=interpolation_stage,
+            )
+        if plan is not None:
+            label_edges = image_cell_edges(
+                extents, dims_r, plan.dim, len(coords[plan.dim])
+            )
+    else:
+        im, cells = _plot_with_mesh(
+            ax,
             data,
-            extent=extents,
-            aspect="auto",
-            cmap=cmap,
-            origin="lower",
-            # Note: these parameters are so that matplotlib versions > 3.10 behave
-            # like matplotlib < 3.9, which tends to work better for visualizing big
-            # DAS data. See #512. We might consider making these parameters of the
-            # waterfall function in the future.
-            interpolation=interpolation,
-            interpolation_stage="data",
+            dims,
+            coords,
+            cmap,
+            gap_color=gap_color,
+            gap_factor=gap_factor,
         )
+        if plan is not None:
+            label_edges = mesh_cell_edges(*cells[plan.dim])
     if scale is not None and len(scale) == 2 and np.all(np.isfinite(scale)):
         im.set_clim(np.asarray(scale))
     # Format axis labels and handle time-like dimensions
     _format_axis_labels(ax, patch, dims_r)
     # Add colorbar if requested
-    if cmap is not None:
-        _add_colorbar(ax, im, patch, log)
+    if cbar:
+        _add_colorbar(ax, im, data, patch, log, scale)
+    # Label lines come last so the legend is placed beyond a colorbar which
+    # has already taken its room.
+    if plan is not None and runs is not None:
+        assert label_edges is not None, "a plan is only made where edges are"
+        draw_labels(ax, plan, runs, label_edges, owned=owned)
     if show:
         plt.show()
     return ax

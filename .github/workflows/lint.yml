@@ -1,6 +1,22 @@
 # Lint the code using the defined pre-commits
 name: LintCode
-on: [push]
+on:
+  push:
+    branches:
+      - master
+      - dev
+  pull_request:
+    branches:
+      - master
+      - dev
+
+permissions:
+  contents: read
+
+# Supersede the previous run: by pull request, or by branch for pushes.
+concurrency:
+  group: LintCode-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 jobs:
   lint_code:
@@ -10,20 +26,22 @@ jobs:
     if: github.event_name == 'push' || !contains(github.event.pull_request.labels.*.name, 'no_ci')
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
+          persist-credentials: false
           fetch-tags: "true"
           fetch-depth: '0'
 
       - uses: ./.github/actions/load-shared-vars
+        id: shared-vars
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v3
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9  # v9.0.0
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
         with:
           # Defined in .github/actions/load-shared-vars/action.yml
-          python-version: ${{ env.PYTHON_DEFAULT }}
+          python-version: ${{ steps.shared-vars.outputs.python-default }}
 
       - name: install linting packages
         run: uv tool install pre-commit

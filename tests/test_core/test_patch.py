@@ -2,20 +2,35 @@
 
 from __future__ import annotations
 
+import gc
 import operator
+import re
 import weakref
+from typing import Any, cast
 
 import numpy as np
 import pandas as pd
 import pytest
+from pydantic import ValidationError
 from rich.text import Text
 
 import dascore as dc
 from dascore.compat import random_state
 from dascore.core import Patch
 from dascore.core.coords import BaseCoord, CoordRange
-from dascore.exceptions import CoordError, ParameterError
+from dascore.core.summary import PatchSummary
+from dascore.exceptions import (
+    CoordDataError,
+    CoordError,
+    ParameterError,
+    PatchAttributeError,
+)
+from dascore.io.core import (
+    _scan_result_to_summary,
+    _select_patch_from_spool,
+)
 from dascore.proc.basic import apply_operator
+from dascore.utils.array import apply_ufunc
 from dascore.utils.misc import suppress_warnings
 
 
@@ -43,11 +58,9 @@ def get_simple_patch() -> Patch:
     Note: This cant be a fixture as pytest seems to hold a reference,
     even for function scoped outputs.
     """
-    attrs = {"time_step": 1}
     pa = Patch(
         data=random_state.random((100, 100)),
         coords={"time": np.arange(100) * 0.01, "distance": np.arange(100) * 0.2},
-        attrs=attrs,
         dims=("time", "distance"),
     )
     return pa
@@ -63,14 +76,16 @@ class TestInit:
         """Create a random patch with a datetime coord."""
         rand = np.random.RandomState(13)
         array = rand.random(size=(20, 200))
-        attrs = dict(dx=1, time_step=1 / 250.0, category="DAS", id="test_data1")
-        time_deltas = dc.to_timedelta64(np.arange(array.shape[1]) * attrs["time_step"])
+        dx = 1
+        dt = 1 / 250.0
+        attrs = dict(category="DAS", id="test_data1")
+        time_deltas = dc.to_timedelta64(np.arange(array.shape[1]) * dt)
         coords = dict(
-            distance=np.arange(array.shape[0]) * attrs["dx"],
+            distance=np.arange(array.shape[0]) * dx,
             time=self.time1 + time_deltas,
         )
         dims = tuple(coords)
-        out = dict(data=array, coords=coords, attrs=attrs, dims=dims)
+        out: dict[str, Any] = dict(data=array, coords=coords, attrs=attrs, dims=dims)
         return Patch(**out)
 
     @pytest.fixture(scope="class")
@@ -79,57 +94,43 @@ class TestInit:
         rand = np.random.RandomState(13)
         array = rand.random(size=(20, 100))
         dt = 1 / 250.0
-        attrs = dict(distance_step=1, time_step=dt, category="DAS", id="test_data1")
-        time_deltas = dc.to_timedelta64(np.arange(array.shape[1]) * attrs["time_step"])
+        attrs = dict(category="DAS", id="test_data1")
+        time_deltas = dc.to_timedelta64(np.arange(array.shape[1]) * dt)
         coords = dict(
-            distance=np.arange(array.shape[0]) * attrs["distance_step"],
+            distance=np.arange(array.shape[0]),
             time=self.time1 + time_deltas,
             latitude=("distance", array[:, 0]),
             quality=(("distance", "time"), array),
         )
         dims = ("distance", "time")
-        out = dict(data=array, coords=coords, attrs=attrs, dims=dims)
+        out: dict[str, Any] = dict(data=array, coords=coords, attrs=attrs, dims=dims)
         return Patch(**out)
-
-    @pytest.fixture(scope="class")
-    def test_conflicting_attrs_coords_raises(self):
-        """Patch for testing conflicting coordinates/attributes."""
-        array = random_state.random((10, 10))
-        # create attrs, these should all get overwritten by coords.
-        attrs = dict(
-            distance_step=10,
-            time_step=dc.to_timedelta64(1),
-            distance_min=1000,
-            distance_max=2002,
-            time_min=dc.to_datetime64("2017-01-01"),
-            time_max=dc.to_datetime64("2019-01-01"),
-        )
-        # create coords
-        coords = dict(
-            time=dc.to_datetime64(np.cumsum(random_state.random(10))),
-            distance=random_state.random(10),
-        )
-        # assemble and output.
-        dims = ("distance", "time")
-        out = dict(data=array, coords=coords, attrs=attrs, dims=dims)
-        msg = "Coords and attrs are incompatible."
-        with pytest.raises(ValueError, match=msg):
-            dc.Patch(**out)
 
     def test_start_time_inferred_from_dt64_coords(self, random_dt_coord):
         """Ensure the time_min and time_max attrs can be inferred from coord time."""
         patch = random_dt_coord
-        assert patch.attrs["time_min"] == self.time1
+        assert patch.summary.get_coord_summary("time").min == self.time1
 
     def test_end_time_inferred_from_dt64_coords(self, random_dt_coord):
         """Ensure the time_min and time_max attrs can be inferred from coord time."""
         patch = random_dt_coord
         time = patch.coords.coord_map["time"].max()
-        assert patch.attrs["time_max"] == time
+        assert patch.summary.get_coord_summary("time").max == time
 
     def test_init_from_array(self, random_patch):
         """Ensure a trace can be created from raw components; array, coords, attrs."""
         assert isinstance(random_patch, Patch)
+
+    def test_init_from_nested_lists(self):
+        """Plain Python lists should still be valid array-like patch inputs."""
+        patch = dc.Patch(
+            data=[[1, 2], [3, 4]],
+            coords={"x": [0, 1], "y": [0, 1]},
+            dims=("x", "y"),
+        )
+        assert patch.shape == (2, 2)
+        assert patch.dims == ("x", "y")
+        np.testing.assert_array_equal(patch.data, np.array([[1, 2], [3, 4]]))
 
     def test_init_from_array_protocol_object(self, random_patch):
         """Ensure array-like objects can initialize a Patch without casting."""
@@ -169,9 +170,16 @@ class TestInit:
         assert isinstance(patch.data, np.ndarray)
         assert not patch.data.flags.writeable
 
+    def test_object_array_conversion_preserves_patch_object(self, random_patch):
+        """Object-dtype conversion should keep the patch, not its array data."""
+        out = np.asarray([random_patch], dtype=object)
+
+        assert out.shape == (1,)
+        assert out[0] is random_patch
+
     def test_max_time_populated(self, random_patch):
         """Ensure the time_max is populated when not explicitly given."""
-        end_time = random_patch.attrs["time_max"]
+        end_time = random_patch.summary.get_coord_summary("time").max
         assert not pd.isnull(end_time)
 
     def test_min_max_populated(self, random_patch):
@@ -226,6 +234,12 @@ class TestInit:
         with pytest.raises(ValueError, match="data, coords, and dims"):
             Patch(data=data)
 
+    def test_missing_data_raises(self):
+        """Patch requires data for non-empty construction."""
+        coords = {"time": np.arange(10), "distance": np.arange(10)}
+        with pytest.raises(ValueError, match="data, coords, and dims"):
+            Patch(coords=coords, dims=("time", "distance"))
+
     def test_coords_from_1_element_array(self):
         """Ensure CoordRange is still returned despite 1D array in time."""
         patch = dc.get_example_patch("random_das", shape=(100, 1))
@@ -245,16 +259,49 @@ class TestInit:
         assert time_shape == len(patch.coords.get_array("time"))
         assert time_shape == len(patch.coords.get_array("time"))
 
+    def test_select_descending_frequency_value_bounds(self):
+        """Value selection should not depend on descending coord order."""
+        frequency = np.cumsum(np.abs(random_state.rand(100)))[::-1]
+        coord = dc.get_coord(data=frequency, units="Hz")
+        patch = dc.Patch(
+            data=np.arange(len(frequency)),
+            coords={"frequency": coord},
+            dims=("frequency",),
+        )
+        eps = 0.000000001
+        low, high = frequency[60] + eps, frequency[50] - eps
+        low_first = patch.select(frequency=(low, high))
+        high_first = patch.select(frequency=(high, low))
+        mask = (frequency >= low) & (frequency <= high)
+        expected = frequency[mask]
+        expected_data = patch.data[mask]
+        out_freq = low_first.get_coord("frequency")
+        assert np.allclose(out_freq.values, expected)
+        assert np.allclose(high_first.get_coord("frequency").values, expected)
+        assert np.array_equal(low_first.data, expected_data)
+        assert np.array_equal(high_first.data, expected_data)
+        assert out_freq.min() >= low
+        assert out_freq.max() <= high
+
     def test_init_no_coords(self, random_patch):
-        """Ensure a new patch can be inited from only attrs."""
+        """Attrs alone no longer provide enough information to build coords."""
         attrs = random_patch.attrs
-        new = random_patch.__class__(attrs=attrs, data=random_patch.data)
-        assert isinstance(new, dc.Patch)
+        with pytest.raises(ValueError, match="data, coords, and dims"):
+            random_patch.__class__(attrs=attrs, data=random_patch.data)
 
     def test_init_with_patch(self, random_patch):
         """Ensure a patch inited on a patch just returns a patch."""
         new = dc.Patch(random_patch)
         assert new == random_patch
+
+    def test_patch_summary_from_patch_copies_private_source_patch_key(
+        self, random_patch
+    ):
+        """Patch summaries built from patches should expose the private source id."""
+        patch = random_patch.update_attrs(_source_patch_key="node-3")
+        summary = PatchSummary.from_patch(patch)
+        assert summary.source_patch_key == "node-3"
+        assert summary.attrs["_source_patch_key"] == "node-3"
 
     def test_non_time_distance_dims(self):
         """Ensure dimensions other than time/distance work."""
@@ -269,11 +316,12 @@ class TestInit:
         assert random_patch.size == random_patch.data.size
 
     def test_new_patch_non_standard_dims(self):
-        """Ensure a non-standard dimension has matching dims in attrs and coords."""
+        """Ensure a non-standard dimension is owned by the patch/coords layer."""
         data = random_state.rand(10, 5)
         coords = {"time": np.arange(10), "can": np.arange(5)}
         patch = dc.Patch(data=data, coords=coords, dims=("time", "can"))
-        assert patch.dims == patch.attrs.dim_tuple
+        assert patch.dims == ("time", "can")
+        assert "dims" not in patch.attrs.model_dump()
 
     def test_non_coord_dims(self):
         """Ensure non-coordinate dimensions can work and create non-coord."""
@@ -321,6 +369,341 @@ class TestNew:
         dims = ("tom", "jerry")
         out = random_patch.new(dims=dims)
         assert out.dims == dims
+
+    def test_new_data_only_validates_shape(self, random_patch):
+        """New should still reject data which doesn't match the coords."""
+        data = random_patch.data[:-1]
+        with pytest.raises(CoordDataError):
+            random_patch.new(data=data)
+
+    def test_new_coords_validates_shape(self, random_patch):
+        """New should reject data which doesn't match passed coords."""
+        coords = random_patch.coords
+        with pytest.raises(CoordDataError):
+            random_patch.new(data=random_patch.data[:, :-1], coords=coords)
+
+    def test_new_same_coords_matches_default(self, random_patch):
+        """Passing the patch's own coords should match passing nothing."""
+        data = random_patch.data * 2
+        out1 = random_patch.new(data=data)
+        out2 = random_patch.new(data=data, coords=random_patch.coords)
+        assert out1.equals(out2, only_required_attrs=False)
+
+    def test_new_no_args_equals_input(self, random_patch):
+        """New with no arguments should reproduce the patch."""
+        assert random_patch.new().equals(random_patch, only_required_attrs=False)
+
+    def test_new_from_patch_takes_over_metadata(self, random_patch):
+        """Passing a patch as data should adopt its coords and attrs."""
+        other = random_patch.decimate(time=2)
+        out = random_patch.new(data=other)
+        assert out.coords == other.coords
+        assert out.shape == other.shape
+
+
+class TestPatchSummary:
+    """Tests for patch summary helpers and selection fallbacks."""
+
+    def test_summary_uses_structured_access(self, random_patch):
+        """Summary should expose coord summaries explicitly."""
+        summary = random_patch.summary
+        time_summary = summary.get_coord_summary("time")
+        assert time_summary.min == random_patch.coords.min("time")
+        assert time_summary.step == random_patch.get_coord("time").step
+
+    def test_scan_returns_summary(self, random_patch):
+        """Scanning a patch should return a PatchSummary."""
+        scanned = dc.scan(random_patch)[0]
+        assert isinstance(scanned, dc.PatchSummary)
+
+    def test_flat_dump_dim_tuple_and_exclude(self):
+        """flat_dump should support dim tuples and exclusions."""
+        coords = {"time": np.array([0.0, 1.5, 3.5]), "distance": np.array([1.0, 2.0])}
+        data = np.arange(6).reshape(2, 3)
+        patch = dc.Patch(data=data, coords=coords, dims=("distance", "time"))
+        out = patch.summary.flat_dump(dim_tuple=True, exclude={"distance"})
+        assert out["time"] == (patch.coords.min("time"), patch.coords.max("time"))
+        assert "distance_min" not in out
+        assert np.isnan(out["time_step"])
+
+    def test_flat_dump_null_datetime_step(self, random_patch):
+        """A datetime coord without a clean step flat-dumps a NaT sentinel."""
+        time = random_patch.coords.get_array("time").copy()
+        time[-1] += np.timedelta64(1, "s")  # break uniformity
+        patch = random_patch.update_coords(time=time)
+        out = patch.summary.flat_dump()
+        step = out["time_step"]
+        assert isinstance(step, np.timedelta64)
+        assert pd.isnull(step)
+
+    def test_select_from_spool_by_integer_source_patch_key(self, random_patch):
+        """Integer-like source ids should fall back to positional selection."""
+        spool = dc.spool(
+            [
+                random_patch.update_attrs(tag="first"),
+                random_patch.update_attrs(tag="second"),
+            ]
+        )
+        out = _select_patch_from_spool(spool, source_patch_key="1")
+        assert out.attrs.tag == "second"
+
+    def test_select_from_spool_by_generated_name_raises(self, random_patch):
+        """Generated patch names should not be used as spool identity."""
+        spool = dc.spool(
+            [
+                random_patch.update_attrs(tag="first"),
+                random_patch.update_attrs(tag="second"),
+            ]
+        )
+        patch_name = spool[1].get_patch_name()
+        with pytest.raises(PatchAttributeError, match="uniquely resolved"):
+            _select_patch_from_spool(spool, source_patch_key=patch_name)
+
+    def test_select_from_single_patch_spool_requires_matching_source_patch_key(
+        self, random_patch
+    ):
+        """A requested source id must not be ignored on a single-patch spool."""
+        spool = dc.spool([random_patch])
+        with pytest.raises(PatchAttributeError, match="uniquely resolved"):
+            _select_patch_from_spool(spool, source_patch_key="999")
+
+    def test_select_from_spool_ambiguous_raises(self):
+        """Ambiguous spool selection should raise a patch error."""
+        spool = dc.examples.get_example_spool("random_das", length=2)
+        with pytest.raises(PatchAttributeError, match="uniquely resolved"):
+            _select_patch_from_spool(spool, source_patch_key="not-found")
+
+    def test_flat_dump_excludes_summary_fields(self, random_patch):
+        """Excluding a summary field should drop it from all coord outputs."""
+        out = random_patch.summary.flat_dump(exclude={"min"})
+        assert "time_min" not in out
+        assert "distance_min" not in out
+
+    def test_summary_unknown_coord_field_raises(self, random_patch):
+        """Flattened coord access should no longer be supported."""
+        summary = random_patch.summary
+        with pytest.raises(AttributeError, match="time_missing"):
+            _ = summary.time_missing
+        assert not hasattr(summary, "time_missing")
+
+    def test_flat_dump_prefers_coord_values_over_attrs(self, random_patch):
+        """flat_dump should overlay coord summaries on top of attrs."""
+        attrs = dc.PatchAttrs(**(random_patch.attrs.model_dump() | {"time_step": 10}))
+        summary = dc.PatchSummary(
+            attrs=attrs,
+            coords=random_patch.coords.to_summary_dict(),
+            dims=random_patch.dims,
+            shape=random_patch.shape,
+            dtype=str(random_patch.dtype),
+        )
+        out = summary.flat_dump()
+        assert out["time_step"] == random_patch.get_coord("time").step
+
+    def test_summary_includes_string_coords(self, random_patch):
+        """Patch summaries should retain lossy string coord summaries."""
+        labels = np.array([f"ch_{num}" for num in range(random_patch.shape[0])])
+        patch = random_patch.update_coords(distance=labels)
+        summary = patch.summary
+        distance = summary.get_coord_summary("distance")
+        assert distance.min == "ch_0"
+        assert distance.step is None
+        assert not distance.is_range_like
+
+    def test_flat_dump_includes_string_coord_fields(self, random_patch):
+        """Flattened summaries should expose string coord metadata."""
+        labels = np.array([f"ch_{num}" for num in range(random_patch.shape[0])])
+        patch = random_patch.update_coords(distance=labels)
+        out = patch.summary.flat_dump()
+        assert out["distance_min"] == "ch_0"
+        assert out["distance_max"] == max(labels)
+        assert out["distance_step"] is None
+
+    def test_from_patch_roundtrip(self, random_patch):
+        """PatchSummary should normalize Patch inputs directly."""
+        summary = dc.PatchSummary.model_validate(random_patch)
+        assert summary.dtype == str(random_patch.dtype)
+        assert summary.dims == random_patch.dims
+
+    def test_model_validate_self(self, random_patch):
+        """Model validation should accept PatchSummary instances unchanged."""
+        summary = random_patch.summary
+        assert dc.PatchSummary.model_validate(summary) is summary
+
+    def test_summary_property_returns_self(self, random_patch):
+        """PatchSummary.summary should mirror Patch.summary."""
+        summary = random_patch.summary
+        assert summary.summary is summary
+
+    def test_summary_model_validate_normalizes_nested_string_dims(self):
+        """Structured summary inputs should normalize serialized coord dims."""
+        payload = {
+            "attrs": {},
+            "coords": {"time": {"min": 1, "max": 2, "dtype": "int64", "dims": "time"}},
+            "dims": "time",
+        }
+        summary = dc.PatchSummary.model_validate(payload)
+        assert summary.dims == ("time",)
+        assert summary.get_coord_summary("time").dims == ("time",)
+
+    def test_summary_model_validate_uses_outer_dims_for_coord_fallback(self):
+        """Structured summary inputs should fall back to outer patch dims."""
+        payload = {
+            "attrs": {},
+            "coords": {"time": {"min": 1, "max": 2, "dtype": "int64"}},
+            "dims": "time",
+        }
+        summary = dc.PatchSummary.model_validate(payload)
+        assert summary.dims == ("time",)
+        assert summary.get_coord_summary("time").dims == ("time",)
+
+    def test_dim_tuple_property_matches_dims(self, random_patch):
+        """PatchSummary.dim_tuple should expose the normalized dims tuple."""
+        summary = random_patch.summary
+        assert summary.dim_tuple == summary.dims
+
+    def test_flat_dump_includes_coord_fingerprint(self, random_patch):
+        """Flattened summaries should preserve coord fingerprints."""
+        out = random_patch.summary.flat_dump()
+        assert out["time_fingerprint"] == random_patch.get_coord("time").fingerprint()
+
+    def test_patch_summary_is_cached(self, random_patch):
+        """Patch.summary should reuse the same summary instance."""
+        assert random_patch.summary is random_patch.summary
+
+    def test_summary_cache_does_not_keep_patch_alive(self):
+        """Holding a summary must not keep the source patch from being GC'd."""
+        patch = dc.get_example_patch()
+        patch_ref = weakref.ref(patch)
+        summary = patch.summary
+
+        del patch
+        gc.collect()
+
+        assert patch_ref() is None
+        assert summary.dims
+        assert summary.dtype
+        assert "time_min" in summary.flat_dump()
+
+    def test_scan_result_to_summary_noop_returns_same_summary(self, random_patch):
+        """Summary conversion should avoid rebuilding unchanged summaries."""
+        summary = random_patch.summary
+        assert _scan_result_to_summary(summary) is summary
+
+    def test_scan_result_to_summary_override_returns_new_summary(self, random_patch):
+        """Summary conversion should still apply explicit source overrides."""
+        summary = random_patch.summary
+        out = _scan_result_to_summary(summary, source_path="some_path")
+        assert out is not summary
+        assert str(out.source_path) == "some_path"
+
+    def test_patch_summary_non_pathlike_source_metadata_is_dropped(self):
+        """Non-pathlike source metadata should normalize to a detached summary."""
+        out = dc.PatchSummary.model_validate(
+            {
+                "attrs": {"tag": "x"},
+                "coords": {},
+                "source_path": object(),
+                "source_format": "PRODML",
+                "source_version": "2.1",
+            }
+        )
+        assert not out.source_path
+        assert not out.source_format
+        assert not out.source_version
+
+    def test_non_mapping_validate_passthrough_raises(self):
+        """Non-mapping validation should fall through to pydantic errors."""
+        with pytest.raises(ValidationError):
+            dc.PatchSummary.model_validate(1.23)
+
+    def test_structured_summary_infers_dims(self):
+        """Structured summary inputs should infer dims from coord summaries."""
+        patch = dc.get_example_patch()
+        coords = {
+            "time": patch.summary.get_coord_summary("time"),
+            "distance": patch.summary.get_coord_summary("distance"),
+        }
+        out = dc.PatchSummary.model_validate(
+            {"attrs": {"tag": "x"}, "coords": coords, "dims": ""}
+        )
+        assert out.dims == ("time", "distance")
+
+    def test_structured_summary_accepts_to_summary_coords(self):
+        """Structured coord entries with to_summary should be normalized."""
+
+        class SummaryLike:
+            def to_summary(self, dims=()):
+                return dc.core.CoordSummary(min=0, max=1, step=1, dims=dims)
+
+        out = dc.PatchSummary.model_validate(
+            {
+                "attrs": {"tag": "x"},
+                "coords": {"time": SummaryLike()},
+                "dims": ("time",),
+            }
+        )
+
+        assert out.coords["time"].min == 0
+        assert out.dims == ("time",)
+
+    def test_structured_summary_accepts_model_dump_coords(self):
+        """Structured coord entries with model_dump should be normalized."""
+
+        class DumpLike:
+            def model_dump(self):
+                return {"min": 1.0, "max": 2.0, "step": 0.5}
+
+        out = dc.PatchSummary.model_validate(
+            {
+                "attrs": {"tag": "x"},
+                "coords": {"distance": DumpLike()},
+                "dims": ("distance",),
+            }
+        )
+
+        assert out.coords["distance"].min == 1.0
+        assert out.dims == ("distance",)
+
+    def test_structured_summary_accepts_none_attrs(self):
+        """Structured inputs should treat attrs=None as empty attrs."""
+        out = dc.PatchSummary.model_validate(
+            {
+                "attrs": None,
+                "coords": {"time": {"min": 1.0, "max": 2.0}},
+                "dims": ("time",),
+            }
+        )
+
+        assert out.attrs == dc.PatchAttrs()
+        assert out.dims == ("time",)
+
+    def test_flat_summary_input_raises(self):
+        """Flat summary inputs should no longer reconstruct PatchSummary."""
+        msg = "structured `attrs`/`coords` input"
+        with pytest.raises(TypeError, match=msg):
+            dc.PatchSummary.model_validate(
+                {"time_min": 1.0, "time_max": 2.0, "dims": None}
+            )
+
+    def test_flat_summary_input_with_tuple_dims_raises(self):
+        """Tuple dims should not make flat summary reconstruction valid."""
+        msg = "structured `attrs`/`coords` input"
+        with pytest.raises(TypeError, match=msg):
+            dc.PatchSummary.model_validate(
+                {"time_min": 1.0, "time_max": 2.0, "dims": ("time",)}
+            )
+
+    def test_top_level_coord_mapping_without_coords_key_raises(self):
+        """Implicit coord summary mappings should no longer be accepted."""
+        msg = "structured `attrs`/`coords` input"
+        with pytest.raises(TypeError, match=msg):
+            dc.PatchSummary.model_validate(
+                {
+                    "dims": ("time", "distance"),
+                    "time": {"min": 1.0, "max": 2.0, "step": 1.0, "dims": ("time",)},
+                    "distance": {"min": 0.0, "max": 10.0, "step": 5.0},
+                }
+            )
 
 
 class TestDisplay:
@@ -374,7 +757,7 @@ class TestEquals:
         with suppress_warnings():
             new_coords = dict(random_patch.coords)
         new_coords["bob"] = new_coords.pop(dims[-1])
-        new_dims = tuple(list(dims)[:-1] + ["bob"])
+        new_dims = tuple([*list(dims)[:-1], "bob"])
         patch_2 = random_patch.new(coords=new_coords, dims=new_dims)
         assert not patch_2.equals(random_patch)
 
@@ -382,17 +765,15 @@ class TestEquals:
         """Ensure if the coords are not equal neither are the arrays."""
         with suppress_warnings():
             new_coords = dict(random_patch.coords)
-        new_coords["distance"] = new_coords["distance"] + 10
+        new_coords["distance"] = new_coords["distance"].values + 10
         patch_2 = random_patch.new(coords=new_coords)
         assert not patch_2.equals(random_patch)
 
     def test_attrs_not_equal(self, random_patch):
         """Ensure if the attributes are not equal the arrays are not equal."""
-        attrs = random_patch.attrs
-        new_attr_dict = {}
-        new_attr_dict["time_step"] = attrs["time_step"] * 0.80
+        new_attr_dict = {"tag": "not_equal"}
         patch2 = random_patch.new(attrs=new_attr_dict)
-        assert patch2.attrs.time_step == new_attr_dict["time_step"]
+        assert patch2.attrs.tag == new_attr_dict["tag"]
         assert not patch2.equals(random_patch)
 
     def test_one_null_value_in_attrs(self, random_patch):
@@ -430,7 +811,6 @@ class TestEquals:
         """Transposed patches are not considered equal."""
         transposed = random_patch.transpose()
         # make sure dims are NE
-        assert transposed.attrs.dims != random_patch.attrs.dims
         assert transposed.dims != random_patch.dims
         # and test equality
         assert not random_patch.equals(transposed)
@@ -505,48 +885,44 @@ class TestUpdateAttrs:
         assert random_patch.attrs.model_dump() == old_attrs
 
     def test_update_starttime1(self, random_patch):
-        """Ensure coords are updated with attrs."""
+        """Coordinate updates should happen through update_coords."""
         t1 = np.datetime64("2000-01-01")
-        pa = random_patch.update_attrs(time_min=t1)
-        assert pa.attrs["time_min"] == t1
+        pa = random_patch.update_coords(time_min=t1)
+        assert pa.summary.get_coord_summary("time").min == t1
         assert pa.coords.min("time") == t1
 
-    def test_update_startttime2(self, random_patch):
+    def test_update_starttime2(self, random_patch):
         """Updating start time should update end time as well."""
-        duration = random_patch.attrs["time_max"] - random_patch.attrs["time_min"]
+        time_coord = random_patch.get_coord("time")
+        duration = time_coord.max() - time_coord.min()
         new_start = np.datetime64("2000-01-01")
-        pa1 = random_patch.update_attrs(time_min=str(new_start))
-        assert pa1.attrs["time_min"] == new_start
-        assert pa1.attrs["time_max"] == new_start + duration
+        pa1 = random_patch.update_coords(time_min=str(new_start))
+        time_summary = pa1.summary.get_coord_summary("time")
+        assert time_summary.min == new_start
+        assert time_summary.max == new_start + duration
 
-    def test_dt_is_datetime64(self, random_patch):
-        """Ensure dt gets changed into timedelta64."""
-        d_time = random_patch.attrs["time_step"]
-        assert isinstance(d_time, np.timedelta64)
-        new1 = random_patch.update_attrs(time_step=10)
-        assert new1.attrs["time_step"] == dc.to_timedelta64(10)
+    def test_update_attrs_accepts_coordinate_shaped_names(self, random_patch):
+        """Coord-shaped names are ordinary attrs; coords are never affected."""
+        out = random_patch.update_attrs(time_step=10, channel_step=3)
+        assert out.attrs["time_step"] == 10
+        assert out.attrs["channel_step"] == 3
+        assert out.coords == random_patch.coords
 
     def test_update_non_sorted_coord(self, wacky_dim_patch):
-        """Ensure update attrs updates non-sorted coordinates."""
+        """Ensure update_coords updates non-sorted coordinates."""
         # test updating dist max
-        pa = wacky_dim_patch.update_attrs(distance_max=10)
-        assert pa.attrs.distance_max == 10
+        pa = wacky_dim_patch.update_coords(distance_max=10)
+        assert pa.summary.get_coord_summary("distance").max == 10
         assert not np.any(pd.isnull(pa.coords.get_array("distance")))
         # test update dist min
-        pa = wacky_dim_patch.update_attrs(distance_min=10)
-        assert pa.attrs.distance_min == 10
+        pa = wacky_dim_patch.update_coords(distance_min=10)
+        assert pa.summary.get_coord_summary("distance").min == 10
         assert not np.any(pd.isnull(pa.coords.get_array("distance")))
 
-    def test_update_units(self, random_patch):
-        """Ensure units can be updated in attrs."""
-        new_dist = "ft"
-        patch1 = random_patch.update_attrs(distance_units=new_dist)
-        patch2 = random_patch.convert_units(distance=new_dist)
-        coord1 = patch1.get_coord("distance")
-        coord2 = patch2.get_coord("distance")
-        coord3 = random_patch.get_coord("distance").convert_units(new_dist)
-        assert coord1 == coord2 == coord3
-        assert patch1 == patch2
+    def test_update_attrs_rejects_coordinate_units(self, random_patch):
+        """Coordinate-like unit fields now behave like plain attrs updates."""
+        out = random_patch.update_attrs(distance_units="ft")
+        assert out.attrs.distance_units == "ft"
 
 
 class TestReleaseMemory:
@@ -647,13 +1023,11 @@ class TestCoords:
 
     def test_seconds(self, random_patch_with_lat):
         """Ensure we can get number of seconds in the patch."""
-        sampling_interval = random_patch_with_lat.attrs["time_step"] / np.timedelta64(
+        time_coord = random_patch_with_lat.coords["time"]
+        sampling_interval = time_coord.step / np.timedelta64(1, "s")
+        expected = (time_coord.max() - time_coord.min()) / np.timedelta64(
             1, "s"
-        )
-        expected = (
-            random_patch_with_lat.attrs["time_max"]
-            - random_patch_with_lat.attrs["time_min"]
-        ) / np.timedelta64(1, "s") + sampling_interval
+        ) + sampling_interval
         assert random_patch_with_lat.seconds == expected
 
     def test_channel_count(self, random_patch_with_lat):
@@ -750,7 +1124,9 @@ class TestBool:
         gt = pa > 0
         assert isinstance(gt, dc.Patch)
         assert gt.data.dtype == np.bool_
-        rgt = 0 < pa
+        # Deliberately number-first: this exercises the reflected operator,
+        # which int.__lt__ is declared to answer with a bool.
+        rgt = cast("dc.Patch", 0 < pa)
         assert rgt.equals(gt)
         # equality across self should be all True for <= and >=
         assert np.all((pa <= pa).data)
@@ -799,17 +1175,6 @@ class TestGetCoord:
         match = "Coordinate distance is not sorted"
         with pytest.raises(CoordError, match=match):
             patch.get_coord("distance", require_sorted=True)
-
-
-class TestDeprecations:
-    """Ensure deprecations are issued."""
-
-    def test_assign_coords_deprecated(self, random_patch):
-        """assign_coords should issue dep. warning."""
-        new_coord = random_patch.coords.get_array("time")
-
-        with pytest.warns(DeprecationWarning):
-            random_patch.assign_coords(new_time=("time", new_coord))
 
 
 class TestSetDims:
@@ -905,7 +1270,7 @@ class TestNumpyFuncs:
             assert isinstance(out, dc.Patch)
 
     def test_at_raises(self, random_patch):
-        """Ensure unupported ufuncs raise."""
+        """Ensure unsupported ufuncs raise."""
         msg = "ufuncs"
         with pytest.raises(ParameterError, match=msg):
             np.multiply.at(random_patch, [1, 20], random_patch)
@@ -937,3 +1302,98 @@ class TestNumpyFuncs:
         # Test ufunc accumulate
         out = func.accumulate("time")
         assert isinstance(out, dc.Patch)
+
+
+class TestApplyUfunc:
+    """Tests for the apply_ufunc patch method."""
+
+    def test_unary_ufunc(self, random_patch):
+        """The patch should be the ufunc's only operand."""
+        out = random_patch.apply_ufunc(np.abs)
+        assert isinstance(out, dc.Patch)
+        assert np.allclose(out.data, np.abs(random_patch.data))
+
+    def test_binary_ufunc_patch(self, random_patch):
+        """A second patch operand should follow the patch."""
+        out = random_patch.apply_ufunc(np.add, random_patch)
+        assert np.allclose(out.data, random_patch.data * 2)
+
+    def test_binary_ufunc_scalar(self, random_patch):
+        """A scalar operand should also follow the patch."""
+        out = random_patch.apply_ufunc(np.multiply, 10)
+        assert np.allclose(out.data, random_patch.data * 10)
+
+    def test_binary_ufunc_not_reversed(self, random_patch):
+        """The patch is the first operand, not the second."""
+        out = random_patch.apply_ufunc(np.subtract, 1)
+        assert np.allclose(out.data, random_patch.data - 1)
+
+    def test_keywords(self, random_patch):
+        """`dim` is consumed on the reduce path, other keywords reach the ufunc."""
+        axis = random_patch.get_axis("time")
+        reduced = random_patch.apply_ufunc(np.add.reduce, dim="time")
+        assert reduced.shape[axis] == 1
+        assert np.allclose(
+            reduced.data, random_patch.data.sum(axis=axis, keepdims=True)
+        )
+        cast = random_patch.apply_ufunc(np.multiply, 2, dtype="float32")
+        assert cast.data.dtype == np.float32
+
+    def test_function_form(self, random_patch):
+        """The function form should still work and agree with the method."""
+        out = apply_ufunc(np.abs, random_patch)
+        assert out.equals(random_patch.apply_ufunc(np.abs))
+
+    def test_unbound_form(self, random_patch):
+        """The method should also work unbound, called off the class."""
+        out = dc.Patch.apply_ufunc(random_patch, np.abs)
+        assert out.equals(random_patch.apply_ufunc(np.abs))
+
+
+class TestStringCoordinatePatch:
+    """Tests for patch APIs using string dimension coordinates."""
+
+    def test_select_string_dimension(self, random_patch):
+        """Patch.select should support exact-match string dimension filters."""
+        labels = np.array([f"ch_{num}" for num in range(random_patch.shape[0])])
+        patch = random_patch.update_coords(distance=labels)
+        out = patch.select(distance="ch_2")
+        assert np.array_equal(out.get_coord("distance").values, np.array(["ch_2"]))
+        assert out.shape[0] == 1
+
+    def test_sort_string_dimension(self, random_patch):
+        """Patch.sort_coords should order string dimension coordinates."""
+        labels = np.array(["delta", "alpha", "charlie", "bravo"])
+        patch = random_patch.select(distance=slice(0, 4), samples=True).update_coords(
+            distance=labels
+        )
+        out = patch.sort_coords("distance")
+        assert np.array_equal(
+            out.get_coord("distance").values,
+            np.array(["alpha", "bravo", "charlie", "delta"]),
+        )
+
+    def test_select_string_dimension_with_wildcard(self, random_patch):
+        """Patch.select should support wildcard string dimension filters."""
+        labels = np.array(["ch_1", "ch_2", "ch_10", "xx_1"])
+        patch = random_patch.select(distance=slice(0, 4), samples=True).update_coords(
+            distance=labels
+        )
+        out = patch.select(distance="ch_?")
+        assert np.array_equal(
+            out.get_coord("distance").values, np.array(["ch_1", "ch_2"])
+        )
+        assert out.shape[0] == 2
+
+    def test_select_string_dimension_with_regex(self, random_patch):
+        """Patch.select should support compiled regex string filters."""
+        labels = np.array(["ch_1", "ch_2", "ch_10", "xx_1"])
+        patch = random_patch.select(distance=slice(0, 4), samples=True).update_coords(
+            distance=labels
+        )
+        out = patch.select(distance=re.compile(r"^ch_\d+$"))
+        assert np.array_equal(
+            out.get_coord("distance").values,
+            np.array(["ch_1", "ch_2", "ch_10"]),
+        )
+        assert out.shape[0] == 3

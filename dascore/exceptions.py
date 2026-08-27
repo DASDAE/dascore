@@ -31,12 +31,37 @@ class ParameterError(ValueError, DASCoreError):
     """Raised when something is wrong with an input parameter."""
 
 
+class InvalidSpoolQueryError(ParameterError):
+    """Raised when a spool query references unknown names or bad values."""
+
+
 class PatchError(DASCoreError):
     """Parent class for more specific Patch Errors."""
 
 
 class IncompatiblePatchError(PatchError):
     """Raised when an operator cannot be performed on a patch."""
+
+
+class UnresolvedPatchError(PatchError):
+    """
+    Raised when an inventory does not describe a patch.
+
+    The patch names no inventory entry, or names one the inventory does
+    not resolve to exactly one of. A patch the inventory describes *twice*
+    (one straddling an epoch boundary) is a different condition and raises
+    a plain `PatchError`: it needs subdividing, not a missing-data policy.
+    """
+
+
+class MissingPatchError(IndexError, PatchError):
+    """
+    Raised when no patch can be produced for a spool entry.
+
+    This typically happens when a patch is trimmed to nothing by
+    a coordinate selection (see #583). Subclasses IndexError for
+    backwards compatibility.
+    """
 
 
 class CoordError(ValueError, PatchError):
@@ -95,12 +120,29 @@ class InvalidFileHandlerError(TypeError, DASCoreError):
     """Raised when a writable file handler is requested from a read handle."""
 
 
-class InvalidIndexVersionError(ValueError, DASCoreError):
+class InvalidIndexError(ValueError, DASCoreError):
+    """Raised when a persisted index is invalid or incompatible."""
+
+
+class InvalidIndexVersionError(InvalidIndexError):
     """Raised when a version mismatch occurs in index."""
 
 
 class MissingOptionalDependencyError(ImportError, DependencyError):
-    """Raised when an optional package needed for some functionality is missing."""
+    """
+    Raised when an optional package needed for some functionality is missing.
+
+    The install_name attribute, when set, gives the name of the package to
+    install (eg protobuf) which may differ from the import name
+    (eg google.protobuf). It defaults on the class so subclasses which don't
+    call this init still have it.
+    """
+
+    install_name: str | None = None
+
+    def __init__(self, *args, install_name: str | None = None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.install_name = install_name
 
 
 class DASVaderCompatibilityError(InvalidFiberFileError, DependencyError):
@@ -117,3 +159,23 @@ class UnitError(ValueError, DASCoreError):
 
 class AttributeMergeError(ValueError, DASCoreError):
     """Raised when something is wrong with combining attributes."""
+
+
+class DASCorePluginError(AttributeError, DASCoreError):
+    """Raised when something is wrong with plugins."""
+
+
+class RemoteCacheError(IOError, DASCoreError):
+    """Raised when DASCore cannot satisfy remote cache requirements."""
+
+
+class InvalidInventoryError(ValueError, DASCoreError):
+    """Raised when inventory metadata violates the DASDAE inventory model."""
+
+
+class InvalidAnnotationError(ValueError, DASCoreError):
+    """Raised when stored annotations violate the DASCore annotation model."""
+
+
+class InvalidModelTagError(ValueError, DASCoreError):
+    """Raised when a serialized document names its model class illegally."""

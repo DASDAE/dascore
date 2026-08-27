@@ -2,25 +2,19 @@
 
 from __future__ import annotations
 
-import numpy as np
+from typing import Literal
 
 import dascore as dc
 from dascore.constants import opt_timeable_types
-from dascore.io import FiberIO
-from dascore.utils.models import UnitQuantity, UTF8Str
+from dascore.io import FiberIO, ScanPayload, make_scan_payload
 
-from ...utils.hdf5 import H5Reader
-from .utils import _get_prodml_version_str, _read_prodml, _yield_prodml_attrs_coords
-
-
-class ProdMLPatchAttrs(dc.PatchAttrs):
-    """Patch attrs for ProdML."""
-
-    pulse_width: float = np.nan
-    pulse_width_units: UnitQuantity | None = None
-    gauge_length: float = np.nan
-    gauge_length_units: UnitQuantity | None = None
-    schema_version: UTF8Str = ""
+from ...utils.hdf5 import H5Reader, H5Writer
+from .utils import (
+    _get_prodml_version_str,
+    _read_prodml,
+    _write_prodml,
+    _yield_prodml_attrs_coords,
+)
 
 
 class ProdMLV2_0(FiberIO):  # noqa
@@ -30,7 +24,11 @@ class ProdMLV2_0(FiberIO):  # noqa
     preferred_extensions = ("hdf5", "h5")
     version = "2.0"
 
-    def get_format(self, resource: H5Reader, **kwargs) -> tuple[str, str] | bool:
+    def get_format(
+        self,
+        resource: H5Reader,
+        **kwargs,
+    ) -> tuple[str, str] | Literal[False]:
         """
         Return True if file contains prodML version 2 data else False.
 
@@ -42,18 +40,25 @@ class ProdMLV2_0(FiberIO):  # noqa
         version_str = _get_prodml_version_str(resource)
         if version_str:
             return (self.name, version_str)
+        return False
 
-    def scan(self, resource: H5Reader, **kwargs) -> list[dc.PatchAttrs]:
+    def scan(
+        self, resource: H5Reader, snap: bool = True, **kwargs
+    ) -> list[ScanPayload]:
         """Scan a prodml file, return summary information about the file's contents."""
-        file_version = _get_prodml_version_str(resource)
-        extras = {
-            "path": resource.filename,
-            "file_format": self.name,
-            "file_version": str(file_version),
-        }
-        out = []
-        for attr, coords in _yield_prodml_attrs_coords(resource, extras=extras):
-            out.append(attr.update(coords=coords))
+        out: list[ScanPayload] = []
+        for attr, coords, source_patch_key in _yield_prodml_attrs_coords(
+            resource, snap=snap
+        ):
+            attrs = attr.update(_source_patch_key=source_patch_key)
+            out.append(
+                make_scan_payload(
+                    attrs=attrs,
+                    coords=coords,
+                    dtype=attrs.get("dtype", ""),
+                    source_patch_key=source_patch_key,
+                )
+            )
         return out
 
     def read(
@@ -61,10 +66,16 @@ class ProdMLV2_0(FiberIO):  # noqa
         resource: H5Reader,
         time: tuple[opt_timeable_types, opt_timeable_types] | None = None,
         distance: tuple[float | None, float | None] | None = None,
+        source_patch_key=(),
         **kwargs,
-    ) -> dc.BaseSpool:
+    ) -> dc.Spool:
         """Read a ProdML file."""
-        patches = _read_prodml(resource, time=time, distance=distance)
+        patches = _read_prodml(
+            resource,
+            time=time,
+            distance=distance,
+            source_patch_key=source_patch_key,
+        )
         return dc.spool(patches)
 
 
@@ -72,3 +83,7 @@ class ProdMLV2_1(ProdMLV2_0):  # noqa
     """Support for ProdML V 2.1."""
 
     version = "2.1"
+
+    def write(self, spool: dc.Patch | dc.Spool, resource: H5Writer, **kwargs) -> None:
+        """Write one raw Patch to a standalone ProdML HDF5 file."""
+        _write_prodml(spool, resource)

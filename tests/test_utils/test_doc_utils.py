@@ -5,10 +5,18 @@ from __future__ import annotations
 import textwrap
 
 import pandas as pd
+import pytest
 
+import dascore.utils.namespace as ns_module
 from dascore.core.attrs import PatchAttrs
 from dascore.examples import EXAMPLE_PATCHES
-from dascore.utils.docs import compose_docstring, format_dtypes, objs_to_doc_df
+from dascore.utils.docs import (
+    compose_docstring,
+    format_dtypes,
+    get_docstring,
+    get_plugin_table,
+    objs_to_doc_df,
+)
 
 
 class TestFormatDtypes:
@@ -20,8 +28,8 @@ class TestFormatDtypes:
         assert isinstance(out, str)
 
 
-class TestDocsting:
-    """tests for obsplus' simple docstring substitution function."""
+class TestDocstring:
+    """tests for DASCore's simple docstring substitution function."""
 
     def count_white_space(self, some_str):
         """Count the number of whitespace chars in a str."""
@@ -72,6 +80,70 @@ class TestDocsting:
         white_space_counts = [self.count_white_space(x) for x in list_lines]
         # all whitespace counts should be the same for the list lines.
         assert len(set(white_space_counts)) == 1
+
+    def test_raises_when_no_placeholders_are_replaced(self):
+        """Unused substitutions should fail if nothing in the docstring matches."""
+        with pytest.raises(ValueError, match="did not replace any placeholders"):
+
+            @compose_docstring(params="value")
+            def dummy_func():
+                """A docstring with no replacement slots."""
+
+    def test_raises_when_some_placeholders_are_unused(self):
+        """Providing extra substitution keys should fail loudly."""
+        with pytest.raises(ValueError, match=r"unused keys.*extra"):
+
+            @compose_docstring(params="value", extra="not-used")
+            def dummy_func():
+                """
+                A docstring with one replacement slot.
+
+                {params}
+                """
+
+
+class TestGetDocstring:
+    """Tests for pulling a docstring out of an object."""
+
+    def test_returns_docstring(self):
+        """The docstring of a documented object is returned unchanged."""
+
+        def documented():
+            """Some words."""
+
+        assert get_docstring(documented) == documented.__doc__
+
+    def test_raises_when_undocumented(self):
+        """An object with no docstring is a source error, not a None value."""
+
+        def undocumented(): ...
+
+        with pytest.raises(AssertionError, match="has no docstring"):
+            get_docstring(undocumented)
+
+
+class TestGetPluginTable:
+    """Tests for get_plugin_table."""
+
+    def test_contains_registered_namespace(self):
+        """Registered namespaces should appear in the returned DataFrame."""
+        df = get_plugin_table()
+        assert "zug" in df["namespace"].values
+        assert "derzug" in df["package_name"].values
+
+    def test_one_row_per_host(self):
+        """A namespace registered on two hosts keeps a row for each."""
+        df = get_plugin_table()
+        rows = df[df["namespace"] == "zug"]
+        assert set(rows["host"]) == {"patch", "spool"}
+        assert len(rows) == 2
+
+    def test_empty_registry_returns_empty_dataframe(self, monkeypatch, tmp_path):
+        """An empty registry directory returns a DataFrame with the correct columns."""
+        monkeypatch.setattr(ns_module, "_PLUGIN_REGISTRY_DIR", tmp_path)
+        df = get_plugin_table()
+        assert list(df.columns) == ["host", "namespace", "package_name", "package_url"]
+        assert df.empty
 
 
 class TestObjToDocDF:

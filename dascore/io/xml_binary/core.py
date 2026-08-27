@@ -2,26 +2,24 @@
 
 from __future__ import annotations
 
-from pathlib import Path
+from typing import Literal
 from xml.etree.ElementTree import ParseError
 
-import numpy as np
 from pydantic import ValidationError
 
 import dascore as dc
-from dascore.io import FiberIO
-from dascore.utils.models import UTF8Str
+from dascore.io import FiberIO, ScanPayload
+from dascore.models import OptionalFiniteFloat, UTF8Str
+from dascore.utils.paths import coerce_to_upath
 
-from .utils import _load_patches, _paths_to_attrs, _read_xml_metadata
+from .utils import _load_patches, _paths_to_scan_patches, _read_xml_metadata
 
 
 class BinaryPatchAttrs(dc.PatchAttrs):
     """Patch attrs for Binary."""
 
-    pulse_width_ns: float = np.nan
-    gauge_length: float = np.nan
-    instrument_id: UTF8Str = ""
-    distance_units: UTF8Str = ""
+    pulse_width: OptionalFiniteFloat = None
+    gauge_length: OptionalFiniteFloat = None
     zone_name: UTF8Str = ""
 
 
@@ -36,26 +34,26 @@ class XMLBinaryV1(FiberIO):
     # File extension for data files.
     _data_extension = ".raw"
 
-    def scan(self, resource, timestamp=None, **kwargs) -> list[dc.PatchAttrs]:
+    @staticmethod
+    def _get_base_path(resource):
+        """Return the directory containing xml metadata and raw files."""
+        path = coerce_to_upath(resource)
+        return path if path.is_dir() else path.parent
+
+    def scan(self, resource, timestamp=None, **kwargs) -> list[ScanPayload]:
         """Scan the contents of the directory."""
-        path = Path(resource)
+        path = self._get_base_path(resource)
         metadata = _read_xml_metadata(path / self._metadata_name)
         data_files = list(path.glob(f"*{self._data_extension}"))
-        extra_attrs = {
-            "file_version": self.version,
-            "file_format": self.name,
-        }
         # Need to update time
-        attrs = _paths_to_attrs(
+        return _paths_to_scan_patches(
             data_files,
             metadata,
             timestamp=timestamp,
             attr_cls=BinaryPatchAttrs,
-            extra_attrs=extra_attrs,
         )
-        return attrs
 
-    def read(self, resource, time=None, distance=None, **kwargs) -> dc.BaseSpool:
+    def read(self, resource, time=None, distance=None, **kwargs) -> dc.Spool:
         """
         Load data from the directory structure.
 
@@ -70,8 +68,8 @@ class XMLBinaryV1(FiberIO):
         **kwargs
             Extra keyword arguments are ignored.
         """
-        path = Path(resource)
-        base_path = path if path.is_dir() else path.parent
+        path = coerce_to_upath(resource)
+        base_path = self._get_base_path(path)
         meta_data = _read_xml_metadata(base_path / self._metadata_name)
         if path.is_dir():
             path = list(path.glob(f"*{self._data_extension}"))
@@ -85,9 +83,9 @@ class XMLBinaryV1(FiberIO):
         )
         return dc.spool(patches)
 
-    def get_format(self, resource, **kwargs) -> tuple[str, str] | bool:
+    def get_format(self, resource, **kwargs) -> tuple[str, str] | Literal[False]:
         """Determine if directory is an XML Binary type."""
-        path = Path(resource)
+        path = self._get_base_path(resource)
         index_path = path / self._metadata_name
         if not index_path.exists():
             return False

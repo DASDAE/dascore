@@ -4,10 +4,22 @@
 project:
   type: website
   output-dir: _site
+  # The JupyterLite site is built by scripts/build_notebooks.py plus
+  # `jupyter lite build` (see .github/actions/prep_doc_build); quarto only
+  # copies it. Both directories hold notebooks, and lite/ also holds prebuilt
+  # html, so they are kept out of the render list -- quarto would otherwise
+  # treat them as pages to render.
+  resources:
+    - lite/**
+  render:
+    - "**/*.qmd"
+    - "!lite/**"
+    - "!lite_contents/**"
 
 filters:
   - quarto
   - filters/fill_links.py
+  - filters/lite_button.lua
 
 execute:
   warning: false
@@ -31,7 +43,7 @@ website:
   image: "_static/logo.png"
   favicon: "_static/logo.png"
   repo-subdir: docs
-  repo-branch: master
+  repo-branch: {{ repo_branch }}
   repo-actions: [edit]
   page-navigation: true
 
@@ -79,8 +91,11 @@ website:
         - text: Formats
           href: supported_formats.qmd
 
+        - text: Plugins
+          href: supported_plugins.qmd
+
         - text: Changelog
-          href: changelog.qmd
+          href: https://github.com/DASDAE/dascore/releases
 
         - text: Contributors
           href: contributors.qmd
@@ -106,14 +121,26 @@ website:
         - text: Transformations
           href: tutorial/transformations.qmd
 
+        - text: Workflow
+          href: tutorial/workflow.qmd
+
         - text: Visualization
           href: tutorial/visualization.qmd
 
         - text: File IO
           href: tutorial/file_io.qmd
 
+        - text: Working with Remote Patches
+          href: tutorial/remote_patches.qmd
+
+        - text: Configuration
+          href: tutorial/configuration.qmd
+
         - text: Coordinates
           href: tutorial/coords.qmd
+
+        - text: Inventory
+          href: tutorial/inventory.qmd
 
     - id: Recipes
       title: 'Recipes'
@@ -144,6 +171,11 @@ website:
             - recipes/real_time_proc.qmd
             - recipes/parallelization.qmd
             - recipes/low_freq_proc.qmd
+
+        - section: "Inventory"
+          contents:
+
+            - recipes/tunnel_inventory.qmd
 
         - section: "IO"
           contents:
@@ -202,11 +234,32 @@ website:
         - text: Documentation Strategy
           href: notes/doc_strategy.qmd
 
+        - text: Coordinate Internals
+          href: notes/coordinate_internals.qmd
+
+        - text: PatchAttrs
+          href: notes/patch_attrs.qmd
+
         - text: Fourier Transforms
           href: notes/dft_notes.qmd
 
         - text: Velocity to Strain Rate
           href: notes/velocity_to_strain_rate.qmd
+
+        - text: Spool Index
+          href: notes/spool_index.qmd
+
+        - text: Spool Selection
+          href: notes/spool_selection.qmd
+
+        - text: Spool Chunking
+          href: notes/spool_chunking.qmd
+
+        - text: Patch Compatibility
+          href: notes/patch_compatibility.qmd
+
+        - text: Inventory Attachment
+          href: notes/inventory_attachment.qmd
 
     - id: API
       title: "API"

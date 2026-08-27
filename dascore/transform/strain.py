@@ -21,7 +21,6 @@ from dascore.utils.patch import patch_function
 def velocity_to_strain_rate(
     patch: PatchType,
     step_multiple: int = 2,
-    gauge_multiple: None | int = None,
     order: int = 2,
 ) -> PatchType:
     r"""
@@ -47,8 +46,6 @@ def velocity_to_strain_rate(
     step_multiple
         The multiples of spatial sampling for the central averaging stencil.
         Must be even as odd values result in a staggered grid.
-    gauge_multiple
-        Deprecated name for step_multiple. Use that instead.
     order
         The order for the finite difference 1st derivative stencil (accuracy).
         It must be a multiple of 2
@@ -82,9 +79,9 @@ def velocity_to_strain_rate(
     [patch.differentiate](`dascore.transform.differentiate.differentiate`)
     under the hood to calculate spatial derivatives.
 
-    The output gauge length is equal to the step_multiple multuplied by the
+    The output gauge length is equal to the step_multiple multiplied by the
     spacing along the distance coordinate, although the concept of
-    gauge_length is more complex with higher oder filters. See
+    gauge_length is more complex with higher order filters. See
     @yang2022filtering for more info.
 
     See the [`velocity_to_strain_rate` note](docs/notes/velocity_to_strain_rate.qmd)
@@ -94,11 +91,6 @@ def velocity_to_strain_rate(
     of this function removes potential edge effects and supports even and odd
     `step_multiple` values.
     """
-    if gauge_multiple is not None:
-        msg = "gauge_multiple will be removed in the future. Use step_multiple."
-        warnings.warn(msg, DeprecationWarning)
-        step_multiple = gauge_multiple * 2
-
     if step_multiple <= 0:
         msg = "step_multiple must be positive."
         raise ParameterError(msg)
@@ -207,7 +199,12 @@ def velocity_to_strain_rate_edgeless(
         data_units=new_data_units,
     )
 
-    return dc.Patch(data=strain_rate, coords=new_coords, attrs=new_attrs)
+    return patch.new(data=strain_rate, coords=new_coords, attrs=new_attrs)
+
+
+def _get_strain_data_type(units) -> str:
+    """Get the strain data_type implied by the converted data units."""
+    return "strain_rate" if units.dimensionality.get("[time]") == -1 else "strain"
 
 
 @patch_function()
@@ -235,12 +232,26 @@ def radians_to_strain(
     refractive_index ($n$)
         The refractive index of the cable.
 
+    Examples
+    --------
+    >>> import dascore as dc
+    >>> patch = (
+    ...     dc.get_example_patch()
+    ...     .update_attrs(data_units="rad", gauge_length=10)
+    ...     .radians_to_strain()
+    ... )
+    >>> assert patch.attrs.data_type == "strain"
+
     Notes
     -----
     Equation 3 of @lindsey2020broadband:
     $$
     \epsilon_{xx}(t, x_j) = \frac{\lambda}{4 \pi n L_{g} \zeta} \Delta \Phi
     $$
+
+    The output `data_type` is set from the converted data units; it is
+    "strain_rate" when they are strain per unit time (eg rad/s becomes
+    strain/s) and "strain" otherwise.
     """
     # First get gauge length, using gl passed into function or attached to attrs.
     gl = getattr(patch.attrs, "gauge_length", None)
@@ -271,6 +282,8 @@ def radians_to_strain(
         msg = f"radians to strain failed to convert {data_units} to strain."
         raise UnitError(msg)
     # Build output patch
-    new_attrs = patch.attrs.update(data_units=new_units)
+    new_attrs = patch.attrs.update(
+        data_units=new_units, data_type=_get_strain_data_type(new_units)
+    )
     new_data = patch.data * const * d_factor
     return patch.update(data=new_data, attrs=new_attrs)

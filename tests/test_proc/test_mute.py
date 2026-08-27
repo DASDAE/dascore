@@ -59,9 +59,17 @@ def _assert_point_values(
 
 
 @pytest.fixture(scope="session")
-def patch_ones(random_patch):
-    """Return a patch filled with ones."""
-    return random_patch.new(data=np.ones_like(random_patch.data))
+def patch_ones():
+    """Return a patch filled with ones.
+
+    A quarter of the default patch's pixels over the same 300 m by 8 s
+    extent: the tests below mute along lines given in metres and seconds,
+    so the extent has to stay while the sampling need not.
+    """
+    patch = dc.get_example_patch(
+        "random_das", shape=(150, 1000), distance_step=2, time_step=0.008
+    )
+    return patch.new(data=np.ones_like(patch.data))
 
 
 @pytest.fixture(scope="module")
@@ -186,6 +194,16 @@ class Test1DLineMute:
         sub = muted1.select(time=(v1, v2), relative=True)
         assert not np.allclose(sub.data, 1)
 
+    def test_single_dict_smooth_matches_scalar(self, patch_ones):
+        """A smooth dict should smooth the selected patch axis."""
+        coord = patch_ones.get_coord("time")
+        v1, v2 = _get_testable_coord_values(coord, relative=True)
+        muted_scalar = patch_ones.line_mute(time=(v1, v2), relative=True, smooth=5)
+        muted_dict = patch_ones.line_mute(
+            time=(v1, v2), relative=True, smooth={"time": 5}
+        )
+        np.testing.assert_allclose(muted_dict.data, muted_scalar.data)
+
     def test_single_quantity(self, patch_ones):
         """A single quantity should work with a specified dimension."""
         coord = patch_ones.get_coord("time")
@@ -258,13 +276,24 @@ class TestMuteLines:
             distance=distance,
         )
         inverted = patch_ones.line_mute(time=time, distance=distance, invert=True)
-
         points = [(110, 3), (271, 7), (23, 1), (50, 6), (250, 1), (170, 3)]
         expected = np.array([0, 0, 0, 1, 1, 1])
         _assert_point_values(muted, self._dims, points=points, expected_values=expected)
         _assert_point_values(
             inverted, self._dims, points=points, expected_values=-expected + 1
         )
+
+    def test_dict_smooth_is_independent_of_key_order(self, patch_ones):
+        """Dict smooth values should stay paired with their dimensions."""
+        time = ([0, 2], [0, 4])
+        distance = ([0, 100], [0, 100])
+        smooth1 = {"time": 5, "distance": 3}
+        smooth2 = {"distance": 3, "time": 5}
+
+        muted1 = patch_ones.line_mute(time=time, distance=distance, smooth=smooth1)
+        muted2 = patch_ones.line_mute(time=time, distance=distance, smooth=smooth2)
+
+        np.testing.assert_allclose(muted1.data, muted2.data)
 
     def test_implicit_with_positive_line(self, patch_ones):
         """

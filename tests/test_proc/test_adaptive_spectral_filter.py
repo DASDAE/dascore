@@ -181,6 +181,35 @@ class TestAdaptiveSpectralFilter:
 
         np.testing.assert_allclose(by_units.data, by_samples.data, rtol=1e-5, atol=1e-5)
 
+    def test_fractional_scalar_overlap_reads_coordinate_units(self) -> None:
+        """One overlap for every dimension is a unit value like a mapping is."""
+        patch = _patch((64,), ("distance",), distance_step=0.5)
+
+        scalar = patch.adaptive_spectral_filter(
+            distance=8.0, overlap=3.5, samples=False, engine="scipy"
+        )
+        by_samples = patch.adaptive_spectral_filter(
+            distance=16, overlap=7, samples=True, engine="scipy"
+        )
+
+        np.testing.assert_allclose(scalar.data, by_samples.data, rtol=1e-5, atol=1e-5)
+
+    def test_scalar_overlap_may_be_time_like(self) -> None:
+        """A timedelta overlap survives to the coordinate, rather than int()."""
+        patch = _patch((64,), ("time",), time_step=np.timedelta64(4, "ms"))
+
+        by_units = patch.adaptive_spectral_filter(
+            time=np.timedelta64(64, "ms"),
+            overlap=np.timedelta64(28, "ms"),
+            samples=False,
+            engine="scipy",
+        )
+        by_samples = patch.adaptive_spectral_filter(
+            time=16, overlap=7, samples=True, engine="scipy"
+        )
+
+        np.testing.assert_allclose(by_units.data, by_samples.data, rtol=1e-5, atol=1e-5)
+
     def test_default_overlap_stays_in_samples_when_windows_use_units(self) -> None:
         """Computed overlap defaults should not be interpreted as coordinate units."""
         patch = _patch(

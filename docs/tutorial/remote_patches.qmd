@@ -1,0 +1,200 @@
+---
+title: Working with Remote Patches
+execute:
+  warning: false
+---
+
+DASCore can work directly with remote resources exposed through [`UPath`](https://pypi.org/project/universal-pathlib/), and is currently tested with backends such as `memory://`, `s3://`, and `http://`.
+
+The main distinction is simple:
+
+- metadata operations such as [`dc.scan(...)`](`dascore.scan`) and [`dc.get_format(...)`](`dascore.get_format`) stay conservative by default
+- [`dc.scan_payloads(...)`](`dascore.scan_payloads`) uses the metadata cache policy too, but may read complete coordinate arrays and retain more memory than `dc.scan(...)`
+- data-loading operations such as [`dc.read(...)`](`dascore.read`) and patch access through [`dc.spool(...)`](`dascore.spool`) are allowed to do heavier IO when needed
+
+## Basic Remote Example
+
+The example below uses `memory://` so it can run without external network access.
+
+```{python}
+from upath import UPath
+import dascore as dc
+
+patch = dc.get_example_patch()
+remote_path = UPath("memory://dascore/tutorial/remote_patch.h5")
+
+dc.write(patch, remote_path, "DASDAE")
+
+summary = dc.scan(remote_path)[0]
+payload = dc.scan_payloads(remote_path, snap=False)[0]
+loaded = dc.read(remote_path)[0]
+spool = dc.spool(remote_path)
+
+print(summary.source_path)
+print(payload["coords"].dims)
+print(loaded.dims)
+print(len(spool))
+```
+
+For backends that support direct remote access, DASCore can often scan and read without creating a local cached copy.
+
+## Remote Cache Settings
+
+The relevant runtime config values live in `dascore.config`.
+
+```{python}
+from pathlib import Path
+
+from dascore.config import get_config, config_context
+
+config = get_config()
+
+print(config.remote_cache_dir)
+print(config.allow_remote_cache)
+print(config.allow_remote_cache_for_metadata)
+print(config.warn_on_remote_cache)
+
+with config_context(
+    remote_cache_dir=Path("/tmp/dascore-remote-cache"),
+    allow_remote_cache=True,
+    allow_remote_cache_for_metadata=False,
+    warn_on_remote_cache=True,
+):
+    ...
+```
+
+- `remote_cache_dir` is the local directory DASCore uses when it has to materialize a remote file.
+- `allow_remote_cache=True` allows local materialization for real read operations.
+- `allow_remote_cache_for_metadata=False` keeps metadata operations predictable by default.
+- `warn_on_remote_cache=True` emits a warning the first time DASCore downloads a remote file into the local cache.
+
+## Metadata By Default
+
+When a backend can satisfy metadata access directly, `dc.scan(...)`, `dc.scan_payloads(...)`, and `dc.get_format(...)` work as usual.
+
+```{python}
+print(dc.get_format(remote_path))
+print(dc.scan(remote_path)[0].source_format)
+print(dc.scan_payloads(remote_path, snap=False)[0]["source_format"])
+```
+
+`scan_payloads` does not load the patch data array, but exact scans can still transfer every stored coordinate value. Use it for targeted coordinate probes rather than broad remote directory listings.
+
+If answering a metadata query would require downloading the file first, DASCore raises [`RemoteCacheError`](`dascore.exceptions.RemoteCacheError`) instead of silently materializing it.
+
+```python
+from dascore.exceptions import RemoteCacheError
+from upath import UPath
+import dascore as dc
+
+http_path = UPath("http://example.com/data/prodml_2.1.h5")
+
+try:
+    dc.get_format(http_path)
+except RemoteCacheError as exc:
+    print(exc)
+```
+
+## Opt In When Metadata Caching Is Acceptable
+
+If you know a metadata operation may need local caching, opt in explicitly.
+
+```python
+from dascore.config import config_context
+from upath import UPath
+import dascore as dc
+
+http_path = UPath("http://example.com/data/prodml_2.1.h5")
+
+with config_context(allow_remote_cache_for_metadata=True):
+    fmt = dc.get_format(http_path)
+    summary = dc.scan(http_path)[0]
+    payload = dc.scan_payloads(http_path, snap=False)[0]
+
+print(fmt)
+print(summary.source_path)
+print(payload["coords"].dims)
+```
+
+When metadata-time caching is enabled, DASCore may warn on the first download if `warn_on_remote_cache=True`.
+
+## Reads And Spools
+
+[`dc.read(...)`](`dascore.read`) remains the escape hatch for remote data that genuinely needs heavier IO. If a backend requires a local cached file to complete the read, DASCore may materialize it locally when `allow_remote_cache=True`.
+
+```python
+from upath import UPath
+import dascore as dc
+
+http_path = UPath("http://example.com/data/prodml_2.1.h5")
+patch = dc.read(http_path)[0]
+print(patch.data.shape)
+```
+
+The same distinction applies to spools:
+
+- `spool.get_contents()` relies on summary metadata
+- `spool[0]` or iteration loads patch data
+- if a remote backend cannot answer the metadata side without a download, use `allow_remote_cache_for_metadata=True`
+
+## Garbage Collection During Remote HDF5 Reads
+
+While a remote HDF5 handle is open, DASCore pauses Python's automatic garbage collection for the whole process, then restores it when the last such handle closes.
+
+This avoids a deadlock which h5py documents under [Python file-like objects](https://docs.h5py.org/en/stable/high/file.html#python-file-like-objects): h5py serializes its low-level calls behind a process-global lock, holds that lock while a file-like object services a read, and needs the same lock to deallocate a dead h5py object. A remote read is serviced by the event loop thread [fsspec](https://filesystem-spec.readthedocs.io/) runs for each async backend, so a cyclic collection landing on that thread waits for a lock the reader will not release until the read completes.
+
+Of the mitigations h5py suggests, DASCore takes the second: temporarily disabling collection. The first, avoiding reference cycles which keep h5py objects alive, is not something a library can guarantee, since the cycle may be anywhere in the process.
+
+Reference counting is unaffected, so most objects are still freed immediately; only cyclic garbage accumulates, and only until the handle closes. Reads of local files and of synchronous backends such as `memory://` are unaffected.
+
+DASCore warns the first time it pauses collection in a process, since the effect is otherwise invisible. Silence it with `warn_on_gc_pause=False` once you know it applies to your workflow.
+
+```python
+import dascore as dc
+from dascore.config import config_context
+
+with config_context(warn_on_gc_pause=False):
+    patch = dc.read("http://example.com/data/prodml_2.1.h5")[0]
+```
+
+## Tuning Remote HDF5 Transfers
+
+Opening an HDF5 file over HTTP is dominated by h5py's metadata probe, which alternates between the file's header and footer. DASCore reads through a block cache so both ends stay resident rather than being refetched on every jump. Two settings control it:
+
+- `remote_hdf5_block_size` — bytes fetched per block (5 MiB by default)
+- `remote_hdf5_max_blocks` — blocks one open handle may keep (8 by default)
+
+Their product is roughly the memory one open handle retains, so ~40 MiB by default. The cache fetches one block per request, so the block size trades bytes against round trips. Which way to move it depends on what you are doing, because scanning and reading pull in opposite directions.
+
+### Scanning many files
+
+Scanning reads only metadata — kilobytes, from two distant regions of each file, which is then closed before the cache is reused. Big blocks spend megabytes to deliver kilobytes, so shrink both:
+
+```python
+import dascore as dc
+from dascore.config import config_context
+
+urls = [f"http://example.com/data/file_{i}.h5" for i in range(100)]
+
+with config_context(remote_hdf5_block_size=262_144, remote_hdf5_max_blocks=4):
+    df = dc.scan_to_df(urls)
+```
+
+That retains 1 MiB per handle rather than 40 MiB. Do not shrink too far: on a high-latency link the extra round trips cost more than the bytes saved.
+
+### Reading whole patches
+
+Reading pulls large contiguous ranges, so bigger blocks mean fewer requests for the same bytes. The LRU earns little on a single pass, so trade blocks for size:
+
+```python
+with config_context(remote_hdf5_block_size=16_777_216, remote_hdf5_max_blocks=2):
+    patch = dc.read("http://example.com/data/prodml_2.1.h5")[0]
+```
+
+If you read whole files, especially more than once, let DASCore materialize them locally instead — see [Remote Cache Settings](#remote-cache-settings). One sequential download beats any streaming pattern.
+
+### Many handles at once
+
+The figure is per *open* handle, so concurrent reads multiply it: eight files in parallel at the defaults holds ~320 MiB. Lower `remote_hdf5_max_blocks` first, since evictions cost nothing for a scan or a single pass.
+
+Both settings apply to the protocols DASCore tunes; `remote_hdf5_max_blocks` reaches only HTTP and HTTPS, as S3 uses a read-ahead cache which takes the block size alone.

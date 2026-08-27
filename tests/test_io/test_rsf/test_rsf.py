@@ -5,6 +5,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+from upath import UPath
 
 import dascore as dc
 from dascore.io.rsf import RSFV1
@@ -75,3 +76,26 @@ class TestRsfWrite:
         file_esize = dtype.itemsize
         datasize = test_data.size * file_esize
         assert os.path.getsize(newdatapath) == datasize
+
+    def test_write_remote_memory_combined(self, random_patch):
+        """Combined RSF output should support remote UPath destinations."""
+        spool = dc.spool(random_patch)
+        path = UPath("memory://dascore/test_hdrdata_remote.rsf")
+        RSFV1().write(spool, path)
+        assert path.exists()
+        test_data = random_patch.data.astype(np.float32)
+        datasize = test_data.size * np.dtype(test_data.dtype).itemsize
+        assert path.stat().st_size >= datasize
+
+    def test_write_remote_memory_split(self, random_patch):
+        """Split RSF output should support remote UPath destinations."""
+        spool = dc.spool(random_patch)
+        path = UPath("memory://dascore/test_hdr_remote.rsf")
+        datapath = UPath("memory://dascore/binary/test_data_remote.rsf")
+        RSFV1().write(spool, path, data_path=datapath)
+        assert path.exists()
+        newdatapath = UPath(str(datapath) + "@")
+        assert newdatapath.exists()
+        test_data = random_patch.data.astype(np.float32)
+        datasize = test_data.size * np.dtype(test_data.dtype).itemsize
+        assert newdatapath.stat().st_size == datasize

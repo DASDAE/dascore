@@ -3,21 +3,146 @@
 from __future__ import annotations
 
 import fnmatch
-import os
 from collections import defaultdict
-from collections.abc import Collection, Mapping, Sequence
+from collections.abc import Collection, Generator, Iterator, Mapping, Sequence
 from functools import cache
+from typing import TypeVar, cast
 
 import numpy as np
 import pandas as pd
 from pydantic import BaseModel
 
 import dascore as dc
-from dascore.constants import PatchType
+from dascore.constants import PatchType, namespace_select_type
 from dascore.core.attrs import PatchAttrs
-from dascore.exceptions import ParameterError
-from dascore.utils.misc import sanitize_range_param
+from dascore.exceptions import InvalidSpoolQueryError, ParameterError
+from dascore.utils.misc import is_range, order_range_tuple, sanitize_range_param
 from dascore.utils.time import to_datetime64, to_timedelta64
+
+_RowType = TypeVar("_RowType")
+
+
+def iter_rows(df: pd.DataFrame, row_type: type[_RowType]) -> Iterator[_RowType]:
+    """
+    Iterate over a dataframe's rows as named tuples of a known shape.
+
+    Parameters
+    ----------
+    df
+        The dataframe to iterate.
+    row_type
+        A NamedTuple declaring the columns the caller reads. Pandas builds
+        the row tuple dynamically, so this only names the shape for
+        readers (and type checkers); it is never instantiated. The frame's
+        index is left out so the declared fields line up with the row's.
+    """
+    return cast(Iterator[_RowType], df.itertuples(index=False))
+
+
+def present_units_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Expose private ``_{name}_units`` columns under public names.
+
+    Coordinate envelopes are stored and presented in each coordinate's
+    original units, so the unit belongs beside the values it scales:
+    ``distance_min`` of 65.6 is self-explaining only with
+    ``distance_units`` of ``ft`` in view. The private spellings exist
+    for the planners (public columns are conflict-policed on merge), so
+    only the presented frame renames them.
+
+    An existing public column is never overwritten. For frames the index
+    builds this cannot happen: an attr whose name would claim a
+    coordinate's public units column is omitted from the flat view with
+    a warning, the same rule that protects envelope columns. A frame
+    assembled some other way keeps whatever it already had, and its
+    private column simply stays private rather than silently replacing
+    a value this function cannot vouch for.
+    """
+    renames = {}
+    for col in df.columns:
+        name = str(col)
+        if not (name.startswith("_") and name.endswith("_units")):
+            continue
+        public = name[1:]
+        if public not in df.columns:
+            renames[col] = public
+    return df.rename(columns=renames) if renames else df
+
+
+def _present_private_column(df: pd.DataFrame, private: str) -> pd.DataFrame:
+    """Rename one private column to its public spelling, if it is free."""
+    public = private[1:]
+    if private not in df.columns or public in df.columns:
+        return df
+    return df.rename(columns={private: public})
+
+
+def present_dtype_column(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Expose ``_dtype`` as ``dtype``.
+
+    The element type of a patch's data is private in the relation
+    because chunk groups and polices every public column, and patches of
+    different element types must still merge. It is worth showing: with
+    ``data_size`` it is what the patch costs to load.
+    """
+    return _present_private_column(df, "_dtype")
+
+
+def present_data_size_column(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Expose ``_data_size`` as ``data_size``.
+
+    The sample count is private for the same reason ``_dtype`` is, and
+    more sharply: patches of different lengths are the ordinary case,
+    and a public column would keep chunk from merging any of them.
+
+    A row states no size when it does not know one: a merged or
+    subdivided chunk output, or a patch a selection trims. The column
+    follows the index's convention
+    of staying nullable (Int64) only when it holds nulls; a column of
+    nothing else arrives from SQL untyped.
+    """
+    out = _present_private_column(df, "_data_size")
+    if "data_size" not in out.columns or out is df:
+        return out
+    sizes = out["data_size"]
+    return out.assign(data_size=sizes.astype("Int64" if sizes.isna().any() else int))
+
+
+def drop_private_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """Drop every remaining private (leading underscore) column."""
+    private = [col for col in df.columns if str(col).startswith("_")]
+    return df.drop(columns=private) if private else df
+
+
+# What `present_columns` runs, in order. Each step but the last gives one
+# private column (or family) back its public spelling; dropping the rest
+# is always last, so a private column no step claims simply does not
+# leave. Add a step here to publish another one -- and only when a caller
+# can act on it, since every column added is one more to read past.
+PRESENTERS = (
+    present_units_columns,
+    present_dtype_column,
+    present_data_size_column,
+    drop_private_columns,
+)
+
+
+def present_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Return the public view of a flat relation.
+
+    The relation carries private columns the spool needs and a caller
+    does not: the row id, per-coordinate identity keys, the raw path
+    attrs. A leading underscore means private everywhere else in
+    DASCore, so a frame handed out publicly should not carry them. A few
+    are private only because the planners police public columns, and
+    those are renamed rather than dropped; `PRESENTERS` is the list.
+    """
+    for present in PRESENTERS:
+        df = present(df)
+    return df
 
 
 @cache
@@ -26,16 +151,196 @@ def get_regex(seed_str):
     return fnmatch.translate(seed_str)  # translate to re
 
 
-def _remove_base_path(series: pd.Series, base="") -> pd.Series:
+def relative_offset(gmin, gmax, value):
     """
-    Ensure paths stored in column name use unix style paths and have base
-    path removed.
+    Resolve one relative bound against a global [gmin, gmax] envelope.
+
+    Positive offsets measure from the start, negative from the end;
+    None/Ellipsis bounds stay open. Datetime envelopes take numeric
+    seconds offsets.
     """
-    assert not series.empty, "Series must be non-empty"
-    unix_paths = series.str.replace(os.sep, "/")
-    unix_base_path = (str(base) + "/").replace(os.sep, "/")
-    out = unix_paths.str.replace(unix_base_path, "", regex=False)
+    if value is None or value is Ellipsis:
+        return None
+    if isinstance(gmin, pd.Timestamp) or isinstance(gmin, np.datetime64):
+        delta = to_timedelta64(abs(float(value)))
+        return (gmin + delta) if value >= 0 else (gmax - delta)
+    return (gmin + value) if value >= 0 else (gmax + value)
+
+
+def relative_ranges_to_absolute(df, kwargs: dict) -> dict:
+    """
+    Resolve relative (start, stop) ranges against a frame's global envelopes.
+
+    Operates only on the dataframe's `{name}_min`/`{name}_max` envelope
+    columns, so both the generic dataframe select path and the catalog
+    share one relative-select implementation without either depending on
+    the index query builder.
+    """
+    out = {}
+    for name, value in kwargs.items():
+        lo_col, hi_col = f"{name}_min", f"{name}_max"
+        if lo_col not in df.columns or hi_col not in df.columns or df.empty:
+            msg = f"Cannot use relative select on {name!r}."
+            raise InvalidSpoolQueryError(msg)
+        if not is_range(value):
+            # same vocabulary as the catalog path's selector shaping
+            msg = (
+                f"relative=True accepts range selectors only (a (start, stop) "
+                f"tuple or slice), got {value!r}."
+            )
+            raise InvalidSpoolQueryError(msg)
+        gmin, gmax = df[lo_col].min(), df[hi_col].max()
+        lo, hi = value
+        out[name] = (
+            relative_offset(gmin, gmax, lo),
+            relative_offset(gmin, gmax, hi),
+        )
     return out
+
+
+def normalize_range_forms(value):
+    """
+    Normalize the patch-level slice range form to a 2-tuple.
+
+    Only slices are converted: bare None/Ellipsis keep their own errors,
+    and a fully-open range is rejected downstream as having no usable
+    bounds (per the selector spec).
+    """
+    if isinstance(value, slice):
+        return sanitize_range_param(value)
+    return value
+
+
+def resolve_selector_namespaces(
+    known_attrs: Collection[str],
+    known_coords: Collection[str],
+    _attrs: namespace_select_type = None,
+    _coords: namespace_select_type = None,
+    kwargs: Mapping | None = None,
+) -> tuple[dict, dict]:
+    """
+    Split selector kwargs into (attrs, coords) per the selector spec.
+
+    Bare kwargs resolve against attributes first, then coordinates;
+    `_attrs`/`_coords` name their namespace explicitly and validate
+    against that side only. Each accepts either a mapping of
+    ``name -> selector`` (the fully general form — required when a name
+    cannot be a Python keyword, e.g. it collides with a select parameter
+    or is not an identifier) or a name/collection of names tagging which
+    *bare kwargs* to interpret in that namespace. Unknown names, and
+    names supplied in more than one namespace, raise (see #435).
+
+    Both the catalog (which pushes predicates into SQL) and the generic
+    dataframe select path resolve names here, so the two agree on which
+    names are valid, what a bare name means, and which range forms are
+    accepted — the paths differ only in how they *apply* a predicate.
+    """
+
+    def _tag_form(spec, kwargs, label):
+        """Normalize a tag-form spec (names of bare kwargs) to a dict."""
+        if spec is None or isinstance(spec, Mapping):
+            return spec, kwargs
+        names = [spec] if isinstance(spec, str) else list(spec)
+        if not all(isinstance(n, str) for n in names):
+            msg = (
+                f"{label} must be a mapping of name -> selector, or a "
+                "name/collection of names tagging bare keyword arguments."
+            )
+            raise InvalidSpoolQueryError(msg)
+        kwargs = dict(kwargs or {})
+        out = {}
+        for n in names:
+            if n not in kwargs:
+                msg = f"{label}={n!r} names no bare keyword argument."
+                raise InvalidSpoolQueryError(msg)
+            out[n] = kwargs.pop(n)
+        return out, kwargs
+
+    _attrs, kwargs = _tag_form(_attrs, kwargs, "_attrs")
+    _coords, kwargs = _tag_form(_coords, kwargs, "_coords")
+    known_attrs, known_coords = set(known_attrs), set(known_coords)
+    # A name in both explicit namespaces is a caller error whether or not
+    # it is valid in either, so this precedes the membership checks.
+    if duplicates := set(_attrs or {}) & set(_coords or {}):
+        names = ", ".join(repr(x) for x in sorted(duplicates))
+        raise InvalidSpoolQueryError(f"{names} given in both _attrs and _coords.")
+    attrs: dict = {}
+    coords: dict = {}
+    for items, allowed, out, noun in (
+        (_attrs, known_attrs, attrs, "an attribute"),
+        (_coords, known_coords, coords, "a coordinate"),
+    ):
+        for name, value in (items or {}).items():
+            if name not in allowed:
+                msg = f"{name!r} is not {noun} of this spool."
+                raise InvalidSpoolQueryError(msg)
+            out[name] = normalize_range_forms(value)
+    for name, value in (kwargs or {}).items():
+        if name in attrs or name in coords:
+            msg = f"{name!r} given as both a bare kwarg and in _attrs/_coords."
+            raise InvalidSpoolQueryError(msg)
+        value = normalize_range_forms(value)
+        if name in known_attrs:
+            attrs[name] = value
+        elif name in known_coords:
+            coords[name] = value
+        else:
+            msg = (
+                f"{name!r} is neither an attribute nor a coordinate of this "
+                f"spool. Attributes: {sorted(known_attrs)}; "
+                f"coordinates: {sorted(known_coords)}."
+            )
+            raise InvalidSpoolQueryError(msg)
+    return attrs, coords
+
+
+def selector_spec_names(spec: namespace_select_type) -> set[str]:
+    """
+    Return the names an `_attrs`/`_coords` argument designates.
+
+    Either form: a mapping of name -> selector, or a name (or names)
+    tagging bare kwargs. A malformed spec keeps only what is a name, so
+    `resolve_selector_namespaces` is left to complain about the rest
+    properly.
+    """
+    if spec is None:
+        return set()
+    if isinstance(spec, str):
+        return {spec}
+    return {x for x in spec if isinstance(x, str)}
+
+
+def requested_selector_names(_attrs, _coords, kwargs) -> set[str]:
+    """
+    Return every name a selection call names, whatever form it arrives in.
+
+    A tag-form `_attrs`/`_coords` names bare kwargs, so a requested name
+    is always either a bare kwarg or a key of a mapping form.
+    """
+    out = set(kwargs)
+    for spec in (_attrs, _coords):
+        if isinstance(spec, Mapping):
+            out |= set(spec)
+    return out
+
+
+def drop_selector_names(spec: namespace_select_type, names) -> namespace_select_type:
+    """
+    Return an `_attrs`/`_coords` argument with some names taken out.
+
+    Callers use this to peel off the names another namespace answers
+    (e.g. coordinates an inventory defines along the fiber) — and the tag
+    form as well as the mapping one, since a tag left behind designates a
+    bare keyword which went with it.
+    """
+    if not names or spec is None:
+        return spec
+    if isinstance(spec, Mapping):
+        return {str(k): v for k, v in spec.items() if k not in names}
+    if isinstance(spec, str):
+        return None if spec in names else spec
+    kept = [x for x in spec if x not in names]
+    return kept or None
 
 
 def _get_min_max_query(kwargs, df):
@@ -134,10 +439,43 @@ def _filter_equality(query_dict, df, bool_index):
     return bool_index
 
 
+def _check_misdirected_range_query(key, val, df):
+    """
+    Raise if a range query was aimed at an interval column.
+
+    Columns like time_min/time_max hold the limits of each row, and a
+    collection of values applied to one is a membership (isin) check. An open
+    bound (... or None) in such a collection is meaningless, and signals a
+    range query which belongs on the dimension instead, eg
+    time_min=(t1, ...) should be time=(t1, ...). Without this the query would
+    silently match nothing.
+    """
+    base = key[:-4] if key.endswith(("_min", "_max")) else None
+    if base is None or not {f"{base}_min", f"{base}_max"}.issubset(set(df.columns)):
+        return
+    # Only a two element sequence can be a range. Anything else is a
+    # membership check, where None may be a legitimate value to match.
+    if len(val) != 2 or not any(x is ... or x is None for x in val):
+        return
+    msg = (
+        f"An open bound (... or None) is not valid in the query for column "
+        f"'{key}'; a collection of values is an isin check, not a range. "
+        f"Use {base}=(min, max) to query a range of {base} values."
+    )
+    raise ParameterError(msg)
+
+
 def _filter_contains(query_dict, df, bool_index):
     """Filter based on rows containing specified values."""
     for key, val in query_dict.items():
-        bool_index = np.logical_and(bool_index, df[key].isin(val))
+        _check_misdirected_range_query(key, val, df)
+        # An ellipsis names no value, so it matches nothing and is dropped
+        # before `isin` sees it: pandas' arrow-backed string columns refuse a
+        # value arrow has no type for, where its numpy-backed ones quietly
+        # never match. The range check above still sees it -- an open bound
+        # in a membership query is what that check exists to name.
+        wanted = [x for x in val if x is not ...]
+        bool_index = np.logical_and(bool_index, df[key].isin(wanted))
     return bool_index
 
 
@@ -170,6 +508,16 @@ def _filter_multicolumn_range(query_dict, df, bool_index):
     return bool_index
 
 
+def _convert_range_bounds(range_tuple, func):
+    """
+    Apply a time conversion to each bound of a range.
+
+    Unbounded (None) ends are left alone; converting them would produce NaT,
+    which compares False against everything and would silently empty the query.
+    """
+    return tuple(None if x is None else func(x) for x in range_tuple)
+
+
 def _convert_times(df, some_dict):
     """Convert query values to datetime/timedelta values."""
     if not some_dict:
@@ -181,16 +529,16 @@ def _convert_times(df, some_dict):
         non_min_max_cols & set(some_dict)
     )
     for key in datetime_keys:
-        some_dict[key] = to_datetime64(some_dict[key])
+        some_dict[key] = _convert_range_bounds(some_dict[key], to_datetime64)
     # convert queries related to time delta into timedelta64
     timedelta_cols = set(df.select_dtypes(include=np.timedelta64).columns)
     timedelta_keys = timedelta_cols & set(some_dict)
     for key in timedelta_keys:
-        some_dict[key] = to_timedelta64(some_dict[key])
+        some_dict[key] = _convert_range_bounds(some_dict[key], to_timedelta64)
     return some_dict
 
 
-def get_interval_columns(df, name, arrays=False):
+def get_interval_columns(df, name):
     """
     Return a series of start, stop, step for columns.
 
@@ -200,8 +548,6 @@ def get_interval_columns(df, name, arrays=False):
         The input dataframe.
     name
         The name of the coordinate (eg time).
-    arrays
-        If True, return output as numpy arrays, else pandas series.
     """
     names = f"{name}_min", f"{name}_max", f"{name}_step"
     missing_cols = set(names) - set(df.columns)
@@ -213,13 +559,10 @@ def get_interval_columns(df, name, arrays=False):
         )
         raise ParameterError(msg)
     start, stop, step = df[names[0]], df[names[1]], df[names[2]]
-    if not arrays:
-        return start, stop, step
-    else:
-        return start.values, stop.values, step.values
+    return start, stop, step
 
 
-def yield_range_tuple_from_kwargs(df, kwargs) -> tuple[str, slice]:
+def yield_range_tuple_from_kwargs(df, kwargs) -> Generator[tuple[str, tuple]]:
     """
     For each slice keyword, yield the name and a tuple of (start, stop).
 
@@ -270,8 +613,9 @@ def adjust_segments(df, ignore_bad_kwargs=False, **kwargs):
     # Track which rows have been modified
     not_modified = ~_column_or_value(out, "_modified", False)
     # find slice kwargs, get series corresponding to interval columns
-    for name, (val_min, val_max) in yield_range_tuple_from_kwargs(out, kwargs):
-        start, stop, step = get_interval_columns(out, name)
+    for name, range_tuple in yield_range_tuple_from_kwargs(out, kwargs):
+        val_min, val_max = order_range_tuple(range_tuple)
+        start, stop, _ = get_interval_columns(out, name)
         min_val = val_min if val_min is not None else start.min()
         max_val = val_max if val_max is not None else stop.max()
         too_small = start < min_val
@@ -282,7 +626,9 @@ def adjust_segments(df, ignore_bad_kwargs=False, **kwargs):
     return out.assign(_modified=~not_modified)
 
 
-def filter_df(df: pd.DataFrame, ignore_bad_kwargs=False, **kwargs) -> np.ndarray:
+def filter_df(
+    df: pd.DataFrame, ignore_bad_kwargs=False, **kwargs
+) -> np.ndarray | pd.Series:
     """
     Determine if each row of the index meets some filter requirements.
 
@@ -304,12 +650,17 @@ def filter_df(df: pd.DataFrame, ignore_bad_kwargs=False, **kwargs) -> np.ndarray
 
     Returns
     -------
-    A boolean array of the same len as df indicating if each row meets the
-    requirements.
+    A boolean mask of the same len as df indicating if each row meets the
+    requirements. Whether it comes back as a bare array or a Series
+    depends on which queries applied, so treat it as an opaque boolean
+    container rather than relying on either.
     """
     min_max_query = _convert_times(df, _get_min_max_query(kwargs, df))
     kwargs, range_query, _ = split_df_query(kwargs, df, ignore_bad_kwargs)
     multicolumn_range_query = _convert_times(df, range_query)
+    multicolumn_range_query = {
+        key: order_range_tuple(val) for key, val in multicolumn_range_query.items()
+    }
     equality_query, collection_query = _get_flat_and_collection_queries(kwargs)
     # get a blank index of True for filters
     bool_index = np.ones(len(df), dtype=bool)
@@ -364,16 +715,6 @@ def get_dim_names_from_columns(df: pd.DataFrame) -> list[str]:
     return sorted(out)
 
 
-def get_column_names_from_dim(dims: Sequence[str]) -> list:
-    """Get column names from a sequence of dimensions."""
-    out = []
-    for name in dims:
-        out.append(f"{name}_min")
-        out.append(f"{name}_max")
-        out.append(f"{name}_step")
-    return out
-
-
 def fill_defaults_from_pydantic(df, base_model: type[BaseModel]):
     """
     Fill missing columns in dataframe with defaults from base_model.
@@ -425,44 +766,16 @@ def _model_list_to_df(mod_list: Sequence[dc.PatchAttrs], exclude=None) -> pd.Dat
 
     Optionally, exclude certain columns
     """
-    df = pd.DataFrame([x.flat_dump(exclude=exclude) for x in mod_list])
+    records = []
+    for item in mod_list:
+        if hasattr(item, "flat_dump"):
+            records.append(item.flat_dump(exclude=exclude))
+        else:
+            records.append(item.summary.flat_dump(exclude=exclude))
+    df = pd.DataFrame(records)
     if "dims" in df.columns:
         df["dims"] = list_ser_to_str(df["dims"])
     return df
-
-
-def _remove_overlaps(df, name):
-    """.
-    Remove overlaps in col, where col_min and col_max should exist in df.
-
-    Assumes df is sorted.
-    """
-
-    def _get_step_values(df, step_name):
-        array = np.roll(df[step_name].values, 1)
-        isna = pd.isnull(array)
-        zeros = np.zeros_like(array, dtype=array.dtype)
-        return np.where(~isna, array, zeros)
-
-    def _get_correct_starts(start, stop, df, step_name):
-        step = _get_step_values(df, step_name)
-        stop_roll = np.roll(stop, 1)
-        start_lt_stop = start <= stop_roll
-        start_lt_stop[0] = False  # remove roll artifact; [0] should be start[0]
-        adjusted = stop_roll + step
-        return np.where(start_lt_stop, adjusted, start)
-
-    min_name, max_name, step_name = f"{name}_min", f"{name}_max", f"{name}_step"
-    assert df[min_name].is_monotonic_increasing, "df must be sorted"
-    start = df[min_name].values
-    stop = df[max_name].values
-    # Add step to stop roll so we don't get 1 sample of overlap
-    corrected_starts = _get_correct_starts(start, stop, df, step_name)
-    # wrap around in roll gives wrong start value, correct it.
-    corrected_starts[0] = start[0]
-    old_modified = _column_or_value(df, "_modified", False)
-    _modified = old_modified | (corrected_starts != start)
-    return df.assign(**{min_name: corrected_starts, "_modified": _modified})
 
 
 def _column_or_value(df, col, value):
@@ -474,26 +787,6 @@ def _column_or_value(df, col, value):
         return df[col].values
     out = np.broadcast_to(np.array(value), len(df))
     return out
-
-
-def _instructions_modified(instruct_df, sub_source):
-    """
-    Determine if the instruction df columns are the same as the source.
-
-    This is useful for determining which patches need select arguments.
-    """
-    # Get the source and desired output dfs broadcast together.
-    names = set(sub_source.columns) & set(instruct_df.columns)
-    source = sub_source.loc[instruct_df["source_index"].values]
-    # not_modified = np.ones(len(instruct_df), dtype=bool)
-    not_modified = ~_column_or_value(source, "_modified", False)
-    for name in names:
-        val1, val2 = source[name].values, instruct_df[name].values
-        eq = val1 == val2
-        null = pd.isnull(val1) & pd.isnull(val2)
-        not_modified &= eq | null
-    modified = ~not_modified
-    return modified
 
 
 def patch_to_dataframe(patch: PatchType) -> pd.DataFrame:
@@ -512,9 +805,9 @@ def patch_to_dataframe(patch: PatchType) -> pd.DataFrame:
     """
     dims = patch.dims
     # ensure a 2D patch is passed
-    assert (
-        len(dims) == 2
-    ), "Patch must have exactly 2 dimensions to convert to dataframe"
+    assert len(dims) == 2, (
+        "Patch must have exactly 2 dimensions to convert to dataframe"
+    )
     # get arrays with dimensional values
     index_values = patch.get_coord(dims[0]).values
     col_values = patch.get_coord(dims[1]).values
@@ -529,7 +822,7 @@ def patch_to_dataframe(patch: PatchType) -> pd.DataFrame:
 
 def dataframe_to_patch(
     df: pd.DataFrame, attrs: PatchAttrs | Mapping | None = None
-) -> PatchType:
+) -> dc.Patch:
     """
     Convert a dataframe to a patch.
 
@@ -561,6 +854,9 @@ def dataframe_to_patch(
     # get data
     data = df.to_numpy()
     dims = _get_column_names(df, attrs)
+    if isinstance(attrs, Mapping):
+        attrs = dict(attrs)
+        attrs.pop("dims", None)
     coords = {dims[0]: df.index.to_numpy(), dims[1]: df.columns.to_numpy()}
     return dc.Patch(data=data, dims=dims, coords=coords, attrs=attrs)
 

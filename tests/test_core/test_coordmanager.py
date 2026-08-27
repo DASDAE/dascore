@@ -17,6 +17,9 @@ from dascore.core.coordmanager import (
 )
 from dascore.core.coords import (
     BaseCoord,
+    CoordMonotonicArray,
+    CoordPartial,
+    CoordRange,
     get_coord,
 )
 from dascore.exceptions import (
@@ -42,18 +45,11 @@ DIMS = ("time", "distance")
 class TestGetCoordManager:
     """Test suite for `get_coord_manager` helper function."""
 
-    def test_coords_and_attrs_raise(self, random_patch):
-        """Ensure using coords and attrs raises."""
-        msg = "Cannot use both attrs and coords"
-        coords, attrs = random_patch.coords, random_patch.attrs
-        with pytest.raises(ParameterError, match=msg):
-            get_coord_manager(coords=coords, attrs=attrs)
-
-    def test_coords_from_attrs(self, random_patch):
-        """Ensure we can get coordinates from patch attrs."""
-        attrs = random_patch.attrs
-        cm = get_coord_manager(attrs=attrs)
-        assert "time" in cm.coord_map
+    def test_attrs_not_accepted(self, random_patch):
+        """Coordinates are never built from attrs; the param is gone."""
+        attrs = {"time_min": 0, "time_max": 10, "time_step": 1}
+        with pytest.raises(TypeError, match="attrs"):
+            get_coord_manager(None, dims=("time",), attrs=attrs)
 
     def test_non_coord_dims(self):
         """Ensure non coordinate dimensions can be created using shape."""
@@ -89,6 +85,13 @@ class TestBasicCoordManager:
         assert set(expected) == set(c_dict)
         for key in set(expected):
             assert np.all(expected[key] == np.array(c_dict[key]))
+
+    def test_coord_shapes_immutable(self, coord_manager):
+        """coord_shapes is cached and shared, so it must be immutable."""
+        shapes = coord_manager.coord_shapes
+        assert set(shapes) == set(coord_manager.coord_map)
+        with pytest.raises(TypeError):
+            shapes["time"] = (1,)
 
     def test_membership(self, coord_manager):
         """Coord membership should work for coord names."""
@@ -150,7 +153,7 @@ class TestBasicCoordManager:
             coord_map[cm_basic.dims[0]] = 10
 
     def test_init_with_coord_manager(self, cm_basic):
-        """Ensure initing coord manager works with a single coord manager."""
+        """Ensure initializing coord manager works with a single coord manager."""
         out = get_coord_manager(cm_basic)
         assert out == cm_basic
 
@@ -209,11 +212,9 @@ class TestBasicCoordManager:
             coord = getattr(cm_basic, dim)
             assert coord == cm_basic.coord_map[dim]
 
-    def test_get_item_warning(self, cm_basic):
-        """Ensure get item emits a warning."""
-        msg = "returns a numpy array"
-        with pytest.warns(UserWarning, match=msg):
-            _ = cm_basic["time"]
+    def test_get_item_returns_coord(self, cm_basic):
+        """Ensure get item returns the coordinate."""
+        assert cm_basic["time"] == cm_basic.get_coord("time")
 
     def test_has_attr(self, cm_basic):
         """Ensure hasattr returns correct result."""
@@ -223,7 +224,7 @@ class TestBasicCoordManager:
         assert not hasattr(cm_basic, "_NOT_A_DIM")
 
     def test_iterate(self, cm_basic):
-        """Ensure coordinates yield name an coordinate when iterated."""
+        """Ensure coordinates yield name and coordinate when iterated."""
         for dim, coord in iter(cm_basic):
             expected = cm_basic.get_coord(dim)
             assert all_close(coord, expected)
@@ -237,7 +238,9 @@ class TestBasicCoordManager:
         """Ensure we can get a scaler value for the coordinate."""
         coord_array = random_patch.get_coord("time").data
         expected = (
-            np.max(coord_array) - np.min(coord_array) + random_patch.attrs["time_step"]
+            np.max(coord_array)
+            - np.min(coord_array)
+            + random_patch.get_coord("time").step
         )
         assert random_patch.coords.coord_range("time") == expected
 
@@ -251,7 +254,7 @@ class TestCoordManagerInputs:
         assert isinstance(out, CoordManager)
 
     def test_additional_coords(self):
-        """Ensure a additional (non-dimensional) coords work."""
+        """Ensure additional (non-dimensional) coords work."""
         coords = dict(COORDS)
         lats = random_state.rand(len(COORDS["distance"]))
         coords["latitude"] = ("distance", lats)
@@ -321,16 +324,6 @@ class TestCoordManagerInputs:
         assert cm.shape == (10, 5)
 
 
-class TestCoordManagerWithAttrs:
-    """Tests for initing coord managing with attribute dict."""
-
-    def test_missing_dim(self):
-        """Coord manager should be able to pull missing info from attributes."""
-        attrs = dict(distance_min=1, distance_max=100, distance_step=10)
-        new = get_coord_manager(None, ("distance",), attrs=attrs)
-        assert "distance" in new.coord_map
-
-
 class TestDrop:
     """Tests for dropping coords with coord manager."""
 
@@ -347,11 +340,21 @@ class TestDrop:
         out, _ = cm_multidim.drop_coords("bob")
         assert out == cm_multidim
 
+    @pytest.mark.parametrize("wrap", [list, tuple, set, iter])
+    def test_drop_sequence(self, cm_multidim, wrap):
+        """A sequence of names should behave exactly like the bare name."""
+        dim = "distance"
+        coords, _ = cm_multidim.drop_coords(wrap([dim]))
+        expected, _ = cm_multidim.drop_coords(dim)
+        assert dim not in coords.dims
+        # Compared to the bare-name call so that dropping too much fails too.
+        assert coords == expected
+
     def test_trims_array(self, cm_multidim):
         """Trying to drop a dim that doesnt exist should just return."""
         array = np.ones(cm_multidim.shape)
         axis = cm_multidim.get_axis("time")
-        cm, new_array = cm_multidim.drop_coords("time", array=array)
+        _cm, new_array = cm_multidim.drop_coords("time", array=array)
         assert new_array.shape[axis] == 0
 
     def test_drop_non_dim_coord(self, cm_multidim):
@@ -420,7 +423,7 @@ class TestSelect:
     def test_filter_array(self, cm_basic):
         """Ensure an array can be filtered."""
         data = np.ones(cm_basic.shape)
-        new, trim = cm_basic.select(distance=(100, 400), array=data)
+        _new, trim = cm_basic.select(distance=(100, 400), array=data)
         assert trim.shape == trim.shape
 
     def test_select_emptying_dim(self, cm_basic):
@@ -460,7 +463,7 @@ class TestSelect:
             assert coord.shape[axis] == expected_len
 
     def test_select_handles_non_dim_kwargs(self, cm_basic):
-        """The coord manager should handle (supress) non dim keyword args."""
+        """The coord manager should handle (suppress) non dim keyword args."""
         ar = np.ones(cm_basic.shape)
         out, new = cm_basic.select(bob=(10, 20), array=ar)
         assert new.shape == ar.shape
@@ -509,7 +512,7 @@ class TestSelect:
         """Ensure trim also trims related dimensions."""
         cm = cm_multidim
         data = np.empty(cm.shape)
-        out, new_data = cm.select(array=data, time=slice(2, 4), samples=True)
+        out, _new_data = cm.select(array=data, time=slice(2, 4), samples=True)
         for name, coord in out.coord_map.items():
             dims = cm.dim_map[name]
             if "time" not in dims:
@@ -923,26 +926,24 @@ class TestRenameDims:
         assert set(out.dim_map) == set(cm.dim_map)
 
 
-class TestUpdateFromAttrs:
-    """Tests to ensure updating attrs can update coordinates."""
+class TestUpdateFlatCoordKwargs:
+    """Coord updates via {dim}_{field} kwargs against the manager's own dims."""
 
-    def test_update_min(self, cm_basic):
-        """Ensure min time in attrs updates appropriate coord."""
+    def test_update_max(self, cm_basic):
+        """Ensure a {dim}_max kwarg updates the appropriate coord."""
         for dim in cm_basic.dims:
             coord = cm_basic.coord_map[dim]
-            attrs = {f"{dim}_max": coord.min()}
-            new, _ = cm_basic.update_from_attrs(attrs)
+            new = cm_basic.update(**{f"{dim}_max": coord.min()})
             new_coord = new.coord_map[dim]
             assert len(new_coord) == len(coord)
             assert new_coord.max() == coord.min()
 
-    def test_update_max(self, cm_basic):
-        """Ensure max time in attrs updates appropriate coord."""
+    def test_update_min(self, cm_basic):
+        """Ensure a {dim}_min kwarg updates the appropriate coord."""
         for dim in cm_basic.dims:
             coord = cm_basic.coord_map[dim]
-            attrs = {f"{dim}_min": coord.max()}
             dist = coord.max() - coord.min()
-            new, _ = cm_basic.update_from_attrs(attrs)
+            new = cm_basic.update(**{f"{dim}_min": coord.max()})
             new_coord = new.coord_map[dim]
             new_dist = new_coord.max() - new_coord.min()
             assert dist == new_dist
@@ -953,35 +954,13 @@ class TestUpdateFromAttrs:
         """Ensure the step can be updated which changes endtime."""
         for dim in cm_basic.dims:
             coord = cm_basic.coord_map[dim]
-            attrs = {f"{dim}_step": coord.step * 10}
             dist = coord.max() - coord.min()
-            new, _ = cm_basic.update_from_attrs(attrs)
+            new = cm_basic.update(**{f"{dim}_step": coord.step * 10})
             new_coord = new.coord_map[dim]
             new_dist = new_coord.max() - new_coord.min()
             assert (dist * 10) == new_dist
             assert len(new_coord) == len(coord)
             assert new_coord.min() == coord.min()
-
-    def test_attrs_as_dict(self, cm_basic):
-        """Ensure the attrs returned has coords attached."""
-        coord = cm_basic.coord_map["time"]
-        attrs = {"time_max": coord.min()}
-        cm, attrs = cm_basic.update_from_attrs(attrs)
-        assert attrs.coords == cm.to_summary_dict()
-        assert attrs.dim_tuple == cm.dims
-
-    def test_attrs_as_patch_attr(self, cm_basic):
-        """Ensure this also works when attrs is a patch attr."""
-        attrs = dc.PatchAttrs(time_min=to_datetime64("2022-01-01"))
-        cm, new_attrs = cm_basic.update_from_attrs(attrs)
-        assert new_attrs.coords == cm.to_summary_dict()
-        assert new_attrs.dim_tuple == cm.dims
-
-    def test_consistent_attrs_leaves_coords_unchanged(self, random_patch):
-        """Attrs which are already consistent should leave coord unchanged."""
-        attrs, coords = random_patch.attrs, random_patch.coords
-        new_coords, new_attrs = coords.update_from_attrs(attrs)
-        assert new_coords == coords
 
 
 class TestUpdate:
@@ -1084,6 +1063,113 @@ class TestUpdate:
         assert dc.get_quantity(new_coord.units) == ft
 
 
+class TestPreserveBaseCoord:
+    """Canonical coords should not be reparsed when passed through update/select.
+
+    Only CoordRange (the canonical evenly-sampled representation) is returned
+    unchanged. Other coord types (CoordPartial, CoordArray, CoordMonotonicArray)
+    are still re-inferred so a fully-specified partial, or slicing that yields an
+    even/empty subset, is canonicalized. That re-inference keeps the coord it was
+    given whenever collapsing it to a range would move any value, since only the
+    exact case is a change of representation rather than of data.
+    """
+
+    def test_update_preserves_range_coord_identity(self, cm_basic):
+        """Updating a CoordRange dim with its own coord keeps the same object."""
+        for name in cm_basic.dims:
+            coord = cm_basic.coord_map[name]
+            assert isinstance(coord, CoordRange)
+            out = cm_basic.update(**{name: coord})
+            assert out.coord_map[name] is coord
+
+    def test_full_partial_canonicalizes_to_range(self, cm_non_coord_dim):
+        """A fully-specified CoordPartial must still become a CoordRange.
+
+        Regression guard: only CoordRange is short-circuited, so a CoordPartial
+        that carries complete start/stop/step is re-inferred into a CoordRange
+        (otherwise value-based selection on it would wrongly raise).
+        """
+        cm = cm_non_coord_dim
+        assert isinstance(cm.coord_map["time"], CoordPartial)
+        size = cm.shape[cm.get_axis("time")]
+        full_partial = CoordPartial(shape=(size,), start=0, stop=size, step=1)
+        out = cm.update(time=full_partial)
+        assert isinstance(out.coord_map["time"], CoordRange)
+        # value-based selection must work on the canonicalized coord.
+        selected, _ = out.select(time=(0, size - 1))
+        assert selected.shape[selected.get_axis("time")] <= size
+
+    def test_update_array_coord_is_equivalent(self, cm_wacky_dims):
+        """Irregular array coords may be re-parsed but stay value-equal."""
+        for name in cm_wacky_dims.dims:
+            coord = cm_wacky_dims.coord_map[name]
+            out = cm_wacky_dims.update(**{name: coord})
+            assert out.coord_map[name] == coord
+            assert np.array_equal(out.get_array(name), cm_wacky_dims.get_array(name))
+
+    def test_select_preserves_untouched_range_coord(self, cm_multidim):
+        """Selecting distance leaves the independent CoordRange time unchanged."""
+        original_time = cm_multidim.coord_map["time"]
+        assert isinstance(original_time, CoordRange)
+        new, _ = cm_multidim.select(distance=(100, 400))
+        assert new.coord_map["time"] is original_time
+        # latitude is tied to distance, so it must be re-sliced (new object).
+        assert new.coord_map["latitude"] is not cm_multidim.coord_map["latitude"]
+
+    def test_select_result_still_correct(self, cm_basic):
+        """The fast path must not change select results."""
+        new, _ = cm_basic.select(distance=(100, 400))
+        dist = new.get_array("distance")
+        full = cm_basic.get_array("distance")
+        expected = full[(full >= 100) & (full <= 400)]
+        assert np.array_equal(dist, expected)
+
+    def test_even_subset_of_irregular_coord_canonicalizes(self):
+        """A sample-selected even subset of an irregular coord becomes a CoordRange.
+
+        Regression guard: array coords must still be re-inferred so slicing that
+        happens to be evenly sampled is canonicalized rather than left as an
+        irregular array coordinate.
+        """
+        coord = dc.get_coord(data=np.array([0.0, 1.0, 3.0]))
+        patch = dc.Patch(data=np.arange(3.0), coords={"x": coord}, dims=("x",))
+        out = patch.select(x=(0, 2), samples=True)  # indices 0..2 -> [0, 1]
+        new_coord = out.coords.coord_map["x"]
+        assert isinstance(new_coord, CoordRange)
+        assert new_coord.evenly_sampled
+
+    def test_near_even_coord_keeps_its_values(self):
+        """Small real irregularity must survive; see #896.
+
+        The evenness test is tolerant (rtol 1e-3), so spacing that varies by
+        less than that used to be replaced by an idealized ramp -- silently
+        inventing sample positions.
+        """
+        values = np.array([0.0, 1.0, 2.0005, 3.0015, 4.002])
+        coord = CoordMonotonicArray(values=values)
+        cm = get_coord_manager({"distance": coord}, dims=("distance",))
+        out = cm.coord_map["distance"]
+        assert np.array_equal(out.values, values)
+        # a range here would mean the spacing was made up
+        assert not isinstance(out, CoordRange)
+
+    def test_near_even_coord_survives_patch(self):
+        """The public Patch path must not move the values either."""
+        values = np.array([0.0, 1.0, 2.0005, 3.0015, 4.002])
+        coord = CoordMonotonicArray(values=values)
+        patch = dc.Patch(data=np.zeros(5), coords={"x": coord}, dims=("x",))
+        assert np.array_equal(patch.get_coord("x").values, values)
+
+    def test_exactly_even_array_still_canonicalizes(self):
+        """Preserving values must not disable the lossless collapse."""
+        values = np.arange(5, dtype=float)
+        coord = CoordMonotonicArray(values=values)
+        cm = get_coord_manager({"distance": coord}, dims=("distance",))
+        out = cm.coord_map["distance"]
+        assert isinstance(out, CoordRange)
+        assert np.array_equal(out.values, values)
+
+
 class TestSqueeze:
     """Tests for squeezing degenerate dimensions."""
 
@@ -1125,7 +1211,7 @@ class TestNonDimCoords:
         assert set(out.dim_map).issuperset(set(cm_basic.dim_map))
 
     def test_init_with_1d_coordinate(self, cm_basic):
-        """Ensure initing with 1D non-dim coords works."""
+        """Ensure initializing with 1D non-dim coords works."""
         with suppress_warnings():
             coords = dict(cm_basic)
         lat = np.ones_like(cm_basic.get_array("distance"))
@@ -1274,9 +1360,33 @@ class TestSnap:
     ):
         """Ensure snapping creates expected dt from merged df."""
         spool = memory_spool_small_dt_differences
-        expected_dt = get_middle_value([x.attrs.time_step for x in spool])
+        expected_dt = get_middle_value([x.get_coord("time").step for x in spool])
         snapped = cm_dt_small_diff.snap()[0]
         assert snapped.coord_map["time"].step == expected_dt
+
+
+class TestSetUnits:
+    """Tests for setting coordinate units."""
+
+    def test_set_units_on_valueless_coord(self):
+        """A dim coord with no values takes units like any other."""
+        cm = get_coord_manager(
+            {"time": get_coord(shape=(10,)), "distance": np.arange(4) * 1.0},
+            dims=("time", "distance"),
+        )
+        assert isinstance(cm.coord_map["time"], CoordPartial)
+        out = cm.set_units(time="s")
+        assert out.coord_map["time"].units == get_quantity("s")
+
+    def test_patch_set_units_on_valueless_coord(self):
+        """The same holds through the patch, which is how users reach it."""
+        cm = get_coord_manager(
+            {"time": get_coord(shape=(10,)), "distance": np.arange(4) * 1.0},
+            dims=("time", "distance"),
+        )
+        patch = dc.Patch(data=np.zeros((10, 4)), coords=cm, dims=cm.dims)
+        out = patch.set_units(time="s")
+        assert out.get_coord("time").units == get_quantity("s")
 
 
 class TestConvertUnits:
@@ -1307,6 +1417,27 @@ class TestConvertUnits:
         time2 = new.coord_map["time"]
         assert time1.dtype == time2.dtype
         assert np.all(np.equal(time1.values, time2.values))
+
+
+class TestUnitNoOps:
+    """A manager rebuilds only the coords which actually changed."""
+
+    def test_one_of_two_coords_changing(self):
+        """
+        The coord which stays put is kept, not rebuilt.
+
+        Both coords are numeric, so the one which does not move does so
+        because its units match and not because it is time-like, which
+        coords have always refused to convert.
+        """
+        cm = get_coord_manager(
+            {"distance": np.arange(10) * 1.0, "depth": np.arange(4) * 1.0},
+            dims=("distance", "depth"),
+        ).set_units(distance="m", depth="m")
+        out = cm.convert_units(distance="ft", depth="m")
+        assert out is not cm
+        assert out.coord_map["depth"] is cm.coord_map["depth"]
+        assert out.coord_map["distance"] is not cm.coord_map["distance"]
 
 
 class TestDisassociate:
@@ -1494,3 +1625,29 @@ class TestFlip:
         q0 = cm.coord_map["quality"].values
         q1 = out.coord_map["quality"].values
         assert np.array_equal(q1, q0[::-1, ::-1])
+
+
+class TestStringCoords:
+    """Tests for CoordManager interactions with string coordinates."""
+
+    def test_to_summary_dict_includes_string_coords(self, cm_basic):
+        """String coords should emit lossy summaries."""
+        labels = np.array(
+            [f"ch_{num}" for num in range(len(cm_basic.get_array("time")))]
+        )
+        cm = cm_basic.update(channel=("time", labels))
+        out = cm.to_summary_dict()
+        assert "channel" in out
+        assert out["channel"].min == "ch_0"
+        assert out["channel"].step is None
+        assert set(cm_basic.dims).issubset(out)
+
+    def test_select_string_dimension(self):
+        """Exact-match selection should work on string dimension coords."""
+        coords = {
+            "channel": np.array(["A", "B", "C", "D"]),
+            "distance": np.arange(3),
+        }
+        cm = get_coord_manager(coords=coords, dims=("channel", "distance"))
+        out, _ = cm.select(channel=np.array(["B", "D"]))
+        assert np.array_equal(out.get_array("channel"), np.array(["B", "D"]))

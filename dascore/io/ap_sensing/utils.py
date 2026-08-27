@@ -4,6 +4,7 @@ Utility functions for AP sensing module.
 
 import dascore as dc
 from dascore.core import get_coord, get_coord_manager
+from dascore.io.utils import build_patches
 from dascore.utils.misc import _maybe_unpack, unbyte
 
 
@@ -32,9 +33,7 @@ def _get_time_coord(resource, shape):
     # Create coord
     start = dc.to_datetime64(start_time_str)
     step = dc.to_timedelta64(1 / sr)
-    stop = start + trace_count * step
-    coord = get_coord(start=start, stop=stop, step=step, units="s")
-    return coord
+    return get_coord(start=start, step=step, shape=(trace_count,), units="s")
 
 
 def _get_distance_coord(resource, data_shape):
@@ -55,9 +54,9 @@ def _get_distance_coord(resource, data_shape):
     # x_end_calc = x_start + step * dist_length
     x_end = _maybe_unpack(stop)
     step_calc = (x_end - x_start) / dist_length
-    coord = get_coord(start=x_start, stop=x_end, step=step_calc, units=start_unit)
-    coord = coord.change_length(dist_length)
-    return coord
+    return get_coord(
+        start=x_start, step=step_calc, shape=(dist_length,), units=start_unit
+    )
 
 
 def _get_coords(resource):
@@ -75,27 +74,29 @@ def _get_coords(resource):
 
 def _get_attrs_dict(resource):
     """Get attributes."""
-    daq = resource["DAQ"]
+    # The file has both an Interrogator group and a DAQ group describing the
+    # digitizer card inside it. Only the former identifies the instrument the
+    # inventory knows; DAQ/SerialNumber is the card's, and a uint32 at that.
+    interrogator = resource["Interrogator"]
     pserver = resource["ProcessingServer"]
-    out = dict(
-        coords=_get_coords(resource),
-        data_category="DAS",
-        instrumet_id=unbyte(_maybe_unpack(daq["SerialNumber"])),
-        gauge_length=_maybe_unpack(pserver["GaugeLength"]),
-        radians_to_nano_strain=_maybe_unpack(pserver["RadiansToNanoStrain"]),
-    )
+    out = {
+        "data_category": "DAS",
+        "interrogator.serial_number": unbyte(
+            _maybe_unpack(interrogator["SerialNumber"])
+        ),
+        "interrogator.model": unbyte(_maybe_unpack(interrogator["Model"])),
+        "gauge_length": _maybe_unpack(pserver["GaugeLength"]),
+        "radians_to_nano_strain": _maybe_unpack(pserver["RadiansToNanoStrain"]),
+    }
     return out
 
 
 def _get_patches(resource, time=None, distance=None, attr_cls=dc.PatchAttrs):
     """Get a patch from ap_sensing file."""
-    attrs = _get_attrs_dict(resource)
-    coords = attrs["coords"]
-    data = resource["DAS"]
-    if time is not None or distance is not None:
-        coords, data = coords.select(array=data, time=time, distance=distance)
-        attrs["coords"] = coords
-        if not data.size:
-            return []
-    attrs = attr_cls.model_validate(attrs)
-    return [dc.Patch(data=data[:], coords=coords, attrs=attrs)]
+    return build_patches(
+        _get_coords(resource),
+        resource["DAS"],
+        _get_attrs_dict(resource),
+        attr_cls=attr_cls,
+        selection={"time": time, "distance": distance},
+    )

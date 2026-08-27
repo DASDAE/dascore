@@ -46,7 +46,7 @@ Contents of `dascore/io/jingle/core.py`:
 Core module for jingle file format support.
 """
 import dascore.exceptions
-from dascore.io.core import FiberIO
+from dascore.io import FiberIO, ScanPayload
 
 
 class JingleV1(FiberIO):
@@ -80,14 +80,35 @@ class JingleV1(FiberIO):
         dascore.exceptions.UnknownFiberFormat exception.
         """
 
-    def scan(self, path, **kwargs):
+    def scan(self, path, snap: bool = True, **kwargs) -> list[ScanPayload]:
         """
         Used to get metadata about a file without reading the whole file.
 
-        This should return a list of
-        [`PatchAttrs`](`dascore.core.attrs.PatchAttrs`) objects
-        from the [dascore.core.attrs](`dascore.core.attrs`) module, or a
-        format-specific subclass.
+        This should return a list of structured scan payloads. Each payload
+        should contain exact coord objects plus patch metadata. The
+        [`make_scan_payload`](`dascore.io.make_scan_payload`) helper builds
+        one, taking `dims` and `shape` from the coords:
+
+        [make_scan_payload(
+            attrs=patch_attrs,
+            coords=coord_manager,
+            dtype="...",
+            source_patch_key="...",  # when needed
+        )]
+
+        A plain dict with the same keys also works.
+
+        DASCore converts these payloads into
+        [`PatchSummary`](`dascore.PatchSummary`) objects in the higher-level
+        `dc.scan(...)` / `dc.scan_to_df(...)` pipeline. Returning
+        [`PatchAttrs`](`dascore.PatchAttrs`) from `scan()` is no longer
+        supported.
+
+        `scan()` should return patch-local attrs plus exact coords for each
+        logical patch. Do not populate source metadata such as `path`,
+        `file_format`, or `file_version` inside the `FiberIO`
+        implementation; DASCore adds those fields in the higher-level
+        `dc.scan(...)` / `dc.scan_to_df(...)` pipeline.
         """
 
     def write(self, patch, path, **kwargs):
@@ -104,13 +125,132 @@ Note that each of these methods should have `**kwargs` at the end. This allows c
 :::
 
 :::{.callout-warning}
-It is very important that the `scan` method returns *exactly* the same patch information as reading the patch would, otherwise the lazy merge planning done by spool can be wrong!
+It is very important that `scan()` returns attrs, coords, dims, shape, dtype,
+and `source_patch_key` values that match what `read()` would produce for the
+same logical patch. Otherwise the lazy planning done by `spool(...)` can be
+wrong.
 :::
+
+## Scan payloads and the `snap` contract
+
+[`FiberIO.scan`](`dascore.io.core.FiberIO.scan`) returns full `CoordManager` objects inside `ScanPayload` dictionaries. DASCore's public [`scan_payloads`](`dascore.scan_payloads`) function exposes those raw payloads and adds `source_path`, `source_format`, and `source_version` provenance. By contrast, [`scan`](`dascore.scan`) and [`scan_to_df`](`dascore.scan_to_df`) reduce coordinates to envelope summaries and remain the appropriate APIs for indexing whole directories.
+
+The public payload boundary validates attrs, dimension names, shape, dtype, and provenance types. It also requires `dims` and `shape` to match the returned `CoordManager` exactly, so malformed formatter payloads fail immediately rather than entering indexing or lazy reload paths.
+
+Every `FiberIO.scan` implementation must accept `snap: bool = True`, either explicitly or through `**kwargs`. The contract is:
+
+- `snap=True` (the default) preserves existing behavior. Formats may represent stored sample times as an idealized uniform range.
+- `snap=False` means returned coords must represent stored coordinate values exactly. For header-defined formats whose coordinates are already specified by start, step, and sample count, this is a documented no-op.
+
+Formats that read stored per-sample coordinate arrays must not use bare `get_coord(array)` for the exact path because its tolerant uniformity inference can snap small jitter. Use the shared [`get_exact_coord`](`dascore.io.utils.get_exact_coord`) helper, which builds a value-preserving coordinate via `CoordSegmented.from_array(values, tolerance=0, units=...)`: a truly uniform array becomes a `CoordRange`, a piecewise-uniform array exposes its internal sampling changes through `CoordSegmented`, and a non-monotonic array falls back to a plain array coordinate. The helper also guards against pathological input: an array whose sub-step jitter would produce roughly one segment per sample is returned as a plain monotonic coordinate rather than an over-segmented one, keeping every value exact without the memory and construction cost of per-sample seams.
+
+`snap=False` describes the coordinate values *stored* by the format, which are not necessarily what `read(...)` returns. A format whose `read` reconstructs coordinates from header start/step/count metadata (e.g. ProdML) will still return that idealized range from `read`, while `scan_payloads(..., snap=False)` reports the exact stored per-sample array. The common IO conformance test only compares scan and read coordinates for formats whose `read` also accepts `snap`/`snap_dims`.
+
+`scan_payloads` retains real coordinate arrays, so callers should scan specific files and discard payloads promptly rather than retaining payloads for an entire large directory.
+
+## `source_patch_key`
+
+If a single file can produce more than one patch, your format should usually provide a `source_patch_key` for each scan payload returned by `scan`.
+
+`source_patch_key` is the per-patch identifier DASCore uses to get back to the same logical patch later. This matters most for `dc.spool(...)`, where DASCore may first `scan()` a file, store patch metadata, and only call `read()` for one patch much later.
+
+The rule is simple:
+
+- `scan()` should emit a stable `source_patch_key` for each patch payload.
+- For FiberIO implementation, prefer setting `attrs["_source_patch_key"]` on both scan payload attrs and loaded patches; DASCore will normalize that onto `PatchSummary.source_patch_key` when summaries are built.
+- `read(..., source_patch_key=...)` should use that value to return the matching patch, or patches if given multiple ids.
+- `source_patch_key` remains the public summary/reload field, while `_source_patch_key` remains the private attr-level field FiberIO authors should set directly.
+- If both are provided when constructing a `PatchSummary`, `source_patch_key` wins and is copied back onto `attrs["_source_patch_key"]`.
+- Private attrs should not participate in normal patch compatibility checks.
+- `source_path`, `source_format`, and `source_version` are owned by the calling DASCore scan layer, not by `FiberIO.scan()`.
+
+For some formats, a numeric patch index is enough if patch ordering is stable. For others, a native identifier such as a group name, node name, or source/zone tuple is better. If your format only ever produces one patch per file, you usually do not need to set `source_patch_key`.
+
+## What Belongs in `attrs`
+
+Every attr a reader emits is one of four kinds, and the kind decides both its
+name and who may change it later.
+
+1. **`acquisition_key`** — the inventory identity of the data source, spelled
+   `network.fiber_array.location.acquisition`. Set it only if the file really
+   carries those codes; most archives supply it through the directory layout
+   instead.
+2. **Observing-system facts** — what the instrument was doing. Use the names
+   in `dascore.constants.INVENTORY_ATTRS`, which are the
+   fields of the DASDAE inventory's acquisition (`gauge_length`,
+   `spatial_interval`, `pulse_width`, …) and of its interrogator, dotted
+   (`interrogator.serial_number`). Using a vendor spelling for one of these
+   splits one fact into two attrs that nothing downstream can reconcile.
+   These attrs carry fixed units — seconds, hertz, meters — so convert at the
+   parse boundary with
+   [`convert_attr_units`](`dascore.io.utils.convert_attr_units`) and never
+   emit a companion attr stating a value's units.
+3. **Data state** — `data_type`, `data_category`, and `data_units`, which
+   describe the data as it now stands. Processing functions rewrite these, so
+   they belong to the patch rather than to the observing system.
+4. **Vendor extras** — everything genuinely specific to the format, under
+   whatever name the format uses. These are welcome, but each new one must be
+   listed in the `VENDOR_ATTRS` set in `tests/test_io/test_common_io.py`,
+   which is where a reviewer checks that the value is not one of the facts
+   above wearing a vendor's name. Declaring them on a `PatchAttrs` subclass
+   gets them validated and coerced; see
+   [format-specific subclasses](`docs/notes/patch_attrs.qmd`) for how one is
+   spelled, and why an optional number is never defaulted to nan or inf.
+
+Stay as close to the file's own spelling as the rules above allow. A value
+that is one of the facts in (2) has to take the canonical name, because two
+spellings of one fact cannot be reconciled downstream; everything else keeps
+the name the format gave it, lightly normalized to `snake_case`. Renaming a
+vendor key to something that merely sounds more standard is how a value ends
+up filed under a name that means something else.
+
+Two suffixes carry meaning, informally but consistently. A name ending in
+`_id` should be free to hold an opaque token — usually a UUID — so nothing
+which is structurally *not* a UUID should take one. A name ending in `_key`
+is a structured lookup key, resolved against something else: `acquisition_key`
+is the only one so far.
+
+Storage provenance (`source_path`, `source_format`, `source_version`) is the
+spool's, not the patch's: it says where the bytes live rather than where the
+signal came from, and a patch merged from three files has no single answer.
+Read it from `get_contents()`.
+
+## Building Scan Payloads
+
+In implementation code, the simplest pattern is usually:
+
+1. Build normal `PatchAttrs` for one logical patch.
+2. Build the exact `CoordManager` you would use for `read()`.
+3. Return one payload built by [`make_scan_payload`](`dascore.io.make_scan_payload`), which fills `dims` and `shape` from the coords.
+
+If you already have a fully loaded `Patch`, DASCore's default `FiberIO.scan()`
+implementation will normalize it into the same structured payload shape. Format
+implementations should still provide a custom `scan()` whenever they can avoid
+loading the full data array.
+
+
+## Building Patches in `read`
+
+Most single-patch `read()` implementations share a tail: apply the caller's dimension selections, drop the patch when the selection empties it, then attach attrs. [`build_patches`](`dascore.io.utils.build_patches`) does exactly that, so a reader usually ends with:
+
+```python
+return dc.spool(
+    build_patches(
+        coords,
+        data_node,
+        attrs,
+        attr_cls=JingleV1PatchAttrs,
+        selection={"time": time, "distance": distance},
+    )
+)
+```
+
+where `attrs` is a dict (or `PatchAttrs`) and `attr_cls` is the format's `PatchAttrs` subclass, if it has one. Selections whose value is `None` are dropped, so a read with nothing to trim never touches the data source.
 
 
 ## Support for Streams/Buffers
 
-Rather than using paths for the IO methods as shown above, it is better practice to write a `FiberIO` which supports the [python stream interface](https://docs.python.org/3/library/io.html#io.BufferedIOBase) or an opened HDF5 file in the form of a `pytables.File` or `h5py.File` object. There are a few reasons for this:
+Rather than using paths for the IO methods as shown above, it is better practice to write a `FiberIO` which supports the [python stream interface](https://docs.python.org/3/library/io.html#io.BufferedIOBase) or an opened HDF5 file in the form of an `h5py.File` object. There are a few reasons for this:
 
 * More types of inputs can be supported, including steaming file contents from the web or in-memory streams like [`BytesIO`](https://docs.python.org/3/library/io.html#io.BytesIO).
 * It is usually more efficient since open-file handles can be automatically reused.
@@ -125,9 +265,6 @@ To make this easy, DASCore will automatically manage and serve the right input t
 
 4. [H5Writer](`dascore.io.H5Writer`) - An instance of `h5py.File` which is open in append mode.
 
-5. [PyTablesReader](`dascore.io.PyTablesReader`) - An instance of `pytables.File` which is open in read mode.
-
-6. [PyTablesWriter](`dascore.io.PyTablesWriter`) - An instance of `pytables.File` which is open in append mode.
 
 Deciding which to use depends on whether the file is an HDF5-based or binary format, and which hdf5 library you want to use.
 

@@ -2,23 +2,36 @@
 
 from __future__ import annotations
 
+import functools
 import os
+import threading
 import time
 import warnings
 from io import BytesIO
 from pathlib import Path
+from threading import Lock
 
 import numpy as np
 import pandas as pd
 import pytest
+from upath import UPath
 
-from dascore.exceptions import MissingOptionalDependencyError
+import dascore as dc
+from dascore.exceptions import MissingOptionalDependencyError, ParameterError
 from dascore.utils.misc import (
+    _callable_name,
+    _get_install_name,
     _iter_filesystem,
+    _locked,
+    _spool_map,
+    all_diffs_close_enough,
     cached_method,
     deep_equality_check,
+    get_2d_line_intersection,
     get_buffer_size,
+    get_parent_code_name,
     get_stencil_coefs,
+    is_strictly_monotonic,
     iterate,
     maybe_get_items,
     maybe_mem_map,
@@ -35,6 +48,54 @@ class TestIterFS:
 
     sub = {"D": {"C": ".mseed"}, "F": ".json", "G": {"H": ".txt"}}  # noqa
     file_paths = {"A": ".txt", "B": sub}  # noqa
+
+    class _FakeRemoteEntry:
+        """Minimal remote path stand-in for traversal edge-case tests."""
+
+        def __init__(
+            self,
+            name,
+            *,
+            scheme="memory",
+            is_file=False,
+            is_dir=False,
+            exists=True,
+            children=(),
+            stat_mtime=0,
+            iterdir_error=None,
+        ):
+            self.name = name
+            self._scheme = scheme
+            self._is_file = is_file
+            self._is_dir = is_dir
+            self._exists = exists
+            self._children = tuple(children)
+            self._stat_mtime = stat_mtime
+            self._iterdir_error = iterdir_error
+
+        def __str__(self):
+            return f"{self._scheme}://dascore/iterfs/{self.name}"
+
+        def is_file(self):
+            return self._is_file
+
+        def is_dir(self):
+            return self._is_dir
+
+        def exists(self):
+            return self._exists
+
+        def stat(self):
+            class _Stat:
+                def __init__(self, st_mtime):
+                    self.st_mtime = st_mtime
+
+            return _Stat(self._stat_mtime)
+
+        def iterdir(self):
+            if self._iterdir_error is not None:
+                raise self._iterdir_error
+            yield from self._children
 
     # --- helper functions
     def setup_test_directory(self, some_dict: dict, path: Path):
@@ -73,7 +134,7 @@ class TestIterFS:
     def test_basic(self, simple_dir):
         """Test basic usage of iterfiles."""
         files = set(self.get_file_paths(self.file_paths, simple_dir))
-        out = {Path(x) for x in _iter_filesystem(simple_dir)}
+        out = set(_iter_filesystem(simple_dir))
         assert files == out
 
     def test_one_subdir(self, simple_dir):
@@ -86,7 +147,7 @@ class TestIterFS:
         """Test with multiple sub directories."""
         path1 = simple_dir / "B" / "D"
         path2 = simple_dir / "B" / "G"
-        out = {Path(x) for x in _iter_filesystem([path1, path2])}
+        out = set(_iter_filesystem([path1, path2]))
         files = self.get_file_paths(self.file_paths, simple_dir)
         expected = {
             x
@@ -95,11 +156,16 @@ class TestIterFS:
         }
         assert out == expected
 
+    def test_local_file_uri(self, simple_dir):
+        """A local path carrying a file:// scheme walks like a plain one."""
+        out = set(_iter_filesystem(simple_dir.as_uri()))
+        assert out == set(_iter_filesystem(simple_dir))
+
     def test_extension(self, simple_dir):
         """Test filtering based on extension."""
         out = set(_iter_filesystem(simple_dir, ext=".txt"))
         for val in out:
-            assert val.endswith(".txt")
+            assert str(val).endswith(".txt")
 
     def test_mtime(self, simple_dir):
         """Test filtering based on modified time."""
@@ -111,16 +177,16 @@ class TestIterFS:
         # get output make sure it only returned first file
         out = list(_iter_filesystem(simple_dir, timestamp=now + 5))
         assert len(out) == 1
-        assert Path(out[0]) == first_file
+        assert out[0] == first_file
 
     def test_skips_files_in_hidden_directory(self, dir_with_hidden_dir):
         """Hidden directory files should be skipped."""
         out1 = list(_iter_filesystem(dir_with_hidden_dir))
-        has_hidden_by_parent = ["hidden_by_parent" in x for x in out1]
+        has_hidden_by_parent = ["hidden_by_parent" in str(x) for x in out1]
         assert not any(has_hidden_by_parent)
         # But if skip_hidden is False it should be there
         out2 = list(_iter_filesystem(dir_with_hidden_dir, skip_hidden=False))
-        has_hidden_by_parent = ["hidden_by_parent" in x for x in out2]
+        has_hidden_by_parent = ["hidden_by_parent" in str(x) for x in out2]
         assert sum(has_hidden_by_parent) == 1
 
     def test_pass_file(self, dummy_text_file):
@@ -129,16 +195,32 @@ class TestIterFS:
         assert len(out) == 1
         assert out[0] == dummy_text_file
 
+    def test_pass_file_respects_extension_filter(self, dummy_text_file):
+        """Direct local file inputs should still honor extension filtering."""
+        assert list(_iter_filesystem(dummy_text_file, ext=".json")) == []
+
+    def test_pass_file_respects_timestamp_filter(self, dummy_text_file):
+        """Direct local file inputs should still honor timestamp filtering."""
+        assert list(_iter_filesystem(dummy_text_file, timestamp=time.time() + 60)) == []
+
     def test_no_directories(self, simple_dir):
         """Ensure no directories are included when include_directories=False."""
-        out = list(_iter_filesystem(simple_dir, include_directories=False))
-        has_dirs = [Path(x).is_dir() for x in out]
+        raw = list(_iter_filesystem(simple_dir, include_directories=False))
+        # Only an explicit skip signal makes the generator yield None, and
+        # this loop sends none, so nothing should be dropped here.
+        out = [x for x in raw if x is not None]
+        assert len(out) == len(raw)
+        has_dirs = [x.is_dir() for x in out]
         assert not any(has_dirs)
 
     def test_include_directories(self, simple_dir):
         """Ensure we can get directories back."""
-        out = list(_iter_filesystem(simple_dir, include_directories=True))
-        returned_dirs = [Path(x) for x in out if Path(x).is_dir()]
+        raw = list(_iter_filesystem(simple_dir, include_directories=True))
+        # Only an explicit skip signal makes the generator yield None, and
+        # this loop sends none, so nothing should be dropped here.
+        out = [x for x in raw if x is not None]
+        assert len(out) == len(raw)
+        returned_dirs = [x for x in out if x.is_dir()]
         assert len(returned_dirs)
         # The top level directory should have been included
         assert simple_dir in returned_dirs
@@ -152,12 +234,157 @@ class TestIterFS:
         out = []
         iterator = _iter_filesystem(simple_dir, include_directories=True)
         for path in iterator:
-            if Path(path).name == "B":
+            # None is the generator's acknowledgement of a skip signal.
+            if path is None:
+                continue
+            if path.name == "B":
                 iterator.send("skip")
             out.append(path)
-        names = {Path(x).name.split(".")[0] for x in out}
+        names = {x.name.split(".")[0] for x in out}
         # Anything after B should have been skipped
         assert {"C", "D", "E", "F"}.isdisjoint(names)
+
+    def test_remote_file(self):
+        """Ensure remote file paths are yielded directly."""
+        path = UPath("memory://dascore/iterfs/file.txt")
+        path.write_text("hello")
+        assert list(_iter_filesystem(path)) == [path]
+
+    def test_remote_directory(self):
+        """Ensure remote directories are traversed with the generic iterator."""
+        root = UPath("memory://dascore/iterfs/root")
+        (root / "sub").mkdir(parents=True, exist_ok=True)
+        (root / ".hidden").mkdir(parents=True, exist_ok=True)
+        (root / "a.txt").write_text("a")
+        (root / "sub" / "b.txt").write_text("b")
+        (root / ".hidden" / "skip.txt").write_text("x")
+        out = list(_iter_filesystem(root, include_directories=True))
+        assert root in out
+        assert root / "a.txt" in out
+        assert root / "sub" / "b.txt" in out
+        assert root / ".hidden" / "skip.txt" not in out
+
+    def test_remote_directory_skip_signal(self):
+        """Ensure skip signals also work on remote directory traversal."""
+        root = UPath("memory://dascore/iterfs/skip")
+        (root / "sub").mkdir(parents=True, exist_ok=True)
+        (root / "sub" / "b.txt").write_text("b")
+        iterator = _iter_filesystem(root, include_directories=True)
+        first = next(iterator)
+        assert first == root
+        assert iterator.send("skip") is None
+        with pytest.raises(StopIteration):
+            next(iterator)
+
+    def test_remote_directory_uses_timestamp_when_backend_supports_mtime(
+        self, monkeypatch
+    ):
+        """Remote iteration should respect timestamps when stat exposes mtime."""
+        root = UPath("memory://dascore/iterfs/timestamp")
+        (root / "old.txt").write_text("old")
+        (root / "new.txt").write_text("new")
+        upath_type = type(root / "old.txt")
+        original_stat = upath_type.stat
+
+        class _Stat:
+            def __init__(self, st_mtime):
+                self.st_mtime = st_mtime
+
+        def _stat(self, *args, **kwargs):
+            name = self.name
+            if name == "old.txt":
+                return _Stat(5)
+            if name == "new.txt":
+                return _Stat(20)
+            return original_stat(self, *args, **kwargs)
+
+        monkeypatch.setattr(upath_type, "stat", _stat)
+        out = list(_iter_filesystem(root, timestamp=10))
+        assert out == [root / "new.txt"]
+
+    def test_remote_file_skips_hidden_name(self):
+        """Direct remote file iteration should respect hidden-name filtering."""
+        path = UPath("memory://dascore/iterfs/.hidden.txt")
+        path.write_text("x")
+        assert list(_iter_filesystem(path)) == []
+
+    def test_remote_file_skips_extension_mismatch(self):
+        """Direct remote file iteration should respect extension filters."""
+        path = UPath("memory://dascore/iterfs/file.bin")
+        path.write_text("x")
+        assert list(_iter_filesystem(path, ext=".txt")) == []
+
+    def test_remote_missing_path_returns_empty(self):
+        """Missing remote paths should simply yield no results."""
+        path = UPath("memory://dascore/iterfs/does_not_exist.txt")
+        assert list(_iter_filesystem(path)) == []
+
+    def test_remote_empty_directory_returns_empty(self):
+        """Remote empty directories should yield no results."""
+        root = UPath("memory://dascore/iterfs/empty")
+        root.mkdir(parents=True, exist_ok=True)
+        assert list(_iter_filesystem(root)) == []
+
+    def test_remote_directory_handles_unknown_entry_kinds(self, monkeypatch):
+        """Remote traversal should probe ambiguous entries before skipping them."""
+        directory_child = self._FakeRemoteEntry(
+            "maybe_dir",
+            children=(self._FakeRemoteEntry("nested.txt", is_file=True),),
+        )
+        skipped_child = self._FakeRemoteEntry("maybe_other")
+        root = self._FakeRemoteEntry(
+            "root",
+            is_dir=True,
+            children=(directory_child, skipped_child),
+        )
+
+        monkeypatch.setattr("dascore.utils.misc.is_pathlike", lambda value: True)
+        monkeypatch.setattr("dascore.utils.misc.is_local_path", lambda value: False)
+        monkeypatch.setattr("dascore.utils.misc.coerce_to_upath", lambda value: value)
+
+        out = list(_iter_filesystem(root))
+        assert directory_child._children[0] in out
+        assert all("maybe_other" not in str(item) for item in out)
+
+    def test_remote_directory_iterdir_fallback_when_exists_is_false(self, monkeypatch):
+        """Remote traversal should still descend when exists() is unreliable."""
+        nested_file = self._FakeRemoteEntry(
+            "nested.txt",
+            scheme="http",
+            exists=True,
+            is_file=True,
+        )
+        root = self._FakeRemoteEntry(
+            "root",
+            scheme="http",
+            exists=False,
+            children=(nested_file,),
+        )
+
+        monkeypatch.setattr("dascore.utils.misc.is_pathlike", lambda value: True)
+        monkeypatch.setattr("dascore.utils.misc.is_local_path", lambda value: False)
+        monkeypatch.setattr("dascore.utils.misc.coerce_to_upath", lambda value: value)
+
+        out = list(_iter_filesystem(root))
+        assert nested_file in out
+
+    def test_remote_directory_iterdir_error_raises_when_path_still_exists(
+        self, monkeypatch
+    ):
+        """Unexpected remote traversal errors should surface for existing paths."""
+        root = self._FakeRemoteEntry(
+            "root",
+            scheme="http",
+            exists=True,
+            iterdir_error=OSError("backend exploded"),
+        )
+        # TODO a lot of monkey patching here. Maybe revisit to make less cringy.
+        monkeypatch.setattr("dascore.utils.misc.is_pathlike", lambda value: True)
+        monkeypatch.setattr("dascore.utils.misc.is_local_path", lambda value: False)
+        monkeypatch.setattr("dascore.utils.misc.coerce_to_upath", lambda value: value)
+
+        with pytest.raises(OSError, match="backend exploded"):
+            list(_iter_filesystem(root))
 
 
 class TestIterate:
@@ -176,13 +403,39 @@ class TestIterate:
         assert iterate("hey") == ("hey",)
 
 
+class TestAllDiffsCloseEnough:
+    """Tests for all_diffs_close_enough."""
+
+    def test_empty_sequence_false(self):
+        """An empty set of diffs should not be considered close enough."""
+        assert not all_diffs_close_enough([])
+
+    @pytest.mark.parametrize(
+        "diffs",
+        [
+            np.array([np.nan, np.nan]),
+            np.array(["NaT", "NaT"], dtype="timedelta64[ns]"),
+        ],
+    )
+    def test_all_null_false(self, diffs):
+        """Diffs containing only null values are not close enough."""
+        assert not all_diffs_close_enough(diffs)
+
+
+def _raise_error(error):
+    """Return a function which raises error when called."""
+
+    def _func(*args, **kwargs):
+        raise error
+
+    return _func
+
+
 class TestOptionalImport:
     """Ensure the optional import works."""
 
     def test_import_installed_module(self):
         """Test to ensure an installed module imports."""
-        import dascore as dc
-
         mod = optional_import("dascore")
         assert mod is dc
         sub_mod = optional_import("dascore.core")
@@ -197,6 +450,56 @@ class TestOptionalImport:
         """If on_missing == "ignore" none is returned."""
         out = optional_import("boblib4", on_missing="ignore")
         assert out is None
+
+    def test_message_has_install_instructions(self, monkeypatch):
+        """The error should say how to install the package, not the module."""
+        error = ModuleNotFoundError("No module named 'google'", name="google")
+        monkeypatch.setattr(
+            "importlib.import_module", _raise_error(error), raising=True
+        )
+        with pytest.raises(MissingOptionalDependencyError) as exc_info:
+            optional_import("google.protobuf.descriptor_pb2")
+        msg = str(exc_info.value)
+        assert "pip install protobuf" in msg
+        assert "uv pip install protobuf" in msg
+        assert exc_info.value.install_name == "protobuf"
+        assert exc_info.value.__cause__ is error
+
+    @pytest.mark.parametrize(
+        "error",
+        [
+            # An installed package which imports something missing.
+            ModuleNotFoundError("No module named 'bob'", name="bob"),
+            # An installed package raising from its own __init__, either
+            # unnamed or naming itself.
+            ImportError("dascore.core requires the C extension"),
+            ImportError("dascore.core is broken", name="dascore.core"),
+        ],
+    )
+    def test_broken_install_gives_no_install_advice(self, monkeypatch, error):
+        """An import failing inside an installed package isn't fixed by install."""
+        monkeypatch.setattr(
+            "importlib.import_module", _raise_error(error), raising=True
+        )
+        with pytest.raises(MissingOptionalDependencyError) as exc_info:
+            optional_import("dascore.core")
+        msg = str(exc_info.value)
+        assert "could not be imported" in msg
+        assert str(error) in msg
+        assert "pip install" not in msg
+        assert exc_info.value.install_name is None
+        assert exc_info.value.__cause__ is error
+
+
+class TestGetInstallName:
+    """Tests for mapping import names to installable package names."""
+
+    def test_install_names(self):
+        """Sub-modules resolve to the package which provides them."""
+        assert _get_install_name("xarray") == "xarray"
+        assert _get_install_name("dascore.utils.misc") == "dascore"
+        assert _get_install_name("google.protobuf.message") == "protobuf"
+        assert _get_install_name("yaml") == "pyyaml"
 
 
 class TestGetStencilCoefficients:
@@ -258,6 +561,42 @@ class TestTukeyFence:
         assert np.allclose(result, [expected_lower, expected_upper])
 
 
+class TestLocked:
+    """Ensure the _locked decorator runs the body holding the owner's lock."""
+
+    class _Counter:
+        """A class whose increments run under a non-reentrant lock."""
+
+        def __init__(self):
+            self._lock = Lock()
+            self.value = 0
+
+        @_locked("_lock")
+        def increment(self):
+            """Increment; the decorator must hold _lock for this call."""
+            # A non-reentrant lock cannot be re-acquired while it is held.
+            assert not self._lock.acquire(blocking=False)
+            self.value += 1
+
+    @pytest.mark.concurrency
+    def test_every_call_is_locked(self):
+        """Concurrent callers each run the body with the lock held."""
+        counter = self._Counter()
+        threads = [threading.Thread(target=counter.increment) for _ in range(8)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+        assert counter.value == 8
+
+    def test_lock_looked_up_per_call(self):
+        """A swapped-in lock is the one used by later calls."""
+        counter = self._Counter()
+        counter._lock = Lock()
+        counter.increment()
+        assert counter.value == 1
+
+
 class TestCachedMethod:
     """Ensure cached methods caches method calls (duh)."""
 
@@ -295,15 +634,37 @@ class TestCachedMethod:
 
 
 class TestMaybeGetItems:
-    """Tests for maybe_get_attrs."""
+    """Tests for maybe_get_items."""
 
-    def test_missed_itme(self):
+    def test_missed_item(self):
         """Ensure it still works when a key is missing."""
         data = {"bob": 1, "bill": 2}
         expected = {"bob": "sue", "lary": "who"}
         out = maybe_get_items(data, attr_map=expected)
         assert "sue" in out
         assert "who" not in out
+
+    def test_falsy_values_are_preserved(self):
+        """Falsy values are legitimate attributes and should not be dropped."""
+        data = {"zero": 0, "zero_float": 0.0, "empty": "", "missing": None}
+        attr_map = {
+            "zero": "zero",
+            "zero_float": "zero_float",
+            "empty": "empty",
+            "missing": "missing",
+        }
+
+        out = maybe_get_items(data, attr_map=attr_map)
+
+        assert out == {"zero": 0, "zero_float": 0.0, "empty": ""}
+
+    def test_multi_element_array_values_are_preserved(self):
+        """Array values should not be truth-tested while being copied."""
+        array = np.array([1, 2])
+
+        out = maybe_get_items({"array": array}, attr_map={"array": "array"})
+
+        np.testing.assert_array_equal(out["array"], array)
 
 
 class TestWarnOrRaise:
@@ -322,12 +683,26 @@ class TestWarnOrRaise:
             warn_or_raise(msg, exception=ValueError, behavior="raise")
 
     def test_nothing(self):
-        """Ensure when  None does nothing."""
+        """Ensure "ignore" does nothing."""
         msg = "Big nothing burger"
         # Now exceptions or warnings will crash the program.
-        with warnings.catch_warnings():
-            warnings.simplefilter("error")
-            warn_or_raise(msg, behavior=None)
+        with suppress_warnings(action="error"):
+            warn_or_raise(msg, behavior="ignore")
+
+    def test_unknown_behavior_raises(self):
+        """A behavior outside the vocabulary says so rather than warning."""
+        with pytest.raises(ParameterError, match="behavior must be one of"):
+            warn_or_raise("nope", behavior=None)
+
+
+class TestSuppressWarnings:
+    """Tests for the suppress_warnings context manager."""
+
+    def test_message_filter_applies_action(self):
+        """A message pattern applies the action to matching warnings."""
+        with suppress_warnings(message="boom", action="error"):
+            with pytest.raises(UserWarning, match="boom"):
+                warnings.warn("boom", UserWarning)
 
 
 class TestToObjectArray:
@@ -338,6 +713,135 @@ class TestToObjectArray:
         patches = [random_patch] * 3
         out = to_object_array(patches)
         assert isinstance(out, np.ndarray)
+
+
+def _dim_count(patch, value=1):
+    """Return the dimension count plus value; named, unlike a lambda."""
+    return len(patch.dims) + value
+
+
+class TestCallableName:
+    """Tests for naming a callable for a progress label."""
+
+    def test_function(self):
+        """A plain function is named by `__name__`."""
+        assert _callable_name(iterate) == "iterate"
+
+    def test_partial(self):
+        """A partial has no `__name__`; it is named for what it wraps."""
+        assert _callable_name(functools.partial(iterate, 1)) == "iterate"
+
+    def test_callable_object(self):
+        """A callable object is named for its class."""
+
+        class Doubler:
+            def __call__(self, patch):
+                return patch * 2
+
+        assert _callable_name(Doubler()) == "Doubler"
+
+    def test_node_name(self):
+        """An object with `node_name` is named for its operation, not its class."""
+        assert _callable_name(dc.proc.abs.op()) == "abs"
+
+
+class TestSpoolMap:
+    """Tests for the private spool mapping helper."""
+
+    def test_without_client(self, random_spool):
+        """A missing client should use direct iteration over the spool."""
+        spool = random_spool[:3]
+        out = _spool_map(
+            spool,
+            lambda patch, value=1: len(patch.dims) + value,
+            progress=None,
+        )
+        assert out == [3, 3, 3]
+
+    @pytest.mark.parametrize(
+        "func, label",
+        [
+            (lambda patch, value=1: len(patch.dims) + value, "<lambda>"),
+            (functools.partial(_dim_count), "_dim_count"),
+        ],
+        ids=["function", "partial"],
+    )
+    def test_with_client(self, random_spool, monkeypatch, func, label):
+        """A client should receive split spools and flatten mapped outputs."""
+        seen = []
+
+        def fake_track(iterable, desc, progress="standard"):
+            seen.append(desc)
+            return iterable
+
+        class DummyClient:
+            def map(self, func, spools):
+                return [func(spool) for spool in spools]
+
+        monkeypatch.setattr("dascore.utils.misc.track", fake_track)
+        monkeypatch.setattr("dascore.utils.misc.os.cpu_count", lambda: 2)
+        out = _spool_map(
+            random_spool[:4],
+            func,
+            client=DummyClient(),
+            size=None,
+            progress="standard",
+        )
+        assert out == [3, 3, 3]
+        assert seen == [f"Applying {label} to spool"]
+
+    def test_empty_spool_with_client(self):
+        """An empty spool asks for no work rather than a split size of zero."""
+
+        class DummyClient:
+            def map(self, func, spools):
+                return [func(spool) for spool in spools]
+
+        out = _spool_map(
+            dc.spool([]),
+            lambda patch: patch,
+            client=DummyClient(),
+            progress=None,
+        )
+        assert out == []
+
+
+class Test2DLineIntersection:
+    """Tests for 2D line intersection helper."""
+
+    def test_non_parallel_lines(self):
+        """Non-parallel lines should return their intersection."""
+        p1 = np.array([0.0, 0.0])
+        p2 = np.array([2.0, 2.0])
+        p3 = np.array([0.0, 2.0])
+        p4 = np.array([2.0, 0.0])
+        out = get_2d_line_intersection(p1, p2, p3, p4)
+        assert np.allclose(out, [1.0, 1.0])
+
+    def test_parallel_lines(self):
+        """Parallel lines should return NaN coordinates."""
+        p1 = np.array([0.0, 0.0])
+        p2 = np.array([1.0, 1.0])
+        p3 = np.array([0.0, 1.0])
+        p4 = np.array([1.0, 2.0])
+        out = get_2d_line_intersection(p1, p2, p3, p4)
+        assert np.isnan(out).all()
+
+
+class TestGetParentCodeName:
+    """Tests for naming the calling scope."""
+
+    def test_gets_caller(self):
+        """Level 1 names the calling scope, level 2 the one above it."""
+
+        def inner():
+            return get_parent_code_name(levels=1), get_parent_code_name(levels=2)
+
+        assert inner() == ("inner", "test_gets_caller")
+
+    def test_above_stack_top(self):
+        """Asking for a frame above the top of the stack has no name."""
+        assert get_parent_code_name(levels=10_000) == "<unknown>"
 
 
 class TestGetBufferSize:
@@ -359,6 +863,15 @@ class TestGetBufferSize:
         size2 = get_buffer_size(bio)
         assert size1 == size2 == 4
 
+    def test_named_buffer_falls_back_when_stat_fails(self):
+        """Handles with unusable .name values should still use tell/seek."""
+
+        class _NamedBytesIO(BytesIO):
+            name = "not-a-real-path"
+
+        bio = _NamedBytesIO(b"1234")
+        assert get_buffer_size(bio) == 4
+
 
 class TestMaybeMemMap:
     """Ensure we can get byte arrays from various objects."""
@@ -377,6 +890,26 @@ class TestMaybeMemMap:
         bio.seek(0)
         array = maybe_mem_map(bio)
         assert isinstance(array, np.ndarray)
+        assert array.size == 4
+
+    def test_unmappable_file(self, tmp_path):
+        """A named file numpy cannot map still reads into memory."""
+        path = tmp_path / "empty.bin"
+        path.touch()
+        with open(path, "rb") as fid:
+            array = maybe_mem_map(fid)
+        assert isinstance(array, np.ndarray)
+        assert not isinstance(array, np.memmap)
+        assert array.size == 0
+
+    def test_name_not_on_disk(self):
+        """A handle whose name is not a real path still reads through it."""
+
+        class _NamedBytesIO(BytesIO):
+            name = "not-a-real-path"
+
+        array = maybe_mem_map(_NamedBytesIO(b"1234"))
+        assert not isinstance(array, np.memmap)
         assert array.size == 4
 
     def test_bytes_io_nonzero_position(self):
@@ -688,3 +1221,38 @@ class TestDeepEqualityCheck:
         result = deep_equality_check(df1, df3)
         assert isinstance(result, bool), f"Expected bool, got {type(result)}"
         assert result is False
+
+
+class TestIsStrictlyMonotonic:
+    """Tests for the strict monotonicity check."""
+
+    def test_increasing(self):
+        """An ascending sequence is monotonic in either sense."""
+        assert is_strictly_monotonic([1, 2, 3])
+        assert is_strictly_monotonic([1, 2, 3], increasing=True)
+        assert not is_strictly_monotonic([1, 2, 3], increasing=False)
+
+    def test_decreasing(self):
+        """A descending sequence qualifies unless ascending is required."""
+        assert is_strictly_monotonic([3, 2, 1])
+        assert is_strictly_monotonic([3, 2, 1], increasing=False)
+        assert not is_strictly_monotonic([3, 2, 1], increasing=True)
+
+    def test_repeats_are_not_strict(self):
+        """Equal neighbors break strictness."""
+        assert not is_strictly_monotonic([1, 1, 2])
+
+    def test_short_sequences(self):
+        """Sequences too short to have a direction are trivially monotonic."""
+        assert is_strictly_monotonic([1])
+        assert is_strictly_monotonic([])
+
+    def test_multidimensional(self):
+        """Monotonicity is undefined for anything but a single dimension."""
+        assert not is_strictly_monotonic(np.arange(4).reshape(2, 2))
+        assert not is_strictly_monotonic(5)
+
+    def test_uncomparable_values(self):
+        """Values which cannot be ordered are not monotonic."""
+        values = np.array([{"a": 1}, {"b": 2}], dtype=object)
+        assert not is_strictly_monotonic(values)

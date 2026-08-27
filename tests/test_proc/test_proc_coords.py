@@ -58,6 +58,14 @@ class TestSortCoords:
             data_along_slice = np.take(new.data, 0, ind)
             assert np.all(np.equal(arg_sort, data_along_slice))
 
+    def test_noop_sort_returns_self(self, random_patch):
+        """Sorting already-sorted coords should return the same objects."""
+        coords = random_patch.coords
+        new_coords, array = coords.sort(array=random_patch.data)
+        assert new_coords is coords
+        assert array is random_patch.data
+        assert random_patch.sort_coords() is random_patch
+
 
 class TestSnapDims:
     """Tests for snapping dimensions."""
@@ -84,6 +92,53 @@ class TestSnapDims:
             assert coord.sorted
             assert coord.evenly_sampled
 
+    @pytest.fixture(scope="class")
+    def even_time_uneven_distance_patch(self):
+        """A patch with an even (CoordRange) time and monotonic-uneven distance."""
+        time = dc.to_datetime64(np.arange(20))
+        distance = np.cumsum(np.arange(1, 11) ** 1.5)
+        data = np.arange(len(time) * len(distance)).reshape(len(time), len(distance))
+        patch = dc.Patch(
+            data=data.astype(np.float64),
+            coords={"time": time, "distance": distance},
+            dims=("time", "distance"),
+        )
+        # sanity: time is even, distance is monotonic but not evenly sampled
+        assert patch.coords.coord_map["time"].evenly_sampled
+        assert not patch.coords.coord_map["distance"].evenly_sampled
+        return patch
+
+    def test_snap_already_even_returns_self(self, random_patch):
+        """Snapping an already-even, sorted patch returns the same objects."""
+        coords = random_patch.coords
+        new_coords, array = coords.snap(array=random_patch.data)
+        assert new_coords is coords
+        assert array is random_patch.data
+        assert random_patch.snap_coords() is random_patch
+        assert random_patch.snap_coords("time", "distance") is random_patch
+
+    def test_snap_changes_only_uneven_coord(self, even_time_uneven_distance_patch):
+        """Only the coordinate that must change is replaced; others are reused."""
+        patch = even_time_uneven_distance_patch
+        out = patch.snap_coords()
+        # distance was uneven, so it should now be evenly sampled
+        assert out.coords.coord_map["distance"].evenly_sampled
+        # time was already even; its coordinate object should be reused as-is
+        assert out.coords.coord_map["time"] is patch.coords.coord_map["time"]
+        # data is unchanged because nothing needed reordering
+        assert np.array_equal(out.data, patch.data)
+
+    def test_snap_reverse_sorted(self, even_time_uneven_distance_patch):
+        """Reverse snapping sorts descending and reorders data accordingly."""
+        patch = even_time_uneven_distance_patch
+        out = patch.snap_coords("distance", reverse=True)
+        coord = out.coords.coord_map["distance"]
+        assert coord.reverse_sorted
+        assert coord.evenly_sampled
+        # data columns should be reversed relative to the ascending snap
+        ascending = patch.snap_coords("distance")
+        assert np.array_equal(out.data, ascending.data[:, ::-1])
+
 
 class TestDropCoords:
     """Tests for dropping coordinates."""
@@ -98,6 +153,33 @@ class TestDropCoords:
         msg = "Cannot drop dimensional coordinates"
         with pytest.raises(ParameterError, match=msg):
             random_patch.drop_coords("time")
+
+    @pytest.mark.parametrize(
+        "form", [["latitude"], ("latitude",), {"latitude"}, iter(["latitude"])]
+    )
+    def test_drop_sequence(self, random_patch_with_lat_lon, form):
+        """A sequence of names should behave exactly like the bare name."""
+        patch = random_patch_with_lat_lon
+        out = patch.drop_coords(form)
+        expected = patch.drop_coords("latitude")
+        assert "latitude" not in out.coords.coord_map
+        # Compared to the bare-name call so that dropping too much fails too.
+        assert set(out.coords.coord_map) == set(expected.coords.coord_map)
+
+    def test_drop_mixed_args(self, random_patch_with_lat_lon):
+        """Names and sequences of names should be usable together."""
+        patch = random_patch_with_lat_lon
+        out = patch.drop_coords("latitude", ["longitude"])
+        dropped = {"latitude", "longitude"}
+        assert not dropped & set(out.coords.coord_map)
+        # Everything else has to survive.
+        assert set(out.coords.coord_map) == set(patch.coords.coord_map) - dropped
+
+    def test_drop_dim_in_sequence_raises(self, random_patch):
+        """A dimension inside a sequence should raise like a bare one."""
+        msg = "Cannot drop dimensional coordinates"
+        with pytest.raises(ParameterError, match=msg):
+            random_patch.drop_coords(["time"])
 
 
 class TestCoordsFromDf:
@@ -210,32 +292,42 @@ class TestSelect:
         assert selected_patch.data.shape == original_patch.data.shape
         assert np.array_equal(selected_patch.data, original_patch.data)
 
+    def test_select_infinite_bound(self, random_patch):
+        """An infinite bound is an open one, like ... or None."""
+        coord = random_patch.get_coord("distance")
+        middle = coord.values[len(coord) // 2]
+        expected = random_patch.select(distance=(middle, ...))
+        assert random_patch.select(distance=(middle, np.inf)).equals(expected)
+        assert random_patch.select(distance=(-np.inf, ...)).equals(random_patch)
+        # The infinite side must not swallow the finite one.
+        assert expected.shape != random_patch.shape
+
     def test_select_by_distance(self, random_patch):
         """Ensure distance can be used to filter patch."""
         dmin, dmax = 100, 200
         pa = random_patch.select(distance=(dmin, dmax))
         assert pa.data.shape < random_patch.data.shape
         # the attrs should have updated as well
-        assert pa.attrs["distance_min"] >= 100
-        assert pa.attrs["distance_max"] <= 200
+        assert pa.get_coord("distance").min() >= 100
+        assert pa.get_coord("distance").max() <= 200
 
     def test_select_by_absolute_time(self, random_patch):
         """Ensure the data can be sub-selected using absolute time."""
         shape = random_patch.data.shape
-        t1 = random_patch.attrs["time_min"] + np.timedelta64(1, "s")
+        t1 = random_patch.get_coord("time").min() + np.timedelta64(1, "s")
         t2 = t1 + np.timedelta64(3, "s")
 
         pa1 = random_patch.select(time=(None, t1))
-        assert pa1.attrs["time_max"] <= t1
+        assert pa1.get_coord("time").max() <= t1
         assert pa1.data.shape < shape
 
         pa2 = random_patch.select(time=(t1, None))
-        assert pa2.attrs["time_min"] >= t1
+        assert pa2.get_coord("time").min() >= t1
         assert pa2.data.shape < shape
 
         tr3 = random_patch.select(time=(t1, t2))
-        assert tr3.attrs["time_min"] >= t1
-        assert tr3.attrs["time_max"] <= t2
+        assert tr3.get_coord("time").min() >= t1
+        assert tr3.get_coord("time").max() <= t2
         assert tr3.data.shape < shape
 
     def test_select_out_of_bounds_time(self, random_patch):
@@ -244,7 +336,7 @@ class TestSelect:
         pa1 = random_patch.select(time=(1, None))
         assert pa1 == random_patch
         # it should also work with proper datetimes.
-        t1 = random_patch.attrs["time_min"] - dc.to_timedelta64(1)
+        t1 = random_patch.get_coord("time").min() - dc.to_timedelta64(1)
         pa2 = random_patch.select(time=(t1, None))
         assert pa2 == random_patch
 
@@ -253,7 +345,7 @@ class TestSelect:
         dist = random_patch.coords.get_array("distance")
         dist_max, dist_mean = np.max(dist), np.mean(dist)
         out = random_patch.select(distance=(dist_mean, dist_max - 1))
-        assert out.attrs["time_max"] == out.coords.max("time")
+        assert out.get_coord("time").max() == out.coords.max("time")
 
     def test_select_emptify_array(self, random_patch):
         """If select range excludes data range patch should be emptied."""
@@ -266,38 +358,38 @@ class TestSelect:
     def test_select_relative_start_end(self, random_patch):
         """Ensure relative select works on start to end."""
         patch1 = random_patch.select(time=(1, -1), relative=True)
-        t1 = random_patch.attrs.time_min + dc.to_timedelta64(1)
-        t2 = random_patch.attrs.time_max - dc.to_timedelta64(1)
+        t1 = random_patch.get_coord("time").min() + dc.to_timedelta64(1)
+        t2 = random_patch.get_coord("time").max() - dc.to_timedelta64(1)
         patch2 = random_patch.select(time=(t1, t2))
         assert patch1 == patch2
 
     def test_select_relative_end_end(self, random_patch):
         """Ensure relative works for end to end."""
         patch1 = random_patch.select(time=(-3, -1), relative=True)
-        t1 = random_patch.attrs.time_max - dc.to_timedelta64(1)
-        t2 = random_patch.attrs.time_max - dc.to_timedelta64(3)
+        t1 = random_patch.get_coord("time").max() - dc.to_timedelta64(1)
+        t2 = random_patch.get_coord("time").max() - dc.to_timedelta64(3)
         patch2 = random_patch.select(time=(t1, t2))
         assert patch1 == patch2
 
     def test_select_relative_start_start(self, random_patch):
         """Ensure relative start ot start."""
         patch1 = random_patch.select(time=(1, 3), relative=True)
-        t1 = random_patch.attrs.time_min + dc.to_timedelta64(1)
-        t2 = random_patch.attrs.time_min + dc.to_timedelta64(3)
+        t1 = random_patch.get_coord("time").min() + dc.to_timedelta64(1)
+        t2 = random_patch.get_coord("time").min() + dc.to_timedelta64(3)
         patch2 = random_patch.select(time=(t1, t2))
         assert patch1 == patch2
 
     def test_select_relative_start_open(self, random_patch):
         """Ensure relative start to open end."""
         patch1 = random_patch.select(time=(1, None), relative=True)
-        t1 = random_patch.attrs.time_min + dc.to_timedelta64(1)
+        t1 = random_patch.get_coord("time").min() + dc.to_timedelta64(1)
         patch2 = random_patch.select(time=(t1, None))
         assert patch1 == patch2
 
     def test_select_relative_end_open(self, random_patch):
         """Ensure relative start to open end."""
         patch1 = random_patch.select(time=(-1, None), relative=True)
-        t1 = random_patch.attrs.time_max - dc.to_timedelta64(1)
+        t1 = random_patch.get_coord("time").max() - dc.to_timedelta64(1)
         patch2 = random_patch.select(time=(t1, None))
         assert patch1 == patch2
 
@@ -315,21 +407,20 @@ class TestSelect:
         pa4 = random_patch.select(distance=...)
         assert pa1 == pa2 == pa3 == pa4
 
-    def test_iselect_deprecated(self, random_patch):
-        """Ensure Patch.iselect raises deprecation error."""
-        msg = "iselect is deprecated"
-        with pytest.warns(DeprecationWarning, match=msg):
-            _ = random_patch.iselect(time=(10, -10))
-
     def test_select_history_outside_bounds(self, random_patch):
         """Selecting outside the bounds should do nothing to history."""
-        attrs = random_patch.attrs
+        patch = random_patch
         dt = dc.to_timedelta64(1)
-        time = (attrs["time_min"] - dt, attrs["time_max"] + dt)
-        dist = (attrs["distance_min"] - 1, attrs["distance_max"] + 1)
-        new = random_patch.select(time=time, distance=dist)
+        time_coord = patch.get_coord("time")
+        distance_coord = patch.get_coord("distance")
+        time = (time_coord.min() - dt, time_coord.max() + dt)
+        dist = (
+            distance_coord.min() - 1,
+            distance_coord.max() + 1,
+        )
+        new = patch.select(time=time, distance=dist)
         # if no select performed everything should be identical.
-        assert new.equals(random_patch, only_required_attrs=False)
+        assert new.equals(patch, only_required_attrs=False)
 
     def test_patch_non_coord(self, random_patch):
         """Test select for a patch with a non coord."""
@@ -554,6 +645,111 @@ class TestSelect:
         sub2 = random_patch.select(time=np.int64(10), samples=True)
         assert sub1 == sub2
 
+    def test_single_sample_retains_step(self, random_patch):
+        """Single-sample select of an evenly sampled coord keeps step. See #567."""
+        orig = random_patch.get_coord("time")
+        sub_patch = random_patch.select(time=1, samples=1)
+        time = sub_patch.get_coord("time")
+        assert time.step is not None
+        assert time.step == orig.step
+
+
+class TestUnselect:
+    """Keeping what a selection would have removed."""
+
+    def test_complements_select(self, random_patch):
+        """Together the two account for every sample, and share none."""
+        selector = (50, 200)
+        kept = random_patch.select(distance=selector).get_array("distance")
+        dropped = random_patch.unselect(distance=selector).get_array("distance")
+        whole = random_patch.get_array("distance")
+        assert not set(kept) & set(dropped)
+        assert sorted([*kept, *dropped]) == sorted(whole)
+
+    def test_interior_range_leaves_a_hole(self, random_patch):
+        """
+        The property which makes a range complement wrong for a spool.
+
+        A patch can have samples removed from its middle; a spool would
+        have to cut every patch into the pieces on either side.
+        """
+        out = random_patch.unselect(distance=(50, 200))
+        coord = out.get_coord("distance")
+        assert coord.step is None
+        values = out.get_array("distance")
+        assert not ((values >= 50) & (values <= 200)).any()
+        assert values.min() < 50 < 200 < values.max()
+
+    def test_data_follows_the_coordinate(self, random_patch):
+        """The rows removed are the rows the selection would have kept."""
+        axis = random_patch.dims.index("distance")
+        values = random_patch.get_array("distance")
+        out = random_patch.unselect(distance=(50, 200))
+        wanted = random_patch.data.take(
+            np.flatnonzero(~((values >= 50) & (values <= 200))), axis=axis
+        )
+        assert np.array_equal(out.data, wanted)
+
+    def test_samples(self, random_patch):
+        """A sample range is complemented in samples too."""
+        out = random_patch.unselect(distance=(..., 10), samples=True)
+        whole = random_patch.get_array("distance")
+        assert np.array_equal(out.get_array("distance"), whole[10:])
+
+    def test_relative(self, random_patch):
+        """Relative selectors mean what they mean in select."""
+        kept = random_patch.select(time=(1, None), relative=True)
+        dropped = random_patch.unselect(time=(1, None), relative=True)
+        assert len(kept.get_array("time")) + len(dropped.get_array("time")) == len(
+            random_patch.get_array("time")
+        )
+
+    def test_unselecting_everything_empties_the_dimension(self, random_patch):
+        """Removing the whole span is legal, and says so with a shape."""
+        coord = random_patch.get_coord("distance")
+        out = random_patch.unselect(distance=(coord.min(), coord.max()))
+        assert out.shape[random_patch.dims.index("distance")] == 0
+
+    def test_each_named_coordinate_is_complemented(self, random_patch):
+        """
+        Two names remove two ranges rather than the one intersection.
+
+        The complement of a block is a frame around it, which no array
+        can hold, so unselect removes the part which is expressible.
+        """
+        time = random_patch.get_array("time")
+        window = (time[0], time[4])
+        out = random_patch.unselect(distance=(50, 60), time=window)
+        assert len(out.get_array("distance")) == len(
+            random_patch.get_array("distance")
+        ) - len(random_patch.select(distance=(50, 60)).get_array("distance"))
+        assert len(out.get_array("time")) == len(time) - 5
+
+    def test_unknown_coordinate_raises(self, random_patch):
+        """A misspelled name is the error it is in select."""
+        with pytest.raises(PatchCoordinateError, match="not found in patch"):
+            random_patch.unselect(not_a_coord=(1, 2))
+
+    def test_a_multidimensional_coordinate_raises(self, random_patch):
+        """
+        A range of one names no samples of a single dimension to drop.
+
+        Its complement is a shape spanning both, which is the same reason
+        two coordinates cannot be complemented jointly.
+        """
+        size = random_patch.shape
+        grid = np.arange(size[0] * size[1]).reshape(size)
+        patch = random_patch.update_coords(quality=(("distance", "time"), grid))
+        with pytest.raises(PatchCoordinateError, match="spans"):
+            patch.unselect(quality=(0, 10))
+
+    def test_non_dimensional_coordinate(self, random_patch):
+        """A coordinate along a dimension trims that dimension."""
+        size = random_patch.coord_shapes["distance"][0]
+        patch = random_patch.update_coords(quality=("distance", np.arange(size)))
+        out = patch.unselect(quality=(0, 9))
+        assert len(out.get_array("quality")) == size - 10
+
 
 class TestOrder:
     """Tests for ordering Patches."""
@@ -673,6 +869,16 @@ class TestSqueeze:
         if coords:
             assert set(coords) == set(patch.coords.coord_map)
 
+    def test_noop_squeeze_returns_self(self, random_patch):
+        """Squeeze on a patch with no length-1 dims returns the same patch."""
+        assert 1 not in random_patch.shape
+        assert random_patch.squeeze() is random_patch
+
+    def test_noop_coord_squeeze_returns_self(self, random_patch):
+        """CoordManager squeeze with no length-1 dims returns self."""
+        coords = random_patch.coords
+        assert coords.squeeze() is coords
+
 
 class TestGetCoord:
     """Tests for the get_coord convenience function."""
@@ -708,7 +914,7 @@ class TestGetCoord:
 
 
 class TestMakeBroadcastable:
-    """Tests for making patches broadcastable to differnt shapes."""
+    """Tests for making patches broadcastable to different shapes."""
 
     def test_broadcast_non_coords(self, random_patch):
         """Ensure non-coords of length 1 can broadcast."""
@@ -898,3 +1104,16 @@ class TestTranspose:
         assert patch_5d.data.size == out.data.size
         # Data values should be the same, just rearranged
         assert np.array_equal(np.sort(patch_5d.data.flat), np.sort(out.data.flat))
+
+    def test_noop_transpose_returns_self(self, random_patch):
+        """Transposing to the current dim order returns the same patch."""
+        assert random_patch.transpose(*random_patch.dims) is random_patch
+
+    def test_noop_transpose_ellipsis_returns_self(self, patch_5d):
+        """A trailing ellipsis that resolves to the same order returns self."""
+        assert patch_5d.transpose(*patch_5d.dims[:-1], ...) is patch_5d
+
+    def test_noop_coord_transpose_returns_self(self, random_patch):
+        """CoordManager transpose to the current order returns self."""
+        coords = random_patch.coords
+        assert coords.transpose(*coords.dims) is coords

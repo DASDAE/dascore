@@ -4,13 +4,13 @@ These notes provide the reasoning for DASCore's [fourier](`dascore.transform.fou
 
 ## Summary {#sec-summary}
 
-- When performing discrete fourier transforms, DASCore multiplies numpy's fft output by the coordinate spacing in order to:
+- For `output="FFT"`, DASCore multiplies NumPy's FFT coefficients by the coordinate spacing along each transformed dimension in order to:
 
    - Produce the same units as the continuous fourier transform
-   - Preserve energy between the initial and transformed signals
-   - Ensure the zero frequency approximates the average of the signal
+   - Preserve the continuous-transform form of Parseval's identity
+   - Ensure the zero-frequency coefficient approximates the integral of the signal
 
-- If the scaled fft is divided by the signal duration, the amplitude spectrum magnitudes correspond to the magnitude of the basis harmonics.
+- `output="AS"`, `"PS"`, and `"PSD"` convert those coefficients into amplitude, power, and power-spectral-density representations. Their normalization uses the DFT domain extent $n\,dx$, not merely the endpoint span $(n-1)\,dx$.
 
 ## Continuous Fourier Transform
 
@@ -25,7 +25,7 @@ Where $f$ is a function of some variable $x$, $\hat{f}$ is $f$ as a function of 
 Its inverse is defined as:
 
 $$
-F^{-1}(\hat{f}) = f(x) = \frac{1}{2\pi} \int_{-\infty}^{\infty} \hat{f}(\xi) e^{i 2 \pi \xi x} d \xi
+F^{-1}(\hat{f}) = f(x) = \int_{-\infty}^{\infty} \hat{f}(\xi) e^{i 2 \pi \xi x} d \xi
 $${#eq-2}
 
 Let us consider how $F$ affects the units of $f(x)$ by first examining the units of the transformed variable $\xi$. Since the product of the variables in the exponential ($i 2 \pi \xi x$) must be unit-less, and $2 \pi i$ have no units, it follows that the units of $\xi$ must be the multiplicative inverse of the units of $x$. That is, if the units of $x$ are seconds($s$), the units of $\xi$ must be $\frac{1}{s} = Hz$. This is confirmed by rudimentary experience with time series analysis.
@@ -35,12 +35,12 @@ The units of $\hat{f}$ are also straight-forward to ascertain from @eq-1. Becaus
 One property of @eq-1 relevant to DASCore's implementation is [Parseval's identity](https://en.wikipedia.org/wiki/Parseval%27s_identity) which, in 1D, can be stated as:
 
 $$
-\int_{-\infty}^{\infty} |\hat{f}(\xi)|^2dx = \int_{-\infty}^{\infty} |f(x)|^2 dx
+\int_{-\infty}^{\infty} |\hat{f}(\xi)|^2 d\xi = \int_{-\infty}^{\infty} |f(x)|^2 dx
 $${#eq-3}
 
 Loosely speaking, we might say that the *energy* of the function is preserved by the transform.
 
-A related property of the @eq-3 is that the zero frequency represents the DC offset, or integral, of the original function. Setting $\xi=0$ we see:
+A related property of @eq-3 is that the zero frequency represents the DC offset, or integral, of the original function. Setting $\xi=0$ in @eq-1 we see:
 
 $$
 \hat{f}(0) = \int_{-\infty}^{\infty} f(x) dx
@@ -153,7 +153,7 @@ ax = plot_amplitude_spectra(freqs1, n_scaled_fft1, freqs2, n_scaled_fft2)
 plt.show()
 ```
 
-A nice result of this approach is that the magnitude of the amplitude spectra values at $\pm$ the dominant frequency ($f_0$) are half of the amplitude of the original sine wave ($b_0$). If we fold the amplitude spectrum over 0, meaning we add the values of the negative frequencies to their corresponding positive frequencies, the value corresponding to $f_0$ is exactly $b_0$.
+A nice result of this approach is that the amplitude-spectrum magnitude at $\pm$ the dominant frequency ($f_0$) is half the amplitude of the original sine wave ($b_0$) for a full two-sided transform. Folding negative-frequency magnitude onto its positive-frequency partner recovers $b_0$.
 
 However, does the equivalent of @eq-3 hold if we perform numerical integration?
 
@@ -182,12 +182,13 @@ print(f"fft n-scaled (n={len(t2)}) energy {fft2_energy:.02f}")
 
 It doesn't. And what about the units? As we saw above, $A$ in @eq-4 would have the same units as $a$.
 
-What if, drawing inspiration from @eq-1, we simply scale the output by the function's sample spacing ($dx$)? After all, the spacing and the number of samples is directly related by
+What if, drawing inspiration from @eq-1, we simply scale the output by the function's sample spacing ($dx$)? For an $n$-sample DFT, the periodic-domain extent that determines the frequency-bin spacing is
 
 $$
-\frac{T}{n} = dx
+T_{DFT} = n\,dx, \qquad d\xi = \frac{1}{T_{DFT}}
 $${#eq-7}
 
+The span between the first and last coordinate labels is instead $(n-1)dx$. DASCore uses $T_{DFT}$ when normalizing spectral outputs.
 
 ```{python}
 #| code-fold: true
@@ -218,7 +219,7 @@ print(f"sine wave (n={len(t2)}) energy {time2_energy:.02f}")
 print(f"fft dt_scaled (n={len(t2)}) energy {fft2_energy:.02f}")
 ```
 
-The energy is conserved, and the expected units are produced. However, we would need to divide by the total signal duration $T$ in order for the spectrum magnitudes to correspond to the time-domain amplitude of harmonics in the new basis (@eq-7), if that property is desirable.
+The continuous-transform form of energy conservation is recovered, and the expected units are produced. Dividing coefficient magnitudes by the DFT extent $T_{DFT}$ gives amplitudes in the original data units (@eq-7).
 
 
 ## Zero Frequency
@@ -253,9 +254,26 @@ plt.show()
 
 Both outputs have a zero frequency amplitude spectrum value very near  12.5.
 
+## DASCore output normalizations
+
+[`Patch.dft(...)`](`dascore.Patch.dft`) exposes four output representations:
+
+| `output` | Normalization | Interpretation |
+|---|---|---|
+| `"FFT"` | NumPy coefficients multiplied by the product of transformed-axis sample spacings | Complex continuous-transform coefficients; data units are multiplied by the original coordinate units. |
+| `"AS"` | `abs(FFT) / T_DFT` | Amplitude spectrum in the original data units. |
+| `"PS"` | `abs(FFT) ** 2 / T_DFT ** 2` | Power spectrum whose bin sum is the time-domain mean square. |
+| `"PSD"` | `abs(FFT) ** 2 / T_DFT` | Power spectral density whose bin-width-weighted sum is the time-domain mean square. |
+
+For transforms over multiple dimensions, $T_{DFT}$ in the table is the product of each transformed dimension's extent. `db=True` applies $20\log_{10}$ to amplitude spectra and $10\log_{10}$ to power or power-spectral-density values. These decibel values are not referenced to a separate physical reference level.
+
+Real transforms retain only non-negative frequencies. DASCore does not automatically double non-DC or non-Nyquist bins for `"AS"`, `"PS"`, or `"PSD"`; callers who need a conventional one-sided spectrum must apply the appropriate factor for their use case.
+
+Only `output="FFT"` retains the complex coefficients required by [`Patch.idft(...)`](`dascore.Patch.idft`).
+
 ## Conclusions
 
-Our requirements/expectations of the dft are met if we simply multiply numpy's fft output by the sample spacing ($dx$). If we want the amplitude spectrum magnitudes to correspond to the amplitude of the composite harmonics, we just need to divide by the signal duration.
+Multiplying NumPy's FFT output by sample spacing gives DASCore coefficients with continuous-transform units and scaling. The other `output` modes derive amplitude and power representations from those coefficients using the DFT extent.
 
 :::{.callout-note}
 We also need to be careful to handle the frequency shifts if the frequency bins are to be sorted.

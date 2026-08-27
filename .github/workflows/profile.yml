@@ -19,34 +19,52 @@ permissions:
   contents: read # required for actions/checkout
   id-token: write # required for OIDC authentication with CodSpeed
 
+# Supersede the previous run: by pull request, or by branch for pushes.
+concurrency:
+  group: CodSpeed-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Where the test-data cache is restored; pooch reads files from here.
+  # Must match the path used in .github/actions/prime-test-data-cache.
+  DFS_DATA_DIR: ${{ github.workspace }}/.test_data_cache
+
 jobs:
   benchmarks:
     name: Run benchmarks
     if: >
       github.event_name != 'pull_request' ||
-      contains(github.event.pull_request.labels.*.name, 'benchmark')
+      (github.event.pull_request.state == 'open' &&
+      contains(github.event.pull_request.labels.*.name, 'benchmark'))
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
+          persist-credentials: false
           fetch-tags: "true"
           fetch-depth: '0'
 
       - uses: ./.github/actions/load-shared-vars
+        id: shared-vars
 
-      - uses: ./.github/actions/mamba-install-dascore
+      - uses: ./.github/actions/install-dascore
         with:
           # Defined in .github/actions/load-shared-vars/action.yml
-          python-version: ${{ env.PYTHON_DEFAULT }}
-          install-group-str: "[profile]"
-          cache-number: 1
+          python-version: ${{ steps.shared-vars.outputs.python-default }}
+          # extras, not just [profile]: the IO benchmarks suppress
+          # DependencyError, so a format whose optional dependency is absent
+          # is silently not benchmarked rather than failing. environment.yml
+          # used to supply some of these (xarray, findiff); installing the
+          # extras keeps that coverage and matches what [dev] gives the
+          # test jobs.
+          install-group-str: "[profile,extras]"
           prepare-test-data: "true"
 
       - name: Run benchmarks
-        uses: CodSpeedHQ/action@v4
+        uses: CodSpeedHQ/action@88472375d0a4572cf70a9f1fe3a4e0ab8da1b924  # v5.0.1
         with:
           mode: simulation
-          # CodSpeed does not inherit the shell activation done by the
-          # micromamba setup step, so run benchmarks explicitly inside the
-          # dascore environment to ensure pytest and pytest-codspeed resolve.
-          run: micromamba run -n dascore ./.github/test_code.sh profile
+          # dascore now installs into the interpreter on PATH, so this no
+          # longer needs a `micromamba run -n dascore` wrapper to resolve
+          # pytest and pytest-codspeed.
+          run: ./.github/test_code.sh profile

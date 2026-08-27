@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
-import warnings
-
 import numpy as np
 
 import dascore as dc
 from dascore.constants import PatchType
+from dascore.exceptions import ParameterError
 from dascore.utils.patch import (
     get_dim_axis_value,
     patch_function,
@@ -25,16 +24,16 @@ def _get_source_fft(patch, dim, source, source_axis, samples):
     # Extract an array containing just the sources
     coord_source = patch.get_coord(dim)
     index_source = coord_source.get_next_index(source, samples=samples)
-    selecter = [slice(None), slice(None), None]
-    selecter[source_axis] = np.atleast_1d(index_source)
-    source = patch.data[tuple(selecter)]
+    selector = [slice(None), slice(None), None]
+    selector[source_axis] = np.atleast_1d(index_source)
+    source = patch.data[tuple(selector)]
     # Now transpose source so source dim is list. Essentially we just
     # need to swap the source axis with the last axis.
     out = np.swapaxes(source, source_axis, -1)
     return out
 
 
-@patch_function()
+@patch_function(data_type="correlation")
 def correlate_shift(
     patch: PatchType, dim: str, undo_weighting: bool = True
 ) -> PatchType:
@@ -86,11 +85,10 @@ def correlate_shift(
     return out
 
 
-@patch_function()
+@patch_function(data_type="correlation")
 def correlate(
     patch: PatchType,
     samples: bool = False,
-    lag=None,
     **kwargs,
 ) -> PatchType:
     """
@@ -116,13 +114,11 @@ def correlate(
     samples : bool, optional (default = False)
         If True, the argument specified in kwargs refers to the *sample* not
         value along that axis. See examples for details.
-    lag
-        Deprecated, just use select on the output patch instead.
     **kwargs
         Specifies correlation dimension and the master source(s), to which
-        we want to cross-correlate all other channels/time samples.If the
+        we want to cross-correlate all other channels/time samples. If the
         master source is an array, the function will compute correlations for
-        all the posible pairs.
+        all the possible pairs.
 
     Examples
     --------
@@ -189,14 +185,12 @@ def correlate(
       shares a name with the original coord except the string "lag_" is
       prepended. For example, "lag_time".
     """
-    if lag is not None:
-        msg = (
-            "Patch.correlate's Parameter 'lag' is deprecated and ignored. "
-            "Simply use Patch.select on the output patch.  "
-            "(e.g., select(lag_time=(...)))"
-        )
-        warnings.warn(msg, DeprecationWarning)
-    assert len(patch.dims) == 2, "must be a 2D patch."
+    if "lag" in kwargs:
+        msg = "The 'lag' parameter was removed. Select on the lag coordinate instead."
+        raise TypeError(msg)
+    if len(patch.dims) != 2:
+        msg = "must be a 2D patch."
+        raise ParameterError(msg)
     dim, source_axis, source = get_dim_axis_value(patch, kwargs=kwargs)[0]
     # Get the axis and coord over which fft should be calculated.
     fft_axis = next(iter(set(range(len(patch.dims))) - {source_axis}))
@@ -216,7 +210,7 @@ def correlate(
     fft_prod = fft_patch_array * np.conj(source_fft)
     # Create frequency domain patch with results
     source = getattr(source, "magnitude", source)  # strips units
-    new_coord = dc.get_coord(values=np.atleast_1d(source))
+    new_coord = dc.get_coord(data=np.atleast_1d(source))
     dim_name = f"source_{dim}"
     cm = patch.coords.update(**{dim_name: (dim_name, new_coord)})
     out = patch.update(data=fft_prod, coords=cm)

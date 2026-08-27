@@ -129,17 +129,6 @@ def _get_coords(fi):
     return coords
 
 
-def _get_attrs(fi, coords, path, file_io):
-    """Create Patch Attribute from SEGY header contents."""
-    attrs = dc.PatchAttrs(
-        path=path,
-        file_version=file_io.version,
-        file_format=file_io.name,
-        coords=coords,
-    )
-    return attrs
-
-
 def _get_time_from_header(header):
     """Creates a datetime64 object from SEGY header date information."""
     segyio = optional_import("segyio")

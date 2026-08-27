@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+from typing import Literal
+
 import dascore as dc
 from dascore.constants import timeable_types
-from dascore.io import FiberIO
+from dascore.io import FiberIO, ScanPayload
 from dascore.utils.hdf5 import H5Reader
 
 from .utils import (
@@ -22,7 +24,11 @@ class Terra15FormatterV4(FiberIO):
     preferred_extensions = ("hdf5", "h5")
     version = "4"
 
-    def get_format(self, resource: H5Reader, **kwargs) -> tuple[str, str] | bool:
+    def get_format(
+        self,
+        resource: H5Reader,
+        **kwargs,
+    ) -> tuple[str, str] | Literal[False]:
         """
         Return True if file contains terra15 version 2 data else False.
 
@@ -34,16 +40,14 @@ class Terra15FormatterV4(FiberIO):
         version_str = _get_terra15_version_str(resource)
         if version_str:
             return (self.name, version_str)
+        return False
 
-    def scan(self, resource: H5Reader, **kwargs) -> list[dc.PatchAttrs]:
+    def scan(
+        self, resource: H5Reader, snap: bool = True, **kwargs
+    ) -> list[ScanPayload]:
         """Scan a terra15 v2 file, return summary information."""
-        version, data_node = _get_version_data_node(resource)
-        extras = {
-            "path": resource.filename,
-            "file_format": self.name,
-            "file_version": str(version),
-        }
-        return _scan_terra15(resource, data_node, extras)
+        _version, data_node = _get_version_data_node(resource)
+        return _scan_terra15(resource, data_node, snap=snap)
 
     def read(
         self,
@@ -52,7 +56,7 @@ class Terra15FormatterV4(FiberIO):
         distance: tuple[float, float] | None = None,
         snap_dims: bool = True,
         **kwargs,
-    ) -> dc.BaseSpool:
+    ) -> dc.Spool:
         """
         Read a terra15 file.
 

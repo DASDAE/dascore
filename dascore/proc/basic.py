@@ -3,27 +3,76 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
+from contextlib import suppress
 from typing import Any, Literal
 
 import numpy as np
 import pandas as pd
 from scipy.fft import next_fast_len
 
-import dascore as dc
 from dascore.compat import array
 from dascore.constants import PatchType
 from dascore.core.attrs import PatchAttrs
-from dascore.core.coordmanager import CoordManager, get_coord_manager
+from dascore.core.coordmanager import (
+    CoordManager,
+    CoordManagerInput,
+    get_coord_manager,
+)
 from dascore.core.coords import get_coord
 from dascore.exceptions import ParameterError
+from dascore.models import ArrayLike
 from dascore.utils.array import _apply_binary_ufunc
+from dascore.utils.array_api import array_namespace, nan_reduce
 from dascore.utils.misc import _get_nullish
-from dascore.utils.models import ArrayLike
 from dascore.utils.patch import (
     align_patch_coords,
     get_dim_axis_value,
     patch_function,
 )
+from dascore.workflow.processor import (
+    PatchProcessor,
+    register_implementation,
+)
+
+# The dtypes which promise, without the values being looked at, that there
+# is no imaginary part: bool, signed and unsigned integers, and floats.
+_REAL_KINDS = ("b", "i", "u", "f")
+
+
+def _known_real(data) -> bool:
+    """
+    Whether the dtype alone says the data has no imaginary part.
+
+    Object arrays are not among them: their dtype says nothing about the
+    elements, and `np.conj` really does conjugate a complex object held in
+    one. Anything whose dtype cannot be read is treated the same way --
+    not known to be real, so the operation runs.
+    """
+    dtype = getattr(data, "dtype", None)
+    if (kind := getattr(dtype, "kind", None)) is not None:
+        return kind in _REAL_KINDS
+    if dtype is None:
+        return False
+    # A backend whose dtypes carry no `kind` -- the standard does not ask
+    # for one -- is asked through its own namespace instead. Without this
+    # every such array reads as "not known to be real", and the operation
+    # runs `real`/`conj` on data the standard forbids them for.
+    with suppress(Exception):
+        return not array_namespace(data).isdtype(dtype, "complex floating")
+    return False
+
+
+def _as_float(data):
+    """
+    Promote data which cannot hold a fraction to floats.
+
+    Numpy promotes when dividing or subtracting a float; the array API
+    standard has no mixed kind promotion, so it has to be explicit.
+    """
+    xp = array_namespace(data)
+    if xp.isdtype(data.dtype, ("real floating", "complex floating")):
+        return data
+    return xp.astype(data, xp.float64)
 
 
 def set_dims(self: PatchType, **kwargs: str) -> PatchType:
@@ -55,9 +104,7 @@ def set_dims(self: PatchType, **kwargs: str) -> PatchType:
     return self.new(coords=cm)
 
 
-def pipe(
-    self: PatchType, func: Callable[[PatchType, ...], PatchType], *args, **kwargs
-) -> PatchType:
+def pipe(self: PatchType, func: Callable[..., PatchType], *args, **kwargs) -> PatchType:
     """
     Pipe the patch to a function.
 
@@ -95,12 +142,13 @@ def pipe(
 
 def update_attrs(self: PatchType, **attrs) -> PatchType:
     """
-    Update attrs and return a new Patch.
+    Update patch attrs and return a new Patch.
 
     Parameters
     ----------
     **attrs
-        attrs to add/update.
+        Attrs to add/update. Nested `coords` payloads are not accepted here;
+        use `patch.update_coords(...)` for coordinate changes.
 
     Examples
     --------
@@ -113,24 +161,17 @@ def update_attrs(self: PatchType, **attrs) -> PatchType:
     >>> # Add new custom attributes
     >>> with_custom = patch.update_attrs(processing_date="2024-01-01")
     """
-
-    def _fast_attr_update(self, attrs):
-        """A fast method for just squashing the attrs and returning new patch."""
-        new = self.__new__(self.__class__)
-        new._data = self.data
-        new._attrs = attrs
-        new._coords = self.coords
-        return new
-
-    # since we update history so often, we make a fast track for it.
     new_attrs = self.attrs.model_dump(exclude_unset=True)
     new_attrs.update(attrs)
-    # pop out coords so new coords has priority.
-    if len(attrs) == 1 and "history" in attrs:
-        return _fast_attr_update(self, PatchAttrs(**new_attrs))
-    new_coords, new_attrs = self.coords.update_from_attrs(new_attrs)
-    out = dict(coords=new_coords, attrs=new_attrs, dims=self.dims)
-    return self.__class__(self.data, **out)
+    validated = PatchAttrs.from_dict(new_attrs)
+    return self.__class__(
+        self._data, coords=self.coords, attrs=validated, dims=self.dims
+    )
+
+
+# Which data a patch is and what was done to it are not part of what it
+# *is*: two patches holding the same data are equal however they were made.
+_LINEAGE = {"patch_id", "processing_id"}
 
 
 def equals(self: PatchType, other: Any, only_required_attrs=True, close=False) -> bool:
@@ -172,12 +213,16 @@ def equals(self: PatchType, other: Any, only_required_attrs=True, close=False) -
     if not self.coords == other.coords:
         return False
     if only_required_attrs:  # only include default fields
-        attrs_to_compare = set(PatchAttrs.model_fields) - {"history", "coords"}
+        # The ids are not part of what a patch *is*: two patches with the
+        # same data, coords and attrs are equal however they were made.
+        attrs_to_compare = set(PatchAttrs.model_fields) - {"history"} - _LINEAGE
         attrs1 = self.attrs.model_dump(include=attrs_to_compare)
         attrs2 = other.attrs.model_dump(include=attrs_to_compare)
-    else:  # include all fields but coords
-        attrs1 = self.attrs.model_dump(exclude=["coords"])
-        attrs2 = other.attrs.model_dump(exclude=["coords"])
+    else:
+        # The ids are excluded here too: comparing every attr is about
+        # the user's attrs, not about where the data came from.
+        attrs1 = self.attrs.model_dump(exclude=_LINEAGE)
+        attrs2 = other.attrs.model_dump(exclude=_LINEAGE)
     if set(attrs1) != set(attrs2):  # attrs don't have same keys; not equal
         return False
     if attrs1 != attrs2:
@@ -191,9 +236,11 @@ def equals(self: PatchType, other: Any, only_required_attrs=True, close=False) -
         if not_equal:
             return False
     # Test data equality or proximity.
+    if self.data.shape != other.data.shape:
+        return False
     if close and not np.allclose(self.data, other.data):
         return False
-    elif not close and not np.equal(self.data, other.data).all():
+    if not close and not np.equal(self.data, other.data).all():
         return False
     return True
 
@@ -212,7 +259,7 @@ def bool_patch(self: PatchType):
 def update(
     self: PatchType,
     data: ArrayLike | np.ndarray | None = None,
-    coords: None | dict[str | Sequence[str], ArrayLike] | CoordManager = None,
+    coords: CoordManagerInput | CoordManager | None = None,
     dims: Sequence[str] | None = None,
     attrs: Mapping | PatchAttrs | None = None,
 ) -> PatchType:
@@ -235,20 +282,16 @@ def update(
     attrs
         Optional attributes (non-coordinate metadata) passed as a dict.
 
-    Notes
-    -----
-    - If both coords and attrs are defined, attrs will have priority.
     """
-    data = data if data is not None else self.data
+    data = data if data is not None else self._data
     coords = coords if coords is not None else self.coords
     if dims is None:
         dims = coords.dims if isinstance(coords, CoordManager) else self.dims
     coords = get_coord_manager(coords, dims)
     if attrs is not None:
-        coords, attrs = coords.update_from_attrs(attrs)
+        attrs = PatchAttrs.from_dict(attrs)
     else:
-        _attrs = dc.PatchAttrs.from_dict(attrs or self.attrs)
-        attrs = _attrs.update(coords=coords)
+        attrs = self.attrs
     return self.__class__(data=data, coords=coords, attrs=attrs)
 
 
@@ -263,7 +306,18 @@ def abs(patch: PatchType) -> PatchType:
     >>> pa = dascore.get_example_patch() # generate example patch
     >>> out = pa.abs() # take absolute value of generated example patch data
     """
-    return patch.new(data=np.abs(patch.data))
+    return Abs()._apply(patch)
+
+
+class Abs(PatchProcessor):
+    """Take the absolute value of the data."""
+
+    def kernel(self, data, meta, out_meta):
+        """Return the magnitude of every sample."""
+        return array_namespace(data).abs(data)
+
+
+register_implementation("abs", Abs)
 
 
 @patch_function()
@@ -280,7 +334,25 @@ def conj(patch: PatchType) -> PatchType:
     >>> dft = pa.dft(None)  # multi-dim dft
     >>> conj = dft.conj()
     """
-    return patch.new(data=np.conj(patch.data))
+    return Conj()._apply(patch)
+
+
+class Conj(PatchProcessor):
+    """Flip the sign of the imaginary part."""
+
+    def kernel(self, data, meta, out_meta):
+        """
+        Return the conjugate, or the data unchanged.
+
+        Real data is its own conjugate, and handing back the very array
+        which came in is what tells the caller nothing happened.
+        """
+        if _known_real(data):
+            return data
+        return array_namespace(data).conj(data)
+
+
+register_implementation("conj", Conj)
 
 
 @patch_function()
@@ -294,7 +366,20 @@ def real(patch: PatchType) -> PatchType:
     >>> pa = dascore.get_example_patch()
     >>> out = pa.real()
     """
-    return patch.new(data=np.real(patch.data))
+    return Real()._apply(patch)
+
+
+class Real(PatchProcessor):
+    """Keep only the real part of the data."""
+
+    def kernel(self, data, meta, out_meta):
+        """Return the real part, or the data which is already only that."""
+        if _known_real(data):
+            return data
+        return array_namespace(data).real(data)
+
+
+register_implementation("real", Real)
 
 
 @patch_function()
@@ -308,10 +393,31 @@ def imag(patch: PatchType) -> PatchType:
     >>> pa = dascore.get_example_patch()
     >>> out = pa.imag()
     """
-    return patch.new(data=np.imag(patch.data))
+    return Imag()._apply(patch)
 
 
-@patch_function()
+class Imag(PatchProcessor):
+    """Keep only the imaginary part of the data."""
+
+    def kernel(self, data, meta, out_meta):
+        """
+        Return the imaginary part, which is zero for real data.
+
+        Asked for explicitly rather than through `imag`: numpy answers
+        zero for a real array, and the standard refuses the question, so
+        the answer numpy gives has to be built here to mean the same
+        thing on every backend.
+        """
+        xp = array_namespace(data)
+        if _known_real(data):
+            return xp.zeros_like(data)
+        return xp.imag(data)
+
+
+register_implementation("imag", Imag)
+
+
+@patch_function(data_type="")
 def angle(patch: PatchType) -> PatchType:
     """
     Return a new patch with the phase angles from the data array.
@@ -325,7 +431,7 @@ def angle(patch: PatchType) -> PatchType:
     return patch.new(data=np.angle(patch.data))
 
 
-@patch_function()
+@patch_function(data_type="")
 def normalize(
     self: PatchType,
     dim: str,
@@ -333,6 +439,10 @@ def normalize(
 ) -> PatchType:
     """
     Normalize a patch along a specified dimension.
+
+    NaN values are ignored when computing the norm. They remain NaN in the
+    output but do not affect any other sample. Slices with a norm of zero,
+    meaning they contain nothing but zeros and NaN, are returned unscaled.
 
     Parameters
     ----------
@@ -360,34 +470,53 @@ def normalize(
     >>> # Bit normalization (sign only)
     >>> bit_norm = patch.normalize(dim="time", norm="bit")
     """
-    axis = self.get_axis(dim)
-    data = self.data
+    return Normalize(dim=dim, norm=norm)._apply(self)
+
+
+class Normalize(PatchProcessor):
+    """Scale each slice along a dimension by a norm of that slice."""
+
+    dim: str
+    norm: str = "l2"
+
+    def kernel(self, data, meta, out_meta):
+        """Return the data with each slice divided by its norm."""
+        return _normalize_kernel(data, meta.get_axis(self.dim), self.norm)
+
+
+register_implementation("normalize", Normalize)
+
+
+def _normalize_kernel(data, axis: int, norm: str):
+    """Divide each slice along an axis by the norm named."""
+    data = _as_float(data)
+    xp = array_namespace(data)
     if norm in {"l1", "l2"}:
         order = int(norm[-1])
-        norm_values = np.linalg.norm(self.data, axis=axis, ord=order)
+        # Equivalent to np.linalg.norm, but skips NaN rather than letting a
+        # single null blank every sample sharing its slice. The float exponent
+        # promotes ints so the powers cannot overflow a narrow dtype.
+        powers = xp.abs(data) ** float(order)
+        norm_values = nan_reduce("sum", powers, axis=axis) ** (1 / order)
+        divisor = xp.expand_dims(norm_values, axis=axis)
     elif norm == "max":
-        norm_values = np.max(data, axis=axis)
+        maxes = nan_reduce("max", xp.abs(data), axis=axis)
+        divisor = xp.expand_dims(maxes, axis=axis)
     elif norm == "bit":
-        pass
+        divisor = xp.abs(data)
     else:
         msg = (
             f"Norm value of {norm} is not supported. "
             f"Supported values are {('l1', 'l2', 'max', 'bit')}"
         )
         raise ValueError(msg)
-    if norm == "bit":
-        new_data = np.divide(
-            data, np.abs(data), out=np.zeros_like(data), where=np.abs(data) != 0
-        )
-    else:
-        expanded_norm = np.expand_dims(norm_values, axis=axis)
-        new_data = np.divide(
-            data, expanded_norm, out=np.zeros_like(data), where=expanded_norm != 0
-        )
-    return self.new(data=new_data)
+    # A zero divisor means there is nothing but zeros and nulls to scale, so
+    # divide those by one; the zeros stay zero and the nulls stay null.
+    one = xp.asarray(1, dtype=divisor.dtype)
+    return data / xp.where(divisor == 0, one, divisor)
 
 
-@patch_function()
+@patch_function(data_type="")
 def standardize(
     self: PatchType,
     dim: str,
@@ -400,6 +529,9 @@ def standardize(
     z = (x - u) / s
     where u is the mean of the training samples or zero if with_mean=False,
     and s is the standard deviation of the training samples or one if with_std=False.
+
+    NaN values are ignored when computing the mean and standard deviation. They
+    remain NaN in the output but do not affect any other sample.
 
     Parameters
     ----------
@@ -420,12 +552,24 @@ def standardize(
     standardized_distance = patch.standardize('distance')
     ```
     """
-    axis = self.get_axis(dim)
-    data = self.data
-    mean = np.mean(data, axis=axis, keepdims=True)
-    std = np.std(data, axis=axis, keepdims=True)
-    new_data = (data - mean) / std
-    return self.new(data=new_data)
+    return Standardize(dim=dim)._apply(self)
+
+
+class Standardize(PatchProcessor):
+    """Remove the mean and scale to unit variance along a dimension."""
+
+    dim: str
+
+    def kernel(self, data, meta, out_meta):
+        """Return the data centred and scaled along its dimension."""
+        axis = meta.get_axis(self.dim)
+        data = _as_float(data)
+        mean = nan_reduce("mean", data, axis=axis, keepdims=True)
+        std = nan_reduce("std", data, axis=axis, keepdims=True)
+        return (data - mean) / std
+
+
+register_implementation("standardize", Standardize)
 
 
 # This is left here to not break compatibility. It also forces `apply_ufunc`
@@ -481,16 +625,20 @@ def dropna(
     # need to iterate each non-dim axis and collapse with func
     axes = set(range(len(patch.shape))) - {axis}
     to_drop = func(to_drop, axis=tuple(axes))
+    if not np.any(to_drop):  # nothing nullish along this dimension
+        return patch
     to_keep = ~to_drop
     assert len(to_keep.shape) == 1
     assert to_keep.shape[0] == patch.data.shape[axis]
     # get slices for trimming data.
-    slices = [slice(None)] * len(patch.dims)
+    # Annotated because the entries are not all slices; ty reads the
+    # list as list[slice] from its initializer otherwise.
+    slices: list[Any] = [slice(None)] * len(patch.dims)
     slices[axis] = to_keep
     new_data = patch.data[tuple(slices)]
     coord = patch.get_coord(dim)
     cm = patch.coords.update(**{dim: coord[to_keep]})
-    attrs = patch.attrs.update(coords={})
+    attrs = patch.attrs
     return patch.new(data=new_data, coords=cm, attrs=attrs)
 
 
@@ -530,6 +678,8 @@ def fillna(patch: PatchType, value, include_inf=True) -> PatchType:
         to_replace = ~np.isfinite(patch.data)
     else:
         to_replace = pd.isnull(patch.data)
+    if not np.any(to_replace):  # nothing nullish to fill
+        return patch
     new_data = patch.data.copy()
     new_data[to_replace] = value
 
@@ -550,6 +700,8 @@ def pad(
 
     Parameters
     ----------
+    patch
+        The patch to pad.
     mode : str, optional
         The mode of padding, by default 'constant'.
     constant_values : scalar , optional
@@ -562,6 +714,10 @@ def pad(
         based on the coordinate's step size. If set to False, or coordinate
         is not evenly sampled, the new coordinates introduced by padding
         will be padded with NaN values.
+    samples : bool, optional
+        If True, the values in kwargs represent samples along a dimension
+        and must be integers. Otherwise, they are assumed to have the same
+        units as the specified dimension, or have units attached.
     **kwargs:
         Used to specify dimension and number of elements,
         either an integer or a tuple (before, after).
@@ -574,6 +730,12 @@ def pad(
         the frequency domain by padding to the next fast fft length after
         2*n - 1 where n is the current dimension length by adding values
         to the end of the axis.
+
+    Notes
+    -----
+    A coordinate measured on a padded dimension grows with it, saying
+    nothing over the samples which were added: NaN or NaT for a number
+    or a time, blank for text, and False for a membership flag.
 
     Examples
     --------
@@ -608,6 +770,11 @@ def pad(
 
     def _get_new_coord(coord, pad_tuple, expand_coords):
         """Get the new coordinate along the expanded axis."""
+        # A pad of no samples leaves the coordinate exactly as it was,
+        # rather than rebuilding it from its values -- which would widen
+        # an integer coordinate to hold a NaN nothing is going to write.
+        if not any(pad_tuple):
+            return coord
         if expand_coords and coord.evenly_sampled:
             new_start = coord.min() - pad_tuple[0] * coord.step
             new_end = coord.max() + (pad_tuple[1] + 1) * coord.step
@@ -624,21 +791,63 @@ def pad(
             added_nan_values = np.pad(
                 old_values, pad_width=pad_tuple, constant_values=null_value
             )
-            new_coord = coord.update(data=added_nan_values)
+            # Units passed rather than updated onto the coordinate: a
+            # coordinate built from new data starts with none, so the
+            # meters a distance was measured in would come off here.
+            new_coord = get_coord(data=added_nan_values, units=coord.units)
         return new_coord
 
     if isinstance(constant_values, Sequence):
         raise ParameterError("constant_values must be a scalar, not a sequence.")
 
+    def _pad_fill(dtype):
+        """What a padded coordinate holds where nothing was measured."""
+        # The spellings a projection onto uncovered channels already
+        # uses: blank text, an unset number, and not a member.
+        if dtype.kind in "US":
+            return ""
+        if dtype.kind == "b":
+            return False
+        return _get_nullish(dtype)
+
+    def _get_associated_coords(pad_tuples):
+        """Grow the coordinates measured on a padded dimension with it."""
+        out = {}
+        for name, coord_dims in patch.coords.dim_map.items():
+            if name in pad_tuples or pad_tuples.keys().isdisjoint(coord_dims):
+                continue
+            widths = [pad_tuples.get(x, (0, 0)) for x in coord_dims]
+            # A pad of no samples is not a pad: `pad(time="fft")` on a
+            # patch already of a fast length asks for one, and widening
+            # an integer coordinate there would change it for nothing.
+            if not any(any(x) for x in widths):
+                continue
+            coord = patch.coords.coord_map[name]
+            values = coord.values
+            # An integer coordinate has to widen to hold the NaN which
+            # says nothing is known there, as the padded dimension's own
+            # does above.
+            if np.issubdtype(values.dtype, np.integer):
+                values = values.astype(np.float64)
+            padded = np.pad(
+                values, pad_width=widths, constant_values=_pad_fill(values.dtype)
+            )
+            grown = get_coord(data=padded, units=coord.units)
+            out[name] = (coord_dims, grown)
+        return out
+
     pad_width = [(0, 0)] * len(patch.shape)
     dimfo = get_dim_axis_value(patch, kwargs=kwargs, allow_multiple=True)
     new_coords = {}
+    pad_tuples = {}
 
     for dim, axis, value in dimfo:
         coord = patch.get_coord(dim, require_evenly_sampled=not samples)
         pad_tuple = _get_pad_tuple(value, samples, coord)
         pad_width[axis] = pad_tuple
+        pad_tuples[dim] = pad_tuple
         new_coords[dim] = _get_new_coord(coord, pad_tuple, expand_coords)
+    new_coords |= _get_associated_coords(pad_tuples)
 
     # Pad data, update coord manager, and return.
     new_data = np.pad(patch.data, pad_width, mode=mode, constant_values=constant_values)
@@ -793,7 +1002,7 @@ def flip(patch, *dims, flip_coords=True):
     return patch.new(data=data, coords=coords)
 
 
-@patch_function()
+@patch_function(data_type="")
 def full(patch, fill_value):
     """
     Return an identical patch with the data replaced by fill_value.
@@ -819,3 +1028,135 @@ def full(patch, fill_value):
     """
     array = np.full(patch.data.shape, fill_value)
     return patch.update(data=array)
+
+
+@patch_function()
+def demedian(patch, dim: str = "time"):
+    """
+    Remove the median along a given dimension of a DASCore patch.
+
+    NaN values are ignored when computing the median, consistent with
+    [Patch.median](`dascore.proc.aggregate.median`). They remain NaN in the
+    output but do not affect any other sample.
+
+    Parameters
+    ----------
+    patch :
+        The patch to remove the median from.
+    dim : str
+        Dimension name (e.g., "time", "distance").
+
+    Example
+    --------
+    >>> import matplotlib.pyplot as plt
+    >>> import dascore as dc
+    >>> import numpy as np
+    >>>
+    >>> patch = dc.get_example_patch('example_event_2')
+    >>> nx,nt = patch.data.shape
+    >>>
+    >>> # Add some periodic common-mode noise
+    >>> x = np.linspace(0, 6 * np.pi, nt)
+    >>> y = np.sin(x) * patch.data.max() / 30
+    >>> Y = y[np.newaxis, :] * np.ones((nx,nt), dtype=float)
+    >>> patch0 = patch + Y
+    >>>
+    >>>
+    >>> # Prepare figure
+    >>> fig, axs = plt.subplots(1, 3, figsize=(20,8), layout='constrained')
+    >>>
+    >>> # Show patch with common-mode noise
+    >>> ax0 = patch0.viz.waterfall(ax = axs[0], show=False)
+    >>> _ = ax0.set_title('Original with common-mode noise');
+    >>>
+    >>> # Show demedian applied patch
+    >>> patch1 = patch0.demedian(dim='distance')
+    >>> ax1 =  patch1.viz.waterfall(ax = axs[1], show=False)
+    >>> _ = ax1.set_title('Removed common-mode noise');
+    >>>
+    >>> # Show difference
+    >>> ax2 = (patch0-patch1).viz.waterfall(ax = axs[2], show=False)
+    >>> _ = ax2.set_title('Difference');
+    >>>
+    >>> plt.show()  # doctest: +SKIP
+    >>> plt.close(fig)
+    """
+    axis = patch.get_axis(dim)
+    data = patch.data
+
+    # Compute median along axis, keep dims for broadcasting
+    med = np.nanmedian(data, axis=axis, keepdims=True)
+
+    new_data = data - med
+
+    # Return a new patch with updated data
+    return patch.new(data=new_data)
+
+
+@patch_function()
+def demean(patch, dim: str = "time"):
+    """
+    Remove the mean along a given dimension of a DASCore patch.
+
+    NaN values are ignored when computing the mean, consistent with
+    [Patch.mean](`dascore.proc.aggregate.mean`). They remain NaN in the output
+    but do not affect any other sample.
+
+    Parameters
+    ----------
+    patch :
+        The patch to remove the mean from.
+    dim : str
+        Dimension name (e.g., "time", "distance").
+
+    Example (note that the example patch is not ideal, but still shows improvements)
+    --------
+    >>> import matplotlib.pyplot as plt
+    >>> import dascore as dc
+    >>> import numpy as np
+    >>>
+    >>> patch = dc.get_example_patch('example_event_2')
+    >>> nx,nt = patch.data.shape
+    >>>
+    >>> # Add some periodic common-mode noise
+    >>> x = np.linspace(0, 6 * np.pi, nt)
+    >>> y = np.sin(x) * patch.data.max() / 30
+    >>> Y = y[np.newaxis, :] * np.ones((nx,nt), dtype=float)
+    >>> patch0 = patch + Y
+    >>>
+    >>>
+    >>> # Prepare figure
+    >>> fig, axs = plt.subplots(1, 3, figsize=(20,8), layout='constrained')
+    >>>
+    >>> # Show patch with common-mode noise
+    >>> ax0 = patch0.viz.waterfall(ax = axs[0], show=False)
+    >>> _ = ax0.set_title('Original with common-mode noise');
+    >>>
+    >>> # Show demean applied patch
+    >>> patch1 = patch0.demean(dim='distance')
+    >>> ax1 =  patch1.viz.waterfall(ax = axs[1], show=False)
+    >>> _ = ax1.set_title('Removed common-mode noise');
+    >>>
+    >>> # Show difference
+    >>> ax2 = (patch0-patch1).viz.waterfall(ax = axs[2], show=False)
+    >>> _ = ax2.set_title('Difference');
+    >>>
+    >>> plt.show()  # doctest: +SKIP
+    >>> plt.close(fig)
+    """
+    return Demean(dim=dim)._apply(patch)
+
+
+class Demean(PatchProcessor):
+    """Remove the mean along a dimension."""
+
+    dim: str = "time"
+
+    def kernel(self, data, meta, out_meta):
+        """Return the data with the mean of each slice taken out."""
+        data = _as_float(data)
+        mean = nan_reduce("mean", data, axis=meta.get_axis(self.dim), keepdims=True)
+        return data - mean
+
+
+register_implementation("demean", Demean)

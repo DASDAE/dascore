@@ -8,13 +8,13 @@ execute:
 This page covers advanced DASCore features. Most users will be fine with only the coordinate material presented in the [patch tutorial](patch.qmd#coords).
 :::
 
-In order to manage coordinate labels and array manipulations, DASCore implements two classes, [BaseCoordinate](`dascore.core.coords.BaseCoord`), which has several associated subclasses corresponding to different types of coordinates, and [CoordManager](`dascore.core.coordmanager.CoordManager`) which manages a group of coordinates. Much like the [`Patch`](`dascore.core.patch.Patch`), instances of both of these classes are immutable (to the extent possible), so they cannot be modified in place but have methods which return new instances.  
+In order to manage coordinate labels and array manipulations, DASCore implements two classes, [`BaseCoord`](`dascore.core.coords.BaseCoord`), which has several associated subclasses corresponding to different types of coordinates, and [CoordManager](`dascore.core.coordmanager.CoordManager`) which manages a group of coordinates. Much like the [`Patch`](`dascore.core.patch.Patch`), instances of both of these classes are immutable (to the extent possible), so they cannot be modified in place but have methods which return new instances.  
 
 # Coordinates
 
 Coordinates usually keep track of labels along an associated dimension of an array, but they can also be independent of array data. They provide methods for slicing, re-ordering, filtering etc. and are used internally by DASCore for such operations.
 
-Much like DASCore's [`Spool`](`dascore.core.spool.BaseSpool`), Coordinates are a collection of classes which implement a common interface. 
+Coordinates are a collection of classes which implement a common interface. 
 
 
 :::{.callout-note}
@@ -50,6 +50,51 @@ random_array = np.random.rand(10)
 random_coord = get_coord(data=random_array)
 ```
 
+String arrays create string-backed coordinates.
+
+```{python}
+import numpy as np
+
+from dascore.core import get_coord
+
+coord = get_coord(data=np.array(["sensor_001", "sensor_002", "sensor_003"]))
+print(type(coord).__name__)
+print(coord.values)
+```
+
+### Segmented Coordinates
+
+[`CoordSegmented`](`dascore.core.coords.CoordSegmented`) preserves monotonic coordinate blocks and the discontinuities between them. It is useful when a logical coordinate contains dropped samples, acquisition gaps, or a sampling-rate change but the corresponding data should remain in one in-memory patch.
+
+Use [`concat_coords(...)`](`dascore.core.coords.concat_coords`) when the blocks are already known:
+
+```{python}
+from dascore.core.coords import concat_coords, get_coord
+
+first = get_coord(start=0.0, stop=5.0, step=1.0, units="m")
+second = get_coord(start=8.0, stop=13.0, step=1.0, units="m")
+segmented = concat_coords(first, second)
+
+print(type(segmented).__name__)
+print(segmented.get_discontinuities("gaps"))
+```
+
+Use [`CoordSegmented.from_array(...)`](`dascore.core.coords.CoordSegmented.from_array`) for an exact, strictly monotonic stored array. The constructor preserves every value and returns the simplest truthful coordinate, so an exactly uniform input becomes a normal `CoordRange` and a wholly irregular input may become a `CoordMonotonicArray`.
+
+```{python}
+import numpy as np
+
+from dascore.core.coords import CoordSegmented
+
+values = np.array([0.0, 1.0, 2.0, 7.0, 8.0, 9.0])
+exact_coord = CoordSegmented.from_array(values, tolerance=0, units="m")
+
+assert np.array_equal(exact_coord.values, values)
+assert len(exact_coord.get_discontinuities("gaps")) == 1
+```
+
+Segmented coordinates have `step=None` because one step cannot describe the entire coordinate. `coord.simplify(tolerance=...)` may replace segments with a simpler fit while bounding how far values move; `coord.snap()` always forces one evenly sampled range and can move interior values without a bound. Use `patch.split_gaps()` to turn a patch with segmented dimensional coordinates into contiguous patches before writing it to a format that cannot store gaps.
+
 ### Update
 
 Update uses the existing coordinate as a template and returns a coordinate with some part modified. 
@@ -69,7 +114,7 @@ coord = get_coord(start=start, stop=stop, step=step)
 new_data = coord.values + np.timedelta64(10, "s")
 coord_new_data = coord.update(data=new_data)
 
-# Update step, keeping length and start but shorting end time.
+# Update step, keeping length and start but shortening end time.
 coord_new_step = coord.update(step=np.timedelta64(1800, 's'))
 
 # Change maximum value, keeping length the same and changing step.
@@ -120,22 +165,24 @@ sorted_data = data[indexer, :]
 ```
 
 ### Snap
-['snap'](`dascore.core.coords.BaseCoord.snap`) is used to calculate an average spacing between samples and "snap" all values to that spacing. If the coordinate is not sorted, it will be sorted in the process. This method should be used with care since it causes some loss in precision and can introduce inaccuracies in down-stream calculations. The min and max of the coordinate remain unchanged. 
+
+[`snap`](`dascore.core.coords.BaseCoord.snap`) replaces coordinate values with an evenly sampled range spanning the same minimum and maximum. This intentionally loses interior precision and should be used only when that idealization is acceptable. Unlike [`sort`](`dascore.core.coords.BaseCoord.sort`), it returns only a new coordinate and no indexer, because it replaces the values rather than permuting them, so for an unsorted coordinate the snapped values no longer label the samples they used to. When data alignment matters, use [`CoordManager.snap`](`dascore.core.coordmanager.CoordManager.snap`), which sorts the coordinate and its associated array together before snapping, or [`Patch.snap_coords(...)`](`dascore.Patch.snap_coords`), which does the same across the selected dimensions of a patch.
 
 ```{python}
 import numpy as np
 
 from dascore.core import get_coord
 
-random_array = np.random.rand(10) 
-random_coord = get_coord(data=random_array)
+values = np.array([0.0, 1.0, 2.2, 3.0])
+irregular_coord = get_coord(data=values)
+snapped_coord = irregular_coord.snap()
 
-sorted_coord, indexer = random_coord.sort()
-
-# The data array can be updated like so:
-data = np.random.rand(10, 20)
-sorted_data = data[indexer, :] 
+assert snapped_coord.evenly_sampled
+assert snapped_coord.min() == irregular_coord.min()
+assert snapped_coord.max() == irregular_coord.max()
 ```
+
+Use `simplify(tolerance=...)` instead when the maximum allowed coordinate movement must be explicit. Most coordinate types are already in their simplest form; this distinction is most useful for segmented coordinates.
 
 
 ### Select
@@ -167,6 +214,51 @@ coord = get_coord(start=0, stop=21, step=1, units='m')
 new_coord, indexer = coord.select((14*ft, 50 * ft))
 print(new_coord) 
 ```
+
+## String Coordinates
+
+String coordinates support exact matching, wildcard matching with `*` and `?`,
+compiled regular expressions, boolean-mask selection, and sorting. They are
+useful for channel names, sensor identifiers, and other categorical labels that
+do not have meaningful numeric spacing.
+
+```{python}
+import numpy as np
+import re
+
+from dascore.core import get_coord
+
+coord = get_coord(data=np.array(["ch_a", "ch_b", "aux_1", "aux_2"]))
+
+selected, indexer = coord.select("ch_b")
+print(selected.values)
+print(indexer)
+
+matched, matched_indexer = coord.select("ch_*")
+print(matched.values)
+print(matched_indexer)
+
+regex_matched, regex_indexer = coord.select(re.compile(r"^aux_\d$"))
+print(regex_matched.values)
+print(regex_indexer)
+
+sorted_coord, sort_indexer = coord.sort()
+print(sorted_coord.values)
+print(sort_indexer)
+```
+
+Unlike numeric, datetime, or timedelta coordinates, string coordinates do not
+support:
+
+- units
+- range-style selection such as `(start, stop)`
+- relative selection
+- range calculations such as `coord_range()`
+
+Selection for string coordinates should use exact values, wildcard patterns,
+compiled regular expressions, or boolean masks. Strings containing `*` or `?`
+are treated as wildcard patterns, so avoid those characters in labels you
+intend to select literally.
 
 ### Units
 
@@ -254,7 +346,7 @@ coord_dict = {
 }
 
 cm_many_coords = get_coord_manager(coords=coord_dict, dims=("dim1", "dim2"))
-print(cm)
+print(cm_many_coords)
 ```
 
 ### Update
@@ -298,8 +390,10 @@ and drop or disassociate coordinates.
 # Disassociate "new_coord" from dimension distance.
 new_cm_3 = new_cm_1.update(new_coord=(None, new_coord))
 
-# Drop coordinate "new_coord".
-new_cm_4 = cm.update(new_coord=None)
+# Drop coordinate "new_coord". Note this must be done on a coord manager
+# which actually has "new_coord"; dropping a missing coord is a no-op.
+new_cm_4 = new_cm_1.update(new_coord=None)
+assert "new_coord" not in new_cm_4.coord_map
 
 # Drop dimension "time".
 new_cm_5 = cm.update(time=None)

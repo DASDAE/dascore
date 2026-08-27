@@ -4,13 +4,12 @@ from __future__ import annotations
 
 import h5py
 import numpy as np
-from h5py import h5r
-from h5py.h5r import Reference
+from h5py.h5r import Reference, dereference
 
 import dascore as dc
-from dascore.compat import array
 from dascore.core.coords import get_coord
 from dascore.exceptions import DASVaderCompatibilityError
+from dascore.io.utils import build_patches, drop_blank_attrs
 from dascore.utils.misc import maybe_get_items, unbyte
 
 # Julia DateTime "instant" values (Dates.value) are milliseconds since
@@ -21,7 +20,7 @@ _JULIA_EPOCH_MS = 62135683200000
 
 attrs_map = {
     "GaugeLength": "gauge_length",
-    "Hostname": "host_name",
+    "Hostname": "interrogator.name",
     "PipelineTracker": "pipeline_tracker",
     "PulseRateFreq": "pulse_rate_frequency",
     "SamplingRate": "sampling_rate",
@@ -77,12 +76,18 @@ def _raise_legacy_ref_error(h5, field_name: str) -> None:
 
 
 def _dereference(h5, value, field_name: str):
-    """Resolve an HDF5 reference, rejecting legacy anonymous DASVader refs."""
+    """Resolve an HDF5 reference or raise a clear compatibility error."""
     if not isinstance(value, Reference):
         return value
-    if h5r.get_name(value, h5.id) is None:
-        _raise_legacy_ref_error(h5, field_name)
-    return h5[value]
+    try:
+        return h5[value]
+    except KeyError:
+        # The high-level lookup fails for some references HDF5 can still
+        # resolve directly, so try that before giving up.
+        try:
+            return h5py.Dataset(dereference(value, h5.id))
+        except Exception:
+            _raise_legacy_ref_error(h5, field_name)
 
 
 # --- Metadata parsing
@@ -117,6 +122,7 @@ def _get_attr_dict(atrib) -> dict:
     """Map DASVader attrib values to PatchAttrs fields."""
     attrs = _dataset_to_dict(atrib)
     attrs = maybe_get_items(attrs, attrs_map)
+    drop_blank_attrs(attrs, ("interrogator.name",))
     attrs["data_category"] = "DAS"
     attrs["data_units"] = "nanostrain"
     return attrs
@@ -179,8 +185,9 @@ def _is_dasvader_jld2(h5) -> bool:
         return False
     # Certain refs that all dasvader files have.
     has_expected = EXPECTED.issubset(set(dtype_names))
-    # Data name can change.
-    has_data = DATA_NAMES & set(dtype_names)
+    # Data name can change. Coerced to a bool so an empty intersection
+    # returns False rather than the empty set the `and` would hand back.
+    has_data = bool(DATA_NAMES & set(dtype_names))
     return has_data and has_expected
 
 
@@ -194,16 +201,11 @@ def _read_dasvader(h5, distance=None, time=None):
     data_name = "data" if "data" in ref_names else next(iter(DATA_NAMES & ref_names))
     # data is a reference here; need to resolve it with h5 File.
     data = _dereference(h5, rec[data_name], data_name)
-    if distance is not None or time is not None:
-        cm, data = cm.select(data, distance=distance, time=time)
-    data = array(data)
-    if not data.size:
-        return []
     attrs = (
         _get_attr_dict(_dereference(h5, rec["atrib"], "atrib"))
         if "atrib" in ref_names
         else {}
     )
-    # attrs["coords"] = cm.to_summary_dict()
-    # attrs["dims"] = cm.dims
-    return [dc.Patch(data=data, coords=cm, attrs=dc.PatchAttrs(**attrs))]
+    return build_patches(
+        cm, data, attrs, selection={"time": time, "distance": distance}
+    )

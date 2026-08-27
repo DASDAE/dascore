@@ -12,8 +12,7 @@ from dascore.utils.downloader import fetch
 @pytest.fixture(scope="module")
 def train_patch():
     """Get an example patch with trains in it."""
-    out = dc.spool(fetch("UoU_lf_urban.hdf5"))[0]
-    return out
+    return dc.spool(fetch("UoU_lf_urban.hdf5"))[0]
 
 
 class TestFilterInteractions:

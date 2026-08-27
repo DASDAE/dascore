@@ -1,0 +1,33 @@
+# Cancel every workflow run that belongs only to a pull request once the pull
+# request closes. This trigger deliberately has no path filter: a PR may start
+# a path-filtered workflow and later revert those files before it is merged.
+name: CancelPRRuns
+
+on:
+  pull_request:
+    types: [closed]
+
+permissions:
+  contents: read
+
+jobs:
+  cancel:
+    name: Cancel ${{ matrix.workflow }}
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        workflow:
+          - CheckPRChangelog
+          - CodSpeed
+          - LintCode
+          - TestCode
+          - TestCodeMinDeps
+          - TestDocBuild
+          - TestFreeThreaded
+          - TestWasm
+    concurrency:
+      group: ${{ matrix.workflow }}-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
+    steps:
+      - name: Confirm cancellation
+        run: echo "Canceled obsolete ${{ matrix.workflow }} runs for pull request ${{ github.event.pull_request.number }}."

@@ -267,6 +267,8 @@ def align_to_coord(
 
     Parameters
     ----------
+    patch
+        The patch to align.
     mode : str
         Determines the output shape of the patch. Options are:
         "full" - Regardless of shift, all original data are preserved.

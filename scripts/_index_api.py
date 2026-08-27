@@ -28,6 +28,17 @@ def _get_file_path(obj):
     return Path(path)
 
 
+def _is_environment_path(path) -> bool:
+    """
+    Return True if the path belongs to an environment nested in the project.
+
+    Virtual environments (e.g. .venv) created inside the repository would
+    otherwise be traversed as if their contents were part of the project.
+    """
+    excluded = {"site-packages", ".venv", "venv", ".pixi", ".tox", ".nox"}
+    return bool(excluded.intersection(Path(path).parts))
+
+
 def _get_base_address(path, base_path):
     """
     Get the base address inherent in the path.
@@ -36,6 +47,8 @@ def _get_base_address(path, base_path):
 
     dascore.core.patch
     """
+    if _is_environment_path(path):
+        return ""
     try:
         out = Path(path).relative_to(Path(base_path))
     except ValueError:
@@ -83,12 +96,35 @@ def _yield_get_submodules(obj, base_path):
             yield mod_name, mod
 
 
+def assert_documenting_this_checkout(module, repo_path=None) -> None:
+    """
+    Raise if the imported module is not the one in this checkout.
+
+    Running a script from the scripts directory puts that directory first on
+    the path, not the working directory, so an editable install elsewhere on
+    the machine wins and the docs describe someone else's branch. Prefix the
+    command with `PYTHONPATH=$PWD` to document the checkout you are in.
+    """
+    if repo_path is None:
+        repo_path = Path(__file__).parent.parent
+    repo_path = Path(repo_path).resolve()
+    module_path = Path(getattr(module, "__file__", "")).resolve()
+    if repo_path in module_path.parents:
+        return
+    msg = (
+        f"{module.__name__} was imported from {module_path}, which is not in "
+        f"{repo_path}. Run the command with PYTHONPATH set to the checkout "
+        f"you mean to document."
+    )
+    raise RuntimeError(msg)
+
+
 def parse_project(obj, key=None):
     """Parse the project create dict of data and data_type."""
 
     def get_type(
         obj, parent_is_class=False
-    ) -> None | Literal["module", "function", "method", "class"]:
+    ) -> Literal["module", "function", "method", "class"] | None:
         """Return a string of the type of object."""
         obj = _unwrap_obj(obj)
         if isinstance(obj, ModuleType):
@@ -164,6 +200,9 @@ def parse_project(obj, key=None):
         # this is something outside of dascore or we have already seen it.
         if str(base_path) not in str(path) or obj_id in data_dict:
             return
+        # skip contents of environments (e.g. .venv) nested in the project.
+        if _is_environment_path(path):
+            return
         # load all the modules first
         if isinstance(obj, ModuleType):
             key = _get_address(obj, path.relative_to(base_path))
@@ -182,7 +221,19 @@ def parse_project(obj, key=None):
             base_address = _get_base_address(path, base_path)
 
             # this is referenced outside of its base address, skip this one.
-            if base_address not in key:
+            # A prefix test rather than a substring one: the address of
+            # dascore/core/inventory.py is a substring of every key under
+            # dascore/core/inventory_loader.py, so a module named after
+            # another would claim as its own everything it merely imports.
+            if key != base_address and not key.startswith(f"{base_address}."):
+                return
+            # A second module-level name bound to the same object (eg
+            # BaseSpool = Spool) is an alias, not its own entity. The
+            # getmembers call above yields names alphabetically, so
+            # BaseSpool would arrive first, claim the page, and leave
+            # every cross ref to Spool dangling.
+            name = key.split(".")[-1]
+            if not parent_is_class and getattr(obj, "__name__", name) != name:
                 return
 
             data_dict[str(id(obj))] = get_data(obj, key, base_path, parent_is_class)
@@ -193,6 +244,8 @@ def parse_project(obj, key=None):
                         continue
                     sub_path = _get_file_path(sub_obj)
                     if str(base_path) not in str(sub_path):
+                        continue
+                    if _is_environment_path(sub_path):
                         continue
                     sub_key = f"{key}.{sub_name}"
                     # make sure this is where the method is defined else skip

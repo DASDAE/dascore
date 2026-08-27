@@ -149,9 +149,11 @@ class TestWienerFilter:
         original_attrs = dict(noisy_patch.attrs)
         result_attrs = dict(result.attrs)
 
-        # Remove history from comparison as it gets updated by patch_function decorator
-        original_attrs.pop("history", None)
-        result_attrs.pop("history", None)
+        # Remove what the patch_function decorator maintains: history, and
+        # the ids which say what was done to the data.
+        for managed in ("history", "processing_id"):
+            original_attrs.pop(managed, None)
+            result_attrs.pop(managed, None)
 
         assert result_attrs == original_attrs
 

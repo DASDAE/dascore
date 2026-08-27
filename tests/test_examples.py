@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import numpy as np
+import pandas as pd
 import pytest
 
 import dascore as dc
-from dascore.examples import EXAMPLE_PATCHES
+import dascore.examples as dc_examples
+from dascore.examples import EXAMPLE_INVENTORIES, EXAMPLE_PATCHES
 from dascore.exceptions import UnknownExampleError
+from dascore.utils.intervals import normalize_value, value_kind
 from dascore.utils.time import to_float
 
 
@@ -24,10 +27,10 @@ class TestGetExamplePatch:
         with pytest.raises(UnknownExampleError, match="No example patch"):
             dc.get_example_patch("NotAnExampleRight????")
 
-    def test_data_file_name(self):
-        """Ensure get_example_spool works on a datafile."""
-        spool = dc.get_example_spool("dispersion_event.h5")
-        assert isinstance(spool, dc.BaseSpool)
+    def test_get_example_patch_data_file_name(self):
+        """Ensure get_example_patch can load file-backed registry entries."""
+        patch = dc.get_example_patch("dispersion_event.h5")
+        assert isinstance(patch, dc.Patch)
 
     @pytest.mark.parametrize("name", EXAMPLE_PATCHES)
     def test_load_example_patch(self, name):
@@ -53,6 +56,142 @@ class TestGetExampleSpool:
         """Ensure get_example_spool works on a datafile."""
         spool = dc.get_example_spool("dispersion_event.h5")
         assert isinstance(spool, dc.BaseSpool)
+
+
+class TestRandomSpool:
+    """The knobs on the random spool example."""
+
+    def test_patches_are_one_length_by_default(self):
+        """Every patch is the same length unless asked otherwise."""
+        spool = dc_examples.random_spool(length=4)
+        assert len({x.shape for x in spool}) == 1
+
+    def test_var_varies_the_lengths(self):
+        """A percent of variability gives the patches a spread of lengths."""
+        spool = dc_examples.random_spool(length=6, var=20)
+        samples = {x.shape[-1] for x in spool}
+        assert len(samples) > 1
+        # A spread, not a scattering: 20% of 2000 samples is a few hundred.
+        assert max(samples) - min(samples) < 2_000
+
+    def test_var_is_seeded(self):
+        """An example which differs run to run is not one."""
+        first = [x.shape for x in dc_examples.random_spool(length=4, var=20)]
+        assert first == [x.shape for x in dc_examples.random_spool(length=4, var=20)]
+
+    def test_var_respects_a_given_shape(self):
+        """The caller's shape sets the channels; only the length varies."""
+        spool = dc_examples.random_spool(length=3, var=20, shape=(7, 50))
+        assert {x.shape[0] for x in spool} == {7}
+        assert all(0 < x.shape[-1] < 150 for x in spool)
+
+
+class TestGetExampleInventory:
+    """Test suite for `get_example_inventory`."""
+
+    def test_default(self):
+        """Ensure calling get_example_inventory with no args returns one."""
+        inventory = dc.get_example_inventory()
+        assert isinstance(inventory, dc.Inventory)
+
+    def test_raises_on_bad_key(self):
+        """Ensure a bad key raises expected error."""
+        with pytest.raises(UnknownExampleError, match="No example inventory"):
+            dc.get_example_inventory("NotAnExampleRight????")
+
+    @pytest.mark.parametrize("name", EXAMPLE_INVENTORIES)
+    def test_load_example_inventory(self, name):
+        """Each registered inventory loads and passes its own checks."""
+        inventory = dc.get_example_inventory(name)
+        assert isinstance(inventory, dc.Inventory)
+        # check returns self, so this both validates and pins that.
+        assert inventory.check() == inventory
+
+
+class TestTunnelInventory:
+    """The tunnel example is the deployment the tunnel recipe builds."""
+
+    @pytest.fixture(scope="class")
+    def inventory(self):
+        """The tunnel example inventory."""
+        return dc.get_example_inventory("tunnel")
+
+    @pytest.fixture(scope="class")
+    def original(self, inventory):
+        """The optical path as it was before the repair."""
+        return inventory.networks[0].fiber_arrays[0].optical_paths[0]
+
+    def test_repair_is_two_epochs_of_one_location(self, inventory):
+        """One location code carries two paths which do not overlap."""
+        paths = inventory.networks[0].fiber_arrays[0].optical_paths
+        assert len(paths) == 2
+        assert len({x.location_code for x in paths}) == 1
+        assert not paths[0].overlaps(paths[1])
+        # The repair spliced two meters of patch cord in.
+        assert paths[1].optical_length == paths[0].optical_length + 2.0
+
+    def test_epochs_are_open_at_the_ends(self, inventory):
+        """The first path runs from the beginning, the second is ongoing."""
+        first, second = inventory.networks[0].fiber_arrays[0].optical_paths
+        assert pd.isnull(first.time_min)
+        assert first.time_max == second.time_min
+        assert pd.isnull(second.time_max)
+
+    def test_geometry_gap_is_a_real_gap(self, inventory, original):
+        """Fiber nobody surveyed gets no position rather than a guess."""
+        crs = inventory.coordinate_reference_system
+        # 1000 m along is slack cable in a tray; 1590 m is down borehole 3.
+        coords = original.coordinates_at(np.array([1000.0, 1590.0]), crs)
+        assert np.isnan(coords[0]).all()
+        assert coords[1][2] == -10.0
+
+    def test_every_label_group_appears(self, original):
+        """A string group and a numeric one, which color differently."""
+        kinds = {}
+        for label in original.labels:
+            kinds.setdefault(label.group, set()).add(
+                value_kind(normalize_value(label.value))
+            )
+        assert kinds == {"section": {"string"}, "borehole": {"numeric"}}
+
+    def test_holds_point_markers(self, original):
+        """Splices and connectors have no length, so they are points."""
+        points = [x for x in original.optical_components if x.optical_length == 0]
+        assert len(points) > 1
+
+    def test_coupling_covers_only_part_of_the_path(self, original):
+        """Partial coverage is legal and is what a coverage plot must show."""
+        assert len({x.coupling_type for x in original.coupling}) == 3
+        covered = sum(x.optical_length for x in original.coupling)
+        assert covered < original.optical_length
+
+    def test_files_are_the_recipe_directory(self):
+        """The example is its authoring files, which the recipe displays."""
+        original = dc_examples.tunnel_inventory_files(repaired=False)
+        repaired = dc_examples.tunnel_inventory_files(repaired=True)
+        assert set(original) < set(repaired)
+        # Before the repair neither its epoch nor its hardware exists.
+        assert not any("@" in x for x in original)
+        assert any("@2024-09-01" in x for x in repaired)
+
+    def test_written_directory_reads_back(self, tmp_path, inventory):
+        """Writing the files and reading them describes the same system."""
+        path = dc_examples.write_tunnel_inventory(tmp_path / "tunnel")
+        loaded = dc.inventory(path)
+        # Not == : an Inventory carries its own resource_id, which is a
+        # fresh uuid on each read, so two reads of one directory differ
+        # in their document identity and in nothing else.
+        assert loaded.networks == inventory.networks
+        assert loaded.resources == inventory.resources
+        assert (
+            loaded.coordinate_reference_system == inventory.coordinate_reference_system
+        )
+
+    def test_unrepaired_directory_holds_one_epoch(self, tmp_path):
+        """The deployment as installed is one path, not two."""
+        path = dc_examples.write_tunnel_inventory(tmp_path / "first", repaired=False)
+        loaded = dc.inventory(path)
+        assert len(loaded.networks[0].fiber_arrays[0].optical_paths) == 1
 
 
 class TestRickerMoveout:
@@ -89,9 +228,9 @@ class TestDeltaPatch:
         assert isinstance(patch, dc.Patch), "delta_patch should return a Patch instance"
 
         dims = patch.dims
-        assert (
-            "time" in dims and "distance" in dims
-        ), "Patch must have 'time' and 'distance' dimensions"
+        assert "time" in dims and "distance" in dims, (
+            "Patch must have 'time' and 'distance' dimensions"
+        )
 
     @pytest.mark.parametrize("dim", ["time", "distance"])
     def test_delta_patch_delta_location(self, dim):
@@ -112,9 +251,9 @@ class TestDeltaPatch:
         # Replace the center value with zero and ensure all zeros remain
         test_data = np.copy(data)
         test_data[mid_idx] = 0
-        assert np.allclose(
-            test_data, 0
-        ), "All other samples should be zero except the center"
+        assert np.allclose(test_data, 0), (
+            "All other samples should be zero except the center"
+        )
 
     @pytest.mark.parametrize("dim", ["time", "distance"])
     def test_delta_patch_with_patch(self, dim):
@@ -134,9 +273,9 @@ class TestDeltaPatch:
         assert data[mid_idx] == 1.0, "Center sample should be 1.0"
         test_data = np.copy(data)
         test_data[mid_idx] = 0
-        assert np.allclose(
-            test_data, 0
-        ), "All other samples should be zero except the center"
+        assert np.allclose(test_data, 0), (
+            "All other samples should be zero except the center"
+        )
 
     @pytest.mark.parametrize("dim", ["lag_time", "distance"])
     def test_delta_patch_with_3d_patch(self, dim):
@@ -155,6 +294,6 @@ class TestDeltaPatch:
         assert data[mid_idx] == 1.0, "Center sample should be 1.0"
         test_data = np.copy(data)
         test_data[mid_idx] = 0
-        assert np.allclose(
-            test_data, 0
-        ), "All other samples should be zero except the center"
+        assert np.allclose(test_data, 0), (
+            "All other samples should be zero except the center"
+        )

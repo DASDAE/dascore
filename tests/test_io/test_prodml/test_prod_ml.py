@@ -7,11 +7,11 @@ import shutil
 import h5py
 import pandas as pd
 import pytest
-import tables
 
 import dascore as dc
 from dascore.core.coords import get_coord
 from dascore.io.core import read
+from dascore.io.prodml.utils import _get_prodml_version_str
 from dascore.utils.downloader import fetch
 
 
@@ -27,7 +27,7 @@ def quantx_v2_example_path():
 def quantx_v2_das_patch(quantx_v2_example_path):
     """Read the QuantXV2 data, return contained DataArray."""
     out = read(quantx_v2_example_path, "prodml")[0]
-    attr_time = out.attrs["time_max"]
+    attr_time = out.summary.get_coord_summary("time").max
     coord_time = out.coords.max("time")
     assert attr_time == coord_time
     return out
@@ -45,21 +45,18 @@ class TestProdMLFile:
     def issue_221_patch_path(self, tmp_path_factory):
         """Ensure dims are correctly ascertained."""
         tmp_path = tmp_path_factory.mktemp("issue_221")
-        path = dc.utils.downloader.fetch("prodml_2.0.h5")
+        path = fetch("prodml_2.0.h5")
         new_path = shutil.copy2(path, tmp_path / "prod_2_monkey_patched.h5")
-        with tables.open_file(new_path, "a") as fi:
+        with h5py.File(new_path, "a") as fi:
             # monkey patch dimensions to simulate issue.
-            new_dims = "time, locus"
-            parent_node = fi.root.Acquisition["Raw[0]"]
-            node = parent_node["RawData"]
-            node._v_attrs.Dimensions = new_dims
+            fi["Acquisition/Raw[0]/RawData"].attrs["Dimensions"] = "time, locus"
         return new_path
 
     @pytest.fixture(scope="class")
     def issue_514_patch_path(self, tmp_path_factory):
         """Make a patch with bad endtime metadata. See #412."""
         tmp_path = tmp_path_factory.mktemp("issue_514")
-        path = dc.utils.downloader.fetch("prodml_2.0.h5")
+        path = fetch("prodml_2.0.h5")
         new_path = shutil.copy2(path, tmp_path / "prod_2_issue_514.h5")
         with h5py.File(new_path, "a") as fi:
             # monkey patch dimensions to simulate issue.
@@ -75,11 +72,6 @@ class TestProdMLFile:
     def silixa_h5_patch(self, idas_h5_example_path):
         """Get the silixa file, return Patch."""
         return dc.spool(idas_h5_example_path)[0]
-
-    def test_read_silixa(self, silixa_h5_patch):
-        """Ensure we can read  Silixa file."""
-        assert isinstance(silixa_h5_patch, dc.Patch)
-        assert silixa_h5_patch.shape
 
     def test_has_gauge_length(self, silixa_h5_patch):
         """Ensure gauge-length is found in patch attrs."""
@@ -111,3 +103,15 @@ class TestReadQuantXV2:
         time = quantx_v2_das_patch.coords.get_array("time")
         dtype = time.dtype
         assert "[ns]" in str(dtype)
+
+
+class TestVersionDetection:
+    """Tests for the ProdML version fingerprint helper."""
+
+    def test_acquisition_without_expected_attrs(self, tmp_path):
+        """An Acquisition group lacking the fingerprint attrs is not ProdML."""
+        path = tmp_path / "not_prodml.h5"
+        with h5py.File(path, "w") as file:
+            file.create_group("Acquisition").attrs["unrelated"] = "x"
+        with h5py.File(path, "r") as file:
+            assert _get_prodml_version_str(file) == ""

@@ -12,6 +12,7 @@ from dascore.constants import PatchType
 from dascore.exceptions import ParameterError
 from dascore.utils.misc import broadcast_for_index, iterate, optional_import
 from dascore.utils.patch import (
+    _get_data_type_from_dims,
     _get_data_units_from_dims,
     _get_dx_or_spacing_and_axes,
     patch_function,
@@ -70,7 +71,7 @@ def _strided_diff(order, patch, axes, dx_or_spacing, step):
     return new_data
 
 
-@patch_function()
+@patch_function(version="1.1")
 def differentiate(
     patch: PatchType,
     dim: str | Sequence[str] | None,
@@ -92,10 +93,10 @@ def differentiate(
         The dimension(s) along which to differentiate. If None differentiates
         over all dimensions.
     order
-        The order of the differentiation operator. Must be a possitive, even
-        integar.
+        The order of the differentiation operator. Must be a positive, even
+        integer.
     step
-        The number of columns/rows to skip for differention.
+        The number of columns/rows to skip for differentiation.
         eg: an array of [a b c d e] uses b and d to calculate diff of c when
         step = 1 and order = 2. When step = 2, a and e are used to calculate
         diff at c.
@@ -104,7 +105,7 @@ def differentiate(
     -----
     For order=2 (the default) numpy's gradient function is used. When
     order != 2, the optional package findiff must be installed in which case
-    order is interpreted as accuracy ("order" means order of differention
+    order is interpreted as accuracy ("order" means order of differentiation
     in that package).
 
     The second order first derivative, for an evenly spaced coordinate,
@@ -114,8 +115,18 @@ def differentiate(
     \hat{f}(x) = \frac{f(x + dx) - f(x - dx)}{2dx} + O({dx}^2)
     $$
 
-    Where $\hat{f}(x)$ is the estiamted derivative of $f$ at $x$, $dx$ is
+    Where $\hat{f}(x)$ is the estimated derivative of $f$ at $x$, $dx$ is
     the sample spacing, and $O$ is the error term.
+
+    The output `data_type` is mapped through the pairs a derivative is
+    known to relate: along `time` displacement, velocity and acceleration
+    follow one another and strain becomes strain_rate (phase becomes
+    phase_rate); along `distance` motion becomes strain, which is what
+    [velocity_to_strain_rate](`dascore.Patch.velocity_to_strain_rate`)
+    does. A derivative the pairs cannot name all the way through --
+    of an unknown `data_type`, or over both dimensions at once -- is a
+    quantity with no label here, and clears `data_type` rather than
+    leaving a stale one on it.
 
     Examples
     --------
@@ -142,7 +153,8 @@ def differentiate(
     # This avoids an extra copy of the array so probably merits its own case.
     else:
         new_data = _get_diff(order, patch.data, axes, dx_or_spacing)
-    # update units
+    # update units and what the data now is
     data_units = _get_data_units_from_dims(patch, dims, truediv)
-    attrs = patch.attrs.update(data_units=data_units)
+    data_type = _get_data_type_from_dims(patch, dims, differentiate=True)
+    attrs = patch.attrs.update(data_units=data_units, data_type=data_type)
     return patch.new(data=new_data, attrs=attrs)

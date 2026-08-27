@@ -299,7 +299,7 @@ def _dim_values_to_samples(
 
 
 def _normalize_overlap(
-    overlap: int | Mapping[str, Any] | None,
+    overlap: Any,
     dims: tuple[str, ...],
     windows: tuple[int, ...],
 ) -> tuple[dict[str, Any], frozenset[str]]:
@@ -310,10 +310,15 @@ def _normalize_overlap(
     if isinstance(overlap, Mapping):
         extra = set(overlap) - set(dims)
         if extra:
-            msg = f"overlap contains dimensions not being filtered: {sorted(extra)}"
+            names = sorted(map(str, extra))
+            msg = f"overlap contains dimensions not being filtered: {names}"
             raise ParameterError(msg)
         return defaults | dict(overlap), frozenset(set(dims) - set(overlap))
-    return {dim: int(overlap) for dim in dims}, frozenset()
+    # Uncoerced: the value the caller gave is read in coordinate units
+    # unless samples says otherwise, and int() of a timedelta64 or a
+    # fractional second is not the overlap they asked for. Only the
+    # defaults above are sample counts, which is what the returned set says.
+    return dict.fromkeys(dims, overlap), frozenset()
 
 
 def _validate_window_and_overlap(
@@ -352,7 +357,9 @@ def _get_engine(engine: _AdaptiveSpectralEngine, selected_ndim: int) -> Callable
         msg = "engine='numba' currently supports exactly two selected dimensions."
         raise ParameterError(msg)
     try:
-        from dascore.proc._adaptive_spectral_filter_numba import (
+        # Deferred: the numba engine is optional, and importing it eagerly
+        # would make numba and rocket-fft required to import dascore.
+        from dascore.proc._adaptive_spectral_filter_numba import (  # noqa: PLC0415
             _NUMBA_ENGINE_AVAILABLE,
             _adaptive_spectral_filter_numba,
         )
@@ -379,7 +386,7 @@ def _get_engine(engine: _AdaptiveSpectralEngine, selected_ndim: int) -> Callable
 def adaptive_spectral_filter(
     patch: PatchType,
     *,
-    overlap: int | Mapping[str, Any] | None = None,
+    overlap: Any = None,
     exponent: float = 0.3,
     normalize_power: bool = False,
     samples: bool = False,

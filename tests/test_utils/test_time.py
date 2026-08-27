@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+import warnings
+from datetime import date, datetime, timedelta
+from decimal import Decimal
 
 import numpy as np
 import pandas as pd
@@ -10,11 +12,17 @@ import pytest
 
 import dascore as dc
 from dascore.compat import random_state
-from dascore.exceptions import TimeError
+from dascore.exceptions import TimeError, UnitError
+
+try:
+    import pyarrow
+except ImportError:
+    pyarrow = None
 from dascore.utils.time import (
-    get_max_min_times,
     is_datetime64,
     is_timedelta64,
+    saturate_add,
+    saturate_subtract,
     to_datetime64,
     to_float,
     to_int,
@@ -41,6 +49,13 @@ class TestToDateTime64:
         float_array = input_datetime64.astype(np.float64) / 1_000_000_000
         out = to_datetime64(float_array)
         assert np.all(input_datetime64 == out)
+
+    def test_float_array_preserves_ns_offsets(self):
+        """Float datetimes should preserve representable nanosecond offsets."""
+        expected = np.array(["2026-06-03T15:18:13.422442752"], dtype="datetime64[ns]")
+        float_array = expected.astype(np.float64) / 1_000_000_000
+        out = to_datetime64(float_array)
+        assert np.all(expected == out)
 
     def test_single_float(self):
         """Ensure a single float can be converted to datetime."""
@@ -70,7 +85,7 @@ class TestToDateTime64:
             assert datestr in str(el)
 
     def test_datetime64(self):
-        """A datetitme64 should remain thus and equal."""
+        """A datetime64 should remain thus and equal."""
         d_time = to_datetime64("2020-01-01")
         out = to_datetime64(d_time)
         assert d_time == out
@@ -78,6 +93,11 @@ class TestToDateTime64:
     def test_none(self):
         """None should return NaT."""
         out = to_datetime64(None)
+        assert pd.isnull(out)
+
+    def test_pandas_nat(self):
+        """Pandas NaT should return numpy NaT."""
+        out = to_datetime64(pd.NaT)
         assert pd.isnull(out)
 
     def test_pandas_timestamp(self):
@@ -157,7 +177,7 @@ class TestToDateTime64:
         assert out.dtype == np.dtype("<M8[ns]")
 
     def test_series(self):
-        """Ensure a series od datatime64 works."""
+        """Ensure a series of datetime64 works."""
         ser = pd.Series(to_datetime64(["2020-01-12", "2024-01-02"]))
         out = to_datetime64(ser)
         assert out.equals(ser)
@@ -168,6 +188,28 @@ class TestToDateTime64:
         out = to_datetime64(dt)
         assert isinstance(out, np.datetime64)
         assert out == to_datetime64("2021-01-02")
+
+    def test_date(self):
+        """Ensure a date works, being the instant its day starts."""
+        out = to_datetime64(date.fromisoformat("2021-01-02"))
+        assert isinstance(out, np.datetime64)
+        assert out == to_datetime64("2021-01-02")
+
+    def test_date_does_not_shadow_datetime(self):
+        """A datetime is a date, so it must keep its own handler."""
+        stamp = datetime.fromisoformat("2021-01-02T03:04:05")
+        assert to_datetime64(stamp) == to_datetime64("2021-01-02T03:04:05")
+
+    @pytest.mark.parametrize("iso", ["2500-01-01", "1000-01-01"])
+    def test_date_outside_the_representable_range(self, iso):
+        """A datetime64 wraps silently, so such a date is refused."""
+        with pytest.raises(ValueError, match="outside the range"):
+            to_datetime64(date.fromisoformat(iso))
+
+    @pytest.mark.parametrize("iso", ["2262-04-11", "1677-09-22"])
+    def test_the_outermost_representable_days(self, iso):
+        """The check refuses what wraps without refusing what does not."""
+        assert to_datetime64(date.fromisoformat(iso)) == to_datetime64(iso)
 
     def test_unsupported_type(self):
         """Ensure unsupported types raise."""
@@ -201,6 +243,16 @@ class TestToDateTime64:
         )
         assert np.all(out == expected)
 
+    @pytest.mark.skipif(pyarrow is None, reason="pyarrow is not installed")
+    def test_arrow_backed_string_array(self):
+        """Which backing pandas gives text is not the caller's choice."""
+        arr = pd.array(self.date_strs, dtype="string[pyarrow]")
+        out = to_datetime64(arr)
+        expected = np.array([dc.to_datetime64(x) for x in self.date_strs]).astype(
+            "datetime64[ns]"
+        )
+        assert np.all(out == expected)
+
 
 class TestToTimeDelta64:
     """Tests for creating timedeltas."""
@@ -222,9 +274,9 @@ class TestToTimeDelta64:
         assert out == np.timedelta64(1_000_000_000, "ns")
 
     def test_float_array(self):
-        """Ensure an array of flaots can be converted to ns timedelta."""
+        """Ensure an array of floats can be converted to ns timedelta."""
         ar = [1.0, 0.000000001, 0.001]
-        expected = np.array([1 * 10**9, 1, 1 * 10**6], "timedelta64")
+        expected = np.array([1 * 10**9, 1, 1 * 10**6], "timedelta64[ns]")
         out = to_timedelta64(ar)
         assert np.all(out == expected)
 
@@ -236,7 +288,7 @@ class TestToTimeDelta64:
         out = to_timedelta64(expected)
         assert np.equal(out, expected).all()
 
-    def test_timedetla64(self):
+    def test_timedelta64(self):
         """Test for passing a time delta."""
         td = to_timedelta64(123)
         out = np.timedelta64(123, "s")
@@ -287,6 +339,10 @@ class TestToTimeDelta64:
             expected = -to_timedelta64(abs(val))
             assert out == expected or (pd.isnull(out) and pd.isnull(expected))
 
+    def test_negative_example_uses_timedelta_function(self):
+        """The negative-number example should demonstrate to_timedelta64."""
+        assert "dc.to_timedelta64(-10.5)" in to_timedelta64.__doc__
+
     def test_negative_int(self):
         """Negative ints should be a symmetric operation."""
         floats_to_test = [1, 10, 100]
@@ -302,15 +358,33 @@ class TestToTimeDelta64:
         assert isinstance(out, np.timedelta64)
         assert out == to_timedelta64(3600)
 
+    def test_series(self):
+        """A Series converts to timedeltas without losing its index."""
+        ser = pd.Series([1.0, 2.0], index=["first", "second"])
+        out = to_timedelta64(ser)
+        expected = pd.Series(to_timedelta64(ser.values), index=ser.index)
+        pd.testing.assert_series_equal(out, expected)
+
     def test_pandas_string_array(self):
         """Ensure pandas StringArray converts to timedelta64[ns]."""
         arr = pd.array(["1s", "2s", None], dtype="string")
         out = to_timedelta64(arr)
         expected = np.array(
-            [np.timedelta64(1, "s"), np.timedelta64(2, "s"), np.timedelta64("NaT")]
+            [
+                np.timedelta64(1, "s"),
+                np.timedelta64(2, "s"),
+                np.timedelta64("NaT", "ns"),
+            ]
         ).astype("timedelta64[ns]")
         assert np.all(out[:2] == expected[:2])
         assert pd.isnull(out[2])
+
+    @pytest.mark.skipif(pyarrow is None, reason="pyarrow is not installed")
+    def test_arrow_backed_string_array(self):
+        """A string column is arrow-backed wherever pyarrow is installed."""
+        arr = pd.array(["1s", "2s"], dtype="string[pyarrow]")
+        out = to_timedelta64(arr)
+        assert np.all(out == np.array([1, 2]).astype("timedelta64[s]"))
 
     def test_unsupported_type(self):
         """Ensure unsupported types raise."""
@@ -332,11 +406,42 @@ class TestToTimeDelta64:
         assert pd.isnull(out1)
         assert pd.isnull(out2)
 
+    def test_none_nat_no_warnings(self):
+        """None should return a typed NaT without warnings."""
+        with warnings.catch_warnings(record=True) as record:
+            warnings.simplefilter("always")
+            out = to_timedelta64(None)
+        assert pd.isnull(out)
+        assert not record
+        assert out.dtype == np.dtype("timedelta64[ns]")
+
     def test_nat_array(self):
         """Ensure an array of NaT works."""
         ar = np.array([to_timedelta64("NaT")] * 4)
         out = to_timedelta64(ar)
         assert np.all(pd.isnull(out))
+
+    @pytest.mark.filterwarnings(
+        "error:The 'generic' unit for NumPy timedelta is deprecated:DeprecationWarning"
+    )
+    def test_null_values_use_explicit_timedelta_unit(self):
+        """Null-like values should not create generic-unit timedeltas."""
+        assert pd.isnull(to_timedelta64(None))
+        assert pd.isnull(to_timedelta64("NaT"))
+
+        out = to_timedelta64([None, 1.0])
+
+        assert out.dtype == np.dtype("timedelta64[ns]")
+        assert pd.isnull(out[0])
+        assert out[1] == np.timedelta64(1, "s")
+
+    def test_non_finite_values_are_nat(self):
+        """Infinite and NaN values should not overflow during conversion."""
+        out = to_timedelta64([np.inf, -np.inf, np.nan, 1.0])
+
+        assert out.dtype == np.dtype("timedelta64[ns]")
+        assert np.all(pd.isnull(out[:3]))
+        assert out[3] == np.timedelta64(1, "s")
 
     def test_array_of_datetimes(self, random_patch):
         """Ensure datetime64 array can be converted to timedelta array."""
@@ -356,6 +461,40 @@ class TestToTimeDelta64:
             time = to_timedelta64(array_no_nan)
             assert np.issubdtype(time.dtype, "m8")
 
+    @pytest.mark.parametrize("unit", ("D", "s", "ms", "ns"))
+    def test_datetime_array_is_epoch_offset(self, unit):
+        """A datetime becomes its offset from the epoch, whatever its unit."""
+        value = np.datetime64("2020-01-01", unit)
+        expected = np.timedelta64(1577836800, "s")
+        assert to_timedelta64(np.array([value])) == expected
+        assert to_timedelta64(np.array(value)) == expected
+
+
+class TestDegenerateArrays:
+    """Tests for 0-D array inputs to the array converters."""
+
+    values = (
+        np.datetime64("2020-01-01", "s"),
+        np.timedelta64(5, "s"),
+        5.0,
+        5,
+    )
+
+    @pytest.mark.parametrize("func", (to_datetime64, to_timedelta64))
+    @pytest.mark.parametrize("value", values)
+    def test_matches_length_one_array(self, func, value):
+        """A 0-D array converts like the length-one array it stands for."""
+        out = func(np.array(value))
+        assert np.shape(out) == ()
+        assert out == func(np.array([value]))[0]
+
+    @pytest.mark.parametrize("func", (to_datetime64, to_timedelta64))
+    def test_nan_becomes_nat(self, func):
+        """A 0-D NaN converts to NaT rather than an epoch value."""
+        out = func(np.array(np.nan))
+        assert np.shape(out) == ()
+        assert pd.isnull(out)
+
 
 class TestToInt:
     """Tests for converting time-like types to ints, or passing through reals."""
@@ -369,6 +508,13 @@ class TestToInt:
         """Ensure int ns is returned for datetime64."""
         out = to_int(to_datetime64("1970-01-01") + np.timedelta64(1, "ns"))
         assert out == 1
+
+    def test_series(self):
+        """A datetime Series converts to integer ns and preserves its index."""
+        ser = pd.Series(to_datetime64(["1970-01-01", "2000-01-01"]))
+        ser.index = ["first", "second"]
+        out = to_int(ser)
+        pd.testing.assert_series_equal(out, ser.astype(np.int64))
 
     def test_timedelta64_array(self):
         """Ensure int ns is returned for datetime64."""
@@ -429,6 +575,63 @@ class TestToInt:
         assert np.issubdtype(out.dtype, np.integer)
 
 
+class TestSaturateTime:
+    """Tests for saturating datetime and timedelta operations."""
+
+    class _OverflowingAdd:
+        """Object which forces the saturating fallback path."""
+
+        def __add__(self, other):
+            raise OverflowError
+
+        def __sub__(self, other):
+            raise OverflowError
+
+    def test_datetime_add_saturates_upper_bound(self):
+        """Adding past datetime64 max should clamp to max."""
+        limits = np.iinfo(np.int64)
+        dt = np.array(int(limits.max) - 1).astype("datetime64[ns]")
+        out = saturate_add(dt, np.timedelta64(5, "ns"))
+        expected = np.array(int(limits.max)).astype("datetime64[ns]")
+        assert out == expected
+
+    def test_datetime_subtract_saturates_lower_bound(self):
+        """Subtracting past datetime64 min should clamp to min."""
+        limits = np.iinfo(np.int64)
+        dt = np.array(int(limits.min) + 1).astype("datetime64[ns]")
+        out = saturate_subtract(dt, np.timedelta64(5, "ns"))
+        expected = np.array(int(limits.min) + 1).astype("datetime64[ns]")
+        assert out == expected
+
+    def test_datetime_ops_preserve_normal_values(self):
+        """Normal datetime arithmetic should match numpy time arithmetic."""
+        dt = np.datetime64("2020-01-01", "ns")
+        delta = np.timedelta64(5, "s")
+        assert saturate_add(dt, delta) == dt + delta
+        assert saturate_subtract(dt, delta) == dt - delta
+
+    def test_timedelta_ops_saturate(self):
+        """Timedelta64 values should also saturate at int64 bounds."""
+        limits = np.iinfo(np.int64)
+        td = np.array(int(limits.max) - 1).astype("timedelta64[ns]")
+        out = saturate_add(td, np.timedelta64(5, "ns"))
+        expected = np.array(int(limits.max)).astype("timedelta64[ns]")
+        assert out == expected
+
+    def test_datetime_array_saturates(self):
+        """Arrays should saturate overflowing entries and preserve normal ones."""
+        limits = np.iinfo(np.int64)
+        dt = np.array([int(limits.max) - 1, 0]).astype("datetime64[ns]")
+        out = saturate_add(dt, np.timedelta64(5, "ns"))
+        expected = np.array([int(limits.max), 5]).astype("datetime64[ns]")
+        assert np.all(out == expected)
+
+    def test_unsupported_type_raises_after_overflow(self):
+        """Unsupported values should still raise from the fallback path."""
+        with pytest.raises(NotImplementedError):
+            saturate_add(self._OverflowingAdd(), np.timedelta64(5, "ns"))
+
+
 class TestIsDateTime:
     """Ensure is_datetime64 detects datetimes."""
 
@@ -449,7 +652,7 @@ class TestIsDateTime:
     def test_datetime_series(
         self,
     ):
-        """is_datettime should work with a pandas series."""
+        """is_datetime should work with a pandas series."""
         array = to_datetime64(["1990-01-01", "2010-01-01T12:23:22"])
         ser = pd.Series(array)
         assert is_datetime64(ser)
@@ -469,6 +672,26 @@ class TestToFloat:
         """Ensure a single float gets converted to float."""
         assert to_float(1.0) == 1.0
         assert to_float(5) == 5.0
+
+    def test_unregistered_float_able(self):
+        """Anything float() understands still reaches the fallback."""
+        assert to_float(Decimal("3")) == 3.0
+        assert to_float("1.5") == 1.5
+
+    def test_timestamp_uses_registration(self):
+        """Timestamp must dispatch, not fall through to float()."""
+        # float(pd.Timestamp(...)) raises, so reaching the fallback would
+        # turn this into a TypeError rather than seconds from the epoch.
+        stamp = pd.Timestamp("1970-01-02")
+        assert to_float(stamp) == pytest.approx(86400.0)
+        with pytest.raises(TypeError):
+            float(stamp)
+
+    def test_container_return_types(self):
+        """A Series stays a Series; other sequences become arrays."""
+        assert isinstance(to_float(pd.Series([1.0, 2.0])), pd.Series)
+        for seq in ([1.0, 2.0], (1.0, 2.0), np.arange(2.0)):
+            assert isinstance(to_float(seq), np.ndarray)
 
     def test_numerical_array(self):
         """Tests for numerical arrays."""
@@ -526,6 +749,39 @@ class TestToFloat:
         assert isinstance(out1, pd.Series)
         assert isinstance(out2, pd.Series)
 
+    def test_time_quantity(self):
+        """A time quantity converts to its duration in seconds."""
+        assert to_float(dc.get_quantity("2 s")) == 2.0
+        assert to_float(dc.get_quantity("2 min")) == 120.0
+        assert to_float(dc.get_quantity("500 ms")) == 0.5
+
+    def test_time_quantity_array(self):
+        """An array-valued time quantity keeps its shape."""
+        quant = np.array([1.0, 2.0]) * dc.get_quantity("min")
+        out = to_float(quant)
+        assert np.allclose(out, [60.0, 120.0])
+
+    def test_time_quantity_returns_float(self):
+        """An integer magnitude is still widened to float."""
+        assert isinstance(to_float(dc.get_quantity("2 s")), float)
+
+    @pytest.mark.parametrize("value", ("10 m", "25 MB", "50%", "1 strain", "5", "1 Hz"))
+    def test_non_time_quantity_raises(self, value):
+        """Only time quantities have a float representation."""
+        with pytest.raises(UnitError, match="only time quantities"):
+            to_float(dc.get_quantity(value))
+
+    def test_data_size_is_not_silently_converted(self):
+        """
+        Guard the bits trap.
+
+        pint's `__float__` converts a dimensionless quantity to base
+        units, and information's base unit is the bit, so bytes used to
+        come back eight times too large instead of raising.
+        """
+        with pytest.raises(UnitError):
+            to_float(dc.get_quantity("25 MB"))
+
 
 class TestIsTimeDelta:
     """Test suite for determining time deltas."""
@@ -551,14 +807,3 @@ class TestIsTimeDelta:
         d2 = np.array([1, 2]).astype("timedelta64[ms]").dtype
         assert not is_timedelta64(d1)
         assert is_timedelta64(d2)
-
-
-class TestGetmaxMinTimes:
-    """Tests for max_min fetching."""
-
-    def test_raises_bad_value(self):
-        """Simple test to make sure error is raised if unordered tuple."""
-        t1 = to_datetime64("2020-01-01")
-        t2 = to_datetime64("1994-01-01")
-        with pytest.raises(ValueError):
-            get_max_min_times((t1, t2))

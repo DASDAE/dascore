@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 
 import dascore as dc
-from dascore.exceptions import UnitError
+from dascore.exceptions import ParameterError, UnitError
 from dascore.units import m
 from dascore.utils.time import to_float
 
@@ -182,7 +182,18 @@ class TestCorrelateInternal:
         out2 = patch.correlate(distance=np.array([1, 2]) * m)
         assert isinstance(out2, dc.Patch)
 
-    def test_lag_deprecated(self, corr_patch):
-        """Ensure the lag parameter is deprecated."""
-        with pytest.warns(DeprecationWarning):
+    def test_lag_removed(self, corr_patch):
+        """Ensure the removed lag parameter is rejected."""
+        with pytest.raises(TypeError, match="lag"):
             corr_patch.correlate(time=1, lag=10, samples=True)
+
+
+class TestCorrelateErrors:
+    """Tests for correlate input validation."""
+
+    def test_non_2d_patch_raises(self):
+        """Correlate requires a 2D patch."""
+        coord = dc.get_coord(start=0, step=1, stop=10)
+        patch_1d = dc.Patch(np.arange(10.0), coords={"time": coord}, dims=("time",))
+        with pytest.raises(ParameterError, match="2D patch"):
+            patch_1d.correlate(time=0, samples=True)

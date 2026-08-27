@@ -8,6 +8,7 @@ import pytest
 
 import dascore as dc
 import dascore.proc.coords
+from dascore.config import config_context
 from dascore.exceptions import ParameterError
 from dascore.units import m
 from dascore.utils.misc import all_close
@@ -80,6 +81,16 @@ class TestRolling:
         expected = vals[start :: self.step, None]
         assert np.allclose(out.data, expected)
 
+    def test_apply_with_overlap(self, range_patch):
+        """Ensure rolling supports overlap end-to-end."""
+        step = range_patch.get_coord("distance").step
+        window = self.window * step
+        overlap = (self.window - self.step) * step
+        overlap_out = range_patch.rolling(distance=window, overlap=overlap).mean()
+        step_out = range_patch.rolling(distance=window, step=self.step * step).mean()
+        assert overlap_out.shape == step_out.shape
+        assert all_close(overlap_out, step_out)
+
     def test_window_size_one(self, random_patch):
         """Ensure we can get a window size of one."""
         time_step = random_patch.get_coord("time").step
@@ -139,11 +150,11 @@ class TestRolling:
         last_label = np.take(out.data, 0, axis=time_ax)
         assert np.all(np.isnan(last_label))
 
-    @pytest.mark.parametrize("_", list(range(5)))
-    def test_compare_to_pandas(self, range_patch, _):
+    def test_compare_to_pandas(self, range_patch):
         """Test the apply method of PatchRoller when distance coordinate is entered
         and the first axis is distance.
         """
+        # Seeded, so the five trials this used to run were one trial five times.
         random = np.random.RandomState(42)
         patch = range_patch
         axis = patch.get_axis("distance")
@@ -151,7 +162,7 @@ class TestRolling:
         window = random.randint(1, patch.shape[axis])
         step = random.randint(1, patch.shape[axis])
         # setup patch and apply mean.
-        channel_spacing = patch.attrs["distance_step"]
+        channel_spacing = patch.coords["distance"].step
         roller = patch.rolling(
             distance=(window * channel_spacing) * m,
             step=(step * channel_spacing) * m,
@@ -199,6 +210,121 @@ class TestRolling:
         patch_1 = roll1.apply(np.sum)
         patch_2 = roll2.apply(np.sum)
         assert patch_2.shape == patch_1.shape
+
+    def test_history_disabled(self, random_patch):
+        """Rolling history should not append when patch history is disabled."""
+        time_step = random_patch.get_coord("time").step
+        expected = random_patch.attrs.history
+        with config_context(patch_history="disabled"):
+            out = random_patch.rolling(time=4 * time_step).mean()
+        assert out.attrs.history == expected
+
+    def test_numpy_apply_with_args_kwargs(self, random_patch):
+        """Ensure numpy rolling apply supports extra function arguments."""
+
+        def percentile_plus(frame, q, offset=0, axis=None):
+            """Get percentile with an offset."""
+            return np.percentile(frame, q, axis=axis) + offset
+
+        dt = random_patch.get_coord("time").step
+        out = random_patch.rolling(time=10 * dt, step=10 * dt, engine="numpy").apply(
+            percentile_plus, 80, offset=1
+        )
+        expected = random_patch.rolling(
+            time=10 * dt, step=10 * dt, engine="numpy"
+        ).apply(lambda frame, axis=None: np.percentile(frame, 80, axis=axis) + 1)
+        assert all_close(out, expected)
+
+    def test_pandas_apply_with_args_kwargs(self):
+        """Ensure pandas rolling apply supports extra function arguments."""
+
+        def percentile_plus(frame, q, offset=0, axis=None):
+            """Get percentile with an offset."""
+            return np.percentile(frame, q, axis=axis) + offset
+
+        # A small patch: pandas applies a python function per window, so this
+        # test's cost is the number of windows, not what is in them.
+        patch = dc.get_example_patch("random_das", shape=(30, 200))
+        dt = patch.get_coord("time").step
+        out = patch.rolling(time=10 * dt, step=10 * dt, engine="pandas").apply(
+            percentile_plus, 80, offset=1
+        )
+        expected = patch.rolling(time=10 * dt, step=10 * dt, engine="pandas").apply(
+            lambda frame: np.percentile(frame, 80) + 1
+        )
+        assert all_close(out, expected)
+
+
+class TestRollingMetadata:
+    """Ensure rolling output carries over the input patch's metadata."""
+
+    @pytest.fixture(scope="class")
+    def unit_patch(self, random_patch_with_lat_lon):
+        """A patch with units set on its data and all of its coords."""
+        patch = random_patch_with_lat_lon
+        return patch.set_units("strain", distance="m", time="s", latitude="deg")
+
+    @pytest.mark.parametrize("engine", ("numpy", "pandas"))
+    def test_coords_unchanged_without_step(self, random_patch, engine):
+        """Without a step the rolling dim is unchanged, so are the coords."""
+        out = random_patch.rolling(time=10, samples=True, engine=engine).mean()
+        assert out.coords == random_patch.coords
+
+    @pytest.mark.parametrize("engine", ("numpy", "pandas"))
+    def test_units_preserved(self, unit_patch, engine):
+        """Data units and units of every coord should survive rolling."""
+        out = unit_patch.rolling(time=10, samples=True, engine=engine).mean()
+        assert out.attrs.data_units == unit_patch.attrs.data_units
+        for name in unit_patch.coords.coord_map:
+            assert out.get_coord(name).units == unit_patch.get_coord(name).units
+
+    @pytest.mark.parametrize("engine", ("numpy", "pandas"))
+    def test_attrs_preserved(self, random_patch, engine):
+        """Non-coordinate attrs should be unaffected by rolling."""
+        patch = random_patch.update_attrs(tag="bob", station="wat")
+        out = patch.rolling(time=10, samples=True, engine=engine).mean()
+        assert out.attrs.tag == "bob"
+        assert out.attrs.station == "wat"
+
+    # The numpy engine routes its reductions through apply, pandas does not.
+    @pytest.mark.parametrize(
+        "engine,suffix", (("numpy", ".apply(mean)"), ("pandas", ".mean()"))
+    )
+    def test_history_appended(self, random_patch, engine, suffix):
+        """A single history entry naming the operation should be added."""
+        out = random_patch.rolling(time=10, samples=True, engine=engine).mean()
+        history = list(out.attrs.history)
+        assert len(history) == len(random_patch.attrs.history) + 1
+        expected = (
+            f"rolling(time=10, step=1, overlap=None, "
+            f"center=False, engine={engine}){suffix}"
+        )
+        assert history[-1] == expected
+
+    @pytest.mark.parametrize("engine", ("numpy", "pandas"))
+    def test_non_dim_coords_preserved(self, random_patch_with_lat_lon, engine):
+        """Coords which don't change shape should be kept as they were."""
+        patch = random_patch_with_lat_lon
+        out = patch.rolling(time=10, samples=True, engine=engine).mean()
+        assert set(out.coords.coord_map) == set(patch.coords.coord_map)
+        for name in set(patch.coords.coord_map) - {"time"}:
+            assert out.get_coord(name) == patch.get_coord(name)
+            assert np.array_equal(out.get_array(name), patch.get_array(name))
+
+    @pytest.mark.parametrize("engine", ("numpy", "pandas"))
+    @pytest.mark.parametrize("step", (1, 3))
+    def test_history_is_tuple(self, random_patch, engine, step):
+        """
+        History must stay a tuple.
+
+        The step==1 path uses model_copy, which does no type coercion, so a
+        list would silently produce attrs unequal to the validated form.
+        """
+        out = random_patch.rolling(
+            time=10, samples=True, step=step, engine=engine
+        ).mean()
+        assert isinstance(out.attrs.history, tuple)
+        assert out.attrs == out.attrs.update(history=out.attrs.history)
 
 
 class TestNumpyVsPandasRolling:
@@ -254,9 +380,9 @@ class TestNumpyVsPandasRolling:
         ).sum()
         numpy_isnan = np.isnan(numpy_out.data)
         pandas_isnan = np.isnan(pandas_out.data)
-        assert np.all(
-            np.equal(numpy_isnan, pandas_isnan)
-        ), "The NaN indices do not match"
+        assert np.all(np.equal(numpy_isnan, pandas_isnan)), (
+            "The NaN indices do not match"
+        )
 
     def test_center_same_stepped(self, range_patch):
         """Ensure center values are handled the same."""
@@ -269,9 +395,9 @@ class TestNumpyVsPandasRolling:
         ).sum()
         numpy_isnan = np.isnan(numpy_out.data)
         pandas_isnan = np.isnan(pandas_out.data)
-        assert np.all(
-            np.equal(numpy_isnan, pandas_isnan)
-        ), "The NaN indices do not match"
+        assert np.all(np.equal(numpy_isnan, pandas_isnan)), (
+            "The NaN indices do not match"
+        )
 
     def test_dimension_order(self, range_patch):
         """Ensure the dimension order doesn't matter."""

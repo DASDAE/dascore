@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+from typing import Literal
+
 import dascore as dc
 from dascore.constants import opt_timeable_types
-from dascore.io import FiberIO
+from dascore.io import FiberIO, ScanPayload, make_scan_payload
 from dascore.utils.hdf5 import H5Reader
 
 from .utils import (
+    DATA_NAMES,
     _dereference,
     _get_attr_dict,
     _get_coord_manager,
@@ -24,8 +27,9 @@ class DASVaderV1(FiberIO):
     Notes
     -----
     Legacy DASVader files may contain anonymous JLD2 object references. DASCore
-    detects those files and raises `DASVaderCompatibilityError` with compatibility
-    instructions instead of failing inside `h5py`. A known working stack for
+    reads these references when supported by HDF5 and raises
+    `DASVaderCompatibilityError` with compatibility instructions when
+    dereferencing fails. A known working stack for
     such legacy files is `h5py<3.16` with `HDF5 1.14.x`.
     """
 
@@ -33,7 +37,11 @@ class DASVaderV1(FiberIO):
     preferred_extensions = ("jld2",)
     version = "1"
 
-    def get_format(self, resource: H5Reader, **kwargs) -> tuple[str, str] | bool:
+    def get_format(
+        self,
+        resource: H5Reader,
+        **kwargs,
+    ) -> tuple[str, str] | Literal[False]:
         """
         Return format if file contains DASVader JLD2 data else False.
 
@@ -46,7 +54,7 @@ class DASVaderV1(FiberIO):
             return self.name, self.version
         return False
 
-    def scan(self, resource: H5Reader, **kwargs) -> list[dc.PatchAttrs]:
+    def scan(self, resource: H5Reader, **kwargs) -> list[ScanPayload]:
         """Scan a DASVader file, return summary information about the file."""
         rec = resource["dDAS"][()]
         cm = _get_coord_manager(resource, rec)
@@ -56,16 +64,14 @@ class DASVaderV1(FiberIO):
             if "atrib" in ref_names
             else {}
         )
-        attrs.update(
-            {
-                "path": resource.filename,
-                "file_format": self.name,
-                "file_version": self.version,
-                "coords": cm.to_summary_dict(),
-                "dims": cm.dims,
-            }
+        data_ref = next(iter(DATA_NAMES & ref_names), None)
+        dtype = (
+            str(_dereference(resource, rec[data_ref], data_ref).dtype)
+            if data_ref
+            else ""
         )
-        return [dc.PatchAttrs(**attrs)]
+        attrs = dc.PatchAttrs.from_dict(attrs)
+        return [make_scan_payload(attrs=attrs, coords=cm, dtype=dtype)]
 
     def read(
         self,
@@ -73,7 +79,7 @@ class DASVaderV1(FiberIO):
         time: tuple[opt_timeable_types, opt_timeable_types] | None = None,
         distance: tuple[float | None, float | None] | None = None,
         **kwargs,
-    ) -> dc.BaseSpool:
+    ) -> dc.Spool:
         """Read a DASVader spool of patches."""
         patches = _read_dasvader(resource, time=time, distance=distance)
         return dc.spool(patches)

@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-import numpy as np
+from typing import Literal
 
 import dascore as dc
 from dascore.constants import opt_timeable_types
-from dascore.io import FiberIO
+from dascore.io import FiberIO, ScanPayload, make_scan_payload
+from dascore.models import OptionalFiniteFloat, UTF8Str
 from dascore.utils.hdf5 import H5Reader
-from dascore.utils.models import UnitQuantity, UTF8Str
 
 from .utils import _get_opto_das_attrs, _get_opto_das_version_str, _read_opto_das
 
@@ -16,8 +16,7 @@ from .utils import _get_opto_das_attrs, _get_opto_das_version_str, _read_opto_da
 class OptoDASPatchAttrs(dc.PatchAttrs):
     """Patch attrs for OptoDAS."""
 
-    gauge_length: float = np.nan
-    gauge_length_units: UnitQuantity | None = None
+    gauge_length: OptionalFiniteFloat = None
     schema_version: UTF8Str = ""
 
 
@@ -28,30 +27,35 @@ class OptoDASV8(FiberIO):
     preferred_extensions = ("hdf5", "h5")
     version = "8"
 
-    def get_format(self, resource: H5Reader, **kwargs) -> tuple[str, str] | bool:
+    def get_format(
+        self,
+        resource: H5Reader,
+        **kwargs,
+    ) -> tuple[str, str] | Literal[False]:
         """
         Return True if file contains OptoDAS version 8 data else False.
 
         Parameters
         ----------
         resource
-            A path to the file which may contain terra15 data.
+            An open h5 file which may contain OptoDAS data.
         """
         version_str = _get_opto_das_version_str(resource)
         if version_str:
             return self.name, version_str
+        return False
 
-    def scan(self, resource: H5Reader, **kwargs) -> list[dc.PatchAttrs]:
+    def scan(
+        self, resource: H5Reader, snap: bool = True, **kwargs
+    ) -> list[ScanPayload]:
         """Scan a OptoDAS file, return summary information about the file's contents."""
-        file_version = _get_opto_das_version_str(resource)
-        extras = {
-            "path": resource.filename,
-            "file_format": self.name,
-            "file_version": str(file_version),
-        }
-        attrs = _get_opto_das_attrs(resource)
-        attrs.update(extras)
-        return [OptoDASPatchAttrs(**attrs)]
+        attrs, coords = _get_opto_das_attrs(resource, snap=snap)
+        attrs = OptoDASPatchAttrs.from_dict(attrs)
+        return [
+            make_scan_payload(
+                attrs=attrs, coords=coords, dtype=str(resource["data"].dtype)
+            )
+        ]
 
     def read(
         self,
@@ -59,7 +63,7 @@ class OptoDASV8(FiberIO):
         time: tuple[opt_timeable_types, opt_timeable_types] | None = None,
         distance: tuple[float | None, float | None] | None = None,
         **kwargs,
-    ) -> dc.BaseSpool:
+    ) -> dc.Spool:
         """Read a OptoDAS spool of patches."""
         patches = _read_opto_das(
             resource, time=time, distance=distance, attr_cls=OptoDASPatchAttrs
@@ -77,3 +81,9 @@ class OptoDASV10(OptoDASV8):
     """Support for OptoDAS V 10."""
 
     version = "10"
+
+
+class OptoDASV11(OptoDASV8):
+    """Support for OptoDAS V 11."""
+
+    version = "11"

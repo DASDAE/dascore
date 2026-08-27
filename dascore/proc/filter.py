@@ -8,7 +8,6 @@ Tobias Megies, Moritz Beyreuther, Yannik Behr
 from __future__ import annotations
 
 import sys
-import warnings
 from collections.abc import Sequence
 
 import numpy as np
@@ -16,8 +15,6 @@ import pandas as pd
 from scipy import ndimage
 from scipy.ndimage import gaussian_filter as np_gauss
 from scipy.ndimage import median_filter as nd_median_filter
-from scipy.signal import filtfilt, iirfilter, iirnotch, sosfilt, sosfiltfilt, zpk2sos
-from scipy.signal import savgol_filter as np_savgol_filter
 
 import dascore as dc
 from dascore.constants import PatchType, samples_arg_description
@@ -30,6 +27,7 @@ from dascore.units import (
     quant_sequence_to_quant_array,
 )
 from dascore.utils.docs import compose_docstring
+from dascore.utils.imports import lazy_import
 from dascore.utils.misc import (
     broadcast_for_index,
     check_filter_kwargs,
@@ -41,6 +39,14 @@ from dascore.utils.patch import (
     patch_function,
 )
 from dascore.utils.time import to_float
+
+filtfilt = lazy_import("scipy.signal", "filtfilt")
+iirfilter = lazy_import("scipy.signal", "iirfilter")
+iirnotch = lazy_import("scipy.signal", "iirnotch")
+sosfilt = lazy_import("scipy.signal", "sosfilt")
+sosfiltfilt = lazy_import("scipy.signal", "sosfiltfilt")
+zpk2sos = lazy_import("scipy.signal", "zpk2sos")
+np_savgol_filter = lazy_import("scipy.signal", "savgol_filter")
 
 
 def _check_sobel_args(dim, mode, cval):
@@ -103,6 +109,8 @@ def pass_filter(
 
     Parameters
     ----------
+    patch
+        The patch to filter
     corners
         The number of corners for the filter. Default is 4.
     zerophase
@@ -158,6 +166,8 @@ def sobel_filter(
 
     Parameters
     ----------
+    patch
+        The patch to filter
     dim
         The dimension along which to apply
     mode
@@ -183,7 +193,7 @@ def sobel_filter(
     dim, mode, cval = _check_sobel_args(dim, mode, cval)
     axis = patch.get_axis(dim)
     out = ndimage.sobel(patch.data, axis=axis, mode=mode, cval=cval)
-    return dc.Patch(data=out, coords=patch.coords, attrs=patch.attrs, dims=patch.dims)
+    return patch.new(data=out)
 
 
 def _create_size_and_axes(patch, kwargs, samples):
@@ -220,7 +230,7 @@ def median_filter(
     patch
         The patch to filter
     samples
-        {sample_explination}
+        {sample_explanation}
     mode
         The mode for handling edges.
     cval
@@ -313,7 +323,17 @@ def notch_filter(patch: PatchType, q: float, **kwargs) -> PatchType:
     for dim, axis, value in dinfo:
         coord = patch.get_coord(dim)
         # Invert units if needed
-        if isinstance(value, dc.units.Quantity) and coord.units is not None:
+        if isinstance(value, dc.units.Quantity):
+            if coord.units is None:
+                # every quantity is rejected, dimensionless ones included:
+                # there is nothing to convert against, and reading `20 %`
+                # as 0.2 Hz (which is what used to happen) is a trap.
+                msg = (
+                    f"Cannot filter {dim!r} with {value}: the coordinate "
+                    "has no units, so a quantity cannot be interpreted "
+                    "against it. Pass a plain number instead."
+                )
+                raise UnitError(msg)
             value, _ = get_inverted_quant(value, coord.units)
         # Check valid parameters
         w0 = to_float(value)
@@ -324,7 +344,7 @@ def notch_filter(patch: PatchType, q: float, **kwargs) -> PatchType:
             raise FilterValueError(msg)
         b, a = iirnotch(w0, Q=q, fs=sr)
         data = filtfilt(b, a, data, axis=axis)
-    return dc.Patch(data=data, coords=patch.coords, attrs=patch.attrs, dims=patch.dims)
+    return patch.new(data=data)
 
 
 @patch_function()
@@ -338,7 +358,7 @@ def savgol_filter(
     **kwargs,
 ) -> PatchType:
     """
-    Applies Savgol filter along spenfied dimensions.
+    Applies Savgol filter along specified dimensions.
 
     The filter will be applied over each selected dimension sequentially.
 
@@ -349,8 +369,7 @@ def savgol_filter(
     polyorder
         Order of polynomial
     samples
-        If True samples are specified
-        If False coordinate of dimension
+        {sample_explanation}
     mode
         The mode for handling edges.
     cval
@@ -412,8 +431,7 @@ def gaussian_filter(
     patch
         The patch to filter
     samples
-        If True samples are specified
-        If False coordinate of dimension
+        {sample_explanation}
     mode
         The mode for handling edges.
     cval
@@ -464,7 +482,6 @@ def slope_filter(
     filt: Sequence[float],
     dims: tuple[str, str] = ("distance", "time"),
     directional: bool = False,
-    notch: bool | None = None,
     invert: bool = False,
 ) -> PatchType:
     """
@@ -478,7 +495,7 @@ def slope_filter(
     patch
         The patch to filter.
     filt
-        A length 4 array of the form [va, vb, vc, vd]. If notch is False,
+        A length 4 array of the form [va, vb, vc, vd]. If invert is False,
         the filter selects the apparent velocities between 'vb' and 'vc'
         with tapering boundaries from 'va' to 'vb' and from 'vc' to 'vd'.
     dims
@@ -492,8 +509,6 @@ def slope_filter(
         away) with increasing coordinate values.
         This can be used for up/down or left/right separation, assuming a
         near-linear fiber layout.
-    notch
-        Deprecated, use invert.
     invert
         If True, the filter represents a notch, meaning the slopes
         specified by the inner `filt` parameters are attenuated rather
@@ -537,7 +552,7 @@ def slope_filter(
     >>> filt = np.array([2e3,2.2e3,8e3,2e4]) * dc.get_unit("m/s")
     >>> patch_filtered = patch.slope_filter(filt=filt)
 
-    The [FK recipe](`docs/recipes/fk.qmd`) provides addtional examples.
+    The [FK recipe](`docs/recipes/fk.qmd`) provides additional examples.
     """
 
     def _check_inputs(patch, filt, dims):
@@ -588,14 +603,17 @@ def slope_filter(
         # Hand the units/partial units in sequence.
         units = getattr(filt, "units", None)
         try:
-            filt = np.array(filt)
+            # Bound to a new name so the except branch still sees the original
+            # ragged sequence rather than a half-assigned filt.
+            array = np.array(filt)
         except ValueError:
-            filt = quant_sequence_to_quant_array(filt)
+            array = quant_sequence_to_quant_array(filt)
+        filt = array
         if units:
             filt = filt * dc.get_quantity(units)
         if not isinstance(filt, dc.units.Quantity):
             return filt
-        array, units = filt.magnitude, filt.units
+        array, units = np.asarray(filt.magnitude), filt.units
         coord_unit_1 = dft_patch.get_coord(freq_dims[-1]).units
         coord_unit_2 = dft_patch.get_coord(freq_dims[-2]).units
         if not (coord_unit_1 and coord_unit_2):
@@ -618,12 +636,6 @@ def slope_filter(
 
     slope = _get_slope_array(dft_patch, directional, freq_dims)
     filt = _maybe_transform_units(filt, dft_patch, freq_dims)
-
-    # TODO remove in dascore 0.2.
-    if notch is not None:
-        msg = "The `notch` parameter of slope filter is deprecated. Use invert."
-        warnings.warn(msg, DeprecationWarning, stacklevel=2)
-        invert = notch
 
     mask = _get_taper_mask(filt, slope, invert)
     new_data = dft_patch.data * mask

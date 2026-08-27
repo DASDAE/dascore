@@ -2,27 +2,47 @@
 
 from __future__ import annotations
 
+import string
+
 import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
-from dascore.units import get_quantity_str
+from dascore.units import Hz, get_quantity_str
+from dascore.units import s as seconds
 from dascore.utils.misc import suppress_warnings
+from dascore.utils.time import dtype_time_like
 
 
 def _get_dim_label(patch, dim):
     """Create a label for the given dimension, including units if defined."""
-    attrs = patch.attrs
-    maybe_units = attrs.get(f"{dim}_units")
-    unit_str = f"({get_quantity_str(maybe_units)})" if maybe_units else ""
-    return str(dim) + unit_str
+    maybe_units = patch.get_coord(dim).units if dim in patch.coords else None
+    if maybe_units == 1 / seconds:
+        maybe_units = Hz
+    dim_str = string.capwords(str(dim))
+    unit_str = f" [{get_quantity_str(maybe_units)}]" if maybe_units else ""
+    return dim_str + unit_str
+
+
+def _get_data_label(patch, default=""):
+    """
+    Create a label for the patch data (its type and units).
+
+    Returns default if the patch has neither a data_type nor data_units.
+    """
+    data_type = str(patch.attrs.get("data_type", ""))
+    data_units = get_quantity_str(patch.attrs.data_units) or ""
+    dunits = f" [{data_units}]" if (data_type and data_units) else f"{data_units}"
+    return f"{data_type}{dunits}" or default
 
 
 def _get_cmap(cmap):
     """Return a color map from a colormap or string."""
     if isinstance(cmap, str):  # get color map if a string was passed
-        cmap = plt.get_cmap(cmap)
+        cmap = plt.get_cmap(cmap).copy()
+        cmap.set_over(cmap(1.0))
+        cmap.set_under(cmap(0.0))
     return cmap
 
 
@@ -31,6 +51,40 @@ def _get_ax(ax):
     if ax is None:
         _, ax = plt.subplots(1)
     return ax
+
+
+def _maybe_invert_yaxis(ax, patch, dim, ascending=True):
+    """
+    Orient the y axis so the dimension it displays runs the standard way.
+
+    Plots which put a patch dimension on the y axis share this rule, so a
+    dimension is oriented the same way whichever plot draws it. Seismic
+    displays put time on a downward axis (shot gathers, record sections),
+    so a time-like dimension runs downward and any other runs upward.
+    Distance in particular must not run downward: a wiggle plot draws its
+    traces as offsets along the y axis, so flipping it would point positive
+    amplitudes down as well, and distance carries no convention which asks
+    for that.
+
+    Parameters
+    ----------
+    ax
+        The axis whose y axis may be inverted.
+    patch
+        The patch being plotted.
+    dim
+        The name of the dimension displayed on the y axis.
+    ascending
+        Whether the axis already places the dimension's values in ascending
+        order. False flips the decision, for a plot whose y positions follow
+        the array rather than the coordinate (wiggle offsets) and whose
+        coordinate is reverse sorted.
+    """
+    invert = dtype_time_like(patch.get_coord(dim).dtype) != (not ascending)
+    # invert_yaxis toggles, so check first; a caller can pass an axis which
+    # is already time-down, and drawing on it must not flip it back.
+    if invert and not ax.yaxis_inverted():
+        ax.invert_yaxis()
 
 
 def _get_extents(dims_r, coords):
@@ -64,7 +118,7 @@ def _get_extents(dims_r, coords):
     # and we want first dim to go from top to bottom
     lims = {x: [] for x in dims_r}
     for dim in dims_r:
-        array = coords[dim]
+        array = coords.get_array(dim) if hasattr(coords, "get_array") else coords[dim]
         # Use nanmin/nanmax to handle NaN/NaT values in coordinates
         with suppress_warnings(RuntimeWarning):
             array_min = np.nanmin(array)
@@ -89,7 +143,8 @@ def _format_time_axis(ax, dim, axis_name):
     start time.
     """
     # Set label to not include units
-    getattr(ax, f"set_{axis_name}label")(dim)
+    dim_str = string.capwords(str(dim))
+    getattr(ax, f"set_{axis_name}label")(dim_str)
     # set date time formatting so MPL knows this axis is a date
     getattr(ax, f"{axis_name}axis_date")()
     # Set intelligent, zoom-in-able date formatter

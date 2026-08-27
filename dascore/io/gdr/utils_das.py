@@ -8,6 +8,7 @@ import numpy as np
 
 import dascore as dc
 from dascore.core import get_coord
+from dascore.io.utils import convert_attr_units, get_exact_coord
 from dascore.utils.hdf5 import extract_h5_attrs, h5_matches_structure
 from dascore.utils.misc import unbyte
 
@@ -30,7 +31,7 @@ _V1_ATTR_MAP = {
     f"{ACQ}.GaugeLength": "gauge_length",
     f"{ACQ}.GaugeLengthUnit": "gauge_length_units",
     f"{ACQ}.UnitOfMeasure": "data_units",
-    "DasMetadata/Interrogator.SerialNumber": "instrument_id",
+    "DasMetadata/Interrogator.SerialNumber": "interrogator.serial_number",
 }
 
 
@@ -50,6 +51,7 @@ def _get_attrs_coords_and_data(resource, snap):
     """
     fill = {"NaN": "", "nan": ""}
     attrs = extract_h5_attrs(resource, _V1_ATTR_MAP, fill_values=fill)
+    convert_attr_units(attrs, "gauge_length", "m")
     coords = _get_coord_manager(resource, snap)
     data = resource["DasRawData/RawData"]
     return attrs, coords, data
@@ -63,7 +65,8 @@ def _get_coord_manager(resource, snap=True):
         # TODO: I am not sure if time will always be in ns, check on it.
         time = resource["DasRawData/DasTimeArray"]
         if not snap:
-            return get_coord(data=np.array(time).astype("datetime64[ns]"))
+            values = np.array(time).astype("datetime64[ns]")
+            return get_exact_coord(values)
         t1 = np.int64(time[0]).astype("datetime64[ns]")
         t2 = np.int64(time[-1]).astype("datetime64[ns]")
         step = (t2 - t1) / (len(time) - 1)
@@ -74,15 +77,12 @@ def _get_coord_manager(resource, snap=True):
         # Note: There is not enough info to correctly infer the start of
         # distance coordinate since Channels are often not included. In this
         # case we just assume the distance starts at 0 since the location of
-        # each channel must be attached alter anyway. This at least includes
+        # each channel must be attached later anyway. This at least includes
         # correct dx information.
         group = resource["DasMetadata/Interrogator/Acquisition"]
         dx = float(unbyte(group.attrs["SpatialSamplingInterval"]))
         units = unbyte(group.attrs["SpatialSamplingIntervalUnit"])
-        start = 0
-        stop = length * dx
-        coord = get_coord(start=start, stop=stop, step=dx, units=units)
-        return coord.change_length(length)
+        return get_coord(start=0, step=dx, shape=(length,), units=units)
 
     def get_dims(dataset):
         """Get the dimension names."""
@@ -110,10 +110,3 @@ def _get_coord_manager(resource, snap=True):
     }
 
     return dc.get_coord_manager(coords=coords, dims=dims)
-
-
-def _maybe_trim_data(cm, data, time=None, distance=None, **kwargs):
-    """Maybe trim the data."""
-    if time is not None or distance is not None:
-        cm, data = cm.select(time=time, distance=distance, array=data)
-    return cm, data

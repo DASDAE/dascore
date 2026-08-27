@@ -3,8 +3,10 @@ Unified interface for moving window operations with automatic engine selection.
 
 This module provides a generic interface for 1D moving window operations
 that can use either scipy or bottleneck backends, with automatic fallback
-when optional dependencies are missing. Bottleneck median windows are aligned
-with centered scipy semantics away from edges.
+when optional dependencies are missing. Bottleneck trailing windows are shifted
+toward centered-window alignment. Odd non-median bottleneck windows match scipy
+away from edges; even non-median windows keep the requested bottleneck engine for
+performance and may differ from scipy's even-window convention.
 """
 
 from __future__ import annotations
@@ -21,6 +23,10 @@ from dascore.exceptions import ParameterError
 from dascore.utils.misc import optional_import
 
 bn = optional_import("bottleneck", on_missing="ignore")
+
+# The engines which can back a moving window operation. "auto" prefers
+# bottleneck and falls back to whichever of the two is installed.
+MOVING_ENGINE = Literal["auto", "scipy", "bottleneck"]
 
 # Operation registry mapping operations to engine implementations
 OPERATION_REGISTRY = {
@@ -63,7 +69,9 @@ def _apply_scipy_operation(
     ddof: int = 0,
 ) -> np.ndarray:
     """Apply scipy operation with proper handling."""
-    module_name, func_name = OPERATION_REGISTRY[operation]["scipy"]
+    spec = OPERATION_REGISTRY[operation]["scipy"]
+    assert spec is not None  # callers check the registry before dispatching here
+    _, func_name = spec
     func = _get_engine_function("scipy", operation)
     scipy_kwargs = {"mode": mode, "cval": cval, "origin": origin}
 
@@ -116,10 +124,15 @@ def _apply_bottleneck_median(
 
     func = _get_engine_function("bottleneck", "median")
     result = func(data, window=window, axis=axis, min_count=min_count)
+    return _shift_bottleneck_result(result, window, axis)
+
+
+def _shift_bottleneck_result(result: np.ndarray, window: int, axis: int) -> np.ndarray:
+    """Shift trailing bottleneck windows to centered window alignment."""
     shift = window // 2
     if shift:
-        destination = [slice(None)] * data.ndim
-        source = [slice(None)] * data.ndim
+        destination = [slice(None)] * result.ndim
+        source = [slice(None)] * result.ndim
         destination[axis] = slice(0, -shift)
         source[axis] = slice(shift, None)
         result[tuple(destination)] = result[tuple(source)]
@@ -171,7 +184,7 @@ def _apply_bottleneck_operation(
 
     extra_kwargs = {"ddof": ddof} if operation == "std" else {}
     result = func(data, window=window, axis=axis, min_count=min_count, **extra_kwargs)
-    return result
+    return _shift_bottleneck_result(result, window, axis)
 
 
 # Engine function wrappers (defined after functions)
@@ -194,9 +207,16 @@ def _get_available_engines() -> tuple[str, ...]:
     return tuple(["scipy", *bottle_list])
 
 
-def _get_engine_function(engine: str, func_name: str) -> Callable | None:
+def has_engine(engine: str) -> bool:
+    """Return True if the named moving window engine is installed."""
+    return engine in _get_available_engines()
+
+
+def _get_engine_function(engine: str, func_name: str) -> Callable:
     """Get and cache engine function."""
-    module_name, func_name = OPERATION_REGISTRY[func_name][engine]
+    spec = OPERATION_REGISTRY[func_name][engine]
+    assert spec is not None  # callers check the registry before dispatching here
+    module_name, func_name = spec
     mod = _get_module(module_name)
     return getattr(mod, func_name)
 
@@ -204,15 +224,19 @@ def _get_engine_function(engine: str, func_name: str) -> Callable | None:
 def _select_engine(preferred: str, operation: str) -> str:
     """Select best available engine with fallback."""
     available = _get_available_engines()
+    # "auto" asks for whatever is installed, so falling back is the answer
+    # to the question, not a problem to warn about (see #1046).
+    requested = preferred
     preferred = "bottleneck" if preferred == "auto" else preferred
 
     if preferred not in available:
         engine = available[0]
-        msg = (
-            f"Preferred engine {preferred} is not available; falling back to {engine}. "
-            "It may require an additional installation."
-        )
-        warnings.warn(msg, UserWarning, stacklevel=4)
+        if requested != "auto":
+            msg = (
+                f"Preferred engine {preferred} is not available; falling back "
+                f"to {engine}. It may require an additional installation."
+            )
+            warnings.warn(msg, UserWarning, stacklevel=4)
         preferred = engine
 
     # Check if operation is available in preferred engine
@@ -230,7 +254,7 @@ def moving_window(
     window: int,
     operation: str,
     axis: int = 0,
-    engine: Literal["auto", "scipy", "bottleneck"] = "auto",
+    engine: MOVING_ENGINE = "auto",
     mode: str = "reflect",
     cval: float = 0.0,
     origin: int = 0,
@@ -251,7 +275,11 @@ def moving_window(
     axis : int, default 0
         Axis along which to operate
     engine : {"auto", "scipy", "bottleneck"}, default "auto"
-        Engine to use
+        Engine to use. "auto" prefers bottleneck and quietly uses scipy when
+        bottleneck is not installed; naming an engine which is missing warns.
+        Bottleneck non-median windows keep the bottleneck engine for even
+        windows. These are shifted toward centered alignment but can differ
+        from scipy's even-window convention.
     mode
         Boundary mode. Non-default values use scipy for operations where
         bottleneck cannot preserve scipy boundary semantics.
@@ -305,7 +333,7 @@ def move_median(
     data: np.ndarray,
     window: int,
     axis: int = 0,
-    engine: str = "auto",
+    engine: MOVING_ENGINE = "auto",
     mode: str = "reflect",
     cval: float = 0.0,
     origin: int = 0,
@@ -329,7 +357,7 @@ def move_mean(
     data: np.ndarray,
     window: int,
     axis: int = 0,
-    engine: str = "auto",
+    engine: MOVING_ENGINE = "auto",
     mode: str = "reflect",
     cval: float = 0.0,
     origin: int = 0,
@@ -353,7 +381,7 @@ def move_std(
     data: np.ndarray,
     window: int,
     axis: int = 0,
-    engine: str = "auto",
+    engine: MOVING_ENGINE = "auto",
     min_count: int = 1,
     ddof: int = 0,
 ) -> np.ndarray:
@@ -367,7 +395,7 @@ def move_sum(
     data: np.ndarray,
     window: int,
     axis: int = 0,
-    engine: str = "auto",
+    engine: MOVING_ENGINE = "auto",
     mode: str = "reflect",
     cval: float = 0.0,
     origin: int = 0,
@@ -391,7 +419,7 @@ def move_min(
     data: np.ndarray,
     window: int,
     axis: int = 0,
-    engine: str = "auto",
+    engine: MOVING_ENGINE = "auto",
     mode: str = "reflect",
     cval: float = 0.0,
     origin: int = 0,
@@ -415,7 +443,7 @@ def move_max(
     data: np.ndarray,
     window: int,
     axis: int = 0,
-    engine: str = "auto",
+    engine: MOVING_ENGINE = "auto",
     mode: str = "reflect",
     cval: float = 0.0,
     origin: int = 0,

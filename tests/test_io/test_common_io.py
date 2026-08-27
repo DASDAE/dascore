@@ -10,42 +10,56 @@ test_io_core.py
 
 from __future__ import annotations
 
-from contextlib import contextmanager, suppress
+import inspect
+from collections import Counter
+from contextlib import suppress
 from functools import cache
-from io import BytesIO, UnsupportedOperation
+from io import BufferedIOBase, BytesIO, UnsupportedOperation
 from operator import eq, ge, le
 from pathlib import Path
-from urllib import error as urllib_error
 
 import numpy as np
 import pandas as pd
 import pytest
 
 import dascore as dc
-from dascore.exceptions import DependencyError
-from dascore.io import BinaryReader
+from dascore.constants import INVENTORY_ATTRS, STORAGE_PROVENANCE_ATTRS
+from dascore.exceptions import CoordError, UnknownFiberFormatError
+from dascore.io import BinaryReader, FiberIO
+from dascore.io.ai4eps import AI4EPSV1
 from dascore.io.ap_sensing import APSensingV10
 from dascore.io.dasdae import DASDAEV1
 from dascore.io.dashdf5 import DASHDF5
-from dascore.io.febus import Febus1, Febus2
+from dascore.io.febus import Febus1, Febus2, FebusBSLH5V1, FebusMTXH5V1, FebusT1V1
 from dascore.io.gdr import GDR_V1
 from dascore.io.h5simple import H5Simple
+from dascore.io.hdas import HDASV1, HDASV2
+from dascore.io.mseed.core import MSeedV2
+from dascore.io.netcdf import NetCDFCFV18
 from dascore.io.neubrex import NeubrexDASV1, NeubrexRFSV1
+from dascore.io.odh4 import ODH4V1
 from dascore.io.optodas import OptoDASV8
 from dascore.io.pickle import PickleIO
 from dascore.io.prodml import ProdMLV2_0, ProdMLV2_1
 from dascore.io.segy import SegyV1_0
 from dascore.io.sentek import SentekV5
-from dascore.io.silixah5 import SilixaH5V1
-from dascore.io.sintela_binary import SintelaBinaryV3
+from dascore.io.silixah5 import SilixaH5V1, SilixaH5V2
+from dascore.io.sintela import SintelaBinaryV3, SintelaProtobufV1
+from dascore.io.sr4731 import SR4731V200
 from dascore.io.tdms import TDMSFormatterV4713
 from dascore.io.terra15 import (
     Terra15FormatterV4,
     Terra15FormatterV5,
     Terra15FormatterV6,
 )
+from dascore.io.uptech import UptechH5V1
 from dascore.utils.downloader import fetch, get_registry_df
-from dascore.utils.misc import all_close, iterate
+from dascore.utils.misc import all_close, iterate, order_range_tuple
+from tests.test_io._common_io_test_utils import (
+    get_flat_io_test,
+    skip_missing,
+    skip_timeout,
+)
 
 # --- Fixtures
 
@@ -57,16 +71,26 @@ from dascore.utils.misc import all_close, iterate
 # See the docs on adding a new IO format, in the contributing section,
 # for more details.
 COMMON_IO_READ_TESTS = {
+    AI4EPSV1(): ("ai4eps_1.h5",),
     APSensingV10(): ("ap_sensing_1.hdf5",),
     DASDAEV1(): ("example_dasdae_event_1.h5",),
     DASHDF5(): ("PoroTomo_iDAS_1.h5",),
     Febus1(): ("valencia_febus_example.h5",),
     Febus2(): ("febus_1.h5", "febus_2.h5"),
+    FebusBSLH5V1(): ("febusg1_C2_2026-06-03T17.18.13+0200.bsl.h5",),
+    FebusMTXH5V1(): ("febus-g1-spectra_C2_2026-06-03T17.28.13+0200.mtx.h5",),
+    FebusT1V1(): ("febus_dts.h5", "febus_dts_single_reading.h5"),
     GDR_V1(): ("gdr_1.h5",),
     H5Simple(): ("h5_simple_2.h5", "h5_simple_1.h5"),
+    HDASV1(): ("hdas_1.h5",),
+    HDASV2(): ("hdas_2.h5",),
     NeubrexDASV1(): ("neubrex_das_1.h5",),
     NeubrexRFSV1(): ("neubrex_dss_forge.h5", "neubrex_dts_forge.h5"),
-    OptoDASV8(): ("opto_das_1.hdf5",),
+    ODH4V1(): ("optasense_odh4_1.h5",),
+    # decimated_optodas.hdf5 is the #419 regression file; it is in the matrix
+    # so every contract runs over it, not only a read.
+    OptoDASV8(): ("opto_das_1.hdf5", "decimated_optodas.hdf5"),
+    SR4731V200(): ("ofl100_1.sor", "ofl100_2.sor", "ofl100_3.sor"),
     ProdMLV2_0(): ("prodml_2.0.h5", "opta_sense_quantx_v2.h5"),
     ProdMLV2_1(): (
         "prodml_2.1.h5",
@@ -76,13 +100,18 @@ COMMON_IO_READ_TESTS = {
     SegyV1_0(): ("conoco_segy_1.sgy",),
     SentekV5(): ("DASDMSShot00_20230328155653619.das",),
     SilixaH5V1(): ("silixa_h5_1.hdf5",),
+    SilixaH5V2(): ("silixa_h5_ingv_1.h5",),
     SintelaBinaryV3(): ("sintela_binary_v3_test_1.raw",),
+    SintelaProtobufV1(): ("sintela_protobuf_1.pb",),
     Terra15FormatterV4(): (
         "terra15_das_1_trimmed.hdf5",
         "terra15_das_unfinished.hdf5",
     ),
     Terra15FormatterV5(): ("terra15_v5_test_file.hdf5",),
     Terra15FormatterV6(): ("terra15_v6_test_file.hdf5",),
+    NetCDFCFV18(): ("xdas_netcdf.nc",),
+    MSeedV2(): ("etna_9n_3chan_10s.mseed",),
+    UptechH5V1(): ("uptech_as1000_1.hdf5",),
 }
 
 # This tuple is for fiber io which support a write method and can write
@@ -96,27 +125,233 @@ COMMON_IO_WRITE_TESTS = (
 # Specifies data registry entries which should not be tested.
 # DASVader is covered in its own test module to isolate its compatibility-path
 # testing from the shared common-IO matrix.
-SKIP_DATA_FILES = {"whale_1.hdf5", "brady_hs_DAS_DTS_coords.csv", "das_vader_1.jld2"}
+SKIP_DATA_FILES = {
+    "brady_hs_DAS_DTS_coords.csv",
+    "das_vader_1.jld2",
+}
+
+# Vendor-specific attrs the readers add on top of the shared vocabulary
+# (`INVENTORY_ATTRS` plus the default `PatchAttrs` fields). Adding a name
+# here is a decision, not a formality: check first whether the value is one
+# of the inventory's facts under a vendor spelling, in which case it belongs
+# under the canonical name, and whether it states units the reader should
+# have converted away at the parse boundary.
+# Formats which hand back the attrs stored in the file rather than building
+# them from a header, so the file, not the reader, chooses the names.
+_PASS_THROUGH_FORMATS = frozenset({"DASDAE", "NETCDF_CF"})
+
+VENDOR_ATTRS = frozenset(
+    {
+        "acq_res",
+        "acqres",
+        "acquisition_id",
+        "acquisition_range_m",
+        "ampli_power",
+        "amppower",
+        "api",
+        "average",
+        "averaging_time",
+        "n_averages",
+        "channel",
+        "channel_step",
+        "distance_decimation_filter",
+        "demod_data_type",
+        "dtype",
+        "end_frequency",
+        "epsg_code",
+        "event_depth_km",
+        "event_id",
+        "event_latitude",
+        "event_longitude",
+        "event_time",
+        "experiment",
+        "facility_id",
+        "fiber_break",
+        "fiber_from",
+        "fiber_id",
+        "fiber_length",
+        "fiber_to",
+        "fiberbreak",
+        "fiberlength",
+        "field_name",
+        "filed_name",
+        "folog_a1_software_version",
+        "format_version",
+        "freq_fiber",
+        "freq_offset",
+        "freq_offset_abs",
+        "freq_ref",
+        "freq_step",
+        "freqfiber",
+        "freqoffset",
+        "freqoffsetabs",
+        "freqref",
+        "freqstep",
+        "gps_status",
+        "group",
+        "index_of_reflection",
+        "index_of_refraction",
+        "long_name",
+        "metadata_recording_time",
+        "magnitude",
+        "magnitude_type",
+        "mode",
+        "mseed_encoding",
+        "mseed_publication_version",
+        "mseed_record_length",
+        "phase_to_strain",
+        "packet_type",
+        "project",
+        "project_number",
+        "pulse_length",
+        "radians_to_nano_strain",
+        "raw_reference",
+        "recorder_namespace",
+        "refractive_index",
+        "sample_scale",
+        "sample_type",
+        "scale_factor_to_strain",
+        "sample_spacing_usec",
+        "sampling_resolution",
+        "schema_version",
+        "service_company_name",
+        "signal_size",
+        "start_channel",
+        "signalsize",
+        "source",
+        "spatial_resolution",
+        "start_frequency",
+        "temperature",
+        "time_decimation_filter",
+        "trace_count",
+        "transform_size",
+        "transform_type",
+        "triggered_time",
+        "wavelength_nm",
+        "well_bore_id",
+        "well_id",
+        "well_name",
+        "window_function",
+        "window_overlap",
+        "window_size",
+        "zone",
+        "zone_count",
+        "zonecount",
+        "zones",
+    }
+)
 
 
-@contextmanager
-def skip_missing():
-    """Skip if missing dependencies found."""
-    try:
-        yield
-    except DependencyError as exc:
-        pytest.skip(str(exc))
-    except TimeoutError as exc:
-        pytest.skip(f"Unable to fetch data due to timeout: {exc}")
+def _replays_stored_attrs(path) -> bool:
+    """
+    Return True for a format which passes a file's own attrs through.
+
+    A DASDAE file returns the attrs it was written with, so it speaks the
+    vocabulary of its own era; a CF NetCDF file carries whatever attrs its
+    writer chose. Only readers which build attrs from a header they parse
+    are held to the shared vocabulary.
+    """
+    with suppress(UnknownFiberFormatError):
+        return dc.get_format(path)[0] in _PASS_THROUGH_FORMATS
+    return False
 
 
-@contextmanager
-def skip_timeout():
-    """Skip if downloading file times out."""
-    try:
-        yield
-    except (TimeoutError, urllib_error.URLError) as exc:
-        pytest.skip(f"Unable to fetch data due to timeout: {exc}")
+# A scan should read headers, not samples. Small files are exempt because
+# fixed metadata cost can legitimately dominate them; measured formats
+# currently sit under 15%.
+_SCAN_COST_MIN_FILE_SIZE = 1_000_000
+_SCAN_COST_MAX_FRACTION = 0.25
+
+# These hand the resource to a library which opens the file itself, so no
+# byte reaches our handle. Listed rather than detected: an empty count is
+# also what a reader that just started bypassing the handle would produce.
+IGNORE_SCAN_CHECK = frozenset({"SEGY", "MSEED"})
+
+# These inherit FiberIO.scan, which reads the whole file to build a summary.
+# Implementing only read is allowed, so this is a choice rather than a defect
+# -- pinned so a new format that skips scan fails instead of joining them.
+FORMATS_WITH_DEFAULT_SCAN = frozenset({"PickleIO", "RSFV1", "WavIO"})
+
+
+class _CountingHandle(BufferedIOBase):
+    """
+    A readable file object which tallies the bytes it hands out.
+
+    Counting here rather than at the process keeps the number free of
+    page-cache and allocator noise, and drops the dependence on /proc, so this
+    measures on every platform DASCore tests rather than only Linux. It also
+    needs no warm-up scan, since module imports never reach this counter.
+
+    Counts bytes consumed, not bytes the kernel moved, so it reads lower than
+    /proc would by up to a buffer fill per reader. That gap is a few KB where
+    the budget is a quarter of a megabyte-plus file, and it cannot hide the
+    failure this guards: a scan that walks every sample consumes every sample.
+
+    Anything handing back the file underneath is refused, since reads through
+    it would not be counted: fileno, which also allows the whole file to be
+    mapped, plus raw, peek, and detach. No current reader needs any of them,
+    so one that does belongs in IGNORE_SCAN_CHECK.
+
+    The name attribute is the exception, and stays available: TDMS, sentek,
+    and Sintela_Binary consult it while scanning. They only stat the file
+    through it rather than read it, which is visible in their totals -- each
+    stays within a buffer fill of what /proc charges the whole scan.
+    """
+
+    _refused = frozenset({"raw", "peek", "detach"})
+
+    def __init__(self, fileobj):
+        self._fileobj = fileobj
+        self.bytes_read = 0
+
+    def read(self, size=-1, /):
+        """Read from the wrapped file, counting what comes back."""
+        out = self._fileobj.read(size)
+        self.bytes_read += len(out)
+        return out
+
+    read1 = read
+
+    def readinto(self, buffer, /):
+        """Read into a buffer, counting the bytes filled."""
+        count = self._fileobj.readinto(buffer)
+        self.bytes_read += count or 0
+        return count
+
+    readinto1 = readinto
+
+    def readline(self, size=-1, /):
+        """Read one line, counting its bytes."""
+        out = self._fileobj.readline(size)
+        self.bytes_read += len(out)
+        return out
+
+    def seek(self, offset, whence=0, /):
+        """Seek the wrapped file; seeking reads nothing."""
+        return self._fileobj.seek(offset, whence)
+
+    def tell(self):
+        """Return the wrapped file's position."""
+        return self._fileobj.tell()
+
+    def seekable(self):
+        """Report the wrapped file as seekable."""
+        return True
+
+    def readable(self):
+        """Report the wrapped file as readable."""
+        return True
+
+    def __getattr__(self, name):
+        """Defer to the wrapped file, except where that would evade counting."""
+        if name in self._refused:
+            raise UnsupportedOperation(name)
+        return getattr(self._fileobj, name)
+
+
+def _scan_summary(scan_result):
+    """Normalize scan output to the patch summary view."""
+    return scan_result.summary if isinstance(scan_result, dc.Patch) else scan_result
 
 
 @cache
@@ -134,22 +369,13 @@ def _cached_read(path, io=None):
     return out
 
 
-def _get_flat_io_test():
-    """Flatten list to [(fiberio, path)] so it can be parametrized."""
-    flat_io = []
-    for io, fetch_name_list in COMMON_IO_READ_TESTS.items():
-        for fetch_name in iterate(fetch_name_list):
-            flat_io.append([io, fetch_name])
-    return flat_io
-
-
 @pytest.fixture(scope="session", params=list(COMMON_IO_READ_TESTS))
 def io_instance(request):
     """Fixture for returning fiber io instances."""
     return request.param
 
 
-@pytest.fixture(scope="session", params=_get_flat_io_test())
+@pytest.fixture(scope="session", params=get_flat_io_test(COMMON_IO_READ_TESTS))
 def io_path_tuple(request):
     """
     A fixture which returns io instance, path_to_file.
@@ -180,7 +406,7 @@ def read_spool(data_file_path):
 
 
 @pytest.fixture(scope="session")
-def scanned_attrs(data_file_path):
+def scanned_summaries(data_file_path):
     """Read each file into a spool."""
     with skip_missing():
         out = dc.scan(data_file_path)
@@ -197,15 +423,16 @@ def fiber_io_writer(request):
 
 
 def _assert_coords_attrs_match(patch):
-    """Ensure both the coordinates and attributes match on patch."""
-    attrs = patch.attrs
+    """Ensure patch summary and coordinates match."""
+    summary = patch.summary
     coords = patch.coords
-    assert attrs.dim_tuple == coords.dims
-    for dim in attrs.dim_tuple:
+    assert summary.dims == coords.dims
+    for dim in summary.dims:
         coord = patch.get_coord(dim)
-        assert coord.min() == getattr(attrs, f"{dim}_min")
-        assert coord.max() == getattr(attrs, f"{dim}_max")
-        assert coord.step == getattr(attrs, f"{dim}_step")
+        summary_coord = summary.get_coord_summary(dim)
+        assert coord.min() == summary_coord.min
+        assert coord.max() == summary_coord.max
+        assert coord.step == summary_coord.step
 
 
 def _assert_op_or_close(val1, val2, op):
@@ -219,9 +446,32 @@ def _assert_op_or_close(val1, val2, op):
     raise AssertionError(msg)
 
 
-# --- Tests
+def _get_coord_trim_values(coord):
+    """Return existing coordinate values to use for read selections."""
+    values = coord.values
+    if len(values) == 1:
+        return values[0], values[0]
+    start_ind = min(max(1, len(values) // 10), len(values) - 1)
+    stop_ind = min(max(start_ind, 2 * len(values) // 10), len(values) - 1)
+    return values[start_ind], values[stop_ind]
 
-DIM_RELATED_ATTRS = ("{dim}_min", "{dim}_max", "{dim}_step")
+
+def _assert_spool_dim_selection(spool, dim, trim_tuple, start_op, stop_op):
+    """Assert all patches in a selected spool respect a requested dim range."""
+    assert len(spool)
+    for patch in spool:
+        _assert_coords_attrs_match(patch)
+        coord = patch.get_coord(dim)
+        summary = patch.summary.get_coord_summary(dim)
+        start = summary.min if trim_tuple[0] in (None, ...) else trim_tuple[0]
+        stop = summary.max if trim_tuple[1] in (None, ...) else trim_tuple[1]
+        if start_op is ge and stop_op is le:
+            start, stop = order_range_tuple((start, stop))
+        _assert_op_or_close(coord.min(), start, start_op)
+        _assert_op_or_close(coord.max(), stop, stop_op)
+
+
+# --- Tests
 
 
 class TestGetFormat:
@@ -245,11 +495,12 @@ class TestGetFormat:
 
     def test_random_textfile_isnt_format(self, io_instance, dummy_text_file):
         """Ensure a dummy text file the format (it isn't any fiber format)."""
-        assert not io_instance.get_format(dummy_text_file)
+        # The contract is False, not merely something falsy.
+        assert io_instance.get_format(dummy_text_file) is False
 
     def test_random_h5_isnt_format(self, io_instance, generic_hdf5):
         """Ensure a dummy h5 file the format (it isn't any fiber format)."""
-        assert not io_instance.get_format(generic_hdf5)
+        assert io_instance.get_format(generic_hdf5) is False
 
     def test_all_other_files_arent_format(self, io_instance):
         """All other data files should not show up as this format."""
@@ -261,7 +512,7 @@ class TestGetFormat:
                     path = fetch(key)
                 out = io_instance.get_format(path)
                 if out:
-                    format_name, version = out
+                    _format_name, version = out
                     assert version != io_instance.version
 
 
@@ -316,53 +567,34 @@ class TestRead:
         """
         io, path = io_path_tuple
         with skip_missing():
-            attrs_from_file = dc.scan(path)
-        assert len(attrs_from_file)
-        attrs_init = attrs_from_file[0]
-        for dim in attrs_init.dim_tuple:
-            start = getattr(attrs_init, f"{dim}_min")
-            stop = getattr(attrs_init, f"{dim}_max")
-            duration = stop - start
+            summaries_from_file = [_scan_summary(x) for x in dc.scan(path)]
+        assert len(summaries_from_file)
+        patch_init = _cached_read(path, io=io)[0]
+        for dim in patch_init.dims:
+            trim_start, trim_stop = _get_coord_trim_values(patch_init.get_coord(dim))
             # first test double ended query
-            trim_tuple = (start + duration / 10, start + 2 * duration / 10)
+            trim_tuple = (trim_start, trim_stop)
             spool = io.read(path, **{dim: trim_tuple})
-            assert len(spool) == 1
-            patch = spool[0]
-            _assert_coords_attrs_match(patch)
-            coord = patch.get_coord(dim)
-            _assert_op_or_close(coord.min(), trim_tuple[0], ge)
-            _assert_op_or_close(coord.max(), trim_tuple[1], le)
+            _assert_spool_dim_selection(spool, dim, trim_tuple, ge, le)
             # then single-ended query on start side
-            trim_tuple = (start + duration / 10, ...)
+            trim_tuple = (trim_start, ...)
             spool = io.read(path, **{dim: trim_tuple})
-            assert len(spool) == 1
-            patch = spool[0]
-            attrs = patch.attrs
-            _assert_coords_attrs_match(patch)
-            coord = patch.get_coord(dim)
-            _assert_op_or_close(coord.min(), trim_tuple[0], ge)
-            _assert_op_or_close(coord.max(), getattr(attrs, f"{dim}_max"), eq)
+            _assert_spool_dim_selection(spool, dim, trim_tuple, ge, eq)
             # then single-ended query on end side
-            trim_tuple = (None, start + duration / 10)
+            trim_tuple = (None, trim_start)
             spool = io.read(path, **{dim: trim_tuple})
-            assert len(spool) == 1
-            patch = spool[0]
-            attrs = patch.attrs
-            _assert_coords_attrs_match(patch)
-            coord = patch.get_coord(dim)
-            _assert_op_or_close(coord.min(), getattr(attrs, f"{dim}_min"), eq)
-            _assert_op_or_close(coord.max(), trim_tuple[1], le)
+            _assert_spool_dim_selection(spool, dim, trim_tuple, eq, le)
 
     def test_slice_out_all_patches_time(self, io_path_tuple):
         """Ensure slicing outside of file time range returns an empty spool."""
         io, path = io_path_tuple
         with skip_missing():
-            attrs_from_file = dc.scan(path)
-        dims = {y for x in attrs_from_file for y in set(x.coords)}
+            scan_patches = dc.scan(path)
+        dims = {y for x in scan_patches for y in x.dims}
         if "time" not in dims:
             pytest.skip("Test requires patch with time and distance dimensions.")
         # First test on selecting outside time range.
-        end_time = np.max([x.coords["time"].max for x in attrs_from_file])
+        end_time = np.max([x.get_coord_summary("time").max for x in scan_patches])
         one_second = np.timedelta64(1, "s")
         spool = io.read(path, time=(end_time + one_second, ...))
         assert len(spool) == 0
@@ -371,12 +603,12 @@ class TestRead:
         """Ensure slicing outside file distance range returns an empty spool."""
         io, path = io_path_tuple
         with skip_missing():
-            attrs_from_file = dc.scan(path)
-        dims = {y for x in attrs_from_file for y in set(x.coords)}
+            scan_patches = dc.scan(path)
+        dims = {y for x in scan_patches for y in x.dims}
         if "distance" not in dims:
             pytest.skip("Test requires patch with time and distance dimensions.")
         # The outside distance range.
-        max_dist = np.max([x.coords["distance"].max for x in attrs_from_file])
+        max_dist = np.max([x.get_coord_summary("distance").max for x in scan_patches])
         spool = io.read(path, distance=(max_dist + 1, ...))
         assert len(spool) == 0
 
@@ -387,43 +619,207 @@ class TestScan:
     def test_scan_basics(self, data_file_path):
         """Ensure each file can be scanned."""
         with skip_missing():
-            attrs_list = dc.scan(data_file_path)
-        assert len(attrs_list)
+            summary_list = dc.scan(data_file_path)
+        assert len(summary_list)
 
-        for attrs in attrs_list:
-            assert isinstance(attrs, dc.PatchAttrs)
-            assert str(attrs.path) == str(data_file_path)
+        for summary in summary_list:
+            assert isinstance(summary, dc.PatchSummary)
+            assert str(summary.source_path) == str(data_file_path)
 
-    def test_scan_has_version_and_format(self, io_path_tuple):
-        """Scan output should contain version and format."""
+    def test_scan_does_not_read_whole_file(self, io_path_tuple):
+        """
+        Scanning must not pull a file's sample data off disk.
+
+        A reader that walks every sample to build a summary still returns the
+        right answer, which makes this easy to regress and expensive to live
+        with: indexing a directory then costs a full read of every file in it.
+
+        Measured in bytes rather than memory, because a reader can stream a
+        file without holding it, and because sample data lands in C-extension
+        buffers that Python's allocation tracing cannot see.
+        """
+        io, path = io_path_tuple
+        if io.name.upper() in IGNORE_SCAN_CHECK:
+            pytest.skip(f"{io.name} does not read through the handle it is given")
+        size = Path(path).stat().st_size
+        if size < _SCAN_COST_MIN_FILE_SIZE:
+            pytest.skip(f"{Path(path).name} too small to hold to a scan budget")
+        with skip_missing(), open(path, "rb") as fi:
+            handle = _CountingHandle(fi)
+            io.scan(handle)
+        # Reading nothing means the handle was bypassed, not that scan is free.
+        assert handle.bytes_read, (
+            f"{type(io).__name__}.scan read nothing through the handle it was "
+            f"given, so its cost cannot be measured; if it opens the file "
+            f"itself, add {io.name} to IGNORE_SCAN_CHECK."
+        )
+        assert handle.bytes_read < size * _SCAN_COST_MAX_FRACTION, (
+            f"{type(io).__name__}.scan read {handle.bytes_read:,} bytes of a "
+            f"{size:,} byte file; a scan should read headers, not samples."
+        )
+
+    def test_formats_implement_scan(self):
+        """
+        Formats should implement scan rather than inherit the default.
+
+        The budget above can only weigh formats that have a large enough test
+        file, so it cannot see a format which never implements scan at all and
+        so reads everything through the FiberIO default. That is what this
+        covers; see FORMATS_WITH_DEFAULT_SCAN for the known exceptions.
+        """
+        FiberIO.manager.load_plugins()
+        # Other test modules register FiberIO subclasses globally on import,
+        # so only DASCore's own formats are considered here.
+        registered = {
+            type(fiber_io)
+            for fiber_io in FiberIO.manager.yield_fiberio()
+            if type(fiber_io).__module__.startswith("dascore.io.")
+        }
+        # Comparison below is by class name, so names must be unique.
+        by_name = Counter(fiber_io_class.__name__ for fiber_io_class in registered)
+        assert not (shared := [k for k, v in by_name.items() if v > 1]), (
+            f"format class names are no longer unique: {sorted(shared)}"
+        )
+        # All three are dependency-free, so all should load. Without this,
+        # a formatter failing to load would drop off both sides and pass.
+        names = {fiber_io_class.__name__ for fiber_io_class in registered}
+        assert FORMATS_WITH_DEFAULT_SCAN <= names, (
+            "formats expected to be registered are missing: "
+            f"{sorted(FORMATS_WITH_DEFAULT_SCAN - names)}"
+        )
+        # Every subclass gets its own type-casting wrapper around scan, so
+        # the function underneath is what says whose scan this really is.
+        default_scan = inspect.unwrap(FiberIO.scan)
+        using_default = {
+            fiber_io_class.__name__
+            for fiber_io_class in registered
+            if inspect.unwrap(fiber_io_class.scan) is default_scan
+        }
+        assert using_default == FORMATS_WITH_DEFAULT_SCAN, (
+            "formats inheriting the read-everything FiberIO.scan changed; "
+            f"expected {sorted(FORMATS_WITH_DEFAULT_SCAN)}, "
+            f"found {sorted(using_default)}. Implement scan for the new "
+            "format, or add it to FORMATS_WITH_DEFAULT_SCAN with a reason."
+        )
+
+    def test_raw_scan_excludes_source_metadata(self, io_path_tuple):
+        """Direct FiberIO scans should not attach source metadata."""
         io, path = io_path_tuple
         with skip_missing():
-            attr_list = io.scan(path)
-        for attrs in attr_list:
-            assert attrs.file_format == io.name
-            assert attrs.file_version == io.version
+            summary_list = io.scan(path)
+        for summary in summary_list:
+            assert "source_path" not in summary
+            assert "source_format" not in summary
+            assert "source_version" not in summary
+            attr_dump = summary["attrs"].model_dump()
+            assert "path" not in attr_dump
+            assert "file_format" not in attr_dump
+            assert "file_version" not in attr_dump
 
-    def test_time_coord_is_time(self, scanned_attrs):
-        """Ensure scanned attrs have correct dtype for time."""
-        for patch_attr in scanned_attrs:
+    def test_public_scan_has_version_and_format(self, io_path_tuple):
+        """Public scan output should contain source metadata."""
+        io, path = io_path_tuple
+        with skip_missing():
+            summary_list = dc.scan(path)
+        for summary in summary_list:
+            assert str(summary.source_path) == str(path)
+            assert summary.source_format == io.name
+            assert summary.source_version == io.version
+
+    def test_scan_snap_false_conforms(self, io_path_tuple):
+        """Exact scans should work and match exact reads when supported."""
+        io, path = io_path_tuple
+        read_params = inspect.signature(io.read).parameters
+        read_kwargs = {}
+        supports_exact_read = False
+        if "snap" in read_params:
+            read_kwargs["snap"] = False
+            supports_exact_read = True
+        elif "snap_dims" in read_params:
+            read_kwargs["snap_dims"] = False
+            supports_exact_read = True
+        with skip_missing():
+            payloads = io.scan(path, snap=False)
+            patches = io.read(path, **read_kwargs)
+
+        assert len(payloads) == len(patches)
+        for payload, patch in zip(payloads, patches, strict=True):
+            coords = payload["coords"]
+            assert isinstance(coords, dc.CoordManager)
+            assert coords.dims == patch.dims
+            assert coords.shape == patch.shape
+            if not supports_exact_read:
+                continue
+            for name in coords.coord_map:
+                np.testing.assert_array_equal(
+                    coords.get_coord(name).values,
+                    patch.get_coord(name).values,
+                )
+
+    def test_time_coord_is_time(self, scanned_summaries):
+        """Ensure scanned summaries have correct dtype for time."""
+        for summary in scanned_summaries:
             with suppress(KeyError):
-                time = patch_attr.coords["time"]
+                time = summary.get_coord_summary("time")
                 assert "datetime64" in str(np.dtype(time.dtype))
 
-    def test_dist_coord_is_float_or_int(self, scanned_attrs):
+    def test_dist_coord_is_float_or_int(self, scanned_summaries):
         """Distance can be either float or int, but must be numeric."""
-        for patch_attr in scanned_attrs:
-            with suppress(KeyError):
-                distance = patch_attr.coords["distance"]
+        for summary in scanned_summaries:
+            with suppress(KeyError, CoordError):
+                distance = summary.get_coord_summary("distance")
                 dtype = np.dtype(distance.dtype)
                 assert np.issubdtype(dtype, np.number)
 
-    def test_no_bytes(self, scanned_attrs):
+    def test_coord_dtype_non_empty(self, scanned_summaries):
+        """Each coordinate summary should have a non-empty dtype string."""
+        for summary in scanned_summaries:
+            for coord_name, coord in summary.coords.items():
+                assert coord.dtype, f"coord '{coord_name}' has empty dtype"
+
+    def test_patch_dims_non_empty(self, scanned_summaries):
+        """Scan results should carry at least one dimension."""
+        for summary in scanned_summaries:
+            assert summary.dims, "PatchSummary has empty dims"
+
+    def test_patch_dtype_non_empty(self, scanned_summaries):
+        """Scan results should carry a non-empty data dtype."""
+        for summary in scanned_summaries:
+            assert summary.dtype, "PatchSummary has empty dtype"
+
+    def test_coord_min_max_ordered(self, scanned_summaries):
+        """Coord min should be <= max for all coordinates."""
+        for summary in scanned_summaries:
+            for coord_name, coord in summary.coords.items():
+                with suppress(TypeError):  # incomparable types (e.g. NaT/NaN)
+                    assert coord.min <= coord.max, (
+                        f"{coord_name}: min ({coord.min}) > max ({coord.max})"
+                    )
+
+    def test_no_bytes(self, scanned_summaries):
         """Sometimes bytes are returned from scanning, we need str."""
-        for patch_attr in scanned_attrs:
-            model = patch_attr.model_dump()
+        for summary in scanned_summaries:
+            model = _scan_summary(summary).model_dump()
             for key, value in model.items():
                 assert not isinstance(value, bytes | np.bytes_)
+
+    def test_no_coord_mirroring_attrs(self, scanned_summaries):
+        """
+        Shipped readers must not mirror coord metadata into attrs.
+
+        Attrs and coords are fully independent; an attr named
+        ``{coord}_{field}`` for one of the patch's own coords would shadow a
+        coordinate envelope column in the flat spool contents. Vendor attrs
+        that merely look coord-shaped (e.g. ``channel_step`` without a
+        ``channel`` coord) are fine.
+        """
+        fields = tuple(dc.core.CoordSummary.model_fields)
+        for raw in scanned_summaries:
+            summary = _scan_summary(raw)
+            names = set(summary.coords) | set(summary.dims)
+            mirrored = {f"{c}_{f}" for c in names for f in fields}
+            bad = mirrored & set(summary.attrs.model_dump())
+            assert not bad, f"attrs mirror coord metadata: {sorted(bad)}"
 
 
 class TestWrite:
@@ -443,6 +839,16 @@ class TestWrite:
         """Ensure the random patch can be written."""
         assert written_fiber_path.exists()
 
+    def test_accepts_patch_or_spool(self, random_patch, fiber_io_writer, tmp_path):
+        """A writer takes a bare patch or a spool; dc.write only sends spools."""
+        pre_ext = list(iterate(fiber_io_writer.preferred_extensions))
+        ext = "" if not len(pre_ext) else pre_ext[0]
+        from_patch = tmp_path / f"patch.{ext}"
+        from_spool = tmp_path / f"spool.{ext}"
+        fiber_io_writer.write(random_patch, from_patch)
+        fiber_io_writer.write(dc.spool([random_patch]), from_spool)
+        assert from_patch.exists() and from_spool.exists()
+
     def test_roundtrip(self, random_patch, written_fiber_path, fiber_io_writer):
         """If the writer can read, ensure round-tripping patch is equal."""
         if not fiber_io_writer.implements_read:
@@ -451,11 +857,50 @@ class TestWrite:
         assert new == random_patch
 
 
+class TestAttrVocabulary:
+    """Readers speak one vocabulary, shared with the inventory."""
+
+    def test_no_unknown_attrs(self, data_file_path):
+        """
+        Every attr a reader emits is canonical, default, or a listed extra.
+
+        Without this each new format is free to invent its own spelling of
+        gauge length or channel spacing, and nothing downstream can treat
+        two files as describing the same kind of thing.
+        """
+        if _replays_stored_attrs(data_file_path):
+            return
+        allowed = set(INVENTORY_ATTRS) | set(dc.PatchAttrs.model_fields) | VENDOR_ATTRS
+        for patch in _cached_read(data_file_path):
+            names = {x for x in dict(patch.attrs) if not x.startswith("_")}
+            assert not (names - allowed)
+
+    def test_no_unit_companion_attrs(self, data_file_path):
+        """
+        No attr states the units of another attr.
+
+        Units are part of each attr's contract, so a companion means the
+        reader skipped the conversion the contract requires.
+        """
+        for patch in _cached_read(data_file_path):
+            names = {x for x in dict(patch.attrs) if not x.startswith("_")}
+            companions = {x for x in names if x.endswith("_units")}
+            assert companions <= {"data_units"}
+
+    def test_no_storage_provenance_attrs(self, data_file_path):
+        """Where the bytes live belongs to the spool, not to patch attrs."""
+        if _replays_stored_attrs(data_file_path):
+            return
+        for patch in _cached_read(data_file_path):
+            names = set(dict(patch.attrs))
+            assert not names & set(STORAGE_PROVENANCE_ATTRS)
+
+
 class TestIntegration:
     """Test suite for generic scanning."""
 
-    def test_scan_attrs_match_patch_attrs(self, data_file_path):
-        """We need to make sure scan and patch attrs are identical."""
+    def test_scan_summary_matches_patch_summary(self, data_file_path):
+        """We need to make sure scan and patch summaries are identical."""
         # Since dasdae format stores attrs and coords, we need to
         # skip events created before coords/attrs were more closely
         # aligned.
@@ -465,23 +910,22 @@ class TestIntegration:
             "data_type",
             "data_units",
             "tag",
-            "network",
+            "acquisition_key",
         )
         with skip_missing():
-            scan_attrs_list = dc.scan(data_file_path)
-        patch_attrs_list = [x.attrs for x in _cached_read(data_file_path)]
-        assert len(scan_attrs_list) == len(patch_attrs_list)
-        for pat_attrs1, scan_attrs2 in zip(patch_attrs_list, scan_attrs_list):
-            assert pat_attrs1.dims == scan_attrs2.dims
+            scan_summary_list = [_scan_summary(x) for x in dc.scan(data_file_path)]
+        patch_summary_list = [x.summary for x in _cached_read(data_file_path)]
+        assert len(scan_summary_list) == len(patch_summary_list)
+        for patch_summary, scan_summary in zip(patch_summary_list, scan_summary_list):
+            assert patch_summary.dims == scan_summary.dims
             # first compare dimensions are related attributes
-            for dim in pat_attrs1.dim_tuple:
-                assert getattr(pat_attrs1, f"{dim}_min") == getattr(
-                    scan_attrs2, f"{dim}_min"
-                )
-                for dim_attr in DIM_RELATED_ATTRS:
-                    attr_name = dim_attr.format(dim=dim)
-                    attr1 = getattr(pat_attrs1, attr_name)
-                    attr2 = getattr(scan_attrs2, attr_name)
+            for dim in patch_summary.dim_tuple:
+                patch_coord = patch_summary.get_coord_summary(dim)
+                scan_coord = scan_summary.get_coord_summary(dim)
+                assert patch_coord.min == scan_coord.min
+                for attr_name in ("min", "max", "step"):
+                    attr1 = getattr(patch_coord, attr_name)
+                    attr2 = getattr(scan_coord, attr_name)
                     # Use close comparison for floating point values
                     if isinstance(attr1, float | np.floating) and isinstance(
                         attr2, float | np.floating
@@ -491,6 +935,8 @@ class TestIntegration:
                         assert attr1 == attr2
             # then other expected attributes.
             for attr_name in comp_attrs:
-                patch_attr = getattr(pat_attrs1, attr_name)
-                scan_attr = getattr(scan_attrs2, attr_name)
-                assert scan_attr == patch_attr
+                patch_value = getattr(patch_summary.attrs, attr_name)
+                scan_value = getattr(scan_summary.attrs, attr_name)
+                if scan_value in ("", None):
+                    continue
+                assert scan_value == patch_value

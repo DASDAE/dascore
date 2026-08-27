@@ -1,9 +1,14 @@
-"""Utilities for terra15."""
+"""Utilities for DASHDF5."""
 
 from __future__ import annotations
 
+from typing import Literal
+
+import numpy as np
+
 import dascore as dc
 from dascore.core import get_coord
+from dascore.io.utils import get_exact_coord
 
 # --- Getting format/version
 
@@ -17,7 +22,7 @@ _DAS_ATTR_MAPPING = {"long_name": "data_type"}
 _CRS_MAPPING = {"epsg_code": "epsg_code"}
 
 
-def _get_cf_version_str(hdf_fi) -> str | bool:
+def _get_cf_version_str(hdf_fi) -> str | Literal[False]:
     """Return the version string for dashdf5 files."""
     conventions = hdf_fi.attrs.get("Conventions", [])
     cf_str = [x for x in conventions if x.startswith("CF-")]
@@ -29,7 +34,7 @@ def _get_cf_version_str(hdf_fi) -> str | bool:
     return das_hdf_str[0].replace("DAS-HDF5-", "")
 
 
-def _get_cf_coords(hdf_fi, minimal=False) -> dc.core.CoordManager:
+def _get_cf_coords(hdf_fi, minimal=False, snap=True) -> dc.core.CoordManager:
     """
     Get a coordinate manager of full file range.
 
@@ -40,17 +45,21 @@ def _get_cf_coords(hdf_fi, minimal=False) -> dc.core.CoordManager:
 
     """
 
+    def _coord(values, units=None):
+        """Return a tolerant or exact coordinate from stored values."""
+        values = np.asarray(values)
+        if snap:
+            return get_coord(data=values, units=units)
+        return get_exact_coord(values, units=units)
+
     def _get_spatialcoord(hdf_fi, code):
         """Get spatial coord."""
-        return get_coord(
-            data=hdf_fi[code],
-            units=hdf_fi[code].attrs["units"],
-        )
+        return _coord(hdf_fi[code], units=hdf_fi[code].attrs["units"])
 
     coords_map = {
-        "channel": get_coord(data=hdf_fi["channel"][:]),
-        "trace": get_coord(data=hdf_fi["trace"][:]),
-        "time": get_coord(data=dc.to_datetime64(hdf_fi["t"][:])),
+        "channel": _coord(hdf_fi["channel"][:]),
+        "trace": _coord(hdf_fi["trace"][:]),
+        "time": _coord(dc.to_datetime64(hdf_fi["t"][:])),
         "x": _get_spatialcoord(hdf_fi, "x"),
         "y": _get_spatialcoord(hdf_fi, "y"),
         "z": _get_spatialcoord(hdf_fi, "z"),
@@ -77,7 +86,7 @@ def _get_cf_coords(hdf_fi, minimal=False) -> dc.core.CoordManager:
 
 def _get_cf_attrs(hdf_fi, coords=None, extras=None):
     """Get attributes for CF file."""
-    out = {"coords": coords or _get_cf_coords(hdf_fi)}
+    out = {}
     out.update(extras or {})
     for n1, n2 in _ROOT_ATTR_MAPPING.items():
         out[n1] = hdf_fi.attrs.get(n2)
@@ -85,4 +94,4 @@ def _get_cf_attrs(hdf_fi, coords=None, extras=None):
         out[n1] = getattr(hdf_fi.get("das", {}), "attrs", {}).get(n2)
     for n1, n2 in _CRS_MAPPING.items():
         out[n1] = getattr(hdf_fi.get("crs", {}), "attrs", {}).get(n2)
-    return dc.PatchAttrs(**out)
+    return dc.PatchAttrs.from_dict(out)

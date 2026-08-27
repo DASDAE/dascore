@@ -1,6 +1,7 @@
 """Utilities functions for Neubrex DAS IO support"""
 
 import dascore as dc
+from dascore.io.utils import convert_attr_units
 from dascore.utils.misc import maybe_get_items, unbyte
 
 
@@ -34,9 +35,7 @@ def _get_coord_manager(acoustic):
         cpu = unbyte(attrs["CPUTimeStamp(UTC)"])
         start = dc.to_datetime64(gps if gps else cpu)
         step = dc.to_timedelta64(attrs["TimeSamplingInterval(seconds)"])
-        time_len = acoustic.shape[0]
-        stop = start + step * time_len
-        return dc.get_coord(start=start, step=step, stop=stop)
+        return dc.get_coord(start=start, step=step, shape=(acoustic.shape[0],))
 
     def _get_dist_coord(acoustic):
         """Get the distance (depth) coordinate."""
@@ -49,8 +48,7 @@ def _get_coord_manager(acoustic):
         step = attrs["SpatialSamplingInterval"]
         units = dc.get_quantity(attrs["StartStopPositionUnit"])
         start = attrs["StartPosition"]
-        stop = dist_len * step + start
-        return dc.get_coord(start=start, step=step, units=units, stop=stop)
+        return dc.get_coord(start=start, step=step, units=units, shape=(dist_len,))
 
     coords = {
         "time": _get_time_coord(acoustic),
@@ -70,25 +68,20 @@ def _get_attr_dict(acoustic):
     """Get a dict of neubrex attributes."""
     mapping = {
         "GaugeLength": "gauge_length",
+        "GaugeLengthUnit": "gauge_length_units",
         "GaugeLengthUnits": "gauge_length_units",
         "IndexOfRefraction": "index_of_refraction",
         "PhaseToStrainConversion(MicroStrainPerRadian)": "phase_to_strain",
-        "NEUBRESCOPE.DAS.SerialNum": "instrument_id",
-        "NEUBRESCOPE.DAS.Model": "instrument_model",
+        "NEUBRESCOPE.DAS.SerialNum": "interrogator.serial_number",
+        "NEUBRESCOPE.DAS.Model": "interrogator.model",
         "DistanceDecimationFilter": "distance_decimation_filter",
         "TimeDecimationFilter": "time_decimation_filter",
     }
     attrs = dict(acoustic.attrs)
     out = maybe_get_items(attrs, mapping)
+    convert_attr_units(out, "gauge_length", "m")
     out["data_units"] = _get_data_units_and_type(attrs)
     return out
-
-
-def _maybe_trim_data(cm, data, time=None, distance=None, **kwargs):
-    """Maybe trim the data."""
-    if time is not None or distance is not None:
-        cm, data = cm.select(time=time, distance=distance, array=data)
-    return cm, data
 
 
 def _get_attrs_coords_and_data(h5fi):

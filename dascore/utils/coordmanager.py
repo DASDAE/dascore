@@ -10,8 +10,8 @@ import numpy as np
 
 import dascore as dc
 from dascore.exceptions import CoordMergeError
+from dascore.models import ArrayLike
 from dascore.utils.display import get_nice_text
-from dascore.utils.models import ArrayLike
 
 
 def merge_coord_managers(
@@ -19,6 +19,7 @@ def merge_coord_managers(
     dim: str,
     snap_tolerance: float | None = None,
     drop_conflicting: bool = False,
+    dim_coord=None,
 ) -> dc.CoordManager:
     """
     Merge coordinate managers along a specified dimension.
@@ -38,16 +39,18 @@ def merge_coord_managers(
     drop_conflicting
         If True, drop conflicting (non-dimensional) coordinates, otherwise
         raise an exception if they occur.
+    dim_coord
+        If provided, use this coordinate for `dim` instead of
+        concatenating the members' values (which materializes them);
+        callers which already built the merged dimension coordinate
+        (e.g. via `concat_coords`) pass it here to avoid that cost.
     """
 
     def _get_dims(managers):
         """Ensure all managers have same dimensions."""
         dims = {x.dims for x in managers}
         if len(dims) != 1:
-            msg = (
-                "Can't merge coord managers, they don't all have the "
-                "same dimensions!"
-            )
+            msg = "Can't merge coord managers, they don't all have the same dimensions!"
             raise CoordMergeError(msg)
         return managers[0].dims
 
@@ -95,14 +98,14 @@ def merge_coord_managers(
             tolerance = snap_tolerance * c_coord.step
             assumed_start = c_coord.max() + c_coord.step
             diff = np.abs(assumed_start - n_coord.min())
+            zero = np.asarray([0], dtype=np.asarray(diff).dtype)[0]
             # snap is close enough, update coord.
-            if diff > 0 and diff <= tolerance:
+            if diff > zero and diff <= tolerance:
                 coord_list[ind] = n_coord.update_limits(min=assumed_start)
             # snap is too far off, bail out.
             elif diff > tolerance:
                 msg = (
-                    f"Cannot merge. Snap tolerance: {get_nice_text(tolerance)}"
-                    f" not met"
+                    f"Cannot merge. Snap tolerance: {get_nice_text(tolerance)} not met"
                 )
                 raise CoordMergeError(msg)
         return coord_list
@@ -111,7 +114,10 @@ def merge_coord_managers(
         """Get the merged coordinates."""
         out = {}
         for coord_name in coords_to_merge:
-            merge_coords = [x.coord_map[dim] for x in managers]
+            if dim_coord is not None and coord_name == dim:
+                out[coord_name] = (managers[0].dim_map[dim], dim_coord)
+                continue
+            merge_coords = [x.coord_map[coord_name] for x in managers]
             axis = managers[0].dim_map[coord_name].index(dim)
             if len(units := {x.units for x in merge_coords}) != 1:
                 # TODO: we might try to convert all the units to a common
@@ -121,11 +127,23 @@ def merge_coord_managers(
                     f"share the same units. Units found are: {set(units)}"
                 )
                 raise CoordMergeError(msg)
-            snap_coords = _snap_coords(merge_coords)
-            data = [x.data for x in snap_coords]
-            dims = managers[0].dim_map[dim]
+            # Only the dimension coordinate defines contiguity, so only it is
+            # snapped; coords merely associated with dim just follow along.
+            if coord_name == dim:
+                merge_coords = _snap_coords(merge_coords)
+            data = [x.data for x in merge_coords]
+            dims = managers[0].dim_map[coord_name]
             new_data = np.concatenate(data, axis=axis)
-            out[coord_name] = (dims, new_data)
+            # raw value concatenation loses the coord's units; reattach
+            # the (verified common) units so the merge stays unit-true
+            common_units = next(iter(units))
+            if common_units is not None:
+                from dascore.core.coords import get_coord  # noqa: PLC0415
+
+                coord = get_coord(data=new_data, units=common_units)
+                out[coord_name] = (dims, coord)
+            else:
+                out[coord_name] = (dims, new_data)
         return out
 
     def _get_new_coords(managers) -> dict[str, tuple[tuple[str, ...], ArrayLike]]:

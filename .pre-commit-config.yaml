@@ -12,9 +12,9 @@ repos:
     # Ruff is a replacement for flake8 and many other linters (much faster too)
 -   repo: https://github.com/astral-sh/ruff-pre-commit
     # Ruff version.
-    rev: v0.4.8
+    rev: v0.16.1
     hooks:
-    -   id: ruff
+    -   id: ruff-check
         args: ["--fix"]
         # Run the formatter.
     -   id: ruff-format
@@ -25,6 +25,15 @@ repos:
     rev: 0.5.0
     hooks:
     -   id: fix-future-annotations
+
+    # Type check with ty. It always checks the whole project (not just changed
+    # files); scoping and rule selection live in pyproject.toml under [tool.ty].
+-   repo: https://github.com/astral-sh/ty-pre-commit
+    rev: v0.0.65
+    hooks:
+    -   id: ty
+        # Isolated mode keeps uv from creating a uv.lock or .venv in the repo.
+        args: [--isolated]
 
     # strips out all outputs from notebooks.
 -   repo: https://github.com/kynan/nbstripout
@@ -44,3 +53,9 @@ repos:
     rev: v1.6.27
     hooks:
     -   id: actionlint
+
+    # Audits github actions for security issues.
+-   repo: https://github.com/zizmorcore/zizmor-pre-commit
+    rev: v1.29.0
+    hooks:
+    -   id: zizmor

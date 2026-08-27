@@ -2,45 +2,76 @@
 
 from __future__ import annotations
 
+import shutil
 from collections.abc import Sequence
 from functools import cache
-from typing import TypeVar
+from threading import RLock
+from types import EllipsisType
+from typing import Any, cast
 
 import numpy as np
 import pandas as pd
 import pint
 from pint import DimensionalityError, Quantity, UndefinedUnitError, Unit
+from pint.facets.plain import PlainUnit
+from platformdirs import user_cache_path
 
 import dascore as dc
 from dascore.compat import is_array
 from dascore.exceptions import UnitError
-from dascore.utils.misc import iterate, unbyte
+from dascore.utils.misc import _reinit_after_fork, iterate, unbyte
 from dascore.utils.time import dtype_time_like, is_datetime64, is_timedelta64, to_float
 
-str_or_none = TypeVar("str_or_none", None, str)
-numeric = TypeVar("numeric", np.ndarray, int, float)
+
+def _get_unit_registry():
+    """Create a Pint registry, clearing stale automatic cache if needed."""
+    try:
+        return pint.UnitRegistry(cache_folder=":auto:")
+    except FileNotFoundError:
+        path = user_cache_path(appname="pint", appauthor=False)
+        shutil.rmtree(path, ignore_errors=True)
+        return pint.UnitRegistry(cache_folder=":auto:")
 
 
-@cache
+# The pint registry is mutable (it memoizes parsed units and conversions)
+# so every helper which touches it runs under this lock. Each such helper
+# is also cached, meaning the lock is only taken on a cache miss.
+_UNIT_LOCK = RLock()
+_UNIT_REGISTRY: pint.UnitRegistry | None = None
+
+
+@_reinit_after_fork
+def _reinit_unit_lock():
+    """Install a fresh unit lock; see _reinit_after_fork."""
+    global _UNIT_LOCK
+    _UNIT_LOCK = RLock()
+
+
 def get_registry():
-    """Get the pint unit registry."""
-    ureg = pint.UnitRegistry(cache_folder=":auto:")
-    # a few custom defs, we may need our own unit registry if this
-    # gets too long.
-    ureg.define("PI=pi")
-    ureg.define("RADIANS=radians")
-    ureg.define("Radians=radians")
-    ureg.define("Radian=radians")
-    # define strain
-    ureg.define("strain=[]=ϵ")
-    # allow multiplication with offset units.
-    ureg.autoconvert_offset_to_baseunit = True
-    # set the shortest display for units.
-    # .formatter was added in new versions of pint; this makes it work with both
-    formatter = getattr(ureg, "formatter", ureg)
-    formatter.default_format = "~"
-    pint.set_application_registry(ureg)
-    return ureg
+    """Get the pint unit registry, creating it exactly once."""
+    global _UNIT_REGISTRY
+    with _UNIT_LOCK:
+        if _UNIT_REGISTRY is None:
+            ureg = _get_unit_registry()
+            # a few custom defs, we may need our own unit registry if this
+            # gets too long.
+            ureg.define("PI=pi")
+            ureg.define("RADIANS=radians")
+            ureg.define("Radians=radians")
+            ureg.define("Radian=radians")
+            # define strain
+            ureg.define("strain=[]=ϵ")
+            # allow multiplication with offset units.
+            ureg.autoconvert_offset_to_baseunit = True
+            # set the shortest display for units.
+            # .formatter was added in new versions of pint; this makes it
+            # work with both
+            formatter = getattr(ureg, "formatter", ureg)
+            formatter.default_format = "~"
+            pint.set_application_registry(ureg)
+            # Publish only once fully defined.
+            _UNIT_REGISTRY = ureg
+        return _UNIT_REGISTRY
 
 
 @cache
@@ -68,21 +99,49 @@ def get_unit(value) -> Unit:
     if isinstance(value, Quantity):
         assert value.magnitude == 1.0
         value = value.units
-    return get_registry().Unit(value)
+    with _UNIT_LOCK:
+        return get_registry().Unit(value)
 
 
 @cache
-def _str_to_quant(qunat_str):
+def _str_to_quant(quant_str):
     """Get quantity from a string; cache output."""
-    if isinstance(qunat_str, Unit):
-        qunat_str = str(qunat_str)  # ensure unit is converted to quantity
-    ureg = get_registry()
-    return ureg.Quantity(qunat_str)
+    with _UNIT_LOCK:
+        if isinstance(quant_str, Unit):
+            quant_str = str(quant_str)  # ensure unit is converted to quantity
+        ureg = get_registry()
+        return ureg.Quantity(quant_str)
 
 
-def get_quantity(value: str_or_none) -> Quantity | None:
+# Anything get_quantity can resolve: a unit or quantity, a string naming
+# one, a numpy time value, or a bare number (which is dimensionless).
+# PlainUnit is the base pint builds its registry Unit from (so it covers
+# Unit too), and is what a quantity's .units is statically. bytes and
+# Ellipsis are the two cases get_quantity opens by handling.
+quantity_like = (
+    str
+    | bytes
+    | Quantity
+    | PlainUnit
+    | np.datetime64
+    | np.timedelta64
+    | int
+    | float
+    | EllipsisType
+    | None
+)
+
+
+def get_quantity(
+    value: quantity_like,
+) -> Quantity | None:
     """
     Convert a value to a pint quantity.
+
+    Returns None for a null-ish input: None, Ellipsis, or the empty
+    string, which is how dascore spells "carries no units". Callers doing
+    arithmetic on the result have to handle that, since an unset unit
+    reaching a multiplication is a real error rather than a typing one.
 
     Parameters
     ----------
@@ -99,18 +158,23 @@ def get_quantity(value: str_or_none) -> Quantity | None:
     >>> many_seconds = dc.get_quantity(dc.to_timedelta64(200))
     """
     value = unbyte(value)
-    if value is None or value is ... or value == "":
+    if value is None or value is ...:
         return None
+    # Check Quantity before the == "" test; comparing a Quantity to a
+    # string goes through pint's parsing machinery and is slow.
     if isinstance(value, Quantity):
         return value
-    elif is_datetime64(value) | is_timedelta64(value):
+    if value == "":
+        return None
+    if is_datetime64(value) | is_timedelta64(value):
         return to_float(value) * dc.get_unit("s")
     return _str_to_quant(value)
 
 
 def get_factor_and_unit(
-    value: str_or_none, simplify: bool = False
-) -> tuple[float, str_or_none]:
+    value: str | Quantity | Unit | np.datetime64 | np.timedelta64 | None,
+    simplify: bool = False,
+) -> tuple[float, str | None]:
     """Convert a mixed unit/scaling factor to scale_factor and unit str."""
     quant = get_quantity(value)
     if quant is None:
@@ -120,29 +184,67 @@ def get_factor_and_unit(
     return quant.magnitude, get_quantity_str(quant.units)
 
 
+def units_match(units1: quantity_like, units2: quantity_like) -> bool:
+    """
+    Return True if two unit specifications name the same units.
+
+    Written for callers which can skip work when nothing would change,
+    so it is deliberately stricter than `==` on the quantities: 1 m and
+    100 cm compare equal but converting between them is real work, and
+    the spellings they leave behind differ.
+
+    Parameters
+    ----------
+    units1
+        A unit, quantity, or string, or None for "carries no units".
+    units2
+        The specification to compare against.
+
+    Examples
+    --------
+    >>> import dascore as dc
+    >>> from dascore.units import units_match
+    >>>
+    >>> assert units_match("m", "meter")
+    >>> assert not units_match("m", "100 cm")
+    >>> assert units_match(None, "")
+    """
+    quant1, quant2 = get_quantity(units1), get_quantity(units2)
+    if quant1 is None or quant2 is None:
+        return quant1 is quant2
+    return quant1.units == quant2.units and quant1.magnitude == quant2.magnitude
+
+
 @cache
 def _get_conversion_factors(from_quant, to_quant) -> tuple[float, float, float]:
     """Get multiplicative and additive conversion factors."""
-    add_mag = (0 * from_quant).to(0 * to_quant).magnitude
-    # need to convert from and to units to deltas for proper conversion.
-    from_delta = (1 * from_quant.units) - (from_quant.units * 0)
-    to_delta = (1 * to_quant.units) - (to_quant.units * 0)
-    mult_mag1 = from_delta.to(to_delta).magnitude
-    return mult_mag1 * from_quant.magnitude, add_mag, 1 / to_quant.magnitude
+    with _UNIT_LOCK:
+        add_mag = (0 * from_quant).to(0 * to_quant).magnitude
+        # need to convert from and to units to deltas for proper conversion.
+        from_delta = (1 * from_quant.units) - (from_quant.units * 0)
+        to_delta = (1 * to_quant.units) - (to_quant.units * 0)
+        mult_mag1 = from_delta.to(to_delta).magnitude
+        return mult_mag1 * from_quant.magnitude, add_mag, 1 / to_quant.magnitude
 
 
 def convert_units(
-    data: numeric,
-    to_units: None | str | Quantity,
-    from_units: None | str | Quantity = None,
-) -> numeric:
+    data: Any,
+    to_units: quantity_like,
+    from_units: quantity_like = None,
+) -> Any:
     """
     Convert units in array from one type of units to another.
 
     Parameters
     ----------
     data
-        The data to convert.
+        The data to convert. Anything supporting `*` and `+` works, as does
+        a Quantity. Deliberately not a narrower annotation: the return type
+        follows the input rather than matching it (an int in yields a float
+        out) and callers legitimately pass values the checker only knows as
+        `object`. Note that data is returned untouched whenever from_units
+        is None or already names to_units, so None survives those paths but
+        raises a TypeError once there are real factors to apply.
     to_units
         The desired units after the conversion
     from_units
@@ -155,13 +257,16 @@ def convert_units(
     [time])
     """
     if isinstance(data, Quantity):  # an existing quantity
-        from_units, data = data.units, data.magnitude
+        return convert_units(data.magnitude, to_units, data.units)
     to_units, from_units = get_quantity(to_units), get_quantity(from_units)
     if from_units is None:
         return data
     elif to_units is None:
         msg = "Cannot convert units to_units are not specified"
         raise UnitError(msg)
+    # Factors of one aren't free: they round a timedelta64 through float.
+    if units_match(from_units, to_units):
+        return data
     try:
         mult1, add, mult2 = _get_conversion_factors(from_units, to_units)
     except DimensionalityError as e:
@@ -169,9 +274,12 @@ def convert_units(
     return (data * mult1 + add) * mult2
 
 
-def assert_dtype_compatible_with_units(dtype, quantity) -> Quantity:
+def assert_dtype_compatible_with_units(dtype, quantity) -> Quantity | None:
     """
     Return quantity if it is compatible with dtype.
+
+    A quantity of None passes through for a non-time dtype and raises for
+    a time-like one, where seconds are the only allowable units.
 
     If not raise [UnitError](`dascore.exceptions.UnitError`).
     """
@@ -186,7 +294,7 @@ def assert_dtype_compatible_with_units(dtype, quantity) -> Quantity:
     return quant
 
 
-def invert_quantity(unit: pint.Unit | str) -> pint.Unit | None:
+def invert_quantity(unit: quantity_like) -> Quantity | None:
     """Invert a unit."""
     # just get magnitude for isnull test to avoid warning of casting
     # quantity to array.
@@ -194,12 +302,33 @@ def invert_quantity(unit: pint.Unit | str) -> pint.Unit | None:
     if pd.isnull(unit_test):
         return None
     quant = get_quantity(unit)
+    if quant is None:
+        return None
     return 1 / quant
 
 
-def get_quantity_str(quant_value: str | Quantity | None) -> str | None:
+@cache
+def _unit_to_str(unit: Unit) -> str:
+    """
+    Get the string representation of a unit; cache the result.
+
+    Unit equality/hashing is exact (e.g. m != cm) so, unlike Quantity,
+    Unit is safe to use as a cache key.
+    """
+    with _UNIT_LOCK:
+        return str(unit)
+
+
+# The subset of quantity_like which names a unit; a numpy time value
+# would come back stringified as a date rather than a unit.
+unit_like = str | bytes | Quantity | PlainUnit | None
+
+
+def get_quantity_str(quant_value: unit_like) -> str | None:
     """
     Ensure a unit/quantity is valid and return its string representation.
+
+    Returns None for a null input, including the empty string.
 
     If it is not valid raise a [UnitError](`dascore.exceptions.UnitError`).
 
@@ -208,23 +337,51 @@ def get_quantity_str(quant_value: str | Quantity | None) -> str | None:
     quant_value
         A input specifying a quantity.
     """
+    # Note: this is called by the pydantic serializers of attrs and coord
+    # models, so it runs many times when working with many patches; the
+    # common paths need to stay cheap (hence _validate_quantity_str and
+    # _unit_to_str caches).
     quant_value = unbyte(quant_value)
-    if quant_value is None or quant_value == "":
+    if quant_value is None:
         return None
-    try:
-        quant = get_quantity(quant_value)
-    except UndefinedUnitError:
-        msg = f"DASCore failed to parse the following unit/quantity: {quant_value}"
-        raise UnitError(msg)
+    if isinstance(quant_value, str):
+        if quant_value == "":
+            return None
+        _validate_quantity_str(quant_value)
+        return quant_value
     if isinstance(quant_value, Quantity):
-        if quant.magnitude == 1.0:
-            quant_value = str(quant.units)
-        else:
-            quant_value = str(quant)
+        if quant_value.magnitude == 1.0:
+            return _unit_to_str(quant_value.units)
+        return str(quant_value)
+    # Any other type (eg a pint Unit): validate by conversion, then use
+    # the string of the original input.
+    get_quantity(quant_value)
     return str(quant_value)
 
 
-def get_inverted_quant(quant, data_units):
+@cache
+def _validate_quantity_str(quant_str: str) -> None:
+    """Raise a UnitError if the string doesn't specify a valid quantity."""
+    try:
+        with _UNIT_LOCK:
+            get_quantity(quant_str)
+    except UndefinedUnitError as e:
+        msg = f"DASCore failed to parse the following unit/quantity: {quant_str}"
+        raise UnitError(msg) from e
+
+
+def carries_units(value) -> bool:
+    """
+    Return True if a value states its own units.
+
+    A quantity says them outright; a timedelta is a time by construction.
+    Anything else is a bare number, which only means something against a
+    unit the caller supplies.
+    """
+    return isinstance(value, Quantity) or is_timedelta64(value)
+
+
+def get_inverted_quant(quant: Quantity | None, data_units):
     """Convert to inverted units."""
     if quant is None:
         return quant, True
@@ -248,11 +405,11 @@ def get_inverted_quant(quant, data_units):
 
 
 def get_filter_units(
-    arg1: Quantity | float,
-    arg2: Quantity | float,
-    to_unit: str | Quantity,
-    dim: None | str = None,
-) -> tuple[float, float]:
+    arg1: Quantity | float | EllipsisType | None,
+    arg2: Quantity | float | EllipsisType | None,
+    to_unit: unit_like,
+    dim: str | None = None,
+) -> tuple[float | None, float | None]:
     """
     Get a tuple for applying filter based on dimension coordinates.
 
@@ -295,9 +452,7 @@ def get_filter_units(
         """Ensure to units are valid."""
         if to_unit is None:
             dim_str = "" if dim is None else dim
-            msg = (
-                f"Cannot use units on dimension {dim_str} because it has " f"no units."
-            )
+            msg = f"Cannot use units on dimension {dim_str} because it has no units."
             raise UnitError(msg)
 
     # fast-path for non-unit, non-quantity inputs.
@@ -310,8 +465,10 @@ def get_filter_units(
     _check_to_units(to_unit, dim)
     # get inverse of desired output units and ensure units are pure.
     to_quant = get_quantity(to_unit)
-    assert to_quant.magnitude == 1.0
-    to_units = get_quantity(to_unit).units
+    if to_quant is None or to_quant.magnitude != 1.0:
+        msg = f"to_unit must be a unit of magnitude 1, got {to_unit}"
+        raise UnitError(msg)
+    to_units = to_quant.units
     quant1, quant2 = get_quantity(arg1), get_quantity(arg2)
     _ensure_same_units(quant1, quant2)
     out1, inverted1 = get_inverted_quant(quant1, to_units)
@@ -322,7 +479,9 @@ def get_filter_units(
     return out1, out2
 
 
-def quant_sequence_to_quant_array(sequence: Sequence[Quantity]) -> Quantity:
+def quant_sequence_to_quant_array(
+    sequence: Sequence[Quantity] | np.ndarray,
+) -> Quantity:
     """
     Convert a sequence of Quantities (eg list) to a Quantity array.
 
@@ -340,7 +499,10 @@ def quant_sequence_to_quant_array(sequence: Sequence[Quantity]) -> Quantity:
     """
     if is_array(sequence):
         # This is a numpy array, just return multiplied by quantity.
-        return sequence * get_quantity("dimensionless")
+        # Cast because numpy declares ndarray.__mul__ as returning an
+        # ndarray; pint's reflected __rmul__ is what actually runs and it
+        # yields a Quantity.
+        return cast("Quantity", sequence * get_quantity("dimensionless"))
     # iterate the sequence and manually convert to base units.
     try:
         base_unit_sequence = [x.to_base_units() for x in sequence]
@@ -348,13 +510,86 @@ def quant_sequence_to_quant_array(sequence: Sequence[Quantity]) -> Quantity:
         msg = "Not all values in sequence are quantities."
         raise UnitError(msg)
     if not len(base_unit_sequence):
-        return np.array([]) * get_quantity("dimensionless")
+        return cast("Quantity", np.array([]) * get_quantity("dimensionless"))
     units = {x.units for x in base_unit_sequence}
     if len(units) != 1:
         msg = "Not all values in sequence have compatible units."
         raise UnitError(msg)
     array = np.array([x.magnitude for x in base_unit_sequence])
     return array * next(iter(units))
+
+
+def is_percent(value: Any) -> bool:
+    """
+    Return True if value is a percent quantity.
+
+    Parameters
+    ----------
+    value
+        Any value of any type to be to test if it is a percent quantity.
+    """
+    return isinstance(value, Quantity) and value.units == get_unit("percent")
+
+
+def is_data_size(value: Any) -> bool:
+    """
+    Return True if value is a quantity of information (bytes, bits, MB, ...).
+
+    Pint treats information as dimensionless, so a compatibility check
+    against bytes also passes for percents and bare dimensionless
+    quantities. The base unit is the only reliable discriminator.
+
+    Parameters
+    ----------
+    value
+        Any value of any type to test if it is a data size quantity.
+
+    Examples
+    --------
+    >>> import dascore as dc
+    >>> from dascore.units import is_data_size
+    >>>
+    >>> assert is_data_size(25 * dc.units.megabytes)
+    >>> assert is_data_size(dc.get_quantity("1 MiB"))
+    >>>
+    >>> # Percents, strain and plain numbers are not sizes.
+    >>> assert not is_data_size(dc.get_quantity("50%"))
+    >>> assert not is_data_size(25)
+    """
+    return isinstance(value, Quantity) and value.to_base_units().units == get_unit(
+        "bit"
+    )
+
+
+def get_byte_count(value: Quantity) -> float:
+    """
+    Return the number of bytes a data size quantity represents.
+
+    Parameters
+    ----------
+    value
+        A quantity of information (eg 25 * dc.units.megabytes).
+
+    Notes
+    -----
+    This is the only correct way to get a byte count from a quantity.
+    In particular [`to_float`](`dascore.utils.time.to_float`) is not:
+    pint converts a dimensionless quantity to its base units, which for
+    information is *bits*, so anything routing a size through a plain
+    `float()` conversion is eight times too large.
+
+    Examples
+    --------
+    >>> import dascore as dc
+    >>> from dascore.units import get_byte_count
+    >>>
+    >>> assert get_byte_count(25 * dc.units.megabytes) == 25_000_000
+    >>> assert get_byte_count(dc.get_quantity("1 MiB")) == 1_048_576
+    """
+    if not is_data_size(value):
+        msg = f"Expected a data size quantity (eg '25 MB'), got {value!r}."
+        raise UnitError(msg)
+    return value.to("byte").magnitude
 
 
 def maybe_convert_percent_to_fraction(obj):
@@ -399,19 +634,16 @@ def maybe_convert_percent_to_fraction(obj):
     >>> assert result[1] == 0.5
     >>> assert result[2] == get_quantity("2 Hz")
     """
-    percent = get_unit("percent")
     out = []
     obj = [obj] if isinstance(obj, Quantity) and obj.ndim == 0 else obj
     for val in iterate(obj):
-        if hasattr(val, "units"):
-            mag, unit = val.magnitude, val.units
-            if unit == percent:
-                val = mag / 100
+        if is_percent(val):
+            val = val.magnitude / 100
         out.append(val)
     return out
 
 
-def __getattr__(name):
+def __getattr__(name: str) -> Quantity:
     """
     Allows arbitrary units (quantities) to be imported from this module.
 
@@ -421,5 +653,12 @@ def __getattr__(name):
     is the same as
     from dascore.units import get_quantity
     m = get_quantity("m")
+
+    Any non-empty name either resolves to a quantity or raises
+    UndefinedUnitError, so the cast holds. The empty string is the one input
+    get_quantity maps to None, and attribute access is the right place to
+    reject it.
     """
-    return get_quantity(name)
+    if not name:
+        raise AttributeError(name)
+    return cast("Quantity", get_quantity(name))

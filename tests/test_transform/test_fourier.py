@@ -8,9 +8,11 @@ from scipy.fft import next_fast_len
 
 import dascore as dc
 import dascore.proc.coords
-from dascore.exceptions import PatchError
+from dascore.compat import random_state
+from dascore.exceptions import ParameterError, PatchError
 from dascore.transform.fourier import dft, idft
-from dascore.units import get_quantity, second
+from dascore.units import get_quantity, get_quantity_str, second
+from dascore.utils.misc import iterate
 
 F_0 = 2
 seconds = get_quantity("seconds")
@@ -80,6 +82,36 @@ def chirp_stft_detrend_patch(chirp_patch):
 class TestDiscreteFourierTransform:
     """Forward DFT suite."""
 
+    def _assert_spectral_power_matches_patch(self, patch, out, dims, output):
+        """Ensure spectral outputs recover the time-domain mean square."""
+        dims = patch.dims if dims is None else tuple(iterate(dims))
+        old_axes = tuple(patch.get_axis(dim) for dim in dims)
+        ft_axes = tuple(out.get_axis(f"ft_{dim}") for dim in dims)
+        expected = np.mean(patch.data**2, axis=old_axes)
+        spectral_power = np.sum(out.data, axis=ft_axes)
+        if output == "PSD":
+            bin_volume = np.prod([abs(out.get_coord(f"ft_{dim}").step) for dim in dims])
+            spectral_power = spectral_power * bin_volume
+
+        assert np.allclose(spectral_power, expected)
+
+    def _assert_real_output_matches_full_dft(self, patch, out, dims, output, real):
+        """Ensure real spectral outputs are not converted to one-sided spectra."""
+        dims = patch.dims if dims is None else tuple(iterate(dims))
+        real = dims[-1] if real is True else real
+        full = patch.dft(dim=dims, real=False, pad=False, output=output)
+        real_axis = full.get_axis(f"ft_{real}")
+        nonnegative = full.get_coord(f"ft_{real}").data >= 0
+        full_ft_axes = tuple(full.get_axis(f"ft_{dim}") for dim in dims)
+        out_ft_axes = tuple(out.get_axis(f"ft_{dim}") for dim in dims)
+        expected = np.sum(
+            np.compress(nonnegative, full.data, axis=real_axis),
+            axis=full_ft_axes,
+        )
+        spectral_power = np.sum(out.data, axis=out_ft_axes)
+
+        assert np.allclose(spectral_power, expected)
+
     def test_max_frequency(self, fft_sin_patch_time):
         """Ensure when sin wave is input max freq is correct."""
         assert "ft_time" in fft_sin_patch_time.dims
@@ -104,6 +136,9 @@ class TestDiscreteFourierTransform:
         """
         Non-dimensional coordinates associated with transformed axis should
         be dropped, but those associated with non-transformed axis should remain.
+
+        A dropped one is parked under a private name for idft to restore;
+        it is not a coordinate of the transformed patch either way.
         """
         patch = random_patch_many_coords
         # every coord associated with time should be dropped in output.
@@ -116,7 +151,7 @@ class TestDiscreteFourierTransform:
         new_coords = set(out.coords.coord_map)
         assert coord_to_drop.isdisjoint(new_coords)
         assert coords_to_keep.issubset(new_coords)
-        # make sure time has no dimsensions
+        # make sure time has no dimensions
         assert out.coords.dim_map["time"] == ()
 
     def test_real_fft(self, sin_patch):
@@ -164,6 +199,13 @@ class TestDiscreteFourierTransform:
         out = fft_sin_patch_time.dft("time")
         assert out.equals(fft_sin_patch_time)
 
+    def test_idempotent_does_not_convert_output(self, fft_sin_patch_time):
+        """Ensure output is ignored when no new dimensions are transformed."""
+        out = fft_sin_patch_time.dft("time", output="AS")
+
+        assert out.equals(fft_sin_patch_time)
+        assert out.attrs["_dft_output"] == "FFT"
+
     def test_idempotent_all_dims(self, fft_sin_patch_all):
         """
         Ensure dft is idempotent for transforms applied to all dims.
@@ -182,10 +224,14 @@ class TestDiscreteFourierTransform:
         assert not out.equals(fft_sin_patch_time)
         assert np.allclose(out.data, fft_sin_patch_all.data)
 
-    def test_datatype_removed(self, fft_sin_patch_time, sin_patch):
-        """Ensure the data_type attr is removed after transform."""
+    def test_datatype_changed(self, fft_sin_patch_time, sin_patch):
+        """Ensure the data_type attr is changed after transform."""
         assert sin_patch.attrs.data_type == "strain_rate"
-        assert fft_sin_patch_time.attrs.data_type == ""
+        assert fft_sin_patch_time.attrs.data_type == "fourier_transform"
+
+    def test_dft_output_attr_set(self, fft_sin_patch_time):
+        """Ensure the DFT output type is tracked."""
+        assert fft_sin_patch_time.attrs["_dft_output"] == "FFT"
 
     def test_pad(self, sin_patch_trimmed):
         """Ensure patch is padded when requested and not otherwise."""
@@ -202,6 +248,149 @@ class TestDiscreteFourierTransform:
         out = str(fft_sin_patch_time)
         assert isinstance(out, str)
         assert out
+
+    @pytest.mark.parametrize(
+        ("output", "data_type"),
+        [
+            ("FFT", "fourier_transform"),
+            ("AS", "amplitude_spectrum"),
+            ("PS", "power_spectrum"),
+            ("PSD", "power_spectral_density"),
+        ],
+    )
+    def test_output_spectral_representations(self, sin_patch, output, data_type):
+        """Ensure supported spectral outputs are returned."""
+        fft = sin_patch.dft("time", output="FFT")
+        out = sin_patch.dft("time", output=output)
+
+        assert out.attrs.data_type == data_type
+        assert out.attrs["_dft_output"] == output
+        assert out.data.shape == fft.data.shape
+
+    @pytest.mark.parametrize("real", [False, True])
+    def test_amplitude_spectrum_scaling(self, sin_patch, real):
+        """Ensure AS recovers harmonic amplitudes."""
+        out = sin_patch.dft("time", real=real, pad=False, output="AS")
+        time_axis = sin_patch.get_axis("time")
+        ft_axis = out.get_axis("ft_time")
+        sine_amp = np.ptp(sin_patch.data, axis=time_axis) / 2
+        expected = sine_amp / 2
+
+        assert np.allclose(np.max(out.data, axis=ft_axis), expected, rtol=0.005)
+
+    @pytest.mark.parametrize("output", ["PS", "PSD"])
+    def test_spectral_power_scaling(self, sin_patch, output):
+        """Ensure PS and PSD integrate/sum to time-domain mean square."""
+        dims = ("time",)
+        out = sin_patch.dft("time", pad=False, output=output)
+
+        self._assert_spectral_power_matches_patch(sin_patch, out, dims, output)
+
+    @pytest.mark.parametrize(
+        "dims",
+        [
+            None,
+            ("time", "distance"),
+        ],
+    )
+    @pytest.mark.parametrize("output", ["PS", "PSD"])
+    def test_spectral_power_scaling_multiple_dims(self, sin_patch, dims, output):
+        """Ensure multi-axis spectral outputs recover mean square."""
+        out = sin_patch.dft(dim=dims, pad=False, output=output)
+
+        self._assert_spectral_power_matches_patch(sin_patch, out, dims, output)
+
+    @pytest.mark.parametrize(
+        ("dims", "real"),
+        [
+            (("time",), True),
+            (("time", "distance"), "time"),
+            (("distance", "time"), "distance"),
+        ],
+    )
+    @pytest.mark.parametrize("output", ["PS", "PSD"])
+    def test_real_spectral_outputs_match_full_dft_bins(
+        self, sin_patch, dims, real, output
+    ):
+        """Ensure real spectral outputs keep raw nonnegative-frequency bins."""
+        out = sin_patch.dft(dim=dims, real=real, pad=False, output=output)
+
+        self._assert_real_output_matches_full_dft(sin_patch, out, dims, output, real)
+
+    @pytest.mark.parametrize("output", ["PS", "PSD"])
+    def test_spectral_power_scaling_padded(self, sin_patch_trimmed, output):
+        """Ensure default padded spectral outputs use the padded extent."""
+        padded = sin_patch_trimmed.pad(time="fft")
+        out = sin_patch_trimmed.dft("time", output=output)
+
+        self._assert_spectral_power_matches_patch(padded, out, ("time",), output)
+
+    def test_spectral_output_units(self, sin_patch):
+        """Ensure spectral output units are scaled according to output type."""
+        data_units = get_quantity(sin_patch.attrs.data_units)
+        time_units = get_quantity(sin_patch.get_coord("time").units)
+
+        as_ = sin_patch.dft("time", pad=False, output="AS")
+        ps = sin_patch.dft("time", pad=False, output="PS")
+        psd = sin_patch.dft("time", pad=False, output="PSD")
+
+        assert get_quantity(as_.attrs.data_units) == data_units
+        assert get_quantity(ps.attrs.data_units) == data_units * data_units
+        expected_psd_units = data_units * data_units * time_units
+        assert get_quantity(psd.attrs.data_units) == expected_psd_units
+
+    def test_time_dft_coord_uses_hz(self, sin_patch):
+        """Ensure transformed time coords use Hz rather than reduced 1/s."""
+        out = sin_patch.dft("time", pad=False)
+
+        assert get_quantity(out.get_coord("ft_time").units) == get_quantity("Hz")
+        assert get_quantity_str(out.get_coord("ft_time").units) == "Hz"
+
+    def test_strain_rate_psd_units_use_hz(self, sin_patch):
+        """Ensure strain-rate PSD units use conventional per-Hz units."""
+        patch = sin_patch.set_units("strain/s")
+
+        out = patch.dft("time", real=True, pad=False, output="PSD")
+
+        assert get_quantity(out.attrs.data_units) == get_quantity("(strain/s)**2/Hz")
+        assert "Hz" in get_quantity_str(out.attrs.data_units)
+
+    @pytest.mark.parametrize("output", ["AS", "PS", "PSD"])
+    def test_spectral_output_without_data_units(self, sin_patch, output):
+        """Ensure spectral outputs don't invent units without data units."""
+        patch = sin_patch.update_attrs(data_units=None)
+
+        out = patch.dft("time", pad=False, output=output)
+
+        assert out.attrs.data_units is None
+
+    def test_output_is_case_insensitive(self, sin_patch):
+        """Ensure output names are normalized before conversion."""
+        lower = sin_patch.dft("time", output="as")
+        upper = sin_patch.dft("time", output="AS")
+        assert lower.equals(upper)
+
+    def test_invalid_output_raises(self, sin_patch):
+        """Ensure invalid output types raise."""
+        with pytest.raises(ValueError, match="Unknown output"):
+            sin_patch.dft("time", output="bad")
+
+    def test_db_true_with_fft_raises(self, sin_patch):
+        """Ensure dB conversion is only accepted for spectral outputs."""
+        with pytest.raises(ParameterError, match="db=True is only supported"):
+            sin_patch.dft("time", output="FFT", db=True)
+
+    @pytest.mark.parametrize(("output", "scale"), [("AS", 20), ("PS", 10), ("PSD", 10)])
+    def test_db_output(self, sin_patch, output, scale):
+        """Ensure spectral outputs use DASCore's no-reference dB scaling."""
+        linear = sin_patch.dft("time", output=output)
+        out = sin_patch.dft("time", output=output, db=True)
+        eps = np.finfo(linear.data.dtype).eps
+        expected = scale * np.log10(linear.data + eps)
+
+        assert get_quantity(out.attrs.data_units) == get_quantity("dB")
+        assert out.attrs.data_type == linear.attrs.data_type
+        assert np.allclose(out.data, expected)
 
 
 class TestInverseDiscreteFourierTransform:
@@ -253,6 +442,20 @@ class TestInverseDiscreteFourierTransform:
         out = fft_sin_patch_time.idft("time")
         assert out.attrs.data_type == sin_patch.attrs.data_type
 
+    def test_dft_output_attr_removed_after_idft(self, fft_sin_patch_time):
+        """Ensure inverse DFT removes private DFT output metadata."""
+        out = fft_sin_patch_time.idft("time")
+
+        assert "_dft_output" not in out.attrs
+
+    @pytest.mark.parametrize("output", ["AS", "PS", "PSD"])
+    def test_non_fft_output_cannot_be_inverted(self, sin_patch, output):
+        """Ensure non-FFT spectral representations cannot be inverted."""
+        out = sin_patch.dft("time", output=output)
+
+        with pytest.raises(ValueError, match="Only dft\\(output='FFT'\\)"):
+            out.idft("time")
+
     def test_undo_padding(self, sin_patch_trimmed):
         """Ensure the padding is undone in idft."""
         dft_patch = sin_patch_trimmed.dft("time")
@@ -266,6 +469,59 @@ class TestInverseDiscreteFourierTransform:
         idft = dft_patch.idft()
         assert idft.shape == sin_patch_trimmed.shape
         assert np.allclose(np.real(idft.data), sin_patch_trimmed.data)
+
+    def test_two_coords_wanting_one_parking_space(self):
+        """A pair of names which park in the same place is refused."""
+        patch = dc.Patch(
+            data=random_state.random((4, 5)),
+            coords={"a": np.arange(4), "a_associated_b": np.arange(5)},
+            dims=("a", "a_associated_b"),
+        )
+        patch = patch.update_coords(
+            b_associated_c=("a", np.arange(4) * 1.0),
+            c=("a_associated_b", np.arange(5) * 1.0),
+        )
+        with pytest.raises(PatchError, match="is where it would go"):
+            patch.dft(("a", "a_associated_b"))
+
+    def test_associated_coords_restored(self, random_patch_many_coords):
+        """Coordinates on a transformed dim come back with it. See #1041."""
+        patch = random_patch_many_coords
+        out = patch.dft(dim=None).idft()
+        # time2 rides time and lat rides distance; quality spans both, which
+        # no single name can park, so it is dropped as it always was.
+        for name in ("time2", "lat"):
+            assert out.coords.dim_map[name] == patch.coords.dim_map[name]
+            assert np.allclose(out.get_array(name), patch.get_array(name))
+        assert "quality" not in out.coords.coord_map
+
+    def test_associated_coords_wait_for_their_dim(self, random_patch_many_coords):
+        """A dim still in the frequency domain keeps its coords parked."""
+        patch = random_patch_many_coords
+        out = patch.dft(dim=None).idft("ft_time")
+        assert "time2" in out.coords.coord_map
+        assert "lat" not in out.coords.coord_map
+        assert "lat" in out.idft().coords.coord_map
+
+    def test_padded_round_trip_restores_associated_coords(self, event_patch_1):
+        """A transform which pads restores what padding said nothing about."""
+        count = event_patch_1.coord_shapes["distance"][0]
+        labels = np.array([f"c{x}" for x in range(count)])
+        patch = event_patch_1.update_coords(
+            label=("distance", labels), idx=("distance", np.arange(count))
+        )
+        out = patch.dft(("time", "distance")).idft().real()
+        assert np.array_equal(out.get_array("label"), labels)
+        # Padding widened the integers to hold the NaN it added, and the
+        # trim which follows cannot narrow them again.
+        assert np.allclose(out.get_array("idx"), np.arange(count))
+
+    def test_real_transform_restores_associated_coords(self, sin_patch):
+        """A real transform is a different length, but restores its coords."""
+        depth = np.arange(len(sin_patch.get_coord("distance"))) * 2.0
+        patch = sin_patch.update_coords(depth=("distance", depth))
+        out = patch.dft(("time", "distance"), real="time").idft()
+        assert np.allclose(out.get_array("depth"), depth)
 
     def test_no_extra_attrs_or_coords(self, sin_patch):
         """Ensure no extra attrs or coords remain after round trip."""
@@ -282,6 +538,21 @@ class TestInverseDiscreteFourierTransform:
 
 class TestSTFT:
     """Tests for the short-time Fourier transform."""
+
+    def test_numeric_window_with_timedelta_coord(self):
+        """
+        Stft with a numeric window length should work when the time
+        coordinate is timedelta64 (not just datetime64); see #604.
+        """
+        patch = dc.get_example_patch()
+        time = patch.get_coord("time")
+        # Convert the time coordinate to timedelta64 (relative to the end).
+        new = patch.update_coords(time=time.values - time.values[-1])
+        # A numeric window length previously raised a ufunc type error here.
+        out_numeric = new.stft(time=0.1)
+        out_timedelta = new.stft(time=dc.to_timedelta64(0.1))
+        # The numeric form must match the explicit-duration form exactly.
+        assert out_numeric.equals(out_timedelta)
 
     def test_type(self, chirp_stft_patch, chirp_patch):
         """Simply ensure the correct type was returned."""
@@ -400,3 +671,67 @@ class TestInverseSTFT:
         msg = "Inverse stft not possible"
         with pytest.raises(PatchError, match=msg):
             chirp_stft_detrend_patch.istft()
+
+
+class TestInverseSTFTAssociatedCoords:
+    """Tests that istft round-trips patches with associated coordinates."""
+
+    @pytest.fixture(scope="class")
+    def patch_with_coords(self):
+        """A patch with coords on each dimension and one on no dimension."""
+        patch = dc.get_example_patch("random_das", shape=(10, 200))
+        dist_len = len(patch.get_coord("distance"))
+        time_len = len(patch.get_coord("time"))
+        return patch.update_coords(
+            depth=("distance", np.arange(dist_len, dtype=float) * 2.0),
+            tlabel=("time", np.arange(time_len, dtype=float)),
+            note=(None, np.array(["a", "b"])),
+        )
+
+    def test_coord_on_untransformed_dim(self, patch_with_coords):
+        """A coord on an untransformed dim survives the round trip. See #1039."""
+        patch = patch_with_coords.drop_coords("tlabel", "note")
+        out = patch.stft(time=0.1).istft()
+        assert out.dims == patch.dims
+        assert out.coords == patch.coords
+        assert np.allclose(out.data, patch.data)
+
+    def test_coord_on_transformed_dim(self, patch_with_coords):
+        """A coord on the transformed dim is dropped by stft, not restored."""
+        patch = patch_with_coords.drop_coords("depth", "note")
+        stft_patch = patch.stft(time=0.1)
+        assert "tlabel" not in stft_patch.coords.coord_map
+        out = stft_patch.istft()
+        assert "tlabel" not in out.coords.coord_map
+        assert out.dims == patch.dims
+        assert np.allclose(out.data, patch.data)
+
+    def test_multiple_associated_coords(self, patch_with_coords):
+        """Several associated coords round trip, minus the transformed one."""
+        patch = patch_with_coords
+        out = patch.stft(time=0.1).istft()
+        expected = patch.drop_coords("tlabel")
+        assert out.dims == patch.dims
+        assert out.coords == expected.coords
+        assert np.allclose(out.data, patch.data)
+
+    def test_coord_on_untransformed_time(self, patch_with_coords):
+        """Transforming distance leaves the time-associated coord intact."""
+        patch = patch_with_coords
+        out = patch.stft(distance=4).istft()
+        assert out.dims == patch.dims
+        assert out.coords == patch.drop_coords("depth").coords
+        assert np.allclose(out.data, patch.data)
+
+    def test_coords_on_stft_dims_dropped(self, patch_with_coords):
+        """Coords on the frequency or window dims cannot survive the inverse."""
+        stft_patch = patch_with_coords.drop_coords("tlabel", "note").stft(time=0.1)
+        freq_len = len(stft_patch.get_coord("ft_time"))
+        win_len = len(stft_patch.get_coord("time"))
+        marked = stft_patch.update_coords(
+            snr=("ft_time", np.arange(freq_len, dtype=float)),
+            wlabel=("time", np.arange(win_len, dtype=float)),
+        )
+        out = marked.istft()
+        assert {"snr", "wlabel"}.isdisjoint(out.coords.coord_map)
+        assert out.coords == stft_patch.istft().coords

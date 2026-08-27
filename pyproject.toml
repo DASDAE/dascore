@@ -2,11 +2,8 @@
 # --- Build system configuration
 
 [build-system]
-requires = [ "setuptools>=41", "setuptools-scm", "scikit-build"]
+requires = [ "setuptools>=61", "setuptools-scm"]
 build-backend = "setuptools.build_meta"
-
-[tool.setuptools-git-versioning]
-enabled = true
 
 [tool.setuptools]
 include-package-data = true
@@ -18,7 +15,7 @@ packages = ["dascore"]
 
 [project]
 name = "dascore"
-dynamic = ["version"]  # version is fetched by setuptools-git-versioning
+dynamic = ["version"]  # version is derived from git tags by setuptools_scm
 
 authors = [
   { name="Derrick Chambers", email="chambers.ja.derrick@gmail.com" },
@@ -27,13 +24,13 @@ authors = [
 description = "A python library for distributed fiber optic sensing"
 readme = "readme.md"
 license = { file="docs/LICENSE" }
-requires-python = ">=3.10"
+requires-python = ">=3.12"
 classifiers = [
     "Development Status :: 4 - Beta",
+    "Environment :: WebAssembly",
+    "Environment :: WebAssembly :: Emscripten",
     "License :: OSI Approved :: GNU Lesser General Public License v3 or later (LGPLv3+)",
     "Topic :: Scientific/Engineering",
-    "Programming Language :: Python :: 3.10",
-    "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
     "Programming Language :: Python :: 3.14",
@@ -45,17 +42,26 @@ keywords = ["geophysics", "distributed-acoustic-sensing"]
 # --- Dependencies
 
 dependencies = [
+     # Provides array_namespace and friends for array-API backed code.
+     "array-api-compat>=1.9",
      "h5py",
-     "matplotlib>=3.8",
-     "numpy>=1.24",
+     "matplotlib>=3.10",
+     # 2.0 is the first numpy with native array API support, which is what
+     # dascore is written against; 2.3.3 is the first pandas 3 accepts on
+     # python 3.14, and a floor below what the matrix installs is untested.
+     "numpy>=2.3.3",
      "packaging",
-     "pandas>=2.0",
-     "pooch>=1.2",
+     # 3.0 is where copy-on-write and the `str` dtype became the only
+     # behavior; dascore is written against those rather than around them.
+     "pandas>=3.0",
+     "pooch>=1.3",  # retry_if_failed was added in 1.3
      "pydantic>2.1",
+     # An inventory is authored as YAML, so reading one is not optional.
+     "pyyaml",
      "rich",
-     "tables>=3.7",
-     "typing_extensions>=4.12",
-     "pint",
+      "typing_extensions>=4.12",
+     "universal-pathlib",
+     "pint>=0.24.4",
      "scipy>=1.15",
 ]
 
@@ -63,28 +69,57 @@ dependencies = [
 
 extras = [
     "xarray",
+    # An annotation set may be stored as parquet rather than CSV; CSV is
+    # the floor which needs nothing.
+    "pyarrow",
+    "netCDF4",
+    "h5netcdf",
     "findiff",
     "obspy",
     "numba",
     "rocket-fft",
     "segyio",
     "bottleneck",
+    "pymseed[numpy]",
+    "protobuf",
 ]
 
 docs = [
     "jinja2",
     "ipywidgets",
     "tabulate",
+    # Quarto executes the {python} cells in docs/**.qmd through jupyter, so
+    # a doc build needs a kernel and the notebook plumbing around it. These
+    # used to be supplied by a conda environment file rather than declared.
+    "ipykernel",
+    "jupyter-client",
+    "nbclient",
+    "nbformat",
+    # The JupyterLite site the tutorial pages link to. jupyter-server is not
+    # used at runtime, but jupyterlite-core requires it to add custom content.
+    "jupyterlite-core",
+    "jupyterlite-pyodide-kernel",
+    "jupyter-server",
 ]
 
 test = [
+    "aiohttp",
+    # A reference array API implementation used to catch numpy-only code.
+    "array-api-strict",
+    # An array backend which array-api-compat has to wrap, unlike numpy and
+    # array-api-strict, so backend dispatch is tested against both kinds.
+    "dask[array]",
     "coverage>=7.4,<8",
     "pytest-cov>=4",
     "pre-commit",
     "pytest",
+    "pytest-timeout",
     "pytest-codeblocks",
-    "pytest-cov",
+    "pytest-xdist",
+    "s3fs",
+    "starlette",
     "twine",
+    "uvicorn",
 ]
 
 profile_base = [
@@ -111,23 +146,33 @@ dev = ["dascore[test]", "dascore[docs]", "dascore[profile_base]", "dascore[extra
 # --- Entry Points
 
 [project.entry-points."dascore.fiber_io"]
+AI4EPS__V1 = "dascore.io.ai4eps.core:AI4EPSV1"
 APSENSING__V10 = "dascore.io.ap_sensing.core:APSensingV10"
 DASDAE__V1 = "dascore.io.dasdae.core:DASDAEV1"
 DASVADER__V1 = "dascore.io.dasvader.core:DASVaderV1"
 DASHDF5__V1 = "dascore.io.dashdf5.core:DASHDF5"
+HDAS__V1 = "dascore.io.hdas.core:HDASV1"
+HDAS__V2 = "dascore.io.hdas.core:HDASV2"
 H5SIMPLE__V1_0 = "dascore.io.h5simple.core:H5Simple"
 FEBUS_G1_CSV__V1_0 = "dascore.io.febus.core:FebusG1CSV1"
+FEBUS_BSL_H5__V1 = "dascore.io.febus.core:FebusBSLH5V1"
+FEBUS_MTX_H5__V1 = "dascore.io.febus.core:FebusMTXH5V1"
 FEBUS__V1 = "dascore.io.febus.core:Febus1"
 FEBUS__V2 = "dascore.io.febus.core:Febus2"
+FEBUS_T1__V1 = "dascore.io.febus.core:FebusT1V1"
 NEUBREXRFS__V1 = "dascore.io.neubrex:NeubrexRFSV1"
+ODH4__V1 = "dascore.io.odh4.core:ODH4V1"
 NEUBREXDAS__V1 = "dascore.io.neubrex:NeubrexDASV1"
 OPTODAS__V8 = "dascore.io.optodas.core:OptoDASV8"
 OPTODAS__V9 = "dascore.io.optodas.core:OptoDASV9"
 OPTODAS__V10 = "dascore.io.optodas.core:OptoDASV10"
+OPTODAS__V11 = "dascore.io.optodas.core:OptoDASV11"
+SR4731__V200 = "dascore.io.sr4731.core:SR4731V200"
 PICKLE = "dascore.io.pickle.core:PickleIO"
 PRODML__V2_0 = "dascore.io.prodml.core:ProdMLV2_0"
 PRODML__V2_1 = "dascore.io.prodml.core:ProdMLV2_1"
 SENTEK__V5 = "dascore.io.sentek.core:SentekV5"
+UPTECH_H5__V1 = "dascore.io.uptech.core:UptechH5V1"
 TDMS__V4713 = "dascore.io.tdms.core:TDMSFormatterV4713"
 TERRA15__V4 = "dascore.io.terra15.core:Terra15FormatterV4"
 TERRA15__V5 = "dascore.io.terra15.core:Terra15FormatterV5"
@@ -138,15 +183,30 @@ SEGY__V1_0 = "dascore.io.segy.core:SegyV1_0"
 SEGY__V2_0 = "dascore.io.segy.core:SegyV2_0"
 SEGY__V2_1 = "dascore.io.segy.core:SegyV2_1"
 SILIXA_H5__V1 = "dascore.io.silixah5:SilixaH5V1"
-SINTELA_BINARY__V3 = "dascore.io.sintela_binary.core:SintelaBinaryV3"
+SILIXA_H5__V2 = "dascore.io.silixah5:SilixaH5V2"
+SINTELA_BINARY__V3 = "dascore.io.sintela.core:SintelaBinaryV3"
+SINTELA_PROTOBUF__V1 = "dascore.io.sintela.core:SintelaProtobufV1"
 RSF__V1 = "dascore.io.rsf.core:RSFV1"
 WAV = "dascore.io.wav.core:WavIO"
 XMLBINARY__V1 = "dascore.io.xml_binary.core:XMLBinaryV1"
 GDR_DAS__V1 = "dascore.io.gdr.core:GDR_V1"
+NETCDF_CF__V1_8 = "dascore.io.netcdf.core:NetCDFCFV18"
+MSEED__V2 = "dascore.io.mseed.core:MSeedV2"
+MSEED__V3 = "dascore.io.mseed.core:MSeedV3"
 
 [project.entry-points."dascore.patch_namespace"]
 io = "dascore.io:PatchIO"
 viz = "dascore.viz:VizPatchNameSpace"
+
+[project.entry-points."dascore.spool_namespace"]
+viz = "dascore.viz:VizSpoolNameSpace"
+
+[project.entry-points."dascore.inventory_namespace"]
+io = "dascore.io:InventoryIO"
+viz = "dascore.viz:VizInventoryNameSpace"
+
+[project.entry-points."dascore.annotation_namespace"]
+io = "dascore.io:AnnotationIO"
 
 
 # --- External tool configuration
@@ -168,6 +228,7 @@ lint.select = [
     "N",
     "NPY",
     "NPY201",
+    "PLC0415",
 ]
 
 # Exclude a variety of commonly ignored directories.
@@ -197,12 +258,16 @@ exclude = [
 ]
 
 # lowest python version supported
-target-version = "py310"
+target-version = "py312"
 
 lint.fixable = ["ALL"]
 
 # List of codes to ignore
-lint.ignore = ["D105", "D107", "D401", "D205", "D200", "D400"]
+lint.ignore = [
+    "D105", "D107", "D401", "D205", "D200", "D400",
+    # PEP 695 generics and `type` aliases (3.12+): adopt in a dedicated pass.
+    "UP040", "UP046", "UP047",
+]
 
 [tool.ruff.lint.mccabe]
 # Unlike Flake8, default to a complexity level of 10.
@@ -212,15 +277,78 @@ max-complexity = 10
 [tool.ruff.lint.pydocstyle]
 convention = "numpy"
 
+# Notebooks are exploratory; ruff started linting them in v0.16 and the
+# docstring rules make little sense for a scratch cell.
+[tool.ruff.lint.per-file-ignores]
+# F401: a notebook often imports a name only used inside an IPython magic,
+# which ruff cannot see, and its autofix would delete the import.
+"*.ipynb" = ["D103", "F401"]
+
+# Coverage is measured on three operating systems and combined in one job
+# (the coverage_gate job in runtests.yml), so the data files have to name the
+# same files: relative paths, with the separator differences mapped away.
+[tool.coverage.run]
+relative_files = true
+
+[tool.coverage.paths]
+source = ["dascore/", "*/dascore/"]
+
 [tool.pytest.ini_options]
+norecursedirs = [
+    "*.egg",
+    ".*",
+    "_darcs",
+    "build",
+    "CVS",
+    "dist",
+    "node_modules",
+    "venv",
+    "{arch}",
+    "worktrees",
+]
 filterwarnings = [
-    # Ignore hdf5 warnings from pytables, See pytables #1035
-    'ignore::Warning:tables:'
+]
+markers = [
+    "network: tests that require network-style filesystem access",
+    "concurrency: tests that spawn threads or processes",
+    "slow: tests skipped by default unless explicitly selected with -m slow",
+    "benchmark: performance benchmark tests",
+    "docs_examples: autogenerated tests for executable qmd examples",
 ]
 
 [tool.ruff.format]
 # Use `\n` line endings for all files
 line-ending = "lf"
+
+[tool.ty.src]
+# tests/ is deliberately out of scope. Type checking is worth most where a
+# wrong annotation propagates to users, and tests are leaf code with a fast,
+# loud failure signal and 100% enforced coverage. They also do type-hostile
+# things on purpose -- passing bad input to prove it is rejected, monkey
+# patching, building stubs -- so enforcing here costs suppressions on every
+# new test and risks silently weakening one during a mechanical fix.
+#
+# The value is in the scan, not the enforcement: because tests call the
+# public API the way users do, running ty over them audits whether dascore's
+# signatures are honest. Run it on demand -- after an API change, before a
+# release -- read what it says about dascore/, and fix that:
+#
+#   uvx ty@0.0.65 check --python .venv --config "src.include=['dascore','tests']"
+#
+# Diagnostics that only describe the tests themselves are not worth acting on.
+include = ["dascore"]
+
+# No rule is ignored globally: invalid-method-override,
+# invalid-argument-type and invalid-return-type have each been burned down
+# to zero and left on.
+
+# These files lazily import optional or untyped modules (xarray, numba,
+# h5py.h5r) that are not installed in the pre-commit hook's environment.
+[[tool.ty.overrides]]
+include = ["dascore/compat.py", "dascore/utils/jit.py", "dascore/io/dasvader/utils.py"]
+
+[tool.ty.overrides.rules]
+unresolved-import = "ignore"
 
 [tool.typos.files]
 extend-exclude = ["docs/_static/logo.svg"]

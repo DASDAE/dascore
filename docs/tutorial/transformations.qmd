@@ -4,7 +4,7 @@ execute:
   warning: false
 ---
 
-In DASCore, transformations are operations which change the units of a patch. Transforms can be found in the [transform module](`dascore.transform`) or accessed as `Patch` methods.
+In DASCore, transformations are operations which change the domain of a patch, and usually its units and dimension names along with it. Transforms can be found in the [transform module](`dascore.transform`) or accessed as `Patch` methods.
 
 # Discrete Fourier Transforms
 
@@ -41,6 +41,16 @@ print(real_transform.get_coord("ft_distance"))
 ```
 
 The Inverse Discrete Fourier Transform [idft](`dascore.transform.fourier.idft`) undoes the transformation.
+
+```{python}
+import numpy as np
+
+# A round trip recovers the original patch.
+round_trip = patch.dft(dim="time").idft()
+
+print(f"dims after round trip: {round_trip.dims}")
+assert np.allclose(round_trip.data.real, patch.data)
+```
 
 # Short Time Fourier Transform
 

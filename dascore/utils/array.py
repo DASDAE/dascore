@@ -4,26 +4,71 @@ Utilities for working with patches and arrays.
 
 from __future__ import annotations
 
+import functools
 import hashlib
 import inspect
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
+from typing import Any
 
 import numpy as np
 
 import dascore as dc
 from dascore.compat import array, is_array
-from dascore.constants import DEFAULT_ATTRS_TO_IGNORE, PatchType
+from dascore.constants import PatchType
 from dascore.exceptions import ParameterError, PatchBroadcastError, UnitError
+from dascore.models import ArrayLike
 from dascore.units import DimensionalityError, Quantity, Unit, get_quantity
-from dascore.utils.misc import iterate
-from dascore.utils.models import ArrayLike
+from dascore.utils.array_api import (
+    array_namespace,
+    asarray_like,
+    is_foreign,
+    is_numpy,
+    nan_reduce,
+)
+from dascore.utils.misc import iterate, suppress_warnings
 from dascore.utils.patch import (
     _merge_aligned_coords,
     _merge_models,
     align_patch_coords,
     get_dim_axis_value,
+    numpy_fallback,
     swap_kwargs_dim_to_axis,
 )
+from dascore.warnings import DASCoreWarning
+from dascore.workflow.builtin import ArrayFunc, Ufunc
+from dascore.workflow.identity import ids_enabled, stamp_combination
+from dascore.workflow.processor import _PATCH_ARGUMENT
+
+# Numpy reductions which skip nans, and the name they are known by in
+# dascore.utils.array_api.nan_reduce.
+NAN_REDUCTIONS = {
+    np.nanmax: "max",
+    np.nanmean: "mean",
+    np.nanmin: "min",
+    np.nanstd: "std",
+    np.nansum: "sum",
+}
+
+# Numpy reductions which the array API standard defines under the same name.
+REDUCTIONS = {np.all: "all", np.any: "any"}
+
+# Numpy ufunc names which the array API standard spells differently.
+UFUNC_NAMES = {
+    "absolute": "abs",
+    "arccos": "acos",
+    "arccosh": "acosh",
+    "arcsin": "asin",
+    "arcsinh": "asinh",
+    "arctan": "atan",
+    "arctan2": "atan2",
+    "arctanh": "atanh",
+    "conjugate": "conj",
+    "invert": "bitwise_invert",
+    "left_shift": "bitwise_left_shift",
+    "power": "pow",
+    "right_shift": "bitwise_right_shift",
+    "rint": "round",
+}
 
 
 def _dummy_accumulate(array, axis=0, dtype=None, out=None):
@@ -46,10 +91,150 @@ def _raise_on_out(kwargs):
 
 def _clear_units_if_bool_dtype(patch):
     """Clear the units on the patch if it is a boolean."""
-    dtype = getattr(patch, "dtype", None)
-    if dtype is not None and np.issubdtype(dtype, np.bool_):
+    # Every ufunc and array function path reassembles a patch first.
+    assert hasattr(patch, "dtype"), "can only clear the units of a patch"
+    if array_namespace(patch.data).isdtype(patch.dtype, "bool"):
         return patch.update_attrs(data_units=None)
     return patch
+
+
+def _is_text_coercible_array(data: Any) -> bool:
+    """Return True when an array can be normalized to text values.
+
+    Arrays must expose ``dtype``; non-array inputs return ``False``. Unicode
+    and fixed-width byte dtypes are accepted directly. Object arrays are only
+    accepted if every flattened element is a string/bytes instance. Empty
+    object arrays return ``False``.
+    """
+    if not hasattr(data, "dtype"):
+        return False
+    if data.dtype.kind in {"U", "S"}:
+        return True
+    if data.dtype.kind != "O":
+        return False
+    array = np.asarray(data)
+    if not array.size:
+        return False
+    string_types = (str, bytes, np.str_, np.bytes_)
+    flat = array.reshape(-1)
+    return all(isinstance(value, string_types) for value in flat)
+
+
+def _coerce_text_array(data: ArrayLike) -> np.ndarray:
+    """Normalize text-coercible arrays to unicode numpy arrays."""
+    array = np.asarray(data)
+    if not _is_text_coercible_array(array):
+        msg = "CoordString requires string-like data."
+        raise ValueError(msg)
+    if array.dtype.kind == "U":
+        return array.astype(array.dtype, copy=False)
+    if not array.size:
+        return np.empty(array.shape, dtype=f"U{array.dtype.itemsize}")
+    flat = array.reshape(-1)
+    decoded = []
+    for value in flat:
+        if isinstance(value, bytes | bytearray | np.bytes_):
+            decoded.append(bytes(value).decode("utf-8"))
+        else:
+            decoded.append(str(value))
+    return np.asarray(decoded, dtype="U").reshape(array.shape)
+
+
+def is_string_byte_serializable_array(data: ArrayLike) -> bool:
+    """Return True when an array should use fixed-width string-byte storage."""
+    data = np.asarray(data)
+    return data.dtype.kind in {"U", "S"} or (
+        data.dtype.kind == "O" and _is_text_coercible_array(data)
+    )
+
+
+def convert_strings_to_bytes(data: ArrayLike) -> np.ndarray:
+    """Encode string-like arrays as fixed-width UTF-8 bytes."""
+    data = np.asarray(data)
+    if not data.size:
+        return np.empty(data.shape, dtype="S1")
+    # Storage backends that require one fixed-width bytes dtype need the
+    # encoded values flattened first so the longest byte string can size it.
+    flat = data.reshape(-1)
+    encoded = []
+    for value in flat:
+        if isinstance(value, bytes | bytearray | np.bytes_):
+            encoded.append(bytes(value))
+        else:
+            encoded.append(str(value).encode("utf-8"))
+    max_len = max(len(item) for item in encoded)
+    out = np.asarray(encoded, dtype=f"S{max_len}")
+    return out.reshape(data.shape)
+
+
+def convert_bytes_to_strings(data: ArrayLike, original_dtype="") -> np.ndarray:
+    """Decode fixed-width bytes arrays back to the requested string form."""
+    data = np.asarray(data)
+    if not data.size:
+        dtype = original_dtype if isinstance(original_dtype, str) else ""
+        if dtype.startswith("|S") or dtype.startswith("S"):
+            return np.empty(data.shape, dtype=dtype)
+        if dtype.startswith("<U") or dtype.startswith("U"):
+            return np.empty(data.shape, dtype=dtype)
+        return np.empty(data.shape, dtype="U1")
+    # Preserve byte-backed arrays when requested. Otherwise decode back to the
+    # stored string representation using the recorded original dtype.
+    if isinstance(original_dtype, str) and (
+        original_dtype.startswith("|S") or original_dtype.startswith("S")
+    ):
+        return data.astype(original_dtype, copy=False).reshape(data.shape)
+    flat = [value.decode("utf-8") for value in data.reshape(-1)]
+    out = np.asarray(flat, dtype="U").reshape(data.shape)
+    if original_dtype in {"object", "|O"}:
+        return out.astype(object)
+    if isinstance(original_dtype, str) and (
+        original_dtype.startswith("<U") or original_dtype.startswith("U")
+    ):
+        return out.astype(original_dtype)
+    return out
+
+
+def _get_backend_ufunc(ufunc, array):
+    """Get the array API equivalent of a numpy ufunc, or None if it has none."""
+    name = UFUNC_NAMES.get(ufunc.__name__, ufunc.__name__)
+    return getattr(array_namespace(array), name, None)
+
+
+def _is_python_scalar(value):
+    """Return True for a scalar every array API function accepts."""
+    # Not isinstance; np.float64 subclasses float but is not a python scalar.
+    return type(value) in (int, float, bool)
+
+
+def _is_inexact(array):
+    """Return True if the array holds real or complex floating point values."""
+    xp = array_namespace(array)
+    return xp.isdtype(array.dtype, ("real floating", "complex floating"))
+
+
+def _as_backend(value, template):
+    """Put a ufunc operand in the same array namespace as template."""
+    # Python scalars are valid operands for any backend, as are arrays which
+    # already belong to it.
+    if _is_python_scalar(value) or array_namespace(value) is array_namespace(template):
+        return value
+    return asarray_like(value, template)
+
+
+def _apply_operator(operator, *arrays, **kwargs):
+    """
+    Apply a ufunc to arrays, one of which may not be numpy backed.
+
+    Numpy data are passed to the numpy ufunc, everything else uses the
+    matching function from its own array API namespace.
+    """
+    template = next((x for x in arrays if is_foreign(x)), None)
+    if template is None:
+        return operator(*arrays, **kwargs)
+    func = _get_backend_ufunc(operator, template)
+    assert func is not None, f"{operator.__name__} has no array API equivalent."
+    arrays = tuple(_as_backend(x, template) for x in arrays)
+    return func(*arrays, **kwargs)
 
 
 def _apply_unary_ufunc(operator: np.ufunc, patch, *args, **kwargs):
@@ -72,8 +257,118 @@ def _apply_unary_ufunc(operator: np.ufunc, patch, *args, **kwargs):
     -----
     We assume the shape of the array won't change.
     """
-    out = operator(patch.data, *args, **kwargs)
-    return patch.new(data=out)
+    out = _apply_operator(operator, patch.data, *args, **kwargs)
+    # As for the binary case: a ufunc has no patch function to name it, so
+    # `np.abs(patch)` would otherwise record that nothing happened.
+    task = Ufunc(
+        name=getattr(operator, "__name__", str(operator)),
+        operands=tuple(args),
+        kwargs=_without_patch_values(kwargs),
+    )
+    attrs = stamp_combination(patch.attrs, [patch.attrs], task.fingerprint)
+    return patch.new(data=out, attrs=attrs)
+
+
+def _quantity(array, units):
+    """
+    Attach a unit quantity to an array without multiplying by it.
+
+    Multiplying by an offset quantity (1 degC) would have the registry
+    convert to base units first; constructing the quantity keeps each
+    element a value in those units. A scale in the units ("100 cm") is
+    folded into the magnitudes, as multiplication would.
+    """
+    magnitude = array if units.magnitude == 1 else array * units.magnitude
+    return type(units)(magnitude, units.units)
+
+
+def _is_boolean(data) -> bool:
+    """True when an array's dtype is boolean, whichever backend holds it."""
+    if is_numpy(data):
+        return data.dtype == np.bool_
+    xp = array_namespace(data)
+    return bool(xp.isdtype(data.dtype, "bool"))
+
+
+def _base_magnitudes(quantity):
+    """The base-unit magnitudes of 0, 1, and 2 of a unit quantity."""
+    return tuple((x * quantity).to_base_units().magnitude for x in (0.0, 1.0, 2.0))
+
+
+def _is_offset_unit(quantity) -> bool:
+    """
+    Return True for an affine unit with an offset (degC), a temperature.
+
+    Decided by behaviour rather than a registry attribute: conversion to
+    base units is linear but does not send zero to zero (dascore's
+    registry converts offsets to base units rather than refusing).
+    """
+    zero, one, two = _base_magnitudes(quantity)
+    return np.isclose(two - one, one - zero) and not np.isclose(zero, 0)
+
+
+# Bounded rather than unbounded: a ufunc can be made at runtime
+# (np.frompyfunc) and the cache holds a reference to whatever it is given.
+@functools.lru_cache(maxsize=64)
+def _needs_equal_units(operator) -> bool:
+    """
+    Return True when an operator wants both of its operands in one unit.
+
+    Metres are the yardstick: the registry refuses a bare number beside
+    them, so what comes back is the operator's own requirement rather than
+    the unit's. An operator which wants dimensionless operands refuses
+    metres beside metres too, which is how the two are told apart. The
+    registry decides by dimensionality, so the operand order does not
+    change the answer.
+    """
+    meter, dimensionless = get_quantity("meter"), get_quantity("dimensionless")
+    assert meter is not None and dimensionless is not None
+
+    def _refuses(other):
+        # DimensionalityError is a TypeError, so these clauses may not be
+        # reordered. The second catches every other way the registry can
+        # decline (an unimplemented ufunc, a dtype, a gufunc's shapes).
+        try:
+            operator(2.0 * meter, other)
+        except DimensionalityError:
+            return True
+        except (TypeError, ValueError):
+            return False
+        return False
+
+    return _refuses(1.5 * dimensionless) and not _refuses(1.5 * meter)
+
+
+def _is_logarithmic_unit(quantity) -> bool:
+    """
+    Return True for a logarithmic unit (dB), whose base conversion is not linear.
+
+    A level may be scaled (2 dB times 2 is 4 dB) and compared, but adding a
+    bare number to it has no meaning the registry agrees on.
+    """
+    zero, one, two = _base_magnitudes(quantity)
+    return not np.isclose(two - one, one - zero)
+
+
+# The binary ufuncs which keep an offset unit (degC) meaningful beside a
+# unitless operand — a difference for sums and differences, an absolute
+# value for extrema and comparisons. Anything else needs an absolute unit.
+_OFFSET_UNIT_OPERATORS = frozenset(
+    {
+        np.add,
+        np.subtract,
+        np.maximum,
+        np.minimum,
+        np.fmax,
+        np.fmin,
+        np.greater,
+        np.greater_equal,
+        np.less,
+        np.less_equal,
+        np.equal,
+        np.not_equal,
+    }
+)
 
 
 def _apply_binary_ufunc(
@@ -81,7 +376,6 @@ def _apply_binary_ufunc(
     patch: PatchType | ArrayLike,
     other: PatchType | ArrayLike,
     *args: tuple[PatchType | ArrayLike, ...],
-    attrs_to_ignore=DEFAULT_ATTRS_TO_IGNORE,
     **kwargs,
 ) -> PatchType:
     """
@@ -100,13 +394,20 @@ def _apply_binary_ufunc(
     other
         The other object to apply the operator element-wise. Must be either a
         non-patch which is broadcastable to the shape of the patch's data, or
-        a patch which has compatible coordinates. If units are provided they
-        must be compatible.
+        a patch of the same kind (see
+        [`check_kind`](`dascore.utils.patch.check_kind`)) sharing at least
+        one dimension; shared dimensions are aligned on the intersection
+        of their coordinate values. Data units take part in the operation,
+        so they need not match unless the operator requires it (adding
+        metres to seconds raises, multiplying them does not). An operand
+        without units — an array, a scalar, or a patch with no
+        `data_units` — conflicts with nothing: it is dimensionless where
+        that works (`metres * x` is metres, `x / metres` is 1/metres) and
+        takes the other operand's units where the operation needs equal
+        units (`metres + x` is metres).
     *args
         Arguments to pass to the operator, can include arrays, scalars,
         and patches.
-    attrs_to_ignore
-        Attributes to ignore when considering if patches are compatible.
     **kwargs
         Keyword arguments to pass to the operator.
 
@@ -121,56 +422,289 @@ def _apply_binary_ufunc(
         patch, other_patch = align_patch_coords(patch, other)
         coords = _merge_aligned_coords(patch.coords, other_patch.coords)
         # Get new attributes.
-        attrs = _merge_models(
-            patch.attrs,
-            other_patch.attrs,
-            attrs_to_ignore=attrs_to_ignore,
-        )
-        other = other_patch.data
-        if other_units := get_quantity(other_patch.attrs.data_units):
-            other = other * other_units
-        return patch, other, coords, attrs
+        attrs = _merge_models(patch.attrs, other_patch.attrs)
+        # the other patch's data stay bare; its units ride alongside, so a
+        # scale in them ("100 cm") is never folded into the data
+        other_units = get_quantity(other_patch.attrs.data_units)
+        return patch, other_patch.data, coords, attrs, other_units
 
     def _ensure_array_compatible(patch, other):
         """Deal with broadcasting a patch and an array."""
         # This handles warning from quantity.
         other = other.magnitude if hasattr(other, "magnitude") else other
-        other = np.asanyarray(other)
-        if patch.shape == other.shape:
+        # Only the shape is needed here, so don't convert arrays which
+        # already have one; that would materialize non-numpy data.
+        if (shape := getattr(other, "shape", None)) is None:
+            shape = np.asanyarray(other).shape
+        if patch.shape == shape:
             return patch
-        if (patch_ndims := patch.ndim) < (array_ndims := other.ndim):
+        if (patch_ndims := patch.ndim) < (array_ndims := len(shape)):
             msg = f"Cannot broadcast patch/array {patch_ndims=} {array_ndims=}"
             raise PatchBroadcastError(msg)
-        patch = patch.make_broadcastable_to(other.shape)
+        patch = patch.make_broadcastable_to(shape)
         return patch
 
     def _apply_op(array1, array2, operator, reversed=False):
         """Simply apply the operator, account for reversal."""
         if reversed:
             array1, array2 = array2, array1
-        return operator(array1, array2, *args, **kwargs)
+        return _apply_operator(operator, array1, array2, *args, **kwargs)
 
-    def _apply_op_units(patch, other, operator, attrs, reversed=False):
-        """Apply the operation handling units attached to array."""
-        data_units = get_quantity(attrs.data_units)
-        data = patch.data if data_units is None else patch.data * data_units
-        # other is not numpy array wrapped w/ quantity, convert to quant
-        if not hasattr(other, "shape"):
-            other = get_quantity(other)
+    def _fallback_label(new_data, units):
+        """The units a numpy-computed result keeps: none when boolean."""
+        return None if _is_boolean(new_data) else _label(units)
+
+    def _label(quantity):
+        """The data_units string for one unit of output."""
+        # the scale comes out of a division, so shed its float noise
+        magnitude = float(f"{quantity.magnitude:.12g}")
+        if magnitude == 1:
+            return str(quantity.units)
+        return str(magnitude * quantity.units)
+
+    def _apply_op_one_unitful(
+        patch, other, operator, attrs, data_units, other_units, reversed=False
+    ):
+        """
+        Apply the operation when exactly one side has units.
+
+        The side without units conflicts with nothing: it is taken as
+        dimensionless first (right for products and quotients) and, if the
+        operator rejects that, as sharing the other side's units (right for
+        sums, differences, and comparisons). A unit whose base is itself
+        dimensionless (µϵ) is one the registry coerces the bare side into
+        rather than rejecting, so there the operator is asked outright and
+        the bare side adopts the units wherever it wants one unit on both
+        sides. The units of one unit of output are settled on scalars —
+        the probe's result over the bare result — so the data stay bare, a
+        scale in the units ("100 cm") rides along unchanged, and nothing
+        large is ever wrapped by the unit registry. A ufunc the registry
+        does not implement falls through to numpy with the units left as
+        they were.
+        """
+        known = data_units if data_units is not None else other_units
+        if _is_offset_unit(known):
+            # An offset unit (degC) cannot be probed by scaling, and only
+            # the operations which keep a temperature a temperature are
+            # meaningful on one: the data keep their units for those, and a
+            # comparison drops them.
+            if operator not in _OFFSET_UNIT_OPERATORS:
+                msg = (
+                    f"{operator} is not defined for the offset units {known}; "
+                    "convert to an absolute unit (kelvin) first."
+                )
+                raise UnitError(msg)
+            # The unitless side is a difference in those units, so it may be
+            # added to or taken from the temperature, never the other way.
+            if operator is np.subtract and not ((data_units is not None) ^ reversed):
+                msg = (
+                    f"Cannot subtract a temperature in {known} from a value "
+                    "without units; convert to an absolute unit (kelvin) first."
+                )
+                raise UnitError(msg)
+            new_data = _apply_op(patch.data, other, operator, reversed)
+            if _is_boolean(new_data):
+                return new_data, attrs.update(data_units=None)
+            return new_data, attrs.update(data_units=_label(known))
+        if _is_logarithmic_unit(known) and operator in (np.add, np.subtract):
+            msg = (
+                f"{operator} is not defined between the logarithmic units {known} "
+                "and a value without units."
+            )
+            raise UnitError(msg)
+        is_power = operator in (np.power, np.float_power)
+        if is_power and np.ndim(other) > 0 and data_units is not None and not reversed:
+            msg = f"{operator} with units {data_units} needs a scalar exponent."
+            raise UnitError(msg)
+        # The exponent's value decides the units of a power; for every other
+        # operation any value does, so a pair whose bare result is not zero
+        # is tried first (2 // 1.5 is 1, and reversed 1.5 // 2 is 0).
+        probe_other = other if is_power and np.ndim(other) == 0 else 1.5
+        dimensionless = get_quantity("dimensionless")
+        assert dimensionless is not None
+        patch_q = data_units if data_units is not None else dimensionless
+        other_q = other_units if other_units is not None else dimensionless
+        # µϵ is dimensionless, so the registry would coerce the bare side
+        # into it (1.5 becomes 1.5e6 µϵ) instead of asking it to adopt.
+        if known.dimensionless and _needs_equal_units(operator):
+            patch_q = other_q = known
+
+        def _probe(value, probe_other):
+            pair = (value * patch_q, probe_other * other_q)
+            try:
+                return operator(*(pair[::-1] if reversed else pair))
+            except DimensionalityError:
+                # equal units needed: the side without adopts the other's
+                adopt = data_units if data_units is not None else other_units
+                pair = (value * adopt, probe_other * adopt)
+                try:
+                    return operator(*(pair[::-1] if reversed else pair))
+                except DimensionalityError as er:
+                    msg = f"{operator} failed with units {data_units} and {other_units}"
+                    raise UnitError(msg) from er
+
         try:
-            new_data_w_units = _apply_op(data, other, operator, reversed=reversed)
+            probe, plain = None, 0.0
+            pairs = ((2.0, 1.5), (1.5, 2.0), (3.0, 2.0), (2.0, 3.0))
+            if is_power:
+                pairs = ((2.0, probe_other),)
+            for value, probe_other in pairs:
+                probe = _probe(value, probe_other)
+                pair = (value, probe_other)
+                plain = operator(*(pair[::-1] if reversed else pair))
+                if not hasattr(probe, "units") or (np.isfinite(plain) and plain != 0):
+                    break
+        except UnitError:
+            raise
+        except (TypeError, ValueError):
+            # The unit registry does not implement this ufunc, or cannot
+            # hold this scalar (a bool), or the ufunc wants dimensioned
+            # operands (matmul); numpy does the work, and the units are
+            # whatever they were, on whichever side had them — unless the
+            # result is boolean, which has none.
+            new_data = _apply_op(patch.data, other, operator, reversed)
+            return new_data, attrs.update(data_units=_fallback_label(new_data, known))
+        new_data = _apply_op(patch.data, other, operator, reversed)
+        if not hasattr(probe, "units"):
+            # a comparison: no units
+            return new_data, attrs.update(data_units=None)
+        # one of the pairs always gives a usable bare result for a ufunc
+        # which returns units at all
+        assert np.isfinite(plain) and plain != 0, f"no usable probe for {operator}"
+        try:
+            return new_data, attrs.update(data_units=_label(probe / plain))
+        except TypeError:
+            # a logarithmic level cannot be divided by a number, but it has
+            # kept its unit through the operation
+            return new_data, attrs.update(data_units=str(probe.units))
+
+    def _apply_op_both_unitful(
+        patch, other, operator, attrs, data_units, other_units, reversed=False
+    ):
+        """
+        Apply the operation with units on both sides through the registry.
+
+        Two known units are left to the unit registry to reconcile or
+        reject; the result's data are its magnitudes in the registry's
+        units (a scale in either side's units is folded into the data).
+        Offset units are the exception: the registry's ufunc dispatch does
+        not handle them, so they are done by hand — the other side is
+        converted to the patch's units, a difference is a delta, extrema
+        and comparisons keep or drop the units, anything else is refused.
+        """
+        if _is_offset_unit(data_units) or _is_offset_unit(other_units):
+            return _apply_op_both_offset(
+                patch, other, operator, attrs, data_units, other_units, reversed
+            )
+        try:
+            result = _apply_op(
+                _quantity(patch.data, data_units),
+                _quantity(other, other_units),
+                operator,
+                reversed,
+            )
         except DimensionalityError as er:
-            msg = f"{operator} failed with units {data_units} and {other.units}"
+            msg = f"{operator} failed with units {data_units} and {other_units}"
             raise UnitError(msg) from er
-        # Check if result has units (comparison operators return plain arrays)
-        if hasattr(new_data_w_units, "units"):
-            attrs = attrs.update(data_units=str(new_data_w_units.units))
-            new_data = new_data_w_units.magnitude
-        else:
-            # Result is unitless (e.g., from boolean comparison)
-            attrs = attrs.update(data_units=None)
-            new_data = new_data_w_units
-        return new_data, attrs
+        except TypeError:
+            # The unit registry does not implement this ufunc; numpy does,
+            # on the data, with `other` expressed in the patch's units and
+            # the units left as they were.
+            if other_units == data_units:
+                other_data = other  # untouched, dtype included
+            else:
+                try:
+                    in_patch_units = _quantity(other, other_units).to(data_units.units)
+                except DimensionalityError as er:
+                    msg = f"{operator} failed with units {data_units} and {other_units}"
+                    raise UnitError(msg) from er
+                other_data = in_patch_units.magnitude / data_units.magnitude
+            new_data = _apply_op(patch.data, other_data, operator, reversed)
+            return new_data, attrs.update(
+                data_units=_fallback_label(new_data, data_units)
+            )
+        if hasattr(result, "units"):
+            return result.magnitude, attrs.update(data_units=str(result.units))
+        # Result is unitless (e.g., from boolean comparison)
+        return result, attrs.update(data_units=None)
+
+    def _apply_op_both_offset(
+        patch, other, operator, attrs, data_units, other_units, reversed=False
+    ):
+        """
+        Apply an operation where an offset unit (degC) meets another unit.
+
+        Two temperatures may be subtracted (a delta), ranked, or compared,
+        never added. A temperature and a difference (delta_degC, or any
+        unit convertible to it) may be added, and the difference taken
+        from the temperature; the result is a temperature.
+        """
+        patch_offset = _is_offset_unit(data_units)
+        other_offset = _is_offset_unit(other_units)
+        refused = UnitError(
+            f"{operator} is not defined for the offset units "
+            f"{data_units if patch_offset else other_units}."
+        )
+        if patch_offset and other_offset:
+            if operator not in _OFFSET_UNIT_OPERATORS or operator is np.add:
+                raise refused
+            # every offset unit is a temperature, so this always converts
+            other_data = _quantity(other, other_units).to(data_units.units).magnitude
+            new_data = _apply_op(patch.data, other_data, operator, reversed)
+            if _is_boolean(new_data):
+                return new_data, attrs.update(data_units=None)
+            if operator is np.subtract:
+                one, zero = _quantity(1.0, data_units), _quantity(0.0, data_units)
+                return new_data, attrs.update(data_units=str((one - zero).units))
+            return new_data, attrs.update(data_units=_label(data_units))
+        # one temperature, one difference: the temperature must be the
+        # minuend of a subtraction, and the sum or difference is a temperature
+        absolute = data_units if patch_offset else other_units
+        temperature_first = patch_offset != reversed
+        if operator not in (np.add, np.subtract) or (
+            operator is np.subtract and not temperature_first
+        ):
+            raise refused
+        delta = (_quantity(1.0, absolute) - _quantity(0.0, absolute)).units
+        try:
+            if patch_offset:
+                other = _quantity(other, other_units).to(delta).magnitude
+                patch_data = patch.data
+            else:
+                patch_data = _quantity(patch.data, data_units).to(delta).magnitude
+        except DimensionalityError as er:
+            msg = f"{operator} failed with units {data_units} and {other_units}"
+            raise UnitError(msg) from er
+        new_data = _apply_op(patch_data, other, operator, reversed)
+        return new_data, attrs.update(data_units=_label(absolute))
+
+    def _apply_op_units(
+        patch, other, operator, attrs, reversed=False, other_units=None
+    ):
+        """
+        Apply the operation with units on at least one side.
+
+        `other_units` is the quantity one unit of `other` stands for when
+        `other` is another patch's data; a bare number, array, or unit-less
+        patch has none, and a Quantity or Unit carries its own.
+        """
+        data_units = get_quantity(attrs.data_units)
+        if isinstance(other, Unit):
+            other = 1 * other
+        elif isinstance(other, str):
+            if (quantity := get_quantity(other)) is None:
+                msg = f"{other!r} names no units; a string operand must."
+                raise UnitError(msg)
+            other = quantity
+        if isinstance(other, Quantity):
+            other, other_units = other.magnitude, 1.0 * other.units
+        if data_units is not None and other_units is not None:
+            return _apply_op_both_unitful(
+                patch, other, operator, attrs, data_units, other_units, reversed
+            )
+        return _apply_op_one_unitful(
+            patch, other, operator, attrs, data_units, other_units, reversed
+        )
 
     # Count patch operands (we only support binary ops on patches).
     patch_is_patch = isinstance(patch, dc.Patch)
@@ -184,16 +718,41 @@ def _apply_binary_ufunc(
         patch, other = other, patch
         reversed = True
 
+    # Taken before the operands are aligned and possibly replaced below:
+    # what went in is what decides which data comes out.
+    members = [x.attrs for x in (patch, other) if isinstance(x, dc.Patch)]
+    other_units = None
     if patch_count > 1:
-        patch, other, coords, attrs = _get_coords_attrs_from_patches(patch, other)
+        patch, other, coords, attrs, other_units = _get_coords_attrs_from_patches(
+            patch, other
+        )
     else:
         patch = _ensure_array_compatible(patch, other)
         coords, attrs = patch.coords, patch.attrs
-    # Apply operation
-    if isinstance(other, Quantity | Unit):
-        new_data, attrs = _apply_op_units(patch, other, operator, attrs, reversed)
+    # Apply operation; only two unitless operands skip the unit registry.
+    has_units = attrs.data_units is not None or other_units is not None
+    if has_units or isinstance(other, Quantity | Unit | str):
+        new_data, attrs = _apply_op_units(
+            patch, other, operator, attrs, reversed, other_units=other_units
+        )
     else:
         new_data = _apply_op(patch.data, other, operator, reversed)
+    # A ufunc is not a patch function, so nothing else names it. Without
+    # this, `patch + 1` and `patch - (-1)` produce the same data and the
+    # same id, though they are different operations. Guarded, so that a
+    # process which has turned the ids off does not hash operands for a
+    # value nothing will read.
+    if ids_enabled():
+        rest = () if other_is_patch else (other,)
+        task = Ufunc(
+            name=getattr(operator, "__name__", str(operator)),
+            reversed=reversed,
+            # `args` reaches the operator too, so two calls which differ
+            # only in those are two operations.
+            operands=_without_patch_values((*rest, *args)),
+            kwargs=_without_patch_values(kwargs),
+        )
+        attrs = stamp_combination(attrs, members, _fingerprint_of(task))
     new = patch.new(data=new_data, coords=coords, attrs=attrs)
     return new
 
@@ -292,21 +851,45 @@ class PatchUFunc:
         )
 
 
+def _apply_reduction(func, data, axis):
+    """
+    Apply a reduction to data, using its own array namespace if it can.
+
+    nan_reduce handles the dtypes the standard cannot reduce.
+    """
+    if not is_numpy(data):
+        if (name := NAN_REDUCTIONS.get(func)) is not None:
+            return nan_reduce(name, data, axis=axis)
+        if (name := REDUCTIONS.get(func)) is not None:
+            return getattr(array_namespace(data), name)(data, axis=axis)
+    # Numpy data, or an aggregation the standard has no name for: a median, or
+    # a callable passed to aggregate. It gets the array as-is, exactly as
+    # before dascore knew about other backends, and decides the output's
+    # backend.
+    return func(data, axis=axis)
+
+
 def _apply_aggregator(patch, dim, func, dim_reduce="empty"):
     """Apply an aggregation operator to patch."""
     data = patch.data
     dims = tuple(iterate(patch.dims if dim is None else dim))
     dfo = get_dim_axis_value(patch, args=dims, allow_multiple=True)
+    if dim_reduce == "squeeze" and {dim for dim, _, _ in dfo} == set(patch.dims):
+        msg = "Cannot squeeze all dimensions; at least one dimension must remain."
+        raise ParameterError(msg)
     # Iter all specified dimensions.
-    for dim, axis, _ in dfo:
+    for dim, _, _ in dfo:
+        axis = patch.get_axis(dim)
         new_coord = patch.get_coord(dim).reduce_coord(dim_reduce=dim_reduce)
         if new_coord is None:
             coords = patch.coords.drop_coords(dim)[0]
-            data = func(data, axis=axis)
+            data = _apply_reduction(func, data, axis)
         else:
             coords = patch.coords.update(**{dim: new_coord})
-            data = np.expand_dims(func(data, axis=axis), axis)
-        patch = patch.new(data=data, coords=coords)
+            reduced = _apply_reduction(func, data, axis)
+            data = array_namespace(reduced).expand_dims(reduced, axis=axis)
+        attrs = patch.attrs.model_dump(exclude={"coords", "dims"}, exclude_unset=True)
+        patch = patch.new(data=data, coords=coords, attrs=attrs)
     return patch
 
 
@@ -412,8 +995,20 @@ def _reassemble_patch(result, patch, func, args, kwargs):
 def apply_array_func(func, *args, **kwargs):
     """
     Apply an array function.
+
+    Numpy functions have no array API equivalent, so patches from other
+    backends are converted to numpy and the result converted back.
     """
     _raise_on_out(kwargs)
+    if (data := _get_foreign_data(args, kwargs)) is not None:
+        name = getattr(func, "__name__", "operation")
+        runner = functools.partial(_apply_array_func, func)
+        return numpy_fallback(name, data, runner, args, kwargs, stacklevel=2)
+    return _apply_array_func(func, *args, **kwargs)
+
+
+def _apply_array_func(func, *args, **kwargs):
+    """Apply an array function to numpy backed patches."""
     # Only handle functions involving Patches
     patches = _find_patches(args, kwargs)
     assert len(patches), "No patches found in apply_array_func"
@@ -436,7 +1031,72 @@ def apply_array_func(func, *args, **kwargs):
     patch = _reassemble_patch(
         result, first_patch, func, converted_args, converted_kwargs
     )
+    # An array function is not a patch function either, so nothing else
+    # names it: without this `np.mean(patch, axis=0)` leaves the ids where
+    # they were and claims nothing was done.
+    if ids_enabled():
+        task = ArrayFunc(
+            name=_array_func_name(func),
+            # The positional arguments say which reduction it was:
+            # `np.mean(patch, 0)` and `np.mean(patch, 1)` are two.
+            args=_without_patch_values(converted_args),
+            kwargs=_without_patch_values(converted_kwargs),
+        )
+        attrs = stamp_combination(
+            patch.attrs, [x.attrs for x in patches], _fingerprint_of(task)
+        )
+        patch = patch.new(attrs=attrs)
     return _clear_units_if_bool_dtype(patch)
+
+
+def _array_func_name(func) -> str:
+    """
+    Return the name an array function is recorded under.
+
+    A ufunc method arrives here as the bound `np.add.reduce`, whose
+    `__name__` is only "reduce" -- so `np.add.reduce` and
+    `np.multiply.reduce` would be one operation without the ufunc it
+    belongs to.
+    """
+    name = getattr(func, "__name__", str(func))
+    owner = getattr(getattr(func, "__self__", None), "__name__", None)
+    return f"{owner}.{name}" if owner else name
+
+
+def _fingerprint_of(task) -> str:
+    """
+    Return a task's fingerprint without complaining about the patch marker.
+
+    The marker is a singleton, so hashing it by its type -- which is what
+    the warning is about -- loses nothing. The warning is worth hearing
+    for a value where it would.
+    """
+    with suppress_warnings(
+        DASCoreWarning, message="A value of type .* has no encoding"
+    ):
+        return task.fingerprint
+
+
+def _without_patch_values(values):
+    """
+    Return arguments with anything the fingerprint should not hold replaced.
+
+    A patch is an *input*, not a parameter -- which one it was is said by
+    the ids folded from the operands. A numpy dtype has no encoding of its
+    own, so it is spelled out rather than hashed by its class, which would
+    give every dtype one fingerprint and warn on every call.
+    """
+
+    def _plain(value):
+        if isinstance(value, dc.Patch):
+            return _PATCH_ARGUMENT
+        if isinstance(value, np.dtype):
+            return str(value)
+        return value
+
+    if isinstance(values, Mapping):
+        return {key: _plain(value) for key, value in values.items()}
+    return tuple(_plain(x) for x in values)
 
 
 # Mapping of ufunc dispatches. Keys are method name or num input/num output.
@@ -446,6 +1106,59 @@ UFUNC_MAP = {
     "reduce": apply_array_func,
     "accumulate": apply_array_func,
 }
+
+
+def _get_foreign_data(args, kwargs):
+    """Return the data of the first non-numpy backed operand, or None."""
+    values = (*args, *kwargs.values())
+    patch_data = (x.data for x in values if isinstance(x, dc.Patch))
+    return next((x for x in (*patch_data, *values) if is_foreign(x)), None)
+
+
+def _operand_can_apply(value, data):
+    """Determine if a ufunc operand can be used with the data's namespace."""
+    if _is_python_scalar(value):
+        return True
+    if getattr(value, "dtype", None) is None:
+        return False
+    # Arrays from a third backend can't be mixed with the data's own.
+    if is_foreign(value) and array_namespace(value) is not array_namespace(data):
+        return False
+    return _is_inexact(value)
+
+
+def _backend_can_apply(ufunc, key, args, kwargs, data):
+    """
+    Determine if a ufunc can be applied in the data's own namespace.
+
+    The numpy fallback is always correct, so this only answers yes where
+    the standard is known to agree with numpy. The standard has narrower
+    dtype domains and no value-based promotion, so eg numpy's rint casts
+    integers up to floats while the standard's round leaves them alone.
+    """
+    # Only element-wise ufuncs have array API equivalents; reductions and
+    # numpy functions (__array_function__) have to use numpy.
+    if key not in ((1, 1), (2, 1)):
+        return False
+    # Numpy-only ufunc options (where, casting, dtype) have no equivalent.
+    if kwargs:
+        return False
+    # Units are implemented with pint, which only wraps numpy arrays. A
+    # second patch's units become a quantity while its coords are aligned,
+    # after this runs, so they have to be caught here too.
+    if any(isinstance(x, Quantity | Unit) for x in args):
+        return False
+    patches = [x for x in args if isinstance(x, dc.Patch)]
+    if len(patches) > 1 and any(x.attrs.data_units for x in patches):
+        return False
+    # Integer and boolean data are where the two disagree most, so they use
+    # numpy; patch data are floating point nearly always.
+    if not _is_inexact(data):
+        return False
+    operands = (x.data if isinstance(x, dc.Patch) else x for x in args)
+    if not all(_operand_can_apply(x, data) for x in operands):
+        return False
+    return _get_backend_ufunc(ufunc, data) is not None
 
 
 def apply_ufunc(ufunc, *args, **kwargs):
@@ -494,7 +1207,13 @@ def apply_ufunc(ufunc, *args, **kwargs):
             f"supported for use with Patch. Use the patch.data array directly."
         )
         raise ParameterError(msg)
-    out = func(ufunc, *args, **kwargs)
+    data = _get_foreign_data(args, kwargs)
+    if data is None or _backend_can_apply(ufunc, key, args, kwargs, data):
+        out = func(ufunc, *args, **kwargs)
+    else:
+        name = getattr(ufunc, "__name__", "operation")
+        runner = functools.partial(func, ufunc)
+        out = numpy_fallback(name, data, runner, args, kwargs, stacklevel=2)
     return _clear_units_if_bool_dtype(out)
 
 
@@ -526,7 +1245,7 @@ def patch_array_function(self, func, types, args, kwargs):
     return apply_array_func(func, *args, **kwargs)
 
 
-def hash_numpy_array(arr: np.ndarray) -> str:
+def hash_array(arr: np.ndarray) -> str:
     """
     Return a stable hash for a NumPy array.
 
@@ -548,18 +1267,18 @@ def hash_numpy_array(arr: np.ndarray) -> str:
     Examples
     --------
     >>> import numpy as np
-    >>> from dascore.utils.array import hash_numpy_array
+    >>> from dascore.utils.array import hash_array
     >>> a = np.array([1.0, 2.0, 3.0])
-    >>> h = hash_numpy_array(a)
+    >>> h = hash_array(a)
     >>> assert isinstance(h, str) and len(h) == 32
     >>> # Same data always produces the same hash
-    >>> assert hash_numpy_array(a) == hash_numpy_array(a.copy())
+    >>> assert hash_array(a) == hash_array(a.copy())
     >>> # Different dtype produces a different hash
-    >>> assert hash_numpy_array(a) != hash_numpy_array(a.astype(np.float32))
+    >>> assert hash_array(a) != hash_array(a.astype(np.float32))
     """
     arr = np.asarray(arr)
     if arr.dtype == object:
-        msg = "hash_numpy_array does not support object arrays."
+        msg = "hash_array does not support object arrays."
         raise ParameterError(msg)
 
     h = hashlib.blake2b(digest_size=16)
@@ -569,11 +1288,15 @@ def hash_numpy_array(arr: np.ndarray) -> str:
     h.update(arr.dtype.str.encode("ascii"))
     h.update(np.asarray(arr.shape, dtype=np.int64).tobytes())
 
-    if arr.flags.c_contiguous:
+    # .data rather than memoryview(...) throughout: it is the same zero-copy
+    # object, and numpy types it as a memoryview.
+    if arr.flags.c_contiguous and arr.dtype.kind not in {"M", "m"}:
         # Zero-copy fast path
-        h.update(memoryview(arr).cast("B"))
+        h.update(arr.data.cast("B"))
     else:
-        # Canonicalize layout; this copies once
-        h.update(np.ascontiguousarray(arr).view(np.uint8))
+        # Canonicalize layout; this also handles datetime/timedelta dtypes,
+        # which do not expose a Python buffer directly. The uint8 view must
+        # come before .data -- a datetime64 buffer cannot be exported.
+        h.update(np.ascontiguousarray(arr).view(np.uint8).data)
 
     return h.hexdigest()

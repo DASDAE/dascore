@@ -23,15 +23,39 @@ def patch_ones(random_patch):
     return patch
 
 
-@pytest.fixture(scope="session", params=sorted(WINDOW_FUNCTIONS))
+# Three shapes run through taper, rather than all thirteen; the window each
+# name resolves to is checked for every entry in test_every_window_tapers.
+TAPER_WINDOWS = ("hann", "triang", "blackmanharris")
+
+
+@pytest.fixture(scope="session", params=TAPER_WINDOWS)
 def time_tapered_patch(request, patch_ones):
     """Return a tapered trace."""
-    if "boxcar" in str(request.param):
-        pytest.skip("boxcar doesn't actually apply taper.")
     # first get a patch with all ones for easy testing
     patch = patch_ones.update(data=np.ones_like(patch_ones.data))
     out = taper(patch, time=0.05, window_type=request.param)
     return out
+
+
+def test_every_window_tapers():
+    """Each name in the table reaches the window scipy has for it.
+
+    The entries are lazy imports, and two of them are aliases (`cos` for
+    hann, `ramp` for triang), so a name pointing at the wrong scipy symbol
+    resolves fine and returns an array of the right length. Asserting the
+    shape of the window is what catches that: every one of them tapers to
+    near zero at both ends, hamming's 0.08 being the highest, and boxcar
+    is the one which does not taper at all.
+    """
+    assert set(TAPER_WINDOWS) <= set(WINDOW_FUNCTIONS)
+    for name, func in WINDOW_FUNCTIONS.items():
+        window = np.asarray(func(64))
+        assert window.shape == (64,), name
+        assert np.max(window) <= 1.0 + 1e-9, name
+        if name == "boxcar":
+            assert np.all(window == 1.0), name
+        else:
+            assert window[0] < 0.09 and window[-1] < 0.09, name
 
 
 def _get_start_end_indices(patch, dim):
@@ -61,9 +85,11 @@ class TestTaperBasics:
 
     def test_time_dt_unchanged(self, time_tapered_patch, random_patch):
         """Ensure each taper type runs."""
-        attrs1, attrs2 = random_patch.attrs, time_tapered_patch.attrs
-        assert attrs1.time_units == attrs2.time_units
-        assert attrs1.time_step == attrs2.time_step
+        attrs1, attrs2 = random_patch.summary, time_tapered_patch.summary
+        time1 = attrs1.get_coord_summary("time")
+        time2 = attrs2.get_coord_summary("time")
+        assert time1.units == time2.units
+        assert time1.step == time2.step
 
     def test_ends_near_zero(self, time_tapered_patch):
         """Ensure the ends of the patch are near zero."""
@@ -245,7 +271,7 @@ class TestTaperRange:
 
     def test_bad_use_of_none(self, random_patch):
         """Ensure bad use of None raises."""
-        with pytest.raises(ParameterError, match=r"Cannot use \.\.\. or None"):
+        with pytest.raises(ParameterError, match=r"Cannot use ... or None"):
             random_patch.taper_range(time=(1, None), relative=True)
 
     def test_use_none(self, random_patch):
@@ -314,3 +340,12 @@ class TestTaperRange:
         # Values from start_idx to end should be 0 (muted)
         assert np.allclose(out.data[start_idx, :], 1)
         assert np.allclose(out.data[end_idx - 1, :], 1)
+
+
+class TestTaperErrors:
+    """Tests for taper input validation."""
+
+    def test_non_length_2_sequence_raises(self, random_patch):
+        """A sequence taper value must have exactly two entries."""
+        with pytest.raises(ParameterError, match="Length 2 sequence"):
+            random_patch.taper(time=(0.1, 0.2, 0.3))

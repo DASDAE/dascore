@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 import platform
 import shutil
@@ -10,55 +12,66 @@ from pathlib import Path
 
 import pandas as pd
 import pytest
-from packaging.version import parse as get_version
+from upath import UPath
 
 import dascore as dc
-from dascore.examples import spool_to_directory
-from dascore.io.indexer import DirectoryIndexer
+from dascore.config import config_context
+from dascore.exceptions import InvalidSpoolError
+from dascore.io.index import indexer as indexer_mod
+from dascore.io.index.indexer import (
+    DBDirectoryIndexer,
+    _get_mapped_index_path,
+    _map_entry_path,
+    _path_digest,
+    _set_mapped_index_path,
+)
+from dascore.io.index.query import InvalidSpoolQueryError
 from dascore.utils.patch import get_patch_names
 
 
 @pytest.fixture(scope="class")
 def basic_indexer(two_patch_directory):
-    """Return and indexer on the basic spool directory."""
-    return DirectoryIndexer(two_patch_directory)
+    """Return an indexer on the basic spool directory."""
+    indexer = DBDirectoryIndexer(two_patch_directory).update(progress=None)
+    yield indexer
+    indexer.close()
 
 
 @pytest.fixture(scope="class")
-def adjacent_indexer(adjacent_spool_directory):
-    """Return and indexer on the basic spool directory."""
-    return DirectoryIndexer(adjacent_spool_directory).update()
+def basic_dir_spool(two_patch_directory):
+    """A spool over the basic directory; querying the index goes through it."""
+    spool = dc.spool(two_patch_directory).update(progress=None)
+    yield spool
+    spool.indexer.close()
 
 
 @pytest.fixture(scope="class")
-def diverse_indexer(diverse_spool_directory):
-    """Return and indexer on the basic spool directory."""
-    return DirectoryIndexer(diverse_spool_directory).update()
+def diverse_dir_spool(diverse_spool_directory):
+    """
+    A spool over the diverse directory.
+
+    Named for the directory: `diverse_spool` in conftest is the
+    in-memory one, and two meanings for one name is how a test quietly
+    gets the wrong object.
+    """
+    spool = dc.spool(diverse_spool_directory).update(progress=None)
+    yield spool
+    spool.indexer.close()
 
 
 @pytest.fixture(scope="class")
-def diverse_df(diverse_indexer):
-    """Return the contents of the diverse indexer."""
-    return diverse_indexer()
-
-
-@pytest.fixture()
-def diverse_df_reset_cache(diverse_indexer):
-    """Return the indexer with a reset cache."""
-    return DirectoryIndexer(diverse_indexer.path)
-
-
-@pytest.fixture(params=[diverse_indexer, diverse_df_reset_cache])
-def diverse_ind(request):
-    """Aggregate the diverse indexers."""
-    return request.getfixturevalue(request.param.__name__)
+def diverse_df(diverse_dir_spool):
+    """Return the contents of the diverse directory spool."""
+    return diverse_dir_spool.get_contents()
 
 
 @pytest.fixture()
 def empty_index(tmp_path_factory):
     """Create an index around an empty directory."""
     path = tmp_path_factory.mktemp("index_created_test")
-    return DirectoryIndexer(path).update()
+    indexer = DBDirectoryIndexer(path).update(progress=None)
+    yield indexer
+    indexer.close()
 
 
 class TestFindIndex:
@@ -67,70 +80,208 @@ class TestFindIndex:
     @pytest.fixture()
     def unwritable_directory(self, tmp_path_factory):
         """Return an un-writable directory."""
-        # currently this doesn't work on windows so we need to skip any test
-        # that depend on this fixture if running on windows
         if "windows" in platform.system().lower():
             pytest.skip("Cant run this test on windows")
         path = tmp_path_factory.mktemp("read_only_data_file")
         os.chmod(path, 0o444)
-        return path
-
-    @pytest.fixture()
-    def directory_indexer_bad_cache(self, tmp_path_factory):
-        """Create a subclass of indexer which has a bd index_map file."""
-        path = tmp_path_factory.mktemp("corrupt_cache_test")
-        cache_path = path / "corrupt_cache.json"
-
-        with cache_path.open("wt") as fi:
-            fi.write("{'bad': 'json'")
-
-        class SubIndexer(DirectoryIndexer):
-            index_map_path = cache_path
-
-        return SubIndexer
+        yield path
+        os.chmod(path, 0o755)
 
     def test_directory_cant_write(self, unwritable_directory):
         """Ensure correct path is found when a read-only directory is used."""
-        dir_index = DirectoryIndexer(unwritable_directory)
+        dir_index = DBDirectoryIndexer(unwritable_directory)
         index_path = dir_index.index_path
-        index_map_path = dir_index.index_map_path
-        assert index_map_path.parent == index_path.parent
+        assert dir_index.index_map_dir == index_path.parent
+
+    def test_read_only_index_name_is_stable(self, unwritable_directory, tmp_path):
+        """The read-only fallback index name must not depend on hash().
+
+        hash() of a str/Path is randomized per process, so a hash-derived
+        name would differ every session and orphan the prior index. The
+        name is a stable digest of the directory path.
+        """
+        map_dir = tmp_path / "path_map"
+        with config_context(directory_index_map_dir=map_dir):
+            first = DBDirectoryIndexer(unwritable_directory).index_path
+        digest = _path_digest(unwritable_directory)
+        assert first.name == f"_dascore_index_{digest}.sqlite3"
 
     def test_specify_index_path(self, tmp_path_factory):
-        """Ensure specifying a Path works."""
+        """Ensure specifying a Path works and is remembered."""
         data_path = tmp_path_factory.mktemp("data_dir")
-        index_path = tmp_path_factory.mktemp("index_dir") / "index.h5"
-        dir_index = DirectoryIndexer(data_path, index_path=index_path)
+        index_path = tmp_path_factory.mktemp("index_dir") / "index.sqlite"
+        dir_index = DBDirectoryIndexer(data_path, index_path=index_path)
         assert dir_index.index_path == index_path
-        # loading a new data dir should now remember where this is.
-        dir_index2 = DirectoryIndexer(data_path)
+        # loading the same data dir should now remember where this is.
+        dir_index2 = DBDirectoryIndexer(data_path)
         assert dir_index2.index_path == index_path
 
     def test_writeable_dir_index_not_there(self, tmp_path_factory):
-        """Tests for when there is writeable directory."""
+        """Tests for when there is a writeable directory."""
         path = tmp_path_factory.mktemp("normal_indexer_test")
-        dir_indexer = DirectoryIndexer(path)
+        dir_indexer = DBDirectoryIndexer(path)
         assert dir_indexer.index_path.parent == path
 
     def test_writable_dir_index_exists(self, tmp_path_factory):
         """A test case where the index does exist."""
         path = tmp_path_factory.mktemp("normal_indexer_test")
-        index_path = path / DirectoryIndexer._index_name
-        index_path.open("w").close()
-        dir_indexer = DirectoryIndexer(path)
-        assert dir_indexer.index_path == index_path
+        first = DBDirectoryIndexer(path)
+        second = DBDirectoryIndexer(path)
+        assert first.index_path == second.index_path
+        assert first.index_path.exists()
 
-    def test_corrupt_cache(
-        self,
-        directory_indexer_bad_cache,
-        tmp_path_factory,
-    ):
-        """Ensure a corrupted cache doesnt crash indexing. See #508."""
-        path = tmp_path_factory.mktemp("corrupt_cache_test")
-        # Test passes if this doesn't raise should not raise.
-        assert directory_indexer_bad_cache.index_map_path.exists()
-        directory_indexer_bad_cache(path)
-        assert not directory_indexer_bad_cache.index_map_path.exists()
+    def test_corrupt_cache(self, tmp_path):
+        """Ensure a corrupt map entry doesn't crash indexing. See #508."""
+        data_dir = tmp_path / "data"
+        data_dir.mkdir()
+        map_dir = tmp_path / "path_map"
+        entry = _map_entry_path(data_dir, map_dir)
+        entry.parent.mkdir(parents=True)
+        entry.write_text("{'bad': 'json'")
+        with config_context(directory_index_map_dir=map_dir):
+            indexer = DBDirectoryIndexer(data_dir)
+        # The corrupt entry reads as a miss, so the writable data dir keeps
+        # its in-directory index rather than crashing.
+        assert indexer.index_path.parent == data_dir
+
+    def test_remote_directory_not_supported(self):
+        """Remote directory indexing should fail fast."""
+        path = UPath("memory://dascore/indexer")
+        (path / "file.txt").write_text("x")
+        with pytest.raises(InvalidSpoolError, match="local filesystem"):
+            DBDirectoryIndexer(path)
+
+    def test_local_upath_normalized_to_path(self, tmp_path):
+        """Local UPath inputs should normalize to pathlib.Path internally."""
+        out = DBDirectoryIndexer(UPath(tmp_path))
+        # A local UPath is itself a Path subclass, so isinstance is not
+        # enough to show it was normalized.
+        assert type(out.path) is type(Path(tmp_path))
+        assert out.path == Path(tmp_path).absolute()
+
+    def test_index_map_dir_comes_from_config(self, tmp_path):
+        """Index map dir should be sourced from runtime configuration."""
+        index_map_dir = tmp_path / "path_map"
+        with config_context(directory_index_map_dir=index_map_dir):
+            out = DBDirectoryIndexer(tmp_path)
+            assert out.index_map_dir == index_map_dir
+
+
+class TestIndexMap:
+    """Tests for the per-directory index-location entries."""
+
+    def test_digest_falls_back_for_non_fspath(self):
+        """A directory os.fsencode rejects still digests (future URL support)."""
+
+        class _Remote:
+            """Stand-in for a remote UPath whose fspath is unavailable."""
+
+            def __fspath__(self):
+                raise NotImplementedError
+
+            def __str__(self):
+                return "memory://data/dir"
+
+        expected = hashlib.sha256(b"memory://data/dir").hexdigest()
+        assert _path_digest(_Remote()) == expected
+
+    def test_roundtrip(self, tmp_path):
+        """A recorded index path is read back for the same directory."""
+        map_dir = tmp_path / "path_map"
+        index_path = tmp_path / "idx.sqlite3"
+        _set_mapped_index_path(tmp_path / "data", index_path, map_dir)
+        assert _get_mapped_index_path(tmp_path / "data", map_dir) == index_path
+
+    def test_missing_entry_is_none(self, tmp_path):
+        """An unmapped directory reads back as None (a cache miss)."""
+        assert _get_mapped_index_path(tmp_path / "nope", tmp_path / "path_map") is None
+
+    def test_distinct_dirs_dont_collide(self, tmp_path):
+        """Separate directories use separate entry files (no lost writes)."""
+        map_dir = tmp_path / "path_map"
+        _set_mapped_index_path(tmp_path / "a", "index-a", map_dir)
+        _set_mapped_index_path(tmp_path / "b", "index-b", map_dir)
+        assert _get_mapped_index_path(tmp_path / "a", map_dir) == Path("index-a")
+        assert _get_mapped_index_path(tmp_path / "b", map_dir) == Path("index-b")
+
+    def test_corrupt_entry_is_miss(self, tmp_path):
+        """A corrupt entry reads as a miss (and is not deleted). See #508."""
+        map_dir = tmp_path / "path_map"
+        entry = _map_entry_path(tmp_path / "a", map_dir)
+        entry.parent.mkdir(parents=True)
+        entry.write_text("{not json")
+        assert _get_mapped_index_path(tmp_path / "a", map_dir) is None
+        # Reads never delete the entry; a later write self-heals it.
+        assert entry.exists()
+
+    def test_bad_payload_shapes_are_miss(self, tmp_path):
+        """Non-string or empty index paths read as a miss, not an error."""
+        map_dir = tmp_path / "path_map"
+        entry = _map_entry_path(tmp_path / "a", map_dir)
+        entry.parent.mkdir(parents=True)
+        entry.write_text(
+            json.dumps({"directory": str(tmp_path / "a"), "index_path": []})
+        )
+        assert _get_mapped_index_path(tmp_path / "a", map_dir) is None
+
+    def test_digest_collision_is_miss(self, tmp_path):
+        """An entry whose stored directory differs reads as a miss."""
+        map_dir = tmp_path / "path_map"
+        entry = _map_entry_path(tmp_path / "a", map_dir)
+        entry.parent.mkdir(parents=True)
+        # Same file, but recorded for a different directory.
+        entry.write_text(json.dumps({"directory": "other", "index_path": "x"}))
+        assert _get_mapped_index_path(tmp_path / "a", map_dir) is None
+
+    def test_update_is_atomic_and_leaves_no_temp(self, tmp_path):
+        """Writes swap a temp file into place, leaving no debris."""
+        map_dir = tmp_path / "path_map"
+        _set_mapped_index_path(tmp_path / "a", "1", map_dir)
+        _set_mapped_index_path(tmp_path / "a", "2", map_dir)
+        assert _get_mapped_index_path(tmp_path / "a", map_dir) == Path("2")
+        entry = _map_entry_path(tmp_path / "a", map_dir)
+        assert [p.name for p in map_dir.iterdir()] == [entry.name]
+
+    def test_failed_swap_cleans_up_temp(self, tmp_path, monkeypatch):
+        """A failure during the atomic swap unlinks the temp file and re-raises."""
+        map_dir = tmp_path / "path_map"
+
+        def boom(*args, **kwargs):
+            raise RuntimeError("swap failed")
+
+        monkeypatch.setattr(indexer_mod.os, "replace", boom)
+        with pytest.raises(RuntimeError, match="swap failed"):
+            indexer_mod._set_mapped_index_path(tmp_path / "a", "1", map_dir)
+        # No temp debris and no half-written entry left behind.
+        assert list(map_dir.iterdir()) == []
+
+
+class TestWalkResilience:
+    """Tests for the filesystem walk tolerating concurrent changes."""
+
+    def test_walk_skips_file_removed_mid_scan(self, tmp_path, monkeypatch):
+        """A file vanishing between the walk and its stat is skipped, not fatal."""
+        good = tmp_path / "good.h5"
+        good.write_bytes(b"")
+        # Never created: models a file deleted between the walk yielding it and
+        # _walk's stat() call, so its real stat() raises FileNotFoundError.
+        vanished = tmp_path / "vanished.h5"
+        indexer = DBDirectoryIndexer(tmp_path)
+
+        def fake_iter(*args, **kwargs):
+            # Deterministically feed _walk both candidates, independent of the
+            # real filesystem, so the stat guard is exercised on the vanished one.
+            yield good
+            yield vanished
+
+        monkeypatch.setattr(indexer_mod, "_iter_filesystem", fake_iter)
+        try:
+            walked = indexer._walk()
+        finally:
+            indexer.close()
+        names = {Path(entry[-1]).name for entry in walked.values()}
+        assert "good.h5" in names
+        assert "vanished.h5" not in names
 
 
 class TestBasics:
@@ -141,157 +292,161 @@ class TestBasics:
         out = str(basic_indexer)
         assert "object at" not in out
 
-    def test_version(self, basic_indexer):
-        """Ensure the version written to file is correct."""
-        updated = basic_indexer.update()
-        index_version = updated._index_table._index_version
-        assert index_version == dc.__last_version__
-        assert get_version(index_version) > get_version("0.0.1")
+    def test_metadata(self, basic_indexer):
+        """The index records its schema version and identity."""
+        meta = basic_indexer._backend.get_metadata()
+        assert meta["what_is_this"] == "dascore_spool_index"
+        assert meta["index_version"] >= 1
 
 
 class TestGetContents:
-    """Test cases for getting contents of indexer as dataframes."""
+    """The indexed directory is queried through a spool."""
 
-    def test_get_contents(self, basic_indexer, two_patch_directory):
+    def test_get_contents(self, basic_dir_spool, two_patch_directory):
         """Ensure contents are returned."""
-        out = basic_indexer()
+        out = basic_dir_spool.get_contents()
         files = list(Path(two_patch_directory).rglob("*.hdf5"))
         assert isinstance(out, pd.DataFrame)
         assert len(out) == len(files)
-        names_df = {x.split("/")[-1] for x in out["path"]}
+        names_df = {x.split("/")[-1] for x in out["source_path"]}
         names_files = {x.name for x in files}
         assert names_df == names_files
 
-    def test_filter_large_starttime(self, diverse_df, diverse_ind):
-        """Ensure the index can be filtered by end time."""
+    def test_filter_time_after(self, diverse_df, diverse_dir_spool):
+        """Half-open time range keeps every file overlapping it."""
         max_starttime = diverse_df["time_min"].max()
-        filtered = diverse_df[diverse_df["time_min"] >= max_starttime]
-        out = diverse_ind(time_min=max_starttime)
-        assert len(out) == len(filtered)
+        expected = diverse_df[diverse_df["time_max"] >= max_starttime]
+        out = diverse_dir_spool.select(time=(max_starttime, None)).get_contents()
+        assert len(out) == len(expected)
 
-    def test_filter_small_starttime(self, diverse_df, diverse_ind):
-        """Ensure the index can be filtered by start time."""
+    def test_filter_time_before(self, diverse_df, diverse_dir_spool):
+        """Half-open time range keeps every file overlapping it."""
         min_endtime = diverse_df["time_max"].min()
-        filtered = diverse_df[diverse_df["time_max"] <= min_endtime]
-        out = diverse_ind(time_max=min_endtime)
-        assert len(out) == len(filtered)
+        expected = diverse_df[diverse_df["time_min"] <= min_endtime]
+        out = diverse_dir_spool.select(time=(None, min_endtime)).get_contents()
+        assert len(out) == len(expected)
 
-    def test_filter_station_exact(self, diverse_df, diverse_ind):
-        """Ensure contents can be filtered on time."""
-        # tests for filtering with exact station name
-        exact_name = diverse_df["station"].unique()[0]
-        new_df = diverse_ind(station=exact_name)
-        assert (new_df["station"] == exact_name).all()
+    def test_filter_tag_exact(self, diverse_df, diverse_dir_spool):
+        """Ensure contents can be filtered on an attr."""
+        # empty strings mean "attr missing" and are not queryable (spec),
+        # so an empty result would satisfy the check below for free.
+        exact_name = next(x for x in diverse_df["tag"].unique() if x)
+        new_df = diverse_dir_spool.select(tag=exact_name).get_contents()
+        assert len(new_df)
+        assert (new_df["tag"] == exact_name).all()
 
-    def test_filter_isin(self, diverse_df, diverse_ind):
-        """Ensure contents can be filtered on time."""
-        # tests for filtering with exact station name
-        exact_name = diverse_df["station"].unique()[0]
-        new_df = diverse_ind(station=exact_name)
-        assert (new_df["station"] == exact_name).all()
+    def test_filter_isin(self, diverse_df, diverse_dir_spool):
+        """Ensure contents can be filtered with a collection."""
+        # empty strings mean "attr missing" and are not queryable (spec).
+        tags = [x for x in diverse_df["tag"].unique() if x]
+        new_df = diverse_dir_spool.select(tag=tags[:2]).get_contents()
+        assert set(new_df["tag"]) <= set(tags[:2])
+        assert len(new_df)
 
-    def test_empty_index(self, empty_index):
-        """An empty index should return an empty dataframe."""
-        df = empty_index()
-        assert df.empty
+    def test_empty_index(self, tmp_path_factory):
+        """An empty directory yields an empty relation."""
+        path = tmp_path_factory.mktemp("empty_contents")
+        spool = dc.spool(path).update(progress=None)
+        try:
+            assert spool.get_contents().empty
+        finally:  # release the index handle so Windows can clean the temp dir
+            spool.indexer.close()
 
 
 class TestUpdate:
-    """Tests for updating index."""
-
-    def make_simple_index_with_version(self, path, version):
-        """Helper function to make a simple index with desired version."""
-        patch = dc.get_example_patch()
-        spool_to_directory([patch], path)
-        # this ensure the version is set to fake version
-        old_version = dc.__last_version__
-        # for some reason monkeypatch fixture wasnt setting version back
-        # so I had to manually set and revert dascore version.
-        setattr(dc, "__last_version__", version)
-        spool = dc.spool(path).update()
-        setattr(dc, "__last_version__", old_version)
-        # ensure version monkey patch worked.
-        meta = spool.indexer.get_index_metadata()
-        assert meta["index_version"] == version
-        return path
+    """Tests for updating the index."""
 
     @pytest.fixture(scope="class")
     def spool_directory_with_non_das_file(self, two_patch_directory, tmp_path_factory):
         """Create a directory with some das files and some non-das files."""
         new = tmp_path_factory.mktemp("unreadable_test") / "sub"
         shutil.copytree(two_patch_directory, new)
-        indexer = DirectoryIndexer(new)
-        # remove index if it exists
         with suppress(FileNotFoundError):
-            indexer.index_path.unlink()
-        # add a non das file
+            for index in Path(new).glob(".dascore_index*"):
+                index.unlink()
         with open(new / "not_das.open", "w") as fi:
             fi.write("cant be das, can it?")
         return new
-
-    @pytest.fixture()
-    def index_old_version(self, monkeypatch, tmp_path_factory):
-        """Create an index which has an old, incompatible version."""
-        # cant use random_patch fixture due to scope-mismatch w/ monkeypatch.
-        path = tmp_path_factory.mktemp("index_old_version ")
-        self.make_simple_index_with_version(path, "0.0.1")
-        return path
-
-    @pytest.fixture()
-    def index_new_version(self, monkeypatch, tmp_path_factory):
-        """Create an index which has an old, incompatible version."""
-        # cant use random_patch fixture due to scope-mismatch w/ monkeypatch.
-        path = tmp_path_factory.mktemp("index_new_version ")
-        # a ridiculously high version
-        fake_version = "1000.0.1"
-        assert get_version(fake_version) > get_version(dc.__last_version__)
-        self.make_simple_index_with_version(path, fake_version)
-        return path
 
     def test_add_one_patch(self, empty_index, random_patch):
         """Ensure a new patch added to the directory shows up."""
         path = empty_index.path / get_patch_names(random_patch).iloc[0]
         random_patch.io.write(path, file_format="dasdae")
-        new_index = empty_index.update()
-        contents = new_index()
-        assert len(contents) == 1
+        updated = empty_index.update(progress=None)
+        assert len(updated._backend.query_ids()) == 1
 
     def test_index_with_bad_file(self, spool_directory_with_non_das_file):
         """Ensure if one file is not readable index continues."""
-        indexer = DirectoryIndexer(spool_directory_with_non_das_file)
-        # if this doesn't fail the test passes
-        updated = indexer.update()
-        assert isinstance(updated, DirectoryIndexer)
+        indexer = DBDirectoryIndexer(spool_directory_with_non_das_file)
+        updated = indexer.update(progress=None)
+        assert isinstance(updated, DBDirectoryIndexer)
+        assert len(updated._backend.query_ids()) == 2
 
-    def test_old_index_recreated(self, index_old_version):
-        """Ensure the old index is recreated when update is called."""
-        msg = "Recreating the index now."
-        with pytest.warns(UserWarning, match=msg):
-            dc.spool(index_old_version).update()
+    def test_removed_file_dropped(self, two_patch_directory, tmp_path_factory):
+        """A deleted file's rows disappear on the next update."""
+        new = tmp_path_factory.mktemp("removed_file_test") / "sub"
+        shutil.copytree(two_patch_directory, new)
+        for index in Path(new).glob(".dascore_index*"):
+            index.unlink()
+        indexer = DBDirectoryIndexer(new).update(progress=None)
+        assert len(indexer._backend.query_ids()) == 2
+        next(iter(Path(new).glob("*.hdf5"))).unlink()
+        assert len(indexer.update(progress=None)._backend.query_ids()) == 1
 
-    def test_new_version_warnings(self, index_new_version):
-        """Ensure an index file with a newer version of dascore issues a warning."""
-        msg = "The index was created with a newer version of dascore"
-        dc.spool(index_new_version)
-        with pytest.warns(UserWarning, match=msg):
-            dc.spool(index_new_version).update()
+    def test_noop_update_rescans_nothing(self, basic_indexer):
+        """Unchanged sources are not rescanned."""
+        before = basic_indexer._backend.get_sources()["last_indexed_ns"].max()
+        basic_indexer.update(progress=None)
+        after = basic_indexer._backend.get_sources()["last_indexed_ns"].max()
+        assert before == after
 
-    def test_update_with_specific_paths(self, basic_indexer):
-        """Test updating with specific file paths to cover _get_paths method."""
-        # Get files in the directory
-        files = list(basic_indexer.path.rglob("*.hdf5"))
-        assert len(files) > 0, "Need at least one file for testing"
+    def test_update_with_specific_paths(self, two_patch_directory, tmp_path_factory):
+        """Updating with specific paths restricts the rescan."""
+        # Its own copy: this test changes the files' modification times, and
+        # the directory fixture is shared with the rest of the session.
+        directory = tmp_path_factory.mktemp("specific_paths") / "data"
+        shutil.copytree(two_patch_directory, directory)
+        # Whatever indexed the shared directory before left its index in it,
+        # and the timestamps below would then be that run's, not this one's.
+        for index in Path(directory).glob(".dascore_index*"):
+            index.unlink()
+        indexer = DBDirectoryIndexer(directory).update(progress=None)
+        files = sorted(indexer.path.rglob("*.hdf5"))
+        assert len(files) >= 2
 
-        # Test update with specific paths (relative paths)
-        relative_paths = [f.name for f in files[:1]]  # Use just first file
-        updated = basic_indexer.update(paths=relative_paths)
-        contents = updated()
+        def _indexed_times():
+            sources = indexer._backend.get_sources().set_index("source_path")
+            return sources["last_indexed_ns"].to_dict()
 
-        # Should have at least the file we specified
-        assert len(contents) >= 1
+        before = _indexed_times()
+        for path in files[:2]:
+            stat = path.stat()
+            os.utime(path, ns=(stat.st_atime_ns, stat.st_mtime_ns + 1_000_000_000))
 
-        # Test update with absolute paths
-        absolute_paths = [str(f) for f in files[:1]]
-        updated2 = basic_indexer.update(paths=absolute_paths)
-        contents2 = updated2()
-        assert len(contents2) >= 1
+        first, second = (indexer._rel(path) for path in files[:2])
+        indexer.update(paths=[files[0].name], progress=None)
+        after_relative = _indexed_times()
+        assert after_relative[first] > before[first]
+        assert after_relative[second] == before[second]
+
+        indexer.update(paths=[str(files[1])], progress=None)
+        after_absolute = _indexed_times()
+        assert after_absolute[first] == after_relative[first]
+        assert after_absolute[second] > after_relative[second]
+        indexer.close()
+
+
+class TestNameResolution:
+    """Unknown names raise per the selector spec."""
+
+    def test_unknown_name_raises(self, basic_dir_spool):
+        """Names in neither namespace error clearly (#435)."""
+        with pytest.raises(InvalidSpoolQueryError, match="neither an attribute"):
+            basic_dir_spool.select(bad_dimension=(1, 2))
+
+    @pytest.mark.parametrize("name", ["attr_names", "coord_names"])
+    def test_a_selector_may_be_named_like_a_parameter(self, random_patch, name):
+        """Every keyword is the caller's selector, not the resolver's."""
+        spool = dc.spool([random_patch.update_attrs(**{name: "abc"})])
+        assert len(spool.select(**{name: "abc"})) == 1
+        assert len(spool.select(**{name: "nope"})) == 0

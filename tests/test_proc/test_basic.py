@@ -11,11 +11,22 @@ from scipy.fft import next_fast_len
 
 import dascore as dc
 from dascore import get_example_patch
-from dascore.exceptions import ParameterError, PatchBroadcastError
+from dascore.exceptions import (
+    IncompatiblePatchError,
+    ParameterError,
+    PatchBroadcastError,
+)
 from dascore.utils.misc import _merge_tuples
 
 OP_NAMES = ("add", "sub", "pow", "truediv", "floordiv", "mul", "mod")
 TEST_OPS = tuple(getattr(operator, x) for x in OP_NAMES)
+
+
+def _patch_with_nan(patch, index=(0, 0)):
+    """Return a float patch with a single NaN so slice contamination shows."""
+    data = np.asarray(patch.data, dtype=np.float64).copy()
+    data[index] = np.nan
+    return patch.new(data=data)
 
 
 @pytest.fixture(scope="session")
@@ -171,6 +182,18 @@ class TestNormalize:
         bit_norm = patch.normalize("time", norm="bit")
         assert np.all(np.unique(bit_norm.data) == np.array([-1.0, 0, 1.0]))
 
+    def test_max_uses_absolute_values(self, random_patch):
+        """Max normalization should divide by maximum absolute value."""
+        data = -np.abs(random_patch.data) - 1
+        patch = random_patch.new(data=data)
+
+        out = patch.normalize("time", norm="max")
+
+        axis = patch.get_axis("time")
+        assert np.all(out.data <= 0)
+        assert np.all(np.abs(out.data) <= 1)
+        assert np.allclose(np.max(np.abs(out.data), axis=axis), 1)
+
     def test_zero_channels(self, random_patch):
         """Ensure after operation each zero row or vector remains so."""
         zeroed_data = np.copy(random_patch.data)
@@ -186,6 +209,57 @@ class TestNormalize:
             assert np.all(norm.data[0, :] == 0.0)
             assert np.all(norm.data[:, 0] == 0.0)
 
+    # One dimension: normalize reduces along an axis, and which axis that
+    # is has its own tests above; what these two are about is the nans.
+    @pytest.mark.parametrize("norm", ["l1", "l2", "max"])
+    def test_nan_does_not_contaminate_slice(self, random_patch, norm):
+        """A single NaN should not blank every value sharing its slice."""
+        patch = _patch_with_nan(random_patch)
+        out = patch.normalize("time", norm=norm)
+        assert np.isnan(out.data).sum() == 1
+
+    @pytest.mark.filterwarnings("ignore:All-NaN slice encountered")
+    @pytest.mark.parametrize("norm", ["l1", "l2", "max"])
+    def test_all_nan_slice_stays_null(self, random_patch, norm):
+        """A completely null slice should stay null rather than become zeros."""
+        dim = "time"
+        data = np.asarray(random_patch.data, dtype=np.float64).copy()
+        # Null the first slice reduced by norm (patch is 2D, so the other axis).
+        other_axis = 1 - random_patch.get_axis(dim)
+        null_slice = tuple(0 if i == other_axis else slice(None) for i in range(2))
+        data[null_slice] = np.nan
+        patch = random_patch.new(data=data)
+
+        out = patch.normalize(dim, norm=norm)
+
+        assert np.all(np.isnan(out.data[null_slice]))
+        assert not np.any(np.isnan(np.delete(out.data, 0, axis=other_axis)))
+
+    @pytest.mark.parametrize("norm", ["l1", "l2", "max", "bit"])
+    def test_null_in_zero_slice_stays_null(self, random_patch, norm):
+        """A null in an otherwise zero slice should stay null, not become zero."""
+        data = np.zeros(random_patch.shape, dtype=np.float64)
+        data[0, 0] = np.nan
+        patch = random_patch.new(data=data)
+
+        out = patch.normalize("time", norm=norm)
+
+        assert np.isnan(out.data[0, 0])
+        assert np.all(out.data[0, 1:] == 0)
+
+    @pytest.mark.parametrize("norm", ["l1", "l2", "max", "bit"])
+    def test_int_data(self, random_patch, norm):
+        """Integer data should normalize to floats without overflowing."""
+        # 100 is large enough that squaring it overflows int8.
+        data = np.full(random_patch.shape, 100, dtype=np.int8)
+        samples = data.shape[random_patch.get_axis("time")]
+        expected = {"l1": 1 / samples, "l2": 1 / np.sqrt(samples), "max": 1, "bit": 1}
+
+        out = random_patch.new(data=data).normalize("time", norm=norm)
+
+        assert np.issubdtype(out.data.dtype, np.floating)
+        assert np.allclose(out.data, expected[norm])
+
 
 class TestStandardize:
     """Tests for standardization."""
@@ -198,6 +272,16 @@ class TestStandardize:
         # test along the time axis
         out = random_patch.standardize("time")
         assert not np.any(pd.isnull(out.data))
+
+    @pytest.mark.parametrize("dim", ["time", "distance"])
+    def test_nan_does_not_contaminate_slice(self, random_patch, dim):
+        """A single NaN should not blank every value sharing its slice."""
+        patch = _patch_with_nan(random_patch)
+        out = patch.standardize(dim)
+        axis = out.get_axis(dim)
+        assert np.isnan(out.data).sum() == 1
+        assert np.allclose(np.nanmean(out.data, axis=axis), 0)
+        assert np.allclose(np.nanstd(out.data, axis=axis), 1)
 
     def test_std(self, random_patch):
         """Ensure after operation standard deviations are 1."""
@@ -417,6 +501,66 @@ class TestFillNa:
 class TestPad:
     """Tests for the padding functionality in a patch."""
 
+    def test_associated_coords_padded(self, random_patch_many_coords):
+        """A coord on a padded dim grows with it, saying nothing new. See #1041."""
+        patch = random_patch_many_coords
+        out = patch.pad(distance=(2, 3), samples=True)
+        lat = out.get_array("lat")
+        assert len(lat) == len(patch.get_array("lat")) + 5
+        assert np.all(np.isnan(lat[:2])) and np.all(np.isnan(lat[-3:]))
+        assert np.allclose(lat[2:-3], patch.get_array("lat"))
+        # One measured on another dimension is untouched.
+        assert np.allclose(out.get_array("time2"), patch.get_array("time2"))
+        # A coordinate spanning both grows along the padded one only.
+        assert out.get_array("quality").shape == out.shape
+
+    def test_padding_two_dimensions_at_once(self, random_patch_many_coords):
+        """A coordinate spanning both padded dims grows along both."""
+        patch = random_patch_many_coords
+        out = patch.pad(distance=(1, 0), time=(0, 2), samples=True)
+        quality = out.get_array("quality")
+        assert quality.shape == out.shape
+        assert np.all(np.isnan(quality[0, :])) and np.all(np.isnan(quality[:, -2:]))
+        assert np.allclose(quality[1:, :-2], patch.get_array("quality"))
+
+    def test_associated_coords_of_other_kinds(self, random_patch):
+        """What is said of the added samples is the dtype's own blank."""
+        shape = random_patch.coord_shapes["distance"]
+        patch = random_patch.update_coords(
+            label=("distance", np.full(shape, "a")),
+            flag=("distance", np.ones(shape, dtype=bool)),
+        )
+        out = patch.pad(distance=(1, 0), samples=True)
+        assert out.get_array("label")[0] == ""
+        assert not out.get_array("flag")[0]
+
+    @pytest.mark.parametrize("expand_coords", (True, False))
+    def test_padding_no_samples_changes_nothing(self, random_patch, expand_coords):
+        """A pad of no samples is not a pad.
+
+        `pad(time="fft")` asks for one whenever the patch is already of a
+        fast length, and widening an integer coordinate there would
+        change it to hold a NaN nothing is going to write.
+        """
+        shape = random_patch.coord_shapes["distance"]
+        # Above 2**53, where a float64 can no longer count by ones.
+        counts = np.arange(shape[0], dtype="int64") + 2**53
+        patch = random_patch.update_coords(idx=("distance", counts))
+        out = patch.pad(distance=0, samples=True, expand_coords=expand_coords)
+        for name in ("idx", "distance"):
+            assert out.get_coord(name).dtype == patch.get_coord(name).dtype
+            assert np.array_equal(out.get_array(name), patch.get_array(name))
+
+    def test_padded_coords_keep_their_units(self, random_patch):
+        """Growing a coordinate does not change what it was measured in."""
+        shape = random_patch.coord_shapes["distance"]
+        patch = random_patch.update_coords(
+            depth=("distance", np.arange(shape[0]) * 1.0)
+        ).set_units(depth="m", distance="m")
+        out = patch.pad(distance=(1, 0), samples=True, expand_coords=False)
+        assert out.get_coord("depth").units == patch.get_coord("depth").units
+        assert out.get_coord("distance").units == patch.get_coord("distance").units
+
     def test_pad_time_dimension_samples_true(self, random_patch, samples=True):
         """Test padding the time dimension with zeros before and after."""
         padded_patch = random_patch.pad(time=(2, 3), samples=samples)
@@ -435,7 +579,7 @@ class TestPad:
         original_shape = random_patch.shape
         new_shape = padded_patch.shape
         distance_axis = random_patch.get_axis("distance")
-        ch_spacing = random_patch.attrs["distance_step"]
+        ch_spacing = random_patch.coords["distance"].step
         assert (
             new_shape[distance_axis] == original_shape[distance_axis] + 14 * ch_spacing
         )
@@ -451,8 +595,9 @@ class TestPad:
         original_shape = random_patch.shape
         new_shape = padded_patch.shape
         distance_axis = random_patch.get_axis("distance")
-        ch_spacing = random_patch.attrs["distance_step"]
-        dist_max = random_patch.attrs["distance_max"]
+        dist_coord = random_patch.coords["distance"]
+        ch_spacing = dist_coord.step
+        dist_max = dist_coord.max()
         assert (
             new_shape[distance_axis] == original_shape[distance_axis] + 8 * ch_spacing
         )
@@ -647,10 +792,13 @@ class TestWhere:
         # Check that dimensions are preserved
         assert result.dims == random_patch.dims
 
-        # Check that attributes are preserved (except history)
-        assert result.attrs.model_dump(
-            exclude={"history"}
-        ) == random_patch.attrs.model_dump(exclude={"history"})
+        # Check that attributes are preserved (except the ones the
+        # decorator maintains: history, and the ids which say what was
+        # done to the data).
+        managed = {"history", "processing_id"}
+        assert result.attrs.model_dump(exclude=managed) == (
+            random_patch.attrs.model_dump(exclude=managed)
+        )
 
     def test_where_non_boolean_condition_raises(self, random_patch):
         """Test that non-boolean condition raises ValueError."""
@@ -694,6 +842,16 @@ class TestWhere:
             assert np.all(
                 ~np.isnan(result.data[false_mask])
             )  # Should have valid values
+
+    def test_where_checks_kind(self, random_patch):
+        """Masks and fills must be the same kind, like any other operand."""
+        vel = random_patch.update_attrs(data_type="velocity")
+        # data_type is not kind, so a mask from a processed patch is fine.
+        out = vel.where(vel.standardize("time") > 0, other=vel.full(0))
+        assert out.attrs.data_type == "velocity"
+        other = random_patch.update_attrs(tag="other")
+        with pytest.raises(IncompatiblePatchError, match="not the same kind"):
+            random_patch.where(other > 0)
 
     def test_where_with_misaligned_coords(self, random_patch):
         """Test where with condition patch having misaligned coordinates."""
@@ -834,3 +992,47 @@ class TestFull:
         patch = random_patch.full(1.0)
         assert patch.coords == random_patch.coords
         assert np.allclose(patch.data, 1.0)
+
+
+class TestDemedian:
+    """Tests for demedian of data."""
+
+    @pytest.mark.parametrize("dim", ["time", "distance"])
+    def test_demedian(self, random_patch, dim):
+        """Ensure detrending removes median."""
+        new = random_patch.new(data=random_patch.data + 10)
+        # perform detrend, ensure all mean values are close to zero
+        dem = new.demedian(dim=dim)
+        medians = np.median(dem.data, axis=dem.get_axis(dim))
+        assert np.allclose(medians, 0)
+
+    @pytest.mark.parametrize("dim", ["time", "distance"])
+    def test_nan_does_not_contaminate_slice(self, random_patch, dim):
+        """A single NaN should not blank every value sharing its slice."""
+        patch = _patch_with_nan(random_patch)
+        out = patch.demedian(dim=dim)
+        assert np.isnan(out.data).sum() == 1
+        medians = np.nanmedian(out.data, axis=out.get_axis(dim))
+        assert np.allclose(medians, 0)
+
+
+class TestDemean:
+    """Tests for demean of data."""
+
+    @pytest.mark.parametrize("dim", ["time", "distance"])
+    def test_demean(self, random_patch, dim):
+        """Ensure detrending removes mean."""
+        new = random_patch.new(data=random_patch.data + 10)
+        # perform detrend, ensure all mean values are close to zero
+        dem = new.demean(dim=dim)
+        means = np.mean(dem.data, axis=dem.get_axis(dim))
+        assert np.allclose(means, 0)
+
+    @pytest.mark.parametrize("dim", ["time", "distance"])
+    def test_nan_does_not_contaminate_slice(self, random_patch, dim):
+        """A single NaN should not blank every value sharing its slice."""
+        patch = _patch_with_nan(random_patch)
+        out = patch.demean(dim=dim)
+        assert np.isnan(out.data).sum() == 1
+        means = np.nanmean(out.data, axis=out.get_axis(dim))
+        assert np.allclose(means, 0)

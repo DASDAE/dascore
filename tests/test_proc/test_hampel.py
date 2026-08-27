@@ -11,6 +11,8 @@ import pytest
 
 import dascore as dc
 from dascore.exceptions import ParameterError
+from dascore.proc import hampel
+from dascore.utils.misc import suppress_warnings
 
 
 def _get_interior_data(data, edge_size=5):
@@ -195,12 +197,12 @@ class TestHampelFilter:
                 approximate_spike = abs(result_approximate.data[time_idx, dist_idx])
 
                 # Both methods should reduce the spike magnitude
-                assert (
-                    standard_spike < original_spike
-                ), f"Standard method didn't reduce spike at ({time_idx}, {dist_idx})"
-                assert (
-                    approximate_spike < original_spike
-                ), f"Approximate method didn't reduce spike at ({time_idx}, {dist_idx})"
+                assert standard_spike < original_spike, (
+                    f"Standard method didn't reduce spike at ({time_idx}, {dist_idx})"
+                )
+                assert approximate_spike < original_spike, (
+                    f"Approximate did not reduce spike at ({time_idx}, {dist_idx})"
+                )
 
                 # Both should achieve similar spike reduction (within 50% of each other)
                 reduction_ratio = min(standard_spike, approximate_spike) / max(
@@ -493,3 +495,27 @@ class TestHampelFilter:
         # Just in case, make sure the filter actually did something, otherwise
         # the check above is pointless.
         assert not np.all(original == out.data)
+
+    def test_no_warning_on_modest_window(self, patch_with_spikes):
+        """A modest window is fast on any engine, so it shouldn't warn."""
+        with suppress_warnings(action="error"):
+            out = patch_with_spikes.hampel_filter(time=25, samples=True)
+        assert out.shape == patch_with_spikes.shape
+
+    def test_bottleneck_makes_large_windows_free(self, patch_with_spikes, monkeypatch):
+        """Only bottleneck's moving median is flat in window size."""
+        big = {"time": 51, "distance": 51, "samples": True}
+        monkeypatch.setattr(hampel, "has_engine", lambda engine: True)
+        with suppress_warnings(action="error"):
+            patch_with_spikes.hampel_filter(**big)
+        # Without it the approximate path falls back to scipy, which is not.
+        monkeypatch.setattr(hampel, "has_engine", lambda engine: False)
+        with pytest.warns(UserWarning, match="Large window size"):
+            patch_with_spikes.hampel_filter(**big)
+
+    def test_warns_on_large_exact_window(self, patch_with_spikes):
+        """Only the exact filter, whose cost grows with the window, warns."""
+        with pytest.warns(UserWarning, match="Large window size"):
+            patch_with_spikes.hampel_filter(
+                time=11, distance=11, samples=True, approximate=False
+            )

@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 import numpy as np
 import pytest
 
 from dascore.exceptions import ParameterError
+from dascore.utils import moving
+from dascore.utils.misc import suppress_warnings
 from dascore.utils.moving import (
     OPERATION_REGISTRY,
     _get_available_engines,
@@ -196,6 +200,19 @@ class TestMovingWindow:
         assert isinstance(out, np.ndarray)
         assert out.shape == test_data["1d"].shape
 
+    def test_auto_engine_does_not_warn(self, test_data, monkeypatch):
+        """Auto asks for what is installed, so a fallback is not a warning."""
+        monkeypatch.setattr(moving, "_get_available_engines", lambda: ("scipy",))
+        with suppress_warnings(action="error"):
+            out = moving_window(test_data["1d"], 3, "median", engine="auto")
+        assert isinstance(out, np.ndarray)
+
+    def test_explicit_missing_engine_warns(self, test_data, monkeypatch):
+        """Naming an engine which is not installed still warns."""
+        monkeypatch.setattr(moving, "_get_available_engines", lambda: ("scipy",))
+        with pytest.warns(UserWarning, match="not available"):
+            moving_window(test_data["1d"], 3, "median", engine="bottleneck")
+
     def test_large_window_warning(self, test_data):
         """Test warning for window larger than data."""
         data = test_data["1d"]
@@ -286,11 +303,38 @@ class TestMovingWindow:
                 result_bn[tuple(indexer)], result_scipy[tuple(indexer)]
             )
 
+    @pytest.mark.parametrize("operation", ["mean", "sum", "min", "max"])
+    def test_bottleneck_operations_are_centered(self, operation):
+        """Bottleneck operations should match scipy away from edge regions."""
+        pytest.importorskip("bottleneck")
+        data = np.array(
+            [
+                [0.0, 3.0, 1.0, 8.0, 4.0, 2.0, 6.0],
+                [5.0, 4.0, 9.0, 1.0, 7.0, 3.0, 2.0],
+                [2.0, 8.0, 4.0, 6.0, 0.0, 5.0, 1.0],
+                [7.0, 1.0, 5.0, 2.0, 9.0, 6.0, 3.0],
+                [4.0, 6.0, 2.0, 5.0, 3.0, 1.0, 8.0],
+            ]
+        )
+
+        for axis, window in ((0, 3), (1, 5)):
+            result_scipy = moving_window(data, window, operation, axis, engine="scipy")
+            result_bn = moving_window(
+                data, window, operation, axis, engine="bottleneck"
+            )
+            half_window = window // 2
+            indexer = [slice(None)] * data.ndim
+            indexer[axis] = slice(half_window, -half_window)
+            np.testing.assert_allclose(
+                result_bn[tuple(indexer)], result_scipy[tuple(indexer)]
+            )
+
     def test_bottleneck_median_boundary_options(self):
         """Non-default scipy boundary options should not be ignored."""
         pytest.importorskip("bottleneck")
         data = np.array([1.0, 5.0, 2.0, 4.0, 3.0])
-        kwargs = {"mode": "constant", "cval": -10.0}
+        # Heterogeneous values, so the inferred type is too wide to splat.
+        kwargs: dict[str, Any] = {"mode": "constant", "cval": -10.0}
         result_scipy = move_median(data, 3, engine="scipy", **kwargs)
         result_bn = move_median(data, 3, engine="bottleneck", **kwargs)
         np.testing.assert_array_equal(result_bn, result_scipy)
@@ -303,7 +347,8 @@ class TestMovingWindow:
         """Non-median operations should also honor requested boundary options."""
         pytest.importorskip("bottleneck")
         data = np.array([1.0, 5.0, 2.0, 4.0, 3.0])
-        kwargs = {"mode": "constant", "cval": -10.0}
+        # Heterogeneous values, so the inferred type is too wide to splat.
+        kwargs: dict[str, Any] = {"mode": "constant", "cval": -10.0}
         result_scipy = move_mean(data, 3, engine="scipy", **kwargs)
         result_bn = move_mean(data, 3, engine="bottleneck", **kwargs)
         np.testing.assert_array_equal(result_bn, result_scipy)

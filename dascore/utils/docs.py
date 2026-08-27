@@ -42,6 +42,19 @@ def format_dtypes(dtype_dict: dict[str, Any]) -> str:
     return out
 
 
+def get_docstring(obj) -> str:
+    """
+    Return an object's docstring.
+
+    `__doc__` is `str | None` on anything, but the callers here compose a
+    documented function's docstring into their own, so a missing one means
+    the docstring was deleted, not that there is nothing to compose.
+    """
+    docstring = obj.__doc__
+    assert docstring is not None, f"{obj} has no docstring to compose."
+    return docstring
+
+
 def compose_docstring(**kwargs: str | Sequence[str]):
     """
     Decorator for composing docstrings.
@@ -75,6 +88,7 @@ def compose_docstring(**kwargs: str | Sequence[str]):
     def _wrap(func):
         docstring = func.__doc__
         assert isinstance(docstring, str)
+        used_keys = set()
         # iterate each provided value and look for it in the docstring
         for key, value in kwargs.items():
             value = value if isinstance(value, str) else "\n".join(value)
@@ -83,6 +97,8 @@ def compose_docstring(**kwargs: str | Sequence[str]):
             search_value = f"{{{key}}}"
             # find all lines that match values
             lines = [x for x in docstring.split("\n") if search_value in x]
+            if lines:
+                used_keys.add(key)
             for line in lines:
                 # determine number of spaces used before matching character
                 spaces = line.split(search_value)[0]
@@ -90,11 +106,51 @@ def compose_docstring(**kwargs: str | Sequence[str]):
                 assert set(spaces) == {" "} or not len(spaces)
                 new = textwrap.indent(textwrap.dedent(value), spaces)
                 docstring = docstring.replace(line, new)
+        if kwargs and not used_keys:
+            msg = (
+                f"compose_docstring did not replace any placeholders on "
+                f"{func.__name__}."
+            )
+            raise ValueError(msg)
+        unused_keys = sorted(set(kwargs) - used_keys)
+        if unused_keys:
+            unused_str = ", ".join(unused_keys)
+            msg = (
+                f"compose_docstring received unused keys for {func.__name__}: "
+                f"{unused_str}."
+            )
+            raise ValueError(msg)
 
         func.__doc__ = docstring
         return func
 
     return _wrap
+
+
+def get_plugin_table() -> pd.DataFrame:
+    """
+    Return a DataFrame of registered third-party plugins.
+
+    Reads all CSV files in the plugin registry and sorts alphabetically.
+    Columns are ``host``, ``namespace``, ``package_name`` and
+    ``package_url``. The host is the object the namespace attaches to,
+    taken from the file's name; one package often registers the same
+    namespace on several of them.
+    """
+    from dascore.utils.namespace import _PLUGIN_REGISTRY_DIR  # noqa: PLC0415
+
+    columns = ["host", "namespace", "package_name", "package_url"]
+    frames = []
+    for path in sorted(_PLUGIN_REGISTRY_DIR.glob("*.csv")):
+        frames.append(pd.read_csv(path).assign(host=path.stem))
+    if not frames:
+        return pd.DataFrame(columns=columns)
+    return (
+        pd.concat(frames, ignore_index=True)
+        .drop_duplicates(subset=["host", "namespace"])
+        .sort_values(["namespace", "host"])[columns]
+        .reset_index(drop=True)
+    )
 
 
 def objs_to_doc_df(doc_dict, cross_reference=True):

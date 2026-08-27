@@ -2,13 +2,23 @@
 
 from __future__ import annotations
 
-import warnings
+import copy
 from typing import ClassVar
 
+import pandas as pd
 import pytest
 
+import dascore as dc
+import dascore.utils.namespace as ns_module
+from dascore.exceptions import DASCorePluginError
+from dascore.utils.misc import suppress_warnings
 from dascore.utils.namespace import (
+    AnnotationNameSpace,
+    InventoryNameSpace,
     NamespaceOwner,
+    PatchNameSpace,
+    SpoolNameSpace,
+    _load_plugin_registry,
     _MethodNameSpace,
 )
 
@@ -30,6 +40,22 @@ class ParentClassNamespace(_MethodNameSpace):
     """A test child class."""
 
     entry_point_group = "dascore.ParentClass"
+
+
+class _HostGetattr:
+    """A base which resolves names of its own, as a pydantic model does."""
+
+    def __getattr__(self, item):
+        """Answer a few names this base owns."""
+        if item in {"from_host", "_private"}:
+            return "host"
+        raise AttributeError(item)
+
+
+class GetattrParent(NamespaceOwner, _HostGetattr):
+    """A host whose base resolves names the namespace search does not."""
+
+    _namespace_entry_point_group = "dascore.ParentClass"
 
 
 class Namespace1(ParentClassNamespace):
@@ -61,10 +87,12 @@ class TestNamespace:
         bob = inst.bob
         assert isinstance(bob, ParentClassNamespace)
 
-    def test_discoverable_is_cached(self):
-        """The same namespace instance should be returned on repeated access."""
+    def test_copy_gets_its_own_binding(self):
+        """A copy of a host hands out a namespace bound to the copy."""
         inst = ParentClass()
-        assert inst.bob is inst.bob
+        inst.bob  # a namespace kept on the host would ride along
+        other = copy.copy(inst)
+        assert other.bob.return_self() is other
 
     def test_parent_type_bound(self):
         """Ensure the parent type is bound the instances."""
@@ -159,8 +187,7 @@ class TestNamespace:
         class DistinctBase(_MethodNameSpace):
             entry_point_group = "dascore.distinct_test"
 
-        with warnings.catch_warnings(record=True) as record:
-            warnings.simplefilter("always")
+        with suppress_warnings(action="always", record=True) as record:
 
             class FirstNamespace(DistinctBase):
                 name = "first"
@@ -192,3 +219,206 @@ class TestNamespace:
         assert CooperativeNamespace.hook_called
         out = CooperativeBase._registry["dascore.cooperative_test"]
         assert out["cooperative"] is CooperativeNamespace
+
+    def test_private_name_refused(self):
+        """A private namespace name a host could never hand out is refused."""
+        with pytest.raises(ValueError, match="must be public"):
+
+            class _Private(ParentClassNamespace):
+                name = "_hidden"
+
+    def test_keyword_name_refused(self):
+        """A keyword is an identifier, but `host.class` will not parse."""
+        with pytest.raises(ValueError, match="must not be a Python keyword"):
+
+            class _Keyword(ParentClassNamespace):
+                name = "class"
+
+    def test_soft_keyword_name_allowed(self):
+        """A soft keyword is a legal attribute name, so it is not refused."""
+
+        class _Soft(ParentClassNamespace):
+            name = "match"
+
+        assert ParentClass().match.__class__ is _Soft
+
+    def test_non_identifier_name_refused(self):
+        """A name which is not an identifier is refused, as the docs say."""
+        with pytest.raises(ValueError, match="must be a Python identifier"):
+
+            class _Spaced(ParentClassNamespace):
+                name = "not an identifier"
+
+    def test_custom_attr_error_message(self):
+        """Ensure _namespace_attr_errors messages are raised verbatim."""
+        inst = ParentClass()
+        with pytest.raises(AttributeError, match="test_error emitted"):
+            inst.test_error
+
+
+class TestHostWithGetattr:
+    """A host which already resolves names of its own keeps doing so."""
+
+    def test_host_getattr_still_resolves(self):
+        """The host's own __getattr__ answers a name no namespace claims."""
+        inst = GetattrParent()
+        assert inst.from_host == "host"
+
+    def test_namespace_still_resolves(self):
+        """A namespace is found even though the host would answer anything."""
+        inst = GetattrParent()
+        assert isinstance(inst.bob, ParentClassNamespace)
+
+    def test_private_name_skips_namespace_search(self):
+        """A private name goes to the host rather than the namespace search."""
+        inst = GetattrParent()
+        assert inst._private == "host"
+
+    def test_private_lookup_loads_no_plugin(self, monkeypatch):
+        """Resolving a private name must not import a plugin to find it."""
+        loaded = []
+        monkeypatch.setattr(
+            ns_module,
+            "maybe_load_entry_point",
+            lambda group, name: loaded.append(name),
+        )
+        inst = GetattrParent()
+        assert inst._private == "host"
+        assert not loaded
+        assert inst.from_host == "host"
+        assert loaded == ["from_host"]
+
+    def test_default_message_survives_host_getattr(self):
+        """A name neither knows still raises this class's message."""
+        inst = GetattrParent()
+        with pytest.raises(AttributeError, match="has no attribute 'unknown'"):
+            inst.unknown
+
+
+class TestRegisteredHosts:
+    """The namespace bases DASCore ships, and the hosts which own them."""
+
+    hosts: ClassVar[dict] = {
+        dc.Patch: (PatchNameSpace, "dascore.patch_namespace"),
+        dc.Spool: (SpoolNameSpace, "dascore.spool_namespace"),
+        dc.Inventory: (InventoryNameSpace, "dascore.inventory_namespace"),
+        dc.AnnotationSet: (AnnotationNameSpace, "dascore.annotation_namespace"),
+    }
+
+    @pytest.mark.parametrize("host", list(hosts))
+    def test_group_matches_base(self, host):
+        """Each host names the group its namespace base registers into."""
+        base, group = self.hosts[host]
+        assert host._namespace_entry_point_group == group
+        assert base.entry_point_group == group
+
+    @pytest.mark.parametrize("host", list(hosts))
+    def test_registry_file_stem(self, host):
+        """Each group's plugin registry file is the one the docs name."""
+        _, group = self.hosts[host]
+        stem = group.split(".")[-1].replace("_namespace", "")
+        assert (ns_module._PLUGIN_REGISTRY_DIR / f"{stem}.csv").exists()
+
+
+class TestPluginRegistry:
+    """Tests for the plugin registry CSV lookup."""
+
+    @pytest.fixture(autouse=True)
+    def _clear_cache(self):
+        """Clear the _load_plugin_registry LRU cache before and after each test."""
+        _load_plugin_registry.cache_clear()
+        yield
+        _load_plugin_registry.cache_clear()
+
+    @pytest.fixture()
+    def parent_class_registry(self, monkeypatch, tmp_path):
+        """Patch _PLUGIN_REGISTRY_DIR with a CSV for ParentClass containing cool_ns."""
+        df = pd.DataFrame(
+            {
+                "package_name": ["coolpkg"],
+                "package_url": ["https://example.com/coolpkg"],
+                "namespace": ["cool_ns"],
+            }
+        )
+        df.to_csv(tmp_path / "ParentClass.csv", index=False)
+        monkeypatch.setattr(ns_module, "_PLUGIN_REGISTRY_DIR", tmp_path)
+        return ParentClass()
+
+    def test_none_group_returns_empty(self):
+        """_load_plugin_registry returns empty dict when group is None."""
+        result = _load_plugin_registry(None)
+        assert result == {}
+
+    def test_nonexistent_csv_returns_empty(self, monkeypatch, tmp_path):
+        """_load_plugin_registry returns empty dict when CSV does not exist."""
+        monkeypatch.setattr(ns_module, "_PLUGIN_REGISTRY_DIR", tmp_path)
+        result = _load_plugin_registry("dascore.nofile_namespace")
+        assert result == {}
+
+    def test_getattr_plugin_hit_raises_helpful_error(self, parent_class_registry):
+        """__getattr__ raises DASCorePluginError with package info for known plugins."""
+        msg = (
+            "ParentClass has a registered namespace of 'cool_ns' "
+            "provided by 'coolpkg' but it is not installed. "
+            "Install it from: https://example.com/coolpkg"
+        )
+        with pytest.raises(DASCorePluginError) as exc_info:
+            parent_class_registry.cool_ns
+        assert str(exc_info.value) == msg
+        assert not hasattr(parent_class_registry, "cool_ns")
+
+    def test_getattr_unknown_attr_raises_default_error(self, monkeypatch, tmp_path):
+        """__getattr__ raises default AttributeError when attr not in CSV."""
+        monkeypatch.setattr(ns_module, "_PLUGIN_REGISTRY_DIR", tmp_path)
+        inst = ParentClass()
+        with pytest.raises(
+            AttributeError, match="ParentClass has no attribute 'totally_unknown'"
+        ):
+            inst.totally_unknown
+
+
+class TestNamespaceConcurrency:
+    """Lazy namespace attachment must be safe under concurrent first use."""
+
+    @pytest.mark.concurrency
+    def test_one_host_per_instance(self, run_in_threads):
+        """Concurrent first access on one object binds every namespace to it."""
+        inst = ParentClass()
+        results = run_in_threads(lambda _: inst.bob)
+        assert [x.return_self() for x in results] == [inst] * len(results)
+
+    @pytest.mark.concurrency
+    def test_distinct_hosts_get_own_namespace(self, run_in_threads):
+        """Concurrent first access on distinct objects binds each host."""
+        instances = [ParentClass() for _ in range(4)]
+        results = run_in_threads(lambda index: instances[index].bob)
+        assert [x.return_self() for x in results] == instances
+
+    @pytest.mark.concurrency
+    def test_concurrent_registration_and_lookup(self, run_in_threads):
+        """Registering namespaces while reading the registry stays consistent."""
+
+        class ConcurrentBase(_MethodNameSpace):
+            entry_point_group = "dascore.concurrent_test"
+
+        def register(index):
+            """Define a new namespace and read the registry back."""
+            type(f"Namespace{index}", (ConcurrentBase,), {"name": f"ns_{index}"})
+            # Snapshot under the lock; sibling threads are inserting.
+            with _MethodNameSpace._registry_lock:
+                return set(_MethodNameSpace._registry["dascore.concurrent_test"])
+
+        run_in_threads(register)
+        registered = _MethodNameSpace._registry["dascore.concurrent_test"]
+        assert set(registered) == {f"ns_{i}" for i in range(4)}
+
+    def test_fork_handler_replaces_held_locks(self):
+        """A lock held at fork time is replaced so the child cannot deadlock."""
+        old_registry = _MethodNameSpace._registry_lock
+        try:
+            with old_registry:
+                ns_module._reinit_namespace_locks()
+                new_registry = _MethodNameSpace._registry_lock
+            assert new_registry is not old_registry
+        finally:
+            _MethodNameSpace._registry_lock = old_registry

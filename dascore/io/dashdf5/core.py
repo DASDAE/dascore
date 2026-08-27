@@ -1,26 +1,16 @@
-"""IO module for reading prodML data."""
+"""IO module for reading DASHDF5 (CF convention) data."""
 
 from __future__ import annotations
 
-import numpy as np
+from typing import Literal
 
 import dascore as dc
 from dascore.constants import opt_timeable_types
-from dascore.io import FiberIO
+from dascore.io import FiberIO, ScanPayload, make_scan_payload
+from dascore.io.utils import build_patches
 from dascore.utils.hdf5 import H5Reader
-from dascore.utils.models import UnitQuantity, UTF8Str
 
 from .utils import _get_cf_attrs, _get_cf_coords, _get_cf_version_str
-
-
-class ProdMLPatchAttrs(dc.PatchAttrs):
-    """Patch attrs for ProdML."""
-
-    pulse_width: float = np.nan
-    pulse_width_units: UnitQuantity | None = None
-    gauge_length: float = np.nan
-    gauge_length_units: UnitQuantity | None = None
-    schema_version: UTF8Str = ""
 
 
 class DASHDF5(FiberIO):
@@ -30,29 +20,35 @@ class DASHDF5(FiberIO):
     preferred_extensions = ("hdf5", "h5")
     version = "1.0"
 
-    def get_format(self, resource: H5Reader, **kwargs) -> tuple[str, str] | bool:
+    def get_format(
+        self,
+        resource: H5Reader,
+        **kwargs,
+    ) -> tuple[str, str] | Literal[False]:
         """
-        Return True if file contains terra15 version 2 data else False.
+        Return the name and version if the file is DASHDF5, else False.
 
         Parameters
         ----------
         resource
-            A path to the file which may contain terra15 data.
+            An open h5 file which may contain DASHDF5 data.
         """
         version_str = _get_cf_version_str(resource)
         if version_str:
             return self.name, version_str
+        return False
 
-    def scan(self, resource: H5Reader, **kwargs) -> list[dc.PatchAttrs]:
+    def scan(
+        self, resource: H5Reader, snap: bool = True, **kwargs
+    ) -> list[ScanPayload]:
         """Get metadata from file."""
-        coords = _get_cf_coords(resource)
-        extras = {
-            "path": resource.filename,
-            "file_format": self.name,
-            "file_version": str(self.version),
-        }
-        attrs = _get_cf_attrs(resource, coords, extras=extras)
-        return [attrs]
+        coords = _get_cf_coords(resource, snap=snap)
+        attrs = _get_cf_attrs(resource, coords)
+        return [
+            make_scan_payload(
+                attrs=attrs, coords=coords, dtype=str(resource["das"].dtype)
+            )
+        ]
 
     def read(
         self,
@@ -62,16 +58,10 @@ class DASHDF5(FiberIO):
         **kwargs,
     ):
         """Read a CF file and return a Patch."""
-        coords = _get_cf_coords(resource)
-        coords_new, data = coords.select(
-            array=resource["das"],
-            time=time,
-            channel=channel,
+        patches = build_patches(
+            _get_cf_coords(resource),
+            resource["das"],
+            _get_cf_attrs(resource),
+            selection={"time": time, "channel": channel},
         )
-        if not data.size:
-            return dc.spool([])
-        attrs = _get_cf_attrs(resource, coords_new)
-        patch = dc.Patch(
-            data=data, attrs=attrs, coords=coords_new, dims=coords_new.dims
-        )
-        return dc.spool(patch)
+        return dc.spool(patches)

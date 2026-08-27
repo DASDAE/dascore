@@ -7,7 +7,7 @@ execute:
 This recipe shows a few strategies to parallelize "embarrassingly parallel" spool processing workflows.
 
 # Processes and Threads
-[dascore.Spool.map](`dascore.BaseSpool.map`) is the easiest way to process patches in a spool in parallel. Here is an example using the Python standard library module [concurrent.futures](https://docs.python.org/3/library/concurrent.futures.html):
+[`Spool.map`](`dascore.core.spool.Spool.map`) is the easiest way to process patches in a spool in parallel. Here is an example using the Python standard library module [concurrent.futures](https://docs.python.org/3/library/concurrent.futures.html):
 
 ```{python}
 from concurrent.futures import ProcessPoolExecutor
@@ -25,9 +25,37 @@ executor = ProcessPoolExecutor()
 spool.map(my_patch_processing_function, client=executor)
 ```
 
-The `ThreadPoolExecutor` from the same module will also work, but due to python's GIL may not provide much of a speed-up.
+The `ThreadPoolExecutor` from the same module also works. On a free-threaded (no-GIL) build of CPython threads run patch processing in parallel; on a standard build the GIL limits the speed-up to whatever the work releases it for, which for DASCore is mostly file reading and NumPy/SciPy computation.
 
 There are two downsides to this approach. First, if the patches aren't chunked adequately it may exhaust the available memory. Second, it will only work on a single machine. The next section presents a more scalable option.
+
+# Thread Safety
+
+DASCore's core test suite — no optional dependencies, no network tests — runs on a free-threaded CPython build with the GIL disabled. The guarantees below are what that supports; they apply equally to threads on a standard build.
+
+## What threads may share
+
+Patches are immutable, so any number of threads may read the same patch. Spools may also be read concurrently: iterating, selecting, chunking, indexing and taking their length are safe from several threads at once, because the underlying metadata caches are synchronized internally.
+
+[`Spool.get_contents`](`dascore.core.spool.Spool.get_contents`) hands back a dataframe you own. Mutating it never changes the spool, so each thread may modify its own copy freely. Arrays reached through coordinates go the other way: they are shared and read-only, so copy one before writing to it.
+
+The process-wide registries take care of themselves. The file-format (`FiberIO`) registry, the method-namespace registry and the [pint](https://pint.readthedocs.io) unit registry are each guarded by a single lock, so first use from several threads at once is safe. Loading the plugins for one format is serialized: the first thread to need a format loads it while the others wait, and none of them can observe a partially registered format.
+
+Remote files are cached per resource. Threads asking for the same remote file take turns, so it downloads once and the rest use the result; different files download at the same time.
+
+## What threads may not share
+
+State-changing calls follow a single-writer model. Updating a directory spool, adding patches to an in-memory spool and [`clear_remote_file_cache`](`dascore.utils.remote_io.clear_remote_file_cache`) should each run from one thread, with no other thread reading the same object meanwhile. DASCore keeps its own structures consistent through such a change, but it does not make a reader see a coherent before-or-after snapshot of it.
+
+An open file handle belongs to one IO operation. DASCore opens each resource once per operation and closes it when the operation ends; a handle obtained from one is not safe to read from two threads at once. Prefer giving each thread its own patch or spool to read, rather than sharing a handle.
+
+Third-party `FiberIO` plugins are responsible for their own thread safety. DASCore synchronizes the registry that holds them and serializes their import, but a plugin which keeps mutable state of its own must guard it.
+
+## Configuration in threads
+
+Configuration has two tiers, described in [runtime configuration](../tutorial/configuration.qmd). `set_config` changes the process-wide base and is visible from every thread. `config_context` overrides the config for the current context only, and a newly started thread begins with a fresh context, so a scoped override does not automatically reach threads started inside it.
+
+[`Spool.map`](`dascore.core.spool.Spool.map`) handles this for you: it binds the configuration active when `map` is called and re-applies it inside each worker, for thread pools and process pools alike. When starting threads yourself, either set the configuration permanently before starting them or re-apply the scoped override inside each thread.
 
 # MPI4Py
 
@@ -41,7 +69,7 @@ First, make sure you have installed DASCore on your machine. See [DASCore Instal
 conda install -c conda-forge mpi4py openmpi
 ```
 
-Please note that this procedure is tested for Python 3.11 and Open MPI GCC 3.1.3
+Please note that this procedure was last tested with Python 3.11 and Open MPI GCC 3.1.3.
 
 
 ## Parallel script

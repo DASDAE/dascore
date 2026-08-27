@@ -8,6 +8,8 @@ import importlib
 import warnings
 from functools import wraps
 
+from dascore.utils.misc import _get_install_message
+
 
 class _DummyNumba:
     """A simple class for acting like numba when numba is not installed."""
@@ -84,7 +86,7 @@ def maybe_numba_jit(
 
     missing_modules = []
     try:
-        import numba
+        import numba  # noqa: PLC0415
 
         if _missing_numba:
             raise ImportError("Simulating missing numba.")
@@ -117,6 +119,7 @@ def maybe_numba_jit(
                     msg = (
                         f"{func.__name__} requires python module "
                         f"{module_names} but it is not installed. "
+                        f"{_get_install_message(missing_modules)}"
                     )
                     raise ImportError(msg)
                 else:
@@ -129,10 +132,17 @@ def maybe_numba_jit(
 
             out_func = decorated
         else:
-            out_func = numba.jit(**compiler_kwargs)(func)
-        out_func.func = func  # make original func accessible via .func
-        out_func.jit_available = has_all_deps
-        out_func.missing_jit_deps = tuple(missing_modules)
+            # numba is the real module in this branch; the dummy stands in
+            # only when the import failed.
+            jit = numba.jit  # ty: ignore[unresolved-attribute]
+            out_func = jit(**compiler_kwargs)(func)
+        # Make the original func accessible via .func, and say which deps the
+        # jit wanted; function objects accept new attributes even though their
+        # declared type does not.
+        missing = tuple(missing_modules)
+        out_func.func = func  # ty: ignore[invalid-assignment]
+        out_func.jit_available = has_all_deps  # ty: ignore[invalid-assignment]
+        out_func.missing_jit_deps = missing  # ty: ignore[invalid-assignment]
         return out_func
 
     return _wrapper

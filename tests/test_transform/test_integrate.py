@@ -79,6 +79,19 @@ class TestIndefiniteIntegrals:
         data_out = out.data.flatten()
         assert np.allclose(expected, data_out)
 
+    def test_integrate_multiple_dims_matches_sequential(self):
+        """Indefinite multi-dim integration should compose axis integrals."""
+        data = np.arange(12, dtype=float).reshape(3, 4)
+        coords = {"distance": np.arange(3), "time": np.arange(4)}
+        patch = dc.Patch(data=data, coords=coords, dims=("distance", "time"))
+
+        out = patch.integrate(dim=("distance", "time"), definite=False)
+        expected = patch.integrate(dim="distance", definite=False).integrate(
+            dim="time", definite=False
+        )
+
+        np.testing.assert_allclose(out.data, expected.data)
+
 
 class TestDefiniteIntegration:
     """Test case for definite path integration."""
@@ -123,3 +136,44 @@ class TestDefiniteIntegration:
         """Simple test to integrate along non-evenly sampled dimension."""
         out = wacky_dim_patch.integrate(dim="time", definite=True)
         assert isinstance(out, dc.Patch)
+
+
+class TestDataType:
+    """An integral is a derivative read backwards, data_type included."""
+
+    @pytest.mark.parametrize(
+        ("dim", "start", "expected"),
+        (
+            ("time", "strain_rate", "strain"),
+            ("time", "acceleration", "velocity"),
+            ("time", "velocity", "displacement"),
+            ("distance", "strain", "displacement"),
+            ("distance", "strain_rate", "velocity"),
+        ),
+    )
+    def test_known_pairs(self, random_patch, dim, start, expected):
+        """An integral of a known type is the type it is known to give."""
+        patch = random_patch.update_attrs(data_type=start)
+        assert patch.integrate(dim).attrs.data_type == expected
+
+    def test_unknown_type_is_cleared(self, random_patch):
+        """An integral with no name here carries no label at all."""
+        patch = random_patch.update_attrs(data_type="temperature")
+        assert patch.integrate("time").attrs.data_type == ""
+
+    def test_definite_integral_maps_too(self, random_patch):
+        """Collapsing a dimension is still an integral along it."""
+        patch = random_patch.update_attrs(data_type="strain_rate")
+        out = patch.integrate("time", definite=True)
+        assert out.attrs.data_type == "strain"
+
+    def test_phase_rate_becomes_phase(self, random_patch):
+        """The pair differentiate states forwards, read backwards."""
+        patch = random_patch.update_attrs(data_type="phase_rate")
+        assert patch.integrate("time").attrs.data_type == "phase"
+
+    def test_round_trip(self, random_patch):
+        """Differentiating then integrating gives the type back."""
+        patch = random_patch.update_attrs(data_type="strain")
+        out = patch.differentiate("time").integrate("time")
+        assert out.attrs.data_type == "strain"

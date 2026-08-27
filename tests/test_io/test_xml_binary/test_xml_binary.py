@@ -7,8 +7,10 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+from upath import UPath
 
 import dascore as dc
+from dascore.constants import STORAGE_PROVENANCE_ATTRS
 from dascore.exceptions import UnknownFiberFormatError
 from dascore.io.xml_binary import XMLBinaryV1
 from dascore.io.xml_binary.utils import _read_xml_metadata
@@ -103,6 +105,16 @@ def directory_bad_xml(tmp_path_factory):
     return new
 
 
+@pytest.fixture(scope="session")
+def remote_binary_xml_directory(binary_xml_directory):
+    """Create an in-memory remote XMLBinary directory."""
+    root = UPath("memory://dascore/xml_binary_remote")
+    root.mkdir(parents=True, exist_ok=True)
+    for path in Path(binary_xml_directory).iterdir():
+        (root / path.name).write_bytes(path.read_bytes())
+    return root
+
+
 class TestReadXMLMetadata:
     """Misc tests reading xml metadata."""
 
@@ -137,6 +149,20 @@ class TestGetFormat:
         out = fiber_io.get_format(directory_bad_xml)
         assert not out
 
+    def test_file_path_uses_parent_directory(self, binary_xml_directory):
+        """A data-file path should resolve format metadata from its parent."""
+        fiber_io = XMLBinaryV1()
+        raw_path = next(binary_xml_directory.glob("*.raw"))
+        assert fiber_io.get_format(raw_path) == (fiber_io.name, fiber_io.version)
+
+    def test_remote_directory_upath(self, remote_binary_xml_directory):
+        """Remote UPath directories should be format-detectable."""
+        fiber_io = XMLBinaryV1()
+        assert fiber_io.get_format(remote_binary_xml_directory) == (
+            fiber_io.name,
+            fiber_io.version,
+        )
+
 
 class TestScanContents:
     """Test scanning contents of xml binary directory."""
@@ -145,6 +171,13 @@ class TestScanContents:
         """Ensure the default test case has two patches."""
         fiber = XMLBinaryV1()
         out = fiber.scan(binary_xml_directory)
+        assert len(out) == 2
+
+    def test_scan_file_path_uses_parent_directory(self, binary_xml_directory):
+        """Scanning a raw file should resolve metadata from the parent dir."""
+        fiber = XMLBinaryV1()
+        raw_path = next(binary_xml_directory.glob("*.raw"))
+        out = fiber.scan(raw_path)
         assert len(out) == 2
 
     def test_mtime(self, binary_xml_directory):
@@ -158,6 +191,32 @@ class TestScanContents:
         assert not len(scan2)
         scan3 = dc.scan(binary_xml_directory, timestamp=mtime - 50)
         assert len(scan3) == 2
+
+    def test_direct_scan_filters_all_by_mtime(self, binary_xml_directory):
+        """The FiberIO scan contract returns empty after filtering every file."""
+        fiber = XMLBinaryV1()
+        newest = max(
+            path.stat().st_mtime for path in binary_xml_directory.glob("*.raw")
+        )
+        assert fiber.scan(binary_xml_directory, timestamp=newest + 1) == []
+
+    def test_remote_directory(self, remote_binary_xml_directory):
+        """Remote XMLBinary directories should be scannable."""
+        fiber = XMLBinaryV1()
+        out = fiber.scan(remote_binary_xml_directory)
+        assert len(out) == 2
+
+    def test_remote_directory_timestamp(self, remote_binary_xml_directory):
+        """Timestamp-filtered remote directory scans should not crash."""
+        out = dc.scan(remote_binary_xml_directory, timestamp=0)
+        assert len(out) == 2
+
+    def test_remote_file_path_uses_parent_directory(self, remote_binary_xml_directory):
+        """Remote raw file scans should resolve metadata from the parent dir."""
+        fiber = XMLBinaryV1()
+        raw_path = next(remote_binary_xml_directory.glob("*.raw"))
+        out = fiber.scan(raw_path)
+        assert len(out) == 2
 
 
 class TestRead:
@@ -195,12 +254,6 @@ class TestRead:
         new_spool = spool.update()
         assert len(new_spool) == 2
 
-    def test_simple_spool(self, binary_xml_directory):
-        """Ensure the simple path can be read into a spool."""
-        spool = dc.spool(binary_xml_directory).update()
-        assert isinstance(spool, dc.BaseSpool)
-        assert len(spool) == 2
-
     def test_read_with_other_files(self, binary_xml_with_other_files):
         """Ensure other files are also included/indexed."""
         spool = dc.spool(binary_xml_with_other_files).update()
@@ -214,3 +267,34 @@ class TestRead:
         path = Path(xml_directory_no_data)
         out = fiberio.read(path)
         assert not len(out)
+
+    def test_read_remote_directory(self, remote_binary_xml_directory):
+        """Remote XMLBinary directories should read into patches."""
+        fiber_io = XMLBinaryV1()
+        spool = fiber_io.read(remote_binary_xml_directory)
+        assert len(spool) == 2
+        assert all(isinstance(patch, dc.Patch) for patch in spool)
+
+    def test_read_remote_single_file(self, remote_binary_xml_directory):
+        """Remote raw-file inputs should resolve and read through the parent dir."""
+        fiber_io = XMLBinaryV1()
+        path = next(remote_binary_xml_directory.glob("*.raw"))
+        out = fiber_io.read(path)
+        assert isinstance(out, dc.BaseSpool)
+        assert len(out) == 1
+
+
+class TestStorageProvenance:
+    """Where the bytes live belongs to the spool, not to patch attrs."""
+
+    def test_read_omits_provenance(self, binary_xml_directory):
+        """A read patch carries no path, format, or version attr."""
+        patch = dc.read(binary_xml_directory)[0]
+        names = set(dict(patch.attrs))
+        assert not names & set(STORAGE_PROVENANCE_ATTRS)
+
+    def test_scan_omits_provenance(self, binary_xml_directory):
+        """Neither does a scanned summary's attrs."""
+        summary = dc.scan(binary_xml_directory)[0]
+        names = set(dict(summary.attrs))
+        assert not names & set(STORAGE_PROVENANCE_ATTRS)

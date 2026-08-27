@@ -4,17 +4,29 @@ Tests specific to DASvader format.
 
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any, cast
 
 import h5py
+import h5py._hl.group as h5py_group
 import numpy as np
 import pytest
 from h5py.h5r import Reference
 
 import dascore as dc
-from dascore.exceptions import DependencyError
-from dascore.io.dasvader.utils import _dereference, _julia_ms_to_datetime64
+from dascore.exceptions import (
+    DASVaderCompatibilityError,
+    DependencyError,
+    UnknownFiberFormatError,
+)
+from dascore.io.dasvader.utils import (
+    EXPECTED,
+    _dereference,
+    _is_dasvader_jld2,
+    _julia_ms_to_datetime64,
+)
 from dascore.utils.downloader import fetch
 
 
@@ -37,7 +49,10 @@ MODERN_DASVADER = _ModernDASVaderValues()
 
 
 def _write_modern_dasvader_file(
-    path: Path, data_name: str = "data", include_attrib: bool = True
+    path: Path,
+    data_name: str = "data",
+    include_attrib: bool = True,
+    host_name: str | None = None,
 ) -> Path:
     """Write a readable DASVader file with named datasets and references."""
     tp_dtype = np.dtype([("hi", "<f8"), ("lo", "<f8")])
@@ -68,7 +83,12 @@ def _write_modern_dasvader_file(
         )
         htime = fi.create_dataset("htime", data=np.array([MODERN_DASVADER.htime_ms]))
 
-        ddas = np.zeros((), dtype=ddas_dtype)
+        # Cast because numpy types np.zeros(..., dtype=<dtype object>) as
+        # float64: a structured dtype built at runtime is invisible to the
+        # stubs, which then reject every field-name index below.
+        ddas = cast(
+            "np.ndarray[Any, np.dtype[np.void]]", np.zeros((), dtype=ddas_dtype)
+        )
         ddas[data_name] = data.ref
         ddas["htime"] = htime.ref
         ddas["time"]["ref"]["hi"] = 0.0
@@ -94,7 +114,7 @@ def _write_modern_dasvader_file(
             )
             host = fi.create_dataset(
                 "Hostname",
-                data=MODERN_DASVADER.host_name,
+                data=(MODERN_DASVADER.host_name if host_name is None else host_name),
                 dtype=h5py.string_dtype(encoding="utf-8"),
             )
             tracker = fi.create_dataset(
@@ -102,7 +122,9 @@ def _write_modern_dasvader_file(
                 data=MODERN_DASVADER.pipeline_tracker,
                 dtype=h5py.string_dtype(encoding="utf-8"),
             )
-            atrib = np.zeros((), dtype=atrib_dtype)
+            atrib = cast(
+                "np.ndarray[Any, np.dtype[np.void]]", np.zeros((), dtype=atrib_dtype)
+            )
             atrib["GaugeLength"] = gauge.ref
             atrib["Hostname"] = host.ref
             atrib["PipelineTracker"] = tracker.ref
@@ -156,7 +178,9 @@ class TestDASVader:
             )
             htime = fi.create_dataset("htime", data=np.array([62_135_683_200_000]))
 
-            ddas = np.zeros((), dtype=ddas_dtype)
+            ddas = cast(
+                "np.ndarray[Any, np.dtype[np.void]]", np.zeros((), dtype=ddas_dtype)
+            )
             ddas["strainrate"] = strainrate.ref
             ddas["htime"] = htime.ref
             ddas["time"]["ref"]["hi"] = 0.0
@@ -176,6 +200,28 @@ class TestDASVader:
         for _, value in das_vader_patch.attrs.items():
             assert not isinstance(value, Reference)
 
+    def test_read_and_scan_fallback_for_reference_dereference(
+        self, monkeypatch, dasvader_modern_path
+    ):
+        """Ensure DASVader works when high-level reference deref fails."""
+        # This intentionally patches h5py internals to simulate dereference
+        # failures that are otherwise hard to trigger from the public API.
+        # TODO: revisit if h5py internals change or a higher-level hook appears.
+        original_getitem = h5py_group.Group.__getitem__
+
+        def _patched_getitem(group, key):
+            if isinstance(key, Reference):
+                raise KeyError("simulated token dereference failure")
+            return original_getitem(group, key)
+
+        monkeypatch.setattr(h5py_group.Group, "__getitem__", _patched_getitem)
+
+        patch = dc.read(dasvader_modern_path)[0]
+        scanned = dc.scan(dasvader_modern_path)
+
+        assert patch.dims
+        assert len(scanned) == 1
+
     def test_legacy_file_raises_clear_error(self, legacy_das_vader_path):
         """Skip on incompatible stacks, otherwise ensure the file still reads."""
         try:
@@ -184,29 +230,66 @@ class TestDASVader:
             pytest.skip(str(exc))
         assert patch.attrs is not None
 
+    def test_legacy_file_scan_warns_and_skips(self, legacy_das_vader_path):
+        """
+        Scan should surface compatibility guidance as a warning, not an error.
+
+        On an HDF5 stack which can resolve the file's anonymous references
+        it simply scans, so only the unsupported case asserts the warning.
+        """
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            out = dc.scan(legacy_das_vader_path)
+        messages = [str(x.message) for x in caught]
+        if out == []:
+            assert any("legacy DASVader JLD2 file" in x for x in messages)
+        else:
+            assert len(out) == 1
+
+    def test_non_dasvader_jld2_is_not_claimed(self, tmp_path):
+        """Non-DASVader JLD2/HDF5 files should not be identified as DASVader."""
+        path = tmp_path / "not_dasvader.jld2"
+        with h5py.File(path, "w") as fi:
+            fi.create_dataset("not_dDAS", data=np.arange(3))
+        with pytest.raises(UnknownFiberFormatError):
+            dc.get_format(path)
+
     def test_modern_file_scan_and_slice(self, dasvader_modern_path):
         """Named-reference DASVader files should still support scan and read."""
         scanned = dc.scan(dasvader_modern_path)
         assert len(scanned) == 1
-        attrs = scanned[0]
-        assert attrs.file_format == "DASVader"
-        assert attrs.gauge_length == MODERN_DASVADER.gauge_length
-        assert attrs.host_name == MODERN_DASVADER.host_name
-        assert attrs.pipeline_tracker == MODERN_DASVADER.pipeline_tracker
-        assert attrs.pulse_rate_frequency == MODERN_DASVADER.pulse_rate_freq
+        summary = scanned[0]
+        assert summary.source_format == "DASVader"
+        assert summary.attrs.gauge_length == MODERN_DASVADER.gauge_length
+        interrogator_name = dict(summary.attrs)["interrogator.name"]
+        assert interrogator_name == MODERN_DASVADER.host_name
+        assert summary.attrs.pipeline_tracker == MODERN_DASVADER.pipeline_tracker
+        assert summary.attrs.pulse_rate_frequency == MODERN_DASVADER.pulse_rate_freq
+        time_summary = summary.get_coord_summary("time")
         patch = dc.read(
             dasvader_modern_path,
-            time=(attrs.time_min + dc.to_timedelta64(MODERN_DASVADER.time_step), ...),
+            time=(
+                time_summary.min + dc.to_timedelta64(MODERN_DASVADER.time_step),
+                ...,
+            ),
         )[0]
         assert patch.dims == ("distance", "time")
         assert patch.attrs.gauge_length == MODERN_DASVADER.gauge_length
+        assert dict(patch.attrs)["interrogator.name"] == MODERN_DASVADER.host_name
+
+    def test_blank_host_name_dropped(self, tmp_path):
+        """An empty Hostname is not passed off as an interrogator name."""
+        path = _write_modern_dasvader_file(tmp_path / "blank.jld2", host_name="   ")
+        assert "interrogator.name" not in dict(dc.scan(path)[0].attrs)
+        assert "interrogator.name" not in dict(dc.read(path)[0].attrs)
 
     def test_modern_file_out_of_range_read_is_empty(self, dasvader_modern_path):
         """Out-of-range selections should return an empty spool."""
         scanned = dc.scan(dasvader_modern_path)[0]
+        distance_summary = scanned.get_coord_summary("distance")
         out = dc.read(
             dasvader_modern_path,
-            distance=(scanned.distance_max + MODERN_DASVADER.distance_step, ...),
+            distance=(distance_summary.max + MODERN_DASVADER.distance_step, ...),
         )
         assert len(out) == 0
 
@@ -239,3 +322,45 @@ class TestDASVader:
         """Non-reference values should be returned unchanged."""
         value = np.float64(5_000.0)
         assert _dereference(None, value, "PulseRateFreq") == value
+
+    def test_dereference_anonymous_reference(self, tmp_path):
+        """Anonymous references should be read when supported by HDF5."""
+        path = tmp_path / "anonymous_reference.h5"
+        with h5py.File(path, "w") as resource:
+            target = resource.create_dataset("target", data=np.array([1]))
+            resource.create_dataset("reference", data=target.ref, dtype=h5py.ref_dtype)
+            del resource["target"]
+            reference = resource["reference"][()]
+
+            assert h5py.h5r.get_name(reference, resource.id) is None
+            resolved = _dereference(resource, reference, "htime")
+
+            assert resolved[0] == 1
+
+    def test_dereference_failure(self):
+        """Failed references should raise a clear compatibility error."""
+
+        class BrokenResource:
+            """Minimal HDF5 resource whose references cannot be resolved."""
+
+            filename = "legacy.jld2"
+
+            def __getitem__(self, value):
+                raise KeyError(value)
+
+        match = r"legacy\.jld2.*'htime'.*h5py<3\.16"
+        with pytest.raises(DASVaderCompatibilityError, match=match):
+            _dereference(BrokenResource(), Reference(), "htime")
+
+    def test_missing_data_name_returns_false(self):
+        """A file with no recognized data name is rejected with a real bool."""
+
+        class _Resource:
+            """Minimal resource exposing only the non-data field names."""
+
+            def get(self, name):
+                return np.zeros(1, dtype=[(x, "<f8") for x in EXPECTED])
+
+        # `is False` rather than a truthiness check: the empty intersection
+        # used to be returned directly, so the answer was the empty set.
+        assert _is_dasvader_jld2(_Resource()) is False

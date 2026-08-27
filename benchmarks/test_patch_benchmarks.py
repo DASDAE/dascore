@@ -7,7 +7,9 @@ import numpy as np
 import pytest
 
 import dascore as dc
+from dascore.config import config_context
 from dascore.utils.patch import get_start_stop_step
+from dascore.workflow.processor import _FINGERPRINTS
 
 
 @pytest.fixture(scope="module")
@@ -82,11 +84,21 @@ class TestProcessingBenchmarks:
         """Selecting on time/distance dimension"""
         patch = example_patch
         patch.select(distance=(100, 200))
-        t1 = patch.attrs["time_min"] + np.timedelta64(1, "s")
+        t1 = patch.get_coord("time").min() + np.timedelta64(1, "s")
         t2 = t1 + np.timedelta64(3, "s")
         patch.select(time=(None, t1))
         patch.select(time=(t1, None))
         patch.select(time=(t1, t2))
+
+    @pytest.mark.benchmark
+    def test_update_existing_coords(self, example_patch):
+        """Time update_coords re-passing already-validated BaseCoords."""
+        patch = example_patch
+        coords = patch.coords
+        patch.update_coords(
+            time=coords.coord_map["time"],
+            distance=coords.coord_map["distance"],
+        )
 
     @pytest.mark.benchmark
     def test_sobel_filter(self, example_patch):
@@ -114,6 +126,18 @@ class TestProcessingBenchmarks:
         patch.transpose(*dims)
 
     @pytest.mark.benchmark
+    def test_transpose_noop(self, example_patch):
+        """Time a no-op transpose (same dimension order)."""
+        patch = example_patch
+        patch.transpose(*patch.dims)
+
+    @pytest.mark.benchmark
+    def test_squeeze_noop(self, example_patch):
+        """Time a no-op squeeze (no length-1 dimensions)."""
+        patch = example_patch
+        patch.squeeze()
+
+    @pytest.mark.benchmark
     def test_roll(self, example_patch):
         """Time roll/shift operations."""
         patch = example_patch
@@ -124,6 +148,12 @@ class TestProcessingBenchmarks:
         """Time coordinate snapping."""
         patch = patch_uneven_time
         patch.snap_coords("time")
+
+    @pytest.mark.benchmark
+    def test_snap_coords_already_even(self, example_patch):
+        """Time snapping an already even/sorted patch (no-op fast path)."""
+        patch = example_patch
+        patch.snap_coords("time", "distance")
 
     @pytest.mark.benchmark
     def test_hampel_filter_non_approximate(self, example_patch):
@@ -160,6 +190,48 @@ class TestProcessingBenchmarks:
         """Time slope mute between velocities."""
         patch = example_patch
         patch.slope_mute(slopes=(1000, 3000))
+
+
+class TestPatchConstructionBenchmarks:
+    """Benchmarks for the patch construction paths."""
+
+    @pytest.fixture(scope="module")
+    def new_data(self, example_patch):
+        """Data for constructing new patches; built outside the timed call."""
+        return np.asarray(example_patch.data) * 2
+
+    @pytest.fixture(scope="module")
+    def decimated(self, example_patch):
+        """A coord manager with one dimension shortened."""
+        coord = example_patch.get_coord("time")[::2]
+        return example_patch.coords.update(time=coord)
+
+    @pytest.mark.benchmark
+    def test_new_data_only(self, example_patch, new_data):
+        """Time new when only data changes; coords and attrs are reused."""
+        example_patch.new(data=new_data)
+
+    @pytest.mark.benchmark
+    def test_new_with_coords(self, example_patch, decimated):
+        """Time new when the coords change, so attrs must be rebuilt."""
+        example_patch.new(data=example_patch.data[:, ::2], coords=decimated)
+
+    @pytest.mark.benchmark
+    def test_new_with_coords_and_attrs(self, example_patch, new_data):
+        """Time new when both coords and attrs are passed."""
+        patch = example_patch
+        patch.new(data=new_data, coords=patch.coords, attrs=patch.attrs)
+
+    @pytest.mark.benchmark
+    def test_patch_init(self, example_patch, new_data):
+        """
+        Time the normal constructor.
+
+        This is a control; it should not move, since the strict path is
+        deliberately left alone.
+        """
+        patch = example_patch
+        dc.Patch(data=new_data, coords=patch.coords, dims=patch.dims, attrs=patch.attrs)
 
 
 class TestTransformBenchmarks:
@@ -239,6 +311,12 @@ class TestVisualizationBenchmarks:
         """Time wiggle plot visualization."""
         patch = example_patch.select(distance=(0, 100))  # Subset for performance
         patch.viz.wiggle()
+
+    @pytest.mark.usefixtures("cleanup_mpl")
+    @pytest.mark.benchmark
+    def test_wiggle_shade(self, example_patch):
+        """Time a shaded wiggle plot of every trace in the patch."""
+        example_patch.viz.wiggle(shade=True)
 
 
 class TestAggregationBenchmarks:
@@ -325,6 +403,11 @@ class TestRollingBenchmarks:
         """Time rolling mean calculation."""
         big_roller.mean()
 
+    @pytest.mark.benchmark
+    def test_rolling_mean_full_call(self, example_patch):
+        """Time a complete rolling mean, including roller construction."""
+        example_patch.rolling(time=5, samples=True, center=True).mean()
+
 
 class TestAlignBenchmarks:
     """Benchmarks for align_to_coord operation."""
@@ -353,3 +436,99 @@ class TestAlignBenchmarks:
         """Benchmark 2D patch with 1D shift coordinate (300 shifts), valid mode."""
         patch = patch_2d_with_1d_shift
         patch.align_to_coord(time="shift_time", mode="valid")
+
+
+class TestIdentityOverhead:
+    """
+    What maintaining the lineage ids costs.
+
+    The charge is per operation -- canonicalizing the call and digesting
+    it -- so it is invisible next to real signal processing and plain
+    next to an operation which barely touches the data. Both ends are
+    timed, because it is the cheap end which decides whether the
+    `patch_provenance` knob is worth keeping.
+
+    Repeating one call is the cheap case: `fingerprint_call` memoizes, so
+    the second identical call pays the lookup and not the digest. Real
+    loops vary their arguments, so the uncached case is timed too.
+    """
+
+    @pytest.fixture(scope="class")
+    def tiny_patch(self):
+        """The smallest patch worth having: all overhead, no work."""
+        return dc.Patch(
+            data=np.ones((2, 2)),
+            coords={"distance": np.arange(2), "time": np.arange(2)},
+            dims=("distance", "time"),
+        )
+
+    @pytest.fixture(scope="class")
+    def big_mask(self, example_patch):
+        """A mask the fingerprint has to hash, being an array parameter."""
+        return np.asarray(example_patch.data) > 0.5
+
+    @pytest.fixture()
+    def ids_disabled(self):
+        """
+        Turn the ids off around a benchmark, not inside it.
+
+        Entering the context builds and validates a whole config, which
+        is not what the control is supposed to be measuring.
+        """
+        with config_context(patch_provenance="disabled"):
+            yield
+
+    @pytest.mark.benchmark
+    def test_identity_overhead_tiny_patch(self, tiny_patch):
+        """The charge on a call which does nothing else, memoized."""
+        tiny_patch.transpose()
+
+    @pytest.mark.benchmark
+    def test_identity_overhead_tiny_patch_disabled(self, tiny_patch, ids_disabled):
+        """The same call with the ids off, as the control."""
+        tiny_patch.transpose()
+
+    @pytest.mark.benchmark
+    def test_identity_overhead_uncached(self, tiny_patch):
+        """
+        The charge with the memo missed, which is what a real loop pays.
+
+        The cache is cleared rather than the arguments varied, so this
+        times the same call as the memoized benchmark above and the two
+        differ by the digest alone.
+        """
+        _FINGERPRINTS.clear()
+        tiny_patch.transpose()
+
+    @pytest.mark.benchmark
+    def test_identity_overhead_uncached_disabled(self, tiny_patch, ids_disabled):
+        """The control for the uncached charge, clearing included."""
+        _FINGERPRINTS.clear()
+        tiny_patch.transpose()
+
+    @pytest.mark.benchmark
+    def test_identity_overhead_array_argument(self, example_patch, big_mask):
+        """An array parameter is hashed, which is the one unflat cost."""
+        example_patch.where(big_mask)
+
+    @pytest.mark.benchmark
+    def test_identity_overhead_array_argument_disabled(
+        self, example_patch, big_mask, ids_disabled
+    ):
+        """The control: the same call without hashing the mask."""
+        example_patch.where(big_mask)
+
+    @pytest.mark.benchmark
+    def test_identity_overhead_real_work(self, example_patch):
+        """Next to actual filtering the charge should not be findable."""
+        example_patch.pass_filter(time=(10, 100))
+
+    @pytest.mark.benchmark
+    def test_identity_overhead_real_work_disabled(self, example_patch, ids_disabled):
+        """The control for real work."""
+        example_patch.pass_filter(time=(10, 100))
+
+    @pytest.mark.benchmark
+    def test_processor_fingerprint(self, example_patch):
+        """Building an operation and asking it what it is."""
+        dc.proc.normalize.op(dim="time").fingerprint

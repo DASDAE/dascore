@@ -1,0 +1,164 @@
+"""Common remote IO tests for localhost HTTP-backed paths."""
+
+from __future__ import annotations
+
+import sys
+
+import pytest
+
+import dascore as dc
+from dascore.utils.downloader import fetch
+from dascore.utils.misc import iterate, suppress_warnings
+from tests.test_io._common_io_test_utils import (
+    get_flat_io_test,
+    get_representative_io_test,
+    skip_missing,
+    skip_on_timeout,
+    skip_timeout,
+)
+from tests.test_io.test_common_io import COMMON_IO_READ_TESTS
+
+# The localhost HTTP + fsspec/aiohttp streaming path can intermittently deadlock
+# on Windows (the async read stalls while h5py probes remote HDF5 metadata),
+# which pytest-timeout then aborts. This is a known Windows flakiness in that
+# fallback path, not a DASCore logic issue; see the win32 skip in
+# test_remote_http.py. Skip the localhost-HTTP matrix on Windows to keep CI
+# deterministic while still exercising it fully on Linux and macOS.
+pytestmark = [
+    pytest.mark.network,
+    pytest.mark.timeout(30),
+    pytest.mark.skipif(
+        sys.platform == "win32",
+        reason="Flaky localhost-HTTP fsspec/aiohttp streaming on Windows.",
+    ),
+]
+
+# What the remote matrix is for is the streaming path, not the readers: every
+# reader is already read, scanned and format-detected against the same files
+# by tests/test_io/test_common_io.py. These nine cover the ways a reader can
+# reach the bytes -- whole-file HDF5, ranged HDF5, a plain binary walk, a
+# SEG-Y trace scan, an obspy handoff -- plus NETCDF_CF, the only one which
+# unwraps the handle through get_h5py_file into h5netcdf.
+#
+# Sintela_Protobuf is deliberately not among them: it walks its MTLV envelope
+# with three small sequential reads per record, so a modest file becomes
+# hundreds of range requests and blows the timeouts below. Its remote
+# coverage stays at the memory:// level.
+REMOTE_FORMATS = {
+    ("PRODML", "2.1"),
+    ("DASDAE", "1"),
+    ("TDMS", "4713"),
+    ("sentek", "5"),
+    ("Sintela_Binary", "3"),
+    ("SR4731", "200"),
+    ("segy", "1.0"),
+    ("MSEED", "2"),
+    ("NETCDF_CF", "1.8"),
+}
+# One file each: what is under test is the streaming path, and a second file
+# of the same format goes down the same one.
+REMOTE_COMMON_IO_READ_TESTS = {
+    io: next(iter(iterate(fetch_names)))
+    for io, fetch_names in COMMON_IO_READ_TESTS.items()
+    if (io.name, io.version) in REMOTE_FORMATS
+}
+# A rename or a version bump would otherwise drop that format out of the
+# matrix silently, leaving a shorter run and no failure.
+_matched = {(io.name, io.version) for io in REMOTE_COMMON_IO_READ_TESTS}
+assert _matched == REMOTE_FORMATS, f"no reader for {sorted(REMOTE_FORMATS - _matched)}"
+REMOTE_GET_FORMAT_CASES = get_flat_io_test(REMOTE_COMMON_IO_READ_TESTS)
+REMOTE_REPRESENTATIVE_CASES = get_representative_io_test(REMOTE_COMMON_IO_READ_TESTS)
+
+# The localhost HTTP/fsspec/h5py streaming path can intermittently stall while
+# probing remote HDF5 metadata (see the TODO in test_remote_http.py). Bound each
+# remote operation below the 30s pytest-timeout so a stall skips with a useful
+# message instead of aborting the whole job as a hard timeout failure.
+REMOTE_OP_TIMEOUT = 15
+
+
+@pytest.fixture(autouse=True)
+def suppress_expected_remote_cache_warnings():
+    """Keep expected remote-cache download warnings out of test output."""
+    with suppress_warnings(UserWarning):
+        yield
+
+
+@pytest.fixture(scope="module", autouse=True)
+def isolated_remote_cache(tmp_path_factory, permanent_config):
+    """Keep the common remote matrix in its own cache root."""
+    with permanent_config(
+        remote_cache_dir=tmp_path_factory.mktemp("remote_common_cache"),
+        allow_remote_cache_for_metadata=True,
+    ):
+        yield
+
+
+def _get_remote_case(fetch_name: str, to_http_range_path):
+    """Return a range-capable HTTP path for one fetched local test file."""
+    with skip_timeout():
+        local_path = fetch(fetch_name)
+    return to_http_range_path(local_path)
+
+
+@pytest.fixture(
+    scope="session",
+    params=REMOTE_GET_FORMAT_CASES,
+    ids=lambda case: f"{case[0].name}-{case[0].version}-{case[1]}",
+)
+def remote_get_format_case(request, to_http_range_path):
+    """Return one remote get-format case per IO/file pairing."""
+    io, fetch_name = request.param
+    return io, _get_remote_case(fetch_name, to_http_range_path)
+
+
+@pytest.fixture(scope="session", params=REMOTE_REPRESENTATIVE_CASES)
+def remote_read_case(request, to_http_range_path):
+    """Return one representative remote read case per FiberIO entry."""
+    io, fetch_name = request.param
+    return io, _get_remote_case(fetch_name, to_http_range_path)
+
+
+@pytest.fixture(scope="session", params=REMOTE_REPRESENTATIVE_CASES)
+def remote_scan_case(request, to_http_range_path):
+    """Return one representative remote scan case per FiberIO entry."""
+    io, fetch_name = request.param
+    return io, _get_remote_case(fetch_name, to_http_range_path)
+
+
+class TestRemoteGetFormat:
+    """Test remote format detection against the local IO support matrix."""
+
+    def test_expected_version(self, remote_get_format_case):
+        """Each IO should identify its own remote test fixture."""
+        io, path = remote_get_format_case
+        with skip_missing(), skip_on_timeout(REMOTE_OP_TIMEOUT, "remote get_format"):
+            out = dc.get_format(path)
+        assert out == (io.name, io.version)
+
+
+class TestRemoteRead:
+    """Test remote reads against the local IO support matrix."""
+
+    def test_read_returns_spools(self, remote_read_case):
+        """Each remotely supported file should read into a spool."""
+        _io, path = remote_read_case
+        with skip_missing(), skip_on_timeout(REMOTE_OP_TIMEOUT, "remote read"):
+            out = dc.read(path)
+        assert isinstance(out, dc.BaseSpool)
+        assert len(out) > 0
+        assert all(isinstance(x, dc.Patch) for x in out)
+
+
+class TestRemoteScan:
+    """Test remote scans against the local IO support matrix."""
+
+    def test_scan_has_source_metadata(self, remote_scan_case):
+        """Public scans of remote files should retain source metadata."""
+        io, path = remote_scan_case
+        with skip_missing(), skip_on_timeout(REMOTE_OP_TIMEOUT, "remote scan"):
+            summary_list = dc.scan(path)
+        assert len(summary_list) > 0
+        for summary in summary_list:
+            assert str(summary.source_path) == str(path)
+            assert summary.source_format == io.name
+            assert summary.source_version == io.version

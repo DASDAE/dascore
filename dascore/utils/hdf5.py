@@ -1,453 +1,367 @@
-"""
-Utilities for working with HDF5 files.
-
-Pytables should only be imported in this module in case we need to switch
-out the hdf5 backend in the future.
-"""
+"""Utilities for working with HDF5 files (h5py-based)."""
 
 from __future__ import annotations
 
-import time
-import warnings
+import io
+import os
+import shutil
+import tempfile
 from collections.abc import Sequence
-from contextlib import contextmanager, suppress
+from contextlib import suppress
 from functools import partial
 from pathlib import Path
-from typing import Literal
+from typing import TYPE_CHECKING
 
 import numpy as np
 import pandas as pd
-import tables
 from h5py import File as H5pyFile
-from packaging.version import parse as get_version
-from pandas.io.common import stringify_path
-from tables import ClosedNodeError
-from tables import File as PyTablesFile
 
-import dascore as dc
-from dascore.constants import ONE_SECOND_IN_NS, max_lens
-from dascore.exceptions import InvalidFileHandlerError, InvalidIndexVersionError
-from dascore.io.core import PatchFileSummary
-from dascore.utils.mapping import FrozenDict
+from dascore.compat import UPath
+from dascore.config import get_config
+from dascore.constants import http_protocols, remote_hdf5_tuned_protocols
 from dascore.utils.misc import (
     _maybe_make_parent_directory,
     _maybe_unpack,
-    cached_method,
-    suppress_warnings,
+    iterate,
     unbyte,
 )
-from dascore.utils.pd import (
-    _remove_base_path,
-    fill_defaults_from_pydantic,
-    list_ser_to_str,
+from dascore.utils.remote_io import (
+    _FallbackFileObj,
+    _get_cached_local_file,
+    ensure_local_file,
+    get_local_handle,
+    is_no_range_http_error,
+    pause_gc,
+    resume_gc,
 )
-from dascore.utils.time import get_max_min_times, to_datetime64, to_int, to_timedelta64
-
-HDF5ExtError = tables.HDF5ExtError
-NoSuchNodeError = tables.NoSuchNodeError
-NodeError = tables.NodeError
 
 ns_to_datetime = partial(pd.to_datetime, unit="ns")
 ns_to_timedelta = partial(pd.to_timedelta, unit="ns")
 
 
-class _HDF5Store(pd.HDFStore):
+def encode_h5_strings(values: str | Sequence[str]) -> np.ndarray:
+    """Encode strings as a fixed-length UTF-8 HDF5 byte array."""
+    return np.asarray([value.encode() for value in iterate(values)], dtype="S")
+
+
+class _ManagedH5pyFile:
     """
-    A work-around for pandas HDF5 store not accepting
-    pytables.File objects.
+    DASCore's internal h5py handle wrapper with deterministic close behavior.
+
+    All h5py-backed DASCore reads return this wrapper so callers see one handle
+    type regardless of whether the underlying resource came from:
+    - a local path
+    - an existing h5py handle
+    - a Python file object
+    - a remote ``UPath`` opened through the fallback fileobj path
+
+    For path-backed opens, this wrapper owns only the h5py handle. For
+    ``h5py.File(..., driver="fileobj")`` paths, it also owns the Python
+    file-like object underneath, whether DASCore created it or the caller
+    supplied it. ``close()`` is therefore the point where DASCore tears down
+    the entire HDF5 access stack.
     """
 
-    def __init__(
-        self,
-        path,
-        mode: str = "a",
-        complevel: int | None = None,
-        complib=None,
-        fletcher32: bool = False,
-        **kwargs,
-    ) -> None:
-        if isinstance(path, str | Path):
-            self._path = stringify_path(path)
-        elif isinstance(path, tables.File):
-            self._path = stringify_path(path.filename)
-        self._mode = "a" if mode is None else mode
-        self._handle = None
-        self._complevel = complevel if complevel else 0
-        self._complib = complib
-        self._fletcher32 = fletcher32
-        self._filters = None
-        if isinstance(path, tables.File):
-            self._handle = path
-        else:
-            self.open(mode)
+    # Class defaults, so a half-built instance is still closeable rather than
+    # falling through __getattr__ to a handle that may not be set yet.
+    _closed = False
+    _gc_paused_pid = None
+
+    def __init__(self, handle: H5pyFile, owned_fileobj=None, gc_paused=False):
+        self._handle = handle
+        self._owned_fileobj = owned_fileobj
+        if gc_paused:
+            # The pid that paused, so a handle inherited through a fork
+            # cannot resume a pause the child never took.
+            self._gc_paused_pid = os.getpid()
+
+    def close(self):
+        """Close the h5py file and, when present, the owned file object."""
+        if self._closed:
+            return
+        self._closed = True
+        try:
+            self._handle.close()
+        finally:
+            # Nested so nothing raised by the teardown, including a
+            # BaseException, can skip the resume and strand the pause.
+            try:
+                if self._owned_fileobj is not None:
+                    with suppress(Exception):
+                        self._owned_fileobj.close()
+            finally:
+                # dict.pop is atomic, so racing closes resume exactly once.
+                pid = self.__dict__.pop("_gc_paused_pid", None)
+                if pid == os.getpid():
+                    resume_gc()
+
+    def __del__(self):
+        """
+        Release a leaked handle's pause so it cannot stop collection forever.
+
+        Only the pause: closing here would also close a caller-supplied h5py
+        file or stream that this wrapper never had permission to close.
+        Reference counting still tears the underlying handles down.
+        """
+        pid = self.__dict__.pop("_gc_paused_pid", None)
+        if pid == os.getpid():
+            with suppress(Exception):
+                resume_gc()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        self.close()
+        return False
+
+    def __getitem__(self, item):
+        return self._handle[item]
+
+    def __contains__(self, item):
+        return item in self._handle
+
+    def __iter__(self):
+        return iter(self._handle)
+
+    @property
+    def closed(self):
+        """Return True when close has been called on the proxy."""
+        return self._closed
+
+    def __getattr__(self, item):
+        return getattr(self._handle, item)
 
 
-@contextmanager
-def open_hdf5_file(
-    path_or_handler: Path | str | tables.File,
-    mode: Literal["r", "w", "a"] = "r",
-) -> tables.File:
+def _is_loop_backed(resource) -> bool:
     """
-    A helper function for getting a `tables.file.File` object.
+    Return True when reads on a resource are served by an event-loop thread.
 
-    If a file reference (str or Path) is passed this context manager will
-    close the file when it exists.
+    fsspec async filesystems (http, s3, ...) bridge each read onto a shared
+    event-loop thread and mark themselves with ``async_impl``; duck-typing it
+    avoids importing fsspec here. Local, memory, and other synchronous
+    backends need no GC pause. A buffered reader hides the filesystem behind
+    ``raw``, so unwrap it: missing it would leave the deadlock window open.
+    """
+    while resource is not None:
+        try:
+            if getattr(getattr(resource, "fs", None), "async_impl", False):
+                return True
+            wrapped = getattr(resource, "raw", None)
+        except Exception:
+            # Probing can fail rather than return nothing: a UPath whose
+            # backend is not installed raises from ``fs``, and a wrapper
+            # can refuse an attribute with something other than
+            # AttributeError. Either way the open below reports it.
+            return False
+        resource = None if wrapped is resource else wrapped
+    return False
+
+
+def _open_h5_fileobj(
+    fileobj, constructor, mode, *, pause: bool, close_on_error: bool
+) -> _ManagedH5pyFile:
+    """
+    Open a file object with h5py through the fileobj driver.
+
+    Loop-backed resources pause automatic collection first; the returned
+    wrapper owns that pause and releases it on close, and a failed open
+    releases it here.
+
+    ``close_on_error`` is set only for file objects DASCore created. A
+    caller-supplied one must survive a failed open: ``get_format`` offers the
+    same object to every FiberIO in turn, and an HDF5 miss is the expected
+    outcome for most of them.
+    """
+    try:
+        if pause:
+            # Inside the try, and paired unconditionally below, because
+            # pause_gc always leaves the depth consistent with the pauses it
+            # took -- even when interrupted partway.
+            pause_gc()
+        handle = constructor(fileobj, mode=mode, driver="fileobj")
+        return _ManagedH5pyFile(handle, fileobj, gc_paused=pause)
+    except BaseException:
+        # Everything the pause covers runs in here, so an interrupt at any
+        # point still rebalances. Nested so nothing raised while closing,
+        # including a BaseException, can skip the resume.
+        try:
+            if close_on_error:
+                with suppress(Exception):
+                    fileobj.close()
+        finally:
+            if pause:
+                resume_gc()
+        raise
+
+
+def get_h5py_file(handle) -> H5pyFile:
+    """
+    Return the underlying ``h5py.File`` for a DASCore h5 handle.
+
+    Consumers such as the ``h5netcdf`` xarray engine require a real
+    ``h5py.File``/group and do not accept DASCore's ``_ManagedH5pyFile`` proxy.
+    Unwrapping the proxy preserves DASCore's ownership: closing the returned
+    ``h5py.File`` remains the responsibility of the managing handle (or the
+    ``IOResourceManager``), not the consumer.
+    """
+    if isinstance(handle, _ManagedH5pyFile):
+        return handle._handle
+    return handle
+
+
+def open_h5_resource(
+    resource,
+    *,
+    mode: str,
+    constructor,
+    open_kwargs_getter,
+) -> _ManagedH5pyFile:
+    """
+    Open an HDF5 resource and return DASCore's managed h5py handle wrapper.
+
+    This is the central constructor for h5py-backed reads in DASCore. It keeps
+    the branching needed for local paths, already-open handles, remote
+    fileobj-backed reads, cached-local reuse, and no-range HTTP fallback in one
+    place so ``H5Reader.get_handle()`` stays thin.
 
     Parameters
     ----------
-    path_or_handler
-        The input
+    resource
+        A local path, remote ``UPath``, open file object, or existing h5py
+        handle.
     mode
-        The mode in which to open the file.
-
-    Raises
-    ------
-    InvalidBuffer if a writable mode is requested from a read only handler.
+        The mode to pass to the h5py constructor.
+    constructor
+        The callable used to construct an h5py handle.
+    open_kwargs_getter
+        Callback which returns backend-specific kwargs for remote file opens.
     """
-
-    def _validate_mode(current_mode, desired_mode):
-        """Ensure modes are compatible else raise."""
-        if desired_mode == "r":
-            return
-        # if a or w is desired the current mode should be w
-        if not current_mode == "w":
-            msg = (
-                f"A HDF5 file handler with mode 'r' was provided but "
-                f"mode: {desired_mode} was requested."
+    if isinstance(resource, _ManagedH5pyFile):
+        return resource
+    if isinstance(resource, H5pyFile):
+        return _ManagedH5pyFile(resource)
+    if isinstance(resource, io.IOBase):
+        # A user-supplied fsspec file object delegates reads to the same
+        # event-loop thread as the UPath branch below and needs the same
+        # GC pause; plain local/in-memory streams do not.
+        return _open_h5_fileobj(
+            resource,
+            constructor,
+            mode,
+            pause=_is_loop_backed(resource),
+            close_on_error=False,
+        )
+    if isinstance(resource, UPath):
+        # Reuse an already-materialized local artifact when present so later
+        # HDF5 reads do not re-enter the remote fallback path unnecessarily.
+        if cached_path := _get_cached_local_file(resource):
+            return open_h5_resource(
+                cached_path,
+                mode=mode,
+                constructor=constructor,
+                open_kwargs_getter=open_kwargs_getter,
             )
-            raise InvalidFileHandlerError(msg)
-
-    if isinstance(path_or_handler, str | Path):
-        # Note: We suppress DataTypeWarnings because pytables fails to read
-        # 8 bit enum indicating true or false written by h5py. See:
-        # https://github.com/PyTables/PyTables/issues/647
-        with suppress_warnings(tables.DataTypeWarning):
-            with tables.open_file(path_or_handler, mode) as fi:
-                yield fi
-    elif isinstance(path_or_handler, tables.File):
-        _validate_mode(path_or_handler.mode, mode)
-        yield path_or_handler
-
-
-def _get_kernel_query(starttime: int, endtime: int, buffer: int):
-    """
-    Create a HDF5 kernel query based on start and end times.
-
-    This is necessary because hdf5 doesn't accept inverted conditions.
-    A slight buffer is applied to the ranges to make sure no edge files
-    are excluded.
-    """
-    t1 = starttime - buffer
-    t2 = endtime + buffer
-    con = (
-        f"(time_min>{t1:d} & time_min<{t2:d}) | "
-        f"((time_max>{t1:d} & time_max<{t2:d}) | "
-        f"(time_min<{t1:d} & time_max>{t2:d}))"
-    )
-    return con
-
-
-class HDFPatchIndexManager:
-    """
-    A class for writing/querying an index table of summary patch info to hdf5.
-
-    It creates a table of patch summary info, a table of metadata and a time
-    stamp of the last time it was updated.
-    """
-
-    _complib = "blosc"
-    _complevel = 9
-    # attributes subclasses need to define
-    buffer = ONE_SECOND_IN_NS
-    # string column sizes in hdf5 table
-    _min_itemsize = max_lens
-    # columns which should be indexed for fast querying
-    _query_columns = ("time_min", "time_max")
-    # functions applied to encode dataframe before saving to hdf5
-    _column_encoders = FrozenDict(
-        {
-            "time_min": lambda x: to_int(to_datetime64(x)),
-            "time_max": lambda x: to_int(to_datetime64(x)),
-            "time_step": lambda x: to_int(to_timedelta64(x)),
-            "dims": list_ser_to_str,
-            "path": lambda x: x.astype(str),
-        }
-    )
-    # functions to apply to decode dataframe after loading from hdf file
-    _column_decorders = FrozenDict(
-        {
-            "time_min": ns_to_datetime,
-            "time_max": ns_to_datetime,
-            "time_step": ns_to_timedelta,
-        }
-    )
-    # base model which determines fields
-    _base_model = PatchFileSummary
-    # any fields to skip
-    _skip_fields = ()
-    # The minimum version of dascore required to read this index. If an older
-    # version is used an error will be raised.
-    _min_version = "0.0.13"
-    # max number of retries for closed node files
-    _max_retries = 10
-
-    def __init__(self, path, namespace=""):
-        super().__init__()
-        self.namespace = namespace
-        self.path = path
-
-    @property
-    def index_columns(self):
-        """Get the columns used for indexing."""
-        out = set(self._base_model.model_fields) - set(self._skip_fields)
-        return tuple(out)
-
-    # columns which should be indexed for fast querying
-    @property
-    def _time_node(self):
-        """The node/table where the update time information is stored."""
-        return "/".join([self.namespace, "last_updated"])
-
-    @property
-    def _index_node(self):
-        """Return the node/table where the index information is stored."""
-        return "/".join([self.namespace, "index"])
-
-    @property
-    def _meta_node(self):
-        """The node/table where the update metadata is stored."""
-        return "/".join([self.namespace, "metadata"])
-
-    def encode_table(self, df, path=None):
-        """Encode the table for writing to hdf5."""
-        # apply column encoders, make paths relative to reference path
-        # and drop any non-index columns.
-        cols = set(df.columns)
-        for col, func in self._column_encoders.items():
-            if col not in cols:
-                continue
-            df[col] = func(df[col])
-        out = (
-            df.pipe(fill_defaults_from_pydantic, self._base_model)
-            .loc[:, list(self.index_columns)]
-            .assign(path=lambda x: _remove_base_path(x["path"], path))
+        # Note: only mode == "r" is a supported remote path here; H5Writer
+        # intercepts UPath targets with its temp-file write-back handle.
+        file_mode = "rb" if mode == "r" else "r+b"
+        open_kwargs = open_kwargs_getter(resource)
+        handle = _FallbackFileObj(
+            remote_opener=lambda: resource.open(file_mode, **open_kwargs),
+            local_opener=lambda: ensure_local_file(resource).open(file_mode),
+            error_predicate=is_no_range_http_error,
         )
-        # there shouldn't be any null values in index now
-        assert not out.isnull().any().any(), "null values found in index"
-        return out
-
-    def decode_table(self, df):
-        """Decode the table from hdf5."""
-        # ensure the base path is not in the path column
-        for col, func in self._column_decorders.items():
-            df[col] = func(df[col])
-        # populate index store and update metadata
-        # assert not df.isnull().any().any(), "null values found in index"
-        return df
-
-    def get_index(self, time_min=None, time_max=None, **kwargs):
-        """
-        Read part of the hdf5 index from path meeting time min/max reqs.
-
-        Parameters
-        ----------
-        time_min
-            The start time of the entries to read.
-        time_max
-            The end time of the entries to read.
-        """
-
-        def _get_index(where, fail_counts=0, **kwargs):
-            try:
-                df = pd.read_hdf(self.path, self._index_node, where=where, **kwargs)
-            except (ClosedNodeError, Exception) as e:
-                # Sometimes in concurrent updates the nodes need time to open/close
-                # so we implement a simply "wait and retry" strategy.
-                # This is a bit wonky but we have found it to work well in practice.
-                if fail_counts > self._max_retries:
-                    raise e
-                time.sleep(0.1)
-                return _get_index(where, fail_counts=fail_counts + 1, **kwargs)
-            else:
-                return df
-
-        time_min, time_max = get_max_min_times((time_min, time_max))
-        where = _get_kernel_query(
-            time_min.view(np.int64),
-            time_max.view(np.int64),
-            self.buffer.view(np.int64),
+        # h5py holds its global lock while blocking on fsspec's event-loop
+        # thread for remote fetches; an automatic garbage collection on that
+        # thread deallocating h5py objects then deadlocks on the same lock.
+        # Pause collection for the handle's lifetime (resumed in close()).
+        return _open_h5_fileobj(
+            handle,
+            constructor,
+            mode,
+            pause=_is_loop_backed(resource),
+            close_on_error=True,
         )
-        df = _get_index(where, **kwargs)
-        return self.decode_table(df)
-
-    def write_update(
-        self,
-        update_df,
-        update_time=None,
-        base_path: str | Path = "",
-    ):
-        """Convert updates to dataframe, then append to index table."""
-        # read in dataframe and prepare for input into hdf5 index
-        update_time = update_time or time.time()
-        df = self.encode_table(update_df.copy(), path=base_path)
-        with _HDF5Store(self.path) as store:
-            try:
-                nrows = store.get_storer(self._index_node).nrows
-            except (AttributeError, KeyError):
-                store.append(
-                    self._index_node,
-                    df,
-                    min_itemsize=self._min_itemsize,
-                    **self.hdf_kwargs,
-                )
-            else:
-                df.index += nrows
-                store.append(self._index_node, df, append=True, **self.hdf_kwargs)
-            self._update_metadata(store, update_time)
-
-    def _update_metadata(self, store, update_time):
-        # update timestamp
-        update_time = time.time() if update_time is None else update_time
-        store.put(self._time_node, pd.Series(update_time))
-        # make sure meta table also exists.
-        # Note this is here to avoid opening the store again.
-        if self._meta_node not in store:
-            meta = self._make_meta_table()
-            store.put(self._meta_node, meta, format="table")
-
-    def _read_metadata(self):
-        """Read the metadata table."""
-        try:
-            with _HDF5Store(self.path, "r") as store:
-                out = store.get(self._meta_node)
-            store.close()
-            return out
-        except (FileNotFoundError, ValueError, KeyError, OSError):
-            with suppress(UnboundLocalError):
-                store.close()
-            self._ensure_meta_table_exists()
-            return pd.read_hdf(self.path, self._meta_node)
-
-    def _ensure_meta_table_exists(self):
-        """If the base path exists ensure it has a meta table, if not create it."""
-        if not Path(self.path).exists():
-            return
-        with _HDF5Store(self.path) as store:
-            # add metadata if not in store
-            if self._meta_node not in store:
-                meta = self._make_meta_table()
-                store.put(self._meta_node, meta, format="table")
-
-    def _make_meta_table(self):
-        """Get a dataframe of meta info."""
-        meta = dict(
-            dascore_version=dc.__last_version__,
-        )
-        return pd.DataFrame(meta, index=[0])
-
-    @property
-    def hdf_kwargs(self) -> dict:
-        """A dict of hdf_kwargs to pass to PyTables."""
-        return dict(
-            complib=self._complib,
-            complevel=self._complevel,
-            format="table",
-            data_columns=list(self._query_columns),
-        )
-
-    @cached_method
-    def validate_version(self):
-        """Handles issues with version mismatches."""
-        # get the version from file, if the file doesnt exist then None
-        version = self._version_or_none
-        if version is not None:
-            # check if index is too old to be read by this version of the parser.
-            # If this is the case, users of this class should handle its
-            # re-creation.
-            min_version_tuple = get_version(self._min_version)
-            index_version = get_version(version)
-            if min_version_tuple > index_version:
-                msg = (
-                    f"The indexing schema has changed since {self._min_version} "
-                    f"and must be regenerated."
-                )
-                raise InvalidIndexVersionError(msg)
-            # check if index was created with newer version of dascore
-            dascore_version = get_version(dc.__last_version__)
-            if index_version > dascore_version:
-                msg = (
-                    f"The index was created with a newer version of dascore ("
-                    f"{version}), you are running ({dc.__last_version__}), "
-                    f"You may encounter problems, consider updating DASCore."
-                )
-                warnings.warn(msg)
-
-    @property
-    def _index_version(self) -> str:
-        """Get the version of dascore used to create the index."""
-        return self._read_metadata()["dascore_version"].iloc[0]
-
-    @property
-    def has_index(self) -> bool:
-        """Return True if an index table has been written."""
-        expected_node = "/".join([self.namespace, "metadata"])
-        with open_hdf5_file(self.path) as h5:
-            try:
-                h5.get_node(expected_node)
-            except NoSuchNodeError:
-                return False
-            else:
-                return True
-
-    @property
-    def _version_or_none(self) -> str | None:
-        """Return the version string or None if it doesn't yet exist."""
-        try:
-            version = self._index_version
-        except FileNotFoundError:
-            return
-        return version
-
-    @property
-    def last_updated_timestamp(self) -> float | None:
-        """Return the last modified time stored in the index, else None."""
-        try:
-            out = pd.read_hdf(self.path, self._time_node)[0]
-        except (OSError, IndexError, ValueError, KeyError, AttributeError):
-            out = None
-        return out
-
-
-class PyTablesReader(PyTablesFile):
-    """A thin wrapper around pytables File object for reading."""
-
-    mode = "r"
-    constructor = PyTablesFile
-
-    @classmethod
-    def get_handle(cls, resource):
-        """Get the File object from various sources."""
-        if isinstance(resource, cls | PyTablesFile):
-            return resource
-        try:
+    try:
+        if mode != "r":
             _maybe_make_parent_directory(resource)
-            return cls.constructor(resource, mode=cls.mode)
-        except TypeError:
-            msg = f"Couldn't get handle from {resource} using {cls}"
-            raise NotImplementedError(msg)
+        return _ManagedH5pyFile(constructor(resource, mode=mode))
+    except TypeError:
+        msg = f"Couldn't get handle from {resource} using h5py"
+        raise NotImplementedError(msg)
 
 
-class PyTablesWriter(PyTablesReader):
-    """A thin wrapper around pytables File object for writing."""
+# FiberIO read/scan/get_format annotate the *caster* class (H5Reader and
+# friends): the io machinery swaps the annotated resource for whatever
+# `get_handle` returns, so what those methods actually receive is the
+# managed handle. Inheriting it while type checking makes the annotation
+# describe the value the method really gets; nothing is instantiated at
+# runtime, where the casters stay plain classes.
+_H5CasterBase = _ManagedH5pyFile if TYPE_CHECKING else object
 
-    mode = "a"
 
+class H5Reader(_H5CasterBase):
+    """A thin wrapper around h5py for reading files.
 
-class H5Reader(PyTablesReader):
-    """A thin wrapper around h5py for reading files."""
+    Remote UPath resources stay remote-first and transparently retry against
+    a cached local file when no-range HTTP access prevents later random reads.
+    """
 
     mode = "r"
     constructor = H5pyFile
+
+    @staticmethod
+    def _get_open_kwargs(resource: UPath) -> dict[str, object]:
+        """Return backend-specific kwargs for remote HDF5 file objects."""
+        protocol = getattr(resource, "protocol", None)
+        if protocol not in remote_hdf5_tuned_protocols:
+            return {}
+        # One snapshot: config is swappable, and reading the size and the
+        # block count separately could pair one setting with the other's
+        # replacement, for a cap neither configuration asked for.
+        config = get_config()
+        # h5py performs many small seeks while opening HDF5 metadata, and
+        # remote backends default to large readahead blocks (s3fs uses 50 MB)
+        # which can pull most of a file just to satisfy those probes.
+        out = {"block_size": config.remote_hdf5_block_size}
+        if protocol not in http_protocols:
+            return out | {"cache_type": "readahead"}
+        # HTTP needs a block LRU instead: the probe alternates between the
+        # file header and footer, and fsspec's default single-window cache
+        # refetches a full block (or the whole file on range-less servers) on
+        # every jump. A few blocks keep both ends resident; the cap bounds
+        # what one open handle retains.
+        max_blocks = config.remote_hdf5_max_blocks
+        return out | {
+            "cache_type": "blockcache",
+            "cache_options": {"maxblocks": max_blocks},
+        }
+
+    @classmethod
+    def get_handle(cls, resource):
+        """
+        Get the HDF5 handle from local paths, remote paths, or open handles.
+
+        h5py can consume a binary file object via the
+        ``fileobj`` driver, so remote UPath inputs stay streaming-based here.
+        """
+        if isinstance(resource, (cls, _ManagedH5pyFile)):
+            return resource
+        return open_h5_resource(
+            resource,
+            mode=cls.mode,
+            constructor=cls.constructor,
+            open_kwargs_getter=cls._get_open_kwargs,
+        )
+
+
+class LocalH5Reader(H5Reader):
+    """An h5py reader which first materializes remote resources locally."""
+
+    @classmethod
+    def get_handle(cls, resource):
+        """Get a local-file-backed h5py handle."""
+        return get_local_handle(resource, super().get_handle)
 
 
 class H5Writer(H5Reader):
@@ -455,11 +369,87 @@ class H5Writer(H5Reader):
 
     mode = "a"
 
+    class _RemoteH5Writer:
+        """Wrap a local h5py file and upload it back to the remote resource."""
 
-# These are left here for backward compatibility, but should not be
-# used in new code.
-HDF5Writer = PyTablesWriter
-HDF5Reader = PyTablesReader
+        def __init__(self, resource: UPath, mode: str):
+            self._resource = resource
+            suffix = resource.suffix or ".h5"
+            fd, temp_name = tempfile.mkstemp(suffix=suffix)
+            os.close(fd)
+            self._temp_path = Path(temp_name)
+            self._closed = False
+            try:
+                if mode != "w" and resource.exists():
+                    with resource.open("rb") as src, self._temp_path.open("wb") as dst:
+                        shutil.copyfileobj(src, dst)
+                local_mode = (
+                    "a"
+                    if self._temp_path.exists() and self._temp_path.stat().st_size
+                    else "w"
+                )
+                self._handle = H5pyFile(self._temp_path, mode=local_mode)
+            except Exception:
+                self._temp_path.unlink(missing_ok=True)
+                raise
+
+        def __getitem__(self, item):
+            return self._handle[item]
+
+        def __setitem__(self, key, value):
+            self._handle[key] = value
+
+        def __contains__(self, item):
+            return item in self._handle
+
+        def commit(self):
+            """Finalize local writes, then upload the temp file to the remote path."""
+            if self._closed:
+                return
+            self._handle.close()
+            # The upload happens only after closing the local h5py handle because
+            # h5py persists metadata and final file structure on close. Remote
+            # backends are written back from the completed temp file as one blob.
+            with self._temp_path.open("rb") as src, self._resource.open("wb") as dst:
+                shutil.copyfileobj(src, dst)
+            self._temp_path.unlink(missing_ok=True)
+            self._closed = True
+
+        def close(self):
+            """Commit remote writes on close to preserve normal file-like semantics."""
+            self.commit()
+
+        def abort(self):
+            """Close and discard the local temp file without uploading it."""
+            if self._closed:
+                return
+            self._handle.close()
+            self._temp_path.unlink(missing_ok=True)
+            self._closed = True
+
+        def _abort(self):
+            """Backward-compatible alias for abort()."""
+            self.abort()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            if exc_type is None:
+                self.commit()
+            else:
+                self.abort()
+            return False
+
+        def __getattr__(self, item):
+            return getattr(self._handle, item)
+
+    @classmethod
+    def get_handle(cls, resource):
+        """Return an HDF5 writer handle for local or remote resources."""
+        if isinstance(resource, UPath):
+            return cls._RemoteH5Writer(resource, cls.mode)
+        return super().get_handle(resource)
 
 
 def unpack_scalar_h5_dataset(dataset):

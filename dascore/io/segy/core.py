@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+from typing import Literal
+
 import dascore as dc
-from dascore.io.core import FiberIO
-from dascore.utils.io import BinaryReader
+from dascore.io.core import FiberIO, ScanPayload, make_scan_payload
+from dascore.utils.io import LocalBinaryReader, LocalPath
 from dascore.utils.misc import optional_import
 
 from .utils import (
-    _get_attrs,
     _get_coords,
     _get_filtered_data_and_coords,
     _get_segy_version,
@@ -28,11 +29,15 @@ class SegyV1_0(FiberIO):  # noqa
     # subclassed and this changed for debugging reasons.
     _package_name = "segyio"
 
-    def get_format(self, fp: BinaryReader, **kwargs) -> tuple[str, str] | bool:
+    def get_format(
+        self,
+        resource: LocalBinaryReader,
+        **kwargs,
+    ) -> tuple[str, str] | Literal[False]:
         """Make sure input is segy."""
-        return _get_segy_version(fp)
+        return _get_segy_version(resource)
 
-    def read(self, path, time=None, channel=None, **kwargs):
+    def read(self, resource: LocalPath, time=None, channel=None, **kwargs):
         """
         Read should take a path and return a patch or sequence of patches.
 
@@ -41,9 +46,10 @@ class SegyV1_0(FiberIO):  # noqa
         be implemented as well.
         """
         segyio = optional_import(self._package_name)
-        with segyio.open(path, ignore_geometry=True) as fi:
+        path_str = str(resource)
+        with segyio.open(path_str, ignore_geometry=True) as fi:
             coords = _get_coords(fi)
-            attrs = _get_attrs(fi, coords, path, self)
+            attrs = dc.PatchAttrs()
             data, coords = _get_filtered_data_and_coords(
                 fi, coords, time=time, channel=channel
             )
@@ -53,22 +59,21 @@ class SegyV1_0(FiberIO):  # noqa
         patch = dc.Patch(coords=coords, data=data, attrs=attrs)
         return dc.spool([patch])
 
-    def scan(self, path, **kwargs) -> list[dc.PatchAttrs]:
+    def scan(self, resource: LocalPath, **kwargs) -> list[ScanPayload]:
         """
         Used to get metadata about a file without reading the whole file.
 
-        This should return a list of
-        [`PatchAttrs`](`dascore.core.attrs.PatchAttrs`) objects
-        from the [dascore.core.attrs](`dascore.core.attrs`) module, or a
-        format-specific subclass.
+        Returns lightweight scan metadata without loading the data array.
         """
         segyio = optional_import(self._package_name)
-        with segyio.open(path, ignore_geometry=True) as fi:
+        path_str = str(resource)
+        with segyio.open(path_str, ignore_geometry=True) as fi:
             coords = _get_coords(fi)
-            attrs = _get_attrs(fi, coords, path, self)
-        return [attrs]
+            attrs = dc.PatchAttrs()
+            dtype = str(fi.dtype)
+        return [make_scan_payload(attrs=attrs, coords=coords, dtype=dtype)]
 
-    def write(self, spool: dc.Patch | dc.BaseSpool, resource, **kwargs):
+    def write(self, spool: dc.Patch | dc.Spool, resource, **kwargs):
         """
         Create a segy file from length 1 spool or patch.
 

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Annotated, Literal
+from typing import Annotated, Literal, get_type_hints
 
 import numpy as np
 import pandas as pd
@@ -11,23 +11,35 @@ import pytest
 from pydantic import Field
 
 import dascore as dc
-from dascore import patch_function
+from dascore.config import config_context
 from dascore.constants import PatchType
 from dascore.exceptions import (
     CoordError,
+    CoordMergeError,
     IncompatiblePatchError,
     ParameterError,
     PatchAttributeError,
     PatchCoordinateError,
 )
+from dascore.units import percent
+from dascore.utils.misc import suppress_warnings
 from dascore.utils.patch import (
+    _force_patch_merge,
     _spool_up,
     align_patch_coords,
+    check_data_units,
+    check_dims,
+    check_kind,
     concatenate_patches,
+    concatenate_planned,
     get_dim_axis_value,
+    get_patch_kind,
     get_patch_names,
     get_patch_window_size,
+    get_window_axis_step,
     merge_compatible_coords_attrs,
+    merge_patches,
+    patch_function,
     patches_to_df,
     stack_patches,
     swap_kwargs_dim_to_axis,
@@ -159,6 +171,89 @@ class TestPatchFunction:
         with pytest.raises(pydantic.ValidationError):
             some_func(patch, some_int=10, specific_float=20.0)
 
+    def test_data_type(self, random_patch):
+        """Ensure the decorator can set the output data_type."""
+
+        @patch_function(data_type="strain_rate")
+        def some_func(patch):
+            """A test function for setting the output data_type."""
+            return patch.new(data=patch.data + 1)
+
+        out = some_func(random_patch)
+
+        assert out.attrs.data_type == "strain_rate"
+
+    def test_data_type_overwrites_returned_patch_attr(self, random_patch):
+        """Ensure the decorator data_type takes precedence."""
+
+        @patch_function(data_type="strain_rate")
+        def some_func(patch):
+            """A test function with a conflicting output data_type."""
+            return patch.new(data=patch.data + 1, attrs={"data_type": "velocity"})
+
+        out = some_func(random_patch)
+
+        assert out.attrs.data_type == "strain_rate"
+
+    def test_data_type_none_preserves_existing_behavior(self, random_patch):
+        """Ensure the default data_type argument leaves attrs unchanged."""
+
+        @patch_function()
+        def some_func(patch):
+            """A test function without decorator-managed data_type."""
+            return patch.new(data=patch.data + 1, attrs={"data_type": "velocity"})
+
+        out = some_func(random_patch)
+
+        assert out.attrs.data_type == "velocity"
+
+    def test_data_type_none_preserves_inherited_data_type(self, random_patch):
+        """Ensure the default data_type argument preserves inherited attrs."""
+
+        @patch_function()
+        def some_func(patch):
+            """A test function without decorator-managed data_type."""
+            return patch.new(data=patch.data + 1)
+
+        patch = random_patch.update_attrs(data_type="velocity")
+        out = some_func(patch)
+
+        assert out.attrs.data_type == "velocity"
+
+    def test_empty_data_type_clears_returned_patch_attr(self, random_patch):
+        """Ensure the decorator can clear the output data_type."""
+
+        @patch_function(data_type="")
+        def some_func(patch):
+            """A test function for clearing data_type."""
+            return patch.new(data=patch.data + 1, attrs={"data_type": "velocity"})
+
+        out = some_func(random_patch)
+
+        assert out.attrs.data_type == ""
+
+    def test_data_type_and_history_use_one_attr_update(self, random_patch, monkeypatch):
+        """Ensure decorator-managed attrs are updated together."""
+        update_count = 0
+        original_update_attrs = dc.Patch.update_attrs
+
+        def update_attrs(self, **attrs):
+            nonlocal update_count
+            update_count += 1
+            return original_update_attrs(self, **attrs)
+
+        @patch_function(data_type="strain_rate")
+        def some_func(patch):
+            """A test function for setting data_type and history."""
+            return patch.new(data=patch.data + 1)
+
+        monkeypatch.setattr(dc.Patch, "update_attrs", update_attrs)
+        out = some_func(random_patch)
+
+        assert out.attrs.data_type == "strain_rate"
+        assert len(out.attrs.history) == len(random_patch.attrs.history) + 1
+        assert update_count == 1
+
 
 class TestHistory:
     """Tests for tracking patch processing history."""
@@ -190,7 +285,6 @@ class TestHistory:
         """
         Ensure patch arguments are truncated in history (issue #529).
         """
-        from dascore.utils.patch import patch_function
 
         @patch_function()
         def func_with_patch_arg(patch, other_patch):
@@ -209,16 +303,52 @@ class TestHistory:
         # Check it's reasonably short (less than 100 chars)
         assert len(history_str) < 100
 
+    def test_history_disabled_for_patch_function(self, random_patch):
+        """Decorator-based history should respect disabled config."""
+        with config_context(patch_history="disabled"):
+            out = add_one(random_patch)
+        assert out.attrs.history == random_patch.attrs.history
 
-class TestMergePatches:
-    """Tests for merging patches together."""
+    def test_disabled_preserves_existing_history(self, random_patch):
+        """Disabling history should stop new entries without clearing old ones."""
+        patch = random_patch.pass_filter(time=(10, 20))
+        original_history = patch.attrs.history
+        with config_context(patch_history="disabled"):
+            out = add_one(patch)
+        assert out.attrs.history == original_history
 
-    def test_deprecated(self, random_patch):
-        """Ensure deprecation warning is raised."""
-        from dascore.utils.patch import merge_patches
+    def test_concatenate_history_disabled(self, random_patch):
+        """Concatenate should use the shared history helper."""
+        with config_context(patch_history="disabled"):
+            out = concatenate_patches([random_patch, random_patch], time=None)
+        assert len(out) == 1
+        assert out[0].attrs.history == random_patch.attrs.history
 
-        with pytest.warns(DeprecationWarning, match="merge_patches is deprecated"):
-            merge_patches(random_patch)
+    def test_stack_history_disabled(self, random_patch):
+        """Stack should use the shared history helper."""
+        with config_context(patch_history="disabled"):
+            out = stack_patches([random_patch, random_patch])
+        assert out.attrs.history == random_patch.attrs.history
+
+
+class TestPatchMergeWorkflow:
+    """Tests for the supported patch merge workflow."""
+
+    def test_merge_compatible_coords_attrs_ignores_private_attrs(self, random_patch):
+        """Private attrs should not make otherwise compatible patches fail."""
+        patch_1 = random_patch.update_attrs(_source_patch_key="one")
+        patch_2 = random_patch.update_attrs(_source_patch_key="two")
+        coords, attrs = merge_compatible_coords_attrs(patch_1, patch_2)
+        assert coords == random_patch.coords
+        assert attrs["_source_patch_key"] == "one"
+
+    def test_binary_ops_ignore_private_attrs(self, random_patch):
+        """Binary ops should work on patches with different private ids."""
+        patch_1 = random_patch.update_attrs(_source_patch_key="one")
+        patch_2 = random_patch.update_attrs(_source_patch_key="two")
+        out = patch_1 + patch_2
+        assert isinstance(out, dc.Patch)
+        assert out.attrs["_source_patch_key"] == "one"
 
 
 class TestGetDimAxisValue:
@@ -268,10 +398,28 @@ class TestPatchesToDF:
     """Test for getting metadata from patch into a dataframe."""
 
     def test_spool_input(self, random_spool):
-        """A spool should return its contents."""
+        """A spool should return its contents with its patches embedded."""
         df = patches_to_df(random_spool)
         assert isinstance(df, pd.DataFrame)
         assert len(df) == len(random_spool)
+        # the "patch" column carries the actual patches, not None
+        assert "patch" in df.columns
+        assert all(isinstance(x, dc.Patch) for x in df["patch"])
+
+    def test_list_of_patches_input(self, random_spool):
+        """A plain sequence of patches is scanned and the patches embedded."""
+        patches = list(random_spool)
+        df = patches_to_df(patches)
+        assert isinstance(df, pd.DataFrame)
+        assert len(df) == len(patches)
+        assert list(df["patch"]) == patches
+
+    def test_empty_list_input(self):
+        """An empty sequence produces an empty frame with the right columns."""
+        df = patches_to_df([])
+        assert isinstance(df, pd.DataFrame)
+        assert len(df) == 0
+        assert "patch" in df.columns
 
     def test_dataframe_input(self, random_spool):
         """The function should be idempotent."""
@@ -287,6 +435,14 @@ class TestPatchesToDF:
         df = random_spool.get_contents().drop(columns="history", errors="ignore")
         out = patches_to_df(df)
         assert "history" in out.columns
+
+    def test_patch_column_added(self, random_spool):
+        """Ensure the patch column gets added when dataframe input lacks it."""
+        df = random_spool.get_contents().drop(columns="patch", errors="ignore")
+        out = patches_to_df(df)
+        assert "patch" in out.columns
+        assert len(out["patch"]) == len(df)
+        assert out["patch"].isnull().all()
 
 
 class TestAlignPatches:
@@ -315,15 +471,12 @@ class TestAlignPatches:
         # The data should all be the same since this is a sub-patch.
         assert np.all(out1.data == out2.data)
 
-    def test_align_no_overlap(self, random_patch):
-        """Alignment with no overlap should return null."""
+    def test_align_no_overlap_raises(self, random_patch):
+        """Sharing a dimension but none of its values is a conflict."""
         dist = random_patch.get_coord("distance")
         new = random_patch.update_coords(distance_min=dist.max() + 10)
-        out1, out2 = align_patch_coords(new, random_patch)
-        assert out1.shape == out2.shape
-        assert out1.coords == out2.coords
-        # Patches should be degenerate.
-        assert 0 in set(out1.shape)
+        with pytest.raises(PatchCoordinateError, match="share no values"):
+            align_patch_coords(new, random_patch)
 
     def test_no_common_dims_raises(self, random_patch):
         """Patches with no common dims should not be align-able."""
@@ -351,6 +504,137 @@ class TestAlignPatches:
         np.broadcast_shapes(out1.shape, out2.shape, desired_shape)
 
 
+class TestCheckKind:
+    """Tests for deciding whether two patches are the same kind."""
+
+    def test_kind_is_the_configured_attrs(self, random_patch):
+        """The kind holds exactly the config's attrs, in order."""
+        kind = get_patch_kind(random_patch)
+        names = dc.get_config().patch_kind_attrs
+        assert tuple(kind) == names
+        assert kind["tag"] == random_patch.attrs.tag
+        # Attrs work as well as patches.
+        assert get_patch_kind(random_patch.attrs) == kind
+
+    def test_processing_keeps_kind(self, random_patch):
+        """Coordinates, history, units, and ids never enter the kind."""
+        changed = (
+            random_patch.pass_filter(time=(None, 10))
+            .select(time=(1, 20), samples=True)
+            .set_units("m/s")
+        )
+        assert check_kind(random_patch, changed)
+
+    @pytest.mark.parametrize(
+        "update",
+        [
+            {"acquisition_key": "TA.R2D1..RAW"},
+            {"data_category": "DTS"},
+            {"tag": "other"},
+        ],
+    )
+    def test_kind_attr_conflicts(self, random_patch, update):
+        """A conflicting kind attr raises, warns, or quietly reports False."""
+        random_patch = random_patch.update_attrs(
+            acquisition_key="DAS.R2D1..RAW", data_category="DAS", tag="a"
+        )
+        other = random_patch.update_attrs(**update)
+        msg = "not the same kind"
+        with pytest.raises(IncompatiblePatchError, match=msg):
+            check_kind(random_patch, other)
+        with pytest.warns(UserWarning, match=msg):
+            assert not check_kind(random_patch, other, check_behavior="warn")
+        with suppress_warnings(action="error"):
+            assert not check_kind(random_patch, other, check_behavior="ignore")
+
+    def test_message_names_the_attr(self, random_patch):
+        """The error says which attribute differs and how."""
+        other = random_patch.update_attrs(tag="other")
+        with pytest.raises(IncompatiblePatchError, match="'tag'") as info:
+            check_kind(random_patch, other)
+        assert "patch_kind_attrs" in str(info.value)
+
+    def test_custom_attr_is_not_kind_unless_configured(self, random_patch):
+        """Only the configured names count; config can add to them."""
+        pa1 = random_patch.update_attrs(foo="a")
+        pa2 = random_patch.update_attrs(foo="b")
+        assert check_kind(pa1, pa2)
+        with config_context(patch_kind_attrs=("foo",)):
+            with pytest.raises(IncompatiblePatchError, match="'foo'"):
+                check_kind(pa1, pa2)
+            # and the default names no longer matter
+            assert check_kind(pa1, pa1.update_attrs(tag="other"))
+
+    def test_missing_attr_matches_anything(self, random_patch):
+        """For two operands a missing value is a wildcard; known ones can clash."""
+        with config_context(patch_kind_attrs=("foo",)):
+            assert get_patch_kind(random_patch)["foo"] is None
+            assert check_kind(random_patch, random_patch.new())
+            assert check_kind(random_patch, random_patch.update_attrs(foo="a"))
+            with pytest.raises(IncompatiblePatchError, match="'foo'"):
+                check_kind(
+                    random_patch.update_attrs(foo="a"),
+                    random_patch.update_attrs(foo="b"),
+                )
+
+    def test_strict_makes_missing_a_value(self, random_patch):
+        """Where patches are partitioned a missing value equals only a missing one."""
+        with config_context(patch_kind_attrs=("foo",)):
+            known = random_patch.update_attrs(foo="a")
+            # Two patches which never recorded it are still the same kind.
+            assert check_kind(random_patch, random_patch.new(), strict=True)
+            assert not check_kind(
+                random_patch, known, check_behavior="ignore", strict=True
+            )
+            with pytest.raises(IncompatiblePatchError, match="'foo'"):
+                check_kind(random_patch, known, strict=True)
+
+    def test_data_type_is_not_kind(self, random_patch):
+        """Processing changes data_type, so it must not gate arithmetic."""
+        vel = random_patch.update_attrs(data_type="velocity")
+        env = vel.envelope("time")
+        assert env.attrs.data_type == "envelope"
+        assert check_kind(vel, env)
+        assert (vel / env).attrs.data_type == "velocity"
+
+    def test_empty_string_is_absent(self, random_patch):
+        """An empty attr (a legacy reader's network="") is the same as none."""
+        legacy = random_patch.update_attrs(network="", station="")
+        assert get_patch_kind(legacy)["network"] is None
+        assert check_kind(legacy, random_patch)
+        # The two spell one missing value, so they match even strictly.
+        assert check_kind(legacy, random_patch, strict=True)
+
+    def test_array_valued_kind_attr(self, random_patch):
+        """Array-valued kind attrs compare as a whole rather than raising."""
+        pa1 = random_patch.update_attrs(foo=np.array([1, 2]))
+        pa2 = random_patch.update_attrs(foo=np.array([1, 2]))
+        pa3 = random_patch.update_attrs(foo=np.array([1, 3]))
+        with config_context(patch_kind_attrs=("foo",)):
+            assert check_kind(pa1, pa2)
+            assert not check_kind(pa1, pa3, check_behavior="ignore")
+
+    def test_retired_check_behavior_raises(self, random_patch):
+        """The behavior argument is validated up front."""
+        with pytest.raises(ParameterError, match="check_behavior must be one of"):
+            check_kind(random_patch, random_patch, check_behavior=None)
+
+
+class TestCheckDataUnits:
+    """Tests for the data-units gate shared by concatenate and stack."""
+
+    def test_only_equal_units_agree(self, random_patch):
+        """Units must be equal; no units is a unit like any other."""
+        bare, metres, km = (random_patch.set_units(x) for x in (None, "m", "km"))
+        assert check_data_units(bare, bare.new())
+        assert check_data_units(metres, metres.set_units("meter"))
+        for other in (bare, km):
+            with pytest.raises(IncompatiblePatchError, match="data units differ"):
+                check_data_units(metres, other)
+        with pytest.warns(UserWarning, match="convert_units"):
+            assert not check_data_units(metres, km, check_behavior="warn")
+
+
 class TestMergeCompatibleCoordsAttrs:
     """Tests for merging compatible attrs, coords."""
 
@@ -369,18 +653,42 @@ class TestMergeCompatibleCoordsAttrs:
 
     def test_incompatible_coords(self, random_patch):
         """Ensure an incompatible error is raised for coords that don't match."""
-        new_time = random_patch.attrs.time_max
-        new = random_patch.update_attrs(time_min=new_time)
+        new_time = random_patch.get_coord("time").max()
+        new = random_patch.update_coords(time_min=new_time)
         match = "coordinates are not equal"
         with pytest.raises(IncompatiblePatchError, match=match):
             merge_compatible_coords_attrs(new, random_patch)
 
     def test_incompatible_attrs(self, random_patch):
-        """Ensure if attrs are off an Error is raised."""
-        new = random_patch.update_attrs(network="TA")
-        match = "attributes are not equal"
+        """A conflicting kind attr raises."""
+        new = random_patch.update_attrs(tag="other")
+        match = "not the same kind"
         with pytest.raises(IncompatiblePatchError, match=match):
             merge_compatible_coords_attrs(new, random_patch)
+
+    def test_kind_is_the_union(self, random_patch):
+        """A value only one patch knows is carried by the result."""
+        keyed = random_patch.update_attrs(acquisition_key="TA.R2D1..RAW")
+        for first, second in [(random_patch, keyed), (keyed, random_patch)]:
+            _, attrs = merge_compatible_coords_attrs(first, second)
+            assert attrs.acquisition_key == "TA.R2D1..RAW"
+
+    def test_other_attrs_fold_to_first(self, random_patch):
+        """Attrs outside the kind never refuse a merge; the first wins."""
+        pa1 = random_patch.update_attrs(foo="a", data_units="m")
+        pa2 = random_patch.update_attrs(foo="b", data_units="s", bar="b")
+        _, attrs = merge_compatible_coords_attrs(pa1, pa2)
+        assert attrs.foo == "a"
+        assert dc.get_quantity(attrs.data_units) == dc.get_quantity("m")
+        # An attr only the second has is added.
+        assert attrs.bar == "b"
+
+    def test_first_without_units_stays_unitless(self, random_patch):
+        """A first patch without units must not inherit the second's."""
+        pa1 = random_patch.set_units(None)
+        pa2 = random_patch.set_units("m")
+        _, attrs = merge_compatible_coords_attrs(pa1, pa2)
+        assert dc.get_quantity(attrs.data_units) is None
 
     def test_extra_coord(self, random_patch, random_patch_with_lat_lon):
         """Extra coords on both patch should end up in the merged patch."""
@@ -390,26 +698,146 @@ class TestMergeCompatibleCoordsAttrs:
         expected = set(pa1.coords.coord_map) | set(pa2.coords.coord_map)
         coords, attrs = merge_compatible_coords_attrs(pa1, pa2)
         assert set(coords.coord_map) == expected
-        assert set(attrs.coords) == expected
+        assert "coords" not in attrs.model_dump()
 
     def test_extra_attrs(self, random_patch):
         """Ensure extra attributes are added to patch."""
         patch = random_patch.update_attrs(new_attr=10)
-        coords, attrs = merge_compatible_coords_attrs(patch, random_patch)
+        _, attrs = merge_compatible_coords_attrs(patch, random_patch)
         assert attrs.get("new_attr") == 10
 
     def test_different_dims(self, random_patch):
         """Ensure we can merge patches which share some dims but not all."""
         patch1 = random_patch
         patch2 = random_patch.rename_coords(time="money")
-        coord, attrs = merge_compatible_coords_attrs(
-            patch1, patch2, dim_intersection=True
-        )
+        coord, _ = merge_compatible_coords_attrs(patch1, patch2, dim_intersection=True)
         assert set(coord.dims) == (set(patch1.dims) | set(patch2.dims))
 
 
 class TestConcatenate:
     """Tests for concatenating spools."""
+
+    def test_deprecated_merge_patches_uses_spool_chunk(self, random_patch):
+        """The deprecated merge helper should still merge compatible patches."""
+        patch_1 = random_patch.update_attrs(history=[])
+        time = patch_1.get_coord("time")
+        patch_2 = patch_1.update_coords(time_min=time.max() + time.step).update_attrs(
+            history=[]
+        )
+
+        with pytest.warns(DeprecationWarning, match="merge_patches is deprecated"):
+            out = merge_patches([patch_1, patch_2])
+
+        assert len(out) == 1
+        assert out[0].get_coord("time").max() == patch_2.get_coord("time").max()
+
+    def test_aggregated_patches_keep_their_dim_kind(self, random_spool):
+        """
+        Joining patches which state no values leaves the kind behind.
+
+        An aggregation with the default dim_reduce leaves a coordinate
+        holding no values but still knowing its dtype. Concatenating such
+        patches must not turn missing datetimes into untyped NaN.
+        """
+        means = [patch.mean("time") for patch in random_spool]
+        assert all(x.get_coord("time").dtype.kind == "M" for x in means)
+
+        out = concatenate_patches(means, time=None)[0]
+        coord = out.get_coord("time")
+        assert coord.dtype.kind == "M", "the axis is still made of times"
+        assert coord.values.dtype.kind == "M"
+
+    @pytest.mark.parametrize(("other", "expected"), [("datetime", "M"), ("float", "f")])
+    def test_blank_member_takes_the_stated_kind(self, random_patch, other, expected):
+        """A patch stating no times joins one that does, as its own null."""
+        size = len(random_patch.get_array("time"))
+        blank = random_patch.update_coords(
+            time=np.full(size, "NaT", dtype="datetime64[ns]")
+        )
+        values = (
+            random_patch.get_array("time")
+            if other == "datetime"
+            else np.arange(size, dtype=float)
+        )
+        stated = random_patch.update_coords(time=values)
+        out = concatenate_patches([blank, stated], time=None)[0]
+        assert out.get_coord("time").values.dtype.kind == expected
+
+    def test_blank_member_against_a_kind_with_no_null_raises(self, random_patch):
+        """Whole numbers have no missing value, so the join is refused."""
+        size = len(random_patch.get_array("time"))
+        blank = random_patch.update_coords(
+            time=np.full(size, "NaT", dtype="datetime64[ns]")
+        )
+        stated = random_patch.update_coords(time=np.arange(size))
+        with pytest.raises(CoordMergeError, match="states no values there"):
+            concatenate_patches([blank, stated], time=None)
+
+    def test_every_member_blank_with_clashing_kinds(self, random_patch):
+        """
+        Members which all state nothing fall back to the floating null.
+
+        No kind is the right one when a blank datetime axis meets a blank
+        floating axis, and no values are lost by degrading to NaN; handing
+        numpy the two arrays as they stand only raises.
+        """
+        size = len(random_patch.get_array("time"))
+        nat = random_patch.update_coords(
+            time=np.full(size, "NaT", dtype="datetime64[ns]")
+        )
+        nan = random_patch.update_coords(time=np.full(size, np.nan))
+        out = concatenate_patches([nat, nan], time=None)[0]
+        values = out.get_coord("time").values
+        assert values.dtype.kind == "f"
+        assert len(values) == 2 * size
+        assert np.all(pd.isnull(values))
+
+    def test_empty_dim_joins_a_stated_one(self, random_patch):
+        """
+        A dimension with no entries states nothing and refuses nothing.
+
+        Every value of an empty array is null, but there are none to write
+        a null into, so the kinds which have no null must still join.
+        """
+        size = len(random_patch.get_array("distance"))
+        labeled = random_patch.update_coords(
+            distance=np.array([f"d{i}" for i in range(size)])
+        )
+        empty = labeled.select(distance=(0, 0), samples=True)
+        assert len(empty.get_array("distance")) == 0
+
+        out = concatenate_patches([empty, labeled], distance=None)[0]
+        assert out.get_coord("distance").dtype.kind == "U"
+        assert np.all(out.get_array("distance") == labeled.get_array("distance"))
+
+    @pytest.mark.parametrize(("other", "expected"), [("datetime", "M"), ("float", "f")])
+    def test_blank_rider_takes_the_stated_kind(self, random_patch, other, expected):
+        """A coordinate riding the dimension is joined as the dimension is."""
+        size = len(random_patch.get_array("time"))
+        blank = random_patch.update_coords(
+            rider=("time", np.full(size, "NaT", dtype="datetime64[ns]"))
+        )
+        values = (
+            random_patch.get_array("time")
+            if other == "datetime"
+            else np.arange(size, dtype=float)
+        )
+        stated = random_patch.update_coords(rider=("time", values))
+        out = concatenate_patches([blank, stated], time=None)[0]
+        joined = out.get_array("rider")
+        assert joined.dtype.kind == expected
+        assert np.all(pd.isnull(joined[:size]))
+        assert np.all(joined[size:] == values)
+
+    def test_blank_rider_against_a_kind_with_no_null_raises(self, random_patch):
+        """A rider is refused for the same reason its dimension would be."""
+        size = len(random_patch.get_array("time"))
+        blank = random_patch.update_coords(
+            rider=("time", np.full(size, "NaT", dtype="datetime64[ns]"))
+        )
+        stated = random_patch.update_coords(rider=("time", np.arange(size)))
+        with pytest.raises(CoordMergeError, match="states no values there"):
+            concatenate_patches([blank, stated], time=None)
 
     def test_different_dims_raises(self, random_patch):
         """Patches can't be concated when they have different dims."""
@@ -419,9 +847,96 @@ class TestConcatenate:
         with pytest.raises(PatchCoordinateError, match=msg):
             concatenate_patches([p1, p2], time=None)
 
+    def test_different_kind_skipped(self, random_patch):
+        """A patch of another kind is left out per check_behavior."""
+        other = random_patch.update_attrs(tag="other")
+        msg = "not the same kind"
+        with pytest.warns(UserWarning, match=msg):
+            out = concatenate_patches([random_patch, other], time=None)
+        assert len(out) == 1
+        assert out[0].shape == random_patch.shape
+        assert out[0].attrs.tag == random_patch.attrs.tag
+        with pytest.raises(IncompatiblePatchError, match=msg):
+            concatenate_patches(
+                [random_patch, other], time=None, check_behavior="raise"
+            )
+
+    def test_missing_kind_value_is_another_kind(self, random_patch):
+        """A patch which never stated a kind attr is not the kind which did."""
+        blank = random_patch.update_attrs(tag="")
+        a = random_patch.update_attrs(tag="a")
+        with pytest.warns(UserWarning, match="not the same kind"):
+            out = concatenate_patches([blank, a], time=None)
+        assert len(out) == 1
+        assert out[0].shape == random_patch.shape
+        assert out[0].attrs.tag == ""
+        # NaN is the same missing value, and just as much a value.
+        with config_context(patch_kind_attrs=("foo",)):
+            nan = random_patch.update_attrs(foo=np.nan)
+            known = random_patch.update_attrs(foo="a")
+            with pytest.warns(UserWarning, match="not the same kind"):
+                out = concatenate_patches([nan, known], time=None)
+            assert out[0].shape == random_patch.shape
+
+    def test_dims_mismatch_raises_even_after_rejections(self, random_patch):
+        """Different dimensions raise whatever was rejected before them."""
+        bad = random_patch.update_coords(distance_min=5)
+        odd = random_patch.rename_coords(time="money")
+        with pytest.warns(UserWarning, match="not equal"):
+            with pytest.raises(PatchCoordinateError, match="different dimensions"):
+                concatenate_patches([random_patch, bad, odd], time=None)
+        # another kind with other dimensions is merely skipped
+        other_kind = random_patch.update_attrs(tag="z").rename_coords(time="money")
+        with pytest.warns(UserWarning, match="not the same kind"):
+            out = concatenate_patches([random_patch, other_kind], time=None)
+        assert len(out) == 1
+
+    def test_different_kind_skipped_before_dims(self, random_patch):
+        """A different-kind patch is skipped whatever its dimensions."""
+        other = random_patch.update_attrs(tag="other").rename_coords(time="money")
+        with suppress_warnings(action="error"):
+            out = concatenate_patches(
+                [random_patch, other], time=None, check_behavior="ignore"
+            )
+        assert len(out) == 1
+        assert out[0].shape == random_patch.shape
+
+    def test_missing_units_are_not_spliced_into_known(self, random_patch):
+        """A patch without units is not spliced onto one which has them."""
+        other = random_patch.set_units("m/s").update_attrs(
+            history=random_patch.attrs.history
+        )
+        with pytest.warns(UserWarning, match="data units differ"):
+            out = concatenate_patches([random_patch, other], time=None)
+        assert out[0].shape == random_patch.shape
+        assert out[0].attrs.data_units is None
+
+    def test_different_units_are_not_spliced(self, random_patch):
+        """Known, different data units are skipped or raise, never mixed."""
+        metres = random_patch.set_units("m")
+        km = random_patch.set_units("km").update_attrs(history=metres.attrs.history)
+        with pytest.warns(UserWarning, match="data units differ"):
+            out = concatenate_patches([metres, km], time=None)
+        assert out[0].shape == metres.shape
+        with pytest.raises(IncompatiblePatchError, match="data units differ"):
+            concatenate_patches([metres, km], time=None, check_behavior="raise")
+
+    def test_history_divergence_warns(self, random_patch):
+        """Splicing processed beside unprocessed data warns but proceeds."""
+        other = random_patch.pass_filter(time=(None, 10))
+        with pytest.warns(UserWarning, match="histories differ"):
+            out = concatenate_patches([random_patch, other], time=None)
+        assert out[0].shape[1] == 2 * random_patch.shape[1]
+        assert not any("pass_filter" in x for x in out[0].attrs.history)
+
     def test_duplicate_patches_existing_dim(self, random_patch):
-        """Ensure duplicate patches are concatenated together."""
-        spool = dc.spool([random_patch, random_patch])
+        """Ensure equal (but distinct) patches are concatenated together.
+
+        Note: the same patch *instance* twice would collapse to one entry
+        (spools have set semantics by patch identity); patch.new() mints
+        a distinct instance with equal contents.
+        """
+        spool = dc.spool([random_patch, random_patch.new()])
         out = concatenate_patches(spool, time=None)
         assert len(out) == 1
         patch = out[0]
@@ -432,6 +947,19 @@ class TestConcatenate:
         val1, val2 = patch.get_array("time"), random_patch.get_array("time")
         assert np.all(val1[: len(val2)] == val2)
         assert np.all(val1[len(val2) :] == val2)
+
+    def test_concatenate_ignores_private_attrs(self, random_patch):
+        """Private ids should not block concatenation of compatible patches."""
+        patch_1 = random_patch.update_attrs(_source_patch_key="one")
+        shifted = (
+            random_patch.coords.get_array("time") + random_patch.get_coord("time").step
+        )
+        patch_2 = random_patch.update_coords(time=shifted).update_attrs(
+            _source_patch_key="two"
+        )
+        out = concatenate_patches([patch_1, patch_2], time=None)
+        assert len(out) == 1
+        assert out[0].attrs["_source_patch_key"] == "one"
 
     def test_different_lens(self, random_patch):
         """Ensure different lengths can be chunked on same dim."""
@@ -453,7 +981,8 @@ class TestConcatenate:
         """Ensure the new dimension can be chunked by an int value."""
         # When new_dim = 1 it should only add a new dimension to each patch
         # and not change the original shape.
-        spool = dc.spool([random_patch] * 6)
+        # Distinct instances: identical instances would dedup to one.
+        spool = dc.spool([random_patch] + [random_patch.new() for _ in range(5)])
         # Test for single values along new dimension
         new = spool.concatenate(new_dim=1)
         assert len(new) == len(spool)
@@ -472,15 +1001,6 @@ class TestConcatenate:
         func = _spool_up(concatenate_patches)
         out = func([random_patch] * 3, time=None)
         assert isinstance(out, dc.BaseSpool)
-
-    def test_new_dim_spool(self, random_patch):
-        """Ensure a patch with new dim can be retrieved from spool."""
-        spool = dc.spool([random_patch, random_patch])
-        spool_concat = spool.concatenate(wave_rank=None)
-        assert len(spool_concat) == 1
-        patch = spool_concat[0]
-        assert "wave_rank" in patch.dims
-        assert len(patch.get_coord("wave_rank")) == len(spool)
 
     def test_patch_with_gap(self, random_patch):
         """Ensure a patch with a time gap still concats."""
@@ -540,6 +1060,27 @@ class TestConcatenate:
             nearly_eq = old_array == new_array
         assert np.all(both_nan | nearly_eq)
 
+    def test_planned_concatenation_rechecks_dimensions(self, random_patch):
+        """A plan's identity keys may be summaries, so dimensions are rechecked."""
+        other = random_patch.update_coords(distance_min=5)
+        with pytest.raises(CoordMergeError, match="distance"):
+            concatenate_planned([random_patch, other], "time")
+        # a coordinate whose values differ is refused under every policy:
+        # `conflict` polices attrs, never coordinates
+        n = random_patch.shape[random_patch.get_axis("distance")]
+        lat_a = random_patch.update_coords(
+            latitude=("distance", np.arange(n, dtype=float))
+        )
+        lat_b = random_patch.update_coords(latitude=("distance", np.ones(n)))
+        for conflict in ("raise", "drop", "keep_first"):
+            with pytest.raises(CoordMergeError, match="latitude"):
+                concatenate_planned([lat_a, lat_b], "time", conflict=conflict)
+        agree = random_patch.update_coords(
+            latitude=("distance", np.arange(n, dtype=float))
+        )
+        out = concatenate_planned([lat_a, agree], "time")
+        assert "latitude" in out.coords.coord_map
+
     def test_private_coords_dropped(self, random_patch):
         """Ensure private coords don't interfere with concat along new dim."""
         pa1 = random_patch.update_coords(_private_1=(None, np.array([1, 2, 3])))
@@ -565,6 +1106,26 @@ class TestConcatenate:
         pa_concat = sp_concat[0]
         assert pa_concat.shape[-1] == len(sp)
         assert "time_min" in pa_concat.dims
+
+    @pytest.mark.parametrize("unit", ["us", "ms"])
+    def test_blank_coord_keeps_the_others_resolution(self, unit):
+        """
+        Joining across a patch which states no values holds resolution.
+
+        The blank patch contributes the null that stands in for its
+        missing values; if that null is of a fixed resolution it wins the
+        dtype promotion and quietly rewrites the coordinate.
+        """
+        time = np.arange(4).astype(f"datetime64[{unit}]")
+        patch = dc.Patch(
+            data=np.random.default_rng(0).random((4, 3)),
+            coords={"time": time, "distance": np.arange(3)},
+            dims=("time", "distance"),
+        )
+        blank = patch.max("time")
+        with suppress_warnings(UserWarning):
+            out = dc.spool([blank, patch]).concatenate(time=None)[0]
+        assert out.get_coord("time").dtype == time.dtype
 
 
 class TestStackPatches:
@@ -598,19 +1159,72 @@ class TestStackPatches:
         # Or a warning issued.
         with pytest.warns(UserWarning, match=msg):
             stack_patches(spool, dim_vary="time", check_behavior="warn")
+        # Or the incompatible patch skipped without a word -- skipped
+        # being the point: a quiet policy must not stack it anyway.
+        with suppress_warnings(action="error"):
+            quiet = stack_patches(spool, dim_vary="time", check_behavior="ignore")
+        assert np.allclose(quiet.data, patch1.data)
+
+    def test_retired_check_behavior_raises(self, random_spool):
+        """None used to mean "ignore"; one spelling of it survives."""
+        patch1, patch2 = random_spool[0], random_spool[1]
+        patch2 = patch2.select(time=(1, 30), samples=True)
+        spool = dc.spool([patch1, patch2])
+        with pytest.raises(ParameterError, match="check_behavior must be one of"):
+            stack_patches(spool, dim_vary="time", check_behavior=None)
+
+    def test_retired_check_behavior_raises_on_compatible_patches(self, random_patch):
+        """Acceptance must not wait for data which happens to disagree."""
+        with pytest.raises(ParameterError, match="check_behavior must be one of"):
+            check_dims(random_patch, random_patch, check_behavior=None)
 
     def test_different_dimensions(self, random_spool):
         """Tests for when the spool has patches with different dimensions."""
+        first = random_spool[1]
         new_patch = random_spool[0].rename_coords(time="money")
-        spool = dc.spool([random_spool[1], new_patch])
+        spool = dc.spool([first, new_patch])
         msg = "not compatible for merging"
         with pytest.warns(UserWarning, match=msg):
-            stack_patches(spool, dim_vary="time", check_behavior="warn")
+            out = stack_patches(spool, dim_vary="time", check_behavior="warn")
+        # The mismatched patch is left out rather than summed in.
+        assert np.allclose(out.data, first.data)
 
     def test_bad_dim_vary(self, random_spool):
         """Ensure when dim_vary is not in patch an error is raised."""
         with pytest.raises(PatchCoordinateError):
             stack_patches(random_spool, dim_vary="money")
+
+    def test_different_kind_skipped(self, random_patch):
+        """A patch of another kind is not summed in."""
+        other = random_patch.update_attrs(tag="other")
+        msg = "not the same kind"
+        with pytest.warns(UserWarning, match=msg):
+            out = stack_patches([random_patch, other], check_behavior="warn")
+        assert np.allclose(out.data, random_patch.data)
+        with pytest.raises(IncompatiblePatchError, match=msg):
+            stack_patches([random_patch, other], check_behavior="raise")
+
+    def test_different_units_are_not_summed(self, random_patch):
+        """Only patches whose units are equal are summed; no units is a unit."""
+        metres = random_patch.set_units("m")
+        km = random_patch.set_units("km")
+        bare = random_patch.set_units(None)
+        for others in ([km], [bare], [bare, km]):
+            with pytest.warns(UserWarning, match="data units differ"):
+                out = stack_patches([metres, *others])
+            assert np.allclose(out.data, metres.data)
+        out = stack_patches([metres, metres.set_units("meter")])
+        assert np.allclose(out.data, 2 * metres.data)
+        assert dc.get_quantity(out.attrs.data_units) == dc.get_quantity("m")
+
+    def test_missing_kind_value_is_another_kind(self, random_patch):
+        """A patch which never stated a kind attr is not summed into one which did."""
+        blank = random_patch.update_attrs(tag="")
+        tagged = random_patch.update_attrs(tag="a")
+        with pytest.warns(UserWarning, match="not the same kind"):
+            out = stack_patches([blank, tagged])
+        assert np.allclose(out.data, random_patch.data)
+        assert out.attrs.tag == ""
 
     def test_stack_coords(self):
         """
@@ -653,6 +1267,13 @@ class TestGetPatchName:
         out = get_patch_names([])
         assert isinstance(out, pd.Series)
 
+    def test_annotations_resolve(self):
+        """
+        The docs renderer resolves annotations at runtime and falls back to
+        raw strings for the whole signature if any name is undefined.
+        """
+        assert get_type_hints(get_patch_names)
+
     def test_name_column_exists(self, random_spool):
         """If the name or path field already exist this should be used."""
         df = random_spool.get_contents().assign(name=lambda x: np.arange(len(x)))
@@ -664,13 +1285,30 @@ class TestGetPatchName:
         """Ensure the path column works."""
         names = get_patch_names(random_directory_spool)
         df = random_directory_spool.get_contents()
-        expected = pd.Series([x[-1].split(".")[0] for x in df["path"].str.split("/")])
+        paths = df["source_path"].str.split("/")
+        expected = pd.Series([x[-1].split(".")[0] for x in paths])
         assert np.all(names == expected)
 
     def test_path_column_leave_extension(self, random_directory_spool):
         """If extension is false the file extension should remain."""
         names = get_patch_names(random_directory_spool, strip_extension=False)
         assert "." in names.iloc[0]
+
+    def test_mixed_path_sources_use_metadata(self, random_spool):
+        """Mixed real and memory paths consistently use metadata names."""
+        df = random_spool.get_contents().iloc[:2].copy()
+        df["source_path"] = ["/data/real_file.h5", "memory://registry/patch"]
+        names = get_patch_names(df)
+        assert names.iloc[0] != "real_file"
+        assert names.iloc[1] != "patch"
+
+    def test_multiple_coord_fields(self, random_spool):
+        """Naming on more than one coordinate flattens the min/max fields."""
+        # drop path so the coordinate-based naming branch is exercised
+        df = random_spool.get_contents().drop(columns=["source_path"], errors="ignore")
+        names = get_patch_names(df, coords=("time", "distance"))
+        assert len(names) == len(df)
+        assert names.str.len().gt(0).all()
 
 
 class TestSwapKwargsDimToAxis:
@@ -812,12 +1450,25 @@ class TestGetPatchWindowSize:
                 simple_patch, {"time": 15}, samples=True, warn_above=10
             )
 
+    def test_warn_above_uses_total_window(self, simple_patch):
+        """The threshold applies to the window's total size, not each dim."""
+        kwargs = {"time": 5, "distance": 5}
+        with pytest.warns(UserWarning, match="Large window size \\(25 samples\\)"):
+            get_patch_window_size(simple_patch, kwargs, samples=True, warn_above=10)
+
+    def test_min_samples_message_suggests_samples(self, simple_patch):
+        """A too-small window in coord units should mention samples (#1046)."""
+        with pytest.raises(ParameterError, match="samples=True"):
+            get_patch_window_size(simple_patch, {"time": 0.2}, min_samples=3)
+        # When the value is already in samples there is nothing to suggest.
+        with pytest.raises(ParameterError, match="Try increasing"):
+            get_patch_window_size(
+                simple_patch, {"time": 2}, samples=True, min_samples=3
+            )
+
     def test_no_warning_under_threshold(self, simple_patch):
         """Test no warning for window sizes under threshold."""
-        import warnings
-
-        with warnings.catch_warnings():
-            warnings.simplefilter("error")  # Turn warnings into errors
+        with suppress_warnings(action="error"):
             # This should not raise (no warning)
             size = get_patch_window_size(
                 simple_patch, {"time": 5}, samples=True, warn_above=10
@@ -850,3 +1501,117 @@ class TestGetPatchWindowSize:
 
         with pytest.raises(CoordError):
             get_patch_window_size(irregular_patch, {"time": 0.5})
+
+
+class TestGetWindowAxisStep:
+    """Tests for getting window size, axis, and step."""
+
+    window = 16
+    step = 8
+
+    def test_apply_with_overlap(self, random_patch):
+        """Ensure overlap is converted to the correct step size."""
+        coord = random_patch.get_coord("distance")
+        window = self.window * coord.step
+        overlap = (self.window - self.step) * coord.step
+        out = get_window_axis_step(random_patch, distance=window, overlap=overlap)
+        assert out == (self.window, random_patch.get_axis("distance"), self.step)
+
+    def test_apply_with_percent_overlap(self, random_patch):
+        """Ensure percent overlap is supported."""
+        coord = random_patch.get_coord("distance")
+        window = self.window * coord.step
+        out = get_window_axis_step(random_patch, distance=window, overlap=50 * percent)
+        assert out == (self.window, random_patch.get_axis("distance"), self.step)
+
+    def test_apply_with_percent_overlap_and_samples(self, random_patch):
+        """Ensure percent overlap works when samples=True."""
+        out = get_window_axis_step(
+            random_patch, distance=self.window, overlap=50 * percent, samples=True
+        )
+        assert out == (self.window, random_patch.get_axis("distance"), self.step)
+
+    def test_negative_overlap_raises(self, random_patch):
+        """Ensure negative overlap is rejected."""
+        step = random_patch.get_coord("distance").step
+        msg = "overlap must be non-negative"
+        with pytest.raises(ParameterError, match=msg):
+            get_window_axis_step(
+                random_patch, distance=self.window * step, overlap=-step
+            )
+
+    def test_invalid_percent_overlap_raises(self, random_patch):
+        """Ensure percent overlap must be between 0 and 100."""
+        msg = "Percentage must be between 0 and 100"
+        with pytest.raises(ParameterError, match=msg):
+            get_window_axis_step(
+                random_patch, distance=self.window, overlap=101 * percent, samples=True
+            )
+
+    def test_complete_overlap_raises(self, random_patch):
+        """Ensure complete overlap is rejected."""
+        msg = "Window step must be greater than zero"
+        with pytest.raises(ParameterError, match=msg):
+            get_window_axis_step(
+                random_patch, distance=self.window, overlap=100 * percent, samples=True
+            )
+
+    def test_overlap_larger_than_window_raises(self, random_patch):
+        """Ensure overlap larger than window is rejected."""
+        msg = "Window step must be greater than zero"
+        with pytest.raises(ParameterError, match=msg):
+            get_window_axis_step(
+                random_patch,
+                distance=self.window,
+                overlap=self.window + 1,
+                samples=True,
+            )
+
+    def test_step_and_overlap_raises(self, random_patch):
+        """Ensure step and overlap are mutually exclusive."""
+        step = random_patch.get_coord("distance").step
+        msg = "step and overlap are mutually exclusive"
+        with pytest.raises(ParameterError, match=msg):
+            get_window_axis_step(
+                random_patch,
+                distance=self.window * step,
+                step=self.step * step,
+                overlap=50 * percent,
+            )
+
+    def test_none_overlap_matches_default(self, random_patch):
+        """Ensure overlap=None preserves default window/step behavior."""
+        step = random_patch.get_coord("distance").step
+        out = get_window_axis_step(
+            random_patch, distance=self.window * step, overlap=None
+        )
+        assert out == (self.window, random_patch.get_axis("distance"), None)
+
+
+class TestForcePatchMergeOverlap:
+    """_force_patch_merge tolerates complete-envelope overlap (keep first)."""
+
+    def test_complete_overlap_keeps_first(self, random_patch):
+        """Identical envelopes merge to the first patch."""
+        twin = random_patch.new()
+        infos = []
+        for patch in (random_patch, twin):
+            info = patch.coords._get_dim_summary()
+            info["patch"] = patch
+            info["dims"] = ",".join(patch.dims)
+            infos.append(info)
+        out = _force_patch_merge(infos, merge_kwargs={})
+        assert len(out) == 1
+        assert out[0]["patch"] is random_patch
+
+
+class TestDottedPatchNames:
+    """A acquisition_key puts dots in the name it generates."""
+
+    def test_name_round_trips_through_a_file(self, tmp_path, random_patch):
+        """Writing a patch under its own name and re-reading keeps the name."""
+        patch = random_patch.update_attrs(acquisition_key="DAS.R2D1..RAW")
+        name = patch.get_patch_name()
+        assert "DAS.R2D1..RAW" in name
+        patch.io.write(tmp_path / f"{name}.h5", "dasdae")
+        assert get_patch_names(dc.spool(tmp_path).update()).iloc[0] == name

@@ -61,7 +61,7 @@ class TestPlotSpectrogram:
 
     def test_invalid_aggr_domain(self, random_patch):
         """Ensure ValueError is raised for invalid aggr_domain."""
-        with pytest.raises(ValueError, match="should be 'time' or 'frequency'."):
+        with pytest.raises(ValueError, match=r"should be 'time' or 'frequency'."):
             random_patch.viz.spectrogram(aggr_domain="invalid")
 
     def test_invalid_patch_dims(self, random_patch):
@@ -78,8 +78,42 @@ class TestPlotSpectrogram:
         axis = patch.viz.spectrogram(dim="time")
         assert isinstance(axis, plt.Axes)
 
-    def test_show(self, random_patch, monkeypatch):
+    @pytest.mark.parametrize("aggr_domain", ["time", "frequency"])
+    def test_length_one_other_dim(self, random_patch, aggr_domain):
+        """A single channel still has a spectrogram; there is just no mean."""
+        patch = random_patch.select(distance=(0, 1), samples=True)
+        assert patch.ndim == 2, "the length one dimension should be kept"
+        axis = patch.viz.spectrogram(dim="time", aggr_domain=aggr_domain)
+        assert isinstance(axis, plt.Axes)
+
+    def test_show(self, random_patch, shown):
         """Ensure show path is callable."""
-        monkeypatch.setattr(plt, "show", lambda: None)
         axis = random_patch.viz.spectrogram(dim="time", show=True)
         assert isinstance(axis, plt.Axes)
+        axis = random_patch.viz.spectrogram(dim="time", show=True)
+        assert isinstance(axis, plt.Axes)
+        assert shown
+
+    @staticmethod
+    def _image_shape(axis):
+        """Return the shape of the data backing the spectrogram image."""
+        images = axis.get_images()
+        if images:
+            return images[0].get_array().shape
+        return axis.collections[0].get_array().shape
+
+    @pytest.mark.parametrize("aggr_domain", ["frequency", "time"])
+    def test_kwargs_passed_to_spectrogram_2d(self, random_patch, aggr_domain):
+        """Ensure kwargs (e.g. nperseg) reach scipy for 2D patches. See #661."""
+        default = random_patch.viz.spectrogram(dim="time", aggr_domain=aggr_domain)
+        windowed = random_patch.viz.spectrogram(
+            dim="time", aggr_domain=aggr_domain, nperseg=64
+        )
+        assert self._image_shape(default) != self._image_shape(windowed)
+
+    def test_kwargs_passed_to_spectrogram_1d(self, random_patch):
+        """Ensure kwargs reach scipy for 1D patches as well. See #661."""
+        patch = random_patch.select(distance=0, samples=True).squeeze()
+        default = patch.viz.spectrogram(dim="time")
+        windowed = patch.viz.spectrogram(dim="time", nperseg=64)
+        assert self._image_shape(default) != self._image_shape(windowed)

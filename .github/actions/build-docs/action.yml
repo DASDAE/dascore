@@ -8,6 +8,7 @@ runs:
     - uses: ./.github/actions/prep_doc_build
 
     - name: build quarto project
-      shell: bash -l {0}
+      shell: bash
       run: |
-        quarto render docs
+        python scripts/_doc_report.py time quarto_render -- \
+          quarto render docs

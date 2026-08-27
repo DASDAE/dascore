@@ -1,5 +1,8 @@
 name: "Mamba Install"
-description: "Sets up mamba before installing DASCore's environment.yml file."
+description: >
+  Sets up mamba before installing DASCore's environment.yml file. Only the
+  conda_env smoke job in runtests.yml uses this; everything else installs
+  from PyPI via .github/actions/install-dascore.
 inputs:
   python-version:
     description: "The python string of the version to install"
@@ -20,11 +23,6 @@ inputs:
     default: "true"
     required: false
 
-  cache-number:
-    description: "Cache number. Use != 1 to reset data cache"
-    required: false
-    default: "1"
-
   prepare-test-data:
     description: "If true, restore, prime, and save the test-data cache after installation"
     required: false
@@ -33,11 +31,21 @@ inputs:
 runs:
   using: "composite"
   steps:
-    - name: Set up environment variable with date
-      shell: bash -l {0}
-      run: echo "CURRENT_DATE=$(date '+%Y-%m-%d')" >> $GITHUB_ENV
+    # Weekly, not daily. The env file's content hash is already part of the
+    # key setup-micromamba builds, so this only exists to pick up upstream
+    # package updates for unpinned deps. A daily key minted a fresh cache per
+    # (platform, python, env file) every day; even weekly, when the whole
+    # matrix ran on mamba, these caches filled 7 GB of the repo's 10 GB
+    # budget and evicted the test-data caches. With a single caller left this
+    # is one ~530 MB cache per week.
+    - name: Set up cache week for environment cache key
+      id: date
+      shell: bash
+      # %G, not %Y: ISO week numbers pair with the ISO year, so %Y-W%V
+      # collides across a new year boundary.
+      run: echo "cache-week=$(date '+%G-W%V')" >> "$GITHUB_OUTPUT"
 
-    - uses: mamba-org/setup-micromamba@v2
+    - uses: mamba-org/setup-micromamba@f457c30a868e4760d3a6fcea5f25dc655b8edf39  # v3.2.1
       with:
         micromamba-version: '2.0.5-0' # versions: https://github.com/mamba-org/micromamba-releases
         environment-file: ${{ inputs.environment-file }}
@@ -45,10 +53,15 @@ runs:
           bash
           powershell
         cache-environment: true
-        cache-environment-key: environment-${{ env.CURRENT_DATE }}-${{ inputs.environment-file }}
+        cache-environment-key: environment-${{ steps.date.outputs.cache-week }}-${{ inputs.environment-file }}
         post-cleanup: "shell-init"
+        # python-gil pins the GIL-enabled build. Without it the solver can
+        # pick the free-threaded (cp3XXt) build of python, which is not what
+        # this job means to test and which lacks wheels for some deps.
+        # Free-threading is covered separately by test_free_threaded.yml.
         create-args: >-
           python=${{ inputs.python-version }}
+          python-gil
 
     # Not sure why this is needed but it appears to be the case
     - name: fix env
@@ -71,36 +84,17 @@ runs:
     - name: install dascore
       if: "${{ inputs.install-package == 'true' }}"
       shell: bash -l {0}
-      run: |
-        pip install -e .${{ inputs.install-group-str }}
-
-    - name: export test data cache env
-      shell: bash -el {0}
       env:
-        INPUT_CACHE_NUMBER: ${{ inputs.cache-number }}
-        RUNNER_OS: ${{ runner.os }}
+        INSTALL_GROUP_STR: ${{ inputs.install-group-str }}
       run: |
-        python .github/scripts/export_test_data_cache_env.py >> "$GITHUB_ENV"
+        pip install -e ".${INSTALL_GROUP_STR}"
 
-    - name: restore test data cache
+    # Normally just restores the cache primed by the calling workflow's setup
+    # job, but also self-heals (prime + save) on a miss, e.g. for single-job
+    # workflows or when a re-run can't see an evicted cache.
+    - name: prepare test data cache
       if: "${{ inputs.prepare-test-data == 'true' }}"
-      id: restore-test-data
-      uses: actions/cache/restore@v4
-      with:
-        path: ${{ env.DATA_CACHE_PATH }}
-        key: ${{ env.DATA_CACHE_KEY }}
-
-    - name: prime test data cache
-      if: "${{ inputs.prepare-test-data == 'true' && steps.restore-test-data.outputs.cache-hit != 'true' }}"
-      shell: bash -el {0}
-      run: python .github/scripts/cache_test_data.py
-
-    - name: save test data cache
-      if: "${{ inputs.prepare-test-data == 'true' && steps.restore-test-data.outputs.cache-hit != 'true' }}"
-      uses: actions/cache/save@v4
-      with:
-        path: ${{ env.DATA_CACHE_PATH }}
-        key: ${{ env.DATA_CACHE_KEY }}
+      uses: ./.github/actions/prime-test-data-cache
 
     # Print out the package info for current environment
     - name: print package info

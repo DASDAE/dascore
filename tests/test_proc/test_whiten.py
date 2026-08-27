@@ -129,8 +129,6 @@ class TestWhiten:
         patch = get_example_patch("sin_wav", frequency=100, sample_rate=500)
         dft_pre = patch.dft("time", real=True)
 
-        import dascore as dc
-
         dc._bob = True
 
         white_patch = patch.whiten(smooth_size=5, time=[80, 120])
@@ -199,9 +197,9 @@ class TestWhiten:
         whitened_patch_freq_domain = dft.whiten(smooth_size=5, time=None)
 
         # check if the returned data is in the frequency domain
-        assert np.iscomplexobj(
-            whitened_patch_freq_domain.data
-        ), "Expected the output to be complex, indicating freq. domain patch."
+        assert np.iscomplexobj(whitened_patch_freq_domain.data), (
+            "Expected the output to be complex, indicating freq. domain patch."
+        )
 
         assert "ft_time" in dft.coords.coord_map
 

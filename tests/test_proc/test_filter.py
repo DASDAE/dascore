@@ -18,6 +18,7 @@ from dascore.exceptions import (
 )
 from dascore.units import Hz, convert_units, get_unit, m
 from dascore.utils.misc import broadcast_for_index
+from dascore.utils.patch import get_dim_sampling_rate
 
 
 class TestPassFilterChecks:
@@ -34,6 +35,11 @@ class TestPassFilterChecks:
             _ = random_patch.pass_filter(time=[1])
         with pytest.raises(FilterValueError, match="length two sequence"):
             _ = random_patch.pass_filter(time=[1, 3, 3])
+
+    def test_scalar_kwarg_raises(self, random_patch):
+        """A non-sequence filter value should get the same clear error."""
+        with pytest.raises(FilterValueError, match="length two sequence"):
+            _ = random_patch.pass_filter(time=10)
 
     def test_all_null_kwarg_raises(self, random_patch):
         """There must be one Non-null kwarg."""
@@ -77,9 +83,9 @@ class TestPassFilterChecks:
 
     def test_high_time_raises(self, random_patch):
         """Ensure too high freq band in time axis raises."""
-        nyquest = 0.5 / (random_patch.attrs.time_step / dc.to_timedelta64(1))
+        nyquist = 0.5 / (random_patch.coords["time"].step / dc.to_timedelta64(1))
         hz = dc.get_quantity("Hz")
-        filt = (1 * hz, nyquest * 1.1 * hz)
+        filt = (1 * hz, nyquist * 1.1 * hz)
         match = "possible filter bounds are"
         with pytest.raises(FilterValueError, match=match):
             random_patch.pass_filter(time=filt)
@@ -222,24 +228,34 @@ class TestSobelFilter:
         assert not np.any(pd.isnull(out.data))
 
 
+@pytest.mark.parametrize("name", ["median_filter", "notch_filter", "savgol_filter"])
+def test_filters_validate_their_dims(random_patch, name):
+    """Each filter routes its dimension arguments through the shared check.
+
+    pass_filter has its own check and its own error (TestPassFilterChecks),
+    so it cannot stand in for these three.
+    """
+    kwargs = {"savgol_filter": {"polyorder": 2}, "notch_filter": {"q": 30}}
+    with pytest.raises(ParameterError, match="You must"):
+        getattr(random_patch, name)(**kwargs.get(name, {}))
+
+
 class TestMedianFilter:
     """Simple tests on median filter."""
 
-    def test_median_no_kwargs_raises(self, random_patch):
-        """Apply default values."""
-        msg = "You must"
-        with pytest.raises(ParameterError, match=msg):
-            random_patch.median_filter()
-
-    def test_median_filter_time(self, random_patch):
+    def test_median_filter_time(self):
         """Test median filter in time dimension."""
-        out = random_patch.median_filter(time=0.5)
+        # A median filter costs the window size times the sample count, so a
+        # small patch says the same thing much sooner.
+        patch = dc.get_example_patch("random_das", shape=(30, 200))
+        out = patch.median_filter(time=0.5)
         assert isinstance(out, dc.Patch)
         assert not np.any(pd.isnull(out.data))
 
-    def test_median_filter_time_distance(self, random_patch):
+    def test_median_filter_time_distance(self):
         """Apply default values."""
-        out = random_patch.median_filter(time=0.05, distance=2)
+        patch = dc.get_example_patch("random_das", shape=(30, 200))
+        out = patch.median_filter(time=0.05, distance=2)
         assert isinstance(out, dc.Patch)
         assert not np.any(pd.isnull(out.data))
 
@@ -251,12 +267,6 @@ class TestMedianFilter:
 
 class TestNotchFilter:
     """Tests for the notch filter."""
-
-    def test_notch_no_kwargs_raises(self, random_patch):
-        """Test that no dimension raises an appropriate error."""
-        msg = "You must"
-        with pytest.raises(ParameterError, match=msg):
-            random_patch.notch_filter(q=30)
 
     def test_notch_filter_time(self, random_patch):
         """Test the notch filter along the time dimension."""
@@ -278,7 +288,7 @@ class TestNotchFilter:
 
     def test_notch_filter_high_frequency_error(self, random_patch):
         """Test notch filter raises error for frequency beyond Nyquist."""
-        sr = dc.utils.patch.get_dim_sampling_rate(random_patch, "time")
+        sr = get_dim_sampling_rate(random_patch, "time")
         nyquist = 0.5 * sr
         too_high_freq = nyquist + 1
         msg = f"possible filter values are in [0, {nyquist}] you passed {too_high_freq}"
@@ -297,19 +307,32 @@ class TestNotchFilter:
         assert isinstance(filtered_patch, dc.Patch)
         assert not np.any(np.isnan(filtered_patch.data))
 
+    @pytest.mark.parametrize(
+        "value",
+        (5 * dc.units.m, dc.get_quantity("20%"), dc.get_quantity("0.2")),
+        ids=("metres", "percent", "dimensionless"),
+    )
+    def test_unitless_coord_with_quantity_raises(self, random_patch, value):
+        """
+        A quantity needs a coordinate with units to be interpreted.
+
+        Dimensionless quantities are rejected too: `20 %` previously
+        slipped through and was read as 0.2 Hz.
+        """
+        patch = random_patch.set_units(distance=None)
+        with pytest.raises(UnitError, match="has no units"):
+            patch.notch_filter(distance=value, q=30)
+
 
 class TestSavgolFilter:
     """Simple tests on Savgol filter."""
 
-    def test_savgol_no_kwargs_raises(self, random_patch):
-        """Ensure no kwargs raises."""
-        msg = "You must"
-        with pytest.raises(ParameterError, match=msg):
-            random_patch.savgol_filter(polyorder=2)
-
-    def test_savgol_filter_time(self, random_patch):
+    def test_savgol_filter_time(self):
         """Test savgol filter in time dimension."""
-        out = random_patch.savgol_filter(polyorder=2, time=5)
+        # time=0.5 rather than 5 with the smaller patch: the window is a
+        # count of samples, and 5 seconds of it no longer fits.
+        patch = dc.get_example_patch("random_das", shape=(30, 200))
+        out = patch.savgol_filter(polyorder=2, time=0.5)
         assert isinstance(out, dc.Patch)
         assert not np.any(pd.isnull(out.data))
 
@@ -340,7 +363,7 @@ class TestSavgolFilter:
 
 
 class TestGaussianFilter:
-    """Test the Guassian Filter."""
+    """Test the Gaussian Filter."""
 
     def test_filter_time(self, event_patch_2):
         """Test for simple filter along the time axis."""
@@ -396,6 +419,13 @@ class TestSlopeFilter:
         assert filtered_patch.shape == example_patch.shape
         assert not np.array_equal(filtered_patch.data, example_patch.data)
 
+    def test_associated_coords_kept(self, example_patch):
+        """The round trip through the fk domain keeps coords. See #1041."""
+        depth = example_patch.get_array("distance") * 2.0
+        patch = example_patch.update_coords(depth=("distance", depth))
+        out = patch.slope_filter(filt=[2e3, 2.2e3, 8e3, 2e4])
+        assert np.allclose(out.get_array("depth"), depth)
+
     def test_attenuated_slopes(self, event_patch_1):
         """Ensure attenuated slopes are much lower in absolute values."""
         # For some reason when padding isn't performed the attenuation can
@@ -433,9 +463,9 @@ class TestSlopeFilter:
         )
         assert isinstance(filtered_patch, dc.Patch)
 
-    def test_notch_deprecated(self, example_patch):
-        """Ensure using notch param issues deprecation warning."""
-        with pytest.warns(DeprecationWarning):
+    def test_notch_removed(self, example_patch):
+        """Ensure the removed notch parameter is rejected."""
+        with pytest.raises(TypeError, match="notch"):
             example_patch.slope_filter(filt=[2e3, 2.2e3, 8e3, 2e4], notch=True)
 
     def test_different_params_not_equal(self, example_patch):

@@ -4,16 +4,19 @@ from __future__ import annotations
 
 import datetime
 import mmap
-import os
 import struct
+from collections.abc import Callable
+from typing import Any, Literal
 
 import numpy as np
 
 from dascore.core.attrs import PatchAttrs
 from dascore.core.coords import get_coord
+from dascore.io.utils import drop_blank_attrs, get_attr_names
+from dascore.utils.misc import get_buffer_size
 from dascore.utils.time import to_datetime64, to_timedelta64
 
-DEFAULT_ATTRS = set(PatchAttrs.model_fields)
+DEFAULT_ATTRS = get_attr_names(PatchAttrs)
 
 
 def type_not_supported(vargin):
@@ -48,7 +51,8 @@ TDS_DATA_TYPE = dict(
 )
 
 # Function mapping for reading TDMS data types
-TDS_READ_VAL = dict(
+# Values differ by type, so the readers are only typed as callables.
+TDS_READ_VAL: dict[str, Callable] = dict(
     {
         "void": lambda f: None,  # tdsTypeVoid
         "int8": lambda f: struct.unpack("<b", f.read(1))[0],
@@ -99,8 +103,8 @@ def parse_time_stamp(fractions, seconds):
         return None
 
 
-def _get_version_str(tdms_file, lead_in_length=28) -> str:
-    """Return True if we have the right file type."""
+def _get_version_str(tdms_file, lead_in_length=28) -> str | Literal[False]:
+    """Return the version string for a TDMS file, else False."""
     lead_in = tdms_file.read(lead_in_length)
     # lead_in is 28 bytes:
     # [string of length 4][int32][int32][int64][int64]
@@ -169,19 +173,61 @@ def _get_distance_coord(attr):
     return d_coord
 
 
+def _iter_segment_bounds(tdms_file, fileinfo, lead_in_length=28):
+    """
+    Yield the (data start, data end) byte offsets of each segment in the file.
+
+    A TDMS file is a sequence of segments, each with its own lead-in naming
+    where the next one begins; the first segment's offsets are the ones
+    already read into fileinfo. Leaves the file position at the last lead-in
+    it had to read, so callers which care must restore it.
+    """
+    rdo = int(fileinfo["raw_data_offset"])
+    nso = int(fileinfo["next_segment_offset"])
+    file_size = fileinfo["file_size"]
+    while True:
+        yield rdo, nso
+        if nso >= file_size:
+            return
+        tdms_file.seek(nso + 12, 0)
+        # Unsigned, as the lead-in reader above also reads them: TDMS writes
+        # all ones for a file it never got to close, meaning the segment runs
+        # to the end of the file, and clamping is what says so.
+        (next_seg_nso, next_seg_rdo) = struct.unpack("<QQ", tdms_file.read(2 * 8))
+        start = nso + lead_in_length
+        rdo = min(file_size, start + next_seg_rdo)
+        # Each segment starts a whole lead-in past the one before it, so this
+        # climbs to file_size and the walk always ends.
+        nso = min(file_size, start + next_seg_nso)
+
+
+def _get_sample_count(tdms_file, fileinfo, lead_in_length=28):
+    """Return how many samples per channel the whole file holds."""
+    itemsize = np.dtype(fileinfo["data_type"]).itemsize
+    per_sample = fileinfo["n_channels"] * itemsize
+    position = tdms_file.tell()
+    try:
+        bounds = list(_iter_segment_bounds(tdms_file, fileinfo, lead_in_length))
+    finally:
+        tdms_file.seek(position, 0)
+    # Counting bytes to the end of the file instead would count every
+    # segment's lead-in and metadata as data.
+    return sum((nso - rdo) // per_sample for rdo, nso in bounds)
+
+
 def _get_all_attrs(tdms_file, lead_in_length=28):
     """Return all the attributes which can be fetched from attributes."""
-    # read leadin information into fileinfo
+    # read lead-in information into fileinfo
     lead_in = tdms_file.read(lead_in_length)
     # lead_in is 28 bytes:
     fields = struct.unpack("<4siiQQ", lead_in)
     # Keep track of information about file in fileinfo
-    fileinfo = dict(zip(FILEINFO_NAMES, fields))
+    fileinfo: dict[str, Any] = dict(zip(FILEINFO_NAMES, fields))
     fileinfo["decimated"] = not bool(fileinfo["toc"] & DECIMATE_MASK)
     # Make offsets relative to beginning of file:
     fileinfo["next_segment_offset"] += lead_in_length
     fileinfo["raw_data_offset"] += lead_in_length
-    fileinfo["file_size"] = os.path.getsize(tdms_file.name)
+    fileinfo["file_size"] = get_buffer_size(tdms_file)
     # Make sure next segment does not go beyond file capacity
     if fileinfo["next_segment_offset"] > fileinfo["file_size"]:
         fileinfo["next_segment_offset"] = fileinfo["file_size"]
@@ -205,7 +251,11 @@ def _get_all_attrs(tdms_file, lead_in_length=28):
     out["data_type"] = "strain_rate"
     out["data_units"] = ""
     out["dims"] = "time,distance"
-    out["instrument_id"] = out.get("SystemInfomation.Devices0.SerialNum")
+    # HostName names the unit ("iDAS005"). The Chassis and Devices<N>
+    # serials name COTS parts inside it, not the interrogator. Silixa's
+    # HDF5 reader keys off the same attr.
+    out["interrogator.name"] = out.get("SystemInfomation.OS.HostName")
+    drop_blank_attrs(out, ("interrogator.name",))
     # Rename some attributes to preferred names
     d_coord = _get_distance_coord(out)
     fileinfo["end_of_properties_offset"] = tdms_file.tell()
@@ -218,18 +268,12 @@ def _get_all_attrs(tdms_file, lead_in_length=28):
     tdms_file.seek(var + 4, 1)
     fileinfo["data_type"] = TDS_DATA_TYPE.get(struct.unpack("<i", tdms_file.read(4))[0])
     if fileinfo["data_type"] not in ("int16", "float32"):
-        raise Exception("Unsupported TDMS data type: " + fileinfo["data_type"])
-    # get number of samples by dividing amount of unread data by the
-    # size of data per channel
-    numofsamples = (
-        (fileinfo["file_size"] - fileinfo["raw_data_offset"])
-        / n_channels
-        / np.dtype(fileinfo["data_type"]).itemsize
-    )
+        raise Exception(f"Unsupported TDMS data type: {fileinfo['data_type']}")
+    # Add up what each segment holds, which for a one-segment file is the
+    # whole file after the header.
+    numofsamples = _get_sample_count(tdms_file, fileinfo, lead_in_length)
     t_coord = _get_time_coord(out, numofsamples)
     out["coords"] = {"time": t_coord, "distance": d_coord}
-    out.update(t_coord.get_attrs_dict("time"))
-    out.update(d_coord.get_attrs_dict("distance"))
     return out, fileinfo
 
 
@@ -290,37 +334,27 @@ def _get_data(tdms_file, lead_in_length=28):
             # Rotate the axes to [samples, nch]
             raw_last_chunk = np.rollaxis(raw_last_chunk, 1)
             data_node = np.append(data_node, raw_last_chunk, axis=0)
-            return data_node, channel_length
+        # Outside the branch: a decimated segment whose chunks all happen to
+        # be full has nothing left over, and still has its data.
+        return data_node, channel_length
 
     fileinfo, attrs = _get_fileinfo(tdms_file)
 
     # map file contents to a variable dmap
     dmap = mmap.mmap(tdms_file.fileno(), 0, access=mmap.ACCESS_READ)
-    # rdo: the start of the data in the file
-    rdo = int(fileinfo["raw_data_offset"])
     # nch: number of channels
     nch = int(fileinfo["n_channels"])
 
-    # nso: the beginning of the segment that comes next after the data
-    nso = fileinfo["next_segment_offset"]
-    # seg1_length: length of recording indicated as raw_data in metadata for
-    # each channel in bytes
-
-    flag = 0
-    while flag == 0:
-        cdata_node, cchannel_length = get_segment_data(fileinfo, nch, dmap, nso, rdo)
-        if fileinfo["file_size"] == nso:
-            flag = 1
+    data_node = None
+    channel_length = 0
+    for rdo, nso in _iter_segment_bounds(tdms_file, fileinfo, lead_in_length):
+        segment, seg_length = get_segment_data(fileinfo, nch, dmap, nso, rdo)
+        # A segment holds every channel for a stretch of time, so segments
+        # stack along time, which is the first axis of (samples, channels).
+        if data_node is None:
+            data_node = segment
         else:
-            tdms_file.seek(nso + 12, 0)
-            (next_seg_nso, next_seg_rdo) = struct.unpack("<qq", tdms_file.read(2 * 8))
-            rdo = min(fileinfo["file_size"], nso + lead_in_length + next_seg_rdo)
-            nso = min(fileinfo["file_size"], nso + lead_in_length + next_seg_nso)
-        try:
-            data_node = np.append(data_node, cdata_node, axis=1)
-            channel_length += cchannel_length
-        except NameError:
-            data_node = cdata_node
-            channel_length = cchannel_length
+            data_node = np.append(data_node, segment, axis=0)
+        channel_length += seg_length
 
     return data_node, channel_length, attrs

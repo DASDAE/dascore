@@ -233,7 +233,7 @@ def _process_tile_group_numba_impl(
     count0 = (nx - parity0 + 1) // 2
     count1 = (ny - parity1 + 1) // 2
     count = count0 * count1
-    for ind in numba.prange(count):  # noqa: F821
+    for ind in numba.prange(count):  # noqa: F821  # ty: ignore[unresolved-reference]
         x_index, y_index = _tile_indices_from_parity_index_numba(
             ind, count1, parity0, parity1
         )

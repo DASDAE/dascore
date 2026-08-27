@@ -12,12 +12,12 @@ from dascore.exceptions import ParameterError
 from dascore.utils.patch import patch_function
 
 
-@patch_function(required_dims=("time", "distance"))
+@patch_function(required_dims=("time", "distance"), data_type="dispersion")
 def dispersion_phase_shift(
     patch: PatchType,
     phase_velocities: Sequence[float],
-    approx_resolution: None | float = None,
-    approx_freq: None | tuple[float, float] = None,
+    approx_resolution: float | None = None,
+    approx_freq: tuple[float, float] | None = None,
 ) -> PatchType:
     """
     Compute dispersion images using the phase-shift method.
@@ -28,7 +28,7 @@ def dispersion_phase_shift(
         Patch to transform. Has to have dimensions of time and distance.
         It also needs to be right-sided (see notes below).
     phase_velocities
-        NumPY array of positive velocities, monotonically increasing, for
+        NumPy array of positive velocities, monotonically increasing, for
         which the dispersion will be computed.
     approx_resolution
         Approximated frequency (Hz) resolution for the output. If left empty,
@@ -69,7 +69,7 @@ def dispersion_phase_shift(
 
     disp_patch = patch.dispersion_phase_shift(np.arange(100,1500,1),
                 approx_resolution=0.1,approx_freq=[5,70])
-    ax = disp_patch.viz.waterfall(show=False,cmap=None)
+    ax = disp_patch.viz.waterfall(show=False, cbar=False)
     ax.set_xlim(5, 70)
     ax.set_ylim(1500, 100)
     disp_patch.viz.waterfall(show=True, ax=ax)

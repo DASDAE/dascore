@@ -5,6 +5,7 @@ from __future__ import annotations
 import dascore as dc
 import dascore.core
 from dascore.core.coords import get_coord
+from dascore.io.utils import build_patches, get_exact_coord
 from dascore.utils.hdf5 import unpack_scalar_h5_dataset
 from dascore.utils.misc import unbyte
 
@@ -27,7 +28,7 @@ def _get_opto_das_version_str(hdf_fi) -> str:
     return version_str
 
 
-def _get_coord_manager(fi):
+def _get_coord_manager(fi, snap=True):
     """Get the distance ranges and spacing."""
     header = fi["header"]
     dims = tuple(unbyte(x) for x in header["dimensionNames"])
@@ -47,7 +48,10 @@ def _get_coord_manager(fi):
         else:  # and distance
             # The channels are ints so we multiply by step to get distance.
             distance = fi["/header/channels"][:] * step
-            coord = get_coord(values=distance)
+            if snap:
+                coord = get_coord(data=distance, units=unit)
+            else:
+                coord = get_exact_coord(distance, units=unit)
         coords[dim] = coord
     out = dascore.core.get_coord_manager(coords=coords, dims=dims)
     return out
@@ -58,8 +62,8 @@ def _get_attr_dict(header):
     attr_map = {
         "gaugeLength": "gauge_length",
         "unit": "data_units",
-        "instrument": "instrument_id",
-        "experiment": "acquisition_id",
+        "instrument": "interrogator.name",
+        "experiment": "experiment",
     }
     out = {"data_category": "DAS"}
     for head_name, attr_name in attr_map.items():
@@ -70,22 +74,20 @@ def _get_attr_dict(header):
     return out
 
 
-def _get_opto_das_attrs(fi) -> dict:
-    """Scan a OptoDAS file, return metadata."""
-    cm = _get_coord_manager(fi)
+def _get_opto_das_attrs(fi, snap=True) -> tuple[dict, dascore.core.CoordManager]:
+    """Scan a OptoDAS file, return metadata and coordinates."""
+    cm = _get_coord_manager(fi, snap=snap)
     attrs = _get_attr_dict(fi["header"])
-    attrs["coords"] = cm
-    return attrs
+    return attrs, cm
 
 
 def _read_opto_das(fi, distance=None, time=None, attr_cls=dc.PatchAttrs):
     """Read the OptoDAS values into a patch."""
-    attrs = _get_opto_das_attrs(fi)
-    data_node = fi["data"]
-    coords = attrs.pop("coords")
-    cm, data = coords.select(array=data_node, distance=distance, time=time)
-    if not data.size:
-        return []
-    attrs["coords"] = cm.to_summary_dict()
-    attrs["dims"] = cm.dims
-    return [dc.Patch(data=data, coords=cm, attrs=attr_cls(**attrs))]
+    attrs, coords = _get_opto_das_attrs(fi)
+    return build_patches(
+        coords,
+        fi["data"],
+        attrs,
+        attr_cls=attr_cls,
+        selection={"time": time, "distance": distance},
+    )

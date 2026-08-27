@@ -73,12 +73,10 @@ class TestStrainRateConversion:
         out2 = terra15_das_patch.velocity_to_strain_rate(step_multiple=4)
         assert isinstance(out2, dc.Patch)
 
-    def test_gauge_multiple_deprecated(self, terra15_das_patch):
-        """Ensure using gauge_multiple issues deprecation warning."""
-        with pytest.warns(DeprecationWarning):
-            out1 = terra15_das_patch.velocity_to_strain_rate(gauge_multiple=1)
-        out2 = terra15_das_patch.velocity_to_strain_rate(step_multiple=2)
-        assert out1.equals(out2)
+    def test_gauge_multiple_removed(self, terra15_das_patch):
+        """Ensure the removed parameter is rejected."""
+        with pytest.raises(TypeError, match="gauge_multiple"):
+            terra15_das_patch.velocity_to_strain_rate(gauge_multiple=1)
 
     def test_no_data_units(self, terra15_das_patch):
         """Ensure a patch with no data units still works."""
@@ -236,6 +234,19 @@ class TestRadianToStrain:
         expected_const = 11.6e-9
         const = out.data / rad_patch.data
         assert np.allclose(const, expected_const)
+
+    def test_data_type_updated(self, rad_patch):
+        """Phase data should become strain, not stay phase."""
+        patch = rad_patch.update_attrs(data_type="phase")
+        out = patch.radians_to_strain()
+        assert out.attrs.data_type == "strain"
+
+    def test_data_type_rate(self, rad_patch):
+        """Data with a per-time component should become strain_rate."""
+        patch = rad_patch.update_attrs(data_units="rad/s", data_type="phase_rate")
+        out = patch.radians_to_strain()
+        assert out.attrs.data_type == "strain_rate"
+        assert get_quantity(out.attrs.data_units) == get_quantity("strain/s")
 
     def test_no_gauge_length_in_attrs(self, rad_patch):
         """Ensure an empty gauge length raises error."""

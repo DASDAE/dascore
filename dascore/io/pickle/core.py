@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pickle
+from typing import Literal
 
 import dascore
 from dascore.io import BinaryReader, BinaryWriter, FiberIO
@@ -20,6 +21,7 @@ class PickleIO(FiberIO):
 
     name = "PICKLE"
     preferred_extensions = ("pkl", "pickle")
+    multi_patch_write = True
 
     def _header_is_dascore(self, byte_stream):
         """Return True if the first few bytes mention dascore classes."""
@@ -27,14 +29,19 @@ class PickleIO(FiberIO):
         spool_or_patch = b"Spool" in byte_stream or b"Patch" in byte_stream
         return has_dascore and spool_or_patch
 
-    def get_format(self, resource: BinaryReader, **kwargs) -> tuple[str, str] | bool:
+    def get_format(
+        self,
+        resource: BinaryReader,
+        **kwargs,
+    ) -> tuple[str, str] | Literal[False]:
         """
-        Return True if file contains a pickled Patch or Spool.
+        Return (name, version) if the file holds a pickled Patch or
+        Spool, else False.
 
         Parameters
         ----------
         resource
-            A path to the file which may contain terra15 data.
+            A binary resource which may contain a pickled patch.
         """
         try:
             start = resource.read(100)  # read first 100 bytes, look for class names
@@ -52,6 +59,6 @@ class PickleIO(FiberIO):
         out = pickle.load(resource)
         return dascore.spool(out)
 
-    def write(self, patch, resource: BinaryWriter, **kwargs):
+    def write(self, spool, resource: BinaryWriter, **kwargs):
         """Write a Patch/Spool to disk."""
-        pickle.dump(patch, resource)
+        pickle.dump(spool, resource)

@@ -1,19 +1,39 @@
 #!/bin/bash
 
-# Script to run tests to account for wonkiness of periodic mac failures.
-args="tests -s --cov dascore --cov-append --cov-report=xml"
+# Runs one flavor of the test suite. Coverage is written to a data file, not
+# xml: each CI cell keeps its own file and the coverage_gate job combines
+# them, because no single OS covers every line (see runtests.yml).
+
+# sysmon is coverage's sys.monitoring core, ~1.11x the no-coverage runtime
+# against ~1.67x for the C tracer. It needs python >= 3.12 (the floor) and
+# does not support branch coverage, which is off here.
+export COVERAGE_CORE=sysmon
+
+# -n logical rather than -n auto: xdist's auto asks psutil for *physical*
+# cores, which is 2 on the SMT-enabled runners; logical gives all 3-4.
+parallel=(-n logical --dist loadfile)
+cov_args=(--cov dascore --cov-append --cov-report=)
+
+args=(tests -m "not network" "${parallel[@]}" "${cov_args[@]}")
+if [[ "$1" == "network" ]]; then
+  args=(tests -m network "${parallel[@]}" "${cov_args[@]}")
+fi
 if [[ "$1" == "doctest" ]]; then
-  args="dascore --doctest-modules"
+  args=(dascore --doctest-modules)
 fi
 if [[ "$1" == "profile" ]]; then
-  args="benchmarks --codspeed"
+  # No xdist: codspeed measures this process.
+  args=(benchmarks --codspeed)
 fi
 
-exit_code=0
+python -c "
+import os
+try:
+    import psutil
+    physical = psutil.cpu_count(logical=False)
+except ImportError:
+    physical = None
+print(f'cpus: logical={os.cpu_count()} physical={physical}')
+"
 
-python -m pytest $args || exit_code=$?
-
-# Check the exit code is related to sporadic failures on mac, see #312
-if [ $exit_code -ne 132 ] && [ $exit_code -ne 0 ]; then
-  exit $exit_code
-fi
+python -m pytest "${args[@]}"

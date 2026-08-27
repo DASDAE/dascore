@@ -8,8 +8,9 @@ import pydantic
 import pytest
 
 import dascore as dc
-from dascore.exceptions import ParameterError
+from dascore.exceptions import InvalidSpoolQueryError, ParameterError
 from dascore.utils.pd import (
+    _model_list_to_df,
     adjust_segments,
     dataframe_to_patch,
     fill_defaults_from_pydantic,
@@ -17,8 +18,14 @@ from dascore.utils.pd import (
     get_interval_columns,
     list_ser_to_str,
     patch_to_dataframe,
+    relative_ranges_to_absolute,
 )
 from dascore.utils.time import to_datetime64, to_timedelta64
+
+try:
+    import pyarrow
+except ImportError:
+    pyarrow = None
 
 
 @pytest.fixture()
@@ -32,7 +39,7 @@ def example_df_2():
     """Create a simple df for testing. Example from Chris Albon."""
     time = to_datetime64("2020-01-03")
     time_min = [time + x * np.timedelta64(1, "s") for x in range(5)]
-    time_max = time_min + np.timedelta64(10, "m")
+    time_max = np.array(time_min) + np.timedelta64(10, "m")
     raw_data = {
         "first_name": ["Jason", "Molly", "Tina", "Jake", "Amy"],
         "last_name": ["Miller", "Jacobson", "Ali", "Milner", "Cooze"],
@@ -51,7 +58,7 @@ def example_df_timedeltas(example_df_2):
     """An example dataframe with timedelta columns."""
     time = to_timedelta64(10)
     time_min = [time + x * np.timedelta64(1, "s") for x in range(5)]
-    time_max = time_min + np.timedelta64(10, "m")
+    time_max = np.array(time_min) + np.timedelta64(10, "m")
 
     out = example_df_2.assign(time_min=time_min, time_max=time_max)
     return out
@@ -136,6 +143,27 @@ class TestFilterDfBasic:
         assert all(con == out)
 
 
+class TestModelListToDf:
+    """Tests for flattening patch-like objects to dataframes."""
+
+    def test_uses_flat_dump_and_serializes_dims(self, random_patch):
+        """Patch-like objects with flat_dump should convert into dataframes."""
+        df = _model_list_to_df([random_patch], exclude={"history"})
+        assert len(df) == 1
+        assert df.loc[0, "dims"] == ",".join(random_patch.dims)
+
+    def test_uses_summary_fallback_when_item_has_no_flat_dump(self, random_patch):
+        """Objects with only .summary should still convert cleanly."""
+
+        class SummaryOnly:
+            def __init__(self, summary):
+                self.summary = summary
+
+        df = _model_list_to_df([SummaryOnly(random_patch.summary)], exclude={"history"})
+        assert len(df) == 1
+        assert df.loc[0, "dims"] == ",".join(random_patch.dims)
+
+
 class TestListSerToStr:
     """Tests for converting list-like series to strings."""
 
@@ -204,6 +232,7 @@ class TestFilterDfAdvanced:
         tmax = to_datetime64(example_df_2["time_max"].max() - np.timedelta64(1, "ns"))
         out = filter_df(example_df_2, time=(tmax, None))
         # just the last row should have been selected
+        assert isinstance(out, pd.Series)
         assert out.iloc[-1] and out.astype(np.int64).sum() == 1
 
     def test_time_query_with_string(self, example_df_2):
@@ -227,13 +256,101 @@ class TestFilterDfAdvanced:
         out = filter_df(df, time_step_min=0.5, time_step_max=2)
         assert out.all()
 
+    def test_open_ended_datetime_range(self, example_df_2):
+        """
+        An unbounded end of a range on a datetime column should not exclude
+        everything. See #808.
+        """
+        # 'time' must be a plain column, ie not paired with time_min/time_max.
+        df = pd.DataFrame({"time": example_df_2["time_min"]})
+        cutoff = df["time"].iloc[2]
+        assert np.all(filter_df(df, time_min=cutoff) == (df["time"] >= cutoff))
+        assert np.all(filter_df(df, time_max=cutoff) == (df["time"] <= cutoff))
+
+    def test_open_ended_timedelta_range(self, example_df_2):
+        """Same as above, but for timedelta columns."""
+        df = example_df_2.assign(step=example_df_2["time_step"] * range(5))
+        cutoff = df["step"].iloc[2]
+        assert np.all(filter_df(df, step_min=cutoff) == (df["step"] >= cutoff))
+        assert np.all(filter_df(df, step_max=cutoff) == (df["step"] <= cutoff))
+
+    @pytest.mark.parametrize(
+        "val",
+        [
+            ("2020-01-03", ...),
+            (..., "2020-01-03"),
+            ("2020-01-03", None),
+            (None, "2020-01-03"),
+        ],
+    )
+    def test_open_bound_on_interval_column_raises(self, example_df_2, val):
+        """
+        An open bound in a membership query on an interval column is a range
+        query aimed at the wrong key; it should raise rather than silently
+        return an empty result. See #808.
+        """
+        with pytest.raises(ParameterError, match=r"Use time=\(min, max\)"):
+            filter_df(example_df_2, time_min=val)
+
+    def test_closed_range_on_interval_column_still_isin(self, example_df_2):
+        """
+        Without an open bound the query is ambiguous, so the documented isin
+        behavior is kept.
+        """
+        vals = list(example_df_2["bp_min"].iloc[:2])
+        out = filter_df(example_df_2, bp_min=tuple(vals))
+        assert np.all(out == example_df_2["bp_min"].isin(vals))
+
+    @pytest.mark.parametrize("val", [[None], [100, None, 125]])
+    def test_non_range_shaped_collection_still_isin(self, example_df_2, val):
+        """
+        Only a two element sequence can be a range, so other collections stay
+        membership checks even when they contain None.
+        """
+        out = filter_df(example_df_2, bp_min=val)
+        assert np.all(out == example_df_2["bp_min"].isin(val))
+
+    def test_ellipsis_kept_for_non_interval_column(self, example_df_2):
+        """
+        Columns with no min/max pair are plain isin checks; an ellipsis there
+        contributes nothing but must not break the rest of the collection.
+        """
+        out = filter_df(example_df_2, first_name=("Jason", ...))
+        assert np.all(out == example_df_2["first_name"].isin(["Jason"]))
+
+    @pytest.mark.skipif(pyarrow is None, reason="pyarrow is not installed")
+    def test_ellipsis_with_an_arrow_backed_column(self, example_df_2):
+        """An arrow-backed column refuses a value arrow has no type for."""
+        df = example_df_2.astype({"first_name": "string[pyarrow]"})
+        out = filter_df(df, first_name=("Jason", ...))
+        assert np.all(out == df["first_name"].isin(["Jason"]))
+
+    def test_open_bound_ignored_for_unknown_column(self, example_df_2):
+        """
+        Unknown columns are forwarded to patch level select, so an open bound
+        in one of them must not raise here.
+        """
+        out = filter_df(example_df_2, not_a_column=(1, ...), ignore_bad_kwargs=True)
+        assert out.all()
+
+    def test_spool_select_open_bound_on_interval_column(self, random_spool):
+        """
+        The user facing path which prompted this: spool.select(time_min=...).
+
+        The spool rejects the unknown name before the interval-column check
+        below it can run, but the point stands: it raises rather than
+        silently returning nothing.
+        """
+        with pytest.raises(ParameterError, match="neither an attribute nor a coord"):
+            random_spool.select(time_min=("2020-01-01", ...))
+
 
 class TestAdjustSegments:
     """Tests for adjusting segments of dataframes."""
 
     @pytest.fixture()
     def adjacent_df(self):
-        """Create a ddtaframe with adjacent times."""
+        """Create a dataframe with adjacent times."""
         time_mins = [
             np.datetime64("2020-01-01"),
             np.datetime64("2020-01-01T00:00:10.01"),
@@ -283,15 +400,46 @@ class TestAdjustSegments:
         assert (out["distance_min"] >= distance[0]).all()
         assert (out["distance_max"] <= distance[1]).all()
 
-    def test_missing_interval_col_raises_keyerro(self, adjacent_df):
-        """Ensure if an interval column is missing a KeyError is raised."""
+    def test_reversed_bounds_keep_adjusted_limits_ordered(self):
+        """Reversed finite bounds should trim metadata by value interval."""
+        df = pd.DataFrame(
+            {
+                "frequency_min": [100.0],
+                "frequency_max": [200.0],
+                "frequency_step": [-1.0],
+            }
+        )
+        out = adjust_segments(df, frequency=(130.0, 120.0))
+        row = out.iloc[0]
+        assert row["frequency_min"] == 120.0
+        assert row["frequency_max"] == 130.0
+        assert row["_modified"]
+
+    def test_reversed_bounds_keep_contained_segments(self):
+        """Reversed finite bounds should filter by the ordered value interval."""
+        df = pd.DataFrame(
+            {
+                "frequency_min": [121.0],
+                "frequency_max": [125.0],
+                "frequency_step": [-1.0],
+            }
+        )
+        out = adjust_segments(df, frequency=(130.0, 120.0))
+        assert len(out) == 1
+        row = out.iloc[0]
+        assert row["frequency_min"] == 121.0
+        assert row["frequency_max"] == 125.0
+        assert not row["_modified"]
+
+    def test_missing_interval_col_raises_parameter_error(self, adjacent_df):
+        """Ensure a missing interval column raises ParameterError."""
         df = adjacent_df.drop(columns=["distance_min"])
         with pytest.raises(ParameterError):
             _ = adjust_segments(df, distance=(100, 200))
 
 
 class TestFillDefaultsFromPydantic:
-    """Tests for initing empty columns from pydanitc models."""
+    """Tests for initializing empty columns from pydantic models."""
 
     class Model(pydantic.BaseModel):
         """Example basemodel."""
@@ -411,3 +559,19 @@ class TestGetIntervalColumns:
         msg = "Cannot chunk spool or dataframe"
         with pytest.raises(ParameterError, match=msg):
             get_interval_columns(example_df_2, "money")
+
+
+class TestRelativeRangesToAbsolute:
+    """Relative range resolution validates its envelope columns."""
+
+    def test_missing_max_column_raises_spool_error(self):
+        """A frame with the min but not the max column raises the doc'd error."""
+        df = pd.DataFrame({"time_min": [0.0]})  # no time_max
+        with pytest.raises(InvalidSpoolQueryError, match="relative select"):
+            relative_ranges_to_absolute(df, {"time": (1, -1)})
+
+    def test_non_tuple_value_raises(self):
+        """A non-(start, stop) relative value raises rather than mis-resolving."""
+        df = pd.DataFrame({"time_min": [0.0], "time_max": [1.0]})
+        with pytest.raises(InvalidSpoolQueryError, match="range selectors"):
+            relative_ranges_to_absolute(df, {"time": 5})

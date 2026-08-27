@@ -24,12 +24,12 @@ print(cm)
 
 ```{python}
 import numpy as np
-# Get array of coordinate values
-time = cm['time']
+# Get the coordinate object
+time = cm["time"]
 
 # Filter data array
 # this gets a new coord manager and a view of the trimmed data.
-_sorted_time = np.sort(time)
+_sorted_time = np.sort(time.values)
 t1 = _sorted_time[5]
 t2 = _sorted_time[-5]
 new_cm, new_data = cm.select(time=(t1, t2), array=data)
@@ -41,20 +41,24 @@ print(new_cm)
 
 from __future__ import annotations
 
-import warnings
 from collections import defaultdict
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from itertools import zip_longest
-from typing import Annotated, Any, TypeVar
+from types import EllipsisType
+from typing import Annotated, Any, Self, cast
 
 import numpy as np
 from pydantic import field_validator, model_validator
 from rich.text import Text
-from typing_extensions import Self
 
-import dascore as dc
 from dascore.constants import dascore_styles, select_values_description
-from dascore.core.coords import BaseCoord, CoordSummary, get_coord
+from dascore.core.coords import (
+    BaseCoord,
+    CoordPartial,
+    CoordRange,
+    CoordSummary,
+    get_coord,
+)
 from dascore.exceptions import (
     CoordDataError,
     CoordError,
@@ -62,7 +66,20 @@ from dascore.exceptions import (
     ParameterError,
     PatchBroadcastError,
 )
-from dascore.utils.attrs import separate_coord_info
+from dascore.models import (
+    ArrayLike,
+    DascoreBaseModel,
+    frozen_dict_serializer,
+    frozen_dict_validator,
+)
+from dascore.utils.array_api import array_namespace
+from dascore.utils.display import (
+    RichRepr,
+    Row,
+    Section,
+    Table,
+    render_text,
+)
 from dascore.utils.docs import compose_docstring
 from dascore.utils.mapping import FrozenDict
 from dascore.utils.misc import (
@@ -72,14 +89,16 @@ from dascore.utils.misc import (
     cached_method,
     iterate,
 )
-from dascore.utils.models import (
-    ArrayLike,
-    DascoreBaseModel,
-    frozen_dict_serializer,
-    frozen_dict_validator,
-)
 
-MaybeArray = TypeVar("MaybeArray", ArrayLike, np.ndarray, None)
+MaybeArray = ArrayLike | np.ndarray | None
+
+# What a coord map may hold, kept identical to the Patch constructor's coords.
+# The value stays Any on purpose: get_coord_manager also accepts an int or a
+# Quantity (a partial coord), a mapping of start/stop/step, and a
+# (dimension, data) tuple, and every union narrow enough to be worth writing
+# rejected one of those first-party forms. Mapping rather than dict so a
+# caller's narrower value type still matches.
+CoordManagerInput = Mapping[str, Any]
 
 
 def _ensure_1d_coord(coord, coord_name: str):
@@ -116,7 +135,7 @@ def _get_indexers_and_new_coords_dict(
 ):
     """Get reductions for each dimension."""
     dim_reductions = {x: slice(None, None) for x in cm.dims}
-    new_coords = dict(cm._get_dim_array_dict(keep_coord=True))
+    new_coords = dict(cm._get_dim_coord_dict())
     for coord_name, vals in kwargs.items():
         # All coordinates should exist in coord_map (filtered by
         # _get_single_dim_kwarg_list)
@@ -147,7 +166,14 @@ def _get_indexers_and_new_coords_dict(
     return new_coords, indexers
 
 
-class CoordManager(DascoreBaseModel):
+# Fields a table lines up on the right, where a reader compares them
+# down the column. Not all of them read as numbers -- a shape is a
+# tuple and a time is an instant -- but all of them are read by their
+# last characters rather than their first.
+_COORD_NUMERIC = frozenset({"min", "max", "step", "shape"})
+
+
+class CoordManager(RichRepr, DascoreBaseModel):
     """
     Class for managing coordinates.
 
@@ -210,20 +236,15 @@ class CoordManager(DascoreBaseModel):
         """Ensure mapping fields are immutable."""
         return FrozenDict(v)
 
-    def __getitem__(self, item) -> np.ndarray:
-        # in order to not break backward compatibility, we need to return
-        # the array. Start the deprecation cycle to be consistent.
-        msg = (
-            "Currently coords[coord_name] returns a numpy array, but in a "
-            "future dascore version it will return a BaseCoord instance. "
-            "Use patch.coords.get_array(coord_name) instead."
-        )
-        warnings.warn(msg, UserWarning, stacklevel=6)
-        return self.get_coord(item).values
+    def __getitem__(self, item) -> BaseCoord:
+        """Return a coordinate by name."""
+        return self.get_coord(item)
 
     def __getattr__(self, item) -> BaseCoord:
         try:
-            return super().__getattr__(item)
+            # pydantic defines BaseModel.__getattr__ only at runtime so
+            # checkers still flag misspelled fields.
+            return super().__getattr__(item)  # ty: ignore[unresolved-attribute]
         except AttributeError:
             # unlike get item, get attr returns the base coordinate.
             try:
@@ -295,56 +316,24 @@ class CoordManager(DascoreBaseModel):
         indirect_coord_drops = _get_dim_change_drop(coord_map, dim_map)
         # drop coords then call get_coords to handle adding new ones.
         coords, _ = self.drop_coords(*(coord_to_drop + indirect_coord_drops))
-        out = coords._get_dim_array_dict(keep_coord=True)
+        out = coords._get_dim_coord_dict()
         out.update({i: v for i, v in kwargs.items() if i not in coord_to_drop})
         # update based on keywords
         for item, value in coord_updates.items():
             coord_name, attr = item.split("_")
-            new = list(out[coord_name])
-            new[1] = new[1].update(**{attr: value})
-            out[coord_name] = tuple(new)
+            coord_dims, coord = out[coord_name]
+            out[coord_name] = (coord_dims, coord.update(**{attr: value}))
 
         dims = tuple(x for x in dims if x not in coord_to_drop)
-        return get_coord_manager(out, dims=dims)
+        # Cast because the factory normalizes the coord mapping in ways the
+        # class constructor does not, so this cannot go through
+        # self.__class__ the way drop_coords does. Exact for CoordManager
+        # itself; a subclass would already lose its type here, which is a
+        # limitation of the factory rather than of this annotation.
+        return cast("Self", get_coord_manager(out, dims=dims))
 
     # we need this here to maintain backwards compatibility
     update_coords = update
-
-    def update_from_attrs(
-        self, attrs: Mapping | dc.PatchAttrs
-    ) -> tuple[Self, dc.PatchAttrs]:
-        """
-        Update coordinates from attrs.
-
-        This will also return a PatchAttrs which conforms to coords.
-
-        Parameters
-        ----------
-        attrs
-            The attribute source, either PatchAttrs instance or mapping.
-        """
-        coord_info, attr_info = separate_coord_info(attrs, dims=self.dims)
-        out = dict(self.coord_map)
-        for name in set(coord_info) & set(out):
-            maybe_updates = coord_info[name]
-            coord = self.coord_map[name]
-            # convert values to dict to determine which should be updated.
-            model_contents = coord.to_summary().model_dump(exclude_defaults=True)
-            # see what has changed.
-            diff = {
-                i: v for i, v in maybe_updates.items() if v != model_contents.get(i)
-            }
-            out[name] = coord.update(**diff)
-        coords = self.new(coord_map=out)
-        # anything not used in coord_info should be put back.
-        # for example, data_units might get put in its own coord called data.
-        for unused_dim in set(coord_info) - set(coords.dims):
-            for key, val in coord_info[unused_dim].items():
-                attr_info[f"{unused_dim}_{key}"] = val
-        attr_info["coords"] = coords.to_summary_dict()
-        attr_info["dims"] = coords.dims
-        attrs = dc.PatchAttrs.from_dict(attr_info)
-        return coords, attrs
 
     def sort(
         self, *coords, array: MaybeArray = None, reverse: bool = False
@@ -414,6 +403,9 @@ class CoordManager(DascoreBaseModel):
         cmap = self.coord_map
         assert set(coords).issubset(set(cmap))
         coords2sort = {x: cmap[x] for x in coords if not getattr(cmap[x], attr)}
+        # Nothing to sort; return self to avoid rebuilding an identical manager.
+        if not coords2sort:
+            return self, array
         new_coords, indexers = _get_dimensional_sorts(coords2sort)
         if array is not None:
             for index in indexers:
@@ -443,14 +435,21 @@ class CoordManager(DascoreBaseModel):
         coords = self.dims if len(coords) == 0 else coords
         cm, array = self.sort(*coords, array=array, reverse=reverse)
         # now the arrays are sorted it should be correct to snap dimensions.
-        cmap = dict(cm.coord_map)
+        # Only collect coords whose snap actually changes them so an already
+        # even manager is returned unchanged (snap returns self when even).
+        updates = {}
         for coord_name in coords:
-            cmap[coord_name] = cmap[coord_name].snap()
-        out = cm.new(coord_map=cmap)
+            current = cm.coord_map[coord_name]
+            snapped = current.snap()
+            if snapped is not current:
+                updates[coord_name] = snapped
+        if not updates:
+            return cm, array
+        out = cm.new(coord_map={**cm.coord_map, **updates})
         assert out.shape == self.shape
         return out, array
 
-    def new(self, dims=None, coord_map=None, dim_map=None) -> Self:
+    def new(self, dims=None, coord_map=None, dim_map=None, **kwargs) -> Self:
         """
         Return a new coordmanager with specified attributes replaced.
 
@@ -467,12 +466,13 @@ class CoordManager(DascoreBaseModel):
             dims=dims if dims is not None else self.dims,
             coord_map=coord_map if coord_map is not None else self.coord_map,
             dim_map=dim_map if dim_map is not None else self.dim_map,
+            **kwargs,
         )
         return out
 
     def drop_coords(
         self,
-        *coords: str | Sequence[str],
+        *coords: str | Iterable[str],
         array: MaybeArray = None,
     ) -> tuple[Self, MaybeArray]:
         """
@@ -484,10 +484,18 @@ class CoordManager(DascoreBaseModel):
         Parameters
         ----------
         *coords
-            The name of the coordinate or dimension.
+            The name of the coordinate or dimension, or a sequence of them.
+        array
+            An array to trim along with the coordinates. Axes belonging to
+            dropped coordinates are emptied (length zero) rather than
+            removed, so the array keeps its dimensionality. If None, the
+            returned array is also None.
         """
         dim_drop_list = []
-        coords_to_drop = {x for x in iterate(coords)}
+        # iterate is applied per argument; the varargs tuple is already
+        # iterable, so flattening it as a whole would leave any sequence
+        # passed in as a single unhashable element.
+        coords_to_drop = {x for coord in coords for x in iterate(coord)}
         # If there are either no coords to drop or this cm doesn't have them.
         if not coords_to_drop or not (set(self.coord_map) & coords_to_drop):
             return self, array
@@ -526,14 +534,14 @@ class CoordManager(DascoreBaseModel):
         new = {x: (None, self.coord_map[x]) for x in coord}
         return self.drop_coords(*coord)[0].update(**new)
 
-    def drop_disassociated_coords(self) -> Self:
+    def drop_disassociated_coords(self) -> tuple[Self, MaybeArray]:
         """Drop all coordinates not associated with a dimension."""
         cmap = self.coord_map
         dim_map = self.dim_map
         no_dim_coords = [x for x in cmap if dim_map[x] == ()]
         return self.drop_coords(*no_dim_coords)
 
-    def drop_private_coords(self, array=None) -> Self:
+    def drop_private_coords(self, array=None) -> tuple[Self, MaybeArray]:
         """Drop all coordinates whose name begin with an underscore."""
         cmap = self.coord_map
         private = tuple(x for x in cmap.keys() if x.startswith("_"))
@@ -554,10 +562,7 @@ class CoordManager(DascoreBaseModel):
         dim_map = dict(self.dim_map)
         for old_dim, new_dim in kwargs.items():
             if new_dim not in coord_map or old_dim not in dims:
-                msg = (
-                    f"{old_dim} is not a dimension or {new_dim} is not a "
-                    f"coordinate."
-                )
+                msg = f"{old_dim} is not a dimension or {new_dim} is not a coordinate."
                 raise CoordError(msg)
             # ensure coords have the same shape
             old_coord, new_coord = coord_map[old_dim], coord_map[new_dim]
@@ -638,7 +643,6 @@ class CoordManager(DascoreBaseModel):
             array = _apply_union_indexers(indexers, array)
         return self, array
 
-    @compose_docstring(select_desc=select_values_description)
     def order(
         self, array: MaybeArray = None, relative=False, samples=False, **kwargs
     ) -> tuple[Self, MaybeArray]:
@@ -712,8 +716,9 @@ class CoordManager(DascoreBaseModel):
             else:
                 msg = f"Cannot broadcast non-empty coord {name} to shape {new}."
                 raise PatchBroadcastError(msg)
-        out = array if array is None else np.broadcast_to(array, target_shape)
-        return self.update_coords(**new_coords), out
+        if array is not None:
+            array = array_namespace(array).broadcast_to(array, target_shape)
+        return self.update_coords(**new_coords), array
 
     def _check_multiple_relative(self, kwargs):
         """
@@ -722,11 +727,30 @@ class CoordManager(DascoreBaseModel):
         """
         used_dims = [self.dim_map[x] for x in kwargs if x in self.coord_map]
         if len(set(used_dims)) < len(used_dims):
-            msg = f"Cannot use {kwargs} for query; some coords " f"share a dimension."
+            msg = f"Cannot use {kwargs} for query; some coords share a dimension."
             raise CoordError(msg)
 
-    def __rich__(self) -> str:
+    def _repr_section(self, depth: int = 0) -> Section:
+        """
+        The coordinates block: its title, and the table under it.
+
+        The same rows the text renders on their own lines, so a panel
+        draws them in columns without either medium re-deriving what a
+        coordinate says. ``depth`` is how far into a containment tree
+        the block sits, which is nothing today -- it is stated so that
+        every ``_repr_section`` in the package is one protocol, and a
+        container which came to hold coordinates could nest them.
+        """
+        header, table = self._repr_parts()
+        return Section(header, (table,), depth)
+
+    def __rich__(self) -> Text:
         """Rich formatting for the coordinate manager."""
+        header, table = self._repr_parts()
+        return header + render_text(table)
+
+    def _repr_parts(self) -> tuple[Text, Table]:
+        """The block's title, and the rows under it."""
         dc_blue = dascore_styles["dc_blue"]
         header_text = Text("➤ ") + Text("Coordinates", style=dc_blue) + Text(" (")
         lens = {x: self.coord_map[x].shape[0] for x in self.dims}
@@ -738,23 +762,25 @@ class CoordManager(DascoreBaseModel):
                 for x in self.dims
             ]
         )
-        out = [header_text, dim_texts, ")"]
-        # sort coords by dims, coords
         non_dim_coords = sorted(set(self.coord_map) - set(self.dims))
-        names = list(self.dims) + non_dim_coords
+        names = [x for x in list(self.dims) + non_dim_coords if not x.startswith("_")]
+        rows = []
         for name in names:
-            # skip private coords for display
-            if name.startswith("_"):
-                continue
             coord = self.coord_map[name]
-            coord_dims = self.dim_map[name]
             if name in self.dims:
-                base = Text.assemble("\n    *", Text(name, style="bold"), ": ")
+                stated = Text("*") + Text(name, style="bold")
             else:
-                base = Text(f"\n    {name} {coord_dims}: ")
-            text = Text.assemble(base, coord.__rich__())
-            out.append(text)
-        return Text.assemble(*out)
+                stated = Text(f"{name} {self.dim_map[name]}")
+            rows.append(
+                Row(
+                    name=stated,
+                    kind=Text(type(coord).__name__, style=coord._rich_style),
+                    fields=coord._repr_fields(),
+                )
+            )
+        return Text.assemble(header_text, dim_texts, ")"), Table(
+            tuple(rows), numeric=_COORD_NUMERIC
+        )
 
     def get_axis(self: Self, dim: str) -> int:
         """
@@ -772,11 +798,6 @@ class CoordManager(DascoreBaseModel):
         except (ValueError, IndexError):
             msg = f"Patch has no dimension: {dim}. Its dimensions are: {self.dims}"
             raise CoordError(msg)
-
-    def __str__(self):
-        return str(self.__rich__())
-
-    __repr__ = __str__
 
     def equals(self, other) -> bool:
         """Return True if other coordinates are approx equal."""
@@ -813,7 +834,7 @@ class CoordManager(DascoreBaseModel):
 
     @property
     def ndim(self):
-        """Return the number of dimensions in the coordinage manager."""
+        """Return the number of dimensions in the coordinate manager."""
         return len(self.dims)
 
     def validate_data(self, data):
@@ -828,46 +849,61 @@ class CoordManager(DascoreBaseModel):
             raise CoordDataError(msg)
         return data
 
-    def _get_dim_array_dict(
-        self, keep_coord=False
-    ) -> dict[tuple[str], ArrayLike | BaseCoord]:
-        """
-        Get the coord map in the form:
-        {coord_name = ((dims,), array)}.
+    def _get_dim_coord_dict(self) -> dict[str, tuple[tuple[str, ...], BaseCoord]]:
+        """Get the coord map in the form {coord_name: ((dims,), coord)}."""
+        return {
+            name: (self.dim_map[name], coord) for name, coord in self.coord_map.items()
+        }
 
-        if keep_coord, just keep the coordinate as second arg.
+    def _get_dim_array_dict(self) -> dict[str, tuple[tuple[str, ...], ArrayLike]]:
+        """Get the coord map in the form {coord_name: ((dims,), array)}."""
+        return {
+            name: (dims, coord.data)
+            for name, (dims, coord) in self._get_dim_coord_dict().items()
+        }
+
+    def _replace_coords(self, new_coords: dict) -> Self:
         """
-        out = {}
-        for name, coord in self.coord_map.items():
-            dims = self.dim_map[name]
-            out[name] = (dims, coord if keep_coord else coord.data)
-        return out
+        Return a manager with these coords replaced, or self if none are.
+
+        Callers pass only the coords which actually changed, so an empty
+        mapping means nothing changed.
+        """
+        if not new_coords:
+            return self
+        return self.new(coord_map={**self.coord_map, **new_coords})
 
     def set_units(self, **kwargs):
         """Set the units of the coordinate manager."""
-        new_coords = dict(self.coord_map)
+        cmap = self.coord_map
+        new = {}
         for name, units in kwargs.items():
-            new_coords[name] = new_coords[name].set_units(units)
-        return self.new(coord_map=new_coords)
+            if (coord := cmap[name].set_units(units)) is not cmap[name]:
+                new[name] = coord
+        return self._replace_coords(new)
 
     def convert_units(self, **kwargs):
         """
         Convert units in coords according to kwargs. Will raise if incompatible
         Coordinates are specified.
         """
-        new_coords = dict(self.coord_map)
+        cmap = self.coord_map
+        new = {}
         for name, units in kwargs.items():
-            new_coords[name] = new_coords[name].convert_units(units)
-        return self.new(coord_map=new_coords)
+            if (coord := cmap[name].convert_units(units)) is not cmap[name]:
+                new[name] = coord
+        return self._replace_coords(new)
 
     def simplify_units(self):
         """Simplify all units in the coordinates."""
-        new_coords = dict(self.coord_map)
-        for name, coord in new_coords.items():
-            new_coords[name] = coord.simplify_units()
-        return self.new(coord_map=new_coords)
+        cmap = self.coord_map
+        new = {}
+        for name, old_coord in cmap.items():
+            if (coord := old_coord.simplify_units()) is not old_coord:
+                new[name] = coord
+        return self._replace_coords(new)
 
-    def transpose(self, *dims: str | type(Ellipsis)) -> Self:
+    def transpose(self, *dims: str | EllipsisType) -> Self:
         """Transpose the coordinates."""
 
         def _get_transpose_dims(new, old):
@@ -894,6 +930,9 @@ class CoordManager(DascoreBaseModel):
             return tuple(new_list)
 
         dims = _get_transpose_dims(new=dims or self.dims[::-1], old=self.dims)
+        # No-op transpose; return self rather than rebuilding an equal manager.
+        if dims == self.dims:
+            return self
         return self.new(dims=dims)
 
     def rename_coord(self, **kwargs) -> Self:
@@ -962,6 +1001,9 @@ class CoordManager(DascoreBaseModel):
                 msg = f"cant squeeze dim {name} because it has non-zero length"
                 raise CoordError(msg)
             to_drop.append(name)
+        # Nothing to squeeze; return self rather than rebuilding an equal manager.
+        if not to_drop:
+            return self
         return self.drop_coords(*to_drop)[0]
 
     def decimate(self, **kwargs) -> tuple[Self, tuple[slice, ...]]:
@@ -975,14 +1017,21 @@ class CoordManager(DascoreBaseModel):
 
         Notes
         -----
-        Removes any coordinate which depended on the decimated dimension.
+        Coordinates which depend on the decimated dimension are subsampled
+        along with it, since taking every nth value of the dimension is
+        taking every nth value of everything indexed by it.
         """
         assert len(kwargs) == 1
         (dim, value) = next(iter(kwargs.items()))
         assert dim in self.dims
         dim_slice = slice(None, None, int(value))
-        new_array = self.coord_map[dim][dim_slice]
-        new = self.update(**{dim: new_array})
+        updates = {}
+        for name, coord_dims in self.dim_map.items():
+            if dim not in coord_dims:
+                continue
+            coord = self.coord_map[name].index(dim_slice, axis=coord_dims.index(dim))
+            updates[name] = (coord_dims, coord)
+        new = self.update(**updates)
         slices = tuple(
             slice(None, None) if d != dim else slice(None, None, value)
             for d in new.dims
@@ -991,9 +1040,9 @@ class CoordManager(DascoreBaseModel):
 
     @property
     @cached_method
-    def coord_shapes(self) -> dict[str, tuple[int, ...]]:
-        """Get a dict of {coord_name: shape}."""
-        return {i: v.shape for i, v in self.coord_map.items()}
+    def coord_shapes(self) -> FrozenDict[str, tuple[int, ...]]:
+        """Get an immutable mapping of {coord_name: shape}."""
+        return FrozenDict({i: v.shape for i, v in self.coord_map.items()})
 
     @property
     @cached_method
@@ -1021,7 +1070,7 @@ class CoordManager(DascoreBaseModel):
         dim_map = self.dim_map
         return tuple((name, *dim_map[name]) for name in self.coord_map)
 
-    def _get_indexer(self, ind: int | None = None, value=None):
+    def _get_indexer(self, ind: int, value=None):
         """
         Get an indexer for the appropriate data shape.
 
@@ -1029,7 +1078,7 @@ class CoordManager(DascoreBaseModel):
 
         ind is a list of indices to substitute in values.
         """
-        out = [slice(None, None) for _ in self.shape]
+        out: list[Any] = [slice(None, None) for _ in self.shape]
         out[ind] = value
         return tuple(out)
 
@@ -1037,13 +1086,36 @@ class CoordManager(DascoreBaseModel):
         """Return the keys (coordinates) in the coord manager."""
         return self.coord_map.keys()
 
-    def to_summary_dict(self) -> dict[str, CoordSummary | tuple[str, ...]]:
+    def to_summary_dict(self) -> dict[str, CoordSummary]:
         """Convert the contents of the coordinate manager to a summary dict."""
         dim_map = self.dim_map
         out = {}
         for name, coord in self.coord_map.items():
             out[name] = coord.to_summary(dims=dim_map[name])
         return out
+
+    def _get_dim_summary(self) -> dict:
+        """
+        Get a flat dict with the dims string and each dimension's range.
+
+        The output has {dim}_min, {dim}_max and {dim}_step keys for each
+        dimension; much cheaper than dumping the full summary models.
+        """
+        info = {"dims": ",".join(self.dims)}
+        for dim in self.dims:
+            coord = self.coord_map[dim]
+            start, step = coord.min(), coord.step
+            if step is None:
+                # Use a typed null, as PatchAttrs.flat_dump does, so column
+                # comparisons on the resulting dataframe behave.
+                if isinstance(start, np.datetime64 | np.timedelta64):
+                    step = np.timedelta64("NaT", "ns")
+                elif isinstance(start, float | np.floating):
+                    step = np.nan
+            info[f"{dim}_min"] = start
+            info[f"{dim}_max"] = coord.max()
+            info[f"{dim}_step"] = step
+        return info
 
     def get_coord(self, coord_name: str) -> BaseCoord:
         """
@@ -1134,9 +1206,8 @@ class CoordManager(DascoreBaseModel):
 
 
 def get_coord_manager(
-    coords: Mapping[str, BaseCoord | np.ndarray] | CoordManager | None = None,
-    dims: tuple[str, ...] | None = None,
-    attrs: dc.PatchAttrs | dict[str, Any] | None = None,
+    coords: CoordManagerInput | CoordManager | None = None,
+    dims: Sequence[str] | None = None,
     shape=None,
 ) -> CoordManager:
     """
@@ -1151,11 +1222,6 @@ def get_coord_manager(
         [`CoordManager`](`dascore.core.CoordManager`).
     dims
         Tuple specify dimension names
-    attrs
-        Attributes which can be used to create coordinates.
-        Cannot be used with coords argument.
-        If you want to update [`CoordManager`](`dascore.core.CoordManager`)
-        use [`update_from_attrs`](`dascore.core.CoordManager.update_from_attrs`).
     shape
         The data array shape which will be managed by coord manager. This
         allows non-coordinate dimensions to be initiated.
@@ -1181,17 +1247,10 @@ def get_coord_manager(
     >>> quality = np.random.random((len(distance), len(time)))
     >>> coords['quality'] = (("distance", "time"), quality)
     >>> cm = get_coord_manager(coords=coords, dims=dims)
-    >>> # Get coordinate manager from typical patch attribute dict
-    >>> attrs = dc.get_example_patch().attrs
-    >>> cm = get_coord_manager(attrs=attrs)
     """
-    if coords is not None and attrs is not None:
-        msg = (
-            "Cannot use both attrs and coords in get_coord_manager. "
-            "Perhaps you want CoordManager.update_from_attrs?"
-        )
-        raise ParameterError(msg)
     # return coords if we already have a coord manager.
+    # A list of dims would never compare equal to a CoordManager's tuple.
+    dims = None if dims is None else tuple(dims)
     if isinstance(coords, CoordManager):
         # maybe try to rename dims.
         if dims is not None and dims != coords.dims:
@@ -1203,8 +1262,6 @@ def get_coord_manager(
     if dims is None:
         if isinstance(coords, Mapping) and all(isinstance(x, str) for x in coords):
             dims = tuple(i for i, v in coords.items() if not isinstance(v, tuple))
-        elif (attrs is not None and "dims" in attrs) or hasattr(attrs, "dims"):
-            dims = tuple(attrs["dims"].split(","))
         else:
             dims = ()
     coords = {} if coords is None else coords
@@ -1214,14 +1271,32 @@ def get_coord_manager(
         for name in missing_dims:
             coord_map[name] = get_coord(shape=shape[dims.index(name)])
             dim_map[name] = (name,)
-    if attrs:
-        coord_updates, _ = separate_coord_info(attrs, dims)
-        updateable_coords = set(coord_updates) - set(coord_map)
-        for name in updateable_coords:
-            coord_map[name] = get_coord(**coord_updates[name])
-            dim_map[name] = (name,)
     out = CoordManager(coord_map=coord_map, dim_map=dim_map, dims=dims)
     return out
+
+
+def _canonicalization_moved_values(original, out) -> bool:
+    """
+    Return True if canonicalizing `original` to `out` changed any value.
+
+    Collapsing an array coord to a CoordRange is meant to be a change of
+    representation, but the evenness test behind it is tolerant, so a
+    coordinate carrying small real irregularity (measured positions, timing
+    jitter) would be replaced by an idealized ramp. Only the exact case is a
+    canonicalization; the rest is data loss.
+    """
+    # Only collapsing to a range can move values, and only a coord we were
+    # handed can be kept, so everything else skips the comparison. A CoordRange
+    # cannot reach here; the caller returns it before this is consulted.
+    if original is None or not isinstance(out, CoordRange):
+        return False
+    # A CoordPartial is a placeholder whose values are all NaN, so it has
+    # nothing to lose; canonicalizing it is the whole point.
+    if isinstance(original, CoordPartial):
+        return False
+    # Canonicalization re-labels a coordinate, it never resamples one.
+    assert original.shape == out.shape
+    return not np.array_equal(original.values, out.values)
 
 
 def _get_coord_dim_map(coords, dims):
@@ -1229,12 +1304,24 @@ def _get_coord_dim_map(coords, dims):
 
     def _get_coord(coord):
         """Get a coordinate from various inputs."""
+        # A CoordRange is already canonical (it is the evenly-sampled
+        # representation), so re-parsing it via model_dump -> get_coord is pure
+        # overhead; return it directly. Other coord types are NOT short-circuited:
+        # array coords (CoordArray/CoordMonotonicArray) can be left non-canonical
+        # by slicing (e.g. an evenly spaced subset that should collapse to a
+        # CoordRange), and a fully-specified CoordPartial should canonicalize to a
+        # CoordRange -- get_coord performs that inference.
+        if isinstance(coord, CoordRange):
+            return coord
+        original = coord if isinstance(coord, BaseCoord) else None
         if hasattr(coord, "model_dump"):
             coord = coord.model_dump(exclude_defaults=True)
         if isinstance(coord, Mapping):  # input is a dict
             out = get_coord(**coord)
         else:
             out = get_coord(data=coord)
+        if _canonicalization_moved_values(original, out):
+            return original
         return out
 
     def _coord_from_simple(name, coord):

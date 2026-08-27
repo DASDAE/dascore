@@ -1,0 +1,31 @@
+# Two uploads reach codecov per run: one `unittests` report from the
+# coverage_gate job (every test cell combined) and one `network` report from
+# the ubuntu network job.
+codecov:
+  notify:
+    after_n_builds: 2
+
+comment:
+  after_n_builds: 2
+
+# Require 100% coverage on the unittests flag.
+coverage:
+  status:
+    project:
+      default:
+        target: 100%
+        threshold: 0%
+        flags:
+          - unittests
+    patch:
+      default:
+        target: 100%
+        threshold: 0%
+        flags:
+          - unittests
+
+flags:
+  unittests:
+    carryforward: false
+  network:
+    carryforward: true

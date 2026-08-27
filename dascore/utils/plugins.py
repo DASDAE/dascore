@@ -7,6 +7,9 @@ import warnings
 from importlib.metadata import entry_points
 from typing import Any
 
+# The entry-point group every FiberIO plugin registers under.
+FIBER_IO_GROUP = "dascore.fiber_io"
+
 
 @functools.cache
 def get_entry_point_loaders(entry_point_group: str) -> dict[str, Any]:

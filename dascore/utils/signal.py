@@ -7,24 +7,24 @@ from __future__ import annotations
 from functools import lru_cache
 
 import numpy as np
-from scipy.signal import windows
 
 from dascore.exceptions import ParameterError
+from dascore.utils.imports import lazy_import
 
 WINDOW_FUNCTIONS = dict(
-    barthann=windows.barthann,
-    bartlett=windows.bartlett,
-    blackman=windows.blackman,
-    blackmanharris=windows.blackmanharris,
-    bohman=windows.bohman,
-    hamming=windows.hamming,
-    hann=windows.hann,
-    cos=windows.hann,
-    nuttall=windows.nuttall,
-    parzen=windows.parzen,
-    triang=windows.triang,
-    ramp=windows.triang,
-    boxcar=windows.boxcar,
+    barthann=lazy_import("scipy.signal.windows", "barthann"),
+    bartlett=lazy_import("scipy.signal.windows", "bartlett"),
+    blackman=lazy_import("scipy.signal.windows", "blackman"),
+    blackmanharris=lazy_import("scipy.signal.windows", "blackmanharris"),
+    bohman=lazy_import("scipy.signal.windows", "bohman"),
+    hamming=lazy_import("scipy.signal.windows", "hamming"),
+    hann=lazy_import("scipy.signal.windows", "hann"),
+    cos=lazy_import("scipy.signal.windows", "hann"),
+    nuttall=lazy_import("scipy.signal.windows", "nuttall"),
+    parzen=lazy_import("scipy.signal.windows", "parzen"),
+    triang=lazy_import("scipy.signal.windows", "triang"),
+    ramp=lazy_import("scipy.signal.windows", "triang"),
+    boxcar=lazy_import("scipy.signal.windows", "boxcar"),
 )
 
 

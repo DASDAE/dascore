@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import warnings
 from collections.abc import Iterator
 from dataclasses import dataclass
+from uuid import uuid4
 
 import h5py
 import numpy as np
@@ -11,15 +13,20 @@ import numpy as np
 import dascore as dc
 from dascore.constants import VALID_DATA_TYPES
 from dascore.core.coords import get_coord
+from dascore.exceptions import InvalidSpoolError, PatchError
+from dascore.io.utils import convert_attr_units, get_exact_coord
+from dascore.models import OptionalFiniteFloat, UTF8Str
+from dascore.units import get_quantity_str
+from dascore.utils.hdf5 import encode_h5_strings
+from dascore.utils.io import _normalize_source_patch_keys
 from dascore.utils.misc import iterate, maybe_get_items, register_func, unbyte
-from dascore.utils.models import UnitQuantity, UTF8Str
 
 # --- Getting format/version
 
 _EXPECTED_ATTRS = (
-    "PulseRate",
-    "PulseWidth",
     "NumberOfLoci",
+    "SpatialSamplingInterval",
+    "StartLocusIndex",
     "schemaVersion",
     "uuid",
 )
@@ -37,8 +44,14 @@ _ROOT_ATTRS = {
     "GaugeLengthUnit": "gauge_length_units",
     "GaugeLengthUnits": "gauge_length_units",
     "GaugeLength.uom": "gauge_length_units",
+    "AcquisitionId": "acquisition_id",
+    "FacilityId": "facility_id",
+    "ServiceCompanyName": "service_company_name",
     "schemaVersion": "schema_version",
 }
+
+# The units patch attrs use for the measures ProdML tags with a uom.
+_MEASURE_UNITS = {"pulse_width": "s", "pulse_rate": "Hz", "gauge_length": "m"}
 
 _FBE_NODE_ATTRS = {
     "StartFrequency": "start_frequency",
@@ -64,10 +77,8 @@ _NODE_DATA_PROCESSORS = {}
 class ProdMLRawPatchAttrs(dc.PatchAttrs):
     """Patch attrs for raw data contained in ProdML."""
 
-    pulse_width: float = np.nan
-    pulse_width_units: UnitQuantity | None = None
-    gauge_length: float = np.nan
-    gauge_length_units: UnitQuantity | None = None
+    pulse_width: OptionalFiniteFloat = None
+    gauge_length: OptionalFiniteFloat = None
     schema_version: UTF8Str = ""
 
 
@@ -75,13 +86,13 @@ class ProdMLFbePatchAttrs(ProdMLRawPatchAttrs):
     """Patch attrs for fbe (frequency band extracted) data in Prodml."""
 
     raw_reference: UTF8Str = ""
-    transform_size: float = np.nan
+    transform_size: OptionalFiniteFloat = None
     transform_type: UTF8Str = ""
     window_size: int | None = None
     window_function: UTF8Str = ""
     window_overlap: int | None = None
-    start_frequency: float = 0
-    end_frequency: float = np.inf
+    start_frequency: OptionalFiniteFloat = 0
+    end_frequency: OptionalFiniteFloat = None
 
 
 @dataclass
@@ -103,9 +114,24 @@ def _get_prodml_version_str(hdf_fi) -> str:
         return ""
     attrs = acquisition.attrs
     is_prodml = set(_EXPECTED_ATTRS).issubset(set(attrs))
+    if not is_prodml:
+        return ""
     # in some prodml schemaVersion is str, in other float; this handles both.
     version_str = str(unbyte(attrs["schemaVersion"]))
-    return version_str if is_prodml else ""
+    return version_str
+
+
+def _get_root_attrs(attrs):
+    """Return normalized attributes from an Acquisition group."""
+    out = maybe_get_items(attrs, _ROOT_ATTRS)
+    if "facility_id" in out:
+        values = tuple(unbyte(x) for x in np.atleast_1d(out["facility_id"]))
+        out["facility_id"] = values[0] if len(values) == 1 else values
+    # ProdML's schema defaults match the units attrs use, so a measure
+    # whose uom is missing or unreadable is taken as already canonical.
+    for name, target in _MEASURE_UNITS.items():
+        convert_attr_units(out, name, target)
+    return out
 
 
 def _get_distance_coord(acq):
@@ -122,12 +148,11 @@ def _get_distance_coord(acq):
     step = float(attrs["SpatialSamplingInterval"])
     num_dist_channels = int(attrs["NumberOfLoci"])
     start = int(attrs["StartLocusIndex"]) * step
-    stop = start + num_dist_channels * step
     units = get_distance_units(attrs)
-    return get_coord(start=start, stop=stop, units=units, step=step)
+    return get_coord(start=start, step=step, shape=(num_dist_channels,), units=units)
 
 
-def _get_time_coord(node):
+def _get_time_coord(node, snap=True):
     """Get the time information from a Raw node."""
     time_names = [x for x in node.keys() if x.endswith("DataTime")]
     assert len(time_names) == 1, f"Found bad time information in prodml {node=}"
@@ -135,6 +160,9 @@ def _get_time_coord(node):
     time_array = node[time_name]
     array_len = len(time_array)
     assert array_len > 0, "Missing time array in ProdML file."
+    if not snap:
+        values = time_array[:].astype("datetime64[us]")
+        return get_exact_coord(values, units="s")
     time_attrs = time_array.attrs
     start_str = unbyte(time_attrs["PartStartTime"]).split("+")[0]
     start = dc.to_datetime64(start_str.rstrip("Z"))
@@ -211,18 +239,258 @@ def _get_data_unit_and_type(node):
         "FbeDataUnit": "data_units",
     }
     out = maybe_get_items(attrs, attr_map)
+    if str(out.get("data_units", "")).upper() == "UNKNOWN":
+        out.pop("data_units")
     if (data_type := out.get("data_type")) is not None:
         clean = data_type.lower().replace(" ", "_")
         out["data_type"] = clean if clean in VALID_DATA_TYPES else ""
     return out
 
 
+# --- Writing ProdML files.
+
+
+def _get_single_patch(spool):
+    """Return the only Patch after validating its writable structure."""
+    patches = [spool] if isinstance(spool, dc.Patch) else list(spool)
+    if len(patches) != 1 or not isinstance(patches[0], dc.Patch):
+        msg = "ProdML writing requires exactly one Patch."
+        raise InvalidSpoolError(msg)
+    patch = patches[0]
+    if patch.data.ndim != 2 or set(patch.dims) != {"time", "distance"}:
+        msg = "ProdML writing requires a 2D Patch with time and distance dimensions."
+        raise PatchError(msg)
+    data = np.asarray(patch.data)
+    valid_dtype = data.dtype.kind in "iuf" and data.dtype.itemsize in {1, 2, 4, 8}
+    valid_dtype &= data.dtype.kind != "f" or data.dtype.itemsize in {4, 8}
+    if not data.size or not valid_dtype:
+        msg = "ProdML writing supports nonempty standard integer or float dtypes."
+        raise PatchError(msg)
+    for name in ("time", "distance"):
+        coord = patch.get_coord(name, require_sorted=True, require_evenly_sampled=True)
+        if not coord.sorted:
+            raise PatchError(f"ProdML {name} coordinates must be increasing.")
+    return patch
+
+
+def _round_times_to_microseconds(coord):
+    """Round absolute timestamps to nearest microsecond using integer math."""
+    values = np.asarray(coord.values)
+    if not np.issubdtype(values.dtype, np.datetime64) or len(values) < 2:
+        msg = "ProdML writing requires at least two absolute time samples."
+        raise PatchError(msg)
+    # A NaT could not survive _get_single_patch's require_evenly_sampled check
+    # (uneven spacing), so it never reaches here and needs no explicit guard.
+    microsecond_values = values.astype("datetime64[us]")
+    if np.array_equal(microsecond_values.astype(values.dtype), values):
+        microseconds = microsecond_values.astype(np.int64)
+        remainder = np.zeros_like(microseconds)
+    else:
+        nanosecond_values = values.astype("datetime64[ns]")
+        if not np.array_equal(nanosecond_values.astype(values.dtype), values):
+            msg = (
+                "ProdML time coordinates must fit the microsecond range or have "
+                "nanosecond precision."
+            )
+            raise PatchError(msg)
+        nanoseconds = nanosecond_values.astype(np.int64)
+        quotient, remainder = np.divmod(nanoseconds, 1_000)
+        increment = np.where(nanoseconds >= 0, remainder >= 500, remainder > 500)
+        microseconds = quotient + increment
+    diffs = np.diff(microseconds)
+    if np.any(diffs <= 0) or not np.all(diffs == diffs[0]):
+        msg = (
+            "ProdML time coordinates must remain increasing and evenly sampled "
+            "after microsecond rounding."
+        )
+        raise PatchError(msg)
+    if np.any(remainder):
+        msg = "ProdML timestamps were rounded to microseconds; precision was lost."
+        warnings.warn(msg, UserWarning, stacklevel=3)
+    return microseconds.astype(np.int64), int(diffs[0])
+
+
+def _get_distance_info(coord):
+    """Return metre sampling values after checking locus-grid alignment."""
+    coord = coord.convert_units("m")
+    start, step = float(coord.min()), float(coord.step)
+    start_locus = round(start / step)
+    if not np.isclose(start, start_locus * step, rtol=0, atol=1e-9):
+        msg = "ProdML distance start must align with its sampling grid."
+        raise PatchError(msg)
+    return step, start_locus
+
+
+def _get_measure(attrs, name):
+    """
+    Return a usable positive measure, or None.
+
+    The value is expected in the units the attr contract states. A patch
+    written before those units were fixed still carries the companion attr
+    naming its own, so it is honored rather than being stamped with a unit
+    the number is not in.
+    """
+    values = {name: attrs.get(name), f"{name}_units": attrs.get(f"{name}_units")}
+    convert_attr_units(values, name, _MEASURE_UNITS[name])
+    measure = values.get(name)
+    if measure is None:
+        return None
+    try:
+        value = float(measure)
+    except (TypeError, ValueError):
+        return None
+    if not np.isfinite(value) or value <= 0:
+        return None
+    return value
+
+
+def _get_write_metadata(attrs):
+    """Return normalized and validated metadata strings for writing."""
+    out = {
+        "AcquisitionId": str(attrs.get("acquisition_id") or uuid4()),
+        "FacilityId": attrs.get("facility_id") or "UNKNOWN",
+        "ServiceCompanyName": attrs.get("service_company_name") or "UNKNOWN",
+        "RawDataUnit": get_quantity_str(attrs.data_units) or "UNKNOWN",
+    }
+    for name in ("FacilityId", "ServiceCompanyName", "RawDataUnit"):
+        value = out[name]
+        if not isinstance(value, str) or not 0 < len(value.encode("utf-8")) <= 64:
+            msg = f"ProdML {name} must contain 1 to 64 UTF-8 bytes (String64)."
+            raise PatchError(msg)
+    return out
+
+
+def _get_acquisition_attrs(
+    attrs, strings, start_time, output_rate, distance_step, start_locus, num_loci
+):
+    """Return attributes for the Acquisition group."""
+    out = {
+        "AcquisitionId": encode_h5_strings(strings["AcquisitionId"])[0],
+        "FacilityId": encode_h5_strings(strings["FacilityId"]),
+        "MaximumFrequency": output_rate / 2,
+        "MaximumFrequency.uom": encode_h5_strings("Hz")[0],
+        "MeasurementStartTime": start_time,
+        "MinimumFrequency": 0.0,
+        "MinimumFrequency.uom": encode_h5_strings("Hz")[0],
+        "NumberOfLoci": np.int64(num_loci),
+        "ServiceCompanyName": encode_h5_strings(strings["ServiceCompanyName"])[0],
+        "SpatialSamplingInterval": distance_step,
+        "SpatialSamplingInterval.uom": encode_h5_strings("m")[0],
+        "StartLocusIndex": np.int64(start_locus),
+        "TriggeredMeasurement": False,
+        "schemaVersion": encode_h5_strings("2.1")[0],
+        "uuid": encode_h5_strings(str(uuid4()))[0],
+    }
+    for name, hdf_name in (
+        ("pulse_rate", "PulseRate"),
+        ("pulse_width", "PulseWidth"),
+        ("gauge_length", "GaugeLength"),
+    ):
+        if (measure := _get_measure(attrs, name)) is not None:
+            out[hdf_name] = measure
+            out[f"{hdf_name}.uom"] = encode_h5_strings(_MEASURE_UNITS[name])[0]
+    return out
+
+
+def _get_array_attrs(
+    patch, strings, times, output_rate, start_locus, start_time, end_time
+):
+    """Return attributes for the raw data and time arrays."""
+    num_loci = len(patch.get_coord("distance"))
+    raw_attrs = {
+        "NumberOfLoci": np.int64(num_loci),
+        "OutputDataRate": output_rate,
+        "OutputDataRate.uom": encode_h5_strings("Hz")[0],
+        "RawDataUnit": encode_h5_strings(strings["RawDataUnit"])[0],
+        "StartLocusIndex": np.int64(start_locus),
+        "uuid": encode_h5_strings(str(uuid4()))[0],
+    }
+    if patch.attrs.data_type:
+        raw_attrs["RawDescription"] = encode_h5_strings(patch.attrs.data_type)[0]
+    data_attrs = {
+        "Count": np.int64(patch.data.size),
+        "Dimensions": encode_h5_strings(
+            ["locus" if dim == "distance" else dim for dim in patch.dims]
+        ),
+        "PartEndTime": end_time,
+        "PartStartTime": start_time,
+        "StartIndex": np.int64(0),
+    }
+    time_attrs = {
+        "Count": np.int64(len(times)),
+        "EndTime": end_time,
+        "PartEndTime": end_time,
+        "PartStartTime": start_time,
+        "StartIndex": np.int64(0),
+        "StartTime": start_time,
+        "Uom": encode_h5_strings("us")[0],
+    }
+    return raw_attrs, data_attrs, time_attrs
+
+
+def _prepare_prodml_write(spool):
+    """Validate input and prepare all values needed to write ProdML."""
+    patch = _get_single_patch(spool)
+    data = np.asarray(patch.data)
+    times, time_step_us = _round_times_to_microseconds(patch.get_coord("time"))
+    distance_step, start_locus = _get_distance_info(patch.get_coord("distance"))
+    strings = _get_write_metadata(patch.attrs)
+    start_time, end_time = (
+        encode_h5_strings(f"{np.datetime64(int(value), 'us')}+00:00")[0]
+        for value in (times[0], times[-1])
+    )
+    output_rate = 1_000_000.0 / time_step_us
+    num_loci = len(patch.get_coord("distance"))
+    acquisition_attrs = _get_acquisition_attrs(
+        patch.attrs,
+        strings,
+        start_time,
+        output_rate,
+        distance_step,
+        start_locus,
+        num_loci,
+    )
+    raw_attrs, data_attrs, time_attrs = _get_array_attrs(
+        patch, strings, times, output_rate, start_locus, start_time, end_time
+    )
+    return (
+        data,
+        times,
+        encode_h5_strings(str(uuid4()))[0],
+        acquisition_attrs,
+        raw_attrs,
+        data_attrs,
+        time_attrs,
+    )
+
+
+def _write_prodml(spool, resource):
+    """Write one raw Patch to a standalone ProdML 2.1 HDF5 file."""
+    prepared = _prepare_prodml_write(spool)
+    data, times, file_uuid, acq_attrs, raw_attrs, data_attrs, time_attrs = prepared
+    h5_file = getattr(resource, "_handle", resource)
+    for key in list(h5_file):
+        del h5_file[key]
+    h5_file.attrs.clear()
+    h5_file.attrs["uuid"] = file_uuid
+    acquisition = h5_file.create_group("Acquisition")
+    acquisition.attrs.update(acq_attrs)
+    raw = acquisition.create_group("Raw[0]")
+    raw.attrs.update(raw_attrs)
+    raw_data = raw.create_dataset("RawData", data=data)
+    raw_data.attrs.update(data_attrs)
+    raw_time = raw.create_dataset("RawDataTime", data=times)
+    raw_time.attrs.update(time_attrs)
+
+
 @register_func(_NODE_ATTRS_PROCESSORS, key="raw")
-def _get_raw_node_attr_coords(node_info, d_coord, base_info):
+def _get_raw_node_attr_coords(node_info, d_coord, base_info, snap=True):
     """Get the raw data information."""
     info = dict(base_info)
-    t_coord = _get_time_coord(node_info.node)
+    t_coord = _get_time_coord(node_info.node, snap=snap)
     info.update(_get_data_unit_and_type(node_info.node))
+    info["dtype"] = str(node_info.node["RawData"].dtype)
+    info["_source_patch_key"] = node_info.name
     coords = dc.get_coord_manager(
         coords={"time": t_coord, "distance": d_coord},
         dims=_get_dims_from_attrs(node_info.node["RawData"].attrs),
@@ -231,11 +499,13 @@ def _get_raw_node_attr_coords(node_info, d_coord, base_info):
 
 
 @register_func(_NODE_ATTRS_PROCESSORS, key="fbe")
-def _get_processed_node_attr_coords(node_info, d_coord, base_info):
+def _get_processed_node_attr_coords(node_info, d_coord, base_info, snap=True):
     """Get information about the processed patches."""
     out = dict(base_info)
-    t_coord = _get_time_coord(node_info.parent_node)
+    t_coord = _get_time_coord(node_info.parent_node, snap=snap)
     out.update(_get_data_unit_and_type(node_info.node))
+    out["dtype"] = str(node_info.node.dtype)
+    out["_source_patch_key"] = node_info.name
     out.update(maybe_get_items(node_info.node.attrs, _FBE_NODE_ATTRS))
     out.update(maybe_get_items(node_info.parent_node.attrs, _FBE_PARENT_ATTRS))
     # For some reason, the distance coords in raw and fbe data are not the
@@ -252,7 +522,7 @@ def _get_processed_node_attr_coords(node_info, d_coord, base_info):
         coords={"time": t_coord, "distance": distance},
         dims=_get_dims_from_attrs(node_info.parent_node.attrs),
     )
-    return ProdMLFbePatchAttrs(**out), coords
+    return ProdMLFbePatchAttrs.from_dict(out), coords
 
 
 @register_func(_NODE_DATA_PROCESSORS, key="raw")
@@ -271,18 +541,20 @@ def _get_fbe_data(node_info):
     return node_info.node
 
 
-def _yield_prodml_attrs_coords(fi, extras=None):
+def _yield_prodml_attrs_coords(
+    fi, extras=None, snap=True
+) -> Iterator[tuple[dc.PatchAttrs, dc.CoordManager, str]]:
     """Scan a prodML file, return metadata."""
     acq = fi["Acquisition"]
     # Get the information common to all from root attributes.
-    base_info = maybe_get_items(acq.attrs, _ROOT_ATTRS)
+    base_info = _get_root_attrs(acq.attrs)
     base_info.update(extras if extras is not None else {})
     d_coord = _get_distance_coord(acq)
     # Iterate the raw and processed data and return results in a list.
     for node_info in _yield_data_nodes(fi):
         func = _NODE_ATTRS_PROCESSORS[node_info.patch_type]
-        attr, coords = func(node_info, d_coord, base_info)
-        yield (attr, coords)
+        attr, coords = func(node_info, d_coord, base_info, snap=snap)
+        yield attr, coords, node_info.name
 
 
 def _get_dims_from_attrs(attrs):
@@ -304,13 +576,16 @@ def _get_dims_from_attrs(attrs):
     return dims
 
 
-def _read_prodml(fi, distance=None, time=None):
+def _read_prodml(fi, distance=None, time=None, source_patch_key=None):
     """Read the prodml values into a patch."""
     out = []
     acq = fi["Acquisition"]
-    base_info = maybe_get_items(acq.attrs, _ROOT_ATTRS)
+    base_info = _get_root_attrs(acq.attrs)
     d_coord = _get_distance_coord(acq)
+    source_patch_keys = _normalize_source_patch_keys(source_patch_key)
     for info in _yield_data_nodes(fi):
+        if source_patch_keys and info.name not in source_patch_keys:
+            continue
         attr_func = _NODE_ATTRS_PROCESSORS[info.patch_type]
         attrs, cm = attr_func(info, d_coord, base_info)
         data = _NODE_DATA_PROCESSORS[info.patch_type](info)

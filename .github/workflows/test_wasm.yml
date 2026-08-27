@@ -1,0 +1,129 @@
+# Build the PyPI wheel and exercise it in a real Pyodide WebAssembly runtime.
+name: TestWasm
+
+permissions:
+  contents: read
+on:
+  push:
+    branches:
+      - master
+      - dev
+      - wasm
+  pull_request:
+    branches:
+      - master
+      - dev
+    paths:
+      - 'dascore/**'
+      - 'tests/**'
+      # The suite now runs the documentation examples, so a change to a qmd
+      # page or to the generator can break this workflow on its own.
+      - 'docs/**'
+      - 'scripts/generate_doc_code_tests.py'
+      - 'scripts/test_wasm.mjs'
+      - 'pyproject.toml'
+      - '.github/workflows/test_wasm.yml'
+      - '.github/actions/**/*.yml'
+      - '.github/scripts/**'
+
+# Supersede the previous run: by pull request, or by branch for pushes.
+concurrency:
+  group: TestWasm-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+# Both jobs must exercise the same Pyodide release so their results are
+# comparable; the npm package and the xbuildenv use matching version numbers.
+env:
+  PYODIDE_VERSION: '314.0.3'
+
+jobs:
+  test_wasm:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          fetch-tags: 'true'
+          fetch-depth: '0'
+          persist-credentials: false
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5.6.0
+        with:
+          python-version: '3.13'
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020  # v4.4.0
+        with:
+          node-version: '24'
+
+      - name: Build universal wheel
+        run: |
+          python -m pip install build
+          python -m build --wheel
+
+      - name: Install Pyodide
+        # The version is pinned through PYODIDE_VERSION above.
+        run: npm install --no-save "pyodide@$PYODIDE_VERSION" # zizmor: ignore[adhoc-packages]
+
+      - name: Test wheel in WebAssembly
+        run: node scripts/test_wasm.mjs dist/*.whl
+
+  # Run the full pytest suite inside a Pyodide virtual environment.
+  # Tests needing threads, subprocesses, or network are deselected since
+  # WebAssembly does not support them.
+  test_wasm_suite:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      # The toolchain that builds the xbuildenv is pinned alongside the runtime
+      # so a new pyodide-build release cannot silently change the environment.
+      PYODIDE_BUILD_VERSION: '0.37.0'
+      # Where the test-data cache is restored; pooch reads files from here.
+      # Must match the path used in .github/actions/prime-test-data-cache.
+      DFS_DATA_DIR: ${{ github.workspace }}/.test_data_cache
+      MPLBACKEND: Agg
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          fetch-tags: 'true'
+          fetch-depth: '0'
+          persist-credentials: false
+
+      # The host interpreter must match the Pyodide interpreter version.
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5.6.0
+        with:
+          python-version: '3.14'
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020  # v4.4.0
+        with:
+          node-version: '24'
+
+      - name: Build universal wheel
+        run: |
+          python -m pip install build
+          python -m build --wheel
+
+      - name: Create Pyodide virtual environment
+        run: |
+          python -m pip install "pyodide-build==$PYODIDE_BUILD_VERSION"
+          pyodide xbuildenv install "$PYODIDE_VERSION"
+          pyodide venv .venv-pyodide
+          # findiff, pyyaml, tabulate and ipython are not dascore requirements,
+          # but the documentation examples import them, so the doc tests below
+          # cannot run without them.
+          .venv-pyodide/bin/pip install dist/*.whl pytest \
+            findiff pyyaml tabulate ipython
+
+      - name: prepare test data cache
+        uses: ./.github/actions/prime-test-data-cache
+
+      # The documentation examples are what a reader actually runs when they
+      # open a tutorial in the browser, so they belong in the wasm suite. The
+      # generated modules land under tests/, so the run below picks them up.
+      - name: generate qmd docs tests
+        run: python scripts/generate_doc_code_tests.py
+
+      - name: Run test suite in WebAssembly
+        run: >
+          .venv-pyodide/bin/python -m pytest tests
+          -m "not network and not concurrency"
+          -p no:cacheprovider --tb=short

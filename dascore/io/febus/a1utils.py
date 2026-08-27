@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections import namedtuple
+from collections.abc import Iterator
 from functools import cache
 
 import numpy as np
@@ -10,6 +11,8 @@ import numpy as np
 import dascore as dc
 from dascore.core import get_coord, get_coord_manager
 from dascore.core.coordmanager import CoordManager
+from dascore.io.utils import drop_blank_attrs
+from dascore.utils.io import _normalize_source_patch_keys
 from dascore.utils.misc import (
     _maybe_unpack,
     broadcast_for_index,
@@ -21,13 +24,13 @@ from dascore.utils.misc import (
 # --- Getting format/version
 
 _FebusSlice = namedtuple(
-    "FebusSlice",
+    "_FebusSlice",
     ["group", "group_name", "source", "source_name", "zone", "zone_name", "data_name"],
 )
 
 
 _FebusTime = namedtuple(
-    "FebusTime",
+    "_FebusTime",
     ["block_time", "time_step", "idx_start", "idx_stop"],
 )
 
@@ -36,7 +39,7 @@ def _get_zone_time(feb):
     """
     Attempt to get time information for the current zone.
 
-    The files are very inconsistent accross versions, so, to try to support
+    The files are very inconsistent across versions, so, to try to support
     as many febus files as possible, this function does a lot of heavy lifting.
 
     Danger: Here be dragons.
@@ -60,13 +63,15 @@ def _get_zone_time(feb):
     zone = feb.zone
     block_time = _get_block_time(feb)
     extents, spacing = zone.attrs["Extent"], zone.attrs["Spacing"]
-    overlap_attr = zone.attrs.get("Overlap", zone.attrs.get("BlockOverlap", 0))
+    # different version use "Overlap" or "BlockOverlap"
+    # if neither exist, default to 100 (according to the FEBUS template)
+    overlap_attr = zone.attrs.get("Overlap", zone.attrs.get("BlockOverlap", 100))
     overlap = np.atleast_1d(_maybe_unpack(overlap_attr))[0]
     shape = feb.zone[feb.data_name].shape
     # We need to determine if this a v1 file (no version in attrs). See # 589
     # and # 587. This could perhaps be made more robust in the future.
     has_version = "Version" in feb.zone.attrs
-    # When the file has a version, the spacing can be trusted, otherise
+    # When the file has a version, the spacing can be trusted, otherwise
     # use spatial sampling.
     if has_version:
         block_pad = 1 + extents[3] - extents[2]
@@ -74,8 +79,18 @@ def _get_zone_time(feb):
     else:
         # In these versions of the files the extents appear to be wrong, but
         # they don't have overlaps so we can just use the shape.
-        dt = 1 / float(_maybe_unpack(zone.attrs["SamplingRate"]))
+
+        # Really early versions (< 2021) seem to have a hardcoded value of
+        # 250000000 stored in zone.attrs["SamplingRate"]
+        # We then use then spacing[1] instead (converted from milli-seconds)
+        fsamp = float(_maybe_unpack(zone.attrs["SamplingRate"]))
+        dt = (
+            1 / fsamp
+            if fsamp < 1e8
+            else float(_maybe_unpack(zone.attrs["Spacing"][1])) / 1_000.0
+        )
         block_pad = shape[1]
+
     # Apparently, if the extents are set to 0 the overlapping edges are still
     # in the file, otherwise they have been removed.
     # This does not, however, mean the block dimension match the actual
@@ -83,7 +98,7 @@ def _get_zone_time(feb):
     assert block_pad > 1
     overlaps_removed = extents[2] != 0
     if overlaps_removed:
-        block_no_pad = int(round(block_time / dt))
+        block_no_pad = round(block_time / dt)
     else:
         block_no_pad = int(round(block_pad / (1 + (overlap / 100)), 0))
     # Perform checks to make sure this is DAS data. If not, you need to use
@@ -118,9 +133,9 @@ def _get_block_time(feb):
     # n for others. The first might imply different times for different
     # zones? We aren't set up to handle that, but we don't know if it can happen
     # so just assert here.
-    assert np.max(time_shape) == np.prod(
-        time_shape
-    ), "Non flat 2d time vector is not supported by DASCore Febus reader."
+    assert np.max(time_shape) == np.prod(time_shape), (
+        "Non flat 2d time vector is not supported by DASCore Febus reader."
+    )
     # Get the average time spacing in each block. These can vary a bit so
     # account for outliers.
     time = np.squeeze(feb.source["time"][:])
@@ -194,15 +209,27 @@ def _get_febus_attrs(feb: _FebusSlice) -> dict:
     zone_attrs = feb.zone.attrs
     attr_mapping = {
         "GaugeLength": "gauge_length",
-        "PulseWidth": "pulse_width",
+        # Febus states the pulse as a length in meters: its own library
+        # declares PulseWidth with unit "m" (febus_optics_lib 1.4.2,
+        # plugins/plugins_das_febus.py). It therefore keeps terra15's name
+        # for the same quantity rather than pulse_width, which the shared
+        # vocabulary defines as a time in seconds.
+        "PulseWidth": "pulse_length",
         "Version": "folog_a1_software_version",
     }
     out = maybe_get_items(zone_attrs, attr_mapping, unpack_names=set(attr_mapping))
     out["group"] = feb.group_name
+    # Hostname states the interrogator host; the top-level group is named
+    # for it but is a container key, which a rewrite can rename. Format
+    # detection already requires Hostname on every Source.
+    out.update(maybe_get_items(feb.source.attrs, {"Hostname": "interrogator.name"}))
+    drop_blank_attrs(out, ("interrogator.name",))
     out["source"] = feb.source_name
     out["zone"] = feb.zone_name
     out["schema_version"] = out.get("folog_a1_software_version", "").split(".")[0]
     out["dims"] = ("time", "distance")
+    out["data_type"] = "strainrate"
+    out["data_units"] = "nanostrain/s"
     return out
 
 
@@ -254,14 +281,12 @@ def _get_distance_coord(feb):
     # Create distance coord
     # Need to account for removing overlap times.
     start = dist_ids[0] * distance_step + distance_origin
-    stop = start + total_distance_inds * distance_step
-    dist_coord = get_coord(
+    return get_coord(
         start=start,
-        stop=stop,
         step=distance_step,
+        shape=(total_distance_inds,),
         units="m",
     )
-    return dist_coord.change_length(total_distance_inds)
 
 
 def _get_febus_coord_manager(feb: _FebusSlice) -> CoordManager:
@@ -274,13 +299,18 @@ def _get_febus_coord_manager(feb: _FebusSlice) -> CoordManager:
     return cm
 
 
-def _yield_attrs_coords(fi) -> tuple[dict, CoordManager]:
+def _yield_attrs_coords(fi) -> Iterator[tuple[dict, CoordManager, _FebusSlice]]:
     """Scan a febus file, return metadata."""
     febuses = _flatten_febus_info(fi)
     for febus in febuses:
         attr = _get_febus_attrs(febus)
         cm = _get_febus_coord_manager(febus)
         yield attr, cm, febus
+
+
+def _get_source_patch_key(feb: _FebusSlice) -> str:
+    """Return a stable patch identifier for Febus multi-patch files."""
+    return f"{feb.group_name}:{feb.source_name}:{feb.zone_name}"
 
 
 def _get_data_new_cm(cm, febus, distance=None, time=None):
@@ -358,12 +388,21 @@ def _get_data_new_cm(cm, febus, distance=None, time=None):
     return data, cm
 
 
-def _read_febus(fi, distance=None, time=None, attr_cls=dc.PatchAttrs):
+def _read_febus(
+    fi, distance=None, time=None, source_patch_key=None, attr_cls=dc.PatchAttrs
+):
     """Read the febus values into a patch."""
     out = []
+    source_patch_keys = _normalize_source_patch_keys(source_patch_key)
     for attr, cm, febus in _yield_attrs_coords(fi):
+        patch_id = _get_source_patch_key(febus)
+        if source_patch_keys and patch_id not in source_patch_keys:
+            continue
         data, new_cm = _get_data_new_cm(cm, febus, distance=distance, time=time)
         if data.size:
-            patch = dc.Patch(data=data, coords=new_cm, attrs=attr_cls(**attr))
+            attr_info = dict(attr)
+            attr_info["_source_patch_key"] = patch_id
+            attrs = attr_cls.from_dict(attr_info)
+            patch = dc.Patch(data=data, coords=new_cm, attrs=attrs)
             out.append(patch)
     return out

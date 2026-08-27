@@ -3,25 +3,24 @@
 from __future__ import annotations
 
 import contextlib
+from typing import Literal
 
 import pandas as pd
 
 import dascore as dc
-from dascore.constants import SpoolType
 from dascore.io import FiberIO
-from dascore.utils.hdf5 import (
-    H5Reader,
-    HDFPatchIndexManager,
-    NodeError,
-    PyTablesReader,
-    PyTablesWriter,
-)
+from dascore.utils.hdf5 import H5Reader, H5Writer
+from dascore.utils.io import _normalize_source_patch_keys
 from dascore.utils.misc import unbyte
 from dascore.utils.patch import get_patch_names
 
 from .utils import (
-    _get_contents_from_patch_groups,
+    _get_contents_from_patch_groups_generic,
+    _get_patch_attrs,
+    _is_legacy_file,
+    _is_legacy_group,
     _kwargs_empty,
+    _matches_attr_filters,
     _read_patch,
     _save_patch,
     _write_meta,
@@ -52,8 +51,14 @@ class DASDAEV1(FiberIO):
     name = "DASDAE"
     preferred_extensions = ("h5", "hdf5")
     version = "1"
+    multi_patch_write = True
 
-    def write(self, spool: SpoolType, resource: PyTablesWriter, index=False, **kwargs):
+    def write(
+        self,
+        spool: dc.Patch | dc.Spool,
+        resource: H5Writer,
+        **kwargs,
+    ):
         """
         Write a collection of patches to a DASDAE file.
 
@@ -63,44 +68,45 @@ class DASDAEV1(FiberIO):
             A collection of patches or a spool (same thing).
         resource
             The path to the file.
-        index
-            If True, create an index for the file. This slows down
-            writing but will make reading/scanning the file more efficient.
-            This is recommended for files with many patches and not recommended
-            for files with few patches.
         """
         # write out patches
         _write_meta(resource, self.version)
         # get an iterable of patches and save them
         patches = [spool] if isinstance(spool, dc.Patch) else spool
-        # create new node called waveforms, else suppress error if it
-        # already exists.
-        with contextlib.suppress(NodeError):
-            resource.create_group(resource.root, "waveforms")
-        waveforms = resource.get_node("/waveforms")
-        # write new patches to file
+        with contextlib.suppress(ValueError):
+            resource.create_group("waveforms")
+        waveforms = resource["waveforms"]
+        # write new patches to file, ensuring unique group names within this
+        # batch so same-named patches (e.g. gap-split siblings that differ
+        # only along a non-named dimension) don't overwrite each other.
+        # strict zip keeps streaming (no spool materialization) while failing
+        # loudly if the name pass and patch pass ever disagree in length.
         patch_names = get_patch_names(patches).values
-        for patch, name in zip(patches, patch_names):
-            _save_patch(patch, waveforms, resource, name)
-        indexer = HDFPatchIndexManager(resource)
-        if index or indexer.has_index:
-            df = self._get_patch_summary(patches)
-            indexer.write_update(df)
+        counts: dict[str, int] = {}
+        for patch, name in zip(patches, patch_names, strict=True):
+            num = counts.get(name, 0)
+            counts[name] = num + 1
+            unique_name = name if num == 0 else f"{name}__{num}"
+            _save_patch(patch, waveforms, unique_name)
 
     def _get_patch_summary(self, patches) -> pd.DataFrame:
         """Get a patch summary to put into index."""
         df = (
             dc.scan_to_df(patches)
             .assign(
-                path=lambda x: get_patch_names(x),
-                file_format=self.name,
-                file_version=self.version,
+                source_patch_key=lambda x: get_patch_names(x),
+                source_format=self.name,
+                source_version=self.version,
             )
             .dropna(subset=["time_min", "time_max", "distance_min", "distance_max"])
         )
         return df
 
-    def get_format(self, resource: H5Reader, **kwargs) -> tuple[str, str] | bool:
+    def get_format(
+        self,
+        resource: H5Reader,
+        **kwargs,
+    ) -> tuple[str, str] | Literal[False]:
         """Return the format from a dasdae file."""
         is_dasdae, version = False, ""  # NOQA
         attrs = resource.attrs
@@ -110,47 +116,36 @@ class DASDAEV1(FiberIO):
         version = unbyte(attrs.get("__DASDAE_version__", ""))
         return file_format, version
 
-    def read(self, resource: PyTablesReader, **kwargs) -> SpoolType:
+    def read(self, resource: H5Reader, source_patch_key=(), **kwargs) -> dc.Spool:
         """Read a dascore file."""
         patches = []
+        source_patch_keys = _normalize_source_patch_keys(source_patch_key)
         try:
-            waveform_group = resource.root["/waveforms"]
+            waveform_group = resource["waveforms"]
         except (KeyError, IndexError):
             return dc.spool([])
-        for patch_group in waveform_group:
-            patch = _read_patch(patch_group, **kwargs)
+        file_legacy = _is_legacy_file(resource)
+        for patch_group in waveform_group.values():
+            patch_name = str(patch_group.name).rsplit("/", maxsplit=1)[-1]
+            if source_patch_keys and patch_name not in source_patch_keys:
+                continue
+            legacy = _is_legacy_group(patch_group, file_legacy)
+            attrs = _get_patch_attrs(patch_group, legacy)
+            if not _matches_attr_filters(attrs, kwargs):
+                continue
+            patch = _read_patch(patch_group, legacy=legacy, **kwargs)
             if not patch.data.size and not _kwargs_empty(kwargs):
                 continue
             patches.append(patch)
         return dc.spool(patches)
 
-    def scan(self, resource: PyTablesReader, **kwargs):
+    def scan(self, resource: H5Reader, snap: bool = True, **kwargs):
         """
-        Get the patch info from the file.
-
-        First we check if the file is using an index. If so, the index is
-        returned. Otherwise, iterate over each waveform group and assemble
-        content information.
+        Get patch info by iterating waveform groups in the file.
 
         Parameters
         ----------
         resource
             A path to the file.
         """
-        indexer = HDFPatchIndexManager(resource.filename)
-        if indexer.has_index:
-            # We need to change the path back to the file rather than internal
-            # HDF5 path so it works with FileSpool and such.
-            records = indexer.get_index().assign(path=str(resource)).to_dict("records")
-            return [dc.PatchAttrs(**x) for x in records]
-        else:
-            file_format = self.name
-            version = resource.root._v_attrs.__DASDAE_version__
-            return _get_contents_from_patch_groups(resource, version, file_format)
-
-    def index(self, path):
-        """Index the dasdae file."""
-        indexer = HDFPatchIndexManager(path)
-        if not indexer.has_index:
-            df = dc.scan_to_df(path)
-            indexer.write_update(df)
+        return _get_contents_from_patch_groups_generic(resource, snap=snap)

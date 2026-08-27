@@ -7,7 +7,9 @@ compatible libraries should go in this model.
 
 from __future__ import annotations
 
+import importlib
 from contextlib import suppress
+from typing import TypeGuard
 
 import numpy as np
 from h5py import Dataset as H5Dataset
@@ -16,7 +18,24 @@ from numpy.random import RandomState
 from rich.progress import Progress  # NOQA
 from scipy.interpolate import interp1d  # NOQA
 from scipy.ndimage import zoom  # NOQA
-from scipy.signal import decimate, resample, resample_poly  # NOQA
+from upath import UPath  # NOQA
+
+
+def _lazy_import(module_name: str, attr_name: str):
+    """Return a callable proxy without importing dascore.utils during startup."""
+
+    def _wrapper(*args, **kwargs):
+        attr = getattr(importlib.import_module(module_name), attr_name)
+        return attr(*args, **kwargs)
+
+    _wrapper.__name__ = attr_name
+    _wrapper.__qualname__ = attr_name
+    return _wrapper
+
+
+decimate = _lazy_import("scipy.signal", "decimate")
+resample = _lazy_import("scipy.signal", "resample")
+resample_poly = _lazy_import("scipy.signal", "resample_poly")
 
 random_state = RandomState(42)
 
@@ -76,9 +95,9 @@ def array(array):
     return _make_immutable(out)
 
 
-def is_array(maybe_array):
+def is_array(maybe_array) -> TypeGuard[np.ndarray]:
     """
     Determine if an object is a numpy array.
     """
-    # This is here so that we can support other array types in the future.
+    # Support for other array types lives in dascore.utils.array_api.
     return isinstance(maybe_array, np.ndarray)

@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
-import dascore as dc
-from dascore.constants import SpoolType
-from dascore.io import FiberIO
-from dascore.utils.hdf5 import H5Reader, PyTablesReader
+from typing import Literal
 
-from .utils import _get_attrs_coords_and_data, _is_h5simple, _maybe_trim_data
+import dascore as dc
+from dascore.io import FiberIO, ScanPayload, make_scan_payload
+from dascore.io.utils import build_patches
+from dascore.utils.hdf5 import H5Reader
+
+from .utils import _get_attrs_coords_and_data, _is_h5simple
 
 
 class H5Simple(FiberIO):
@@ -17,13 +19,17 @@ class H5Simple(FiberIO):
     preferred_extensions = ("hdf5", "h5")
     version = "1"
 
-    def get_format(self, resource: H5Reader, **kwargs) -> tuple[str, str] | bool:
+    def get_format(
+        self,
+        resource: H5Reader,
+        **kwargs,
+    ) -> tuple[str, str] | Literal[False]:
         """Determine if is simple h5 format."""
         if _is_h5simple(resource):
             return self.name, self.version
         return False
 
-    def read(self, resource: PyTablesReader, snap=True, **kwargs) -> SpoolType:
+    def read(self, resource: H5Reader, snap=True, **kwargs) -> dc.Spool:
         """
         Read a simple h5 file.
 
@@ -36,18 +42,11 @@ class H5Simple(FiberIO):
         **kwargs
             Passed to filtering coordinates.
         """
-        attrs, cm, data = _get_attrs_coords_and_data(resource, snap, self)
-        new_cm, new_data = _maybe_trim_data(cm, data, kwargs)
-        if not new_cm.size:
-            return dc.spool([])
-        patch = dc.Patch(coords=new_cm, data=new_data[:], attrs=attrs)
-        return dc.spool([patch])
+        attrs, cm, data = _get_attrs_coords_and_data(resource, snap)
+        return dc.spool(build_patches(cm, data, attrs, selection=kwargs))
 
-    def scan(
-        self, resource: PyTablesReader, snap=True, **kwargs
-    ) -> list[dc.PatchAttrs]:
+    def scan(self, resource: H5Reader, snap=True, **kwargs) -> list[ScanPayload]:
         """Get the attributes of a h5simple file."""
-        attrs, cm, data = _get_attrs_coords_and_data(resource, snap, self)
-        attrs["coords"] = cm.to_summary_dict()
-        attrs["path"] = resource.filename
-        return [dc.PatchAttrs(**attrs)]
+        attrs, cm, data = _get_attrs_coords_and_data(resource, snap)
+        attrs = dc.PatchAttrs.from_dict(attrs)
+        return [make_scan_payload(attrs=attrs, coords=cm, dtype=str(data.dtype))]

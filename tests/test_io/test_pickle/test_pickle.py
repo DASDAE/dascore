@@ -34,13 +34,17 @@ class TestGetFormat:
         parser = PickleIO()
         assert not parser.get_format(generic_hdf5)
 
-    def test_read_pickle(self, pickle_patch_path, random_patch):
-        """Ensure a pickle file can be read."""
-        out = dc.read(pickle_patch_path)
-        assert isinstance(out, dc.BaseSpool)
-        assert len(out) == 1
-        assert isinstance(out[0], dc.Patch)
-        assert random_patch == out[0]
+    def test_spool_from_pickle(self, pickle_patch_path, random_patch):
+        """dc.spool on a scanless format wraps the read spool and serves it.
+
+        PICKLE implements read but not scan, so dc.spool routes through
+        Spool(dc.read(...)); the wrapped patches must load back.
+        """
+        spool = dc.spool(pickle_patch_path)
+        assert len(spool) == 1
+        assert len(spool.get_contents()) == 1
+        assert spool[0] == random_patch
+        assert next(iter(spool)) == random_patch
 
     def test_file_not_there(self):
         """Get format should return false if the file doesn't exist."""
@@ -88,16 +92,30 @@ class TestScan:
         "distance_max",
         "distance_step",
         "tag",
-        "network",
+        "acquisition_key",
     )
+
+    @staticmethod
+    def _get_summary_value(summary, attr):
+        """Return a comparable summary value from attrs or coord summaries."""
+        if attr.startswith("time_"):
+            return getattr(
+                summary.get_coord_summary("time"), attr.removeprefix("time_")
+            )
+        if attr.startswith("distance_"):
+            return getattr(
+                summary.get_coord_summary("distance"), attr.removeprefix("distance_")
+            )
+        return getattr(summary.attrs, attr)
 
     def test_scan_attrs_eq_read_attrs(self, pickle_patch_path):
         """Ensure read/scan produce the same attrs."""
         scan_list = dc.scan(pickle_patch_path)
-        patch_attrs_list = [x.attrs for x in dc.read(pickle_patch_path)]
+        patch_summaries = [x.summary for x in dc.read(pickle_patch_path)]
 
-        for scan_attrs, patch_attrs in zip(scan_list, patch_attrs_list):
+        for scan_attrs, patch_summary in zip(scan_list, patch_summaries):
+            scan_attrs = scan_attrs.summary
             for attr in self.comp_attrs:
-                scan_attr = getattr(scan_attrs, attr)
-                patch_attr = getattr(patch_attrs, attr)
+                scan_attr = self._get_summary_value(scan_attrs, attr)
+                patch_attr = self._get_summary_value(patch_summary, attr)
                 assert scan_attr == patch_attr

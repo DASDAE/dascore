@@ -2,26 +2,53 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any, Literal
 
 import numpy as np
 import pandas as pd
-from pydantic import Field
 
 import dascore as dc
 from dascore.constants import samples_arg_description
 from dascore.exceptions import ParameterError
 from dascore.utils.docs import compose_docstring
-from dascore.utils.models import DascoreBaseModel
-from dascore.utils.patch import get_dim_axis_value
+from dascore.utils.patch import (
+    _maybe_add_history_str,
+    get_dim_axis_value,
+    get_window_axis_step,
+)
 from dascore.utils.pd import rolling_df
 
+rolling_apply_description = """
+Apply a function over the specified moving window.
 
-class _PatchRollerInfo(DascoreBaseModel):
+Parameters
+----------
+function
+    The function which is applied.
+*args
+    Positional arguments passed to function.
+**kwargs
+    Keyword arguments passed to function.
+
+Examples
+--------
+>>> import numpy as np
+>>> import dascore as dc
+>>>
+>>> patch = dc.get_example_patch()
+>>> out = patch.rolling(time=100, samples=True).apply(np.percentile, 80)
+"""
+
+
+@dataclass(frozen=True, slots=True)
+class _PatchRollerInfo:
     """
     A dataclass for storing info on rolling operation.
 
-    Should be subclassed to implement rolling methods.
+    Should be subclassed to implement rolling methods. This is an ephemeral
+    internal object created on every rolling call, so it is a plain dataclass
+    rather than a validated model.
     """
 
     patch: Any  # cant set to patch due to circular import
@@ -31,7 +58,6 @@ class _PatchRollerInfo(DascoreBaseModel):
     axis: int
     center: bool
     roll_hist: str = ""
-    func_kwargs: dict = Field(default_factory=dict)
 
     def get_coords(self):
         """
@@ -40,22 +66,26 @@ class _PatchRollerInfo(DascoreBaseModel):
         Accounts for centered or non-centered coordinates. If the window
         length is even, the first half value is used.
         """
-        coord = self.patch.get_coord(self.dim)
-        if self.step > 1:
-            coord = coord[:: self.step]
+        # Without a step the dimension is unchanged; reuse the coord manager.
+        if self.step == 1:
+            return self.patch.coords
+        coord = self.patch.get_coord(self.dim)[:: self.step]
         return self.patch.coords.update(**{self.dim: coord})
 
     def _get_attrs_with_apply_history(self, func_or_str):
         """Get new attrs that has history from apply attached."""
-        new_history = list(self.patch.attrs.history)
         if callable(func_or_str):
             func_name = getattr(func_or_str, "__name__", "")
             hist_str = f"{self.roll_hist}.apply({func_name})"
         else:
             hist_str = f"{self.roll_hist}.{func_or_str}()"
-        new_history.append(hist_str)
-        attrs = self.patch.attrs.update(history=new_history, coords={})
-        return attrs
+        return _maybe_add_history_str(self.patch.attrs, hist_str)
+
+    def _new_patch(self, data, func_or_str):
+        """Create the output patch from rolled data."""
+        coords = self.get_coords()
+        attrs = self._get_attrs_with_apply_history(func_or_str)
+        return self.patch.update(data=data, coords=coords, attrs=attrs)
 
 
 class _NumpyPatchRoller(_PatchRollerInfo):
@@ -72,26 +102,35 @@ class _NumpyPatchRoller(_PatchRollerInfo):
         return int(out)
 
     def _pad_roll_array(self, data):
-        """Pad."""
-        num_nans = 1 + (self.window - 2) // self.step
-        pad_width = [(0, 0)] * len(data.shape)
-        pad_width[self.axis] = (num_nans, 0)
-        padded = np.pad(data, pad_width, constant_values=np.nan)
-        if self.step == 1:
-            assert padded.shape == self.patch.data.shape
-        if self.center:
-            # roll array along axis to center
-            padded = np.roll(padded, -(num_nans // 2), axis=self.axis)
-        return padded
-
-    def apply(self, function):
         """
-        Apply a function over the specified moving window.
+        Pad the reduced array with NaNs and align it to the output coordinate.
 
-        Parameters
-        ----------
-        function
-            The function which is applied. Must accept an axis argument.
+        The NaNs go at the start of the axis, except when centering, which
+        moves `num_nans // 2` of them to the end. This is done with a single
+        allocation rather than a pad followed by a roll.
+        """
+        num_nans = 1 + (self.window - 2) // self.step
+        if not num_nans:  # window of one sample; nothing to pad.
+            return data
+        shape = list(data.shape)
+        shape[self.axis] += num_nans
+        out = np.full(shape, np.nan, dtype=data.dtype)
+        start = num_nans - num_nans // 2 if self.center else num_nans
+        slicer = [slice(None, None)] * len(shape)
+        slicer[self.axis] = slice(start, start + data.shape[self.axis])
+        out[tuple(slicer)] = data
+        if self.step == 1:
+            assert out.shape == self.patch.data.shape
+        return out
+
+    @compose_docstring(apply_description=rolling_apply_description)
+    def apply(self, function, *args, **kwargs):
+        """
+        {apply_description}
+
+        Notes
+        -----
+        The provided function must accept an ``axis`` argument.
         """
         # TODO look at replacing this with a call to `as_strided` that
         # accounts for strides.
@@ -107,13 +146,10 @@ class _NumpyPatchRoller(_PatchRollerInfo):
         start = self.get_start_index()
         step_slice[self.axis] = slice(start, None, self.step)
         # apply function, then pad with NaNs and roll
-        kwargs = self.func_kwargs
         trimmed_slide_view = slide_view[tuple(step_slice)]
-        raw = function(trimmed_slide_view, axis=-1, **kwargs).astype(np.float64)
-        out = self._pad_roll_array(raw)
-        new_coords = self.get_coords()
-        attrs = self._get_attrs_with_apply_history(function)
-        return self.patch.update(data=out, coords=new_coords, attrs=attrs)
+        raw = function(trimmed_slide_view, *args, axis=-1, **kwargs)
+        out = self._pad_roll_array(np.asarray(raw, dtype=np.float64))
+        return self._new_patch(out, function)
 
     def mean(self):
         """Apply mean to moving window."""
@@ -163,26 +199,27 @@ class _PandasPatchRoller(_PatchRollerInfo):
         )
         return roll
 
-    def _repack_patch(self, df, attrs=None):
+    def _repack_patch(self, df, func_or_str):
         """Repack patch into dataframe."""
         data = df.values if not self.axis else df.T.values
         # get rid of extra dims if original data doesn't have them.
         if len(data.shape) != len(self.patch.data.shape):
             data = np.squeeze(data)
-        coords = self.get_coords()
-        return self.patch.update(data=data, coords=coords, attrs=attrs)
+        return self._new_patch(data, func_or_str)
 
     def _call_rolling_func(self, name, *args, **kwargs):
         """Helper function for calling a rolling function."""
         rolling = self._get_rolling()
         df = getattr(rolling, name)(*args, **kwargs)
-        attrs = self._get_attrs_with_apply_history(name)
-        return self._repack_patch(df, attrs=attrs)
+        return self._repack_patch(df, name)
 
-    def apply(self, func):
-        df = self._get_rolling().apply(func, **self.func_kwargs)
-        attrs = self._get_attrs_with_apply_history(func)
-        return self._repack_patch(df, attrs=attrs)
+    @compose_docstring(apply_description=rolling_apply_description)
+    def apply(self, function, *args, **kwargs):
+        """
+        {apply_description}
+        """
+        df = self._get_rolling().apply(function, args=args, kwargs=kwargs)
+        return self._repack_patch(df, function)
 
     def mean(self):
         """Apply mean."""
@@ -216,6 +253,7 @@ def rolling(
     center=False,
     engine: Literal["numpy", "pandas", None] = None,
     samples=False,
+    overlap=None,
     **kwargs,
 ) -> _NumpyPatchRoller | _PandasPatchRoller:
     """
@@ -227,10 +265,13 @@ def rolling(
 
     Parameters
     ----------
+    patch
+        The patch to apply the rolling function to.
     step
         The window is evaluated at every step result, equivalent to slicing
         at every step. If the step argument is not None, the result will
-        have a different shape than the input. Default None.
+        have a different shape than the input. Mutually exclusive with
+        overlap. Default None.
     center
         If False, set the window labels as the right edge of the window index.
         If True, set the window labels as the center of the window index. Default False.
@@ -243,7 +284,12 @@ def rolling(
         If step > 10 samples, or `apply` is the desired rolling operation, numpy
         is probably better.
     samples
-        {sample_explination}
+        {sample_explanation}
+    overlap
+        The overlap between windows. Can be a number (assumed to be in units of
+        the rolling dimension if `samples`==False), a percent, or None. If
+        provided, step is calculated as `window - overlap`. Percent overlap is
+        always interpreted relative to the window length.
     **kwargs
         Used to pass dimension and window size.
         For example `time=10` represents window size of
@@ -289,12 +335,12 @@ def rolling(
     #### Note 2: Applying custom functions with rolling operation
 
     When `apply` is the desired rolling operation and we are interested to use our
-    own function over a desired window, we need to define our finction the way that
+    own function over a desired window, we need to define our function the way that
     it performs the operation on the last axis of the sliced matrix
 
     Below is an example of applying a custom zero crossing rate function (zcr_std) with
     rolling operation for a window size of 100 samples and skipping every other samples.
-    It applys the desired operation (which is multiplying every sample to its next
+    It applies the desired operation (which is multiplying every sample to its next
     sample to determine the zero crossings) on the last axis of the sliced
     frame (from rolling).
 
@@ -312,6 +358,16 @@ def rolling(
 
     patch = dc.get_example_patch()
     zcr_patch = patch.rolling(time=100, step=2, samples=True).apply(zcr_std)
+
+    # Additional arguments can be passed directly to apply.
+    def percentile(frame, q, axis=-1):
+        '''Compute a rolling percentile.'''
+        return np.percentile(frame, q, axis=axis)
+
+
+    percentile_patch = patch.rolling(time=100, step=2, samples=True).apply(
+        percentile, 80
+    )
     ```
 
     Examples
@@ -337,20 +393,18 @@ def rolling(
             return _PandasPatchRoller
         return _NumpyPatchRoller
 
-    # get window sizes in samples
     dim, axis, value = get_dim_axis_value(patch, kwargs=kwargs)[0]
-    roll_hist = f"rolling({dim}={value}, step={step}, center={center}, engine={engine})"
-    coord = patch.get_coord(dim)
-    window = coord.get_sample_count(value, samples=samples, enforce_lt_coord=True)
-    step = (
-        1
-        if step is None
-        else coord.get_sample_count(step, samples=samples, enforce_lt_coord=True)
-    )
+    window, _, step = get_window_axis_step(patch, overlap, step, samples, **kwargs)
+    # Handle default when no overlap/step specified and ensure window size
+    step = 1 if step is None else step
     if window == 0 or step == 0:
         msg = "Window or step size can't be zero. Use any positive values."
         raise ParameterError(msg)
     cls = _get_engine(step, engine, patch)
+    roll_hist = (
+        f"rolling({dim}={value}, step={step}, overlap={overlap}, "
+        f"center={center}, engine={engine})"
+    )
     out = cls(
         patch=patch,
         window=window,

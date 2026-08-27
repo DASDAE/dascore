@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import io
 import tempfile
 from collections.abc import Sequence
 from contextlib import suppress
@@ -9,20 +10,42 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-from scipy.signal import chirp as spy_chirp
 
 import dascore as dc
 import dascore.core
 from dascore.compat import random_state
+from dascore.config import config_context
+from dascore.core.inventory import (
+    Acquisition,
+    CouplingCondition,
+    DistanceMap,
+    FiberArray,
+    FiberSegment,
+    Geometry,
+    Interrogator,
+    Inventory,
+    Network,
+    OpticalPath,
+    OpticalPathLabel,
+)
 from dascore.exceptions import UnknownExampleError
-from dascore.utils.docs import compose_docstring
 from dascore.utils.downloader import fetch
+from dascore.utils.imports import lazy_import
 from dascore.utils.misc import iterate, register_func
 from dascore.utils.patch import get_patch_names
 from dascore.utils.time import to_timedelta64
 
+spy_chirp = lazy_import("scipy.signal", "chirp")
+
 EXAMPLE_PATCHES = {}
 EXAMPLE_SPOOLS = {}
+EXAMPLE_INVENTORIES = {}
+
+
+def _load_example_patch_from_file(path: str | Path) -> dc.Patch:
+    """Load the first patch from an example file without spool indirection."""
+    with config_context(allow_dasdae_format_unpickle=True):
+        return dc.read(path)[0]
 
 
 @register_func(EXAMPLE_PATCHES, key="random_das")
@@ -34,8 +57,7 @@ def random_patch(
     distance_min=0,
     distance_step=1,
     dist_array=None,
-    network="",
-    station="",
+    acquisition_key="",
     tag="random",
     shape=(300, 2_000),
 ):
@@ -58,10 +80,9 @@ def random_patch(
     dist_array
         If not None, an array of distance values and `distance_min` and
         `distance_step` will not be used.
-    network
-        The network code.
-    station
-        The station designation.
+    acquisition_key
+        The inventory identity of the data source
+        (network.fiber_array.location.acquisition).
     tag
         The patch tag
     shape
@@ -73,42 +94,27 @@ def random_patch(
     # create attrs
     t1 = np.atleast_1d(np.datetime64(time_min))[0]
     d1 = np.atleast_1d(distance_min)
+    time_step = to_timedelta64(time_step)
     attrs = dict(
-        distance_step=distance_step,
-        time_step=to_timedelta64(time_step),
         category="DAS",
-        time_min=t1,
-        network=network,
-        station=station,
+        acquisition_key=acquisition_key,
         tag=tag,
-        time_units="s",
-        distance_units="m",
     )
-    # need to pop out dim attrs if coordinates provided.
-    if time_array is not None:
-        attrs.pop("time_min")
-        # need to keep time_step if time_array is len 1 to get coord range
-        if len(time_array) > 1:
-            attrs.pop("time_step")
-    else:
+    if time_array is None:
         time_array = dascore.core.get_coord(
-            data=t1 + np.arange(array.shape[1]) * attrs["time_step"],
-            step=attrs["time_step"],
-            units=attrs["time_units"],
+            data=t1 + np.arange(array.shape[1]) * time_step,
+            step=time_step,
+            units="s",
         )
-    if dist_array is not None:
-        attrs.pop("distance_step")
-    else:
+    if dist_array is None:
         dist_array = dascore.core.get_coord(
-            data=d1 + np.arange(array.shape[0]) * attrs["distance_step"],
-            step=attrs["distance_step"],
-            units=attrs["distance_units"],
+            data=d1 + np.arange(array.shape[0]) * distance_step,
+            step=distance_step,
+            units="m",
         )
     coords = dict(distance=dist_array, time=time_array)
     # assemble and output.
-    out = dict(data=array, coords=coords, attrs=attrs, dims=("distance", "time"))
-    patch = dc.Patch(**out)
-    return patch
+    return dc.Patch(data=array, coords=coords, attrs=attrs, dims=("distance", "time"))
 
 
 @register_func(EXAMPLE_PATCHES, key="patch_with_null")
@@ -181,9 +187,8 @@ def wacky_dim_coord_patch():
     time_ar = dc.to_datetime64(np.cumsum(random_state.random(1_000)))
     patch = random_patch(shape=shape, dist_array=dist_ar, time_array=time_ar)
     # check attrs
-    attrs = patch.attrs
-    assert pd.isnull(attrs.coords["time"].step)
-    assert pd.isnull(attrs.coords["time"].step)
+    time_coord = patch.coords.coord_map["time"]
+    assert pd.isnull(time_coord.step)
     return patch
 
 
@@ -299,7 +304,7 @@ def example_event_1():
     An induced event recorded on a borehole fiber  from @stanvek2022fracture.
     """
     path = fetch("example_dasdae_event_1.h5")
-    return dc.spool(path)[0]
+    return _load_example_patch_from_file(path)
 
 
 @register_func(EXAMPLE_PATCHES, key="example_event_2")
@@ -308,7 +313,7 @@ def example_event_2():
     [`example_event_1`](`dascore.examples.example_event_1`) with pre-processing.
     """
     path = fetch("example_dasdae_event_1.h5")
-    patch = dc.spool(path)[0].update_attrs(data_type="strain_rate")
+    patch = _load_example_patch_from_file(path).update_attrs(data_type="strain_rate")
     # We convert time to relative time in seconds to match the figure in
     # the publication.
     delta_time = patch.coords.get_array("time") - patch.coords.min("time")
@@ -327,7 +332,7 @@ def deformation_rate_event_1():
     An event recorded in an underground mine by a Terra15 unit.
     """
     path = fetch("deformation_rate_event_1.hdf5")
-    return dc.spool(path)[0]
+    return _load_example_patch_from_file(path)
 
 
 @register_func(EXAMPLE_PATCHES, key="forge_dss")
@@ -338,7 +343,7 @@ def forge_dss():
     https://gdr.openei.org/submissions/1565
     """
     path = fetch("neubrex_dss_forge.h5")
-    return dc.spool(path)[0]
+    return _load_example_patch_from_file(path)
 
 
 @register_func(EXAMPLE_PATCHES, key="febus_dss_mine_tight")
@@ -346,7 +351,7 @@ def febus_dss_mine_1():
     """
     DSS file from a tight-buffered fiber at a mine with Febus interrogator
     """
-    return dc.spool(fetch("dss_ug_mine_tight.h5"))[0]
+    return _load_example_patch_from_file(fetch("dss_ug_mine_tight.h5"))
 
 
 @register_func(EXAMPLE_PATCHES, key="febus_dss_mine_loose")
@@ -354,7 +359,7 @@ def febus_dss_mine_2():
     """
     DSS file from a loose-buffered fiber at a mine with Febus interrogator
     """
-    return dc.spool(fetch("dss_ug_mine_loose.h5"))[0]
+    return _load_example_patch_from_file(fetch("dss_ug_mine_loose.h5"))
 
 
 @register_func(EXAMPLE_PATCHES, key="forge_dts")
@@ -365,7 +370,7 @@ def forge_dts():
     https://gdr.openei.org/submissions/1565
     """
     path = fetch("neubrex_dts_forge.h5")
-    return dc.spool(path)[0]
+    return _load_example_patch_from_file(path)
 
 
 @register_func(EXAMPLE_PATCHES, key="nd_patch")
@@ -515,16 +520,9 @@ def delta_patch(
 
         coords = {"distance": dist_coord, "time": time_coord}
         attrs = dict(
-            time_min=t0,
-            time_step=time_step_td,
-            distance_min=distance_min,
-            distance_step=distance_step,
             category="DAS",
-            network="",
-            station="",
+            acquisition_key="",
             tag="delta",
-            time_units="s",
-            distance_units="m",
         )
 
         # Depending on the selected dimension, place a line of ones at the midpoint
@@ -562,11 +560,13 @@ def dispersion_event():
     A synthetic shot record that exhibits dispersion.
     """
     path = fetch("dispersion_event.h5")
-    return dc.spool(path)[0]
+    return _load_example_patch_from_file(path)
 
 
 @register_func(EXAMPLE_SPOOLS, key="random_das")
-def random_spool(time_gap=0, length=3, time_min=np.datetime64("2020-01-03"), **kwargs):
+def random_spool(
+    time_gap=0, length=3, time_min=np.datetime64("2020-01-03"), var=0, **kwargs
+):
     """
     Several random patches in the spool.
 
@@ -580,15 +580,27 @@ def random_spool(time_gap=0, length=3, time_min=np.datetime64("2020-01-03"), **k
     time_min
         The start time of the first patch. Subsequent patches have start times
         after the end time of the previous patch, plus the time_gap.
+    var
+        How much the patch lengths vary, in percent. Zero makes every patch
+        the same length; a positive value draws each from a normal
+        distribution that wide, as an archive of real files has.
     **kwargs
         Passed to the [_random_patch](`dascore.examples.random_patch`) function.
     """
+    shape = kwargs.pop("shape", (300, 2_000))
+    samples = shape[-1]
+    if var > 0:
+        # Seeded, since an example which differs run to run is not one.
+        draws = np.random.default_rng(42).normal(samples, samples * var / 100, length)
+        lengths = np.clip(draws, 1, None).astype(int)
+    else:
+        lengths = np.full(length, samples, dtype=int)
     out = []
-    for _ in range(length):
-        patch = random_patch(time_min=time_min, **kwargs)
+    for count in lengths:
+        patch = random_patch(time_min=time_min, shape=(*shape[:-1], count), **kwargs)
         out.append(patch)
-        diff = to_timedelta64(time_gap) + patch.attrs.coords["time"].step
-        time_min = patch.attrs["time_max"] + diff
+        diff = to_timedelta64(time_gap) + patch.coords.step("time")
+        time_min = patch.coords.max("time") + diff
     return dc.spool(out)
 
 
@@ -615,28 +627,26 @@ def diverse_spool():
     """
     A spool with a diverse set of patch metadata for testing.
 
-    There are various gaps, tags, station names, etc.
+    There are various gaps, tags, acquisition keys, etc.
     """
     spool_no_gaps = random_spool()
-    spool_no_gaps_different_network = random_spool(network="das2")
-    spool_big_gaps = random_spool(time_gap=np.timedelta64(1, "s"), station="big_gaps")
-    spool_overlaps = random_spool(
-        time_gap=-np.timedelta64(10, "ms"), station="overlaps"
-    )
-    time_step = spool_big_gaps[0].attrs.coords["time"].step
+    spool_no_gaps_different_source = random_spool(acquisition_key="DAS2.R2D1..RAW")
+    spool_big_gaps = random_spool(time_gap=np.timedelta64(1, "s"), tag="big_gaps")
+    spool_overlaps = random_spool(time_gap=-np.timedelta64(10, "ms"), tag="overlaps")
+    time_step = spool_big_gaps[0].coords.step("time")
     dt = to_timedelta64(time_step / np.timedelta64(1, "s"))
-    spool_small_gaps = random_spool(time_gap=dt, station="smallg")
+    spool_small_gaps = random_spool(time_gap=dt, tag="smallg")
     spool_way_late = random_spool(
-        length=1, time_min=np.datetime64("2030-01-01"), station="wayout"
+        length=1, time_min=np.datetime64("2030-01-01"), tag="wayout"
     )
     spool_new_tag = random_spool(tag="some_tag", length=1)
     spool_way_early = random_spool(
-        length=1, time_min=np.datetime64("1989-05-04"), station="wayout"
+        length=1, time_min=np.datetime64("1989-05-04"), tag="wayout"
     )
 
     all_spools = [
         spool_no_gaps,
-        spool_no_gaps_different_network,
+        spool_no_gaps_different_source,
         spool_big_gaps,
         spool_overlaps,
         spool_small_gaps,
@@ -646,6 +656,46 @@ def diverse_spool():
     ]
 
     return dc.spool([y for x in all_spools for y in x])
+
+
+@register_func(EXAMPLE_SPOOLS, key="sparse_dss")
+def sparse_dss_spool():
+    """
+    Two months of a sparsely sampled DSS deployment.
+
+    One patch per day of hourly samples along 20 channels, for a
+    temperature and a strain acquisition which start and end at
+    different times and lose different days to outages. Sampled once an
+    hour, so the whole thing is a few hundred kilobytes -- small enough
+    to build in memory, long enough to draw on a calendar.
+
+    A day short of its 24 samples leaves a hole after it, so the
+    acquisitions cover their spans by different amounts.
+    """
+    hour = to_timedelta64(np.timedelta64(1, "h"))
+    day_one = np.datetime64("2024-01-01")
+    runs = {
+        # tag: (days it ran, days it was down, days it cut short)
+        # Days 17-20 are the site's own outage, so both lose them.
+        "temperature": (range(60), {17, 18, 19, 20, 33}, {8: 18, 41: 12}),
+        "strain": (range(9, 50), {17, 18, 19, 20, 28, 29, 30}, {41: 12}),
+    }
+    patches = []
+    for tag, (days, down, short) in runs.items():
+        for day in days:
+            if day in down:
+                continue
+            samples = short.get(day, 24)
+            patches.append(
+                random_patch(
+                    time_min=day_one + np.timedelta64(day, "D"),
+                    time_step=hour,
+                    distance_step=5,
+                    shape=(20, samples),
+                    tag=tag,
+                )
+            )
+    return dc.spool(patches)
 
 
 def spool_to_directory(spool, path=None, file_format="DASDAE", extension="hdf5"):
@@ -660,6 +710,8 @@ def spool_to_directory(spool, path=None, file_format="DASDAE", extension="hdf5")
         The path to the directory, if None, create tempdir.
     file_format
         The file format for the saved files.
+    extension
+        The file extension given to each saved file.
     """
     if path is None:
         path = Path(tempfile.mkdtemp())
@@ -671,7 +723,6 @@ def spool_to_directory(spool, path=None, file_format="DASDAE", extension="hdf5")
     return path
 
 
-@compose_docstring(examples=", ".join(list(EXAMPLE_PATCHES)))
 def get_example_patch(example_name="random_das", **kwargs) -> dc.Patch:
     """
     Load an example Patch.
@@ -713,7 +764,7 @@ def get_example_patch(example_name="random_das", **kwargs) -> dc.Patch:
     if example_name not in EXAMPLE_PATCHES:
         # Allow the example name to be a data registry entry.
         with suppress(ValueError):
-            return dc.spool(fetch(example_name))[0]
+            return _load_example_patch_from_file(fetch(example_name))
         msg = (
             f"No example patch registered with name {example_name} "
             f"Registered example patches are {list(EXAMPLE_PATCHES)}"
@@ -722,8 +773,7 @@ def get_example_patch(example_name="random_das", **kwargs) -> dc.Patch:
     return EXAMPLE_PATCHES[example_name](**kwargs)
 
 
-@compose_docstring(examples=", ".join(list(EXAMPLE_SPOOLS)))
-def get_example_spool(example_name="random_das", **kwargs) -> dc.BaseSpool:
+def get_example_spool(example_name="random_das", **kwargs) -> dc.Spool:
     """
     Load an example Spool.
 
@@ -770,3 +820,509 @@ def get_example_spool(example_name="random_das", **kwargs) -> dc.BaseSpool:
         )
         raise UnknownExampleError(msg)
     return EXAMPLE_SPOOLS[example_name](**kwargs)
+
+
+def inventory_patch_pair():
+    """
+    Return a patch and an inventory which resolves it.
+
+    The patch is the random DAS example carrying the acquisition key of the
+    inventory's one acquisition. That acquisition places its 300 channels on
+    an optical path through a measured two-point distance map, so the path's
+    geometry, coupling, and labels project onto the patch. Used by the
+    enrich documentation and tests.
+    """
+    patch = random_patch(acquisition_key="DAS.R2D1..RAW")
+    distance = patch.get_coord("distance")
+    # The interrogator's own axis starts at its channel 0; the path axis
+    # starts 100 m later, at the far end of the lead-in cable.
+    acquisition = Acquisition(
+        code="RAW",
+        location_code="",
+        data_type="velocity",
+        data_category="DAS",
+        gauge_length=10.0,
+        spatial_interval=1.0,
+        sample_rate=1.0 / dc.to_float(patch.get_coord("time").step),
+        pulse_width=1e-8,
+        interrogator=Interrogator(
+            manufacturer="Fake Interrogators", model="FI-1", serial_number="sn-1"
+        ),
+        distance_map=DistanceMap(
+            instrument_distance=(float(distance.min()), float(distance.max())),
+            distance=(100.0, 100.0 + float(distance.max() - distance.min())),
+        ),
+    )
+    path = OpticalPath(
+        name="main",
+        location_code="",
+        optical_components=(
+            FiberSegment(name="cable", distance_min=0.0, distance_max=500.0),
+        ),
+        geometry=(
+            Geometry(
+                name="trench",
+                distance=(100.0, 400.0),
+                # The canonical axis names, so the segment states the CRS's
+                # axes whatever this inventory's CRS happens to call them.
+                columns={
+                    "x": (-117.0, -117.0),
+                    "y": (40.0, 40.1),
+                    "z": (1500.0, 1500.0),
+                },
+            ),
+        ),
+        coupling=(
+            CouplingCondition(
+                distance_min=100.0,
+                distance_max=250.0,
+                coupling_type="trench",
+                medium="soil",
+            ),
+        ),
+        labels=(
+            OpticalPathLabel(
+                distance_min=100.0, distance_max=200.0, group="zone", value="north"
+            ),
+            OpticalPathLabel(
+                distance_min=200.0, distance_max=400.0, group="zone", value="south"
+            ),
+            OpticalPathLabel(distance_min=150.0, distance_max=300.0, group="noisy"),
+        ),
+    )
+    inventory = Inventory(
+        networks=(
+            Network(
+                code="DAS",
+                fiber_arrays=(
+                    FiberArray(
+                        code="R2D1", acquisitions=(acquisition,), optical_paths=(path,)
+                    ),
+                ),
+            ),
+        )
+    ).check()
+    return patch, inventory
+
+
+@register_func(EXAMPLE_INVENTORIES, key="random_das")
+def random_das_inventory() -> Inventory:
+    """A single-path inventory which resolves the random_das example patch."""
+    return inventory_patch_pair()[1]
+
+
+def get_example_inventory(example_name="random_das", **kwargs) -> Inventory:
+    """
+    Load an example Inventory.
+
+    Supported example inventories are:
+    ```{python}
+    #| echo: false
+    #| output: asis
+    from dascore.examples import EXAMPLE_INVENTORIES
+
+    from dascore.utils.docs import objs_to_doc_df
+
+    df = objs_to_doc_df(EXAMPLE_INVENTORIES)
+    print(df.to_markdown(index=False, stralign="center"))
+    ```
+
+    Parameters
+    ----------
+    example_name
+        The name of the example to load. Options are listed above.
+    **kwargs
+        Passed to the corresponding functions to generate the inventory.
+
+    Raises
+    ------
+    (`UnknownExampleError`)['dascore.examples.UnknownExampleError`] if an
+        unregistered inventory is requested.
+
+    Examples
+    --------
+    >>> import dascore as dc
+    >>> inventory = dc.get_example_inventory("tunnel")
+    >>> len(inventory.networks)
+    1
+    """
+    if example_name not in EXAMPLE_INVENTORIES:
+        msg = (
+            f"No example inventory registered with name {example_name} "
+            f"Registered example inventories are {list(EXAMPLE_INVENTORIES)}"
+        )
+        raise UnknownExampleError(msg)
+    return EXAMPLE_INVENTORIES[example_name](**kwargs)
+
+
+# --- The tunnel inventory -------------------------------------------------
+#
+# This builds the deployment the tunnel recipe walks through, and is the
+# single definition of it: the recipe displays these very files rather
+# than composing its own, so the page and the example cannot drift apart.
+
+_TUNNEL_RESOURCES = {
+    "telemetry-cable": (
+        "object_type: Cable\n"
+        "name: tunnel telemetry cable\n"
+        "manufacturer: Corning\n"
+        "model: MIC tight-buffered 4F OS2\n"
+        "fiber_count: 4\n"
+        "description: The run in from the instrument room.\n"
+    ),
+    "connecting-cable": (
+        "object_type: Cable\n"
+        "name: tunnel connecting cable\n"
+        "manufacturer: Corning\n"
+        "model: MIC tight-buffered 4F OS2\n"
+        "fiber_count: 4\n"
+        "description: The links between boxes, couplers, and borehole heads.\n"
+    ),
+    "borehole-cable": (
+        "object_type: Cable\n"
+        "name: borehole sensing cable\n"
+        "manufacturer: Nerve Sensors\n"
+        "model: Epsilon\n"
+        "fiber_count: 4\n"
+        "description: Rock-coupled downhole cable with an armored pigtail.\n"
+    ),
+    "trench-cable": (
+        "object_type: Cable\n"
+        "name: helically wound trench cable\n"
+        "manufacturer: Silixa\n"
+        "model: HWC\n"
+        "fiber_count: 1\n"
+    ),
+    "das-interrogator": (
+        "object_type: Interrogator\n"
+        "name: tunnel DAS interrogator\n"
+        "manufacturer: Sintela\n"
+        "model: Onyxia\n"
+        "instrument_type: DAS interrogator\n"
+    ),
+    "repair-cord": (
+        "object_type: Cable\nname: trench repair patch cord\nfiber_count: 1\n"
+    ),
+    "repair-box": (
+        "object_type: Enclosure\nname: trench repair box\nenclosure_type: box\n"
+    ),
+}
+
+# One enclosure per housing, because a resource_id names an asset rather than
+# a kind: box A and box E are two boxes, and each borehole has its own
+# turnaround down the hole.
+for _label, _name in [
+    ("splice-box-a", "splice box at A"),
+    ("splice-box-e", "splice box at E"),
+    ("turnaround-1", "borehole 1 turnaround housing"),
+    ("turnaround-2", "borehole 2 turnaround housing"),
+    ("turnaround-3", "borehole 3 turnaround housing"),
+]:
+    _kind = "box" if "splice" in _label else "housing"
+    _TUNNEL_RESOURCES[_label] = (
+        f"object_type: Enclosure\nname: tunnel {_name}\nenclosure_type: {_kind}\n"
+    )
+
+_TUNNEL_COMPONENTS = """\
+object_type,distance_min,distance_max,name,container
+FiberSegment,0,1500,telemetry lead-in,telemetry-cable
+Splice,1500,,splice at box A,splice-box-a
+FiberSegment,1500,1502.5,drop into the trench,trench-cable
+FiberSegment,1502.5,1527.5,trench B to the coil,trench-cable
+FiberSegment,1527.5,1537.5,cable coil at C,trench-cable
+FiberSegment,1537.5,1562.5,trench from the coil to D,trench-cable
+FiberSegment,1562.5,1565,rise out of the trench,trench-cable
+Splice,1565,,splice at box E,splice-box-e
+FiberSegment,1565,1580,link E to borehole 3,connecting-cable
+FiberSegment,1580,1600,borehole 3 down,borehole-cable
+Splice,1600,,borehole 3 turnaround,turnaround-3
+FiberSegment,1600,1620,borehole 3 up,borehole-cable
+FiberSegment,1620,1635,link borehole 3 to coupler G,connecting-cable
+Connector,1635,,coupler G,
+FiberSegment,1635,1650,link coupler G to borehole 2,connecting-cable
+FiberSegment,1650,1670,borehole 2 down,borehole-cable
+Splice,1670,,borehole 2 turnaround,turnaround-2
+FiberSegment,1670,1690,borehole 2 up,borehole-cable
+FiberSegment,1690,1705,link borehole 2 to coupler H,connecting-cable
+Connector,1705,,coupler H,
+FiberSegment,1705,1720,link coupler H to borehole 1,connecting-cable
+FiberSegment,1720,1740,borehole 1 down,borehole-cable
+Splice,1740,,borehole 1 turnaround,turnaround-1
+FiberSegment,1740,1760,borehole 1 up,borehole-cable
+FiberSegment,1760,1775,link borehole 1 back to box A,connecting-cable
+Terminator,1775,,path end,
+"""
+
+# The surveyed waypoints, lettered as the recipe's drawing letters them.
+_TUNNEL_A = (100.00, 100.00, 0.0)
+_TUNNEL_B = (100.00, 97.79, -0.5)
+_TUNNEL_C = (122.15, 97.79, -0.5)
+_TUNNEL_D = (144.30, 97.79, -0.5)
+_TUNNEL_E = (144.30, 100.00, 0.0)
+_TUNNEL_HEADS = {
+    1: (108.00, 100.00, 0.0),
+    2: (126.00, 100.00, 0.0),
+    3: (142.00, 100.00, 0.0),
+}
+_TUNNEL_DEPTH = 20.0
+# The trench cable is wound helically, so a meter of fiber covers cos(phi)
+# of a meter of tunnel.
+_TUNNEL_WIND = 0.886
+_TUNNEL_TRENCH = (
+    "drop into the trench",
+    "trench B to the coil",
+    "trench from the coil to D",
+    "rise out of the trench",
+)
+_TUNNEL_REPAIRED_TRENCH = (
+    "drop into the trench",
+    "trench B to the break",
+    "trench from the break to the coil",
+    "trench from the coil to D",
+    "rise out of the trench",
+)
+
+
+def _tunnel_components(components_csv):
+    """Read the components table, with each point component's end filled in."""
+    frame = pd.read_csv(io.StringIO(components_csv))
+    frame["distance_max"] = frame["distance_max"].fillna(frame["distance_min"])
+    return frame
+
+
+def _tunnel_spans(components_csv):
+    """Map each component's name to the optical interval it covers."""
+    frame = _tunnel_components(components_csv)
+    return dict(zip(frame["name"], zip(frame["distance_min"], frame["distance_max"])))
+
+
+def _tunnel_bottom(number):
+    """The bottom of a borehole is its head, straight down."""
+    x, y, _ = _TUNNEL_HEADS[number]
+    return (x, y, -_TUNNEL_DEPTH)
+
+
+def _tunnel_runs(repaired=False):
+    """Which component runs between which two surveyed waypoints."""
+    if repaired:
+        # The patch cord is coiled in a splice box, so the trench is
+        # surveyed up to the break and again from it, and the two meters
+        # between get no position at all.
+        brk = (100.00 + 15.0 * _TUNNEL_WIND, 97.79, -0.5)
+        runs = [
+            ("drop into the trench", _TUNNEL_A, _TUNNEL_B),
+            ("trench B to the break", _TUNNEL_B, brk),
+            ("trench from the break to the coil", brk, _TUNNEL_C),
+            ("trench from the coil to D", _TUNNEL_C, _TUNNEL_D),
+            ("rise out of the trench", _TUNNEL_D, _TUNNEL_E),
+        ]
+    else:
+        runs = [
+            ("drop into the trench", _TUNNEL_A, _TUNNEL_B),
+            ("trench B to the coil", _TUNNEL_B, _TUNNEL_C),
+            ("trench from the coil to D", _TUNNEL_C, _TUNNEL_D),
+            ("rise out of the trench", _TUNNEL_D, _TUNNEL_E),
+        ]
+    for number in (3, 2, 1):
+        runs.append(
+            (f"borehole {number} down", _TUNNEL_HEADS[number], _tunnel_bottom(number))
+        )
+        runs.append(
+            (f"borehole {number} up", _tunnel_bottom(number), _TUNNEL_HEADS[number])
+        )
+    return runs
+
+
+def _tunnel_geometry(at, runs):
+    """Turn each straight run into the two control points which place it."""
+    rows = []
+    for name, start, end in runs:
+        first, last = at[name]
+        rows.append((name, first, *start))
+        rows.append((name, last, *end))
+    frame = pd.DataFrame(rows, columns=["name", "distance", "x", "y", "z"])
+    return frame.to_csv(index=False)
+
+
+def _tunnel_coupling(at, trench_parts):
+    """Buried in the trench, coiled at C, cemented in the boreholes."""
+    rows: list[tuple] = [
+        (*at[name], "trench", "soil", "direct_burial", 0.5) for name in trench_parts
+    ]
+    rows.append((*at["cable coil at C"], "coiled", "soil", "", 0.5))
+    rows.extend(
+        (
+            at[f"borehole {number} down"][0],
+            at[f"borehole {number} up"][1],
+            "outside_borehole_casing",
+            "rock",
+            "cemented",
+            "",
+        )
+        for number in (3, 2, 1)
+    )
+    frame = pd.DataFrame(
+        rows,
+        columns=[
+            "distance_min",
+            "distance_max",
+            "coupling_type",
+            "medium",
+            "attachment",
+            "depth",
+        ],
+    )
+    return frame.to_csv(index=False)
+
+
+def _tunnel_labels(at, trench_parts):
+    """Which section a channel is in, and which borehole if it is in one."""
+    rows: list[tuple] = [(*at[name], "section", "trench") for name in trench_parts]
+    rows.append((*at["cable coil at C"], "section", "coil"))
+    for number in (3, 2, 1):
+        span = (at[f"borehole {number} down"][0], at[f"borehole {number} up"][1])
+        rows.append((*span, "section", "borehole"))
+        rows.append((*span, "borehole", number))
+    frame = pd.DataFrame(
+        rows, columns=["distance_min", "distance_max", "group", "value"]
+    )
+    return frame.to_csv(index=False)
+
+
+# What the contractor put in where the trench cable was cut, as the
+# length of each piece: fifteen meters of the original run, the two
+# splices holding a two-meter patch cord, and the rest of the run.
+_TUNNEL_REPAIR = (
+    ("FiberSegment", 15.0, "trench B to the break", "trench-cable"),
+    ("Splice", 0.0, "repair splice near side", "repair-box"),
+    ("FiberSegment", 2.0, "repair patch cord", "repair-cord"),
+    ("Splice", 0.0, "repair splice far side", "repair-box"),
+    ("FiberSegment", 10.0, "trench from the break to the coil", "trench-cable"),
+)
+
+
+def _tunnel_repaired_components():
+    """
+    One row becomes five where the contractor cut the trench cable.
+
+    The repair leaves two meters more fiber than it replaced, so every
+    component past it sits two meters further along the path. That shift
+    is the price of an absolute distance, and it is applied here once
+    rather than retyped into every row below the break.
+    """
+    rows = _tunnel_components(_TUNNEL_COMPONENTS).to_dict("records")
+    index = next(
+        i for i, row in enumerate(rows) if row["name"] == "trench B to the coil"
+    )
+    cut = rows[index]
+    position = cut["distance_min"]
+    replacement = []
+    for object_type, length, name, container in _TUNNEL_REPAIR:
+        replacement.append(
+            dict(
+                object_type=object_type,
+                distance_min=position,
+                distance_max=position + length,
+                name=name,
+                container=container,
+            )
+        )
+        position += length
+    shift = position - cut["distance_max"]
+    for row in rows[index + 1 :]:
+        row["distance_min"] += shift
+        row["distance_max"] += shift
+    rows[index : index + 1] = replacement
+    frame = pd.DataFrame(rows)
+    # A point component states one distance; writing its end back would
+    # make the repaired table say more than the original one does.
+    point = frame["distance_min"] == frame["distance_max"]
+    frame.loc[point, "distance_max"] = None
+    return frame.to_csv(index=False)
+
+
+def tunnel_inventory_files(repaired: bool = True) -> dict[str, str]:
+    """
+    Return the tunnel inventory as a mapping of file name to file text.
+
+    This is the authoring directory the tunnel recipe writes, as data. It
+    is exposed so the recipe can display the same files the example
+    loads, rather than composing a second copy which could drift.
+
+    Parameters
+    ----------
+    repaired
+        Whether to include the epoch added when the trench cable was
+        repaired. False is the deployment as first installed, which is
+        what the recipe shows before it gets to the repair.
+    """
+    array = "fiber_arrays/XT.TUN1"
+    path, epoch = f"{array}/path.00", f"{array}/path.00@2024-09-01"
+    at = _tunnel_spans(_TUNNEL_COMPONENTS)
+    repaired_csv = _tunnel_repaired_components()
+    repaired_at = _tunnel_spans(repaired_csv)
+    files = {
+        "inventory.yaml": (
+            "object_type: Inventory\n"
+            "coordinate_reference_system:\n"
+            "  authority: local\n"
+            "  code: tunnel\n"
+            "  name: tunnel engineering grid\n"
+            "  coordinate_labels: [x, y, z]\n"
+            "  units: [meter, meter, meter]\n"
+        ),
+        f"{array}/attrs.yaml": ("object_type: FiberArray\nname: tunnel fiber array\n"),
+        "acquisitions/XT.TUN1.00.DAS.yaml": (
+            "object_type: Acquisition\n"
+            "data_category: DAS\n"
+            "data_type: strain_rate\n"
+            "data_units: 1/s\n"
+            "interrogator: das-interrogator\n"
+            "gauge_length: 10.0\n"
+            "spatial_interval: 1.0\n"
+            "sample_rate: 250.0\n"
+            "distance_map:\n"
+            "  instrument_distance: [0.0, 2000.0]\n"
+            "  distance: [0.0, 2000.0]\n"
+        ),
+        f"{path}/attrs.yaml": "object_type: OpticalPath\n",
+        f"{path}/optical_components.csv": _TUNNEL_COMPONENTS,
+        f"{path}/geometry.csv": _tunnel_geometry(at, _tunnel_runs()),
+        f"{path}/coupling.csv": _tunnel_coupling(at, _TUNNEL_TRENCH),
+        f"{path}/labels.csv": _tunnel_labels(at, _TUNNEL_TRENCH),
+        f"{epoch}/attrs.yaml": "object_type: OpticalPath\n",
+        f"{epoch}/optical_components.csv": repaired_csv,
+        f"{epoch}/geometry.csv": _tunnel_geometry(
+            repaired_at, _tunnel_runs(repaired=True)
+        ),
+        f"{epoch}/coupling.csv": _tunnel_coupling(repaired_at, _TUNNEL_REPAIRED_TRENCH),
+        f"{epoch}/labels.csv": _tunnel_labels(repaired_at, _TUNNEL_REPAIRED_TRENCH),
+    }
+    for name, text in _TUNNEL_RESOURCES.items():
+        files[f"resources/{name}.yaml"] = text
+    if not repaired:
+        # The repair is later hardware, so before it happens neither its
+        # epoch nor the resources it introduced exist yet.
+        files = {
+            name: text
+            for name, text in files.items()
+            if epoch not in name and "repair-" not in name
+        }
+    return files
+
+
+def write_tunnel_inventory(path, repaired: bool = True) -> Path:
+    """Write the tunnel inventory's authoring directory and return it."""
+    path = Path(path)
+    for name, text in tunnel_inventory_files(repaired=repaired).items():
+        file_path = path / name
+        file_path.parent.mkdir(parents=True, exist_ok=True)
+        file_path.write_text(text)
+    return path
+
+
+@register_func(EXAMPLE_INVENTORIES, key="tunnel")
+def tunnel_inventory() -> Inventory:
+    """The tunnel deployment the tunnel recipe builds, read from its files."""
+    directory = Path(tempfile.mkdtemp()) / "tunnel_inventory"
+    return dc.inventory(write_tunnel_inventory(directory))

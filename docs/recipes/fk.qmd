@@ -54,7 +54,7 @@ ax.set_ylim(-.2, .2);
 
 One advantage of the F-K transform is the ability to manipulate signals based on their apparent velocities. [`Patch.slope_filter`](`dascore.Patch.slope_filter`) can be used for this purpose.
 
-For example, given the first example event, we can apply a slope filter whose range covers reasonable seismic velocities. The `filt` parameter specifies the slope (apparent velocities). It is a 4 length sequence of the form [va, vb, vc, vd] where velocities between `vb` and `vc` are unchanged (or set to zero if the `notch` parameter is `True`) and values between `va` and `vb`, as well as  those between `vc` and `vd`, are tapered. 
+For example, given the first example event, we can apply a slope filter whose range covers reasonable seismic velocities. The `filt` parameter specifies the slope (apparent velocities). It is a 4 length sequence of the form [va, vb, vc, vd] where velocities between `vb` and `vc` are unchanged (or set to zero if `invert=True`) and values between `va` and `vb`, as well as those between `vc` and `vd`, are tapered.
 
 
 ```{python}  

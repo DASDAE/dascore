@@ -6,9 +6,11 @@ from pathlib import Path
 
 import pytest
 from scipy.io.wavfile import read as read_wav
+from upath import UPath
 
 import dascore as dc
 from dascore.constants import ONE_SECOND
+from dascore.exceptions import ParameterError
 
 
 class TestWriteWav:
@@ -44,11 +46,23 @@ class TestWriteWav:
         dc.write(audio_patch, path, "wav")
         assert path.exists()
 
+    def test_write_single_local_upath(self, audio_patch, tmp_path_factory):
+        """Local UPath file destinations should work for wav writes."""
+        path = UPath(tmp_path_factory.mktemp("wave_temp_upath") / "temp.wav")
+        dc.write(audio_patch, path, "wav")
+        assert path.exists()
+
+    def test_write_single_remote_upath(self, audio_patch):
+        """Remote UPath file destinations should work for wav writes."""
+        path = UPath("memory://dascore/temp.wav")
+        dc.write(audio_patch, path, "wav")
+        assert path.exists()
+
     def test_resample(self, audio_patch, tmp_path_factory):
         """Ensure resampling changes sampling rate in file."""
         path = tmp_path_factory.mktemp("wav_resample") / "resampled.wav"
         dc.write(audio_patch, path, "wav", resample_frequency=1000)
-        (sr, ar) = read_wav(str(path))
+        (sr, _ar) = read_wav(str(path))
         assert sr == 1000
 
     def test_write_non_distance_dims(
@@ -66,5 +80,25 @@ class TestWriteWav:
         for mic_val in patch.coords.get_array("microphone"):
             assert path / f"microphone_{mic_val}.wav" in wavs
             # Verify content of first file
-            sr, data = read_wav(str(wavs[0]))
+            sr, _data = read_wav(str(wavs[0]))
         assert sr == int(ONE_SECOND / patch.get_coord("time").step)
+
+    def test_write_remote_directory(self, audio_patch_non_distance_dim):
+        """Remote directory destinations should work for wav writes."""
+        path = UPath("memory://dascore/wav_dir")
+        patch = audio_patch_non_distance_dim
+        patch.io.write(path, "wav")
+        wavs = list(path.glob("*.wav"))
+        assert len(wavs) == len(patch.coords.get_array("microphone"))
+
+    def test_multi_patch_spool_raises(self, audio_patch, tmp_path_factory):
+        """Writing a spool with more than one patch to wav should raise."""
+        path = tmp_path_factory.mktemp("wave_multi") / "temp.wav"
+        # Offset a copy in time so the two patches don't merge into one.
+        time = audio_patch.get_coord("time")
+        offset = (time.max() - time.min()) + 1_000 * time.step
+        other = audio_patch.update_coords(time=time.values + offset)
+        spool = dc.spool([audio_patch, other])
+        assert len(spool) == 2
+        with pytest.raises(ParameterError, match="single patch spools"):
+            dc.write(spool, path, "wav")

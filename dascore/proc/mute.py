@@ -4,21 +4,22 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from collections.abc import Mapping, Sized
-from typing import ClassVar
+from typing import Any, ClassVar
 
 import numpy as np
 from numpy.linalg import norm
 from numpy.typing import NDArray
+from pydantic import BaseModel, ConfigDict
 from scipy.ndimage import gaussian_filter
 
 import dascore as dc
 from dascore.constants import PatchType
 from dascore.exceptions import ParameterError
+from dascore.models import sensible_model_equals, sensible_model_hash
 from dascore.utils.docs import compose_docstring
 from dascore.utils.misc import (
     get_2d_line_intersection,
 )
-from dascore.utils.models import DascoreBaseModel
 from dascore.utils.patch import get_dim_axis_value, patch_function
 
 _smooth_param = """
@@ -40,10 +41,22 @@ smooth
 _smooth_type = None | float | int | tuple[float | int, ...] | dict[str, float | int]
 
 
-class _MuteGeometry(ABC, DascoreBaseModel):
+class _MuteGeometry(ABC, BaseModel):
     """
     Parent class for Mute Geometry.
+
+    A plain pydantic model: these carry a mute's geometry from argument
+    parsing to mask construction and are never serialized. Subclassing
+    DascoreBaseModel would only claim each a tag in the model registry,
+    naming them in documents they never appear in.
     """
+
+    model_config = ConfigDict(frozen=True, arbitrary_types_allowed=True)
+
+    # These hold ndarrays, which pydantic's generated __eq__ cannot compare
+    # (it raises on the truth value of an array), so they keep DASCore's.
+    __eq__ = sensible_model_equals
+    __hash__ = sensible_model_hash
 
     dims: tuple[str, ...]
     axes: tuple[int, ...]
@@ -73,6 +86,7 @@ class _MuteGeometry(ABC, DascoreBaseModel):
             if not isinstance(smooth, Mapping):
                 vals = [smooth] * len(dims)
                 axes = self.axes
+                smooth_dims = dims
             else:
                 # Otherwise, the smooth dict must be a subset of the dimensions.
                 if not set(smooth).issubset(set(dims)):
@@ -82,10 +96,12 @@ class _MuteGeometry(ABC, DascoreBaseModel):
                         f"smooth keys are {list(smooth)}."
                     )
                     raise ParameterError(msg)
-                vals = [smooth[dim] for dim in dims if dim in smooth]
-                axes = [self.dims.index(x) for x in smooth]
+                dim_axis_map = dict(zip(self.dims, self.axes, strict=True))
+                smooth_dims = [dim for dim in dims if dim in smooth]
+                vals = [smooth[dim] for dim in smooth_dims]
+                axes = [dim_axis_map[dim] for dim in smooth_dims]
 
-            return vals, axes
+            return vals, axes, smooth_dims
 
         def _convert_to_samples(smooth, dims, patch):
             """Convert the smooth parameter to number of samples."""
@@ -108,8 +124,8 @@ class _MuteGeometry(ABC, DascoreBaseModel):
                     out.append(coord.get_sample_count(val))
             return out
 
-        smooth_by_dims, axes = _broadcast_smooth_to_dims(self.dims, smooth)
-        smooth_ints = _convert_to_samples(smooth_by_dims, self.dims, patch)
+        smooth_by_dims, axes, smooth_dims = _broadcast_smooth_to_dims(self.dims, smooth)
+        smooth_ints = _convert_to_samples(smooth_by_dims, smooth_dims, patch)
         # Now convert to input format for scipy's gaussian filter.
         return smooth_ints, axes
 
@@ -134,7 +150,7 @@ class _MuteGeometry1D(_MuteGeometry):
     def _apply_mask(self, array: NDArray, patch: dc.Patch, fill_value) -> NDArray:
         coord = patch.get_coord(self.dims[0])
         _, c_index = coord.select(self.lims, relative=self.relative)
-        index = [slice(None)] * array.ndim
+        index: list[Any] = [slice(None)] * array.ndim
         index[self.axes[0]] = c_index
         array[tuple(index)] = fill_value
         return array

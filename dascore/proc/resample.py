@@ -5,19 +5,21 @@ from __future__ import annotations
 from typing import Literal
 
 import numpy as np
-from scipy.signal import decimate as scipy_decimate
 
 import dascore as dc
 import dascore.compat as compat
 from dascore.constants import PatchType
-from dascore.exceptions import FilterValueError
+from dascore.exceptions import FilterValueError, ParameterError
 from dascore.units import get_filter_units
+from dascore.utils.imports import lazy_import
 from dascore.utils.patch import (
     get_dim_axis_value,
     get_start_stop_step,
     patch_function,
 )
-from dascore.utils.time import to_int, to_timedelta64
+from dascore.utils.time import dtype_time_like, to_int, to_timedelta64
+
+scipy_decimate = lazy_import("scipy.signal", "decimate")
 
 
 def _apply_scipy_decimation(patch, factor, ftype, axis):
@@ -28,7 +30,7 @@ def _apply_scipy_decimation(patch, factor, ftype, axis):
         data = scipy_decimate(patch.data, factor, ftype=ftype, axis=axis)
     except ValueError as e:
         msg = (
-            "Scipy decimation failed. This can happen for dimensions with"
+            "Scipy decimation failed. This can happen for dimensions with "
             "few elements. Consider setting filter_type to False. The raised "
             f"exception was {e}"
         )
@@ -48,6 +50,8 @@ def decimate(
 
     Parameters
     ----------
+    patch
+        The patch to decimate.
     filter_type
         filter type to use to avoid aliasing. Options are:
             iir - infinite impulse response
@@ -70,6 +74,16 @@ def decimate(
     - If the decimation dimension is small, this can fail due to lack of
       padding values.
 
+    - Coordinates measured on the decimated dimension are decimated with
+      it: taking every nth value of a dimension takes every nth value of
+      everything indexed by it.
+
+    See Also
+    --------
+    [resample](`dascore.proc.resample.resample`)
+        Change sampling to a specified interval or number of samples, rather
+        than by an integer decimation factor.
+
     Examples
     --------
     # Simple example using iir
@@ -83,13 +97,49 @@ def decimate(
     coords, slices = patch.coords.decimate(**{dim: int(factor)})
     # Apply scipy.signal.decimate and get new coords
     if filter_type:
-        data = _apply_scipy_decimation(patch.data, factor, ftype=filter_type, axis=axis)
+        data = _apply_scipy_decimation(patch, factor, ftype=filter_type, axis=axis)
     else:  # No filter, simply slice along specified dimension.
         data = patch.data[slices]
         # Need to copy so array isn't a slice and holds onto reference of parent
         data = np.array(data) if copy else data
     # Update delta_dim since spacing along dimension has changed.
     return patch.new(data=data, coords=coords)
+
+
+def _interpolate_associated(cm, dim, coord_num, samples_num, kind) -> dict:
+    """
+    Interpolate the coordinates which ride the interpolated dimension.
+
+    A coordinate of numbers is a function of the dimension, so it is
+    interpolated the way the data is. Anything else is dropped, by
+    updating it to None: a label has nothing between its values, and a
+    time does not survive the trip through floating point -- a nanosecond
+    of the present is 1.6e18 of them, where the nearest float64 is
+    hundreds of nanoseconds away. Dropped explicitly, because
+    interpolating onto the same number of samples in different places
+    would otherwise leave the old values sitting on the new ones.
+    """
+    out = {}
+    for name, coord_dims in cm.dim_map.items():
+        coord = cm.coord_map[name]
+        if name == dim or dim not in coord_dims:
+            continue
+        # Asked before the number test, not after: numpy counts a
+        # timedelta64 as a number, and interpolating one gives back a
+        # float in whatever resolution it was stored in.
+        if dtype_time_like(coord.dtype) or not np.issubdtype(coord.dtype, np.number):
+            out[name] = None
+            continue
+        func = compat.interp1d(
+            coord_num,
+            coord.values,
+            axis=coord_dims.index(dim),
+            kind=kind,
+            fill_value="extrapolate",
+        )
+        values = func(samples_num)
+        out[name] = (coord_dims, dc.core.get_coord(data=values, units=coord.units))
+    return out
 
 
 @patch_function()
@@ -118,7 +168,17 @@ def interpolate(patch: PatchType, kind: str | int = "linear", **kwargs) -> Patch
     This function just uses scipy's interp1d function under the hood.
     See scipy.interpolate.interp1d for information.
 
-    See also [snap](`dascore.core.Patch.snap_coords`).
+    Coordinates measured on the interpolated dimension are interpolated
+    with it where they are numbers, and dropped otherwise: a label has
+    nothing between its values, and a time does not survive the trip
+    through floating point.
+
+    See Also
+    --------
+    [Patch.snap_coords](`dascore.Patch.snap_coords`)
+        Snap coordinates to evenly sampled values without interpolating data.
+    [resample](`dascore.proc.resample.resample`)
+        Resample data to a target sampling interval or number of samples.
 
     Examples
     --------
@@ -127,7 +187,8 @@ def interpolate(patch: PatchType, kind: str | int = "linear", **kwargs) -> Patch
     >>> patch = dc.get_example_patch()
     >>> # up-sample time coordinate
     >>> time = patch.coords.get_array('time')
-    >>> new_time = np.arange(time.min(), time.max(), 0.5*patch.attrs.time_step)
+    >>> time_step = patch.get_coord("time").step
+    >>> new_time = np.arange(time.min(), time.max(), 0.5 * time_step)
     >>> patch_uptime = patch.interpolate(time=new_time)
     >>> # interpolate unevenly sampled dim to evenly sampled
     >>> patch = dc.get_example_patch("wacky_dim_coords_patch")
@@ -149,7 +210,9 @@ def interpolate(patch: PatchType, kind: str | int = "linear", **kwargs) -> Patch
     cm = patch.coords
     associated_dims = cm.dim_map[dim]
     coord_new = dc.core.get_coord(data=samples)
-    cm_new = cm.update(**{dim: (associated_dims, coord_new)})
+    updates = {dim: (associated_dims, coord_new)}
+    updates |= _interpolate_associated(cm, dim, coord_num, samples_num, kind)
+    cm_new = cm.update(**updates)
     return patch.new(data=out, coords=cm_new)
 
 
@@ -226,6 +289,12 @@ def resample(
         if coord_units is not None:
             coord_units = 1 / coord_units
         new_step, _ = get_filter_units(value, value, to_unit=coord_units)
+        if new_step is None:
+            msg = (
+                f"resample requires a sampling period for dimension {dim!r}; "
+                f"got {value!r}. Pass samples=True to resample by length."
+            )
+            raise ParameterError(msg)
         # nasty hack so that ints/floats get converted to seconds.
         if isinstance(step, np.timedelta64):
             new_step = to_timedelta64(new_step)
