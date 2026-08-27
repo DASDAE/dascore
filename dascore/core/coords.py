@@ -633,9 +633,7 @@ class BaseCoord(RichRepr, DascoreBaseModel, abc.ABC):
         # them off the end of the line is not how it is read. A time
         # states its units in the way it is written -- an instant, a
         # step of "0.0005s" -- and says nothing here.
-        stated = None
-        if self.units is not None and not dtype_time_like(self.dtype):
-            stated = get_quantity_str(self.units)
+        stated = None if dtype_time_like(self.dtype) else self.unit_str
 
         def measured(value: Text) -> Text:
             """The value, and what it is measured in where it says."""

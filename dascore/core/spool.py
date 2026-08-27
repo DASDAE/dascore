@@ -2498,9 +2498,11 @@ class Spool(NodeRepr, NamespaceOwner):
             # other dimension is named in what it was measured in.
             if units and not isinstance(low, _TIMES):
                 base += Text(" ") + Text(units[0], dascore_styles["units"])
-            # How far the two ends lie apart, said bare: the line has
-            # already named the units, and a width is in them.
-            if (span := span_text(low, high)) is not None:
+            # How far the two ends lie apart, in what they are measured
+            # in: a width said bare beside a max which names its units
+            # reads as if it were in others, and the tracks under this
+            # line state theirs.
+            if (span := span_text(low, high, units[0] if units else None)) is not None:
                 base += Text("  ") + span
         return base
 

@@ -927,10 +927,10 @@ def duration_text(low, high) -> Text | None:
     """
     if not isinstance(low, _TIME_TYPES) or not isinstance(high, _TIME_TYPES):
         return None
-    # Both the same kind of time. An instant and a duration are not two
-    # ends of one extent, and subtracting them raises out of the middle
-    # of a repr in one order and gives an instant back in the other.
-    if isinstance(low, _INSTANT_TYPES) != isinstance(high, _INSTANT_TYPES):
+    # An end which is not a time is not an end: NaT compares against a
+    # Timestamp by raising, and how long an extent with one lasted is
+    # not a question with an answer.
+    if pd.isnull(low) or pd.isnull(high):
         return None
     # Read from the two ends together, which is exact, and from each of
     # them on its own where that cannot be done. An int64 of
@@ -964,6 +964,9 @@ def duration_text(low, high) -> Text | None:
     if seconds is None:
         # Each end on its own, which fits where the span between them
         # does -- to a precision only a far shorter span would miss.
+        # Held in nanoseconds itself, so a pair stated in a coarser unit
+        # and further apart than any instant a nanosecond can reach is
+        # read no better here than it was subtracted.
         seconds = to_float(high) - to_float(low)
     if not (said := human_duration(seconds)):
         return None
@@ -984,10 +987,9 @@ def span_text(low, high, units: str | None = None) -> Text | None:
     one in seconds would state a different quantity than the one
     measured.
 
-    ``units`` is what to say that width in, and is for a line which
-    states them nowhere else. A line which already names its units --
-    a coordinate row with a units field, a dimension with its unit
-    after it -- passes nothing rather than say them twice.
+    ``units`` is what to say that width in, and is stated wherever the
+    caller knows them: a width is a quantity, and one said bare beside
+    two ends which name their units reads as if it were in others.
 
     None where there is no width to state: two ends which meet, which
     is one sample and not a span of nothing, and a dimension of labels,
@@ -995,33 +997,43 @@ def span_text(low, high, units: str | None = None) -> Text | None:
     """
     if isinstance(low, _TIME_TYPES) or isinstance(high, _TIME_TYPES):
         return duration_text(low, high)
-    # Real, not Number: a complex pair has no width along one axis.
-    # Nor is a bool a quantity, though Python counts one as an integer;
-    # a true which is one more than a false is arithmetic, not a width.
-    if isinstance(low, bool) or isinstance(high, bool):
-        return None
-    if not (isinstance(low, numbers.Real) and isinstance(high, numbers.Real)):
+    if not (_measurable(low) and _measurable(high)):
         return None
     try:
         if isinstance(low, numbers.Integral) and isinstance(high, numbers.Integral):
             # Subtracted as integers, which is exact and does not wrap:
             # two int64 ends one apart up near 2**60 are the same float,
             # so a width of one would come back as no width at all.
-            width = float(int(high) - int(low))
+            width = abs(int(high) - int(low))
         else:
-            width = float(high) - float(low)
-    except (OverflowError, ValueError, TypeError):
-        # An end no float holds, a Python int of four hundred digits
-        # among them. A repr states nothing rather than raising out of
-        # the middle of itself.
+            # Subtracted in the kind they are held in, which a Decimal
+            # or a long double is exact in and a float is not.
+            width = abs(high - low)
+        # Read as a float only to ask whether there is a width to say,
+        # never to say it: an end no float holds, a Python int of four
+        # hundred digits among them, has no width a reader could read.
+        magnitude = float(width)
+    except (ArithmeticError, ValueError, TypeError):
+        # A repr states nothing rather than raising out of the middle
+        # of itself.
         return None
-    # A width, like a duration, is how far apart the two ends lie and
-    # not which of them was handed over first.
-    width = abs(width)
-    if not np.isfinite(width) or width == 0:
+    if not np.isfinite(magnitude) or magnitude == 0:
         return None
+    # Drawn the way the two ends it came from are drawn, so a reader
+    # who subtracts what the line says gets what the line says.
     stated = f" {units}" if units else ""
-    return Text(f"<{width:g}{stated}>", dascore_styles["keys"])
+    return Text(f"<{get_nice_text(width).plain}{stated}>", dascore_styles["keys"])
+
+
+def _measurable(value) -> bool:
+    """Whether a value is a quantity two of which lie a width apart."""
+    # A bool is an integer to Python and a quantity to nobody: a true
+    # which is one more than a false is arithmetic, not a width. A
+    # complex pair has no width along one axis. Every other kind of
+    # number has one, a Decimal and a Fraction among them.
+    if isinstance(value, bool | complex):
+        return False
+    return isinstance(value, numbers.Number)
 
 
 def _split_instant(rendered: str) -> tuple[str, str]:

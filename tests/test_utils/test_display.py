@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import re
 import time
+from decimal import Decimal
+from fractions import Fraction
 from html import unescape
 from importlib.resources import files
 from pathlib import Path
@@ -1042,6 +1044,24 @@ class TestDurationText:
         """
         assert duration_text(low, high) is None
 
+    @pytest.mark.parametrize(
+        ("low", "high"),
+        [
+            (pd.Timestamp("2020-01-01"), np.datetime64("NaT")),
+            (np.datetime64("NaT"), pd.Timestamp("2020-01-01")),
+            (pd.NaT, pd.Timestamp("2020-01-01")),
+        ],
+        ids=["high_null", "low_null", "pandas_null"],
+    )
+    def test_an_end_which_is_not_a_time(self, low, high):
+        """
+        NaT compares against a Timestamp by raising.
+
+        How long an extent with one end unstated lasted is not a
+        question with an answer, and not one to raise a repr over.
+        """
+        assert duration_text(low, high) is None
+
     def test_further_apart_than_a_timedelta_holds(self):
         """
         Two instants can lie further apart than a Timedelta holds.
@@ -1104,8 +1124,18 @@ class TestSpanText:
         assert str(span_text(low, high)) == "<24 s>"
 
     def test_a_width_is_said_in_the_units_asked_for(self):
-        """A line which names its units nowhere else names them here."""
-        assert str(span_text(0.0, 5.0, "m")) == "<5 m>"
+        """A width said bare reads as if it were in other units."""
+        assert str(span_text(0.0, 5.0, "m")) == "<5.000 m>"
+
+    def test_a_width_is_drawn_as_the_ends_it_came_from_are(self):
+        """
+        A reader who subtracts what the line says gets what it says.
+
+        The same formatter the two ends are drawn with, so a float
+        states its decimals and an integer states none.
+        """
+        assert str(span_text(360.663, 362.119)) == "<1.456>"
+        assert str(span_text(0, 299)) == "<299>"
 
     def test_ends_which_meet_have_no_width(self):
         """One sample spans an instant, which is not a span of nothing."""
@@ -1141,10 +1171,11 @@ class TestSpanText:
         Two int64 ends can lie further apart than an int64 holds.
 
         Subtracted as they are stored the width wraps and comes back
-        negative, so each end is read as a float first.
+        negative, so both ends are read as Python integers first, which
+        have no width they do not fit in.
         """
         low, high = np.int64(-(2**63)), np.int64(2**63 - 1)
-        assert str(span_text(low, high)) == "<1.84467e+19>"
+        assert str(span_text(low, high)) == "<18446744073709551615>"
 
     def test_a_width_finer_than_a_float_resolves(self):
         """
@@ -1177,6 +1208,23 @@ class TestSpanText:
         and give an instant back in the other.
         """
         assert span_text(low, high) is None
+
+    @pytest.mark.parametrize(
+        ("low", "high", "expected"),
+        [
+            (Decimal("1.5"), Decimal("4.5"), "<3.0>"),
+            (Fraction(2**60), Fraction(2**60 + 1), "<1>"),
+        ],
+        ids=["decimal", "fraction"],
+    )
+    def test_a_width_held_in_a_kind_a_float_cannot_hold(self, low, high, expected):
+        """
+        Every kind of number has a width, not only the ones numpy has.
+
+        Read as two floats these come back as no width at all: 2**60
+        and one past it are the same float.
+        """
+        assert str(span_text(low, high)) == expected
 
     def test_a_pair_of_bools_has_no_width(self):
         """
@@ -1483,7 +1531,7 @@ class TestValuesAReaderCanRead:
         """
         frame = pd.DataFrame({"distance_min": [0.0], "distance_max": [299.0]})
         rendered = str(AnnotationSet(frame, dims=("distance",)))
-        assert "<299>" in rendered
+        assert "<299.000>" in rendered
         assert " m>" not in rendered
 
     def test_an_annotation_set_states_its_span(self):
@@ -2155,8 +2203,9 @@ class TestTableColumns:
         """
         It belongs where the row stating it puts it.
 
-        Only a time coordinate has a span, and it states it between its
-        max and its step rather than after everything a distance says.
+        A coordinate of one sample has no span, and the one beside it
+        states its own between its max and its step rather than after
+        everything the shorter row says.
         """
         assert self._columns([("a", "xz"), ("b", "xyz")]) == ["kind", "x", "y", "z"]
 
