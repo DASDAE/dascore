@@ -24,7 +24,7 @@ so the two produce the same output.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable
 from itertools import product
 from math import prod
 from typing import Any, Literal, NamedTuple
@@ -34,14 +34,11 @@ from pydantic import ConfigDict
 from scipy import fft as sp_fft
 
 from dascore.constants import PatchType
-from dascore.exceptions import (
-    MissingOptionalDependencyError,
-    ParameterError,
-    PatchCoordinateError,
-)
+from dascore.exceptions import MissingOptionalDependencyError, ParameterError
 from dascore.utils.misc import is_power_of_two
 from dascore.utils.patch import patch_function
 from dascore.utils.signal import _triangular_taper
+from dascore.utils.window import resolve_window
 from dascore.workflow.meta import PatchMeta
 from dascore.workflow.processor import PatchProcessor, register_implementation
 
@@ -291,63 +288,6 @@ class _Geometry(NamedTuple):
     overlaps: tuple[int, ...]
 
 
-def _axes(meta: PatchMeta, dims: tuple[str, ...]) -> tuple[int, ...]:
-    """Return the axis of each dimension named, refusing one the patch lacks."""
-    for dim in dims:
-        if dim not in meta.dims:
-            msg = f"Dimension {dim!r} not found in patch dimensions {meta.dims}."
-            raise PatchCoordinateError(msg)
-    return tuple(meta.get_axis(dim) for dim in dims)
-
-
-def _sample_counts(
-    meta: PatchMeta,
-    values: Mapping[str, Any],
-    *,
-    samples: bool,
-    name: str,
-    sample_dims: frozenset[str] = frozenset(),
-) -> tuple[int, ...]:
-    """Convert per-dimension values in samples or coordinate units to sample counts."""
-    out: list[int] = []
-    for dim, value in values.items():
-        if samples or dim in sample_dims:
-            count = int(value)
-        else:
-            count = meta.coords.get_coord(dim).get_sample_count(value)
-        invalid = count < 0 if name == "overlap" else count <= 0
-        if invalid:
-            requirement = "non-negative" if name == "overlap" else "positive"
-            msg = f"{name} for dimension {dim!r} must be {requirement}."
-            raise ParameterError(msg)
-        out.append(count)
-    return tuple(out)
-
-
-def _normalize_overlap(
-    overlap: Any,
-    dims: tuple[str, ...],
-    windows: tuple[int, ...],
-) -> tuple[dict[str, Any], frozenset[str]]:
-    """Return per-dimension overlap values and internally defaulted dimensions."""
-    # The largest overlap the window allows, which is what Lightguide uses.
-    defaults = {dim: window // 2 - 1 for dim, window in zip(dims, windows)}
-    if overlap is None:
-        return defaults, frozenset(dims)
-    if isinstance(overlap, Mapping):
-        extra = set(overlap) - set(dims)
-        if extra:
-            names = sorted(map(str, extra))
-            msg = f"overlap contains dimensions not being filtered: {names}"
-            raise ParameterError(msg)
-        return defaults | dict(overlap), frozenset(set(dims) - set(overlap))
-    # Uncoerced: the value the caller gave is read in coordinate units
-    # unless samples says otherwise, and int() of a timedelta64 or a
-    # fractional second is not the overlap they asked for. Only the
-    # defaults above are sample counts, which is what the returned set says.
-    return dict.fromkeys(dims, overlap), frozenset()
-
-
 def _get_engine(engine: str, selected_ndim: int) -> Callable:
     """Return the requested adaptive spectral array filter implementation."""
     if engine == "scipy" or (engine == "auto" and selected_ndim == 1):
@@ -504,16 +444,22 @@ class AdaptiveSpectralFilter(PatchProcessor):
                 "kwargs, e.g. patch.adaptive_spectral_filter(time=32, samples=True)."
             )
             raise ParameterError(msg)
-        dims = tuple(selected)
-        axes = _axes(meta, dims)
-        windows = _sample_counts(meta, selected, samples=self.samples, name="window")
-        overlap_values, sample_dims = _normalize_overlap(self.overlap, dims, windows)
-        overlaps = _sample_counts(
+        window = resolve_window(
             meta,
-            overlap_values,
+            selected,
             samples=self.samples,
-            name="overlap",
-            sample_dims=sample_dims,
+            overlap=self.overlap,
+            # The most the window allows, which is what Lightguide uses. A
+            # default is a sample count whatever `samples` says.
+            default_overlap=lambda size: size // 2 - 1,
+        )
+        # A default was given, so every dimension has an overlap.
+        assert window.overlap is not None
+        dims, axes, windows, overlaps = (
+            window.dims,
+            window.axes,
+            window.size,
+            window.overlap,
         )
         _validate_window_and_overlap(dims, windows, overlaps, float(self.exponent))
         return _Geometry(axes, windows, overlaps)

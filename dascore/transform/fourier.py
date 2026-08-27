@@ -31,11 +31,11 @@ from dascore.utils.patch import (
     _get_data_units_from_dims,
     _get_dx_or_spacing_and_axes,
     get_dim_axis_value,
-    get_window_axis_step,
     patch_function,
 )
 from dascore.utils.time import is_datetime64, is_timedelta64, to_float
 from dascore.utils.transformatter import FourierTransformatter
+from dascore.utils.window import resolve_window
 
 if TYPE_CHECKING:
     from scipy.signal import ShortTimeFFT
@@ -627,11 +627,19 @@ def stft(
     (dim, axis, _) = get_dim_axis_value(patch, kwargs=kwargs)[0]
     coord = patch.get_coord(dim, require_evenly_sampled=True)
     # Get window count/step in samples
-    window_samples, _, hop = get_window_axis_step(
-        patch, step=None, overlap=overlap, samples=samples, **kwargs
+    resolved = resolve_window(
+        patch,
+        kwargs,
+        samples=samples,
+        overlap=overlap,
+        allow_multiple=False,
+        # No floor of its own: a zero window is refused below, by name.
+        min_samples=0,
+        enforce_lt_coord=True,
     )
-    # Default step here is the same size as window (no overlap).
-    hop = hop if hop is not None else window_samples
+    window_samples = resolved.size[0]
+    # No overlap given means none: the windows abut.
+    hop = window_samples if resolved.stride is None else resolved.stride[0]
     sampling_rate = 1 / abs(dc.to_float(coord.step))
     # Create window.
     if isinstance(taper_window, ndarray):

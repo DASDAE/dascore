@@ -14,14 +14,12 @@ import dascore as dc
 from dascore.config import config_context
 from dascore.constants import PatchType
 from dascore.exceptions import (
-    CoordError,
     CoordMergeError,
     IncompatiblePatchError,
     ParameterError,
     PatchAttributeError,
     PatchCoordinateError,
 )
-from dascore.units import percent
 from dascore.utils.misc import suppress_warnings
 from dascore.utils.patch import (
     _force_patch_merge,
@@ -35,8 +33,6 @@ from dascore.utils.patch import (
     get_dim_axis_value,
     get_patch_kind,
     get_patch_names,
-    get_patch_window_size,
-    get_window_axis_step,
     merge_compatible_coords_attrs,
     merge_patches,
     patch_function,
@@ -1371,221 +1367,6 @@ class TestSwapKwargsDimToAxis:
 
         with pytest.raises(ParameterError, match="Dimension 'invalid_dim' not found"):
             swap_kwargs_dim_to_axis(random_patch, kwargs)
-
-
-class TestGetPatchWindowSize:
-    """Tests for the get_patch_window_size function."""
-
-    @pytest.fixture()
-    def simple_patch(self):
-        """Create a simple patch for testing."""
-        patch = dc.get_example_patch()
-        return patch.update_coords(time_step=0.2)  # Make windows reasonable
-
-    def test_basic_window_size(self, simple_patch):
-        """Test basic window size calculation."""
-        size = get_patch_window_size(simple_patch, {"time": 0.6})
-        assert isinstance(size, tuple)
-        assert len(size) == simple_patch.data.ndim
-        # Find which axis corresponds to time
-        time_axis = simple_patch.dims.index("time")
-        distance_axis = simple_patch.dims.index("distance")
-        assert size[time_axis] > 1  # time dimension should have window > 1
-        assert size[distance_axis] == 1  # distance dimension should be 1
-
-    def test_multiple_dimensions(self, simple_patch):
-        """Test window size with multiple dimensions."""
-        size = get_patch_window_size(simple_patch, {"time": 0.6, "distance": 3.0})
-        time_axis = simple_patch.dims.index("time")
-        distance_axis = simple_patch.dims.index("distance")
-        assert size[time_axis] > 1  # time dimension
-        assert size[distance_axis] > 1  # distance dimension
-
-    def test_samples_true(self, simple_patch):
-        """Test with samples=True parameter."""
-        size = get_patch_window_size(simple_patch, {"time": 5}, samples=True)
-        time_axis = simple_patch.dims.index("time")
-        assert size[time_axis] == 5
-
-    def test_require_odd_true_samples_false(self, simple_patch):
-        """Test require_odd=True with samples=False adjusts even sizes."""
-        # Use a value that would give even samples
-        coord = simple_patch.get_coord("time")
-        step = coord.step
-        even_value = step * 4  # Should give 4 samples
-
-        size = get_patch_window_size(
-            simple_patch, {"time": even_value}, samples=False, require_odd=True
-        )
-        # Should be adjusted to 5 (next odd number)
-        time_axis = simple_patch.dims.index("time")
-        assert size[time_axis] % 2 == 1
-
-    def test_require_odd_true_samples_true_even_raises(self, simple_patch):
-        """Test require_odd=True with samples=True raises for even sizes."""
-        with pytest.raises(ParameterError, match="windows must be odd"):
-            get_patch_window_size(
-                simple_patch, {"time": 4}, samples=True, require_odd=True
-            )
-
-    def test_require_odd_true_samples_true_odd_passes(self, simple_patch):
-        """Test require_odd=True with samples=True passes for odd sizes."""
-        size = get_patch_window_size(
-            simple_patch, {"time": 5}, samples=True, require_odd=True
-        )
-        time_axis = simple_patch.dims.index("time")
-        assert size[time_axis] == 5
-
-    def test_min_samples_validation(self, simple_patch):
-        """Test minimum samples validation."""
-        with pytest.raises(ParameterError, match="at least 3 samples"):
-            get_patch_window_size(
-                simple_patch, {"time": 2}, samples=True, min_samples=3
-            )
-
-    def test_warn_above_warning(self, simple_patch):
-        """Test warning for large window sizes."""
-        with pytest.warns(UserWarning, match="Large window size.*may result in slow"):
-            get_patch_window_size(
-                simple_patch, {"time": 15}, samples=True, warn_above=10
-            )
-
-    def test_warn_above_uses_total_window(self, simple_patch):
-        """The threshold applies to the window's total size, not each dim."""
-        kwargs = {"time": 5, "distance": 5}
-        with pytest.warns(UserWarning, match="Large window size \\(25 samples\\)"):
-            get_patch_window_size(simple_patch, kwargs, samples=True, warn_above=10)
-
-    def test_min_samples_message_suggests_samples(self, simple_patch):
-        """A too-small window in coord units should mention samples (#1046)."""
-        with pytest.raises(ParameterError, match="samples=True"):
-            get_patch_window_size(simple_patch, {"time": 0.2}, min_samples=3)
-        # When the value is already in samples there is nothing to suggest.
-        with pytest.raises(ParameterError, match="Try increasing"):
-            get_patch_window_size(
-                simple_patch, {"time": 2}, samples=True, min_samples=3
-            )
-
-    def test_no_warning_under_threshold(self, simple_patch):
-        """Test no warning for window sizes under threshold."""
-        with suppress_warnings(action="error"):
-            # This should not raise (no warning)
-            size = get_patch_window_size(
-                simple_patch, {"time": 5}, samples=True, warn_above=10
-            )
-            time_axis = simple_patch.dims.index("time")
-            assert size[time_axis] == 5
-
-    def test_empty_kwargs(self, simple_patch):
-        """Test with empty kwargs returns all ones."""
-        size = get_patch_window_size(simple_patch, {})
-        assert all(s == 1 for s in size)
-        assert len(size) == simple_patch.data.ndim
-
-    def test_invalid_dimension_raises(self, simple_patch):
-        """Test invalid dimension name raises error."""
-        with pytest.raises(ParameterError):
-            get_patch_window_size(simple_patch, {"invalid_dim": 5})
-
-    def test_non_evenly_sampled_raises(self, simple_patch):
-        """Test non-evenly sampled coordinate raises error."""
-        # Create a non-evenly sampled coordinate
-        time_size = simple_patch.data.shape[simple_patch.dims.index("time")]
-        time_vals = np.array([0.0, 0.1, 0.3, 0.7, 1.5])  # Non-uniform spacing
-        # Take enough values to match the patch size
-        if len(time_vals) < time_size:
-            # Extend with more irregular values
-            extra_vals = np.linspace(2.0, 10.0, time_size - len(time_vals))
-            time_vals = np.concatenate([time_vals, extra_vals])
-        irregular_patch = simple_patch.update_coords(time=time_vals[:time_size])
-
-        with pytest.raises(CoordError):
-            get_patch_window_size(irregular_patch, {"time": 0.5})
-
-
-class TestGetWindowAxisStep:
-    """Tests for getting window size, axis, and step."""
-
-    window = 16
-    step = 8
-
-    def test_apply_with_overlap(self, random_patch):
-        """Ensure overlap is converted to the correct step size."""
-        coord = random_patch.get_coord("distance")
-        window = self.window * coord.step
-        overlap = (self.window - self.step) * coord.step
-        out = get_window_axis_step(random_patch, distance=window, overlap=overlap)
-        assert out == (self.window, random_patch.get_axis("distance"), self.step)
-
-    def test_apply_with_percent_overlap(self, random_patch):
-        """Ensure percent overlap is supported."""
-        coord = random_patch.get_coord("distance")
-        window = self.window * coord.step
-        out = get_window_axis_step(random_patch, distance=window, overlap=50 * percent)
-        assert out == (self.window, random_patch.get_axis("distance"), self.step)
-
-    def test_apply_with_percent_overlap_and_samples(self, random_patch):
-        """Ensure percent overlap works when samples=True."""
-        out = get_window_axis_step(
-            random_patch, distance=self.window, overlap=50 * percent, samples=True
-        )
-        assert out == (self.window, random_patch.get_axis("distance"), self.step)
-
-    def test_negative_overlap_raises(self, random_patch):
-        """Ensure negative overlap is rejected."""
-        step = random_patch.get_coord("distance").step
-        msg = "overlap must be non-negative"
-        with pytest.raises(ParameterError, match=msg):
-            get_window_axis_step(
-                random_patch, distance=self.window * step, overlap=-step
-            )
-
-    def test_invalid_percent_overlap_raises(self, random_patch):
-        """Ensure percent overlap must be between 0 and 100."""
-        msg = "Percentage must be between 0 and 100"
-        with pytest.raises(ParameterError, match=msg):
-            get_window_axis_step(
-                random_patch, distance=self.window, overlap=101 * percent, samples=True
-            )
-
-    def test_complete_overlap_raises(self, random_patch):
-        """Ensure complete overlap is rejected."""
-        msg = "Window step must be greater than zero"
-        with pytest.raises(ParameterError, match=msg):
-            get_window_axis_step(
-                random_patch, distance=self.window, overlap=100 * percent, samples=True
-            )
-
-    def test_overlap_larger_than_window_raises(self, random_patch):
-        """Ensure overlap larger than window is rejected."""
-        msg = "Window step must be greater than zero"
-        with pytest.raises(ParameterError, match=msg):
-            get_window_axis_step(
-                random_patch,
-                distance=self.window,
-                overlap=self.window + 1,
-                samples=True,
-            )
-
-    def test_step_and_overlap_raises(self, random_patch):
-        """Ensure step and overlap are mutually exclusive."""
-        step = random_patch.get_coord("distance").step
-        msg = "step and overlap are mutually exclusive"
-        with pytest.raises(ParameterError, match=msg):
-            get_window_axis_step(
-                random_patch,
-                distance=self.window * step,
-                step=self.step * step,
-                overlap=50 * percent,
-            )
-
-    def test_none_overlap_matches_default(self, random_patch):
-        """Ensure overlap=None preserves default window/step behavior."""
-        step = random_patch.get_coord("distance").step
-        out = get_window_axis_step(
-            random_patch, distance=self.window * step, overlap=None
-        )
-        assert out == (self.window, random_patch.get_axis("distance"), None)
 
 
 class TestForcePatchMergeOverlap:

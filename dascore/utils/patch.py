@@ -4,9 +4,7 @@ from __future__ import annotations
 
 import functools
 import inspect
-import math
 import sys
-import warnings
 from collections import namedtuple
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from typing import Literal, Protocol, cast, overload
@@ -33,7 +31,7 @@ from dascore.exceptions import (
     PatchCoordinateError,
     UnitError,
 )
-from dascore.units import carries_units, convert_units, get_quantity, is_percent
+from dascore.units import carries_units, convert_units, get_quantity
 from dascore.utils.array_api import (
     asarray_like,
     backend_name,
@@ -64,7 +62,7 @@ from dascore.utils.misc import (
     yield_sub_sequences,
 )
 from dascore.utils.paths import is_memory_uri
-from dascore.utils.time import is_timedelta64, to_float, to_timedelta64
+from dascore.utils.time import to_float
 from dascore.workflow.builtin import Concatenate, Stack
 from dascore.workflow.checks import attr_type, check_patch_attrs, check_patch_coords
 from dascore.workflow.identity import (
@@ -926,196 +924,6 @@ def get_dim_sampling_rate(patch: PatchType, dim: str) -> float:
         )
         raise CoordDataError(msg)
     return 1.0 / d_dim
-
-
-def get_patch_window_size(
-    patch: PatchType,
-    kwargs: dict,
-    samples: bool = False,
-    *,
-    require_odd: bool = False,
-    warn_above: int | None = None,
-    min_samples: int = 1,
-    enforce_lt_coord: bool = False,
-) -> tuple[int, ...]:
-    """
-    Get window sizes for patch processing operations.
-
-    Parameters
-    ----------
-    patch
-        The input patch.
-    kwargs
-        Keyword arguments specifying dimension names and their window sizes.
-    samples
-        If True, kwargs values are in samples; if False, in coordinate units.
-    require_odd
-        If True, require odd window sizes. When samples=False, even sizes
-        are adjusted to be odd. When samples=True, even sizes raise ParameterError.
-    warn_above
-        If specified, warn when the total window size (the product of the
-        sample counts of each dimension) exceeds this value.
-    min_samples
-        Minimum number of samples required per dimension.
-    enforce_lt_coord
-        If True, reject windows larger than coordinate length.
-
-    Returns
-    -------
-    Tuple of window sizes for each dimension of the patch data.
-
-    Raises
-    ------
-    ParameterError
-        If window sizes are too small, or if require_odd=True and samples=True
-        but window size is even.
-    """
-    # Handle empty kwargs case - return all ones
-    if not kwargs:
-        return tuple([1] * patch.data.ndim)
-
-    aggs = get_dim_axis_value(patch, kwargs=kwargs, allow_multiple=True)
-    size = [1] * patch.data.ndim
-
-    for name, axis, val in aggs:
-        coord = patch.get_coord(name, require_evenly_sampled=True)
-        samps = coord.get_sample_count(
-            val, samples=samples, enforce_lt_coord=enforce_lt_coord
-        )
-
-        # Check minimum samples requirement
-        if samps < min_samples:
-            if samples:
-                hint = "Try increasing its value."
-            else:
-                # in seconds, which is what a time value would be given in
-                step = coord.step
-                step = f"{to_float(step)} s" if is_timedelta64(step) else step
-                hint = (
-                    f"The value is in the units of {name}, which is sampled "
-                    f"every {step}; increase it, or use samples=True to give "
-                    "the window in samples."
-                )
-            msg = (
-                f"Window must have at least {min_samples} samples along each "
-                f"dimension. {name} has {samps} samples. {hint}"
-            )
-            raise ParameterError(msg)
-
-        # Handle odd number requirement
-        if require_odd and (samps % 2 != 1):
-            if not samples:
-                # Adjust even sizes to odd when samples=False
-                samps += 1
-            else:
-                # Raise error when samples=True and size is even
-                msg = (
-                    f"For clean median calculation, dimension windows must be odd "
-                    f"but {name} has a value of {samps} samples."
-                )
-                raise ParameterError(msg)
-
-        size[axis] = samps
-
-    # Warn on the total window, not each dimension: the cost of a windowed
-    # operation tracks the number of samples the window covers, so a 2D
-    # window is as expensive as its area.
-    total = math.prod(size)
-    if warn_above is not None and total > warn_above:
-        msg = (
-            f"Large window size ({total} samples) may result in slow "
-            "performance. Consider reducing the window size."
-        )
-        warnings.warn(msg, UserWarning, stacklevel=3)
-
-    return tuple(size)
-
-
-def get_window_axis_step(
-    patch,
-    overlap=None,
-    step=None,
-    samples=False,
-    **kwargs,
-) -> tuple[int, int, int | None]:
-    """
-    Get window size, axis, and step for a single patch dimension.
-
-    Parameters
-    ----------
-    patch
-        The patch with the dimension and coordinate.
-    overlap
-        Optional overlap between adjacent windows. Percent quantities are
-        interpreted relative to the window size.
-    step
-        Optional step between adjacent windows. Mutually exclusive with overlap.
-        Percent quantities are interpreted relative to the window size.
-    samples
-        If True, numeric window, overlap, and step values are interpreted as
-        sample counts. Quantities with explicit units keep their unit meaning.
-    **kwargs
-        Exactly one dimension name and window size.
-
-    Returns
-    -------
-    tuple
-        The window size in samples, the axis for the dimension, and the step in
-        samples. The step is None if neither step nor overlap was provided.
-    """
-
-    def _percent_to_window_samps(window, val):
-        """Convert any percentages to samples of the window."""
-        if is_per := is_percent(val):
-            mag = val.magnitude
-            if mag < 0 or mag > 100:
-                msg = f"Percentage must be between 0 and 100, not {val}"
-                raise ParameterError(msg)
-            val = int(np.round(val.magnitude / 100 * window))
-        return val, is_per
-
-    def _check_not_negative(val, name):
-        """Ensure a step or overlap value isn't negative."""
-        magnitude = val.magnitude if isinstance(val, dc.units.Quantity) else val
-        # A bare 0 would make numpy cast the timedelta to a generic unit.
-        zero = to_timedelta64(0) if is_timedelta64(magnitude) else 0
-        if magnitude is not None and magnitude < zero:
-            msg = f"{name} must be non-negative"
-            raise ParameterError(msg)
-
-    def quantity_to_samps(val, coord, samples=False):
-        """Convert quantity value to number of samples."""
-        # None just passes through
-        if val is None:
-            return None
-        # Specifying a quantity should overwrite samples parameter.
-        if isinstance(val, dc.units.Quantity):
-            samples = False
-        return coord.get_sample_count(val, samples=samples, enforce_lt_coord=True)
-
-    if overlap is not None and step is not None:
-        msg = "step and overlap are mutually exclusive."
-        raise ParameterError(msg)
-
-    dim, axis, win = get_dim_axis_value(patch, kwargs=kwargs, allow_multiple=False)[0]
-    coord = patch.get_coord(dim, require_evenly_sampled=True)
-    win_samp = coord.get_sample_count(win, samples=samples, enforce_lt_coord=True)
-    # Convert any percentages to win_samples
-    step, step_percent = _percent_to_window_samps(win_samp, step)
-    overlap, overlap_percent = _percent_to_window_samps(win_samp, overlap)
-    _check_not_negative(step, "step")
-    _check_not_negative(overlap, "overlap")
-    # Then convert to coordinate samples. This handles differing units and such.
-    step = quantity_to_samps(step, coord, samples=samples or step_percent)
-    overlap = quantity_to_samps(overlap, coord, samples=samples or overlap_percent)
-    # Convert overlap to step
-    if step is None and overlap is not None:
-        step = win_samp - overlap
-    if step is not None and step <= 0:
-        msg = "Window step must be greater than zero."
-        raise ParameterError(msg)
-    # Get window length/step in samples
-    return win_samp, axis, step
 
 
 # What a derivative along a dimension makes of the data. Read forward to

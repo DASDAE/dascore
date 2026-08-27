@@ -15,9 +15,9 @@ from dascore.utils.docs import compose_docstring
 from dascore.utils.patch import (
     _maybe_add_history_str,
     get_dim_axis_value,
-    get_window_axis_step,
 )
 from dascore.utils.pd import rolling_df
+from dascore.utils.window import resolve_window
 
 rolling_apply_description = """
 Apply a function over the specified moving window.
@@ -394,7 +394,19 @@ def rolling(
         return _NumpyPatchRoller
 
     dim, axis, value = get_dim_axis_value(patch, kwargs=kwargs)[0]
-    window, _, step = get_window_axis_step(patch, overlap, step, samples, **kwargs)
+    resolved = resolve_window(
+        patch,
+        kwargs,
+        samples=samples,
+        overlap=overlap,
+        step=step,
+        allow_multiple=False,
+        # No floor of its own: a zero window is refused below, by name.
+        min_samples=0,
+        enforce_lt_coord=True,
+    )
+    window = resolved.size[0]
+    step = None if resolved.stride is None else resolved.stride[0]
     # Handle default when no overlap/step specified and ensure window size
     step = 1 if step is None else step
     if window == 0 or step == 0:
