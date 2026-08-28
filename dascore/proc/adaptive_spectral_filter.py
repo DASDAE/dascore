@@ -34,7 +34,6 @@ from scipy import fft as sp_fft
 
 from dascore.constants import PatchType
 from dascore.exceptions import MissingOptionalDependencyError, ParameterError
-from dascore.utils.misc import is_power_of_two
 from dascore.utils.patch import patch_function
 from dascore.utils.signal import get_taper
 from dascore.utils.tiles import TilePlan, get_tile_plan
@@ -54,10 +53,8 @@ def _check_window(window: Any, overlap: Any, label: str) -> None:
     if not isinstance(overlap, int | np.integer):
         msg = f"overlap for {label} must be an integer; got {overlap!r}."
         raise ValueError(msg)
-    if window <= 4 or not is_power_of_two(window):
-        msg = (
-            f"window for {label} must be a power of two greater than 4; got {window!r}."
-        )
+    if window < 2:
+        msg = f"window for {label} must be at least 2 samples; got {window!r}."
         raise ValueError(msg)
     if overlap < 0:
         msg = f"overlap for {label} must be non-negative; got {overlap!r}."
@@ -175,8 +172,7 @@ def _adaptive_spectral_filter_scipy(
     data
         One- or two-dimensional input array. The filter computes in ``float32``.
     window_size
-        Power-of-two window lengths, one per array axis. Values must be greater
-        than 4.
+        Window lengths in samples, one per array axis, of at least 2.
     overlap
         Number of samples each neighboring window overlaps on each axis. Values
         must be non-negative and smaller than half the matching window.
@@ -198,7 +194,7 @@ def _adaptive_spectral_filter_scipy(
     ValueError
         If ``data`` is not one- or two-dimensional, ``exponent`` is not finite,
         ``window_size`` and ``overlap`` do not match ``data.ndim``, any window
-        size is not a power of two greater than 4, or any overlap is negative or
+        size is under 2 samples, or any overlap is negative or
         at least half the matching window size.
     """
     data = np.asarray(data)
@@ -326,9 +322,9 @@ def adaptive_spectral_filter(
       its own magnitude to the power of ``exponent``, so the output's units
       are not the input's and its amplitudes grow with the input's; compare
       arrivals within one output rather than across inputs.
-    - Windows must be powers of two greater than 4 samples. A window should
-      hold a few cycles of the arrivals to keep and be short against the
-      distance over which their moveout changes.
+    - A window should hold a few cycles of the arrivals to keep and be short
+      against the distance over which their moveout changes. Any length of
+      at least 2 samples serves; a power of two transforms fastest.
     """
     return AdaptiveSpectralFilter(
         overlap=overlap,
@@ -377,6 +373,7 @@ class AdaptiveSpectralFilter(PatchProcessor):
             overlap=self.overlap,
             # Sample counts are read as given, whatever the coordinate is.
             require_evenly_sampled=False,
+            min_samples=2,
             # The most the window allows, which is what Lightguide uses. A
             # default is a sample count whatever `samples` says.
             default_overlap=lambda size: size // 2 - 1,

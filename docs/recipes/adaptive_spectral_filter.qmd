@@ -31,7 +31,7 @@ fig, axes = plt.subplots(1, 2, figsize=(12, 5), sharey=True)
 show(axes, [patch, filtered], ["band-passed", "filtered"])
 ```
 
-Only the window sizes were given; `overlap` defaults to the largest the window allows and `exponent` to 0.8, the settings Lightguide uses. Windows must be powers of two greater than 4 samples and can also be given in coordinate units, as in `patch.adaptive_spectral_filter(time=1.6e-3 * s, distance=16 * m)`. Selecting a single dimension weights each trace's spectrum on its own, which favours the strong arrivals but cannot see coherence across the fiber.
+Only the window sizes were given; `overlap` defaults to the largest the window allows and `exponent` to 0.8, the settings Lightguide uses. Windows can also be given in coordinate units, as in `patch.adaptive_spectral_filter(time=1.6e-3 * s, distance=16 * m)`. Selecting a single dimension weights each trace's spectrum on its own, which favours the strong arrivals but cannot see coherence across the fiber.
 
 ## Choosing the exponent
 
