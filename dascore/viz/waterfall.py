@@ -291,6 +291,9 @@ def waterfall(
 
     Notes
     -----
+    - A Patch with an empty dimension raises `ParameterError` immediately
+      because it has no cells to render.
+
     - The Y axis is automatically inverted if it is "time-like". This is to
       be consistent with standard seismic plotting convention. If you don't
       want this, simply invert the y axis of the returned axis object as
@@ -303,6 +306,9 @@ def waterfall(
       the default behavior is to now use a statistical fence to avoid the
       problem. To get the old behavior, simply set scale=1.0.
     """
+    if 0 in patch.shape:
+        msg = "Cannot plot a Patch with an empty dimension."
+        raise ParameterError(msg)
     # Validate inputs
     patch = _validate_patch_dims(patch)
     _validate_gap_factor(gap_factor)
