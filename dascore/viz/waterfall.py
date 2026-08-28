@@ -45,7 +45,10 @@ def _validate_patch_dims(patch):
     """Validate that patch is 2D for waterfall plotting."""
     if patch.ndim != 2:
         # Try squeezing out degenerate dims to visualize.
-        patch = patch.squeeze()
+        singleton_dims = [
+            dim for dim, size in zip(patch.dims, patch.shape, strict=True) if size == 1
+        ]
+        patch = patch.squeeze(singleton_dims)
         if patch.ndim != 2:
             dims = patch.dims
             msg = (
@@ -291,6 +294,9 @@ def waterfall(
 
     Notes
     -----
+    - A Patch with an empty dimension returns an empty axes because it has no
+      cells to render.
+
     - The Y axis is automatically inverted if it is "time-like". This is to
       be consistent with standard seismic plotting convention. If you don't
       want this, simply invert the y axis of the returned axis object as
@@ -314,7 +320,8 @@ def waterfall(
     plan, runs = None, None
     if label_coord is not None:
         plan = label_plan(patch, label_coord, dims_r)
-        runs = label_runs(patch.coords.get_array(plan.name), plan.name)
+        if 0 not in patch.shape:
+            runs = label_runs(patch.coords.get_array(plan.name), plan.name)
     # Setup axes and data. A figure this call built is one whose room a
     # legend may take; any other belongs to the caller.
     owned = ax is None
@@ -326,6 +333,12 @@ def waterfall(
     dim_coords = {dim: patch.get_coord(dim) for dim in dims}
     coords = {dim: np.asarray(coord) for dim, coord in dim_coords.items()}
     cmap = _get_waterfall_colormap(patch, cmap)
+    if 0 in patch.shape:
+        _get_scale(scale, scale_type, np.zeros(1))
+        _format_axis_labels(ax, patch, dims_r)
+        if show:
+            plt.show()
+        return ax
     scale = _get_scale(scale, scale_type, data)
     label_edges = None
     use_image = all(coord.evenly_sampled for coord in dim_coords.values())
