@@ -671,11 +671,17 @@ def stft(
     resolved = resolve_window(
         patch, kwargs, samples=samples, overlap=overlap, enforce_lt_coord=True
     )
-    dims, axes, sizes = resolved.dims, resolved.axes, resolved.size
+    # In the patch's axis order, whatever order they were named in: the
+    # stack's window axes come out in that order.
+    order = np.argsort(resolved.axes)
+    dims = tuple(resolved.dims[i] for i in order)
+    axes = tuple(resolved.axes[i] for i in order)
+    sizes = tuple(resolved.size[i] for i in order)
     ndim = len(dims)
     coords = [patch.get_coord(dim) for dim in dims]
     # No overlap given means none: the windows abut.
-    hops = sizes if resolved.stride is None else resolved.stride
+    strides = resolved.stride
+    hops = sizes if strides is None else tuple(strides[i] for i in order)
     nffts = tuple(
         _resolve_nfft(nfft.get(dim) if isinstance(nfft, Mapping) else nfft, coord, size)
         for dim, coord, size in zip(dims, coords, sizes)

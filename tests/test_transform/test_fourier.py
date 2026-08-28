@@ -749,6 +749,13 @@ class TestSTFTManyDims:
         back = shuffled.istft()
         assert back.equals(plane_wave.transpose("time", "distance"), close=True)
 
+    def test_argument_order_does_not_matter(self, plane_wave):
+        """Dimensions are windowed in the patch's order however they are named."""
+        by_axis = plane_wave.stft(distance=32, time=64, samples=True)
+        by_name = plane_wave.stft(time=64, distance=32, samples=True)
+        assert by_name.equals(by_axis)
+        assert by_name.istft().equals(plane_wave, close=True)
+
     def test_nfft_per_dimension(self, plane_wave):
         """A mapping gives each dimension its own FFT length."""
         out = plane_wave.stft(
