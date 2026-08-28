@@ -571,7 +571,7 @@ def _swap_window_axes(data: np.ndarray, axes: tuple[int, ...]) -> np.ndarray:
     return np.moveaxis(data, (*axes, *tail), (*tail, *axes))
 
 
-@patch_function(data_type="fourier_transform")
+@patch_function(data_type="fourier_transform", version="2.0")
 def stft(
     patch: PatchType,
     taper_window: str | ndarray | tuple[str | Any, ...] = "hann",
@@ -682,6 +682,9 @@ def stft(
     # No overlap given means none: the windows abut.
     strides = resolved.stride
     hops = sizes if strides is None else tuple(strides[i] for i in order)
+    if isinstance(nfft, Mapping) and (extra := set(nfft) - set(dims)):
+        msg = f"nfft names dimensions which are not windowed: {sorted(extra)}."
+        raise ParameterError(msg)
     nffts = tuple(
         _resolve_nfft(nfft.get(dim) if isinstance(nfft, Mapping) else nfft, coord, size)
         for dim, coord, size in zip(dims, coords, sizes)
@@ -746,7 +749,7 @@ def stft(
     return patch.new(data=data, coords=cm, attrs=attrs)
 
 
-@patch_function()
+@patch_function(version="2.0")
 def istft(patch) -> dc.Patch:
     """
     Invert a short-time fourier transform.

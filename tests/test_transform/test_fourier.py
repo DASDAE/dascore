@@ -765,6 +765,11 @@ class TestSTFTManyDims:
         assert out.attrs["_stft_mfft_distance"] == 64
         assert out.istft().equals(plane_wave, close=True)
 
+    def test_nfft_for_an_unwindowed_dimension_refused(self, plane_wave):
+        """A misspelt or unwindowed dimension in the mapping is not ignored."""
+        with pytest.raises(ParameterError, match="not windowed"):
+            plane_wave.stft(distance=32, time=64, samples=True, nfft={"tiem": 128})
+
     def test_window_per_dimension(self, plane_wave):
         """A list gives each dimension its own taper, in dimension order."""
         out = plane_wave.stft(
