@@ -320,7 +320,7 @@ def resample(
     if associated:
         names = ", ".join(associated)
         msg = f"Resampling dimension {dim!r} dropped associated coordinates: {names}."
-        warnings.warn(msg, DASCoreWarning, stacklevel=2)
+        warnings.warn(msg, DASCoreWarning, stacklevel=3)
         cm, _ = cm.drop_coords(*associated)
     cm = cm.update(**{dim: new_coord})
     out = patch.new(data=data, coords=cm)

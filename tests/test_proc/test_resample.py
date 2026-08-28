@@ -222,9 +222,10 @@ class TestResample:
         distance = patch.get_coord("distance")
         value = len(distance) * 2 if samples else distance.step * 1.232132323222
 
-        with pytest.warns(DASCoreWarning, match="lat, quality"):
+        with pytest.warns(DASCoreWarning, match="lat, quality") as warning_records:
             out = patch.resample(distance=value, samples=samples)
 
+        assert warning_records[0].filename == __file__
         assert {"lat", "quality"}.isdisjoint(out.coords.coord_map)
         assert np.allclose(out.get_array("time2"), patch.get_array("time2"))
 
