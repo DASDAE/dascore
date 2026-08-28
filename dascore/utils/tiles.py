@@ -22,7 +22,7 @@ from functools import lru_cache
 from itertools import product
 
 import numpy as np
-from numpy.lib.stride_tricks import sliding_window_view
+from numpy.lib.stride_tricks import as_strided
 
 from dascore.exceptions import ParameterError
 
@@ -107,14 +107,20 @@ class TilePlan:
         )
 
     def _tile_view(self, buffer: np.ndarray, writeable: bool = False) -> np.ndarray:
-        """A view of the buffer as the tile grid, ``[*grid, *size]``."""
-        view = sliding_window_view(buffer, self.size, writeable=writeable)
-        return view[
-            tuple(
-                slice(0, count * step, step)
-                for count, step in zip(self.grid, self.stride)
-            )
-        ]
+        """
+        A view of the buffer as the tile grid, ``[*grid, *size]``.
+
+        Strided directly rather than through `sliding_window_view`, whose
+        view spans every window position: on a 32-bit build that logical
+        size overflows for an ordinary patch, though nothing is allocated.
+        """
+        strides = (
+            *(step * s for step, s in zip(self.stride, buffer.strides)),
+            *buffer.strides,
+        )
+        return as_strided(
+            buffer, shape=(*self.grid, *self.size), strides=strides, writeable=writeable
+        )
 
     def pad(self, array: np.ndarray, dtype=None) -> np.ndarray:
         """
