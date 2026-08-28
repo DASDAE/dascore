@@ -956,11 +956,12 @@ def get_patch_window_size(
     # Deferred: dascore.utils.window imports this module.
     from dascore.utils.window import resolve_window  # noqa: PLC0415
 
+    if not kwargs:
+        return (1,) * len(patch.dims)
     return resolve_window(
         patch,
         kwargs,
         samples=samples,
-        allow_empty=True,
         require_odd=require_odd,
         warn_above=warn_above,
         min_samples=min_samples,

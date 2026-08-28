@@ -7,7 +7,7 @@ import pytest
 from scipy.signal.windows import hann, triang
 
 from dascore.exceptions import ParameterError
-from dascore.utils.signal import WINDOW_FUNCTIONS, get_ramp, get_taper, get_window
+from dascore.utils.signal import WINDOW_NAMES, get_ramp, get_taper, get_window
 
 # The shapes a blend might be asked for, from flat to bell.
 SHAPES = ["boxcar", "triang", "hann", "hamming", "blackman", ("tukey", 0.5)]
@@ -51,14 +51,19 @@ class TestGetWindow:
         with pytest.raises(ValueError, match="NW"):
             get_window(("dpss", 2.5), 3)
 
+    def test_a_name_needing_a_parameter_is_refused_by_name(self):
+        """Kaiser without its beta is a window the caller cannot have."""
+        with pytest.raises(ParameterError, match="not a known window"):
+            get_window("kaiser", 8)
+
     def test_unknown_name_refused(self):
         """A name nobody knows says what the options are."""
         with pytest.raises(ParameterError, match="not a known window"):
             get_window("windowsXP", 8)
 
     def test_every_registered_name_builds(self):
-        """The registry is not decorative."""
-        for name in WINDOW_FUNCTIONS:
+        """The name table is not decorative."""
+        for name in WINDOW_NAMES:
             assert get_window(name, 8).shape == (8,)
 
 

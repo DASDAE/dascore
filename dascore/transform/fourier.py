@@ -612,9 +612,8 @@ def stft(
       For a given sliding window, Parseval's theorem doesn't hold exactly
       (unless a boxcar window is used) because the taper window changes the time
       series signal before the transformation.
-    - If an array is passed for taper_window that has a different length
-      than specified in kwargs, artificial enriching of frequency resolution
-      (equivalent to zero padding in time domain) can occur.
+    - An array passed for taper_window must have as many samples as the
+      window; one of another length is refused.
     - Non-dimensional coordinates associated with transformed coordinates
       are dropped in the output.
 
@@ -636,11 +635,7 @@ def stft(
     # No overlap given means none: the windows abut.
     hop = window_samples if resolved.stride is None else resolved.stride[0]
     sampling_rate = 1 / abs(dc.to_float(coord.step))
-    # Create window.
-    if isinstance(taper_window, ndarray):
-        window = taper_window
-    else:
-        window = get_window(taper_window, window_samples)
+    window = get_window(taper_window, window_samples)
     # Perform stft
     fft_mode = "onesided" if np.isrealobj(patch.data) else "centered"
     stft = ShortTimeFFT(

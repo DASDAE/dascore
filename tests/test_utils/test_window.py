@@ -103,14 +103,8 @@ class TestWindowSize:
             )
         assert window.size == (5,)
 
-    def test_empty_kwargs_allowed(self, simple_patch):
-        """With nothing windowed, the window is one along every axis."""
-        window = resolve_window(simple_patch, {}, allow_empty=True)
-        assert window.dims == ()
-        assert window.full_size() == (1,) * simple_patch.data.ndim
-
     def test_empty_kwargs_refused(self, simple_patch):
-        """Unless the function wants a dimension."""
+        """A windowed function wants a window."""
         with pytest.raises(ParameterError, match="at least one dimension"):
             resolve_window(simple_patch, {})
 

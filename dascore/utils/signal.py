@@ -23,24 +23,25 @@ from dascore.utils.imports import lazy_import
 
 _scipy_get_window = lazy_import("scipy.signal", "get_window")
 
-# DASCore's own names for windows, including two which scipy does not
-# spell: `cos` for hann and `ramp` for triang. Anything not here is handed
-# to scipy, which knows the rest and takes `(name, parameter)` tuples.
-WINDOW_FUNCTIONS = dict(
-    barthann=lazy_import("scipy.signal.windows", "barthann"),
-    bartlett=lazy_import("scipy.signal.windows", "bartlett"),
-    blackman=lazy_import("scipy.signal.windows", "blackman"),
-    blackmanharris=lazy_import("scipy.signal.windows", "blackmanharris"),
-    bohman=lazy_import("scipy.signal.windows", "bohman"),
-    hamming=lazy_import("scipy.signal.windows", "hamming"),
-    hann=lazy_import("scipy.signal.windows", "hann"),
-    cos=lazy_import("scipy.signal.windows", "hann"),
-    nuttall=lazy_import("scipy.signal.windows", "nuttall"),
-    parzen=lazy_import("scipy.signal.windows", "parzen"),
-    triang=lazy_import("scipy.signal.windows", "triang"),
-    ramp=lazy_import("scipy.signal.windows", "triang"),
-    boxcar=lazy_import("scipy.signal.windows", "boxcar"),
-)
+# The names DASCore documents for windows, each the scipy name it means.
+# Two are DASCore's own: `cos` for hann and `ramp` for triang. Anything not
+# here is handed to scipy as given, which knows more names and takes
+# `(name, parameter)` tuples.
+WINDOW_NAMES = {
+    "barthann": "barthann",
+    "bartlett": "bartlett",
+    "blackman": "blackman",
+    "blackmanharris": "blackmanharris",
+    "bohman": "bohman",
+    "boxcar": "boxcar",
+    "cos": "hann",
+    "hamming": "hamming",
+    "hann": "hann",
+    "nuttall": "nuttall",
+    "parzen": "parzen",
+    "ramp": "triang",
+    "triang": "triang",
+}
 
 
 def get_window(window: Any, size: int, *, fftbins: bool = False) -> np.ndarray:
@@ -50,7 +51,7 @@ def get_window(window: Any, size: int, *, fftbins: bool = False) -> np.ndarray:
     Parameters
     ----------
     window
-        A name from `WINDOW_FUNCTIONS`, any name or ``(name, parameter)``
+        A name from `WINDOW_NAMES`, any name or ``(name, parameter)``
         tuple `scipy.signal.get_window` accepts, or an array, which is
         returned as it is if it has `size` samples.
     size
@@ -69,18 +70,19 @@ def get_window(window: Any, size: int, *, fftbins: bool = False) -> np.ndarray:
             msg = f"The window has {len(window)} samples, not {size}."
             raise ParameterError(msg)
         return window
-    if isinstance(window, str) and window in WINDOW_FUNCTIONS:
-        return WINDOW_FUNCTIONS[window](size, sym=not fftbins)
+    name = WINDOW_NAMES.get(window, window) if isinstance(window, str) else window
     try:
-        return _scipy_get_window(window, size, fftbins=fftbins)
+        return _scipy_get_window(name, size, fftbins=fftbins)
     except ValueError as exc:
-        # scipy says "Unknown window type" for a name it lacks; its other
-        # complaints -- a parameter out of range -- are its own to make.
-        if "Unknown window type" not in str(exc):
+        # A bare name scipy refuses is one it does not know, or one which
+        # needs a parameter it was not given; either way the caller named
+        # a window they cannot have. A tuple's complaint is about its
+        # parameters, and is scipy's to make.
+        if not isinstance(window, str):
             raise
         msg = (
-            f"'{window}' is not a known window type. Options are: "
-            f"{sorted(WINDOW_FUNCTIONS)}, or any name scipy.signal.get_window takes."
+            f"'{window}' is not a known window type ({exc}). Options are: "
+            f"{sorted(WINDOW_NAMES)}, or any name scipy.signal.get_window takes."
         )
         raise ParameterError(msg) from exc
 

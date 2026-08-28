@@ -252,6 +252,21 @@ class TestChangedOnPurpose:
         with pytest.raises(ParameterError, match="at least 1 samples"):
             patch.stft(time=0, samples=True, overlap=None)
 
+    def test_rolling_zero_window_is_the_resolver_s_floor(self, patch):
+        """Rolling had its own "can't be zero" check; the shared floor says it now."""
+        with pytest.raises(ParameterError, match="at least 1 samples"):
+            patch.rolling(time=0, samples=True)
+
+    def test_hampel_with_no_window_refuses(self, patch):
+        """Given no dimension, hampel used to return the data untouched."""
+        with pytest.raises(ParameterError, match="at least one dimension"):
+            patch.hampel_filter()
+
+    def test_stft_array_window_of_the_wrong_length_refused(self, patch):
+        """A 90-sample array for a 100-sample window used to be zero padded."""
+        with pytest.raises(ParameterError, match="90 samples, not 100"):
+            patch.stft(time=100, taper_window=np.ones(90), samples=True)
+
     def test_adaptive_spectral_filter_refuses_none_in_a_mapping(self, patch):
         """Raised a TypeError before; now says what to do instead."""
         with pytest.raises(ParameterError, match="leave it out"):

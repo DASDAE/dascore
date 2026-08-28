@@ -399,18 +399,13 @@ def rolling(
         overlap=overlap,
         step=step,
         allow_multiple=False,
-        # No floor of its own: a zero window is refused below, by name.
-        min_samples=0,
         enforce_lt_coord=True,
     )
     dim, axis, window = resolved.dims[0], resolved.axes[0], resolved.size[0]
     value = kwargs[dim]
     step = None if resolved.stride is None else resolved.stride[0]
-    # Handle default when no overlap/step specified and ensure window size
+    # No overlap or step given means every sample gets a window.
     step = 1 if step is None else step
-    if window == 0 or step == 0:
-        msg = "Window or step size can't be zero. Use any positive values."
-        raise ParameterError(msg)
     cls = _get_engine(step, engine, patch)
     roll_hist = (
         f"rolling({dim}={value}, step={step}, overlap={overlap}, "

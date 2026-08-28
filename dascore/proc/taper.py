@@ -14,7 +14,7 @@ from dascore.units import Quantity
 from dascore.utils.docs import compose_docstring
 from dascore.utils.misc import broadcast_for_index
 from dascore.utils.patch import get_dim_axis_value, patch_function
-from dascore.utils.signal import WINDOW_FUNCTIONS, get_ramp
+from dascore.utils.signal import WINDOW_NAMES, get_ramp
 from dascore.utils.time import to_float
 
 
@@ -61,7 +61,7 @@ def _validate_windows(samps, start_slice, end_slice, shape, axis):
 
 
 @patch_function()
-@compose_docstring(taper_type=sorted(WINDOW_FUNCTIONS))
+@compose_docstring(taper_type=sorted(WINDOW_NAMES))
 def taper(
     patch: PatchType,
     window_type: str = "hann",
@@ -195,7 +195,7 @@ def _get_range_envelope(coord, inds, window_type, invert):
 
 
 @patch_function()
-@compose_docstring(taper_type=sorted(WINDOW_FUNCTIONS))
+@compose_docstring(taper_type=sorted(WINDOW_NAMES))
 def taper_range(
     patch: PatchType,
     window_type: str = "hann",

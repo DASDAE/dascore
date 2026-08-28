@@ -190,7 +190,6 @@ def resolve_window(
     step: Any = None,
     default_overlap: OverlapDefault = None,
     allow_multiple: bool = True,
-    allow_empty: bool = False,
     require_evenly_sampled: bool = True,
     require_odd: bool = False,
     min_samples: int | None = 1,
@@ -223,9 +222,6 @@ def resolve_window(
         `Window.overlap` None when nothing was given.
     allow_multiple
         Whether more than one dimension may be windowed.
-    allow_empty
-        Whether no dimension at all may be, giving an empty window whose
-        `full_size` is all ones.
     require_evenly_sampled
         Whether a windowed coordinate must be evenly sampled. When it need
         not be, a window given in samples never consults the coordinate;
@@ -253,8 +249,6 @@ def resolve_window(
     if overlap is not None and step is not None:
         msg = "step and overlap are mutually exclusive."
         raise ParameterError(msg)
-    if not kwargs and allow_empty:
-        return Window((), (), (), None, len(patch.dims))
     dim_axis_values = get_dim_axis_value(
         patch, kwargs=kwargs, allow_multiple=allow_multiple
     )

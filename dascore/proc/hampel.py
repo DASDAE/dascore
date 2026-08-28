@@ -201,7 +201,6 @@ def hampel_filter(
         require_odd=True,
         warn_above=warn_above,
         min_samples=3,
-        allow_empty=True,
     ).full_size()
     # Need to convert ints to float for calculations to avoid roundoff error.
     # There were issues using np.issubdtype not working so this uses kind.
