@@ -15,10 +15,12 @@ import warnings
 
 import numpy as np
 import pytest
+from scipy.signal.windows import hann
 
 import dascore as dc
 from dascore.exceptions import CoordError, ParameterError
 from dascore.units import percent, s
+from dascore.utils.signal import get_taper
 
 
 @pytest.fixture(scope="module")
@@ -337,8 +339,6 @@ class TestTaperRamps:
 
     def test_taper_hann_uses_a_2n_plus_1_window(self, ones):
         """The same construction for hann: the first five of a hann of 11."""
-        from scipy.signal.windows import hann  # noqa: PLC0415
-
         out = ones.taper(time=(np.timedelta64(16, "ms"), None), window_type="hann")
         np.testing.assert_allclose(out.data[0, :5], hann(11)[:5], rtol=1e-6)
         assert out.data[0, 5] == 1.0
@@ -363,8 +363,6 @@ class TestTaperRamps:
 
     def test_stft_window_is_scipy_symmetric(self, patch):
         """Stft's whole-tile window is scipy's symmetric one."""
-        from scipy.signal.windows import hann  # noqa: PLC0415
-
         out = patch.stft(time=8, samples=True, overlap=None)
         # The window travels as a coordinate for istft; it is the symmetric hann.
         np.testing.assert_allclose(
@@ -373,7 +371,5 @@ class TestTaperRamps:
 
     def test_adaptive_spectral_filter_ramp(self, ones):
         """The tile taper's ramp is the 2n + 1 triangle, complementary by nature."""
-        from dascore.utils.signal import get_taper  # noqa: PLC0415
-
         taper = get_taper("triang", (8,), (3,))
         np.testing.assert_allclose(taper, [0.25, 0.5, 0.75, 1, 1, 0.75, 0.5, 0.25])

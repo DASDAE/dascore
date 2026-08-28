@@ -64,7 +64,7 @@ def _validate_windows(samps, start_slice, end_slice, shape, axis):
 @compose_docstring(taper_type=sorted(WINDOW_NAMES))
 def taper(
     patch: PatchType,
-    window_type: str = "hann",
+    window_type: str | tuple = "hann",
     **kwargs,
 ) -> PatchType:
     """
@@ -75,8 +75,10 @@ def taper(
     patch
         The patch instance.
     window_type
-        The type of window to use For tapering. Supported Options are:
-            {taper_type}.
+        The window whose edge the taper takes. Supported options are:
+            {taper_type}
+        or any name or ``(name, parameter)`` tuple `scipy.signal.get_window`
+        accepts, such as ``("tukey", 0.5)``.
     **kwargs
         Used to specify the dimension along which to taper and the percentage
         of total length of the dimension (if a decimal or percent, see examples),
@@ -198,7 +200,7 @@ def _get_range_envelope(coord, inds, window_type, invert):
 @compose_docstring(taper_type=sorted(WINDOW_NAMES))
 def taper_range(
     patch: PatchType,
-    window_type: str = "hann",
+    window_type: str | tuple = "hann",
     invert=False,
     relative=False,
     samples=False,
@@ -212,8 +214,10 @@ def taper_range(
     patch
         A patch instance.
     window_type
-        The type of window to use For tapering. Supported Options are:
-            {taper_type}.
+        The window whose edge the taper takes. Supported options are:
+            {taper_type}
+        or any name or ``(name, parameter)`` tuple `scipy.signal.get_window`
+        accepts, such as ``("tukey", 0.5)``.
     invert
         If True, the values inside the specified range are set to zero
         and gradually tapered to 1.
