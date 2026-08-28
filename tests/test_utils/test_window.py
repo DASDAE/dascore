@@ -432,7 +432,20 @@ class TestWindow:
         assert window.full_size() == (1, 5, 1)
         assert window.full_size(fill=0) == (0, 5, 0)
 
-    def test_stride(self):
-        """Stride is size less overlap."""
-        window = Window(("distance", "time"), (0, 1), (16, 8), (7, 3), 2)
-        assert window.stride == (9, 5)
+    def test_overlap_is_size_less_stride(self):
+        """Overlap is derived, so it and the stride can never disagree."""
+        window = Window(("distance", "time"), (0, 1), (16, 8), (9, 5), 2)
+        assert window.overlap == (7, 3)
+
+    def test_a_gap_is_a_negative_overlap(self, random_patch):
+        """A stride longer than the window is allowed, and says so."""
+        window = resolve_window(random_patch, {"distance": 5}, samples=True, step=8)
+        assert window.stride == (8,)
+        assert window.overlap == (-3,)
+
+    def test_default_overlap_takes_a_numpy_integer(self, random_patch):
+        """A sample count from numpy is a sample count."""
+        window = resolve_window(
+            random_patch, {"distance": 16}, samples=True, default_overlap=np.int64(2)
+        )
+        assert window.overlap == (2,)

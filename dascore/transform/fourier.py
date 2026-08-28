@@ -629,8 +629,6 @@ def stft(
         samples=samples,
         overlap=overlap,
         allow_multiple=False,
-        # No floor of its own: a zero window is refused below, by name.
-        min_samples=0,
         enforce_lt_coord=True,
     )
     dim, axis, window_samples = resolved.dims[0], resolved.axes[0], resolved.size[0]

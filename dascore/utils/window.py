@@ -19,7 +19,7 @@ import math
 import warnings
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Protocol
 
 import numpy as np
 
@@ -31,11 +31,25 @@ from dascore.utils.time import is_timedelta64, to_float, to_timedelta64
 
 # What a function means by an overlap nobody gave: a sample count, or a
 # rule for one from the window's size in samples.
-OverlapDefault = Callable[[int], int] | int | None
+OverlapDefault = Callable[[int], int] | int | np.integer | None
 
 # Marks a dimension a mapping left out, which is not the same as one it
 # set to None.
 _UNGIVEN = object()
+
+
+class Windowed(Protocol):
+    """What a window is resolved against: a patch, or its metadata alone."""
+
+    @property
+    def dims(self) -> tuple[str, ...]:
+        """The dimension names, in axis order."""
+        ...
+
+    @property
+    def coords(self) -> Any:
+        """The coordinate manager."""
+        ...
 
 
 @dataclass(frozen=True)
@@ -51,10 +65,10 @@ class Window:
         The axis of each.
     size
         The window along each, in samples.
-    overlap
-        How far each window reaches into the next, in samples, or None if
-        the caller gave no overlap, no step, and no default -- which each
-        function reads its own way.
+    stride
+        How far each window advances, in samples, or None if the caller
+        gave no overlap, no step, and no default -- which each function
+        reads its own way. A stride longer than the window leaves a gap.
     ndim
         How many dimensions the patch has, so the window can be spelled
         out for every axis.
@@ -63,15 +77,15 @@ class Window:
     dims: tuple[str, ...]
     axes: tuple[int, ...]
     size: tuple[int, ...]
-    overlap: tuple[int, ...] | None
+    stride: tuple[int, ...] | None
     ndim: int
 
     @property
-    def stride(self) -> tuple[int, ...] | None:
-        """How far each window advances, in samples; None with no overlap."""
-        if self.overlap is None:
+    def overlap(self) -> tuple[int, ...] | None:
+        """How far each window reaches into the next; negative across a gap."""
+        if self.stride is None:
             return None
-        return tuple(size - over for size, over in zip(self.size, self.overlap))
+        return tuple(size - step for size, step in zip(self.size, self.stride))
 
     def full_size(self, fill: int = 1) -> tuple[int, ...]:
         """Return the window along every patch axis, `fill` where none was given."""
@@ -168,7 +182,7 @@ def _too_small(name: str, coord, count: int, min_samples: int, in_samples: bool)
 
 
 def resolve_window(
-    patch,
+    patch: Windowed,
     kwargs: Mapping[str, Any],
     *,
     samples: bool = False,
@@ -285,7 +299,7 @@ def resolve_window(
         )
         warnings.warn(msg, UserWarning, stacklevel=3)
 
-    overlaps = _resolve_overlap(
+    strides = _resolve_stride(
         coords,
         dims,
         size,
@@ -296,10 +310,10 @@ def resolve_window(
         enforce_lt_coord=enforce_lt_coord,
         through_coord=require_evenly_sampled,
     )
-    return Window(dims, axes, size, overlaps, len(patch.dims))
+    return Window(dims, axes, size, strides, len(patch.dims))
 
 
-def _resolve_overlap(
+def _resolve_stride(
     coords: Mapping[str, Any],
     dims: tuple[str, ...],
     size: tuple[int, ...],
@@ -311,7 +325,7 @@ def _resolve_overlap(
     enforce_lt_coord: bool,
     through_coord: bool,
 ) -> tuple[int, ...] | None:
-    """Return the overlap along each dimension in samples, or None if none was given."""
+    """Return the stride along each dimension in samples, or None if none was given."""
     name = "step" if step is not None else "overlap"
     given = _spread(step if step is not None else overlap, dims, name)
     out: list[int] = []
@@ -324,7 +338,11 @@ def _resolve_overlap(
                 continue
             # A default is a sample count already, and is checked like a
             # given one: it must not retreat, and must leave an advance.
-            count = default if isinstance(default, int) else default(window)
+            count = (
+                int(default)
+                if isinstance(default, int | np.integer)
+                else default(window)
+            )
             _check_not_negative(count, "overlap")
             advance = window - count
         else:
@@ -341,7 +359,7 @@ def _resolve_overlap(
         if advance <= 0:
             msg = "Window step must be greater than zero."
             raise ParameterError(msg)
-        out.append(window - advance)
+        out.append(advance)
     if ungiven and out:
         msg = f"{name} was given for some dimensions but not {ungiven}."
         raise ParameterError(msg)

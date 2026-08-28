@@ -178,6 +178,15 @@ def _maybe_add_history_str(attrs, hist_str):
     return attrs.update(history=new_history)
 
 
+class _HasDims(Protocol):
+    """Anything with dimension names in axis order: a patch, or its metadata."""
+
+    @property
+    def dims(self) -> tuple[str, ...]:
+        """The dimension names."""
+        ...
+
+
 class _PatchFunction(Protocol):
     """
     A function wrapped by `patch_function`.
@@ -809,7 +818,7 @@ def get_patch_names(
 
 
 def get_dim_axis_value(
-    patch: PatchType,
+    patch: _HasDims,
     *,
     args: tuple = tuple(),
     kwargs: Mapping = FrozenDict(),

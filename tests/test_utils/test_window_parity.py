@@ -247,6 +247,11 @@ class TestChangedOnPurpose:
         )
         assert np.allclose(by_percent.data, by_count.data)
 
+    def test_stft_refuses_a_zero_window(self, patch):
+        """Reached scipy and failed on the window's shape before; now says why."""
+        with pytest.raises(ParameterError, match="at least 1 samples"):
+            patch.stft(time=0, samples=True, overlap=None)
+
     def test_adaptive_spectral_filter_refuses_none_in_a_mapping(self, patch):
         """Raised a TypeError before; now says what to do instead."""
         with pytest.raises(ParameterError, match="leave it out"):
