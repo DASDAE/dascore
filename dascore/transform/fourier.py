@@ -7,7 +7,7 @@ implementation.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from math import prod
 from operator import mul, truediv
 from typing import Any, Literal
@@ -31,7 +31,7 @@ from dascore.utils.patch import (
     _get_dx_or_spacing_and_axes,
     patch_function,
 )
-from dascore.utils.signal import get_window
+from dascore.utils.signal import get_window_nd
 from dascore.utils.time import to_float
 from dascore.utils.transformatter import FourierTransformatter
 from dascore.utils.window import resolve_window
@@ -559,15 +559,16 @@ def _as_is(tiles: np.ndarray) -> np.ndarray:
     return tiles
 
 
-def _swap_window_axes(data: np.ndarray, axis: int) -> np.ndarray:
+def _swap_window_axes(data: np.ndarray, axes: tuple[int, ...]) -> np.ndarray:
     """
-    Move a stack's last axis to `axis` and what was there to the end.
+    Swap a stack's last axes, one per windowed dimension, with `axes`.
 
-    A stack keeps the windows within a tile as its last axis; an stft keeps
-    the frequencies where the transformed dimension was and the window
+    A stack keeps the samples within a tile as its last axes; an stft keeps
+    the frequencies where the transformed dimensions were and the window
     centres last. The swap is its own inverse.
     """
-    return np.moveaxis(data, (axis, -1), (-1, axis))
+    tail = tuple(range(-len(axes), 0))
+    return np.moveaxis(data, (*axes, *tail), (*tail, *axes))
 
 
 @patch_function(data_type="fourier_transform")
@@ -577,7 +578,7 @@ def stft(
     overlap: Quantity | int | None = 50 * percent,
     samples: bool = False,
     detrend: bool = False,
-    nfft: int | Quantity | np.timedelta64 | None = None,
+    nfft: int | Quantity | np.timedelta64 | Mapping[str, Any] | None = None,
     **kwargs,
 ):
     """
@@ -588,10 +589,9 @@ def stft(
     patch
         The patch to transform.
     taper_window
-        Parameter controlling the tapering of each time window before
-        fourier transform. Can either be the name of the window to use,
-        or an array, or a tuple of name and parameters passed to scipy.signal's
-        get_window function.
+        The taper each window is multiplied by before its transform: a name,
+        an array, or a ``(name, parameter)`` tuple `get_window` knows, for
+        every windowed dimension, or a list with one per dimension.
     overlap
         The overlap between windows. Can be a number (assumed to be in units of
         the transformed dimension if `samples`==False), a percent, or None for
@@ -605,13 +605,16 @@ def stft(
         no longer possible.
     nfft
         The length of the FFT taken of each window, in samples, or as a
-        quantity or timedelta in the transformed dimension's units. None, the default,
-        is the window length. A longer FFT zero pads each window, which
-        samples the same spectrum at more, closer frequencies; it adds no
-        resolution, since the window holds no more data. Must be at least
-        the window length.
+        quantity or timedelta in the transformed dimension's units; a mapping
+        gives each dimension its own. None, the default, is the window
+        length. A longer FFT zero pads each window, which samples the same
+        spectrum at more, closer frequencies; it adds no resolution, since
+        the window holds no more data. Must be at least the window length.
     **kwargs
-        Used to specify window length in data units, percent, or samples.
+        The dimensions to window and the window along each, in coordinate
+        units or, with `samples`, in samples. More than one dimension gives
+        each window's spectrum over all of them: ``distance=32, time=64``
+        is a local frequency-wavenumber spectrum.
 
     Examples
     --------
@@ -632,6 +635,9 @@ def stft(
     >>>
     >>> # Zero pad each 1000 sample window to a 4096 point FFT.
     >>> pa3 = patch.stft(time=1000, samples=True, nfft=4096)
+    >>>
+    >>> # Local f-k spectra: windows of 32 channels by 64 samples.
+    >>> fk = dc.get_example_patch().stft(distance=32, time=64, samples=True)
 
     Notes
     -----
@@ -642,11 +648,15 @@ def stft(
     - An array passed for taper_window must have as many samples as the
       window; one of another length is refused. To zero pad each window's
       FFT, give `nfft`.
+    - Real data is transformed one-sided along the last windowed dimension
+      and centred along the others, as [Patch.dft](`dascore.Patch.dft`) with
+      ``real=True`` is; complex data is centred along every one.
     - The output is a stack of windows as
       [Patch.tile_apply](`dascore.Patch.tile_apply`) makes one, transformed
       along the window: the transformed dimension becomes the window
       centres, ``{dim}_start`` and ``{dim}_stop`` say where each window came
-      from in samples, and the coordinates the stack carries for
+      from in samples, the frequencies sit where the dimension was and the
+      centres come last, and the coordinates the stack carries for
       [Patch.reassemble](`dascore.Patch.reassemble`) are what
       [Patch.istft](`dascore.Patch.istft`) blends the windows back with.
       Non-dimensional coordinates along the transformed dimension travel with
@@ -659,59 +669,75 @@ def stft(
     from dascore.proc.tile_apply import TileApply  # noqa: PLC0415
 
     resolved = resolve_window(
-        patch,
-        kwargs,
-        samples=samples,
-        overlap=overlap,
-        allow_multiple=False,
-        enforce_lt_coord=True,
+        patch, kwargs, samples=samples, overlap=overlap, enforce_lt_coord=True
     )
-    dim, axis, size = resolved.dims[0], resolved.axes[0], resolved.size[0]
-    coord = patch.get_coord(dim)
+    dims, axes, sizes = resolved.dims, resolved.axes, resolved.size
+    ndim = len(dims)
+    coords = [patch.get_coord(dim) for dim in dims]
     # No overlap given means none: the windows abut.
-    hop = size if resolved.stride is None else resolved.stride[0]
-    window = get_window(taper_window, size)
-    nfft = _resolve_nfft(nfft, coord, size)
-    fft_mode = "onesided" if np.isrealobj(patch.data) else "centered"
+    hops = sizes if resolved.stride is None else resolved.stride
+    nffts = tuple(
+        _resolve_nfft(nfft.get(dim) if isinstance(nfft, Mapping) else nfft, coord, size)
+        for dim, coord, size in zip(dims, coords, sizes)
+    )
+    real = np.isrealobj(patch.data)
     # A detrended window is tapered after the trend is removed, so the
     # stack is cut bare and the taper goes on here; an invertible one is
     # cut under the taper, which the stack then carries for istft.
     settings: dict[str, Any] = {
         "function": _as_is,
         "mode": "stack",
-        "analysis": None if detrend else window,
-        "overlap": size - hop,
+        "analysis": None if detrend else taper_window,
+        "overlap": {d: z - h for d, z, h in zip(dims, sizes, hops)},
         "samples": True,
-        dim: size,
+        **dict(zip(dims, sizes)),
     }
     stack = TileApply(**settings)._apply(patch)
     tiles = stack.data
+    tail = tuple(range(-ndim, 0))
     if detrend:
-        tiles = sp_detrend(tiles, axis=-1, type="linear") * window
-    step = to_float(coord.step)
-    if fft_mode == "onesided":
-        spectra = nft.rfft(tiles, n=nfft, axis=-1)
-        freqs = nft.rfftfreq(nfft, d=step)
-    else:
-        spectra = nft.fftshift(nft.fft(tiles, n=nfft, axis=-1), axes=-1)
-        freqs = nft.fftshift(nft.fftfreq(nfft, d=step))
+        for axis in tail:
+            tiles = sp_detrend(tiles, axis=axis, type="linear")
+        tiles = tiles * get_window_nd(taper_window, sizes)
+    steps = [to_float(coord.step) for coord in coords]
+    # Real data is transformed one-sided along the last windowed dimension
+    # and centred along the others, as dft does; complex data centred along
+    # every one.
+    fft = nft.rfftn if real else nft.fftn
+    spectra = fft(tiles, s=nffts, axes=tail)
+    centred = tail[:-1] if real else tail
+    if centred:
+        spectra = nft.fftshift(spectra, axes=centred)
+    freqs = [nft.fftshift(nft.fftfreq(n, d=step)) for n, step in zip(nffts, steps)]
+    if real:
+        freqs[-1] = nft.rfftfreq(nffts[-1], d=steps[-1])
     # One pass: the phase and, for compatibility with dft, the scale by step.
-    spectra *= _centre_phase(freqs * step, size) * spectra.dtype.type(step)
-    ft_dim = FourierTransformatter().rename_dims(patch.dims, index=axis)[axis]
-    new_dims = (*patch.dims[:axis], ft_dim, *patch.dims[axis + 1 :], dim)
+    factor = np.prod(steps).astype(spectra.dtype)
+    for axis, cycles, size, step in zip(tail, freqs, sizes, steps):
+        shape = [1] * ndim
+        shape[axis] = -1
+        factor = factor * _centre_phase(cycles * step, size).reshape(shape)
+    spectra *= factor
+    ft_dims = FourierTransformatter().rename_dims(dims)
+    new_dims = (
+        *(ft_dims[dims.index(d)] if d in dims else d for d in patch.dims),
+        *dims,
+    )
     coord_map = stack.coords.get_coord_tuple_map()
-    coord_map.pop(f"{dim}_offset")
-    freq_coord = get_coord(data=freqs, units=invert_quantity(coord.units))
-    coord_map[ft_dim] = ((ft_dim,), freq_coord)
+    for dim, ft_dim, values, coord in zip(dims, ft_dims, freqs, coords):
+        coord_map.pop(f"{dim}_offset")
+        freq_coord = get_coord(data=values, units=invert_quantity(coord.units))
+        coord_map[ft_dim] = ((ft_dim,), freq_coord)
     cm = get_coord_manager(coords=coord_map, dims=new_dims)
     attrs = stack.attrs.update(
         _stft_detrended=detrend,
-        _stft_fft_mode=fft_mode,
-        _stft_mfft=nfft,
+        _stft_real=dims[-1] if real else None,
         _pre_stft_data_type=patch.attrs.get("data_type"),
-        data_units=_get_data_units_from_dims(patch, dim, mul),
+        data_units=_get_data_units_from_dims(patch, dims, mul),
+        **{f"_stft_mfft_{dim}": n for dim, n in zip(dims, nffts)},
     )
-    return patch.new(data=_swap_window_axes(spectra, axis), coords=cm, attrs=attrs)
+    data = _swap_window_axes(spectra, axes)
+    return patch.new(data=data, coords=cm, attrs=attrs)
 
 
 @patch_function()
@@ -753,48 +779,65 @@ def istft(patch) -> dc.Patch:
 
     coord_map = patch.coords.get_coord_tuple_map()
     dims = [d for d in patch.dims if f"_tile_source_{d}" in coord_map]
-    if len(dims) != 1 or "_stft_mfft" not in dict(patch.attrs):
+    if not dims or "_stft_real" not in dict(patch.attrs):
         msg = (
             "Inverse short time fourier transform requires a patch that has"
             " undergone stft but this patch is missing required attrs. "
         )
         raise PatchError(msg)
-    if patch.attrs["_stft_detrended"] or f"_tile_analysis_{dims[0]}" not in coord_map:
+    windows = [f"_tile_analysis_{dim}" for dim in dims]
+    if patch.attrs["_stft_detrended"] or any(w not in coord_map for w in windows):
         msg = f"Inverse stft not possible for patch {patch}."
         raise PatchError(msg)
-    dim = dims[0]
-    ft_dim = FourierTransformatter().rename_dims([dim])[0]
-    axis = patch.get_axis(ft_dim)
-    source = coord_map[f"_tile_source_{dim}"][1]
-    size = len(coord_map[f"_tile_analysis_{dim}"][1])
-    nfft = int(patch.attrs["_stft_mfft"])
-    step = to_float(source.step)
-    cycles = patch.get_coord(ft_dim).values * step
-    spectra = _swap_window_axes(patch.data, axis)
-    spectra = spectra / (_centre_phase(cycles, size) * step)
-    if patch.attrs["_stft_fft_mode"] == "onesided":
-        tiles = nft.irfft(spectra, n=nfft, axis=-1)
-    else:
-        tiles = nft.ifft(nft.ifftshift(spectra, axes=-1), n=nfft, axis=-1)
+    # The dimension transformed one-sided, if any, is last, as it was cut.
+    real = patch.attrs["_stft_real"]
+    dims = [d for d in dims if d != real] + ([real] if real else [])
+    windows = [f"_tile_analysis_{dim}" for dim in dims]
+    ndim = len(dims)
+    ft_dims = FourierTransformatter().rename_dims(dims)
+    sizes = [len(coord_map[name][1]) for name in windows]
+    nffts = [int(patch.attrs[f"_stft_mfft_{dim}"]) for dim in dims]
+    steps = [to_float(coord_map[f"_tile_source_{dim}"][1].step) for dim in dims]
+    # The window centres go last, then the frequencies swap with them, so
+    # the windows' samples are the last axes whatever order the patch is in.
+    tail = tuple(range(-ndim, 0))
+    centres = tuple(patch.get_axis(dim) for dim in dims)
+    base_dims = [d for d in patch.dims if d not in dims]
+    axes = tuple(base_dims.index(ft_dim) for ft_dim in ft_dims)
+    spectra = _swap_window_axes(np.moveaxis(patch.data, centres, tail), axes)
+    factor = np.prod(steps).astype(spectra.dtype)
+    for axis, ft_dim, size, step in zip(tail, ft_dims, sizes, steps):
+        shape = [1] * ndim
+        shape[axis] = -1
+        cycles = patch.get_coord(ft_dim).values * step
+        factor = factor * _centre_phase(cycles, size).reshape(shape)
+    spectra = spectra / factor
+    centred = tail[:-1] if real else tail
+    if centred:
+        spectra = nft.ifftshift(spectra, axes=centred)
+    ifft = nft.irfftn if real else nft.ifftn
+    tiles = ifft(spectra, s=nffts, axes=tail)
     # The FFT was zero padded past the window; the window is its first samples.
-    tiles = tiles[..., :size]
-    offset = f"{dim}_offset"
-    # The frequency axis does not survive, nor does anything riding on it.
+    tiles = tiles[(..., *(slice(0, size) for size in sizes))]
+    offsets = [f"{dim}_offset" for dim in dims]
+    # The frequency axes do not survive, nor does anything riding on them.
     for name, cdims in patch.coords.dim_map.items():
-        if ft_dim in cdims:
+        if set(cdims) & set(ft_dims):
             coord_map.pop(name)
-    coord_map[offset] = ((offset,), get_coord(data=np.arange(size)))
-    others = [d for d in patch.dims[axis + 1 :] if d != dim]
-    stack_dims = (*patch.dims[:axis], dim, *others, offset)
-    attrs = {k: v for k, v in dict(patch.attrs).items() if not k.startswith("_stft")}
+    for offset, size in zip(offsets, sizes):
+        coord_map[offset] = ((offset,), get_coord(data=np.arange(size)))
+    renamed = (dims[ft_dims.index(d)] if d in ft_dims else d for d in base_dims)
+    stack_dims = (*renamed, *offsets)
+    data_type = patch.attrs.get("_pre_stft_data_type")
+    private = ("_stft", "_pre_stft")
+    attrs = {k: v for k, v in dict(patch.attrs).items() if not k.startswith(private)}
     stack = patch.new(
         data=tiles,
         coords=get_coord_manager(coords=coord_map, dims=stack_dims),
         attrs=dc.PatchAttrs(**attrs),
     )
     out = reassemble.func(stack)
-    new_attrs = dict(out.attrs)
-    if "_pre_stft_data_type" in new_attrs:
-        new_attrs["data_type"] = new_attrs.pop("_pre_stft_data_type")
-    new_attrs["data_units"] = _get_data_units_from_dims(patch, dim, truediv)
-    return out.update_attrs(**new_attrs)
+    return out.update_attrs(
+        data_type=data_type or "",
+        data_units=_get_data_units_from_dims(patch, dims, truediv),
+    )
