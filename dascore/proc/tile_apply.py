@@ -302,7 +302,7 @@ def _stack_coords(meta: PatchMeta, window: Window):
         starts = np.arange(count) * stride - stride
         # The tile's middle sample, in the coordinate's units.
         centres = _offset_values(coord, starts + (size - 1) / 2)
-        offsets = _offset_values(coord, np.arange(size)) - coord.min()
+        offsets = _offset_values(coord, np.arange(size)) - coord.values[0]
         new_coords[dim] = get_coord(data=centres, units=coord.units)
         new_coords[f"{dim}_start"] = (dim, starts)
         new_coords[f"{dim}_stop"] = (dim, starts + size)

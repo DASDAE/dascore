@@ -202,6 +202,9 @@ class TestStack:
         assert centres[0] > centres[1]
         first = flipped.get_coord("distance").values[0]
         assert centres[0] == first + (-8 + 7.5) * flipped.get_coord("distance").step
+        # Offsets count from the tile's first sample, in the coordinate's direction.
+        offsets = stacked.get_coord("distance_offset").values
+        assert offsets[0] == 0 and offsets[1] == flipped.get_coord("distance").step
         assert stacked.reassemble().equals(flipped, close=True)
 
     def test_source_name_collision_refused(self, patch):

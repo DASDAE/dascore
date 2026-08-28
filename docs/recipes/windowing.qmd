@@ -56,8 +56,10 @@ tiles = patch.tile_apply(lambda x: x, mode="stack", time=0.02, distance=40)
 print(tiles.dims, tiles.shape)
 
 # Drop every tile whose energy is in the lowest quarter, then blend back.
+# The mean keeps the offset axes at length one, so a per-tile flag
+# broadcasts back over every sample of its tile.
 energy = (tiles**2).mean(dim=("distance_offset", "time_offset"))
-quiet = energy.data < np.percentile(energy.data, 25)  # one flag per tile
+quiet = energy.data < np.percentile(energy.data, 25)
 kept = tiles.new(data=np.where(quiet, 0, tiles.data))
 denoised = kept.reassemble()
 assert denoised.shape == patch.shape
