@@ -229,6 +229,8 @@ class TestReassemble:
         back = stacked.reassemble()
         assert back.equals(patch, close=True)
         assert not any(k.startswith("_tile") for k in back.coords.coord_map)
+        assert not any(k.startswith("_tile") for k in dict(back.attrs))
+        assert "_tile_stride_time" in dict(stacked.attrs)
 
     def test_round_trip_one_dimension(self, patch):
         """And with one dimension windowed."""
@@ -287,6 +289,18 @@ class TestReassemble:
             back.data[:, 200:-200], patch.data[:, 200:-200], atol=1e-5
         )
         assert np.abs(back.data[:, :8]).max() == 0
+
+    def test_every_other_tile(self, patch):
+        """A stack thinned to alternate tiles blends under the taper it was cut for."""
+        stacked = patch.tile_apply(identity, mode="stack", time=64, samples=True)
+        n = stacked.shape[stacked.get_axis("time")]
+        thinned = stacked.select(time=np.arange(0, n, 2), samples=True)
+        back = thinned.reassemble()
+        assert back.shape == patch.shape
+        assert not any(k.startswith("_tile") for k in dict(back.attrs))
+        # Every other tile is gone, so no sample sees more than one: the
+        # blend is the kept tiles under their taper, nothing doubled.
+        assert np.abs(back.data).max() <= np.abs(patch.data).max() * 1.01
 
     def test_needs_a_stack(self, patch):
         """A patch nobody tiled cannot be reassembled."""

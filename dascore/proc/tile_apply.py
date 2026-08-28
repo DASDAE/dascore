@@ -223,6 +223,12 @@ class TileApply(PatchProcessor):
         if not selected:
             msg = "tile_apply needs a dimension and its window, e.g. time=0.5."
             raise ParameterError(msg)
+        # In the patch's axis order, whatever order they were named in, so a
+        # stack's tile and offset axes come out in that order too.
+        position = {dim: axis for axis, dim in enumerate(meta.dims)}
+        selected = dict(
+            sorted(selected.items(), key=lambda kv: position.get(kv[0], -1))
+        )
         return resolve_window(
             meta,
             selected,
@@ -238,7 +244,14 @@ class TileApply(PatchProcessor):
         window = self.window(meta)
         if self.mode == "overlap_add":
             return meta
-        return meta.update(coords=_stack_coords(meta, window))
+        assert window.stride is not None
+        # The stride the tiles were cut at travels in attrs, so a thinned
+        # stack still reassembles under the taper it was cut for.
+        strides = {
+            f"_tile_stride_{d}": int(s) for d, s in zip(window.dims, window.stride)
+        }
+        attrs = meta.attrs.update(**strides)
+        return meta.update(coords=_stack_coords(meta, window), attrs=attrs)
 
     def kernel(self, data, meta, out_meta):
         """Tile every batch over the windowed axes; blend or stack."""
@@ -261,12 +274,9 @@ class TileApply(PatchProcessor):
             stacks = np.stack([self.function(plan.extract(batch)) for batch in batches])
             out = stacks.reshape((*moved.shape[:-ndim], *plan.grid, *plan.size))
             # The tile axes go where the windowed dimensions were; the
-            # offsets within a tile go at the end, in the patch's axis order.
+            # offsets within a tile stay at the end, already in axis order.
             n_batch = moved.ndim - ndim
-            out = np.moveaxis(out, range(n_batch, n_batch + ndim), window.axes)
-            first = out.ndim - ndim
-            offsets = [first + int(i) for i in np.argsort(window.axes)]
-            return np.moveaxis(out, offsets, range(first, out.ndim))
+            return np.moveaxis(out, range(n_batch, n_batch + ndim), window.axes)
         taper = get_taper(self.taper, window.size, window.overlap)
         if engine == "numba":
             from dascore.utils._tiles_numba import apply_jit  # noqa: PLC0415
@@ -317,9 +327,7 @@ def _stack_coords(meta: PatchMeta, window: Window):
                     coords.get_coord(name),
                 )
         coords = coords.disassociate_coord(dim)
-    axis_of = dict(zip(window.dims, window.axes))
-    by_axis = sorted(window.dims, key=axis_of.__getitem__)
-    dims = (*meta.dims, *(f"{dim}_offset" for dim in by_axis))
+    dims = (*meta.dims, *(f"{dim}_offset" for dim in window.dims))
     # Coords given bare, or as (dims, values): the manager takes either.
     coord_map: dict[str, Any] = dict(coords.get_coord_tuple_map())
     coord_map.update(new_coords)
@@ -327,23 +335,6 @@ def _stack_coords(meta: PatchMeta, window: Window):
 
 
 register_implementation("tile_apply", TileApply)
-
-
-def _overlap_from_starts(
-    starts: list[np.ndarray], size: tuple[int, ...]
-) -> tuple[int, ...]:
-    """
-    Return how far the tiles overlapped when cut, from the gaps between starts.
-
-    The smallest gap between any two starts is the stride; a lone tile has
-    nothing to overlap with and gets a boxcar.
-    """
-    out = []
-    for start, z in zip(starts, size):
-        unique = np.unique(start)
-        stride = int(np.min(np.diff(unique))) if len(unique) > 1 else z
-        out.append(max(0, z - stride))
-    return tuple(out)
 
 
 @patch_function()
@@ -397,10 +388,11 @@ def reassemble(patch: PatchType, *, taper: Any = "hann") -> PatchType:
     grid = moved.shape[-2 * ndim : -ndim]
     stacks = moved.reshape((-1, int(np.prod(grid)), *size))
     # Where each tile goes is what its start says, whatever order the tiles
-    # are in and whichever of them are still here; the taper's ramp length
-    # is what the tiles overlapped by when they were cut.
+    # are in and whichever of them are still here; the taper is the one the
+    # tiles were cut for, which the stride in attrs says.
     starts = [patch.get_coord(f"{dim}_start").values for dim in dims]
-    overlap = _overlap_from_starts(starts, size)
+    strides = tuple(int(patch.attrs[f"_tile_stride_{dim}"]) for dim in dims)
+    overlap = tuple(z - st for z, st in zip(size, strides))
     weights = get_taper(taper, size, overlap)
     origins = np.stack(np.meshgrid(*starts, indexing="ij"), axis=-1).reshape(-1, ndim)
     low = tuple(int(min(0, s.min())) for s in starts)
@@ -435,4 +427,5 @@ def reassemble(patch: PatchType, *, taper: Any = "hann") -> PatchType:
         coord_map.pop(f"_tile_source_{key}")
     new_dims = tuple(d for d in patch.dims if d not in offset_dims)
     coords = get_coord_manager(coords=coord_map, dims=new_dims)
-    return patch.new(data=out, coords=coords)
+    attrs = {k: v for k, v in dict(patch.attrs).items() if not k.startswith("_tile_")}
+    return patch.new(data=out, coords=coords, attrs=dc.PatchAttrs(**attrs))
