@@ -249,7 +249,7 @@ def median_filter(
     Values specified with kwargs should be small, for example < 10 samples
     otherwise this can take a long time and use lots of memory.
     """
-    size = resolve_window(patch, kwargs, samples=samples, min_samples=None).full_size()
+    size = resolve_window(patch, kwargs, samples=samples, min_samples=0).full_size()
     new_data = nd_median_filter(patch.data, size=size, mode=mode, cval=cval)
     return patch.update(data=new_data)
 
@@ -384,7 +384,7 @@ def savgol_filter(
     >>> filtered_pa_3 = pa.savgol_filter(distance=10, time=0.1, polyorder=4)
     """
     data = patch.data
-    window = resolve_window(patch, kwargs, samples=samples, min_samples=None)
+    window = resolve_window(patch, kwargs, samples=samples, min_samples=0)
     size, axes = window.full_size(), window.axes
     for ax in axes:
         data = np_savgol_filter(
@@ -448,7 +448,7 @@ def gaussian_filter(
     See scipy.ndimage.gaussian_filter for more info on implementation
     and arguments.
     """
-    window = resolve_window(patch, kwargs, samples=samples, min_samples=None)
+    window = resolve_window(patch, kwargs, samples=samples, min_samples=0)
     size, axes = window.full_size(), window.axes
     used_size = tuple(size[x] for x in axes)
     data = np_gauss(

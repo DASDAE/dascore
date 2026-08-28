@@ -585,14 +585,12 @@ class TestSTFT:
             .select(time=0, samples=True)
             .squeeze()
         )
-        # The first slice should have 50 padded 0s on the right, and the first
-        # 51 samples in the signal.
-        padded = patch.pad(time=(50, 0), samples=True).select(
-            time=(0, 101), samples=True
-        )
-        padded_fft = padded.dft("time", real=True, pad=False).squeeze()
+        # With no overlap the first window is the first 101 samples; the stft
+        # refers phase to the window's centre, so magnitudes are compared.
+        first = patch.select(time=(0, 101), samples=True)
+        first_fft = first.dft("time", real=True, pad=False).squeeze()
         ar1 = stft.data
-        ar2 = padded_fft.data
+        ar2 = first_fft.data
 
         factor = np.abs(ar1) / np.abs(ar2)
         assert np.allclose(factor, 1.0)
@@ -617,10 +615,10 @@ class TestSTFT:
         plain = random_patch.stft(time=100, samples=True)
         padded = random_patch.stft(time=100, samples=True, nfft=256)
         assert len(padded.get_coord("ft_time")) == 256 // 2 + 1
-        rate = padded.attrs["_stft_sampling_rate"]
+        rate = 1 / dc.to_float(random_patch.get_coord("time").step)
         assert float(padded.get_coord("ft_time").step) == pytest.approx(rate / 256)
         # The window and hop are untouched; only the FFT of each window grew.
-        assert padded.attrs["_stft_hop"] == plain.attrs["_stft_hop"]
+        assert padded.attrs["_tile_stride_time"] == plain.attrs["_tile_stride_time"]
         assert padded.get_coord("time") == plain.get_coord("time")
         assert padded.attrs["_stft_mfft"] == 256
 
@@ -660,6 +658,17 @@ class TestSTFT:
         axis = padded.get_axis("ft_time")
         every_other = np.take(padded.data, np.arange(0, 101, 2), axis=axis)
         assert np.allclose(every_other, plain.data)
+
+    def test_complex_input_round_trips(self, random_patch):
+        """Complex data is transformed two-sided, centred, and comes back."""
+        patch = random_patch.new(data=random_patch.data * (1 + 1j))
+        out = patch.stft(time=16, samples=True)
+        freqs = out.get_coord("ft_time").values
+        assert len(freqs) == 16
+        assert freqs[0] < 0 < freqs[-1]
+        assert out.attrs["_stft_fft_mode"] == "centered"
+        back = out.istft()
+        assert back.equals(patch, close=True)
 
     def test_non_dim_coord_associated_with_transform(self):
         """See #611."""
@@ -722,6 +731,12 @@ class TestInverseSTFT:
         with pytest.raises(PatchError, match=msg):
             random_patch.istft()
 
+    def test_uninvertible_window_raises(self, random_patch):
+        """Abutting hann windows leave gaps: the stft is not invertible."""
+        out = random_patch.stft(time=16, samples=True, overlap=None)
+        with pytest.raises(ParameterError, match="cannot be inverted"):
+            out.istft()
+
     def test_detrended_raise(self, chirp_stft_detrend_patch):
         """Since detrended stft can't be inverted it should raise."""
         msg = "Inverse stft not possible"
@@ -753,22 +768,22 @@ class TestInverseSTFTAssociatedCoords:
         assert np.allclose(out.data, patch.data)
 
     def test_coord_on_transformed_dim(self, patch_with_coords):
-        """A coord on the transformed dim is dropped by stft, not restored."""
+        """A coord on the transformed dim rides with the windows and comes back."""
         patch = patch_with_coords.drop_coords("depth", "note")
         stft_patch = patch.stft(time=0.1)
         assert "tlabel" not in stft_patch.coords.coord_map
+        assert "_tile_source_time__tlabel" in stft_patch.coords.coord_map
         out = stft_patch.istft()
-        assert "tlabel" not in out.coords.coord_map
         assert out.dims == patch.dims
+        assert out.coords == patch.coords
         assert np.allclose(out.data, patch.data)
 
     def test_multiple_associated_coords(self, patch_with_coords):
-        """Several associated coords round trip, minus the transformed one."""
+        """Several associated coords round trip, the transformed one included."""
         patch = patch_with_coords
         out = patch.stft(time=0.1).istft()
-        expected = patch.drop_coords("tlabel")
         assert out.dims == patch.dims
-        assert out.coords == expected.coords
+        assert out.coords == patch.coords
         assert np.allclose(out.data, patch.data)
 
     def test_coord_on_untransformed_time(self, patch_with_coords):
@@ -776,7 +791,7 @@ class TestInverseSTFTAssociatedCoords:
         patch = patch_with_coords
         out = patch.stft(distance=4).istft()
         assert out.dims == patch.dims
-        assert out.coords == patch.drop_coords("depth").coords
+        assert out.coords == patch.coords
         assert np.allclose(out.data, patch.data)
 
     def test_coords_on_stft_dims_dropped(self, patch_with_coords):

@@ -123,10 +123,10 @@ class TestAdaptiveSpectralFilter:
             patch.adaptive_spectral_filter(samples=True, engine="scipy")
 
     def test_rejects_non_positive_window(self) -> None:
-        """Window sizes must resolve to positive sample counts."""
+        """Window sizes must resolve to at least two samples."""
         patch = _patch((64, 64), ("distance", "time"), dtype=np.float32)
 
-        with pytest.raises(ParameterError, match="at least 1 samples"):
+        with pytest.raises(ParameterError, match="at least 2 samples"):
             patch.adaptive_spectral_filter(
                 distance=0, time=16, samples=True, engine="scipy"
             )
@@ -432,11 +432,25 @@ class TestAdaptiveSpectralFilter:
         with pytest.raises(ParameterError, match="two selected dimensions"):
             patch.adaptive_spectral_filter(time=16, samples=True, engine="numba")
 
+    def test_any_window_length(self):
+        """A window need not be a power of two: 15 by 300 samples filters."""
+        patch = _patch((32, 600), ("distance", "time"), dtype=np.float32)
+        out = patch.adaptive_spectral_filter(distance=15, time=300, samples=True)
+        assert out.shape == patch.shape
+        assert np.all(np.isfinite(out.data))
+
+    def test_window_in_units_need_not_be_a_power_of_two(self):
+        """0.3 s at 4 ms is 75 samples, and works like any other length."""
+        patch = _patch((8, 1000), ("distance", "time"), dtype=np.float32)
+        by_units = patch.adaptive_spectral_filter(time=0.3)
+        by_samples = patch.adaptive_spectral_filter(time=75, samples=True)
+        assert np.allclose(by_units.data, by_samples.data)
+
     @pytest.mark.parametrize(
         "kwargs,match",
         [
             ({"exponent": np.nan}, "exponent must be finite"),
-            ({"distance": 15}, "power of two"),
+            ({"distance": 1}, "at least 2 samples"),
             ({"overlap": {"distance": 8}}, "too large"),
             ({"overlap": {"distance": -1}}, "non-negative"),
         ],
@@ -540,8 +554,7 @@ class TestAdaptiveSpectralCore:
     @pytest.mark.parametrize(
         "window_size,overlap,match",
         [
-            ((15, 16), (7, 7), "power of two"),
-            ((4, 16), (1, 7), "greater than 4"),
+            ((1, 16), (0, 7), "at least 2 samples"),
             ((16, 16), (-1, 7), "non-negative"),
             ((16, 16), (8, 7), "too large"),
             ((16.0, 16), (7, 7), "must be an integer"),

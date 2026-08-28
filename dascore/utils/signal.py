@@ -217,7 +217,8 @@ def get_dual_taper(
     Parameters
     ----------
     window
-        The analysis window; see `get_window`. One name for every axis.
+        The analysis window; see `get_window`. One for every axis, or a
+        list with one per axis.
     size
         The tile's shape.
     stride
@@ -239,6 +240,8 @@ def get_dual_taper(
         msg = "size and stride must have the same length."
         raise ParameterError(msg)
     size, stride = tuple(size), tuple(stride)
+    if isinstance(window, list):
+        return _build_dual_taper(window, size, stride)
     if _hashable(window):
         analysis, synthesis = _cached_dual_taper(window, size, stride)
         return analysis.copy(), synthesis.copy()
@@ -251,11 +254,64 @@ def _cached_dual_taper(window, size, stride):
 
 
 def _build_dual_taper(window, size, stride):
-    analyses, duals = [], []
-    for length, step in zip(size, stride):
-        edge = np.asarray(get_window(window, length), dtype=np.float64)
-        duals.append(_ShortTimeFFT(edge, hop=step, fs=1.0).dual_win)
-        analyses.append(edge)
-    analysis = math.prod(np.ix_(*analyses)) if len(size) > 1 else analyses[0]
-    synthesis = math.prod(np.ix_(*duals)) if len(size) > 1 else duals[0]
-    return np.asarray(analysis, np.float32), np.asarray(synthesis, np.float32)
+    edges = get_window_edges(window, size)
+    duals = []
+    for edge, step in zip(edges, stride):
+        try:
+            duals.append(_ShortTimeFFT(edge, hop=step, fs=1.0).dual_win)
+        except ValueError as exc:
+            msg = (
+                f"A {len(edge)} sample window cannot be inverted at a stride of "
+                f"{step}: the tiles leave gaps no tile weights. Overlap more."
+            )
+            raise ParameterError(msg) from exc
+    return _outer(edges), _outer(duals)
+
+
+def get_window_nd(window: Any, size: tuple[int, ...]) -> np.ndarray:
+    """
+    Return a window along every axis of a tile: the outer product of its edges.
+
+    Parameters
+    ----------
+    window
+        The window; see `get_window`. One for every axis, or a list with
+        one per axis.
+    size
+        The tile's shape.
+
+    Examples
+    --------
+    >>> from dascore.utils.signal import get_window_nd
+    >>> get_window_nd("hann", (8, 16)).shape
+    (8, 16)
+    """
+    return _outer(get_window_edges(window, tuple(size)))
+
+
+def get_window_edges(window: Any, size: tuple[int, ...]) -> list[np.ndarray]:
+    """
+    Return a window along each axis of a tile, as float64 arrays.
+
+    Parameters
+    ----------
+    window
+        The window; see `get_window`. One for every axis, or a list with
+        one per axis.
+    size
+        The tile's shape.
+    """
+    windows = window if isinstance(window, list) else [window] * len(size)
+    if len(windows) != len(size):
+        msg = f"{len(windows)} windows were given for {len(size)} axes."
+        raise ParameterError(msg)
+    return [
+        np.asarray(get_window(spec, n), dtype=np.float64)
+        for spec, n in zip(windows, size, strict=True)
+    ]
+
+
+def _outer(edges: list[np.ndarray]) -> np.ndarray:
+    """Return the outer product of the edges, in float32."""
+    out = math.prod(np.ix_(*edges)) if len(edges) > 1 else edges[0]
+    return np.asarray(out, np.float32)

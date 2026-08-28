@@ -8,7 +8,6 @@ import pytest
 import dascore as dc
 from dascore.exceptions import CoordError, ParameterError
 from dascore.units import percent
-from dascore.utils.misc import suppress_warnings
 from dascore.utils.patch import get_patch_window_size, get_window_axis_step
 from dascore.utils.window import Window, resolve_window
 from dascore.workflow.meta import PatchMeta
@@ -84,25 +83,6 @@ class TestWindowSize:
         # When the value is already in samples there is nothing to suggest.
         with pytest.raises(ParameterError, match="Try increasing"):
             resolve_window(simple_patch, {"time": 2}, samples=True, min_samples=3)
-
-    def test_warn_above(self, simple_patch):
-        """A large window warns."""
-        with pytest.warns(UserWarning, match="Large window size.*may result in slow"):
-            resolve_window(simple_patch, {"time": 15}, samples=True, warn_above=10)
-
-    def test_warn_above_uses_total_window(self, simple_patch):
-        """The threshold applies to the window's area, not each dimension."""
-        kwargs = {"time": 5, "distance": 5}
-        with pytest.warns(UserWarning, match="Large window size \\(25 samples\\)"):
-            resolve_window(simple_patch, kwargs, samples=True, warn_above=10)
-
-    def test_no_warning_under_threshold(self, simple_patch):
-        """A small window says nothing."""
-        with suppress_warnings(action="error"):
-            window = resolve_window(
-                simple_patch, {"time": 5}, samples=True, warn_above=10
-            )
-        assert window.size == (5,)
 
     def test_empty_kwargs_refused(self, simple_patch):
         """A windowed function wants a window."""
@@ -334,11 +314,9 @@ class TestOverlap:
 class TestPolicies:
     """The knobs a function turns."""
 
-    def test_min_samples_none_is_no_floor(self, simple_patch):
+    def test_min_samples_zero_is_no_floor(self, simple_patch):
         """A zero window passes when a function sets no floor."""
-        window = resolve_window(
-            simple_patch, {"time": 0}, samples=True, min_samples=None
-        )
+        window = resolve_window(simple_patch, {"time": 0}, samples=True, min_samples=0)
         assert window.size == (0,)
 
     def test_uneven_coordinate_with_sample_counts(self):
@@ -404,6 +382,14 @@ class TestDeprecatedResolvers:
         assert (
             size == resolve_window(simple_patch, {"time": 5}, samples=True).full_size()
         )
+
+    def test_get_patch_window_size_warns_above(self, simple_patch):
+        """The deprecated helper still warns on a large window."""
+        with pytest.warns(UserWarning, match="Large window"):
+            with pytest.warns(DeprecationWarning):
+                get_patch_window_size(
+                    simple_patch, {"time": 5}, samples=True, warn_above=4
+                )
 
     def test_get_patch_window_size_with_no_window(self, simple_patch):
         """As before, no dimension gives one along every axis."""

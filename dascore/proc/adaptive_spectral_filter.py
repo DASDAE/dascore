@@ -1,25 +1,14 @@
 """
-Adaptive spectral filtering for DASCore patches.
-
-The filter walks a patch in overlapping windows along one or two dimensions.
-Each window is transformed to the spectral domain, every coefficient is
-weighted by a power of its own magnitude, and the window is transformed back
-and added into the output under a tapered overlap-add. Energy which is
-coherent within a window concentrates in a few large coefficients, which the
-weighting keeps; energy spread across the spectrum is suppressed.
+The adaptive spectral (AFK) filter: every window's spectrum weighted by a
+power of its own magnitude, so coherent energy is kept and the rest suppressed.
 
 Over two dimensions this is the adaptive frequency-wavenumber filter of
 @isken2022denoising as implemented by Pyrocko
 [Lightguide](https://github.com/pyrocko/lightguide), which the SciPy engine
-here matches to floating-point precision. Over one dimension it is the same
-weighting applied to each trace on its own.
-
-The public patch function converts dimension names and coordinate units to
-axes and sample counts and batches over every dimension not selected. The
-engines work on raw one- or two-dimensional arrays; the optional
-Numba/rocket-fft engine in `_adaptive_spectral_filter_numba` handles the
-two-dimensional case and shares this module's validation, padding, and taper
-so the two produce the same output.
+matches to floating-point precision. The engines take one- or
+two-dimensional arrays; the patch function resolves windows and batches over
+every other dimension. The optional numba engine in
+`_adaptive_spectral_filter_numba` shares this module's validation and taper.
 """
 
 from __future__ import annotations
@@ -34,7 +23,6 @@ from scipy import fft as sp_fft
 
 from dascore.constants import PatchType
 from dascore.exceptions import MissingOptionalDependencyError, ParameterError
-from dascore.utils.misc import is_power_of_two
 from dascore.utils.patch import patch_function
 from dascore.utils.signal import get_taper
 from dascore.utils.tiles import TilePlan, get_tile_plan
@@ -54,16 +42,16 @@ def _check_window(window: Any, overlap: Any, label: str) -> None:
     if not isinstance(overlap, int | np.integer):
         msg = f"overlap for {label} must be an integer; got {overlap!r}."
         raise ValueError(msg)
-    if window <= 4 or not is_power_of_two(window):
-        msg = (
-            f"window for {label} must be a power of two greater than 4; got {window!r}."
-        )
+    if window < 2:
+        msg = f"window for {label} must be at least 2 samples; got {window!r}."
         raise ValueError(msg)
     if overlap < 0:
         msg = f"overlap for {label} must be non-negative; got {overlap!r}."
         raise ValueError(msg)
     if overlap >= window / 2:
-        msg = f"overlap for {label} is too large; maximum is {window // 2 - 1} samples."
+        msg = (
+            f"overlap for {label} is too large; maximum is {(window - 1) // 2} samples."
+        )
         raise ValueError(msg)
 
 
@@ -168,38 +156,31 @@ def _adaptive_spectral_filter_scipy(
     normalize_power: bool = False,
 ) -> np.ndarray:
     """
-    Filter a 1D or 2D array with the SciPy adaptive spectral implementation.
+    Filter a 1D or 2D array with the SciPy engine.
 
     Parameters
     ----------
     data
-        One- or two-dimensional input array. The filter computes in ``float32``.
+        A one- or two-dimensional array; the filter computes in ``float32``.
     window_size
-        Power-of-two window lengths, one per array axis. Values must be greater
-        than 4.
+        Window lengths in samples, one per axis, of at least 2.
     overlap
-        Number of samples each neighboring window overlaps on each axis. Values
-        must be non-negative and smaller than half the matching window.
+        Samples each window shares with the next along each axis: at least 0
+        and under half the window.
     exponent
-        Spectral magnitude exponent used as the adaptive weighting power. ``0``
-        leaves the spectrum unweighted before overlap-add reconstruction.
+        The weighting power; ``0`` leaves the spectrum unweighted.
     normalize_power
-        If ``True``, normalize each tile's spectral magnitudes by that tile's
-        maximum magnitude before applying ``exponent``.
+        If True, scale each window's magnitudes by their maximum first.
 
     Returns
     -------
-    numpy.ndarray
-        The filtered array with the same shape as ``data``. Floating input
-        dtypes are restored; non-floating inputs return ``float32`` output.
+    The filtered array, in the input's floating dtype or ``float32``.
 
     Raises
     ------
     ValueError
-        If ``data`` is not one- or two-dimensional, ``exponent`` is not finite,
-        ``window_size`` and ``overlap`` do not match ``data.ndim``, any window
-        size is not a power of two greater than 4, or any overlap is negative or
-        at least half the matching window size.
+        For an array of another dimensionality, or a window, overlap, or
+        exponent outside the ranges above.
     """
     data = np.asarray(data)
     _validate_filter_inputs(
@@ -254,62 +235,42 @@ def adaptive_spectral_filter(
     **kwargs: Any,
 ) -> PatchType:
     """
-    Apply adaptive spectral filtering over one or two patch dimensions.
+    Suppress energy which is not coherent within a window: the AFK filter.
 
     Parameters
     ----------
     patch
-        DASCore patch whose data should be filtered.
+        The patch to filter.
     overlap
-        Window overlap in samples when ``samples=True`` or in coordinate units
-        otherwise. A single value applies to all selected dimensions; a mapping
-        can specify dimensions independently. When omitted, each dimension
-        defaults to ``window // 2 - 1`` samples, the largest overlap allowed.
+        How far each window reaches into the next, in coordinate units or,
+        with `samples`, in samples; a mapping gives each dimension its own.
+        Default is ``(window - 1) // 2`` samples, the most allowed.
     exponent
-        Spectral magnitude exponent used as the adaptive weighting power.
-        Larger values suppress incoherent energy harder; ``0`` leaves the
-        spectrum unweighted, and values above 1 begin to remove weak coherent
-        arrivals along with the noise. Must be non-negative.
+        The weighting power. ``0`` leaves the spectrum unweighted; above 1
+        weak coherent arrivals go with the noise. Non-negative.
     normalize_power
-        If ``True``, normalize each tile's spectral magnitudes by that tile's
-        maximum magnitude before applying ``exponent``. This keeps the
-        amplitude of every window near its input level, at the cost of
-        suppressing much less noise in windows which hold no signal.
+        If True, scale each window's magnitudes by their maximum before the
+        exponent, which keeps every window near its input amplitude at the
+        cost of suppressing much less noise where there is no signal.
     samples
-        If ``True``, dimension kwargs and overlap values are interpreted as
-        sample counts. If ``False``, values are converted through evenly sampled
-        patch coordinates.
+        If True, windows and overlaps are sample counts.
     engine
-        ``"auto"`` uses SciPy for one selected dimension and the optional
-        Numba/rocket-fft implementation for two selected dimensions when
-        available. ``"numba"`` requires two selected dimensions and the optional
-        fast engine. ``"scipy"`` always uses the SciPy FFT implementation.
+        ``"scipy"``, ``"numba"`` (two dimensions, needs numba and rocket-fft),
+        or ``"auto"``, which is numba when it can be.
     **kwargs
-        One or two dimension names and their window sizes, such as ``time=32``
-        or ``time=32, distance=32``.
+        One or two dimensions and their windows, such as ``time=32`` or
+        ``time=32, distance=32``.
 
     Returns
     -------
-    Patch
-        A new patch with filtered data and original dimensions and coordinates.
-        The data are ``float32``, or ``float64`` for ``float64`` input.
-
-    Raises
-    ------
-    ParameterError
-        If one or two dimensions are not selected, if selected window or overlap
-        values are invalid, if ``exponent`` is not finite and non-negative, or
-        if an invalid engine name is requested.
-    MissingOptionalDependencyError
-        If ``engine="numba"`` is requested for two selected dimensions but the
-        optional fast-engine dependencies are not installed.
+    A patch with the input's shape and coordinates, in ``float32`` unless the
+    input is ``float64``.
 
     Examples
     --------
     >>> import dascore as dc
     >>> patch = dc.get_example_patch("example_event_2").pass_filter(time=(1, 300))
-    >>> # Suppress energy which is not coherent across both time and distance,
-    >>> # in windows of 16 samples along each.
+    >>> # Keep what is coherent across both time and distance.
     >>> filtered = patch.adaptive_spectral_filter(
     ...     time=16, distance=16, samples=True
     ... )
@@ -318,17 +279,16 @@ def adaptive_spectral_filter(
 
     Notes
     -----
-    - With two selected dimensions this is the adaptive frequency-wavenumber
-      (AFK) filter of @isken2022denoising, and matches Pyrocko
-      [Lightguide](https://github.com/pyrocko/lightguide)'s `afk_filter`,
-      whose defaults are ``window_size=16, overlap=7, exponent=0.8``.
-    - The filter is not amplitude preserving. Each coefficient is scaled by
-      its own magnitude to the power of ``exponent``, so the output's units
-      are not the input's and its amplitudes grow with the input's; compare
-      arrivals within one output rather than across inputs.
-    - Windows must be powers of two greater than 4 samples. A window should
-      hold a few cycles of the arrivals to keep and be short against the
-      distance over which their moveout changes.
+    - Over two dimensions this is the adaptive frequency-wavenumber filter of
+      @isken2022denoising, matching Pyrocko
+      [Lightguide](https://github.com/pyrocko/lightguide)'s `afk_filter` and
+      its defaults, ``window_size=16, overlap=7, exponent=0.8``.
+    - Not amplitude preserving: each coefficient is scaled by its own
+      magnitude to the power of ``exponent``, so compare arrivals within one
+      output rather than across inputs.
+    - A window should hold a few cycles of the arrivals to keep and be short
+      against the distance over which their moveout changes; a power of two
+      transforms fastest.
     """
     return AdaptiveSpectralFilter(
         overlap=overlap,
@@ -377,9 +337,10 @@ class AdaptiveSpectralFilter(PatchProcessor):
             overlap=self.overlap,
             # Sample counts are read as given, whatever the coordinate is.
             require_evenly_sampled=False,
+            min_samples=2,
             # The most the window allows, which is what Lightguide uses. A
             # default is a sample count whatever `samples` says.
-            default_overlap=lambda size: size // 2 - 1,
+            default_overlap=lambda size: (size - 1) // 2,
         )
         # A default was given, so every dimension has an overlap.
         assert window.overlap is not None

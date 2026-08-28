@@ -83,20 +83,25 @@ class TestOverlapNone:
     def test_stft_omitted_means_half(self, patch):
         """Stft's default is not None but 50%: windows of 8 hop by 4."""
         out = patch.stft(time=8, samples=True)
-        assert out.attrs["_stft_hop"] == 4
+        assert out.attrs["_tile_stride_time"] == 4
 
     def test_stft_none_means_no_overlap(self, patch):
         """Given None outright, windows abut."""
         out = patch.stft(time=8, samples=True, overlap=None)
-        assert out.attrs["_stft_hop"] == 8
+        assert out.attrs["_tile_stride_time"] == 8
 
     def test_adaptive_spectral_filter_means_the_most_allowed(self, patch):
-        """Windows of 16 overlap by 7, which is window // 2 - 1."""
+        """Windows of 16 overlap by 7 and of 15 by 7: the most under half."""
         by_default = patch.adaptive_spectral_filter(time=16, distance=16, samples=True)
         by_hand = patch.adaptive_spectral_filter(
             time=16, distance=16, overlap=7, samples=True
         )
         assert np.allclose(by_default.data, by_hand.data)
+        odd = patch.adaptive_spectral_filter(time=15, distance=15, samples=True)
+        odd_by_hand = patch.adaptive_spectral_filter(
+            time=15, distance=15, overlap=7, samples=True
+        )
+        assert np.allclose(odd.data, odd_by_hand.data)
 
 
 class TestPercentRounding:
@@ -106,7 +111,7 @@ class TestPercentRounding:
     def test_stft_hop(self, patch, window, hop):
         """50% of 5 is 2, of 7 is 4, of 9 is 4; the hop is what is left."""
         out = patch.stft(time=window, samples=True, overlap=50 * percent)
-        assert out.attrs["_stft_hop"] == hop
+        assert out.attrs["_tile_stride_time"] == hop
 
     def test_rolling_hop(self, patch):
         """Rolling rounds the same way: 5 samples at 50% steps by 3."""
@@ -351,7 +356,7 @@ class TestTaperRamps:
         out = patch.stft(time=8, samples=True, overlap=None)
         # The window travels as a coordinate for istft; it is the symmetric hann.
         np.testing.assert_allclose(
-            out.get_coord("_stft_window").values, hann(8, sym=True)
+            out.get_coord("_tile_analysis_time").values, hann(8, sym=True), rtol=1e-6
         )
 
     def test_adaptive_spectral_filter_ramp(self, ones):

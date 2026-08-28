@@ -2,8 +2,8 @@
 Cut an array into overlapping tiles, and blend them back.
 
 A :class:`TilePlan` is the geometry: where every tile of a given size and
-stride sits over an array of a given shape, with one stride of zeros padded
-on every side so the tiles at the edges see a full taper ramp. It cuts the
+stride sits over an array of a given shape, zero padded so that every tile
+which reaches the array exists whole. It cuts the
 array into a dense stack of tiles, ``[n_tiles, *size]``, which one call to a
 vectorized function can transform, and adds a stack back under a taper so
 that, with a taper whose ramps are complementary, tiles of an untouched
@@ -66,23 +66,19 @@ class TilePlan:
     @property
     def margin(self) -> tuple[int, ...]:
         """
-        Zeros added at each end of every axis, in whole strides.
+        Zeros before the array along each axis, in whole strides.
 
-        Enough that every sample of the array is reached by every tile which
-        would reach it in an unbounded grid: one stride when tiles overlap
-        by no more than half, more when they overlap deeper, which a
-        synthesis window computed as a dual relies on.
+        As many as it takes for every tile which reaches the array to exist:
+        none when tiles abut, one stride up to half overlap, more beyond it,
+        which a synthesis window computed as a dual relies on.
         """
-        return tuple(
-            max(step, math.ceil((z - step) / step) * step)
-            for z, step in zip(self.size, self.stride)
-        )
+        return tuple((c - 1) * step for c, step in zip(self.colours, self.stride))
 
     @property
     def grid(self) -> tuple[int, ...]:
-        """How many tiles along each axis."""
+        """How many tiles along each axis: every one which reaches the array."""
         return tuple(
-            (length + 2 * m) // step
+            (length - 1 + m) // step + 1
             for length, m, step in zip(self.shape, self.margin, self.stride)
         )
 
@@ -95,7 +91,7 @@ class TilePlan:
     def extended(self) -> tuple[int, ...]:
         """The padded buffer's shape, long enough for the last tile to fit whole."""
         return tuple(
-            max(length + 2 * m, (count - 1) * step + z)
+            max(length + m, (count - 1) * step + z)
             for length, m, step, count, z in zip(
                 self.shape, self.margin, self.stride, self.grid, self.size
             )

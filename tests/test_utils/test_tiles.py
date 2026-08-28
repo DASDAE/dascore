@@ -35,6 +35,14 @@ class TestGeometry:
         assert plan.extended[0] >= (plan.grid[0] - 1) * 9 + 16
         assert plan.n_tiles == plan.grid[0]
 
+    def test_abutting_tiles_need_no_margin(self):
+        """With no overlap the first tile starts at the array, and none is wasted."""
+        plan = get_tile_plan((10,), (4,), (4,))
+        assert plan.margin == (0,)
+        assert plan.grid == (3,)
+        plan = get_tile_plan((8,), (4,), (4,))
+        assert plan.grid == (2,)
+
     def test_margin_grows_with_overlap(self):
         """One stride of margin up to half overlap; whole strides beyond it."""
         assert get_tile_plan((64,), (16,), (9,)).margin == (9,)
