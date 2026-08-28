@@ -25,6 +25,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 import dascore as dc
+from dascore.units import percent
 
 patch = dc.get_example_patch("example_event_2").pass_filter(time=(1, 300))
 
@@ -85,6 +86,22 @@ def agc_tile(tile):
 normalized = patch.tile_apply(agc_tile, time=0.02, distance=40)
 ```
 
+## A window on the way in
+
+By default the function sees raw, rectangular tiles and the blend alone is tapered. A function which takes a spectrum of each tile may want the tile windowed first. Give `analysis` a window name and each tile is multiplied by it before the function sees it; the blend then uses that window's dual, computed by scipy along each axis, so an unchanged stack still returns the input exactly — and the overlap may go past half the window.
+
+```{python}
+def keep_strongest(tiles):
+    """Keep the largest quarter of each tile's f-k coefficients."""
+    spectra = np.fft.rfft2(tiles)
+    cutoff = np.percentile(np.abs(spectra), 75, axis=(1, 2), keepdims=True)
+    return np.fft.irfft2(np.where(np.abs(spectra) < cutoff, 0, spectra), s=tiles.shape[1:])
+
+
+local_fk = patch.tile_apply(keep_strongest, analysis="hann", overlap=75 * percent, time=0.02, distance=40)
+assert local_fk.shape == patch.shape
+```
+
 ## What a tile sees
 
-Tiles start one stride before the data and are padded with zeros, so every sample is covered by tiles which see a full taper ramp on both sides. Overlap defaults to half the window and cannot exceed it, since the ramps would cross. The taper's shape is any window [`get_window`](`dascore.utils.signal.get_window`) knows; its ramps are made complementary whatever the shape, which is what makes the blend exact.
+Tiles start before the data and are padded with zeros: one stride before, so every sample is covered by tiles which see a full taper ramp on both sides, or under an analysis window as many whole strides as it takes for every tile which would reach a sample to exist, which the dual relies on. Overlap defaults to half the window; under a taper it cannot exceed half, since the ramps would cross, and under an analysis window it may go as deep as scipy can invert the window at. The taper's shape is any window [`get_window`](`dascore.utils.signal.get_window`) knows; its ramps are made complementary whatever the shape, which is what makes the blend exact.

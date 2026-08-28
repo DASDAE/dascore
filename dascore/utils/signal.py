@@ -22,6 +22,7 @@ from dascore.exceptions import ParameterError
 from dascore.utils.imports import lazy_import
 
 _scipy_get_window = lazy_import("scipy.signal", "get_window")
+_ShortTimeFFT = lazy_import("scipy.signal", "ShortTimeFFT")
 
 # The names DASCore documents for windows, each the scipy name it means.
 # Two are DASCore's own: `cos` for hann and `ramp` for triang. Anything not
@@ -200,3 +201,61 @@ def get_taper(
         return _cached_taper(window, size, overlap).copy()
     # An array, or a tuple carrying a list: built each time, uncached.
     return _build_taper(window, size, overlap)
+
+
+def get_dual_taper(
+    window: Any, size: tuple[int, ...], stride: tuple[int, ...]
+) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Return an analysis window and the synthesis window which inverts it.
+
+    Tiles multiplied by the analysis window on the way in and by the
+    synthesis window on the way out sum to exactly what they were cut from,
+    at any stride the window can be inverted at: the synthesis window is
+    scipy's canonical dual, built per axis and multiplied across them.
+
+    Parameters
+    ----------
+    window
+        The analysis window; see `get_window`. One name for every axis.
+    size
+        The tile's shape.
+    stride
+        How far tiles advance along each axis.
+
+    Returns
+    -------
+    A pair of ``float32`` arrays of shape `size`: the analysis window and
+    its dual.
+
+    Examples
+    --------
+    >>> from dascore.utils.signal import get_dual_taper
+    >>> analysis, synthesis = get_dual_taper("hann", (16, 16), (4, 4))
+    >>> analysis.shape == synthesis.shape == (16, 16)
+    True
+    """
+    if len(size) != len(stride):
+        msg = "size and stride must have the same length."
+        raise ParameterError(msg)
+    size, stride = tuple(size), tuple(stride)
+    if _hashable(window):
+        analysis, synthesis = _cached_dual_taper(window, size, stride)
+        return analysis.copy(), synthesis.copy()
+    return _build_dual_taper(window, size, stride)
+
+
+@lru_cache(maxsize=64)
+def _cached_dual_taper(window, size, stride):
+    return _build_dual_taper(window, size, stride)
+
+
+def _build_dual_taper(window, size, stride):
+    analyses, duals = [], []
+    for length, step in zip(size, stride):
+        edge = np.asarray(get_window(window, length), dtype=np.float64)
+        duals.append(_ShortTimeFFT(edge, hop=step, fs=1.0).dual_win)
+        analyses.append(edge)
+    analysis = math.prod(np.ix_(*analyses)) if len(size) > 1 else analyses[0]
+    synthesis = math.prod(np.ix_(*duals)) if len(size) > 1 else duals[0]
+    return np.asarray(analysis, np.float32), np.asarray(synthesis, np.float32)

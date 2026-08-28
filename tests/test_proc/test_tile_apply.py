@@ -137,6 +137,127 @@ class TestOverlapAdd:
         assert "function='agc'" in list(out.attrs.history)[-1]
 
 
+class TestAnalysisWindow:
+    """A window on the way in, its dual on the way out."""
+
+    def test_deep_overlap_stack_starts_where_the_tiles_do(self, patch):
+        """At 12 of 16 the first tile starts three strides before the data."""
+        tiles = patch.tile_apply(
+            lambda x: x,
+            mode="stack",
+            analysis="hann",
+            overlap=12,
+            time=16,
+            samples=True,
+        )
+        starts = tiles.get_coord("time_start").values
+        assert starts[0] == -12
+        assert starts[1] - starts[0] == 4
+
+    def test_deep_overlap_thinned_stack_is_placed_by_its_starts(self, patch):
+        """Every other tile of a deep stack lands where the full stack put it."""
+        tiles = patch.tile_apply(
+            lambda x: x,
+            mode="stack",
+            analysis="hann",
+            overlap=12,
+            time=16,
+            samples=True,
+        )
+        keep = np.arange(0, tiles.shape[tiles.dims.index("time")], 2)
+        thinned = tiles.select(time=keep, samples=True).reassemble()
+        zeroed = tiles.data.copy()
+        zeroed[:, 1::2] = 0
+        expected = tiles.new(data=zeroed).reassemble()
+        np.testing.assert_allclose(thinned.data, expected.data, atol=1e-6)
+
+    @pytest.mark.parametrize("mode", ["overlap_add", "stack"])
+    def test_without_a_window_the_function_sees_the_dtype(self, mode):
+        """No analysis window, no promotion: an integer tile stays integer."""
+        seen = []
+        patch = dc.Patch(
+            data=np.arange(32, dtype=np.int32), coords={"x": np.arange(32)}, dims=("x",)
+        )
+
+        def parity(tiles):
+            seen.append(tiles.dtype)
+            return tiles & 1
+
+        patch.tile_apply(parity, mode=mode, x=8, samples=True)
+        assert seen == [np.dtype(np.int32)]
+
+    @pytest.mark.parametrize("window", ["hann", "hamming", ("tukey", 0.5)])
+    def test_identity_under_a_dual(self, patch, window):
+        """Windowed tiles blended under the dual return the input exactly."""
+        out = patch.tile_apply(
+            identity, analysis=window, time=32, distance=8, samples=True
+        )
+        np.testing.assert_allclose(out.data, patch.data, atol=1e-5)
+
+    def test_deep_overlap(self, patch):
+        """With a dual the overlap may pass half the window: hop 4 of 16."""
+        out = patch.tile_apply(
+            identity, analysis="hann", overlap=12, time=16, samples=True
+        )
+        np.testing.assert_allclose(out.data, patch.data, atol=1e-5)
+
+    def test_function_sees_the_window(self, patch):
+        """The function receives windowed tiles, not raw ones."""
+        seen = {}
+
+        def peek(tiles):
+            seen["edge"] = float(np.abs(tiles[:, :, 0]).max())
+            return tiles
+
+        patch.tile_apply(peek, analysis="hann", time=32, distance=8, samples=True)
+        assert seen["edge"] == 0.0  # a hann window is zero at its first sample
+
+    def test_stack_round_trip(self, patch):
+        """A stack cut with an analysis window reassembles under its dual."""
+        stacked = patch.tile_apply(
+            identity, mode="stack", analysis="hann", overlap=12, time=16, samples=True
+        )
+        assert stacked.attrs["_tile_analysis"] == "hann"
+        back = stacked.reassemble()
+        assert back.equals(patch, close=True)
+        assert "_tile_analysis" not in dict(back.attrs)
+
+    def test_stack_refuses_a_taper(self, patch):
+        """The dual is the only blend a windowed stack has."""
+        stacked = patch.tile_apply(
+            identity, mode="stack", analysis="hann", time=16, samples=True
+        )
+        with pytest.raises(ParameterError, match="cannot be given"):
+            stacked.reassemble(taper="triang")
+
+    def test_taper_and_analysis_exclusive(self, patch):
+        """One or the other."""
+        with pytest.raises(ParameterError, match="cannot be given as well"):
+            patch.tile_apply(
+                identity, analysis="hann", taper="triang", time=16, samples=True
+            )
+
+    def test_an_explicit_default_taper_is_still_a_taper(self, patch):
+        """Spelling out the default does not slip past the exclusivity rule."""
+        with pytest.raises(ParameterError, match="cannot be given as well"):
+            patch.tile_apply(
+                lambda x: x, analysis="hann", taper="hann", time=16, samples=True
+            )
+
+    def test_array_refused(self, patch):
+        """A dual is built along each axis, which needs a name."""
+        with pytest.raises(ParameterError, match="given by name"):
+            patch.tile_apply(identity, analysis=np.ones((16,)), time=16, samples=True)
+
+    def test_numba_engine(self, patch):
+        """The compiled path windows each tile before the function too."""
+        half_tile = _jitted()
+        by_numba = patch.tile_apply(
+            half_tile, analysis="hann", time=32, distance=8, samples=True
+        )
+        np.testing.assert_allclose(by_numba.data, patch.data / 2, atol=1e-4)
+
+
 class TestStack:
     """The tiles themselves."""
 
@@ -222,6 +343,12 @@ class TestStack:
 
 class TestReassemble:
     """Blending a stack back."""
+
+    def test_array_taper(self, patch):
+        """A taper given as an array is a window like any other."""
+        tiles = patch.tile_apply(lambda x: x, mode="stack", time=16, samples=True)
+        back = tiles.reassemble(taper=np.hanning(17))
+        assert back.equals(patch, close=True)
 
     def test_round_trip_two_dimensions(self, patch):
         """An unchanged stack reassembles to the patch, coordinates and all."""
@@ -366,6 +493,7 @@ class TestEngines:
                     c0,
                     c1,
                     half_tile,
+                    np.ones(plan.size, np.float32),
                 )
         np.testing.assert_allclose(plan.crop(out), data / 2, atol=1e-5)
 
