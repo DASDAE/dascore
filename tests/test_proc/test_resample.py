@@ -81,6 +81,7 @@ class TestInterpolate:
         out = patch.interpolate(distance=new_coord)
         assert out.coords.dim_map["lat"] == ("distance",)
         assert out.get_coord("lat").units == patch.get_coord("lat").units
+        assert out.get_coord("distance").units == patch.get_coord("distance").units
         assert len(out.get_array("lat")) == len(new_coord)
         # The samples which did not move keep the values they had.
         kept = out.get_array("lat")[::2]
@@ -115,6 +116,22 @@ class TestInterpolate:
         out = patch.interpolate(distance=new_coord)
         assert out.coords.dim_map["quality"] == ("distance", "time")
         assert out.get_array("quality").shape == out.shape
+
+    def test_unsigned_coords_do_not_wrap(self):
+        """Rebasing unsigned interpolation coordinates avoids wraparound."""
+        coord = np.array([3, 4, 5], dtype=np.uint64)
+        samples = np.array([2, 3, 4], dtype=np.uint64)
+        values = coord.astype(float)
+        patch = dc.Patch(
+            data=values,
+            coords={"x": coord, "aux": ("x", values)},
+            dims=("x",),
+        )
+
+        out = patch.interpolate(x=samples)
+
+        assert np.allclose(out.data, samples)
+        assert np.allclose(out.get_array("aux"), samples)
 
 
 class TestDecimate:
@@ -233,6 +250,7 @@ class TestResample:
             return expected
 
         assert out.coords.dim_map == patch.coords.dim_map
+        assert out.get_coord("distance").units == patch.get_coord("distance").units
         expected_lat = _linear_extrapolate(patch.get_array("lat"))
         assert np.allclose(out.get_array("lat"), expected_lat)
         expected_quality = np.apply_along_axis(

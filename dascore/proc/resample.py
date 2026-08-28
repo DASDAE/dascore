@@ -108,9 +108,13 @@ def decimate(
 
 def _relative_coord_values(coord_num, samples_num):
     """Return interpolation coordinates relative to their first sample."""
-    if not len(coord_num):
-        return coord_num, samples_num
     offset = coord_num[0]
+    if np.issubdtype(coord_num.dtype, np.unsignedinteger) or np.issubdtype(
+        samples_num.dtype, np.unsignedinteger
+    ):
+        coord_num = np.asarray(np.asarray(coord_num, dtype=object) - int(offset))
+        samples_num = np.asarray(np.asarray(samples_num, dtype=object) - int(offset))
+        return coord_num.astype(np.float64), samples_num.astype(np.float64)
     return coord_num - offset, samples_num - offset
 
 
@@ -230,7 +234,7 @@ def interpolate(patch: PatchType, kind: str | int = "linear", **kwargs) -> Patch
     out = func(interp_samples)
     cm = patch.coords
     associated_dims = cm.dim_map[dim]
-    coord_new = dc.core.get_coord(data=samples)
+    coord_new = dc.core.get_coord(data=samples, units=cm.coord_map[dim].units)
     updates = {dim: (associated_dims, coord_new)}
     updates |= _interpolate_associated(cm, dim, coord_num, samples_num, kind)
     cm_new = _apply_coord_updates(cm, updates)
@@ -330,6 +334,7 @@ def resample(
     data, new_coord = compat.resample(
         patch.data, int(np.round(new_len)), t=coord, axis=axis, window=window
     )
+    new_coord = dc.core.get_coord(data=new_coord, units=coord.units)
     cm = patch.coords
     coord_num = to_int(cm.get_array(dim))
     out = patch.new(data=data, coords=cm.update(**{dim: new_coord}))
