@@ -7,7 +7,14 @@ import pytest
 from scipy.signal.windows import hann, triang
 
 from dascore.exceptions import ParameterError
-from dascore.utils.signal import WINDOW_NAMES, get_ramp, get_taper, get_window
+from dascore.utils.signal import (
+    WINDOW_NAMES,
+    get_dual_taper,
+    get_ramp,
+    get_taper,
+    get_window,
+)
+from dascore.utils.tiles import get_tile_plan
 
 # The shapes a blend might be asked for, from flat to bell.
 SHAPES = ["boxcar", "triang", "hann", "hamming", "blackman", ("tukey", 0.5)]
@@ -214,3 +221,37 @@ class TestGetTaper:
                 ] += taper
         inner = total[overlap[0] : -overlap[0], overlap[1] : -overlap[1]]
         np.testing.assert_allclose(inner, 1, atol=1e-6)
+
+
+class TestGetDualTaper:
+    """An analysis window and the synthesis window which inverts it."""
+
+    def test_unhashable_window_builds(self):
+        """A scipy tuple carrying a list is not hashable, and still builds."""
+        analysis, synthesis = get_dual_taper(("general_cosine", [0.5, 0.5]), (8,), (2,))
+        assert analysis.shape == synthesis.shape == (8,)
+
+    @pytest.mark.parametrize("shape", SHAPES)
+    @pytest.mark.parametrize(
+        "size,stride",
+        [((8,), (3,)), ((8,), (2,)), ((16, 16), (9, 9)), ((16, 16), (4, 4))],
+    )
+    def test_analysis_times_dual_sums_to_one(self, shape, size, stride):
+        """Tiles cut, windowed, and blended under the dual return the array."""
+        rng = np.random.default_rng(5)
+        array = rng.normal(size=tuple(4 * z for z in size)).astype(np.float32)
+        plan = get_tile_plan(array.shape, size, stride)
+        analysis, synthesis = get_dual_taper(shape, size, stride)
+        out = plan.overlap_add(plan.extract(array) * analysis, synthesis)
+        np.testing.assert_allclose(out, array, atol=1e-5)
+
+    def test_shapes_and_dtype(self):
+        """Both windows are float32 arrays of the tile's shape."""
+        analysis, synthesis = get_dual_taper("hann", (8, 16), (4, 8))
+        assert analysis.shape == synthesis.shape == (8, 16)
+        assert analysis.dtype == synthesis.dtype == np.float32
+
+    def test_mismatched_lengths_refused(self):
+        """A stride per axis."""
+        with pytest.raises(ParameterError, match="same length"):
+            get_dual_taper("hann", (8, 16), (4,))

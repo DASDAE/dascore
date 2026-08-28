@@ -35,6 +35,14 @@ class TestGeometry:
         assert plan.extended[0] >= (plan.grid[0] - 1) * 9 + 16
         assert plan.n_tiles == plan.grid[0]
 
+    def test_margin_grows_with_overlap(self):
+        """One stride of margin up to half overlap; whole strides beyond it."""
+        assert get_tile_plan((64,), (16,), (9,)).margin == (9,)
+        assert get_tile_plan((64,), (16,), (8,)).margin == (8,)
+        # Hop 3 of 8: a sample is reached by three tiles, two strides back.
+        assert get_tile_plan((33,), (8,), (3,)).margin == (6,)
+        assert get_tile_plan((64,), (16,), (4,)).margin == (12,)
+
     def test_colours(self):
         """Tiles two strides apart cannot overlap when the stride is over half."""
         assert get_tile_plan((64, 64), (16, 16), (9, 9)).colours == (2, 2)

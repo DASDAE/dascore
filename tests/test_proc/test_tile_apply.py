@@ -137,6 +137,74 @@ class TestOverlapAdd:
         assert "function='agc'" in list(out.attrs.history)[-1]
 
 
+class TestAnalysisWindow:
+    """A window on the way in, its dual on the way out."""
+
+    @pytest.mark.parametrize("window", ["hann", "hamming", ("tukey", 0.5)])
+    def test_identity_under_a_dual(self, patch, window):
+        """Windowed tiles blended under the dual return the input exactly."""
+        out = patch.tile_apply(
+            identity, analysis=window, time=32, distance=8, samples=True
+        )
+        np.testing.assert_allclose(out.data, patch.data, atol=1e-5)
+
+    def test_deep_overlap(self, patch):
+        """With a dual the overlap may pass half the window: hop 4 of 16."""
+        out = patch.tile_apply(
+            identity, analysis="hann", overlap=12, time=16, samples=True
+        )
+        np.testing.assert_allclose(out.data, patch.data, atol=1e-5)
+
+    def test_function_sees_the_window(self, patch):
+        """The function receives windowed tiles, not raw ones."""
+        seen = {}
+
+        def peek(tiles):
+            seen["edge"] = float(np.abs(tiles[:, :, 0]).max())
+            return tiles
+
+        patch.tile_apply(peek, analysis="hann", time=32, distance=8, samples=True)
+        assert seen["edge"] == 0.0  # a hann window is zero at its first sample
+
+    def test_stack_round_trip(self, patch):
+        """A stack cut with an analysis window reassembles under its dual."""
+        stacked = patch.tile_apply(
+            identity, mode="stack", analysis="hann", overlap=12, time=16, samples=True
+        )
+        assert stacked.attrs["_tile_analysis"] == "hann"
+        back = stacked.reassemble()
+        assert back.equals(patch, close=True)
+        assert "_tile_analysis" not in dict(back.attrs)
+
+    def test_stack_refuses_a_taper(self, patch):
+        """The dual is the only blend a windowed stack has."""
+        stacked = patch.tile_apply(
+            identity, mode="stack", analysis="hann", time=16, samples=True
+        )
+        with pytest.raises(ParameterError, match="cannot be given"):
+            stacked.reassemble(taper="triang")
+
+    def test_taper_and_analysis_exclusive(self, patch):
+        """One or the other."""
+        with pytest.raises(ParameterError, match="cannot be given as well"):
+            patch.tile_apply(
+                identity, analysis="hann", taper="triang", time=16, samples=True
+            )
+
+    def test_array_refused(self, patch):
+        """A dual is built along each axis, which needs a name."""
+        with pytest.raises(ParameterError, match="given by name"):
+            patch.tile_apply(identity, analysis=np.ones((16,)), time=16, samples=True)
+
+    def test_numba_engine(self, patch):
+        """The compiled path windows each tile before the function too."""
+        half_tile = _jitted()
+        by_numba = patch.tile_apply(
+            half_tile, analysis="hann", time=32, distance=8, samples=True
+        )
+        np.testing.assert_allclose(by_numba.data, patch.data / 2, atol=1e-4)
+
+
 class TestStack:
     """The tiles themselves."""
 
@@ -366,6 +434,7 @@ class TestEngines:
                     c0,
                     c1,
                     half_tile,
+                    np.ones(plan.size, np.float32),
                 )
         np.testing.assert_allclose(plan.crop(out), data / 2, atol=1e-5)
 

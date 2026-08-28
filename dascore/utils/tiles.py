@@ -65,14 +65,25 @@ class TilePlan:
 
     @property
     def margin(self) -> tuple[int, ...]:
-        """Zeros added at each end of every axis: one stride, for a full ramp."""
-        return self.stride
+        """
+        Zeros added at each end of every axis, in whole strides.
+
+        Enough that every sample of the array is reached by every tile which
+        would reach it in an unbounded grid: one stride when tiles overlap
+        by no more than half, more when they overlap deeper, which a
+        synthesis window computed as a dual relies on.
+        """
+        return tuple(
+            max(step, math.ceil((z - step) / step) * step)
+            for z, step in zip(self.size, self.stride)
+        )
 
     @property
     def grid(self) -> tuple[int, ...]:
         """How many tiles along each axis."""
         return tuple(
-            (length + 2 * step) // step for length, step in zip(self.shape, self.stride)
+            (length + 2 * m) // step
+            for length, m, step in zip(self.shape, self.margin, self.stride)
         )
 
     @property
@@ -84,9 +95,9 @@ class TilePlan:
     def extended(self) -> tuple[int, ...]:
         """The padded buffer's shape, long enough for the last tile to fit whole."""
         return tuple(
-            max(length + 2 * step, (count - 1) * step + z)
-            for length, step, count, z in zip(
-                self.shape, self.stride, self.grid, self.size
+            max(length + 2 * m, (count - 1) * step + z)
+            for length, m, step, count, z in zip(
+                self.shape, self.margin, self.stride, self.grid, self.size
             )
         )
 
