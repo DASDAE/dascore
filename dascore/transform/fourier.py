@@ -683,7 +683,9 @@ def stft(
     strides = resolved.stride
     hops = sizes if strides is None else tuple(strides[i] for i in order)
     if isinstance(nfft, Mapping) and (extra := set(nfft) - set(dims)):
-        msg = f"nfft names dimensions which are not windowed: {sorted(extra)}."
+        msg = (
+            f"nfft names dimensions which are not windowed: {sorted(map(str, extra))}."
+        )
         raise ParameterError(msg)
     nffts = tuple(
         _resolve_nfft(nfft.get(dim) if isinstance(nfft, Mapping) else nfft, coord, size)
