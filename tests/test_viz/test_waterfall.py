@@ -222,42 +222,28 @@ class TestWaterfall:
         assert isinstance(ax, plt.Axes)
 
     @pytest.mark.parametrize("dim", ("distance", "time"))
-    def test_empty_dimension_returns_axes(self, random_patch, shown, dim):
-        """A patch with an empty dimension has nothing to draw. See #1089."""
+    @pytest.mark.parametrize("add_dimension", (False, True))
+    def test_empty_dimension_raises_immediately(
+        self, random_patch, shown, dim, add_dimension
+    ):
+        """An empty patch is rejected before any other processing. See #1089."""
         patch = random_patch.select(**{dim: (0, 0)}, samples=True)
+        if add_dimension:
+            patch = patch.append_dims("extra")
         assert 0 in patch.shape
-        _, supplied = plt.subplots()
+        figure_numbers = plt.get_fignums()
 
-        ax = patch.viz.waterfall(ax=supplied, show=True)
+        with pytest.raises(ParameterError, match="empty dimension"):
+            patch.viz.waterfall(
+                gap_factor=0,
+                scale_type="invalid",
+                label_coord="invalid",
+                cmap="invalid",
+                show=True,
+            )
 
-        assert ax is supplied
-        assert not ax.images
-        assert not ax.collections
-        assert ax.get_xlabel() and ax.get_ylabel()
-        assert shown
-
-    def test_empty_patch_squeezes_singleton_dimension(self, random_patch):
-        """A singleton dimension can be squeezed without dropping an empty one."""
-        patch = random_patch.select(distance=(0, 0), samples=True).append_dims("extra")
-        ax = patch.viz.waterfall(show=False)
-        assert not ax.images
-
-    def test_empty_labelled_dimension(self):
-        """An empty labelled dimension returns an empty axes."""
-        patch, inventory = inventory_patch_pair()
-        patch = patch.enrich(inventory).select(distance=(0, 0), samples=True)
-        ax = patch.viz.waterfall(label_coord="zone", show=False)
-        assert not ax.images
-
-    def test_empty_other_dimension_validates_labels(self):
-        """Labels remain validated when only the other dimension is empty."""
-        patch, inventory = inventory_patch_pair()
-        patch = patch.enrich(inventory)
-        empty_zone = np.full(patch.coord_shapes["distance"], "")
-        patch = patch.update_coords(zone=("distance", empty_zone))
-        patch = patch.select(time=(0, 0), samples=True)
-        with pytest.raises(ParameterError, match="no labels"):
-            patch.viz.waterfall(label_coord="zone", show=False)
+        assert plt.get_fignums() == figure_numbers
+        assert not shown
 
     def test_y_axis_inverted_only_when_time_like(self, random_patch):
         """Time on the y axis increases downward; other dimensions do not."""
@@ -408,9 +394,6 @@ class TestWaterfall:
         # Case sensitivity
         with pytest.raises(ParameterError, match=msg):
             random_patch.viz.waterfall(scale_type="Relative")
-        empty = random_patch.select(distance=(0, 0), samples=True)
-        with pytest.raises(ParameterError, match=msg):
-            empty.viz.waterfall(scale_type="invalid")
 
     def test_non_2d_patch_raises(self, random_patch):
         """Ensure non-2D patches raise ParameterError."""

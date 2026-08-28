@@ -45,10 +45,7 @@ def _validate_patch_dims(patch):
     """Validate that patch is 2D for waterfall plotting."""
     if patch.ndim != 2:
         # Try squeezing out degenerate dims to visualize.
-        singleton_dims = [
-            dim for dim, size in zip(patch.dims, patch.shape, strict=True) if size == 1
-        ]
-        patch = patch.squeeze(singleton_dims)
+        patch = patch.squeeze()
         if patch.ndim != 2:
             dims = patch.dims
             msg = (
@@ -239,13 +236,11 @@ def waterfall(
         and the legend names them by the coordinate. Absent values (the empty
         string, NaN, or False) label nothing, and leave bare spine.
 
-        For a non-empty Patch, raises `ParameterError` for a coordinate which
-        is not a set of labels: one stating more than 20 distinct values, one
-        changing more than 200 times, one whose every value is absent, and one
-        which is a dimension or spans both of them. An empty Patch validates
-        the coordinate's dimensions but not its values when the labelled
-        dimension itself is empty because nothing can be labelled. All
-        refusals happen before a figure is created.
+        Raises `ParameterError` for a coordinate which is not a set of
+        labels: one stating more than 20 distinct values, one changing more
+        than 200 times, one whose every value is absent, and one which is a
+        dimension or spans both of them. All are judged before anything is
+        drawn, so a refusal leaves no figure behind.
 
     Examples
     --------
@@ -296,8 +291,8 @@ def waterfall(
 
     Notes
     -----
-    - A Patch with an empty dimension returns an empty axes because it has no
-      cells to render.
+    - A Patch with an empty dimension raises `ParameterError` immediately
+      because it has no cells to render.
 
     - The Y axis is automatically inverted if it is "time-like". This is to
       be consistent with standard seismic plotting convention. If you don't
@@ -311,6 +306,9 @@ def waterfall(
       the default behavior is to now use a statistical fence to avoid the
       problem. To get the old behavior, simply set scale=1.0.
     """
+    if 0 in patch.shape:
+        msg = "Cannot plot a Patch with an empty dimension."
+        raise ParameterError(msg)
     # Validate inputs
     patch = _validate_patch_dims(patch)
     _validate_gap_factor(gap_factor)
@@ -322,8 +320,7 @@ def waterfall(
     plan, runs = None, None
     if label_coord is not None:
         plan = label_plan(patch, label_coord, dims_r)
-        if len(patch.get_coord(plan.dim)):
-            runs = label_runs(patch.coords.get_array(plan.name), plan.name)
+        runs = label_runs(patch.coords.get_array(plan.name), plan.name)
     # Setup axes and data. A figure this call built is one whose room a
     # legend may take; any other belongs to the caller.
     owned = ax is None
@@ -335,12 +332,6 @@ def waterfall(
     dim_coords = {dim: patch.get_coord(dim) for dim in dims}
     coords = {dim: np.asarray(coord) for dim, coord in dim_coords.items()}
     cmap = _get_waterfall_colormap(patch, cmap)
-    if 0 in patch.shape:
-        _get_scale(scale, scale_type, np.zeros(1))
-        _format_axis_labels(ax, patch, dims_r)
-        if show:
-            plt.show()
-        return ax
     scale = _get_scale(scale, scale_type, data)
     label_edges = None
     use_image = all(coord.evenly_sampled for coord in dim_coords.values())
