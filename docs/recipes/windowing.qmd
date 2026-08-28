@@ -70,7 +70,7 @@ A stack nobody changed reassembles to the patch it was cut from, coordinates and
 
 ## A compiled function, one tile at a time
 
-A function compiled with numba is given one tile at a time rather than the stack, in parallel, which is faster for anything that cannot be written over the stack in one numpy call. It compiles the first time it is used in each process, which takes a few seconds; after that a 2000 by 6000 patch tiles in a fraction of a second.
+A function compiled with numba is given one tile at a time rather than the stack, in parallel, which is faster for anything that cannot be written over the stack in one numpy call. It works over any number of dimensions and in `mode="stack"` too. It compiles the first time it is used in each process, which takes a few seconds; after that a 2000 by 6000 patch tiles in a fraction of a second.
 
 ```{python}
 #| eval: false

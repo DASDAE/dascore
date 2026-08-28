@@ -17,6 +17,7 @@ with `reassemble` (``mode="stack"``).
 from __future__ import annotations
 
 from collections.abc import Callable
+from functools import partial
 from typing import Any
 
 import numpy as np
@@ -63,7 +64,7 @@ def _offset_values(coord, offsets: np.ndarray):
     return first + offsets * step
 
 
-def _engine_for(engine: str, func, ndim: int) -> str:
+def _engine_for(engine: str, func) -> str:
     """Return which engine runs `func`, or say why neither can."""
     if engine not in _ENGINES:
         msg = f"engine must be one of {_ENGINES}; got {engine!r}."
@@ -76,12 +77,6 @@ def _engine_for(engine: str, func, ndim: int) -> str:
             msg = (
                 "engine='numba' takes a numba-compiled function of one tile; "
                 "a plain function takes the whole stack and runs on numpy."
-            )
-            raise ParameterError(msg)
-        if ndim != 2:
-            msg = (
-                "A numba-compiled function is given one tile at a time over "
-                f"exactly two windowed dimensions; this call windows {ndim}."
             )
             raise ParameterError(msg)
         # Deferred: the driver is optional, and importing it eagerly would
@@ -125,9 +120,9 @@ def tile_apply(
         What to do to the tiles. On the numpy engine it is given the whole
         stack at once, an array of ``[n_tiles, *window]``, and returns one of
         the same shape: one vectorized call, not one per tile. A function
-        compiled with numba is given one tile at a time by the numba engine
-        and returns a tile of the same shape; it compiles the first time it
-        is used in each process, which takes a few seconds.
+        compiled with numba is given one tile at a time by the numba engine,
+        in parallel, and returns a tile of the same shape; it compiles the
+        first time it is used in each process, which takes a few seconds.
     mode
         ``"overlap_add"`` blends the tiles back under `taper` into a patch
         shaped like the input. ``"stack"`` returns the tiles unblended: each
@@ -157,7 +152,7 @@ def tile_apply(
         If True, windows and overlaps are sample counts.
     engine
         ``"numpy"``, ``"numba"``, or ``"auto"``, which is numba for a
-        numba-compiled `function` over two dimensions and numpy otherwise.
+        numba-compiled `function` and numpy otherwise.
     **kwargs
         The dimensions to window and the window along each, such as
         ``time=0.5`` (seconds) or ``time=64, distance=16, samples=True``.
@@ -286,7 +281,7 @@ class TileApply(PatchProcessor):
         """Tile every batch over the windowed axes; blend or stack."""
         window = self.window(meta)
         assert window.stride is not None and window.overlap is not None
-        engine = _engine_for(self.engine, self.function, len(window.axes))
+        engine = _engine_for(self.engine, self.function)
         plan = window.tiles(data.shape)
         data = np.asarray(data)
         ndim = len(window.axes)
@@ -294,22 +289,18 @@ class TileApply(PatchProcessor):
         moved = np.moveaxis(data, window.axes, tail)
         batches = moved.reshape((-1, *moved.shape[-ndim:]))
         if self.mode == "stack":
-            if engine == "numba":
-                msg = (
-                    "mode='stack' hands the function the whole stack of tiles; "
-                    "a numba-compiled function of one tile cannot take it."
-                )
-                raise ParameterError(msg)
             analysis = (
                 None
                 if self.analysis is None
                 else get_dual_taper(self.analysis, plan.size, plan.stride)[0]
             )
+            apply = self.function
+            if engine == "numba":
+                from dascore.utils._tiles_numba import stack_jit  # noqa: PLC0415
+
+                apply = partial(stack_jit, func=self.function)
             stacks = np.stack(
-                [
-                    self.function(_windowed(plan.extract(batch), analysis))
-                    for batch in batches
-                ]
+                [apply(_windowed(plan.extract(batch), analysis)) for batch in batches]
             )
             out = stacks.reshape((*moved.shape[:-ndim], *plan.grid, *plan.size))
             # The tile axes go where the windowed dimensions were; the

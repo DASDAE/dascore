@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import itertools
+
 import numpy as np
 import pytest
 
@@ -272,13 +274,17 @@ class TestStack:
         halved = patch.tile_apply(halve, mode="stack", time=64, samples=True)
         np.testing.assert_allclose(halved.data, raw.data / 2)
 
-    def test_compiled_function_refused(self, patch):
-        """A per-tile function has no stack to take."""
+    def test_compiled_function_stacks(self, patch):
+        """A per-tile function is run over every tile of the stack, in parallel."""
         half_tile = _jitted()
-        with pytest.raises(ParameterError, match="cannot take it"):
-            patch.tile_apply(
-                half_tile, mode="stack", time=64, distance=16, samples=True
-            )
+        by_numba = patch.tile_apply(
+            half_tile, mode="stack", time=64, distance=16, samples=True
+        )
+        by_numpy = patch.tile_apply(
+            halve, mode="stack", time=64, distance=16, samples=True
+        )
+        np.testing.assert_allclose(by_numba.data, by_numpy.data, atol=1e-6)
+        assert by_numba.dims == by_numpy.dims
 
     def test_dims_and_shape(self, stacked, patch):
         """Tile axes where the dimensions were, offsets at the end in axis order."""
@@ -469,10 +475,13 @@ class TestEngines:
         assert np.iscomplexobj(out.data)
         np.testing.assert_allclose(out.data.imag, patch.data, atol=1e-4)
 
-    def test_driver_runs_in_python(self, patch):
-        """The driver gives the same answer uncompiled."""
+    def test_drivers_run_in_python(self, patch):
+        """The drivers give the same answer uncompiled."""
         half_tile = _jitted()
-        from dascore.utils._tiles_numba import _apply_colour_class  # noqa: PLC0415
+        from dascore.utils._tiles_numba import (  # noqa: PLC0415
+            _blend_class,
+            _stack_each,
+        )
         from dascore.utils.signal import get_taper  # noqa: PLC0415
         from dascore.utils.tiles import get_tile_plan  # noqa: PLC0415
 
@@ -480,22 +489,23 @@ class TestEngines:
         plan = get_tile_plan(data.shape, (8, 16), (5, 9))
         taper = get_taper("hann", (8, 16), (3, 7))
         padded, out = plan.pad(data), np.zeros(plan.extended, dtype=np.float32)
-        for c0 in range(plan.colours[0]):
-            for c1 in range(plan.colours[1]):
-                _apply_colour_class.func(
-                    padded,
-                    out,
-                    taper,
-                    *plan.size,
-                    *plan.stride,
-                    *plan.grid,
-                    *plan.colours,
-                    c0,
-                    c1,
-                    half_tile,
-                    np.ones(plan.size, np.float32),
-                )
+        tiles_in, tiles_out = plan._tile_view(padded), plan._tile_view(out, True)
+        for colour in itertools.product(*(range(c) for c in plan.colours)):
+            sub = tuple(slice(c, None, k) for c, k in zip(colour, plan.colours))
+            tiles = tiles_in[sub]
+            _blend_class.func(
+                tiles,
+                tiles_out[sub],
+                taper,
+                tiles.shape[1:2],
+                half_tile,
+                np.ones(plan.size, np.float32),
+            )
         np.testing.assert_allclose(plan.crop(out), data / 2, atol=1e-5)
+        stack = plan.extract(data)
+        stacked = np.empty_like(stack)
+        _stack_each.func(stack, stacked, half_tile)
+        np.testing.assert_allclose(stacked, stack / 2)
 
     def test_jitted_function_on_numpy_engine_refused(self, patch):
         """A per-tile function cannot take the stack."""
@@ -508,12 +518,44 @@ class TestEngines:
         with pytest.raises(ParameterError, match="numba-compiled function"):
             patch.tile_apply(halve, engine="numba", time=64, distance=16, samples=True)
 
-    @pytest.mark.parametrize("engine", ["auto", "numba"])
-    def test_compiled_function_needs_two_dimensions(self, patch, engine):
-        """The driver tiles two dimensions, and says so however it was reached."""
+    def test_compiled_function_in_one_dimension(self, patch):
+        """The driver tiles one dimension as readily as two."""
         half_tile = _jitted()
-        with pytest.raises(ParameterError, match="exactly two windowed dimensions"):
-            patch.tile_apply(half_tile, time=64, samples=True, engine=engine)
+        by_numba = patch.tile_apply(half_tile, time=64, samples=True)
+        by_numpy = patch.tile_apply(halve, time=64, samples=True)
+        np.testing.assert_allclose(by_numba.data, by_numpy.data, atol=1e-5)
+
+    def test_compiled_function_in_three_dimensions(self):
+        """And three, with a dimension that is not windowed batched over."""
+        half_tile = _jitted()
+        rng = np.random.default_rng(3)
+        patch = dc.Patch(
+            data=rng.normal(size=(3, 24, 30, 40)).astype(np.float32),
+            coords={
+                "a": np.arange(3),
+                "x": np.arange(24),
+                "y": np.arange(30),
+                "z": np.arange(40),
+            },
+            dims=("a", "x", "y", "z"),
+        )
+        by_numba = patch.tile_apply(half_tile, x=8, y=6, z=10, samples=True)
+        by_numpy = patch.tile_apply(halve, x=8, y=6, z=10, samples=True)
+        np.testing.assert_allclose(by_numba.data, by_numpy.data, atol=1e-5)
+        np.testing.assert_allclose(by_numba.data, patch.data / 2, atol=1e-5)
+
+    def test_compiled_function_under_an_analysis_window(self, patch):
+        """The window goes on inside the driver, and the dual brings it back."""
+        half_tile = _jitted()
+        out = patch.tile_apply(
+            half_tile,
+            analysis="hann",
+            overlap={"time": 48, "distance": 12},
+            time=64,
+            distance=16,
+            samples=True,
+        )
+        np.testing.assert_allclose(out.data, patch.data / 2, atol=1e-4)
 
     def test_numba_engine_without_numba(self, patch, monkeypatch):
         """Asked for by name with numba absent, it says what is missing."""
