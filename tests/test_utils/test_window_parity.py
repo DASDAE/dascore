@@ -297,3 +297,64 @@ class TestEmptySelection:
         """So does every function which reads its dimensions from kwargs."""
         with pytest.raises(ParameterError, match="at least one dimension"):
             patch.median_filter()
+
+
+class TestTaperRamps:
+    """
+    The ramp each edge-tapering function builds today, pinned by value.
+
+    `Patch.taper` takes the first half of a window of 2n samples;
+    `taper_range` and the adaptive spectral filter take the first n of a
+    window of 2n + 1. The two are not the same ramp, and which one a
+    function uses is part of what it returns.
+    """
+
+    @pytest.fixture(scope="class")
+    def ones(self):
+        """A patch of ones, so the taper is the output."""
+        patch = dc.get_example_patch()
+        return patch.new(data=np.ones_like(patch.data))
+
+    def test_taper_uses_a_2n_window(self, ones):
+        """16 ms is five samples; the ramp is the first five of a triangle of ten."""
+        out = ones.taper(time=(np.timedelta64(16, "ms"), None), window_type="triang")
+        np.testing.assert_allclose(out.data[0, :5], [0.1, 0.3, 0.5, 0.7, 0.9])
+        assert out.data[0, 5] == 1.0
+
+    def test_taper_hann_uses_a_2n_window(self, ones):
+        """The same construction for hann: the first five of a hann of ten."""
+        from scipy.signal.windows import hann  # noqa: PLC0415
+
+        out = ones.taper(time=(np.timedelta64(16, "ms"), None), window_type="hann")
+        np.testing.assert_allclose(out.data[0, :5], hann(10)[:5], rtol=1e-6)
+        assert out.data[0, 5] == 1.0
+
+    def test_taper_range_uses_a_2n_plus_1_window(self, ones):
+        """Four samples of triangle from a window of nine: 0.2, 0.4, 0.6, 0.8."""
+        out = ones.taper_range(
+            time=(0, 4, 100, 104), samples=True, window_type="triang"
+        )
+        np.testing.assert_allclose(out.data[0, :5], [0.2, 0.4, 0.6, 0.8, 1.0])
+
+    def test_taper_range_hann_uses_a_2n_plus_1_window(self, ones):
+        """And for hann."""
+        out = ones.taper_range(time=(0, 4, 100, 104), samples=True, window_type="hann")
+        expected = [0.0, 0.14644661, 0.5, 0.85355339, 1.0]
+        np.testing.assert_allclose(out.data[0, :5], expected, rtol=1e-6)
+
+    def test_stft_window_is_scipy_symmetric(self, patch):
+        """Stft's whole-tile window is scipy's symmetric one."""
+        from scipy.signal.windows import hann  # noqa: PLC0415
+
+        out = patch.stft(time=8, samples=True, overlap=None)
+        # The window travels as a coordinate for istft; it is the symmetric hann.
+        np.testing.assert_allclose(
+            out.get_coord("_stft_window").values, hann(8, sym=True)
+        )
+
+    def test_adaptive_spectral_filter_ramp(self, ones):
+        """The tile taper's ramp is the 2n + 1 triangle, complementary by nature."""
+        from dascore.utils.signal import get_taper  # noqa: PLC0415
+
+        taper = get_taper("triang", (8,), (3,))
+        np.testing.assert_allclose(taper, [0.25, 0.5, 0.75, 1, 1, 0.75, 0.5, 0.25])

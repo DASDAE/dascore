@@ -32,6 +32,7 @@ from dascore.utils.patch import (
     _get_dx_or_spacing_and_axes,
     patch_function,
 )
+from dascore.utils.signal import get_window
 from dascore.utils.time import is_datetime64, is_timedelta64, to_float
 from dascore.utils.transformatter import FourierTransformatter
 from dascore.utils.window import resolve_window
@@ -40,7 +41,6 @@ if TYPE_CHECKING:
     from scipy.signal import ShortTimeFFT
 else:
     ShortTimeFFT = lazy_import("scipy.signal", "ShortTimeFFT")
-get_window = lazy_import("scipy.signal.windows", "get_window")
 
 DFT_OUTPUT_DATA_TYPE_MAP = {
     "AS": "amplitude_spectrum",
@@ -640,7 +640,7 @@ def stft(
     if isinstance(taper_window, ndarray):
         window = taper_window
     else:
-        window = get_window(taper_window, window_samples, fftbins=False)
+        window = get_window(taper_window, window_samples)
     # Perform stft
     fft_mode = "onesided" if np.isrealobj(patch.data) else "centered"
     stft = ShortTimeFFT(

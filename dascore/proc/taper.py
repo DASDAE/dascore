@@ -14,7 +14,7 @@ from dascore.units import Quantity
 from dascore.utils.docs import compose_docstring
 from dascore.utils.misc import broadcast_for_index
 from dascore.utils.patch import get_dim_axis_value, patch_function
-from dascore.utils.signal import WINDOW_FUNCTIONS, _get_window_function
+from dascore.utils.signal import WINDOW_FUNCTIONS, get_ramp, get_window
 from dascore.utils.time import to_float
 
 
@@ -111,7 +111,6 @@ def taper(
     >>> from dascore.units import m
     >>> patch_taper4 = patch.taper(distance=15 * m)
     """
-    func = _get_window_function(window_type)
     # get taper values in samples.
     out = np.array(patch.data)  # Need to make a copy here.
     shape = out.shape
@@ -120,14 +119,16 @@ def taper(
     _validate_windows(samps, start_slice, end_slice, shape, axis)
     if samps[0] is not None:
         val = start_slice.stop
-        window = func(2 * val)[:val]
+        # The first half of a window of 2n, as this function has always cut
+        # it; taper_range and the tile tapers take the first n of 2n + 1.
+        window = get_window(window_type, 2 * val)[:val]
         # get indices window (which will broadcast) and data
         data_inds = broadcast_for_index(n_dims, axis, start_slice)
         window_inds = broadcast_for_index(n_dims, axis, slice(None), fill=None)
         out[data_inds] = out[data_inds] * window[window_inds]
     if samps[1] is not None:
         val = shape[axis] - end_slice.start
-        window = func(2 * val)[val:]
+        window = get_window(window_type, 2 * val)[val:]
         data_inds = broadcast_for_index(n_dims, axis, end_slice)
         window_inds = broadcast_for_index(n_dims, axis, slice(None), fill=None)
         out[data_inds] = out[data_inds] * window[window_inds]
@@ -164,9 +165,7 @@ def _get_taper_coord_inds(coord, values, relative, samples):
 
 def _get_taper_curve(coord, ind_1, ind_2, window_type, reverse=False):
     """Get the taper curve between index1 and index2."""
-    func = _get_window_function(window_type)
-    samps = ind_2 - ind_1
-    taper = func(samps * 2 + 1)[:samps]
+    taper = get_ramp(window_type, ind_2 - ind_1)
     if reverse:
         taper = taper[::-1]
     # Need to extrapolate to get correct values for non evenly sampled coords.
