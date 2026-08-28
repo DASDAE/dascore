@@ -99,13 +99,14 @@ class Window:
         """
         Return the plan for tiling an array of `shape` along the windowed axes.
 
-        `shape` is the array's extent along `dims`, in that order. A window
-        with no stride cannot tile.
+        `shape` is the whole array's; the plan covers the windowed axes in
+        the order the window names them. A window with no stride cannot tile.
         """
         if self.stride is None:
             msg = "A window with no overlap or step given does not tile."
             raise ParameterError(msg)
-        return get_tile_plan(tuple(shape), self.size, self.stride)
+        selected = tuple(shape[axis] for axis in self.axes)
+        return get_tile_plan(selected, self.size, self.stride)
 
 
 def _percent_to_samples(value: Any, size: int) -> tuple[Any, bool]:

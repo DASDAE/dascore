@@ -16,12 +16,11 @@ from __future__ import annotations
 import numpy as np
 
 from dascore.proc.adaptive_spectral_filter import (
+    _plan_and_taper,
     _restore_dtype,
     _validate_filter_inputs,
 )
 from dascore.utils.jit import maybe_numba_jit
-from dascore.utils.signal import get_taper
-from dascore.utils.tiles import get_tile_plan
 
 
 # fastmath is intentional: the weighting is approximate, and tests allow small
@@ -102,13 +101,10 @@ def _adaptive_spectral_filter_numba(
     if data.ndim != 2:
         msg = "The numba engine filters two-dimensional arrays only."
         raise ValueError(msg)
-    stride = tuple(win - over for win, over in zip(window_size, overlap))
-    plan = get_tile_plan(data.shape, window_size, stride)
-    taper = get_taper("triang", window_size, overlap)
+    plan, taper = _plan_and_taper(data, window_size, overlap)
     # The buffer is long enough for every tile to be whole, so the kernel
     # slices without checking the edges.
-    padded = np.zeros(plan.extended, dtype=np.float32)
-    padded[plan._inner()] = data
+    padded = plan.pad(data, dtype=np.float32)
     filtered = np.zeros_like(padded)
     for colour0 in range(plan.colours[0]):
         for colour1 in range(plan.colours[1]):
@@ -117,7 +113,7 @@ def _adaptive_spectral_filter_numba(
                 filtered,
                 taper,
                 *window_size,
-                *stride,
+                *plan.stride,
                 *plan.grid,
                 *plan.colours,
                 colour0,
@@ -125,4 +121,4 @@ def _adaptive_spectral_filter_numba(
                 float(exponent),
                 bool(normalize_power),
             )
-    return _restore_dtype(filtered[plan._inner()], data.dtype)
+    return _restore_dtype(plan.crop(filtered), data.dtype)

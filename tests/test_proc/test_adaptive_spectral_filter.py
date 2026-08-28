@@ -697,8 +697,7 @@ class TestAdaptiveSpectralCore:
         window, overlap = (8, 16), (3, 7)
         plan = get_tile_plan(data.shape, window, (5, 9))
         taper = get_taper("triang", window, overlap)
-        padded = np.zeros(plan.extended, dtype=np.float32)
-        padded[plan._inner()] = data
+        padded = plan.pad(data)
         filtered = np.zeros_like(padded)
         for colour0 in range(plan.colours[0]):
             for colour1 in range(plan.colours[1]):
@@ -715,7 +714,7 @@ class TestAdaptiveSpectralCore:
                     0.8,
                     True,
                 )
-        out = filtered[plan._inner()]
+        out = plan.crop(filtered)
         expected = _adaptive_spectral_filter_scipy(
             data,
             window_size=window,

@@ -64,7 +64,7 @@ class TilePlan:
             raise ParameterError(msg)
 
     @property
-    def pad(self) -> tuple[int, ...]:
+    def margin(self) -> tuple[int, ...]:
         """Zeros added at each end of every axis: one stride, for a full ramp."""
         return self.stride
 
@@ -103,7 +103,7 @@ class TilePlan:
     def _inner(self) -> tuple[slice, ...]:
         """The array's place inside the padded buffer."""
         return tuple(
-            slice(step, step + length) for step, length in zip(self.pad, self.shape)
+            slice(step, step + length) for step, length in zip(self.margin, self.shape)
         )
 
     def _tile_view(self, buffer: np.ndarray, writeable: bool = False) -> np.ndarray:
@@ -116,10 +116,23 @@ class TilePlan:
             )
         ]
 
-    def extract(self, array: np.ndarray) -> np.ndarray:
-        """Return the tiles as a float32 stack, ``[n_tiles, *size]``."""
-        buffer = np.zeros(self.extended, dtype=np.float32)
+    def pad(self, array: np.ndarray, dtype=None) -> np.ndarray:
+        """
+        Return the array inside a zeroed buffer every tile fits in whole.
+
+        The buffer takes the array's dtype unless one is given.
+        """
+        buffer = np.zeros(self.extended, dtype=dtype or np.asarray(array).dtype)
         buffer[self._inner()] = array
+        return buffer
+
+    def crop(self, buffer: np.ndarray) -> np.ndarray:
+        """Return the array's part of a buffer `pad` made."""
+        return buffer[self._inner()]
+
+    def extract(self, array: np.ndarray, dtype=None) -> np.ndarray:
+        """Return the tiles as a stack, ``[n_tiles, *size]``, in the array's dtype."""
+        buffer = self.pad(array, dtype)
         return self._tile_view(buffer).reshape((self.n_tiles, *self.size))
 
     def overlap_add(self, tiles: np.ndarray, taper: np.ndarray) -> np.ndarray:
@@ -134,18 +147,20 @@ class TilePlan:
             The weights each tile is multiplied by, of the tile's shape; see
             `dascore.utils.signal.get_taper`.
         """
-        buffer = np.zeros(self.extended, dtype=np.float32)
-        grid = tiles.reshape((*self.grid, *self.size)) * taper
+        dtype = np.result_type(tiles, taper)
+        buffer = np.zeros(self.extended, dtype=dtype)
+        grid = tiles.reshape((*self.grid, *self.size))
         view = self._tile_view(buffer, writeable=True)
         # One colour class at a time: its tiles never overlap, so adding
-        # them through the strided view touches each sample once.
+        # them through the strided view touches each sample once. The
+        # taper goes on here, a class at a time, rather than on the stack.
         for colour in product(*(range(k) for k in self.colours)):
             pick = tuple(
                 slice(c, count, k)
                 for c, count, k in zip(colour, self.grid, self.colours)
             )
-            view[pick] += grid[pick]
-        return buffer[self._inner()]
+            view[pick] += grid[pick] * taper
+        return self.crop(buffer)
 
     def apply(self, array: np.ndarray, func, taper: np.ndarray) -> np.ndarray:
         """

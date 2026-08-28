@@ -30,7 +30,7 @@ class TestGeometry:
     def test_grid_and_extension(self):
         """Two strides of padding, tiles every stride, room for the last one."""
         plan = get_tile_plan((100,), (16,), (9,))
-        assert plan.pad == (9,)
+        assert plan.margin == (9,)
         assert plan.grid == (118 // 9,)
         assert plan.extended[0] >= (plan.grid[0] - 1) * 9 + 16
         assert plan.n_tiles == plan.grid[0]
@@ -64,17 +64,46 @@ class TestExtract:
     """Cutting the stack."""
 
     def test_stack_shape(self):
-        """One tile per grid cell, each the tile's size."""
+        """One tile per grid cell, each the tile's size, in the array's dtype."""
         plan = get_tile_plan((100, 257), (16, 16), (9, 9))
-        tiles = plan.extract(np.ones((100, 257)))
+        tiles = plan.extract(np.ones((100, 257), dtype=np.float32))
         assert tiles.shape == (plan.n_tiles, 16, 16)
         assert tiles.dtype == np.float32
+
+    def test_dtype_is_kept_or_given(self):
+        """Complex tiles for a complex array; a dtype asked for is used."""
+        plan = get_tile_plan((40,), (8,), (5,))
+        assert plan.extract(np.ones(40, dtype=np.complex64)).dtype == np.complex64
+        assert (
+            plan.extract(np.ones(40, dtype=np.int16), dtype=np.float32).dtype
+            == np.float32
+        )
+
+    def test_pad_and_crop_round_trip(self):
+        """`crop` undoes `pad`."""
+        plan = get_tile_plan((40, 30), (8, 8), (5, 5))
+        array = np.arange(1200, dtype=np.float64).reshape(40, 30)
+        buffer = plan.pad(array)
+        assert buffer.shape == plan.extended and buffer.dtype == np.float64
+        np.testing.assert_array_equal(plan.crop(buffer), array)
 
     def test_edges_are_zero_padded(self):
         """The first tile starts one stride before the data, in zeros."""
         plan = get_tile_plan((100,), (16,), (9,))
         tiles = plan.extract(np.ones(100))
         assert np.all(tiles[0, :9] == 0) and np.all(tiles[0, 9:] == 1)
+
+    def test_complex_round_trip(self):
+        """A complex stack blends back to the complex array."""
+        rng = np.random.default_rng(4)
+        array = (rng.normal(size=(30, 40)) + 1j * rng.normal(size=(30, 40))).astype(
+            np.complex64
+        )
+        plan = get_tile_plan(array.shape, (8, 8), (5, 5))
+        taper = get_taper("hann", (8, 8), (3, 3))
+        out = plan.overlap_add(plan.extract(array), taper)
+        assert out.dtype == np.complex64
+        np.testing.assert_allclose(out, array, atol=1e-5)
 
     def test_first_tile_is_the_padded_start(self):
         """A tile is a plain slice of the padded buffer."""
@@ -115,7 +144,7 @@ class TestOverlapAdd:
             for j in range(plan.grid[1]):
                 b0, b1 = i * plan.stride[0], j * plan.stride[1]
                 expected[b0 : b0 + 16, b1 : b1 + 8] += grid[i, j] * taper
-        expected = expected[plan._inner()]
+        expected = plan.crop(expected)
         # float32, summed in a different order.
         np.testing.assert_allclose(plan.overlap_add(tiles, taper), expected, atol=1e-6)
 

@@ -37,7 +37,7 @@ from dascore.exceptions import MissingOptionalDependencyError, ParameterError
 from dascore.utils.misc import is_power_of_two
 from dascore.utils.patch import patch_function
 from dascore.utils.signal import get_taper
-from dascore.utils.tiles import get_tile_plan
+from dascore.utils.tiles import TilePlan, get_tile_plan
 from dascore.utils.window import Window, resolve_window
 from dascore.workflow.meta import PatchMeta
 from dascore.workflow.processor import PatchProcessor, register_implementation
@@ -125,6 +125,15 @@ def _restore_dtype(out: np.ndarray, dtype: np.dtype) -> np.ndarray:
     return out
 
 
+def _plan_and_taper(
+    data: np.ndarray, window_size: tuple[int, ...], overlap: tuple[int, ...]
+) -> tuple[TilePlan, np.ndarray]:
+    """Validate the filter's inputs and return where its tiles sit and their taper."""
+    stride = tuple(win - over for win, over in zip(window_size, overlap))
+    plan = get_tile_plan(data.shape, window_size, stride)
+    return plan, get_taper("triang", window_size, overlap)
+
+
 def _weight_spectra(
     tiles: np.ndarray, *, exponent: float, normalize_power: bool
 ) -> np.ndarray:
@@ -196,13 +205,13 @@ def _adaptive_spectral_filter_scipy(
     _validate_filter_inputs(
         data, window_size=window_size, overlap=overlap, exponent=float(exponent)
     )
-    stride = tuple(win - over for win, over in zip(window_size, overlap))
-    plan = get_tile_plan(data.shape, window_size, stride)
-    taper = get_taper("triang", window_size, overlap)
+    plan, taper = _plan_and_taper(data, window_size, overlap)
     weight = partial(
         _weight_spectra, exponent=float(exponent), normalize_power=normalize_power
     )
-    return _restore_dtype(plan.apply(data, weight, taper), data.dtype)
+    # The filter works in float32 whatever it is given.
+    out = plan.apply(np.asarray(data, dtype=np.float32), weight, taper)
+    return _restore_dtype(out, data.dtype)
 
 
 def _get_engine(engine: str, selected_ndim: int) -> Callable:
