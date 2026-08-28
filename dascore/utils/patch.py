@@ -103,6 +103,9 @@ def _format_values(val):
     elif isinstance(val, dc.Patch):
         # Truncate patch representations in history (issue #529)
         out = "Patch..."
+    elif callable(val):
+        # By name: a repr would carry an address which changes every run.
+        out = getattr(val, "__qualname__", None) or repr(val)
     else:
         out = str(val)
         if len(out) > _MAX_HISTORY_VALUE_LEN:

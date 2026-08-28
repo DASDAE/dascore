@@ -44,7 +44,7 @@ IDS = [x[0] for x in CALLS]
 # The operations whose arguments the serializer refuses. A frame is data,
 # not a parameter; the serializer says so, and this records which calls in
 # the catalogue land on it.
-_NOT_WRITABLE = {"coords_from_df", "add_distance_to"}
+_NOT_WRITABLE = {"coords_from_df", "add_distance_to", "tile_apply"}
 
 
 def _drawn(axes) -> tuple[int, ...]:

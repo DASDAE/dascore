@@ -19,4 +19,5 @@ from .hampel import hampel_filter
 from .wiener import wiener_filter
 from .align import align_to_coord
 from .adaptive_spectral_filter import adaptive_spectral_filter
+from .tile_apply import reassemble, tile_apply
 from .inventory import enrich
