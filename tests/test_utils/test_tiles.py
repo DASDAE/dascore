@@ -79,6 +79,16 @@ class TestExtract:
             == np.float32
         )
 
+    @pytest.mark.parametrize(
+        "shape,size,stride", [((40,), (8,), (5,)), ((40, 30), (8, 8), (5, 5))]
+    )
+    def test_stack_is_writeable(self, shape, size, stride):
+        """A stack is for transforming, in place if the caller likes."""
+        plan = get_tile_plan(shape, size, stride)
+        tiles = plan.extract(np.ones(shape, dtype=np.float32))
+        tiles /= 2
+        assert tiles.flags.writeable
+
     def test_pad_and_crop_round_trip(self):
         """`crop` undoes `pad`."""
         plan = get_tile_plan((40, 30), (8, 8), (5, 5))

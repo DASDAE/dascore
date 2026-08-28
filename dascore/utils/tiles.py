@@ -133,7 +133,10 @@ class TilePlan:
     def extract(self, array: np.ndarray, dtype=None) -> np.ndarray:
         """Return the tiles as a stack, ``[n_tiles, *size]``, in the array's dtype."""
         buffer = self.pad(array, dtype)
-        return self._tile_view(buffer).reshape((self.n_tiles, *self.size))
+        tiles = self._tile_view(buffer).reshape((self.n_tiles, *self.size))
+        # A one-dimensional plan reshapes without copying, which would hand
+        # out the read-only window view; a stack is for writing to.
+        return tiles if tiles.flags.writeable else tiles.copy()
 
     def overlap_add(self, tiles: np.ndarray, taper: np.ndarray) -> np.ndarray:
         """
