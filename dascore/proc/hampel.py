@@ -10,7 +10,8 @@ from scipy.ndimage import median_filter
 from dascore.constants import PatchType
 from dascore.exceptions import ParameterError
 from dascore.utils.moving import has_engine, move_median
-from dascore.utils.patch import get_patch_window_size, patch_function
+from dascore.utils.patch import patch_function
+from dascore.utils.window import resolve_window
 
 
 def _separable_median(data, size, mode, out):
@@ -193,9 +194,15 @@ def hampel_filter(
     # filter and scipy's median_filter both grow with the window.
     fast = approximate and has_engine("bottleneck")
     warn_above = None if fast else 100
-    size = get_patch_window_size(
-        patch, kwargs, samples, require_odd=True, warn_above=warn_above, min_samples=3
-    )
+    size = resolve_window(
+        patch,
+        kwargs,
+        samples=samples,
+        require_odd=True,
+        warn_above=warn_above,
+        min_samples=3,
+        allow_empty=True,
+    ).full_size()
     # Need to convert ints to float for calculations to avoid roundoff error.
     # There were issues using np.issubdtype not working so this uses kind.
     is_int = data.dtype.kind in {"i", "u"}

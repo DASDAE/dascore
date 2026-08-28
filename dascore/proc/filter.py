@@ -39,6 +39,7 @@ from dascore.utils.patch import (
     patch_function,
 )
 from dascore.utils.time import to_float
+from dascore.utils.window import resolve_window
 
 filtfilt = lazy_import("scipy.signal", "filtfilt")
 iirfilter = lazy_import("scipy.signal", "iirfilter")
@@ -196,23 +197,6 @@ def sobel_filter(
     return patch.new(data=out)
 
 
-def _create_size_and_axes(patch, kwargs, samples):
-    """
-    Return a tuple of (size) and (axes).
-
-    Note: size will always have the same size as the patch, but
-    1s will be used if axis is not used.
-    """
-    dimfo = get_dim_axis_value(patch, kwargs=kwargs, allow_multiple=True)
-    axes = [x.axis for x in dimfo]
-    size = [1] * len(patch.dims)
-    for dim, axis, value in dimfo:
-        coord = patch.get_coord(dim)
-        window = coord.get_sample_count(value, samples=samples)
-        size[axis] = window
-    return tuple(size), tuple(axes)
-
-
 @patch_function()
 @compose_docstring(sample_explanation=samples_arg_description)
 def median_filter(
@@ -265,7 +249,7 @@ def median_filter(
     Values specified with kwargs should be small, for example < 10 samples
     otherwise this can take a long time and use lots of memory.
     """
-    size, _ = _create_size_and_axes(patch, kwargs, samples)
+    size = resolve_window(patch, kwargs, samples=samples, min_samples=None).full_size()
     new_data = nd_median_filter(patch.data, size=size, mode=mode, cval=cval)
     return patch.update(data=new_data)
 
@@ -400,7 +384,8 @@ def savgol_filter(
     >>> filtered_pa_3 = pa.savgol_filter(distance=10, time=0.1, polyorder=4)
     """
     data = patch.data
-    size, axes = _create_size_and_axes(patch, kwargs, samples)
+    window = resolve_window(patch, kwargs, samples=samples, min_samples=None)
+    size, axes = window.full_size(), window.axes
     for ax in axes:
         data = np_savgol_filter(
             x=patch.data,
@@ -463,7 +448,8 @@ def gaussian_filter(
     See scipy.ndimage.gaussian_filter for more info on implementation
     and arguments.
     """
-    size, axes = _create_size_and_axes(patch, kwargs, samples)
+    window = resolve_window(patch, kwargs, samples=samples, min_samples=None)
+    size, axes = window.full_size(), window.axes
     used_size = tuple(size[x] for x in axes)
     data = np_gauss(
         input=patch.data,

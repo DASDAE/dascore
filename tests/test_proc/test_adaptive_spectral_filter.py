@@ -125,7 +125,7 @@ class TestAdaptiveSpectralFilter:
         """Window sizes must resolve to positive sample counts."""
         patch = _patch((64, 64), ("distance", "time"), dtype=np.float32)
 
-        with pytest.raises(ParameterError, match=r"window.*must be positive"):
+        with pytest.raises(ParameterError, match="at least 1 samples"):
             patch.adaptive_spectral_filter(
                 distance=0, time=16, samples=True, engine="scipy"
             )

@@ -7,7 +7,8 @@ from __future__ import annotations
 from dascore.constants import PatchType
 from dascore.exceptions import ParameterError
 from dascore.utils.imports import lazy_import
-from dascore.utils.patch import get_patch_window_size, patch_function
+from dascore.utils.patch import patch_function
+from dascore.utils.window import resolve_window
 
 wiener = lazy_import("scipy.signal", "wiener")
 
@@ -78,6 +79,6 @@ def wiener_filter(
         )
         raise ParameterError(msg)
 
-    size = get_patch_window_size(patch, kwargs, samples, min_samples=1)
+    size = resolve_window(patch, kwargs, samples=samples).full_size()
     filtered_data = wiener(patch.data, mysize=size, noise=noise)
     return patch.update(data=filtered_data)
