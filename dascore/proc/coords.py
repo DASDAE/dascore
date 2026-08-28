@@ -889,6 +889,13 @@ def squeeze(self: PatchType, dim=None) -> PatchType:
         is selected with length greater than one, an error is raised.
         If None, all length one dimensions are squeezed.
 
+    Raises
+    ------
+    CoordError
+        If a selected dimension does not exist or has more than one sample.
+    ParameterError
+        If squeezing would remove every dimension from the patch.
+
     Examples
     --------
     >>> import dascore as dc
@@ -906,6 +913,9 @@ def squeeze(self: PatchType, dim=None) -> PatchType:
     # Nothing to squeeze; the coord manager returned self, so reuse this patch.
     if coords is self.coords:
         return self
+    if not coords.dims:
+        msg = "Cannot squeeze all dimensions; at least one dimension must remain."
+        raise ParameterError(msg)
     if dim is None:
         axes = tuple(i for i, x in enumerate(self.shape) if x == 1)
     else:

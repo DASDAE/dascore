@@ -1393,6 +1393,8 @@ def tukey_fence(data, fence_multiplier=1.5) -> np.ndarray:
     """
     Apply Tukey's fence to determine data range without outliers.
     """
+    if np.all(pd.isnull(data)):
+        return np.asarray([np.nan, np.nan])
     q1, q3 = np.nanpercentile(data, [25, 75])
     dmin, dmax = np.nanmin(data), np.nanmax(data)
     diff = q3 - q1  # Interquartile range (IQR)
