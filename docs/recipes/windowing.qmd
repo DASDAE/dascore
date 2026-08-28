@@ -68,9 +68,11 @@ assert denoised.shape == patch.shape
 
 A stack nobody changed reassembles to the patch it was cut from, coordinates and all.
 
+`stft` is this stack with each window transformed along its offsets: the same `{dim}_start`, `{dim}_stop`, and rider coordinates, so `istft` is an inverse FFT of each window followed by `reassemble`, under the dual of the taper the windows were cut with.
+
 ## A compiled function, one tile at a time
 
-A function compiled with numba is given one tile at a time rather than the stack, in parallel, which is faster for anything that cannot be written over the stack in one numpy call. It compiles the first time it is used in each process, which takes a few seconds; after that a 2000 by 6000 patch tiles in a fraction of a second.
+A function compiled with numba is given one tile at a time rather than the stack, in parallel, which is faster for anything that cannot be written over the stack in one numpy call. It works over any number of dimensions and in `mode="stack"` too. It compiles the first time it is used in each process, which takes a few seconds; after that a 2000 by 6000 patch tiles in a fraction of a second.
 
 ```{python}
 #| eval: false
@@ -104,4 +106,4 @@ assert local_fk.shape == patch.shape
 
 ## What a tile sees
 
-Tiles start before the data and are padded with zeros: one stride before, so every sample is covered by tiles which see a full taper ramp on both sides, or under an analysis window as many whole strides as it takes for every tile which would reach a sample to exist, which the dual relies on. Overlap defaults to half the window; under a taper it cannot exceed half, since the ramps would cross, and under an analysis window it may go as deep as scipy can invert the window at. The taper's shape is any window [`get_window`](`dascore.utils.signal.get_window`) knows; its ramps are made complementary whatever the shape, which is what makes the blend exact.
+Tiles start before the data and are padded with zeros, as many whole strides before as it takes for every tile which reaches a sample to exist: none when tiles abut, one stride up to half overlap, more beyond it, which an analysis window's dual relies on. Overlap defaults to half the window; under a taper it cannot exceed half, since the ramps would cross, and under an analysis window it may go as deep as scipy can invert the window at. The taper's shape is any window [`get_window`](`dascore.utils.signal.get_window`) knows; its ramps are made complementary whatever the shape, which is what makes the blend exact.

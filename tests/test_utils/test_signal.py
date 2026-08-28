@@ -226,6 +226,17 @@ class TestGetTaper:
 class TestGetDualTaper:
     """An analysis window and the synthesis window which inverts it."""
 
+    def test_uninvertible_window_refused(self):
+        """A hann at a stride of its own length leaves gaps; scipy has no dual."""
+        with pytest.raises(ParameterError, match="cannot be inverted"):
+            get_dual_taper("hann", (8,), (8,))
+
+    def test_one_window_per_axis(self):
+        """A list gives each axis its own window."""
+        analysis, _ = get_dual_taper(["hann", "boxcar"], (8, 6), (4, 3))
+        np.testing.assert_allclose(analysis[:, 0], get_window("hann", 8) * 1.0)
+        np.testing.assert_allclose(analysis[4, :], np.ones(6) * analysis[4, 0])
+
     def test_unhashable_window_builds(self):
         """A scipy tuple carrying a list is not hashable, and still builds."""
         analysis, synthesis = get_dual_taper(("general_cosine", [0.5, 0.5]), (8,), (2,))

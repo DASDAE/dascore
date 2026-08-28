@@ -4,6 +4,9 @@ Functionality for Hampel despiking.
 
 from __future__ import annotations
 
+import math
+import warnings
+
 import numpy as np
 from scipy.ndimage import median_filter
 
@@ -193,15 +196,17 @@ def hampel_filter(
     # Only bottleneck's moving median is flat in window size; the exact
     # filter and scipy's median_filter both grow with the window.
     fast = approximate and has_engine("bottleneck")
-    warn_above = None if fast else 100
     size = resolve_window(
-        patch,
-        kwargs,
-        samples=samples,
-        require_odd=True,
-        warn_above=warn_above,
-        min_samples=3,
+        patch, kwargs, samples=samples, require_odd=True, min_samples=3
     ).full_size()
+    # The cost tracks the window's area, so a 2D window is as expensive as
+    # its samples multiplied.
+    if not fast and math.prod(size) > 100:
+        msg = (
+            f"Large window size ({math.prod(size)} samples) may result in slow "
+            "performance. Consider reducing the window size."
+        )
+        warnings.warn(msg, UserWarning, stacklevel=2)
     # Need to convert ints to float for calculations to avoid roundoff error.
     # There were issues using np.issubdtype not working so this uses kind.
     is_int = data.dtype.kind in {"i", "u"}
