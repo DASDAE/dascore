@@ -261,15 +261,7 @@ class TestChangedOnPurpose:
 
 
 class TestDimensionOrder:
-    """Which order the selected dimensions come back in no longer matters."""
-
-    def test_savgol_does_not_care_either(self, patch):
-        """Both keyword axes are filtered, so neither keyword order wins."""
-        both = patch.savgol_filter(time=5, distance=7, samples=True, polyorder=2)
-        other = patch.savgol_filter(distance=7, time=5, samples=True, polyorder=2)
-        last = patch.savgol_filter(distance=7, samples=True, polyorder=2)
-        assert np.allclose(both.data, other.data)
-        assert not np.allclose(both.data, last.data)
+    """Whether the order of the selected dimensions changes the answer."""
 
     def test_gaussian_does_not_care(self, patch):
         """Gaussian smoothing is separable, so order is nothing to it."""

@@ -362,15 +362,23 @@ class TestSavgolFilter:
         assert not np.allclose(out.data, event_patch_2.data)
 
     def test_each_dim_filtered_in_turn(self, random_patch):
-        """Each pass filters the last one's output, not the original data."""
+        """
+        Each pass filters the last one's output, not the original data.
+
+        Every pass used to filter patch.data, so only the last keyword's
+        axis survived: the two dimension call equaled the last keyword's
+        alone, and swapping the keywords changed the answer.
+        """
         kwargs = {"samples": True, "polyorder": 2}
         out = random_patch.savgol_filter(time=5, distance=7, **kwargs)
         chained = random_patch.savgol_filter(time=5, **kwargs).savgol_filter(
             distance=7, **kwargs
         )
+        swapped = random_patch.savgol_filter(distance=7, time=5, **kwargs)
+        last_keyword = random_patch.savgol_filter(distance=7, **kwargs)
         assert np.allclose(out.data, chained.data)
-        one = random_patch.savgol_filter(time=5, **kwargs)
-        assert not np.allclose(out.data, one.data)
+        assert np.allclose(out.data, swapped.data)
+        assert not np.allclose(out.data, last_keyword.data)
 
 
 class TestGaussianFilter:
