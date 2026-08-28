@@ -454,6 +454,24 @@ class TestWindowedNormalize:
         expected = _windowed_norm_reference(patch.data, 1, "l2", 3)
         assert np.allclose(out.data, expected)
 
+    def test_descending_coord(self, random_patch):
+        """A flipped fiber counts its window the same way an unflipped one does."""
+        values = random_patch.get_array("distance")[::-1].copy()
+        flipped = random_patch.update_coords(distance=values).new(
+            data=np.asarray(random_patch.data)[::-1]
+        )
+
+        out = flipped.normalize("distance", window=51, samples=True)
+        expected = random_patch.normalize("distance", window=51, samples=True)
+
+        assert np.allclose(np.asarray(out.data)[::-1], expected.data)
+        # And a window in units, whose conversion is what the negative step
+        # used to make negative.
+        assert np.allclose(
+            flipped.normalize("distance", window=50).data,
+            out.data,
+        )
+
     def test_uneven_coord_in_units_raises(self, random_patch):
         """A window in units cannot be converted without an even step."""
         values = np.array([0.0, 1.0, 3.0, 7.0, 15.0])
@@ -638,6 +656,16 @@ class TestPowCoord:
             dims=("distance", "time"),
         )
         with pytest.raises((CoordError, ParameterError)):
+            patch.pow_coord(time=2)
+
+    def test_non_finite_coord_raises(self, random_patch):
+        """A coordinate holding an infinity has no gain curve to give."""
+        patch = dc.Patch(
+            data=np.ones((1, 3)),
+            coords={"distance": np.arange(1.0), "time": np.array([0.0, 1.0, np.inf])},
+            dims=("distance", "time"),
+        )
+        with pytest.raises(ParameterError, match="not finite"):
             patch.pow_coord(time=2)
 
     @pytest.mark.parametrize("dtype", [np.float32, np.float64])

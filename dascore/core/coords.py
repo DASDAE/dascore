@@ -1157,7 +1157,11 @@ class BaseCoord(RichRepr, DascoreBaseModel, abc.ABC):
         else:
             compat_val = self._get_compatible_value(value, relative=True)
             duration = compat_val - self.min()
-            ratio = duration / self.step
+            # The magnitude of the step, because a window of 30 m is thirty
+            # samples whether the coordinate counts up or down. A descending
+            # coordinate has a negative step, and dividing by it signed would
+            # make the count negative.
+            ratio = duration / np.abs(self.step)
             if np.issubdtype(self.dtype, np.floating):
                 nearest = np.round(ratio)
                 # Adding a relative float value to coord.min() and subtracting

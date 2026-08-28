@@ -734,14 +734,14 @@ def _coord_gain_curve(
         offsets = np.asarray((values - values[0]) / step, dtype=dtype)
         curve = (offsets + 1.0) ** power
     if not np.all(np.isfinite(curve)):
-        # One guard for every way the arithmetic can fail: a coordinate
-        # holding no values, a first step of zero, a fractional power of a
-        # negative offset. Naming them apart would not help the caller,
-        # who has one coordinate to look at either way.
+        # One guard for every way the arithmetic can fail. A coordinate
+        # which is not sorted, and so one whose first two values are equal,
+        # has already been refused; what reaches here is a coordinate whose
+        # own values are not all finite.
         msg = (
             f"pow_coord cannot build a gain curve from '{dim}' raised to "
-            f"{power}: the result is not finite everywhere. The coordinate "
-            f"has to hold values, and its first step cannot be zero."
+            f"{power}: the result is not finite everywhere. Check that the "
+            f"coordinate holds finite values."
         )
         raise ParameterError(msg)
     return curve
