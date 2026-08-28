@@ -106,6 +106,25 @@ def decimate(
     return patch.new(data=data, coords=coords)
 
 
+def _relative_coord_values(coord_num, samples_num):
+    """Return interpolation coordinates relative to their first sample."""
+    if not len(coord_num):
+        return coord_num, samples_num
+    offset = coord_num[0]
+    return coord_num - offset, samples_num - offset
+
+
+def _apply_coord_updates(cm, updates):
+    """Apply coordinate updates without parsing coordinate names as kwargs."""
+    coord_map = dict(cm.get_coord_tuple_map())
+    for name, value in updates.items():
+        if value is None:
+            coord_map.pop(name, None)
+        else:
+            coord_map[name] = value
+    return dc.core.get_coord_manager(coords=coord_map, dims=cm.dims)
+
+
 def _interpolate_associated(cm, dim, coord_num, samples_num, kind) -> dict:
     """
     Interpolate the coordinates which ride the interpolated dimension.
@@ -120,6 +139,7 @@ def _interpolate_associated(cm, dim, coord_num, samples_num, kind) -> dict:
     would otherwise leave the old values sitting on the new ones.
     """
     out = {}
+    coord_num, samples_num = _relative_coord_values(coord_num, samples_num)
     for name, coord_dims in cm.dim_map.items():
         coord = cm.coord_map[name]
         if name == dim or dim not in coord_dims:
@@ -203,16 +223,17 @@ def interpolate(patch: PatchType, kind: str | int = "linear", **kwargs) -> Patch
     # datetime64 yet.
     coord_num = to_int(patch.coords.get_array(dim))
     samples_num = to_int(samples)
+    interp_coord, interp_samples = _relative_coord_values(coord_num, samples_num)
     func = compat.interp1d(
-        coord_num, patch.data, axis=axis, kind=kind, fill_value="extrapolate"
+        interp_coord, patch.data, axis=axis, kind=kind, fill_value="extrapolate"
     )
-    out = func(samples_num)
+    out = func(interp_samples)
     cm = patch.coords
     associated_dims = cm.dim_map[dim]
     coord_new = dc.core.get_coord(data=samples)
     updates = {dim: (associated_dims, coord_new)}
     updates |= _interpolate_associated(cm, dim, coord_num, samples_num, kind)
-    cm_new = cm.update(**updates)
+    cm_new = _apply_coord_updates(cm, updates)
     return patch.new(data=out, coords=cm_new)
 
 
@@ -257,6 +278,9 @@ def resample(
     -----
     - Unless `samples` is `True`, this function requires a sampling_period.
     - The resulting Patch can be slightly shorter than the input Patch.
+    - Numeric coordinates measured on the resampled dimension are interpolated
+      onto its new samples. Time-like and non-numeric coordinates measured on
+      that dimension are dropped, as they are by [`Patch.interpolate`].
 
     Examples
     --------
@@ -306,11 +330,18 @@ def resample(
     data, new_coord = compat.resample(
         patch.data, int(np.round(new_len)), t=coord, axis=axis, window=window
     )
-    cm = patch.coords.update(**{dim: new_coord})
-    out = patch.new(data=data, coords=cm)
+    cm = patch.coords
+    coord_num = to_int(cm.get_array(dim))
+    out = patch.new(data=data, coords=cm.update(**{dim: new_coord}))
     # Interpolate if new sampling rate is not very close to desired sampling rate.
+    associated_kind = "linear"
     if not samples and not np.isclose(new_len, np.round(new_len)):
         start, stop, step = get_start_stop_step(out, dim)
         new_coord = np.arange(start, stop, new_step)
         out = interpolate(out, kind=interp_kind, **{dim: new_coord})
-    return out
+        associated_kind = interp_kind
+    updates = _interpolate_associated(
+        cm, dim, coord_num, to_int(out.coords.get_array(dim)), associated_kind
+    )
+    coords = _apply_coord_updates(out.coords, updates)
+    return out.new(coords=coords)
