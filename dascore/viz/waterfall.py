@@ -239,11 +239,13 @@ def waterfall(
         and the legend names them by the coordinate. Absent values (the empty
         string, NaN, or False) label nothing, and leave bare spine.
 
-        Raises `ParameterError` for a coordinate which is not a set of
-        labels: one stating more than 20 distinct values, one changing more
-        than 200 times, one whose every value is absent, and one which is a
-        dimension or spans both of them. All are judged before anything is
-        drawn, so a refusal leaves no figure behind.
+        For a non-empty Patch, raises `ParameterError` for a coordinate which
+        is not a set of labels: one stating more than 20 distinct values, one
+        changing more than 200 times, one whose every value is absent, and one
+        which is a dimension or spans both of them. An empty Patch validates
+        the coordinate's dimensions but not its values when the labelled
+        dimension itself is empty because nothing can be labelled. All
+        refusals happen before a figure is created.
 
     Examples
     --------
@@ -320,7 +322,7 @@ def waterfall(
     plan, runs = None, None
     if label_coord is not None:
         plan = label_plan(patch, label_coord, dims_r)
-        if 0 not in patch.shape:
+        if len(patch.get_coord(plan.dim)):
             runs = label_runs(patch.coords.get_array(plan.name), plan.name)
     # Setup axes and data. A figure this call built is one whose room a
     # legend may take; any other belongs to the caller.

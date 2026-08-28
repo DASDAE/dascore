@@ -249,6 +249,16 @@ class TestWaterfall:
         ax = patch.viz.waterfall(label_coord="zone", show=False)
         assert not ax.images
 
+    def test_empty_other_dimension_validates_labels(self):
+        """Labels remain validated when only the other dimension is empty."""
+        patch, inventory = inventory_patch_pair()
+        patch = patch.enrich(inventory)
+        empty_zone = np.full(patch.coord_shapes["distance"], "")
+        patch = patch.update_coords(zone=("distance", empty_zone))
+        patch = patch.select(time=(0, 0), samples=True)
+        with pytest.raises(ParameterError, match="no labels"):
+            patch.viz.waterfall(label_coord="zone", show=False)
+
     def test_y_axis_inverted_only_when_time_like(self, random_patch):
         """Time on the y axis increases downward; other dimensions do not."""
         ax = random_patch.viz.waterfall()  # distance on the y axis
