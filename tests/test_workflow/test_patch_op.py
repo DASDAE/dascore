@@ -209,7 +209,8 @@ class TestOneCanonicalCall:
         """Which is what binding against the signature is for."""
         first = dc.proc.normalize.op("time")
         second = dc.proc.normalize.op(dim="time")
-        assert first.kwargs == second.kwargs == {"dim": "time", "norm": "l2"}
+        expected = {"dim": "time", "norm": "l2", "window": None, "samples": False}
+        assert first.kwargs == second.kwargs == expected
         assert first.fingerprint == second.fingerprint
         assert first == second
 
@@ -734,6 +735,8 @@ class TestImplementations:
 
             dim: str = "time"
             norm: str = "l2"
+            window: float | None = None
+            samples: bool = False
 
             def run(self, patch):
                 """Do something a caller could tell apart."""

@@ -11,7 +11,7 @@ import pandas as pd
 from scipy.fft import next_fast_len
 
 from dascore.compat import array
-from dascore.constants import PatchType
+from dascore.constants import PatchType, samples_arg_description
 from dascore.core.attrs import PatchAttrs
 from dascore.core.coordmanager import (
     CoordManager,
@@ -21,14 +21,26 @@ from dascore.core.coordmanager import (
 from dascore.core.coords import get_coord
 from dascore.exceptions import ParameterError
 from dascore.models import ArrayLike
+from dascore.units import Quantity, get_quantity
 from dascore.utils.array import _apply_binary_ufunc
-from dascore.utils.array_api import array_namespace, nan_reduce
+from dascore.utils.array_api import (
+    array_namespace,
+    asarray_like,
+    backend_name,
+    is_numpy,
+    nan_reduce,
+    to_numpy,
+    warn_numpy_fallback,
+)
+from dascore.utils.docs import compose_docstring
 from dascore.utils.misc import _get_nullish
+from dascore.utils.moving import move_max, move_mean
 from dascore.utils.patch import (
     align_patch_coords,
     get_dim_axis_value,
     patch_function,
 )
+from dascore.utils.time import dtype_time_like
 from dascore.workflow.processor import (
     PatchProcessor,
     register_implementation,
@@ -432,17 +444,26 @@ def angle(patch: PatchType) -> PatchType:
 
 
 @patch_function(data_type="")
+@compose_docstring(sample_explanation=samples_arg_description)
 def normalize(
     self: PatchType,
     dim: str,
     norm: Literal["l1", "l2", "max", "bit"] = "l2",
+    window: float | Quantity | None = None,
+    samples: bool = False,
 ) -> PatchType:
     """
     Normalize a patch along a specified dimension.
 
+    By default each slice along `dim` is divided by a single norm of that
+    whole slice. Giving a `window` divides each sample by the norm of a
+    window centered on it instead, which is automatic gain control: late,
+    weak arrivals come up to the amplitude of early, strong ones.
+
     NaN values are ignored when computing the norm. They remain NaN in the
-    output but do not affect any other sample. Slices with a norm of zero,
-    meaning they contain nothing but zeros and NaN, are returned unscaled.
+    output but do not affect any other sample. Slices, or windows, with a
+    norm of zero -- meaning they contain nothing but zeros and NaN -- are
+    returned unscaled.
 
     Parameters
     ----------
@@ -455,6 +476,24 @@ def normalize(
             l2 - divide each sample by the l2 of the axis.
             max - divide each sample by the maximum of the absolute value of the axis.
             bit - sample-by-sample normalization (-1/+1)
+    window
+        The length of the moving window, in units of `dim` unless `samples`
+        is True. If None, the whole slice is one window. Not supported for
+        `norm="bit"`, which is already a sample-by-sample operation.
+    samples
+        {sample_explanation}
+
+    Notes
+    -----
+    - A window is centered on the sample it scales, so an even window length
+      is raised to the next odd one.
+
+    - The windowed norms are means rather than sums: `l2` divides by the
+      window's RMS and `l1` by its mean absolute value. Were they sums, the
+      output would scale with the window length, and the reflected windows
+      at the edges of the dimension would not line up with the interior.
+      Over a whole slice the two differ only by a constant, so the
+      unwindowed norms are left as the sums they have always been.
 
     Examples
     --------
@@ -469,8 +508,14 @@ def normalize(
     >>>
     >>> # Bit normalization (sign only)
     >>> bit_norm = patch.normalize(dim="time", norm="bit")
+    >>>
+    >>> # Automatic gain control: divide by the RMS of a 1 second window.
+    >>> agc = patch.normalize(dim="time", norm="l2", window=1)
+    >>>
+    >>> # The same, with the window given in samples.
+    >>> agc = patch.normalize(dim="time", norm="l2", window=251, samples=True)
     """
-    return Normalize(dim=dim, norm=norm)._apply(self)
+    return Normalize(dim=dim, norm=norm, window=window, samples=samples)._apply(self)
 
 
 class Normalize(PatchProcessor):
@@ -478,13 +523,162 @@ class Normalize(PatchProcessor):
 
     dim: str
     norm: str = "l2"
+    window: Any | None = None
+    samples: bool = False
 
     def kernel(self, data, meta, out_meta):
         """Return the data with each slice divided by its norm."""
-        return _normalize_kernel(data, meta.get_axis(self.dim), self.norm)
+        axis = meta.get_axis(self.dim)
+        if self.window is None:
+            return _normalize_kernel(data, axis, self.norm)
+        coord = meta.coords.coord_map[self.dim]
+        window = _get_odd_window(coord, self.window, self.samples, self.norm)
+        return _windowed_normalize_kernel(data, axis, self.norm, window)
 
 
 register_implementation("normalize", Normalize)
+
+
+def _get_odd_window(coord, window, samples: bool, norm: str) -> int:
+    """Return the window length in samples, rounded up to an odd count."""
+    if norm == "bit":
+        msg = (
+            "normalize(norm='bit') scales each sample by its own magnitude, "
+            "so a window means nothing. Drop the window, or pick another norm."
+        )
+        raise ParameterError(msg)
+    count = coord.get_sample_count(window, samples=samples, enforce_lt_coord=True)
+    return count + 1 if count % 2 == 0 else count
+
+
+def _windowed_normalize_kernel(data, axis: int, norm: str, window: int):
+    """Divide each sample by a norm of the window centered on it."""
+    if norm not in {"l1", "l2", "max"}:
+        msg = (
+            f"Norm value of {norm} is not supported. "
+            f"Supported values are {('l1', 'l2', 'max')}"
+        )
+        raise ValueError(msg)
+    original = data
+    numpy_input = is_numpy(data)
+    if not numpy_input:
+        # The moving windows come from scipy, which numpy alone can feed.
+        warn_numpy_fallback("normalize", backend_name(data))
+        data = to_numpy(data)
+    data = _as_float(data)
+    # Nulls are read as zeros so the window sums skip them, and counted
+    # separately so they do not drag the mean toward zero either. The
+    # engine is pinned rather than chosen so that installing bottleneck
+    # cannot change what a patch normalizes to at the edges.
+    valid = ~np.isnan(data)
+    filled = np.where(valid, data, 0.0)
+    if norm == "max":
+        # An absolute value is never negative, so a null read as zero
+        # cannot win a window which holds anything else.
+        divisor = move_max(np.abs(filled), window, axis=axis, engine="scipy")
+    else:
+        order = int(norm[-1])
+        powers = np.abs(filled) ** float(order)
+        counted = move_mean(
+            valid.astype(powers.dtype), window, axis=axis, engine="scipy"
+        )
+        summed = move_mean(powers, window, axis=axis, engine="scipy")
+        # A window of nothing but nulls sums to zero as well, so it falls
+        # through to the zero divisor guard below rather than dividing here.
+        safe_count = np.where(counted == 0, 1.0, counted)
+        divisor = (summed / safe_count) ** (1.0 / order)
+    out = data / np.where(divisor == 0, 1.0, divisor)
+    return out if numpy_input else asarray_like(out, original)
+
+
+@patch_function()
+def pow_coord(patch: PatchType, relative: bool = True, **kwargs) -> PatchType:
+    """
+    Scale the data by coordinate values raised to a power.
+
+    This is the deterministic counterpart of automatic gain control (see
+    [`normalize`](`dascore.Patch.normalize`)): the gain depends only on where
+    a sample sits along a coordinate, not on the amplitudes around it, so
+    amplitudes stay comparable from one trace to the next. Raising time to a
+    power of one or two is the usual correction for the geometric spreading
+    and attenuation which make later arrivals weaker.
+
+    Parameters
+    ----------
+    patch
+        The patch to scale.
+    relative
+        If True, count the coordinate from its own start, so the gain curve
+        begins at one and the first sample keeps its amplitude. If False,
+        use the coordinate's absolute values, which raises the data units to
+        match.
+    **kwargs
+        Dimension names and the power to raise each to, e.g. `time=2`.
+
+    Notes
+    -----
+    - The relative curve is `((coord - coord[0]) / step + 1) ** power`, which
+      is one, two, three ... raised to the power. Counting from one rather
+      than zero is what keeps a power from zeroing the first sample.
+
+    - That curve is a ratio of coordinate values and so carries no units,
+      which is why `relative=True` leaves the data units alone. An absolute
+      curve does carry them, so `relative=False` multiplies the data units by
+      the coordinate's, raised to the same power.
+
+    - `relative=False` is refused for time coordinates. Their absolute values
+      count from an epoch, and a power of the seconds since 1970 says nothing
+      about the data.
+
+    Examples
+    --------
+    >>> import dascore as dc
+    >>> patch = dc.get_example_patch()
+    >>>
+    >>> # Correct for spreading which grows as the square of traveltime.
+    >>> gained = patch.pow_coord(time=2)
+    >>>
+    >>> # Along the fiber instead.
+    >>> gained = patch.pow_coord(distance=1)
+    >>>
+    >>> # Both at once.
+    >>> gained = patch.pow_coord(time=2, distance=1)
+    """
+    dim_axis_values = get_dim_axis_value(patch, kwargs=kwargs, allow_multiple=True)
+    data = _as_float(patch.data)
+    data_units = get_quantity(patch.attrs.data_units)
+    for dim, axis, power in dim_axis_values:
+        coord = patch.get_coord(dim)
+        curve = _coord_gain_curve(coord, float(power), relative, dim)
+        shape = [1] * len(patch.dims)
+        shape[axis] = curve.size
+        data = data * asarray_like(curve.reshape(shape), data)
+        coord_units = get_quantity(coord.units)
+        if not relative and data_units is not None and coord_units is not None:
+            data_units = data_units * coord_units ** float(power)
+    out = patch.new(data=data)
+    if data_units != get_quantity(patch.attrs.data_units):
+        out = out.update_attrs(data_units=data_units)
+    return out
+
+
+def _coord_gain_curve(coord, power: float, relative: bool, dim: str) -> np.ndarray:
+    """Return the gain curve a coordinate raised to a power makes."""
+    values = coord.values
+    if not relative:
+        if dtype_time_like(coord.dtype):
+            msg = (
+                f"pow_coord cannot raise the absolute values of '{dim}' to a "
+                "power because they are times, counted from an epoch which "
+                "has nothing to do with the data. Use relative=True."
+            )
+            raise ParameterError(msg)
+        return np.asarray(values, dtype=np.float64) ** power
+    if values.size < 2:
+        # A lone sample is the start of the coordinate, and its gain is one.
+        return np.ones(values.size)
+    step = coord.step if coord.evenly_sampled else values[1] - values[0]
+    return ((values - values[0]) / step + 1.0) ** power
 
 
 def _normalize_kernel(data, axis: int, norm: str):

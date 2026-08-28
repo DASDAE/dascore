@@ -170,6 +170,7 @@ CALLS: tuple[tuple[str, str, tuple, dict], ...] = (
     ("istft", "stft", (), {}),
     # -- one dimension, given positionally where the signature allows it
     ("normalize", "default", ("time",), {"norm": "l1"}),
+    ("pow_coord", "default", (), {"time": 2}),
     ("standardize", "default", ("time",), {}),
     ("detrend", "default", ("time",), {"type": "constant"}),
     ("demean", "default", (), {"dim": "distance"}),
