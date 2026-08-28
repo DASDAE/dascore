@@ -104,4 +104,4 @@ assert local_fk.shape == patch.shape
 
 ## What a tile sees
 
-Tiles start one stride before the data and are padded with zeros, so every sample is covered by tiles which see a full taper ramp on both sides. Overlap defaults to half the window and cannot exceed it, since the ramps would cross. The taper's shape is any window [`get_window`](`dascore.utils.signal.get_window`) knows; its ramps are made complementary whatever the shape, which is what makes the blend exact.
+Tiles start before the data and are padded with zeros: one stride before, so every sample is covered by tiles which see a full taper ramp on both sides, or under an analysis window as many whole strides as it takes for every tile which would reach a sample to exist, which the dual relies on. Overlap defaults to half the window; under a taper it cannot exceed half, since the ramps would cross, and under an analysis window it may go as deep as scipy can invert the window at. The taper's shape is any window [`get_window`](`dascore.utils.signal.get_window`) knows; its ramps are made complementary whatever the shape, which is what makes the blend exact.

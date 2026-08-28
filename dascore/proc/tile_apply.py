@@ -108,7 +108,7 @@ def tile_apply(
     *,
     mode: str = "overlap_add",
     overlap: Any = None,
-    taper: Any = "hann",
+    taper: Any = None,
     analysis: Any = None,
     samples: bool = False,
     engine: str = "auto",
@@ -138,12 +138,13 @@ def tile_apply(
         How far each window reaches into the next, in coordinate units or,
         with `samples`, in samples; a percent is a fraction of the window;
         a mapping gives each dimension its own. Half the window when not
-        given. Never more than half: the taper's ramps would cross.
+        given, and never more than half under a taper, whose ramps would
+        cross; under an analysis window, as deep as scipy can invert it.
     taper
         The window whose edge the taper ramps take -- any name
-        `dascore.utils.signal.get_window` knows. The ramps are made
-        complementary, so blended tiles of an unchanged stack return the
-        input exactly. Not applied in ``"stack"`` mode.
+        `dascore.utils.signal.get_window` knows; Hann when not given. The
+        ramps are made complementary, so blended tiles of an unchanged stack
+        return the input exactly. Not applied in ``"stack"`` mode.
     analysis
         A window each tile is multiplied by before `function` sees it -- any
         name or ``(name, parameter)`` tuple `get_window` knows, applied along
@@ -187,9 +188,11 @@ def tile_apply(
 
     Notes
     -----
-    - Tiles start one stride before the data and are padded with zeros, so
-      every sample of the input is covered by tiles which see a full taper
-      ramp on both sides.
+    - Tiles start before the data and are padded with zeros: one stride
+      before, so every sample of the input is covered by tiles which see a
+      full taper ramp on both sides, or under an analysis window as many
+      whole strides as it takes for every tile which would reach a sample to
+      exist, which its dual relies on.
     - The adaptive spectral filter is this with a spectral weighting as
       `function`; see
       [`Patch.adaptive_spectral_filter`](`dascore.Patch.adaptive_spectral_filter`).
@@ -221,7 +224,7 @@ class TileApply(PatchProcessor):
     function: Callable
     mode: str = "overlap_add"
     overlap: Any = None
-    taper: Any = "hann"
+    taper: Any = None
     analysis: Any = None
     samples: bool = False
     engine: str = "auto"
@@ -235,7 +238,7 @@ class TileApply(PatchProcessor):
         if not selected:
             msg = "tile_apply needs a dimension and its window, e.g. time=0.5."
             raise ParameterError(msg)
-        if self.analysis is not None and self.taper != "hann":
+        if self.analysis is not None and self.taper is not None:
             msg = (
                 "Given an analysis window, the tiles are blended under its dual; "
                 "a taper cannot be given as well."
@@ -297,21 +300,23 @@ class TileApply(PatchProcessor):
                     "a numba-compiled function of one tile cannot take it."
                 )
                 raise ParameterError(msg)
-            analysis = _analysis(self.analysis, plan)
+            analysis = (
+                None
+                if self.analysis is None
+                else get_dual_taper(self.analysis, plan.size, plan.stride)[0]
+            )
             stacks = np.stack(
-                [self.function(plan.extract(batch) * analysis) for batch in batches]
+                [
+                    self.function(_windowed(plan.extract(batch), analysis))
+                    for batch in batches
+                ]
             )
             out = stacks.reshape((*moved.shape[:-ndim], *plan.grid, *plan.size))
             # The tile axes go where the windowed dimensions were; the
             # offsets within a tile stay at the end, already in axis order.
             n_batch = moved.ndim - ndim
             return np.moveaxis(out, range(n_batch, n_batch + ndim), window.axes)
-        analysis = _analysis(self.analysis, plan)
-        synthesis = (
-            get_taper(self.taper, plan.size, window.overlap)
-            if self.analysis is None
-            else get_dual_taper(self.analysis, plan.size, plan.stride)[1]
-        )
+        analysis, synthesis = _windows(self.analysis, self.taper, plan, window.overlap)
         if engine == "numba":
             from dascore.utils._tiles_numba import apply_jit  # noqa: PLC0415
 
@@ -322,7 +327,7 @@ class TileApply(PatchProcessor):
         else:
             blended = [
                 plan.overlap_add(
-                    self.function(plan.extract(batch) * analysis), synthesis
+                    self.function(_windowed(plan.extract(batch), analysis)), synthesis
                 )
                 for batch in batches
             ]
@@ -330,11 +335,23 @@ class TileApply(PatchProcessor):
         return np.moveaxis(out, tail, window.axes)
 
 
-def _analysis(analysis: Any, plan) -> np.ndarray:
-    """Return what every tile is multiplied by on the way in: ones by default."""
+def _windows(
+    analysis: Any, taper: Any, plan, overlap
+) -> tuple[np.ndarray | None, np.ndarray]:
+    """
+    Return what tiles are multiplied by on the way in and on the way out.
+
+    Without an analysis window the tiles go in as they are and come out
+    under a taper with complementary ramps; with one, under its dual.
+    """
     if analysis is None:
-        return np.ones(plan.size, dtype=np.float32)
-    return get_dual_taper(analysis, plan.size, plan.stride)[0]
+        return None, get_taper("hann" if taper is None else taper, plan.size, overlap)
+    return get_dual_taper(analysis, plan.size, plan.stride)
+
+
+def _windowed(tiles: np.ndarray, analysis: np.ndarray | None) -> np.ndarray:
+    """Return the tiles under the analysis window, or as they are without one."""
+    return tiles if analysis is None else tiles * analysis
 
 
 def _stack_coords(meta: PatchMeta, window: Window):
@@ -342,8 +359,8 @@ def _stack_coords(meta: PatchMeta, window: Window):
     coords = meta.coords
     plan = window.tiles(meta.shape)
     new_coords = {}
-    for dim, size, stride, count in zip(
-        window.dims, window.size, plan.stride, plan.grid
+    for dim, size, stride, margin, count in zip(
+        window.dims, window.size, plan.stride, plan.margin, plan.grid
     ):
         claimed = (
             f"{dim}_start",
@@ -356,7 +373,7 @@ def _stack_coords(meta: PatchMeta, window: Window):
                 msg = f"The patch already has a coordinate called {name}."
                 raise ParameterError(msg)
         coord = coords.get_coord(dim)
-        starts = np.arange(count) * stride - stride
+        starts = np.arange(count) * stride - margin
         # The tile's middle sample, in the coordinate's units.
         centres = _offset_values(coord, starts + (size - 1) / 2)
         offsets = _offset_values(coord, np.arange(size)) - coord.values[0]
@@ -476,11 +493,11 @@ def reassemble(patch: PatchType, *, taper: Any = None) -> PatchType:
         weights = get_dual_taper(analysis, size, strides)[1]
     else:
         overlap = tuple(z - st for z, st in zip(size, strides))
-        weights = get_taper(taper or "hann", size, overlap)
+        weights = get_taper("hann" if taper is None else taper, size, overlap)
     plan = get_tile_plan(shape, size, strides)
     as_cut = all(
-        len(s) == count and np.array_equal(s, np.arange(count) * st - st)
-        for s, count, st in zip(starts, plan.grid, strides)
+        len(s) == count and np.array_equal(s, np.arange(count) * st - m)
+        for s, count, st, m in zip(starts, plan.grid, strides, plan.margin)
     )
     if as_cut:
         # Every tile, in the order it was cut: the plan blends the stack a

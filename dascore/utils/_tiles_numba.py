@@ -31,7 +31,7 @@ def _apply_colour_class(
     colour0: int,
     colour1: int,
     func,
-    analysis: np.ndarray,
+    analysis: np.ndarray | None = None,
 ) -> None:
     """
     Apply `func` to every tile of one colour class, adding into `out`.
@@ -57,16 +57,18 @@ def apply_jit(
     array: np.ndarray,
     func,
     taper: np.ndarray,
-    analysis: np.ndarray,
+    analysis: np.ndarray | None = None,
 ) -> np.ndarray:
     """
     Return the array with `func` applied to every tile and the tiles blended.
 
     `func` is a numba-compiled function of one tile returning a tile of the
     same shape. Two dimensions only. `analysis` multiplies each tile before
-    `func` sees it.
+    `func` sees it; None is a window of ones.
     """
     padded = plan.pad(array, dtype=np.result_type(array, np.float32))
+    if analysis is None:
+        analysis = np.ones(plan.size, dtype=padded.dtype)
     analysis = analysis.astype(padded.dtype)
     # One tile through the function first, to learn what it returns: the
     # output takes that dtype, so a real tile made complex is kept complex.
