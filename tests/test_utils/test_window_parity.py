@@ -301,12 +301,12 @@ class TestEmptySelection:
 
 class TestTaperRamps:
     """
-    The ramp each edge-tapering function builds today, pinned by value.
+    The ramp each edge-tapering function builds, pinned by value.
 
-    `Patch.taper` takes the first half of a window of 2n samples;
-    `taper_range` and the adaptive spectral filter take the first n of a
-    window of 2n + 1. The two are not the same ramp, and which one a
-    function uses is part of what it returns.
+    All take the first n samples of a window of 2n + 1, so a five-sample
+    triangle is 1/6, 2/6, ... 5/6 and the plateau follows. `Patch.taper`
+    used to take the first half of a window of 2n instead (1/10, 3/10,
+    ...), and moved here on purpose: one ramp, everywhere.
     """
 
     @pytest.fixture(scope="class")
@@ -315,19 +315,23 @@ class TestTaperRamps:
         patch = dc.get_example_patch()
         return patch.new(data=np.ones_like(patch.data))
 
-    def test_taper_uses_a_2n_window(self, ones):
-        """16 ms is five samples; the ramp is the first five of a triangle of ten."""
+    def test_taper_uses_a_2n_plus_1_window(self, ones):
+        """16 ms is five samples; the ramp is the first five of a triangle of 11."""
         out = ones.taper(time=(np.timedelta64(16, "ms"), None), window_type="triang")
-        np.testing.assert_allclose(out.data[0, :5], [0.1, 0.3, 0.5, 0.7, 0.9])
-        assert out.data[0, 5] == 1.0
+        np.testing.assert_allclose(out.data[0, :6], np.arange(1, 7) / 6)
 
-    def test_taper_hann_uses_a_2n_window(self, ones):
-        """The same construction for hann: the first five of a hann of ten."""
+    def test_taper_hann_uses_a_2n_plus_1_window(self, ones):
+        """The same construction for hann: the first five of a hann of 11."""
         from scipy.signal.windows import hann  # noqa: PLC0415
 
         out = ones.taper(time=(np.timedelta64(16, "ms"), None), window_type="hann")
-        np.testing.assert_allclose(out.data[0, :5], hann(10)[:5], rtol=1e-6)
+        np.testing.assert_allclose(out.data[0, :5], hann(11)[:5], rtol=1e-6)
         assert out.data[0, 5] == 1.0
+
+    def test_taper_end_is_the_start_reversed(self, ones):
+        """The end ramp is the mirror of the start ramp."""
+        out = ones.taper(time=np.timedelta64(16, "ms"), window_type="triang")
+        np.testing.assert_allclose(out.data[0, -5:], (np.arange(1, 6) / 6)[::-1])
 
     def test_taper_range_uses_a_2n_plus_1_window(self, ones):
         """Four samples of triangle from a window of nine: 0.2, 0.4, 0.6, 0.8."""

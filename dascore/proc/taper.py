@@ -14,7 +14,7 @@ from dascore.units import Quantity
 from dascore.utils.docs import compose_docstring
 from dascore.utils.misc import broadcast_for_index
 from dascore.utils.patch import get_dim_axis_value, patch_function
-from dascore.utils.signal import WINDOW_FUNCTIONS, get_ramp, get_window
+from dascore.utils.signal import WINDOW_FUNCTIONS, get_ramp
 from dascore.utils.time import to_float
 
 
@@ -119,16 +119,14 @@ def taper(
     _validate_windows(samps, start_slice, end_slice, shape, axis)
     if samps[0] is not None:
         val = start_slice.stop
-        # The first half of a window of 2n, as this function has always cut
-        # it; taper_range and the tile tapers take the first n of 2n + 1.
-        window = get_window(window_type, 2 * val)[:val]
+        window = get_ramp(window_type, val)
         # get indices window (which will broadcast) and data
         data_inds = broadcast_for_index(n_dims, axis, start_slice)
         window_inds = broadcast_for_index(n_dims, axis, slice(None), fill=None)
         out[data_inds] = out[data_inds] * window[window_inds]
     if samps[1] is not None:
         val = shape[axis] - end_slice.start
-        window = get_window(window_type, 2 * val)[val:]
+        window = get_ramp(window_type, val)[::-1]
         data_inds = broadcast_for_index(n_dims, axis, end_slice)
         window_inds = broadcast_for_index(n_dims, axis, slice(None), fill=None)
         out[data_inds] = out[data_inds] * window[window_inds]
