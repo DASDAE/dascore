@@ -612,6 +612,45 @@ class TestSTFT:
         out = random_patch.stft(time=1, overlap=None)
         assert isinstance(out, dc.Patch)
 
+    def test_nfft_adds_bins(self, random_patch):
+        """A longer FFT samples the spectrum at more, closer frequencies."""
+        plain = random_patch.stft(time=100, samples=True)
+        padded = random_patch.stft(time=100, samples=True, nfft=256)
+        assert len(padded.get_coord("ft_time")) == 256 // 2 + 1
+        rate = padded.attrs["_stft_sampling_rate"]
+        assert float(padded.get_coord("ft_time").step) == pytest.approx(rate / 256)
+        # The window and hop are untouched; only the FFT of each window grew.
+        assert padded.attrs["_stft_hop"] == plain.attrs["_stft_hop"]
+        assert padded.get_coord("time") == plain.get_coord("time")
+        assert padded.attrs["_stft_mfft"] == 256
+
+    def test_nfft_default_is_the_window(self, random_patch):
+        """None means the window length, which is what stft always did."""
+        plain = random_patch.stft(time=100, samples=True)
+        explicit = random_patch.stft(time=100, samples=True, nfft=None)
+        assert plain.attrs["_stft_mfft"] == 100
+        assert explicit.equals(plain)
+
+    def test_nfft_in_units(self, random_patch):
+        """A quantity is read through the coordinate, whatever samples says."""
+        by_count = random_patch.stft(time=100, samples=True, nfft=256)
+        by_units = random_patch.stft(time=100, samples=True, nfft=1.024 * second)
+        assert by_units.attrs["_stft_mfft"] == 256
+        assert by_units.equals(by_count)
+
+    def test_nfft_below_window_refused(self, random_patch):
+        """A shorter FFT would drop data, which is not a transform."""
+        with pytest.raises(ParameterError, match="at least the window length"):
+            random_patch.stft(time=100, samples=True, nfft=50)
+
+    def test_nfft_is_interpolation(self, random_patch):
+        """Padding adds bins between the old ones; the old ones are unchanged."""
+        plain = random_patch.stft(time=100, samples=True)
+        padded = random_patch.stft(time=100, samples=True, nfft=200)
+        axis = padded.get_axis("ft_time")
+        every_other = np.take(padded.data, np.arange(0, 101, 2), axis=axis)
+        assert np.allclose(every_other, plain.data)
+
     def test_non_dim_coord_associated_with_transform(self):
         """See #611."""
         patch = dc.get_example_patch("random_das", shape=(10, 200))
@@ -659,6 +698,13 @@ class TestInverseSTFT:
         stft = patch.stft(time=1)
         istft = stft.istft()
         assert patch.equals(istft, close=True)
+
+    def test_round_trip_with_nfft(self, random_patch):
+        """A padded FFT inverts to the same data; the padding is dropped."""
+        pa1 = random_patch.stft(time=100, samples=True, nfft=256)
+        pa2 = pa1.istft()
+        assert pa2.equals(random_patch, close=True)
+        assert not any(k.startswith("_stft") for k in dict(pa2.attrs))
 
     def test_non_transformed_raises(self, random_patch):
         """Test that a patch that hasn't undergone stft can't be used."""
