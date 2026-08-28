@@ -32,8 +32,9 @@ from dascore.exceptions import (
     ParameterError,
     PatchError,
 )
+from dascore.utils.misc import iterate
 from dascore.utils.patch import patch_function
-from dascore.utils.signal import get_dual_taper, get_taper
+from dascore.utils.signal import get_dual_taper, get_taper, get_window, get_window_nd
 from dascore.utils.tiles import get_tile_plan
 from dascore.utils.time import is_datetime64, is_timedelta64, to_float
 from dascore.utils.window import Window, resolve_window
@@ -183,11 +184,10 @@ def tile_apply(
 
     Notes
     -----
-    - Tiles start before the data and are padded with zeros: one stride
-      before, so every sample of the input is covered by tiles which see a
-      full taper ramp on both sides, or under an analysis window as many
-      whole strides as it takes for every tile which would reach a sample to
-      exist, which its dual relies on.
+    - Tiles start before the data and are padded with zeros, as many whole
+      strides before as it takes for every tile which reaches a sample to
+      exist: none when tiles abut, one stride up to half overlap, more
+      beyond it, which an analysis window's dual relies on.
     - The adaptive spectral filter is this with a spectral weighting as
       `function`; see
       [`Patch.adaptive_spectral_filter`](`dascore.Patch.adaptive_spectral_filter`).
@@ -239,10 +239,11 @@ class TileApply(PatchProcessor):
                 "a taper cannot be given as well."
             )
             raise ParameterError(msg)
-        if self.analysis is not None and not isinstance(self.analysis, str | tuple):
+        if isinstance(self.analysis, np.ndarray) and self.analysis.ndim != 1:
             msg = (
-                "An analysis window is given by name, or as a (name, parameter) "
-                "tuple, so that its dual can be built along each axis."
+                "An analysis window given as an array is one-dimensional, an "
+                "edge applied along every windowed dimension, so that its dual "
+                "can be built along each axis."
             )
             raise ParameterError(msg)
         # In the patch's axis order, whatever order they were named in, so a
@@ -272,10 +273,9 @@ class TileApply(PatchProcessor):
         strides = {
             f"_tile_stride_{d}": int(s) for d, s in zip(window.dims, window.stride)
         }
-        if self.analysis is not None:
-            strides["_tile_analysis"] = self.analysis
         attrs = meta.attrs.update(**strides)
-        return meta.update(coords=_stack_coords(meta, window), attrs=attrs)
+        coords = _stack_coords(meta, window, self.analysis)
+        return meta.update(coords=coords, attrs=attrs)
 
     def kernel(self, data, meta, out_meta):
         """Tile every batch over the windowed axes; blend or stack."""
@@ -292,7 +292,7 @@ class TileApply(PatchProcessor):
             analysis = (
                 None
                 if self.analysis is None
-                else get_dual_taper(self.analysis, plan.size, plan.stride)[0]
+                else get_window_nd(self.analysis, plan.size)
             )
             apply = self.function
             if engine == "numba":
@@ -345,7 +345,7 @@ def _windowed(tiles: np.ndarray, analysis: np.ndarray | None) -> np.ndarray:
     return tiles if analysis is None else tiles * analysis
 
 
-def _stack_coords(meta: PatchMeta, window: Window):
+def _stack_coords(meta: PatchMeta, window: Window, analysis: Any):
     """Return a stack's coordinate manager: tile centres, edges, and offsets."""
     coords = meta.coords
     plan = window.tiles(meta.shape)
@@ -358,6 +358,7 @@ def _stack_coords(meta: PatchMeta, window: Window):
             f"{dim}_stop",
             f"{dim}_offset",
             f"_tile_source_{dim}",
+            f"_tile_analysis_{dim}",
         )
         for name in claimed:
             if name in coords.coord_map:
@@ -366,14 +367,18 @@ def _stack_coords(meta: PatchMeta, window: Window):
         coord = coords.get_coord(dim)
         starts = np.arange(count) * stride - margin
         # The tile's middle sample, in the coordinate's units.
-        centres = _offset_values(coord, starts + (size - 1) / 2)
+        centres = _offset_values(coord, starts + size // 2)
         offsets = _offset_values(coord, np.arange(size)) - coord.values[0]
         new_coords[dim] = get_coord(data=centres, units=coord.units)
         new_coords[f"{dim}_start"] = (dim, starts)
         new_coords[f"{dim}_stop"] = (dim, starts + size)
         new_coords[f"{dim}_offset"] = get_coord(data=offsets, units=coord.units)
-        # The coordinate the tiles were cut from, for reassembly.
+        # The coordinate the tiles were cut from, for reassembly, and the
+        # window the tiles were cut under, whose dual blends them back.
         new_coords[f"_tile_source_{dim}"] = (None, coord)
+        if analysis is not None:
+            edge = np.asarray(get_window(analysis, size), dtype=np.float32)
+            new_coords[f"_tile_analysis_{dim}"] = (None, edge)
         # And every coordinate which rode along it, a quality flag say.
         for name, aux_dims in coords.dim_map.items():
             if aux_dims == (dim,) and name != dim:
@@ -473,15 +478,16 @@ def reassemble(patch: PatchType, *, taper: Any = None) -> PatchType:
     # tiles were cut for, which the stride in attrs says.
     starts = [patch.get_coord(f"{dim}_start").values for dim in dims]
     strides = tuple(int(patch.attrs[f"_tile_stride_{dim}"]) for dim in dims)
-    analysis = patch.attrs.get("_tile_analysis")
-    if analysis is not None:
+    windows = [f"_tile_analysis_{dim}" for dim in dims]
+    if all(name in patch.coords.coord_map for name in windows):
         if taper is not None:
             msg = (
                 "This stack was cut with an analysis window and is blended under "
                 "its dual; a taper cannot be given."
             )
             raise ParameterError(msg)
-        weights = get_dual_taper(analysis, size, strides)[1]
+        edges = [patch.get_coord(name).values for name in windows]
+        weights = get_dual_taper(edges, size, strides)[1]
     else:
         overlap = tuple(z - st for z, st in zip(size, strides))
         weights = get_taper("hann" if taper is None else taper, size, overlap)
@@ -498,8 +504,15 @@ def reassemble(patch: PatchType, *, taper: Any = None) -> PatchType:
         blended = _place_each(stacks, starts, shape, size, weights)
     out = blended.reshape((*batch_shape, *shape))
     out = np.moveaxis(out, tuple(range(-ndim, 0)), tile_axes)
-    # Put the source coordinates back, and drop everything the stack added.
-    coord_map: dict[str, Any] = dict(patch.coords.get_coord_tuple_map())
+    # Put the source coordinates back, and drop everything the stack added,
+    # along with any coordinate on a tile or offset axis, which has no
+    # sample to go back to.
+    consumed = set(dims) | set(offset_dims)
+    coord_map: dict[str, Any] = {
+        name: (cdims, values)
+        for name, (cdims, values) in patch.coords.get_coord_tuple_map().items()
+        if not consumed & set(iterate(cdims))
+    }
     for dim, coord in sources.items():
         coord_map[dim] = coord
         for name in (
@@ -507,8 +520,9 @@ def reassemble(patch: PatchType, *, taper: Any = None) -> PatchType:
             f"{dim}_stop",
             f"{dim}_offset",
             f"_tile_source_{dim}",
+            f"_tile_analysis_{dim}",
         ):
-            coord_map.pop(name)
+            coord_map.pop(name, None)
     for key, coord in riders.items():
         dim, name = key.split("__", 1)
         coord_map[name] = (dim, coord)

@@ -11,6 +11,7 @@ import dascore as dc
 from dascore.exceptions import ParameterError, PatchError
 from dascore.proc.tile_apply import TileApply
 from dascore.units import percent
+from dascore.utils.signal import get_window
 
 
 def identity(tiles):
@@ -219,10 +220,11 @@ class TestAnalysisWindow:
         stacked = patch.tile_apply(
             identity, mode="stack", analysis="hann", overlap=12, time=16, samples=True
         )
-        assert stacked.attrs["_tile_analysis"] == "hann"
+        edge = stacked.get_coord("_tile_analysis_time").values
+        np.testing.assert_allclose(edge, get_window("hann", 16), atol=1e-7)
         back = stacked.reassemble()
         assert back.equals(patch, close=True)
-        assert "_tile_analysis" not in dict(back.attrs)
+        assert "_tile_analysis_time" not in back.coords.coord_map
 
     def test_stack_refuses_a_taper(self, patch):
         """The dual is the only blend a windowed stack has."""
@@ -246,10 +248,20 @@ class TestAnalysisWindow:
                 lambda x: x, analysis="hann", taper="hann", time=16, samples=True
             )
 
-    def test_array_refused(self, patch):
-        """A dual is built along each axis, which needs a name."""
-        with pytest.raises(ParameterError, match="given by name"):
-            patch.tile_apply(identity, analysis=np.ones((16,)), time=16, samples=True)
+    def test_array_window(self, patch):
+        """A one-dimensional array is an edge for every windowed dimension."""
+        edge = get_window("hamming", 16)
+        by_array = patch.tile_apply(identity, analysis=edge, time=16, samples=True)
+        by_name = patch.tile_apply(identity, analysis="hamming", time=16, samples=True)
+        assert by_array.equals(by_name, close=True)
+        assert by_array.equals(patch, close=True)
+
+    def test_two_dimensional_array_refused(self, patch):
+        """A dual is built along each axis, which an N-D array cannot give."""
+        with pytest.raises(ParameterError, match="one-dimensional"):
+            patch.tile_apply(
+                identity, analysis=np.ones((16, 16)), time=16, samples=True
+            )
 
     def test_numba_engine(self, patch):
         """The compiled path windows each tile before the function too."""
@@ -300,7 +312,7 @@ class TestStack:
         centres = stacked.get_coord("time").values
         step = patch.get_coord("time").step
         expected = patch.get_coord("time").min() + dc.to_timedelta64(
-            (starts + 7.5) * dc.to_float(step)
+            (starts + 8) * dc.to_float(step)
         )
         np.testing.assert_array_equal(centres, expected)
 
@@ -328,7 +340,7 @@ class TestStack:
         centres = stacked.get_coord("distance").values
         assert centres[0] > centres[1]
         first = flipped.get_coord("distance").values[0]
-        assert centres[0] == first + (-8 + 7.5) * flipped.get_coord("distance").step
+        assert centres[0] == first + (-8 + 8) * flipped.get_coord("distance").step
         # Offsets count from the tile's first sample, in the coordinate's direction.
         offsets = stacked.get_coord("distance_offset").values
         assert offsets[0] == 0 and offsets[1] == flipped.get_coord("distance").step
@@ -349,6 +361,15 @@ class TestStack:
 
 class TestReassemble:
     """Blending a stack back."""
+
+    def test_coordinate_on_a_tile_axis_is_dropped(self, patch):
+        """A per-tile coordinate has no sample to go back to."""
+        tiles = patch.tile_apply(lambda x: x, mode="stack", time=16, samples=True)
+        n_tiles = tiles.shape[tiles.dims.index("time")]
+        marked = tiles.update_coords(energy=("time", np.arange(n_tiles, dtype=float)))
+        back = marked.reassemble()
+        assert "energy" not in back.coords.coord_map
+        assert back.equals(patch, close=True)
 
     def test_array_taper(self, patch):
         """A taper given as an array is a window like any other."""
