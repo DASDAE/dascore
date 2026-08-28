@@ -551,7 +551,7 @@ def _centre_phase(cycles: np.ndarray, size: int) -> np.ndarray:
     there, as scipy's `ShortTimeFFT` does. `cycles` is each frequency in
     cycles per sample.
     """
-    return np.exp(2j * np.pi * cycles * (size // 2))
+    return np.exp(2j * np.pi * cycles * (size // 2)).astype(np.complex64)
 
 
 def _as_is(tiles: np.ndarray) -> np.ndarray:
@@ -688,7 +688,6 @@ def stft(
     tiles = stack.data
     if detrend:
         tiles = sp_detrend(tiles, axis=-1, type="linear") * window
-    # For compatibility with dft, we scale by step. See the DFT note for why.
     step = to_float(coord.step)
     if fft_mode == "onesided":
         spectra = nft.rfft(tiles, n=nfft, axis=-1)
@@ -696,7 +695,8 @@ def stft(
     else:
         spectra = nft.fftshift(nft.fft(tiles, n=nfft, axis=-1), axes=-1)
         freqs = nft.fftshift(nft.fftfreq(nfft, d=step))
-    spectra *= _centre_phase(freqs * step, size)
+    # One pass: the phase and, for compatibility with dft, the scale by step.
+    spectra *= _centre_phase(freqs * step, size) * spectra.dtype.type(step)
     ft_dim = FourierTransformatter().rename_dims(patch.dims, index=axis)[axis]
     new_dims = (*patch.dims[:axis], ft_dim, *patch.dims[axis + 1 :], dim)
     coord_map = stack.coords.get_coord_tuple_map()
@@ -711,9 +711,7 @@ def stft(
         _pre_stft_data_type=patch.attrs.get("data_type"),
         data_units=_get_data_units_from_dims(patch, dim, mul),
     )
-    return patch.new(
-        data=_swap_window_axes(spectra * step, axis), coords=cm, attrs=attrs
-    )
+    return patch.new(data=_swap_window_axes(spectra, axis), coords=cm, attrs=attrs)
 
 
 @patch_function()
@@ -772,8 +770,8 @@ def istft(patch) -> dc.Patch:
     nfft = int(patch.attrs["_stft_mfft"])
     step = to_float(source.step)
     cycles = patch.get_coord(ft_dim).values * step
-    spectra = _swap_window_axes(patch.data, axis) / step
-    spectra = spectra / _centre_phase(cycles, size)
+    spectra = _swap_window_axes(patch.data, axis)
+    spectra = spectra / (_centre_phase(cycles, size) * step)
     if patch.attrs["_stft_fft_mode"] == "onesided":
         tiles = nft.irfft(spectra, n=nfft, axis=-1)
     else:
