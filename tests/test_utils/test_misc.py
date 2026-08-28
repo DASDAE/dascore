@@ -542,9 +542,9 @@ class TestTukeyFence:
         assert np.allclose(result, [1.0, 5.0])
 
     def test_all_nan(self):
-        """All-NaN data should return NaN bounds."""
+        """All-NaN data should return NaN bounds without warnings."""
         data = np.array([np.nan, np.nan, np.nan])
-        with suppress_warnings():
+        with suppress_warnings(action="error"):
             result = tukey_fence(data)
         assert np.isnan(result[0])
         assert np.isnan(result[1])

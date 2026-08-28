@@ -94,12 +94,12 @@ from dascore.utils.display import (
     ACQUISITION_ATTR,
     NodeRepr,
     Repr,
-    duration_text,
     elision_text,
     get_header_text,
     get_nice_text,
     group_names,
     range_texts,
+    span_text,
     split_block,
 )
 from dascore.utils.docs import compose_docstring
@@ -2493,14 +2493,17 @@ class Spool(NodeRepr, NamespaceOwner):
                 # in, so a min and a max from two of them are not two
                 # ends of one extent. Say so rather than imply otherwise.
                 base += Text(f"  (mixed units: {', '.join(units)})", key_style)
-            elif isinstance(low, _TIMES):
-                # A time is stated as an instant, so how long the two of
-                # them are apart is a fact the line does not yet carry.
-                # Any other dimension states its own magnitude already.
-                if (span := duration_text(low, high)) is not None:
-                    base += Text("  ") + span
-            elif units:
+                continue
+            # A time states its units in the way it is written; every
+            # other dimension is named in what it was measured in.
+            if units and not isinstance(low, _TIMES):
                 base += Text(" ") + Text(units[0], dascore_styles["units"])
+            # How far the two ends lie apart, in what they are measured
+            # in: a width said bare beside a max which names its units
+            # reads as if it were in others, and the tracks under this
+            # line state theirs.
+            if (span := span_text(low, high, units[0] if units else None)) is not None:
+                base += Text("  ") + span
         return base
 
     @staticmethod
@@ -2520,19 +2523,12 @@ class Spool(NodeRepr, NamespaceOwner):
 
     def _span_text(self, low, high, units: tuple[str, ...]) -> Text | None:
         """How wide an extent is, measured in what the dimension is."""
-        # A time span is a duration. Any other dimension is as wide as
-        # its own units say, and calling that many seconds would be a
-        # different claim about a different quantity.
-        if isinstance(low, _TIMES):
-            return duration_text(low, high)
-        if isinstance(low, numbers.Number):
-            # A width is only in a unit where every patch agrees on one;
-            # stating the first of several would label a track in a unit
-            # it was not measured in.
-            stated = f" {units[0]}" if len(units) == 1 else ""
-            return Text(f"<{float(high - low):g}{stated}>", dascore_styles["keys"])
-        # A dimension of labels has two ends and no width between them.
-        return None
+        # A track states its units nowhere else, so the width carries
+        # them -- but only where every patch agrees on one, since
+        # stating the first of several would label a track in a unit it
+        # was not measured in.
+        stated = units[0] if len(units) == 1 else None
+        return span_text(low, high, stated)
 
     def _tracks_text(self, df, dim: str) -> Text | None:
         """

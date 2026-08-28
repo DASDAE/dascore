@@ -24,6 +24,21 @@ def _get_shade_vertices(ax):
     return poly, np.concatenate([x.vertices for x in poly.get_paths()])
 
 
+def _peak_is_above_offset(ax):
+    """Return True if the first trace's peak is drawn above its offset line."""
+    trace = _get_traces(ax)[0]
+    x, low, high = trace[0, 0], trace[:, 1].min(), trace[:, 1].max()
+    # Display coordinates grow upward on the screen, whatever the axis does.
+    (_, low_y), (_, high_y) = ax.transData.transform([(x, low), (x, high)])
+    return high_y > low_y
+
+
+def _trace_display_y(ax, index):
+    """Where a trace is drawn, in display coordinates, which grow upward."""
+    trace = _get_traces(ax)[index]
+    return ax.transData.transform([(trace[0, 0], trace[:, 1].mean())])[0][1]
+
+
 class TestWiggle:
     """Tests for wiggle plot."""
 
@@ -284,3 +299,65 @@ class TestWiggle:
         patch = patch_1d + 10  # everything well above zero
         ax = patch.viz.wiggle(shade=True)
         assert min(ax.get_ylim()) <= 0
+
+
+class TestWiggleOrientation:
+    """Tests for which direction the wiggle plot's y axis runs."""
+
+    @pytest.fixture()
+    def small_patch(self, random_patch):
+        """A small patch to cut back on plot time."""
+        return random_patch.select(distance=(10, 15), samples=True).select(
+            time=(0, 20), samples=True
+        )
+
+    def test_positive_data_deflects_up(self, small_patch):
+        """An all positive patch, like an envelope, must deflect up."""
+        patch = small_patch.envelope("time")
+        assert np.all(patch.data >= 0)
+        assert _peak_is_above_offset(patch.viz.wiggle())
+
+    def test_time_traces_deflect_with_their_axis(self, small_patch):
+        """
+        Stacking traces along time inverts the axis they are offset along,
+        so their amplitudes point down with it. Documented, not desirable;
+        a time axis running upward would be the greater surprise.
+        """
+        patch = small_patch.envelope("time")
+        assert not _peak_is_above_offset(patch.viz.wiggle(dim="distance"))
+
+    @pytest.mark.parametrize("reverse", [False, True])
+    def test_distance_runs_upward(self, small_patch, reverse):
+        """Distance increases upward however its coordinate is sorted."""
+        patch = small_patch.sort_coords("distance", reverse=reverse)
+        distance = patch.get_array("distance")
+        ax = patch.viz.wiggle()
+        far = _trace_display_y(ax, int(np.argmax(distance)))
+        near = _trace_display_y(ax, int(np.argmin(distance)))
+        assert far > near
+
+    @pytest.mark.parametrize("reverse", [False, True])
+    def test_time_runs_downward(self, small_patch, reverse):
+        """Time increases downward however its coordinate is sorted."""
+        patch = small_patch.sort_coords("time", reverse=reverse)
+        time = patch.get_array("time")
+        ax = patch.viz.wiggle(dim="distance")
+        late = _trace_display_y(ax, int(np.argmax(time)))
+        early = _trace_display_y(ax, int(np.argmin(time)))
+        assert late < early
+
+    def test_inversion_is_idempotent(self, small_patch):
+        """Drawing on an already time-down axis must not flip it back."""
+        _, ax = plt.subplots(1)
+        for _ in range(2):
+            small_patch.viz.wiggle(dim="distance", ax=ax)
+            assert ax.yaxis_inverted()
+
+    @pytest.mark.parametrize("trace_dim", ["distance", "time"])
+    def test_agrees_with_waterfall(self, small_patch, trace_dim):
+        """Both plots invert the y axis under the same conditions."""
+        connected_dim = next(iter(set(small_patch.dims) - {trace_dim}))
+        wiggle_ax = small_patch.viz.wiggle(dim=connected_dim)
+        # Waterfall puts the patch's first dimension on the y axis.
+        water_ax = small_patch.transpose(trace_dim, connected_dim).viz.waterfall()
+        assert wiggle_ax.yaxis_inverted() == water_ax.yaxis_inverted()

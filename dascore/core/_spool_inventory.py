@@ -49,10 +49,11 @@ from dascore.exceptions import (
     MissingOptionalDependencyError,
     ParameterError,
     PatchError,
+    UnitError,
     UnresolvedPatchError,
 )
 from dascore.models import values_equal
-from dascore.units import get_quantity_str
+from dascore.units import convert_units, get_quantity_str
 from dascore.utils.intervals import interval_masks, value_kind
 from dascore.utils.misc import iterate, validate_acquisition_key
 from dascore.utils.time import to_datetime64
@@ -685,6 +686,38 @@ def readable_on(dist_map) -> list[str]:
     return sorted({x for axis in dist_map.axes for x in AXIS_COORDS[axis]})
 
 
+# The units each map axis states its control points in. A channel number
+# counts channels and states no unit, while an instrument distance is the
+# interrogator's own meters, so a patch which carries feet must be
+# converted before the map can read it. Reading raw magnitudes instead
+# would place the channels somewhere else on the fiber, silently.
+AXIS_UNITS = {"channel": None, "instrument_distance": "m"}
+assert set(AXIS_UNITS) == set(DISTANCE_MAP_AXES)
+
+
+def to_axis_units(values, units, axis: str, name: str):
+    """
+    Return channel-like values in the units their map axis is written in.
+
+    Values which state no units are read as the axis's own, which is what
+    a patch that never mentioned units meant. Units the axis cannot be
+    expressed in are refused rather than silently taken as magnitudes.
+    """
+    to_units = AXIS_UNITS[axis]
+    if to_units is None or units is None or (isinstance(units, str) and not units):
+        return values
+    try:
+        return convert_units(values, to_units=to_units, from_units=units)
+    except UnitError as error:
+        msg = (
+            f"The patch's {name!r} coordinate is in "
+            f"{get_quantity_str(units)}, which the {axis!r} axis of the "
+            f"distance map cannot be read in; it states its control points "
+            f"in {to_units}. ({error})"
+        )
+        raise UnitError(msg) from error
+
+
 # Tracks whose fields enrich can project. The inventory names them, so a
 # track enrich can project and one selection can ask about are the same set.
 _TRACK_NAMES = tuple(TRACK_IDENTITY_FIELDS)
@@ -1254,6 +1287,18 @@ class PlacedRow(NamedTuple):
         return self.grid, self.low, self.high
 
 
+def _frame_units(frame, name: str) -> list:
+    """
+    Return each row's stated units for one coordinate, or None where it
+    states none. A planning frame keeps them private and a presented one
+    public, and either may answer here.
+    """
+    for column in (f"_{name}_units", f"{name}_units"):
+        if column in frame.columns:
+            return [None if pd.isnull(x) else x for x in frame[column]]
+    return [None] * len(frame)
+
+
 def _placed_rows(contexts, placements, frame, name: str):
     """
     Yield each row's channel grid and where it lands on the optical path.
@@ -1264,12 +1309,13 @@ def _placed_rows(contexts, placements, frame, name: str):
     """
     steps = frame[f"{name}_step"].to_numpy()
     bounds = zip(frame[f"{name}_min"], frame[f"{name}_max"], strict=True)
+    units = _frame_units(frame, name)
     # Keyed by identity because that is what is cheap: sibling epochs
     # resolve to one shared context object, and `__eq__` on an inventory
     # model dumps the whole subtree. A miss only recomputes.
     cache: dict[tuple, tuple] = {}
-    for context, (dim, axis), (low, high), step in zip(
-        contexts, placements, bounds, steps, strict=True
+    for context, (dim, axis), (low, high), step, unit in zip(
+        contexts, placements, bounds, steps, units, strict=True
     ):
         if context is None or dim is None:
             yield PlacedRow(context, low, high, None, None, None)
@@ -1286,10 +1332,16 @@ def _placed_rows(contexts, placements, frame, name: str):
         # patch states a negative one, and counting samples with it would
         # give none at all.
         step = abs(step)
-        key = (id(context), axis, low, high, step)
+        # The units are part of the key because the envelope columns hold
+        # each row's native magnitudes: the same numbers in feet and in
+        # meters describe different channels.
+        key = (id(context), axis, low, high, step, unit)
         if (placed := cache.get(key)) is None:
             grid = np.arange(round((high - low) / step) + 1) * step + low
-            placed = (grid, context.acquisition.channel_to_distance(grid, axis=axis))
+            # The grid stays in the row's own units, which is what the
+            # pieces are cut in; only the map reads it in its own.
+            on_axis = to_axis_units(grid, unit, axis, name)
+            placed = (grid, context.acquisition.channel_to_distance(on_axis, axis=axis))
             cache[key] = placed
         grid, distances = placed
         yield PlacedRow(context, low, high, grid, distances, None)

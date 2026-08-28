@@ -879,6 +879,14 @@ class TestSqueeze:
         coords = random_patch.coords
         assert coords.squeeze() is coords
 
+    @pytest.mark.parametrize("dim", [None, ("distance", "time")])
+    def test_squeeze_all_dimensions_raises(self, random_patch, dim):
+        """Squeeze should not create an unsupported scalar patch."""
+        patch = random_patch.select(distance=0, time=0, samples=True)
+        msg = "at least one dimension"
+        with pytest.raises(ParameterError, match=msg):
+            patch.squeeze(dim)
+
 
 class TestGetCoord:
     """Tests for the get_coord convenience function."""

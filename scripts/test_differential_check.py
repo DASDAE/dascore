@@ -17,6 +17,7 @@ from differential_check import (
 )
 
 import dascore as dc
+from dascore.exceptions import ParameterError
 
 
 @pytest.fixture(scope="module")
@@ -65,6 +66,18 @@ class TestCompare:
         assert compare({"a": digest(patch)}, {}) == ["a: only in before"]
 
 
+# dump() records the error instead of the fingerprint when a call raises,
+# so the comparison covers what each version says about a bad argument --
+# the class included, since it names the error it writes. Naming them here
+# keeps a fourth from joining quietly, which would drop that call from the
+# comparison.
+RAISERS = {
+    "norm_bad": ValueError,
+    "transpose_bad_dim": ParameterError,
+    "rename_missing": KeyError,
+}
+
+
 class TestCalls:
     """Tests for the calls which get compared."""
 
@@ -75,8 +88,12 @@ class TestCalls:
         assert {"add_scalar", "agg_mean", "pad_tuple"}.issubset(set(calls))
 
     def test_calls_run(self):
-        """Every call runs and returns something which can be fingerprinted."""
+        """Every call fingerprints, save the ones which exist to raise."""
         for name, call in get_calls().items():
+            if (error := RAISERS.get(name)) is not None:
+                with pytest.raises(error):
+                    call()
+                continue
             assert digest(call()), f"{name} returned nothing"
 
 

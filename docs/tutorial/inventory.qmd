@@ -213,7 +213,7 @@ Only what an object states is shown, so a field left at its default does not tak
 
 An inventory also draws itself through its `viz` namespace, and each of the three plots looks along one coordinate.
 
-[`Inventory.viz.path`](`dascore.viz.inventory.path`) looks along **optical distance**, which is the coordinate the data is in. Every track the path describes becomes a lane, so the channels an acquisition places, the components, the coupling, and each label group line up against the same axis:
+[`Inventory.viz.path`](`dascore.viz.inventory.path`) looks along **optical distance**, which is the coordinate the data is in. Every track becomes a lane, so the distances each acquisition's channels cover, the components, the coupling, and each label group line up against the same axis:
 
 ```{python}
 inventory.viz.path(show=True);
@@ -271,6 +271,8 @@ patch_out = enriched[0]
 assert patch_out.attrs.gauge_length == 10.0
 assert "zone" in patch_out.coords.coord_map
 ```
+
+The per-channel facts reach the patch by way of the acquisition's `distance_map`, which places each channel on the optical path. The map states its control points in meters on the `instrument_distance` axis, so a patch whose axis is written in another length — feet, kilometers — is converted before it is read, and one whose axis is not a length at all raises rather than being taken for meters. The `channel` axis counts channels and states no unit.
 
 Enrichment never removes a patch. One the inventory does not describe comes out unchanged rather than missing, with a warning, so an inventory that deliberately covers part of an archive needs no pruning first. Deciding membership is a separate step, below.
 

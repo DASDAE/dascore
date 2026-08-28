@@ -71,6 +71,8 @@ target/
 
 # docs
 docs/api/*
+# The generated pages are not tracked, but the sidebar they use is.
+!docs/api/_metadata.yml
 # Where a local `quarto render docs` puts the built site.
 docs/_site/
 _autosummary

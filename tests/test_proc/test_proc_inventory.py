@@ -24,6 +24,7 @@ from dascore.exceptions import (
     InvalidInventoryError,
     ParameterError,
     PatchError,
+    UnitError,
     UnresolvedPatchError,
 )
 
@@ -357,6 +358,41 @@ class TestChannelResolution:
         """Overwriting the mapped axis would break the next resolution."""
         with pytest.raises(PatchError, match="will not overwrite"):
             patch.enrich(inventory, attrs=False, coords=("distance",))
+
+
+class TestCoordinateUnits:
+    """The map reads its axis in its own units, not the patch's."""
+
+    def test_feet_place_the_same_channels(self, patch, inventory):
+        """Restating the axis in feet moves no channel along the fiber."""
+        in_meters = patch.enrich(inventory)
+        in_feet = patch.convert_units(distance="ft").enrich(inventory)
+        for name in ("zone", "x", "y", "z"):
+            first = in_meters.get_array(name)
+            second = in_feet.get_array(name)
+            if np.issubdtype(first.dtype, np.floating):
+                assert np.allclose(first, second, equal_nan=True)
+            else:
+                assert np.array_equal(first, second)
+
+    def test_incompatible_units_raise(self, patch, inventory):
+        """A coordinate which is not a length cannot be a distance."""
+        seconds = patch.set_units(distance="s")
+        with pytest.raises(UnitError, match="instrument_distance"):
+            seconds.enrich(inventory, attrs=False, coords=("zone",))
+
+    def test_a_channel_axis_ignores_units(self, patch, inventory):
+        """Channel numbers count channels, so they state no unit."""
+        channel_map = _replace_acquisition(
+            inventory, distance_map=DistanceMap(channel=(0.0,), distance=(100.0,))
+        )
+        channels = np.arange(len(patch.get_coord("distance")))
+        with_channel = patch.update_coords(channel=("distance", channels))
+        bare = with_channel.enrich(channel_map, attrs=False, coords=("zone",))
+        with_units = with_channel.set_units(channel="ft").enrich(
+            channel_map, attrs=False, coords=("zone",)
+        )
+        assert np.array_equal(bare.get_array("zone"), with_units.get_array("zone"))
 
 
 class TestGeometryColumns:

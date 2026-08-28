@@ -17,6 +17,7 @@ from dascore.utils.plotting import (
     _get_ax,
     _get_data_label,
     _get_dim_label,
+    _maybe_invert_yaxis,
 )
 from dascore.utils.time import dtype_time_like
 
@@ -169,7 +170,11 @@ def _wiggle_2d(patch, ax, dim, scale, alpha, color, shade):
     # formatter there would overwrite them.
     if np.issubdtype(patch.get_coord(dim).dtype, np.datetime64):
         _format_time_axis(ax, dim, "x")
-    ax.invert_yaxis()  # invert y so it's consistent with waterfall
+    # The y axis holds the trace offsets, so it is other_dim which decides.
+    # The offsets follow the array, so a reverse sorted coordinate already
+    # runs the other way and the axis must be flipped back.
+    other_coord = patch.get_coord(other_dim)
+    _maybe_invert_yaxis(ax, patch, other_dim, ascending=not other_coord.reverse_sorted)
     return ax
 
 
@@ -226,6 +231,19 @@ def wiggle(
     >>> # A single trace plots as one line
     >>> trace = patch.select(distance=0, samples=True)
     >>> _ = trace.viz.wiggle()
+
+    Notes
+    -----
+    - Traces are drawn as offsets along the y axis, so which way that axis
+      runs also decides which way positive amplitudes point.
+
+    - As in [waterfall](`dascore.viz.waterfall`), the y axis is inverted
+      only when it is "time-like". Traces stacked along distance (the
+      default) therefore leave it alone, and positive amplitudes point up
+      just as they point right in a conventional (time down) wiggle
+      display. Traces stacked along time (`dim="distance"`) invert it to
+      keep time increasing downward, and the amplitudes follow it down. To
+      undo either, invert the y axis of the returned axis object.
     """
     # A length one dimension has nothing to connect, so drop it rather than
     # drawing a separate (one-sample) wiggle for every sample along the other.

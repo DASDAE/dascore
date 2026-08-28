@@ -129,7 +129,7 @@ class TestRolling:
     def test_window_zero_raises(self, random_patch):
         """When the window or step is entered 0 it should raise."""
         random_patch.get_coord("time")
-        msg = "Window or step size can't be zero"
+        msg = "at least 1 samples"
         with pytest.raises(ParameterError, match=msg):
             random_patch.rolling(time=0)
 

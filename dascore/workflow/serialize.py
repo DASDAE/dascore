@@ -279,7 +279,7 @@ def _encode(obj: Any, mode: EncodeMode) -> Any:
     if isinstance(obj, partial):
         return _encode_partial(obj, mode)
     if callable(obj):
-        return _encode_callable(obj)
+        return _encode_callable(obj, mode)
     return _encode_opaque(obj)
 
 
@@ -497,7 +497,7 @@ def _encode_partial(value: partial, mode: EncodeMode) -> Any:
     }
 
 
-def _encode_callable(func: Callable) -> Any:
+def _encode_callable(func: Callable, mode: EncodeMode = FINGERPRINT) -> Any:
     """
     Encode a callable by where it is defined.
 
@@ -507,6 +507,12 @@ def _encode_callable(func: Callable) -> Any:
     that source, and so are one parameter as far as a fingerprint is
     concerned.
     """
+    if mode == DOCUMENT:
+        msg = (
+            "A function parameter cannot be written to a document. Give the "
+            "task values it can carry, or keep the operation in code."
+        )
+        raise ParameterError(msg)
     module = getattr(func, "__module__", None) or "<unknown>"
     qualname = getattr(func, "__qualname__", None) or repr(func)
     out = {"path": f"{module}:{qualname}"}

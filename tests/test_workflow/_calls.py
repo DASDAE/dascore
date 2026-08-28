@@ -104,12 +104,22 @@ def get_patch(name: str):
         small = patch.select(distance=(0, 50))
         shifts = np.arange(len(small.get_array("distance"))) * np.timedelta64(1, "ms")
         return small.update_coords(shift_times=("distance", shifts))
+    if name == "tiled":
+        # A stack of tiles, which `reassemble` blends back.
+        return patch.tile_apply(
+            _halve, mode="stack", time=64, distance=16, samples=True
+        )
     if name == "inventory":
         from dascore.examples import inventory_patch_pair  # noqa: PLC0415
 
         return inventory_patch_pair()[0]
     msg = f"no example patch called {name!r}"
     raise LookupError(msg)
+
+
+def _halve(tiles):
+    """A function over a stack of tiles, for `tile_apply`."""
+    return tiles / 2
 
 
 def _slope_filter():
@@ -206,6 +216,9 @@ CALLS: tuple[tuple[str, str, tuple, dict], ...] = (
     ("slope_filter", "default", (Lazy(_slope_filter),), {}),
     ("wiener_filter", "default", (), {"time": 5, "samples": True}),
     ("hampel_filter", "default", (), {"time": 5, "samples": True}),
+    ("adaptive_spectral_filter", "default", (), {"time": 32, "samples": True}),
+    ("tile_apply", "default", (_halve,), {"time": 64, "distance": 16, "samples": True}),
+    ("reassemble", "tiled", (), {"taper": "triang"}),
     ("select", "default", (), {"distance": (10, 40)}),
     ("unselect", "default", (), {"distance": (10, 40)}),
     ("order", "default", (), {"distance": (30, 10, 20), "samples": True}),

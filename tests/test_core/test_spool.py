@@ -2232,7 +2232,7 @@ class TestSpoolRepr:
         ]
         rendered = str(dc.spool(patches))
         assert "➤ Tracks (2 along distance)" in rendered
-        assert "<5>" in rendered
+        assert "<5.000>" in rendered
         assert " s>" not in rendered
 
     def test_a_track_states_the_unit_its_dimension_agrees_on(self):
@@ -2247,7 +2247,18 @@ class TestSpoolRepr:
             ).convert_units(distance="m")
             for tag in ("a", "b")
         ]
-        assert "<5 m>" in str(dc.spool(patches))
+        assert "<5.000 m>" in str(dc.spool(patches))
+
+    def test_a_dimension_states_how_wide_it_is(self):
+        """
+        A dimension line states its width the way its coordinates do.
+
+        Two ends do not carry it, and the same width read off the
+        tracks under the line is said the same way there.
+        """
+        rendered = str(dc.get_example_spool())
+        assert "distance: 0.000 to 299.000 m  <299.000 m>" in rendered
+        assert "<24 s>" in rendered
 
     def test_a_dimension_of_labels_has_ends_and_no_width(self):
         """A string dimension cannot be subtracted, and must not be."""

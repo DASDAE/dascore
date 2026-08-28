@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import warnings
 from typing import Literal
 
 import numpy as np
@@ -18,6 +19,7 @@ from dascore.utils.patch import (
     patch_function,
 )
 from dascore.utils.time import dtype_time_like, to_int, to_timedelta64
+from dascore.warnings import DASCoreWarning
 
 scipy_decimate = lazy_import("scipy.signal", "decimate")
 
@@ -257,6 +259,9 @@ def resample(
     -----
     - Unless `samples` is `True`, this function requires a sampling_period.
     - The resulting Patch can be slightly shorter than the input Patch.
+    - Coordinates associated with the resampled dimension are dropped because
+      resampling cannot safely infer their new values. A `DASCoreWarning` names
+      any coordinates which were dropped.
 
     Examples
     --------
@@ -306,7 +311,18 @@ def resample(
     data, new_coord = compat.resample(
         patch.data, int(np.round(new_len)), t=coord, axis=axis, window=window
     )
-    cm = patch.coords.update(**{dim: new_coord})
+    associated = sorted(
+        name
+        for name, coord_dims in patch.coords.dim_map.items()
+        if name != dim and dim in coord_dims
+    )
+    cm = patch.coords
+    if associated:
+        names = ", ".join(associated)
+        msg = f"Resampling dimension {dim!r} dropped associated coordinates: {names}."
+        warnings.warn(msg, DASCoreWarning, stacklevel=3)
+        cm, _ = cm.drop_coords(*associated)
+    cm = cm.update(**{dim: new_coord})
     out = patch.new(data=data, coords=cm)
     # Interpolate if new sampling rate is not very close to desired sampling rate.
     if not samples and not np.isclose(new_len, np.round(new_len)):

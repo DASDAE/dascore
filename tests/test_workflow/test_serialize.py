@@ -447,10 +447,15 @@ class TestOddballs:
         """A function is encoded by where it is defined."""
         assert encode(np.mean) == {"$callable": {"path": "numpy:mean"}}
 
-    def test_callable_cannot_round_trip(self):
-        """A document does not import whatever it names."""
+    def test_callable_cannot_be_written(self):
+        """A document does not import whatever it names, so it is not written."""
+        with pytest.raises(ParameterError, match="cannot be written"):
+            encode(np.mean, mode=DOCUMENT)
+
+    def test_callable_document_cannot_be_read(self):
+        """One written elsewhere is refused on the way in as well."""
         with pytest.raises(ParameterError, match="cannot be rebuilt"):
-            decode(encode(np.mean, mode=DOCUMENT))
+            decode({"$callable": {"path": "numpy:mean"}})
 
     def test_lambdas_differ_by_source(self):
         """Two lambdas which do different things are different parameters."""
@@ -480,8 +485,8 @@ class TestOddballs:
 
     def test_partial_round_trip_refused(self):
         """A partial holds a function, so a document cannot carry it."""
-        with pytest.raises(ParameterError, match="cannot be rebuilt"):
-            decode(encode(partial(np.mean, axis=0), mode=DOCUMENT))
+        with pytest.raises(ParameterError, match="cannot be written"):
+            encode(partial(np.mean, axis=0), mode=DOCUMENT)
 
     def test_opaque_value(self):
         """A value nothing else describes is named by its class."""

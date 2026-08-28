@@ -585,14 +585,12 @@ class TestSTFT:
             .select(time=0, samples=True)
             .squeeze()
         )
-        # The first slice should have 50 padded 0s on the right, and the first
-        # 51 samples in the signal.
-        padded = patch.pad(time=(50, 0), samples=True).select(
-            time=(0, 101), samples=True
-        )
-        padded_fft = padded.dft("time", real=True, pad=False).squeeze()
+        # With no overlap the first window is the first 101 samples; the stft
+        # refers phase to the window's centre, so magnitudes are compared.
+        first = patch.select(time=(0, 101), samples=True)
+        first_fft = first.dft("time", real=True, pad=False).squeeze()
         ar1 = stft.data
-        ar2 = padded_fft.data
+        ar2 = first_fft.data
 
         factor = np.abs(ar1) / np.abs(ar2)
         assert np.allclose(factor, 1.0)
@@ -611,6 +609,66 @@ class TestSTFT:
         """Using None for overlap should be supported."""
         out = random_patch.stft(time=1, overlap=None)
         assert isinstance(out, dc.Patch)
+
+    def test_nfft_adds_bins(self, random_patch):
+        """A longer FFT samples the spectrum at more, closer frequencies."""
+        plain = random_patch.stft(time=100, samples=True)
+        padded = random_patch.stft(time=100, samples=True, nfft=256)
+        assert len(padded.get_coord("ft_time")) == 256 // 2 + 1
+        rate = 1 / dc.to_float(random_patch.get_coord("time").step)
+        assert float(padded.get_coord("ft_time").step) == pytest.approx(rate / 256)
+        # The window and hop are untouched; only the FFT of each window grew.
+        assert padded.attrs["_tile_stride_time"] == plain.attrs["_tile_stride_time"]
+        assert padded.get_coord("time") == plain.get_coord("time")
+        assert padded.attrs["_stft_mfft"] == 256
+
+    def test_nfft_default_is_the_window(self, random_patch):
+        """None means the window length, which is what stft always did."""
+        plain = random_patch.stft(time=100, samples=True)
+        explicit = random_patch.stft(time=100, samples=True, nfft=None)
+        assert plain.attrs["_stft_mfft"] == 100
+        assert explicit.equals(plain)
+
+    def test_nfft_in_units(self, random_patch):
+        """A quantity is read through the coordinate, whatever samples says."""
+        by_count = random_patch.stft(time=100, samples=True, nfft=256)
+        by_units = random_patch.stft(time=100, samples=True, nfft=1.024 * second)
+        assert by_units.attrs["_stft_mfft"] == 256
+        assert by_units.equals(by_count)
+
+    def test_nfft_as_a_timedelta(self, random_patch):
+        """A native duration is read through the coordinate like a quantity."""
+        out = random_patch.stft(time=100, samples=True, nfft=np.timedelta64(1024, "ms"))
+        assert out.attrs["_stft_mfft"] == 256
+
+    def test_fractional_nfft_refused(self, random_patch):
+        """256.9 points is not an FFT length; it is not rounded quietly."""
+        with pytest.raises(ParameterError, match="whole number of samples"):
+            random_patch.stft(time=100, samples=True, nfft=256.9)
+
+    def test_nfft_below_window_refused(self, random_patch):
+        """A shorter FFT would drop data, which is not a transform."""
+        with pytest.raises(ParameterError, match="at least the window length"):
+            random_patch.stft(time=100, samples=True, nfft=50)
+
+    def test_nfft_is_interpolation(self, random_patch):
+        """Padding adds bins between the old ones; the old ones are unchanged."""
+        plain = random_patch.stft(time=100, samples=True)
+        padded = random_patch.stft(time=100, samples=True, nfft=200)
+        axis = padded.get_axis("ft_time")
+        every_other = np.take(padded.data, np.arange(0, 101, 2), axis=axis)
+        assert np.allclose(every_other, plain.data)
+
+    def test_complex_input_round_trips(self, random_patch):
+        """Complex data is transformed two-sided, centred, and comes back."""
+        patch = random_patch.new(data=random_patch.data * (1 + 1j))
+        out = patch.stft(time=16, samples=True)
+        freqs = out.get_coord("ft_time").values
+        assert len(freqs) == 16
+        assert freqs[0] < 0 < freqs[-1]
+        assert out.attrs["_stft_fft_mode"] == "centered"
+        back = out.istft()
+        assert back.equals(patch, close=True)
 
     def test_non_dim_coord_associated_with_transform(self):
         """See #611."""
@@ -660,11 +718,24 @@ class TestInverseSTFT:
         istft = stft.istft()
         assert patch.equals(istft, close=True)
 
+    def test_round_trip_with_nfft(self, random_patch):
+        """A padded FFT inverts to the same data; the padding is dropped."""
+        pa1 = random_patch.stft(time=100, samples=True, nfft=256)
+        pa2 = pa1.istft()
+        assert pa2.equals(random_patch, close=True)
+        assert not any(k.startswith("_stft") for k in dict(pa2.attrs))
+
     def test_non_transformed_raises(self, random_patch):
         """Test that a patch that hasn't undergone stft can't be used."""
         msg = "undergone stft"
         with pytest.raises(PatchError, match=msg):
             random_patch.istft()
+
+    def test_uninvertible_window_raises(self, random_patch):
+        """Abutting hann windows leave gaps: the stft is not invertible."""
+        out = random_patch.stft(time=16, samples=True, overlap=None)
+        with pytest.raises(ParameterError, match="cannot be inverted"):
+            out.istft()
 
     def test_detrended_raise(self, chirp_stft_detrend_patch):
         """Since detrended stft can't be inverted it should raise."""
@@ -697,22 +768,22 @@ class TestInverseSTFTAssociatedCoords:
         assert np.allclose(out.data, patch.data)
 
     def test_coord_on_transformed_dim(self, patch_with_coords):
-        """A coord on the transformed dim is dropped by stft, not restored."""
+        """A coord on the transformed dim rides with the windows and comes back."""
         patch = patch_with_coords.drop_coords("depth", "note")
         stft_patch = patch.stft(time=0.1)
         assert "tlabel" not in stft_patch.coords.coord_map
+        assert "_tile_source_time__tlabel" in stft_patch.coords.coord_map
         out = stft_patch.istft()
-        assert "tlabel" not in out.coords.coord_map
         assert out.dims == patch.dims
+        assert out.coords == patch.coords
         assert np.allclose(out.data, patch.data)
 
     def test_multiple_associated_coords(self, patch_with_coords):
-        """Several associated coords round trip, minus the transformed one."""
+        """Several associated coords round trip, the transformed one included."""
         patch = patch_with_coords
         out = patch.stft(time=0.1).istft()
-        expected = patch.drop_coords("tlabel")
         assert out.dims == patch.dims
-        assert out.coords == expected.coords
+        assert out.coords == patch.coords
         assert np.allclose(out.data, patch.data)
 
     def test_coord_on_untransformed_time(self, patch_with_coords):
@@ -720,7 +791,7 @@ class TestInverseSTFTAssociatedCoords:
         patch = patch_with_coords
         out = patch.stft(distance=4).istft()
         assert out.dims == patch.dims
-        assert out.coords == patch.drop_coords("depth").coords
+        assert out.coords == patch.coords
         assert np.allclose(out.data, patch.data)
 
     def test_coords_on_stft_dims_dropped(self, patch_with_coords):
