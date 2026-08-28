@@ -61,7 +61,7 @@ class TestWindowSize:
 
     def test_require_odd_refuses_even_samples(self, simple_patch):
         """Given in samples, an even count is the caller's to fix."""
-        with pytest.raises(ParameterError, match="windows must be odd"):
+        with pytest.raises(ParameterError, match="odd number"):
             resolve_window(simple_patch, {"time": 4}, samples=True, require_odd=True)
 
     def test_require_odd_passes_odd_samples(self, simple_patch):

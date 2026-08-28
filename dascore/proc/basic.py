@@ -9,6 +9,7 @@ from typing import Any, Literal
 import numpy as np
 import pandas as pd
 from scipy.fft import next_fast_len
+from scipy.ndimage import correlate1d
 
 from dascore.compat import array
 from dascore.constants import PatchType, samples_arg_description
@@ -24,6 +25,7 @@ from dascore.models import ArrayLike
 from dascore.units import Quantity, get_quantity
 from dascore.utils.array import _apply_binary_ufunc
 from dascore.utils.array_api import (
+    _real_dtype,
     array_namespace,
     asarray_like,
     backend_name,
@@ -34,13 +36,14 @@ from dascore.utils.array_api import (
 )
 from dascore.utils.docs import compose_docstring
 from dascore.utils.misc import _get_nullish
-from dascore.utils.moving import move_max, move_mean
+from dascore.utils.moving import move_max
 from dascore.utils.patch import (
     align_patch_coords,
     get_dim_axis_value,
     patch_function,
 )
 from dascore.utils.time import dtype_time_like
+from dascore.utils.window import resolve_window
 from dascore.workflow.processor import (
     PatchProcessor,
     register_implementation,
@@ -531,24 +534,47 @@ class Normalize(PatchProcessor):
         axis = meta.get_axis(self.dim)
         if self.window is None:
             return _normalize_kernel(data, axis, self.norm)
-        coord = meta.coords.coord_map[self.dim]
-        window = _get_odd_window(coord, self.window, self.samples, self.norm)
-        return _windowed_normalize_kernel(data, axis, self.norm, window)
+        if self.norm == "bit":
+            msg = (
+                "normalize(norm='bit') scales each sample by its own magnitude, "
+                "so a window means nothing. Drop the window, or pick another norm."
+            )
+            raise ParameterError(msg)
+        # A window has to be centered on the sample it scales, so it must
+        # hold an odd number of them.
+        window = resolve_window(
+            meta,
+            {self.dim: self.window},
+            samples=self.samples,
+            allow_multiple=False,
+            require_odd=True,
+            require_evenly_sampled=False,
+            enforce_lt_coord=True,
+        )
+        return _windowed_normalize_kernel(data, axis, self.norm, window.size[0])
 
 
 register_implementation("normalize", Normalize)
 
 
-def _get_odd_window(coord, window, samples: bool, norm: str) -> int:
-    """Return the window length in samples, rounded up to an odd count."""
-    if norm == "bit":
-        msg = (
-            "normalize(norm='bit') scales each sample by its own magnitude, "
-            "so a window means nothing. Drop the window, or pick another norm."
-        )
-        raise ParameterError(msg)
-    count = coord.get_sample_count(window, samples=samples, enforce_lt_coord=True)
-    return count + 1 if count % 2 == 0 else count
+def _window_mean(data, window: int, axis: int):
+    """
+    Return the mean of a centered window, summed a window at a time.
+
+    Not `dascore.utils.moving.move_mean`, and not for want of trying: both
+    engines behind it run one accumulator along the axis, adding the sample
+    which enters a window and subtracting the one which leaves. Squaring
+    first, as `l2` does, squares the data's dynamic range, and what the
+    accumulator then loses to cancellation is unbounded next to a window
+    which should have come out near zero -- a mute, a dead channel, the
+    quiet before an arrival. It reads as a small negative number, whose
+    square root is null, so a single loud sample can blank the rest of its
+    trace. Correlating against an explicit kernel sums each window on its
+    own and cannot drift, at the cost of reading the window rather than
+    stepping it.
+    """
+    weights = np.full(window, 1.0 / window, dtype=data.dtype)
+    return correlate1d(data, weights, axis=axis, mode="reflect")
 
 
 def _windowed_normalize_kernel(data, axis: int, norm: str, window: int):
@@ -566,11 +592,17 @@ def _windowed_normalize_kernel(data, axis: int, norm: str, window: int):
         warn_numpy_fallback("normalize", backend_name(data))
         data = to_numpy(data)
     data = _as_float(data)
-    # Nulls are read as zeros so the window sums skip them, and counted
-    # separately so they do not drag the mean toward zero either. The
-    # engine is pinned rather than chosen so that installing bottleneck
-    # cannot change what a patch normalizes to at the edges.
-    valid = ~np.isnan(data)
+    if data.dtype == np.float16:
+        # The moving windows are scipy filters, which have no float16.
+        data = data.astype(np.float32)
+    # Anything not finite is read as zero so the window sums skip it, and
+    # counted separately so it does not drag the mean toward zero either.
+    # Infinities are excluded along with the nulls because these windows
+    # are computed by running arithmetic: one infinity inside a running
+    # sum leaves NaN behind it long after the window has moved past.
+    # The engine is pinned rather than chosen so that installing
+    # bottleneck cannot change what a patch normalizes to at the edges.
+    valid = np.isfinite(data)
     filled = np.where(valid, data, 0.0)
     if norm == "max":
         # An absolute value is never negative, so a null read as zero
@@ -579,15 +611,15 @@ def _windowed_normalize_kernel(data, axis: int, norm: str, window: int):
     else:
         order = int(norm[-1])
         powers = np.abs(filled) ** float(order)
-        counted = move_mean(
-            valid.astype(powers.dtype), window, axis=axis, engine="scipy"
-        )
-        summed = move_mean(powers, window, axis=axis, engine="scipy")
+        counted = _window_mean(valid.astype(powers.dtype), window, axis)
+        summed = _window_mean(powers, window, axis)
         # A window of nothing but nulls sums to zero as well, so it falls
         # through to the zero divisor guard below rather than dividing here.
         safe_count = np.where(counted == 0, 1.0, counted)
         divisor = (summed / safe_count) ** (1.0 / order)
-    out = data / np.where(divisor == 0, 1.0, divisor)
+    # Not `== 0`: a window whose samples are all zero can leave a mean a
+    # hair below it, which a fractional power would turn into a null.
+    out = data / np.where(divisor <= 0, 1.0, divisor)
     return out if numpy_input else asarray_like(out, original)
 
 
@@ -621,6 +653,13 @@ def pow_coord(patch: PatchType, relative: bool = True, **kwargs) -> PatchType:
       is one, two, three ... raised to the power. Counting from one rather
       than zero is what keeps a power from zeroing the first sample.
 
+    - That makes the curve a function of the sample, not of the physical
+      span, so the same patch resampled gains differently: the sample one
+      second in is the 250th at 250 Hz and the 125th at 125 Hz. Within one
+      patch every trace is gained identically, which is what makes their
+      amplitudes comparable; across patches of different sample rates they
+      are not, so gain before resampling or not at all.
+
     - That curve is a ratio of coordinate values and so carries no units,
       which is why `relative=True` leaves the data units alone. An absolute
       curve does carry them, so `relative=False` multiplies the data units by
@@ -646,23 +685,36 @@ def pow_coord(patch: PatchType, relative: bool = True, **kwargs) -> PatchType:
     """
     dim_axis_values = get_dim_axis_value(patch, kwargs=kwargs, allow_multiple=True)
     data = _as_float(patch.data)
+    # The curve is built in the data's own precision, so a float32 patch is
+    # not doubled in size by being gained.
+    gain_dtype = np.float32 if _real_dtype(data) == np.float32 else np.float64
     data_units = get_quantity(patch.attrs.data_units)
     for dim, axis, power in dim_axis_values:
-        coord = patch.get_coord(dim)
-        curve = _coord_gain_curve(coord, float(power), relative, dim)
+        # Sorted, because a gain curve says "further along the coordinate
+        # means more gain", which an unsorted coordinate cannot mean.
+        coord = patch.get_coord(dim, require_sorted=True)
+        curve = _coord_gain_curve(coord, float(power), relative, dim, gain_dtype)
         shape = [1] * len(patch.dims)
         shape[axis] = curve.size
         data = data * asarray_like(curve.reshape(shape), data)
         coord_units = get_quantity(coord.units)
-        if not relative and data_units is not None and coord_units is not None:
-            data_units = data_units * coord_units ** float(power)
+        if not relative and coord_units is not None:
+            # Data carrying no units is dimensionless, as it is everywhere
+            # else units are combined, rather than a reason to drop the
+            # coordinate's.
+            gain_units = coord_units ** float(power)
+            data_units = gain_units if data_units is None else data_units * gain_units
     out = patch.new(data=data)
     if data_units != get_quantity(patch.attrs.data_units):
-        out = out.update_attrs(data_units=data_units)
+        # The units moved, so whatever the data was called -- velocity,
+        # strain rate -- it is not that any more.
+        out = out.update_attrs(data_units=data_units, data_type="")
     return out
 
 
-def _coord_gain_curve(coord, power: float, relative: bool, dim: str) -> np.ndarray:
+def _coord_gain_curve(
+    coord, power: float, relative: bool, dim: str, dtype
+) -> np.ndarray:
     """Return the gain curve a coordinate raised to a power makes."""
     values = coord.values
     if not relative:
@@ -673,12 +725,26 @@ def _coord_gain_curve(coord, power: float, relative: bool, dim: str) -> np.ndarr
                 "has nothing to do with the data. Use relative=True."
             )
             raise ParameterError(msg)
-        return np.asarray(values, dtype=np.float64) ** power
+        return np.asarray(values, dtype=dtype) ** power
     if values.size < 2:
         # A lone sample is the start of the coordinate, and its gain is one.
-        return np.ones(values.size)
+        return np.ones(values.size, dtype=dtype)
     step = coord.step if coord.evenly_sampled else values[1] - values[0]
-    return ((values - values[0]) / step + 1.0) ** power
+    with np.errstate(all="ignore"):
+        offsets = np.asarray((values - values[0]) / step, dtype=dtype)
+        curve = (offsets + 1.0) ** power
+    if not np.all(np.isfinite(curve)):
+        # One guard for every way the arithmetic can fail: a coordinate
+        # holding no values, a first step of zero, a fractional power of a
+        # negative offset. Naming them apart would not help the caller,
+        # who has one coordinate to look at either way.
+        msg = (
+            f"pow_coord cannot build a gain curve from '{dim}' raised to "
+            f"{power}: the result is not finite everywhere. The coordinate "
+            f"has to hold values, and its first step cannot be zero."
+        )
+        raise ParameterError(msg)
+    return curve
 
 
 def _normalize_kernel(data, axis: int, norm: str):

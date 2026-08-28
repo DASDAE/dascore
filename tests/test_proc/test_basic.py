@@ -12,11 +12,13 @@ from scipy.fft import next_fast_len
 import dascore as dc
 from dascore import get_example_patch
 from dascore.exceptions import (
+    CoordError,
     IncompatiblePatchError,
     ParameterError,
     PatchBroadcastError,
 )
 from dascore.utils.misc import _merge_tuples
+from dascore.warnings import NumpyFallbackWarning
 
 OP_NAMES = ("add", "sub", "pow", "truediv", "floordiv", "mul", "mod")
 TEST_OPS = tuple(getattr(operator, x) for x in OP_NAMES)
@@ -33,11 +35,12 @@ def _windowed_norm_reference(data, axis, norm, window):
     pad = [(half, half) if i == axis else (0, 0) for i in range(data.ndim)]
     padded = np.pad(data, pad, mode="symmetric")
     views = np.lib.stride_tricks.sliding_window_view(padded, window, axis=axis)
+    magnitudes = np.where(np.isfinite(views), np.abs(views), np.nan)
     if norm == "max":
-        divisor = np.nanmax(np.abs(views), axis=-1)
+        divisor = np.nanmax(magnitudes, axis=-1)
     else:
         order = int(norm[-1])
-        divisor = np.nanmean(np.abs(views) ** order, axis=-1) ** (1 / order)
+        divisor = np.nanmean(magnitudes**order, axis=-1) ** (1 / order)
     return data / np.where(divisor == 0, 1, divisor)
 
 
@@ -293,22 +296,32 @@ class TestWindowedNormalize:
 
     @pytest.mark.parametrize("norm", ["l1", "l2", "max"])
     @pytest.mark.parametrize("window", [3, 21])
-    def test_matches_reference(self, random_patch, norm, window):
+    @pytest.mark.parametrize("dim", ["time", "distance"])
+    def test_matches_reference(self, random_patch, norm, window, dim):
         """The window norms should match windows written out one by one."""
-        axis = random_patch.get_axis("time")
+        # Shifted negative, or every norm is the identity on its absolute
+        # value and the rectification goes untested.
+        patch = random_patch.new(data=np.asarray(random_patch.data) - 0.5)
+        axis = patch.get_axis(dim)
         expected = _windowed_norm_reference(
-            np.asarray(random_patch.data, dtype=np.float64), axis, norm, window
+            np.asarray(patch.data, dtype=np.float64), axis, norm, window
         )
 
-        out = random_patch.normalize("time", norm=norm, window=window, samples=True)
+        out = patch.normalize(dim, norm=norm, window=window, samples=True)
 
         assert np.allclose(out.data, expected)
 
-    def test_even_window_is_raised_to_odd(self, random_patch):
+    def test_even_window_in_units_is_raised_to_odd(self, random_patch):
         """An even window cannot be centered, so it grows by one."""
-        even = random_patch.normalize("time", window=4, samples=True)
+        # The example patch is sampled at 4 ms, so 16 ms is four samples.
+        even = random_patch.normalize("time", window=0.016)
         odd = random_patch.normalize("time", window=5, samples=True)
         assert np.allclose(even.data, odd.data)
+
+    def test_even_window_in_samples_is_refused(self, random_patch):
+        """An exact sample count which cannot be centered is refused."""
+        with pytest.raises(ParameterError, match="odd number"):
+            random_patch.normalize("time", window=4, samples=True)
 
     def test_window_units_match_samples(self, random_patch):
         """A window in seconds should be the sample count it stands for."""
@@ -354,10 +367,103 @@ class TestWindowedNormalize:
     def test_nan_does_not_contaminate_window(self, random_patch, norm):
         """A single NaN should not blank every sample whose window holds it."""
         patch = _patch_with_nan(random_patch)
+        axis = patch.get_axis("time")
+        expected = _windowed_norm_reference(
+            np.asarray(patch.data, dtype=np.float64), axis, norm, 11
+        )
 
         out = patch.normalize("time", norm=norm, window=11, samples=True)
 
         assert np.isnan(out.data).sum() == 1
+        # And the windows which held the null were divided by a norm taken
+        # over the samples which were not null.
+        finite = ~np.isnan(expected)
+        assert np.allclose(out.data[finite], expected[finite])
+
+    @pytest.mark.parametrize("norm", ["l1", "l2", "max"])
+    def test_infinity_stays_in_its_own_window(self, random_patch, norm):
+        """An infinity should not blank the samples the window moved on to."""
+        data = np.asarray(random_patch.data, dtype=np.float64).copy()
+        data[0, 5] = np.inf
+        patch = random_patch.new(data=data)
+
+        out = patch.normalize("time", norm=norm, window=5, samples=True)
+
+        assert np.isinf(out.data[0, 5])
+        # Two windows past the infinity, everything is finite again.
+        assert np.all(np.isfinite(out.data[0, 8:]))
+        assert np.all(np.isfinite(out.data[1:, :]))
+
+    @pytest.mark.parametrize("norm", ["l1", "l2", "max"])
+    def test_loud_sample_beside_a_quiet_stretch(self, norm):
+        """A muted or quiet stretch must survive a loud sample near it."""
+        # A running window sum, which is how a moving mean is usually
+        # computed, does not come back to zero after a large value leaves
+        # it. Squared, as l2 does, what is left reads as a small negative
+        # number, and its root is null.
+        data = np.zeros((1, 40))
+        data[0, :3] = [2.0, -0.5, 0.3]
+        patch = dc.Patch(
+            data=data,
+            coords={"distance": np.arange(1.0), "time": np.arange(40.0)},
+            dims=("distance", "time"),
+        )
+        expected = _windowed_norm_reference(data, 1, norm, 5)
+
+        out = patch.normalize("time", norm=norm, window=5, samples=True)
+
+        assert np.all(np.isfinite(out.data))
+        assert np.allclose(out.data, expected)
+
+    @pytest.mark.parametrize("norm", ["l1", "l2"])
+    def test_muted_tail_stays_finite(self, norm):
+        """The same, for the mute at the end of a record."""
+        data = np.random.default_rng(0).normal(size=(20, 400))
+        data[:, 300:] = 0.0
+        patch = dc.Patch(
+            data=data,
+            coords={"distance": np.arange(20.0), "time": np.arange(400.0)},
+            dims=("distance", "time"),
+        )
+
+        out = patch.normalize("time", norm=norm, window=11, samples=True)
+
+        assert np.all(np.isfinite(out.data))
+        assert np.all(out.data[:, 320:] == 0)
+
+    def test_float16(self, random_patch):
+        """Narrow floats should be promoted rather than refused."""
+        patch = random_patch.new(data=np.asarray(random_patch.data, dtype=np.float16))
+
+        out = patch.normalize("time", window=11, samples=True)
+
+        assert np.issubdtype(out.data.dtype, np.floating)
+        assert np.all(np.isfinite(out.data))
+
+    def test_uneven_coord_in_samples(self, random_patch):
+        """A window in samples needs no spacing, so an uneven coord is fine."""
+        values = np.array([0.0, 1.0, 3.0, 7.0, 15.0])
+        patch = dc.Patch(
+            data=np.arange(15.0).reshape(3, 5),
+            coords={"distance": np.arange(3.0), "time": values},
+            dims=("distance", "time"),
+        )
+
+        out = patch.normalize("time", window=3, samples=True)
+
+        expected = _windowed_norm_reference(patch.data, 1, "l2", 3)
+        assert np.allclose(out.data, expected)
+
+    def test_uneven_coord_in_units_raises(self, random_patch):
+        """A window in units cannot be converted without an even step."""
+        values = np.array([0.0, 1.0, 3.0, 7.0, 15.0])
+        patch = dc.Patch(
+            data=np.ones((3, 5)),
+            coords={"distance": np.arange(3.0), "time": values},
+            dims=("distance", "time"),
+        )
+        with pytest.raises(CoordError):
+            patch.normalize("time", window=2.0)
 
     def test_zero_window_stays_zero(self, random_patch):
         """Windows holding nothing but zeros should come back unscaled."""
@@ -381,19 +487,37 @@ class TestWindowedNormalize:
 
     def test_quantity_window(self, random_patch):
         """A window given as a quantity should be the length it names."""
-        with_units = random_patch.normalize("time", window=dc.get_quantity("0.02 s"))
+        # Milliseconds, so a dropped unit is 1000 times the window asked for
+        # rather than the same number the bare float would have meant.
+        with_units = random_patch.normalize("time", window=dc.get_quantity("20 ms"))
         bare = random_patch.normalize("time", window=0.02)
         assert np.allclose(with_units.data, bare.data)
 
     @pytest.mark.parametrize("norm", ["l1", "l2", "max"])
     def test_complex_data(self, random_patch, norm):
         """Complex data should be scaled by the magnitude of its window."""
-        patch = random_patch.new(data=random_patch.data.astype(np.complex128))
+        real = np.asarray(random_patch.data, dtype=np.float64)
+        patch = random_patch.new(data=real - 0.5 + 1j * np.flip(real, axis=1))
+        expected = _windowed_norm_reference(patch.data, 1, norm, 11)
 
         out = patch.normalize("time", norm=norm, window=11, samples=True)
 
         assert np.issubdtype(out.data.dtype, np.complexfloating)
-        assert not np.any(np.isnan(out.data))
+        assert np.allclose(out.data, expected)
+
+    def test_non_numpy_backend_warns(self, random_patch):
+        """A lazy or device array is pulled to numpy, and says so."""
+        dask_array = pytest.importorskip("dask.array")
+        data = np.asarray(random_patch.data, dtype=np.float64)
+        patch = random_patch.new(data=dask_array.from_array(data, chunks=(100, 500)))
+        expected = _windowed_norm_reference(data, 1, "l2", 11)
+
+        with pytest.warns(NumpyFallbackWarning, match="normalize"):
+            out = patch.normalize("time", window=11, samples=True)
+
+        assert np.allclose(np.asarray(out.data), expected)
+        # The fallback converts back, so the caller keeps its backend.
+        assert not isinstance(out.data, np.ndarray)
 
     def test_bad_norm_raises(self, random_patch):
         """An unsupported norm should raise, window or no window."""
@@ -443,7 +567,9 @@ class TestPowCoord:
 
     def test_uneven_coord_uses_first_step(self, random_patch):
         """An unevenly sampled coordinate should still count from one."""
-        values = np.array([0.0, 1.0, 3.0, 7.0, 15.0])
+        # A first step of two and an origin of ten, so neither dividing by
+        # the step nor subtracting the origin can be skipped unnoticed.
+        values = np.array([10.0, 12.0, 16.0, 24.0])
         patch = dc.Patch(
             data=np.ones((values.size, 3)),
             coords={"distance": values, "time": np.arange(3.0)},
@@ -453,13 +579,72 @@ class TestPowCoord:
         out = patch.pow_coord(distance=2)
 
         ratio = (out.data / patch.data)[:, 0]
-        assert np.allclose(ratio, (values + 1.0) ** 2)
+        assert np.allclose(ratio, ((values - 10.0) / 2.0 + 1.0) ** 2)
+
+    def test_offset_coord_counts_from_its_own_start(self, random_patch):
+        """A coordinate which does not start at zero still gains from one."""
+        patch = random_patch.update_coords(
+            distance=random_patch.get_array("distance") + 1000.0
+        )
+
+        out = patch.pow_coord(distance=2)
+
+        length = patch.shape[patch.get_axis("distance")]
+        ratio = (out.data / patch.data)[:, 0]
+        assert np.allclose(ratio, (np.arange(length) + 1.0) ** 2)
+
+    def test_negative_power(self, random_patch):
+        """A negative power undoes a positive one."""
+        out = random_patch.pow_coord(time=2).pow_coord(time=-2)
+        assert np.allclose(out.data, random_patch.data)
 
     def test_single_sample_coord(self, random_patch):
         """A coordinate of one sample is its own start, so nothing scales."""
         patch = random_patch.select(time=0, samples=True)
         out = patch.pow_coord(time=2)
         assert np.allclose(out.data, patch.data)
+
+    def test_single_sample_coord_without_a_step(self, random_patch):
+        """The same, for a lone sample which has no step to divide by."""
+        patch = dc.Patch(
+            data=np.ones((3, 1)),
+            coords={"distance": np.arange(3.0), "time": np.array([7.0])},
+            dims=("distance", "time"),
+        )
+        assert patch.get_coord("time").step is None
+
+        out = patch.pow_coord(time=2)
+
+        assert np.allclose(out.data, patch.data)
+
+    def test_unsorted_coord_raises(self, random_patch):
+        """A gain curve cannot mean anything on an unsorted coordinate."""
+        patch = dc.Patch(
+            data=np.ones((1, 4)),
+            coords={
+                "distance": np.arange(1.0),
+                "time": np.array([0.0, 1.0, -2.0, 2.0]),
+            },
+            dims=("distance", "time"),
+        )
+        with pytest.raises(CoordError, match="sorted"):
+            patch.pow_coord(time=0.5)
+
+    def test_repeated_coord_values_raise(self, random_patch):
+        """A repeated value means a step of zero, which has no curve."""
+        patch = dc.Patch(
+            data=np.ones((1, 3)),
+            coords={"distance": np.arange(1.0), "time": np.array([0.0, 0.0, 1.0])},
+            dims=("distance", "time"),
+        )
+        with pytest.raises((CoordError, ParameterError)):
+            patch.pow_coord(time=2)
+
+    @pytest.mark.parametrize("dtype", [np.float32, np.float64])
+    def test_float_dtype_preserved(self, random_patch, dtype):
+        """Gaining a patch should not double the memory it takes."""
+        patch = random_patch.new(data=np.asarray(random_patch.data, dtype=dtype))
+        assert patch.pow_coord(time=2).data.dtype == dtype
 
     def test_relative_false_uses_absolute_values(self, random_patch):
         """Absolute values leave the coordinate where it actually sits."""
@@ -490,10 +675,17 @@ class TestPowCoord:
         expected = dc.get_quantity("m/s") * dc.get_quantity("m") ** 2
         assert dc.get_quantity(out.attrs.data_units) == expected
 
-    def test_unitless_patch_stays_unitless(self, random_patch):
-        """With no data units there is nothing for the coordinate to scale."""
+    def test_unitless_patch_takes_the_coord_units(self, random_patch):
+        """Data with no units is dimensionless, not a reason to drop the coord's."""
         out = random_patch.pow_coord(distance=2, relative=False)
-        assert out.attrs.data_units is None
+        assert dc.get_quantity(out.attrs.data_units) == dc.get_quantity("m") ** 2
+
+    def test_absolute_curve_clears_data_type(self, random_patch):
+        """Data whose units moved is no longer whatever it was called."""
+        patch = random_patch.set_units("m/s").update_attrs(data_type="velocity")
+
+        assert patch.pow_coord(distance=2).attrs.data_type == "velocity"
+        assert patch.pow_coord(distance=2, relative=False).attrs.data_type == ""
 
     def test_history_recorded(self, random_patch):
         """The call should be written into the patch history."""
@@ -503,13 +695,26 @@ class TestPowCoord:
 
     def test_bad_dim_raises(self, random_patch):
         """A dimension the patch does not have should raise."""
-        with pytest.raises((ParameterError, KeyError)):
+        with pytest.raises(ParameterError):
             random_patch.pow_coord(not_a_dim=2)
 
     def test_no_dim_raises(self, random_patch):
         """A call which names no dimension has nothing to scale by."""
         with pytest.raises(ParameterError, match="at least one dimension"):
             random_patch.pow_coord()
+
+    def test_non_numpy_backend(self, random_patch):
+        """A lazy array is scaled where it is, with no pull to numpy."""
+        dask_array = pytest.importorskip("dask.array")
+        data = np.asarray(random_patch.data, dtype=np.float64)
+        patch = random_patch.new(data=dask_array.from_array(data, chunks=(100, 500)))
+        length = data.shape[1]
+
+        out = patch.pow_coord(time=2)
+
+        expected = data * (np.arange(length) + 1.0) ** 2
+        assert np.allclose(np.asarray(out.data), expected)
+        assert not isinstance(out.data, np.ndarray)
 
 
 class TestStandardize:

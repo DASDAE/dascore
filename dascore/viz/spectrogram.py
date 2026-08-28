@@ -122,7 +122,7 @@ def spectrogram(
     Notes
     -----
     This is [Patch.stft](`dascore.Patch.stft`) followed by
-    [Patch.viz.waterfall](`dascore.Patch.viz.waterfall`), with one other
+    [Patch.viz.waterfall](`dascore.viz.waterfall`), with one other
     dimension averaged away, and the values drawn are |STFT|² in the scaling
     `stft` uses. Before DASCore 0.1.22 it called `scipy.signal.spectrogram`
     directly, which differed in more than scaling: it removed the mean of

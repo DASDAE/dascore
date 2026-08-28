@@ -283,11 +283,21 @@ def resolve_window(
         if require_odd and count % 2 != 1:
             if in_samples:
                 msg = (
-                    f"For clean median calculation, dimension windows must be odd "
-                    f"but {dim} has a value of {count} samples."
+                    f"Windows must hold an odd number of samples, so that one "
+                    f"can be centered on the sample it belongs to, but {dim} "
+                    f"has a value of {count} samples."
                 )
                 raise ParameterError(msg)
             count += 1
+            # Rounding up can be what pushes a window past its coordinate,
+            # so the length is checked again rather than only before.
+            if enforce_lt_coord and count > len(coord):
+                msg = (
+                    f"A window of {value} along {dim} rounds up to {count} "
+                    f"samples to be centered, which is longer than the "
+                    f"{len(coord)} samples {dim} has."
+                )
+                raise ParameterError(msg)
         sizes.append(count)
     size = tuple(sizes)
     strides = _resolve_stride(
