@@ -46,6 +46,11 @@ class TestGetWindow:
         with pytest.raises(ParameterError, match="7 samples, not 8"):
             get_window(np.ones(7), 8)
 
+    def test_scipy_parameter_errors_are_scipy_errors(self):
+        """A window scipy knows but cannot build with those parameters says why."""
+        with pytest.raises(ValueError, match="NW"):
+            get_window(("dpss", 2.5), 3)
+
     def test_unknown_name_refused(self):
         """A name nobody knows says what the options are."""
         with pytest.raises(ParameterError, match="not a known window"):
@@ -82,6 +87,11 @@ class TestGetRamp:
         ramp = get_ramp(shape, length, complementary=True)
         np.testing.assert_allclose(ramp + ramp[::-1], 1, atol=1e-12)
         assert np.all(ramp >= 0) and np.all(ramp <= 1)
+
+    def test_integer_array_ramp(self):
+        """An integer array is weights too, once complementary."""
+        ramp = get_ramp(np.arange(7), 3, complementary=True)
+        np.testing.assert_allclose(ramp + ramp[::-1], 1)
 
     def test_complementary_keeps_the_shape_monotone(self):
         """Scaling does not turn a rise into a wobble."""
@@ -120,6 +130,28 @@ class TestGetTaper:
     def test_odd_sizes_are_fine(self):
         """A tile need not be even."""
         assert get_taper("triang", (7, 9), (3, 4)).shape == (7, 9)
+
+    def test_array_window(self):
+        """An array window builds a taper, uncached."""
+        taper = get_taper(np.hanning(7), (8,), (3,))
+        assert taper.shape == (8,)
+        assert taper[4] == 1.0
+
+    def test_tuple_with_a_list_parameter(self):
+        """A scipy tuple carrying a list is not hashable, and still builds."""
+        taper = get_taper(("general_cosine", [0.5, 0.5]), (8,), (3,))
+        assert taper.shape == (8,)
+
+    def test_unknown_window_refused_even_at_zero_overlap(self):
+        """No ramp is needed, and the name is still checked."""
+        with pytest.raises(ParameterError, match="not a known window"):
+            get_taper("windowsXP", (8,), (0,))
+
+    def test_two_dimensional_is_float32_throughout(self):
+        """Edges multiply in float32, so the corner is the float32 product."""
+        taper = get_taper("triang", (8, 8), (2, 2))
+        corner = np.float32(1 / 3) * np.float32(1 / 3)
+        assert taper[0, 0] == corner
 
     def test_copies_are_handed_out(self):
         """Writing to one taper does not change the next."""

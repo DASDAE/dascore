@@ -74,6 +74,10 @@ def get_window(window: Any, size: int, *, fftbins: bool = False) -> np.ndarray:
     try:
         return _scipy_get_window(window, size, fftbins=fftbins)
     except ValueError as exc:
+        # scipy says "Unknown window type" for a name it lacks; its other
+        # complaints -- a parameter out of range -- are its own to make.
+        if "Unknown window type" not in str(exc):
+            raise
         msg = (
             f"'{window}' is not a known window type. Options are: "
             f"{sorted(WINDOW_FUNCTIONS)}, or any name scipy.signal.get_window takes."
@@ -102,6 +106,8 @@ def get_ramp(window: Any, length: int, *, complementary: bool = False) -> np.nda
     """
     ramp = get_window(window, 2 * length + 1)[:length]
     if complementary and length:
+        # Weights, whatever the window was given as.
+        ramp = np.asarray(ramp, dtype=np.float64)
         total = ramp + ramp[::-1]
         ramp = np.divide(ramp, total, out=np.full_like(ramp, 0.5), where=total > 0)
         # A window such as blackman touches zero from below by rounding; a
@@ -110,11 +116,10 @@ def get_ramp(window: Any, length: int, *, complementary: bool = False) -> np.nda
     return ramp
 
 
-@lru_cache(maxsize=64)
-def _cached_taper(
+def _build_taper(
     window: Any, size: tuple[int, ...], overlap: tuple[int, ...]
 ) -> np.ndarray:
-    """Build the taper `get_taper` hands out copies of."""
+    """Build a taper; see `get_taper`."""
     if len(size) != len(overlap):
         msg = "size and overlap must have the same length."
         raise ParameterError(msg)
@@ -126,15 +131,34 @@ def _cached_taper(
         raise ParameterError(msg)
     edges = []
     for length, over in zip(size, overlap):
-        edge = np.ones(length, dtype=np.float64)
+        # float32 throughout, edges and product alike, so the taper is the
+        # one the filter has always used to the last bit.
+        edge = np.ones(length, dtype=np.float32)
+        # Built even when the overlap is zero, so a window nothing knows is
+        # refused rather than never asked for.
+        ramp = get_ramp(window, over, complementary=True).astype(np.float32)
         if over:
-            ramp = get_ramp(window, over, complementary=True)
             edge[:over] = ramp
             edge[length - over :] = ramp[::-1]
         edges.append(edge)
     # Separable: the taper is the outer product of its edges.
     taper = math.prod(np.ix_(*edges)) if len(edges) > 1 else edges[0]
     return np.asarray(taper, dtype=np.float32)
+
+
+@lru_cache(maxsize=64)
+def _cached_taper(
+    window: Any, size: tuple[int, ...], overlap: tuple[int, ...]
+) -> np.ndarray:
+    """The tapers named by something hashable, built once each."""
+    return _build_taper(window, size, overlap)
+
+
+def _hashable(value: Any) -> bool:
+    """Whether a window can key the cache: a name, or a tuple of such."""
+    if isinstance(value, tuple):
+        return all(_hashable(item) for item in value)
+    return isinstance(value, str | int | float)
 
 
 def get_taper(
@@ -169,4 +193,8 @@ def get_taper(
     >>> taper.shape
     (8, 8)
     """
-    return _cached_taper(window, tuple(size), tuple(overlap)).copy()
+    size, overlap = tuple(size), tuple(overlap)
+    if _hashable(window):
+        return _cached_taper(window, size, overlap).copy()
+    # An array, or a tuple carrying a list: built each time, uncached.
+    return _build_taper(window, size, overlap)
