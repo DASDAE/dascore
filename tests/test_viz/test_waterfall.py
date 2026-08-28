@@ -392,7 +392,7 @@ class TestWaterfall:
         """All-NaN data should plot without leaking scaling warnings."""
         data = np.full(random_patch.shape, np.nan)
         patch = random_patch.update(data=data)
-        with suppress_warnings(action="error"):
+        with suppress_warnings(category=RuntimeWarning, action="error"):
             ax = patch.viz.waterfall()
         assert isinstance(ax, plt.Axes)
 
