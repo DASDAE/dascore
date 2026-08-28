@@ -563,7 +563,13 @@ def _resolve_nfft(nfft, coord, window_samples: int) -> int:
     """
     if nfft is None:
         return window_samples
-    count = coord.get_sample_count(nfft) if isinstance(nfft, Quantity) else int(nfft)
+    if isinstance(nfft, Quantity | np.timedelta64):
+        count = coord.get_sample_count(nfft)
+    elif isinstance(nfft, int | np.integer):
+        count = int(nfft)
+    else:
+        msg = f"nfft must be a whole number of samples or a quantity; got {nfft!r}."
+        raise ParameterError(msg)
     if count < window_samples:
         msg = (
             f"nfft must be at least the window length; a {count} point FFT of "
@@ -579,7 +585,7 @@ def stft(
     taper_window: str | ndarray | tuple[str | Any, ...] = "hann",
     overlap: Quantity | int | None = 50 * percent,
     samples: bool = False,
-    nfft: int | Quantity | None = None,
+    nfft: int | Quantity | np.timedelta64 | None = None,
     detrend: bool = False,
     **kwargs,
 ):
@@ -604,7 +610,7 @@ def stft(
         are in samples (or explicit units).
     nfft
         The length of the FFT taken of each window, in samples, or as a
-        quantity with units of the transformed dimension. None, the default,
+        quantity or timedelta in the transformed dimension's units. None, the default,
         is the window length. A longer FFT zero pads each window, which
         samples the same spectrum at more, closer frequencies; it adds no
         resolution, since the window holds no more data. Must be at least

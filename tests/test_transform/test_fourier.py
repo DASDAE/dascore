@@ -638,6 +638,16 @@ class TestSTFT:
         assert by_units.attrs["_stft_mfft"] == 256
         assert by_units.equals(by_count)
 
+    def test_nfft_as_a_timedelta(self, random_patch):
+        """A native duration is read through the coordinate like a quantity."""
+        out = random_patch.stft(time=100, samples=True, nfft=np.timedelta64(1024, "ms"))
+        assert out.attrs["_stft_mfft"] == 256
+
+    def test_fractional_nfft_refused(self, random_patch):
+        """256.9 points is not an FFT length; it is not rounded quietly."""
+        with pytest.raises(ParameterError, match="whole number of samples"):
+            random_patch.stft(time=100, samples=True, nfft=256.9)
+
     def test_nfft_below_window_refused(self, random_patch):
         """A shorter FFT would drop data, which is not a transform."""
         with pytest.raises(ParameterError, match="at least the window length"):

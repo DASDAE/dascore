@@ -24,14 +24,15 @@ def _get_other_dim(dim, dims):
         return dims[0] if dims[1] == dim else dims[1]
 
 
-def _spectrogram_patch(patch: PatchType, dim: str, aggr_domain: str, **stft_kwargs):
+def _spectrogram_patch(
+    patch: PatchType, dim: str, other_dim: str | None, aggr_domain: str, **stft_kwargs
+):
     """
     Return the power the spectrogram draws: |STFT|², one other dimension averaged.
 
     The other dimension is averaged before the transform (`aggr_domain="time"`)
     or after it (`"frequency"`); a one-sample dimension is squeezed either way.
     """
-    other_dim = _get_other_dim(dim, patch.dims)
     if other_dim is None:
         return patch.stft(**stft_kwargs).abs() ** 2
     if aggr_domain == "time":
@@ -64,6 +65,7 @@ def spectrogram(
     overlap: Quantity | int | None = 50 * percent,
     nfft: int | Quantity | None = None,
     samples: bool = False,
+    detrend: bool = False,
     **kwargs,
 ) -> plt.Axes:
     """
@@ -98,7 +100,7 @@ def spectrogram(
         If True, visualize the common logarithm of the absolute values of patch data.
     show : bool, optional
         If True, show the plot. Otherwise, just return the axis.
-    taper_window, overlap, nfft, samples
+    taper_window, overlap, nfft, samples, detrend
         Passed to [Patch.stft](`dascore.Patch.stft`), and read as it reads them.
     **kwargs
         The window, as [Patch.stft](`dascore.Patch.stft`) takes it: the
@@ -121,18 +123,24 @@ def spectrogram(
     -----
     This is [Patch.stft](`dascore.Patch.stft`) followed by
     [Patch.viz.waterfall](`dascore.Patch.viz.waterfall`), with one other
-    dimension averaged away. The values drawn are |STFT|² in the scaling
-    `stft` uses, which is `dft`'s; an earlier version called
-    `scipy.signal.spectrogram` directly, whose power spectral density differs
-    from this by a constant and which took scipy's own argument names
-    (`nperseg`, `noverlap`). Window, overlap, taper and FFT length are now
-    spelled as `stft` spells them.
+    dimension averaged away, and the values drawn are |STFT|² in the scaling
+    `stft` uses. Before DASCore 0.1.22 it called `scipy.signal.spectrogram`
+    directly, which differed in more than scaling: it removed the mean of
+    each window (`detrend="constant"`), tapered with a ``("tukey", 0.25)``
+    window, overlapped by an eighth of the window, took no windows past the
+    ends of the data, and spelled its arguments as scipy does (`nperseg`,
+    `noverlap`). Now the taper is hann, the overlap half, windows reach the
+    ends as `stft`'s do, nothing is detrended unless `detrend=True` is
+    passed through, and the window, overlap, taper and FFT length are given
+    as `stft` takes them.
     """
     dims = patch.dims
     if len(dims) > 2 or len(dims) < 1:
         raise ValueError("Can only make spectrogram of 1D or 2D patches.")
+    other_dim = _get_other_dim(dim, dims)
     if not kwargs:
-        kwargs, samples = {dim: 256}, True
+        # scipy's old default, or the whole of a shorter patch.
+        kwargs, samples = {dim: min(256, len(patch.get_coord(dim)))}, True
     elif dim not in kwargs:
         msg = (
             f"The window is given along {sorted(kwargs)} but the spectrogram is "
@@ -142,11 +150,13 @@ def spectrogram(
     spec = _spectrogram_patch(
         patch,
         dim,
+        other_dim,
         aggr_domain,
         taper_window=taper_window,
         overlap=overlap,
         nfft=nfft,
         samples=samples,
+        detrend=detrend,
         **kwargs,
     )
     return spec.viz.waterfall(

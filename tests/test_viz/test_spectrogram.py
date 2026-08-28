@@ -126,6 +126,17 @@ class TestPlotSpectrogram:
         padded = random_patch.viz.spectrogram(time=64, samples=True, nfft=256)
         assert self._image_shape(padded)[0] > self._image_shape(plain)[0]
 
+    def test_short_patch_takes_the_whole_of_itself(self, random_patch):
+        """A patch shorter than the 256 sample default is one window."""
+        short = random_patch.select(time=(0, 100), samples=True)
+        axis = short.viz.spectrogram()
+        assert isinstance(axis, plt.Axes)
+
+    def test_detrend_passes_through(self, random_patch):
+        """Detrending each window is stft's, reached from here."""
+        axis = random_patch.viz.spectrogram(time=64, samples=True, detrend=True)
+        assert isinstance(axis, plt.Axes)
+
     def test_scipy_spelling_refused(self, random_patch):
         """Scipy's nperseg is not a dimension; the window is time=..."""
         with pytest.raises(ParameterError, match="give the window as time="):
@@ -135,7 +146,7 @@ class TestPlotSpectrogram:
     def test_is_stft_squared(self, random_patch, aggr_domain):
         """What is drawn is |stft|² with the other dimension averaged."""
         power = _spectrogram_patch(
-            random_patch, "time", aggr_domain, time=64, samples=True
+            random_patch, "time", "distance", aggr_domain, time=64, samples=True
         )
         if aggr_domain == "time":
             averaged = random_patch.aggregate("distance", method="mean")
