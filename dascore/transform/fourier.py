@@ -554,6 +554,31 @@ def _get_stft_coords(patch, dim, axis, coord, stft, window):
     return out
 
 
+def _resolve_nfft(nfft, coord, window_samples: int) -> int:
+    """
+    Return the FFT length in samples: the window's, or a longer one to pad to.
+
+    A bare number is a sample count whatever `samples` said; a quantity is
+    read through the coordinate.
+    """
+    if nfft is None:
+        return window_samples
+    if isinstance(nfft, Quantity | np.timedelta64):
+        count = coord.get_sample_count(nfft)
+    elif isinstance(nfft, int | np.integer):
+        count = int(nfft)
+    else:
+        msg = f"nfft must be a whole number of samples or a quantity; got {nfft!r}."
+        raise ParameterError(msg)
+    if count < window_samples:
+        msg = (
+            f"nfft must be at least the window length; a {count} point FFT of "
+            f"a {window_samples} sample window would drop data."
+        )
+        raise ParameterError(msg)
+    return count
+
+
 @patch_function(data_type="fourier_transform")
 def stft(
     patch: PatchType,
@@ -561,6 +586,7 @@ def stft(
     overlap: Quantity | int | None = 50 * percent,
     samples: bool = False,
     detrend: bool = False,
+    nfft: int | Quantity | np.timedelta64 | None = None,
     **kwargs,
 ):
     """
@@ -586,6 +612,13 @@ def stft(
         If True, detrend each time window before performing fourier transform.
         This can lead to nicer looking spectrograms, but means the istft is
         no longer possible.
+    nfft
+        The length of the FFT taken of each window, in samples, or as a
+        quantity or timedelta in the transformed dimension's units. None, the default,
+        is the window length. A longer FFT zero pads each window, which
+        samples the same spectrum at more, closer frequencies; it adds no
+        resolution, since the window holds no more data. Must be at least
+        the window length.
     **kwargs
         Used to specify window length in data units, percent, or samples.
 
@@ -605,6 +638,9 @@ def stft(
     >>> # Using a custom window array and specifying window/overlap in samples.
     >>> window = get_window(("tukey", 0.1), 1000)
     >>> pa2 = patch.stft(time=1000, taper_window=window, overlap=100, samples=True)
+    >>>
+    >>> # Zero pad each 1000 sample window to a 4096 point FFT.
+    >>> pa3 = patch.stft(time=1000, samples=True, nfft=4096)
 
     Notes
     -----
@@ -613,7 +649,8 @@ def stft(
       (unless a boxcar window is used) because the taper window changes the time
       series signal before the transformation.
     - An array passed for taper_window must have as many samples as the
-      window; one of another length is refused.
+      window; one of another length is refused. To zero pad each window's
+      FFT, give `nfft`.
     - Non-dimensional coordinates associated with transformed coordinates
       are dropped in the output.
 
@@ -636,6 +673,7 @@ def stft(
     hop = window_samples if resolved.stride is None else resolved.stride[0]
     sampling_rate = 1 / abs(dc.to_float(coord.step))
     window = get_window(taper_window, window_samples)
+    nfft = _resolve_nfft(nfft, coord, window_samples)
     # Perform stft
     fft_mode = "onesided" if np.isrealobj(patch.data) else "centered"
     stft = ShortTimeFFT(
@@ -643,7 +681,7 @@ def stft(
         hop=hop,
         fs=sampling_rate,
         fft_mode=fft_mode,
-        mfft=window_samples,
+        mfft=nfft,
     )
     func = stft.stft if not detrend else partial(stft.stft_detrend, detr="linear")
     # For compatibility with dft, we scale by step. See the DFT note for why.
@@ -659,7 +697,7 @@ def stft(
         "_stft_sampling_rate": sampling_rate,
         "_stft_detrended": detrend,
         "_stft_fft_mode": fft_mode,
-        "_stft_mfft": window_samples,
+        "_stft_mfft": nfft,
         "_stft_performed": True,
         "_pre_stft_data_type": patch.attrs.get("data_type"),
         "data_units": _get_data_units_from_dims(patch, dim, mul),
