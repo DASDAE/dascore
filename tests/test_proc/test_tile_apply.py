@@ -264,6 +264,16 @@ class TestReassemble:
             back.get_coord("quality").values, np.arange(2000) % 3
         )
 
+    def test_three_dimensions_windowed(self, cube):
+        """Every dimension windowed at once: the plan is not two-dimensional."""
+        stacked = cube.tile_apply(
+            halve, mode="stack", shot=2, distance=16, time=32, samples=True
+        )
+        assert stacked.dims[-3:] == ("shot_offset", "distance_offset", "time_offset")
+        np.testing.assert_allclose(stacked.reassemble().data, cube.data / 2, atol=1e-5)
+        blended = cube.tile_apply(identity, shot=2, distance=16, time=32, samples=True)
+        np.testing.assert_allclose(blended.data, cube.data, atol=1e-5)
+
     def test_edit_between(self, patch):
         """Work done on the stack is what comes back: halve, then blend."""
         stacked = patch.tile_apply(identity, mode="stack", time=64, samples=True)
