@@ -585,8 +585,8 @@ def stft(
     taper_window: str | ndarray | tuple[str | Any, ...] = "hann",
     overlap: Quantity | int | None = 50 * percent,
     samples: bool = False,
-    nfft: int | Quantity | np.timedelta64 | None = None,
     detrend: bool = False,
+    nfft: int | Quantity | np.timedelta64 | None = None,
     **kwargs,
 ):
     """
@@ -608,6 +608,10 @@ def stft(
     samples
         If True, the window length (provided in kwargs) and overlap parameters
         are in samples (or explicit units).
+    detrend
+        If True, detrend each time window before performing fourier transform.
+        This can lead to nicer looking spectrograms, but means the istft is
+        no longer possible.
     nfft
         The length of the FFT taken of each window, in samples, or as a
         quantity or timedelta in the transformed dimension's units. None, the default,
@@ -615,10 +619,6 @@ def stft(
         samples the same spectrum at more, closer frequencies; it adds no
         resolution, since the window holds no more data. Must be at least
         the window length.
-    detrend
-        If True, detrend each time window before performing fourier transform.
-        This can lead to nicer looking spectrograms, but means the istft is
-        no longer possible.
     **kwargs
         Used to specify window length in data units, percent, or samples.
 
