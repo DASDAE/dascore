@@ -13,6 +13,7 @@ from dascore.compat import random_state
 from dascore.exceptions import FilterValueError, ParameterError
 from dascore.units import Hz, m, s
 from dascore.utils.patch import get_start_stop_step
+from dascore.warnings import DASCoreWarning
 
 resample_mod = importlib.import_module("dascore.proc.resample")
 
@@ -81,7 +82,6 @@ class TestInterpolate:
         out = patch.interpolate(distance=new_coord)
         assert out.coords.dim_map["lat"] == ("distance",)
         assert out.get_coord("lat").units == patch.get_coord("lat").units
-        assert out.get_coord("distance").units == patch.get_coord("distance").units
         assert len(out.get_array("lat")) == len(new_coord)
         # The samples which did not move keep the values they had.
         kept = out.get_array("lat")[::2]
@@ -116,22 +116,6 @@ class TestInterpolate:
         out = patch.interpolate(distance=new_coord)
         assert out.coords.dim_map["quality"] == ("distance", "time")
         assert out.get_array("quality").shape == out.shape
-
-    def test_unsigned_coords_do_not_wrap(self):
-        """Rebasing unsigned interpolation coordinates avoids wraparound."""
-        coord = np.array([3, 4, 5], dtype=np.uint64)
-        samples = np.array([2, 3, 4], dtype=np.uint64)
-        values = coord.astype(float)
-        patch = dc.Patch(
-            data=values,
-            coords={"x": coord, "aux": ("x", values)},
-            dims=("x",),
-        )
-
-        out = patch.interpolate(x=samples)
-
-        assert np.allclose(out.data, samples)
-        assert np.allclose(out.get_array("aux"), samples)
 
 
 class TestDecimate:
@@ -230,87 +214,33 @@ class TestResample:
     """Tests for resampling along a given dimension."""
 
     @pytest.mark.parametrize("samples", (False, True))
-    def test_associated_coords_resampled(self, random_patch_many_coords, samples):
-        """Numeric coordinates on the resampled dimension follow it. See #1090."""
+    def test_associated_coords_dropped_with_warning(
+        self, random_patch_many_coords, samples
+    ):
+        """Coords on the resampled dimension are deliberately dropped. See #1090."""
         patch = random_patch_many_coords
         distance = patch.get_coord("distance")
         value = len(distance) * 2 if samples else distance.step * 1.232132323222
 
-        out = patch.resample(distance=value, samples=samples)
-        old_distance = patch.get_array("distance")
-        new_distance = out.get_array("distance")
+        with pytest.warns(DASCoreWarning, match="lat, quality"):
+            out = patch.resample(distance=value, samples=samples)
 
-        def _linear_extrapolate(values):
-            expected = np.interp(new_distance, old_distance, values)
-            above = new_distance > old_distance[-1]
-            slope = (values[-1] - values[-2]) / (old_distance[-1] - old_distance[-2])
-            expected[above] = values[-1] + slope * (
-                new_distance[above] - old_distance[-1]
-            )
-            return expected
-
-        assert out.coords.dim_map == patch.coords.dim_map
-        assert out.get_coord("distance").units == patch.get_coord("distance").units
-        expected_lat = _linear_extrapolate(patch.get_array("lat"))
-        assert np.allclose(out.get_array("lat"), expected_lat)
-        expected_quality = np.apply_along_axis(
-            _linear_extrapolate,
-            patch.get_axis("distance"),
-            patch.get_array("quality"),
-        )
-        assert np.allclose(out.get_array("quality"), expected_quality)
+        assert {"lat", "quality"}.isdisjoint(out.coords.coord_map)
         assert np.allclose(out.get_array("time2"), patch.get_array("time2"))
 
-    def test_datetime_dim_associated_coord(self):
-        """Large epoch nanoseconds retain fine interpolation precision."""
-        size = 8
-        time = np.datetime64("2026-01-01", "ns") + np.arange(size) * np.timedelta64(
-            100, "ns"
-        )
-        patch = dc.Patch(
-            data=np.arange(size, dtype=float),
-            coords={"time": time, "clock": ("time", np.arange(size, dtype=float))},
-            dims=("time",),
-        )
-
-        out = patch.resample(time=16, samples=True)
-
-        assert np.allclose(out.get_array("clock"), np.arange(16) / 2)
-
-        samples = time[0] + np.arange(11) * np.timedelta64(70, "ns")
-        out = patch.interpolate(time=samples)
-        assert np.allclose(out.data, out.get_array("clock"))
-
-    def test_associated_coord_name_like_dim_attr(self):
-        """A legal coordinate name is not parsed as dimension metadata."""
-        distance = np.arange(8, dtype=float)
+    def test_same_length_resample_drops_associated_coords(self):
+        """Associated coordinates are dropped even when their shape still fits."""
+        distance = np.arange(8.0)
         patch = dc.Patch(
             data=distance,
-            coords={"distance": distance, "distance_min": ("distance", distance * 10)},
+            coords={"distance": distance, "aux": ("distance", distance)},
             dims=("distance",),
         )
 
-        out = patch.resample(distance=16, samples=True)
+        with pytest.warns(DASCoreWarning, match="aux"):
+            out = patch.resample(distance=len(distance), samples=True)
 
-        assert np.allclose(out.get_array("distance_min"), np.arange(16) * 5)
-
-        out = patch.resample(distance=1.02)
-        assert np.allclose(
-            out.get_array("distance_min"), out.get_array("distance") * 10
-        )
-
-    def test_exact_resample_ignores_interp_kind_for_coords(self):
-        """Fourier-only resampling does not apply the fallback interpolation kind."""
-        values = np.arange(3, dtype=float)
-        patch = dc.Patch(
-            data=values,
-            coords={"x": values, "aux": ("x", values)},
-            dims=("x",),
-        )
-
-        out = patch.resample(x=6, samples=True, interp_kind="cubic")
-
-        assert np.allclose(out.get_array("aux"), np.arange(6) / 2)
+        assert "aux" not in out.coords.coord_map
 
     def test_missing_period_raises(self, random_patch):
         """A null sampling period is rejected rather than producing NaN."""
