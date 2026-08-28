@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import functools
 import inspect
+import math
 import sys
+import warnings
 from collections import namedtuple
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from typing import Literal, Protocol, cast, overload
@@ -967,15 +969,21 @@ def get_patch_window_size(
 
     if not kwargs:
         return (1,) * len(patch.dims)
-    return resolve_window(
+    size = resolve_window(
         patch,
         kwargs,
         samples=samples,
         require_odd=require_odd,
-        warn_above=warn_above,
         min_samples=min_samples,
         enforce_lt_coord=enforce_lt_coord,
     ).full_size()
+    if warn_above is not None and math.prod(size) > warn_above:
+        msg = (
+            f"Large window size ({math.prod(size)} samples) may result in slow "
+            "performance. Consider reducing the window size."
+        )
+        warnings.warn(msg, UserWarning, stacklevel=2)
+    return size
 
 
 @deprecate(

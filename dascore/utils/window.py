@@ -15,8 +15,6 @@ by the function which wants it.
 
 from __future__ import annotations
 
-import math
-import warnings
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any, Protocol
@@ -206,8 +204,7 @@ def resolve_window(
     allow_multiple: bool = True,
     require_evenly_sampled: bool = True,
     require_odd: bool = False,
-    min_samples: int | None = 1,
-    warn_above: int | None = None,
+    min_samples: int = 1,
     enforce_lt_coord: bool = False,
 ) -> Window:
     """
@@ -244,10 +241,8 @@ def resolve_window(
         Whether the window must have an odd number of samples. Given in
         units, an even count is rounded up; given in samples, refused.
     min_samples
-        The fewest samples a window may have along any dimension, or None
-        for no floor at all.
-    warn_above
-        Warn when the window's total sample count -- its area -- exceeds this.
+        The fewest samples a window may have along any dimension; 0 is no
+        floor at all.
     enforce_lt_coord
         Whether a window, step, or overlap longer than its coordinate is refused.
 
@@ -282,7 +277,7 @@ def resolve_window(
             enforce_lt_coord=enforce_lt_coord,
             through_coord=require_evenly_sampled,
         )
-        if min_samples is not None and count < min_samples:
+        if count < min_samples:
             msg = _too_small(dim, coord, count, min_samples, in_samples)
             raise ParameterError(msg)
         if require_odd and count % 2 != 1:
@@ -295,18 +290,6 @@ def resolve_window(
             count += 1
         sizes.append(count)
     size = tuple(sizes)
-
-    # Warn on the total window, not each dimension: the cost of a windowed
-    # operation tracks the number of samples the window covers, so a 2D
-    # window is as expensive as its area.
-    total = math.prod(size)
-    if warn_above is not None and total > warn_above:
-        msg = (
-            f"Large window size ({total} samples) may result in slow "
-            "performance. Consider reducing the window size."
-        )
-        warnings.warn(msg, UserWarning, stacklevel=3)
-
     strides = _resolve_stride(
         coords,
         dims,
