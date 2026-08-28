@@ -129,7 +129,9 @@ def _to_samples(
 
 
 def _spread(value: Any, dims: tuple[str, ...], name: str) -> dict[str, Any]:
-    """Return one value per dimension from a scalar or a mapping."""
+    """Return one value per dimension from a scalar or a mapping; ungiven where none."""
+    if value is None:
+        return dict.fromkeys(dims, _UNGIVEN)
     if not isinstance(value, Mapping):
         return dict.fromkeys(dims, value)
     if extra := set(value) - set(dims):
@@ -146,9 +148,9 @@ def _spread(value: Any, dims: tuple[str, ...], name: str) -> dict[str, Any]:
     return {dim: value.get(dim, _UNGIVEN) for dim in dims}
 
 
-def _too_small(name: str, coord, count: int, min_samples: int, samples: bool) -> str:
+def _too_small(name: str, coord, count: int, min_samples: int, in_samples: bool) -> str:
     """Say why a window is too short, and what to do about it."""
-    if samples:
+    if in_samples:
         hint = "Try increasing its value."
     else:
         # in seconds, which is what a time value would be given in
@@ -244,18 +246,13 @@ def resolve_window(
     )
     dims = tuple(x.dim for x in dim_axis_values)
     axes = tuple(x.axis for x in dim_axis_values)
-    coords = {}
-    for dim in dims:
-        coord = patch.coords.get_coord(dim)
+    coords, sizes = {}, []
+    for dim, _, value in dim_axis_values:
+        coord = coords[dim] = patch.coords.get_coord(dim)
         if require_evenly_sampled and coord.step is None:
             extra = f"as required by {get_parent_code_name()}"
             msg = f"Coordinate {dim} is not evenly sampled {extra}"
             raise CoordError(msg)
-        coords[dim] = coord
-
-    sizes = []
-    for dim, _, value in dim_axis_values:
-        coord = coords[dim]
         count, in_samples = _to_samples(
             coord,
             value,
@@ -317,36 +314,35 @@ def _resolve_overlap(
     """Return the overlap along each dimension in samples, or None if none was given."""
     name = "step" if step is not None else "overlap"
     given = _spread(step if step is not None else overlap, dims, name)
-    out: list[int | None] = []
+    out: list[int] = []
+    ungiven: list[str] = []
     for dim, window in zip(dims, size):
         value = given[dim]
-        kind, in_samples, via_coord = name, samples, through_coord
-        if value is _UNGIVEN or value is None:
+        if value is _UNGIVEN:
             if default is None:
-                out.append(None)
+                ungiven.append(dim)
                 continue
             # A default is a sample count already, and is checked like a
             # given one: it must not retreat, and must leave an advance.
-            value = default if isinstance(default, int) else default(window)
-            kind, in_samples, via_coord = "overlap", True, False
-        value, was_percent = _percent_to_samples(value, window)
-        _check_not_negative(value, kind)
-        count, _ = _to_samples(
-            coords[dim],
-            value,
-            samples=in_samples or was_percent,
-            enforce_lt_coord=enforce_lt_coord,
-            through_coord=via_coord,
-        )
-        advance = count if kind == "step" else window - count
+            count = default if isinstance(default, int) else default(window)
+            _check_not_negative(count, "overlap")
+            advance = window - count
+        else:
+            value, was_percent = _percent_to_samples(value, window)
+            _check_not_negative(value, name)
+            count, _ = _to_samples(
+                coords[dim],
+                value,
+                samples=samples or was_percent,
+                enforce_lt_coord=enforce_lt_coord,
+                through_coord=through_coord,
+            )
+            advance = count if name == "step" else window - count
         if advance <= 0:
             msg = "Window step must be greater than zero."
             raise ParameterError(msg)
         out.append(window - advance)
-    if all(value is None for value in out):
-        return None
-    if any(value is None for value in out):
-        missing = [dim for dim, value in zip(dims, out) if value is None]
-        msg = f"{name} was given for some dimensions but not {missing}."
+    if ungiven and out:
+        msg = f"{name} was given for some dimensions but not {ungiven}."
         raise ParameterError(msg)
-    return tuple(out)  # ty: ignore[invalid-return-type]
+    return None if ungiven else tuple(out)

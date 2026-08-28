@@ -30,7 +30,6 @@ from dascore.utils.misc import broadcast_for_index, iterate
 from dascore.utils.patch import (
     _get_data_units_from_dims,
     _get_dx_or_spacing_and_axes,
-    get_dim_axis_value,
     patch_function,
 )
 from dascore.utils.time import is_datetime64, is_timedelta64, to_float
@@ -624,9 +623,6 @@ def stft(
     [Patch.dft](`dascore.Patch.dft`), [Patch.istft](`dascore.Patch.istft`)
     """
     # Get coordinate information.
-    (dim, axis, _) = get_dim_axis_value(patch, kwargs=kwargs)[0]
-    coord = patch.get_coord(dim, require_evenly_sampled=True)
-    # Get window count/step in samples
     resolved = resolve_window(
         patch,
         kwargs,
@@ -637,7 +633,8 @@ def stft(
         min_samples=0,
         enforce_lt_coord=True,
     )
-    window_samples = resolved.size[0]
+    dim, axis, window_samples = resolved.dims[0], resolved.axes[0], resolved.size[0]
+    coord = patch.get_coord(dim)
     # No overlap given means none: the windows abut.
     hop = window_samples if resolved.stride is None else resolved.stride[0]
     sampling_rate = 1 / abs(dc.to_float(coord.step))

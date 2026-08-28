@@ -457,14 +457,10 @@ class AdaptiveSpectralFilter(PatchProcessor):
         )
         # A default was given, so every dimension has an overlap.
         assert window.overlap is not None
-        dims, axes, windows, overlaps = (
-            window.dims,
-            window.axes,
-            window.size,
-            window.overlap,
+        _validate_window_and_overlap(
+            window.dims, window.size, window.overlap, float(self.exponent)
         )
-        _validate_window_and_overlap(dims, windows, overlaps, float(self.exponent))
-        return _Geometry(axes, windows, overlaps)
+        return _Geometry(window.axes, window.size, window.overlap)
 
     def kernel(self, data, meta, out_meta):
         """Filter every batch over the selected axes and stack the results."""

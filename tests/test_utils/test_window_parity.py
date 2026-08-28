@@ -11,6 +11,8 @@ one, so the merge can be checked against them rather than trusted.
 
 from __future__ import annotations
 
+import warnings
+
 import numpy as np
 import pytest
 
@@ -23,6 +25,12 @@ from dascore.units import percent, s
 def patch():
     """The example patch: 300 channels by 2000 samples at 4 ms."""
     return dc.get_example_patch()
+
+
+@pytest.fixture(scope="module")
+def wacky():
+    """A patch whose coordinates are not evenly sampled."""
+    return dc.get_example_patch("wacky_dim_coords_patch")
 
 
 class TestOddWindows:
@@ -149,8 +157,6 @@ class TestWarnings:
 
     def test_hampel_quiet_under_it(self, patch):
         """9 by 9 is 81."""
-        import warnings  # noqa: PLC0415
-
         with warnings.catch_warnings():
             warnings.simplefilter("error")
             patch.hampel_filter(time=9, distance=9, samples=True, approximate=False)
@@ -173,11 +179,6 @@ class TestMinimumSamples:
 class TestUnevenCoordinates:
     """A window in coordinate units needs an evenly sampled coordinate."""
 
-    @pytest.fixture(scope="class")
-    def wacky(self):
-        """A patch whose coordinates are not evenly sampled."""
-        return dc.get_example_patch("wacky_dim_coords_patch")
-
     @pytest.mark.parametrize(
         "name", ["median_filter", "gaussian_filter", "hampel_filter", "wiener_filter"]
     )
@@ -189,11 +190,6 @@ class TestUnevenCoordinates:
 
 class TestUnevenCoordinatesInSamples:
     """A window in samples on an uneven coordinate: only AFK ever allowed it."""
-
-    @pytest.fixture(scope="class")
-    def wacky(self):
-        """A patch whose coordinates are not evenly sampled."""
-        return dc.get_example_patch("wacky_dim_coords_patch")
 
     def test_adaptive_spectral_filter_reads_the_count(self, wacky):
         """It never consulted the coordinate for a sample count, and still does not."""
