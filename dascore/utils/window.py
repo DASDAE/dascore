@@ -27,6 +27,7 @@ from dascore.exceptions import CoordError, ParameterError
 from dascore.units import Quantity, is_percent
 from dascore.utils.misc import get_parent_code_name
 from dascore.utils.patch import get_dim_axis_value
+from dascore.utils.tiles import TilePlan, get_tile_plan
 from dascore.utils.time import is_timedelta64, to_float, to_timedelta64
 
 # What a function means by an overlap nobody gave: a sample count, or a
@@ -93,6 +94,19 @@ class Window:
         for axis, size in zip(self.axes, self.size):
             out[axis] = size
         return tuple(out)
+
+    def tiles(self, shape: tuple[int, ...]) -> TilePlan:
+        """
+        Return the plan for tiling an array of `shape` along the windowed axes.
+
+        `shape` is the whole array's; the plan covers the windowed axes in
+        the order the window names them. A window with no stride cannot tile.
+        """
+        if self.stride is None:
+            msg = "A window with no overlap or step given does not tile."
+            raise ParameterError(msg)
+        selected = tuple(shape[axis] for axis in self.axes)
+        return get_tile_plan(selected, self.size, self.stride)
 
 
 def _percent_to_samples(value: Any, size: int) -> tuple[Any, bool]:

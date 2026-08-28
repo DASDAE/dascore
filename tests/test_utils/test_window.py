@@ -423,6 +423,22 @@ class TestDeprecatedResolvers:
 class TestWindow:
     """The resolved object itself."""
 
+    def test_tiles(self, random_patch):
+        """A window with a stride plans tiles over the axes it selects."""
+        window = resolve_window(
+            random_patch, {"distance": 16, "time": 8}, samples=True, overlap=2
+        )
+        plan = window.tiles(random_patch.shape)
+        assert plan.size == (16, 8)
+        assert plan.stride == (14, 6)
+        assert plan.shape == tuple(random_patch.shape[axis] for axis in window.axes)
+
+    def test_tiles_need_a_stride(self, random_patch):
+        """With no overlap or step given there is no stride to tile at."""
+        window = resolve_window(random_patch, {"time": 8}, samples=True)
+        with pytest.raises(ParameterError, match="does not tile"):
+            window.tiles(random_patch.shape)
+
     def test_full_size_fill(self):
         """Unselected axes take the fill."""
         window = Window(("time",), (1,), (5,), None, 3)

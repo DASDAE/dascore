@@ -21,6 +21,8 @@ from dascore.proc.adaptive_spectral_filter import (
     _get_engine,
     _validate_window_and_overlap,
 )
+from dascore.utils.signal import get_taper
+from dascore.utils.tiles import get_tile_plan
 
 
 def _numba_engine():
@@ -692,26 +694,33 @@ class TestAdaptiveSpectralCore:
         numba_mod = _numba_engine()
         rng = np.random.default_rng(20260511)
         data = rng.normal(size=(24, 40)).astype(np.float32)
-        kwargs = dict(window_size=(8, 16), overlap=(3, 7))
-        padded, taper, stride, n_tiles = numba_mod._prepare_work_arrays(data, **kwargs)
+        window, overlap = (8, 16), (3, 7)
+        plan = get_tile_plan(data.shape, window, (5, 9))
+        taper = get_taper("triang", window, overlap)
+        padded = plan.pad(data)
         filtered = np.zeros_like(padded)
-        for parity0, parity1 in [(0, 0), (0, 1), (1, 0), (1, 1)]:
-            numba_mod._filter_tile_group.func(
-                padded,
-                filtered,
-                taper,
-                8,
-                16,
-                *stride,
-                *n_tiles,
-                parity0,
-                parity1,
-                0.8,
-                True,
-            )
-        out = numba_mod._finalize_output(filtered, data.shape, data.dtype, stride)
+        for colour0 in range(plan.colours[0]):
+            for colour1 in range(plan.colours[1]):
+                numba_mod._filter_colour_class.func(
+                    padded,
+                    filtered,
+                    taper,
+                    *window,
+                    *plan.stride,
+                    *plan.grid,
+                    *plan.colours,
+                    colour0,
+                    colour1,
+                    0.8,
+                    True,
+                )
+        out = plan.crop(filtered)
         expected = _adaptive_spectral_filter_scipy(
-            data, exponent=0.8, normalize_power=True, **kwargs
+            data,
+            window_size=window,
+            overlap=overlap,
+            exponent=0.8,
+            normalize_power=True,
         )
 
         np.testing.assert_allclose(out, expected, rtol=1e-5, atol=1e-5)

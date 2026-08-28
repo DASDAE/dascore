@@ -3,6 +3,12 @@ Optional Numba/rocket-fft engine for the two-dimensional adaptive spectral filte
 
 The module imports whether or not numba and rocket-fft are installed; only
 ``_NUMBA_ENGINE_AVAILABLE`` says whether the kernel can actually compile.
+
+The kernel is the filter with its tile loop written out, rather than the
+plan's vectorized one, because it can then be compiled once and cached on
+disk; a kernel taking the filter as an argument would compile again in
+every process. It takes its geometry -- padding, grid, colour classes --
+from the same `TilePlan` the numpy engine uses.
 """
 
 from __future__ import annotations
@@ -10,8 +16,8 @@ from __future__ import annotations
 import numpy as np
 
 from dascore.proc.adaptive_spectral_filter import (
-    _finalize_output,
-    _prepare_work_arrays,
+    _plan_and_taper,
+    _restore_dtype,
     _validate_filter_inputs,
 )
 from dascore.utils.jit import maybe_numba_jit
@@ -27,7 +33,7 @@ from dascore.utils.jit import maybe_numba_jit
     fastmath=True,
     parallel=True,
 )
-def _filter_tile_group(
+def _filter_colour_class(
     padded: np.ndarray,
     filtered: np.ndarray,
     taper: np.ndarray,
@@ -37,27 +43,26 @@ def _filter_tile_group(
     stride1: int,
     n_tiles0: int,
     n_tiles1: int,
-    parity0: int,
-    parity1: int,
+    colours0: int,
+    colours1: int,
+    colour0: int,
+    colour1: int,
     exponent: float,
     normalize_power: bool,
 ) -> None:
     """
-    Filter every tile whose grid indices share a parity, adding into filtered.
+    Filter every tile of one colour class, adding into filtered.
 
-    Same-parity tiles start two strides apart, and an overlap under half the
-    window keeps a window shorter than two strides, so no two iterations of
-    the parallel loop write to the same output sample.
+    Tiles of one class are `colours` strides apart, further than a tile
+    reaches, so no two iterations of the parallel loop write to the same
+    output sample.
     """
-    count0 = (n_tiles0 - parity0 + 1) // 2
-    count1 = (n_tiles1 - parity1 + 1) // 2
+    count0 = (n_tiles0 - colour0 + colours0 - 1) // colours0
+    count1 = (n_tiles1 - colour1 + colours1 - 1) // colours1
     for ind in numba.prange(count0 * count1):  # noqa: F821  # ty: ignore[unresolved-reference]
-        beg0 = (parity0 + 2 * (ind // count1)) * stride0
-        beg1 = (parity1 + 2 * (ind % count1)) * stride1
-        n0 = min(window0, padded.shape[0] - beg0)
-        n1 = min(window1, padded.shape[1] - beg1)
-        tile = np.zeros((window0, window1), dtype=np.float32)
-        tile[:n0, :n1] = padded[beg0 : beg0 + n0, beg1 : beg1 + n1]
+        beg0 = (colour0 + colours0 * (ind // count1)) * stride0
+        beg1 = (colour1 + colours1 * (ind % count1)) * stride1
+        tile = padded[beg0 : beg0 + window0, beg1 : beg1 + window1]
         spec = np.fft.rfft2(tile)
         if exponent != 0.0:
             power = np.abs(spec)
@@ -67,11 +72,11 @@ def _filter_tile_group(
                 power = power / max_power if max_power > 0.0 else power
             # float32 so the weighted spectrum keeps rfft2's complex64 type.
             spec = spec * (power**exponent).astype(np.float32)
-        tile = np.fft.irfft2(spec, s=(window0, window1))
-        filtered[beg0 : beg0 + n0, beg1 : beg1 + n1] += tile[:n0, :n1] * taper[:n0, :n1]
+        out = np.fft.irfft2(spec, s=(window0, window1))
+        filtered[beg0 : beg0 + window0, beg1 : beg1 + window1] += out * taper
 
 
-_NUMBA_ENGINE_AVAILABLE = _filter_tile_group.jit_available
+_NUMBA_ENGINE_AVAILABLE = _filter_colour_class.jit_available
 
 
 def _adaptive_spectral_filter_numba(
@@ -96,22 +101,24 @@ def _adaptive_spectral_filter_numba(
     if data.ndim != 2:
         msg = "The numba engine filters two-dimensional arrays only."
         raise ValueError(msg)
-    padded, taper, stride, n_tiles = _prepare_work_arrays(
-        data, window_size=window_size, overlap=overlap
-    )
+    plan, taper = _plan_and_taper(data, window_size, overlap)
+    # The buffer is long enough for every tile to be whole, so the kernel
+    # slices without checking the edges.
+    padded = plan.pad(data, dtype=np.float32)
     filtered = np.zeros_like(padded)
-    for parity0 in range(2):
-        for parity1 in range(2):
-            _filter_tile_group(
+    for colour0 in range(plan.colours[0]):
+        for colour1 in range(plan.colours[1]):
+            _filter_colour_class(
                 padded,
                 filtered,
                 taper,
                 *window_size,
-                *stride,
-                *n_tiles,
-                parity0,
-                parity1,
+                *plan.stride,
+                *plan.grid,
+                *plan.colours,
+                colour0,
+                colour1,
                 float(exponent),
                 bool(normalize_power),
             )
-    return _finalize_output(filtered, data.shape, data.dtype, stride)
+    return _restore_dtype(plan.crop(filtered), data.dtype)

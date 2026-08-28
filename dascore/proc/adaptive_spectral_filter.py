@@ -25,9 +25,8 @@ so the two produce the same output.
 from __future__ import annotations
 
 from collections.abc import Callable
-from itertools import product
-from math import prod
-from typing import Any, Literal, NamedTuple
+from functools import partial
+from typing import Any, Literal
 
 import numpy as np
 from pydantic import ConfigDict
@@ -38,7 +37,8 @@ from dascore.exceptions import MissingOptionalDependencyError, ParameterError
 from dascore.utils.misc import is_power_of_two
 from dascore.utils.patch import patch_function
 from dascore.utils.signal import get_taper
-from dascore.utils.window import resolve_window
+from dascore.utils.tiles import TilePlan, get_tile_plan
+from dascore.utils.window import Window, resolve_window
 from dascore.workflow.meta import PatchMeta
 from dascore.workflow.processor import PatchProcessor, register_implementation
 
@@ -112,44 +112,6 @@ def _validate_window_and_overlap(
         raise ParameterError(str(exc)) from exc
 
 
-def _prepare_work_arrays(
-    data: np.ndarray,
-    *,
-    window_size: tuple[int, ...],
-    overlap: tuple[int, ...],
-) -> tuple[np.ndarray, np.ndarray, tuple[int, ...], tuple[int, ...]]:
-    """
-    Return the padded float32 input, the taper, the stride, and the tile grid.
-
-    The input is padded by one stride of zeros on every side so the tiles
-    which straddle its edges see a full taper ramp.
-    """
-    working = np.ascontiguousarray(data, dtype=np.float32)
-    stride = tuple(win - over for win, over in zip(window_size, overlap))
-    taper = get_taper("triang", window_size, overlap)
-    padded_shape = tuple(
-        length + 2 * step for length, step in zip(working.shape, stride)
-    )
-    padded = np.zeros(padded_shape, dtype=np.float32)
-    inner = tuple(
-        slice(step, length + step) for length, step in zip(working.shape, stride)
-    )
-    padded[inner] = working
-    n_tiles = tuple(pad_len // step for pad_len, step in zip(padded.shape, stride))
-    return padded, taper, stride, n_tiles
-
-
-def _finalize_output(
-    filtered: np.ndarray,
-    shape: tuple[int, ...],
-    dtype: np.dtype,
-    stride: tuple[int, ...],
-) -> np.ndarray:
-    """Crop the padding away and restore the input dtype where that is safe."""
-    inner = tuple(slice(step, length + step) for length, step in zip(shape, stride))
-    return _restore_dtype(filtered[inner], dtype)
-
-
 def _restore_dtype(out: np.ndarray, dtype: np.dtype) -> np.ndarray:
     """
     Return float32 output in the input's dtype, if that is a wide enough float.
@@ -163,51 +125,38 @@ def _restore_dtype(out: np.ndarray, dtype: np.dtype) -> np.ndarray:
     return out
 
 
-def _extract_tiles(
-    padded: np.ndarray,
-    window_size: tuple[int, ...],
-    stride: tuple[int, ...],
-    n_tiles: tuple[int, ...],
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Copy every window into a dense tile stack for batched FFTs."""
-    ndim = len(window_size)
-    tiles = np.zeros((prod(n_tiles), *window_size), dtype=np.float32)
-    begins = np.zeros((*n_tiles, ndim), dtype=np.int64)
-    sizes = np.zeros((*n_tiles, ndim), dtype=np.int64)
-    for tile_index, tile_inds in enumerate(product(*(range(num) for num in n_tiles))):
-        beg = tuple(ind * step for ind, step in zip(tile_inds, stride))
-        end = tuple(
-            min(start + win, size)
-            for start, win, size in zip(beg, window_size, padded.shape)
-        )
-        valid_shape = tuple(stop - start for start, stop in zip(beg, end))
-        begins[tile_inds] = beg
-        sizes[tile_inds] = valid_shape
-        data_slices = tuple(slice(start, stop) for start, stop in zip(beg, end))
-        tile_slices = tuple(slice(0, size) for size in valid_shape)
-        tiles[(tile_index, *tile_slices)] = padded[data_slices]
-    return tiles, begins, sizes
+def _plan_and_taper(
+    data: np.ndarray, window_size: tuple[int, ...], overlap: tuple[int, ...]
+) -> tuple[TilePlan, np.ndarray]:
+    """Validate the filter's inputs and return where its tiles sit and their taper."""
+    stride = tuple(win - over for win, over in zip(window_size, overlap))
+    plan = get_tile_plan(data.shape, window_size, stride)
+    return plan, get_taper("triang", window_size, overlap)
 
 
-def _overlap_add_tiles(
-    out: np.ndarray,
-    tiles: np.ndarray,
-    taper: np.ndarray,
-    begins: np.ndarray,
-    sizes: np.ndarray,
-) -> None:
-    """Add every tapered tile back into the padded output."""
-    grid_shape = begins.shape[:-1]
-    for tile_index, tile_inds in enumerate(
-        product(*(range(num) for num in grid_shape))
-    ):
-        beg = tuple(begins[tile_inds])
-        valid_shape = tuple(sizes[tile_inds])
-        out_slices = tuple(
-            slice(start, start + size) for start, size in zip(beg, valid_shape)
-        )
-        tile_slices = tuple(slice(0, size) for size in valid_shape)
-        out[out_slices] += tiles[(tile_index, *tile_slices)] * taper[tile_slices]
+def _weight_spectra(
+    tiles: np.ndarray, *, exponent: float, normalize_power: bool
+) -> np.ndarray:
+    """
+    Return every tile with its spectrum weighted by a power of its magnitude.
+
+    The filter itself, on a stack of tiles: one FFT over the stack, one
+    weighting, one inverse.
+    """
+    axes = tuple(range(1, tiles.ndim))
+    size = tiles.shape[1:]
+    spec = sp_fft.rfftn(tiles, s=size, axes=axes, workers=-1)
+    if exponent != 0.0:
+        power = np.abs(spec).astype(np.float32, copy=False)
+        if normalize_power:
+            max_power = power.max(axis=axes, keepdims=True)
+            power = np.divide(
+                power, max_power, out=np.zeros_like(power), where=max_power != 0
+            )
+        spec *= power**exponent
+    return sp_fft.irfftn(spec, s=size, axes=axes, workers=-1).astype(
+        np.float32, copy=False
+    )
 
 
 def _adaptive_spectral_filter_scipy(
@@ -256,35 +205,13 @@ def _adaptive_spectral_filter_scipy(
     _validate_filter_inputs(
         data, window_size=window_size, overlap=overlap, exponent=float(exponent)
     )
-    padded, taper, stride, n_tiles = _prepare_work_arrays(
-        data, window_size=window_size, overlap=overlap
+    plan, taper = _plan_and_taper(data, window_size, overlap)
+    weight = partial(
+        _weight_spectra, exponent=float(exponent), normalize_power=normalize_power
     )
-    tiles, begins, sizes = _extract_tiles(padded, window_size, stride, n_tiles)
-    axes = tuple(range(-data.ndim, 0))
-
-    spec = sp_fft.rfftn(tiles, s=window_size, axes=axes, workers=-1)
-    if exponent != 0.0:
-        power = np.abs(spec).astype(np.float32, copy=False)
-        if normalize_power:
-            max_power = power.max(axis=axes, keepdims=True)
-            power = np.divide(
-                power, max_power, out=np.zeros_like(power), where=max_power != 0
-            )
-        spec *= power**exponent
-    tiles = sp_fft.irfftn(spec, s=window_size, axes=axes, workers=-1).astype(
-        np.float32, copy=False
-    )
-    filtered = np.zeros_like(padded)
-    _overlap_add_tiles(filtered, tiles, taper, begins, sizes)
-    return _finalize_output(filtered, data.shape, data.dtype, stride)
-
-
-class _Geometry(NamedTuple):
-    """The selected axes and their windows and overlaps, all in samples."""
-
-    axes: tuple[int, ...]
-    windows: tuple[int, ...]
-    overlaps: tuple[int, ...]
+    # The filter works in float32 whatever it is given.
+    out = plan.apply(np.asarray(data, dtype=np.float32), weight, taper)
+    return _restore_dtype(out, data.dtype)
 
 
 def _get_engine(engine: str, selected_ndim: int) -> Callable:
@@ -434,8 +361,8 @@ class AdaptiveSpectralFilter(PatchProcessor):
     # `_get_engine` as a ParameterError like every other bad argument.
     engine: str = "auto"
 
-    def geometry(self, meta: PatchMeta) -> _Geometry:
-        """Return the selected axes and their windows and overlaps, in samples."""
+    def geometry(self, meta: PatchMeta) -> Window:
+        """Return the window in samples: the selected axes, sizes, and overlaps."""
         selected = self.model_extra or {}
         if len(selected) not in {1, 2}:
             msg = (
@@ -459,11 +386,12 @@ class AdaptiveSpectralFilter(PatchProcessor):
         _validate_window_and_overlap(
             window.dims, window.size, window.overlap, float(self.exponent)
         )
-        return _Geometry(window.axes, window.size, window.overlap)
+        return window
 
     def kernel(self, data, meta, out_meta):
         """Filter every batch over the selected axes and stack the results."""
-        axes, windows, overlaps = self.geometry(meta)
+        window = self.geometry(meta)
+        axes, windows, overlaps = window.axes, window.size, window.overlap
         engine = _get_engine(self.engine, len(axes))
         data = np.asarray(data)
         tail = tuple(range(-len(axes), 0))
