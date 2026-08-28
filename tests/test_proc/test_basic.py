@@ -668,6 +668,13 @@ class TestPowCoord:
         with pytest.raises(ParameterError, match="not finite"):
             patch.pow_coord(time=2)
 
+    def test_absolute_curve_through_zero_raises(self, random_patch):
+        """An absolute curve of a coordinate which starts at zero can diverge."""
+        # The example patch's distance starts at 0, so a negative power of
+        # its own values is infinite at the first sample.
+        with pytest.raises(ParameterError, match="not finite"):
+            random_patch.pow_coord(distance=-1, relative=False)
+
     @pytest.mark.parametrize("dtype", [np.float32, np.float64])
     def test_float_dtype_preserved(self, random_patch, dtype):
         """Gaining a patch should not double the memory it takes."""

@@ -653,6 +653,11 @@ def pow_coord(patch: PatchType, relative: bool = True, **kwargs) -> PatchType:
       is one, two, three ... raised to the power. Counting from one rather
       than zero is what keeps a power from zeroing the first sample.
 
+    - An unevenly sampled coordinate has no one step, so its first is used:
+      the curve is the offset from the start measured in first steps, plus
+      one. Every sample still gets a distinct gain, but the spacing of the
+      curve no longer follows the spacing of the coordinate.
+
     - That makes the curve a function of the sample, not of the physical
       span, so the same patch resampled gains differently: the sample one
       second in is the 250th at 250 Hz and the 125th at 125 Hz. Within one
@@ -725,26 +730,33 @@ def _coord_gain_curve(
                 "has nothing to do with the data. Use relative=True."
             )
             raise ParameterError(msg)
-        return np.asarray(values, dtype=dtype) ** power
+        with np.errstate(all="ignore"):
+            return _check_finite(np.asarray(values, dtype=dtype) ** power, dim, power)
     if values.size < 2:
         # A lone sample is the start of the coordinate, and its gain is one.
         return np.ones(values.size, dtype=dtype)
     step = coord.step if coord.evenly_sampled else values[1] - values[0]
     with np.errstate(all="ignore"):
         offsets = np.asarray((values - values[0]) / step, dtype=dtype)
-        curve = (offsets + 1.0) ** power
-    if not np.all(np.isfinite(curve)):
-        # One guard for every way the arithmetic can fail. A coordinate
-        # which is not sorted, and so one whose first two values are equal,
-        # has already been refused; what reaches here is a coordinate whose
-        # own values are not all finite.
-        msg = (
-            f"pow_coord cannot build a gain curve from '{dim}' raised to "
-            f"{power}: the result is not finite everywhere. Check that the "
-            f"coordinate holds finite values."
-        )
-        raise ParameterError(msg)
-    return curve
+        return _check_finite((offsets + 1.0) ** power, dim, power)
+
+
+def _check_finite(curve: np.ndarray, dim: str, power: float) -> np.ndarray:
+    """Return the gain curve, or say which coordinate could not make one."""
+    if np.all(np.isfinite(curve)):
+        return curve
+    # One guard for every way the arithmetic can fail: a coordinate holding
+    # something which is not finite, a negative power of a coordinate which
+    # passes through zero, a fractional power of a negative one. Naming
+    # them apart would not help the caller, who has one coordinate and one
+    # power to look at either way.
+    msg = (
+        f"pow_coord cannot build a gain curve from '{dim}' raised to "
+        f"{power}: the result is not finite everywhere. With relative=False "
+        f"the coordinate's own values are raised to the power, so one which "
+        f"crosses zero or runs negative has no curve for every power."
+    )
+    raise ParameterError(msg)
 
 
 def _normalize_kernel(data, axis: int, norm: str):
