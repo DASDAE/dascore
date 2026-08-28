@@ -256,6 +256,26 @@ class TestAnalysisWindow:
         assert by_array.equals(by_name, close=True)
         assert by_array.equals(patch, close=True)
 
+    def test_one_window_per_dimension(self, patch):
+        """A list gives each windowed dimension its own, in dimension order."""
+        windows = ["hann", "boxcar"]  # distance, then time: the patch's order
+        blended = patch.tile_apply(
+            identity, analysis=windows, time=16, distance=8, samples=True
+        )
+        assert blended.equals(patch, close=True)
+        stacked = patch.tile_apply(
+            identity, mode="stack", analysis=windows, time=16, distance=8, samples=True
+        )
+        assert np.all(stacked.get_coord("_tile_analysis_time").values == 1)
+        assert stacked.reassemble().equals(patch, close=True)
+
+    def test_wrong_number_of_windows_refused(self, patch):
+        """One window per windowed dimension, no more and no fewer."""
+        with pytest.raises(ParameterError, match="windows were given"):
+            patch.tile_apply(
+                identity, analysis=["hann"], time=16, distance=8, samples=True
+            )
+
     def test_two_dimensional_array_refused(self, patch):
         """A dual is built along each axis, which an N-D array cannot give."""
         with pytest.raises(ParameterError, match="one-dimensional"):

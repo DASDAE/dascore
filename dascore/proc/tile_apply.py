@@ -34,7 +34,12 @@ from dascore.exceptions import (
 )
 from dascore.utils.misc import iterate
 from dascore.utils.patch import patch_function
-from dascore.utils.signal import get_dual_taper, get_taper, get_window, get_window_nd
+from dascore.utils.signal import (
+    get_dual_taper,
+    get_taper,
+    get_window_edges,
+    get_window_nd,
+)
 from dascore.utils.tiles import get_tile_plan
 from dascore.utils.time import is_datetime64, is_timedelta64, to_float
 from dascore.utils.window import Window, resolve_window
@@ -143,10 +148,12 @@ def tile_apply(
         return the input exactly. Not applied in ``"stack"`` mode.
     analysis
         A window each tile is multiplied by before `function` sees it -- any
-        name or ``(name, parameter)`` tuple `get_window` knows, applied along
-        every windowed dimension. Given one, the tiles are blended back under
-        its dual, computed by scipy along each axis, so the blend is still
-        exact; a spectral `function` then sees a properly windowed tile.
+        name, ``(name, parameter)`` tuple, or one-dimensional array
+        `get_window` knows, applied along every windowed dimension, or a
+        list with one per windowed dimension in the patch's dimension
+        order. Given one, the tiles are blended back under its dual,
+        computed by scipy along each axis, so the blend is still exact; a
+        spectral `function` then sees a properly windowed tile.
         Exclusive with `taper`, and the overlap may then exceed half the
         window. None, the default, gives `function` the raw tile.
     samples
@@ -349,6 +356,7 @@ def _stack_coords(meta: PatchMeta, window: Window, analysis: Any):
     """Return a stack's coordinate manager: tile centres, edges, and offsets."""
     coords = meta.coords
     plan = window.tiles(meta.shape)
+    edges = None if analysis is None else get_window_edges(analysis, plan.size)
     new_coords = {}
     for dim, size, stride, margin, count in zip(
         window.dims, window.size, plan.stride, plan.margin, plan.grid
@@ -376,8 +384,8 @@ def _stack_coords(meta: PatchMeta, window: Window, analysis: Any):
         # The coordinate the tiles were cut from, for reassembly, and the
         # window the tiles were cut under, whose dual blends them back.
         new_coords[f"_tile_source_{dim}"] = (None, coord)
-        if analysis is not None:
-            edge = np.asarray(get_window(analysis, size), dtype=np.float32)
+        if edges is not None:
+            edge = edges[window.dims.index(dim)].astype(np.float32)
             new_coords[f"_tile_analysis_{dim}"] = (None, edge)
         # And every coordinate which rode along it, a quality flag say.
         for name, aux_dims in coords.dim_map.items():

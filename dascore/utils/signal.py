@@ -254,7 +254,7 @@ def _cached_dual_taper(window, size, stride):
 
 
 def _build_dual_taper(window, size, stride):
-    edges = _edges(window, size)
+    edges = get_window_edges(window, size)
     duals = []
     for edge, step in zip(edges, stride):
         try:
@@ -286,15 +286,28 @@ def get_window_nd(window: Any, size: tuple[int, ...]) -> np.ndarray:
     >>> get_window_nd("hann", (8, 16)).shape
     (8, 16)
     """
-    return _outer(_edges(window, tuple(size)))
+    return _outer(get_window_edges(window, tuple(size)))
 
 
-def _edges(window: Any, size: tuple[int, ...]) -> list[np.ndarray]:
-    """Return the window along each axis, as float64 arrays."""
+def get_window_edges(window: Any, size: tuple[int, ...]) -> list[np.ndarray]:
+    """
+    Return a window along each axis of a tile, as float64 arrays.
+
+    Parameters
+    ----------
+    window
+        The window; see `get_window`. One for every axis, or a list with
+        one per axis.
+    size
+        The tile's shape.
+    """
     windows = window if isinstance(window, list) else [window] * len(size)
+    if len(windows) != len(size):
+        msg = f"{len(windows)} windows were given for {len(size)} axes."
+        raise ParameterError(msg)
     return [
         np.asarray(get_window(spec, n), dtype=np.float64)
-        for spec, n in zip(windows, size)
+        for spec, n in zip(windows, size, strict=True)
     ]
 
 
