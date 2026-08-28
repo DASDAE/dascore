@@ -246,7 +246,6 @@ class TileApply(PatchProcessor):
         assert window.stride is not None and window.overlap is not None
         engine = _engine_for(self.engine, self.function, len(window.axes))
         plan = window.tiles(data.shape)
-        taper = get_taper(self.taper, window.size, window.overlap)
         data = np.asarray(data)
         ndim = len(window.axes)
         tail = tuple(range(-ndim, 0))
@@ -268,6 +267,7 @@ class TileApply(PatchProcessor):
             first = out.ndim - ndim
             offsets = [first + int(i) for i in np.argsort(window.axes)]
             return np.moveaxis(out, offsets, range(first, out.ndim))
+        taper = get_taper(self.taper, window.size, window.overlap)
         if engine == "numba":
             from dascore.utils._tiles_numba import apply_jit  # noqa: PLC0415
 
@@ -309,6 +309,13 @@ def _stack_coords(meta: PatchMeta, window: Window):
         new_coords[f"{dim}_offset"] = get_coord(data=offsets, units=coord.units)
         # The coordinate the tiles were cut from, for reassembly.
         new_coords[f"_tile_source_{dim}"] = (None, coord)
+        # And every coordinate which rode along it, a quality flag say.
+        for name, aux_dims in coords.dim_map.items():
+            if aux_dims == (dim,) and name != dim:
+                new_coords[f"_tile_source_{dim}__{name}"] = (
+                    None,
+                    coords.get_coord(name),
+                )
         coords = coords.disassociate_coord(dim)
     axis_of = dict(zip(window.dims, window.axes))
     by_axis = sorted(window.dims, key=axis_of.__getitem__)
@@ -363,11 +370,15 @@ def reassemble(patch: PatchType, *, taper: Any = "hann") -> PatchType:
     >>> tiles = patch.tile_apply(lambda x: x, mode="stack", time=0.2, samples=False)
     >>> assert tiles.reassemble().equals(patch, close=True)
     """
-    sources = {
+    stashed = {
         name[len("_tile_source_") :]: coord
         for name, coord in patch.coords.coord_map.items()
         if name.startswith("_tile_source_")
     }
+    # `dim` for the coordinate the tiles were cut from; `dim__name` for one
+    # which rode along it.
+    sources = {name: coord for name, coord in stashed.items() if "__" not in name}
+    riders = {name: coord for name, coord in stashed.items() if "__" in name}
     if not sources:
         msg = "reassemble takes a patch tile_apply stacked; this one has no tiles."
         raise PatchError(msg)
@@ -418,6 +429,10 @@ def reassemble(patch: PatchType, *, taper: Any = "hann") -> PatchType:
             f"_tile_source_{dim}",
         ):
             coord_map.pop(name)
+    for key, coord in riders.items():
+        dim, name = key.split("__", 1)
+        coord_map[name] = (dim, coord)
+        coord_map.pop(f"_tile_source_{key}")
     new_dims = tuple(d for d in patch.dims if d not in offset_dims)
     coords = get_coord_manager(coords=coord_map, dims=new_dims)
     return patch.new(data=out, coords=coords)

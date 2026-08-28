@@ -106,6 +106,31 @@ class TestOverlapAdd:
         out = cube.tile_apply(halve, distance=16, time=32, samples=True)
         np.testing.assert_allclose(out.data, cube.data / 2, atol=1e-5)
 
+    def test_history_names_a_partial_and_an_object(self, patch):
+        """A partial is named by its function, a callable object by its class."""
+        from functools import partial  # noqa: PLC0415
+
+        def scale(tiles, by):
+            return tiles * by
+
+        class Scaler:
+            def __call__(self, tiles):
+                return tiles * 3
+
+        by_partial = patch.tile_apply(partial(scale, by=2), time=64, samples=True)
+        by_object = patch.tile_apply(Scaler(), time=64, samples=True)
+        assert "scale'" in list(by_partial.attrs.history)[-1]
+        assert "0x" not in list(by_partial.attrs.history)[-1]
+        assert "function='" in list(by_object.attrs.history)[-1]
+        assert "0x" not in list(by_object.attrs.history)[-1]
+
+    def test_stack_needs_no_taper(self, patch):
+        """The taper is not built for a stack, so a name nothing knows is not asked."""
+        stacked = patch.tile_apply(
+            identity, mode="stack", taper="windowsXP", time=64, samples=True
+        )
+        assert stacked.dims[-1] == "time_offset"
+
     def test_history_names_the_function(self, patch):
         """History says which function, by name, not by address."""
         out = patch.tile_apply(agc, time=64, samples=True)
@@ -223,6 +248,17 @@ class TestReassemble:
         )
         assert stacked.reassemble().equals(cube, close=True)
 
+    def test_coordinates_riding_a_windowed_dimension_come_back(self, patch):
+        """A per-sample coordinate along a windowed dimension round-trips."""
+        flagged = patch.update_coords(quality=("time", np.arange(2000) % 3))
+        stacked = flagged.tile_apply(identity, mode="stack", time=64, samples=True)
+        assert "quality" not in stacked.dims
+        back = stacked.reassemble()
+        assert back.equals(flagged, close=True)
+        np.testing.assert_array_equal(
+            back.get_coord("quality").values, np.arange(2000) % 3
+        )
+
     def test_edit_between(self, patch):
         """Work done on the stack is what comes back: halve, then blend."""
         stacked = patch.tile_apply(identity, mode="stack", time=64, samples=True)
@@ -265,6 +301,19 @@ class TestEngines:
         by_numpy = patch.tile_apply(halve, time=64, distance=16, samples=True)
         np.testing.assert_allclose(by_numba.data, by_numpy.data, atol=1e-5)
         assert by_numba.dims == patch.dims
+
+    def test_numba_keeps_the_function_s_dtype(self, patch):
+        """A compiled function which makes a real tile complex keeps it complex."""
+        numba = pytest.importorskip("numba")
+        _jitted()
+
+        @numba.njit
+        def to_complex(tile):
+            return tile * (1 + 1j)
+
+        out = patch.tile_apply(to_complex, time=64, distance=16, samples=True)
+        assert np.iscomplexobj(out.data)
+        np.testing.assert_allclose(out.data.imag, patch.data, atol=1e-4)
 
     def test_driver_runs_in_python(self, patch):
         """The driver gives the same answer uncompiled."""

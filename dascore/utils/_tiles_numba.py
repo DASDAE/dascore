@@ -59,7 +59,10 @@ def apply_jit(plan: TilePlan, array: np.ndarray, func, taper: np.ndarray) -> np.
     same shape. Two dimensions only.
     """
     padded = plan.pad(array, dtype=np.result_type(array, np.float32))
-    out = np.zeros_like(padded)
+    # One tile through the function first, to learn what it returns: the
+    # output takes that dtype, so a real tile made complex is kept complex.
+    probe = func(padded[tuple(slice(0, z) for z in plan.size)])
+    out = np.zeros(plan.extended, dtype=np.result_type(probe, padded, taper))
     for colour0 in range(plan.colours[0]):
         for colour1 in range(plan.colours[1]):
             _apply_colour_class(
