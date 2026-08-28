@@ -169,6 +169,7 @@ website:
             - recipes/edge_effects.qmd
             - recipes/fk.qmd
             - recipes/adaptive_spectral_filter.qmd
+            - recipes/windowing.qmd
             - recipes/real_time_proc.qmd
             - recipes/parallelization.qmd
             - recipes/low_freq_proc.qmd
