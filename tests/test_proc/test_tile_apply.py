@@ -120,6 +120,20 @@ class TestStack:
         """The example patch cut into 16 by 16 tiles."""
         return patch.tile_apply(identity, mode="stack", time=0.064, distance=16)
 
+    def test_function_is_applied(self, patch):
+        """The stack is what the function made of the tiles, not the raw tiles."""
+        raw = patch.tile_apply(identity, mode="stack", time=64, samples=True)
+        halved = patch.tile_apply(halve, mode="stack", time=64, samples=True)
+        np.testing.assert_allclose(halved.data, raw.data / 2)
+
+    def test_compiled_function_refused(self, patch):
+        """A per-tile function has no stack to take."""
+        half_tile = _jitted()
+        with pytest.raises(ParameterError, match="cannot take it"):
+            patch.tile_apply(
+                half_tile, mode="stack", time=64, distance=16, samples=True
+            )
+
     def test_dims_and_shape(self, stacked, patch):
         """Tile axes where the dimensions were, offsets at the end in axis order."""
         assert stacked.dims == ("distance", "time", "distance_offset", "time_offset")
@@ -154,6 +168,22 @@ class TestStack:
         stacked = patch.tile_apply(identity, mode="stack", distance=16, samples=True)
         assert stacked.get_coord("distance_offset").values[1] == 1.0
         assert stacked.dims == ("distance", "time", "distance_offset")
+
+    def test_descending_coordinate(self, patch):
+        """Centres step down a descending coordinate from its first sample."""
+        flipped = patch.flip("distance", flip_coords=True)
+        stacked = flipped.tile_apply(identity, mode="stack", distance=16, samples=True)
+        centres = stacked.get_coord("distance").values
+        assert centres[0] > centres[1]
+        first = flipped.get_coord("distance").values[0]
+        assert centres[0] == first + (-8 + 7.5) * flipped.get_coord("distance").step
+        assert stacked.reassemble().equals(flipped, close=True)
+
+    def test_source_name_collision_refused(self, patch):
+        """The coordinate the source travels under is claimed too."""
+        clashing = patch.update_coords(_tile_source_time=("time", np.zeros(2000)))
+        with pytest.raises(ParameterError, match="_tile_source_time"):
+            clashing.tile_apply(identity, mode="stack", time=64, samples=True)
 
     def test_collision_refused(self, patch):
         """A coordinate already called what a stack would call one is refused."""
@@ -199,17 +229,30 @@ class TestReassemble:
         back = stacked.update(data=stacked.data / 2).reassemble()
         np.testing.assert_allclose(back.data, patch.data / 2, atol=1e-5)
 
+    def test_reordered_tiles_go_back_where_they_came_from(self, patch):
+        """Each tile is placed by its start, whatever order the stack is in."""
+        stacked = patch.tile_apply(identity, mode="stack", time=64, samples=True)
+        n = stacked.shape[stacked.get_axis("time")]
+        reversed_stack = stacked.order(time=np.arange(n)[::-1], samples=True)
+        assert reversed_stack.reassemble().equals(patch, close=True)
+
+    def test_dropped_tiles_leave_their_region_quiet(self, patch):
+        """A stack with tiles removed blends what is left; the gap stays silent."""
+        stacked = patch.tile_apply(identity, mode="stack", time=64, samples=True)
+        n = stacked.shape[stacked.get_axis("time")]
+        kept = stacked.select(time=(2, n - 2), samples=True)
+        back = kept.reassemble()
+        assert back.shape == patch.shape
+        # The middle is untouched; the ends, whose tiles are gone, are not.
+        np.testing.assert_allclose(
+            back.data[:, 200:-200], patch.data[:, 200:-200], atol=1e-5
+        )
+        assert np.abs(back.data[:, :8]).max() == 0
+
     def test_needs_a_stack(self, patch):
         """A patch nobody tiled cannot be reassembled."""
         with pytest.raises(PatchError, match="has no tiles"):
             patch.reassemble()
-
-    def test_grid_must_match(self, patch):
-        """A stack with tiles missing does not reassemble."""
-        stacked = patch.tile_apply(identity, mode="stack", time=64, samples=True)
-        fewer = stacked.select(time=(0, 10), samples=True)
-        with pytest.raises(PatchError, match="tile as"):
-            fewer.reassemble()
 
 
 class TestEngines:
@@ -261,11 +304,12 @@ class TestEngines:
         with pytest.raises(ParameterError, match="numba-compiled function"):
             patch.tile_apply(halve, engine="numba", time=64, distance=16, samples=True)
 
-    def test_numba_engine_is_two_dimensional(self, patch):
-        """The driver tiles two dimensions."""
+    @pytest.mark.parametrize("engine", ["auto", "numba"])
+    def test_compiled_function_needs_two_dimensions(self, patch, engine):
+        """The driver tiles two dimensions, and says so however it was reached."""
         half_tile = _jitted()
-        with pytest.raises(ParameterError, match="exactly two dimensions"):
-            patch.tile_apply(half_tile, time=64, samples=True, engine="numba")
+        with pytest.raises(ParameterError, match="exactly two windowed dimensions"):
+            patch.tile_apply(half_tile, time=64, samples=True, engine=engine)
 
     def test_numba_engine_without_numba(self, patch, monkeypatch):
         """Asked for by name with numba absent, it says what is missing."""

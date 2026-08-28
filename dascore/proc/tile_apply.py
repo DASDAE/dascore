@@ -33,7 +33,6 @@ from dascore.exceptions import (
 )
 from dascore.utils.patch import patch_function
 from dascore.utils.signal import get_taper
-from dascore.utils.tiles import get_tile_plan
 from dascore.utils.time import is_datetime64, is_timedelta64, to_float
 from dascore.utils.window import Window, resolve_window
 from dascore.workflow.meta import PatchMeta
@@ -51,11 +50,16 @@ def _is_jitted(func) -> bool:
 
 
 def _offset_values(coord, offsets: np.ndarray):
-    """Return coordinate values `offsets` samples from the coordinate's start."""
-    step = coord.step
+    """
+    Return coordinate values `offsets` samples from the coordinate's first sample.
+
+    From the first sample, not the minimum: a descending coordinate steps
+    down from where it starts.
+    """
+    first, step = coord.values[0], coord.step
     if is_datetime64(coord.dtype) or is_timedelta64(coord.dtype):
-        return coord.min() + dc.to_timedelta64(offsets * to_float(step))
-    return coord.min() + offsets * step
+        return first + dc.to_timedelta64(offsets * to_float(step))
+    return first + offsets * step
 
 
 def _engine_for(engine: str, func, ndim: int) -> str:
@@ -65,7 +69,7 @@ def _engine_for(engine: str, func, ndim: int) -> str:
         raise ParameterError(msg)
     jitted = _is_jitted(func)
     if engine == "auto":
-        engine = "numba" if jitted and ndim == 2 else "numpy"
+        engine = "numba" if jitted else "numpy"
     if engine == "numba":
         if not jitted:
             msg = (
@@ -74,7 +78,10 @@ def _engine_for(engine: str, func, ndim: int) -> str:
             )
             raise ParameterError(msg)
         if ndim != 2:
-            msg = "engine='numba' tiles exactly two dimensions."
+            msg = (
+                "A numba-compiled function is given one tile at a time over "
+                f"exactly two windowed dimensions; this call windows {ndim}."
+            )
             raise ParameterError(msg)
         # Deferred: the driver is optional, and importing it eagerly would
         # compile it whenever dascore is imported.
@@ -246,7 +253,13 @@ class TileApply(PatchProcessor):
         moved = np.moveaxis(data, window.axes, tail)
         batches = moved.reshape((-1, *moved.shape[-ndim:]))
         if self.mode == "stack":
-            stacks = np.stack([plan.extract(batch) for batch in batches])
+            if engine == "numba":
+                msg = (
+                    "mode='stack' hands the function the whole stack of tiles; "
+                    "a numba-compiled function of one tile cannot take it."
+                )
+                raise ParameterError(msg)
+            stacks = np.stack([self.function(plan.extract(batch)) for batch in batches])
             out = stacks.reshape((*moved.shape[:-ndim], *plan.grid, *plan.size))
             # The tile axes go where the windowed dimensions were; the
             # offsets within a tile go at the end, in the patch's axis order.
@@ -275,9 +288,15 @@ def _stack_coords(meta: PatchMeta, window: Window):
     for dim, size, stride, count in zip(
         window.dims, window.size, plan.stride, plan.grid
     ):
-        for suffix in ("_start", "_stop", "_offset"):
-            if f"{dim}{suffix}" in coords.coord_map:
-                msg = f"The patch already has a coordinate called {dim}{suffix}."
+        claimed = (
+            f"{dim}_start",
+            f"{dim}_stop",
+            f"{dim}_offset",
+            f"_tile_source_{dim}",
+        )
+        for name in claimed:
+            if name in coords.coord_map:
+                msg = f"The patch already has a coordinate called {name}."
                 raise ParameterError(msg)
         coord = coords.get_coord(dim)
         starts = np.arange(count) * stride - stride
@@ -301,6 +320,23 @@ def _stack_coords(meta: PatchMeta, window: Window):
 
 
 register_implementation("tile_apply", TileApply)
+
+
+def _overlap_from_starts(
+    starts: list[np.ndarray], size: tuple[int, ...]
+) -> tuple[int, ...]:
+    """
+    Return how far the tiles overlapped when cut, from the gaps between starts.
+
+    The smallest gap between any two starts is the stride; a lone tile has
+    nothing to overlap with and gets a boxcar.
+    """
+    out = []
+    for start, z in zip(starts, size):
+        unique = np.unique(start)
+        stride = int(np.min(np.diff(unique))) if len(unique) > 1 else z
+        out.append(max(0, z - stride))
+    return tuple(out)
 
 
 @patch_function()
@@ -338,10 +374,7 @@ def reassemble(patch: PatchType, *, taper: Any = "hann") -> PatchType:
     dims = tuple(sources)
     offset_dims = tuple(f"{dim}_offset" for dim in dims)
     size = tuple(len(patch.get_coord(name)) for name in offset_dims)
-    starts = [patch.get_coord(f"{dim}_start").values for dim in dims]
-    stride = tuple(int(s[1] - s[0]) if len(s) > 1 else z for s, z in zip(starts, size))
     shape = tuple(len(coord) for coord in sources.values())
-    overlap = tuple(z - st for z, st in zip(size, stride))
     tile_axes = tuple(patch.get_axis(dim) for dim in dims)
     offset_axes = tuple(patch.get_axis(name) for name in offset_dims)
     ndim = len(dims)
@@ -352,15 +385,28 @@ def reassemble(patch: PatchType, *, taper: Any = "hann") -> PatchType:
     batch_shape = moved.shape[: -2 * ndim]
     grid = moved.shape[-2 * ndim : -ndim]
     stacks = moved.reshape((-1, int(np.prod(grid)), *size))
-    plan = get_tile_plan(shape, size, stride)
-    if plan.grid != grid:
-        msg = f"The stack holds {grid} tiles but {shape} samples tile as {plan.grid}."
-        raise PatchError(msg)
+    # Where each tile goes is what its start says, whatever order the tiles
+    # are in and whichever of them are still here; the taper's ramp length
+    # is what the tiles overlapped by when they were cut.
+    starts = [patch.get_coord(f"{dim}_start").values for dim in dims]
+    overlap = _overlap_from_starts(starts, size)
     weights = get_taper(taper, size, overlap)
-    blended = np.stack([plan.overlap_add(stack, weights) for stack in stacks])
-    out = np.moveaxis(
-        blended.reshape((*batch_shape, *shape)), tuple(range(-ndim, 0)), tile_axes
+    origins = np.stack(np.meshgrid(*starts, indexing="ij"), axis=-1).reshape(-1, ndim)
+    low = tuple(int(min(0, s.min())) for s in starts)
+    high = tuple(int(max(n, s.max() + z)) for n, s, z in zip(shape, starts, size))
+    out = np.zeros(
+        (stacks.shape[0], *(h - lo for lo, h in zip(low, high))),
+        dtype=np.result_type(stacks, weights),
     )
+    for tile, origin in enumerate(origins):
+        place = tuple(
+            slice(int(o - lo), int(o - lo + z)) for o, lo, z in zip(origin, low, size)
+        )
+        out[(slice(None), *place)] += stacks[:, tile] * weights
+    inner = tuple(slice(-lo, -lo + n) for lo, n in zip(low, shape))
+    blended = out[(slice(None), *inner)]
+    out = blended.reshape((*batch_shape, *shape))
+    out = np.moveaxis(out, tuple(range(-ndim, 0)), tile_axes)
     # Put the source coordinates back, and drop everything the stack added.
     coord_map: dict[str, Any] = dict(patch.coords.get_coord_tuple_map())
     for dim, coord in sources.items():
