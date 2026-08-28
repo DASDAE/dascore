@@ -91,12 +91,17 @@ class TestOverlapNone:
         assert out.attrs["_tile_stride_time"] == 8
 
     def test_adaptive_spectral_filter_means_the_most_allowed(self, patch):
-        """Windows of 16 overlap by 7, which is window // 2 - 1."""
+        """Windows of 16 overlap by 7 and of 15 by 7: the most under half."""
         by_default = patch.adaptive_spectral_filter(time=16, distance=16, samples=True)
         by_hand = patch.adaptive_spectral_filter(
             time=16, distance=16, overlap=7, samples=True
         )
         assert np.allclose(by_default.data, by_hand.data)
+        odd = patch.adaptive_spectral_filter(time=15, distance=15, samples=True)
+        odd_by_hand = patch.adaptive_spectral_filter(
+            time=15, distance=15, overlap=7, samples=True
+        )
+        assert np.allclose(odd.data, odd_by_hand.data)
 
 
 class TestPercentRounding:

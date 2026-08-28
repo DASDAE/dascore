@@ -49,7 +49,9 @@ def _check_window(window: Any, overlap: Any, label: str) -> None:
         msg = f"overlap for {label} must be non-negative; got {overlap!r}."
         raise ValueError(msg)
     if overlap >= window / 2:
-        msg = f"overlap for {label} is too large; maximum is {window // 2 - 1} samples."
+        msg = (
+            f"overlap for {label} is too large; maximum is {(window - 1) // 2} samples."
+        )
         raise ValueError(msg)
 
 
@@ -242,7 +244,7 @@ def adaptive_spectral_filter(
     overlap
         How far each window reaches into the next, in coordinate units or,
         with `samples`, in samples; a mapping gives each dimension its own.
-        Default is ``window // 2 - 1`` samples, the most allowed.
+        Default is ``(window - 1) // 2`` samples, the most allowed.
     exponent
         The weighting power. ``0`` leaves the spectrum unweighted; above 1
         weak coherent arrivals go with the noise. Non-negative.
@@ -338,7 +340,7 @@ class AdaptiveSpectralFilter(PatchProcessor):
             min_samples=2,
             # The most the window allows, which is what Lightguide uses. A
             # default is a sample count whatever `samples` says.
-            default_overlap=lambda size: size // 2 - 1,
+            default_overlap=lambda size: (size - 1) // 2,
         )
         # A default was given, so every dimension has an overlap.
         assert window.overlap is not None
