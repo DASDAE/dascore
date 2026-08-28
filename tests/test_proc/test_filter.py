@@ -361,6 +361,17 @@ class TestSavgolFilter:
         assert out.shape == event_patch_2.shape
         assert not np.allclose(out.data, event_patch_2.data)
 
+    def test_each_dim_filtered_in_turn(self, random_patch):
+        """Each pass filters the last one's output, not the original data."""
+        kwargs = {"samples": True, "polyorder": 2}
+        out = random_patch.savgol_filter(time=5, distance=7, **kwargs)
+        chained = random_patch.savgol_filter(time=5, **kwargs).savgol_filter(
+            distance=7, **kwargs
+        )
+        assert np.allclose(out.data, chained.data)
+        one = random_patch.savgol_filter(time=5, **kwargs)
+        assert not np.allclose(out.data, one.data)
+
 
 class TestGaussianFilter:
     """Test the Gaussian Filter."""

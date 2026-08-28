@@ -388,7 +388,7 @@ def savgol_filter(
     size, axes = window.full_size(), window.axes
     for ax in axes:
         data = np_savgol_filter(
-            x=patch.data,
+            x=data,
             window_length=size[ax],
             polyorder=polyorder,
             mode=mode,
