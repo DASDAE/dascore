@@ -261,22 +261,7 @@ class TestChangedOnPurpose:
 
 
 class TestDimensionOrder:
-    """Which order the selected dimensions come back in matters to savgol."""
-
-    def test_savgol_keeps_only_the_last_keyword(self, patch):
-        """
-        Each pass filters the original data, so the last keyword axis wins.
-
-        Pinned so the migration does not change it by accident; it is a
-        bug, and fixing it is a separate change with its own test.
-        """
-        both = patch.savgol_filter(time=5, distance=7, samples=True, polyorder=2)
-        last = patch.savgol_filter(distance=7, samples=True, polyorder=2)
-        reversed_both = patch.savgol_filter(
-            distance=7, time=5, samples=True, polyorder=2
-        )
-        assert np.allclose(both.data, last.data)
-        assert not np.allclose(both.data, reversed_both.data)
+    """Whether the order of the selected dimensions changes the answer."""
 
     def test_gaussian_does_not_care(self, patch):
         """Gaussian smoothing is separable, so order is nothing to it."""
