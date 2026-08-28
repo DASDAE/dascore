@@ -33,6 +33,7 @@ from dascore.exceptions import (
 )
 from dascore.utils.patch import patch_function
 from dascore.utils.signal import get_taper
+from dascore.utils.tiles import get_tile_plan
 from dascore.utils.time import is_datetime64, is_timedelta64, to_float
 from dascore.utils.window import Window, resolve_window
 from dascore.workflow.meta import PatchMeta
@@ -337,6 +338,30 @@ def _stack_coords(meta: PatchMeta, window: Window):
 register_implementation("tile_apply", TileApply)
 
 
+def _place_each(stacks, starts, shape, size, weights):
+    """
+    Blend tiles by adding each where its start says, one tile at a time.
+
+    For a stack which is not every tile in the order it was cut -- thinned,
+    or reordered -- where the plan's colour classes no longer apply.
+    """
+    ndim = len(shape)
+    origins = np.stack(np.meshgrid(*starts, indexing="ij"), axis=-1).reshape(-1, ndim)
+    low = tuple(int(min(0, s.min())) for s in starts)
+    high = tuple(int(max(n, s.max() + z)) for n, s, z in zip(shape, starts, size))
+    out = np.zeros(
+        (stacks.shape[0], *(h - lo for lo, h in zip(low, high))),
+        dtype=np.result_type(stacks, weights),
+    )
+    for tile, origin in enumerate(origins):
+        place = tuple(
+            slice(int(o - lo), int(o - lo + z)) for o, lo, z in zip(origin, low, size)
+        )
+        out[(slice(None), *place)] += stacks[:, tile] * weights
+    inner = tuple(slice(-lo, -lo + n) for lo, n in zip(low, shape))
+    return out[(slice(None), *inner)]
+
+
 @patch_function()
 def reassemble(patch: PatchType, *, taper: Any = "hann") -> PatchType:
     """
@@ -394,20 +419,17 @@ def reassemble(patch: PatchType, *, taper: Any = "hann") -> PatchType:
     strides = tuple(int(patch.attrs[f"_tile_stride_{dim}"]) for dim in dims)
     overlap = tuple(z - st for z, st in zip(size, strides))
     weights = get_taper(taper, size, overlap)
-    origins = np.stack(np.meshgrid(*starts, indexing="ij"), axis=-1).reshape(-1, ndim)
-    low = tuple(int(min(0, s.min())) for s in starts)
-    high = tuple(int(max(n, s.max() + z)) for n, s, z in zip(shape, starts, size))
-    out = np.zeros(
-        (stacks.shape[0], *(h - lo for lo, h in zip(low, high))),
-        dtype=np.result_type(stacks, weights),
+    plan = get_tile_plan(shape, size, strides)
+    as_cut = all(
+        len(s) == count and np.array_equal(s, np.arange(count) * st - st)
+        for s, count, st in zip(starts, plan.grid, strides)
     )
-    for tile, origin in enumerate(origins):
-        place = tuple(
-            slice(int(o - lo), int(o - lo + z)) for o, lo, z in zip(origin, low, size)
-        )
-        out[(slice(None), *place)] += stacks[:, tile] * weights
-    inner = tuple(slice(-lo, -lo + n) for lo, n in zip(low, shape))
-    blended = out[(slice(None), *inner)]
+    if as_cut:
+        # Every tile, in the order it was cut: the plan blends the stack a
+        # colour class at a time rather than a tile at a time.
+        blended = np.stack([plan.overlap_add(stack, weights) for stack in stacks])
+    else:
+        blended = _place_each(stacks, starts, shape, size, weights)
     out = blended.reshape((*batch_shape, *shape))
     out = np.moveaxis(out, tuple(range(-ndim, 0)), tile_axes)
     # Put the source coordinates back, and drop everything the stack added.
