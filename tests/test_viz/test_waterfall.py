@@ -16,6 +16,7 @@ import dascore as dc
 from dascore.examples import inventory_patch_pair
 from dascore.exceptions import ParameterError
 from dascore.units import get_quantity_str, percent
+from dascore.utils.misc import suppress_warnings
 from dascore.utils.time import is_datetime64, to_timedelta64
 from dascore.viz._labels import BAR_GID, MAX_LABELS, MAX_RUNS, SEAM_GID
 from dascore.viz._lanes import string_colors
@@ -385,6 +386,14 @@ class TestWaterfall:
         data = np.ones(random_patch.shape)
         patch = random_patch.update(data=data)
         ax = patch.viz.waterfall()
+        assert isinstance(ax, plt.Axes)
+
+    def test_all_nan_patch(self, random_patch):
+        """All-NaN data should plot without leaking scaling warnings."""
+        data = np.full(random_patch.shape, np.nan)
+        patch = random_patch.update(data=data)
+        with suppress_warnings(category=RuntimeWarning, action="error"):
+            ax = patch.viz.waterfall()
         assert isinstance(ax, plt.Axes)
 
     def test_constant_data_with_relative_scale(self, random_patch):
