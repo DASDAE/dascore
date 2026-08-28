@@ -37,7 +37,7 @@ from dascore.constants import PatchType
 from dascore.exceptions import MissingOptionalDependencyError, ParameterError
 from dascore.utils.misc import is_power_of_two
 from dascore.utils.patch import patch_function
-from dascore.utils.signal import _triangular_taper
+from dascore.utils.signal import get_taper
 from dascore.utils.window import resolve_window
 from dascore.workflow.meta import PatchMeta
 from dascore.workflow.processor import PatchProcessor, register_implementation
@@ -126,8 +126,7 @@ def _prepare_work_arrays(
     """
     working = np.ascontiguousarray(data, dtype=np.float32)
     stride = tuple(win - over for win, over in zip(window_size, overlap))
-    plateau = tuple(win - 2 * over for win, over in zip(window_size, overlap))
-    taper = _triangular_taper(window_size, plateau)
+    taper = get_taper("triang", window_size, overlap)
     padded_shape = tuple(
         length + 2 * step for length, step in zip(working.shape, stride)
     )

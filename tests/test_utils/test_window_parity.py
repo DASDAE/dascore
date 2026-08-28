@@ -15,10 +15,12 @@ import warnings
 
 import numpy as np
 import pytest
+from scipy.signal.windows import hann
 
 import dascore as dc
 from dascore.exceptions import CoordError, ParameterError
 from dascore.units import percent, s
+from dascore.utils.signal import get_taper
 
 
 @pytest.fixture(scope="module")
@@ -252,6 +254,21 @@ class TestChangedOnPurpose:
         with pytest.raises(ParameterError, match="at least 1 samples"):
             patch.stft(time=0, samples=True, overlap=None)
 
+    def test_rolling_zero_window_is_the_resolver_s_floor(self, patch):
+        """Rolling had its own "can't be zero" check; the shared floor says it now."""
+        with pytest.raises(ParameterError, match="at least 1 samples"):
+            patch.rolling(time=0, samples=True)
+
+    def test_hampel_with_no_window_refuses(self, patch):
+        """Given no dimension, hampel used to return the data untouched."""
+        with pytest.raises(ParameterError, match="at least one dimension"):
+            patch.hampel_filter()
+
+    def test_stft_array_window_of_the_wrong_length_refused(self, patch):
+        """A 90-sample array for a 100-sample window used to be zero padded."""
+        with pytest.raises(ParameterError, match="90 samples, not 100"):
+            patch.stft(time=100, taper_window=np.ones(90), samples=True)
+
     def test_adaptive_spectral_filter_refuses_none_in_a_mapping(self, patch):
         """Raised a TypeError before; now says what to do instead."""
         with pytest.raises(ParameterError, match="leave it out"):
@@ -282,3 +299,62 @@ class TestEmptySelection:
         """So does every function which reads its dimensions from kwargs."""
         with pytest.raises(ParameterError, match="at least one dimension"):
             patch.median_filter()
+
+
+class TestTaperRamps:
+    """
+    The ramp each edge-tapering function builds, pinned by value.
+
+    All take the first n samples of a window of 2n + 1, so a five-sample
+    triangle is 1/6, 2/6, ... 5/6 and the plateau follows. `Patch.taper`
+    used to take the first half of a window of 2n instead (1/10, 3/10,
+    ...), and moved here on purpose: one ramp, everywhere.
+    """
+
+    @pytest.fixture(scope="class")
+    def ones(self):
+        """A patch of ones, so the taper is the output."""
+        patch = dc.get_example_patch()
+        return patch.new(data=np.ones_like(patch.data))
+
+    def test_taper_uses_a_2n_plus_1_window(self, ones):
+        """16 ms is five samples; the ramp is the first five of a triangle of 11."""
+        out = ones.taper(time=(np.timedelta64(16, "ms"), None), window_type="triang")
+        np.testing.assert_allclose(out.data[0, :6], np.arange(1, 7) / 6)
+
+    def test_taper_hann_uses_a_2n_plus_1_window(self, ones):
+        """The same construction for hann: the first five of a hann of 11."""
+        out = ones.taper(time=(np.timedelta64(16, "ms"), None), window_type="hann")
+        np.testing.assert_allclose(out.data[0, :5], hann(11)[:5], rtol=1e-6)
+        assert out.data[0, 5] == 1.0
+
+    def test_taper_end_is_the_start_reversed(self, ones):
+        """The end ramp is the mirror of the start ramp."""
+        out = ones.taper(time=np.timedelta64(16, "ms"), window_type="triang")
+        np.testing.assert_allclose(out.data[0, -5:], (np.arange(1, 6) / 6)[::-1])
+
+    def test_taper_range_uses_a_2n_plus_1_window(self, ones):
+        """Four samples of triangle from a window of nine: 0.2, 0.4, 0.6, 0.8."""
+        out = ones.taper_range(
+            time=(0, 4, 100, 104), samples=True, window_type="triang"
+        )
+        np.testing.assert_allclose(out.data[0, :5], [0.2, 0.4, 0.6, 0.8, 1.0])
+
+    def test_taper_range_hann_uses_a_2n_plus_1_window(self, ones):
+        """And for hann."""
+        out = ones.taper_range(time=(0, 4, 100, 104), samples=True, window_type="hann")
+        expected = [0.0, 0.14644661, 0.5, 0.85355339, 1.0]
+        np.testing.assert_allclose(out.data[0, :5], expected, rtol=1e-6)
+
+    def test_stft_window_is_scipy_symmetric(self, patch):
+        """Stft's whole-tile window is scipy's symmetric one."""
+        out = patch.stft(time=8, samples=True, overlap=None)
+        # The window travels as a coordinate for istft; it is the symmetric hann.
+        np.testing.assert_allclose(
+            out.get_coord("_stft_window").values, hann(8, sym=True)
+        )
+
+    def test_adaptive_spectral_filter_ramp(self, ones):
+        """The tile taper's ramp is the 2n + 1 triangle, complementary by nature."""
+        taper = get_taper("triang", (8,), (3,))
+        np.testing.assert_allclose(taper, [0.25, 0.5, 0.75, 1, 1, 0.75, 0.5, 0.25])

@@ -21,7 +21,6 @@ from dascore.proc.adaptive_spectral_filter import (
     _get_engine,
     _validate_window_and_overlap,
 )
-from dascore.utils.signal import _triangular_taper
 
 
 def _numba_engine():
@@ -535,58 +534,6 @@ class TestAdaptiveSpectralFilter:
 
 class TestAdaptiveSpectralCore:
     """Tests for plain array adaptive spectral helpers."""
-
-    def test_triangular_taper_values(self) -> None:
-        """The shared taper should match the overlap-add ramp geometry."""
-        taper = _triangular_taper((8, 8), (2, 2))
-        expected_1d = np.array([0.25, 0.5, 0.75, 1.0, 1.0, 0.75, 0.5, 0.25])
-
-        np.testing.assert_allclose(taper, expected_1d[:, None] * expected_1d[None, :])
-        assert taper.dtype == np.float32
-
-    def test_triangular_taper_all_ones_when_plateau_matches_window(self) -> None:
-        """A full-window plateau should support zero-overlap reconstruction."""
-        taper = _triangular_taper((8, 8), (8, 8))
-
-        np.testing.assert_array_equal(taper, np.ones((8, 8), dtype=np.float32))
-
-    def test_triangular_taper_one_dimensional(self) -> None:
-        """The shared taper should also support 1D reconstruction."""
-        taper = _triangular_taper((8,), (2,))
-        expected = np.array([0.25, 0.5, 0.75, 1.0, 1.0, 0.75, 0.5, 0.25])
-
-        np.testing.assert_allclose(taper, expected)
-        assert taper.dtype == np.float32
-
-    def test_triangular_taper_cache_is_not_mutated_by_callers(self) -> None:
-        """Callers should receive a copy of the cached taper."""
-        taper = _triangular_taper((16, 16), (2, 2))
-        expected = taper.copy()
-
-        taper[...] = -1.0
-        actual = _triangular_taper((16, 16), (2, 2))
-
-        np.testing.assert_array_equal(actual, expected)
-
-    @pytest.mark.parametrize(
-        "window_size,plateau,match",
-        [
-            ((16, 16), (17, 2), "Plateau cannot"),
-            ((16, 16), (-1, 2), "non-negative"),
-            ((15, 16), (2, 2), "Window sizes must be even"),
-            ((16, 16), (2,), "same length"),
-            ((16, 16, 16), (2, 2, 2), "one- and two-dimensional"),
-        ],
-    )
-    def test_triangular_taper_rejects_invalid_geometry(
-        self,
-        window_size: tuple[int, int],
-        plateau: tuple[int, int],
-        match: str,
-    ) -> None:
-        """Invalid taper geometry should raise."""
-        with pytest.raises(ValueError, match=match):
-            _triangular_taper(window_size, plateau)
 
     @pytest.mark.parametrize(
         "window_size,overlap,match",

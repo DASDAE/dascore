@@ -9,6 +9,7 @@ import dascore as dc
 from dascore.exceptions import CoordError, ParameterError
 from dascore.units import percent
 from dascore.utils.misc import suppress_warnings
+from dascore.utils.patch import get_patch_window_size, get_window_axis_step
 from dascore.utils.window import Window, resolve_window
 from dascore.workflow.meta import PatchMeta
 
@@ -103,14 +104,8 @@ class TestWindowSize:
             )
         assert window.size == (5,)
 
-    def test_empty_kwargs_allowed(self, simple_patch):
-        """With nothing windowed, the window is one along every axis."""
-        window = resolve_window(simple_patch, {}, allow_empty=True)
-        assert window.dims == ()
-        assert window.full_size() == (1,) * simple_patch.data.ndim
-
     def test_empty_kwargs_refused(self, simple_patch):
-        """Unless the function wants a dimension."""
+        """A windowed function wants a window."""
         with pytest.raises(ParameterError, match="at least one dimension"):
             resolve_window(simple_patch, {})
 
@@ -404,18 +399,20 @@ class TestDeprecatedResolvers:
 
     def test_get_patch_window_size(self, simple_patch):
         """The full-size tuple, as before."""
-        from dascore.utils.patch import get_patch_window_size  # noqa: PLC0415
-
         with pytest.warns(DeprecationWarning, match="resolve_window"):
             size = get_patch_window_size(simple_patch, {"time": 5}, samples=True)
         assert (
             size == resolve_window(simple_patch, {"time": 5}, samples=True).full_size()
         )
 
+    def test_get_patch_window_size_with_no_window(self, simple_patch):
+        """As before, no dimension gives one along every axis."""
+        with pytest.warns(DeprecationWarning, match="resolve_window"):
+            size = get_patch_window_size(simple_patch, {})
+        assert size == (1,) * simple_patch.data.ndim
+
     def test_get_window_axis_step(self, random_patch):
         """Window, axis, and step, as before."""
-        from dascore.utils.patch import get_window_axis_step  # noqa: PLC0415
-
         with pytest.warns(DeprecationWarning, match="resolve_window"):
             out = get_window_axis_step(
                 random_patch, distance=16, overlap=50 * percent, samples=True
