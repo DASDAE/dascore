@@ -47,19 +47,29 @@ with dc.config_context(patch_kind_attrs=("acquisition_key",)):
 ```
 
 ```{python}
+from IPython.display import HTML
+
 with dc.config_context(patch_history="disabled", display_max_items=3):
     patch = dc.get_example_patch().abs()
-    patch
+    compact_html = HTML(patch._repr_html_())
+
+compact_html
 ```
 
 HTML output uses collapsible sections in notebooks and rendered documentation. Text output contains the same underlying summary and is suitable for terminals and logs.
 
 ```{python}
 with dc.config_context(display_html=False):
-    patch
+    text_output = repr(patch)
 
+print(text_output)
+```
+
+```{python}
 with dc.config_context(display_html_open_lines=0):
-    patch
+    folded_html = HTML(patch._repr_html_())
+
+folded_html
 ```
 
 For `allow_remote_cache`, HDF5 block-cache settings, and metadata-versus-read behavior, see [Working with remote patches](remote_patches.qmd).

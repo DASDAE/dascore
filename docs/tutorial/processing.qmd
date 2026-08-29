@@ -120,7 +120,7 @@ both_dimensions = event.pow_coord(time=2, distance=1)
 
 The coordinate count begins at one rather than zero, so the first sample retains its amplitude. Time powers of one or two are common geometric-spreading corrections; other dimensions can be corrected in the same call.
 
-# Spectral whitening
+# Spectral whitening {#whiten}
 
 [`Patch.whiten`](`dascore.Patch.whiten`) balances spectral amplitudes while largely preserving phase. It is commonly used before ambient-noise correlation.
 

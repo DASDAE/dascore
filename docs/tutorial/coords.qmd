@@ -203,6 +203,6 @@ renamed = manager.rename_coord(time="elapsed_time")
 
 When several dimensions are sorted together, the returned data reflects each permutation in dimension order. Renaming a dimension also updates every coordinate association that refers to it.
 
-`sort`, `snap`, unit conversion, and other alignment-changing methods follow the same `(manager, array)` return pattern. Passing no array updates coordinates alone; when data alignment matters, always pass the associated array.
+`select`, `order`, `sort`, and `snap` accept an associated array and return `(manager, array)`. Methods that do not change alignment, such as unit conversion, return only a manager.
 
 Prefer the corresponding Patch methods when operating on a patch; they keep data, coordinates, metadata, and provenance together.

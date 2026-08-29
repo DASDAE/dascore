@@ -232,7 +232,7 @@ Patches that cannot concatenate remain in separate output groups. Values are ord
 
 # Mapping
 
-[`Spool.map`](`dascore.core.spool.Spool.map`) applies a function lazily to every patch. Chunk first to control work size.
+[`Spool.map`](`dascore.core.spool.Spool.map`) eagerly applies a function to every patch. Chunk first to control work size.
 
 ```{python}
 def distance_max(patch):

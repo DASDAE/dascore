@@ -61,6 +61,8 @@ with config_context(
 When a metadata query would require a full download and metadata caching is disabled, DASCore raises [`RemoteCacheError`](`dascore.exceptions.RemoteCacheError`). Opt in only for a known operation:
 
 ```python
+http_path = UPath("https://raw.githubusercontent.com/dasdae/test_data/master/das/example_dasdae_event_1.h5")
+
 with config_context(allow_remote_cache_for_metadata=True):
     summary = dc.scan(http_path)[0]
 ```
