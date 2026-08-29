@@ -4,182 +4,109 @@ execute:
   warning: false
 ---
 
-The following highlights some DASCore features for working with IO.
+DASCore reads and writes local `pathlib.Path` objects and remote [`UPath`](https://pypi.org/project/universal-pathlib/) resources supported by each format. See [Working with remote patches](remote_patches.qmd) for cache policy.
 
-:::{.callout-note}
-If you are working with remote `UPath` resources, especially HTTP or object
-store backends, see the [Working with Remote Patches](remote_patches.qmd)
-tutorial for examples, cache settings, and metadata-vs-read behavior.
-:::
+# Writing and reading
 
-## Using UPath Resources
-
-DASCore accepts both `pathlib.Path` and [`UPath`](https://pypi.org/project/universal-pathlib/) inputs for many file-backed workflows. This is useful when your data lives on a non-local backend supported by `fsspec`.
-
-The example below uses `memory://` so it can run without any external network access.
-
-```{python}
-from upath import UPath
-import dascore as dc
-
-source = dc.get_example_patch()
-remote_path = UPath("memory://dascore/tutorial/example_patch.h5")
-
-dc.write(source, remote_path, "DASDAE")
-
-summary = dc.scan(remote_path)[0]
-loaded = dc.read(remote_path)[0]
-
-print(summary.source_path)
-print(loaded.dims)
-```
-
-## Writing Patches to Disk
-
-Patches can be written to disk using the `io` namespace. The following shows how to write a Patch to disk in the [DASDAE format](`dascore.io.dasdae`)
+Write through `Patch.io`, then open the result with `dc.read` or `dc.spool`:
 
 ```{python}
 from pathlib import Path
+
 import dascore as dc
 
-write_path = Path("output_file.h5")
 patch = dc.get_example_patch()
-
-patch.io.write(write_path, "dasdae")
+path = Path("output_file.h5")
+patch.io.write(path, "DASDAE")
+round_trip = dc.read(path)[0]
 ```
 
 ```{python}
 #| echo: false
-if write_path.exists():
-    write_path.unlink()
+path.unlink(missing_ok=True)
 ```
 
-Remote-style `UPath` destinations also work for supported formats.
+Remote-style destinations use the same interface:
 
 ```{python}
 from upath import UPath
-import dascore as dc
 
-patch = dc.get_example_patch()
-remote_write_path = UPath("memory://dascore/tutorial/output_file.pkl")
-
-patch.io.write(remote_write_path, "pickle")
-
-round_trip = dc.read(remote_write_path)[0]
-print(round_trip.dims)
+remote_path = UPath("memory://dascore/tutorial/output.pkl")
+patch.io.write(remote_path, "pickle")
+remote_patch = dc.read(remote_path)[0]
 ```
 
-## Scan Metadata Without Loading Data
+Format support varies by backend: a formatter that requires a local seekable file may use the remote cache, while formats built on fsspec-compatible stores can operate directly.
 
-[`dascore.scan`](`dascore.scan`) returns [`PatchSummary`](`dascore.PatchSummary`) objects. These results expose patch metadata, coordinate-summary envelopes, and source information without loading the data array into memory.
+# Scanning metadata
+
+[`dc.scan`](`dascore.scan`) returns [`PatchSummary`](`dascore.PatchSummary`) objects without loading patch arrays.
 
 ```{python}
-import dascore as dc
 from dascore.utils.downloader import fetch
 
-path = fetch("terra15_das_1_trimmed.hdf5")
-scan_patch = dc.scan(path)[0]
+source = fetch("terra15_das_1_trimmed.hdf5")
+summary = dc.scan(source)[0]
 
-print(scan_patch.source_path)
-print(scan_patch.get_coord_summary("time").min)
+print(summary.source_path)
+print(summary.get_coord_summary("time").min)
 ```
 
-Scan results are useful for listing contents, building dataframes, and deciding which patches to load.
+Scanning also reports `source_format`, `source_version`, and `source_patch_key`, which together identify the formatter and patch inside a multi-patch file.
+
+Use source fields from the summary to load a specific patch. For compact directory listings, use `scan` or `scan_to_df`.
 
 ```{python}
-loaded_patch = dc.read(
-    scan_patch.source_path,
-    file_format=scan_patch.source_format,
-    file_version=scan_patch.source_version,
-    source_patch_key=scan_patch.source_patch_key or None,
+loaded = dc.read(
+    summary.source_path,
+    file_format=summary.source_format,
+    file_version=summary.source_version,
+    source_patch_key=summary.source_patch_key or None,
 )[0]
-print(loaded_patch.data.shape)
 ```
 
-When a coordinate-summary envelope is insufficient, [`dascore.scan_payloads(...)`](`dascore.scan_payloads`) exposes each formatter's full `CoordManager` without loading the patch data array. Pass `snap=False` to request the exact stored coordinate values from formats that store per-sample arrays.
+[`dc.scan_payloads(...)`](`dascore.scan_payloads`) also returns each formatter's `CoordManager`. With `snap=False`, formats that store per-sample coordinates expose their exact values:
 
 ```{python}
-payload = dc.scan_payloads(path, snap=False)[0]
-time_coord = payload["coords"].get_coord("time")
-
-print(payload["source_path"])
-print(type(time_coord).__name__)
-print(time_coord.get_discontinuities("gaps"))
+payload = dc.scan_payloads(source, snap=False)[0]
+time = payload["coords"].get_coord("time")
 ```
 
-`scan_payloads` may read and retain large coordinate arrays, so prefer a specific file over an entire directory and discard each result promptly. Use `dc.scan` or `dc.scan_to_df` for compact directory indexing.
+Payload scans still may read and retain large coordinate arrays, so reserve them for targeted files.
 
-:::{.callout-note}
-`Patch.attrs` stores non-coordinate metadata only. Coordinate summaries such as `time_min`, `time_max`, and `distance_step` are accessed through [`PatchSummary.get_coord_summary(...)`](`dascore.PatchSummary.get_coord_summary`) or via `patch.summary.get_coord_summary(...)`.
-:::
+`Patch.attrs` contains non-coordinate metadata. Access coordinate bounds and steps from `Patch.summary`, `PatchSummary.get_coord_summary(...)`, or the flattened summary returned by `flat_dump()`.
 
-## Directory spools
+# Directory spools
 
-A spool over a directory of dascore-readable files is created with the [`dascore.spool`](`dascore.spool`) function. It is the same class as any other spool; the only difference is how it was constructed.
-
-For example:
+`dc.spool(directory)` creates a lazy, indexed view of every supported file below that directory:
 
 ```{python}
-#| output: false
+from dascore import examples
 
-import dascore
-from dascore import examples as ex
-
-# Get a directory with several files
-diverse_spool = dascore.get_example_spool('diverse_das')
-path = ex.spool_to_directory(diverse_spool)
-
-# Create a spool for interacting with the files in the directory.
+directory = examples.spool_to_directory(dc.get_example_spool("diverse_das"))
 spool = (
-  dascore.spool(path)
-  .select(acquisition_key='DAS2.*')  # sub-select one data source
-  .select(time=(..., '2022-01-01'))  # unselect anything after 2022
-  .chunk(time=2, overlap=0.5)  # change the chunking of the patches
+    dc.spool(directory)
+    .select(acquisition_key="DAS2.*")
+    .select(time=(..., "2022-01-01"))
+    .chunk(time=2, overlap=0.5)
 )
+```
 
-# Iterate each patch and do something with it
+Iteration is where patch arrays are loaded:
+
+```{python}
 for patch in spool:
-  ...
+    processed = patch.detrend("time")
 ```
 
-## Converting Patches to Other Library Formats
+The hidden `.dascore_index.sqlite3` stores file metadata and enables selections before patch data is loaded. Opening a new directory creates the index; call `spool.update()` after files change. See the [spool tutorial](spool.qmd) and [index note](../notes/spool_index.qmd) for path attributes and index lifecycle.
 
-The `Patch.io` namespace also includes functionality for converting `Patch` instances to datastructures used by other libraries including Pandas, Xarray, and ObsPy. See the [external conversion recipe](../recipes/external_conversion.qmd) for examples.
+`update()` scans new or modified files, removes rows for deleted files, and leaves unchanged rows alone. File size and modification time identify candidates for rescanning.
 
+An optional `.inventory` companion describes the observing system and is not scanned as data.
 
-## Directory Indexer
-The `DBDirectoryIndexer` tracks the contents of a directory which contains fiber data. It creates a small, hidden SQLite index named `.dascore_index.sqlite3` at the top of the directory. Directory spools use this index internally and push metadata selections into SQLite before loading patch data. See the [spool index note](../notes/spool_index.qmd) for the schema and lifecycle.
+The index and inventory are companions to the archive rather than data sources themselves, so both use reserved hidden names and are excluded from formatter discovery.
 
-`.dascore_index.sqlite3` is one of two hidden names DASCore gives a meaning at the top of a data directory. The other is `.inventory`, which is where a directory may keep the [inventory](inventory.qmd) describing the observing system its data was recorded through. Both are companions the directory keeps rather than content it holds, which is why both are hidden and neither is scanned as data.
+# External formats
 
-
-```{python}
-#| output: false
-import dascore
-from dascore.io.index.indexer import DBDirectoryIndexer
-from dascore import examples as ex
-
-# Get a directory with several files
-diverse_spool = dascore.get_example_spool('diverse_das')
-path = ex.spool_to_directory(diverse_spool)
-
-# Create an indexer and update the index. This scans new or changed files
-# (detected by per-file modification time and size), removes entries of
-# deleted files, and creates the index if one does not yet exist.
-DBDirectoryIndexer(path).update()
-
-# The index is queried through a spool. Opening one indexes the directory
-# if it has not been indexed yet, but does not rescan afterwards: call
-# spool.update() (or the indexer's, above) when the files change.
-df = dascore.spool(path).get_contents()
-
-# This dataframe can be used to ascertain data availability, detect gaps, etc.
-```
-
-```{python}
-#| echo: false
-
-from IPython.display import display
-
-display(df.head())
-```
+`Patch.io` also converts patches to structures used by Pandas, Xarray, and ObsPy. See the [external conversion recipe](../recipes/external_conversion.qmd).

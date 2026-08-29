@@ -1,92 +1,67 @@
 # Runtime Configuration
 
-DASCore exposes a small runtime configuration surface through `dascore.config`.
+Runtime settings live in `dascore.config` and affect subsequent operations.
 
-```python
-from pathlib import Path
-
-from dascore.config import get_config, config_context
-
-print(get_config().remote_cache_dir)
-
-with config_context(remote_cache_dir=Path("/tmp/dascore-remote-cache")):
-    ...
-```
-
-Configuration changes affect subsequent operations only. For example, changing `remote_cache_dir` changes where future remote-file materializations are cached.
-
-## Two configuration tiers
-
-Config can be changed in two ways:
-
-- `set_config(...)` changes the process-wide base permanently. The change is visible from every thread and task and is not restored automatically; `reset_config()` returns to defaults. Use it for application-level settings applied once at startup.
-- `config_context(...)` overrides the config only for the current thread or task. The override is restored when the block exits, and concurrent blocks in different threads never clobber one another.
-
-```python
+```{python}
 import dascore as dc
 
-dc.set_config(display_float_precision=5)  # permanent
+print(dc.get_config().display_float_precision)
+```
 
-with dc.config_context(display_float_precision=8):  # scoped to this block
+# Scope
+
+| Function | Scope | Restoration |
+|---|---|---|
+| `set_config(...)` | Process-wide base | Until `reset_config()` |
+| `config_context(...)` | Current thread or task | When the block exits |
+
+```{python}
+dc.set_config(display_float_precision=5)
+
+with dc.config_context(display_float_precision=8):
     ...
 
-dc.reset_config()  # drop the permanent change
+dc.reset_config()
 ```
 
-[`Spool.map`](`dascore.core.spool.Spool.map`) binds the config active when `map` is called and re-applies it in each worker, so overrides also reach thread- and process-pool workers.
+Concurrent contexts do not overwrite one another. `Spool.map` captures the active configuration and reapplies it in workers.
 
-History recording is also configurable:
+`set_config` is intended for application startup. Prefer `config_context` in libraries, tests, notebooks, and any operation that should restore the caller's settings.
 
-- `patch_history="standard"` preserves the default behavior and appends new entries to `Patch.attrs.history`.
-- `patch_history="disabled"` preserves any existing history but stops DASCore from appending new entries inside that config context.
+# Common settings
 
-```python
-from dascore.config import config_context
+- `patch_history="disabled"` preserves existing history but stops appending entries.
+- `patch_kind_attrs` selects metadata fields that determine whether patches are compatible; see [Patch compatibility](../notes/patch_compatibility.qmd).
+- `display_float_precision` controls displayed decimals.
+- `display_array_threshold` limits printed array values.
+- `display_max_items` limits children shown at each representation level.
+- `display_max_patches` disables expensive spool summaries above a threshold.
+- `display_html` switches notebook output to text.
+- `display_html_open_lines` sets when HTML sections start folded; `0` folds all sections.
 
-with config_context(patch_history="disabled"):
-    ...
+`patch_kind_attrs` affects operators and spool partitioning. Conflicting values prevent combination; missing values act as wildcards for operators but form their own partition in spool operations.
+
+```{python}
+with dc.config_context(patch_kind_attrs=("acquisition_key",)):
+    ...  # tag and data_category no longer separate patch kinds
 ```
 
-Which patches may be combined is configurable too: `patch_kind_attrs` names the attributes that decide whether two patches are the same kind (patches with differing values for any of them are never combined; a missing value is a wildcard for operators and a value of its own where patches are partitioned). See the [Patch Compatibility](../notes/patch_compatibility.qmd) note.
-
-```python
-with config_context(patch_kind_attrs=("acquisition_key",)):
-    ...  # tag and data_category no longer separate patches
+```{python}
+with dc.config_context(patch_history="disabled", display_max_items=3):
+    patch = dc.get_example_patch().abs()
+    display(patch)
 ```
 
-How objects print is configurable as well: `display_float_precision` sets the decimals shown for floats (a value smaller than the last of them is shown in that many significant figures instead, so it reads as a number rather than as 0.000), `display_array_threshold` how much of an array is printed before it is elided, `display_max_items` how many children a repr lists per level before saying how many it left out, and `display_max_patches` how large a spool may be before its repr stops summarizing what it covers and names the limit it exceeded instead.
+HTML output uses collapsible sections in notebooks and rendered documentation. Text output contains the same underlying summary and is suitable for terminals and logs.
 
-```python
-with config_context(display_max_items=3):
-    display(inventory)  # at most three networks, arrays or paths per level
+```{python}
+with dc.config_context(display_html=False):
+    display(patch)
 
-with config_context(display_max_patches=100):
-    display(spool)  # a bigger spool names the limit rather than its extents
+with dc.config_context(display_html_open_lines=0):
+    display(patch)
 ```
 
-Where a display can render HTML -- a notebook, or this documentation --
-an object draws a panel whose sections fold, rather than the text above.
-`display_html` turns that off and sends every display back to the text,
-which says the same words. `display_html_open_lines` (12 by default) is
-how many lines a section may hold and still open on its own; a longer
-one, such as a patch's data, starts folded, and `0` folds every section.
+For `allow_remote_cache`, HDF5 block-cache settings, and metadata-versus-read behavior, see [Working with remote patches](remote_patches.qmd).
 
-A setting only holds while its block does, and a notebook echoes the
-last thing a cell states rather than anything inside a block, so these
-ask for the display while the setting is still in force. `display` is a
-name Jupyter puts in the namespace; elsewhere it comes from
-`IPython.display`.
-
-```python
-with config_context(display_html=False):
-    display(patch)  # the text repr, even in a notebook
-
-with config_context(display_html_open_lines=0):
-    display(patch)  # every section folded until it is asked for
-```
-
-For remote IO settings such as `allow_remote_cache`,
-`allow_remote_cache_for_metadata`, `warn_on_remote_cache`,
-`remote_hdf5_block_size`, `remote_hdf5_max_blocks`, and `warn_on_gc_pause`,
-plus examples of metadata-only vs read-time behavior, see
-[Working with Remote Patches](remote_patches.qmd).
+Remote settings include the cache directory, separate permissions for metadata and data materialization, first-download warnings, HDF5 block size, block count, and garbage-collection warnings. Keep conservative metadata defaults unless a workflow explicitly accepts downloads.
