@@ -8,7 +8,7 @@ from xml.etree import ElementTree
 
 import pytest
 
-from dascore.core.inventory import Acquisition, FiberArray, Inventory, OpticalPath
+from dascore.core.inventory import Acquisition, FiberArray, OpticalPath
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 _DOC_PATH = _REPO_ROOT / "docs"
@@ -32,13 +32,18 @@ _GRAPHIC_ELEMENTS = {
 }
 _MODEL_FIELDS = {
     "inventory_hierarchy.svg": {
-        Inventory: {"resources"},
-        FiberArray: {"optical_paths", "acquisitions"},
-        OpticalPath: {"optical_components", "geometry", "labels", "coupling"},
-        Acquisition: {"interrogator", "distance_map"},
+        "fiber-array-site": (FiberArray, {"optical_paths", "acquisitions"}),
+        "optical-path-tracks": (
+            OpticalPath,
+            {"optical_components", "geometry", "labels", "coupling"},
+        ),
+        "acquisition-settings": (Acquisition, {"interrogator", "distance_map"}),
     },
     "optical_path_concept.svg": {
-        OpticalPath: {"optical_components", "geometry", "labels", "coupling"},
+        "layer-cards": (
+            OpticalPath,
+            {"optical_components", "geometry", "labels", "coupling"},
+        ),
     },
 }
 
@@ -68,8 +73,11 @@ def test_diagram_is_valid_svg(name):
     """A missing, empty, or malformed image must fail before the docs build."""
     root = ElementTree.parse(_STATIC_PATH / name).getroot()
     assert root.tag == "{http://www.w3.org/2000/svg}svg"
-    assert root.get("viewBox")
-    assert all(float(value) > 0 for value in root.get("viewBox").split()[2:])
+    view_box = root.get("viewBox")
+    assert view_box
+    values = [float(value) for value in re.split(r"[\s,]+", view_box.strip())]
+    assert len(values) == 4
+    assert values[2] > 0 and values[3] > 0
     namespace = "{http://www.w3.org/2000/svg}"
     definitions = {
         element
@@ -88,8 +96,10 @@ def test_diagram_is_valid_svg(name):
 def test_diagram_model_fields(name, model_fields):
     """Field names shown in the diagrams stay aligned with the models."""
     root = ElementTree.parse(_STATIC_PATH / name).getroot()
-    text = " ".join(root.itertext()).lower()
-    for model, fields in model_fields.items():
+    for group_id, (model, fields) in model_fields.items():
+        group = root.find(f".//*[@id='{group_id}']")
+        assert group is not None
+        text = " ".join(group.itertext()).lower()
         assert fields <= model.model_fields.keys()
         assert all(field in text for field in fields)
 
