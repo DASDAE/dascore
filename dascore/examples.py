@@ -429,6 +429,10 @@ def ricker_moveout(
     Notes
     -----
     Based on https://github.com/lijunzh/ricker/.
+
+    See Also
+    --------
+    `plane_wave`: one frequency at one apparent velocity, with no onset.
     """
 
     def _ricker(time, delay):
@@ -494,6 +498,11 @@ def plane_wave(
         The number of distance channels.
     time_min
         The start time in the metadata.
+
+    See Also
+    --------
+    `ricker_moveout`: a wavelet with an onset crossing the array at one
+    apparent velocity, for time-domain moveout.
     """
     distance = np.arange(channel_count) * distance_step
     time = np.arange(round(duration / time_step)) * time_step
