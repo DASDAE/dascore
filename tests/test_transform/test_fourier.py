@@ -690,16 +690,7 @@ class TestSTFTManyDims:
     @pytest.fixture(scope="class")
     def plane_wave(self):
         """A plane wave of 20 Hz moving at 500 m/s: one (f, k) in every window."""
-        distance = np.arange(128, dtype=float) * 4.0
-        time = np.arange(1024, dtype=float) * 0.002
-        freq, velocity = 20.0, 500.0
-        data = np.cos(2 * np.pi * freq * (time[None, :] - distance[:, None] / velocity))
-        patch = dc.Patch(
-            data=data.astype(np.float32),
-            coords={"distance": distance, "time": time},
-            dims=("distance", "time"),
-        )
-        return patch.set_units(distance="m", time="s")
+        return dc.get_example_patch("plane_wave")
 
     def test_dims_and_coords(self, plane_wave):
         """Frequencies where the dimensions were, then the window centres."""
