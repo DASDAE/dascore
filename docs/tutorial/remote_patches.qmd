@@ -90,7 +90,7 @@ Only cyclic garbage accumulates during the pause, and only until the final remot
 
 ```python
 with config_context(warn_on_gc_pause=False):
-    patch = dc.read("http://example.com/data/prodml_2.1.h5")[0]
+    patch = dc.read(http_path)[0]
 ```
 
 # Transfer tuning
@@ -108,7 +108,7 @@ Small blocks reduce over-fetch during metadata scans but increase network round 
 
 ```python
 with config_context(remote_hdf5_block_size=262_144, remote_hdf5_max_blocks=4):
-    summaries = dc.scan_to_df(urls)
+    summaries = dc.scan_to_df([http_path])
 ```
 
 HTTP and HTTPS use both settings. S3 uses its own read-ahead cache and takes the block size only.
