@@ -480,6 +480,7 @@ class Patch(NodeRepr, NamespaceOwner):
 
     interpolate = dascore.proc.interpolate
     normalize = dascore.proc.normalize
+    pow_coord = dascore.proc.pow_coord
     standardize = dascore.proc.standardize
     taper = dascore.proc.taper
     taper_range = dascore.proc.taper_range

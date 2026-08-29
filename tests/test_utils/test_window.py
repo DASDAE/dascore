@@ -59,9 +59,25 @@ class TestWindowSize:
         window = resolve_window(simple_patch, {"time": step * 4}, require_odd=True)
         assert window.size == (5,)
 
+    def test_require_odd_can_overrun_the_coord(self, simple_patch):
+        """Rounding up to odd is itself able to push a window past the end."""
+        coord = simple_patch.get_coord("time")
+        # A window of the whole coordinate, whose even count has nowhere to
+        # round up to. Checked before the rounding it would have passed.
+        whole = coord.step * len(coord)
+        assert len(coord) % 2 == 0
+
+        with pytest.raises(ParameterError, match="rounds up"):
+            resolve_window(
+                simple_patch,
+                {"time": whole},
+                require_odd=True,
+                enforce_lt_coord=True,
+            )
+
     def test_require_odd_refuses_even_samples(self, simple_patch):
         """Given in samples, an even count is the caller's to fix."""
-        with pytest.raises(ParameterError, match="windows must be odd"):
+        with pytest.raises(ParameterError, match="odd number"):
             resolve_window(simple_patch, {"time": 4}, samples=True, require_odd=True)
 
     def test_require_odd_passes_odd_samples(self, simple_patch):

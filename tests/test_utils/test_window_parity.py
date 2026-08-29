@@ -46,7 +46,7 @@ class TestOddWindows:
 
     def test_hampel_refuses_even_samples(self, patch):
         """Given in samples, an even window is the caller's mistake."""
-        with pytest.raises(ParameterError, match="must be odd"):
+        with pytest.raises(ParameterError, match="odd number"):
             patch.hampel_filter(time=4, samples=True)
 
     def test_median_accepts_even_samples(self, patch):

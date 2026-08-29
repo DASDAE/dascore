@@ -171,6 +171,48 @@ smoothed.viz.waterfall();
 Notice the nan values at the start of the time axis. These can be trimmed with [`Patch.dropna`](`dascore.Patch.dropna`).
 
 
+# Gain
+
+Amplitudes recorded far from a source, or late in a record, are weaker than the ones near it. Two patch functions bring them back up.
+
+## Automatic gain control
+
+Passing a `window` to [`Patch.normalize`](`dascore.Patch.normalize`) divides each sample by the norm of a window centered on it, rather than by one norm of the whole trace. That is automatic gain control: weak late arrivals come up to the amplitude of the strong early ones, at the cost of no longer being able to compare amplitudes across the record.
+
+```{python}
+import dascore as dc
+
+patch = dc.get_example_patch("example_event_1")
+patch.viz.waterfall(scale=0.2);
+```
+
+```{python}
+# Divide each sample by the RMS of a 0.1 second window around it.
+gained = patch.normalize("time", norm="l2", window=0.1)
+gained.viz.waterfall(scale=0.5);
+```
+
+The `norm` argument picks what the window is divided by, exactly as it does without a window: `l2` for the RMS, `l1` for the mean absolute value, `max` for the largest absolute value. The window length is in units of the dimension unless `samples=True`, and is centered on the sample it scales.
+
+Every sample is scaled, the ends included. Where a centered window runs off the end of the dimension, the coordinate is reflected about its last sample to fill it, so the output keeps the shape it was given and gains no NaN values. That is deliberately unlike [`rolling`](`dascore.Patch.rolling`), which returns one value per *window* rather than one per sample and so leaves NaN where a window was not full. Here a NaN edge would throw away half a window at each end of every trace -- with a one second window on a record sampled at 250 Hz, an eighth of an eight second record, first arrivals and all.
+
+## Power gain
+
+[`Patch.pow_coord`](`dascore.Patch.pow_coord`) multiplies the data by a coordinate raised to a power. Unlike gain control, the curve depends only on where a sample sits, never on the amplitudes around it, so amplitudes stay comparable from trace to trace. Raising time to a power of one or two is the usual correction for geometric spreading.
+
+```{python}
+spread_corrected = patch.pow_coord(time=2)
+spread_corrected.viz.waterfall(scale=0.5);
+```
+
+The gain counts from the start of the coordinate: the curve is one, two, three ... raised to the power, so the first sample keeps its amplitude rather than being multiplied by zero. Any dimension can carry a power, and several can at once:
+
+```{python}
+# Correct along the fiber as well as in time.
+both = patch.pow_coord(time=2, distance=1)
+```
+
+
 # Whiten
 
 The [`Patch.whiten`](`dascore.Patch.whiten`) function performs spectral whitening by balancing the amplitude spectra of the patch while leaving the phase (largely) unchanged. Spectral whitening is often a pre-processing step in ambient noise correlation workflows.
