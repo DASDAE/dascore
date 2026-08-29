@@ -54,7 +54,7 @@ segmented = concat_coords(first, second)
 print(segmented.get_discontinuities("gaps"))
 ```
 
-Use [`CoordSegmented.from_array(...)`](`dascore.core.coords.CoordSegmented.from_array`) to preserve an exact monotonic array. Segmented coordinates have `step=None`. `simplify(tolerance=...)` may reduce their segments within an error bound; `snap()` always replaces values with one evenly sampled range. Split patches with segmented dimension coordinates before writing to formats that cannot represent gaps.
+Use [`CoordSegmented.from_array(...)`](`dascore.core.coords.CoordSegmented.from_array`) to preserve an exact monotonic array. It returns the simplest truthful coordinate, so uniform input becomes `CoordRange`; segmented output has `step=None`. `simplify(tolerance=...)` may reduce segments within an error bound, while `snap()` replaces values with one evenly sampled range. Use `patch.split_gaps()` before writing segmented dimensions to formats that cannot represent gaps.
 
 ```{python}
 from dascore.core.coords import CoordSegmented

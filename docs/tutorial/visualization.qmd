@@ -121,7 +121,7 @@ spool.viz.coverage(show=True);
 
 Lane names contain the metadata that separates compatible groups and append that group's coverage. A spool representation uses the same kind attributes for tracks, but coverage lanes may split a track further by sampling rate or coordinate structure.
 
-Time is the default dimension. Select a smaller spool before plotting when coverage percentages should describe a smaller window; change only the axes to zoom without changing the statistics.
+Time is the default dimension; pass another one as in `spool.viz.coverage("distance")`. Select a smaller spool before plotting when coverage percentages should describe a smaller window; change only the axes to zoom without changing the statistics.
 
 ```{python}
 spool.select(time=("2024-01-15", "2024-01-25")).viz.coverage(show=True);

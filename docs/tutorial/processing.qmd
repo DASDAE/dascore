@@ -76,7 +76,7 @@ A scalar applies the same fraction at both ends. Tuple values let asymmetric rec
 
 See the [edge-effects recipe](../recipes/edge_effects.qmd) for tapering before filters.
 
-# Rolling windows
+# Rolling windows {#rolling}
 
 [`Patch.rolling`](`dascore.Patch.rolling`) provides moving-window reductions. Incomplete windows produce NaNs, which can be removed with `dropna`.
 

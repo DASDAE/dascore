@@ -50,7 +50,7 @@ index_path = Path(tempfile.mkdtemp()) / "index.h5"
 external_index = dc.spool(directory, index_path=index_path).update()
 ```
 
-Pass `index_path=` when the data directory is not writable. The path is normally discovered automatically; when supplying one explicitly, reuse it when reopening the archive. Remote `UPath` resources also work; see [Working with remote patches](remote_patches.qmd) for cache policy.
+Pass `index_path=` when the data directory is not writable. New spools normally rediscover an external index; an index inside the data directory takes precedence. Remote `UPath` resources also work; see [Working with remote patches](remote_patches.qmd) for cache policy.
 
 ## Path attributes
 
@@ -185,11 +185,6 @@ merged = spool.chunk(time=None)
 bounded = spool.chunk(time=1 * megabytes)
 ```
 
-```{python}
-partial_windows = spool.chunk(time=3, overlap=1, keep_partial=True)
-all_contiguous = spool.chunk(time=None)
-```
-
 `overlap` accepts the same coordinate-unit, quantity, or data-size forms as the chunk length. `keep_partial=True` retains a shorter final window. Passing `time=None` asks DASCore to merge every contiguous compatible segment.
 
 Data-size limits cover the array only, not coordinates, metadata, or later processing copies. `MB` is decimal and `MiB` is binary.
@@ -211,7 +206,7 @@ coverage = gappy.get_coverage()
 second_scale_gaps = gappy.get_gaps(tolerance=1 * s)
 ```
 
-`gap_size` spans from the last sample before a gap to the first after it, so subtract one sample step for the missing extent. The `tolerance` argument, shared with `chunk`, controls which boundaries count. Coverage uses patch envelopes; holes inside a patch are not visible. `group_id` links coverage rows to their gaps.
+`gap_size` spans from the last sample before a gap to the first after it, so subtract one sample step for the missing extent. The `tolerance` argument, shared with `chunk`, controls which boundaries count. Pass another dimension as in `get_gaps("distance")`; `time` is only the default. Coverage uses patch envelopes; holes inside a patch are not visible. `group_id` links coverage rows to their gaps.
 
 At the default tolerance of 1.5 samples, one missing sample counts as a gap. A quantity or timedelta expresses the limit in coordinate units instead. Overlaps are not gaps; coverage calculates the union of available spans.
 
@@ -233,7 +228,7 @@ joined = dc.spool([patch, later]).concatenate(time=None)
 
 `concatenate` can also create a new dimension when given a name not already present. Use this to stack compatible patches whose samples should remain distinct rather than merging along an existing axis.
 
-Patches that cannot concatenate remain in separate output groups. Values are ordered along the concatenated dimension when it has a step; otherwise spool order is retained. Other coordinates must agree, while coordinates along the concatenated dimension are joined.
+Patches that cannot concatenate remain in separate output groups. Values are ordered along the concatenated dimension when it has a step; otherwise spool order is retained. Other coordinates must agree, while coordinates along the concatenated dimension are joined. For conflicting non-coordinate attributes, `conflict=` can raise (the default), drop them, or keep the first value.
 
 # Mapping
 

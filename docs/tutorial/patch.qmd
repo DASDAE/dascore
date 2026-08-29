@@ -77,21 +77,7 @@ A coordinate may be associated with one or more dimensions, such as latitude alo
 
 Dimension coordinates usually share a dimension's name, but that is not required. Auxiliary coordinates such as latitude commonly depend on `distance`; a quality grid may depend on both `distance` and `time`; deployment metadata can be independent of every dimension.
 
-String coordinates support exact matches, wildcards, compiled regular expressions, masks, and sorting. They do not support units or numeric range selection.
-
-```{python}
-import re
-
-labeled = patch.select(distance=slice(0, 4), samples=True).new(dims=("channel", "time"))
-labeled = labeled.update_coords(channel=np.array(["ch_a", "ch_b", "aux_1", "aux_2"]))
-
-exact = labeled.select(channel="ch_b")
-channels = labeled.select(channel="ch_*")
-aux = labeled.select(channel=re.compile(r"^aux_\d$"))
-reverse = labeled.sort_coords("channel", reverse=True)
-```
-
-Wildcards use Unix-style `*` and `?`. Use a compiled expression for regular-expression matching, and avoid wildcard characters in labels that must be selected literally.
+String coordinates support exact matches, wildcards, compiled regular expressions, masks, and sorting, but not units or numeric ranges. See [String coordinates](coords.qmd#string-coordinates) for examples and literal-label caveats.
 
 ## Attributes and summaries
 
@@ -107,7 +93,7 @@ print(row["time_min"], row["distance_step"])
 
 `Patch.summary` is read-only. `flat_dump()` is intended for tabular rows and produces the same coordinate-summary column names used by spool indexes, including `time_min`, `time_max`, and `distance_step`. The optional `data_type` attribute is a display hint; interpret data through its units, coordinates, and history.
 
-The complete validated attribute schema is available programmatically:
+A preview of the validated attribute schema is available programmatically:
 
 ```{python}
 attribute_fields = dc.PatchAttrs.get_summary_df()
@@ -239,7 +225,7 @@ window = patch.select(
 )
 ```
 
-Slices are accepted anywhere a `(minimum, maximum)` tuple is accepted. They remain range shorthand, so sample slices still require `samples=True`. Processing functions such as `pass_filter` and `taper` use tuples rather than slices.
+`select` and `order` accept slices as range shorthand; sample slices still require `samples=True`. Processing functions such as `pass_filter` and `taper` require tuples.
 
 ## Unselect and order
 
