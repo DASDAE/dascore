@@ -1,133 +1,136 @@
-"""
-Tests which keep the inventory tutorial's mermaid diagrams honest.
-
-The diagrams are hand-written, so nothing stops them describing a model that no
-longer looks like that. These tests read the diagrams back out of the page and
-check each edge against the models: that the source is a model, that the field
-labelling the edge exists on it, that the target is a model that field can
-actually hold, and that a dashed edge is drawn exactly where the field accepts a
-resource_id string in place of the object.
-"""
+"""Tests for the inventory tutorial's explanatory diagrams."""
 
 from __future__ import annotations
 
+import math
 import re
-import types
 from pathlib import Path
-from typing import Union, get_args, get_origin, get_type_hints
+from xml.etree import ElementTree
 
 import pytest
 
-import dascore.core.inventory as inventory_module
-from dascore.core.inventory import InventoryModel
+from dascore.core.inventory import Acquisition, FiberArray, OpticalPath
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 _DOC_PATH = _REPO_ROOT / "docs"
 _PAGE_PATH = _DOC_PATH / "tutorial" / "inventory.qmd"
+_STATIC_PATH = _DOC_PATH / "_static"
+_DIAGRAMS = {
+    "inventory_hierarchy.svg": {"station", "channel", "fiber", "acquisition"},
+    "optical_path_concept.svg": {"components", "geometry", "labels", "coupling"},
+}
+_GRAPHIC_ELEMENTS = {
+    "circle",
+    "ellipse",
+    "image",
+    "line",
+    "path",
+    "polygon",
+    "polyline",
+    "rect",
+    "text",
+    "use",
+}
+_MODEL_FIELDS = {
+    "inventory_hierarchy.svg": {
+        "fiber-array-site": (FiberArray, {"optical_paths", "acquisitions"}),
+        "optical-path-tracks": (
+            OpticalPath,
+            {"optical_components", "geometry", "labels", "coupling"},
+        ),
+        "acquisition-settings": (Acquisition, {"interrogator", "distance_map"}),
+    },
+    "optical_path_concept.svg": {
+        "layer-cards": (
+            OpticalPath,
+            {"optical_components", "geometry", "labels", "coupling"},
+        ),
+    },
+}
 
-# Run wherever the docs are, skip where they are not, on the same terms as
-# test_changelog.py: the sdist grafts tests but ships only docs/LICENSE, so the
-# directory existing does not mean the real docs tree is there. Deliberately not
-# keyed on the tutorial itself, or deleting the page would skip rather than fail.
+# The sdist grafts tests but ships only docs/LICENSE. Key this on a page the
+# full documentation tree always contains, not on the files under test.
 _DOCS_PRESENT = (_DOC_PATH / "index.qmd").is_file()
 
 pytestmark = pytest.mark.skipif(
     not _DOCS_PRESENT, reason="the documentation tree is not installed"
 )
 
-_BLOCK = re.compile(r"^```\{mermaid\}\n(.*?)^```", re.MULTILINE | re.DOTALL)
-# `Source -->|field| Target` or its dashed form, where a target may carry a
-# label: `Components["FiberSegment · Splice"]`.
-_EDGE = re.compile(
-    r"^\s*(\w+)\s*(-->|-\.->)\s*\|(\w+)\|\s*(\w+)(?:\[\"([^\"]+)\"\])?\s*$"
-)
-_ARROW = re.compile(r"-\.?->")
+
+def _page_text() -> str:
+    """Return the inventory tutorial source."""
+    return _PAGE_PATH.read_text(encoding="utf-8")
 
 
-def _read_diagrams():
-    """Return the page's edges, and the edge lines which could not be read.
-
-    The unread lines matter as much as the edges: an edge this module cannot
-    parse is an edge it cannot check, and dropping it silently is how the whole
-    file goes vacuous one arrow at a time.
-    """
-    if not _DOCS_PRESENT:  # nothing to read; every test here is skipped
-        return (), ()
-    edges, unread = [], []
-    # Explicitly utf-8: the page is, and the separator this splits labels on is
-    # not ascii, so reading it under a locale which is not utf-8 -- windows --
-    # decodes the separator to something else and quietly stops splitting.
-    for block in _BLOCK.findall(_PAGE_PATH.read_text(encoding="utf-8")):
-        for line in block.splitlines():
-            if (match := _EDGE.match(line)) is None:
-                if _ARROW.search(line):
-                    unread.append(line.strip())
-                continue
-            source, arrow, field, node, label = match.groups()
-            # A labelled node stands for the several types its label names.
-            targets = tuple(label.split(" · ")) if label else (node,)
-            edges.append((source, arrow == "-.->", field, targets))
-    return tuple(edges), tuple(unread)
+def _parse_view_box(value: str) -> list[float]:
+    """Parse and validate an SVG viewBox."""
+    values = [float(item) for item in re.split(r"[\s,]+", value.strip())]
+    valid = (
+        len(values) == 4
+        and all(math.isfinite(item) for item in values)
+        and values[2] > 0
+        and values[3] > 0
+    )
+    if not valid:
+        raise ValueError(f"Invalid SVG viewBox: {value!r}")
+    return values
 
 
-def _accepted_models(model, field):
-    """Return the models the field holds, and whether it accepts a reference.
-
-    A reference is a `str` in the same union as a model, which is how the
-    inventory spells "this may be a resource_id instead of the object".
-    """
-    annotation = get_type_hints(model)[field]
-    found, referenced = set(), False
-
-    def _walk(node, in_reference_union):
-        nonlocal referenced
-        origin = get_origin(node)
-        if origin in (Union, types.UnionType):
-            args = get_args(node)
-            in_reference_union = str in args
-            for arg in args:
-                _walk(arg, in_reference_union)
-        elif origin is not None:
-            for arg in get_args(node):
-                _walk(arg, in_reference_union)
-        elif isinstance(node, type) and issubclass(node, InventoryModel):
-            found.add(node)
-            referenced = referenced or in_reference_union
-
-    _walk(annotation, False)
-    return found, referenced
+@pytest.mark.parametrize("name", _DIAGRAMS)
+def test_page_references_each_diagram(name):
+    """Each shipped diagram is used exactly once by the inventory page."""
+    pattern = rf"^!\[[^]]+\]\(\.\./_static/{re.escape(name)}\)"
+    assert len(re.findall(pattern, _page_text(), re.MULTILINE)) == 1
 
 
-_EDGES, _UNREAD = _read_diagrams()
+@pytest.mark.parametrize("name", _DIAGRAMS)
+def test_diagram_is_valid_svg(name):
+    """A missing, empty, or malformed image must fail before the docs build."""
+    root = ElementTree.parse(_STATIC_PATH / name).getroot()
+    assert root.tag == "{http://www.w3.org/2000/svg}svg"
+    view_box = root.get("viewBox")
+    assert view_box
+    _parse_view_box(view_box)
+    namespace = "{http://www.w3.org/2000/svg}"
+    definitions = {
+        element
+        for defs in root.findall(f".//{namespace}defs")
+        for element in defs.iter()
+    }
+    tags = {
+        element.tag.rsplit("}", 1)[-1]
+        for element in root.iter()
+        if element not in definitions
+    }
+    assert tags & _GRAPHIC_ELEMENTS
 
 
-class TestDiagramEdges:
-    """Every edge drawn in the tutorial has to be a field the models have."""
+def test_non_finite_view_box_is_invalid():
+    """SVG viewBox values cannot contain floating-point infinities."""
+    with pytest.raises(ValueError, match="Invalid SVG viewBox"):
+        _parse_view_box("0 0 inf 100")
 
-    def test_the_page_draws_edges(self):
-        """A regex which quietly matched nothing would pass every test below."""
-        assert len(_EDGES) >= 12
 
-    def test_every_edge_line_is_read(self):
-        """An arrow this module cannot parse is an arrow it cannot check."""
-        assert not _UNREAD, f"Unparsed mermaid edges: {_UNREAD}"
+@pytest.mark.parametrize(("name", "model_fields"), _MODEL_FIELDS.items())
+def test_diagram_model_fields(name, model_fields):
+    """Field names shown in the diagrams stay aligned with the models."""
+    root = ElementTree.parse(_STATIC_PATH / name).getroot()
+    for group_id, (model, fields) in model_fields.items():
+        group = root.find(f".//*[@id='{group_id}']")
+        assert group is not None
+        text = " ".join(group.itertext()).lower()
+        assert fields <= model.model_fields.keys()
+        assert all(field in text for field in fields)
 
-    @pytest.mark.parametrize(("source", "dashed", "field", "targets"), _EDGES)
-    def test_an_edge_matches_the_models(self, source, dashed, field, targets):
-        """The source, the field, the targets, and the arrow all have to agree."""
-        model = getattr(inventory_module, source, None)
-        assert isinstance(model, type) and issubclass(model, InventoryModel), (
-            f"{source} is not an inventory model."
-        )
-        assert field in model.model_fields, f"{source} has no field {field!r}."
 
-        accepted, referenced = _accepted_models(model, field)
-        names = {x.__name__ for x in accepted}
-        for target in targets:
-            assert target in names, f"{source}.{field} cannot hold a {target}."
-
-        arrow = "dashed" if dashed else "solid"
-        assert dashed == referenced, (
-            f"{source}.{field} is drawn {arrow}, which says the wrong thing "
-            "about whether it accepts a resource_id in place of the object."
-        )
+@pytest.mark.parametrize(("name", "required_terms"), _DIAGRAMS.items())
+def test_diagram_has_alt_text(name, required_terms):
+    """The page gives each visual a useful text alternative."""
+    pattern = rf"^!\[[^]]+\]\(\.\./_static/{re.escape(name)}\)\{{(?P<attrs>[^}}]+)\}}"
+    match = re.search(pattern, _page_text(), re.MULTILINE)
+    assert match is not None
+    alt_match = re.search(r'fig-alt="(?P<alt>[^"]+)"', match["attrs"])
+    assert alt_match is not None
+    alt = alt_match["alt"].lower()
+    assert len(alt.split()) >= 20
+    assert all(term in alt for term in required_terms)
