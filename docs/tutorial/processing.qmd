@@ -42,6 +42,26 @@ squeezed = flat_patch.squeeze()
 print(f"Post-squeeze shape: {squeezed.shape}")
 ```
 
+## Squeeze coords
+
+[`squeeze_coords`](`dascore.Patch.squeeze_coords`) does something similar for non-dimensional coordinates: a coordinate whose values are all the same, however long it is, is dropped and its value stored in the patch attrs under the coordinate's name. Units are not kept.
+
+```{python}
+import numpy as np
+
+import dascore as dc
+
+patch = dc.get_example_patch()
+
+# Add a coordinate which has the same value for every distance.
+quality = np.ones(patch.coord_shapes["distance"])
+patch = patch.update_coords(quality=("distance", quality))
+
+squeezed = patch.squeeze_coords()
+print(f"quality coord: {'quality' in squeezed.coords.coord_map}")
+print(f"quality attr: {squeezed.attrs.get('quality')}")
+```
+
 ## Dropna
 
 The [`dropna` patch function](`dascore.Patch.dropna`) patch function drops "nullish" values from a given label.
