@@ -194,6 +194,8 @@ gained.viz.waterfall(scale=0.5);
 
 The `norm` argument picks what the window is divided by, exactly as it does without a window: `l2` for the RMS, `l1` for the mean absolute value, `max` for the largest absolute value. The window length is in units of the dimension unless `samples=True`, and is centered on the sample it scales.
 
+Every sample is scaled, the ends included. Where a centered window runs off the end of the dimension, the coordinate is reflected about its last sample to fill it, so the output keeps the shape it was given and gains no NaN values. That is deliberately unlike [`rolling`](`dascore.Patch.rolling`), which returns one value per *window* rather than one per sample and so leaves NaN where a window was not full. Here a NaN edge would throw away half a window at each end of every trace -- with a one second window on a record sampled at 250 Hz, an eighth of an eight second record, first arrivals and all.
+
 ## Power gain
 
 [`Patch.pow_coord`](`dascore.Patch.pow_coord`) multiplies the data by a coordinate raised to a power. Unlike gain control, the curve depends only on where a sample sits, never on the amplitudes around it, so amplitudes stay comparable from trace to trace. Raising time to a power of one or two is the usual correction for geometric spreading.

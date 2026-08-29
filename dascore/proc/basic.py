@@ -481,7 +481,9 @@ def normalize(
             bit - sample-by-sample normalization (-1/+1)
     window
         The length of the moving window, in units of `dim` unless `samples`
-        is True. If None, the whole slice is one window. Not supported for
+        is True. The window is centered on the sample it scales and is
+        reflected where it runs off either end of `dim`, so every sample is
+        scaled. If None, the whole slice is one window. Not supported for
         `norm="bit"`, which is already a sample-by-sample operation.
     samples
         {sample_explanation}
@@ -490,6 +492,17 @@ def normalize(
     -----
     - A window is centered on the sample it scales, so an even window length
       is raised to the next odd one.
+
+    - Every sample gets a value, the ends included: where a centered window
+      runs off the end of the dimension, the coordinate is reflected about
+      its last sample to fill it (scipy's `mode="reflect"`, the same rule
+      `median_filter` and the other windowed filters use). So the output has
+      the shape it was given and holds no nulls the input did not. This is
+      not what [`rolling`](`dascore.Patch.rolling`) does: rolling returns one
+      value per window rather than one per sample, and leaves nulls where a
+      window was not full. A null edge here would delete real data -- half a
+      window off each end of every trace, which for a one second window at
+      250 Hz is an eighth of an eight second record, first arrivals included.
 
     - The windowed norms are means rather than sums: `l2` divides by the
       window's RMS and `l1` by its mean absolute value. Were they sums, the
