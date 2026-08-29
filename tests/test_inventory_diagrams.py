@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import re
 from pathlib import Path
 from xml.etree import ElementTree
@@ -61,6 +62,20 @@ def _page_text() -> str:
     return _PAGE_PATH.read_text(encoding="utf-8")
 
 
+def _parse_view_box(value: str) -> list[float]:
+    """Parse and validate an SVG viewBox."""
+    values = [float(item) for item in re.split(r"[\s,]+", value.strip())]
+    valid = (
+        len(values) == 4
+        and all(math.isfinite(item) for item in values)
+        and values[2] > 0
+        and values[3] > 0
+    )
+    if not valid:
+        raise ValueError(f"Invalid SVG viewBox: {value!r}")
+    return values
+
+
 @pytest.mark.parametrize("name", _DIAGRAMS)
 def test_page_references_each_diagram(name):
     """Each shipped diagram is used exactly once by the inventory page."""
@@ -75,9 +90,7 @@ def test_diagram_is_valid_svg(name):
     assert root.tag == "{http://www.w3.org/2000/svg}svg"
     view_box = root.get("viewBox")
     assert view_box
-    values = [float(value) for value in re.split(r"[\s,]+", view_box.strip())]
-    assert len(values) == 4
-    assert values[2] > 0 and values[3] > 0
+    _parse_view_box(view_box)
     namespace = "{http://www.w3.org/2000/svg}"
     definitions = {
         element
@@ -90,6 +103,12 @@ def test_diagram_is_valid_svg(name):
         if element not in definitions
     }
     assert tags & _GRAPHIC_ELEMENTS
+
+
+def test_non_finite_view_box_is_invalid():
+    """SVG viewBox values cannot contain floating-point infinities."""
+    with pytest.raises(ValueError, match="Invalid SVG viewBox"):
+        _parse_view_box("0 0 inf 100")
 
 
 @pytest.mark.parametrize(("name", "model_fields"), _MODEL_FIELDS.items())
