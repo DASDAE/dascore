@@ -57,7 +57,7 @@ def is_memory_uri(path) -> bool:
     return str(path).startswith(_MEMORY_SCHEMES)
 
 
-def is_example_uri(path) -> bool:
+def is_example_uri(path: object) -> bool:
     """
     Return True if a path names a file in the example data registry.
 

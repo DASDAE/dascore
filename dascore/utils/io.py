@@ -16,7 +16,7 @@ import numpy as np
 import dascore as dc
 from dascore.compat import UPath
 from dascore.constants import PatchType
-from dascore.exceptions import PatchConversionError
+from dascore.exceptions import ParameterError, PatchConversionError
 from dascore.utils.downloader import resolve_example_uri
 from dascore.utils.misc import (
     _maybe_make_parent_directory,
@@ -26,6 +26,7 @@ from dascore.utils.misc import (
 from dascore.utils.paths import (
     coerce_to_local_path,
     coerce_to_upath,
+    is_example_uri,
     is_local_path,
     is_pathlike,
 )
@@ -231,6 +232,24 @@ def release_handle(handle, abort: bool = False):
         getattr(handle, "close", lambda: None)()
 
 
+# Handle classes name the mode they open in. Everything else truncates or
+# appends, so an example file must not be opened through one.
+_READ_MODES = frozenset({"r", "rb"})
+
+
+def _refuse_example_write(source, required_type) -> None:
+    """Refuse a handle which would write over a downloaded example file."""
+    if not is_example_uri(source):
+        return
+    if getattr(required_type, "mode", "r") in _READ_MODES:
+        return
+    msg = (
+        f"Cannot open {source} for writing; examples:// names are read-only. "
+        f"Give a path to write to instead."
+    )
+    raise ParameterError(msg)
+
+
 class IOResourceManager:
     """
     A class for managing opening/closing files.
@@ -269,6 +288,7 @@ class IOResourceManager:
         if isinstance(self._source, self.__class__):
             return self._source.get_resource(required_type)
         required_type = _get_required_type(required_type)
+        _refuse_example_write(self._source, required_type)
         with self._lock:
             if required_type not in self._cache:
                 source = _resolve_resource(self._source, required_type)

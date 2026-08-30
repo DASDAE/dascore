@@ -53,6 +53,7 @@ from dascore.io.core import (
 from dascore.io.dasdae.core import DASDAEV1
 from dascore.io.utils import build_patches, convert_attr_units, get_exact_coord
 from dascore.utils.downloader import fetch
+from dascore.utils.hdf5 import H5Writer
 from dascore.utils.io import BinaryReader, BinaryWriter, IOResourceManager
 from dascore.utils.misc import suppress_warnings
 from dascore.utils.time import to_datetime64
@@ -1095,6 +1096,24 @@ class TestExampleUri:
         """Payload scans accept the uri too."""
         payload = dc.scan_payloads(example_uri, snap=False)[0]
         assert "coords" in payload
+
+    def test_scan_through_manager_names_the_file(self, example_uri, example_path):
+        """A manager wrapping a uri still reports a reloadable source path."""
+        summary = dc.scan(IOResourceManager(example_uri))[0]
+        assert str(summary.source_path) == str(example_path)
+
+    def test_writer_handle_refused(self, example_uri, example_path):
+        """A writer handle would truncate the example, so it is refused."""
+        before = example_path.read_bytes()
+        for required_type in (BinaryWriter, H5Writer):
+            with pytest.raises(ParameterError, match="read-only"):
+                IOResourceManager(example_uri).get_resource(required_type)
+        assert example_path.read_bytes() == before
+
+    def test_reader_handle_allowed(self, example_uri):
+        """Reading through a manager is unaffected by the write refusal."""
+        with IOResourceManager(example_uri) as man:
+            assert man.get_resource(BinaryReader).read(4)
 
     def test_ids_name_the_file(self, example_uri, example_path):
         """A patch read by uri has the id of one read by path."""

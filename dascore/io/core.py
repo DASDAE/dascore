@@ -445,6 +445,9 @@ def _get_reloadable_source_path(
             continue
         if isinstance(candidate, IOResourceManager):
             candidate = candidate.source
+        # A reloadable path names the file, never the examples:// name,
+        # which no filesystem knows how to reopen.
+        candidate = resolve_example_uri(candidate)
         if isinstance(candidate, str | Path | UPath):
             return coerce_to_upath(candidate)
     return ""

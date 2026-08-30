@@ -5,6 +5,7 @@ from __future__ import annotations
 from functools import cache
 from importlib.resources import files
 from pathlib import Path
+from typing import TypeVar
 
 import pandas as pd
 import pooch
@@ -15,6 +16,9 @@ from dascore.exceptions import UnknownExampleError
 from dascore.utils.paths import EXAMPLE_SCHEME, is_example_uri
 
 REGISTRY_PATH = Path(str(files("dascore").joinpath("data_registry.txt")))
+
+# An example uri becomes a Path; anything else is handed back as it came.
+_T = TypeVar("_T")
 
 
 @cache
@@ -91,7 +95,7 @@ def fetch(name: Path | str, **kwargs) -> Path:
     )
 
 
-def resolve_example_uri(resource):
+def resolve_example_uri(resource: _T) -> _T | Path:
     """
     Resolve an ``examples://{name}`` URI to a local path.
 
