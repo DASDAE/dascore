@@ -34,10 +34,13 @@ Coordinates expose values, units, data type, ordering, sampling regularity, limi
 
 | Attribute | Meaning |
 |---|---|
-| `sorted`, `reverse_sorted` | Coordinate order |
+| `sorted` | Whether values are strictly increasing |
+| `reverse_sorted` | Whether values are strictly decreasing |
 | `evenly_sampled` | Whether one step describes every value |
 | `dtype` | NumPy data type |
+| `data` | Array of coordinate values |
 | `units` | Physical units, if present |
+| `degenerate` | Whether the coordinate has zero length |
 | `min()`, `max()` | Coordinate limits |
 
 ## Segmented coordinates

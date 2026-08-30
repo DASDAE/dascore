@@ -83,4 +83,4 @@ Patch selection, processing, and conversion methods accept quantities directly. 
 
 Use explicit quantities whenever code may encounter the same coordinate expressed in different units. Bare values are most appropriate when the coordinate convention is fixed and documented.
 
-Unit-aware operations preserve physical meaning through coordinate conversion and patch arithmetic. `set_units` changes labels only; `convert_units` changes values to preserve the same quantity.
+Unit-aware operations preserve physical meaning through coordinate conversion and patch arithmetic. [`Patch.set_units`](`dascore.Patch.set_units`) changes labels only; [`Patch.convert_units`](`dascore.Patch.convert_units`) changes values to preserve the same quantity.

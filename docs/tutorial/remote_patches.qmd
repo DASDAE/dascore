@@ -84,7 +84,7 @@ with config_context(allow_remote_cache=True):
 
 # Remote HDF5 and garbage collection
 
-Remote HDF5 file-like reads can deadlock if cyclic garbage collection runs on fsspec's event-loop thread while h5py holds its global lock. DASCore therefore pauses cyclic garbage collection while remote HDF5 handles are open, restores it after the last handle closes, and warns once per process. Reference counting and local-file reads are unaffected.
+Remote HDF5 file-like reads can deadlock if cyclic garbage collection runs on fsspec's event-loop thread while h5py holds its global lock, as described in [h5py's file-like object documentation](https://docs.h5py.org/en/stable/high/file.html#python-file-like-objects). DASCore therefore pauses cyclic garbage collection while remote HDF5 handles are open, restores it after the last handle closes, and warns once per process. Reference counting and local-file reads are unaffected.
 
 Only cyclic garbage accumulates during the pause, and only until the final remote HDF5 handle closes. Objects reclaimed through normal reference counting are still released immediately.
 

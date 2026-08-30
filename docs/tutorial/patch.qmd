@@ -57,7 +57,7 @@ manual_patch = dc.Patch(
 
 ## Data and coordinates
 
-`Patch.data` is a read-only n-dimensional array. Copy it before changing values directly.
+`Patch.data` is an immutable n-dimensional array and must be treated as such; it generally cannot be changed in place. Copy it before changing values directly.
 
 ```{python}
 data_copy = np.array(patch.data)
@@ -137,7 +137,7 @@ assert first.attrs.processing_id == same.attrs.processing_id
 assert first.attrs.processing_id != other.attrs.processing_id
 ```
 
-File-backed patches derive `patch_id` from format, version, path, patch key, file size, and modification time. Repeated reads and metadata scans therefore agree without hashing the data array. Copying the same bytes to another path produces a different derived ID; overwriting a path also changes it. DASDAE files store both IDs and restore the stored values when read elsewhere.
+When a file does not contain a `patch_id`, DASCore derives one from the format, version, path, patch key, file size, and modification time. Repeated reads and metadata scans therefore agree without hashing the data array. Copying the same bytes to another path produces a different derived ID, and overwriting a path also changes it. When a file contains stored IDs, DASCore restores those values when the file is read elsewhere.
 
 In-memory patches receive process-local IDs. Direct calls to `new`, `update`, and `update_attrs` preserve both IDs because patch functions use them to assemble results. Changing data through these low-level methods does not describe a processing step:
 
