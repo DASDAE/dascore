@@ -4,1045 +4,404 @@ execute:
   warning: false
 ---
 
-A [`Patch`](`dascore.core.patch.Patch`) manages an array and its associated coordinate labels and metadata.
-
-:::{.callout-note}
-The `Patch` design was inspired by [Xarray's `DataArray`](https://docs.xarray.dev/en/stable/generated/xarray.DataArray.html)
-:::
-
-# Patch creation
-
-Patches can be created in several different ways.
-
-## Load an example patch
-
-DASCore includes several example datasets. They are mostly used for simple demonstrations and testing.
+A [`Patch`](`dascore.core.patch.Patch`) couples an array with coordinate labels and metadata. Patch methods return new patches instead of modifying the original.
 
 ```{python}
-import dascore as dc
-from dascore import print
+import numpy as np
 
-pa1 = dc.get_example_patch("random_das")
-pa2 = dc.get_example_patch("example_event_1")
+import dascore as dc
+
+patch = dc.get_example_patch()
 ```
 
-See [`get_example_patch`](`dascore.examples.get_example_patch`) for supported patches.
+# Creating patches
 
-## Load a file
+## Examples and files
 
-A single file can be loaded like this:
-
+DASCore includes example patches for tutorials and tests:
 
 ```{python}
-#| code-fold: true
-# This code block is only here to create a usable path for the next cell.
-import dascore as dc
-# Import fetch to read DASCore example files.
+event = dc.get_example_patch("example_event_1")
+```
+
+Use [`dc.spool(...)`](`dascore.spool`) to open DAS files and take a patch by indexing the spool:
+
+```{python}
 from dascore.utils.downloader import fetch
 
-
 path = fetch("terra15_das_1_trimmed.hdf5")
-# To read DAS data stored locally on your machine, simply replace the above line with:
-# path = "/path/to/data/directory/data.EXT"
+file_patch = dc.spool(path)[0]
 ```
 
+See the [spool tutorial](spool.qmd) for directories, archives, and remote resources.
+
+## Arrays
+
+To build a patch directly, supply the data, its dimension names, and coordinates. Attributes are optional.
 
 ```{python}
-import dascore as dc
+rng = np.random.default_rng(13)
+data = rng.random((300, 2_000))
+time = dc.to_datetime64("2017-09-18") + np.arange(2_000) * dc.to_timedelta64(1 / 250)
+distance = np.arange(300)
 
-# path should point to your file, e.g.
-# path = mydata.hdf5
-
-pa = dc.spool(path)[0]
-```
-
-Spools are covered in more detail in the [next section](spool.qmd).
-
-
-## Manually create a patch
-
-Patches can be created from:
-
-- A data array
-- Coordinates for labeling each axis
-- Attributes (optional)
-
-```{python}
-import numpy as np
-
-import dascore as dc
-from dascore.utils.time import to_timedelta64
-
-# Create the patch data
-array = np.random.random(size=(300, 2_000))
-
-# Create attributes, or metadata
-attrs = dict(
-    category="DAS",
-    id="test_data1",
-    data_units="um/(m * s)"
+manual_patch = dc.Patch(
+    data=data,
+    dims=("distance", "time"),
+    coords={"distance": distance, "time": time},
+    attrs={"data_units": "um/(m * s)"},
 )
-
-# Create coordinates, labels for each axis in the array.
-time_start = dc.to_datetime64("2017-09-18")
-time_step = to_timedelta64(1 / 250)
-time = time_start + np.arange(array.shape[1]) * time_step
-
-distance_start = 0
-distance_step = 1
-distance = distance_start + np.arange(array.shape[0]) * distance_step
-
-coords = dict(time=time, distance=distance)
-
-# Define dimensions (first label corresponds to data axis 0)
-dims = ('distance', 'time')
-
-pa = dc.Patch(data=array, coords=coords, attrs=attrs, dims=dims)
 ```
 
-# Patch anatomy
+# Anatomy
 
-## Data
+## Data and coordinates
 
-The data is simply an n-dimensional array which is accessed with the `data` attribute.
+`Patch.data` is a read-only n-dimensional array. Copy it before changing values directly.
 
 ```{python}
-import dascore as dc
-
-patch = dc.get_example_patch()
-
-print(f"Data shape is {patch.data.shape}")
-
-print(f"Data contents are\n{patch.data}")
+data_copy = np.array(patch.data)
+data_copy[:10] = 0
 ```
 
-:::{.callout-note}
-The data arrays are read-only. This means you can't modify them in place; you must make a copy first.
-
-```python
-import numpy as np
-
-patch.data[:10] = 12  # won't work
-
-array = np.array(patch.data)  # this makes a copy
-array[:10] = 12  # then this works
-```
-:::
-
-
-## Coords
-
-DASCore implements a class called [CoordManager](`dascore.core.coordmanager.CoordManager`) which manages dimension names, coordinate labels, selecting, sorting, etc. `CoordManager` has several convenience methods for accessing contained information:
+`Patch.coords` manages dimension names and coordinates. The common accessors are available on the patch itself:
 
 ```{python}
-import dascore as dc
-
-patch = dc.get_example_patch()
-coords = patch.coords
-
-# Get an array of time values
-time_array = coords.get_array("time")
-
-# Get the maximum distance value
-distance_max = coords.max("distance")
-
-# Get the time step (NaN if time isn't evenly sampled)
-time_step = coords.step("time")
+time_coord = patch.get_coord("time")
+time_values = patch.get_array("time")
+distance_max = patch.coords.max("distance")
+time_step = patch.coords.step("time")
 ```
 
-For convenience, coordinates and their corresponding arrays can be accessed from the patch level as well.
+A coordinate may be associated with one or more dimensions, such as latitude along `distance`, or be independent of the data. See the advanced [coordinates tutorial](coords.qmd) for direct `BaseCoord` and `CoordManager` use.
+
+Dimension coordinates usually share a dimension's name, but that is not required. Auxiliary coordinates such as latitude commonly depend on `distance`; a quality grid may depend on both `distance` and `time`; deployment metadata can be independent of every dimension.
+
+String coordinates support exact matches, wildcards, compiled regular expressions, masks, and sorting, but not units or numeric ranges. See [String coordinates](coords.qmd#string-coordinates) for examples and literal-label caveats.
+
+## Attributes and summaries
+
+`Patch.attrs` contains validated, non-coordinate metadata such as `data_units`, `acquisition_key`, `gauge_length`, and processing history. Coordinate bounds and steps are derived through `Patch.summary` rather than duplicated in `attrs`.
 
 ```{python}
-import dascore as dc
+print(patch.attrs.data_units)
+print(patch.summary.get_coord_summary("time").min)
 
-patch = dc.get_example_patch()
-
-# Get the coordinate object for distance
-distance_coord = patch.get_coord("distance")
-
-# Get the array of values corresponding to time
-time_array = patch.get_array("time")
+row = patch.flat_dump()
+print(row["time_min"], row["distance_step"])
 ```
 
-Coords also have an expressive string representation:
+`Patch.summary` is read-only. `flat_dump()` is intended for tabular rows and produces the same coordinate-summary column names used by spool indexes, including `time_min`, `time_max`, and `distance_step`. The optional `data_type` attribute is a display hint; interpret data through its units, coordinates, and history.
+
+A preview of the validated attribute schema is available programmatically:
 
 ```{python}
-print(coords)
+attribute_fields = dc.PatchAttrs.get_summary_df()
+attribute_fields.head()
 ```
 
-:::{.callout-note}
-
- - Patch dimensions may have an associated coordinate with the same name but this is not required.
-
- - Coordinates are often (but not always) associated with one or more dimensions. For example, coordinates "latitude" and "longitude" are often associated with dimension "distance". 
-
-:::
-
-Most of the other `CoordManager` features are primarily used internally by DASCore, but you can read more about them in the [Coordinate Tutorial](coords.qmd).
-
-String dimension labels are also supported. These are useful when a dimension
-is identified by names or channel labels rather than numeric positions.
-
-```{python}
-import numpy as np
-import re
-
-import dascore as dc
-
-patch = dc.get_example_patch().select(distance=slice(0, 4), samples=True)
-patch = patch.new(dims=("channel", "time"))
-labels = np.array(["ch_a", "ch_b", "aux_1", "aux_2"])
-patch = patch.update_coords(channel=labels)
-
-# Exact-match selection works on string coordinates.
-selected = patch.select(channel="ch_b")
-print(selected.get_coord("channel").values)
-
-# Unix-style wildcards also work.
-matched = patch.select(channel="ch_*")
-print(matched.get_coord("channel").values)
-
-# Compiled regular expressions are also supported.
-regex_matched = patch.select(channel=re.compile(r"^aux_\d$"))
-print(regex_matched.get_coord("channel").values)
-
-# Sorting also works.
-sorted_patch = patch.sort_coords("channel", reverse=True)
-print(sorted_patch.get_coord("channel").values)
-```
-
-String coordinates support exact matching, wildcard matching with `*` and `?`,
-compiled regular expressions, boolean-mask selection, and sorting, but they do
-not support units or numeric range selection. Avoid using `*` or `?` in labels
-you intend to select literally.
-
-## Attrs
-
-The metadata stored in `Patch.attrs` is a [pydantic model](https://docs.pydantic.dev/usage/models/) which enforces a schema and provides validation. [`PatchAttrs.get_summary_df`](`dascore.models.base.DascoreBaseModel.get_summary_df`) generates a table of the attribute descriptions:
-
-
-```{python}
-#| echo: false
-
-import dascore as dc
-from IPython.display import Markdown
-
-df_str = (
-    dc.PatchAttrs.get_summary_df()
-    .reset_index()
-    .to_markdown(index=False, stralign="center")
-)
-Markdown(df_str)
-```
-
-
-Specific data formats may also add attributes (e.g. "gauge_length", "pulse_width"), but this depends on the parser.
-
-### Patch History
-
-Patch-processing methods append entries to `Patch.attrs.history` by default so downstream steps remain traceable.
-
-```{python}
-import dascore as dc
-
-patch = dc.get_example_patch()
-filtered = patch.pass_filter(time=(1, 10))
-
-print(filtered.attrs.history[-1])
-```
-
-If you want to suppress new history entries for a block of operations, use `config_context(patch_history="disabled")`. Existing history is preserved, but DASCore will stop appending new entries until that config context exits.
+Patch functions append to `attrs.history`. Disable new entries temporarily when provenance is not needed:
 
 ```{python}
 from dascore.config import config_context
 
-patch = dc.get_example_patch().pass_filter(time=(1, 10))
-old_history = patch.attrs.history
-
 with config_context(patch_history="disabled"):
-    out = patch.abs()
-
-assert out.attrs.history == old_history
+    without_new_history = patch.abs()
 ```
 
-`Patch.attrs` only stores non-coordinate metadata. This includes things like the acquisition key, data units, and observing-system fields such as `gauge_length` or `pulse_width`.
+Existing history remains intact while recording is disabled. This is useful for tight processing loops where a full operation log is unnecessary; leave the default enabled when results must be audited later.
 
 ### Patch identity
 
-Two ids answer two different questions, and they move independently.
+Two attributes track identity:
 
-`patch_id` says **which data** this is. It survives every operation which does not change what the data is *of* — filtering, decimating, transposing, changing units — and changes only when data from more than one source is combined.
-
-`processing_id` says **what was done**. It advances on every operation, by folding that operation's fingerprint into the id the input carried.
+| Attribute | Meaning | Changes when |
+|---|---|---|
+| `patch_id` | Which source data this is | Multiple sources are combined |
+| `processing_id` | Which operations produced it | A patch function changes the patch |
 
 ```{python}
-import dascore as dc
-
-patch = dc.get_example_patch()
 filtered = patch.pass_filter(time=(1, 10))
-
-# Same data, so the same patch_id.
 assert filtered.attrs.patch_id == patch.attrs.patch_id
-# Something was done to it, so a new processing_id.
 assert filtered.attrs.processing_id != patch.attrs.processing_id
 ```
 
-Neither is a random number after the first, so the same data processed the same way arrives at the same `processing_id` — in another process, on another machine, next year:
+The processing route matters. Repeating the same operations produces the same `processing_id`, while changing their order does not:
 
 ```{python}
-one = patch.pass_filter(time=(1, 10)).decimate(time=2)
-two = patch.pass_filter(time=(1, 10)).decimate(time=2)
-assert one.attrs.processing_id == two.attrs.processing_id
-
-# And a different route is a different answer, order included.
+first = patch.pass_filter(time=(1, 10)).decimate(time=2)
+same = patch.pass_filter(time=(1, 10)).decimate(time=2)
 other = patch.decimate(time=2).pass_filter(time=(1, 10))
-assert other.attrs.processing_id != one.attrs.processing_id
+
+assert first.attrs.processing_id == same.attrs.processing_id
+assert first.attrs.processing_id != other.attrs.processing_id
 ```
 
-A patch read from a file derives its `patch_id` from what it was read from — the format and version, the path, which patch it is within the file, and the file's size and modification time — so two processes reading the same file agree on which data it is, and so does scanning it without reading it at all:
+File-backed patches derive `patch_id` from format, version, path, patch key, file size, and modification time. Repeated reads and metadata scans therefore agree without hashing the data array. Copying the same bytes to another path produces a different derived ID; overwriting a path also changes it. DASDAE files store both IDs and restore the stored values when read elsewhere.
 
-```{python}
-import tempfile
-from pathlib import Path
-
-path = Path(tempfile.mkdtemp()) / "patch.h5"
-patch.io.write(path, "dasdae")
-
-assert dc.read(path)[0].attrs.patch_id == dc.read(path)[0].attrs.patch_id
-```
-
-Those fields are the ones the spool index already keeps, and they are the ones it already uses to decide whether a file changed: data written over a path is a new datum rather than the old one wearing its id. The price is the other way round — the same bytes copied to a second path, or re-fetched over the first, are a new datum too. A missed match is the safe failure; two different data claiming to be one is not.
-
-`patch_id` is indexed by the spool, so a spool hands back the patch an id names without loading anything to look for it — see [Finding a patch by its id](spool.qmd#finding-a-patch-by-its-id). `processing_id` is not: it advances on every operation, including the ones a spool runs as it loads.
-
-The path is part of the id, so a derived id is not stable across machines. A stored one is: DASDAE writes both ids into the file, and a patch read back from it keeps the id it was written with rather than deriving a new one. A patch built in memory names no source, so its `patch_id` is minted, and stable only within the process which built it.
-
-An operation which hands the patch straight back did nothing, and records nothing. Neither id is part of `Patch.equals`: two patches holding the same data are equal however they were made.
-
-### What builds a patch, and what operates on one
-
-`new`, `update` and `update_attrs` carry both ids through, unless you name one and set it yourself. They are not operations — they are how a patch function assembles its own result — so stamping there would count every operation twice.
-
-That has a consequence worth knowing: changing data through `new` yourself leaves the ids saying the data is unchanged and the route is the same one.
+In-memory patches receive process-local IDs. Direct calls to `new`, `update`, and `update_attrs` preserve both IDs because patch functions use them to assemble results. Changing data through these low-level methods does not describe a processing step:
 
 ```{python}
 doubled = patch.new(data=patch.data * 2)
-
-# It says it is the same data by the same route, because nothing told it otherwise.
 assert doubled.attrs.patch_id == patch.attrs.patch_id
 assert doubled.attrs.processing_id == patch.attrs.processing_id
 ```
 
-The ids describe what DASCore was asked to do. Work done through [patch functions](processing.qmd) is described; work done by reaching past them is not. Building a patch from arrays rather than from another patch is the honest case, and mints a new `patch_id`:
+Use patch functions when processing should advance provenance. A function that returns the input unchanged advances neither ID, and IDs do not participate in `Patch.equals`. Set `patch_provenance="disabled"` only when IDs are not needed. See [Finding a patch by its ID](spool.qmd#finding-a-patch-by-id) and [Workflow](workflow.qmd) for lookup and operation fingerprints.
+
+## Display and shortcuts
+
+Displaying a patch summarizes its data, coordinates, attributes, and history. HTML displays use collapsible sections; [`display_html`](configuration.qmd) selects the text representation instead.
 
 ```{python}
-import numpy as np
-
-built = dc.Patch(data=np.asarray(patch.data), coords=patch.coords, dims=patch.dims)
-assert built.attrs.patch_id != patch.attrs.patch_id
-```
-
-Set `patch_provenance="disabled"` to stop maintaining them:
-
-```{python}
-with config_context(patch_provenance="disabled"):
-    plain = dc.Patch(data=patch.data, coords=patch.coords, dims=patch.dims)
-
-assert plain.attrs.patch_id == ""
-```
-
-## Summary
-
-`Patch.summary` provides a read-only combined view of:
-
-- `Patch.attrs` for non-coordinate metadata
-- coordinate summaries derived from `Patch.coords`
-
-Use `Patch.summary` when you need fields such as `time_min`, `time_max`, `distance_step`, or coordinate units.
-
-```{python}
-import dascore as dc
-
-patch = dc.get_example_patch()
-
-print(patch.attrs.tag)
-print(patch.get_coord("time").min())
-print(patch.get_coord("distance").step)
-```
-
-For tabular use, [`PatchSummary.flat_dump()`](`dascore.PatchSummary.flat_dump`) returns a flat dictionary combining attrs with coordinate summary fields.
-
-```{python}
-row = patch.flat_dump()
-print(row["time_min"])
-print(row["distance_max"])
-```
-
-The `data_type` attribute is an optional label for the kind of data in the patch. It is useful for display defaults and quick inspection, but physical interpretation should come from `data_units`, coordinate units, and `history`. See the [PatchAttrs note](../notes/patch_attrs.qmd) for more detail.
-
-## Seeing a patch
-
-A patch says what it holds. Where a display can render HTML — a notebook, or this page — it draws a panel whose sections fold; everywhere else, and with `display_html` off, it says the same words as text.
-
-A time range is drawn as a range rather than as two values: both ends state the same fields, and the far one states only what differs, with `…` standing for whatever it repeats of the near one. A patch inside one day says that day once.
-
-```{python}
-import dascore as dc
-
-patch = dc.get_example_patch()
 patch
 ```
 
-## Shortcuts
-
-DASCore Patches offer a few shortcuts for quickly accessing commonly used information:
+For time-distance patches, `seconds` and `channel_count` provide quick size information. `get_patch_name()` returns the default filename for a patch.
 
 ```{python}
-import dascore as dc
-
-patch = dc.get_example_patch()
-print(patch.seconds)  # number of seconds in the patch
-print(patch.channel_count)  # number of channels in the patch
+print(patch.seconds, patch.channel_count)
+print(patch.get_patch_name())
 ```
 
-These shortcuts only work for patches with dimensions "time" and "distance", but they can help new users who may be unfamiliar with datetimes and coordinates.
+`Spool.get_patch_names()` applies the same naming convention to every managed patch. Display precision, truncation, and folding are controlled by the [runtime configuration](configuration.qmd).
 
-The "name" of a patch (the filename DASCore would use if the patch were saved to disk) can be generated with [`Patch.get_patch_name`](`dascore.Patch.get_patch_name`). For a spool, use [`Spool.get_patch_names`](`dascore.Spool.get_patch_names`) to get the names of its managed patches.
-
-```python 
-import dascore as dc
-
-patch = dc.get_example_patch()
-spool = dc.get_example_spool()
-
-patch_name = patch.get_patch_name()
-patch_names = spool.get_patch_names()
-```
-
-# Trim and Reshape
-
-The following methods help trim, reshape, and manipulate coordinates.
+# Selecting and reshaping
 
 ## Select
 
-Patches are trimmed using the [`Patch.select`](`dascore.Patch.select`) method. Unlike [`Patch.order`](`dascore.Patch.order`), `select` will not change the order of the affected dimensions, it will only remove elements. Most commonly, `select` takes the coordinate name and a tuple of (lower_limit, upper_limit) as the values. Either limit can be `...` or `None`, indicating an open interval, as can an infinite bound pointing away from the data, such as `(lower_limit, np.inf)`. 
+[`Patch.select`](`dascore.Patch.select`) keeps coordinate values inside a range without reordering them. Use `...` or `None` for an open bound.
 
 ```{python}
-import numpy as np
-
-import dascore as dc
-
-patch = dc.get_example_patch()
-attrs = patch.attrs
-
-# Select 1 sec after current start time to 1 sec before end time.
 time = patch.get_coord("time")
-one_sec = dc.to_timedelta64(1)
-select_tuple = (time.min() + one_sec, time.max() - one_sec)
-new = patch.select(time=select_tuple)
+one_second = dc.to_timedelta64(1)
 
-# Select only the first half of the distance channels.
-distance_max = np.mean(patch.coords.get_array('distance'))
-new = patch.select(distance=(..., distance_max))
+trimmed = patch.select(time=(time.min() + one_second, time.max() - one_second))
+first_half = patch.select(distance=(..., np.mean(patch.get_array("distance"))))
 ```
 
-The `relative` keyword is used to trim coordinates based on the start (positive) and end (negative).
+With `relative=True`, positive bounds are measured from the start and negative bounds from the end:
 
 ```{python}
-import dascore as dc
+trimmed = patch.select(time=(1, -1), relative=True)
+```
+
+Relative quantities are converted before measuring from an endpoint:
+
+```{python}
 from dascore.units import ft
 
-patch = dc.get_example_patch()
-
-# We can make the example above simpler with relative selection
-new = patch.select(time=(1, -1), relative=True)
-
-# select 2 seconds from end to 1 second from end
-new = patch.select(time=(-2, -1), relative=True)
-
-# select last 100 ft of distance channels
-new = patch.select(distance=(-100 * ft, ...), relative=True)
+last_hundred_feet = patch.select(distance=(-100 * ft, ...), relative=True)
 ```
 
-The `samples` keyword tells `select` the meaning of the query is in samples rather than the units of the selected dimension. Unlike absolute selections, sample selections are **always** relative to the data contained in the patch: a single index of 0 is the first sample along the dimension and -1 is the last.
+With `samples=True`, values are array indices. Sample ranges follow Python slicing, while coordinate-value ranges include both endpoints.
 
-:::{.callout-warning}
-Sample ranges and value ranges do not have the same end behavior. A value range includes both of its endpoints, but a sample range excludes its upper bound, like Python's slicing and `range`.
-
-A consequence worth remembering: `-1` used as the end of a range excludes the last sample, even though `-1` on its own selects it.
-
-| query | selects |
+| Query | Result |
 |---|---|
-| `select(distance=(0, 10))` | values 0 through 10, **both included** (11 channels) |
-| `select(time=(0, 10), samples=True)` | samples 0 through 9 (10 samples) |
-| `select(time=(0, -1), samples=True)` | every sample **except** the last |
-| `select(time=-1, samples=True)` | only the last sample |
-
-: Range endpoints in values vs samples {.striped .hover}
-
-`select` also accepts a slice wherever it accepts a `(min, max)` tuple, which is worth preferring for sample ranges since `slice(0, -1)` reads exactly like `x[0:-1]`. Note this is specific to `select` and `order`; processing functions such as `pass_filter` and `taper` require a tuple. Note also that the slice is still only shorthand for a range, so it needs `samples=True` just as a tuple does — without it, `-1` is a coordinate value rather than an index.
-:::
+| `select(distance=(0, 10))` | Coordinate values 0 through 10, inclusive |
+| `select(time=(0, 10), samples=True)` | Samples 0 through 9 |
+| `select(time=(0, -1), samples=True)` | Every sample except the last |
+| `select(time=-1, samples=True)` | Only the last sample |
 
 ```{python}
-import dascore as dc
-
-patch = dc.get_example_patch()
-sample_count = len(patch.get_array("time"))
-
-# Trim patch to only include first 10 time rows (or columns).
-new = patch.select(time=(..., 10), samples=True)
-assert len(new.get_array("time")) == 10
-
-# Only include the last distance column or row.
-new = patch.select(distance=-1, samples=True)
-
-# But as the end of a range, -1 excludes the last sample.
-new = patch.select(time=(0, -1), samples=True)
-assert len(new.get_array("time")) == sample_count - 1
-
-# A slice means the same thing, and makes that more obvious.
-assert len(patch.select(time=slice(0, -1), samples=True).get_array("time")) == sample_count - 1
+first_ten = patch.select(time=slice(0, 10), samples=True)
+last_channel = patch.select(distance=-1, samples=True)
 ```
 
-Arrays can also be passed as values in which case they will be treated like sets, meaning only coordinate elements in the array will be selected.
+Arrays select a set of coordinate values or sample positions:
 
 ```{python}
-import numpy as np
-
-import dascore as dc
-
-patch = dc.get_example_patch()
-
-# Create an array of desired distances.
-dist_to_select = np.array([10., 18., 12.])
-sub_patch = patch.select(distance=dist_to_select)
-# Test that select worked.
-assert set(sub_patch.get_array('distance')) == set(dist_to_select)
-
-# Samples also work
-sub_patch = patch.select(distance=np.array([0, 12, 10, 9]), samples=True)
-assert len(sub_patch.get_array('distance')) == 4
+chosen = patch.select(distance=np.array([10, 18, 12]))
+chosen_samples = patch.select(distance=np.array([0, 12, 10, 9]), samples=True)
 ```
 
-## Unselect
-
-[`Patch.unselect`](`dascore.Patch.unselect`) is the complement of `select`: it takes the same selectors and removes the samples `select` would have kept. Naming one coordinate gives exactly the complement; naming several complements each on its own, as below.
+Multiple keywords apply one selection per coordinate in the same call. The resulting array is the intersection of those selections:
 
 ```{python}
-import dascore as dc
+window = patch.select(
+    time=(1, -1),
+    distance=(0, 100),
+    relative=True,
+)
+```
 
-patch = dc.get_example_patch()
+`select` and `order` accept slices as range shorthand; sample slices still require `samples=True`. Processing functions such as `pass_filter` and `taper` require tuples.
 
-# Everything outside meters 50 to 200.
+## Unselect and order
+
+[`Patch.unselect`](`dascore.Patch.unselect`) removes what `select` would keep. Removing an interior range creates a segmented coordinate.
+
+```{python}
 outside = patch.unselect(distance=(50, 200))
-
-# Together the two account for every channel, and share none.
-inside = patch.select(distance=(50, 200))
-assert len(outside.get_array("distance")) + len(inside.get_array("distance")) == 300
-```
-
-Removing a range from the middle leaves a hole, so the coordinate is no longer evenly sampled:
-
-```{python}
-assert patch.get_coord("distance").step is not None
 assert outside.get_coord("distance").step is None
 ```
 
-That is why [`Spool.unselect`](`dascore.core.spool.Spool.unselect`) refuses the patches' own coordinates. A patch can have samples removed from its middle; at spool level the complement of a range would be a hole in every patch rather than a choice between patches. The coordinates an attached DASDAE [inventory](inventory.qmd) defines along the fiber are a separate case, and are accepted: removing one of those chooses which channels a patch holds. When several coordinates are named, each is complemented on its own — the true complement of a block is a frame around it, which no array can hold.
+Each named coordinate is complemented independently. At spool level, patch coordinates cannot be unselected because removing an interior interval could turn one patch into two; use `Patch.unselect` when subdivision is intended.
 
-## Order
- Order is similar to [`Patch.select`](`dascore.Patch.select`), but will re-arrange data to the order specified by a value array. This may also cause parts of the patch to be duplicated.
-
-```{python}
-import numpy as np
-
-import dascore as dc
-
-patch = dc.get_example_patch()
-
-# Get a patch with a new distance ordering
-dist_order1 = np.array([20., 10., 15.])
-patch_dist1 = patch.order(distance=dist_order1)
-assert np.all(dist_order1 == patch_dist1.get_array("distance"))
-
-# Get a patch with duplicate entries for distance
-dist_order2 = np.array([20., 20., 20.])
-patch_dist2 = patch.order(distance=dist_order2)
-assert np.all(dist_order2 == patch_dist2.get_array("distance"))
-```
-
-## New dimensions
-
-Sometimes it can be useful to add new (empty) dimensions to a Patch.
-[`Patch.append_dims`](`dascore.Patch.append_dims`) does this.
-
-```python
-import dascore as dc
-
-patch = dc.get_example_patch()
-
-# Create a new patch with a single empty dimension called "nothing"
-patch_dims = patch.append_dims("nothing")
-
-# Create a new patch with a length two dimension called "money".
-# The contents of the patch are repeated along the new dimension to fill
-# the required length.
-patch_extended_dims = patch.append_dims(money=2)
-
-# Transpose can then be used to re-arrange the dims
-patch_extended = patch_extended_dims.transpose("time", "money", "distance")
-
-# And update coords to add coordinate values to the new dim
-patch_extended_coord = patch_extended.update_coords(money=[10, 30])
-```
-
-Although these examples are quite contrived, these functions are very useful for transforms which create high dimensional patches. 
-
-# Processing
-
-The patch has several methods which are intended to be chained together via a [fluent interface](https://en.wikipedia.org/wiki/Fluent_interface), meaning each method returns a new `Patch` instance.
+[`Patch.order`](`dascore.Patch.order`) instead follows the supplied order and may duplicate samples.
 
 ```{python}
-import dascore as dc
-pa = dc.get_example_patch()
+ordered = patch.order(distance=np.array([20, 10, 20]))
+```
 
-out = (
-    # Decimate to reduce data volume by 8 along time dimension
-    pa.decimate(time=8)  
-    # Detrend along distance dimension
-    .detrend(dim='distance')
-    # Apply a low-pass 10 Hz butterworth filter along time dimension
+[`Patch.append_dims`](`dascore.Patch.append_dims`) adds a dimension and optionally repeats the data along it:
+
+```{python}
+expanded = patch.append_dims(realization=2).update_coords(realization=[0, 1])
+```
+
+The new dimension is appended to the array. Use `transpose` to place it elsewhere:
+
+```{python}
+expanded = expanded.transpose("distance", "realization", "time")
+```
+
+# Processing and visualization
+
+Patch methods form a fluent interface, so processing steps can be chained:
+
+```{python}
+processed = (
+    patch.decimate(time=8)
+    .detrend(dim="distance")
     .pass_filter(time=(..., 10))
 )
 ```
-The processing methods are located in the [dascore.proc](`dascore.proc`) module. The [patch processing tutorial](processing.qmd) provides more information about processing routines.
 
-# Visualization
+See [Patch processing](processing.qmd) and the [`dascore.proc`](`dascore.proc`) API for available operations.
 
-DASCore provides some visualization functions in the [dascore.viz](`dascore.viz`) module or using the `Patch.viz` namespace. DASCore generally only implements simple, matplotlib based visualizations but other DASDAE packages will likely do more interesting visualizations.
+Plots are available through `Patch.viz`:
 
 ```{python}
-import dascore as dc
+event.taper(time=0.05).pass_filter(time=(..., 300)).viz.waterfall(show=True);
+```
 
-patch = (
-    dc.get_example_patch('example_event_1')
-    .taper(time=0.05)
-    .pass_filter(time=(..., 300))
+See the [visualization tutorial](visualization.qmd) for plot options.
+
+# Updating patches
+
+[`Patch.update`](`dascore.Patch.update`) replaces data, coordinates, or the complete attribute model. [`Patch.update_attrs`](`dascore.Patch.update_attrs`) changes selected metadata fields.
+
+```{python}
+scaled = patch.update(data=patch.data * 10)
+retagged = patch.update_attrs(tag="processed")
+```
+
+[`Patch.update_coords`](`dascore.Patch.update_coords`) modifies or adds coordinates. Tuple values specify `(associated_dimensions, values)`.
+
+```{python}
+shifted = patch.update_coords(time_min=patch.coords.min("time") + one_second)
+
+latitude = np.linspace(41.5, 41.8, patch.shape[0])
+located = patch.update_coords(latitude=("distance", latitude))
+
+quality = np.ones_like(patch.data)
+with_quality = located.update_coords(quality=(patch.dims, quality))
+```
+
+Several coordinates can be attached in one call, and the associated dimension determines the required shape:
+
+```{python}
+longitude = np.linspace(-109.9, -109.6, patch.shape[0])
+located = patch.update_coords(
+    latitude=("distance", latitude),
+    longitude=("distance", longitude),
 )
-
-patch.viz.waterfall(show=True);
 ```
 
-# Modifying patches
-
-Because patches should be treated as immutable objects, they can't be modified with normal attribute assignment. However, DASCore provides several methods that return new patches with modifications. 
-
-## Update
-
-[`Patch.update`](`dascore.core.patch.Patch.update`) uses the `Patch` instances as a template and returns a new `Patch` instances with one or more aspects modified.
+The same tuple syntax works during construction:
 
 ```{python}
-import dascore as dc
-pa = dc.get_example_patch()
-
-# Create a copy of patch with new data but coords and attrs stay the same.
-new_data_patch = pa.update(data=pa.data * 10)
-
-# Completely replace the attributes.
-new_attrs_patch = pa.update(attrs=dict(tag="TMU"))
-```
-
-## Update attrs
-
-[`Patch.update_attrs`](`dascore.core.patch.Patch.update_attrs`) is for making changes to the attrs (metadata) while keeping the unaffected metadata (`Patch.update` would completely replace the old attrs).
-
-```{python}
-import dascore as dc
-pa = dc.get_example_patch()
-
-# Update existing attribute 'acquisition_key' and create new attr 'new_attr'
-pa1 = pa.update_attrs(acquisition_key='EXP1.R2D1..RAW', new_attr=42)
-```
-
-```{python}
-#| echo: false
-assert pa1.attrs.acquisition_key == "EXP1.R2D1..RAW"
-assert pa1.attrs.new_attr == 42
-```
-
-
-## Update coords
-
-[`Patch.update_coords`](`dascore.core.patch.Patch.update_coords`) returns a new patch with the coordinates changed in some way. These changes can include:
- - Modifying (updating) existing coordinates
- - Adding new coordinates
- - Changing coordinate dimensional association
-
-
-### Modifying coordinates
-
-Coordinates can be updated by specifying a new array which should take the place of the old one:
-
-```{python}
-import dascore as dc
-
-pa = dc.get_example_patch()
-
-# Add one second to all values in the time array.
-one_second = dc.to_timedelta64(1)
-old_time = pa.coords.get_array('time')
-new = pa.update_coords(time=old_time + one_second)
-```
-
-Or by specifying new min, max, or step values for a coordinate.
-
-```{python}
-import dascore as dc
-
-pa = dc.get_example_patch()
-one_second = dc.to_timedelta64(1)
-
-# Change the starting time of the array.
-new_time = pa.coords.min('time') + one_second
-new = pa.update_coords(time_min=new_time)
-```
-
-### Adding coordinates
-
-Commonly, additional coordinates, such as latitude/longitude, are attached to a particular dimension such as distance. It is also possible to include coordinates that are not associated with any dimensions.
-
-
-```{python}
-import numpy as np
-
-import dascore as dc
-
-pa = dc.get_example_patch()
-coords = pa.coords
-dist = coords.get_array('distance')
-time = coords.get_array('time')
-
-# Add a single coordinate associated with distance dimension.
-lat = np.arange(0, len(dist)) * .001 -109.857952
-# Note the tuple form: (associated_dimension, value)
-out_1 = pa.update_coords(latitude=('distance', lat))
-
-# Add multiple coordinates associated with distance dimension.
-lon = np.arange(0, len(dist)) *.001 + 41.544654
-out_2 = pa.update_coords(
-    latitude=('distance', lat),
-    longitude=('distance', lon),
+rebuilt = dc.Patch(
+    data=patch.data,
+    dims=patch.dims,
+    coords={
+        "distance": patch.get_array("distance"),
+        "time": patch.get_array("time"),
+        "latitude": ("distance", latitude),
+        "quality": (patch.dims, quality),
+    },
+    attrs=patch.attrs,
 )
-
-# Add coordinate associated with multiple dimensions.
-quality = np.ones_like(pa.data)
-out_3 = pa.update_coords(
-    quality=(pa.dims, quality)
-)
-
-# Add coordinate which isn't associated with a dimension.
-no_dim_coord = pa.update_coords(non_dim=(None, np.arange(10)))
 ```
 
-### Changing coordinate dimensional association
+To change an association, pass the same values with a new dimension tuple. This changes coordinate metadata without reshaping the patch.
 
-The dimensions each coordinate is associated with can be changed. For example, to remove a coordinate's dimension association:
+Coordinates not associated with a dimension use `(None, values)`. [`Patch.drop_coords`](`dascore.Patch.drop_coords`) removes non-dimensional coordinates; dimension coordinates cannot be dropped.
 
 ```{python}
-import dascore as dc
-
-# Load a patch which has latitude and longitude coordinates.
-patch = dc.get_example_patch("random_patch_with_lat_lon")
-
-# Disassociate latitude from distance.
-lat = patch.coords.get_array('latitude')
-patch_detached_lat = patch.update_coords(latitude=(None, lat))
+detached = located.update_coords(latitude=(None, latitude))
+without_latitude = detached.drop_coords("latitude")
 ```
-
-## Dropping coordinates
-
-Non-dimensional coordinates can be dropped using [`Patch.drop_coords`](`dascore.proc.coords.drop_coords`). Dimensional coordinates, however, cannot be dropped since doing so would force the patch data to become degenerate.
-
-```{python}
-import dascore as dc
-
-# This patch has latitude and longitude coordinates
-patch = dc.get_example_patch("random_patch_with_lat_lon")
-
-# Drop latitude, this won't affect the data or other coordinates
-patch_dropped_lat = patch.drop_coords("latitude")
-print(patch_dropped_lat.coords)
-```
-
-### Coords in patch initialization
-
-Any number of coordinates can also be assigned when the patch is initiated. For coordinates other than those of the patch dimensions, the associated dimensions must be specified. For example:
-
-```{python}
-import dascore as dc
-import numpy as np
-
-# Create data for patch
-rand = np.random.RandomState(13)
-array = rand.random(size=(20, 100))
-time1 = np.datetime64("2020-01-01")
-
-# Create patch attrs
-attrs = dict(dx=1, d_time=1 / 250.0, category="DAS", id="test_data1")
-time_deltas = dc.to_timedelta64(np.arange(array.shape[1]) * attrs["d_time"])
-
-# Create coordinate data
-distance = np.arange(array.shape[0]) * attrs["dx"]
-time = time1 + time_deltas
-quality = np.ones_like(array)
-latitude = np.arange(array.shape[0]) * .001 - 111.00
-
-# Create coord dict
-coords = dict(
-    distance=distance,
-    time=time,
-    latitude=("distance", latitude),  # Note distance is attached dimension
-    quality=(("distance", "time"), quality),  # Two attached dimensions here
-)
-
-# Define dimensions of array and init Patch
-dims = ("distance", "time")
-out = dc.Patch(data=array, coords=coords, attrs=attrs, dims=dims)
-```
-
 
 # Units
 
-As mentioned in the [units section of the concept page](concepts.qmd#units), DASCore provides first-class support for units. 
-
-## Patch units
-
-There are two methods for configuring the units associated with a `Patch`.
-
-[`Patch.set_units`](`dascore.Patch.set_units`) sets the units on a patch or its coordinates. Old units are simply overwritten without performing any conversions. The first argument sets the data units and the keywords set the coordinate units.
-
-[`Patch.convert_units`](`dascore.Patch.convert_units`) converts data or coordinates units by appropriately transforming the data or coordinates arrays. If no units exist they will simply be set.
+[`Patch.set_units`](`dascore.Patch.set_units`) changes unit labels without converting values. [`Patch.convert_units`](`dascore.Patch.convert_units`) converts the data or coordinate values.
 
 ```{python}
-import dascore as dc
-
-patch = dc.get_example_patch()
-
-# Set data units and distance units; don't do any conversions
-patch_set_units = patch.set_units("m/s", distance="ft")
-
-# Convert data units and distance units; will modify data/coords
-# to correctly do the conversion.
-patch_conv_units = patch_set_units.convert_units("ft/s", distance='m')
+with_units = patch.set_units("m/s", distance="ft")
+converted = with_units.convert_units("ft/s", distance="m")
 ```
 
-The data or coordinate units attributes are [Pint Quantity](https://pint.readthedocs.io/en/stable/getting/tutorial.html#defining-a-quantity), but they can be converted to strings with [`get_quantity_str`](`dascore.units.get_quantity_str`).
+Use `set_units` only when values are already expressed in the new unit or when correcting a missing label. Use `convert_units` when numeric values must preserve the same physical quantity. Data units are stored as Pint quantities and can be formatted with [`get_quantity_str`](`dascore.units.get_quantity_str`).
+
+Quantities may be passed directly to selection and processing functions:
 
 ```{python}
-import dascore as dc
-from dascore.units import get_quantity_str
+from dascore.units import ft, m
 
-patch = dc.get_example_patch().set_units("m/s")
-
-print(type(patch.attrs.data_units))
-print(get_quantity_str(patch.attrs.data_units))
+selected = patch.select(distance=(10 * ft, 10 * m))
+filtered = patch.pass_filter(distance=(10 * m, 100 * m))
 ```
 
-## Units in processing functions
+Quantities are converted to the coordinate's units before selection or processing, so the same expression works after a coordinate is converted from metres to feet.
+
+# Arithmetic and NumPy
+
+Scalar and NumPy-array operations broadcast over patch data. Patch-to-patch operations require compatible metadata and align coordinates on their intersection; units participate in the calculation. See [Patch compatibility](../notes/patch_compatibility.qmd) for the shared rules.
 
 ```{python}
-import dascore as dc
-from dascore.units import m, ft
+scaled = patch / 10
+offset = patch + np.ones(patch.shape)
+combined = patch + patch
 
-pa = dc.get_example_patch()
-
-# Sub-select a patch to only include distance from 10ft to 10m.
-sub_selected = pa.select(distance=(10*ft, 10*m))
-
-# Filter patch for spatial wavelengths from 10m to 100m.
-dist_filtered = pa.pass_filter(distance=(10*m, 100*m))
+assert np.allclose(scaled.data, patch.data / 10)
+assert np.allclose(combined.data, patch.data * 2)
 ```
 
-See the documentation on [`Patch.select`](`dascore.Patch.select`) and [`Patch.pass_filter`](`dascore.Patch.pass_filter`) for more details.
-
-# Patch operations
-
-Patches implement many numpy-like functions which are applied directly to a patch using built-in python operators.
-
-In the case of scalars and numpy arrays, the operations are broadcast over the patch data. In the case of two patches, the patches must be the same kind (no conflicting values for the attributes named by the config option `patch_kind_attrs`, such as `acquisition_key` and `tag`), their coordinates are aligned on the intersection of their values, then the operator is applied to both patches' data. Data units take part in the operation rather than having to match. Here are a few examples:
-
-:::{.callout-note}
-See the [Patch Compatibility](../notes/patch_compatibility.qmd) note for the rules shared by operators, `where`, `concatenate`, `stack`, and `chunk`.
-:::
-
-## Patch operations with scalars
+Operations between patches first reject conflicting values in the configured `patch_kind_attrs`, then align shared coordinate values. Broadcast-compatible shapes are supported:
 
 ```{python}
-import numpy as np
-
-import dascore as dc
-
-patch = dc.get_example_patch()
-
-out1 = patch / 10
-assert np.allclose(patch.data / 10, out1.data)
-
-out2 = patch ** 2.3
-assert np.allclose(patch.data ** 2.3, out2.data)
-
-out3 = patch - 3
-assert np.allclose(patch.data - 3, out3.data)
+one_channel = patch.select(distance=0, samples=True).squeeze()
+broadcast_sum = patch + one_channel
+assert broadcast_sum.shape == patch.shape
 ```
 
-Units are also fully supported.
+Quantities update `data_units` as part of the arithmetic:
 
 ```{python}
-import dascore as dc
-from dascore.units import m, s
+from dascore.units import s
 
-patch = dc.get_example_patch().set_units("m/s")
-
-# Multiplying patches by a quantity with units updates the data_units.
-new = patch * 10 * m/s
-
-print(f"units before operation {patch.attrs.data_units}")
-print(f"units after operation {new.attrs.data_units}")
+velocity = patch.set_units("m/s")
+displacement = velocity * (2 * s)
+print(displacement.attrs.data_units)
 ```
 
-## Patch operations with numpy arrays
+Array operands must broadcast against patch data. Coordinate-aware alignment occurs only for another Patch; a bare NumPy array contributes no coordinate or metadata information.
 
-`Patch` implements the numpy array protocol, meaning you can use numpy functions on patches
+NumPy ufuncs operate directly on patches, and DASCore patch ufuncs support named-dimension reduction and accumulation.
 
 ```{python}
-import numpy as np
-
-import dascore as dc
-
-patch = dc.get_example_patch()
-ones = np.ones(patch.shape)
-
-out1 = patch + ones
-assert np.allclose(patch.data + ones, out1.data)
+absolute = np.abs(patch)
+cumulative = patch.add.accumulate("time")
+summed = patch.add.reduce("distance")
 ```
 
-Units also work with numpy arrays.
+`Patch.apply_ufunc` also accepts a NumPy ufunc explicitly. DASCore maps named dimensions to NumPy axes and preserves compatible coordinates:
 
 ```{python}
-import numpy as np
-
-import dascore as dc
-from dascore.units import furlongs
-
-patch = dc.get_example_patch()
-ones = np.ones(patch.shape) * furlongs
-
-out1 = patch * ones
-print(f"units before operation {patch.attrs.data_units}")
-print(f"units after operation {out1.attrs.data_units}")
+same_absolute = patch.apply_ufunc(np.abs)
+scaled = patch.apply_ufunc(np.multiply, 10)
 ```
 
-## Patch operations with other patches
-
-### Identically shaped patches
-
-When patches are shaped the same, the operations can simply be applied on the data arrays, then coords and attrs merged.
-
-```{python}
-import numpy as np
-
-import dascore as dc
-from dascore.units import furlongs
-
-patch = dc.get_example_patch()
-
-# Adding two patches together simply adds their data their
-# and checks/merges coords and attrs.
-out = patch + patch
-
-assert np.allclose(patch.data * 2, out.data)
-```
-
-### Broadcastable patches
-
-If the arrays are not shaped the same, but they can be broadcasted to compatible shapes, these operations work as well.
-
-```{python}
-import numpy as np
-
-import dascore as dc
-from dascore.units import furlongs
-
-patch = dc.get_example_patch()
-sub_patch = patch.select(distance=1, samples=True)
-print(sub_patch.shape)
-
-# The sub patch is broadcasted over the patch along appropriate dimension.
-sum_patch = patch + sub_patch
-print(sum_patch.shape)
-```
-
-### Numpy Functions
-
-DASCore uses [apply_array_ufunc](`dascore.utils.array.apply_ufunc`) and [array_function](`dascore.utils.array.apply_array_func`) for applying numpy functions to `Patch` instances.
-
-For NumPy's [ufuncs](https://numpy.org/doc/stable/reference/ufuncs.html) DASCore implements `Patch` universal functions. You can use numpy ufuncs directly on patches or create patch-specific ufuncs with dimension support.
-
-```{python}
-import numpy as np
-import dascore as dc
-
-patch = dc.get_example_patch()
-
-# Use numpy ufuncs directly on patches
-abs_patch = np.abs(patch)
-sin_patch = np.sin(patch)
-
-# Add patches together using numpy ufuncs
-sum_patch = np.add(patch, patch)
-
-# Or name the ufunc, with the patch as its first operand
-same_abs_patch = patch.apply_ufunc(np.abs)
-scaled_patch = patch.apply_ufunc(np.multiply, 10)
-```
-
-Some of the Patch methods are ufuncs which means they support accumulation and reduction along specified dimensions.
-
-```{python}
-from dascore.utils.array import PatchUFunc
-import numpy as np
-import dascore as dc
-
-patch = dc.get_example_patch()
-added_patch = patch.add(patch)
-patch_cum_sum = patch.add.accumulate("time")
-patch_reduced = patch.add.reduce("distance")
-```
-
-
-:::{.callout-note}
-`PatchUFunc.reduce`/`accumulate` accept `dim` (mapped internally to `axis`), while numpy ufuncs accept `axis`.
-:::
-
-For more advanced usage, you can create patch ufuncs.
-
-```{python}
-from dascore.utils.array import PatchUFunc
-import numpy as np
-import dascore as dc
-
-# Create a patch ufunc wrapper
-add_ufunc = PatchUFunc(np.add)
-patch = dc.get_example_patch()
-
-# Use accumulate to compute cumulative sum along time dimension
-cumsum_patch = add_ufunc.accumulate(patch, dim="time")
-
-# Use reduce to sum all values along distance dimension
-sum_patch = add_ufunc.reduce(patch, dim="distance")
-
-# Bind to patch for cleaner syntax
-bound_add = add_ufunc.__get__(patch, type(patch))
-result = bound_add.reduce(dim="time")  # No need to pass patch
-```
-
-The patch ufunc system automatically handles dimension-to-axis conversion and preserves patch coordinates appropriately.
+Named reduction removes the reduced dimension and coordinates which depend on it. Accumulation retains the original shape and dimension coordinates.
