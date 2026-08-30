@@ -294,6 +294,16 @@ class TestLayout:
         ax = plot_lanes(frame, value="v")
         assert _texts(ax) == ["wide"]
 
+    def test_label_ink_matches_its_fill(self):
+        """White ink on a dark box, dark ink on a light one, so both read."""
+        frame = pd.DataFrame(
+            {"start": [0.0, 50.0], "end": [50.0, 100.0], "v": ["coal", "chalk"]}
+        )
+        ax = plot_lanes(frame, value="v", color={"coal": "black", "chalk": "white"})
+        inks = {x.get_text(): to_rgba(x.get_color()) for x in ax.texts}
+        assert inks["coal"] == to_rgba("white")
+        assert inks["chalk"] == to_rgba("black")
+
     def test_a_narrow_box_turns_its_label(self):
         """Text too wide for its box is stood on end rather than dropped."""
         # Boxes narrower than the text but far taller than it is tall.

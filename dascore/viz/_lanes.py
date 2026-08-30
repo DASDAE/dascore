@@ -500,12 +500,19 @@ def _fit_labels(ax, placements, max_labels):
     scale = _MEASURED_DPI / figure.dpi
 
     size = plt.rcParams["font.size"] * 0.8
-    for text, x_mid, y_mid, width, height in placements:
+    for text, x_mid, y_mid, width, height, fill in placements:
         if not text:
             continue
         box = _box_points(transform, scale, x_mid, y_mid, width, height)
         room = (box[0] - _LABEL_PAD, box[1] - _LABEL_PAD)
         taken = _text_points(text, size)
+        # Black text carries a halo of the box's own lightness poorly, and
+        # a halo alone cannot rescue it: match the text to the fill instead,
+        # dark ink on a light box, white on a dark one, with the halo in
+        # the opposite tone so the letters keep an edge on their neighbours.
+        r, g, b = to_rgba_array(fill)[0][:3]
+        luminance = 0.299 * r + 0.587 * g + 0.114 * b
+        ink, halo = ("black", "white") if luminance > 0.5 else ("white", "black")
         for rotation in (0, 90):
             # Turning the text swaps which way it has to fit.
             if rotation:
@@ -520,10 +527,10 @@ def _fit_labels(ax, placements, max_labels):
                 va="center",
                 rotation=rotation,
                 fontsize=size,
+                color=ink,
                 zorder=4,
                 clip_on=True,
-                # A dark fill would otherwise swallow the text sitting on it.
-                path_effects=[pe.withStroke(linewidth=1.3, foreground="white")],
+                path_effects=[pe.withStroke(linewidth=1.5, foreground=halo)],
             )
             break
 
@@ -803,6 +810,7 @@ def plot_lanes(
                     low + height / 2,
                     width,
                     height,
+                    row_color,
                 )
             )
         if boxes:
