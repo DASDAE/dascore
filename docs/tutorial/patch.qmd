@@ -27,11 +27,12 @@ event = dc.get_example_patch("example_event_1")
 Use [`dc.spool(...)`](`dascore.spool`) to open DAS files and take a patch by indexing the spool:
 
 ```{python}
-from dascore.utils.downloader import fetch
-
-path = fetch("terra15_das_1_trimmed.hdf5")
-file_patch = dc.spool(path)[0]
+file_patch = dc.spool("examples://terra15_das_1_trimmed.hdf5")[0]
 ```
+
+:::{.callout-note}
+An `examples://` name refers to a file in DASCore's [example data registry](`dascore.utils.downloader.get_registry_df`); it is downloaded and cached the first time it is used. Anywhere it appears in these docs, a path to your own data works just as well. Generated examples, which have no file behind them, come from [`dc.get_example_patch`](`dascore.examples.get_example_patch`) and [`dc.get_example_spool`](`dascore.examples.get_example_spool`) instead.
+:::
 
 See the [spool tutorial](spool.qmd) for directories, archives, and remote resources.
 

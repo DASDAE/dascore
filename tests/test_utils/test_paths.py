@@ -13,6 +13,7 @@ from dascore.utils.paths import (
     coerce_to_upath,
     directory_writable,
     get_path_protocol,
+    is_example_uri,
     is_local_path,
     is_pathlike,
     requires_local_directory,
@@ -124,3 +125,20 @@ class TestRequiresLocalDirectory:
                 UPath("memory://dascore/testdir"),
                 label="Directory spool",
             )
+
+
+class TestIsExampleUri:
+    """The examples:// scheme is matched exactly."""
+
+    def test_example_uri(self):
+        """A name with the scheme is an example uri."""
+        assert is_example_uri("examples://terra15_das_1_trimmed.hdf5")
+
+    def test_similar_name_is_not_matched(self):
+        """A real file whose name merely starts with examples is not."""
+        assert not is_example_uri("examples_notes.h5")
+        assert not is_example_uri("example://not_the_scheme.h5")
+
+    def test_path_is_not_matched(self, tmp_path):
+        """Ordinary paths are not example uris."""
+        assert not is_example_uri(tmp_path / "data.h5")

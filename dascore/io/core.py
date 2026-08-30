@@ -60,6 +60,7 @@ from dascore.exceptions import (
     RemoteCacheError,
     UnknownFiberFormatError,
 )
+from dascore.utils.downloader import resolve_example_uri
 from dascore.utils.io import (
     IOResourceManager,
     _normalize_source_patch_keys,
@@ -77,7 +78,12 @@ from dascore.utils.misc import (
     iterate,
     warn_or_raise,
 )
-from dascore.utils.paths import coerce_to_local_path, coerce_to_upath, is_local_path
+from dascore.utils.paths import (
+    coerce_to_local_path,
+    coerce_to_upath,
+    is_example_uri,
+    is_local_path,
+)
 from dascore.utils.plugins import FIBER_IO_GROUP, get_entry_point_loaders
 from dascore.utils.progress import track
 from dascore.utils.remote_io import (
@@ -763,7 +769,9 @@ class _FiberIOManager:
         # would be caught by the robustness handler below and read as
         # "wrong format", silently skipping the reader which does match.
         with IOResourceManager(path) as man, suppress_gc_pause_warning():
-            path = man.source
+            # The source may still be an examples:// name if a manager was
+            # handed in already wrapping one; the checks below need a path.
+            path = resolve_example_uri(man.source)
             if isinstance(path, UPath):
                 exists = path.exists()
                 suffix = path.suffix
@@ -1203,6 +1211,8 @@ def _source_path_string(source) -> str:
     """
     if isinstance(source, IOResourceManager):
         source = source.source
+    # An id names the file an examples:// name resolves to, not the name.
+    source = resolve_example_uri(source)
     if isinstance(source, str | Path | UPath):
         return _canonical_path(source)
     for attribute in ("_dascore_source_path", "name", "filename"):
@@ -1350,15 +1360,13 @@ def read(
     --------
     >>> import numpy as np
     >>> import dascore as dc
-    >>> from dascore.utils.downloader import fetch
     >>>
-    >>> file_path = fetch("terra15_das_1_trimmed.hdf5")
-    >>>
-    >>> patch = dc.read(file_path)
+    >>> patch = dc.read("examples://terra15_das_1_trimmed.hdf5")
     """
     # Held because `path` is reassigned to whatever the reader wanted; the
     # id names the source the caller asked for, not the handle it became.
-    source = path
+    # An examples:// name resolves first so the id names the file, not the URI.
+    source = path = resolve_example_uri(path)
     with remote_cache_scope("read"):
         with IOResourceManager(path) as man:
             inferred_format = not file_format or not file_version
@@ -1436,11 +1444,8 @@ def scan_to_df(
     Examples
     --------
     >>> import dascore as dc
-    >>> from dascore.utils.downloader import fetch
     >>>
-    >>> file_path = fetch("terra15_das_1_trimmed.hdf5")
-    >>>
-    >>> df = dc.scan_to_df(file_path)
+    >>> df = dc.scan_to_df("examples://terra15_das_1_trimmed.hdf5")
     """
     if isinstance(path, pd.DataFrame):
         return path
@@ -1466,6 +1471,7 @@ def scan_to_df(
 def _iterate_scan_inputs(patch_source, ext, mtime, include_directories=True, **kwargs):
     """Yield scan candidates."""
     for el in iterate(patch_source):
+        el = resolve_example_uri(el)
         if isinstance(el, str | Path | UPath):
             path = (
                 coerce_to_local_path(el) if is_local_path(el) else coerce_to_upath(el)
@@ -1835,10 +1841,8 @@ def scan(
     Examples
     --------
     >>> import dascore as dc
-    >>> from dascore.utils.downloader import fetch
     >>>
-    >>> file_path = fetch("terra15_das_1_trimmed.hdf5")
-    >>> summary = dc.scan(file_path)[0]
+    >>> summary = dc.scan("examples://terra15_das_1_trimmed.hdf5")[0]
 
     See Also
     --------
@@ -1978,12 +1982,10 @@ def get_format(
     Examples
     --------
     >>> import dascore as dc
-    >>> from dascore.utils.downloader import fetch
     >>>
-    >>> file_path = fetch("prodml_2.1.h5")
-    >>>
-    >>> file_format, file_version = dc.get_format(file_path)
+    >>> file_format, file_version = dc.get_format("examples://prodml_2.1.h5")
     """
+    path = resolve_example_uri(path)
     scope = get_remote_cache_scope()
     if scope == "read":
         return FiberIO.manager._get_format(
@@ -2111,6 +2113,8 @@ def write(
     ------
     [`UnknownFiberFormatError`](`dascore.exceptions.UnknownFiberFormatError`)
         - Could not determine the fiber format.
+    [`ParameterError`](`dascore.exceptions.ParameterError`)
+        - The path is an ``examples://`` name, which is read-only.
 
     Examples
     --------
@@ -2124,6 +2128,16 @@ def write(
     >>> assert path.exists()
     >>> path.unlink()
     """
+    # Example files are read-only; writing to one would land on top of the
+    # downloader's cached copy. A manager is unwrapped first so wrapping the
+    # uri is not a way around this.
+    target = path.source if isinstance(path, IOResourceManager) else path
+    if is_example_uri(target):
+        msg = (
+            f"Cannot write to {target}; examples:// names are read-only. "
+            f"Give a path to write to instead."
+        )
+        raise ParameterError(msg)
     fiber_io = FiberIO.manager.get_fiberio(format=file_format, version=file_version)
     if not isinstance(patch_or_spool, dc.Spool):
         patch_or_spool = dc.spool([patch_or_spool])

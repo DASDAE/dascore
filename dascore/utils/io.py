@@ -17,6 +17,7 @@ import dascore as dc
 from dascore.compat import UPath
 from dascore.constants import PatchType
 from dascore.exceptions import PatchConversionError
+from dascore.utils.downloader import resolve_example_uri
 from dascore.utils.misc import (
     _maybe_make_parent_directory,
     iterate,
@@ -50,6 +51,12 @@ def ensure_local_file(resource) -> Path:
 
 def _normalize_resource_identity(resource):
     """Normalize one pathlike input to a local Path or remote UPath."""
+    # An examples:// name has no filesystem behind it, so it becomes a real
+    # path before anything asks what protocol it speaks. It happens here,
+    # when a handle is actually wanted, rather than when a manager is built:
+    # constructing one must not reach the network, and the manager's source
+    # must keep naming the uri so a write of it can still be refused.
+    resource = resolve_example_uri(resource)
     if is_local_path(resource):
         return coerce_to_local_path(resource)
     return coerce_to_upath(resource)

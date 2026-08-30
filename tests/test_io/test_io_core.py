@@ -26,6 +26,7 @@ from dascore.exceptions import (
     InvalidFiberIOError,
     MissingOptionalDependencyError,
     MissingPatchError,
+    ParameterError,
     PatchAttributeError,
     RemoteCacheError,
     UnknownFiberFormatError,
@@ -1030,6 +1031,77 @@ class TestFileUri:
     def test_read(self, file_uri, dasdae_path):
         """Read via file:// URI should equal read via plain path."""
         assert dc.read(file_uri)[0] == dc.read(dasdae_path)[0]
+
+
+class TestExampleUri:
+    """The examples:// scheme names a file in the data registry."""
+
+    name = "terra15_das_1_trimmed.hdf5"
+
+    @pytest.fixture(scope="class")
+    def example_path(self):
+        """The local path the example uri resolves to."""
+        return fetch(self.name)
+
+    @pytest.fixture(scope="class")
+    def example_uri(self):
+        """The uri form of the same file."""
+        return f"examples://{self.name}"
+
+    def test_get_format(self, example_uri, example_path):
+        """get_format should agree for uri and path."""
+        assert dc.get_format(example_uri) == dc.get_format(example_path)
+
+    def test_scan(self, example_uri, example_path):
+        """Scanning a uri names the resolved file, not the uri."""
+        summary = dc.scan(example_uri)[0]
+        assert summary == dc.scan(example_path)[0]
+        assert str(summary.source_path) == str(example_path)
+
+    def test_scan_to_df(self, example_uri, example_path):
+        """scan_to_df should accept the uri."""
+        df = dc.scan_to_df(example_uri)
+        assert str(df["source_path"].iloc[0]) == str(example_path)
+
+    def test_read(self, example_uri, example_path):
+        """Read via uri should equal read via path."""
+        assert dc.read(example_uri)[0] == dc.read(example_path)[0]
+
+    def test_write_refused(self, example_uri, example_path):
+        """Writing to a uri must not overwrite the cached example file."""
+        before = example_path.read_bytes()
+        with pytest.raises(ParameterError, match="read-only"):
+            dc.write(dc.get_example_patch(), example_uri, "dasdae")
+        assert example_path.read_bytes() == before
+
+    def test_write_refused_through_manager(self, example_uri, example_path):
+        """Wrapping the uri in a manager is not a way around the refusal."""
+        before = example_path.read_bytes()
+        with pytest.raises(ParameterError, match="read-only"):
+            dc.write(dc.get_example_patch(), IOResourceManager(example_uri), "pickle")
+        assert example_path.read_bytes() == before
+
+    def test_manager_construction_is_lazy(self, monkeypatch, example_uri):
+        """Building a manager must not reach the network."""
+
+        def _no_fetch(*args, **kwargs):
+            raise AssertionError("the manager resolved its source eagerly")
+
+        monkeypatch.setattr("dascore.utils.downloader._fetch_cached", _no_fetch)
+        manager = IOResourceManager(example_uri)
+        assert manager.source == example_uri
+
+    def test_scan_payloads(self, example_uri):
+        """Payload scans accept the uri too."""
+        payload = dc.scan_payloads(example_uri, snap=False)[0]
+        assert "coords" in payload
+
+    def test_ids_name_the_file(self, example_uri, example_path):
+        """A patch read by uri has the id of one read by path."""
+        by_uri = dc.read(example_uri)[0]
+        by_path = dc.read(example_path)[0]
+        assert by_uri.attrs.patch_id == by_path.attrs.patch_id
+        assert by_uri.attrs.history == by_path.attrs.history
 
 
 class TestScan:

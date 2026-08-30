@@ -18,6 +18,10 @@ _HIVE_NULL = "__HIVE_DEFAULT_PARTITION__"
 # dascore.io.index.catalog); such paths dispatch to in-memory registries
 # and are never treated as file names.
 _MEMORY_SCHEMES = ("memorypatch://", "memory://")
+# Synthetic URI scheme naming a file in the example data registry
+# (dascore/data_registry.txt); resolved to a local path by
+# dascore.utils.downloader.resolve_example_uri.
+EXAMPLE_SCHEME = "examples://"
 
 
 def is_pathlike(resource) -> TypeIs[str | Path | UPath]:
@@ -51,6 +55,24 @@ def is_memory_uri(path) -> bool:
     named e.g. ``memory_notes.h5`` is not misclassified.
     """
     return str(path).startswith(_MEMORY_SCHEMES)
+
+
+def is_example_uri(path) -> bool:
+    """
+    Return True if a path names a file in the example data registry.
+
+    Matches the exact ``examples://`` scheme, so a real file named e.g.
+    ``examples_notes.h5`` is not misclassified.
+
+    Examples
+    --------
+    >>> from dascore.utils.paths import is_example_uri
+    >>> is_example_uri("examples://terra15_das_1_trimmed.hdf5")
+    True
+    >>> is_example_uri("examples_notes.h5")
+    False
+    """
+    return str(path).startswith(EXAMPLE_SCHEME)
 
 
 def directory_writable(path) -> bool:

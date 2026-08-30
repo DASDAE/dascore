@@ -11,6 +11,8 @@ import pooch
 
 from dascore.config import get_config
 from dascore.constants import DATA_VERSION
+from dascore.exceptions import UnknownExampleError
+from dascore.utils.paths import EXAMPLE_SCHEME, is_example_uri
 
 REGISTRY_PATH = Path(str(files("dascore").joinpath("data_registry.txt")))
 
@@ -87,3 +89,59 @@ def fetch(name: Path | str, **kwargs) -> Path:
     return _fetch_cached(
         name=str(name), cache_dir=str(get_config().downloader_cache_dir)
     )
+
+
+def resolve_example_uri(resource):
+    """
+    Resolve an ``examples://{name}`` URI to a local path.
+
+    Parameters
+    ----------
+    resource
+        Any resource. Anything which is not an example URI is returned
+        unchanged so call sites need no branch of their own.
+
+    Returns
+    -------
+    A path to the downloaded file, or the unmodified resource.
+
+    Raises
+    ------
+    [`UnknownExampleError`](`dascore.exceptions.UnknownExampleError`) if the
+    name is not a file in the data registry.
+
+    Examples
+    --------
+    >>> from dascore.utils.downloader import resolve_example_uri
+    >>> path = resolve_example_uri("examples://terra15_das_1_trimmed.hdf5")
+    >>> path.exists()
+    True
+    """
+    if not is_example_uri(resource):
+        return resource
+    name = str(resource)[len(EXAMPLE_SCHEME) :]
+    if name in set(get_registry_df()["name"]):
+        # Deliberately not fetch: it returns a same-named file in the working
+        # directory in preference to the registry entry, and an examples://
+        # name asked for the registry entry.
+        return _fetch_cached(
+            name=name, cache_dir=str(get_config().downloader_cache_dir)
+        )
+    # Imported here rather than at module top because dascore.examples
+    # imports fetch from this module.
+    from dascore.examples import EXAMPLE_PATCHES, EXAMPLE_SPOOLS  # noqa: PLC0415
+
+    if name in EXAMPLE_PATCHES or name in EXAMPLE_SPOOLS:
+        msg = (
+            f"'{name}' is a generated example, not a file in the data "
+            f"registry, so it has no path to open. Use "
+            f"dc.get_example_patch('{name}') or "
+            f"dc.get_example_spool('{name}') instead."
+        )
+    else:
+        msg = (
+            f"No example file named '{name}'. Names come from the data "
+            f"registry; see dascore.utils.downloader.get_registry_df for "
+            f"the full list."
+        )
+    raise UnknownExampleError(msg)
