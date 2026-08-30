@@ -8,7 +8,7 @@ DASCore reads and writes local `pathlib.Path` objects and remote [`UPath`](https
 
 # Writing and reading
 
-Write through `Patch.io`, then open the result with `dc.read` or `dc.spool`:
+Write through `Patch.io`, then open the result as a spool:
 
 ```{python}
 from pathlib import Path
@@ -18,7 +18,7 @@ import dascore as dc
 patch = dc.get_example_patch()
 path = Path("output_file.h5")
 patch.io.write(path, "DASDAE")
-round_trip = dc.read(path)[0]
+round_trip = dc.spool(path)[0]
 ```
 
 ```{python}
@@ -26,14 +26,14 @@ round_trip = dc.read(path)[0]
 path.unlink(missing_ok=True)
 ```
 
-Remote-style destinations use the same interface:
+Remote destinations use the same interface through [universal-pathlib](https://pypi.org/project/universal-pathlib/), whose `UPath` objects support URLs implemented by [fsspec](https://filesystem-spec.readthedocs.io/):
 
 ```{python}
 from upath import UPath
 
 remote_path = UPath("memory://dascore/tutorial/output.pkl")
 patch.io.write(remote_path, "pickle")
-remote_patch = dc.read(remote_path)[0]
+remote_patch = dc.spool(remote_path)[0]
 ```
 
 Format support varies by backend: a formatter that requires a local seekable file may use the remote cache, while formats built on fsspec-compatible stores can operate directly.
@@ -46,7 +46,8 @@ Format support varies by backend: a formatter that requires a local seekable fil
 from dascore.utils.downloader import fetch
 
 source = fetch("terra15_das_1_trimmed.hdf5")
-summary = dc.scan(source)[0]
+summary_index = 0
+summary = dc.scan(source)[summary_index]
 
 print(summary.source_path)
 print(summary.get_coord_summary("time").min)
@@ -54,15 +55,15 @@ print(summary.get_coord_summary("time").min)
 
 Scanning also reports `source_format`, `source_version`, and `source_patch_key`, which together identify the formatter and patch inside a multi-patch file.
 
-Use source fields from the summary to load a specific patch. For compact directory listings, use `scan` or `scan_to_df`.
+Use the source path and the summary's position to load the same patch through its spool. Scan results and file-spool rows have the same order, and the spool uses each row's `source_patch_key` when materializing it. For compact directory listings, use `scan` or `scan_to_df`.
 
 ```{python}
-loaded = dc.read(
+source_spool = dc.spool(
     summary.source_path,
     file_format=summary.source_format,
     file_version=summary.source_version,
-    source_patch_key=summary.source_patch_key or None,
-)[0]
+)
+loaded = source_spool[summary_index]
 ```
 
 [`dc.scan_payloads(...)`](`dascore.scan_payloads`) also returns each formatter's `CoordManager`. With `snap=False`, formats that store per-sample coordinates expose their exact values:
@@ -103,7 +104,7 @@ The hidden `.dascore_index.sqlite3` stores file metadata and enables selections 
 
 `update()` scans new or modified files, removes rows for deleted files, and leaves unchanged rows alone. File size and modification time identify candidates for rescanning.
 
-An optional `.inventory` companion describes the observing system and is not scanned as data.
+An optional [`.inventory` companion](inventory.qmd) describes the observing system and is not scanned as data.
 
 The index and inventory are companions to the archive rather than data sources themselves, so both use reserved hidden names and are excluded from formatter discovery.
 
