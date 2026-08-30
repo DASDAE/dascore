@@ -46,7 +46,8 @@ Format support varies by backend: a formatter that requires a local seekable fil
 from dascore.utils.downloader import fetch
 
 source = fetch("terra15_das_1_trimmed.hdf5")
-summary = dc.scan(source)[0]
+summary_index = 0
+summary = dc.scan(source)[summary_index]
 
 print(summary.source_path)
 print(summary.get_coord_summary("time").min)
@@ -54,7 +55,7 @@ print(summary.get_coord_summary("time").min)
 
 Scanning also reports `source_format`, `source_version`, and `source_patch_key`, which together identify the formatter and patch inside a multi-patch file.
 
-Use the source path and patch ID to load the specific scanned patch through its spool. The spool uses its indexed `source_patch_key` when materializing that row. For compact directory listings, use `scan` or `scan_to_df`.
+Use the source path and the summary's position to load the same patch through its spool. Scan results and file-spool rows have the same order, and the spool uses each row's `source_patch_key` when materializing it. For compact directory listings, use `scan` or `scan_to_df`.
 
 ```{python}
 source_spool = dc.spool(
@@ -62,7 +63,7 @@ source_spool = dc.spool(
     file_format=summary.source_format,
     file_version=summary.source_version,
 )
-loaded = source_spool.select(patch_id=summary.attrs.patch_id)[0]
+loaded = source_spool[summary_index]
 ```
 
 [`dc.scan_payloads(...)`](`dascore.scan_payloads`) also returns each formatter's `CoordManager`. With `snap=False`, formats that store per-sample coordinates expose their exact values:

@@ -137,7 +137,7 @@ assert first.attrs.processing_id == same.attrs.processing_id
 assert first.attrs.processing_id != other.attrs.processing_id
 ```
 
-When a file does not contain a `patch_id`, DASCore derives one from the format, version, path, patch key, file size, and modification time. Repeated reads and metadata scans therefore agree without hashing the data array. Copying the same bytes to another path produces a different derived ID, and overwriting a path also changes it. When a file contains stored IDs, DASCore restores those values when the file is read elsewhere.
+When a file does not contain a `patch_id`, DASCore derives one from the format, version, path, patch key, file size, and modification time. Repeated reads and metadata scans therefore agree without hashing the data array. Copying the same bytes to another path produces a different derived ID, and overwriting a path also changes it. Formats that support stored lineage IDs restore those values when the file is read elsewhere.
 
 In-memory patches receive process-local IDs. Direct calls to `new`, `update`, and `update_attrs` preserve both IDs because patch functions use them to assemble results. Changing data through these low-level methods does not describe a processing step:
 
