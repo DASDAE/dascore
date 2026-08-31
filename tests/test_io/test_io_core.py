@@ -54,7 +54,12 @@ from dascore.io.dasdae.core import DASDAEV1
 from dascore.io.utils import build_patches, convert_attr_units, get_exact_coord
 from dascore.utils.downloader import fetch
 from dascore.utils.hdf5 import H5Writer
-from dascore.utils.io import BinaryReader, BinaryWriter, IOResourceManager
+from dascore.utils.io import (
+    BinaryReader,
+    BinaryWriter,
+    IOResourceManager,
+    LocalPath,
+)
 from dascore.utils.misc import suppress_warnings
 from dascore.utils.time import to_datetime64
 from dascore.workflow.identity import source_patch_id
@@ -1109,6 +1114,28 @@ class TestExampleUri:
             with pytest.raises(ParameterError, match="read-only"):
                 IOResourceManager(example_uri).get_resource(required_type)
         assert example_path.read_bytes() == before
+
+    def test_modeless_handle_refused(self, example_uri, example_path):
+        """A handle which declares no mode is refused rather than trusted."""
+
+        class _ModelessWriter:
+            """A writer which forgot to say which mode it opens in."""
+
+            @classmethod
+            def get_handle(cls, resource):
+                """Truncate the resource, as an undeclared writer would."""
+                return open(resource, mode="wb")
+
+        before = example_path.read_bytes()
+        with pytest.raises(ParameterError, match="read-only"):
+            IOResourceManager(example_uri).get_resource(_ModelessWriter)
+        assert example_path.read_bytes() == before
+
+    def test_path_handles_allowed(self, example_uri, example_path):
+        """Types which name the file rather than open it stay allowed."""
+        for required_type in (Path, UPath, LocalPath):
+            resource = IOResourceManager(example_uri).get_resource(required_type)
+            assert str(resource) == str(example_path)
 
     def test_reader_handle_allowed(self, example_uri):
         """Reading through a manager is unaffected by the write refusal."""

@@ -241,7 +241,17 @@ def _refuse_example_write(source, required_type) -> None:
     """Refuse a handle which would write over a downloaded example file."""
     if not is_example_uri(source):
         return
-    if getattr(required_type, "mode", "r") in _READ_MODES:
+    # A type with no get_handle opens nothing: the resolved path is handed
+    # through as it is. LocalPath has one, but it returns a filename rather
+    # than an open file, so neither can truncate anything by itself.
+    if not hasattr(required_type, "get_handle"):
+        return
+    if isinstance(required_type, type) and issubclass(required_type, LocalPath):
+        return
+    # Any other handle must say it opens to read. A missing mode is refused
+    # rather than assumed harmless: every reader here declares one, so
+    # silence is more likely an unknown writer than a safe default.
+    if getattr(required_type, "mode", None) in _READ_MODES:
         return
     msg = (
         f"Cannot open {source} for writing; examples:// names are read-only. "
