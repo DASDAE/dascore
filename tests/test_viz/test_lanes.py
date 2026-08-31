@@ -294,6 +294,53 @@ class TestLayout:
         ax = plot_lanes(frame, value="v")
         assert _texts(ax) == ["wide"]
 
+    def test_label_ink_matches_its_fill(self):
+        """White ink on a dark box, dark ink on a light one, so both read."""
+        frame = pd.DataFrame(
+            {"start": [0.0, 50.0], "end": [50.0, 100.0], "v": ["coal", "chalk"]}
+        )
+        ax = plot_lanes(frame, value="v", color={"coal": "black", "chalk": "white"})
+        inks = {x.get_text(): to_rgba(x.get_color()) for x in ax.texts}
+        assert inks["coal"] == to_rgba("white")
+        assert inks["chalk"] == to_rgba("black")
+
+    def test_label_ink_follows_contrast_not_the_midpoint(self):
+        """A saturated mid-tone reads better in black, and gets it."""
+        # The palette's green averages below half yet holds nearly twice
+        # the contrast with black as with white.
+        frame = pd.DataFrame({"start": [0.0], "end": [100.0], "v": ["moss"]})
+        ax = plot_lanes(frame, value="v", color="#009E73")
+        assert to_rgba(ax.texts[0].get_color()) == to_rgba("black")
+
+    @pytest.mark.parametrize(
+        ("figure_color", "axes_color", "expected"),
+        [
+            ("white", "white", "black"),
+            ("white", "black", "white"),
+            # A transparent axes shows the figure, not the white default.
+            ("black", "none", "white"),
+        ],
+    )
+    def test_a_transparent_fill_is_inked_for_what_shows(
+        self, figure_color, axes_color, expected
+    ):
+        """A see-through fill is judged by what is behind it, not itself."""
+        # The same nearly clear black renders pale over white and dark
+        # over black, so the ink has to follow what shows through.
+        frame = pd.DataFrame({"start": [0.0], "end": [100.0], "v": ["haze"]})
+        figure, ax = plt.subplots()
+        figure.set_facecolor(figure_color)
+        ax.set_facecolor(axes_color)
+        plot_lanes(frame, ax=ax, value="v", color={"haze": (0.0, 0.0, 0.0, 0.1)})
+        assert to_rgba(ax.texts[0].get_color()) == to_rgba(expected)
+
+    def test_an_unpainted_box_still_labels(self):
+        """color="none" paints nothing, and its label takes the background."""
+        frame = pd.DataFrame({"start": [0.0], "end": [100.0], "v": ["clear"]})
+        ax = plot_lanes(frame, value="v", color="none")
+        assert _texts(ax) == ["clear"]
+        assert to_rgba(ax.texts[0].get_color()) == to_rgba("black")
+
     def test_a_narrow_box_turns_its_label(self):
         """Text too wide for its box is stood on end rather than dropped."""
         # Boxes narrower than the text but far taller than it is tall.
