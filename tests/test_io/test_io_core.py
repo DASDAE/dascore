@@ -26,6 +26,7 @@ from dascore.exceptions import (
     InvalidFiberIOError,
     MissingOptionalDependencyError,
     MissingPatchError,
+    ParameterError,
     PatchAttributeError,
     RemoteCacheError,
     UnknownFiberFormatError,
@@ -52,7 +53,13 @@ from dascore.io.core import (
 from dascore.io.dasdae.core import DASDAEV1
 from dascore.io.utils import build_patches, convert_attr_units, get_exact_coord
 from dascore.utils.downloader import fetch
-from dascore.utils.io import BinaryReader, BinaryWriter, IOResourceManager
+from dascore.utils.hdf5 import H5Writer
+from dascore.utils.io import (
+    BinaryReader,
+    BinaryWriter,
+    IOResourceManager,
+    LocalPath,
+)
 from dascore.utils.misc import suppress_warnings
 from dascore.utils.time import to_datetime64
 from dascore.workflow.identity import source_patch_id
@@ -1030,6 +1037,117 @@ class TestFileUri:
     def test_read(self, file_uri, dasdae_path):
         """Read via file:// URI should equal read via plain path."""
         assert dc.read(file_uri)[0] == dc.read(dasdae_path)[0]
+
+
+class TestExampleUri:
+    """The examples:// scheme names a file in the data registry."""
+
+    name = "terra15_das_1_trimmed.hdf5"
+
+    @pytest.fixture(scope="class")
+    def example_path(self):
+        """The local path the example uri resolves to."""
+        return fetch(self.name)
+
+    @pytest.fixture(scope="class")
+    def example_uri(self):
+        """The uri form of the same file."""
+        return f"examples://{self.name}"
+
+    def test_get_format(self, example_uri, example_path):
+        """get_format should agree for uri and path."""
+        assert dc.get_format(example_uri) == dc.get_format(example_path)
+
+    def test_scan(self, example_uri, example_path):
+        """Scanning a uri names the resolved file, not the uri."""
+        summary = dc.scan(example_uri)[0]
+        assert summary == dc.scan(example_path)[0]
+        assert str(summary.source_path) == str(example_path)
+
+    def test_scan_to_df(self, example_uri, example_path):
+        """scan_to_df should accept the uri."""
+        df = dc.scan_to_df(example_uri)
+        assert str(df["source_path"].iloc[0]) == str(example_path)
+
+    def test_read(self, example_uri, example_path):
+        """Read via uri should equal read via path."""
+        assert dc.read(example_uri)[0] == dc.read(example_path)[0]
+
+    def test_write_refused(self, example_uri, example_path):
+        """Writing to a uri must not overwrite the cached example file."""
+        before = example_path.read_bytes()
+        with pytest.raises(ParameterError, match="read-only"):
+            dc.write(dc.get_example_patch(), example_uri, "dasdae")
+        assert example_path.read_bytes() == before
+
+    def test_write_refused_through_manager(self, example_uri, example_path):
+        """Wrapping the uri in a manager is not a way around the refusal."""
+        before = example_path.read_bytes()
+        with pytest.raises(ParameterError, match="read-only"):
+            dc.write(dc.get_example_patch(), IOResourceManager(example_uri), "pickle")
+        assert example_path.read_bytes() == before
+
+    def test_manager_construction_is_lazy(self, monkeypatch, example_uri):
+        """Building a manager must not reach the network."""
+
+        def _no_fetch(*args, **kwargs):
+            raise AssertionError("the manager resolved its source eagerly")
+
+        monkeypatch.setattr("dascore.utils.downloader._fetch_cached", _no_fetch)
+        manager = IOResourceManager(example_uri)
+        assert manager.source == example_uri
+
+    def test_scan_payloads(self, example_uri):
+        """Payload scans accept the uri too."""
+        payload = dc.scan_payloads(example_uri, snap=False)[0]
+        assert "coords" in payload
+
+    def test_scan_through_manager_names_the_file(self, example_uri, example_path):
+        """A manager wrapping a uri still reports a reloadable source path."""
+        summary = dc.scan(IOResourceManager(example_uri))[0]
+        assert str(summary.source_path) == str(example_path)
+
+    def test_writer_handle_refused(self, example_uri, example_path):
+        """A writer handle would truncate the example, so it is refused."""
+        before = example_path.read_bytes()
+        for required_type in (BinaryWriter, H5Writer):
+            with pytest.raises(ParameterError, match="read-only"):
+                IOResourceManager(example_uri).get_resource(required_type)
+        assert example_path.read_bytes() == before
+
+    def test_modeless_handle_refused(self, example_uri, example_path):
+        """A handle which declares no mode is refused rather than trusted."""
+
+        class _ModelessWriter:
+            """A writer which forgot to say which mode it opens in."""
+
+            @classmethod
+            def get_handle(cls, resource):
+                """Truncate the resource, as an undeclared writer would."""
+                return open(resource, mode="wb")
+
+        before = example_path.read_bytes()
+        with pytest.raises(ParameterError, match="read-only"):
+            IOResourceManager(example_uri).get_resource(_ModelessWriter)
+        assert example_path.read_bytes() == before
+
+    def test_path_handles_allowed(self, example_uri, example_path):
+        """Types which name the file rather than open it stay allowed."""
+        for required_type in (Path, UPath, LocalPath):
+            resource = IOResourceManager(example_uri).get_resource(required_type)
+            assert str(resource) == str(example_path)
+
+    def test_reader_handle_allowed(self, example_uri):
+        """Reading through a manager is unaffected by the write refusal."""
+        with IOResourceManager(example_uri) as man:
+            assert man.get_resource(BinaryReader).read(4)
+
+    def test_ids_name_the_file(self, example_uri, example_path):
+        """A patch read by uri has the id of one read by path."""
+        by_uri = dc.read(example_uri)[0]
+        by_path = dc.read(example_path)[0]
+        assert by_uri.attrs.patch_id == by_path.attrs.patch_id
+        assert by_uri.attrs.history == by_path.attrs.history
 
 
 class TestScan:

@@ -43,11 +43,8 @@ Format support varies by backend: a formatter that requires a local seekable fil
 [`dc.scan`](`dascore.scan`) returns [`PatchSummary`](`dascore.PatchSummary`) objects without loading patch arrays.
 
 ```{python}
-from dascore.utils.downloader import fetch
-
-source = fetch("terra15_das_1_trimmed.hdf5")
 summary_index = 0
-summary = dc.scan(source)[summary_index]
+summary = dc.scan("examples://terra15_das_1_trimmed.hdf5")[summary_index]
 
 print(summary.source_path)
 print(summary.get_coord_summary("time").min)
@@ -69,7 +66,7 @@ loaded = source_spool[summary_index]
 [`dc.scan_payloads(...)`](`dascore.scan_payloads`) also returns each formatter's `CoordManager`. With `snap=False`, formats that store per-sample coordinates expose their exact values:
 
 ```{python}
-payload = dc.scan_payloads(source, snap=False)[0]
+payload = dc.scan_payloads(summary.source_path, snap=False)[0]
 time = payload["coords"].get_coord("time")
 ```
 

@@ -103,6 +103,7 @@ from dascore.utils.display import (
     split_block,
 )
 from dascore.utils.docs import compose_docstring
+from dascore.utils.downloader import resolve_example_uri
 from dascore.utils.misc import (
     _spool_map,
     deep_equality_check,
@@ -2633,14 +2634,13 @@ def spool(obj: path_types | Spool | Sequence[PatchType], **kwargs) -> Spool:
     Examples
     --------
     >>> import dascore as dc
-    >>> from dascore.utils.downloader import fetch
     >>>
-    >>> # Get a spool from a single file
-    >>> single_file_path = fetch("example_dasdae_event_1.h5")
-    >>> file_spool = dc.spool(single_file_path)
+    >>> # Get a spool from a single file. An examples:// name refers to a
+    >>> # file in DASCore's example data registry; use your own path here.
+    >>> file_spool = dc.spool("examples://example_dasdae_event_1.h5")
     >>>
     >>> # get a spool from a directory of files
-    >>> directory_path = fetch("example_dasdae_event_1.h5").parent
+    >>> directory_path = dc.examples.spool_to_directory(dc.get_example_spool())
     >>> directory_spool = dc.spool(directory_path)
     >>>
     >>> # get a spool from a single patch
@@ -2656,7 +2656,7 @@ def spool(obj: path_types | Spool | Sequence[PatchType], **kwargs) -> Spool:
 @spool.register(UPath)
 def _spool_from_str(path, **kwargs):
     """Get a spool from a path."""
-    path = coerce_to_upath(path)
+    path = coerce_to_upath(resolve_example_uri(path))
     # A directory was passed; index it.
     if path.is_dir():
         requires_local_directory(path, label="Directory spool")

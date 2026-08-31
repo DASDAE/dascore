@@ -17,10 +17,8 @@ spool = dc.get_example_spool()
 Use [`dc.spool(...)`](`dascore.spool`) for any supported input:
 
 ```{python}
-from dascore.utils.downloader import fetch
-
 memory_spool = dc.spool([dc.get_example_patch()])
-file_spool = dc.spool(fetch("terra15_das_1_trimmed.hdf5"))
+file_spool = dc.spool("examples://terra15_das_1_trimmed.hdf5")
 ```
 
 Remote paths use the same constructor:
@@ -36,7 +34,8 @@ remote_spool = dc.spool(remote_file)
 Directory spools maintain an index for fast metadata queries. Call `update()` after files change.
 
 ```{python}
-directory = fetch("terra15_das_1_trimmed.hdf5").parent
+# Write example patches to a directory to get a usable path.
+directory = dc.examples.spool_to_directory(dc.get_example_spool())
 directory_spool = dc.spool(directory).update()
 ```
 

@@ -28,6 +28,7 @@ from dascore.exceptions import (
     MissingOptionalDependencyError,
     MissingPatchError,
     ParameterError,
+    UnknownExampleError,
 )
 from dascore.io.index.planned import PlanResolver
 from dascore.io.segy import SegyV1_0
@@ -952,6 +953,19 @@ class TestGetSpool:
         """A path that doesn't exist should raise."""
         with pytest.raises(Exception, match="get spool from"):
             dc.spool("here_or_there?")
+
+    def test_spool_from_example_uri(self, terra15_das_example_path):
+        """An examples:// name should behave like the path it names."""
+        out = dc.spool("examples://terra15_das_1_trimmed.hdf5")
+        expected = dc.spool(terra15_das_example_path)
+        assert isinstance(out, BaseSpool)
+        assert len(out) == len(expected)
+        assert out[0].equals(expected[0])
+
+    def test_generated_example_uri_raises(self):
+        """A generated example has no file, so the error says where to look."""
+        with pytest.raises(UnknownExampleError, match="get_example_spool"):
+            dc.spool("examples://random_das")
 
     def test_non_supported_type_raises(self):
         """A type that can't contain patches should raise."""
