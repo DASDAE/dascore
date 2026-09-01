@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import math
 import typing
 from contextlib import suppress
 from functools import cache
@@ -352,19 +353,63 @@ def xarray_to_patch(data_array) -> dc.Patch:
     )
 
 
-def _xarray_block_count(low, high, step) -> int:
-    """Sample count of an inclusive envelope, snapped to its step."""
-    return int(np.round(to_float(high - low) / to_float(step))) + 1
+# Relative slack when placing an inclusive trim boundary on a source
+# sample grid, absorbing float noise without reaching the next sample.
+_GRID_EPS = 1e-6
 
 
-def _load_xarray_block(catalog, row, dim, lims, dims, shape):
+def _envelope_coord(low, high, step, get_coord):
+    """A dimension coordinate stated by its index envelope, either order."""
+    if pd.isnull(step):
+        if low == high:
+            return get_coord(data=[low])
+        msg = (
+            f"Cannot size a lazy array: a dimension spanning {low} to "
+            f"{high} records no sampling step in the spool index."
+        )
+        raise PatchConversionError(msg)
+    if to_float(step) < 0:
+        # A descending coordinate starts at its max; stop is exclusive.
+        return get_coord(start=high, stop=low + step, step=step)
+    return get_coord(min=low, max=high + step, step=step)
+
+
+def _member_window(low, high, step, origin):
+    """
+    Return (count, first, last) grid samples of a member's trim window.
+
+    The member's own grid — its source origin and step — decides the
+    count exactly as an inclusive select decides it, so an overlap trim
+    falling off a neighbor's grid still sizes its block correctly.
+    """
+    if pd.isnull(step) or to_float(step) == 0:
+        if low == high:
+            return 1, low, low
+        msg = (
+            f"Cannot size a lazy block: a patch spanning {low} to {high} "
+            "records no sampling step in the spool index."
+        )
+        raise PatchConversionError(msg)
+    step_float = to_float(step)
+    rel_low = to_float(low - origin) / step_float
+    rel_high = to_float(high - origin) / step_float
+    first = math.ceil(rel_low - _GRID_EPS)
+    last = math.floor(rel_high + _GRID_EPS)
+    # plan invariant: a published member always presents at least a sample
+    assert last >= first, "a plan member never presents an empty window"
+    return last - first + 1, origin + first * step, origin + last * step
+
+
+def _load_xarray_block(resolver, row, dim, lims, dims, shape, dtype):
     """
     Load one dask block: a source patch trimmed to its member window.
 
-    Runs at compute time, once per block; the trim hint limits what the
-    reader loads and the select re-applies the window exactly.
+    Runs at compute time, once per block. Member loading goes through the
+    plan resolver — the same path a chunked spool loads through — so
+    residuals, units, and nested plans are honored; the select re-applies
+    the window exactly since read hints only reduce reading.
     """
-    patch = catalog.resolve_row(row, extra_trim={dim: lims}).select(**{dim: lims})
+    patch = resolver._load_member(row).select(**{dim: lims})
     if patch.dims != dims:
         patch = patch.transpose(*dims)
     if patch.shape != shape:
@@ -374,7 +419,9 @@ def _load_xarray_block(catalog, row, dim, lims, dims, shape):
             "file changed after indexing; run spool.update() and convert again."
         )
         raise PatchConversionError(msg)
-    return patch.data
+    # A member narrower than the segment's combined dtype upcasts here so
+    # the array holds the dtype its metadata states.
+    return patch.data.astype(dtype, copy=False)
 
 
 def _xarray_group_nodes(outputs, group_attrs):
@@ -449,20 +496,51 @@ def spool_to_xarray(
     da = optional_import("dask.array")
     # function-level to avoid a circular import through dascore.core
     from dascore.core.coords import get_coord  # noqa: PLC0415
+    from dascore.io.index.planned import PlanResolver, derived_catalog  # noqa: PLC0415
     from dascore.utils.chunk_plan import build_chunk_plan  # noqa: PLC0415
 
-    base, working = spool._plan_frames(dim)
+    source_rows, working = spool._plan_frames(dim)
     if not len(working):
         return xr.DataTree()
-    merge_kwargs: dict[str, Any] = {dim: None}
+    steps = working.get(f"{dim}_step")
+    if steps is not None and (to_float(steps.values) < 0).any():
+        msg = (
+            f"A descending '{dim}' coordinate is not supported by "
+            f"to_xarray; sort the patches along {dim} first."
+        )
+        raise PatchConversionError(msg)
+    chunk_kwargs: dict[str, Any] = {dim: None}
     plan = build_chunk_plan(
-        working, tolerance=tolerance, conflict=conflict, group=group, **merge_kwargs
+        working, tolerance=tolerance, conflict=conflict, group=group, **chunk_kwargs
     )
-    outputs, members = plan.outputs, plan.members
+    outputs = plan.outputs
     group_attrs = list(plan.params["group"])
     names, codes = _xarray_group_nodes(outputs, group_attrs)
-    sources = base.set_index("_patch_id")
-    catalog = spool._catalog
+    # The same derivation chunk performs: its resolver is what knows how
+    # to load one member row, whatever kind of spool this is.
+    catalog = derived_catalog(
+        source_rows=source_rows,
+        plan=plan,
+        parent=spool._catalog,
+        merge_kwargs={
+            "conflict": conflict,
+            "snap_coords": True,
+            "tolerance": plan.params["tolerance"],
+        },
+        mode="chunk",
+        origin_path=spool.spool_path,
+    )
+    resolver = catalog.resolver
+    assert isinstance(resolver, PlanResolver)  # a chunk derivation always is
+    # plan.members and the resolver's member_rows are the same rows in the
+    # same order; the former keeps _patch_id (for the source grid origin),
+    # the latter is what the resolver loads from.
+    member_rows = resolver.member_rows.reset_index(drop=True)
+    members = plan.members.reset_index(drop=True)
+    members = members.assign(
+        _pos=np.arange(len(members)),
+        _origin=members["_patch_id"].map(working.set_index("_patch_id")[f"{dim}_min"]),
+    )
     envelope_cols = {
         f"{d}_{end}"
         for dims_str in outputs["dims"].unique()
@@ -478,54 +556,57 @@ def spool_to_xarray(
         for segment, (_, out) in enumerate(sub.sort_values(f"{dim}_min").iterrows()):
             dims = tuple(str(out["dims"]).split(","))
             axis = dims.index(dim)
-            if (dtype_str := out["_dtype"]) is None or pd.isnull(dtype_str):
+            if (dtype_str := out["_dtype"]) is None or not str(dtype_str):
                 msg = (
                     "Cannot build a lazy array without a dtype in the spool "
                     "index; re-index the spool with spool.update()."
                 )
                 raise PatchConversionError(msg)
             dtype = np.dtype(dtype_str)
-            step = out[f"{dim}_step"]
             mem = members[members["output_id"] == out["output_id"]]
             mem = mem.sort_values(f"{dim}_min")
-            counts = [
-                _xarray_block_count(m[f"{dim}_min"], m[f"{dim}_max"], step)
+            # Each member's block is sized on its own source grid: origin,
+            # step, and trim window, exactly as loading will size it.
+            windows = [
+                _member_window(
+                    m[f"{dim}_min"], m[f"{dim}_max"], m[f"{dim}_step"], m["_origin"]
+                )
                 for _, m in mem.iterrows()
             ]
             coords, sizes = {}, {}
             for d in dims:
                 if d == dim:
-                    # The member counts are authoritative, and the coordinate
-                    # is snapped over the segment envelope exactly as chunk
-                    # snaps a merged coordinate: min and max unchanged, step
-                    # recomputed from the span.
-                    n = sum(counts)
-                    lo, hi = out[f"{dim}_min"], out[f"{dim}_max"]
-                    span = hi - lo
-                    if n > 1 and isinstance(span, pd.Timedelta | np.timedelta64):
-                        nanos = pd.Timedelta(span).value
-                        eff = np.timedelta64(int(np.round(nanos / (n - 1))), "ns")
-                    elif n > 1:
-                        eff = span / (n - 1)
+                    # The member windows are authoritative, and the
+                    # coordinate is snapped over the actual first and last
+                    # samples exactly as chunk snaps a merged coordinate:
+                    # ends unchanged, step recomputed from the span.
+                    n = sum(w[0] for w in windows)
+                    lo, hi = windows[0][1], windows[-1][2]
+                    if n == 1:
+                        coord = get_coord(data=[lo])
                     else:
-                        eff = step
-                    coord = get_coord(min=lo, max=lo + n * eff, step=eff)
-                    if len(coord) != n:
-                        coord = coord.change_length(n)
+                        span = hi - lo
+                        if isinstance(span, pd.Timedelta | np.timedelta64):
+                            nanos = pd.Timedelta(span).value
+                            eff = np.timedelta64(int(np.round(nanos / (n - 1))), "ns")
+                        else:
+                            eff = span / (n - 1)
+                        coord = get_coord(min=lo, max=lo + n * eff, step=eff)
+                        if len(coord) != n:
+                            coord = coord.change_length(n)
                 else:
-                    d_step = out[f"{d}_step"]
-                    coord = get_coord(
-                        min=out[f"{d}_min"], max=out[f"{d}_max"] + d_step, step=d_step
+                    coord = _envelope_coord(
+                        out[f"{d}_min"], out[f"{d}_max"], out[f"{d}_step"], get_coord
                     )
                 coords[d] = coord.values
                 sizes[d] = len(coord)
             blocks = []
-            for (_, m), count in zip(mem.iterrows(), counts, strict=True):
+            for (count, *_), (_, m) in zip(windows, mem.iterrows(), strict=True):
                 shape = tuple(count if d == dim else sizes[d] for d in dims)
                 lims = (m[f"{dim}_min"], m[f"{dim}_max"])
-                row = sources.loc[m["_patch_id"]].to_dict()
+                row = member_rows.iloc[int(m["_pos"])].to_dict()
                 delayed = dask.delayed(_load_xarray_block)(
-                    catalog, row, dim, lims, dims, shape
+                    resolver, row, dim, lims, dims, shape, dtype
                 )
                 blocks.append(da.from_delayed(delayed, shape=shape, dtype=dtype))
             array = da.concatenate(blocks, axis=axis)
