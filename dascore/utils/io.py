@@ -425,9 +425,9 @@ def _member_coord(low, high, step, env_low, env_high, get_coord):
     """
     low, high, step = _np_scalar(low), _np_scalar(high), _np_scalar(step)
     env_low, env_high = _np_scalar(env_low), _np_scalar(env_high)
+    # A single-sample merge dimension never reaches here: the planner
+    # refuses to chunk a dimension it cannot order.
     if pd.isnull(step) or to_float(step) == 0:
-        if low == high:
-            return get_coord(data=[low])
         msg = (
             f"Cannot size a lazy block: a patch spanning {low} to {high} "
             "records no sampling step in the spool index."

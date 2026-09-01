@@ -1541,6 +1541,60 @@ class TestSpoolToXarray:
             data["time"].values, merged.get_coord("time").values
         )
 
+    def test_single_sample_non_dim(self, random_patch):
+        """A one-sample non-merge dimension has no step yet converts."""
+        thin = random_patch.select(distance=(0, 1), samples=True)
+        thin = thin.update_coords(distance=np.array([5.0]))
+        leaf = self._leaves(dc.spool([thin]).io.to_xarray())[0]
+        assert leaf.dataset["data"].shape == thin.shape
+        np.testing.assert_array_equal(leaf.dataset["data"].values, thin.data)
+        np.testing.assert_array_equal(leaf.dataset["data"]["distance"].values, [5.0])
+
+    def test_irregular_dim_raises(self, random_patch):
+        """A multi-sample coordinate with no step cannot be sized."""
+        time = random_patch.get_coord("time").values.copy()
+        time[1] += np.timedelta64(1, "ms")
+        wobbly = random_patch.update_coords(time=time)
+        with pytest.raises(PatchConversionError, match="no sampling step"):
+            dc.spool([wobbly]).io.to_xarray()
+
+    def test_irregular_non_dim_raises(self, random_patch):
+        """A stepless non-merge dimension cannot be sized either."""
+        dist = random_patch.get_coord("distance").values.copy().astype(float)
+        dist[1] += 0.5
+        wobbly = random_patch.update_coords(distance=dist)
+        with pytest.raises(PatchConversionError, match="no sampling step"):
+            dc.spool([wobbly]).io.to_xarray()
+
+    def test_transposed_member_load(self, random_spool, monkeypatch):
+        """A member loading in another dim order is transposed to match."""
+        from dascore.io.index.planned import PlanResolver  # noqa: PLC0415
+
+        tree = random_spool.io.to_xarray()
+        merged = random_spool.chunk(time=None)[0]
+        original = PlanResolver._load_member
+
+        def _transposed(self, kwargs):
+            return original(self, kwargs).transpose()
+
+        monkeypatch.setattr(PlanResolver, "_load_member", _transposed)
+        leaf = self._leaves(tree)[0]
+        np.testing.assert_array_equal(leaf.dataset["data"].values, merged.data)
+
+    def test_no_group_attrs(self, random_spool):
+        """With no grouping attributes the whole spool is one group."""
+        with config_context(patch_kind_attrs=()):
+            tree = random_spool.io.to_xarray()
+        assert len(tree.children) == 1
+        assert len(self._leaves(tree)) == 1
+
+    def test_quantity_tolerance(self, diverse_spool):
+        """A unit-bearing tolerance is handed to simplify as it stands."""
+        sub = diverse_spool.select(tag="big_gaps")
+        default = len(self._leaves(sub.io.to_xarray()))
+        loose = len(self._leaves(sub.io.to_xarray(tolerance=dc.get_quantity("1 hour"))))
+        assert loose < default
+
     def test_value_select_refused(self, random_spool):
         """A pending value-range selection cannot be sized; it raises."""
         coord = random_spool[0].get_coord("time")
