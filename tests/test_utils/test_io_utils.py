@@ -1595,6 +1595,54 @@ class TestSpoolToXarray:
         loose = len(self._leaves(sub.io.to_xarray(tolerance=dc.get_quantity("1 hour"))))
         assert loose < default
 
+    def test_duplicate_node_names_raise(self, random_patch, monkeypatch):
+        """Two groups resolving to one node name must not overwrite arrays."""
+        import dascore.utils.display as display_module  # noqa: PLC0415
+
+        patches = [
+            random_patch.update_attrs(cable_id="a"),
+            random_patch.update_attrs(cable_id="b"),
+        ]
+        monkeypatch.setattr(
+            display_module, "group_names", lambda *args, **kwargs: ["same", "same"]
+        )
+        with pytest.raises(PatchConversionError, match="more than one group"):
+            dc.spool(patches).io.to_xarray(group="cable_id")
+
+    def test_assoc_coord_samples_select_refused(self, random_patch):
+        """A samples selection on an associated coordinate cannot be sized."""
+        n = len(random_patch.get_coord("distance"))
+        patch = random_patch.update_coords(zone=("distance", np.arange(n)))
+        sub = dc.spool([patch]).select(zone=(0, 5), samples=True)
+        with pytest.raises(PatchConversionError, match="associated"):
+            sub.io.to_xarray()
+
+    def test_enriched_spool_refused(self, random_spool):
+        """Pending inventory enrichment would be dropped; refuse instead."""
+        sub = random_spool[0:2]
+        sub._enrich_kwargs = {"coords": True}
+        with pytest.raises(PatchConversionError, match="enrichment"):
+            sub.io.to_xarray()
+
+    def test_quantity_tolerance_with_units(self, random_patch):
+        """A unit-bearing tolerance reads against the coordinate's units."""
+        d = random_patch.get_coord("distance")
+        gap = random_patch.update_coords(
+            distance_min=d.max() + 5 * d.step  # a 5-step gap along distance
+        )
+        spool = dc.spool([random_patch, gap])
+        tol = dc.get_quantity("10 m")
+        merged = spool.chunk(distance=None, tolerance=tol)[0]
+        tree = spool.io.to_xarray(dim="distance", tolerance=tol)
+        leaves = self._leaves(tree)
+        assert len(leaves) == 1
+        data = leaves[0].dataset["data"]
+        assert data.shape == merged.data.shape
+        np.testing.assert_array_equal(data.values, merged.data)
+        np.testing.assert_array_equal(
+            data["distance"].values, merged.get_coord("distance").values
+        )
+
     def test_value_select_refused(self, random_spool):
         """A pending value-range selection cannot be sized; it raises."""
         coord = random_spool[0].get_coord("time")

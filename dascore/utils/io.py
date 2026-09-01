@@ -401,7 +401,7 @@ def _np_scalar(value):
 def _envelope_coord(low, high, step, get_coord):
     """A dimension coordinate stated by its index envelope, either order."""
     low, high, step = _np_scalar(low), _np_scalar(high), _np_scalar(step)
-    if pd.isnull(step):
+    if pd.isnull(step) or to_float(step) == 0:
         if low == high:
             return get_coord(data=[low])
         msg = (
@@ -415,16 +415,20 @@ def _envelope_coord(low, high, step, get_coord):
     return get_coord(min=low, max=high + step, step=step)
 
 
-def _member_coord(low, high, step, env_low, env_high, get_coord):
+def _member_coord(low, high, step, env_low, env_high, get_coord, units=None):
     """
     The coordinate a member presents inside its trim window.
 
     The member's full coordinate is rebuilt from its envelope and trimmed
     by the coordinate's own select, so block sizes and sample labels
     follow exactly the rule loading follows, not a parallel rounding.
+    Units ride along so a unit-bearing tolerance can be read against the
+    merged coordinate, as chunk reads it.
     """
     low, high, step = _np_scalar(low), _np_scalar(high), _np_scalar(step)
     env_low, env_high = _np_scalar(env_low), _np_scalar(env_high)
+    # Rows state units as strings; anything else (absent, null) is none.
+    units = units if isinstance(units, str) and units else None
     # A single-sample merge dimension never reaches here: the planner
     # refuses to chunk a dimension it cannot order.
     if pd.isnull(step) or to_float(step) == 0:
@@ -433,7 +437,7 @@ def _member_coord(low, high, step, env_low, env_high, get_coord):
             "records no sampling step in the spool index."
         )
         raise PatchConversionError(msg)
-    full = get_coord(min=env_low, max=env_high + step, step=step)
+    full = get_coord(min=env_low, max=env_high + step, step=step, units=units)
     coord, _ = full.select((low, high))
     # plan invariant: a published member always presents at least a sample
     assert len(coord), "a plan member never presents an empty window"
@@ -492,6 +496,16 @@ def _xarray_group_nodes(outputs, group_attrs):
             "attributes."
         )
         raise PatchConversionError(msg)
+    # A literal value can collide with a generated fallback name (a group
+    # tagged "group 0" beside an untagged one); a shared node path would
+    # silently overwrite arrays.
+    if len(set(names)) != len(names):
+        dupes = sorted({x for x in names if names.count(x) > 1})
+        msg = (
+            f"Group name(s) {dupes} name more than one group of patches. "
+            "Pass `group` attributes which tell the groups apart."
+        )
+        raise PatchConversionError(msg)
     return names, codes
 
 
@@ -532,13 +546,18 @@ def spool_to_xarray(
     Notes
     -----
     Requires ``xarray`` and ``dask``. Coordinates associated with a
-    dimension (rather than defining one) are not carried into the tree.
+    dimension (rather than defining one) are not carried into the tree,
+    and coordinates are rebuilt from their indexed envelopes, whose
+    numeric values are floats — an integer-valued dimension coordinate
+    comes back as floats.
 
     A spool with pending value-range selections cannot be converted: the
     catalog states such bounds as candidacy rather than sample positions,
     so the arrays cannot be sized without reading. Convert first and
     select on the tree (e.g. ``sel(time=...)``), or select with
-    ``samples=True``, which stays exact.
+    ``samples=True`` on dimensions, which stays exact. Pending inventory
+    enrichment is likewise refused, since the tree would omit the
+    enriched attributes.
     """
     xr = optional_import("xarray")
     dask = optional_import("dask")
@@ -556,14 +575,33 @@ def spool_to_xarray(
     source_rows, working = spool._plan_frames(dim)
     if not len(working):
         return xr.DataTree()
-    for selected, samples in spool._catalog.residuals:
-        if samples or not selected:
-            continue
+    if spool._enrich_kwargs:
         msg = (
-            "Cannot convert a spool with pending value selections (on "
+            "Cannot convert a spool with pending inventory enrichment: the "
+            "tree would omit the enriched attributes. Convert the spool "
+            "before enriching it."
+        )
+        raise PatchConversionError(msg)
+    all_dims = {
+        d for dims_str in working["dims"].dropna() for d in str(dims_str).split(",")
+    }
+    for selected, samples in spool._catalog.residuals:
+        # A samples selection on a dimension adjusts that dimension's
+        # envelopes exactly; anything else changes what loads in ways the
+        # envelopes do not state.
+        if not selected or (samples and set(selected) <= all_dims):
+            continue
+        kind = (
+            "sample selections on associated coordinates"
+            if samples
+            else ("value selections")
+        )
+        msg = (
+            f"Cannot convert a spool with pending {kind} (on "
             f"{sorted(selected)}): such bounds are candidacy, not sample "
             "positions, so the lazy arrays cannot be sized. Convert "
-            "first and select on the tree, or select with samples=True."
+            "first and select on the tree, or select dimensions with "
+            "samples=True."
         )
         raise PatchConversionError(msg)
     steps = working.get(f"{dim}_step")
@@ -649,6 +687,7 @@ def spool_to_xarray(
                     m["_env_low"],
                     m["_env_high"],
                     get_coord,
+                    units=m.get(f"_{dim}_units"),
                 )
                 for _, m in mem.iterrows()
             ]
