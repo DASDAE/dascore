@@ -1348,11 +1348,15 @@ class TestXarray:
 class TestSpoolToXarray:
     """Tests for converting a spool to a dask-backed xarray DataTree."""
 
+    @pytest.fixture(autouse=True)
+    def _require_libs(self):
+        """These tests need both optional libraries."""
+        pytest.importorskip("xarray")
+        pytest.importorskip("dask")
+
     @pytest.fixture
     def diverse_tree(self, diverse_spool):
         """Convert the diverse spool, skipping without xarray or dask."""
-        pytest.importorskip("xarray")
-        pytest.importorskip("dask")
         return diverse_spool.io.to_xarray()
 
     def _leaves(self, tree):
@@ -1404,8 +1408,6 @@ class TestSpoolToXarray:
 
     def test_builds_without_reading(self, diverse_spool_directory, monkeypatch):
         """Constructing the tree must not read any patch data."""
-        pytest.importorskip("xarray")
-        pytest.importorskip("dask")
         from dascore.io.index.catalog import FileResolver, PatchCatalog  # noqa: PLC0415
         from dascore.io.index.planned import PlanResolver  # noqa: PLC0415
 
@@ -1424,8 +1426,6 @@ class TestSpoolToXarray:
         self, diverse_spool_directory, monkeypatch
     ):
         """A small selection loads only the member blocks it touches."""
-        pytest.importorskip("xarray")
-        pytest.importorskip("dask")
         from dascore.io.index.planned import PlanResolver  # noqa: PLC0415
 
         spool = dc.spool(diverse_spool_directory).update()
@@ -1456,25 +1456,22 @@ class TestSpoolToXarray:
 
     def test_plan_backed_spool(self, random_spool):
         """A chunked spool converts and computes like its merged self."""
-        pytest.importorskip("xarray")
-        pytest.importorskip("dask")
         tree = random_spool.chunk(time=2).io.to_xarray()
         leaves = self._leaves(tree)
         assert len(leaves) == 1
         merged = random_spool.chunk(time=None)[0]
         np.testing.assert_array_equal(leaves[0].dataset["data"].values, merged.data)
 
-    def test_missing_dtype_raises(self, random_spool, monkeypatch):
+    @pytest.mark.parametrize("bad_dtype", [None, ""])
+    def test_missing_dtype_raises(self, random_spool, monkeypatch, bad_dtype):
         """An index without a dtype cannot size the arrays; say so."""
-        pytest.importorskip("xarray")
-        pytest.importorskip("dask")
         import dascore.utils.chunk_plan as chunk_plan_module  # noqa: PLC0415
 
         original = chunk_plan_module.build_chunk_plan
 
         def _null_dtype(*args, **kwargs):
             plan = original(*args, **kwargs)
-            plan.outputs["_dtype"] = ""
+            plan.outputs["_dtype"] = bad_dtype
             return plan
 
         monkeypatch.setattr(chunk_plan_module, "build_chunk_plan", _null_dtype)
@@ -1483,8 +1480,6 @@ class TestSpoolToXarray:
 
     def test_tolerance_argument(self, diverse_spool):
         """A looser tolerance merges gaps the default keeps as segments."""
-        pytest.importorskip("xarray")
-        pytest.importorskip("dask")
         sub = diverse_spool.select(tag="big_gaps")
         default = len(self._leaves(sub.io.to_xarray()))
         loose = len(self._leaves(sub.io.to_xarray(tolerance=10_000)))
@@ -1492,8 +1487,6 @@ class TestSpoolToXarray:
 
     def test_stale_index_shape_raises(self, random_spool, monkeypatch):
         """A block whose loaded shape breaks its promise raises clearly."""
-        pytest.importorskip("xarray")
-        pytest.importorskip("dask")
         from dascore.io.index.planned import PlanResolver  # noqa: PLC0415
 
         tree = random_spool.io.to_xarray()
@@ -1510,8 +1503,6 @@ class TestSpoolToXarray:
 
     def test_segment_names_follow_dim_order(self, diverse_spool):
         """segment_0..n are ordered along the merged dimension."""
-        pytest.importorskip("xarray")
-        pytest.importorskip("dask")
         tree = diverse_spool.io.to_xarray()
         for node in tree.children.values():
             starts = [
@@ -1522,8 +1513,6 @@ class TestSpoolToXarray:
 
     def test_sampling_jitter_steps(self, random_patch):
         """Members merged under sampling tolerance keep their own grids."""
-        pytest.importorskip("xarray")
-        pytest.importorskip("dask")
         first = random_patch
         coord = first.get_coord("time")
         step = coord.step * 1.04  # within the 5% sampling tolerance
@@ -1534,11 +1523,12 @@ class TestSpoolToXarray:
         data = leaf.dataset["data"]
         assert data.shape == merged.data.shape
         np.testing.assert_array_equal(data.values, merged.data)
+        np.testing.assert_array_equal(
+            data["time"].values, merged.get_coord("time").values
+        )
 
     def test_off_grid_overlap(self, random_patch):
         """An overlap whose grids misalign still sizes blocks exactly."""
-        pytest.importorskip("xarray")
-        pytest.importorskip("dask")
         coord = random_patch.get_coord("time")
         shifted = random_patch.update_coords(time_min=coord.max() - 9.3 * coord.step)
         spool = dc.spool([random_patch, shifted])
@@ -1547,11 +1537,31 @@ class TestSpoolToXarray:
         data = leaf.dataset["data"]
         assert data.shape == merged.data.shape
         np.testing.assert_array_equal(data.values, merged.data)
+        np.testing.assert_array_equal(
+            data["time"].values, merged.get_coord("time").values
+        )
+
+    def test_value_select_refused(self, random_spool):
+        """A pending value-range selection cannot be sized; it raises."""
+        coord = random_spool[0].get_coord("time")
+        sub = random_spool.select(time=(coord.min() + coord.step // 2, None))
+        with pytest.raises(PatchConversionError, match="value selections"):
+            sub.io.to_xarray()
+
+    def test_samples_select_supported(self, random_spool):
+        """A samples-based selection stays exact and converts."""
+        sub = random_spool.select(time=(10, -10), samples=True)
+        merged = sub.chunk(time=None)[0]
+        leaf = self._leaves(sub.io.to_xarray())[0]
+        data = leaf.dataset["data"]
+        assert data.shape == merged.data.shape
+        np.testing.assert_array_equal(data.values, merged.data)
+        np.testing.assert_array_equal(
+            data["time"].values, merged.get_coord("time").values
+        )
 
     def test_descending_dim_raises(self, random_patch):
         """A descending merge dimension is refused with a clear message."""
-        pytest.importorskip("xarray")
-        pytest.importorskip("dask")
         flipped = random_patch.update_coords(
             distance=random_patch.get_coord("distance").values[::-1]
         )
@@ -1560,8 +1570,6 @@ class TestSpoolToXarray:
 
     def test_descending_non_dim_coord(self, random_patch):
         """A descending non-merge coordinate keeps its order and values."""
-        pytest.importorskip("xarray")
-        pytest.importorskip("dask")
         flipped = random_patch.update_coords(
             distance=random_patch.get_coord("distance").values[::-1]
         )
@@ -1574,8 +1582,6 @@ class TestSpoolToXarray:
 
     def test_mixed_dtype_upcasts(self, random_patch):
         """Blocks narrower than the combined dtype upcast at load."""
-        pytest.importorskip("xarray")
-        pytest.importorskip("dask")
         coord = random_patch.get_coord("time")
         narrow = random_patch.new(data=random_patch.data.astype(np.float32))
         narrow = narrow.update_coords(time_min=coord.max() + coord.step)
@@ -1583,12 +1589,12 @@ class TestSpoolToXarray:
         leaf = self._leaves(spool.io.to_xarray())[0]
         data = leaf.dataset["data"]
         assert data.dtype == np.float64
-        assert data.compute().dtype == np.float64
+        # A slice touching only the narrow member must upcast in the
+        # loader itself, not by concatenation with a wider block.
+        assert data.isel(time=slice(-3, None)).compute().dtype == np.float64
 
     def test_single_group_spool(self, random_spool):
         """A homogeneous spool merges into one segment of one group."""
-        pytest.importorskip("xarray")
-        pytest.importorskip("dask")
         tree = random_spool.io.to_xarray()
         leaves = self._leaves(tree)
         assert len(leaves) == 1
@@ -1597,8 +1603,6 @@ class TestSpoolToXarray:
 
     def test_group_argument(self, diverse_spool):
         """An explicit group partitions the tree by that attribute."""
-        pytest.importorskip("xarray")
-        pytest.importorskip("dask")
         tree = diverse_spool.io.to_xarray(group="tag", conflict="drop")
         tags = {x.dataset["data"].attrs.get("tag") for x in self._leaves(tree)}
         contents_tags = set(diverse_spool.get_contents()["tag"])
@@ -1610,8 +1614,6 @@ class TestSpoolToXarray:
 
     def test_bad_group_raises(self, diverse_spool):
         """A group attribute no patch has raises the standard query error."""
-        pytest.importorskip("xarray")
-        pytest.importorskip("dask")
         from dascore.exceptions import InvalidSpoolQueryError  # noqa: PLC0415
 
         with pytest.raises(InvalidSpoolQueryError, match="do not exist"):
@@ -1619,16 +1621,14 @@ class TestSpoolToXarray:
 
     def test_empty_spool(self):
         """An empty spool converts to an empty tree."""
-        xr = pytest.importorskip("xarray")
-        pytest.importorskip("dask")
+        import xarray as xr  # noqa: PLC0415
+
         tree = dc.spool([]).io.to_xarray()
         assert isinstance(tree, xr.DataTree)
         assert not self._leaves(tree)
 
     def test_slash_in_group_name_raises(self, random_patch):
         """A group value which cannot name a tree node raises."""
-        pytest.importorskip("xarray")
-        pytest.importorskip("dask")
         # Two values are needed: a lone group is named by its ordinal.
         patches = [
             random_patch.update_attrs(cable_id="a/b"),

@@ -68,8 +68,9 @@ dependencies = [
 [project.optional-dependencies]
 
 extras = [
-    "xarray",
-    # A spool converts to a lazily-loaded DataTree; dask supplies the arrays.
+    # A spool converts to a lazily-loaded DataTree, which entered xarray
+    # core in 2024.10; dask supplies the arrays.
+    "xarray>=2024.10",
     "dask",
     # An annotation set may be stored as parquet rather than CSV; CSV is
     # the floor which needs nothing.
