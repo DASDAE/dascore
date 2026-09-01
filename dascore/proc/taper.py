@@ -14,7 +14,7 @@ from dascore.units import Quantity
 from dascore.utils.docs import compose_docstring
 from dascore.utils.misc import broadcast_for_index
 from dascore.utils.patch import get_dim_axis_value, patch_function
-from dascore.utils.signal import WINDOW_FUNCTIONS, _get_window_function
+from dascore.utils.signal import WINDOW_NAMES, get_ramp
 from dascore.utils.time import to_float
 
 
@@ -61,10 +61,10 @@ def _validate_windows(samps, start_slice, end_slice, shape, axis):
 
 
 @patch_function()
-@compose_docstring(taper_type=sorted(WINDOW_FUNCTIONS))
+@compose_docstring(taper_type=sorted(WINDOW_NAMES))
 def taper(
     patch: PatchType,
-    window_type: str = "hann",
+    window_type: str | tuple = "hann",
     **kwargs,
 ) -> PatchType:
     """
@@ -75,8 +75,10 @@ def taper(
     patch
         The patch instance.
     window_type
-        The type of window to use For tapering. Supported Options are:
-            {taper_type}.
+        The window whose edge the taper takes. Supported options are:
+            {taper_type}
+        or any name or ``(name, parameter)`` tuple `scipy.signal.get_window`
+        accepts, such as ``("tukey", 0.5)``.
     **kwargs
         Used to specify the dimension along which to taper and the percentage
         of total length of the dimension (if a decimal or percent, see examples),
@@ -111,7 +113,6 @@ def taper(
     >>> from dascore.units import m
     >>> patch_taper4 = patch.taper(distance=15 * m)
     """
-    func = _get_window_function(window_type)
     # get taper values in samples.
     out = np.array(patch.data)  # Need to make a copy here.
     shape = out.shape
@@ -120,14 +121,14 @@ def taper(
     _validate_windows(samps, start_slice, end_slice, shape, axis)
     if samps[0] is not None:
         val = start_slice.stop
-        window = func(2 * val)[:val]
+        window = get_ramp(window_type, val)
         # get indices window (which will broadcast) and data
         data_inds = broadcast_for_index(n_dims, axis, start_slice)
         window_inds = broadcast_for_index(n_dims, axis, slice(None), fill=None)
         out[data_inds] = out[data_inds] * window[window_inds]
     if samps[1] is not None:
         val = shape[axis] - end_slice.start
-        window = func(2 * val)[val:]
+        window = get_ramp(window_type, val)[::-1]
         data_inds = broadcast_for_index(n_dims, axis, end_slice)
         window_inds = broadcast_for_index(n_dims, axis, slice(None), fill=None)
         out[data_inds] = out[data_inds] * window[window_inds]
@@ -164,9 +165,7 @@ def _get_taper_coord_inds(coord, values, relative, samples):
 
 def _get_taper_curve(coord, ind_1, ind_2, window_type, reverse=False):
     """Get the taper curve between index1 and index2."""
-    func = _get_window_function(window_type)
-    samps = ind_2 - ind_1
-    taper = func(samps * 2 + 1)[:samps]
+    taper = get_ramp(window_type, ind_2 - ind_1)
     if reverse:
         taper = taper[::-1]
     # Need to extrapolate to get correct values for non evenly sampled coords.
@@ -198,10 +197,10 @@ def _get_range_envelope(coord, inds, window_type, invert):
 
 
 @patch_function()
-@compose_docstring(taper_type=sorted(WINDOW_FUNCTIONS))
+@compose_docstring(taper_type=sorted(WINDOW_NAMES))
 def taper_range(
     patch: PatchType,
-    window_type: str = "hann",
+    window_type: str | tuple = "hann",
     invert=False,
     relative=False,
     samples=False,
@@ -215,8 +214,10 @@ def taper_range(
     patch
         A patch instance.
     window_type
-        The type of window to use For tapering. Supported Options are:
-            {taper_type}.
+        The window whose edge the taper takes. Supported options are:
+            {taper_type}
+        or any name or ``(name, parameter)`` tuple `scipy.signal.get_window`
+        accepts, such as ``("tukey", 0.5)``.
     invert
         If True, the values inside the specified range are set to zero
         and gradually tapered to 1.

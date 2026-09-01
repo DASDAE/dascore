@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import numbers
 import re
 import textwrap
 from collections import Counter
@@ -154,9 +155,10 @@ class Table:
     """
     Records of one sort, drawn together.
 
-    They need not state the same fields -- only a time coordinate has a
-    span -- so a column exists for every field any row states and a row
-    with nothing for one leaves it empty.
+    They need not state the same fields -- a coordinate of one sample
+    has no span, and one read off a file may have no step -- so a
+    column exists for every field any row states and a row with
+    nothing for one leaves it empty.
 
     A terminal draws each record on its own line, which is what keeps
     `str()` unchanged; a panel draws them in columns, where each label
@@ -402,13 +404,13 @@ def _merge_columns(rows: Sequence[Row]) -> list[str]:
     """
     One column order which every row's own order agrees with.
 
-    Rows state different fields -- only a time coordinate has a span,
-    and a coordinate which selected nothing states neither a min nor a
-    max -- so the columns are the union. Sorted rather than merged by
-    hand: what each row states is an ordering constraint on part of the
-    whole, and reading them in as edges is what keeps a field which
-    appears late in one row and early in another from landing where no
-    row puts it.
+    Rows state different fields -- a coordinate of one sample has no
+    span, and a coordinate which selected nothing states neither a min
+    nor a max -- so the columns are the union. Sorted rather than
+    merged by hand: what each row states is an ordering constraint on
+    part of the whole, and reading them in as edges is what keeps a
+    field which appears late in one row and early in another from
+    landing where no row puts it.
 
     Two rows can disagree outright, which is a cycle and has no answer;
     the order they were first stated in is the one taken then.
@@ -910,6 +912,29 @@ def human_duration(value: np.timedelta64 | pd.Timedelta | float) -> str:
     return f"{size:.3g} s"
 
 
+def _seconds_apart(seconds: float | None, low, high) -> float:
+    """
+    How far apart two times lie, from the span between them or the ends.
+
+    The span, where it is one: subtracting two instants is exact, and
+    nothing else says how far apart they are to the nanosecond.
+
+    Each end on its own where it is not. An int64 of nanoseconds holds
+    about 584 years and two instants can lie further apart than that:
+    pandas raises over it, numpy raises over it on some versions and
+    wraps on others, and a wrap shows as a span pointing the other way
+    from the ends it was read off -- five centuries came back as 84.6
+    of them. Reading the ends costs a precision only a far shorter span
+    would miss, and a span that short is never one of these. It is held
+    in nanoseconds itself, though, so a pair stated in a coarser unit
+    and further apart than any instant a nanosecond can reach is read
+    no better here than it was subtracted.
+    """
+    if seconds is not None and (seconds < 0) == (high < low):
+        return seconds
+    return to_float(high) - to_float(low)
+
+
 def duration_text(low, high) -> Text | None:
     """
     How long an extent lasted, as a repr states it.
@@ -918,37 +943,111 @@ def duration_text(low, high) -> Text | None:
     zero, which reads as a label on a gap and as an empty pair of
     brackets here.
 
-    Asked wherever a repr states two instants. A time is stated as an
-    instant, so how far apart two of them are is a fact the line does
-    not otherwise carry; every other kind of dimension states its own
-    magnitude already, and saying it twice is not saying more.
-
     Only of two times. A duration is read in seconds, so a distance of
     299 handed to this would come back as "5 m" -- five minutes, of a
-    span measured in metres.
+    span measured in metres. `span_text` is what an extent of any kind
+    is asked through; this is the arm of it which reads a clock.
     """
     if not isinstance(low, _TIME_TYPES) or not isinstance(high, _TIME_TYPES):
         return None
+    # An end which is not a time is not an end: NaT compares against a
+    # Timestamp by raising, and how long an extent with one lasted is
+    # not a question with an answer.
+    if pd.isnull(low) or pd.isnull(high):
+        return None
+    seconds = None
     try:
         span = high - low
-    except (OutOfBoundsDatetime, OutOfBoundsTimedelta):
-        # Two instants can lie further apart than a Timedelta holds. How
-        # long that is matters less than the extents it would otherwise
-        # take down with it.
-        return None
-    # Divided by a second rather than read with `to_float`, which counts
-    # nanoseconds: a span of centuries is more of those than an int64
-    # holds, and the wrap is silent. Ten thousand years read that way
-    # came back as sixty one.
-    try:
-        seconds = span / np.timedelta64(1, "s")
+    except (OutOfBoundsDatetime, OutOfBoundsTimedelta, OverflowError):
+        # Two instants can lie further apart than the int64 of
+        # nanoseconds holding them, which pandas raises over and numpy
+        # raises over on some versions. `_seconds_apart` says how far
+        # apart they are without them.
+        pass
     except TypeError:
-        # A span held in years or months is not a fixed number of
-        # seconds, so numpy refuses to say how many. Neither will this.
+        # Two times which do not agree on a timezone do not subtract at
+        # all, and neither end can be read as the other's clock.
         return None
-    if not (said := human_duration(seconds)):
+    else:
+        # Divided by a second rather than read with `to_float`, which
+        # counts nanoseconds: the same int64 the ends were held in, and
+        # ten thousand years read that way came back as sixty one.
+        try:
+            seconds = span / np.timedelta64(1, "s")
+        except TypeError:
+            # A span held in years or months is not a fixed number of
+            # seconds, so numpy refuses to say how many. Neither will
+            # this.
+            return None
+    if not (said := human_duration(_seconds_apart(seconds, low, high))):
         return None
     return Text(f"<{said}>", dascore_styles["keys"])
+
+
+def span_text(low, high, units: str | None = None) -> Text | None:
+    """
+    How wide an extent is, as a repr states it.
+
+    Asked wherever a repr states two ends. How far apart they lie is a
+    fact those two numbers do not carry: fiber running from 1212.4 m to
+    1636.7 m is 424.3 m of it, and the subtraction which says so is not
+    work a reader should be left to do.
+
+    A time span is a duration, said in the largest unit which fits.
+    Every other extent is as wide as its own numbers say, since reading
+    one in seconds would state a different quantity than the one
+    measured.
+
+    ``units`` is what to say that width in, and is stated wherever the
+    caller knows them: a width is a quantity, and one said bare beside
+    two ends which name their units reads as if it were in others.
+
+    None where there is no width to state: two ends which meet, which
+    is one sample and not a span of nothing, and a dimension of labels,
+    which has two ends and nothing measurable between them.
+    """
+    if isinstance(low, _TIME_TYPES) or isinstance(high, _TIME_TYPES):
+        return duration_text(low, high)
+    if not (_measurable(low) and _measurable(high)):
+        return None
+    try:
+        if isinstance(low, numbers.Integral) and isinstance(high, numbers.Integral):
+            # Subtracted as integers, which is exact and does not wrap:
+            # two int64 ends one apart up near 2**60 are the same float,
+            # so a width of one would come back as no width at all.
+            width = abs(int(high) - int(low))
+        else:
+            # Subtracted in the kind they are held in, which a Decimal
+            # or a long double is exact in and a float is not.
+            width = abs(high - low)
+        # Read as a float only to ask whether there is a width to say,
+        # never to say it: an end no float holds, a Python int of four
+        # hundred digits among them, has no width a reader could read.
+        magnitude = float(width)
+    except (ArithmeticError, ValueError, TypeError):
+        # A repr states nothing rather than raising out of the middle
+        # of itself.
+        return None
+    if not np.isfinite(magnitude) or magnitude == 0:
+        return None
+    # Drawn the way the two ends it came from are drawn, so a reader
+    # who subtracts what the line says gets what the line says.
+    stated = f" {units}" if units else ""
+    return Text(f"<{get_nice_text(width).plain}{stated}>", dascore_styles["keys"])
+
+
+def _measurable(value) -> bool:
+    """Whether a value is a quantity two of which lie a width apart."""
+    # A bool is an integer to Python and a quantity to nobody: a true
+    # which is one more than a false is arithmetic, not a width. A
+    # complex pair has no width along one axis, and numpy's own kinds
+    # are asked for by name -- only complex128 subclasses Python's,
+    # so complex64 came through as a number and stated the modulus of
+    # the difference. Every other kind of number has a width, a
+    # Decimal and a Fraction among them.
+    if isinstance(value, bool | complex | np.complexfloating):
+        return False
+    return isinstance(value, numbers.Number)
 
 
 def _split_instant(rendered: str) -> tuple[str, str]:
@@ -1399,7 +1498,7 @@ def mapping_to_text(mapping, header: str, style: str = "dc_yellow") -> Text:
     return txt
 
 
-def human_size(byte_count: int) -> str:
+def _human_size(byte_count: int) -> str:
     """How much room something takes up, in the largest unit which fits."""
     size = float(byte_count)
     if not np.isfinite(size):
@@ -1429,7 +1528,7 @@ def array_to_text(data, units=None) -> Text:
     # which is the size in pieces; whether it fits in memory is the
     # question those two are usually being multiplied to answer.
     byte_count = getattr(data, "nbytes", None)
-    if byte_count is not None and (size := human_size(byte_count)):
+    if byte_count is not None and (size := _human_size(byte_count)):
         header += Text(", ") + Text(size, dascore_styles["keys"])
     header += Text(")")
     config = get_config()

@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import matplotlib.pyplot as plt
+import numpy as np
 import pytest
 
-from dascore.viz.spectrogram import _get_other_dim
+from dascore.exceptions import ParameterError
+from dascore.viz.spectrogram import _get_other_dim, _spectrogram_patch
 
 
 def test_get_other_dim_valid():
@@ -103,17 +105,54 @@ class TestPlotSpectrogram:
         return axis.collections[0].get_array().shape
 
     @pytest.mark.parametrize("aggr_domain", ["frequency", "time"])
-    def test_kwargs_passed_to_spectrogram_2d(self, random_patch, aggr_domain):
-        """Ensure kwargs (e.g. nperseg) reach scipy for 2D patches. See #661."""
+    def test_window_reaches_stft_2d(self, random_patch, aggr_domain):
+        """The window is stft's, and changes the picture. See #661."""
         default = random_patch.viz.spectrogram(dim="time", aggr_domain=aggr_domain)
         windowed = random_patch.viz.spectrogram(
-            dim="time", aggr_domain=aggr_domain, nperseg=64
+            dim="time", aggr_domain=aggr_domain, time=64, samples=True
         )
         assert self._image_shape(default) != self._image_shape(windowed)
 
-    def test_kwargs_passed_to_spectrogram_1d(self, random_patch):
-        """Ensure kwargs reach scipy for 1D patches as well. See #661."""
+    def test_window_reaches_stft_1d(self, random_patch):
+        """And for a single trace. See #661."""
         patch = random_patch.select(distance=0, samples=True).squeeze()
         default = patch.viz.spectrogram(dim="time")
-        windowed = patch.viz.spectrogram(dim="time", nperseg=64)
+        windowed = patch.viz.spectrogram(dim="time", time=64, samples=True)
         assert self._image_shape(default) != self._image_shape(windowed)
+
+    def test_nfft_adds_frequency_rows(self, random_patch):
+        """A longer FFT draws more frequency rows for the same window."""
+        plain = random_patch.viz.spectrogram(time=64, samples=True)
+        padded = random_patch.viz.spectrogram(time=64, samples=True, nfft=256)
+        assert self._image_shape(padded)[0] > self._image_shape(plain)[0]
+
+    def test_short_patch_takes_the_whole_of_itself(self, random_patch):
+        """A patch shorter than the 256 sample default is one window."""
+        short = random_patch.select(time=(0, 100), samples=True)
+        axis = short.viz.spectrogram()
+        assert isinstance(axis, plt.Axes)
+
+    def test_detrend_passes_through(self, random_patch):
+        """Detrending each window is stft's, reached from here."""
+        axis = random_patch.viz.spectrogram(time=64, samples=True, detrend=True)
+        assert isinstance(axis, plt.Axes)
+
+    def test_scipy_spelling_refused(self, random_patch):
+        """Scipy's nperseg is not a dimension; the window is time=..."""
+        with pytest.raises(ParameterError, match="give the window as time="):
+            random_patch.viz.spectrogram(nperseg=64)
+
+    @pytest.mark.parametrize("aggr_domain", ["frequency", "time"])
+    def test_is_stft_squared(self, random_patch, aggr_domain):
+        """What is drawn is |stft|² with the other dimension averaged."""
+        power = _spectrogram_patch(
+            random_patch, "time", "distance", aggr_domain, time=64, samples=True
+        )
+        if aggr_domain == "time":
+            averaged = random_patch.aggregate("distance", method="mean")
+            expected = averaged.stft(time=64, samples=True).abs() ** 2
+        else:
+            power_2d = random_patch.stft(time=64, samples=True).abs() ** 2
+            expected = power_2d.aggregate("distance", method="mean")
+        expected = expected.squeeze()
+        assert np.allclose(power.data, expected.data)

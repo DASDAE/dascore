@@ -4,423 +4,257 @@ execute:
   warning: false
 ---
 
-Spools are containers/managers of [patches](patch.qmd). The spool interface is designed to manage a variety of data sources, including a group of patches loaded into memory, archives of local files, and a variety of remote resources.
-
-For file-backed spools, DASCore first scans metadata and coordinate summaries, then loads patch data only when you access a patch from the spool. This means methods like `get_contents()` work from patch summary metadata, while `spool[0]` or iteration materializes loaded patches.
-
-# Data Sources
-
-The simplest way to get the appropriate spool for a specified input is to use the [`spool`](`dascore.spool`) function, which knows about many different input types and returns a [`Spool`](`dascore.core.spool.Spool`) instance.
-
-## Patches (in-memory)
+A [`Spool`](`dascore.core.spool.Spool`) manages patches from memory, files, directories, or remote resources. File-backed spools scan metadata first and load arrays only when patches are accessed.
 
 ```{python}
 import dascore as dc
 
-patch_list = [dc.get_example_patch()]
-
-spool1 = dc.spool(patch_list)
+spool = dc.get_example_spool()
 ```
 
-## A Single file
+# Data sources
+
+Use [`dc.spool(...)`](`dascore.spool`) for any supported input:
 
 ```{python}
-import dascore as dc
+memory_spool = dc.spool([dc.get_example_patch()])
+file_spool = dc.spool("examples://terra15_das_1_trimmed.hdf5")
+```
+
+Remote paths use the same constructor:
+
+```{python}
 from upath import UPath
-# Import fetch to read DASCore example files 
-from dascore.utils.downloader import fetch
 
-path_to_das_file = fetch("terra15_das_1_trimmed.hdf5")
-# To read DAS data stored locally on your machine, simply replace the above line with:
-# path_to_das_file = "/path/to/data/directory/data.EXT"
-
-spool2 = dc.spool(path_to_das_file)
-
-# UPath-backed resources also work for file-backed spools.
-remote_file = UPath("memory://dascore/tutorial/spool_file.h5")
+remote_file = UPath("memory://dascore/tutorial/spool-file.h5")
 dc.write(dc.get_example_patch(), remote_file, "DASDAE")
-spool2_remote = dc.spool(remote_file)
+remote_spool = dc.spool(remote_file)
 ```
 
-## A directory of DAS files
+Directory spools maintain an index for fast metadata queries. Call `update()` after files change.
 
 ```{python}
-import dascore as dc
-# Import fetch to read DASCore example files 
-from dascore.utils.downloader import fetch
-
-# Fetch a sample file path from DASCore (just to get a usable path for the rest of the cell)
-directory_path = fetch('terra15_das_1_trimmed.hdf5').parent
-# To read a directory of DAS data stored locally on your machine, 
-# simply replace the above line with:
-# directory_path = "/path/to/data/directory/"
-
-# Update will create an index of the contents for fast querying/access
-spool3 = dc.spool(directory_path).update()
+# Write example patches to a directory to get a usable path.
+directory = dc.examples.spool_to_directory(dc.get_example_spool())
+directory_spool = dc.spool(directory).update()
 ```
 
-An indexed directory summarizes itself when printed, the same as any other spool; see [what a spool says of itself](#what-a-spool-says-of-itself).
-
-If you want the index file to exist somewhere else, for example if you can't write to the data directory, you can specify an index path.
+To place the index outside the data directory:
 
 ```{python}
-#| warning: false
-#| output: false
 import tempfile
 from pathlib import Path
 
 index_path = Path(tempfile.mkdtemp()) / "index.h5"
-
-# Update will create an index of the contents for fast querying/access.
-spool = dc.spool(directory_path, index_path=index_path).update()
+external_index = dc.spool(directory, index_path=index_path).update()
 ```
 
-A new spool created for the same directory will find this index file automatically. The exception is when a valid index file already exists inside the data directory itself, which takes precedence.
+Pass `index_path=` when the data directory is not writable. New spools normally rediscover an external index; an index inside the data directory takes precedence. Remote `UPath` resources also work; see [Working with remote patches](remote_patches.qmd) for cache policy.
 
-:::{.callout-warning}
-If you remove files from a directory that has already been indexed, you should delete the index file and then call `update` again on the spool like this:
+## Path attributes
 
-```python
-spool.indexer.index_path.unlink()
-spool.update()
-```
-
-It is best not to delete files once added to a directory managed by DASCore.
-:::
-
-### Path attributes (hive-style directories)
-
-Directory spools parse `key=value` pairs out of the directories inside the spool, in the style of [Hive partitioning](https://hive.apache.org/). Each directory segment can hold one pair (`acquisition_key=XX.R2D1..RAW/`), or several separated by `__` (the same separator DASCore's default patch names use), as in `cable=north__tag=raw/`. The parsed values become string attributes: they show up in `get_contents()`, work with `select`, and are set on loaded patches. When a path attribute and an attribute stored inside the file share a name, the path wins — renaming a directory is how you attach or correct metadata without rewriting data.
+Directory names written as `key=value` become string attributes on index rows and loaded patches. Multiple pairs in one segment use `__`; path values override attributes stored in the file.
 
 ```{python}
-import tempfile
-from pathlib import Path
-
-import dascore as dc
-
-# Build a small hive-partitioned directory of DAS files.
-data_path = Path(tempfile.mkdtemp()) / "experiment=demo" / "cable=north"
+root = Path(tempfile.mkdtemp())
+data_path = root / "experiment=demo" / "cable=north"
 data_path.mkdir(parents=True)
-dc.get_example_patch().io.write(data_path / "das_file.h5", "DASDAE")
+dc.get_example_patch().io.write(data_path / "patch.h5", "DASDAE")
 
-spool = dc.spool(data_path.parent.parent).update()
-df = spool.get_contents()
-assert df["experiment"].iloc[0] == "demo"
-assert len(spool.select(cable="north")) == 1
-
-# The loaded patch carries the path attributes too.
-patch = spool[0]
-assert patch.attrs["experiment"] == "demo"
-assert patch.attrs["cable"] == "north"
+partitioned = dc.spool(root).update()
+assert partitioned.get_contents()["experiment"].iloc[0] == "demo"
+assert partitioned[0].attrs["cable"] == "north"
 ```
 
-Renaming a partition directory and calling `update()` refreshes the affected attributes by rewriting index rows — file contents are not re-read, so this stays fast even for very large directories.
+Renaming a partition directory and calling `update()` refreshes path attributes without rereading file contents. Removing a path attribute may require rescanning the affected file so its stored value can be restored.
 
-```{python}
-root = data_path.parent.parent
-(root / "experiment=demo").rename(root / "experiment=final")
-spool = spool.update()
-assert spool.get_contents()["experiment"].iloc[0] == "final"
-```
-
-A few details worth knowing:
-
-- Only the directories *containing* a source are parsed. The source's own name is opaque, whether it names a file or a directory-format unit: an extension cannot be told apart from a value ending in one, so `acquisition_key=XX.R2D1..RAW` would be ambiguous. The spool's own root is outside the spool and contributes nothing either, so `dc.spool(".../experiment=demo")` does not pick up `experiment` — point the spool at a parent to keep that partition.
-- Values are always strings; `select` supports equality, collections, unix-style globs, and regular expressions on them.
-- Removing a `key=value` pair from a path triggers a rescan of the affected files (the file's own value has to be recovered), while adding or changing pairs does not.
-- A path key that matches a coordinate name (e.g. `distance=...`) resolves attrs-first in bare `select` kwargs; use the `_coords` argument to target the coordinate explicitly.
-
-However they were constructed, all spools are the same class and share the same behavior and methods.
-
-:::{.callout-note}
-Remote file resources work with `dc.spool(...)`, `dc.read(...)`, `dc.scan(...)`, and `dc.scan_payloads(...)`.
-:::
-
-:::{.callout-note}
-For remote `UPath` resources, DASCore treats metadata operations differently
-from full reads. See the [Working with Remote Patches](remote_patches.qmd)
-tutorial for the remote-cache policy, spool implications, and examples.
-:::
+Only directories below the spool root are parsed; the root and source filename are not. Values remain strings and support the normal attribute selectors. When a path key matches a coordinate, bare `select` targets the attribute; use `_coords` for the coordinate. See the [directory index note](../notes/spool_index.qmd) for update and indexing details.
 
 # Accessing patches
 
-Patches are extracted from the spool via simple iteration or indexing. New
-spools are returned via slicing.
+Indexing and iteration load patches. Slicing, integer arrays, and boolean masks return a new spool.
 
 ```{python}
-import dascore as dc
-
-spool = dc.get_example_spool()
-
-# Extract first patch in the spool.
 patch = spool[0]
+subset = spool[1:]
 
-# Iterate patches in spool.
 for patch in spool:
     ...
-
-# Slice spool to create new spool which excludes first patch.
-new_spool = spool[1:]
 ```
 
-For file-backed spools, indexing or iteration is the point where DASCore loads the underlying patch data. Metadata-only operations such as `get_contents()` and `select(...)` can usually run without loading full patch arrays.
-
-An array can also be used (just like numpy) to select/re-arrange spool contents. For example, a boolean array can be used to de-select patches:
+Integer arrays reorder patches and may repeat them; boolean arrays keep positions marked `True`:
 
 ```{python}
-import dascore as dc
 import numpy as np
 
-spool = dc.get_example_spool()
-
-# Get bool array, true values indicate patch is kept, false is discarded.
-bool_array = np.ones(len(spool), dtype=np.bool_)
-bool_array[1] = False
-
-# Remove patch at position 1 from spool.
-new = spool[bool_array]
+reordered = spool[np.array([2, 0])]
+mask = np.ones(len(spool), dtype=bool)
+mask[1] = False
+without_second = spool[mask]
 ```
 
-and an integer array can be used to deselect/rearrange patches
+Lists and Pandas Series follow the same positional rules. Slicing remains lazy: it narrows the spool plan without loading selected arrays.
+
+Rows from `get_contents()` align with spool positions, so a dataframe condition can select the same patches. Do not reuse a mask from a differently ordered spool.
 
 ```{python}
-import dascore as dc
-import numpy as np
-
-spool = dc.get_example_spool()
-
-# Get an array of integers which indicate the index of included patches
-index_array = np.array([2, 0])
-
-# create a new spool with patch 2 and patch 0.
-new = spool[index_array]
+diverse = dc.get_example_spool("diverse_das")
+contents = diverse.get_contents()
+tagged = diverse[contents["tag"] == "some_tag"]
 ```
 
-A pandas Series or a list works the same way. Since the rows of [`get_contents`](`dascore.core.spool.Spool.get_contents`) line up with the patches, a filter on that dataframe is a boolean selector for the spool:
+# Inspecting and selecting
+
+Displaying a spool shows its patch count, coordinate extents, and tracks for distinct patch kinds. Large spools omit the expensive summary according to [`display_max_patches`](configuration.qmd).
+
+A track groups patches with the same configured kind attributes and measures their span along time, or another available dimension. Single-kind spools omit redundant tracks because their overall extent already carries the same information. Tracks describe extents, not coverage; use `get_coverage` for missing-data statistics.
 
 ```{python}
-import dascore as dc
-
-spool = dc.get_example_spool("diverse_das")
-df = spool.get_contents()
-
-# Keep the patches whose tag is "some_tag" (the same as a select).
-new = spool[df["tag"] == "some_tag"]
-assert len(new) == (df["tag"] == "some_tag").sum()
-```
-
-A boolean mask is applied by position, so it must come from the contents of the spool it selects; build it from that spool's `get_contents` rather than from a differently ordered or already filtered view.
-
-# What a spool says of itself
-
-A spool states how many patches it holds, the extent it covers along each dimension its patches have, and one *track* per kind of patch. A track is named by the values which tell its kind apart from the others, by the same rule the [coverage plot](visualization.qmd#spool) names its lanes. Tracks are measured along one dimension — time where the patches have it — and patches which do not have that dimension are left out of them. A spool of a single kind states no tracks at all, since the extents above already state what its one track would.
-
-```{python}
-import dascore as dc
-
 dc.get_example_spool("diverse_das")
 ```
 
-Summarizing realizes the whole index relation, which is more work than a glance is worth on a very large archive. The `display_max_patches` [configuration option](configuration.qmd) says where that line is, and it holds however the spool got here: past it a spool states its count, its path, and a line naming the limit it exceeded — never the extents — whether or not the relation was already realized. Nothing here measures coverage — that runs a chunk plan, and is what `get_coverage` below is for.
-
-# get_contents
-
-The [`get_contents`](`dascore.core.spool.Spool.get_contents`) method returns a dataframe listing the spool contents. It realizes the whole relation, so it can be expensive over a large remote archive.
+[`Spool.get_contents`](`dascore.core.spool.Spool.get_contents`) returns one metadata row per patch without loading its data array. File-backed rows include `source_path`, `source_format`, and `source_patch_key`.
 
 ```{python}
-import dascore as dc
-spool = dc.get_example_spool()
-
-# Return dataframe with contents of spool (each row has metadata of a patch)
-contents = spool.get_contents()
-contents
+contents = diverse.get_contents()
+contents[["time_min", "time_max", "source_format"]].head()
 ```
 
-The columns returned by `get_contents()` come from the same patch summary metadata exposed by `Patch.summary`, so fields such as `time_min`, `time_max`, and `distance_step` are available without loading the underlying patch data. Source metadata such as `source_path`, `source_format`, and `source_patch_key` are also available for file-backed spools.
+The dataframe is a realized relation, so requesting every row can be expensive for a very large remote archive. Apply `select` first whenever the index backend can push down the predicate.
 
-# select
-
-The [select](`dascore.core.spool.Spool.select`) method selects a subset of a spool and returns a new spool. [`get_contents`](`dascore.core.spool.Spool.get_contents`) will now reflect a subset of the original data requested by the select operation.
+[`Spool.select`](`dascore.core.spool.Spool.select`) filters metadata and trims matching patches along coordinates.
 
 ```{python}
-import dascore as dc
-spool = dc.get_example_spool()
-
-# Select a spool with data after Jan 3rd, 2020.
-subspool = spool.select(time=('2020-01-03T00:00:09', ...))
+recent = diverse.select(time=("2020-01-03", ...))
+sources = diverse.select(acquisition_key={"DAS2.R2D1..RAW", "DAS3.R2D1..RAW"})
+tagged = diverse.select(tag="some*")
 ```
 
-In addition to trimming the data along a specified dimension (as shown above), `select` can be used to filter patches that meet a specified criteria.
-
+Coordinate selections both discard patches outside the range and trim intersecting patches. Attribute selections only filter rows. Collections, Unix-style globs, and compiled regular expressions are accepted for string metadata.
 
 ```{python}
-import dascore as dc
-# Load a spool which has many diverse patches.
-spool = dc.get_example_spool('diverse_das')
+import re
 
-# Only include patches from two named data sources.
-subspool = spool.select(acquisition_key={'DAS2.R2D1..RAW', 'DAS3.R2D1..RAW'})
-
-# Only include spools which match some unix-style query on their tags.
-subspool = spool.select(tag='some*')
+regex_tags = diverse.select(tag=re.compile(r"^some"))
 ```
 
-## Finding a patch by its id
+## Finding a patch by ID
 
-`patch_id` — which data a patch is, described in [Patch identity](patch.qmd#patch-identity) — is indexed like any other attribute. A spool can therefore hand back the patch an id names without loading anything to look for it, which is how a result written down somewhere else finds its way back to the data it came from.
+File-backed `patch_id` values are indexed, so a recorded ID can locate its source without loading every patch:
 
 ```{python}
-import dascore as dc
-spool = dc.get_example_spool()
-
-wanted = spool.get_contents()["patch_id"].iloc[1]
+wanted = spool.get_contents()["patch_id"].iloc[0]
 found = spool.select(patch_id=wanted)
-
-assert len(found) == 1
 assert found[0].attrs.patch_id == wanted
 ```
 
-An id is the same on every read of the same file, so one written down today still names the same data next year — see [Patch identity](patch.qmd#patch-identity) for what an id is derived from and when it changes.
+`processing_id` is not indexed because loading advances processing provenance. Built or chunked spools may have no `patch_id`, and moving a source invalidates its derived ID until the directory is rescanned. See [Patch identity](patch.qmd#patch-identity) for the identity rules.
 
-Two things do not carry an id. `processing_id` is not indexed at all: it advances whenever an operation runs, and a spool runs one as it loads, so what the index recorded would not be what came back. And a spool whose patches are built rather than read — a chunked one, most of all — has no `patch_id` column, because a merged patch folds its members' ids rather than inheriting any one of them; selecting by id there says the spool has no such attribute rather than quietly matching nothing.
+An empty ID after a file move is intentional: retaining the path-derived value would point at a source which no longer exists. Calling `update()` rebuilds the row from its new location.
 
-An id names a path, so a file which moves — including the directory rename that attaches metadata to an archive — is no longer the row the index derived an id for. The index clears the id rather than keeping a stale one, so a moved source has an empty `patch_id` until the archive is scanned again; the patches themselves still carry theirs.
+## Unselect
 
-# unselect
-
-[`unselect`](`dascore.core.spool.Spool.unselect`) is the complement of `select`: it returns the patches the same selection would have removed. Each keyword means what it means in `select`, so this is how to name what a spool does *not* want without spelling out the rest of the archive.
+[`Spool.unselect`](`dascore.core.spool.Spool.unselect`) returns patches rejected by the same attribute selection.
 
 ```{python}
-import dascore as dc
-spool = dc.get_example_spool('diverse_das')
-
-# Everything except the patches tagged 'some_tag'.
-subspool = spool.unselect(tag='some_tag')
-assert len(subspool) + len(spool.select(tag='some_tag')) == len(spool)
+not_tagged = diverse.unselect(tag="some_tag")
 ```
 
-The patches' own coordinates are not accepted. Selecting on one trims each patch to the range as well as dropping the patches which miss it entirely, so the complement of `time=(t1, t2)` is the part of every patch *before* `t1` together with the part *after* `t2` — one patch becoming two. That is subdivision rather than filtering; select the ranges to keep instead, or use [`Patch.unselect`](`dascore.Patch.unselect`) on each patch.
-
-The coordinates an attached [inventory](inventory.qmd) defines along the fiber are different, and *are* accepted: removing one of those chooses which channels a patch holds. A patch may then be cut into the pieces the query did not match, so `len` can grow here as well.
-
-# chunk
-
-The [`chunk`](`dascore.core.spool.Spool.chunk`) method controls how data are grouped together in patches within the spool. It can be used to merge contiguous patches together, specify the size of patches for processing, specify overlap with previous patches, etc.
+Patch coordinates are excluded because complementing an interior range would split every patch. Inventory coordinates are allowed and may increase the number of resulting patches.
 
 ```{python}
-import dascore as dc
-spool = dc.get_example_spool()
+from dascore.examples import inventory_patch_pair
 
-# Chunk spool for 3 s increments with 1 s overlaps
-# and keep any segments at the end that don't have the full 3 s.
-subspool = spool.chunk(time=3, overlap=1, keep_partial=True)
-
-# Merge all contiguous segments along time dimension.
-merged_spool = spool.chunk(time=None)
+inventory_patch, inventory = inventory_patch_pair()
+inventory_spool = dc.spool(inventory_patch).attach_inventory(inventory)
+outside_zone = inventory_spool.unselect(zone="zone_1")
 ```
 
-The chunk length can also be a quantity, either in the coordinate's own units or as a data size. A data size chunks so that each patch's data array is about that large, which is the usual way to keep patches inside a memory budget without working out the sample arithmetic by hand.
+Inventory complements may cut one input patch into several retained pieces, so an `unselect` result can contain more patches than its input.
+
+# Chunking and coverage
+
+[`Spool.chunk`](`dascore.core.spool.Spool.chunk`) lazily changes patch boundaries. It can merge contiguous patches, create fixed windows with overlap, or limit array size.
 
 ```{python}
-from dascore.units import s, megabytes
+from dascore.units import megabytes, s
 
-# The same 3 second chunk, with the units stated explicitly.
-unit_chunked = spool.chunk(time=3 * s)
-
-# Chunk so each patch's data array is at most ~1 MB.
-size_chunked = spool.chunk(time=1 * megabytes)
+windowed = spool.chunk(time=3 * s, overlap=1 * s, keep_partial=True)
+merged = spool.chunk(time=None)
+bounded = spool.chunk(time=1 * megabytes)
 ```
 
-A data size measures the data array only; coordinates, attrs, and any copies made later during processing are extra, so the patch as a whole is somewhat larger. The sample count is rounded down, so the patch's data never exceeds the requested size, and `MB` is 10^6^ bytes while `MiB` is 2^20^. `overlap` accepts the same forms.
+`overlap` accepts the same coordinate-unit, quantity, or data-size forms as the chunk length. `keep_partial=True` retains a shorter final window. Passing `time=None` asks DASCore to merge every contiguous compatible segment.
 
-# get_gaps
+Data-size limits cover the array only, not coordinates, metadata, or later processing copies. `MB` is decimal and `MiB` is binary.
 
-Merging tells you what a spool *has*; [`get_gaps`](`dascore.core.spool.Spool.get_gaps`) tells you what it is missing. It applies the same rules `chunk` merges by, so every row it returns is a boundary `chunk` refuses to close.
+## Gaps and coverage
+
+[`Spool.get_gaps`](`dascore.core.spool.Spool.get_gaps`) reports boundaries that `chunk` will not merge. [`Spool.get_coverage`](`dascore.core.spool.Spool.get_coverage`) summarizes the same compatible groups.
 
 ```{python}
 import numpy as np
 from dascore.examples import random_spool
 
-# Three patches separated by one second holes.
 gappy = random_spool(time_gap=np.timedelta64(1, "s"), length=3)
-
-gappy.get_gaps()
+gaps = gappy.get_gaps()
+coverage = gappy.get_coverage()
 ```
-
-`time_min` is the last sample before the gap and `time_max` the first sample after it, so `gap_size` is one step wider than the extent actually missing; subtract the magnitude of the `time_step` column for the extent itself. Overlapping patches are never a gap, and neither is a hole the `tolerance` covers — a boundary is a gap once it exceeds `tolerance` samples, so at the default 1.5 a single missing sample already counts. A quantity or timedelta states the same limit in the coordinate's own units instead — `get_gaps(tolerance=1 * s)` reports every boundary wider than a second, whatever the sampling rate — and never reports one narrower than a single sample, so contiguous patches stay contiguous. It is the same `tolerance` `chunk` takes, so widening it here predicts exactly which merges will succeed.
-
-Pass another dimension to ask about it instead; `time` is only the default.
-
-# get_coverage
-
-[`get_coverage`](`dascore.core.spool.Spool.get_coverage`) summarizes the same groups, one row each, which is the quicker way to see whether an archive is worth loading at all.
 
 ```{python}
-gappy.get_coverage()
+second_scale_gaps = gappy.get_gaps(tolerance=1 * s)
 ```
 
-`gap_total` is the sum of that group's `get_gaps` rows, `span` is the extent it covers end to end, and `coverage` is the fraction of that span the patches cover. It is measured between patches, from the index's envelopes, so a hole *inside* a patch does not show up. Patches divide into groups the way `chunk` divides them — on the kind attributes, but also on sampling rate and coordinate structure — so a single tag can span several rows. `group_id` names the group in both frames, which is how a gap is traced back to the row that counts it.
+`gap_size` spans from the last sample before a gap to the first after it, so subtract one sample step for the missing extent. The `tolerance` argument, shared with `chunk`, controls which boundaries count. Pass another dimension as in `get_gaps("distance")`; `time` is only the default. Coverage uses patch envelopes; holes inside a patch are not visible. `group_id` links coverage rows to their gaps.
 
-Both frames are drawn by [`Spool.viz.coverage`](`dascore.viz.spool.coverage`), and a long archive by [`Spool.viz.calendar`](`dascore.viz.spool.calendar`); see the [visualization tutorial](visualization.qmd#spool). Those lanes and the [tracks a spool states](#what-a-spool-says-of-itself) are named by one rule, with the coverage each group measured appended here; because the groups above are the finer partition, a lane is a track or a part of one.
+At the default tolerance of 1.5 samples, one missing sample counts as a gap. A quantity or timedelta expresses the limit in coordinate units instead. Overlaps are not gaps; coverage calculates the union of available spans.
 
-# concatenate
-Similar to `chunk`, [`Spool.concatenate`](`dascore.Spool.concatenate`) is used to combine patches together. However, `concatenate` ignores gaps and overlaps along the concatenation axis — it joins each group's patches in the order of that dimension (spool order when the dimension has no step to tell its orientation) — and can even be used to create new patch dimensions. It partitions patches as `chunk` does (by kind, dimensions, the other dimensions' identities, and the concatenated dimension's units), so patches which cannot be concatenated together simply land in separate outputs, and it polices the remaining attributes with the same `conflict` argument (coordinates are not policed: they are joined along the concatenated dimension, or must agree). Like `chunk`, it produces a lazy, plan-backed result.
+Coverage groups use patch kind, dimensions, sampling rate, and coordinate structure. One metadata tag can therefore produce several rows when its patches cannot be combined safely.
 
-```python 
-import dascore as dc
+Use [`Spool.viz.coverage`](`dascore.viz.spool.coverage`) or [`Spool.viz.calendar`](`dascore.viz.spool.calendar`) to plot these summaries.
 
+## Concatenate
+
+[`Spool.concatenate`](`dascore.Spool.concatenate`) joins each compatible group even across gaps or overlaps. Unlike `chunk`, it does not require continuity.
+
+```{python}
 patch = dc.get_example_patch()
-
-# Create a spool with patches that have a large gap
-time = patch.get_coord("time")
 one_hour = dc.to_timedelta64(3600)
-patch2 = patch.update_coords(time_min=time.max() + one_hour)
-spool = dc.spool([patch, patch2])
+later = patch.update_coords(time_min=patch.get_coord("time").max() + one_hour)
 
-# chunk rightfully wouldn't merge these patches, but concatenate will.
-merged = spool.concatenate(time=None)
-print(merged[0].coords)
+joined = dc.spool([patch, later]).concatenate(time=None)
 ```
 
-# map
+`concatenate` can also create a new dimension when given a name not already present. Use this to stack compatible patches whose samples should remain distinct rather than merging along an existing axis.
 
-The [`map`](`dascore.core.spool.Spool.map`) method applies a function to all patches in the spool. It provides an efficient way to process large datasets, especially when combined with clients (aka executors).
+Patches that cannot concatenate remain in separate output groups. Values are ordered along the concatenated dimension when it has a step; otherwise spool order is retained. Other coordinates must agree, while coordinates along the concatenated dimension are joined. For conflicting non-coordinate attributes, `conflict=` can raise (the default), drop them, or keep the first value.
 
-For example, calculating the maximum value for each channel (distance) for 5 second increments with 1 second overlap can be done like so:
+# Mapping
+
+[`Spool.map`](`dascore.core.spool.Spool.map`) eagerly applies a function to every patch. Chunk first to control work size.
 
 ```{python}
-import dascore as dc
-spool = dc.get_example_spool()
-
-# define function for mapping to each patch
-def get_dist_max(patch):
-    """Function which will be mapped to each patch in spool."""
+def distance_max(patch):
+    """Return each channel's maximum."""
     return patch.aggregate("time", "max")
 
-# chunk and apply function
-map_out = spool.chunk(time=5, overlap=1).map(get_dist_max)
 
-# combine output back into a single patch
-agg_patch = dc.spool(map_out).concatenate(time=None)[0]
-
-agg_patch
+mapped = spool.chunk(time=5, overlap=1).map(distance_max)
+result = dc.spool(mapped).concatenate(time=None)[0]
 ```
 
-See the [parallel processing recipe](../recipes/parallelization.qmd) for more examples with `map`.
+`map` returns a list by default. Wrap it with `dc.spool(...)` to continue using spool operations, as above. Active runtime configuration is propagated to thread and process workers.
+
+See the [parallel processing recipe](../recipes/parallelization.qmd) for executors and larger workflows.
 
 # Inventory
 
-A spool can carry a DASDAE [inventory](inventory.qmd): a description of the observing system its data was recorded through — the fiber, where it goes, and how the interrogator was configured over time. Attaching one adds nothing to the patches, but makes the names the inventory defines along the fiber available to `select` and [`expand_by`](`dascore.core.spool.Spool.expand_by`), and lets [`enrich`](`dascore.core.spool.Spool.enrich`) copy that metadata onto patches as they are extracted.
+A spool can attach a DASDAE [inventory](inventory.qmd). Inventory labels become available to `select` and [`expand_by`](`dascore.core.spool.Spool.expand_by`); [`enrich`](`dascore.core.spool.Spool.enrich`) copies observing-system metadata onto extracted patches.
 
 ```{python}
-import dascore as dc
-from dascore.examples import inventory_patch_pair
-
 patch, inventory = inventory_patch_pair()
-spool = dc.spool(patch).attach_inventory(inventory)
-
-# The inventory annotates two zones along the fiber, so they can be selected.
-assert len(spool.expand_by("zone")) == 2
+with_inventory = dc.spool(patch).attach_inventory(inventory)
+assert len(with_inventory.expand_by("zone")) == 2
 ```
 
-A spool opened on a directory which carries an inventory under the name `.inventory` — as a directory, or as `.inventory.yaml`, `.inventory.yml`, or `.inventory.json` — starts out attached to it.
+Directory spools automatically load `.inventory`, `.inventory.yaml`, `.inventory.yml`, or `.inventory.json` stored beside the data.

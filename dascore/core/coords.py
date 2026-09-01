@@ -56,10 +56,10 @@ from dascore.utils.array import (
 )
 from dascore.utils.display import (
     RichRepr,
-    duration_text,
     get_nice_text,
     range_texts,
     rate_text,
+    span_text,
 )
 from dascore.utils.docs import compose_docstring, get_docstring
 from dascore.utils.misc import (
@@ -627,30 +627,45 @@ class BaseCoord(RichRepr, DascoreBaseModel, abc.ABC):
         is held.
         """
         fields: list[tuple[str, Text, bool]] = []
+        # What the values are measured in, said on each of them rather
+        # than in a field of its own: how far the fiber runs and what
+        # that is measured in are one fact, and reading the second of
+        # them off the end of the line is not how it is read. A time
+        # states its units in the way it is written -- an instant, a
+        # step of "0.0005s" -- and says nothing here.
+        stated = None if dtype_time_like(self.dtype) else self.unit_str
+
+        def measured(value: Text) -> Text:
+            """The value, and what it is measured in where it says."""
+            if not stated:
+                return value
+            return value + Text(f" {stated}", dascore_styles["units"])
+
         # Drawn as one range: the two ends state the same blocks, and
         # the second states only what the first did not already.
         near, far = range_texts(self.min(), self.max())
         if not pd.isnull(self.min()):
-            fields.append(("min", near, True))
+            fields.append(("min", measured(near), True))
         if not pd.isnull(self.max()):
-            fields.append(("max", far, True))
-        # Only a time. Two instants say nothing about how far apart they
-        # are; a distance from 0 to 299 m already says 299 m.
-        if dtype_time_like(self.dtype) and not pd.isnull(self.min()):
-            if (span := duration_text(self.min(), self.max())) is not None:
+            fields.append(("max", measured(far), True))
+        # How far the two ends lie apart, which they do not otherwise
+        # say: a fiber run from 1212.4 m to 1636.7 m is 424.3 m of it.
+        if not (pd.isnull(self.min()) or pd.isnull(self.max())):
+            if (span := span_text(self.min(), self.max(), stated)) is not None:
                 # The brackets say what it is, so a line does not
                 # need the label a column heading gives it.
                 fields.append(("span", span, False))
         if not pd.isnull(self.step):
-            step = get_nice_text(self.step)
+            step = measured(get_nice_text(self.step))
             if (rate := rate_text(self.step)) is not None:
                 step = step + rate
             fields.append(("step", step, True))
+        # A coordinate which states no value has nothing to hang its
+        # units on, and they are a fact of it either way.
+        if stated and not fields:
+            fields.append(("units", get_nice_text(stated, style="units"), True))
         fields.append(("shape", get_nice_text(self.shape), True))
         fields.append(("dtype", get_nice_text(self.dtype), True))
-        if self.units is not None:
-            unit_str = get_quantity_str(self.units)
-            fields.append(("units", get_nice_text(unit_str, style="units"), True))
         return tuple(fields)
 
     def __rich__(self):
@@ -1142,7 +1157,11 @@ class BaseCoord(RichRepr, DascoreBaseModel, abc.ABC):
         else:
             compat_val = self._get_compatible_value(value, relative=True)
             duration = compat_val - self.min()
-            ratio = duration / self.step
+            # The magnitude of the step, because a window of 30 m is thirty
+            # samples whether the coordinate counts up or down. A descending
+            # coordinate has a negative step, and dividing by it signed would
+            # make the count negative.
+            ratio = duration / np.abs(self.step)
             if np.issubdtype(self.dtype, np.floating):
                 nearest = np.round(ratio)
                 # Adding a relative float value to coord.min() and subtracting

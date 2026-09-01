@@ -44,7 +44,7 @@ IDS = [x[0] for x in CALLS]
 # The operations whose arguments the serializer refuses. A frame is data,
 # not a parameter; the serializer says so, and this records which calls in
 # the catalogue land on it.
-_NOT_WRITABLE = {"coords_from_df", "add_distance_to"}
+_NOT_WRITABLE = {"coords_from_df", "add_distance_to", "tile_apply"}
 
 
 def _drawn(axes) -> tuple[int, ...]:
@@ -209,7 +209,8 @@ class TestOneCanonicalCall:
         """Which is what binding against the signature is for."""
         first = dc.proc.normalize.op("time")
         second = dc.proc.normalize.op(dim="time")
-        assert first.kwargs == second.kwargs == {"dim": "time", "norm": "l2"}
+        expected = {"dim": "time", "norm": "l2", "window": None, "samples": False}
+        assert first.kwargs == second.kwargs == expected
         assert first.fingerprint == second.fingerprint
         assert first == second
 
@@ -594,29 +595,22 @@ class TestDocuments:
         One class for every patch function, not one class each.
 
         `PatchOp` is the whole cost of naming any of them in a document.
+        The module argues against a class per patch function, so a
+        processor class is allowed only where it is the registered
+        implementation of one -- and then only because it gives the
+        operation a seam a whole function does not have.
         """
-        tags = {
-            tag
-            for tag, cls in registered_models().items()
-            if isinstance(cls, type) and issubclass(cls, (PatchOp, PatchProcessor))
+        processors = {
+            cls
+            for cls in registered_models().values()
+            if isinstance(cls, type)
+            and issubclass(cls, PatchProcessor)
+            and cls is not PatchProcessor
         }
-        # Spelled out rather than counted, so that a class added without
-        # a reason to is noticed. The module argues against a class per
-        # patch function; these are the exceptions it names -- the ones
-        # wanting a kernel seam.
-        assert tags == {
-            "PatchOp",
-            "PatchProcessor",
-            "Abs",
-            "Conj",
-            "Demean",
-            "Imag",
-            "Normalize",
-            "Real",
-            "RenameCoords",
-            "Standardize",
-            "Transpose",
-        }
+        assert processors == set(processor_module._IMPLEMENTATIONS.values())
+        seams = ("derive_meta", "plan_kernel", "kernel", "reconcile")
+        for cls in processors:
+            assert any(seam in cls.__dict__ for seam in seams), cls.__name__
 
     def test_the_document_names_the_operation(self):
         """The name and the arguments are what a document holds."""
@@ -734,6 +728,8 @@ class TestImplementations:
 
             dim: str = "time"
             norm: str = "l2"
+            window: float | None = None
+            samples: bool = False
 
             def run(self, patch):
                 """Do something a caller could tell apart."""

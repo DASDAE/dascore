@@ -429,6 +429,10 @@ def ricker_moveout(
     Notes
     -----
     Based on https://github.com/lijunzh/ricker/.
+
+    See Also
+    --------
+    `plane_wave`: one frequency at one apparent velocity, with no onset.
     """
 
     def _ricker(time, delay):
@@ -458,6 +462,60 @@ def ricker_moveout(
     coords = {"time": to_timedelta64(time), "distance": distance}
     dims = ("time", "distance")
     return dc.Patch(data=data, coords=coords, dims=dims)
+
+
+@register_func(EXAMPLE_PATCHES, key="plane_wave")
+def plane_wave(
+    frequency=20.0,
+    velocity=500.0,
+    duration=2.048,
+    time_step=0.002,
+    distance_step=4.0,
+    channel_count=128,
+    time_min="2020-01-01",
+):
+    """
+    A plane wave: one frequency crossing the array at one apparent velocity.
+
+    Every window of it has the same frequency-wavenumber content, a single
+    peak at ``(frequency, -frequency / velocity)``, which makes it a clean
+    input for spectral transforms and moveout filters.
+
+    Parameters
+    ----------
+    frequency
+        The wave's frequency in Hz.
+    velocity
+        The apparent velocity along the fibre in m/s; negative moves the
+        wave the other way.
+    duration
+        The duration of the time coordinate in seconds.
+    time_step
+        The time step in seconds.
+    distance_step
+        The distance step in metres.
+    channel_count
+        The number of distance channels.
+    time_min
+        The start time in the metadata.
+
+    See Also
+    --------
+    `ricker_moveout`: a wavelet with an onset crossing the array at one
+    apparent velocity, for time-domain moveout.
+    """
+    distance = np.arange(channel_count) * distance_step
+    time = np.arange(round(duration / time_step)) * time_step
+    phase = 2 * np.pi * frequency * (time[None, :] - distance[:, None] / velocity)
+    patch = dc.Patch(
+        data=np.cos(phase).astype(np.float32),
+        coords={
+            "distance": distance,
+            "time": to_timedelta64(time) + np.datetime64(time_min),
+        },
+        dims=("distance", "time"),
+    )
+    return patch.set_units(distance="m", time="s")
 
 
 @register_func(EXAMPLE_PATCHES, key="delta_patch")

@@ -16,6 +16,7 @@ import dascore as dc
 from dascore.examples import inventory_patch_pair
 from dascore.exceptions import ParameterError
 from dascore.units import get_quantity_str, percent
+from dascore.utils.misc import suppress_warnings
 from dascore.utils.time import is_datetime64, to_timedelta64
 from dascore.viz._labels import BAR_GID, MAX_LABELS, MAX_RUNS, SEAM_GID
 from dascore.viz._lanes import string_colors
@@ -221,6 +222,37 @@ class TestWaterfall:
         assert random_patch.dims[1] in ax.get_xlabel().lower()
         assert isinstance(ax, plt.Axes)
 
+    @pytest.mark.parametrize("dim", ("distance", "time"))
+    @pytest.mark.parametrize("add_dimension", (False, True))
+    def test_empty_dimension_raises_immediately(
+        self, random_patch, shown, dim, add_dimension
+    ):
+        """An empty patch is rejected before any other processing. See #1089."""
+        patch = random_patch.select(**{dim: (0, 0)}, samples=True)
+        if add_dimension:
+            patch = patch.append_dims("extra")
+        assert 0 in patch.shape
+        figure_numbers = plt.get_fignums()
+
+        with pytest.raises(ParameterError, match="empty dimension"):
+            patch.viz.waterfall(
+                gap_factor=0,
+                scale_type="invalid",
+                label_coord="invalid",
+                cmap="invalid",
+                show=True,
+            )
+
+        assert plt.get_fignums() == figure_numbers
+        assert not shown
+
+    def test_y_axis_inverted_only_when_time_like(self, random_patch):
+        """Time on the y axis increases downward; other dimensions do not."""
+        ax = random_patch.viz.waterfall()  # distance on the y axis
+        assert not ax.yaxis_inverted()
+        ax = random_patch.transpose("time", "distance").viz.waterfall()
+        assert ax.yaxis_inverted()
+
     def test_colorbar_scale(self, random_patch):
         """Tests for the scaling parameter."""
         ax_scalar = random_patch.viz.waterfall(scale=0.2)
@@ -346,6 +378,11 @@ class TestWaterfall:
         with pytest.raises(ParameterError, match=msg):
             random_patch.viz.waterfall(scale=(0.1, 0.2, 0.9), scale_type="relative")
 
+    def test_long_absolute_scale_raises(self, random_patch):
+        """Three absolute values are limits for nothing, so say so."""
+        with pytest.raises(ParameterError, match="scale must be"):
+            random_patch.viz.waterfall(scale=(0.1, 0.2, 0.9), scale_type="absolute")
+
     def test_invalid_scale_type_raises(self, random_patch):
         """Ensure invalid scale_type values raise ParameterError."""
         msg = "scale_type must be one of"
@@ -375,6 +412,14 @@ class TestWaterfall:
         ax = patch.viz.waterfall()
         assert isinstance(ax, plt.Axes)
 
+    def test_all_nan_patch(self, random_patch):
+        """All-NaN data should plot without leaking scaling warnings."""
+        data = np.full(random_patch.shape, np.nan)
+        patch = random_patch.update(data=data)
+        with suppress_warnings(category=RuntimeWarning, action="error"):
+            ax = patch.viz.waterfall()
+        assert isinstance(ax, plt.Axes)
+
     def test_constant_data_with_relative_scale(self, random_patch):
         """Ensure constant data works with non-zero relative scale."""
         data = np.ones(random_patch.shape) * 42.0
@@ -385,6 +430,11 @@ class TestWaterfall:
         # Verify colorbar limits are not identical
         clim = ax.images[0].get_clim()
         assert clim[0] != clim[1], "Colorbar limits should not be identical"
+
+    def test_negative_relative_scale_raises(self, random_patch):
+        """A negative relative scale would put the limits in the wrong order."""
+        with pytest.raises(ParameterError, match="greater than 0"):
+            random_patch.viz.waterfall(scale=-0.5, scale_type="relative")
 
     def test_scale_zero_raises(self, random_patch):
         """Ensure scale=0 with relative scaling raises ParameterError."""

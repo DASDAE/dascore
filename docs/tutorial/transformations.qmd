@@ -4,84 +4,58 @@ execute:
   warning: false
 ---
 
-In DASCore, transformations are operations which change the domain of a patch, and usually its units and dimension names along with it. Transforms can be found in the [transform module](`dascore.transform`) or accessed as `Patch` methods.
+Transforms change a patch's domain and usually its dimension names and units. They are available as Patch methods and in [`dascore.transform`](`dascore.transform`).
 
-# Discrete Fourier Transforms
+# Fourier transform
 
-The [Discrete Fourier Transform](https://en.wikipedia.org/wiki/Discrete_Fourier_transform) (dft) is commonly used in many signal processing workflows. DASCore implements this as the [dft](`dascore.transform.fourier.dft`) patch method.
+[`Patch.dft`](`dascore.transform.fourier.dft`) changes a dimension such as `time` to its Fourier-domain counterpart, `ft_time`. `real=True` keeps only the nonnegative frequencies of real input.
 
 ```{python}
 import numpy as np
+
 import dascore as dc
 
-# Get example patch, set unit to velocity (for demonstration)
 patch = dc.get_example_patch().set_units("m/s")
+transformed = patch.dft(dim="time", real=True)
 
-transformed = patch.dft(dim="time")
-
-# Note how the dimension name has changed
-print(f"old_dims: {patch.dims} new dims: {transformed.dims}")
-
-# As have the units
-old_units = patch.attrs.data_units
-new_units = transformed.attrs.data_units
-print(f"old units: {old_units}, new units: {new_units}")
+print(transformed.dims)
+print(transformed.attrs.data_units)
 ```
 
-:::{.callout-note}
-The transformed dimension names change; "time" becomes "ft_time" indicating the domain of the dimension has changed. The units are also updated. See the [note on Fourier transforms in DASCore](../notes/dft_notes.qmd) for more details.
-:::
-
-In many cases, it is advantageous to only calculate the fourier transform corresponding to the positive frequencies (since the Fourier transform of a real signal is symmetric).
+The transformed coordinate uses inverse units and the data units change according to the transform normalization. Transform several dimensions by naming each one.
 
 ```{python}
-# Transform distance axis to Fourier domain using real fourier transform
-real_transform = patch.dft(dim='distance', real=True)
-print(real_transform.get_coord("ft_distance"))
+spatial_spectrum = patch.dft(dim="distance", real=True)
+print(spatial_spectrum.get_coord("ft_distance"))
 ```
 
-The Inverse Discrete Fourier Transform [idft](`dascore.transform.fourier.idft`) undoes the transformation.
+[`Patch.idft`](`dascore.transform.fourier.idft`) performs the inverse transform:
 
 ```{python}
-import numpy as np
-
-# A round trip recovers the original patch.
 round_trip = patch.dft(dim="time").idft()
-
-print(f"dims after round trip: {round_trip.dims}")
 assert np.allclose(round_trip.data.real, patch.data)
 ```
 
-# Short Time Fourier Transform
+Real transforms remember the information needed for their inverse. Numerical round trips may contain tiny floating-point differences, so compare them with a tolerance rather than exact equality.
 
-Related to the Discrete Fourier Transform, the [Short Term Fourier Transform](https://en.wikipedia.org/wiki/Short-time_Fourier_transform) is useful for analyzing the time-dependent frequency content. DASCore implements this as [stft](`dascore.transform.fourier.stft`) and the corresponding [istft](`dascore.transform.fourier.istft`).
+See [Fourier transforms in DASCore](../notes/dft_notes.qmd) for naming, units, and normalization.
 
-```{python}
-import numpy as np
-import dascore as dc
-from dascore.units import second, percent
+# Short-time Fourier transform
 
-# Get example patch, set unit to velocity (for demonstration)
-patch = (
-    dc.get_example_patch("chirp", channel_count=3)
-    .set_units("m/s")
-)
-
-patch.viz.waterfall();
-```
+[`Patch.stft`](`dascore.transform.fourier.stft`) shows frequency content through time; [`Patch.istft`](`dascore.transform.fourier.istft`) inverts it.
 
 ```{python}
-# Perform the transform, visualize the amplitude spectra, for the first
-# channel then invert.
-transformed = (
-    patch.stft(time=1*second, overlap=50*percent)
-)
-inverse =  transformed.istft()
+from dascore.units import percent, second
 
-transformed.abs().select(distance=0, samples=True).squeeze().viz.waterfall();
+chirp = dc.get_example_patch("chirp", channel_count=3).set_units("m/s")
+spectrogram = chirp.stft(time=1 * second, overlap=50 * percent)
+inverse = spectrogram.istft()
+
+spectrogram.abs().select(distance=0, samples=True).squeeze().viz.waterfall();
 ```
 
-:::{.callout-note}
-`stft` drops non-dimensional coordinates associated with the transformed
-dimension, matching `dft` behavior.
-:::
+The window length uses the selected coordinate's units. `overlap` may be expressed as a percentage, coordinate quantity, or supported numeric form. The inverse uses the transform metadata to reconstruct the original dimension.
+
+Inspect the transformed coordinate to obtain frequency bins; select or filter in the transformed domain exactly as with other patch dimensions.
+
+Like `dft`, `stft` drops non-dimensional coordinates associated with the transformed dimension.

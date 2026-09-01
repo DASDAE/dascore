@@ -958,7 +958,7 @@ class DistanceMap(InventoryModel):
         Parameters
         ----------
         values
-            Channel numbers or instrument distances.
+            Channel numbers, or instrument distances in meters.
         axis
             The input axis ``values`` are on; the map's first axis by
             default.
@@ -1096,7 +1096,9 @@ class Acquisition(TimeRangedModel):
         Parameters
         ----------
         values
-            The interrogator-reported coordinate to place on the path.
+            The interrogator-reported coordinate to place on the path,
+            in the units of ``axis``: bare channel numbers on the channel
+            axis, and meters on the instrument_distance axis.
         axis
             Which of the map's input axes ``values`` are on; the map's
             first axis by default.

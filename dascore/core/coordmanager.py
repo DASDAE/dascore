@@ -855,13 +855,6 @@ class CoordManager(RichRepr, DascoreBaseModel):
             name: (self.dim_map[name], coord) for name, coord in self.coord_map.items()
         }
 
-    def _get_dim_array_dict(self) -> dict[str, tuple[tuple[str, ...], ArrayLike]]:
-        """Get the coord map in the form {coord_name: ((dims,), array)}."""
-        return {
-            name: (dims, coord.data)
-            for name, (dims, coord) in self._get_dim_coord_dict().items()
-        }
-
     def _replace_coords(self, new_coords: dict) -> Self:
         """
         Return a manager with these coords replaced, or self if none are.

@@ -1,0 +1,57 @@
+---
+title: Adaptive Spectral (AFK) Filtering
+execute:
+    warning: False
+---
+
+[`Patch.adaptive_spectral_filter`](`dascore.Patch.adaptive_spectral_filter`) is the adaptive frequency-wavenumber (AFK) filter of @isken2022denoising, as in Pyrocko's [Lightguide](https://github.com/pyrocko/lightguide). Each window of the data is Fourier transformed, every coefficient is scaled by its own magnitude to the power `exponent`, and the windows are blended back. A coherent arrival concentrates in a few large coefficients, which the weighting favours over noise spread across the spectrum.
+
+```{python}
+import numpy as np
+import matplotlib.pyplot as plt
+
+import dascore as dc
+
+patch = dc.get_example_patch("example_event_2").pass_filter(time=(1, 300))
+filtered = patch.adaptive_spectral_filter(time=16, distance=16, samples=True)
+
+
+def show(axes, patches, titles):
+    """Each patch on its own colour scale: the filter does not keep amplitude."""
+    for ax, patch, title in zip(axes, patches, titles):
+        scale = np.percentile(np.abs(patch.data), 99)
+        patch.viz.waterfall(ax=ax, scale=scale, scale_type="absolute", cmap="bwr")
+        ax.set_title(title)
+    axes[0].figure.tight_layout()
+
+
+fig, axes = plt.subplots(1, 2, figsize=(12, 5), sharey=True)
+show(axes, [patch, filtered], ["band-passed", "filtered"])
+```
+
+`overlap` defaults to the most the window allows and `exponent` to 0.8, Lightguide's settings. Windows may be given in coordinate units. A single dimension weights each trace on its own.
+
+## Choosing the exponent
+
+0 passes the data unchanged; above 1, weak coherent arrivals go with the noise.
+
+```{python}
+exponents = [0.2, 0.5, 0.8, 1.2]
+fig, axes = plt.subplots(1, 4, figsize=(20, 5), sharey=True)
+show(
+    axes,
+    [
+        patch.adaptive_spectral_filter(
+            time=16, distance=16, samples=True, exponent=exponent
+        )
+        for exponent in exponents
+    ],
+    [f"exponent={exponent}" for exponent in exponents],
+)
+```
+
+## What it does not do
+
+It does not preserve amplitude: compare arrivals within one filtered patch, not across patches.
+
+Nor does it remove coherent noise: per-channel striping, ringing, or a strong surface wave are kept like arrivals, so remove them first, as the band-pass above does.

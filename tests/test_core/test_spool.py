@@ -28,6 +28,7 @@ from dascore.exceptions import (
     MissingOptionalDependencyError,
     MissingPatchError,
     ParameterError,
+    UnknownExampleError,
 )
 from dascore.io.index.planned import PlanResolver
 from dascore.io.segy import SegyV1_0
@@ -952,6 +953,19 @@ class TestGetSpool:
         """A path that doesn't exist should raise."""
         with pytest.raises(Exception, match="get spool from"):
             dc.spool("here_or_there?")
+
+    def test_spool_from_example_uri(self, terra15_das_example_path):
+        """An examples:// name should behave like the path it names."""
+        out = dc.spool("examples://terra15_das_1_trimmed.hdf5")
+        expected = dc.spool(terra15_das_example_path)
+        assert isinstance(out, BaseSpool)
+        assert len(out) == len(expected)
+        assert out[0].equals(expected[0])
+
+    def test_generated_example_uri_raises(self):
+        """A generated example has no file, so the error says where to look."""
+        with pytest.raises(UnknownExampleError, match="get_example_spool"):
+            dc.spool("examples://random_das")
 
     def test_non_supported_type_raises(self):
         """A type that can't contain patches should raise."""
@@ -2232,7 +2246,7 @@ class TestSpoolRepr:
         ]
         rendered = str(dc.spool(patches))
         assert "➤ Tracks (2 along distance)" in rendered
-        assert "<5>" in rendered
+        assert "<5.000>" in rendered
         assert " s>" not in rendered
 
     def test_a_track_states_the_unit_its_dimension_agrees_on(self):
@@ -2247,7 +2261,18 @@ class TestSpoolRepr:
             ).convert_units(distance="m")
             for tag in ("a", "b")
         ]
-        assert "<5 m>" in str(dc.spool(patches))
+        assert "<5.000 m>" in str(dc.spool(patches))
+
+    def test_a_dimension_states_how_wide_it_is(self):
+        """
+        A dimension line states its width the way its coordinates do.
+
+        Two ends do not carry it, and the same width read off the
+        tracks under the line is said the same way there.
+        """
+        rendered = str(dc.get_example_spool())
+        assert "distance: 0.000 to 299.000 m  <299.000 m>" in rendered
+        assert "<24 s>" in rendered
 
     def test_a_dimension_of_labels_has_ends_and_no_width(self):
         """A string dimension cannot be subtracted, and must not be."""

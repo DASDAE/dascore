@@ -16,12 +16,8 @@ segy v2.1 spec: seg_y_rev2_1-oct2023-1701361639333.pdf
 Examples
 --------
 import dascore as dc
-from dascore.utils.downloader import fetch
 
-# get the path to a segy file.
-path = fetch("conoco_segy_1.sgy")
-
-segy_patch = dc.spool(path)[0]
+segy_patch = dc.spool("examples://conoco_segy_1.sgy")[0]
 """
 
 from .core import SegyV1_0, SegyV2_0, SegyV2_1

@@ -20,7 +20,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 from matplotlib.collections import PatchCollection
-from matplotlib.colors import BoundaryNorm, ListedColormap, to_rgba_array
+from matplotlib.colors import BoundaryNorm, ListedColormap, to_rgba, to_rgba_array
 from matplotlib.font_manager import FontProperties
 from matplotlib.layout_engine import ConstrainedLayoutEngine
 from matplotlib.patches import Patch as PatchArtist
@@ -481,6 +481,36 @@ def _text_points(text: str, size: float) -> tuple[float, float]:
     return width, height
 
 
+def _over(top, bottom) -> tuple[float, float, float]:
+    """The color `top` shows as when drawn over the opaque `bottom`."""
+    red, green, blue, alpha = to_rgba(top)
+    pairs = zip((red, green, blue), bottom, strict=True)
+    return tuple(alpha * x + (1 - alpha) * y for x, y in pairs)
+
+
+def _label_colors(fill, background) -> tuple[str, str]:
+    """The ink and halo a label takes on a box of this fill.
+
+    Black text on a dark box is unreadable whatever halo it carries, so
+    the ink follows the box: whichever of black and white holds more
+    contrast against it, with the halo in the other tone so the letters
+    keep an edge on their neighbours. The fill is judged as it renders,
+    since "none" and any partly transparent color show the background
+    rather than themselves.
+    """
+    channels = np.asarray(_over(fill, background))
+    # Contrast as sRGB defines it, over channels the display linearizes.
+    # An average of the coded channels instead calls a saturated green
+    # dark and gives it white text, which reads worse on it than black.
+    linear = np.where(
+        channels <= 0.04045, channels / 12.92, ((channels + 0.055) / 1.055) ** 2.4
+    )
+    light = float(np.array([0.2126, 0.7152, 0.0722]) @ linear)
+    white_ink = (1.0 + 0.05) / (light + 0.05)
+    black_ink = (light + 0.05) / (0.0 + 0.05)
+    return ("white", "black") if white_ink > black_ink else ("black", "white")
+
+
 def _fit_labels(ax, placements, max_labels):
     """Draw each label the way it fits its box, and drop what cannot.
 
@@ -500,12 +530,18 @@ def _fit_labels(ax, placements, max_labels):
     scale = _MEASURED_DPI / figure.dpi
 
     size = plt.rcParams["font.size"] * 0.8
-    for text, x_mid, y_mid, width, height in placements:
+    # What a fill with any transparency lets through: the axes, and the
+    # figure behind an axes which is itself transparent. White under
+    # both, since a figure saved to show through would read as black.
+    over_figure = _over(figure.get_facecolor(), (1.0, 1.0, 1.0))
+    background = _over(ax.get_facecolor(), over_figure)
+    for text, x_mid, y_mid, width, height, fill in placements:
         if not text:
             continue
         box = _box_points(transform, scale, x_mid, y_mid, width, height)
         room = (box[0] - _LABEL_PAD, box[1] - _LABEL_PAD)
         taken = _text_points(text, size)
+        ink, halo = _label_colors(fill, background)
         for rotation in (0, 90):
             # Turning the text swaps which way it has to fit.
             if rotation:
@@ -520,10 +556,10 @@ def _fit_labels(ax, placements, max_labels):
                 va="center",
                 rotation=rotation,
                 fontsize=size,
+                color=ink,
                 zorder=4,
                 clip_on=True,
-                # A dark fill would otherwise swallow the text sitting on it.
-                path_effects=[pe.withStroke(linewidth=1.3, foreground="white")],
+                path_effects=[pe.withStroke(linewidth=1.5, foreground=halo)],
             )
             break
 
@@ -666,7 +702,9 @@ def plot_lanes(
         default: text as itself, a number as its digits, and a row which
         states no value nothing, since its lane already names it. Text
         too wide for its box is turned on its side, and dropped only
-        when it does not fit that way either.
+        when it does not fit that way either. Each label is inked in
+        whichever of black and white reads better on its own box, so a
+        dark fill carries white text and a light one black.
     lanes
         The lanes to draw, in order. Names with no rows are kept as empty
         lanes, so two figures of different subjects still line up.
@@ -803,6 +841,7 @@ def plot_lanes(
                     low + height / 2,
                     width,
                     height,
+                    row_color,
                 )
             )
         if boxes:

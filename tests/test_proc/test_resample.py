@@ -13,6 +13,7 @@ from dascore.compat import random_state
 from dascore.exceptions import FilterValueError, ParameterError
 from dascore.units import Hz, m, s
 from dascore.utils.patch import get_start_stop_step
+from dascore.warnings import DASCoreWarning
 
 resample_mod = importlib.import_module("dascore.proc.resample")
 
@@ -211,6 +212,36 @@ class TestDecimate:
 
 class TestResample:
     """Tests for resampling along a given dimension."""
+
+    @pytest.mark.parametrize("samples", (False, True))
+    def test_associated_coords_dropped_with_warning(
+        self, random_patch_many_coords, samples
+    ):
+        """Coords on the resampled dimension are deliberately dropped. See #1090."""
+        patch = random_patch_many_coords
+        distance = patch.get_coord("distance")
+        value = len(distance) * 2 if samples else distance.step * 1.232132323222
+
+        with pytest.warns(DASCoreWarning, match="lat, quality") as warning_records:
+            out = patch.resample(distance=value, samples=samples)
+
+        assert warning_records[0].filename == __file__
+        assert {"lat", "quality"}.isdisjoint(out.coords.coord_map)
+        assert np.allclose(out.get_array("time2"), patch.get_array("time2"))
+
+    def test_same_length_resample_drops_associated_coords(self):
+        """Associated coordinates are dropped even when their shape still fits."""
+        distance = np.arange(8.0)
+        patch = dc.Patch(
+            data=distance,
+            coords={"distance": distance, "aux": ("distance", distance)},
+            dims=("distance",),
+        )
+
+        with pytest.warns(DASCoreWarning, match="aux"):
+            out = patch.resample(distance=len(distance), samples=True)
+
+        assert "aux" not in out.coords.coord_map
 
     def test_missing_period_raises(self, random_patch):
         """A null sampling period is rejected rather than producing NaN."""

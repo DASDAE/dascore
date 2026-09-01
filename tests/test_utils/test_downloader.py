@@ -9,6 +9,7 @@ import pandas as pd
 import pytest
 
 from dascore.config import config_context
+from dascore.exceptions import UnknownExampleError
 from dascore.utils.downloader import (
     REGISTRY_PATH,
     _fetch_cached,
@@ -16,6 +17,7 @@ from dascore.utils.downloader import (
     fetcher,
     get_fetcher,
     get_registry_df,
+    resolve_example_uri,
 )
 
 
@@ -109,3 +111,39 @@ class TestFetch:
         out = _fetch_cached(name="example.dat", cache_dir=str(tmp_path))
 
         assert out == tmp_path / "example.dat"
+
+
+class TestResolveExampleUri:
+    """The examples:// scheme names a file in the data registry."""
+
+    def test_registry_name(self):
+        """A registry name resolves to the downloaded file."""
+        name = "terra15_das_1_trimmed.hdf5"
+        path = resolve_example_uri(f"examples://{name}")
+        assert path.exists()
+        assert path.name == name
+        assert path.parent == get_fetcher().path
+
+    def test_working_directory_file_does_not_shadow(self, tmp_path, monkeypatch):
+        """A same-named local file must not stand in for the registry entry."""
+        name = "terra15_das_1_trimmed.hdf5"
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / name).write_bytes(b"not the registered file")
+        path = resolve_example_uri(f"examples://{name}")
+        assert path.parent == get_fetcher().path
+        assert path.read_bytes()[:4] != b"not "
+
+    def test_non_uri_passes_through(self, tmp_path):
+        """Anything which is not an example uri is returned unchanged."""
+        for resource in (tmp_path, str(tmp_path), 42):
+            assert resolve_example_uri(resource) is resource
+
+    def test_unknown_name_raises(self):
+        """An unregistered name names the registry in the error."""
+        with pytest.raises(UnknownExampleError, match="registry"):
+            resolve_example_uri("examples://not_a_real_file.h5")
+
+    def test_generated_example_points_to_example_functions(self):
+        """A generated example has no file, so the error says where to look."""
+        with pytest.raises(UnknownExampleError, match="get_example_spool"):
+            resolve_example_uri("examples://random_das")

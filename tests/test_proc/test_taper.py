@@ -11,7 +11,7 @@ from dascore.exceptions import ParameterError
 from dascore.proc.taper import taper
 from dascore.units import m, percent
 from dascore.utils.misc import broadcast_for_index
-from dascore.utils.signal import WINDOW_FUNCTIONS
+from dascore.utils.signal import WINDOW_NAMES, get_window
 
 gen = np.random.default_rng(32)
 
@@ -38,18 +38,18 @@ def time_tapered_patch(request, patch_ones):
 
 
 def test_every_window_tapers():
-    """Each name in the table reaches the window scipy has for it.
-
-    The entries are lazy imports, and two of them are aliases (`cos` for
-    hann, `ramp` for triang), so a name pointing at the wrong scipy symbol
-    resolves fine and returns an array of the right length. Asserting the
-    shape of the window is what catches that: every one of them tapers to
-    near zero at both ends, hamming's 0.08 being the highest, and boxcar
-    is the one which does not taper at all.
     """
-    assert set(TAPER_WINDOWS) <= set(WINDOW_FUNCTIONS)
-    for name, func in WINDOW_FUNCTIONS.items():
-        window = np.asarray(func(64))
+    Each documented name builds the window scipy has for it.
+
+    Two of them are aliases (`cos` for hann, `ramp` for triang), so a name
+    pointing at the wrong scipy symbol would still return an array of the
+    right length. Asserting the shape of the window is what catches that:
+    every one of them tapers to near zero at both ends, hamming's 0.08 being
+    the highest, and boxcar is the one which does not taper at all.
+    """
+    assert set(TAPER_WINDOWS) <= set(WINDOW_NAMES)
+    for name in WINDOW_NAMES:
+        window = np.asarray(get_window(name, 64))
         assert window.shape == (64,), name
         assert np.max(window) <= 1.0 + 1e-9, name
         if name == "boxcar":

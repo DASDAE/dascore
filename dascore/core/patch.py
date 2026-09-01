@@ -463,6 +463,9 @@ class Patch(NodeRepr, NamespaceOwner):
     gaussian_filter = dascore.proc.gaussian_filter
     slope_filter = dascore.proc.slope_filter
     wiener_filter = dascore.proc.wiener_filter
+    adaptive_spectral_filter = dascore.proc.adaptive_spectral_filter
+    tile_apply = dascore.proc.tile_apply
+    reassemble = dascore.proc.reassemble
     abs = dascore.proc.abs
     conj = dascore.proc.conj
     real = dascore.proc.real
@@ -477,6 +480,7 @@ class Patch(NodeRepr, NamespaceOwner):
 
     interpolate = dascore.proc.interpolate
     normalize = dascore.proc.normalize
+    pow_coord = dascore.proc.pow_coord
     standardize = dascore.proc.standardize
     taper = dascore.proc.taper
     taper_range = dascore.proc.taper_range

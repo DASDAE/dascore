@@ -80,6 +80,7 @@ extras = [
     "findiff",
     "obspy",
     "numba",
+    "rocket-fft",
     "segyio",
     "bottleneck",
     "pymseed[numpy]",

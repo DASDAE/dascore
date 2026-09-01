@@ -17,7 +17,8 @@ import pandas as pd
 import dascore as dc
 from dascore.compat import UPath
 from dascore.constants import PatchType, SpoolType
-from dascore.exceptions import PatchConversionError
+from dascore.exceptions import ParameterError, PatchConversionError
+from dascore.utils.downloader import resolve_example_uri
 from dascore.utils.misc import (
     _maybe_make_parent_directory,
     iterate,
@@ -26,6 +27,7 @@ from dascore.utils.misc import (
 from dascore.utils.paths import (
     coerce_to_local_path,
     coerce_to_upath,
+    is_example_uri,
     is_local_path,
     is_pathlike,
 )
@@ -51,6 +53,12 @@ def ensure_local_file(resource) -> Path:
 
 def _normalize_resource_identity(resource):
     """Normalize one pathlike input to a local Path or remote UPath."""
+    # An examples:// name has no filesystem behind it, so it becomes a real
+    # path before anything asks what protocol it speaks. It happens here,
+    # when a handle is actually wanted, rather than when a manager is built:
+    # constructing one must not reach the network, and the manager's source
+    # must keep naming the uri so a write of it can still be refused.
+    resource = resolve_example_uri(resource)
     if is_local_path(resource):
         return coerce_to_local_path(resource)
     return coerce_to_upath(resource)
@@ -225,6 +233,34 @@ def release_handle(handle, abort: bool = False):
         getattr(handle, "close", lambda: None)()
 
 
+# Handle classes name the mode they open in. Everything else truncates or
+# appends, so an example file must not be opened through one.
+_READ_MODES = frozenset({"r", "rb"})
+
+
+def _refuse_example_write(source, required_type) -> None:
+    """Refuse a handle which would write over a downloaded example file."""
+    if not is_example_uri(source):
+        return
+    # A type with no get_handle opens nothing: the resolved path is handed
+    # through as it is. LocalPath has one, but it returns a filename rather
+    # than an open file, so neither can truncate anything by itself.
+    if not hasattr(required_type, "get_handle"):
+        return
+    if isinstance(required_type, type) and issubclass(required_type, LocalPath):
+        return
+    # Any other handle must say it opens to read. A missing mode is refused
+    # rather than assumed harmless: every reader here declares one, so
+    # silence is more likely an unknown writer than a safe default.
+    if getattr(required_type, "mode", None) in _READ_MODES:
+        return
+    msg = (
+        f"Cannot open {source} for writing; examples:// names are read-only. "
+        f"Give a path to write to instead."
+    )
+    raise ParameterError(msg)
+
+
 class IOResourceManager:
     """
     A class for managing opening/closing files.
@@ -263,6 +299,7 @@ class IOResourceManager:
         if isinstance(self._source, self.__class__):
             return self._source.get_resource(required_type)
         required_type = _get_required_type(required_type)
+        _refuse_example_write(self._source, required_type)
         with self._lock:
             if required_type not in self._cache:
                 source = _resolve_resource(self._source, required_type)

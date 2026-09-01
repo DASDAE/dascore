@@ -85,7 +85,11 @@ class TestTimeCommand:
         assert timing["page_count"] == 3
         # The last page has no next page to bound it; it lands in finalize.
         assert set(timing["pages"]) == {"a.qmd", "b.qmd"}
-        assert timing["page_phase"] == pytest.approx(0.1, abs=0.1)
+        # Bounded, not pinned: a loaded runner takes as long as it takes.
+        # The two sleeps between the three progress lines are the floor, and
+        # the sleep after the last one has to land outside the page phase.
+        assert timing["page_phase"] >= 0.1
+        assert timing["page_phase"] < timing["wall"]
         assert timing["startup"] + timing["page_phase"] + timing["finalize"] == (
             pytest.approx(timing["wall"], abs=0.01)
         )
@@ -407,3 +411,28 @@ class TestProgressLine:
     def test_not_a_progress_line(self):
         """Other output quarto writes is not mistaken for a page."""
         assert _doc_report._PROGRESS.match("Output created: _site/index.html") is None
+
+
+class TestQuartoTiming:
+    """Tests for finding whichever quarto phase a build timed."""
+
+    def test_render(self, report_path):
+        """The workflows which render name it quarto_render."""
+        _doc_report.update_report("timings", {"quarto_render": {"pages": {"a": 1.0}}})
+
+        assert _doc_report._quarto_timing(_doc_report.load_report())["pages"]
+
+    def test_publish(self, report_path):
+        """The netlify workflow renders inside the publish and names it so."""
+        _doc_report.update_report("timings", {"quarto_publish": {"pages": {"a": 1.0}}})
+        _doc_report.update_report("index", {"qmd": {"executable_pages": {}}})
+
+        summary = _doc_report.build_summary(_doc_report.load_report())
+
+        assert "| Page kind | Pages | Mean | Total |" in summary
+
+    def test_neither(self, report_path):
+        """A build which rendered nothing has no page table to write."""
+        _doc_report.update_report("timings", {"build_api_docs": {"wall": 1.0}})
+
+        assert _doc_report._quarto_timing(_doc_report.load_report()) == {}

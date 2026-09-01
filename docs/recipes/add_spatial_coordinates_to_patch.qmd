@@ -16,10 +16,10 @@ Here, we:
 import pandas as pd
 
 import dascore as dc
-from dascore.utils.downloader import fetch
 
-# Get path for example coordinates.
-path = fetch("brady_hs_DAS_DTS_coords.csv")
+# Get path for example coordinates. Pandas needs a path, so the example
+# file is fetched rather than named with an examples:// uri.
+path = dc.examples.fetch("brady_hs_DAS_DTS_coords.csv")
 
 # Read coordinates data from csv file.
 coord_table = pd.read_csv(path).rename(columns={"Channel": "distance"})

@@ -6,9 +6,7 @@ Examples
 Read a registered test file:
 
 >>> import dascore as dc
->>> from dascore.utils.downloader import fetch
->>> path = fetch("uptech_as1000_1.hdf5")
->>> spool = dc.read(path)
+>>> spool = dc.read("examples://uptech_as1000_1.hdf5")
 
 The reader expects ``Acquisition/StrainRate`` and ``Acquisition/Time``
 datasets. Format metadata is read from attributes on the strain-rate dataset;

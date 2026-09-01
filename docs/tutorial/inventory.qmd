@@ -4,380 +4,236 @@ execute:
   warning: false
 ---
 
-A DASDAE **inventory** describes the observing system a fiber archive was recorded through: the cables and fibers the light travelled down, the interrogators that lit them, where the fiber physically goes, and how all of it was configured over time. It plays the role StationXML plays in seismology, extended to the things a fiber deployment has and a seismic station does not — an optical path with components along it, and channels whose meaning is a position on that path.
+A DASDAE **inventory** describes the observing system behind a fiber archive: the optical path, interrogator settings, deployment geometry, coupling, and labels. It plays the role StationXML plays for point sensors while leaving the data files unchanged.
 
-The data files stay as they are. An inventory is written once, beside the archive, and DASCore joins the two on demand: patches carry an `acquisition_key` (`network.fiber_array.location.acquisition`) which, together with the time they cover, resolves to exactly one entry in the inventory.
-
-Nothing here changes patch data. Everything an inventory contributes is metadata — attributes on a patch, coordinates along the fiber, and names you can select and group by.
+Patches join to the inventory through `acquisition_key` (`network.fiber_array.location.acquisition`) and time. The result is metadata: patch attributes, coordinates along the fiber, and names available for selection and grouping.
 
 # The model
 
-An inventory is a tree of DASCore models. Its spine is containment, and each edge below is labelled with the field that holds the thing it points at.
+![Point-sensor and fiber inventory concepts.](../_static/inventory_hierarchy.svg){width="100%" style="background-color: white" fig-alt="Conceptual comparison of observing-system identifiers: point sensors progress from network and station through location to channel, while fiber systems progress from network and fiber array through optical path to acquisition; both share resources and a coordinate reference system."}
 
-```{mermaid}
-flowchart TD
-  Inventory -->|networks| Network
-  Network -->|fiber_arrays| FiberArray
-  Network -->|stations| Station
-  FiberArray -->|acquisitions| Acquisition
-  FiberArray -->|optical_paths| OpticalPath
-  Station -->|channels| Channel
+This is a conceptual comparison with StationXML, not a literal containment diagram. In DASCore, acquisitions and optical paths are sibling collections on a fiber array. There is no `Location` model: a [`Channel`](`dascore.core.inventory.Channel`) carries a `location_code`, and a station holds its channels directly.
+
+An [`Inventory`](`dascore.core.inventory.Inventory`) contains [`Network`](`dascore.core.inventory.Network`) objects. A network may hold conventional stations and [`FiberArray`](`dascore.core.inventory.FiberArray`) objects. Each fiber array holds:
+
+- [`Acquisition`](`dascore.core.inventory.Acquisition`) objects, which describe an interrogator stream and map instrument distance onto an optical path.
+- [`OpticalPath`](`dascore.core.inventory.OpticalPath`) objects, which describe what the light travelled through.
+
+Shared objects such as interrogators, cables, enclosures, and measurements live under `Inventory.resources`. Other objects refer to them by `resource_id`, avoiding duplicate metadata; model constructors also accept the object itself.
+
+![Optical-path track concepts.](../_static/optical_path_concept.svg){width="100%" style="background-color: white" fig-alt="Four tracks share optical distance: contiguous optical components tile the complete fiber, geometry is a partially defined function, labels form independent interval groups, and coupling is stated only where known."}
+
+An optical path has four independent tracks along optical distance:
+
+- `optical_components`: fiber segments, splices, connectors, and terminators. These tile the complete path and define its extent.
+- `geometry`: measured quantities along the fiber, including coordinates named by the inventory's coordinate reference system.
+- `coupling`: how each interval of cable meets its surroundings.
+- `labels`: interval names such as borehole, drift, or zone.
+
+Geometry, coupling, and labels may cover only part of the path. Missing coverage means “not stated,” not that the fiber or channel is absent.
+
+Acquisitions and optical paths may have time-bounded epochs. Resolving a patch therefore uses both its acquisition key and time: hardware or geometry can change without changing the durable fiber-array identity.
+
+# Authoring an inventory
+
+Inventories can be written as one YAML or JSON document, but a directory is easier to maintain: models use YAML or JSON, while long tracks use CSV.
+
+```text
+inventory/
+├── inventory.yaml
+├── resources/
+│   └── interrogator-1.yaml
+├── acquisitions/
+│   └── DAS.R2D1..RAW.yaml
+└── fiber_arrays/
+    └── DAS.R2D1/
+        ├── attrs.yaml
+        └── path/
+            ├── attrs.yaml
+            ├── optical_components.csv
+            ├── geometry.csv
+            ├── coupling.csv
+            └── labels.csv
 ```
 
-An [`Inventory`](`dascore.core.inventory.Inventory`) holds networks; a [`Network`](`dascore.core.inventory.Network`) holds fiber arrays, and stations for the conventional instruments recorded alongside them; a [`FiberArray`](`dascore.core.inventory.FiberArray`) is the durable observing identity, which holds both [`Acquisition`](`dascore.core.inventory.Acquisition`) objects — how an interrogator was set up — and [`OpticalPath`](`dascore.core.inventory.OpticalPath`) objects — what the light actually travelled through.
+Each object file declares its `object_type`. An acquisition filename gives its full identity, and its `distance_map` connects the interrogator's axis to optical distance:
 
-The optical path is the part with no seismological analog. It is described by four independent tracks along optical distance.
-
-```{mermaid}
-flowchart LR
-  OpticalPath -->|optical_components| Components["FiberSegment · Splice · Connector · Terminator"]
-  OpticalPath -->|geometry| Geometry
-  OpticalPath -->|coupling| CouplingCondition
-  OpticalPath -->|labels| OpticalPathLabel
+```yaml
+object_type: Acquisition
+data_category: DAS
+data_type: velocity
+gauge_length: 10.0
+interrogator: interrogator-1
+distance_map:
+  instrument_distance: [0.0, 299.0]
+  distance: [100.0, 399.0]
 ```
 
-The components are the physical pieces the light passes through, and they are what gives the path its extent: each one states the stretch of optical distance it occupies, and they tile — each begins where the last ended — so the path runs from the first to the last. They are read in distance order whatever order the rows are written in, so a component states where it is rather than being counted through to it. The other three describe intervals of that extent — the geometry holds the measured curves along the fiber, of which the columns the coordinate reference system names are position; the coupling says how the fiber is attached to the ground there; and the labels name anything else worth recording per interval. Each of those covers what it covers, and none of them has to cover the whole path.
+Track files are ordinary tables. For example:
 
-Objects reused in several places — interrogators, cables, enclosures, measurements — are written once under the inventory's `resources` and referred to elsewhere by their `resource_id`. Such a field accepts either the object itself or that string, which is what the dashed edges below mean.
-
-```{mermaid}
-flowchart LR
-  Acquisition -.->|interrogator| Interrogator
-  FiberSegment -.->|container| Cable
-  Cable -.->|container| Enclosure
-  OpticalPath -.->|measurements| OpticalMeasurement
+```csv
+object_type,distance_min,distance_max,name
+FiberSegment,0,100,lead-in
+Splice,100,,wellhead splice
+FiberSegment,100,500,trench cable
 ```
 
-These three diagrams are the shape of the model, not the whole of it; each class's own API page lists every field it has.
+A point component leaves `distance_max` blank; a fiber segment states both bounds. Rows are ordered by distance when loaded, regardless of file order.
 
-# Writing an inventory
+The main authoring rules are:
 
-An inventory can be a single YAML file, but the format it is usually authored in is a **directory**, which splits the metadata along its natural grain: small heterogeneous objects as YAML (or JSON) files matching the models, and long row-shaped track data as CSV files a field crew can maintain in a spreadsheet.
+- File and directory names state identity. If the file repeats an identity field, the values must agree.
+- `path` is the reserved optical-path directory. `attrs` and `inventory` are reserved file stems.
+- Files outside reserved object slots are ignored unless they declare a recognized inventory object; files inside reserved slots must follow the conventions. Field notes and photographs may live elsewhere in the inventory tree.
+- CSV columns beginning with `_` are also ignored. Use `description` for notes that should survive serialization.
+- Quantities that interpolate belong in `geometry.csv`; interval values belong in `labels.csv`. Units may appear in geometry headers, for example `chainage (m)`.
+
+A dated entity uses an `@time` suffix, such as `path@2025-01-01/`, to begin a new epoch. The directory loader validates identities, object types, references, track coverage, and epoch ranges when [`dc.inventory`](`dascore.core.inventory_loader.inventory`) reads it.
+
+Position is ordinary geometry whose column names match the coordinate reference system, or the canonical aliases `x`, `y`, and `z`. Positional axes must be stated together and use the CRS units; a geometry segment may omit all of them and record another quantity such as chainage instead.
+
+The [tunnel inventory recipe](../recipes/tunnel_inventory.qmd) builds a complete directory, including resources, geometry, repairs, and multiple optical paths.
+
+# Track semantics
+
+Tracks use three shapes:
+
+| shape | tracks | coverage | overlap | value outside coverage |
+|---|---|---|---|---|
+| tiling | `optical_components` | complete | none | — |
+| function | geometry columns, coupling, labels with values | partial | none | `""` or `NaN` |
+| membership | labels without values | partial | allowed | `False` |
+
+A label with an empty `value` states membership; a label with a value defines an interval coordinate. Literal `true` and `false` values are refused because an empty value already spells membership. One label group must consistently contain text, numbers, or membership. Numeric groups use `NaN` outside coverage and therefore project as floating-point coordinates.
+
+Intervals are half-open, `[start, end)`, so adjacent rows can tile without overlap. Projection still includes the final channel at the end of a covered run.
+
+Geometry columns, label groups, and typed tracks become coordinates. Label group names cannot use structural names, track names, or recognized coordinate labels; see `RESERVED_GROUP_NAMES` in `dascore.core.inventory`. Geometry columns may use coordinate labels—that is how a segment states an axis—but cannot share a name with a label group.
+
+# Inspecting and visualizing
+
+The examples below use an inventory and patch designed to resolve together:
 
 ```{python}
 import tempfile
 from pathlib import Path
 
 import dascore as dc
-
-files = {
-    # The envelope: the document's own facts. Optional.
-    "inventory.yaml": "object_type: Inventory\n",
-    # Shared objects, named by the resource_id others refer to them by.
-    "resources/fi-1.yaml": (
-        "object_type: Interrogator\n"
-        "manufacturer: Fake Interrogators\n"
-        "model: FI-1\n"
-    ),
-    # A file's name states the identity: network.fiber_array.location.code
-    "acquisitions/DAS.R2D1..RAW.yaml": (
-        "object_type: Acquisition\n"
-        "data_category: DAS\n"
-        "data_type: velocity\n"
-        "gauge_length: 10.0\n"
-        "spatial_interval: 1.0\n"
-        "interrogator: fi-1\n"
-        # Where the interrogator's own axis lands on the optical path.
-        "distance_map:\n"
-        "  instrument_distance: [0.0, 299.0]\n"
-        "  distance: [100.0, 399.0]\n"
-    ),
-    # An entity is a file until it needs tracks, and then a directory.
-    "fiber_arrays/DAS.R2D1/attrs.yaml": (
-        "object_type: FiberArray\nname: the north array\n"
-    ),
-    "fiber_arrays/DAS.R2D1/path/attrs.yaml": (
-        "object_type: OpticalPath\nname: main\n"
-    ),
-    # The tracks along the path, as tables.
-    "fiber_arrays/DAS.R2D1/path/optical_components.csv": (
-        "object_type,distance_min,distance_max,name\n"
-        "FiberSegment,0,100,lead-in\n"
-        "Splice,100,,wellhead splice\n"
-        "FiberSegment,100,500,trench cable\n"
-    ),
-    "fiber_arrays/DAS.R2D1/path/coupling.csv": (
-        "distance_min,distance_max,coupling_type,medium\n"
-        "100,400,trench,soil\n"
-    ),
-    # A geometry column is any number measured along the fiber. This one
-    # is the trench's own chainage, and the middle segment is a coil: the
-    # chainage stands still while ten meters of fiber goes by.
-    "fiber_arrays/DAS.R2D1/path/geometry.csv": (
-        "name,distance,chainage (m)\n"
-        "to the coil,100,1200\n"
-        "to the coil,240,1340\n"
-        "slack coil,240,1340\n"
-        "slack coil,250,1340\n"
-        "past the coil,250,1340\n"
-        "past the coil,400,1490\n"
-    ),
-    "fiber_arrays/DAS.R2D1/path/labels.csv": (
-        "distance_min,distance_max,group,value\n"
-        "100,250,zone,north\n"
-        "250,400,zone,south\n"
-        "150,300,noisy,\n"
-    ),
-}
-
-inventory_path = Path(tempfile.mkdtemp()) / "north_array"
-for name, text in files.items():
-    path = inventory_path / name
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(text)
-
-inventory = dc.inventory(inventory_path)
-```
-
-A point component — a splice, a connector, a terminator — occupies no measurable length, so it states one distance and leaves `distance_max` blank; the wellhead splice above is one. A fiber segment states both, since one silently collapsing to a point would lose the fiber it stands for.
-
-A few rules make that directory readable without a schema in front of you:
-
-- **The file declares what it is.** Every object file states its `object_type`, and its container checks that statement rather than supplying it.
-- **The name states the identity.** `acquisitions/DAS.R2D1..RAW.yaml` *is* the acquisition `DAS.R2D1..RAW` — network `DAS`, fiber array `R2D1`, blank location code, code `RAW`. Restating a part of it inside the file is allowed, as long as the two agree; there is never a precedence rule between two spellings of one fact.
-- **`path` is the one reserved *container* name.** A directory called `path` addresses an optical path rather than serializing an attribute named "path". (`attrs` and `inventory` are reserved as file stems — an entity's own object file, and the envelope — and the top-level directory names above are fixed.)
-- **Files that participate in no convention are ignored.** Photos, field notes, and deployment logs can live in the inventory directory undisturbed.
-- **Columns that participate in no convention are ignored too.** A CSV header beginning with an underscore — `_crew`, `_drawing` — is the crew's own record keeping, and nothing reads it. It stays in the file it was written in, so a note which should travel with the inventory goes in a `description` column instead, which every object has.
-
-Two tracks can hold something that varies along the fiber, and which one to use is decided by how a value behaves between the points which state it. **A quantity which interpolates goes in `geometry.csv`**, one column per quantity, read as a curve through its control points; a column may name its units in its header, `chainage (m)`. **A value which holds over a stretch and then stops goes in `labels.csv`**, a set of intervals rather than a curve — a zone name has no meaning between two of them, and neither does a borehole number. Labels are usually words, then, but a number which identifies rather than measures is a label too. A column of text in a geometry table is refused, and says so.
-
-Position is not a separate kind of thing: a column whose name the coordinate reference system declares — or its canonical `x`, `y`, `z` alias — *is* that axis, takes its units from the CRS, and must be stated with all its siblings, since half a position is not a position. A segment which names none of them, like the chainage above, states no position at all and is perfectly valid. The segment `name`s themselves are for humans; what a channel gets is the columns.
-
-# The shape of a track
-
-Every track is a set of intervals of optical distance, and the rules a track is checked against follow from which of three shapes it has:
-
-| shape | tracks | coverage | overlap | an uncovered channel gets |
-|---|---|---|---|---|
-| tiling | `optical_components` | the whole path | none | — |
-| function | geometry columns, `coupling`, label groups with values | partial | none | `""` for text, `NaN` for numbers |
-| membership | label groups without values | partial | free: a channel belongs if any interval includes it | `False` |
-
-A label states membership by leaving its `value` empty, as `noisy` does above, and states a function by giving one. `true` and `false` are refused as values, since membership already has a spelling. A group holds one kind of value throughout — text or numbers — and a group which states membership in one row cannot hold a value in another. Because a numeric group spells absence as `NaN`, it projects onto a patch as floats, so a borehole numbered `3` reads back as `3.0`; a number which must stay exact is text, `BH3`.
-
-A group, a geometry column, and a typed track each become a coordinate under their own name, so one name is one coordinate: a group may not take the name of a structural coordinate (`time`, `distance`, `channel`, `instrument_distance`, `acquisition_key`), of a track (`optical_components`, `geometry`, `coupling`, or `labels` itself), or of any recognised coordinate label, whether or not this inventory's coordinate reference system declares it; the full set is `RESERVED_GROUP_NAMES` in `dascore.core.inventory`. A group and a geometry column cannot share a name either.
-
-Intervals are half-open, `[start, end)`, which is what lets adjacent intervals tile without overlapping. When a track is projected onto channels, the end of each run of coverage belongs to the interval ending there, so the last channel of a run is not left out by an interval which ends exactly on it.
-
-Loading checks the document, so a directory that is not a valid inventory says so at the point it is read:
-
-```{python}
-from dascore.exceptions import InvalidInventoryError
-
-try:
-    dc.inventory(inventory_path / "acquisitions")
-except InvalidInventoryError as error:
-    print(error)
-else:
-    raise AssertionError("a directory of acquisitions is no inventory")
-```
-
-Inventories can also be built in memory from the model classes directly, which is how the tests build theirs. The examples below take one already built that way, along with a patch it describes:
-
-```{python}
 from dascore.examples import inventory_patch_pair
 
-patch, example_inventory = inventory_patch_pair()
+patch, inventory = inventory_patch_pair()
 ```
 
-Where a patch is not needed, [`dc.get_example_inventory`](`dascore.examples.get_example_inventory`) returns a registered inventory on its own, the same way `dc.get_example_patch` returns a patch. `dc.get_example_inventory("tunnel")` is the whole deployment the [tunnel recipe](../recipes/tunnel_inventory.qmd) builds, read from the same files that page shows.
-
-# What an inventory can contribute
-
-[`Inventory.get_names`](`dascore.core.inventory.Inventory.get_names`) lists the names an inventory could put on a patch, split by where each one lands. `attrs` are the observing-system facts, which are one value per patch; `coords` take a value per channel, because they describe somewhere along the fiber.
+[`Inventory.get_names`](`dascore.core.inventory.Inventory.get_names`) separates scalar attributes from per-channel coordinates:
 
 ```{python}
 names = inventory.get_names()
-
-print("attrs:", names.attrs[:4], "...")
-print("coords:", [x for x in names.coords if "." not in x])
-
-# The label groups and the geometry column named in the CSVs.
-assert {"zone", "noisy", "chainage"} <= set(names.coords)
 assert "gauge_length" in names.attrs
+assert {"zone", "noisy", "coupling"} <= set(names.coords)
 ```
 
-`zone` and `noisy` are there because the labels CSV named them, and `chainage` because the geometry CSV did: a group and a column each become a coordinate under their own name. `coupling`, `geometry`, and `optical_components` are there for the same reason — a track contributes its name only where a path actually describes it. `distance` is where each channel sits on the optical path, and `x`/`y`/`z` and `longitude`/`latitude`/`elevation` are the two spellings of the axes the inventory's coordinate reference system declares.
+The result lists what the inventory *can* contribute, not what every channel will receive. A partially covered path may list a coordinate whose value is blank for some channels.
 
-Listing a name is not promising a value for it. This example's geometry states chainage and no position, so the spatial names resolve to nothing until some segment states them.
-
-# Seeing an inventory
-
-An inventory summarizes what it holds. Each object in the tree states one line, so the line you see nested here is the line that network, fiber array or optical path leads with when you show it on its own:
-
-```{python}
-inventory
-```
-
-Only what an object states is shown, so a field left at its default does not take up a line. `Networks` lists at most `display_max_items` children per level (see the [configuration](configuration.qmd) page) and says how many it left out.
-
-An inventory also draws itself through its `viz` namespace, and each of the three plots looks along one coordinate.
-
-[`Inventory.viz.path`](`dascore.viz.inventory.path`) looks along **optical distance**, which is the coordinate the data is in. Every track the path describes becomes a lane, so the channels an acquisition places, the components, the coupling, and each label group line up against the same axis:
+`Inventory.viz.path` aligns acquisitions, components, coupling, labels, and geometry along optical distance:
 
 ```{python}
 inventory.viz.path(show=True);
 ```
 
-A geometry column is a curve rather than a set of intervals, so it is drawn as a panel beneath. Here the chainage stands still through the slack coil while ten meters of fiber goes by:
+Use `tracks=` to select lanes and `columns=` to select geometry columns. [`Inventory.viz.map`](`dascore.viz.inventory.map_path`) plots geometry in space, while [`Inventory.viz.timeline`](`dascore.viz.inventory.timeline`) plots acquisition and path epochs through time.
+
+# Using an inventory with a spool
+
+[`Spool.attach_inventory`](`dascore.core.spool.Spool.attach_inventory`) stores an inventory reference without changing patches or loading data. It is the only way a spool gets an inventory; `enrich` and `conform_to_inventory` always use the attached one.
 
 ```{python}
-inventory.viz.path(columns="chainage", show=True);
-```
-
-`tracks=` picks the lanes, in the order given, when the whole picture is more than the question needs:
-
-```{python}
-inventory.viz.path(tracks=("coupling", "zone"), show=True);
-```
-
-The other two plots need something this small example does not have. [`Inventory.viz.map`](`dascore.viz.inventory.map_path`) looks along **space**, and needs geometry which states the CRS's axes; this path states chainage and no position. [`Inventory.viz.timeline`](`dascore.viz.inventory.timeline`) looks along **time**, and is worth reading where the epochs are real. The [tunnel recipe](../recipes/tunnel_inventory.qmd) has both.
-
-# Attaching an inventory to a spool
-
-[`Spool.attach_inventory`](`dascore.core.spool.Spool.attach_inventory`) carries an inventory on a spool, and touches no data. No patch gains a field, no row moves, `len` does not change. It costs nothing per patch, which is what makes it safe to do early and decide later what to use it for. Attaching a *different* inventory does clear any enrichment set up from the old one, since applying the old instructions to new metadata would rewrite every patch behind your back.
-
-It is also the only way a spool gets an inventory: `enrich` and `conform_to_inventory` read the attached one rather than taking their own, so the spool has one answer to which inventory it means.
-
-```{python}
-spool = dc.spool(patch).attach_inventory(example_inventory)
-
-# Attaching alone adds nothing to the patches.
+spool = dc.spool(patch).attach_inventory(inventory)
 assert "gauge_length" not in dict(spool[0].attrs)
 ```
 
-What attaching *does* change is which names resolve. The coordinates the inventory defines along the fiber become selectable, and [`Spool.expand_by`](`dascore.core.spool.Spool.expand_by`) can expand the spool by the values of one:
+Once attached, inventory coordinates can drive selection and expansion:
 
 ```{python}
-# Keep only the channels the inventory places in the northern zone.
 northern = spool.select(zone="north")
-
-# Or get one patch per zone, each holding that zone's channels.
 zones = spool.expand_by("zone")
-assert len(zones) == 2
 assert set(zones.get_contents()["zone"]) == {"north", "south"}
 ```
 
-Selecting on an inventory coordinate trims channels rather than cutting the patch at the spool level, since the inventory is what says which channel is which. A patch left with no matching channels at all drops out, there being nothing to keep.
+Selection trims channels; a patch with no matching channels drops out.
 
-# Enriching patches
+Attaching a replacement inventory clears enrichment configured from the old one, preventing stale instructions from being applied to new metadata.
 
-[`Spool.enrich`](`dascore.core.spool.Spool.enrich`) is how the inventory's metadata actually reaches the patches. It is set up once and applied as each patch is extracted, so it stays cheap on a large spool.
+## Enriching patches
 
-```{python}
-enriched = spool.enrich()
-
-patch_out = enriched[0]
-assert patch_out.attrs.gauge_length == 10.0
-assert "zone" in patch_out.coords.coord_map
-```
-
-Enrichment never removes a patch. One the inventory does not describe comes out unchanged rather than missing, with a warning, so an inventory that deliberately covers part of an archive needs no pruning first. Deciding membership is a separate step, below.
-
-What it copies follows one rule on each side. Every scalar fact the resolved acquisition states — and its interrogator's, under `interrogator.` — becomes an attr, and every per-channel fact the optical path states becomes a coordinate: the geometry axes, the label groups, and how each channel is coupled. Four names are left out of the blanket form: `data_type` and `data_units`, which describe the data as it now stands rather than the system that recorded it, and `sample_rate` and `spatial_interval`, which the patch's own coordinates already state and which a decimated patch would contradict. Naming one asks for it anyway.
+[`Spool.enrich`](`dascore.core.spool.Spool.enrich`) copies resolved metadata as patches are loaded. Acquisition and interrogator facts become attributes; optical-path facts become per-channel coordinates.
 
 ```{python}
-enriched_patch = spool.enrich()[0]
-
-# A fact about the acquisition, and one about each channel.
-assert enriched_patch.attrs.data_category == "DAS"
-assert set(enriched_patch.get_array("coupling")) == {"trench", ""}
-
-# Which makes the comparison everyone wants a selection.
-trenched = enriched_patch.select(coupling="trench")
+enriched = spool.enrich()[0]
+assert enriched.attrs.gauge_length == 10.0
+assert "zone" in enriched.coords.coord_map
+assert set(enriched.get_array("coupling")) == {"trench", ""}
 ```
 
-Where the patch and the inventory both state an attr and disagree, `conflict` decides. The default `keep_first` keeps what the file said, because it said it first; `keep_last` lets the inventory correct it; `drop` leaves neither; and `raise` treats the disagreement as the misresolution it usually is — a header contradicting the resolved acquisition normally means the `acquisition_key` resolved to the wrong place. Filling an attr the patch leaves unset is not a disagreement, and happens under every policy.
+The acquisition's `distance_map` performs the projection. Compatible distance units are converted; incompatible axes raise. An unresolved patch is returned unchanged with a warning, so enrichment never silently removes data.
+
+By default, scalar acquisition fields and `interrogator.*` fields become attributes, while geometry, coupling, and labels become coordinates. `data_type` and `data_units` are excluded because processing may have changed the data; `sample_rate` and `spatial_interval` are excluded because the patch coordinates already state them. They can still be requested explicitly.
+
+If a patch attribute conflicts with the inventory, `conflict` chooses the result: `keep_first` (default) keeps the patch value, `keep_last` uses the inventory, `drop` removes both, and `raise` reports the contradiction.
 
 ```{python}
 stale = patch.update_attrs(gauge_length=99.0)
-
-assert stale.enrich(example_inventory).attrs.gauge_length == 99.0
-assert stale.enrich(example_inventory, conflict="keep_last").attrs.gauge_length == 10.0
+assert stale.enrich(inventory).attrs.gauge_length == 99.0
+assert stale.enrich(inventory, conflict="keep_last").attrs.gauge_length == 10.0
 ```
 
-A single patch can be enriched directly with [`Patch.enrich`](`dascore.proc.inventory.enrich`), which takes the same arguments apart from `on_unresolved` — one patch either resolves or raises, so there is no policy to state. It takes the inventory as an argument, since only a spool carries one:
+[`Patch.enrich`](`dascore.proc.inventory.enrich`) performs the same operation directly on one patch, but an unresolved patch raises instead of using the spool's `on_unresolved` policy.
+
+## Conforming a spool
+
+[`Spool.conform_to_inventory`](`dascore.core.spool.Spool.conform_to_inventory`) eagerly resolves every row, rejects or drops unresolved patches, and subdivides patches at optical-path changes. Unlike attachment and enrichment, it can change spool length.
 
 ```{python}
-one = patch.enrich(example_inventory)
-assert one.attrs.gauge_length == 10.0
-```
-
-# Conforming a spool
-
-[`Spool.conform_to_inventory`](`dascore.core.spool.Spool.conform_to_inventory`) is the one eager step of the workflow, and the only one that changes what the spool contains. It resolves every row now, refuses patches the inventory does not describe, and *subdivides* a patch whose span crosses a change of optical path — so the spool can grow as well as shrink. Pass `on_unresolved="ignore"` (or `"warn"`) to drop the undescribed patches instead of raising, which is what an inventory deliberately covering part of an archive wants.
-
-```{python}
-# A second patch this inventory says nothing about.
 stranger = dc.get_example_patch("random_das", acquisition_key="XX.NOPE..RAW")
-mixed = dc.spool([patch, stranger]).attach_inventory(example_inventory)
-assert len(mixed) == 2
+mixed = dc.spool([patch, stranger]).attach_inventory(inventory)
 
-# Conforming keeps only what the inventory describes.
 conformed = mixed.conform_to_inventory(on_unresolved="ignore")
 assert len(conformed) == 1
 assert conformed[0].attrs.acquisition_key == "DAS.R2D1..RAW"
 ```
 
-Subdivision is exact: each piece begins at the first sample at or after the change that opens it, so together the pieces hold every sample the patch held and hold none of them twice. `len` and `get_contents` describe the pieces.
+Subdivision preserves every sample exactly once. Use `on_unresolved="warn"` or `"ignore"` when an inventory intentionally covers only part of an archive.
 
-This is why attaching an inventory never implies conforming to one. Attaching is inert; conforming changes `len`, moves rows, raises by default on a patch the inventory does not describe, and raises, whatever the policy, when a patch straddles a change of acquisition. A spool that quietly changed its own length would be a bad thing to get by default.
+Conforming raises when one patch straddles an acquisition change, since a patch cannot carry two acquisition configurations. This is why attachment remains inert: conforming can remove, split, or reject data and must be requested explicitly.
 
-# An inventory a directory carries
+# Inventory files beside data
 
-A directory of data can keep the inventory that describes it, under the name `.inventory`, and a spool opened on that directory starts out attached to it. The metadata is then found where it lies, rather than named again by every script that reads the archive.
+A data directory may carry its inventory as `.inventory/`, `.inventory.yaml`, `.inventory.yml`, or `.inventory.json`. A spool opened on that directory attaches it automatically:
 
 ```{python}
 data_path = Path(tempfile.mkdtemp()) / "archive"
 data_path.mkdir()
 patch.io.write(data_path / "patch.h5", "DASDAE")
-
-# Either form works: the directory .inventory/, or a serialized file
-# naming its format -- .inventory.yaml, .inventory.yml, or .inventory.json.
-example_inventory.io.to_yaml(data_path / ".inventory.yaml")
+inventory.io.to_yaml(data_path / ".inventory.yaml")
 
 carrying = dc.spool(data_path).update()
 assert carrying.enrich()[0].attrs.gauge_length == 10.0
 ```
 
-The name is hidden for the same reason `.dascore_index.sqlite3` is: it is a companion the directory keeps rather than content it holds, so the file scanner skips it. Both forms present at once is two spellings of one fact, and is refused. The visible spelling `inventory.yaml` is deliberately *not* it — in the authoring format that name is the envelope, so a data directory holding one would be claiming to be an inventory directory itself.
+Discovery happens when the spool opens, but parsing waits until an inventory-backed operation. Ordinary `len`, sorting, chunking, patch loading, and selection using only indexed names do not parse it; selection on an inventory coordinate does. The inventory is then cached. After editing it, call `attach_inventory()` with no argument to reread the directory's copy.
 
-Three things happen at three different times, and keeping them apart is the point:
-
-- **Discovery is eager.** Whether the directory carries an inventory is settled when the spool is opened, by a stat of each spelling and nothing more.
-- **Reading is lazy.** The file is read at the first question only an inventory can answer — never for `len`, `get_contents`, `sort`, `chunk`, extracting a patch, or a selection on names the index already knows. A malformed inventory therefore cannot stop you loading data; only the inventory-backed calls fail, and they name the directory the inventory came from and say that the spool picked it up on opening.
-- **Refreshing is explicit.** An inventory is an input, not a cache, so it is read once and held with no modification-time check. `attach_inventory()` with no argument means "the one this directory carries, read it again", which is the whole authoring loop:
-
-```{python}
-# Correct the gauge length in the file the directory carries.
-old_acquisition = example_inventory.networks[0].fiber_arrays[0].acquisitions[0]
-corrected = example_inventory.replace(
-    old_acquisition, old_acquisition.new(gauge_length=12.0)
-)
-corrected.io.to_yaml(data_path / ".inventory.yaml")
-
-# The spool which already read it still reports what it read.
-assert carrying.enrich()[0].attrs.gauge_length == 10.0
-
-# Asking again is what picks the correction up.
-refreshed = carrying.attach_inventory()
-assert refreshed.enrich()[0].attrs.gauge_length == 12.0
-```
-
-`attach_inventory` accepts a path as well as an `Inventory`, read on the same terms — and it is the only one of the three that takes either, since `enrich` and `conform_to_inventory` read what it attached.
+Two `.inventory` spellings in one directory are refused as ambiguous. The visible name `inventory.yaml` is not a companion file: in the authoring format it is the inventory envelope.
 
 # Serializing
 
-[`Inventory.io.to_yaml`](`dascore.core.inventory.inventory_to_yaml`) writes the single-file interchange form — the artifact to ship beside a data archive — and [`dc.inventory`](`dascore.core.inventory_loader.inventory`) reads any of the forms back.
+[`Inventory.io.to_yaml`](`dascore.core.inventory.inventory_to_yaml`) produces the single-file interchange form. [`dc.inventory`](`dascore.core.inventory_loader.inventory`) reads directory, YAML, JSON, model, or serialized text inputs.
 
 ```{python}
 text = inventory.io.to_yaml()
 assert dc.inventory(text) == inventory
 
-# JSON works everywhere YAML does, and needs no YAML library installed.
 json_path = data_path / "inventory.json"
 json_path.write_text(inventory.model_dump_json())
 assert dc.inventory(json_path) == inventory
 ```
 
-A document that cannot be parsed, cannot be decoded, or keys a field with something that is not a name (`1: 2` is legal YAML) raises `InvalidInventoryError` rather than whatever the parser happened to raise, wherever it is read from.
+Invalid documents consistently raise [`InvalidInventoryError`](`dascore.exceptions.InvalidInventoryError`).

@@ -111,7 +111,6 @@ def _get_context() -> dict:
         "dascore_path": str(Path(dc.__file__).absolute().parent),
         "platform": sys.platform,
         "runner": os.environ.get("RUNNER_NAME", ""),
-        "compact_sidebar": os.environ.get("DASCORE_DOC_COMPACT_SIDEBAR", ""),
         "run_id": os.environ.get("GITHUB_RUN_ID", ""),
         "workflow": os.environ.get("GITHUB_WORKFLOW", ""),
     }
@@ -241,7 +240,7 @@ def measure_qmd(api_path: Path = API_DOC_PATH) -> dict:
         kind = classify_page(path.read_text())
         kinds[kind] += 1
         if kind != "static":
-            executable[str(path.relative_to(api_path.parent))] = kind
+            executable[path.relative_to(api_path.parent).as_posix()] = kind
     return {
         "sizes": _size_stats(sizes),
         "kinds": dict(kinds),
@@ -297,7 +296,7 @@ def find_case_collisions(api_path: Path = API_DOC_PATH) -> list[list[str]]:
     """
     groups = defaultdict(list)
     for path in api_path.rglob("*.qmd"):
-        relative = str(path.relative_to(api_path))
+        relative = path.relative_to(api_path).as_posix()
         groups[relative.lower()].append(relative)
     return sorted(sorted(x) for x in groups.values() if len(x) > 1)
 
@@ -312,6 +311,7 @@ def measure_urls() -> dict:
     out.update({k: len(v) for k, v in difference.items()})
     out["removed_examples"] = difference["removed"][:20]
     out["moved_examples"] = dict(list(difference["moved"].items())[:20])
+    out["unpublished_examples"] = difference["unpublished"][:20]
     return out
 
 
@@ -345,11 +345,13 @@ _QUIET_KINDS = frozenset({"static", "source_only"})
 
 def _record_surprise(surprises, relative, executable, has_output) -> None:
     """Note a page whose rendered output disagrees with its classification."""
-    kind = executable.get(str(relative.with_suffix(".qmd")), "static")
+    # Posix throughout: these are keys into the index the build wrote and
+    # names printed in a report read next to it, not paths on this disk.
+    kind = executable.get(relative.with_suffix(".qmd").as_posix(), "static")
     if has_output and kind in _QUIET_KINDS:
-        surprises["unexpected"].append(str(relative))
+        surprises["unexpected"].append(relative.as_posix())
     elif not has_output and kind not in _QUIET_KINDS:
-        surprises["missing"].append(str(relative))
+        surprises["missing"].append(relative.as_posix())
 
 
 def _archive_bytes(site_path: Path) -> int:
@@ -430,9 +432,21 @@ def _minutes(value) -> str:
     return f"{value / 60:.1f} min"
 
 
+def _quarto_timing(report: dict) -> dict:
+    """
+    Return whichever quarto phase this build timed.
+
+    The workflows which render name it quarto_render; the one which publishes
+    to netlify renders as part of the publish and names it quarto_publish.
+    """
+    timings = report.get("timings", {})
+    named = (timings.get(x, {}) for x in ("quarto_render", "quarto_publish"))
+    return next((x for x in named if x.get("pages")), {})
+
+
 def _kernel_lines(report: dict) -> list[str]:
     """Report the page phase split by whether a page ran a kernel."""
-    render = report.get("timings", {}).get("quarto_render", {})
+    render = _quarto_timing(report)
     pages = render.get("pages", {})
     kinds = report.get("index", {}).get("qmd", {}).get("executable_pages", {})
     if not pages:
@@ -488,8 +502,9 @@ def build_summary(report: dict) -> str:
             f"| API sidebar | {sidebar_kib:.1f} KiB |",
             f"| cross reference keys | {index.get('cross_ref', {}).get('keys', 0)} |",
             f"| case collisions | {len(index.get('case_collisions', []))} |",
-            f"| URLs removed since baseline | {urls.get('removed', 0)} |",
-            f"| URLs moved since baseline | {urls.get('moved', 0)} |",
+            f"| pages no longer published | {urls.get('unpublished', 0)} |",
+            f"| keys removed since baseline | {urls.get('removed', 0)} |",
+            f"| keys moved since baseline | {urls.get('moved', 0)} |",
         ]
         for kind, count in sorted(qmd.get("kinds", {}).items()):
             lines.append(f"| pages, {kind} | {count} |")

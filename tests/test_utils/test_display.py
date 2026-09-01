@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import re
 import time
+from decimal import Decimal
+from fractions import Fraction
 from html import unescape
 from importlib.resources import files
 from pathlib import Path
@@ -24,6 +26,7 @@ from dascore.core.annotations import (
     AnnotationSet,
     AnnotationSetAttrs,
 )
+from dascore.core.coords import get_coord
 from dascore.core.inventory import Acquisition, Cable, Network
 from dascore.utils import display
 from dascore.utils.display import (
@@ -36,9 +39,11 @@ from dascore.utils.display import (
     Table,
     _body_lines,
     _get_stylesheet,
+    _human_size,
     _indent_text,
     _limit_items,
     _render_html,
+    _seconds_apart,
     _section_title,
     _storage_quantum,
     _strip_css_comments,
@@ -55,13 +60,13 @@ from dascore.utils.display import (
     get_nice_text,
     group_names,
     human_duration,
-    human_size,
     mapping_to_text,
     model_to_line,
     percent,
     range_texts,
     rate_text,
     render_text,
+    span_text,
     split_block,
     stated_fields,
 )
@@ -967,7 +972,7 @@ class TestHumanSize:
     )
     def test_size_in_the_largest_unit_which_fits(self, count, expected):
         """A byte count is read in whatever unit keeps it short."""
-        assert human_size(count) == expected
+        assert _human_size(count) == expected
 
     def test_an_unknown_size_draws_no_comma(self):
         """The comma introduces a size, so it goes when there is none."""
@@ -988,7 +993,7 @@ class TestHumanSize:
 
         "nan TiB" is a worse answer than not saying.
         """
-        assert human_size(float("nan")) == ""
+        assert _human_size(float("nan")) == ""
 
 
 class TestDurationText:
@@ -1040,14 +1045,69 @@ class TestDurationText:
         """
         assert duration_text(low, high) is None
 
+    @pytest.mark.parametrize(
+        ("low", "high"),
+        [
+            (pd.Timestamp("2020-01-01"), np.datetime64("NaT")),
+            (np.datetime64("NaT"), pd.Timestamp("2020-01-01")),
+            (pd.NaT, pd.Timestamp("2020-01-01")),
+        ],
+        ids=["high_null", "low_null", "pandas_null"],
+    )
+    def test_an_end_which_is_not_a_time(self, low, high):
+        """
+        NaT compares against a Timestamp by raising.
+
+        How long an extent with one end unstated lasted is not a
+        question with an answer, and not one to raise a repr over.
+        """
+        assert duration_text(low, high) is None
+
     def test_further_apart_than_a_timedelta_holds(self):
         """
         Two instants can lie further apart than a Timedelta holds.
 
-        How long that is matters less than the extents it would
-        otherwise take down with it.
+        Subtracting them raises, so each is read on its own instead --
+        the whole of what pandas can say is 584.6 years wide.
         """
-        assert duration_text(pd.Timestamp.min, pd.Timestamp.max) is None
+        assert "584.6 y" in str(duration_text(pd.Timestamp.min, pd.Timestamp.max))
+
+    def test_a_span_which_points_the_other_way_from_its_ends(self):
+        """
+        A wrap is a span whose sign its two ends disagree with.
+
+        Asked of `_seconds_apart` directly: whether numpy wraps here or
+        raises is a version away either way, and the reading which
+        rescues the wrap has to hold on both.
+        """
+        low = np.datetime64("1700-01-01", "ns")
+        high = np.datetime64("2200-01-01", "ns")
+        # What the wrapped subtraction says: 84.6 years, and negative.
+        wrapped = -2.668289673709552e9
+        assert _seconds_apart(wrapped, low, high) > 1.5e10
+        assert _seconds_apart(None, low, high) > 1.5e10
+        # A span its ends agree with is the span, to the nanosecond.
+        assert _seconds_apart(0.5, low, high) == 0.5
+
+    def test_a_span_wider_than_the_nanoseconds_it_is_held_in(self):
+        """
+        An int64 of nanoseconds holds about 584 years.
+
+        numpy wraps past that without saying so, and five centuries
+        came back as 84.6 of them.
+        """
+        low = np.datetime64("1700-01-01", "ns")
+        high = np.datetime64("2200-01-01", "ns")
+        assert "500 y" in str(duration_text(low, high))
+
+    def test_two_times_which_do_not_share_a_timezone(self):
+        """
+        One aware and one naive do not subtract.
+
+        Which matters less than the repr they would raise out of.
+        """
+        low = pd.Timestamp("2020-01-01", tz="UTC")
+        assert duration_text(low, pd.Timestamp("2020-01-02")) is None
 
     @pytest.mark.parametrize(
         ("low", "high", "expected"),
@@ -1066,6 +1126,156 @@ class TestDurationText:
         """
         said = duration_text(np.datetime64(low), np.datetime64(high))
         assert expected in str(said)
+
+
+class TestSpanText:
+    """Tests for how wide an extent is, whatever it is measured in."""
+
+    def test_two_numbers_state_how_far_apart_they_lie(self):
+        """The fact a min and a max do not carry on their own."""
+        assert str(span_text(1212.381, 1636.714)) == "<424.333>"
+
+    def test_two_instants_are_a_duration(self):
+        """A time is the one kind of extent said in units of its own."""
+        low = np.datetime64("2020-01-01T00:00:00")
+        high = np.datetime64("2020-01-01T00:00:24")
+        assert str(span_text(low, high)) == "<24 s>"
+
+    def test_a_width_is_said_in_the_units_asked_for(self):
+        """A width said bare reads as if it were in other units."""
+        assert str(span_text(0.0, 5.0, "m")) == "<5.000 m>"
+
+    def test_a_width_is_drawn_as_the_ends_it_came_from_are(self):
+        """
+        A reader who subtracts what the line says gets what it says.
+
+        The same formatter the two ends are drawn with, so a float
+        states its decimals and an integer states none.
+        """
+        assert str(span_text(360.663, 362.119)) == "<1.456>"
+        assert str(span_text(0, 299)) == "<299>"
+
+    def test_ends_which_meet_have_no_width(self):
+        """One sample spans an instant, which is not a span of nothing."""
+        assert span_text(5.0, 5.0) is None
+
+    @pytest.mark.parametrize(
+        ("low", "high"),
+        [
+            ("a", "c"),
+            (None, None),
+            (np.bool_(False), np.bool_(True)),
+            (complex(0, 0), complex(1, 1)),
+            # Only complex128 subclasses Python's complex, so the rest
+            # came through as numbers and stated the modulus of the
+            # difference as though it were a width.
+            (np.complex64(0), np.complex64(3 + 4j)),
+            (np.complex128(0), np.complex128(3 + 4j)),
+            (np.clongdouble(0), np.clongdouble(3 + 4j)),
+            (0.0, float("nan")),
+            (0.0, float("inf")),
+        ],
+        ids=[
+            "strings",
+            "none",
+            "bools",
+            "complex",
+            "complex64",
+            "complex128",
+            "clongdouble",
+            "nan",
+            "infinite",
+        ],
+    )
+    def test_what_has_no_width_states_none(self, low, high):
+        """
+        A dimension of labels has two ends and nothing between them.
+
+        Neither has a pair which cannot be subtracted into one real
+        number, or whose difference is not a number a reader can read.
+        """
+        assert span_text(low, high) is None
+
+    def test_ends_no_float_holds_state_nothing(self):
+        """A repr says nothing rather than raising out of the middle of itself."""
+        assert span_text(0, 10**400) is None
+
+    def test_a_width_wider_than_its_own_dtype_holds(self):
+        """
+        Two int64 ends can lie further apart than an int64 holds.
+
+        Subtracted as they are stored the width wraps and comes back
+        negative, so both ends are read as Python integers first, which
+        have no width they do not fit in.
+        """
+        low, high = np.int64(-(2**63)), np.int64(2**63 - 1)
+        assert str(span_text(low, high)) == "<18446744073709551615>"
+
+    def test_a_width_finer_than_a_float_resolves(self):
+        """
+        Two int64 ends one apart up near 2**60 are the same float.
+
+        Subtracted as floats their width reads as zero, which states no
+        span at all for two ends which really do lie apart.
+        """
+        low = np.int64(2**60)
+        assert str(span_text(low, low + 1)) == "<1>"
+
+    def test_a_width_is_not_which_end_came_first(self):
+        """How far apart two ends lie, the way a duration is read."""
+        assert str(span_text(5, 2)) == "<3>"
+
+    @pytest.mark.parametrize(
+        ("low", "high"),
+        [
+            (np.datetime64("2020-01-01"), np.timedelta64(1, "D")),
+            (np.timedelta64(1, "D"), np.datetime64("2020-01-01")),
+            (pd.Timestamp("2020-01-01"), pd.Timedelta("1D")),
+        ],
+        ids=["numpy", "numpy_reversed", "pandas"],
+    )
+    def test_an_instant_and_a_duration_are_not_one_extent(self, low, high):
+        """
+        Two kinds of time do not make two ends.
+
+        Subtracted they raise out of the middle of a repr in one order,
+        and give an instant back in the other.
+        """
+        assert span_text(low, high) is None
+
+    @pytest.mark.parametrize(
+        ("low", "high", "expected"),
+        [
+            (Decimal("1.5"), Decimal("4.5"), "<3.0>"),
+            (Fraction(2**60), Fraction(2**60 + 1), "<1>"),
+        ],
+        ids=["decimal", "fraction"],
+    )
+    def test_a_width_held_in_a_kind_a_float_cannot_hold(self, low, high, expected):
+        """
+        Every kind of number has a width, not only the ones numpy has.
+
+        Read as two floats these come back as no width at all: 2**60
+        and one past it are the same float.
+        """
+        assert str(span_text(low, high)) == expected
+
+    def test_a_pair_of_bools_has_no_width(self):
+        """
+        A true which is one more than a false is arithmetic.
+
+        Python counts a bool as an integer, so nothing else refuses it.
+        """
+        assert span_text(False, True) is None
+
+    def test_a_mixed_pair_is_not_read_as_a_duration(self):
+        """
+        One end a time and the other not is not an extent at all.
+
+        Without the guard numpy raises out of the middle of a repr.
+        """
+        assert span_text(np.datetime64("2020-01-01"), 1) is None
+        assert span_text(1, np.datetime64("2020-01-01")) is None
 
 
 class TestRangeTexts:
@@ -1281,13 +1491,49 @@ class TestValuesAReaderCanRead:
         coord = dc.get_example_patch().coords.coord_map["time"]
         assert "250 Hz" in str(coord)
 
-    def test_a_distance_coord_states_neither(self):
+    def test_a_distance_coord_states_its_span(self):
         """
-        A distance from 0 to 299 m already says how wide it is, and a
-        rate over it is not a quantity anyone quotes.
+        A run of fiber is as long as its two ends lie apart, which is a
+        subtraction the reader should not be left to do.
         """
         rendered = str(dc.get_example_patch().coords.coord_map["distance"])
-        assert "Hz" not in rendered
+        assert "<299 m>" in rendered
+
+    def test_a_distance_coord_states_no_rate(self):
+        """One over a distance is not a quantity anyone quotes."""
+        assert "Hz" not in str(dc.get_example_patch().coords.coord_map["distance"])
+
+    def test_a_span_off_the_time_axis_is_not_read_in_seconds(self):
+        """299 metres read as a duration is "5 m", which is five minutes."""
+        rendered = str(dc.get_example_patch().coords.coord_map["distance"])
+        assert " s>" not in rendered
+
+    def test_a_coord_states_its_units_on_its_values(self):
+        """
+        What a value is measured in is part of reading it.
+
+        Said in a field of its own it sat at the end of the line, a
+        column away from every number it applied to.
+        """
+        rendered = str(dc.get_example_patch().coords.coord_map["distance"])
+        assert "min: 0 m max: 299 m" in rendered
+        assert "step: 1 m" in rendered
+        assert "units: " not in rendered
+
+    def test_a_time_coord_states_no_units_of_its_own(self):
+        """An instant, and a step of "0.004s", say it in the writing."""
+        rendered = str(dc.get_example_patch().coords.coord_map["time"])
+        assert "units" not in rendered
+
+    def test_a_coord_with_no_values_still_states_its_units(self):
+        """Nothing is left to hang them on, and they are a fact of it."""
+        coord = get_coord(shape=(10,), units="m")
+        assert "units: m" in str(coord)
+
+    def test_a_coord_of_one_sample_states_no_span(self):
+        """Two ends which meet lie no distance apart."""
+        patch = dc.get_example_patch().select(distance=(0, 1), samples=True)
+        rendered = str(patch.coords.coord_map["distance"])
         assert "<" not in rendered
 
     def test_the_data_states_how_much_room_it_takes(self):
@@ -1310,16 +1556,17 @@ class TestValuesAReaderCanRead:
         rendered = str(AnnotationSet(frame, dims=("time",)))
         assert "min: 2020-01-01T00:00:00 max: …:09" in rendered
 
-    def test_an_annotation_set_over_distance_states_no_span(self):
+    def test_an_annotation_set_over_distance_states_its_width(self):
         """
-        A distance annotation is not measured in time.
+        A distance annotation is as wide as distance is.
 
-        299 metres read as a duration is "5 m", which is five minutes.
+        Not as many seconds: 299 metres read as a duration is "5 m",
+        which is five minutes.
         """
         frame = pd.DataFrame({"distance_min": [0.0], "distance_max": [299.0]})
         rendered = str(AnnotationSet(frame, dims=("distance",)))
-        assert "299" in rendered
-        assert "<" not in rendered
+        assert "<299.000>" in rendered
+        assert " m>" not in rendered
 
     def test_an_annotation_set_states_its_span(self):
         """The same fact a spool and a patch coordinate state."""
@@ -1937,7 +2184,6 @@ class TestCoordinatesAreStated:
             # Asked of the coordinate rather than stated: an integer is
             # 32 bits where the suite runs in WebAssembly and 64 here.
             ("dtype", None),
-            ("units", "m"),
         ],
     )
     def test_the_facts_a_coordinate_states(self, patch, label, value):
@@ -1991,8 +2237,9 @@ class TestTableColumns:
         """
         It belongs where the row stating it puts it.
 
-        Only a time coordinate has a span, and it states it between its
-        max and its step rather than after everything a distance says.
+        A coordinate of one sample has no span, and the one beside it
+        states its own between its max and its step rather than after
+        everything the shorter row says.
         """
         assert self._columns([("a", "xz"), ("b", "xyz")]) == ["kind", "x", "y", "z"]
 
