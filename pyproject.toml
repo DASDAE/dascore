@@ -69,6 +69,8 @@ dependencies = [
 
 extras = [
     "xarray",
+    # A spool converts to a lazily-loaded DataTree; dask supplies the arrays.
+    "dask",
     # An annotation set may be stored as parquet rather than CSV; CSV is
     # the floor which needs nothing.
     "pyarrow",
@@ -198,6 +200,7 @@ io = "dascore.io:PatchIO"
 viz = "dascore.viz:VizPatchNameSpace"
 
 [project.entry-points."dascore.spool_namespace"]
+io = "dascore.io:SpoolIO"
 viz = "dascore.viz:VizSpoolNameSpace"
 
 [project.entry-points."dascore.inventory_namespace"]

@@ -35,6 +35,21 @@ dar = patch.io.to_xarray()
 patch_from_dar = dc.io.xarray_to_patch(dar)
 ```
 
+A whole spool converts to a lazy, [dask](https://docs.dask.org/)-backed [DataTree](https://docs.xarray.dev/en/stable/user-guide/hierarchical-data.html) with one node per group of related patches (partitioned exactly as [`chunk`](`dascore.Spool.chunk`) partitions them) and one child node per contiguous segment. Building the tree reads no data; computing a selection loads only the source patches it touches.
+
+```python
+import dascore as dc
+
+spool = dc.get_example_spool("diverse_das")
+
+# Convert the spool to a DataTree of lazy arrays.
+tree = spool.io.to_xarray()
+
+# Nothing has been loaded yet; this reads only the patches it needs.
+first = next(node for node in tree.subtree if "data" in node.dataset)
+small = first.dataset["data"].isel(time=slice(0, 100)).compute()
+```
+
 ## [ObsPy](https://docs.obspy.org/)
 
 ```python

@@ -9,13 +9,14 @@ from functools import cache
 from inspect import isfunction, ismethod
 from pathlib import Path
 from threading import RLock
-from typing import Any, get_type_hints
+from typing import Any, Literal, get_type_hints
 
 import numpy as np
+import pandas as pd
 
 import dascore as dc
 from dascore.compat import UPath
-from dascore.constants import PatchType
+from dascore.constants import PatchType, SpoolType
 from dascore.exceptions import PatchConversionError
 from dascore.utils.misc import (
     _maybe_make_parent_directory,
@@ -349,6 +350,196 @@ def xarray_to_patch(data_array) -> dc.Patch:
         dims=data_array.dims,
         data=data_array.data,
     )
+
+
+def _xarray_block_count(low, high, step) -> int:
+    """Sample count of an inclusive envelope, snapped to its step."""
+    return int(np.round(to_float(high - low) / to_float(step))) + 1
+
+
+def _load_xarray_block(catalog, row, dim, lims, dims, shape):
+    """
+    Load one dask block: a source patch trimmed to its member window.
+
+    Runs at compute time, once per block; the trim hint limits what the
+    reader loads and the select re-applies the window exactly.
+    """
+    patch = catalog.resolve_row(row, extra_trim={dim: lims}).select(**{dim: lims})
+    if patch.dims != dims:
+        patch = patch.transpose(*dims)
+    if patch.shape != shape:
+        msg = (
+            f"Loaded block from '{row.get('source_path', '<memory>')}' has shape "
+            f"{patch.shape}, but the spool index promised {shape}. The source "
+            "file changed after indexing; run spool.update() and convert again."
+        )
+        raise PatchConversionError(msg)
+    return patch.data
+
+
+def _xarray_group_nodes(outputs, group_attrs):
+    """Name a DataTree node per output group, by the spool's naming rule."""
+    # The same rule which names a repr's tracks and a coverage plot's
+    # lanes; a node name must also be a valid single path component.
+    from dascore.utils.display import ACQUISITION_ATTR, group_names  # noqa: PLC0415
+
+    if not group_attrs:
+        frame = pd.DataFrame(index=[0])
+        codes = pd.Series(0, index=outputs.index)
+    else:
+        codes = outputs.groupby(group_attrs, dropna=False, sort=True).ngroup()
+        frame = (
+            outputs[group_attrs]
+            .assign(_code=codes)
+            .drop_duplicates("_code")
+            .sort_values("_code")
+            .drop(columns="_code")
+            .reset_index(drop=True)
+        )
+    fallback = ACQUISITION_ATTR if ACQUISITION_ATTR in frame.columns else None
+    names = group_names(frame, fallback=fallback)
+    if bad := [x for x in names if "/" in x]:
+        msg = (
+            f"Group name(s) {bad} contain '/', which cannot name a DataTree "
+            "node. Pass different `group` attributes."
+        )
+        raise PatchConversionError(msg)
+    return names, codes
+
+
+def spool_to_xarray(
+    spool: SpoolType,
+    dim: str = "time",
+    group: str | typing.Sequence[str] | None = None,
+    tolerance=1.5,
+    conflict: Literal["drop", "raise", "keep_first"] = "raise",
+):
+    """
+    Convert a spool to a lazy, dask-backed xarray DataTree.
+
+    Patches are partitioned exactly as [`chunk`](`dascore.Spool.chunk`)
+    partitions them: one tree node per group of related patches, holding
+    one child node per contiguous segment (``segment_0`` onward, ordered
+    along ``dim``), each with a dask-backed ``data`` variable. Building
+    the tree reads no patch data — every shape, dtype, and coordinate
+    comes from the spool's metadata — and computing a selection loads
+    only the source patches it touches.
+
+    Parameters
+    ----------
+    spool
+        The spool to convert.
+    dim
+        The dimension segments are merged along.
+    group
+        Attributes which partition patches into unrelated groups, exactly
+        as `chunk` uses them. Defaults to the config's ``patch_kind_attrs``.
+    tolerance
+        The sampling tolerance deciding segment continuity, as in `chunk`.
+    conflict
+        How attribute conflicts within a segment resolve, as in `chunk`.
+
+    Notes
+    -----
+    Requires ``xarray`` and ``dask``. Coordinates associated with a
+    dimension (rather than defining one) are not carried into the tree.
+    """
+    xr = optional_import("xarray")
+    dask = optional_import("dask")
+    da = optional_import("dask.array")
+    # function-level to avoid a circular import through dascore.core
+    from dascore.core.coords import get_coord  # noqa: PLC0415
+    from dascore.utils.chunk_plan import build_chunk_plan  # noqa: PLC0415
+
+    base, working = spool._plan_frames(dim)
+    if not len(working):
+        return xr.DataTree()
+    merge_kwargs: dict[str, Any] = {dim: None}
+    plan = build_chunk_plan(
+        working, tolerance=tolerance, conflict=conflict, group=group, **merge_kwargs
+    )
+    outputs, members = plan.outputs, plan.members
+    group_attrs = list(plan.params["group"])
+    names, codes = _xarray_group_nodes(outputs, group_attrs)
+    sources = base.set_index("_patch_id")
+    catalog = spool._catalog
+    envelope_cols = {
+        f"{d}_{end}"
+        for dims_str in outputs["dims"].unique()
+        for d in str(dims_str).split(",")
+        for end in ("min", "max", "step")
+    }
+    tree = {}
+    for code, sub in outputs.groupby(codes.to_numpy(), sort=True):
+        node = f"/{names[code]}"
+        first = sub.iloc[0]
+        node_attrs = {key: first[key] for key in group_attrs if pd.notnull(first[key])}
+        tree[node] = xr.Dataset(attrs=node_attrs)
+        for segment, (_, out) in enumerate(sub.sort_values(f"{dim}_min").iterrows()):
+            dims = tuple(str(out["dims"]).split(","))
+            axis = dims.index(dim)
+            if (dtype_str := out["_dtype"]) is None or pd.isnull(dtype_str):
+                msg = (
+                    "Cannot build a lazy array without a dtype in the spool "
+                    "index; re-index the spool with spool.update()."
+                )
+                raise PatchConversionError(msg)
+            dtype = np.dtype(dtype_str)
+            step = out[f"{dim}_step"]
+            mem = members[members["output_id"] == out["output_id"]]
+            mem = mem.sort_values(f"{dim}_min")
+            counts = [
+                _xarray_block_count(m[f"{dim}_min"], m[f"{dim}_max"], step)
+                for _, m in mem.iterrows()
+            ]
+            coords, sizes = {}, {}
+            for d in dims:
+                if d == dim:
+                    # The member counts are authoritative, and the coordinate
+                    # is snapped over the segment envelope exactly as chunk
+                    # snaps a merged coordinate: min and max unchanged, step
+                    # recomputed from the span.
+                    n = sum(counts)
+                    lo, hi = out[f"{dim}_min"], out[f"{dim}_max"]
+                    span = hi - lo
+                    if n > 1 and isinstance(span, pd.Timedelta | np.timedelta64):
+                        nanos = pd.Timedelta(span).value
+                        eff = np.timedelta64(int(np.round(nanos / (n - 1))), "ns")
+                    elif n > 1:
+                        eff = span / (n - 1)
+                    else:
+                        eff = step
+                    coord = get_coord(min=lo, max=lo + n * eff, step=eff)
+                    if len(coord) != n:
+                        coord = coord.change_length(n)
+                else:
+                    d_step = out[f"{d}_step"]
+                    coord = get_coord(
+                        min=out[f"{d}_min"], max=out[f"{d}_max"] + d_step, step=d_step
+                    )
+                coords[d] = coord.values
+                sizes[d] = len(coord)
+            blocks = []
+            for (_, m), count in zip(mem.iterrows(), counts, strict=True):
+                shape = tuple(count if d == dim else sizes[d] for d in dims)
+                lims = (m[f"{dim}_min"], m[f"{dim}_max"])
+                row = sources.loc[m["_patch_id"]].to_dict()
+                delayed = dask.delayed(_load_xarray_block)(
+                    catalog, row, dim, lims, dims, shape
+                )
+                blocks.append(da.from_delayed(delayed, shape=shape, dtype=dtype))
+            array = da.concatenate(blocks, axis=axis)
+            attrs = {
+                key: value
+                for key, value in out.items()
+                if not str(key).startswith("_")
+                and key not in envelope_cols
+                and key not in ("output_id", "dims")
+                and pd.notnull(value)
+            }
+            data = xr.DataArray(array, dims=dims, coords=coords, attrs=attrs)
+            tree[f"{node}/segment_{segment}"] = xr.Dataset({"data": data})
+    return xr.DataTree.from_dict(tree)
 
 
 def patch_to_obspy(patch: PatchType):

@@ -9,6 +9,7 @@ from io import BufferedReader, BufferedWriter, BytesIO, StringIO, TextIOBase
 from pathlib import Path
 
 import h5py
+import numpy as np
 import pytest
 from fsspec.asyn import AsyncFileSystem
 from upath import UPath
@@ -1342,6 +1343,155 @@ class TestXarray:
         # Ensure it round-trips
         patch2 = xarray_to_patch(dar)
         assert isinstance(patch2, dc.Patch)
+
+
+class TestSpoolToXarray:
+    """Tests for converting a spool to a dask-backed xarray DataTree."""
+
+    @pytest.fixture
+    def diverse_tree(self, diverse_spool):
+        """Convert the diverse spool, skipping without xarray or dask."""
+        pytest.importorskip("xarray")
+        pytest.importorskip("dask")
+        return diverse_spool.io.to_xarray()
+
+    def _leaves(self, tree):
+        """Return the datasets holding a data variable."""
+        return [node for node in tree.subtree if "data" in node.dataset]
+
+    def test_tree_structure(self, diverse_tree):
+        """Each leaf holds one lazy data variable with dim coordinates."""
+        import dask.array as da  # noqa: PLC0415
+        import xarray as xr  # noqa: PLC0415
+
+        assert isinstance(diverse_tree, xr.DataTree)
+        leaves = self._leaves(diverse_tree)
+        assert leaves
+        for leaf in leaves:
+            data = leaf.dataset["data"]
+            assert isinstance(data.data, da.Array)
+            assert set(data.dims) <= set(data.coords)
+
+    def test_matches_chunk(self, diverse_spool, diverse_tree):
+        """Every leaf's values equal the equivalent chunk output patch."""
+        expected = {}
+        for patch in diverse_spool.chunk(time=None):
+            coord = patch.get_coord("time")
+            key = (
+                patch.attrs.tag,
+                patch.attrs.acquisition_key or "",
+                np.datetime64(coord.min(), "ns"),
+                patch.shape,
+            )
+            expected[key] = patch
+        leaves = self._leaves(diverse_tree)
+        assert len(leaves) == len(expected)
+        for leaf in leaves:
+            data = leaf.dataset["data"]
+            key = (
+                data.attrs["tag"],
+                data.attrs.get("acquisition_key") or "",
+                np.datetime64(data["time"].values.min(), "ns"),
+                data.shape,
+            )
+            patch = expected.pop(key)
+            np.testing.assert_array_equal(data.values, patch.data)
+            for dim in patch.dims:
+                np.testing.assert_array_equal(
+                    data[dim].values, patch.get_coord(dim).values
+                )
+        assert not expected
+
+    def test_builds_without_reading(self, diverse_spool_directory, monkeypatch):
+        """Constructing the tree must not read any patch data."""
+        pytest.importorskip("xarray")
+        pytest.importorskip("dask")
+        from dascore.io.index.catalog import PatchCatalog  # noqa: PLC0415
+
+        spool = dc.spool(diverse_spool_directory).update()
+
+        def _fail(*args, **kwargs):
+            raise AssertionError("tree construction read patch data")
+
+        monkeypatch.setattr(PatchCatalog, "resolve_row", _fail)
+        tree = spool.io.to_xarray()
+        assert len(self._leaves(tree))
+
+    def test_compute_reads_only_needed_blocks(
+        self, diverse_spool_directory, monkeypatch
+    ):
+        """A small selection loads only the source patches it touches."""
+        pytest.importorskip("xarray")
+        pytest.importorskip("dask")
+        from dascore.io.index.catalog import PatchCatalog  # noqa: PLC0415
+
+        spool = dc.spool(diverse_spool_directory).update()
+        tree = spool.io.to_xarray()
+        calls = []
+        original = PatchCatalog.resolve_row
+
+        def _counting(self, *args, **kwargs):
+            calls.append(1)
+            return original(self, *args, **kwargs)
+
+        monkeypatch.setattr(PatchCatalog, "resolve_row", _counting)
+        # big_gaps has one source patch per segment; slicing inside the
+        # first segment must load exactly one.
+        leaf = next(
+            x
+            for x in self._leaves(tree)
+            if x.dataset["data"].attrs.get("tag") == "big_gaps"
+        )
+        _ = leaf.dataset["data"].isel(time=slice(0, 5)).compute()
+        assert len(calls) == 1
+
+    def test_single_group_spool(self, random_spool):
+        """A homogeneous spool merges into one segment of one group."""
+        pytest.importorskip("xarray")
+        pytest.importorskip("dask")
+        tree = random_spool.io.to_xarray()
+        leaves = self._leaves(tree)
+        assert len(leaves) == 1
+        merged = random_spool.chunk(time=None)[0]
+        np.testing.assert_array_equal(leaves[0].dataset["data"].values, merged.data)
+
+    def test_group_argument(self, diverse_spool):
+        """An explicit group partitions the tree by that attribute."""
+        pytest.importorskip("xarray")
+        pytest.importorskip("dask")
+        tree = diverse_spool.io.to_xarray(group="tag", conflict="drop")
+        tags = {x.dataset["data"].attrs.get("tag") for x in self._leaves(tree)}
+        contents_tags = set(diverse_spool.get_contents()["tag"])
+        assert tags == contents_tags
+
+    def test_bad_group_raises(self, diverse_spool):
+        """A group attribute no patch has raises the standard query error."""
+        pytest.importorskip("xarray")
+        pytest.importorskip("dask")
+        from dascore.exceptions import InvalidSpoolQueryError  # noqa: PLC0415
+
+        with pytest.raises(InvalidSpoolQueryError, match="do not exist"):
+            diverse_spool.io.to_xarray(group="not_an_attr")
+
+    def test_empty_spool(self):
+        """An empty spool converts to an empty tree."""
+        xr = pytest.importorskip("xarray")
+        pytest.importorskip("dask")
+        tree = dc.spool([]).io.to_xarray()
+        assert isinstance(tree, xr.DataTree)
+        assert not self._leaves(tree)
+
+    def test_slash_in_group_name_raises(self, random_patch):
+        """A group value which cannot name a tree node raises."""
+        pytest.importorskip("xarray")
+        pytest.importorskip("dask")
+        # Two values are needed: a lone group is named by its ordinal.
+        patches = [
+            random_patch.update_attrs(cable_id="a/b"),
+            random_patch.update_attrs(cable_id="c/d", time_min="2022-01-01"),
+        ]
+        with pytest.raises(PatchConversionError, match="cannot name"):
+            dc.spool(patches).io.to_xarray(group="cable_id")
 
 
 class TestObsPy:
