@@ -11,7 +11,6 @@ import dascore as dc
 from dascore import config as dascore_config
 from dascore.config import (
     DascoreConfig,
-    config_attr,
     config_context,
     get_config,
     reset_config,
@@ -158,16 +157,6 @@ class TestConfigContext:
         with pytest.raises(TypeError, match="DascoreConfig"):
             with config_context(object()):
                 pass
-
-    def test_config_attr_reflects_runtime_config(self):
-        """Config descriptors resolve against the active runtime config."""
-
-        class _UsesConfig:
-            value = config_attr("display_float_precision")
-
-        assert _UsesConfig().value == get_config().display_float_precision
-        with config_context(display_float_precision=7):
-            assert _UsesConfig().value == 7
 
     @pytest.mark.concurrency
     def test_concurrent_overrides_are_isolated(self):

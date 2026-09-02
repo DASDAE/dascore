@@ -245,22 +245,6 @@ if hasattr(os, "register_at_fork"):  # not available on windows
     os.register_at_fork(after_in_child=_reinit_config_lock)
 
 
-class _ConfigDescriptor:
-    """Descriptor for attributes that should always reflect runtime config."""
-
-    def __init__(self, attr_name: str):
-        self.attr_name = attr_name
-
-    def __get__(self, _instance, _owner=None):
-        """Return the current configured value for the target attribute."""
-        return getattr(get_config(), self.attr_name)
-
-
-def config_attr(attr_name: str):
-    """Return a descriptor bound to one field on the active runtime config."""
-    return _ConfigDescriptor(attr_name)
-
-
 def get_config() -> DascoreConfig:
     """Return the active runtime configuration.
 

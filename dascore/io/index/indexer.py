@@ -22,7 +22,7 @@ import pandas as pd
 
 import dascore as dc
 from dascore.compat import UPath
-from dascore.config import config_attr
+from dascore.config import get_config
 from dascore.constants import PROGRESS_LEVELS
 from dascore.exceptions import InvalidIndexVersionError
 from dascore.io.core import is_directory_format
@@ -124,10 +124,10 @@ class DBDirectoryIndexer:
         the data directory.
     """
 
-    ext: str | None = None
-    # cache dir holding per-data-directory index-location entries, used
-    # when a data directory itself is not writable
-    index_map_dir: Path = config_attr("directory_index_map_dir")
+    @property
+    def index_map_dir(self) -> Path:
+        """Cache dir recording index locations for read-only data directories."""
+        return get_config().directory_index_map_dir
 
     def __init__(
         self,
@@ -275,7 +275,7 @@ class DBDirectoryIndexer:
         uses so members are not offered individually.
         """
         files: dict[str, tuple[int, int, Path]] = {}
-        gen = _iter_filesystem(self.path, ext=self.ext, include_directories=True)
+        gen = _iter_filesystem(self.path, include_directories=True)
         signal = None
         while True:
             try:

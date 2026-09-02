@@ -526,61 +526,57 @@ def build_coord_clause(
         "dur": ("min_ns", "max_ns"),
         "num": ("min_num", "max_num"),
         "str": ("min_str", "max_str"),
-        None: (None, None),
     }[kind]
     conditions = ["pc.coord_name = ?"]
     params: list = [name]
-    if kind is not None:
-        if kind in ("time", "dur"):
-            # absolute queries match absolute coords, durations relative.
-            conditions.append("cd.is_relative = ?")
-            params.append(kind == "dur")
-            kind_match = "time"
-        else:
-            kind_match = kind
-        conditions.append("cd.value_kind = ?")
-        params.append(kind_match)
-        # lo bounds the coord max (overlap), hi bounds the coord min.
-        # typed_values holds the coerced non-open bounds in (lo, hi) order,
-        # so each side pairs with its TypedValue (which knows the bound's
-        # own units) here.
-        sides = []
-        for bound, bound_col, op in ((lo, max_col, ">="), (hi, min_col, "<=")):
-            if bound is None:
-                continue
-            sides.append((bound, typed_values[len(sides)], bound_col, op))
-        if compatible_units is None:
-            # A bare range means each definition's native units: one plain
-            # predicate against the envelopes, which are stored in the
-            # coordinate's original units.
-            for bound, _typed, bound_col, op in sides:
-                conditions.append(f"cd.{bound_col} {op} ?")
-                params.append(bound)
-        elif not compatible_units:
-            conditions.append("cd.units IS NULL")
-        else:
-            # A unit-bearing range converts itself once per distinct
-            # compatible stored unit into an OR branch; a bare bound in a
-            # mixed range stays native per branch, exactly how the
-            # residual's per-bound _CanonicalRange reads it at load.
-            # NULL-unit defs stay unconstrained candidates: unitless
-            # values cannot be proven dimensionally incompatible.
-            branches = ["cd.units IS NULL"]
-            for unit in sorted(compatible_units):
-                sub_clauses = ["cd.units = ?"]
-                sub_params: list = [unit]
-                for bound, typed, bound_col, op in sides:
-                    if typed.units is None:
-                        val = bound
-                    else:
-                        val = convert_units(
-                            bound, to_units=unit, from_units=typed.units
-                        )
-                    sub_clauses.append(f"cd.{bound_col} {op} ?")
-                    sub_params.append(val)
-                branches.append("(" + " AND ".join(sub_clauses) + ")")
-                params.extend(sub_params)
-            conditions.append("(" + " OR ".join(branches) + ")")
+    if kind in ("time", "dur"):
+        # absolute queries match absolute coords, durations relative.
+        conditions.append("cd.is_relative = ?")
+        params.append(kind == "dur")
+        kind_match = "time"
+    else:
+        kind_match = kind
+    conditions.append("cd.value_kind = ?")
+    params.append(kind_match)
+    # lo bounds the coord max (overlap), hi bounds the coord min.
+    # typed_values holds the coerced non-open bounds in (lo, hi) order,
+    # so each side pairs with its TypedValue (which knows the bound's
+    # own units) here.
+    sides = []
+    for bound, bound_col, op in ((lo, max_col, ">="), (hi, min_col, "<=")):
+        if bound is None:
+            continue
+        sides.append((bound, typed_values[len(sides)], bound_col, op))
+    if compatible_units is None:
+        # A bare range means each definition's native units: one plain
+        # predicate against the envelopes, which are stored in the
+        # coordinate's original units.
+        for bound, _typed, bound_col, op in sides:
+            conditions.append(f"cd.{bound_col} {op} ?")
+            params.append(bound)
+    elif not compatible_units:
+        conditions.append("cd.units IS NULL")
+    else:
+        # A unit-bearing range converts itself once per distinct
+        # compatible stored unit into an OR branch; a bare bound in a
+        # mixed range stays native per branch, exactly how the
+        # residual's per-bound _CanonicalRange reads it at load.
+        # NULL-unit defs stay unconstrained candidates: unitless
+        # values cannot be proven dimensionally incompatible.
+        branches = ["cd.units IS NULL"]
+        for unit in sorted(compatible_units):
+            sub_clauses = ["cd.units = ?"]
+            sub_params: list = [unit]
+            for bound, typed, bound_col, op in sides:
+                if typed.units is None:
+                    val = bound
+                else:
+                    val = convert_units(bound, to_units=unit, from_units=typed.units)
+                sub_clauses.append(f"cd.{bound_col} {op} ?")
+                sub_params.append(val)
+            branches.append("(" + " AND ".join(sub_clauses) + ")")
+            params.extend(sub_params)
+        conditions.append("(" + " OR ".join(branches) + ")")
     # A semi-join the engine can evaluate once (idx_pcoords_name) beats a
     # correlated EXISTS probed per patch row (~2.5x on a 200k-source index).
     where.add(

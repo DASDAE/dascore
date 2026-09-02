@@ -334,11 +334,6 @@ class PatchSummary(DascoreBaseModel):
         return out
 
     @property
-    def dim_tuple(self) -> tuple[str, ...]:
-        """Return the dimensions as a tuple."""
-        return self.dims
-
-    @property
     def summary(self) -> PatchSummary:
         """Return self for symmetry with Patch.summary."""
         return self

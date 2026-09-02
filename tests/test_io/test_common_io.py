@@ -919,7 +919,7 @@ class TestIntegration:
         for patch_summary, scan_summary in zip(patch_summary_list, scan_summary_list):
             assert patch_summary.dims == scan_summary.dims
             # first compare dimensions are related attributes
-            for dim in patch_summary.dim_tuple:
+            for dim in patch_summary.dims:
                 patch_coord = patch_summary.get_coord_summary(dim)
                 scan_coord = scan_summary.get_coord_summary(dim)
                 assert patch_coord.min == scan_coord.min

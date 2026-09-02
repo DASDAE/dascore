@@ -23,7 +23,6 @@ from dascore.exceptions import (
 from dascore.utils.misc import suppress_warnings
 from dascore.utils.patch import (
     _force_patch_merge,
-    _spool_up,
     align_patch_coords,
     check_data_units,
     check_dims,
@@ -991,12 +990,6 @@ class TestConcatenate:
         for patch in new:
             coord = patch.get_coord("new_dim")
             assert len(coord) == 2
-
-    def test_spool_up(self, random_patch):
-        """Ensure a patch is returned if the wrapper is used."""
-        func = _spool_up(concatenate_patches)
-        out = func([random_patch] * 3, time=None)
-        assert isinstance(out, dc.BaseSpool)
 
     def test_patch_with_gap(self, random_patch):
         """Ensure a patch with a time gap still concats."""

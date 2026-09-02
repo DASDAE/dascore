@@ -556,11 +556,6 @@ class TestPatchSummary:
         assert summary.dims == ("time",)
         assert summary.get_coord_summary("time").dims == ("time",)
 
-    def test_dim_tuple_property_matches_dims(self, random_patch):
-        """PatchSummary.dim_tuple should expose the normalized dims tuple."""
-        summary = random_patch.summary
-        assert summary.dim_tuple == summary.dims
-
     def test_flat_dump_includes_coord_fingerprint(self, random_patch):
         """Flattened summaries should preserve coord fingerprints."""
         out = random_patch.summary.flat_dump()

@@ -2244,12 +2244,6 @@ class Spool(NodeRepr, NamespaceOwner):
             catalog.update(progress=progress)
             return self._new_from_catalog(catalog)
         if self._file_path is not None:
-            from dascore.io.core import FiberIO  # noqa: PLC0415
-
-            formatter = FiberIO.manager.get_fiberio(
-                format=self._file_format, version=self._file_version
-            )
-            getattr(formatter, "index", lambda _: None)(self._file_path)
             refreshed = self.from_file(
                 self._file_path, self._file_format, self._file_version
             )

@@ -67,13 +67,6 @@ class TestLiveRoundtrip:
         patch = live_catalog.get_patch(0)
         assert isinstance(patch, dc.Patch)
 
-    def test_add_more_patches(self, patches):
-        """add() ingests additional live patches."""
-        catalog = PatchCatalog.from_patches(patches[:1])
-        assert len(catalog) == 1
-        catalog.add(patches[1])
-        assert len(catalog) == 2
-
 
 class TestSelectComposition:
     """select composes lazily with eager validation."""
@@ -109,12 +102,6 @@ class TestSelectComposition:
         """Selection composes without realizing the dataframe."""
         view = live_catalog.select(distance=(0, 10))
         assert view._df_cache.get(view._revision.value) is None
-
-    def test_views_cannot_mutate(self, live_catalog, patches):
-        """Mutation only on the root."""
-        view = live_catalog.select(distance=(0, 10))
-        with pytest.raises(InvalidSpoolQueryError, match="root catalog"):
-            view.add(patches[0])
 
 
 class TestResidualSelects:
@@ -237,23 +224,6 @@ class TestCatalogEdges:
         with pytest.raises(InvalidSpoolQueryError, match="range selectors"):
             live_catalog.select(time=5, relative=True)
 
-    def test_add_on_file_catalog_not_implemented(self, tmp_path, patches):
-        """add() is memory-only for now."""
-        path = dc.examples.spool_to_directory(
-            dc.spool(list(patches)), path=tmp_path / "d"
-        )
-        catalog = PatchCatalog.from_directory(path).update(progress=None)
-        with pytest.raises(NotImplementedError, match="in-memory"):
-            catalog.add(patches[0])
-        catalog.close()
-
-    def test_remove(self, patches):
-        """remove() drops sources by identity."""
-        catalog = PatchCatalog.from_patches(patches)
-        target = catalog.sources()["source_path"].iloc[0]
-        catalog.remove([target])
-        assert len(catalog) == len(patches) - 1
-
 
 class TestCount:
     """len(catalog) counts in SQL and agrees with the realized relation."""
@@ -295,14 +265,6 @@ class TestCount:
 
         monkeypatch.setattr(type(fresh), "to_df", _boom)
         assert isinstance(len(fresh), int)
-
-    def test_introspection(self, live_catalog):
-        """Names, sources, and metadata pass through."""
-        assert "time" in live_catalog.coord_names()
-        assert "tag" in live_catalog.attr_names()
-        assert len(live_catalog.sources()) == 3
-        assert live_catalog.get_metadata()["what_is_this"] == "dascore_spool_index"
-        live_catalog.close()
 
     def test_open_relative_bound(self, live_catalog):
         """Ellipsis/None bounds stay open through relative resolution."""

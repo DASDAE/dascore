@@ -897,11 +897,6 @@ class PatchCatalog:
             or self._ids is not None
         )
 
-    def _require_root(self, operation: str) -> None:
-        if self.is_view:
-            msg = f"{operation} is only allowed on a root catalog, not a view."
-            raise InvalidSpoolQueryError(msg)
-
     # --- selection ------------------------------------------------------
 
     def select(
@@ -1093,22 +1088,6 @@ class PatchCatalog:
 
     # --- mutation (root only) ----------------------------------------------
 
-    def add(self, patches: Sequence[dc.Patch] | dc.Patch) -> PatchCatalog:
-        """Add live patches to the catalog."""
-        with self._revision.lock:
-            self._require_root("add")
-            if not isinstance(self.resolver, LiveResolver):
-                msg = "add() currently supports in-memory catalogs only."
-                raise NotImplementedError(msg)
-            patches = [patches] if isinstance(patches, dc.Patch) else list(patches)
-            additions = {_patch_path(x): x for x in patches}
-            self.resolver._registry.update(additions)
-            # Re-adding a patch replaces its row (same identity), so this
-            # stays idempotent.
-            self.backend.write_sources(_live_records(additions))
-            self._invalidate()
-            return self
-
     def update(self, progress: PROGRESS_LEVELS = "standard") -> PatchCatalog:
         """Sync a directory-backed catalog with the filesystem."""
         # The scan itself is long-running file IO; it manages its own
@@ -1118,37 +1097,7 @@ class PatchCatalog:
         self._invalidate()
         return self
 
-    def remove(self, source_paths: Sequence[str], base_uri: str = "") -> PatchCatalog:
-        """Remove sources (and their patches) from the catalog."""
-        with self._revision.lock:
-            self._require_root("remove")
-            source_paths = list(source_paths)
-            self.backend.delete_sources(source_paths, base_uri=base_uri)
-            # The live registry is the store for in-memory patches; it must
-            # stay in step with the backend rows (pickling rebuilds from it).
-            registry = self.resolver.live_entries()
-            for path in source_paths:
-                registry.pop(path, None)
-            self._invalidate()
-            return self
-
     # --- introspection -------------------------------------------------------
-
-    def attr_names(self) -> set[str]:
-        """Attr names known to the index."""
-        return self.backend.attr_names()
-
-    def coord_names(self) -> set[str]:
-        """Coord names known to the index."""
-        return self.backend.coord_names()
-
-    def sources(self) -> pd.DataFrame:
-        """The sources table."""
-        return self.backend.get_sources()
-
-    def get_metadata(self) -> dict:
-        """Index-level metadata."""
-        return self.backend.get_metadata()
 
     def close(self) -> None:
         """Close the backend (root and all views share it)."""

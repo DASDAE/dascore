@@ -222,20 +222,6 @@ class TestPatchIdentity:
         loaded = pickle.loads(pickle.dumps(combined))
         assert len(loaded) == 2
 
-    def test_remove_updates_live_registry(self):
-        """Removing a live source removes it from the store as well."""
-        patch = dc.get_example_patch()
-        catalog = PatchCatalog.from_patches([patch])
-        path = catalog.to_df().iloc[0]["source_path"]
-        catalog.remove([path])
-        assert len(catalog.to_df()) == 0
-        # A pickled catalog rebuilds from the registry; the removed patch
-        # must not resurrect.
-        loaded = pickle.loads(pickle.dumps(catalog))
-        loaded.attr_names()  # bootstrap the backend
-        loaded._invalidate()
-        assert len(loaded.to_df()) == 0
-
 
 class TestExportPushdown:
     """Selected-membership export must not scan the whole archive."""
