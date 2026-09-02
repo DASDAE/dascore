@@ -424,6 +424,9 @@ def _member_coord(low, high, step, env_low, env_high, get_coord, units=None):
     follow exactly the rule loading follows, not a parallel rounding.
     Units ride along so a unit-bearing tolerance can be read against the
     merged coordinate, as chunk reads it.
+
+    Also returns the window as half-open sample indices on the member's
+    own grid — the form `FiberIO.read_array` takes.
     """
     low, high, step = _np_scalar(low), _np_scalar(high), _np_scalar(step)
     env_low, env_high = _np_scalar(env_low), _np_scalar(env_high)
@@ -438,34 +441,48 @@ def _member_coord(low, high, step, env_low, env_high, get_coord, units=None):
         )
         raise PatchConversionError(msg)
     full = get_coord(min=env_low, max=env_high + step, step=step, units=units)
-    coord, _ = full.select((low, high))
+    coord, indexer = full.select((low, high))
     # plan invariant: a published member always presents at least a sample
     assert len(coord), "a plan member never presents an empty window"
-    return coord
+    # a range select of an evenly sampled coordinate is a unit slice
+    assert isinstance(indexer, slice), "range select yields a slice"
+    start, stop, stride = indexer.indices(len(full))
+    assert stride == 1, "range select never strides"
+    return coord, (start, stop)
 
 
-def _load_xarray_block(resolver, row, dim, lims, dims, shape, dtype):
+def _load_xarray_block(resolver, row, dim, lims, dims, shape, dtype, window=None):
     """
     Load one dask block: a source patch trimmed to its member window.
 
-    Runs at compute time, once per block. Member loading goes through the
-    plan resolver — the same path a chunked spool loads through — so
-    residuals, units, and nested plans are honored; the select re-applies
-    the window exactly since read hints only reduce reading.
+    Runs at compute time, once per block. When the row's format offers a
+    `read_array` fast path, only the raw array for the sample window is
+    read; otherwise member loading goes through the plan resolver — the
+    same path a chunked spool loads through — so residuals, units, and
+    nested plans are honored. The select re-applies the window exactly
+    since read hints only reduce reading.
     """
-    patch = resolver._load_member(row).select(**{dim: lims})
-    if patch.dims != dims:
-        patch = patch.transpose(*dims)
-    if patch.shape != shape:
+    array = None
+    src_dims = tuple(str(row.get("dims") or "").split(","))
+    if window is not None and all(src_dims):
+        array = resolver._load_member_array(row, {dim: window})
+    if array is None:
+        patch = resolver._load_member(row).select(**{dim: lims})
+        if patch.dims != dims:
+            patch = patch.transpose(*dims)
+        array = patch.data
+    elif src_dims != dims:
+        array = np.transpose(array, [src_dims.index(d) for d in dims])
+    if array.shape != shape:
         msg = (
             f"Loaded block from '{row.get('source_path', '<memory>')}' has shape "
-            f"{patch.shape}, but the spool index promised {shape}. The source "
+            f"{array.shape}, but the spool index promised {shape}. The source "
             "file changed after indexing; run spool.update() and convert again."
         )
         raise PatchConversionError(msg)
     # A member narrower than the segment's combined dtype upcasts here so
     # the array holds the dtype its metadata states.
-    return patch.data.astype(dtype, copy=False)
+    return array.astype(dtype, copy=False)
 
 
 def _xarray_group_nodes(outputs, group_attrs):
@@ -678,9 +695,11 @@ def spool_to_xarray(
             mem = members[members["output_id"] == out["output_id"]]
             mem = mem.sort_values(f"{dim}_min")
             # Each member's block is sized by its own coordinate: the same
-            # select which trims the block at load also counts it here.
-            member_coords = [
-                _member_coord(
+            # select which trims the block at load also counts it here,
+            # and its indexer is the sample window a data-only read takes.
+            member_coords, member_windows = [], []
+            for _, m in mem.iterrows():
+                coord, window = _member_coord(
                     m[f"{dim}_min"],
                     m[f"{dim}_max"],
                     m[f"{dim}_step"],
@@ -689,8 +708,8 @@ def spool_to_xarray(
                     get_coord,
                     units=m.get(f"_{dim}_units"),
                 )
-                for _, m in mem.iterrows()
-            ]
+                member_coords.append(coord)
+                member_windows.append(window)
             coords, sizes = {}, {}
             for d in dims:
                 if d == dim:
@@ -720,13 +739,14 @@ def spool_to_xarray(
                 coords[d] = coord.values
                 sizes[d] = len(coord)
             blocks = []
-            for member_coord, (_, m) in zip(member_coords, mem.iterrows(), strict=True):
+            zipped = zip(member_coords, member_windows, mem.iterrows(), strict=True)
+            for member_coord, window, (_, m) in zipped:
                 count = len(member_coord)
                 shape = tuple(count if d == dim else sizes[d] for d in dims)
                 lims = (m[f"{dim}_min"], m[f"{dim}_max"])
                 row = member_rows.iloc[int(m["_pos"])].to_dict()
                 delayed = dask.delayed(_load_xarray_block)(
-                    resolver_ref, row, dim, lims, dims, shape, dtype
+                    resolver_ref, row, dim, lims, dims, shape, dtype, window
                 )
                 blocks.append(da.from_delayed(delayed, shape=shape, dtype=dtype))
             array = da.concatenate(blocks, axis=axis)

@@ -2202,3 +2202,71 @@ class TestSourceIds:
         """The config which turns the ids off turns this off too."""
         with config_context(patch_provenance="disabled"):
             assert dc.read(terra15_path)[0].attrs.patch_id == ""
+
+
+class TestFiberIOReadArray:
+    """Tests for the read_array data-only contract and its default."""
+
+    @pytest.fixture(scope="class")
+    def single_patch_path(self, tmp_path_factory):
+        """One patch written to a DASDAE file."""
+        path = tmp_path_factory.mktemp("read_array") / "single.h5"
+        dc.write(dc.get_example_patch(), path, "dasdae")
+        return path
+
+    @pytest.fixture(scope="class")
+    def multi_patch_path(self, tmp_path_factory):
+        """Two patches written to one DASDAE file."""
+        path = tmp_path_factory.mktemp("read_array") / "multi.h5"
+        spool = dc.examples.get_example_spool("random_das", length=2)
+        dc.write(spool, path, "dasdae")
+        return path
+
+    @pytest.fixture(scope="class")
+    def dasdae_io(self, single_patch_path):
+        """The FiberIO which read the file, resolved exactly."""
+        fmt, version = dc.get_format(single_patch_path)
+        return FiberIO.manager.get_fiberio(format=fmt, version=version)
+
+    def test_default_matches_read_then_select(self, dasdae_io, single_patch_path):
+        """The default is read + samples-select, stated as arrays."""
+        patch = dc.read(single_patch_path)[0]
+        windows = {"time": (5, 50), "distance": (2, 9)}
+        out = dasdae_io.read_array(single_patch_path, windows)
+        expected = patch.select(**windows, samples=True).data
+        assert np.array_equal(out, expected)
+
+    def test_absent_dimensions_load_whole(self, dasdae_io, single_patch_path):
+        """A dimension missing from windows comes back whole."""
+        patch = dc.read(single_patch_path)[0]
+        out = dasdae_io.read_array(single_patch_path, {"time": (0, 10)})
+        expected = patch.select(time=(0, 10), samples=True).data
+        assert np.array_equal(out, expected)
+        assert np.array_equal(dasdae_io.read_array(single_patch_path, {}), patch.data)
+
+    def test_multi_patch_selects_keyed_patch(self, dasdae_io, multi_patch_path):
+        """The key names which patch of the file the windows index."""
+        for payload in dc.scan(multi_patch_path):
+            key = payload.source_patch_key
+            wanted = dc.read(multi_patch_path, source_patch_key=key)[0]
+            out = dasdae_io.read_array(
+                multi_patch_path, {"time": (3, 17)}, source_patch_key=key
+            )
+            expected = wanted.select(time=(3, 17), samples=True).data
+            assert np.array_equal(out, expected)
+
+    def test_multi_patch_without_key_raises(self, dasdae_io, multi_patch_path):
+        """Windows on an ambiguous grid never guess a patch."""
+        with pytest.raises(PatchAttributeError, match="uniquely resolved"):
+            dasdae_io.read_array(multi_patch_path, {"time": (0, 5)})
+
+    def test_implements_flag(self, dasdae_io, monkeypatch):
+        """The flag says whether a format overrides the default."""
+        assert not dasdae_io.implements_read_array
+        monkeypatch.setattr(
+            type(dasdae_io),
+            "read_array",
+            lambda self, resource, windows, **kw: np.empty(0),
+            raising=False,
+        )
+        assert dasdae_io.implements_read_array

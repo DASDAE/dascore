@@ -24,9 +24,12 @@ import pandas as pd
 
 import dascore as dc
 from dascore.core.coords import CoordSummary
+from dascore.exceptions import UnknownFiberFormatError
+from dascore.io.core import FiberIO
 from dascore.io.index.backend import get_backend
 from dascore.io.index.catalog import (
     CompositeResolver,
+    FileResolver,
     PatchCatalog,
     PatchResolver,
     _adjust_unit_segments,
@@ -49,6 +52,7 @@ from dascore.utils.chunk_plan import (
 from dascore.utils.misc import _CanonicalRange, is_range
 from dascore.utils.patch import concatenate_planned
 from dascore.utils.patch_assembly import PatchAssembler
+from dascore.utils.paths import is_memory_uri
 from dascore.utils.pd import adjust_segments
 
 # Row columns which name dc.read's own keyword arguments; passing one along
@@ -555,6 +559,49 @@ class PlanResolver(PatchResolver):
         patch = self.loader.resolve(kwargs, **trim)
         patch = apply_exact_residuals(patch, self.parent_residuals)
         return self._in_plan_units(patch, kwargs)
+
+    def _load_member_array(self, row: Mapping, windows: Mapping) -> np.ndarray | None:
+        """
+        Load one member's raw array through the format's `read_array`.
+
+        ``windows`` maps dimension name to a half-open ``(start, stop)``
+        sample window on the member source's own grid; absent dimensions
+        load whole. The array comes back in the source's stated dimension
+        order, untransposed and uncast.
+
+        Returns None when the row cannot take the data-only path, and the
+        caller falls back to `_load_member`, which is exact for every
+        row. The fast path requires a plain file-backed row with a
+        concrete format and version, a format which overrides
+        ``read_array``, and no parent residuals — a residual re-trims the
+        loaded patch, so a window computed against the residual-adjusted
+        envelope is not a window on the raw grid.
+        """
+        if self.parent_residuals:
+            return None
+        path = row.get("source_path")
+        fmt, version = row.get("source_format"), row.get("source_version")
+        if not path or not fmt or not version:
+            return None
+        path = str(path)
+        if is_memory_uri(path) or path.startswith(PLAN_SCHEME):
+            return None
+        loader = self.loader
+        if not isinstance(loader, FileResolver):
+            loader = getattr(loader, "file", None)
+        if not isinstance(loader, FileResolver):
+            return None
+        try:
+            # An exact version is required: without one the manager hands
+            # back the newest reader, which may not match this file.
+            fiber_io = FiberIO.manager.get_fiberio(format=fmt, version=version)
+        except UnknownFiberFormatError:
+            return None
+        if not fiber_io.implements_read_array:
+            return None
+        key = _row_source_patch_key(row)
+        kwargs = {"source_patch_key": key} if key else {}
+        return fiber_io.read_array(loader.resolve_path(path), dict(windows), **kwargs)
 
     def _in_plan_units(self, patch: dc.Patch, kwargs: Mapping) -> dc.Patch:
         """

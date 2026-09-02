@@ -1907,3 +1907,131 @@ class TestIOResourceManagerConcurrency:
             assert len({id(x) for x in handles}) == 1
             assert not handles[0].closed
         assert handles[0].closed
+
+
+class TestToXarrayReadArray:
+    """Tests wiring the read_array fast path into to_xarray blocks."""
+
+    @pytest.fixture(autouse=True)
+    def _require_libs(self):
+        """These tests need both optional libraries."""
+        pytest.importorskip("xarray")
+        pytest.importorskip("dask")
+
+    @pytest.fixture(scope="class")
+    def dasdae_directory(self, tmp_path_factory):
+        """A directory of single-patch DASDAE files."""
+        path = tmp_path_factory.mktemp("to_xarray_read_array")
+        for num, patch in enumerate(dc.get_example_spool()):
+            patch.io.write(path / f"patch_{num}.h5", "dasdae")
+        return path
+
+    @pytest.fixture
+    def override_calls(self, monkeypatch):
+        """Give DASDAE a counting read_array override."""
+        from dascore.io.core import FiberIO  # noqa: PLC0415
+        from dascore.io.dasdae.core import DASDAEV1  # noqa: PLC0415
+
+        calls = []
+
+        def read_array(self, resource, windows, **kwargs):
+            calls.append(windows)
+            return FiberIO.read_array(self, resource, windows, **kwargs)
+
+        monkeypatch.setattr(DASDAEV1, "read_array", read_array, raising=False)
+        return calls
+
+    def _leaf(self, tree):
+        """The first dataset holding a data variable."""
+        return next(node for node in tree.subtree if "data" in node.dataset)
+
+    def test_fast_path_loads_blocks(
+        self, dasdae_directory, override_calls, monkeypatch
+    ):
+        """With an override, computing never builds a member Patch."""
+        from dascore.io.index.planned import PlanResolver  # noqa: PLC0415
+
+        spool = dc.spool(dasdae_directory).update()
+        eager = spool.chunk(time=None)[0].data
+        tree = spool.io.to_xarray()
+
+        def _fail(*args, **kwargs):
+            raise AssertionError("fast path fell back to patch loading")
+
+        monkeypatch.setattr(PlanResolver, "_load_member", _fail)
+        out = self._leaf(tree)["data"].data.compute()
+        assert np.array_equal(out, eager)
+        assert len(override_calls) == len(spool)
+
+    def test_residual_spool_falls_back(self, dasdae_directory, override_calls):
+        """A samples-selected spool loads through the exact patch path."""
+        spool = dc.spool(dasdae_directory).update()
+        sub = spool.select(time=(2, 100), samples=True)
+        out = self._leaf(sub.io.to_xarray())["data"].data.compute()
+        assert np.array_equal(out, sub.chunk(time=None)[0].data)
+        assert override_calls == []
+
+    def test_transposes_source_order(self):
+        """A native-order array is transposed to the tree's dims."""
+        from dascore.utils.io import _load_xarray_block  # noqa: PLC0415
+
+        native = np.arange(12).reshape(3, 4)
+
+        class _Fake:
+            def _load_member_array(self, row, windows):
+                return native
+
+        row = {"dims": "time,distance", "source_path": "x"}
+        out = _load_xarray_block(
+            _Fake(),
+            row,
+            "time",
+            (0, 2),
+            ("distance", "time"),
+            (4, 3),
+            native.dtype,
+            (0, 3),
+        )
+        assert np.array_equal(out, native.T)
+
+    def test_stale_shape_raises(self):
+        """An array which breaks the index's promise raises."""
+        from dascore.exceptions import PatchConversionError  # noqa: PLC0415
+        from dascore.utils.io import _load_xarray_block  # noqa: PLC0415
+
+        class _Fake:
+            def _load_member_array(self, row, windows):
+                return np.zeros((2, 2))
+
+        row = {"dims": "time,distance", "source_path": "x"}
+        with pytest.raises(PatchConversionError, match="promised"):
+            _load_xarray_block(
+                _Fake(), row, "time", (0, 2), ("time", "distance"), (3, 4), "f8", (0, 3)
+            )
+
+    def test_row_without_dims_falls_back(self, random_patch):
+        """A row which cannot state its dimension order takes the patch path."""
+        from dascore.utils.io import _load_xarray_block  # noqa: PLC0415
+
+        patch = random_patch
+
+        class _Fake:
+            def _load_member_array(self, row, windows):
+                raise AssertionError("fast path consulted without dims")
+
+            def _load_member(self, row):
+                return patch
+
+        coord = patch.get_coord("time")
+        lims = (coord.min(), coord.max())
+        out = _load_xarray_block(
+            _Fake(),
+            {"source_path": "x"},
+            "time",
+            lims,
+            patch.dims,
+            patch.shape,
+            patch.data.dtype,
+            (0, len(coord)),
+        )
+        assert np.array_equal(out, patch.data)
