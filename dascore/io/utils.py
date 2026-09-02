@@ -244,7 +244,12 @@ def resolve_keyed_source(
     return pairs[0][1]
 
 
-def slice_dataset(dataset, dims: Sequence[str], windows: Mapping[str, Any], shape=None):
+def slice_dataset(
+    dataset: ArrayLike,
+    dims: Sequence[str],
+    windows: Mapping[str, Any],
+    shape: Sequence[int] | None = None,
+) -> np.ndarray:
     """
     Read the sample windows of an array stored in ``dims`` order.
 

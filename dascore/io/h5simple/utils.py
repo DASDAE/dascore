@@ -51,9 +51,9 @@ def _get_coord(v, snap, name):
     return coord
 
 
-def _fill_coords(coord_shape_dict, other_nodes, data_node):
+def _name_missing_dim(coord_shape_dict, data_node) -> int:
     """
-    Fill missing coordinate with "channel".
+    Name the one axis no node accounts for "channel", and return its length.
 
     This is needed because the foresee data on pubdas only specify time;
     we have to fill in channel number.
@@ -62,8 +62,7 @@ def _fill_coords(coord_shape_dict, other_nodes, data_node):
     assert len(missing_shape) == 1, "can only fill one missing coord."
     shape = next(iter(missing_shape))
     coord_shape_dict[shape] = "channel"
-    other_nodes["channel"] = np.arange(shape)
-    return other_nodes, coord_shape_dict
+    return shape
 
 
 def _get_dims(data_node, time_node, other_nodes, dims=None):
@@ -85,11 +84,7 @@ def _get_dims(data_node, time_node, other_nodes, dims=None):
     coord_shape_dict[len(time_node)] = "time"
     # need to fill some dims
     if len(coord_shape_dict) != len(data_node.shape):
-        other_nodes, coord_shape_dict = _fill_coords(
-            coord_shape_dict,
-            other_nodes,
-            data_node,
-        )
+        _name_missing_dim(coord_shape_dict, data_node)
     return tuple(coord_shape_dict[x] for x in data_node.shape), other_nodes
 
 
@@ -97,6 +92,10 @@ def _get_coords_and_dims(data_node, time_node, other_nodes, snap=True, dims=None
     """Get dims tuple and coord dict."""
     dims, other_nodes = _get_dims(data_node, time_node, other_nodes, dims)
     other_nodes["time"] = time_node
+    # the filled axis is named but not built: only coordinates need it
+    if "channel" in dims and "channel" not in other_nodes:
+        length = data_node.shape[dims.index("channel")]
+        other_nodes["channel"] = np.arange(length)
     coords = {i: _get_coord(v, snap=snap, name=i) for i, v in other_nodes.items()}
     return dims, coords
 
