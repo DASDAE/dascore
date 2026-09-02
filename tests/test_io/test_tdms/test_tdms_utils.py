@@ -246,16 +246,28 @@ class TestReadArray:
             return original(fileinfo, nch, dmap, nso, rdo)
 
         single = dc.spool(fetch("iDAS005_tdms_example.626.tdms"))[0]
+        with open(two_segment_path, "rb") as fi:
+            fileinfo, _ = tdms_utils._get_fileinfo(fi)
+            first, second = (
+                rdo for rdo, _ in tdms_utils._iter_segment_bounds(fi, fileinfo)
+            )
         monkeypatch.setattr(tdms_utils, "_get_segment_data", spy)
         io = TDMSFormatterV4713()
-        out = io.read_array(two_segment_path, {"time": (1200, 1300)})
-        assert len(decoded) == 1
-        assert np.array_equal(out, single.data[200:300])
-        # a window inside the first segment stops the walk before the second
-        decoded.clear()
-        out = io.read_array(two_segment_path, {"time": (100, 200)})
-        assert len(decoded) == 1
-        assert np.array_equal(out, single.data[100:200])
+        # windows and the segment each should decode; the boundary is 1000
+        cases = {
+            (1200, 1300): [second],
+            (100, 200): [first],
+            (0, 1000): [first],
+            (1000, 1100): [second],
+            (990, 1010): [first, second],
+        }
+        for (start, stop), expected in cases.items():
+            decoded.clear()
+            out = io.read_array(two_segment_path, {"time": (start, stop)})
+            assert decoded == expected, (start, stop)
+            # both segments hold the example's samples
+            rows = np.concatenate([single.data, single.data])[start:stop]
+            assert np.array_equal(out, rows)
 
     def test_empty_window(self, two_segment_path):
         """A window past the end is empty with the right width and dtype."""

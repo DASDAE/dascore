@@ -160,8 +160,8 @@ def windows_to_slices(
 
     Each window is validated as `Patch.select` validates ``samples=True``
     values and resolved against its dimension's length, so every slice
-    comes back with explicit non-negative bounds; a dimension without a
-    window is taken whole.
+    comes back with explicit non-negative bounds and ``start <= stop`` (a
+    reversed window is empty); a dimension without a window is taken whole.
 
     Parameters
     ----------

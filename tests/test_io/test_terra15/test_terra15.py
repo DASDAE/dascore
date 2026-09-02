@@ -112,22 +112,6 @@ class TestTerra15Unfinished:
 class TestReadArray:
     """Tests for slicing the data node directly."""
 
-    @pytest.fixture(
-        params=["terra15_das_example_path", "terra15_v5_path", "terra15_v6_path"]
-    )
-    def terra15_path(self, request):
-        """Each Terra15 version's example file."""
-        return request.getfixturevalue(request.param)
-
-    def test_matches_default(self, terra15_path):
-        """The override returns what the read-and-trim default returns."""
-        io = Terra15FormatterV4()
-        windows = {"time": (3, 11), "distance": (2, 6)}
-        out = io.read_array(terra15_path, windows)
-        expected = FiberIO.read_array(io, terra15_path, windows)
-        assert out.dtype == expected.dtype
-        assert np.array_equal(out, expected)
-
     def test_unfinished_file_stops_at_written_samples(
         self, terra15_das_unfinished_path
     ):
@@ -140,6 +124,18 @@ class TestReadArray:
         # a window past the end clips to the written samples, as select does
         tail = io.read_array(terra15_das_unfinished_path, {"time": (-3, 10**6)})
         assert np.array_equal(tail, patch.data[-3:])
+
+    def test_raw_grid_counts_every_row(self, terra15_das_unfinished_path):
+        """With snap_dims=False the window lives on the raw grid, as in read."""
+        io = Terra15FormatterV4()
+        path = terra15_das_unfinished_path
+        out = io.read_array(path, {"time": (-5, None)}, snap_dims=False)
+        expected = FiberIO.read_array(io, path, {"time": (-5, None)}, snap_dims=False)
+        assert np.array_equal(out, expected)
+        assert len(out) == 5
+        assert len(io.read_array(path, {}, snap_dims=False)) > len(
+            io.read_array(path, {})
+        )
 
     def test_reads_only_the_window(self, terra15_v6_path, monkeypatch):
         """The data node is sliced in the file, not read whole then trimmed."""

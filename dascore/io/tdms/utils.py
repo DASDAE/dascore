@@ -201,10 +201,14 @@ def _iter_segment_bounds(tdms_file, fileinfo, lead_in_length=28):
         nso = min(file_size, start + next_seg_nso)
 
 
+def _segment_sample_count(fileinfo, rdo, nso) -> int:
+    """How many samples per channel the segment at these byte bounds holds."""
+    per_sample = int(fileinfo["n_channels"]) * np.dtype(fileinfo["data_type"]).itemsize
+    return (nso - rdo) // per_sample
+
+
 def _get_sample_count(tdms_file, fileinfo, lead_in_length=28):
     """Return how many samples per channel the whole file holds."""
-    itemsize = np.dtype(fileinfo["data_type"]).itemsize
-    per_sample = fileinfo["n_channels"] * itemsize
     position = tdms_file.tell()
     try:
         bounds = list(_iter_segment_bounds(tdms_file, fileinfo, lead_in_length))
@@ -212,7 +216,7 @@ def _get_sample_count(tdms_file, fileinfo, lead_in_length=28):
         tdms_file.seek(position, 0)
     # Counting bytes to the end of the file instead would count every
     # segment's lead-in and metadata as data.
-    return sum((nso - rdo) // per_sample for rdo, nso in bounds)
+    return sum(_segment_sample_count(fileinfo, rdo, nso) for rdo, nso in bounds)
 
 
 def _get_all_attrs(tdms_file, lead_in_length=28):
@@ -288,10 +292,8 @@ def _get_fileinfo(tdms_file, lead_in_length=28):
 
 def _get_segment_data(fileinfo, nch, dmap, nso, rdo):
     """Decode one segment of the mapped file as a (samples, channels) array."""
-    # seg1_length: length of recording indicated as raw_data in metadata for
-    # each channel in bytes
-    seg_length = int((nso - rdo) / nch / np.dtype(fileinfo["data_type"]).itemsize)
-    channel_length = seg_length
+    # samples per channel in this segment
+    seg_length = _segment_sample_count(fileinfo, rdo, nso)
 
     if fileinfo["decimated"]:
         # number of completely full chunks
@@ -332,34 +334,37 @@ def _get_segment_data(fileinfo, nch, dmap, nso, rdo):
         data_node = np.append(data_node, raw_last_chunk, axis=0)
     # Outside the branch: a decimated segment whose chunks all happen to
     # be full has nothing left over, and still has its data.
-    return data_node, channel_length
+    return data_node
 
 
 def _read_sample_range(tdms_file, fileinfo, start=0, stop=None, lead_in_length=28):
     """
     Read time samples ``start`` to ``stop`` (half-open) as (samples, channels).
 
-    A segment interleaves its channels, so it is the finest unit decoded;
-    only the segments the range touches are.
+    ``start`` and ``stop`` are resolved, non-negative sample indices (or
+    ``stop`` None for the end). Only the segments the range touches are
+    decoded.
     """
     dmap = mmap.mmap(tdms_file.fileno(), 0, access=mmap.ACCESS_READ)
     nch = int(fileinfo["n_channels"])
-    per_sample = nch * np.dtype(fileinfo["data_type"]).itemsize
     parts, offset = [], 0
     for rdo, nso in _iter_segment_bounds(tdms_file, fileinfo, lead_in_length):
-        seg_start, seg_stop = offset, offset + (nso - rdo) // per_sample
+        seg_len = _segment_sample_count(fileinfo, rdo, nso)
+        seg_start, seg_stop = offset, offset + seg_len
         offset = seg_stop
         if stop is not None and seg_start >= stop:
             break
         if seg_stop <= start:
             continue
-        segment, _ = _get_segment_data(fileinfo, nch, dmap, nso, rdo)
-        seg_len = seg_stop - seg_start
+        segment = _get_segment_data(fileinfo, nch, dmap, nso, rdo)
         low = max(start - seg_start, 0)
         high = seg_len if stop is None else min(stop - seg_start, seg_len)
         parts.append(segment[low:high])
     if not parts:
         return np.empty((0, nch), dtype=fileinfo["data_type"])
+    if len(parts) == 1:
+        # a decoded segment owns its data, so one part needs no copy
+        return parts[0]
     # segments stack along time, the first axis of (samples, channels)
     return np.concatenate(parts, axis=0)
 

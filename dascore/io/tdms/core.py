@@ -18,7 +18,6 @@ from .utils import (
     _get_data,
     _get_default_attrs,
     _get_fileinfo,
-    _get_sample_count,
     _get_version_str,
     _read_sample_range,
 )
@@ -93,13 +92,12 @@ class TDMSFormatterV4713(FiberIO):
         """
         Decode only the segments a time window touches.
 
-        A segment interleaves its channels, so it is the finest unit read;
-        the distance window is applied after decoding. The file holds one
-        patch, so no ``source_patch_key`` is taken.
+        The distance window is applied after decoding, since a segment
+        interleaves its channels.
         """
         raise_on_extra_kwargs(kwargs, "windows")
-        fileinfo, _ = _get_fileinfo(resource)
-        shape = (_get_sample_count(resource, fileinfo), int(fileinfo["n_channels"]))
+        fileinfo, attrs = _get_fileinfo(resource)
+        shape = (len(attrs["coords"]["time"]), int(fileinfo["n_channels"]))
         time_slice, dist_slice = windows_to_slices(windows, ("time", "distance"), shape)
         data = _read_sample_range(resource, fileinfo, time_slice.start, time_slice.stop)
         return data[:, dist_slice]
