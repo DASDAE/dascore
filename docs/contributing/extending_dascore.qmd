@@ -2,59 +2,20 @@
 title: Extending DASCore
 ---
 
-This page explains how to extend DASCore's objects with namespaces. Use it when you want users to write code like `patch.my_plugin.some_method()` or `spool.my_plugin.some_method()` from a separate package.
+Namespaces let external packages expose methods such as `patch.my_plugin.method()` without subclassing DASCore objects or adding optional dependencies to core. File formats use [`FiberIO`](new_format.qmd), not namespaces.
 
-## When to use a namespace
-
-A namespace is appropriate when you want to group related functionality under a stable access point instead of adding many methods directly to a DASCore object. Good candidates include:
-
-- Optional integrations that should live in a separate package.
-- Domain-specific processing that is useful to a subset of users.
-- Functionality that needs extra dependencies which should not become core DASCore dependencies.
-
-If you are adding support for a new file format, see [Adding a New Format](new_format.qmd). File formats use `FiberIO` plugins, not method namespaces.
-
-Namespaces and `FiberIO` plugins are the extension points; subclassing a DASCore object is not one. There is a single `Spool` class, whose state is the catalog its `__init__` builds, so copying a subclass instance which never ran that `__init__` is refused rather than silently accepted.
-
-## The namespace model
-
-Four objects host namespaces. Each has its own base class and entry point group, so a namespace named `zug` on a `Patch` and one on a `Spool` are different things:
-
-| Host | Base class | Entry point group | Plugin registry file |
+| Host | Base class | Entry-point group | Registry |
 |---|---|---|---|
 | `Patch` | `PatchNameSpace` | `dascore.patch_namespace` | `patch.csv` |
 | `Spool` | `SpoolNameSpace` | `dascore.spool_namespace` | `spool.csv` |
 | `Inventory` | `InventoryNameSpace` | `dascore.inventory_namespace` | `inventory.csv` |
 | `AnnotationSet` | `AnnotationNameSpace` | `dascore.annotation_namespace` | `annotation.csv` |
 
-All four bases live in `dascore.utils.namespace`. Namespace methods receive the host object, so they look like normal methods on it. Naming the first argument after the host can make this explicit:
+The base classes live in `dascore.utils.namespace`. A method receives the host object, so it behaves like a normal host method.
 
-```{python}
-import dascore as dc
-from dascore.constants import PatchType
-from dascore.utils.namespace import PatchNameSpace
+## Local namespaces
 
-
-class MyPatchNamespace(PatchNameSpace):
-    """Patch extension methods."""
-    
-    @dc.patch_function
-    def peak_to_peak(patch: PatchType) -> float:
-        """Return peak-to-peak amplitude."""
-        return patch.data.max() - patch.data.min()
-```
-
-## Local, non-plugin use
-
-If you are not using entry-point plugins, importing a namespace subclass is enough. Give the subclass a `name`, then import it somewhere before users access `patch.<name>` or `spool.<name>`.
-
-This is mainly useful for:
-
-- Experiments in a notebook or script.
-- Tests which define temporary namespaces inline.
-- Private/local code where packaging an entry-point plugin is unnecessary.
-
-Example:
+For notebooks, tests, or private code, define a named subclass and import it before access:
 
 ```{python}
 import dascore as dc
@@ -74,90 +35,31 @@ patch = dc.get_example_patch()
 value = patch.my_ext.peak_to_peak()
 ```
 
-The namespace `name` must be a public Python identifier -- a leading underscore is refused, since a host resolves its own private names before the namespaces are searched. If another namespace of the same type already uses that name, DASCore warns when the subclass is defined and the later class wins.
+The name must be a public Python identifier. Defining a duplicate host/name pair warns and replaces the earlier class.
 
-## Packaging an extension plugin
+## Plugin packages
 
-For reusable extensions, this is the preferred approach. Define the namespace class in your package and register it with an entry point in `pyproject.toml`.
-
-### Patch namespace example
-
-Suppose your package is named `dascore-extra` and you want to expose `patch.my_ext`.
-
-`dascore_extra/patch_namespace.py`
-
-```{python}
-import dascore as dc
-from dascore.constants import PatchType
-from dascore.utils.namespace import PatchNameSpace
-
-
-class MyPatchNamespace(PatchNameSpace):
-    """Patch methods provided by dascore-extra."""
-
-    name = "my_ext"
-    
-    dc.patch_function()
-    def peak_to_peak(patch: PatchType) -> float:
-        return patch.data.max() - patch.data.min()
-```
-
-`pyproject.toml`
+Reusable extensions should register an entry point. Given the class above in `dascore_extra.patch_namespace`:
 
 ```default
 [project.entry-points."dascore.patch_namespace"]
 my_ext = "dascore_extra.patch_namespace:MyPatchNamespace"
 ```
 
-After installation, DASCore loads the namespace the first time `patch.my_ext` is accessed.
+DASCore loads it on first access. `Spool`, `Inventory`, and `AnnotationSet` use the same pattern with the base class and group from the table.
 
-### Registering your plugin with DASCore
+After publishing the package, add it to the matching file under `dascore/plugin_registry/` so missing-plugin errors can tell users what to install:
 
-Once your package is published, consider opening a pull request to [DASCore](https://github.com/DASDAE/dascore) to add it to the plugin registry. This lets users see a helpful message pointing to your package when they try to use your namespace without having it installed.
-
-Add a row to the plugin registry file for the host, from the table above -- `dascore/plugin_registry/patch.csv` for a patch namespace:
-
-```
+```text
 package_name,package_url,namespace
 dascore-extra,https://github.com/yourorg/dascore-extra,my_ext
 ```
 
-With that row in place, `patch.my_ext` raises a descriptive error for users who have not yet installed your package:
-
-```
-DASCorePluginError: Patch has a registered namespace of 'my_ext' provided by
-'dascore-extra' but it is not installed. Install it from:
-https://github.com/yourorg/dascore-extra
-```
-
-### The other hosts
-
-`Spool`, `Inventory` and `AnnotationSet` namespaces use the same pattern. The only changes are the base class and the entry point group, both from the table above. For example, a namespace on an `AnnotationSet`:
-
-```{python}
-from dascore.utils.namespace import AnnotationNameSpace
-
-
-class MyAnnotationNamespace(AnnotationNameSpace):
-    """AnnotationSet methods provided by dascore-extra."""
-
-    name = "my_ext"
-
-    def count_groups(annotations) -> int:
-        """Return how many distinct groups the set holds."""
-        return annotations.io.to_dataframe()["group"].nunique()
-```
-
-```default
-[project.entry-points."dascore.annotation_namespace"]
-my_ext = "dascore_extra.annotation_namespace:MyAnnotationNamespace"
-```
-
-DASCore uses this itself: `patch.io`, `inventory.io` and `annotation_set.io` are namespaces registered in exactly this way, defined in `dascore/io/__init__.py`.
+DASCore's own `patch.io`, `inventory.io`, and `annotation_set.io` follow this model.
 
 ## Array backends
 
-Patch data can be backed by any array library which implements the [array API standard](https://data-apis.org/array-api/latest/), not just NumPy. A patch function receives the patch exactly as it was given, so its body decides which backends it supports. Getting the namespace from the data, rather than reaching for NumPy, is what makes a function work on all of them:
+Patch functions receive the original data backend. Use its [array API](https://data-apis.org/array-api/latest/) namespace instead of NumPy when the function should support multiple backends:
 
 ```{python}
 import dascore as dc
@@ -171,13 +73,11 @@ def double(patch: PatchType) -> PatchType:
     return patch.new(data=xp.multiply(patch.data, 2))
 ```
 
-Most of DASCore's patch functions are still written against NumPy, and make no promise about data from another backend: depending on the body they may raise, or quietly return a NumPy-backed patch. Operators and ufuncs (`patch * 2`, `np.sqrt(patch)`) always work: they stay in the array's own namespace when the standard can express them, and otherwise convert to NumPy and back, which issues a `NumpyFallbackWarning`. NumPy functions such as `np.mean(patch)`, and reductions of dtypes the standard excludes, always take that second path.
+Plain NumPy-based functions may raise or return a NumPy-backed patch for other arrays. Operators and ufuncs stay in the array namespace when possible; otherwise they convert through NumPy and emit `NumpyFallbackWarning`.
 
-Array-likes which merely support `__array__`, rather than implementing the standard, are handled by NumPy and report `"numpy"` as their backend.
+NumPy functions such as `np.mean(patch)` and reductions over excluded dtypes always use this fallback; `__array__`-only objects report `numpy` as their backend.
 
-### Supplying a kernel for your own backend
-
-A handful of operations are written out by hand as a [PatchProcessor](`dascore.workflow.processor.PatchProcessor`), splitting what the operation *means* from what it *computes*: `derive_meta` works out the result's coordinates and never sees an array, and `kernel` does the arithmetic and never sees a coordinate. Where one exists, a package which brings its own arrays can say how that operation runs on them, without touching DASCore:
+Some operations use a [`PatchProcessor`](`dascore.workflow.processor.PatchProcessor`) with separate metadata and array kernels. A backend package can register its own kernel without changing the operation:
 
 ```{python}
 import numpy as np
@@ -188,21 +88,9 @@ from dascore.workflow import register_kernel
 
 @register_kernel(Abs, "mybackend")
 def _abs_mybackend(processor, data, meta, out_meta):
-    """How `abs` runs on mybackend's arrays."""
     return np.abs(data)
 ```
 
-The kernel is chosen by the backend the data report, so nothing else about the operation changes — `patch.abs()` reaches it, and the name, arguments and fingerprint are what they always were. An operation with no registered kernel for a backend falls back to the class's own `kernel`, which is written to the standard.
+The data backend selects the kernel; unregistered backends use the processor's standard kernel. Most patch functions are still plain functions and need no processor.
 
-Only a few operations have a processor today; the rest are plain functions, and adding one is a deliberate act rather than something every patch function needs.
-
-## Related guides
-
-- [Contributing](contributing.qmd)
-- [Documentation](documentation.qmd)
-- [Testing](testing.qmd)
-- [Adding a New Format](new_format.qmd)
-
-:::{.callout-note}
-[Pandas](https://pandas.pydata.org/pandas-docs/stable/development/extending.html) and [Xarray](https://docs.xarray.dev/en/stable/internals/extending-xarray.html) expose similar extension points through accessors. DASCore's namespace system serves a similar purpose, but simplifies the implementation API (eg no need to know about the accessor).
-:::
+See [Contributing](contributing.qmd), [Testing](testing.qmd), and [Documentation](documentation.qmd) for package conventions.
