@@ -66,7 +66,7 @@ The resulting signal had some of the spikes removed with minimal distortion to t
 
 
 ::: {.callout-warning}
-The Hampel filter can be quite slow if large windows are used. We recommend using window sizes that correspond to <10 samples for most cases.
+With `approximate=False` the Hampel filter can be quite slow if large windows are used, since its cost grows with the window's area. The default (`approximate=True`) is nearly insensitive to window size.
 :::
 
 ### Multi-dimensional Filtering
@@ -87,7 +87,7 @@ ax.set_title("Filtered along Time and Distance");
 
 2. **Threshold selection**: Start with a conservative threshold (3.5-5.0) and adjust based on your data characteristics and noise level.
 
-3. **Window size**: Choose window sizes that are large enough to provide stable statistics but small enough to preserve local features. Start with ~5-9 samples per dimension.
+3. **Window size**: Choose window sizes that are large enough to provide stable statistics but small enough to preserve local features. Start with ~5-9 samples per dimension. Use `samples=True` to give the window in samples rather than coordinate units.
 
 4. **Performance optimization**: `approximate=True` (default) achieves a 3-4x speedup with minimal quality loss. It is usually good enough for simply removing data spikes, but exact median calculations can be achieved by setting this to False.
 

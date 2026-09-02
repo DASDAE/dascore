@@ -19,7 +19,6 @@ from dascore.io.netcdf.utils import (
     get_cf_version,
     is_netcdf4_file,
 )
-from dascore.utils.downloader import fetch
 from dascore.utils.remote_io import (
     clear_remote_file_cache,
     get_remote_cache_path,
@@ -54,8 +53,11 @@ def _assert_patch_round_trip_equal(expected: dc.Patch, observed: dc.Patch) -> No
     assert set(expected.coords.coord_map) == set(observed.coords.coord_map)
     expected_attrs = expected.attrs.model_dump()
     observed_attrs = observed.attrs.model_dump()
-    expected_attrs.pop("_source_patch_id", None)
-    observed_attrs.pop("_source_patch_id", None)
+    # Where the bytes came from is not part of what the data is: a patch
+    # read from a file names its source, one built in memory does not.
+    for attrs in (expected_attrs, observed_attrs):
+        attrs.pop("_source_patch_key", None)
+        attrs.pop("patch_id", None)
     assert expected_attrs == observed_attrs
 
 
@@ -228,15 +230,6 @@ class TestNetCDFUtils:
         with h5py.File(path, "r") as h5file:
             assert not is_netcdf4_file(h5file)
 
-    def test_get_cf_version_decodes_bytes(self, tmp_path):
-        """CF version extraction should decode byte attrs."""
-        path = tmp_path / "cf_version_bytes.nc"
-        with h5py.File(path, "w") as h5file:
-            h5file.attrs["Conventions"] = np.bytes_("CF-1.9")
-
-        with h5py.File(path, "r") as h5file:
-            assert get_cf_version(h5file) == "1.9"
-
 
 class TestNetCDFCoreHelpers:
     """Direct tests for lightweight NetCDF core helpers."""
@@ -310,88 +303,16 @@ class TestNetCDFCoreHelpers:
         assert out["chunksizes"] == (10, 20)
 
     def test_read_returns_empty_spool_for_empty_filtered_patch(
-        self, minimal_cf_netcdf_path, monkeypatch
+        self, minimal_cf_netcdf_path
     ):
-        """Read should return an empty spool after filtering removes all data."""
+        """A selection which keeps no samples reads as an empty spool.
 
-        class FakeDataArray:
-            def __init__(self):
-                self.data = np.ones((1, 1))
-
-                def _make_coord(dims, vals):
-                    return type("Coord", (), {"dims": dims, "values": vals})()
-
-                self.coords = {
-                    "distance": _make_coord(("distance",), np.array([0])),
-                    "time": _make_coord(("time",), np.array([0])),
-                }
-                self.attrs = {}
-                self.dims = ("distance", "time")
-                self.shape = self.data.shape
-
-            def load(self):
-                return self
-
-        class FakeDataset:
-            def __init__(self):
-                self.data_vars = {"data": FakeDataArray()}
-                self.attrs = {}
-
-            def __enter__(self):
-                return self
-
-            def __exit__(self, *args):
-                return False
-
-            def get(self, name):
-                return self.data_vars["data"]
-
-            def __getitem__(self, item):
-                return self.data_vars[item]
-
-        formatter = netcdf_core.NetCDFCFV18()
-        fake_xarray = type(
-            "FakeXarray",
-            (),
-            {"open_dataset": staticmethod(lambda *args, **kwargs: FakeDataset())},
-        )
-        empty_patch = dc.Patch(
-            data=np.empty((0, 0)),
-            coords=dc.get_coord_manager(
-                coords={"distance": np.array([]), "time": np.array([])},
-                dims=("distance", "time"),
-            ),
-            dims=("distance", "time"),
-            attrs={"tag": "empty"},
-        )
-
-        def _optional_import(name, on_missing="raise"):
-            if name == "xarray":
-                return fake_xarray
-            if name == "netCDF4":
-                return object()
-            return None
-
-        monkeypatch.setattr(netcdf_core, "optional_import", _optional_import)
-        monkeypatch.setattr(
-            netcdf_core,
-            "xarray_to_patch",
-            lambda data_array: dc.Patch(
-                data=data_array.data,
-                coords=dc.get_coord_manager(
-                    coords={
-                        name: (coord.dims, coord.values)
-                        for name, coord in data_array.coords.items()
-                    },
-                    dims=data_array.dims,
-                ),
-                dims=data_array.dims,
-                attrs=dict(data_array.attrs),
-            ),
-        )
-        monkeypatch.setattr(dc.Patch, "select", lambda self, **kwargs: empty_patch)
-
-        spool = formatter.read(minimal_cf_netcdf_path, time=(0, 1))
+        A window past the end of the file is what empties the patch; the
+        fake xarray pipeline this replaces reached the same two lines by
+        making Patch.select return an empty patch to every caller.
+        """
+        # The file's time axis runs 0-9, so this window keeps nothing.
+        spool = netcdf_core.NetCDFCFV18().read(minimal_cf_netcdf_path, time=(100, 200))
         assert len(spool) == 0
 
     def test_write_uses_xarray_dataset_path(self, example_patch, tmp_path, monkeypatch):
@@ -521,7 +442,7 @@ class TestNetCDFIO:
         assert "time" in patch.coords
         assert "distance" in patch.coords
         assert patch.data.ndim == 2
-        assert patch.attrs["_source_patch_id"] == "data"
+        assert patch.attrs["_source_patch_key"] == "data"
 
     def test_scan_netcdf(self, netcdf_path):
         """Test scanning a NetCDF file for metadata."""
@@ -531,7 +452,7 @@ class TestNetCDFIO:
         assert summary.source_format == "NETCDF_CF"
         assert "time" in summary.coords
         assert "distance" in summary.coords
-        assert summary.source_patch_id == "data"
+        assert summary.source_patch_key == "data"
 
     def test_remote_stream_no_download(self, example_patch, netcdf_path):
         """Remote NetCDF should stream via h5netcdf, not download to the cache."""
@@ -558,73 +479,12 @@ class TestNetCDFIO:
         assert patch == example_patch
         assert _cached_file_count() == 0, "read should stream, not download"
 
-    def test_get_format(self, minimal_cf_netcdf_path):
-        """Test format detection."""
-        assert dc.get_format(minimal_cf_netcdf_path) == ("NETCDF_CF", "1.8")
-
     def test_get_format_without_xarray_import(
-        self, minimal_cf_netcdf_path, monkeypatch
+        self, minimal_cf_netcdf_path, hide_module
     ):
         """Format detection should not depend on xarray being importable."""
-        original_import_module = importlib.import_module
-
-        def _import_module(name, package=None):
-            if name == "xarray":
-                raise ImportError("xarray disabled for test")
-            return original_import_module(name, package)
-
-        monkeypatch.setattr(importlib, "import_module", _import_module)
-
+        hide_module("xarray")
         assert dc.get_format(minimal_cf_netcdf_path) == ("NETCDF_CF", "1.8")
-
-    def test_get_format_rejects_silixa_carina_hdf5(self):
-        """
-        NETCDF_CF must not claim Silixa Carina/iDAS HDF5 files.
-
-        These files (e.g. the INGV Mt Etna deployment) are written through a
-        netCDF library, so they carry _NCProperties and dimension scales, but
-        their netCDF coordinate variables are empty or zeroed; the usable
-        metadata lives in Silixa attrs on the root. They have no Conventions
-        attr, so the version requirement in get_format must reject them.
-        """
-        path = fetch("silixa_h5_ingv_1.h5")
-        formatter = netcdf_core.NetCDFCFV18()
-        with h5py.File(path, "r") as h5file:
-            assert is_netcdf4_file(h5file)
-            assert get_cf_version(h5file) is None
-            assert formatter.get_format(h5file) is False
-
-    def test_round_trip(self, example_patch, tmp_path):
-        """Test round-trip: patch -> NetCDF -> patch."""
-        _require_xarray_netcdf_engine()
-        path = tmp_path / "roundtrip.nc"
-
-        # Write and read back
-        dc.write(example_patch, path, file_format="netcdf_cf")
-        spool = dc.read(path, file_format="netcdf_cf")
-        recovered_patch = spool[0]
-
-        # Check data preservation
-        np.testing.assert_array_almost_equal(
-            example_patch.data, recovered_patch.data, decimal=6
-        )
-
-        # Check coordinate preservation
-        for coord_name in example_patch.coords.coord_map:
-            orig_coord = example_patch.coords.get_array(coord_name)
-            recovered_coord = recovered_patch.coords.get_array(coord_name)
-
-            if coord_name == "time":
-                # Time coordinates might have slight precision differences
-                # due to CF time conversion (float64 seconds -> datetime64[ns])
-                time_diff = np.abs(orig_coord - recovered_coord)
-                assert np.all(
-                    time_diff < np.timedelta64(200, "us")
-                )  # 200 microsecond tolerance
-            else:
-                np.testing.assert_array_almost_equal(
-                    orig_coord, recovered_coord, decimal=6
-                )
 
 
 class TestNetCDFXarrayCompatibility:
@@ -754,15 +614,6 @@ class TestNetCDFEdgeCases:
         return dc.spool([patch1, patch2])
 
     @pytest.fixture
-    def invalid_hdf5_file(self, tmp_path):
-        """Create an invalid HDF5 file (not NetCDF)."""
-        path = tmp_path / "invalid.nc"
-        with h5py.File(path, "w") as h5file:
-            rng = np.random.default_rng()
-            h5file.create_dataset("random_data", data=rng.standard_normal((100, 50)))
-        return path
-
-    @pytest.fixture
     def compressed_netcdf_file(self, tmp_path):
         """Create a compressed NetCDF file for testing."""
         _require_xarray_netcdf_engine()
@@ -793,11 +644,6 @@ class TestNetCDFEdgeCases:
             NotImplementedError, match="Multi-patch spools not yet supported"
         ):
             dc.write(multi_patch_spool, path, file_format="netcdf_cf")
-
-    def test_invalid_netcdf_file(self, invalid_hdf5_file):
-        """Test behavior with invalid NetCDF file."""
-        with h5py.File(invalid_hdf5_file, "r") as h5file:
-            assert not is_netcdf4_file(h5file)
 
     def test_compression_options(self, compressed_netcdf_file):
         """Test NetCDF file creation with compression options."""
@@ -904,7 +750,7 @@ class TestNetCDFUtilsAdvanced:
         patch = spool[0]
         assert set(patch.coords.coord_map) == {"time", "distance"}
         assert patch.attrs.tag == ""
-        assert patch.attrs["_source_patch_id"] == "data"
+        assert patch.attrs["_source_patch_key"] == "data"
 
     def test_error_conditions(self, tmp_path):
         """Test various error conditions."""

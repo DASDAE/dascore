@@ -47,16 +47,16 @@ class ProdMLV2_0(FiberIO):  # noqa
     ) -> list[ScanPayload]:
         """Scan a prodml file, return summary information about the file's contents."""
         out: list[ScanPayload] = []
-        for attr, coords, source_patch_id in _yield_prodml_attrs_coords(
+        for attr, coords, source_patch_key in _yield_prodml_attrs_coords(
             resource, snap=snap
         ):
-            attrs = attr.update(_source_patch_id=source_patch_id)
+            attrs = attr.update(_source_patch_key=source_patch_key)
             out.append(
                 make_scan_payload(
                     attrs=attrs,
                     coords=coords,
                     dtype=attrs.get("dtype", ""),
-                    source_patch_id=source_patch_id,
+                    source_patch_key=source_patch_key,
                 )
             )
         return out
@@ -66,7 +66,7 @@ class ProdMLV2_0(FiberIO):  # noqa
         resource: H5Reader,
         time: tuple[opt_timeable_types, opt_timeable_types] | None = None,
         distance: tuple[float | None, float | None] | None = None,
-        source_patch_id=(),
+        source_patch_key=(),
         **kwargs,
     ) -> dc.Spool:
         """Read a ProdML file."""
@@ -74,7 +74,7 @@ class ProdMLV2_0(FiberIO):  # noqa
             resource,
             time=time,
             distance=distance,
-            source_patch_id=source_patch_id,
+            source_patch_key=source_patch_key,
         )
         return dc.spool(patches)
 

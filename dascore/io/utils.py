@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import warnings
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from typing import Any
 
 import numpy as np
@@ -84,6 +84,29 @@ def convert_attr_units(attrs: dict, name: str, to_units: str, from_units="") -> 
     return attrs
 
 
+def drop_blank_attrs(attrs: dict, names: Iterable[str]) -> dict:
+    """
+    Drop the named attrs whose value is blank, in place.
+
+    A field the vendor left empty, or omitted, states nothing. Keeping it
+    turns "the file does not say" into a value downstream code can match
+    on, so the parse boundary drops it rather than passing the blank along.
+
+    Parameters
+    ----------
+    attrs
+        The parsed attrs, modified in place and returned.
+    names
+        The attrs to drop when blank. A name is blank when it is missing,
+        None, or a string of only whitespace.
+    """
+    for name in names:
+        value = attrs.get(name)
+        if value is None or (isinstance(value, str) and not value.strip()):
+            attrs.pop(name, None)
+    return attrs
+
+
 def build_patches(
     coords: CoordManager,
     data: ArrayLike,
@@ -127,6 +150,37 @@ def build_patches(
         return []
     # Ellipsis rather than a slice so 0d data (a scalar patch) also loads.
     return [dc.Patch(data=data[...], coords=coords, attrs=patch_attrs)]
+
+
+def get_gridded_coord(values, units=None) -> BaseCoord:
+    """
+    Return a stored coordinate array forced onto an even grid.
+
+    For axes the instrument samples on a fixed grid, where the stored values
+    only restate that grid and any departure from it is representation noise.
+    Such an array can jitter past the tolerance `get_coord` uses to recognize
+    an even coordinate and leave a monotonic coord with no step.
+
+    Parameters
+    ----------
+    values
+        The stored coordinate values.
+    units
+        Units to attach to the returned coordinate.
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> from dascore.io.utils import get_gridded_coord
+    >>> # an even grid restated in float32, as some formats store it
+    >>> values = np.linspace(4000.0, 4009.9, 100, dtype=np.float32)
+    >>> coord = get_gridded_coord(values.astype(np.float64), units="m")
+    >>> float(round(coord.step, 4))
+    0.1
+    """
+    coord = get_coord(data=np.atleast_1d(np.asarray(values)), units=units)
+    # A lone sample states no spacing, and snap would invent a step of 1.
+    return coord.snap() if len(coord) > 1 else coord
 
 
 def get_exact_coord(values, units=None) -> BaseCoord:

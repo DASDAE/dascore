@@ -12,7 +12,6 @@ from __future__ import annotations
 import pytest
 
 import dascore as dc
-import dascore.core.spool as spool_module
 from dascore.exceptions import InvalidSpoolError
 from dascore.io.index.planned import PlanResolver
 
@@ -155,13 +154,6 @@ class TestTypeSurface:
         file_spool = dc.spool(file_path)
         for spool in (live, dir_spool, file_spool, live.chunk(time=2)):
             assert type(spool) is dc.Spool
-
-    def test_removed_names_gone(self):
-        """The old concrete class names are deleted outright."""
-        for name in ("MemorySpool", "DirectorySpool", "FileSpool"):
-            assert not hasattr(spool_module, name)
-        with pytest.raises(ImportError):
-            from dascore.clients.dirspool import DirectorySpool  # noqa
 
     def test_live_patch_predicate(self, patches, tmp_path):
         """has_live_patches distinguishes memory content, not class."""

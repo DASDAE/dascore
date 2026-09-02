@@ -14,10 +14,9 @@ from dascore.exceptions import ParameterError
 from dascore.utils.docs import compose_docstring
 from dascore.utils.patch import (
     _maybe_add_history_str,
-    get_dim_axis_value,
-    get_window_axis_step,
 )
 from dascore.utils.pd import rolling_df
+from dascore.utils.window import resolve_window
 
 rolling_apply_description = """
 Apply a function over the specified moving window.
@@ -393,13 +392,20 @@ def rolling(
             return _PandasPatchRoller
         return _NumpyPatchRoller
 
-    dim, axis, value = get_dim_axis_value(patch, kwargs=kwargs)[0]
-    window, _, step = get_window_axis_step(patch, overlap, step, samples, **kwargs)
-    # Handle default when no overlap/step specified and ensure window size
+    resolved = resolve_window(
+        patch,
+        kwargs,
+        samples=samples,
+        overlap=overlap,
+        step=step,
+        allow_multiple=False,
+        enforce_lt_coord=True,
+    )
+    dim, axis, window = resolved.dims[0], resolved.axes[0], resolved.size[0]
+    value = kwargs[dim]
+    step = None if resolved.stride is None else resolved.stride[0]
+    # No overlap or step given means every sample gets a window.
     step = 1 if step is None else step
-    if window == 0 or step == 0:
-        msg = "Window or step size can't be zero. Use any positive values."
-        raise ParameterError(msg)
     cls = _get_engine(step, engine, patch)
     roll_hist = (
         f"rolling({dim}={value}, step={step}, overlap={overlap}, "

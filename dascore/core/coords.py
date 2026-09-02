@@ -18,7 +18,7 @@ from contextlib import suppress
 from functools import cache
 from operator import gt, lt
 from types import EllipsisType
-from typing import TYPE_CHECKING, Any, Literal, cast, overload
+from typing import TYPE_CHECKING, Any, Literal, NoReturn, Self, cast, overload
 
 import numpy as np
 import pandas as pd
@@ -29,7 +29,6 @@ from pydantic import (
     model_validator,
 )
 from rich.text import Text
-from typing_extensions import Self
 
 import dascore as dc
 from dascore.compat import array, is_array
@@ -48,13 +47,20 @@ from dascore.units import (
     get_quantity,
     get_quantity_str,
     percent,
+    units_match,
 )
 from dascore.utils.array import (
     _coerce_text_array,
     _is_text_coercible_array,
     hash_array,
 )
-from dascore.utils.display import get_nice_text
+from dascore.utils.display import (
+    RichRepr,
+    get_nice_text,
+    range_texts,
+    rate_text,
+    span_text,
+)
 from dascore.utils.docs import compose_docstring, get_docstring
 from dascore.utils.misc import (
     _get_nullish,
@@ -142,8 +148,7 @@ def _reduce_time_like(func, data):
     data = np.asarray(data)
     valid = data[~pd.isnull(data)]
     if not valid.size:
-        nfunc = np.datetime64 if is_datetime64(data) else np.timedelta64
-        return np.atleast_1d(nfunc("NaT", "ns"))
+        return np.atleast_1d(_get_nullish(data.dtype))
 
     # Some reducers cannot operate directly on time-like dtypes. If direct
     # reduction fails, or returns only nulls despite valid input, fall back to
@@ -182,6 +187,40 @@ def _get_dtype(value, dtype):
         return str(dtype)
     value = type(value)
     return str(np.dtype(value))
+
+
+def _conformed(value, dtype: np.dtype):
+    """
+    The value as the given dtype, or unchanged where that would lose it.
+
+    Conforming is only ever a change of spelling. A coordinate whose
+    metadata does not fit the dtype it declares — a partial one stating
+    an integer dtype and a fractional start — would otherwise have the
+    difference truncated away, and two coordinates which are not equal
+    would share an identity.
+    """
+    with suppress(TypeError, ValueError, OverflowError):
+        original = np.asarray(value)
+        converted = original.astype(dtype)
+        if converted.astype(original.dtype) == original:
+            return converted
+    return value
+
+
+def _scalar_dtype(dtype: np.dtype, name: str) -> np.dtype:
+    """
+    The dtype a coordinate's own scalar is conformed to before hashing.
+
+    The coordinate's dtype, at its own precision — a coordinate keeping
+    picoseconds must not have them rounded away, or two coordinates a
+    picosecond apart would share an identity. A step is the duration
+    between values, so it takes the matching time unit rather than the
+    time kind itself.
+    """
+    if dtype.kind not in "mM":
+        return dtype
+    unit = np.datetime_data(dtype)[0]
+    return np.dtype(f"timedelta64[{unit}]") if name == "step" else dtype
 
 
 class CoordSummary(DascoreBaseModel):
@@ -316,7 +355,7 @@ def get_compatible_values(val, dtype):
     return val
 
 
-class BaseCoord(DascoreBaseModel, abc.ABC):
+class BaseCoord(RichRepr, DascoreBaseModel, abc.ABC):
     """
     Coordinate interface.
 
@@ -375,9 +414,29 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
         # This also allows shape to be an int.
         return tuple(iterate(value))
 
-    @abc.abstractmethod
     def convert_units(self, units) -> Self:
-        """Convert from one unit to another. Set units if None are set."""
+        """
+        Convert from one unit to another. Set units if None are set.
+
+        A coordinate already carrying exactly these units -- magnitude
+        included, so `100 cm` is not `m` -- returns itself, letting a
+        caller detect a conversion with nothing to do by identity.
+        """
+        if units_match(self.units, units):
+            return self
+        return self._convert_units(units)
+
+    def _convert_units(self, units) -> Self:
+        """
+        Perform the conversion; callers normally screen out no-op requests.
+
+        Concrete rather than abstract so that a subclass written against
+        the older API, where `convert_units` was the abstract method,
+        still instantiates. DASCore's own classes are held to it by
+        `TestUnitNoOps.test_every_coord_class_implements_the_hook`.
+        """
+        msg = f"{type(self).__name__} does not implement unit conversion."
+        raise NotImplementedError(msg)
 
     def _get_value_index(self, coord_array, values_to_find):
         """Get the indices were values occur in array, account for duplicates."""
@@ -552,35 +611,73 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
         """Total number of elements."""
         return self.shape[0]
 
+    def _repr_fields(self) -> tuple[tuple[str, Text, bool], ...]:
+        """
+        The facts this coordinate states, in the order it states them.
+
+        One source for the line a terminal prints and the row a panel
+        draws, so the two cannot come to hold different facts. A field
+        the coordinate has nothing to say for is left out rather than
+        stated blank.
+
+        This is the hook a subclass states extra facts through. A
+        manager builds its rows from these rather than from each
+        coordinate's rendered line, so facts added by overriding
+        ``__rich__`` alone would show on the coordinate and nowhere it
+        is held.
+        """
+        fields: list[tuple[str, Text, bool]] = []
+        # What the values are measured in, said on each of them rather
+        # than in a field of its own: how far the fiber runs and what
+        # that is measured in are one fact, and reading the second of
+        # them off the end of the line is not how it is read. A time
+        # states its units in the way it is written -- an instant, a
+        # step of "0.0005s" -- and says nothing here.
+        stated = None if dtype_time_like(self.dtype) else self.unit_str
+
+        def measured(value: Text) -> Text:
+            """The value, and what it is measured in where it says."""
+            if not stated:
+                return value
+            return value + Text(f" {stated}", dascore_styles["units"])
+
+        # Drawn as one range: the two ends state the same blocks, and
+        # the second states only what the first did not already.
+        near, far = range_texts(self.min(), self.max())
+        if not pd.isnull(self.min()):
+            fields.append(("min", measured(near), True))
+        if not pd.isnull(self.max()):
+            fields.append(("max", measured(far), True))
+        # How far the two ends lie apart, which they do not otherwise
+        # say: a fiber run from 1212.4 m to 1636.7 m is 424.3 m of it.
+        if not (pd.isnull(self.min()) or pd.isnull(self.max())):
+            if (span := span_text(self.min(), self.max(), stated)) is not None:
+                # The brackets say what it is, so a line does not
+                # need the label a column heading gives it.
+                fields.append(("span", span, False))
+        if not pd.isnull(self.step):
+            step = measured(get_nice_text(self.step))
+            if (rate := rate_text(self.step)) is not None:
+                step = step + rate
+            fields.append(("step", step, True))
+        # A coordinate which states no value has nothing to hang its
+        # units on, and they are a fact of it either way.
+        if stated and not fields:
+            fields.append(("units", get_nice_text(stated, style="units"), True))
+        fields.append(("shape", get_nice_text(self.shape), True))
+        fields.append(("dtype", get_nice_text(self.dtype), True))
+        return tuple(fields)
+
     def __rich__(self):
         key_style = dascore_styles["keys"]
         base = Text("")
         base += Text(self.__class__.__name__, style=self._rich_style)
         base += Text("(")
-        if not pd.isnull(self.min()):
-            base += Text(" min: ", key_style)
-            base += get_nice_text(self.min())
-        if not pd.isnull(self.max()):
-            base += Text(" max: ", key_style)
-            base += get_nice_text(self.max())
-        if not pd.isnull(self.step):
-            base += Text(" step: ", key_style)
-            base += get_nice_text(self.step)
-        base += Text(" shape: ", key_style)
-        base += get_nice_text(self.shape)
-        base += Text(" dtype: ", key_style)
-        base += get_nice_text(self.dtype)
-        if self.units is not None:
-            base += Text(" units: ", key_style)
-            unit_str = get_quantity_str(self.units)
-            base += get_nice_text(unit_str, style="units")
+        for label, value, labelled in self._repr_fields():
+            base += Text(f" {label}: ", key_style) if labelled else Text(" ")
+            base += value
         base += Text(" )")
         return base
-
-    def __str__(self):
-        return str(self.__rich__())
-
-    __repr__ = __str__
 
     def __array__(self, dtype=None, copy=False):
         """Numpy method for getting array data with `np.array(coord)`."""
@@ -595,13 +692,31 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
         """Return a coordinate normalized for stable fingerprinting."""
         if self.units is None or dtype_time_like(self.dtype):
             return self
-        return self.simplify_units()
+        # The unguarded conversion, deliberately. A coord already in base
+        # units matches the guard and would come back with whatever dtype
+        # it happens to have, while one which is not converts to floats --
+        # so an integer range in metres and the same range in centimetres
+        # would fingerprint differently. Converting both is what puts them
+        # in one numeric form.
+        _, units = get_factor_and_unit(self.units, simplify=True)
+        return self._convert_units(units)
 
-    @staticmethod
-    def _hash_scalar(value) -> tuple[str, str | None]:
-        """Return a dtype-aware scalar hash token."""
+    def _hash_scalar(self, value, name: str = "start") -> tuple[str, str | None]:
+        """
+        Return a dtype-aware scalar hash token.
+
+        The value is first conformed to the coordinate's own dtype, since
+        a fingerprint identifies *values*, not how they were spelled: a
+        range whose start was given as `0` holds the same coordinate as
+        one given `0.0`, and a step of four milliseconds is the step of
+        four million nanoseconds. Without this they would be stored under
+        different identities and never deduplicate.
+        """
         if value is None:
             return ("none", None)
+        dtype = np.dtype(self.dtype) if self.dtype else None
+        if dtype is not None:
+            value = _conformed(value, _scalar_dtype(dtype, name))
         return ("scalar", hash_array(np.asarray([value])))
 
     @staticmethod
@@ -699,6 +814,8 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
 
     def set_units(self, units) -> Self:
         """Set new units on coordinates."""
+        if units_match(self.units, units):
+            return self
         new = dict(self)
         new["units"] = units
         return self.__class__(**new)
@@ -1040,7 +1157,11 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
         else:
             compat_val = self._get_compatible_value(value, relative=True)
             duration = compat_val - self.min()
-            ratio = duration / self.step
+            # The magnitude of the step, because a window of 30 m is thirty
+            # samples whether the coordinate counts up or down. A descending
+            # coordinate has a negative step, and dividing by it signed would
+            # make the count negative.
+            ratio = duration / np.abs(self.step)
             if np.issubdtype(self.dtype, np.floating):
                 nearest = np.round(ratio)
                 # Adding a relative float value to coord.min() and subtracting
@@ -1291,7 +1412,7 @@ class CoordPartial(BaseCoord):
         passed = {i: v for i, v in limits.items() if v is not None}
         return self.update(**passed, **kwargs)
 
-    def convert_units(self, units) -> Self:
+    def _convert_units(self, units) -> Self:
         """Convert scalar metadata units, or set units if none exist."""
         out = self.model_dump(exclude_unset=True, exclude_defaults=True)
         out["units"] = units
@@ -1317,6 +1438,10 @@ class CoordPartial(BaseCoord):
     def values(self):
         """Return the internal data. Same as values attribute."""
         null_val = np.asarray(_get_nullish(self.dtype))
+        # NaN is a plain python float, so a narrower floating dtype has to
+        # be asked for by name or the values contradict the recorded dtype.
+        if self.dtype is not None and np.dtype(self.dtype).kind == "f":
+            null_val = null_val.astype(self.dtype)
         data = np.broadcast_to(null_val, self.shape)
         return data
 
@@ -1390,9 +1515,9 @@ class CoordPartial(BaseCoord):
         return (
             self.shape,
             str(np.dtype(self.dtype)),
-            self._hash_scalar(self.start),
-            self._hash_scalar(self.stop),
-            self._hash_scalar(self.step),
+            self._hash_scalar(self.start, "start"),
+            self._hash_scalar(self.stop, "stop"),
+            self._hash_scalar(self.step, "step"),
         )
 
 
@@ -1533,9 +1658,9 @@ class CoordRange(BaseCoord):
         """Return the scalar payload needed to fingerprint range coords."""
         return (
             self.shape,
-            self._hash_scalar(self.start),
-            self._hash_scalar(self.stop),
-            self._hash_scalar(self.step),
+            self._hash_scalar(self.start, "start"),
+            self._hash_scalar(self.stop, "stop"),
+            self._hash_scalar(self.step, "step"),
         )
 
     def __getitem__(self, item):
@@ -1563,7 +1688,7 @@ class CoordRange(BaseCoord):
     def __len__(self):
         return self.shape[0]
 
-    def convert_units(self, units) -> Self:
+    def _convert_units(self, units) -> Self:
         """Convert units, or set units if none exist."""
         # cant convert time units
         if dtype_time_like(self.dtype):
@@ -1786,7 +1911,7 @@ class CoordArray(BaseCoord):
         values["shape"] = values["values"].shape
         return values
 
-    def convert_units(self, units) -> Self:
+    def _convert_units(self, units) -> Self:
         """Convert units, or set units if none exist."""
         is_time = np.issubdtype(self.dtype, np.datetime64)
         is_time_delta = np.issubdtype(self.dtype, np.timedelta64)
@@ -2283,17 +2408,34 @@ class CoordSegmented(BaseCoord):
         units = kwargs.pop("units", self.units)
         return self.__class__(segments=segments, units=units)
 
-    def set_units(self, units) -> Self:
-        """Set new units on the coordinate and all segments."""
-        segments = tuple(x.set_units(units) for x in self.segments)
+    def _rebuild_segments(self, segments) -> Self:
+        """Return a coord holding these segments, or self if none moved."""
+        if all(new is old for new, old in zip(segments, self.segments)):
+            return self
         return self.__class__(segments=segments)
 
+    def set_units(self, units) -> Self:
+        """Set new units on the coordinate and all segments."""
+        return self._rebuild_segments(tuple(x.set_units(units) for x in self.segments))
+
     def convert_units(self, units) -> Self:
-        """Convert units, or set units if none exist."""
+        """
+        Convert units, or set units if none exist.
+
+        The guard is per segment rather than on `self.units`, which speaks
+        only for the first: segments are admitted when their units are
+        merely equal, so a coord in metres can hold a segment in `100 cm`,
+        and that one still has work to do.
+        """
+        return self._convert_units(units)
+
+    def _convert_units(self, units) -> Self:
+        """Convert each segment, keeping self when none of them moved."""
         if dtype_time_like(self.dtype):
             return self
-        segments = tuple(x.convert_units(units) for x in self.segments)
-        return self.__class__(segments=segments)
+        return self._rebuild_segments(
+            tuple(x.convert_units(units) for x in self.segments)
+        )
 
     def _rebuild(self, segments) -> BaseCoord:
         """Build the simplest coordinate from a (non-empty) list of segments."""
@@ -2476,9 +2618,20 @@ class CoordSegmented(BaseCoord):
         """Coerce the tolerance to the dtype expected for value deviations."""
         if tolerance is None:
             tolerance = 0
-        if hasattr(tolerance, "units"):  # pint quantity tolerances
+        stated = None
+        if is_timedelta64(tolerance) and not dtype_time_like(self.dtype):
+            # A timedelta against a numeric coordinate is a length in
+            # seconds, which only the coordinate's units can place.
+            stated = (to_float(tolerance), "s")
+        elif hasattr(tolerance, "units"):  # pint quantity tolerances
+            stated = (tolerance.magnitude, tolerance.units)
+        if stated is not None:
+            magnitude, from_units = stated
             target = "s" if dtype_time_like(self.dtype) else self.units
-            tolerance = convert_units(tolerance.magnitude, target, tolerance.units)
+            # A tolerance is a DELTA, so it converts between two anchor
+            # points: 20 degC of deviation is 36 degF, never 68.
+            anchor = convert_units(0.0, target, from_units)
+            tolerance = convert_units(magnitude, target, from_units) - anchor
         if dtype_time_like(self.dtype):
             tolerance = dc.to_timedelta64(tolerance)
             zero = dc.to_timedelta64(0)
@@ -2730,7 +2883,7 @@ def _get_coord_kind(
     return "array"
 
 
-def _raise_string_coord_error(operation: str) -> None:
+def _raise_string_coord_error(operation: str) -> NoReturn:
     """Raise a consistent error for unsupported string coord operations."""
     msg = f"String coordinates do not support {operation}."
     raise CoordError(msg)
@@ -2775,11 +2928,14 @@ class CoordString(BaseCoord):
         values["step"] = None
         return values
 
-    def convert_units(self, units) -> Self:
-        """String coordinates cannot be converted between units."""
-        if units not in (None, ""):
-            _raise_string_coord_error("unit conversion")
-        return self
+    def _convert_units(self, units) -> Self:
+        """
+        String coordinates cannot be converted between units.
+
+        A request for no units is answered by the caller's guard, so
+        anything reaching here is asking for real ones.
+        """
+        _raise_string_coord_error("unit conversion")
 
     def set_units(self, units) -> Self:
         """Reject setting units on string coordinates."""
@@ -3112,6 +3268,14 @@ def get_coord(
         elif monotonic:
             return CoordMonotonicArray(values=data, units=units)
         elif np.all(pd.isnull(data)):
+            # The values say nothing, but their type still does: an array of
+            # NaT came from datetimes and should stay datetimes, as the
+            # empty case above also keeps. Only a kind whose null the
+            # values can actually hold is recorded; an object array of
+            # Nones has no null but NaN, so claiming "object" would state
+            # a dtype which `values` then contradicts.
+            if dtype is None and data.dtype.kind in "fmM":
+                dtype = data.dtype
             return CoordPartial(
                 shape=data.shape,
                 units=units,

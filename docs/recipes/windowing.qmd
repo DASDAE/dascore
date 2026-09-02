@@ -1,0 +1,109 @@
+---
+title: Windows and Tiles
+execute:
+    warning: False
+---
+
+Much of what is done to DAS data is done to a window of it at a time. DASCore has three ways of windowing, and they answer different questions.
+
+| you want | use | what comes back |
+|---|---|---|
+| a value per sample, from the samples around it | [`Patch.rolling`](`dascore.Patch.rolling`) | a patch shaped like the input |
+| a transform of each window, kept as windows | [`Patch.stft`](`dascore.Patch.stft`), or [`Patch.tile_apply`](`dascore.Patch.tile_apply`) with `mode="stack"` | a patch with a window axis |
+| each window transformed and the windows blended back | [`Patch.tile_apply`](`dascore.Patch.tile_apply`) | a patch shaped like the input |
+
+All three take the window the same way: the dimension and its length, in coordinate units or with `samples=True` in samples, plus an `overlap` which may be a count, a duration, a percent of the window, or a mapping with one per dimension.
+
+## Tiles, blended
+
+`tile_apply` cuts the patch into overlapping tiles along one or more dimensions, hands them to a function, and blends the results back under a taper whose ramps sum to one, so a function which changes nothing returns the input exactly. The function is given the whole stack of tiles at once — an array of `[n_tiles, *window]` — and returns one of the same shape.
+
+Automatic gain control is the simplest example: every window scaled to unit RMS, so quiet and loud stretches draw alike.
+
+```{python}
+import numpy as np
+import matplotlib.pyplot as plt
+
+import dascore as dc
+from dascore.units import percent
+
+patch = dc.get_example_patch("example_event_2").pass_filter(time=(1, 300))
+
+
+def agc(tiles):
+    """Scale every tile to unit RMS."""
+    rms = np.sqrt(np.mean(tiles**2, axis=(1, 2), keepdims=True))
+    return tiles / np.where(rms > 0, rms, 1)
+
+
+normalized = patch.tile_apply(agc, time=0.02, distance=40)
+
+fig, axes = plt.subplots(1, 2, figsize=(12, 5), sharey=True)
+for ax, pa, title in zip(axes, [patch, normalized], ["band-passed", "AGC, 20 ms by 40 m"]):
+    scale = np.percentile(np.abs(pa.data), 99)
+    pa.viz.waterfall(ax=ax, scale=scale, scale_type="absolute", cmap="bwr")
+    ax.set_title(title)
+fig.tight_layout()
+```
+
+The [adaptive spectral filter](adaptive_spectral_filter.qmd) is the same machinery with a spectral weighting as the function.
+
+## Tiles, kept
+
+With `mode="stack"` the tiles come back unblended. Each windowed dimension becomes an axis of tile centres, `{dim}_start` and `{dim}_stop` say where each tile came from in samples, and the samples within a tile become a `{dim}_offset` dimension at the end. Work on the stack as a patch — select tiles, transform along the offsets, threshold — and [`reassemble`](`dascore.Patch.reassemble`) blends it back.
+
+```{python}
+tiles = patch.tile_apply(lambda x: x, mode="stack", time=0.02, distance=40)
+print(tiles.dims, tiles.shape)
+
+# Drop every tile whose energy is in the lowest quarter, then blend back.
+# The mean keeps the offset axes at length one, so a per-tile flag
+# broadcasts back over every sample of its tile.
+energy = (tiles**2).mean(dim=("distance_offset", "time_offset"))
+quiet = energy.data < np.percentile(energy.data, 25)
+kept = tiles.new(data=np.where(quiet, 0, tiles.data))
+denoised = kept.reassemble()
+assert denoised.shape == patch.shape
+```
+
+A stack nobody changed reassembles to the patch it was cut from, coordinates and all.
+
+`stft` is this stack with each window transformed along its offsets: the same `{dim}_start`, `{dim}_stop`, and rider coordinates, so `istft` is an inverse FFT of each window followed by `reassemble`, under the dual of the taper the windows were cut with.
+
+## A compiled function, one tile at a time
+
+A function compiled with numba is given one tile at a time rather than the stack, in parallel, which is faster for anything that cannot be written over the stack in one numpy call. It works over any number of dimensions and in `mode="stack"` too. It compiles the first time it is used in each process, which takes a few seconds; after that a 2000 by 6000 patch tiles in a fraction of a second.
+
+```{python}
+#| eval: false
+import numba
+
+
+@numba.njit
+def agc_tile(tile):
+    rms = np.sqrt(np.mean(tile * tile))
+    return tile / rms if rms > 0 else tile
+
+
+normalized = patch.tile_apply(agc_tile, time=0.02, distance=40)
+```
+
+## A window on the way in
+
+By default the function sees raw, rectangular tiles and the blend alone is tapered. A function which takes a spectrum of each tile may want the tile windowed first. Give `analysis` a window name and each tile is multiplied by it before the function sees it; the blend then uses that window's dual, computed by scipy along each axis, so an unchanged stack still returns the input exactly — and the overlap may go past half the window.
+
+```{python}
+def keep_strongest(tiles):
+    """Keep the largest quarter of each tile's f-k coefficients."""
+    spectra = np.fft.rfft2(tiles)
+    cutoff = np.percentile(np.abs(spectra), 75, axis=(1, 2), keepdims=True)
+    return np.fft.irfft2(np.where(np.abs(spectra) < cutoff, 0, spectra), s=tiles.shape[1:])
+
+
+local_fk = patch.tile_apply(keep_strongest, analysis="hann", overlap=75 * percent, time=0.02, distance=40)
+assert local_fk.shape == patch.shape
+```
+
+## What a tile sees
+
+Tiles start before the data and are padded with zeros, as many whole strides before as it takes for every tile which reaches a sample to exist: none when tiles abut, one stride up to half overlap, more beyond it, which an analysis window's dual relies on. Overlap defaults to half the window; under a taper it cannot exceed half, since the ramps would cross, and under an analysis window it may go as deep as scipy can invert the window at. The taper's shape is any window [`get_window`](`dascore.utils.signal.get_window`) knows; its ramps are made complementary whatever the shape, which is what makes the blend exact.

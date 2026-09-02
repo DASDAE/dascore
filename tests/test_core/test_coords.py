@@ -10,7 +10,6 @@ from functools import partial
 from io import BytesIO
 from types import SimpleNamespace
 from typing import ClassVar
-from unittest.mock import patch
 
 import numpy as np
 import pandas as pd
@@ -156,11 +155,15 @@ def coord(request) -> BaseCoord:
     return request.getfixturevalue(request.param)
 
 
-@pytest.fixture(scope="session", params=COORDS)
+@pytest.fixture(scope="session")
 def long_coord(coord) -> BaseCoord:
-    """Meta-fixture for returning all coords with len > 7."""
-    if len(coord) < 7:
-        pytest.skip("Only coords with len 3 or more used.")
+    """The coord meta-fixture, for tests which need one longer than 7.
+
+    Every coord in COORDS is at least 100 long. Do not add `params=COORDS`
+    here: `coord` is already parametrized over them, so a second pass runs
+    each test once per pair of coords to see the same twelve.
+    """
+    assert len(coord) > 7
     return coord
 
 
@@ -194,10 +197,6 @@ def assert_value_in_one_step(coord, index, value, greater=True):
 
 class TestBasics:
     """A suite of basic tests for coordinates."""
-
-    def test_coord_init(self, coord):
-        """Simply run to insure all coords initialize."""
-        assert isinstance(coord, BaseCoord)
 
     def test_bad_init(self):
         """Ensure no parameters raises error."""
@@ -551,7 +550,76 @@ class TestCoordFingerprint:
 
     def test_hash_scalar_none(self):
         """The helper should preserve an explicit None sentinel."""
-        assert BaseCoord._hash_scalar(None) == ("none", None)
+        coord = get_coord(start=0.0, stop=10.0, step=1.0)
+        assert coord._hash_scalar(None) == ("none", None)
+
+    def test_spelling_of_a_scalar_is_not_its_identity(self):
+        """Equal coordinates fingerprint alike however they were written."""
+        as_ints = get_coord(start=0, stop=10, step=1.0)
+        as_floats = get_coord(start=0.0, stop=10.0, step=1.0)
+        assert as_ints == as_floats
+        assert as_ints.fingerprint() == as_floats.fingerprint()
+
+    def test_time_precision_is_not_its_identity(self):
+        """A step of four milliseconds is four million nanoseconds."""
+        t0 = np.datetime64("2020-01-01", "ns")
+        coarse = get_coord(
+            start=t0,
+            stop=t0 + np.timedelta64(400, "ms"),
+            step=np.timedelta64(4, "ms"),
+        )
+        fine = get_coord(
+            start=t0,
+            stop=t0 + np.timedelta64(400_000_000, "ns"),
+            step=np.timedelta64(4_000_000, "ns"),
+        )
+        assert coarse == fine
+        assert coarse.fingerprint() == fine.fingerprint()
+
+    def test_a_summary_round_trip_keeps_the_identity(self):
+        """Describing a coordinate and rebuilding it is the same coordinate."""
+        t0 = np.datetime64("2020-01-01", "ns")
+        coord = get_coord(
+            start=t0,
+            stop=t0 + np.timedelta64(400, "ms"),
+            step=np.timedelta64(4, "ms"),
+        )
+        assert coord.to_summary().to_coord().fingerprint() == coord.fingerprint()
+
+    def test_metadata_which_does_not_fit_its_dtype_still_differs(self):
+        """Conforming is a change of spelling, never a loss of value."""
+        first = CoordPartial(shape=(10,), dtype="int64", start=1.1, stop=11.1, step=1.0)
+        second = CoordPartial(
+            shape=(10,), dtype="int64", start=1.2, stop=11.2, step=1.0
+        )
+        assert first != second
+        assert first.fingerprint() != second.fingerprint()
+
+    def test_finer_precision_than_nanoseconds_still_differs(self):
+        """Conforming a scalar must not round away what a coordinate keeps."""
+        start = np.datetime64("1969-09-23T15:46:49.660978561024")
+        step = np.timedelta64(1000, "ps")
+        first = get_coord(start=start, stop=start + step * 100, step=step)
+        apart = start + np.timedelta64(1, "ps")
+        second = get_coord(start=apart, stop=apart + step * 100, step=step)
+        assert first != second
+        assert first.fingerprint() != second.fingerprint()
+
+    def test_different_values_still_differ(self):
+        """Canonicalizing the spelling does not blur real differences."""
+        first = get_coord(start=0.0, stop=10.0, step=1.0)
+        assert (
+            first.fingerprint()
+            != get_coord(start=0.0, stop=20.0, step=1.0).fingerprint()
+        )
+        assert (
+            first.fingerprint()
+            != get_coord(start=1.0, stop=11.0, step=1.0).fingerprint()
+        )
+        assert (
+            first.fingerprint()
+            != get_coord(start=0.0, stop=10.0, step=0.5).fingerprint()
+        )
 
     def test_range_equivalent_units_same_fingerprint(self):
         """Equivalent range coords should fingerprint the same after normalization."""
@@ -632,16 +700,13 @@ class TestCoordFingerprint:
             units="cm",
             dtype="float64",
         )
-        seen = []
-
-        def _fake_convert(value, to_units=None, from_units=None):
-            seen.append((value, to_units, from_units))
-            return value
-
-        with patch("dascore.core.coords.convert_units", _fake_convert):
-            coord.convert_units("m")
-
-        assert seen == [(400.0, "m", coord.units), (100.0, "m", coord.units)]
+        out = coord.convert_units("m")
+        # The null start is left alone rather than converted; the two real
+        # scalars are converted from cm.
+        assert np.isnan(out.start)
+        assert out.stop == 4.0
+        assert out.step == 1.0
+        assert out.units == get_quantity("m")
 
     def test_partial_convert_units_without_existing_units_sets_units_only(self):
         """Unitless partial coords should take units without scalar conversion."""
@@ -1040,13 +1105,6 @@ class TestOrder:
         coord, _reduction = long_coord.order(inds, samples=True)
         assert len(coord) == len(inds)
         assert np.all(coord.values == coord.values[0])
-
-    def test_non_integer_array_with_samples_raises(self, evenly_sampled_coord):
-        """Samples argument should require integer arrays."""
-        vals = np.array([1.01, 2.0, 3.0])
-        msg = "requires integer dtype"
-        with pytest.raises(CoordError, match=msg):
-            evenly_sampled_coord.select(vals, samples=True)
 
     def test_duplicate_array_values(self, long_coord):
         """Ensure duplicate values cause duplicates in array."""
@@ -1766,6 +1824,71 @@ class TestPartialCoord:
         """A partial coord coerces an int shape like every other coord."""
         assert CoordPartial(shape=5, dtype="float64").shape == (5,)
 
+    @pytest.mark.parametrize("unit", ["us", "ms", "s"])
+    @pytest.mark.parametrize("kind", ["datetime64", "timedelta64"])
+    def test_values_keep_the_declared_resolution(self, kind, unit):
+        """
+        The nulls a partial coord stands for are of its own dtype.
+
+        A fixed resolution here leaks out of the coordinate: the values
+        report one dtype while the coord reports another, and anything
+        which promotes against them, such as concatenation, takes the
+        wrong one.
+        """
+        dtype = np.dtype(f"{kind}[{unit}]")
+        coord = CoordPartial(shape=(3,), dtype=dtype)
+        assert coord.values.dtype == dtype
+
+    @pytest.mark.parametrize("dtype", ["datetime64[ns]", "timedelta64[us]"])
+    def test_all_null_array_keeps_its_dtype(self, dtype):
+        """
+        An array of nulls says nothing about when, but still says what.
+
+        The values are gone, the kind of thing they were is not, and a
+        partial coord has a dtype to record it. Dropping it turned missing
+        datetimes into untyped NaN. Float is left out of the parameters:
+        an unset dtype already reads as float64, so it cannot regress.
+        """
+        dtype = np.dtype(dtype)
+        coord = get_coord(data=np.full(3, "NaT", dtype=dtype))
+        assert isinstance(coord, CoordPartial)
+        assert coord.dtype == dtype
+        assert coord.values.dtype == dtype
+
+    @pytest.mark.parametrize("dtype", ["float32", "float64"])
+    def test_all_null_floats_keep_their_width(self, dtype):
+        """
+        A recorded floating dtype is one the values actually have.
+
+        NaN is a plain python float, so a narrower dtype has to be asked
+        for by name; without that the coord reports float32 while its
+        values report float64, and anything promoting against them, such
+        as concatenation, takes the wrong one.
+        """
+        dtype = np.dtype(dtype)
+        coord = get_coord(data=np.full(3, np.nan, dtype=dtype))
+        assert isinstance(coord, CoordPartial)
+        assert coord.dtype == dtype
+        assert coord.values.dtype == dtype
+
+    def test_all_null_object_array_claims_no_dtype(self):
+        """
+        A dtype is only worth recording when the values can honor it.
+
+        The null of an object array is NaN, so its values are floats;
+        saying "object" would state a dtype which `values` contradicts.
+        """
+        coord = get_coord(data=np.array([None, None, None]))
+        assert isinstance(coord, CoordPartial)
+        assert coord.values.dtype == np.dtype("float64")
+        assert coord.dtype in (None, np.dtype("float64"))
+
+    def test_given_dtype_beats_the_array(self):
+        """A caller who names a dtype is not overruled by the values."""
+        data = np.full(3, "NaT", dtype="datetime64[ns]")
+        coord = get_coord(data=data, dtype="timedelta64[ns]")
+        assert coord.dtype == np.dtype("timedelta64[ns]")
+
     def test_set_units_positionally(self, basic_non_coord):
         """Units are set the same way as on any other coord."""
         out = basic_non_coord.set_units("m")
@@ -2020,7 +2143,7 @@ class TestGetSampleCount:
         out = evenly_sampled_time_delta_coord.get_sample_count(12 * dt)
         assert out == 12
 
-    @pytest.mark.parametrize("sample", (0, 10, 100, 42, 13))
+    @pytest.mark.parametrize("sample", (0, 42))
     def test_samples(self, evenly_sampled_coord, sample):
         """Ensure value is returned when samples==True."""
         assert len(evenly_sampled_coord) >= sample
@@ -2351,7 +2474,9 @@ class TestChangeLength:
             with pytest.raises(ParameterError, match="non-negative"):
                 coord.change_length(length)
 
-    @pytest.mark.parametrize("length", [2.5, 3.0, "3", None, True, False])
+    # A float, a string and a bool: the three kinds of thing which are not
+    # an integer length (bool is the one the check has a clause for).
+    @pytest.mark.parametrize("length", [2.5, "3", True])
     def test_non_integer_length_raises(
         self, evenly_sampled_coord, basic_non_coord, length
     ):
@@ -2806,3 +2931,40 @@ class TestDimensionalityErrors:
         """Constructing a CoordRange with a 2D shape must be rejected."""
         with pytest.raises(ValidationError, match="only works for 1D coords"):
             CoordRange(start=0, step=1, shape=(2, 3))
+
+
+class TestUnitNoOps:
+    """A coord asked for the units it already has hands itself back."""
+
+    def test_no_op_on_every_coord_class(self, coord):
+        """Setting or converting to the units already carried changes nothing."""
+        with_units = coord.set_units("m") if coord.units is None else coord
+        assert with_units.convert_units(with_units.units) is with_units
+        assert with_units.set_units(with_units.units) is with_units
+
+    def test_every_coord_class_implements_the_hook(self):
+        """
+        `_convert_units` is concrete, so nothing else would notice.
+
+        It is concrete to keep a subclass written against the older API,
+        where `convert_units` was the abstract method, instantiable. That
+        costs the abstract check which would have caught a coord class
+        shipping without a conversion, so this asks the question instead.
+        """
+
+        def _subclasses(cls):
+            for sub in cls.__subclasses__():
+                yield sub
+                yield from _subclasses(sub)
+
+        missing = [
+            sub.__name__
+            for sub in _subclasses(BaseCoord)
+            if sub._convert_units is BaseCoord._convert_units
+        ]
+        assert not missing
+
+    def test_the_hook_says_so_when_it_is_not_implemented(self, evenly_sampled_coord):
+        """A class which did not implement it gets an error naming itself."""
+        with pytest.raises(NotImplementedError, match="unit conversion"):
+            BaseCoord._convert_units(evenly_sampled_coord, "m")

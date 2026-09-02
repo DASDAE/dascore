@@ -54,6 +54,12 @@ def get_gap_edges(values, gap_factor: float | None = None):
     -------
     tuple[np.ndarray, np.ndarray]
         Cell edges and a Boolean array marking gaps after each input value.
+
+    See Also
+    --------
+    [`Spool.get_gaps`](`dascore.core.spool.Spool.get_gaps`) answers the
+    other gap question: where whole patches fail to meet, read from the
+    index rather than from a coordinate's values.
     """
     values = _normalize_coord_values(values)
     if len(values) == 1:

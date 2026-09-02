@@ -1,0 +1,845 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<svg
+   width="873.46014"
+   height="600"
+   viewBox="0 0 873.46014 600"
+   version="1.1"
+   id="svg56"
+   sodipodi:docname="inventory_hierarchy.svg"
+   inkscape:version="1.4.4 (1:1.4.4+202605061436+dcaf3e7d9e)"
+   xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape"
+   xmlns:sodipodi="http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd"
+   xmlns="http://www.w3.org/2000/svg"
+   xmlns:svg="http://www.w3.org/2000/svg"
+   xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+   xmlns:cc="http://creativecommons.org/ns#"
+   xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <sodipodi:namedview
+     id="namedview56"
+     pagecolor="#ffffff"
+     bordercolor="#666666"
+     borderopacity="1.0"
+     inkscape:showpageshadow="2"
+     inkscape:pageopacity="0.0"
+     inkscape:pagecheckerboard="0"
+     inkscape:deskcolor="#d1d1d1"
+     inkscape:zoom="0.75166667"
+     inkscape:cx="667.18403"
+     inkscape:cy="343.90244"
+     inkscape:window-width="1854"
+     inkscape:window-height="1011"
+     inkscape:window-x="66"
+     inkscape:window-y="32"
+     inkscape:window-maximized="1"
+     inkscape:current-layer="layer-icons" />
+  <title
+     id="title1">Inventory hierarchy: SEED codes and DFOS codes</title>
+  <!--
+    Layout: one shared Network root, two parallel branches at identical row heights.
+    Seismic branch (blue #1f4e79 / #e3ecf6), fiber branch (rust #9a4a14 / #f7ece2),
+    shared root and structure lines in neutral grey (#555555).
+    Box = 240 x 108; icon cell = 64 x 40 at the top-left of each box.
+  -->
+  <defs
+     id="defs1">
+    <marker
+       id="arrow"
+       viewBox="0 0 10 10"
+       refX="9"
+       refY="5"
+       markerWidth="7"
+       markerHeight="7"
+       orient="auto-start-reverse">
+      <path
+         d="M 0,0 10,5 0,10 Z"
+         style="fill:#555555;stroke:none"
+         id="path1" />
+    </marker>
+    <pattern
+       id="hatch-blue"
+       patternUnits="userSpaceOnUse"
+       width="4"
+       height="4"
+       patternTransform="rotate(45)">
+      <path
+         d="M 0,0 V 4"
+         style="stroke:#1f4e79;stroke-width:0.8;opacity:0.55"
+         id="path2" />
+    </pattern>
+    <pattern
+       id="hatch-rust"
+       patternUnits="userSpaceOnUse"
+       width="4"
+       height="4"
+       patternTransform="rotate(45)">
+      <path
+         d="M 0,0 V 4"
+         style="stroke:#9a4a14;stroke-width:0.8;opacity:0.55"
+         id="path3" />
+    </pattern>
+  </defs>
+  <!-- ===================== background ===================== -->
+  <!-- ===================== titles (on the Network row) ===================== -->
+  <g
+     inkscape:groupmode="layer"
+     transform="translate(-40.687927,-18.303204)"
+     inkscape:label="titles"
+     id="layer-titles">
+    <text
+       x="218.58395"
+       y="186.57831"
+       style="font-weight:bold;font-size:20px;font-family:'Source Sans 3', 'Noto Sans', 'DejaVu Sans', sans-serif;text-anchor:middle;fill:#1f4e79"
+       id="text1">Points</text>
+    <text
+       x="711.9101"
+       y="186.57831"
+       style="font-weight:bold;font-size:20px;font-family:'Source Sans 3', 'Noto Sans', 'DejaVu Sans', sans-serif;text-anchor:middle;fill:#9a4a14"
+       id="text3">Fiber</text>
+    <text
+       x="462.577"
+       y="32.583179"
+       style="font-weight:bold;font-size:20px;font-family:'Source Sans 3', 'Noto Sans', 'DejaVu Sans', sans-serif;text-anchor:middle;fill:#606060;fill-opacity:1"
+       id="text3-7">Inventory</text>
+  </g>
+  <!-- ===================== node boxes ===================== -->
+  <g
+     inkscape:groupmode="layer"
+     transform="translate(-40.687927,-18.303204)"
+     inkscape:label="nodes"
+     id="layer-nodes">
+    <g
+       id="node-network-0"
+       transform="matrix(0.59546922,0,0,0.62794221,-52.300615,31.450944)"
+       style="stroke-width:1.63535">
+      <rect
+         x="355"
+         y="40"
+         width="240"
+         height="108"
+         rx="4"
+         ry="4"
+         style="fill:#ffffff;stroke:#555555;stroke-width:2.45302"
+         id="rect4-9" />
+    </g>
+    <!-- shared root -->
+    <text
+       x="187.09528"
+       y="82.92662"
+       style="font-weight:bold;font-size:17px;font-family:'Source Sans 3', 'Noto Sans', 'DejaVu Sans', sans-serif;fill:#333333"
+       id="text5-8">Resources</text>
+    <!-- seismic branch -->
+    <rect
+       x="189.73392"
+       y="198.0238"
+       width="240"
+       height="108"
+       rx="4"
+       ry="4"
+       style="fill:#e3ecf6;stroke:#1f4e79;stroke-width:1.5"
+       id="rect6" />
+    <text
+       x="205.73392"
+       y="278.0238"
+       style="font-weight:bold;font-size:17px;font-family:'Source Sans 3', 'Noto Sans', 'DejaVu Sans', sans-serif;fill:#1f4e79"
+       id="text7">Station</text>
+    <text
+       x="413.73392"
+       y="278.0238"
+       style="font-size:18px;font-family:'Source Code Pro', 'DejaVu Sans Mono', Menlo, Consolas, monospace;text-anchor:end;fill:#1f4e79"
+       id="text8">S01</text>
+    <text
+       x="205.73392"
+       y="296.0238"
+       style="font-size:13px;font-family:'Source Sans 3', 'Noto Sans', 'DejaVu Sans', sans-serif;fill:#5f5f5f"
+       id="desc-station">a site with point sensors</text>
+    <text
+       x="176.98079"
+       y="106.45135"
+       style="font-size:13px;font-family:'Source Sans 3', 'Noto Sans', 'DejaVu Sans', sans-serif;fill:#5f5f5f"
+       id="desc-station-2">shareable objects</text>
+    <g
+       id="g64"
+       transform="translate(950.06009,67.320943)">
+      <g
+         id="node-network-0-3"
+         transform="matrix(0.59546922,0,0,0.62794221,-537.66122,-32.347511)"
+         style="stroke-width:1.63535">
+        <rect
+           x="355"
+           y="40"
+           width="240"
+           height="108"
+           rx="4"
+           ry="4"
+           style="fill:#ffffff;stroke:#555555;stroke-width:2.45302"
+           id="rect4-9-7" />
+      </g>
+      <text
+         x="-270.67435"
+         y="19.128166"
+         style="font-weight:bold;font-size:17px;font-family:'Source Sans 3', 'Noto Sans', 'DejaVu Sans', sans-serif;fill:#333333"
+         id="text5-8-5">CRS</text>
+      <text
+         x="-321.08081"
+         y="42.652893"
+         style="font-size:13px;font-family:'Source Sans 3', 'Noto Sans', 'DejaVu Sans', sans-serif;fill:#5f5f5f"
+         id="desc-station-2-9">Coordinate Reference</text>
+    </g>
+    <g
+       id="node-location"
+       transform="translate(119.73392,-7.9762)">
+      <rect
+         x="70"
+         y="342"
+         width="240"
+         height="108"
+         rx="4"
+         ry="4"
+         style="fill:#e3ecf6;stroke:#1f4e79;stroke-width:1.5"
+         id="rect8" />
+      <text
+         x="86"
+         y="422"
+         style="font-weight:bold;font-size:17px;font-family:'Source Sans 3', 'Noto Sans', 'DejaVu Sans', sans-serif;fill:#1f4e79"
+         id="text9">Location</text>
+      <text
+         x="294"
+         y="422"
+         style="font-size:18px;font-family:'Source Code Pro', 'DejaVu Sans Mono', Menlo, Consolas, monospace;text-anchor:end;fill:#1f4e79"
+         id="text10">00</text>
+      <text
+         x="86"
+         y="440"
+         style="font-size:13px;font-family:'Source Sans 3', 'Noto Sans', 'DejaVu Sans', sans-serif;fill:#5f5f5f"
+         id="desc-location">groups channels of one sensor</text>
+    </g>
+    <g
+       id="node-channel"
+       transform="translate(119.73392,-7.9762)">
+      <rect
+         x="70"
+         y="478"
+         width="240"
+         height="108"
+         rx="4"
+         ry="4"
+         style="fill:#e3ecf6;stroke:#1f4e79;stroke-width:1.5"
+         id="rect10" />
+      <text
+         x="86"
+         y="558"
+         style="font-weight:bold;font-size:17px;font-family:'Source Sans 3', 'Noto Sans', 'DejaVu Sans', sans-serif;fill:#1f4e79"
+         id="text11">Channel</text>
+      <text
+         x="294"
+         y="558"
+         style="font-size:18px;font-family:'Source Code Pro', 'DejaVu Sans Mono', Menlo, Consolas, monospace;text-anchor:end;fill:#1f4e79"
+         id="text12">HHZ</text>
+      <text
+         x="86"
+         y="576"
+         style="font-size:13px;font-family:'Source Sans 3', 'Noto Sans', 'DejaVu Sans', sans-serif;fill:#5f5f5f"
+         id="desc-channel">one sensor stream</text>
+    </g>
+    <!-- fiber branch -->
+    <g
+       id="node-fiber-array"
+       transform="translate(-143.93991,-7.9762)">
+      <rect
+         x="640"
+         y="206"
+         width="240"
+         height="108"
+         rx="4"
+         ry="4"
+         style="fill:#f7ece2;stroke:#9a4a14;stroke-width:1.5"
+         id="rect12" />
+      <text
+         x="656"
+         y="286"
+         style="font-weight:bold;font-size:17px;font-family:'Source Sans 3', 'Noto Sans', 'DejaVu Sans', sans-serif;fill:#9a4a14"
+         id="text13">Fiber array</text>
+      <text
+         x="656"
+         y="304"
+         style="font-size:13px;font-family:'Source Sans 3', 'Noto Sans', 'DejaVu Sans', sans-serif;fill:#5f5f5f"
+         id="text14">a site made of fibers</text>
+      <text
+         x="864"
+         y="286"
+         style="font-size:18px;font-family:'Source Code Pro', 'DejaVu Sans Mono', Menlo, Consolas, monospace;text-anchor:end;fill:#9a4a14"
+         id="text15">L01</text>
+    </g>
+    <g
+       id="node-optical-path"
+       transform="translate(-143.93991,-7.9762)">
+      <rect
+         x="640"
+         y="342"
+         width="240"
+         height="108"
+         rx="4"
+         ry="4"
+         style="fill:#f7ece2;stroke:#9a4a14;stroke-width:1.5"
+         id="rect15" />
+      <text
+         x="656"
+         y="422"
+         style="font-weight:bold;font-size:17px;font-family:'Source Sans 3', 'Noto Sans', 'DejaVu Sans', sans-serif;fill:#9a4a14"
+         id="text16">Optical path</text>
+      <text
+         x="656"
+         y="440"
+         style="font-size:13px;font-family:'Source Sans 3', 'Noto Sans', 'DejaVu Sans', sans-serif;fill:#5f5f5f"
+         id="text17">one path through the array</text>
+      <text
+         x="864"
+         y="422"
+         style="font-size:18px;font-family:'Source Code Pro', 'DejaVu Sans Mono', Menlo, Consolas, monospace;text-anchor:end;fill:#9a4a14"
+         id="text18">04</text>
+    </g>
+    <g
+       id="node-acquisition"
+       transform="translate(-143.93991,-7.9762)">
+      <rect
+         x="640"
+         y="478"
+         width="240"
+         height="108"
+         rx="4"
+         ry="4"
+         style="fill:#f7ece2;stroke:#9a4a14;stroke-width:1.5"
+         id="rect18" />
+      <text
+         x="656"
+         y="558"
+         style="font-weight:bold;font-size:17px;font-family:'Source Sans 3', 'Noto Sans', 'DejaVu Sans', sans-serif;fill:#9a4a14"
+         id="text19">Acquisition</text>
+      <text
+         x="656"
+         y="576"
+         style="font-size:13px;font-family:'Source Sans 3', 'Noto Sans', 'DejaVu Sans', sans-serif;fill:#5f5f5f"
+         id="text20">one interrogator stream</text>
+      <text
+         x="864"
+         y="558"
+         style="font-size:18px;font-family:'Source Code Pro', 'DejaVu Sans Mono', Menlo, Consolas, monospace;text-anchor:end;fill:#9a4a14"
+         id="text21">FSF</text>
+    </g>
+  </g>
+  <!-- ===================== concept icons ===================== -->
+  <!-- each icon lives in a 64 x 40 cell at (box.x + 16, box.y + 12); ink kept within x 10..54, y 6..34 -->
+  <g
+     inkscape:groupmode="layer"
+     transform="translate(-40.687927,-18.303204)"
+     inkscape:label="icons"
+     id="layer-icons">
+    <!-- network: several stations, joined -->
+    <g
+       id="g9"
+       transform="translate(-12.102997)">
+      <rect
+         x="355"
+         y="40"
+         width="240"
+         height="108"
+         rx="4"
+         ry="4"
+         style="fill:#ffffff;stroke:#555555;stroke-width:1.5"
+         id="rect4" />
+      <text
+         x="376.9455"
+         y="120.69434"
+         style="font-weight:bold;font-size:17px;font-family:'Source Sans 3', 'Noto Sans', 'DejaVu Sans', sans-serif;fill:#333333"
+         id="text5">Network</text>
+      <text
+         x="572.24756"
+         y="120.86432"
+         style="font-size:18px;font-family:'Source Code Pro', 'DejaVu Sans Mono', Menlo, Consolas, monospace;text-anchor:end;fill:#333333"
+         id="text6">XM</text>
+      <g
+         id="icon-network"
+         transform="translate(376.94551,52.694336)"
+         style="fill:none;stroke-width:1.5;stroke-linecap:round;stroke-linejoin:round">
+        <path
+           d="m 2,10 c 12,0 16,20 28,20 12,0 12,-16 20,-16 8,0 10,4 12,4"
+           style="fill:none;stroke:#9a4a14;stroke-width:1.75"
+           id="icon-network-fiber" />
+        <path
+           d="m 6,34 6,-10 6,10 z"
+           style="fill:#1f4e79;stroke:#1f4e79"
+           id="path22" />
+        <path
+           d="M 24,16 30,6 36,16 Z"
+           style="fill:#1f4e79;stroke:#1f4e79"
+           id="path23" />
+        <path
+           d="m 44,34 6,-10 6,10 z"
+           style="fill:#1f4e79;stroke:#1f4e79"
+           id="path24" />
+      </g>
+    </g>
+    <!-- station: the station symbol on the ground -->
+    <g
+       id="icon-station"
+       transform="translate(205.73392,210.0238)"
+       style="fill:none;stroke:#1f4e79;stroke-width:1.5;stroke-linecap:round;stroke-linejoin:round">
+      <g
+         id="station-region"
+         transform="matrix(1.1606512,0,0,1.1606512,-5.1408384,0.27343901)"
+         style="stroke-width:1.29238">
+        <path
+           d="M 32,4 C 42.5,4 49,10.5 49,21 49,31 42,38 32,38 21.5,38 15,31 15,20.5 15,10.5 22,4 32,4 Z"
+           style="fill:#1f4e79;fill-opacity:0.1;stroke:#1f4e79;stroke-width:0.689268;stroke-opacity:0.35"
+           id="path4" />
+        <path
+           d="M 32,4 C 42.5,4 49,10.5 49,21 49,31 42,38 32,38 21.5,38 15,31 15,20.5 15,10.5 22,4 32,4 Z"
+           style="fill:url(#hatch-blue);stroke:none;stroke-width:1.29238"
+           id="path5" />
+      </g>
+      <path
+         d="m 20.235179,33.765636 12.000001,-21.999999 12,21.999999 z"
+         style="fill:#1f4e79"
+         id="path26" />
+    </g>
+    <!-- location: a pin on a spot -->
+    <g
+       id="icon-location"
+       transform="translate(205.73392,355.19887)"
+       style="fill:none;stroke:#1f4e79;stroke-width:1.5;stroke-linecap:round;stroke-linejoin:round">
+      <path
+         d="m 32,32 c 0,0 -7.5,-12 -7.5,-18 a 7.5,7.5 0 1 1 15,0 c 0,6 -7.5,18 -7.5,18 z"
+         style="fill:#1f4e79"
+         id="path28" />
+      <circle
+         cx="32"
+         cy="14"
+         r="2.8"
+         style="fill:#ffffff;stroke:none"
+         id="circle28" />
+    </g>
+    <!-- channel: one trace -->
+    <g
+       id="icon-channel"
+       transform="translate(205.73392,482.0238)"
+       style="fill:none;stroke:#1f4e79;stroke-width:1.75;stroke-linecap:round;stroke-linejoin:round">
+      <path
+         d="M 10,28.7 L 15.5,28.7 L 21,18 L 26.5,38.5 L 32,17 L 37.5,36 L 43,22 L 48.5,31.5 L 54,28.7"
+         id="channel-trace" />
+      <g
+         style="fill:#1f4e79;stroke:none"
+         id="channel-samples">
+        <circle
+           cx="10"
+           cy="28.7"
+           r="1.7"
+           id="channel-sample-1" />
+        <circle
+           cx="15.5"
+           cy="28.7"
+           r="1.7"
+           id="channel-sample-2" />
+        <circle
+           cx="21"
+           cy="18"
+           r="1.7"
+           id="channel-sample-3" />
+        <circle
+           cx="26.5"
+           cy="38.5"
+           r="1.7"
+           id="channel-sample-4" />
+        <circle
+           cx="32"
+           cy="17"
+           r="1.7"
+           id="channel-sample-5" />
+        <circle
+           cx="37.5"
+           cy="36"
+           r="1.7"
+           id="channel-sample-6" />
+        <circle
+           cx="43"
+           cy="22"
+           r="1.7"
+           id="channel-sample-7" />
+        <circle
+           cx="48.5"
+           cy="31.5"
+           r="1.7"
+           id="channel-sample-8" />
+        <circle
+           cx="54"
+           cy="28.7"
+           r="1.7"
+           id="channel-sample-9" />
+      </g>
+    </g>
+    <!-- fiber array: a cable along the drift, down and back up each borehole -->
+    <g
+       id="icon-fiber-array"
+       transform="translate(512.06009,214.2238)"
+       style="fill:none;stroke:#9a4a14;stroke-width:1.5;stroke-linecap:round;stroke-linejoin:round">
+      <g
+         id="fiber-array-region">
+        <path
+           d="m 2,10 c 12,0 16,20 28,20 12,0 12,-16 20,-16 8,0 10,4 12,4"
+           style="fill:none;stroke:#9a4a14;stroke-width:15.6;stroke-linecap:round;stroke-linejoin:round;stroke-opacity:0.13"
+           id="path6" />
+        <path
+           d="m 2,10 c 12,0 16,20 28,20 12,0 12,-16 20,-16 8,0 10,4 12,4"
+           style="fill:none;stroke:url(#hatch-rust);stroke-width:14;stroke-linecap:round;stroke-linejoin:round"
+           id="path7" />
+      </g>
+      <path
+         d="m 2,10 c 12,0 16,20 28,20 12,0 12,-16 20,-16 8,0 10,4 12,4"
+         style="stroke-width:1.75"
+         id="fiber-array-fiber" />
+    </g>
+    <!-- optical path: one fiber, addressed by distance from its start -->
+    <g
+       id="icon-optical-path"
+       transform="matrix(-1.4169094,0,0,-1.4409618,592.22334,402.55501)"
+       style="fill:none;stroke:#9a4a14;stroke-width:1.04977;stroke-linecap:round;stroke-linejoin:round">
+      <path
+         d="M 12,12 H 54 V 28 H 12 a 2,8 0 0 1 0,-16 z"
+         style="fill:#e2c4a6;stroke:#9a4a14;stroke-width:1.04977"
+         id="optical-path-cladding" />
+      <ellipse
+         cx="12"
+         cy="20"
+         rx="2"
+         ry="8"
+         style="fill:#e2c4a6;stroke:#9a4a14;stroke-width:1.04977"
+         id="optical-path-cladding-face" />
+      <path
+         d="m 12,17 h 42 v 6 H 12 a 0.9,3 0 0 1 0,-6 z"
+         style="fill:#ffffff;stroke:#9a4a14;stroke-width:0.769831"
+         id="optical-path-core" />
+      <ellipse
+         cx="12"
+         cy="20"
+         rx="0.89999998"
+         ry="3"
+         style="fill:#ffffff;stroke:#9a4a14;stroke-width:0.769831"
+         id="optical-path-core-face" />
+      <path
+         d="M 50,20 H 18 M 22.5,22.5 18,20 22.5,17.5"
+         style="stroke:#9a4a14;stroke-width:1.22473"
+         id="optical-path-light" />
+    </g>
+    <!-- acquisition: an interrogator sending a pulse down the fiber -->
+    <g
+       id="icon-acquisition"
+       transform="translate(512.06009,488.59899)"
+       style="fill:none;stroke:#9a4a14;stroke-width:1.5;stroke-linecap:round;stroke-linejoin:round">
+      <rect
+         x="4"
+         y="12"
+         width="16"
+         height="16"
+         rx="2"
+         ry="2"
+         style="fill:#ffffff;stroke:#9a4a14;stroke-width:1.5"
+         id="acquisition-interrogator" />
+      <rect
+         x="7"
+         y="15"
+         width="10"
+         height="5"
+         rx="1"
+         ry="1"
+         style="fill:none;stroke:#9a4a14;stroke-width:1.2"
+         id="acquisition-screen" />
+      <circle
+         cx="8.5"
+         cy="23.5"
+         r="1.1"
+         style="fill:#9a4a14;stroke:none"
+         id="acquisition-led-1" />
+      <circle
+         cx="12.5"
+         cy="23.5"
+         r="1.1"
+         style="fill:#9a4a14;stroke:none"
+         id="acquisition-led-2" />
+      <path
+         d="m 21.000017,20 h 17.355585 m -6.508344,-3 8.677792,3 -8.677792,3"
+         style="stroke:#9a4a14;stroke-width:1.75"
+         id="acquisition-arrow" />
+      <rect
+         x="42.14994"
+         y="8"
+         width="26"
+         height="24"
+         id="acquisition-waterfall-frame" />
+      <path
+         d="m 44.14994,31 q 2,-11 10,-22 m -3,22 q 2,-11 10,-22 m -3,22 q 2,-7 8,-14"
+         id="acquisition-waterfall-streaks" />
+    </g>
+  </g>
+  <!-- ===================== tree ===================== -->
+  <g
+     inkscape:groupmode="layer"
+     transform="translate(-40.687927,-18.303204)"
+     inkscape:label="arrows"
+     id="layer-arrows">
+    <!-- the root forks into both branches -->
+    <path
+       id="fork-seismic"
+       d="m 451.73392,148 v 20.6995 l -142,-0.40567 v 26.73662"
+       style="fill:none;stroke:#555555;stroke-width:2;marker-end:url(#arrow)"
+       sodipodi:nodetypes="cccc" />
+    <path
+       id="fork-fiber"
+       d="m 475,148 v 18.76828 l 142,0.52019 v 26.06822"
+       style="fill:none;stroke:#555555;stroke-width:2;marker-end:url(#arrow)"
+       sodipodi:nodetypes="cccc" />
+    <path
+       id="fork-fiber-3"
+       d="m 583.12735,94 h 38.53274"
+       style="fill:none;stroke:#555555;stroke-width:2;marker-end:url(#arrow)"
+       sodipodi:nodetypes="cc" />
+    <path
+       id="fork-fiber-3-1"
+       d="M 342.66666,94 H 304.13392"
+       style="fill:none;stroke:#555555;stroke-width:2;marker-end:url(#arrow)"
+       sodipodi:nodetypes="cc" />
+    <!-- within each branch -->
+    <path
+       d="m 309.73392,306.0238 v 28"
+       style="fill:none;stroke:#555555;stroke-width:1.5"
+       id="path37" />
+    <path
+       d="m 309.73392,442.0238 v 28"
+       style="fill:none;stroke:#555555;stroke-width:1.5"
+       id="path38" />
+    <path
+       d="m 616.06009,306.0238 v 28"
+       style="fill:none;stroke:#555555;stroke-width:1.5"
+       id="path39" />
+    <path
+       d="m 616.06009,442.0238 v 28"
+       style="fill:none;stroke:#555555;stroke-width:1.5"
+       id="path40" />
+  </g>
+  <!-- ===================== what the seismic levels carry ===================== -->
+  <g
+     inkscape:groupmode="layer"
+     transform="translate(-40.687927,-18.303204)"
+     inkscape:label="seismic-expansion"
+     id="layer-seismic-expansion">
+    <g
+       id="station-site">
+      <path
+         d="m 183.9,209 h -10 v 88 h 10"
+         style="fill:none;stroke:#1f4e79;stroke-width:1.5"
+         id="path8" />
+      <text
+         x="161.89999"
+         y="217"
+         style="font-style:italic;font-size:14px;font-family:'Source Sans 3', 'Noto Sans', 'DejaVu Sans', sans-serif;text-anchor:end;fill:#1f4e79"
+         id="text2">monitoring region</text>
+      <text
+         x="161.89999"
+         y="239"
+         style="font-size:14px;font-family:'Source Code Pro', 'DejaVu Sans Mono', Menlo, Consolas, monospace;text-anchor:end;fill:#444444"
+         id="text22">site</text>
+      <text
+         x="161.89999"
+         y="257"
+         style="font-size:14px;font-family:'Source Code Pro', 'DejaVu Sans Mono', Menlo, Consolas, monospace;text-anchor:end;fill:#444444"
+         id="text23">operator</text>
+      <text
+         x="161.89999"
+         y="274.65598"
+         style="font-size:14px;font-family:'Source Code Pro', 'DejaVu Sans Mono', Menlo, Consolas, monospace;text-anchor:end;fill:#444444"
+         id="text25">geology</text>
+    </g>
+    <g
+       id="location-position">
+      <path
+         d="m 183.9,345 h -10 v 88 h 10"
+         style="fill:none;stroke:#1f4e79;stroke-width:1.5"
+         id="path41" />
+      <text
+         x="161.89999"
+         y="353"
+         style="font-style:italic;font-size:14px;font-family:'Source Sans 3', 'Noto Sans', 'DejaVu Sans', sans-serif;text-anchor:end;fill:#1f4e79"
+         id="text41">measurement point</text>
+      <text
+         x="161.89999"
+         y="375"
+         style="font-size:14px;font-family:'Source Code Pro', 'DejaVu Sans Mono', Menlo, Consolas, monospace;text-anchor:end;fill:#444444"
+         id="text42">latitude</text>
+      <text
+         x="161.89999"
+         y="393"
+         style="font-size:14px;font-family:'Source Code Pro', 'DejaVu Sans Mono', Menlo, Consolas, monospace;text-anchor:end;fill:#444444"
+         id="text43">longitude</text>
+      <text
+         x="161.89999"
+         y="411"
+         style="font-size:14px;font-family:'Source Code Pro', 'DejaVu Sans Mono', Menlo, Consolas, monospace;text-anchor:end;fill:#444444"
+         id="text44">elevation</text>
+      <text
+         x="161.89999"
+         y="429"
+         style="font-size:14px;font-family:'Source Code Pro', 'DejaVu Sans Mono', Menlo, Consolas, monospace;text-anchor:end;fill:#444444"
+         id="text45">depth</text>
+    </g>
+    <g
+       id="channel-settings">
+      <path
+         d="m 183.9,479.5 h -10 v 88 h 10"
+         style="fill:none;stroke:#1f4e79;stroke-width:1.5"
+         id="path45" />
+      <text
+         x="161.89999"
+         y="487.5"
+         style="font-style:italic;font-size:14px;font-family:'Source Sans 3', 'Noto Sans', 'DejaVu Sans', sans-serif;text-anchor:end;fill:#1f4e79"
+         id="text46">Sensor Info</text>
+      <text
+         x="161.89999"
+         y="506.5"
+         style="font-size:14px;font-family:'Source Code Pro', 'DejaVu Sans Mono', Menlo, Consolas, monospace;text-anchor:end;fill:#444444"
+         id="text47">sensor</text>
+      <text
+         x="161.89999"
+         y="523.5"
+         style="font-size:14px;font-family:'Source Code Pro', 'DejaVu Sans Mono', Menlo, Consolas, monospace;text-anchor:end;fill:#444444"
+         id="text48">sampling(t)</text>
+      <text
+         x="161.89999"
+         y="540.73242"
+         style="font-size:14px;font-family:'Source Code Pro', 'DejaVu Sans Mono', Menlo, Consolas, monospace;text-anchor:end;fill:#444444"
+         id="text49">response</text>
+    </g>
+  </g>
+  <!-- ===================== what the fiber levels carry ===================== -->
+  <g
+     inkscape:groupmode="layer"
+     transform="translate(-40.687927,-18.303204)"
+     inkscape:label="fiber-expansion"
+     id="layer-fiber-expansion">
+    <g
+       id="fiber-array-site">
+      <path
+         d="m 741.8,209 h 10 v 88 h -10"
+         style="fill:none;stroke:#9a4a14;stroke-width:1.5"
+         id="path49" />
+      <text
+         x="763.79999"
+         y="217"
+         style="font-style:italic;font-size:14px;font-family:'Source Sans 3', 'Noto Sans', 'DejaVu Sans', sans-serif;fill:#9a4a14"
+         id="text50">monitoring region</text>
+      <text
+         x="763.79999"
+         y="239"
+         style="font-size:14px;font-family:'Source Code Pro', 'DejaVu Sans Mono', Menlo, Consolas, monospace;fill:#444444"
+         id="text51">name</text>
+      <text
+         x="763.79999"
+         y="257"
+         style="font-size:14px;font-family:'Source Code Pro', 'DejaVu Sans Mono', Menlo, Consolas, monospace;fill:#444444"
+         id="text52">optical_paths</text>
+      <text
+         x="763.79999"
+         y="275"
+         style="font-size:14px;font-family:'Source Code Pro', 'DejaVu Sans Mono', Menlo, Consolas, monospace;fill:#444444"
+         id="text53">acquisitions</text>
+    </g>
+    <g
+       id="optical-path-tracks"
+       transform="translate(-144.18102,-7.0492038)">
+      <path
+         d="m 886,352 h 10 v 88 h -10"
+         style="fill:none;stroke:#9a4a14;stroke-width:1.5"
+         id="path46" />
+      <text
+         x="908"
+         y="360"
+         style="font-style:italic;font-size:14px;font-family:'Source Sans 3', 'Noto Sans', 'DejaVu Sans', sans-serif;fill:#9a4a14"
+         id="text54">measurement path</text>
+      <text
+         x="908"
+         y="382"
+         style="font-size:14px;font-family:'Source Code Pro', 'DejaVu Sans Mono', Menlo, Consolas, monospace;fill:#444444"
+         id="text55">optical_components</text>
+      <text
+         x="908"
+         y="400"
+         style="font-size:14px;font-family:'Source Code Pro', 'DejaVu Sans Mono', Menlo, Consolas, monospace;fill:#444444"
+         id="text56">geometry</text>
+      <text
+         x="908"
+         y="418"
+         style="font-size:14px;font-family:'Source Code Pro', 'DejaVu Sans Mono', Menlo, Consolas, monospace;fill:#444444"
+         id="text57">labels</text>
+      <text
+         x="908"
+         y="436"
+         style="font-size:14px;font-family:'Source Code Pro', 'DejaVu Sans Mono', Menlo, Consolas, monospace;fill:#444444"
+         id="text58">coupling</text>
+    </g>
+    <g
+       id="acquisition-settings"
+       transform="translate(-135.80829,-4.7035928)">
+      <path
+         d="m 876.44123,484.18931 h 10 v 88 h -10"
+         style="fill:none;stroke:#9a4a14;stroke-width:1.5"
+         id="path58" />
+      <text
+         x="898.44122"
+         y="492.1893"
+         style="font-style:italic;font-size:14px;font-family:'Source Sans 3', 'Noto Sans', 'DejaVu Sans', sans-serif;fill:#9a4a14"
+         id="text59">Sensor info</text>
+      <text
+         x="898.44122"
+         y="511.1893"
+         style="font-size:14px;font-family:'Source Code Pro', 'DejaVu Sans Mono', Menlo, Consolas, monospace;fill:#444444"
+         id="text60">interrogator</text>
+      <text
+         x="898.44122"
+         y="528.03552"
+         style="font-size:14px;font-family:'Source Code Pro', 'DejaVu Sans Mono', Menlo, Consolas, monospace;fill:#444444"
+         id="text61">sampling(t,d)</text>
+      <text
+         x="898.44122"
+         y="545.03552"
+         style="font-size:14px;font-family:'Source Code Pro', 'DejaVu Sans Mono', Menlo, Consolas, monospace;fill:#444444"
+         id="text62">distance_map</text>
+    </g>
+  </g>
+  <!-- ===================== keys ===================== -->
+  <g
+     inkscape:groupmode="layer"
+     transform="translate(-40.687927,-18.303204)"
+     inkscape:label="keys"
+     id="layer-keys">
+    <text
+       x="309.98099"
+       y="605.18195"
+       style="font-size:22px;font-family:'Source Code Pro', 'DejaVu Sans Mono', Menlo, Consolas, monospace;text-anchor:middle;fill:#1f4e79"
+       id="text63"><tspan
+   style="fill:#333333"
+   id="tspan52">XM</tspan>.S01.00.HHZ</text>
+    <text
+       x="616.61334"
+       y="605.18195"
+       style="font-size:22px;font-family:'Source Code Pro', 'DejaVu Sans Mono', Menlo, Consolas, monospace;text-anchor:middle;fill:#9a4a14"
+       id="text64"><tspan
+   style="fill:#333333"
+   id="tspan54">XM</tspan>.L01.04.FSF</text>
+  </g>
+  <metadata
+     id="metadata1">
+    <rdf:RDF>
+      <cc:Work
+         rdf:about="">
+        <dc:title>Inventory hierarchy: SEED codes and DFOS codes</dc:title>
+      </cc:Work>
+    </rdf:RDF>
+  </metadata>
+</svg>

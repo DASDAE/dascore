@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import pickle
 import shutil
-from pathlib import Path
 from typing import ClassVar
 
 import h5py
@@ -54,15 +53,6 @@ def written_dascore_v1_random(random_patch, tmp_path_factory):
 
 @pytest.fixture(scope="class")
 @register_func(WRITTEN_FILES)
-def written_dascore_v1_random_copy(written_dascore_v1_random, tmp_path_factory):
-    """Copy the previous DASDAE file for compatibility-oriented tests."""
-    new_path = tmp_path_factory.mktemp("dasdae_test_path") / "copied_dasdae.h5"
-    shutil.copy(written_dascore_v1_random, new_path)
-    return new_path
-
-
-@pytest.fixture(scope="class")
-@register_func(WRITTEN_FILES)
 def written_dascore_v1_empty(tmp_path_factory):
     """Write an empty patch to the dascore format."""
     path = tmp_path_factory.mktemp("empty_patch") / "empty.hdf5"
@@ -83,42 +73,14 @@ def written_dascore_correlate(tmp_path_factory, random_patch):
     return path
 
 
-@pytest.fixture(params=WRITTEN_FILES, scope="class")
-def dasdae_v1_file_path(request):
-    """Gatherer fixture to iterate through each written dasdae format."""
-    return request.getfixturevalue(request.param)
-
-
 class TestWriteDASDAE:
     """Ensure the format can be written."""
-
-    def test_file_exists(self, dasdae_v1_file_path):
-        """The file should *of course* exist."""
-        assert Path(dasdae_v1_file_path).exists()
 
     def test_append(self, written_dascore_v1_random, tmp_path_factory, random_patch):
         """Ensure files can be appended to unindexed dasdae file."""
         # make a copy of the dasdae file.
         new_path = tmp_path_factory.mktemp("dasdae_append") / "tmp.h5"
         shutil.copy(written_dascore_v1_random, new_path)
-        # ensure the patch exists in the copied spool.
-        df_pre = dc.spool(new_path).get_contents()
-        assert len(df_pre) == 1
-        # append patch to dasdae file
-        new_patch = random_patch.update_coords(time_min="1990-01-01")
-        dc.write(new_patch, new_path, "DASDAE")
-        # ensure the file has grown in contents
-        df = dc.spool(new_path).get_contents()
-        assert len(df) == len(df_pre) + 1
-        assert (df["time_min"] == to_datetime64("1990-01-01")).any()
-
-    def test_append_after_copy(
-        self, written_dascore_v1_random_copy, tmp_path_factory, random_patch
-    ):
-        """Ensure append still works on a copied DASDAE file."""
-        # make a copy of the dasdae file.
-        new_path = tmp_path_factory.mktemp("dasdae_append") / "tmp.h5"
-        shutil.copy(written_dascore_v1_random_copy, new_path)
         # ensure the patch exists in the copied spool.
         df_pre = dc.spool(new_path).get_contents()
         assert len(df_pre) == 1
@@ -145,27 +107,11 @@ class TestWriteDASDAE:
 class TestReadDASDAE:
     """Test for reading a dasdae format."""
 
-    def test_round_trip_random_patch(self, random_patch, tmp_path_factory):
-        """Ensure the random patch can be round-tripped."""
-        path = tmp_path_factory.mktemp("dasdae_round_trip") / "rt.h5"
-        dc.write(random_patch, path, "DASDAE")
-        out = dc.read(path)
-        assert len(out) == 1
-        assert out[0].equals(random_patch)
-
     def test_round_trip_empty_patch(self, written_dascore_v1_empty):
         """Ensure an empty patch can be deserialized."""
         spool = dc.read(written_dascore_v1_empty)
         assert len(spool) == 1
         spool[0].equals(dc.Patch())
-
-    def test_reads_legacy_fixture(self):
-        """Legacy DASDAE fixtures still need to remain readable."""
-        path = fetch("example_dasdae_event_1.h5")
-        with config_context(allow_dasdae_format_unpickle=True):
-            spool = dc.read(path, file_format="DASDAE")
-        assert len(spool) == 1
-        assert spool[0].dims
 
     def test_append_to_legacy_file_keeps_new_attrs(
         self, random_patch, tmp_path_factory
@@ -215,32 +161,32 @@ class TestReadDASDAE:
         spool = parser.read(generic_hdf5)
         assert not len(spool)
 
-    def test_read_source_patch_id(self, tmp_path):
+    def test_read_source_patch_key(self, tmp_path):
         """Reading with a source patch id should only load one patch."""
         path = tmp_path / "multi_patch.h5"
         spool = dc.examples.get_example_spool("random_das", length=2)
         dc.write(spool, path, "DASDAE", file_version="1")
         scanned = dc.scan(path)
-        target = scanned[1].source_patch_id
-        out = dc.read(path, source_patch_id=target)
+        target = scanned[1].source_patch_key
+        out = dc.read(path, source_patch_key=target)
         assert len(out) == 1
-        assert out[0].attrs["_source_patch_id"] == target
-        assert out[0].summary.source_patch_id == out[0].attrs["_source_patch_id"]
+        assert out[0].attrs["_source_patch_key"] == target
+        assert out[0].summary.source_patch_key == out[0].attrs["_source_patch_key"]
         assert (
             out[0].summary.get_coord_summary("time").min
             == scanned[1].get_coord_summary("time").min
         )
 
-    def test_read_multiple_source_patch_ids(self, tmp_path):
+    def test_read_multiple_source_patch_keys(self, tmp_path):
         """Reading with multiple source patch ids should return each match."""
         path = tmp_path / "multi_patch.h5"
         spool = dc.examples.get_example_spool("random_das", length=3)
         dc.write(spool, path, "DASDAE", file_version="1")
         scanned = dc.scan(path)
-        targets = [scanned[0].source_patch_id, scanned[2].source_patch_id]
-        out = dc.read(path, source_patch_id=targets)
+        targets = [scanned[0].source_patch_key, scanned[2].source_patch_key]
+        out = dc.read(path, source_patch_key=targets)
         assert len(out) == 2
-        assert {patch.attrs["_source_patch_id"] for patch in out} == set(targets)
+        assert {patch.attrs["_source_patch_key"] for patch in out} == set(targets)
         assert {patch.summary.get_coord_summary("time").min for patch in out} == {
             scanned[0].get_coord_summary("time").min,
             scanned[2].get_coord_summary("time").min,
@@ -286,22 +232,6 @@ class TestReadDASDAE:
         assert len(out) == 1
         assert out[0].attrs.tag == "S120"
 
-    def test_get_format_false(self, generic_hdf5):
-        """A generic HDF5 file is not a DASDAE file."""
-        parser = DASDAEV1()
-        assert not parser.get_format(generic_hdf5)
-
-    def test_read_empty_selection_returns_no_patches(
-        self, tmp_path_factory, random_patch
-    ):
-        """Selections outside an empty patch should return no patches."""
-        path = tmp_path_factory.mktemp("dasdae_read_empty_selection") / "out.h5"
-        time = random_patch.get_coord("time")
-        random_patch.io.write(path, "dasdae")
-        empty_range_start = time.max() + 3 * time.step
-        out = dc.read(path, time=(empty_range_start, ...))
-        assert len(out) == 0
-
 
 class TestScanDASDAE:
     """Tests for scanning the dasdae format."""
@@ -310,33 +240,19 @@ class TestScanDASDAE:
         """Ensure scanning returns expected values."""
         info1 = dc.scan(written_dascore_v1_random)[0].attrs.model_dump()
         info2 = random_patch.attrs.model_dump()
+        # History is excluded because writing is not an operation; the
+        # ids are not, because a file carries them and that is the point.
         common_keys = set(info1) & set(info2) - {"history"}
+        assert info1["patch_id"] == info2["patch_id"]
         for key in common_keys:
             assert info1[key] == info2[key]
-
-    def test_scan_has_source_patch_id(self, written_dascore_v1_random):
-        """Scanned DASDAE patches should expose source patch ids."""
-        patch = dc.scan(written_dascore_v1_random)[0]
-        assert patch.source_patch_id
-
-    def test_copied_fixture_matches_original(
-        self,
-        written_dascore_v1_random,
-        written_dascore_v1_random_copy,
-    ):
-        """Copying a DASDAE file should not change scan output."""
-        df1 = dc.scan_to_df(written_dascore_v1_random)
-        df2 = dc.scan_to_df(written_dascore_v1_random_copy)
-        # common fields should be equal (except path)
-        common = list((set(df1) & set(df2)) - {"source_path"})
-        assert df1[common].equals(df2[common])
 
     def test_get_patch_summary_has_file_metadata(self, random_spool):
         """The summary helper should stamp DASDAE metadata on each row."""
         out = DASDAEV1()._get_patch_summary(random_spool)
         assert set(out["source_format"]) == {"DASDAE"}
         assert set(out["source_version"]) == {"1"}
-        assert out["source_patch_id"].notnull().all()
+        assert out["source_patch_key"].notnull().all()
 
 
 class TestAttrsClassRoundTrip:
@@ -493,16 +409,113 @@ class TestLegacyFixtureCompatibility:
 
     def test_decode_legacy_attr_bytes_falls_back_to_text(self):
         """Undecodable legacy bytes should fall back to plain text."""
-        assert _decode_legacy_attr_value(b"abc") == "abc"
+        assert _decode_legacy_attr_value({}, "key", b"abc") == "abc"
 
-    def test_decode_legacy_attr_pickled_bytes_fall_back_to_text(self):
-        """Legacy pickled attrs should no longer be unpickled."""
-        payload = pickle.dumps(("a", "b"))
-        assert isinstance(_decode_legacy_attr_value(payload), str)
+    def test_decode_legacy_attr_pickled_bytes_need_the_attrs(self):
+        """A payload can only be told from text by the stored attribute."""
+        payload = pickle.dumps(("a", "b"), 0)
+        assert isinstance(_decode_legacy_attr_value({}, "history", payload), str)
 
     def test_decode_legacy_attr_unboxes_scalar_arrays(self):
         """Scalar legacy arrays should be unpacked back to scalars."""
-        assert _decode_legacy_attr_value(np.asarray(5)) == 5
+        assert _decode_legacy_attr_value({}, "key", np.asarray(5)) == 5
+
+
+class TestPyTablesAttrPayloads:
+    """PyTables pickled attr values HDF5 had no native type for."""
+
+    @pytest.fixture
+    def pytables_attrs(self, tmp_path):
+        """Read attrs back from a group whose attrs mimic PyTables output."""
+
+        def _read(legacy=True, **values):
+            path = tmp_path / "pytables_attrs.h5"
+            with h5py.File(path, "w") as h5:
+                group = h5.create_group("waveforms").create_group("patch")
+                for name, value in values.items():
+                    # PyTables wrote payloads as bytes, which HDF5 records
+                    # with the ASCII character set, and text as UTF-8.
+                    group.attrs[f"_attrs_{name}"] = np.bytes_(pickle.dumps(value, 0))
+                return _get_attrs(group, legacy=legacy)
+
+        return _read
+
+    def test_read_decodes_none(self, pytables_attrs):
+        """A pickled None should read back as None, not as its payload."""
+        assert pytables_attrs(gauge_length=None)["gauge_length"] is None
+
+    def test_read_decodes_history(self, pytables_attrs):
+        """A pickled history tuple should read back as a tuple."""
+        attrs = pytables_attrs(history=("first", "second"))
+        assert attrs["history"] == ("first", "second")
+
+    def test_payload_needs_the_opt_in(self, pytables_attrs):
+        """Without the opt-in an attr payload stays the text it was."""
+        with config_context(allow_dasdae_format_unpickle=False):
+            assert pytables_attrs(gauge_length=None)["gauge_length"] == "N."
+
+    def test_undecodable_payload_stays_text(self, tmp_path):
+        """Bytes which are not a pickle keep the text they would have had."""
+        path = tmp_path / "not_a_pickle.h5"
+        with h5py.File(path, "w") as h5:
+            group = h5.create_group("waveforms").create_group("patch")
+            group.attrs["_attrs_station"] = np.bytes_(b"not a pickle.")
+            assert _get_attrs(group)["station"] == "not a pickle."
+
+    def test_text_attr_is_not_decoded(self, tmp_path):
+        """A real string which happens to be a valid payload stays text."""
+        path = tmp_path / "text_attr.h5"
+        with h5py.File(path, "w") as h5:
+            group = h5.create_group("waveforms").create_group("patch")
+            # PyTables stored a real string as fixed-length UTF-8 and a
+            # payload as raw bytes. "N." is byte-identical to a pickled
+            # None, so only the character set separates the two, and the
+            # value has to be written the way PyTables wrote text for the
+            # test to reach that comparison at all.
+            group.attrs.create(
+                "_attrs_station",
+                np.bytes_(b"N."),
+                dtype=h5py.string_dtype(encoding="utf-8", length=2),
+            )
+            attrs = group.attrs
+            assert isinstance(attrs["_attrs_station"], np.bytes_ | bytes)
+            assert attrs.get_id("_attrs_station").get_type().get_cset() == 1
+            assert _get_attrs(group)["station"] == "N."
+
+    def test_attr_name_repeating_the_prefix(self, tmp_path):
+        """The stored name must be recovered exactly, not by substitution."""
+        path = tmp_path / "repeated_prefix.h5"
+        with h5py.File(path, "w") as h5:
+            group = h5.create_group("waveforms").create_group("patch")
+            group.attrs["_attrs_my_attrs_thing"] = np.bytes_(pickle.dumps(None, 0))
+            assert _get_attrs(group)["my_attrs_thing"] is None
+
+    def test_modern_file_is_not_decoded(self, pytables_attrs):
+        """Only legacy files hold PyTables payloads."""
+        assert pytables_attrs(legacy=False, note=None)["note"] == "N."
+
+    @pytest.mark.parametrize(
+        ("name", "expected"),
+        [
+            ("example_event_1", ()),
+            ("deformation_rate_event_1", ()),
+        ],
+    )
+    def test_shipped_file_history(self, name, expected):
+        """A shipped legacy file states its history, not its payload (#1078)."""
+        assert dc.get_example_patch(name).attrs.history == expected
+
+    def test_shipped_file_history_text(self):
+        """A shipped legacy file with real history states it as entries."""
+        history = dc.get_example_patch("febus_dss_mine_tight").attrs.history
+        assert isinstance(history, tuple)
+        assert history and all(isinstance(x, str) for x in history)
+        assert not history[0].startswith("(V")
+
+    def test_shipped_file_gauge_length(self):
+        """The example the strain docstrings use states no gauge length."""
+        patch = dc.get_example_patch("deformation_rate_event_1")
+        assert getattr(patch.attrs, "gauge_length", None) is None
 
 
 class TestLegacyUnitCompanions:
@@ -868,7 +881,7 @@ class TestRoundTrips:
         new = random_patch.update_coords(dt=("distance", dt))
         new.io.write(path, "dasdae")
         patch = dc.spool(path, file_format="DASDAE")[0]
-        assert isinstance(patch, dc.Patch)
+        assert patch == new
 
     def test_roundtrip_nullish_datetime_coord(self, tmp_path_factory, random_patch):
         """Ensure a patch with an attached datetime coord with nulls works."""

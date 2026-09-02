@@ -15,18 +15,25 @@ from functools import cache
 from pathlib import Path
 
 
+def _find_docs_path() -> Path:
+    """
+    Return the docs directory, by the file it is looking for.
+
+    Looking for a directory named docs whose path holds "docs" exactly once
+    finds nothing in a worktree named for the docs, like repr-docs, and every
+    page then fails to render.
+    """
+    for path in Path(__file__).absolute().parents:
+        if (path / ".cross_ref.json").exists():
+            return path
+    raise ValueError("failed to find cross-ref file")
+
+
 @cache
 def get_cross_ref_dict() -> dict[str, str]:
     """Load cross-reference dictionaries."""
     out = {}
-    path = Path(__file__).absolute()
-    count = 0
-    while path.name != "docs" or str(path).count("docs") != 1:
-        path = path.parent
-        count += 1
-        if count > 100:
-            raise ValueError("failed to find cross-ref file")
-    for cross_ref_path in path.rglob(".cross_ref.json"):
+    for cross_ref_path in _find_docs_path().rglob(".cross_ref.json"):
         out.update(json.loads(cross_ref_path.read_text()))
     assert out, "didn't find cross ref dict"
     return out

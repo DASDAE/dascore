@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 
+import numpy as np
 import pytest
 
 from dascore import PatchAttrs
@@ -39,8 +40,53 @@ class TestMergeAttrs:
         pa1 = PatchAttrs(tag="bob", another=2, same=42)
         pa2 = PatchAttrs(tag="bob", another=2, same=42)
         pa3 = PatchAttrs(another=1, same=42, different=10)
-        with pytest.raises(Exception, match="non-dim attrs are not equal"):
+        with pytest.raises(Exception, match="hold conflicting values"):
             combine_patch_attrs([pa1, pa2, pa3])
+
+    def test_missing_is_a_value(self):
+        """An attr one member never recorded conflicts with one which did."""
+        pa1 = PatchAttrs(data_type="velocity", gauge=10.0)
+        pa2 = PatchAttrs(data_type="", gauge=np.nan)
+        for order in ([pa1, pa2], [pa2, pa1]):
+            with pytest.raises(Exception, match="hold conflicting values"):
+                combine_patch_attrs(order)
+
+    def test_missing_spellings_are_one_value(self):
+        """None, NaN, and "" are the same value, so they never conflict."""
+        attrs = [PatchAttrs(foo=""), PatchAttrs(foo=None), PatchAttrs(foo=np.nan)]
+        assert combine_patch_attrs(attrs).get("foo") is None
+
+    def test_all_missing_is_omitted(self):
+        """An attr nobody knows is left out rather than carried as ""."""
+        out = combine_patch_attrs([PatchAttrs(foo=""), PatchAttrs(foo="")])
+        assert out.get("foo") is None
+
+    def test_drop_omits_missing_beside_known(self):
+        """Drop omits an attr one member left empty, like any other conflict."""
+        pa1 = PatchAttrs(data_type="velocity", foo="a")
+        pa2 = PatchAttrs(data_type="", foo="b")
+        out = combine_patch_attrs([pa1, pa2], conflict="drop")
+        # data_type is a declared field, so dropping it leaves its default.
+        assert out.get("data_type") == ""
+        assert out.get("foo") is None
+
+    def test_keep_first_means_the_first_member(self):
+        """keep_first keeps the first member's value, empty or not."""
+        pa1 = PatchAttrs(foo="", bar=None)
+        pa2 = PatchAttrs(foo="x", bar=1)
+        out = combine_patch_attrs([pa1, pa2], conflict="keep_first")
+        assert out.get("foo") is None
+        assert out.get("bar") is None
+        out = combine_patch_attrs([pa2, pa1], conflict="keep_first")
+        assert out.foo == "x"
+        assert out.bar == 1
+
+    def test_history_never_compared(self):
+        """Histories differing is not a conflict; the first member's carries."""
+        pa1 = PatchAttrs(history=("pass_filter",))
+        pa2 = PatchAttrs(history=())
+        assert combine_patch_attrs([pa1, pa2]).history == ("pass_filter",)
+        assert combine_patch_attrs([pa2, pa1]).history == ()
 
     def test_drop_conflicts(self, random_patch):
         """Ensure unequal non-coordinate attrs can be dropped."""
@@ -94,7 +140,7 @@ class TestMergeAttrs:
 
     def test_private_attrs_are_ignored_for_merge_conflicts(self, random_patch):
         """Private attrs should not block attr merging."""
-        attrs1 = random_patch.attrs.update(_source_patch_id="one")
-        attrs2 = random_patch.attrs.update(_source_patch_id="two")
+        attrs1 = random_patch.attrs.update(_source_patch_key="one")
+        attrs2 = random_patch.attrs.update(_source_patch_key="two")
         out = combine_patch_attrs([attrs1, attrs2])
-        assert "_source_patch_id" not in out.model_dump()
+        assert "_source_patch_key" not in out.model_dump()

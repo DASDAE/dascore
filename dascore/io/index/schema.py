@@ -30,8 +30,13 @@ from collections.abc import Mapping
 from types import MappingProxyType
 from typing import NamedTuple, get_args, get_type_hints
 
-# Version of the index schema, independent of dascore's version.
-INDEX_VERSION = 9
+# Version of the index schema, independent of dascore's version. Bump it
+# when an index written by an older dascore would be read wrongly rather
+# than merely incompletely -- including when what a *stored value* means
+# changes, not only when a column does. 14 reads a legacy DASDAE file's
+# PyTables attr payloads, so 13 stored the payload text where a value
+# is now stored (`gauge_length` of "N." rather than nothing).
+INDEX_VERSION = 14
 # Identity string so any tool can sanity-check what it opened.
 WHAT_IS_THIS = "dascore_spool_index"
 
@@ -102,9 +107,12 @@ class PatchRow(NamedTuple):
 
     patch_id: int
     source_id: int
-    source_patch_id: str
+    source_patch_key: str
     dims: str
     dtype: str  # the data array's dtype, eg "float64"
+    # Samples in the data array (the product of its shape); NULL when the
+    # summary stated no shape.
+    data_size: int | None
     time_min: int | None  # epoch ns; NULL for relative-time patches
     time_max: int | None
     time_step: int | None
@@ -230,7 +238,7 @@ TABLE_CONSTRAINTS = MappingProxyType(
             # today; it states the invariant where the schema states its
             # other invariants, for a writer which does not yet exist.
             "CHECK (dims IS NOT NULL)",
-            "UNIQUE (source_id, source_patch_id)",
+            "UNIQUE (source_id, source_patch_key)",
             "FOREIGN KEY (source_id) REFERENCES sources(source_id) ON DELETE CASCADE",
         ),
         "attrs": (
@@ -261,10 +269,13 @@ TABLE_CONSTRAINTS = MappingProxyType(
 # not indexed; ingest warns about them.
 RESERVED_ATTR_COLUMNS = frozenset(
     {
-        # storage tables
-        "patch_id",
+        # storage tables. `patch_id` is deliberately absent: the row id it
+        # names here is renamed private (SPOOL_EARLY_RENAMES) before attr
+        # columns are applied, so a patch's own `patch_id` claims the
+        # public spelling rather than colliding with it. A path may still
+        # not claim it; see `_UNCLAIMABLE_BY_PATH`.
         "source_id",
-        "source_patch_id",
+        "source_patch_key",
         "source_path",
         "source_format",
         "format_version",
@@ -274,6 +285,7 @@ RESERVED_ATTR_COLUMNS = frozenset(
         "path_attrs",
         "dims",
         "dtype",
+        "data_size",
         # These named structural columns until version 9 dropped them.
         # They stay reserved: the spool gives them a meaning whether or
         # not a column holds one, and un-reserving a name silently turns
@@ -318,13 +330,20 @@ RESERVED_ATTR_COLUMNS = frozenset(
 # underscore is load-bearing, not cosmetic: chunk's merge-compatibility
 # grouping and conflict policing both compare all non-private columns, so
 # a public `dtype` would raise CoordMergeError on every merge of patches
-# with differing element types.
-SPOOL_PRIVATE_RENAMES = MappingProxyType({"patch_id": "_patch_id", "dtype": "_dtype"})
+# with differing element types, and a public `data_size` would do the
+# same to every merge of patches of different lengths. `present_columns`
+# gives both back their public spelling on the way out to a caller.
+# `patch_id` is the one of these an attr also legitimately claims: it
+# names a row in this schema and a datum on a patch. It is renamed in the
+# backend, before attr columns land, so the attr finds the public spelling
+# free; the rest are renamed where the spool relation is built.
+SPOOL_EARLY_RENAMES = MappingProxyType({"patch_id": "_patch_id"})
+SPOOL_LATE_RENAMES = MappingProxyType({"dtype": "_dtype", "data_size": "_data_size"})
 
 # Explicit secondary indexes. Every other access path is covered by a
 # PRIMARY KEY or UNIQUE autoindex above — patch_coords(patch_id,
 # coord_name), sources(base_uri, source_path), patches(source_id,
-# source_patch_id), coord_defs(def_key) — and duplicating them measured
+# source_patch_key), coord_defs(def_key) — and duplicating them measured
 # ~25% extra file size and slower writes for no query gain.
 INDEXES = (("idx_pcoords_name", "patch_coords", "coord_name"),)
 

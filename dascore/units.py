@@ -184,6 +184,37 @@ def get_factor_and_unit(
     return quant.magnitude, get_quantity_str(quant.units)
 
 
+def units_match(units1: quantity_like, units2: quantity_like) -> bool:
+    """
+    Return True if two unit specifications name the same units.
+
+    Written for callers which can skip work when nothing would change,
+    so it is deliberately stricter than `==` on the quantities: 1 m and
+    100 cm compare equal but converting between them is real work, and
+    the spellings they leave behind differ.
+
+    Parameters
+    ----------
+    units1
+        A unit, quantity, or string, or None for "carries no units".
+    units2
+        The specification to compare against.
+
+    Examples
+    --------
+    >>> import dascore as dc
+    >>> from dascore.units import units_match
+    >>>
+    >>> assert units_match("m", "meter")
+    >>> assert not units_match("m", "100 cm")
+    >>> assert units_match(None, "")
+    """
+    quant1, quant2 = get_quantity(units1), get_quantity(units2)
+    if quant1 is None or quant2 is None:
+        return quant1 is quant2
+    return quant1.units == quant2.units and quant1.magnitude == quant2.magnitude
+
+
 @cache
 def _get_conversion_factors(from_quant, to_quant) -> tuple[float, float, float]:
     """Get multiplicative and additive conversion factors."""
@@ -212,8 +243,8 @@ def convert_units(
         follows the input rather than matching it (an int in yields a float
         out) and callers legitimately pass values the checker only knows as
         `object`. Note that data is returned untouched whenever from_units
-        is None, so None survives that path but raises a TypeError once
-        there are real factors to apply.
+        is None or already names to_units, so None survives those paths but
+        raises a TypeError once there are real factors to apply.
     to_units
         The desired units after the conversion
     from_units
@@ -233,6 +264,9 @@ def convert_units(
     elif to_units is None:
         msg = "Cannot convert units to_units are not specified"
         raise UnitError(msg)
+    # Factors of one aren't free: they round a timedelta64 through float.
+    if units_match(from_units, to_units):
+        return data
     try:
         mult1, add, mult2 = _get_conversion_factors(from_units, to_units)
     except DimensionalityError as e:
@@ -334,6 +368,17 @@ def _validate_quantity_str(quant_str: str) -> None:
     except UndefinedUnitError as e:
         msg = f"DASCore failed to parse the following unit/quantity: {quant_str}"
         raise UnitError(msg) from e
+
+
+def carries_units(value) -> bool:
+    """
+    Return True if a value states its own units.
+
+    A quantity says them outright; a timedelta is a time by construction.
+    Anything else is a bare number, which only means something against a
+    unit the caller supplies.
+    """
+    return isinstance(value, Quantity) or is_timedelta64(value)
 
 
 def get_inverted_quant(quant: Quantity | None, data_units):

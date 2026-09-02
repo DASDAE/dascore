@@ -176,9 +176,9 @@ class TestHivePathAttrBenchmarks:
         path = tmp_path_factory.mktemp("hive_benchmark")
         patches = _make_contiguous_patches(25)
         for i, patch in enumerate(patches):
-            sub = path / f"acquisition_key=XX.R2D1..S{i % 5}" / "cable=A"
+            sub = path / f"acquisition_key=XX.R2D1..S{i % 5}" / "cable=A__tag=raw"
             sub.mkdir(parents=True, exist_ok=True)
-            patch.io.write(sub / f"tag=raw__num={i:03d}.h5", "dasdae")
+            patch.io.write(sub / f"patch_{i:03d}.h5", "dasdae")
         return path
 
     @pytest.mark.benchmark

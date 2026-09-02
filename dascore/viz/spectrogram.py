@@ -1,26 +1,16 @@
-"""A spectrogram visualization."""
+"""A spectrogram visualization: a short-time Fourier transform, drawn."""
 
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import Literal
+from typing import Any, Literal
 
 import matplotlib.pyplot as plt
-import numpy as np
-from scipy.signal import spectrogram as scipy_spectrogram
 
 from dascore.constants import PatchType
-from dascore.core.attrs import PatchAttrs
-from dascore.core.coordmanager import get_coord_manager
-from dascore.core.coords import get_compatible_values, get_coord
-from dascore.units import invert_quantity
-from dascore.utils.misc import iterate
-from dascore.utils.patch import (
-    _get_data_units_from_dims,
-    _get_dx_or_spacing_and_axes,
-    patch_function,
-)
-from dascore.utils.transformatter import FourierTransformatter
+from dascore.exceptions import ParameterError
+from dascore.units import Quantity, percent
+from dascore.utils.patch import patch_function
 
 
 def _get_other_dim(dim, dims):
@@ -34,47 +24,29 @@ def _get_other_dim(dim, dims):
         return dims[0] if dims[1] == dim else dims[1]
 
 
-def _get_new_original_coord(old_coord, array):
-    """Get a new coordinate for original axis (eg time)."""
-    old_min = get_compatible_values(old_coord.min(), array.dtype)
-    is_dt = np.issubdtype(old_coord.dtype, np.datetime64)
-    val_dtype = np.timedelta64 if is_dt else old_coord.dtype
-    vals = get_compatible_values(array, val_dtype)
-    return get_coord(data=old_min + vals, units=old_coord.units)
+def _spectrogram_patch(
+    patch: PatchType, dim: str, other_dim: str | None, aggr_domain: str, **stft_kwargs
+):
+    """
+    Return the power the spectrogram draws: |STFT|², one other dimension averaged.
 
-
-def _get_transformed_coord(coord, freqs):
-    """Get the transformed coordinates."""
-    return get_coord(data=freqs, units=invert_quantity(coord.units))
-
-
-def _get_new_dims(patch, dim, new_coord_name):
-    """Get the new dimension tuple."""
-    dims = list(patch.dims)
-    dims[dims.index(dim)] = new_coord_name
-    return tuple([*dims, dim])
-
-
-def _spectrogram_patch(patch: PatchType, dim: str = "time", **kwargs) -> PatchType:
-    """Create a spectrogram patch for visualization."""
-    assert len(iterate(dim)) == 1, "only one dimension allowed."
-    coord = patch.get_coord(dim)
-    dxs, axes = _get_dx_or_spacing_and_axes(patch, dim, require_evenly_spaced=True)
-    new_coord_name = FourierTransformatter().rename_dims(dim)[0]
-    out_coords = patch.coords._get_dim_array_dict()
-    freqs, original, spec = scipy_spectrogram(
-        patch.data,
-        fs=1 / dxs[0],
-        axis=axes[0],
-        **kwargs,
-    )
-    out_coords[dim] = _get_new_original_coord(coord, original)
-    out_coords[new_coord_name] = _get_transformed_coord(coord, freqs)
-    new_dims = _get_new_dims(patch, dim, new_coord_name)
-    cm = get_coord_manager(out_coords, dims=tuple(new_dims))
-    attrs = dict(patch.attrs)
-    attrs["data_units"] = _get_data_units_from_dims(patch, dim, np.multiply)
-    return patch.__class__(data=spec, attrs=PatchAttrs(**attrs), coords=cm)
+    The other dimension is averaged before the transform (`aggr_domain="time"`)
+    or after it (`"frequency"`); a one-sample dimension is squeezed either way.
+    """
+    if other_dim is None:
+        return patch.stft(**stft_kwargs).abs() ** 2
+    if aggr_domain == "time":
+        averaged = patch.aggregate(other_dim, method="mean", dim_reduce="squeeze")
+        return averaged.stft(**stft_kwargs).abs() ** 2
+    if aggr_domain == "frequency":
+        power = (patch.stft(**stft_kwargs).abs() ** 2).squeeze()
+        # A length one other_dim is squeezed out above, and a dimension
+        # of one sample has nothing to average over anyway.
+        if other_dim in power.dims:
+            power = power.aggregate(other_dim, method="mean").squeeze()
+        return power
+    msg = f"The aggr_domain '{aggr_domain}' should be 'time' or 'frequency'."
+    raise ValueError(msg)
 
 
 @patch_function()
@@ -88,6 +60,12 @@ def spectrogram(
     scale_type: Literal["relative", "absolute"] = "relative",
     log=False,
     show=False,
+    *,
+    taper_window: Any = "hann",
+    overlap: Quantity | int | None = 50 * percent,
+    nfft: int | Quantity | None = None,
+    samples: bool = False,
+    detrend: bool = False,
     **kwargs,
 ) -> plt.Axes:
     """
@@ -122,9 +100,13 @@ def spectrogram(
         If True, visualize the common logarithm of the absolute values of patch data.
     show : bool, optional
         If True, show the plot. Otherwise, just return the axis.
-    **kwargs : dict, optional
-        Passed to `scipy.signal.spectrogram` to control spectrogram options.
-        See its documentation for options.
+    taper_window, overlap, nfft, samples, detrend
+        Passed to [Patch.stft](`dascore.Patch.stft`), and read as it reads them.
+    **kwargs
+        The window, as [Patch.stft](`dascore.Patch.stft`) takes it: the
+        dimension and its length, such as ``time=0.5`` (seconds) or
+        ``time=256, samples=True``. With none given, a 256 sample window along
+        `dim`.
 
     Examples
     --------
@@ -133,25 +115,50 @@ def spectrogram(
     >>>
     >>> # Create a spectrogram plot
     >>> ax = patch.viz.spectrogram(show=False)
+    >>>
+    >>> # Half second windows, zero padded to 512 point FFTs, log colours.
+    >>> ax = patch.viz.spectrogram(time=0.5, nfft=512, log=True)
+
+    Notes
+    -----
+    This is [Patch.stft](`dascore.Patch.stft`) followed by
+    [Patch.viz.waterfall](`dascore.viz.waterfall`), with one other
+    dimension averaged away, and the values drawn are |STFT|² in the scaling
+    `stft` uses. Before DASCore 0.1.22 it called `scipy.signal.spectrogram`
+    directly, which differed in more than scaling: it removed the mean of
+    each window (`detrend="constant"`), tapered with a ``("tukey", 0.25)``
+    window, overlapped by an eighth of the window, took no windows past the
+    ends of the data, and spelled its arguments as scipy does (`nperseg`,
+    `noverlap`). Now the taper is hann, the overlap half, windows reach the
+    ends as `stft`'s do, nothing is detrended unless `detrend=True` is
+    passed through, and the window, overlap, taper and FFT length are given
+    as `stft` takes them.
     """
     dims = patch.dims
     if len(dims) > 2 or len(dims) < 1:
         raise ValueError("Can only make spectrogram of 1D or 2D patches.")
-
     other_dim = _get_other_dim(dim, dims)
-    if other_dim is not None:
-        if aggr_domain == "time":
-            patch_aggr = patch.aggregate(other_dim, method="mean", dim_reduce="squeeze")
-            spec = _spectrogram_patch(patch_aggr, dim, **kwargs)
-        elif aggr_domain == "frequency":
-            _spec = _spectrogram_patch(patch, dim, **kwargs).squeeze()
-            spec = _spec.aggregate(other_dim, method="mean").squeeze()
-        else:
-            raise ValueError(
-                f"The aggr_domain '{aggr_domain}' should be 'time' or 'frequency'."
-            )
-    else:
-        spec = _spectrogram_patch(patch, dim, **kwargs)
+    if not kwargs:
+        # scipy's old default, or the whole of a shorter patch.
+        kwargs, samples = {dim: min(256, len(patch.get_coord(dim)))}, True
+    elif dim not in kwargs:
+        msg = (
+            f"The window is given along {sorted(kwargs)} but the spectrogram is "
+            f"of {dim!r}; give the window as {dim}=..."
+        )
+        raise ParameterError(msg)
+    spec = _spectrogram_patch(
+        patch,
+        dim,
+        other_dim,
+        aggr_domain,
+        taper_window=taper_window,
+        overlap=overlap,
+        nfft=nfft,
+        samples=samples,
+        detrend=detrend,
+        **kwargs,
+    )
     return spec.viz.waterfall(
         ax=ax, cmap=cmap, scale=scale, scale_type=scale_type, log=log, show=show
     )

@@ -76,3 +76,46 @@ tbody tr:nth-child(odd) {
     display: block;
     margin-bottom: 10px;
 }
+
+/* Link added to tutorial pages by filters/lite_button.lua, which opens the
+   page as a live notebook in the JupyterLite site. */
+/* The "Open in JupyterLite" launcher at the top of runnable tutorials. Greys
+are given as translucent neutrals so one rule serves the light and dark
+themes. */
+.lite-launch {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.55em;
+    margin-bottom: 1.4rem;
+    padding: 0.4rem 0.9rem 0.4rem 0.7rem;
+    border: 1px solid rgba(128, 128, 128, 0.4);
+    border-radius: 999px;
+    background-color: rgba(128, 128, 128, 0.08);
+    /* Without this the label takes the theme's link colour and the button
+    reads as a stray link someone drew a box around. */
+    color: inherit;
+    font-size: 0.85rem;
+    font-weight: 500;
+    line-height: 1.25;
+    text-decoration: none;
+    transition: border-color 120ms ease, background-color 120ms ease;
+}
+
+.lite-launch:hover,
+.lite-launch:focus-visible {
+    border-color: #f37726;
+    background-color: rgba(243, 119, 38, 0.12);
+    color: inherit;
+    text-decoration: none;
+}
+
+.lite-launch-logo {
+    height: 1.4em;
+    width: auto;
+    flex: none;
+}
+
+/* The mark's stock planets are mid-grey and sink into the dark theme. */
+body.quarto-dark .lite-launch .jupyter-planet {
+    fill: #c9c9c9;
+}

@@ -52,9 +52,52 @@ class DascoreConfig(BaseModel):
         default=10,
         description="Maximum history length to display before summarizing entries.",
     )
+    display_max_items: int = Field(
+        default=10,
+        ge=0,
+        description="Maximum children a repr lists per level before eliding.",
+    )
+    display_max_patches: int = Field(
+        default=1_000,
+        ge=0,
+        description=(
+            "Patches a spool may hold before its repr stops summarizing "
+            "what it covers and prints its count, its path, and the "
+            "limit it exceeded instead. Summarizing realizes the whole "
+            "index relation, which past this many rows is more work "
+            "than a glance is worth; the limit holds whether or not "
+            "that relation happens to be realized already."
+        ),
+    )
+    display_html: bool = Field(
+        default=True,
+        description=(
+            "Whether a display which renders HTML -- a notebook, the docs "
+            "site -- is offered the collapsible repr. False sends every "
+            "display back to the text repr, which says the same words."
+        ),
+    )
+    display_html_open_lines: int = Field(
+        default=12,
+        ge=0,
+        description=(
+            "Body lines a section of an HTML repr may hold and still open "
+            "on its own. A short section is worth a glance; a long one -- "
+            "an array, a deep tree -- is folded until it is asked for. "
+            "0 folds every section."
+        ),
+    )
     patch_history: Literal["standard", "disabled"] = Field(
         default="standard",
         description="Controls whether DASCore appends processing history to patches.",
+    )
+    patch_provenance: Literal["ids", "disabled"] = Field(
+        default="ids",
+        description=(
+            "Controls whether DASCore maintains the patch_id and "
+            "processing_id which say which data a patch is and what was "
+            "done to it."
+        ),
     )
     sampling_group_tolerance: float = Field(
         default=0.05,
@@ -66,10 +109,9 @@ class DascoreConfig(BaseModel):
             "separate groups."
         ),
     )
-    groupby_attrs: tuple[str, ...] = Field(
+    patch_kind_attrs: tuple[str, ...] = Field(
         default=(
             "acquisition_key",
-            "data_type",
             "data_category",
             "tag",
             # Legacy: these are not patch attrs any more, but archives
@@ -81,13 +123,18 @@ class DascoreConfig(BaseModel):
             "station",
         ),
         description=(
-            "Attributes which partition patches into separate groups for "
-            "chunk/merge operations. Patches whose values differ on any of "
-            "these are never combined (no error); the per-call `group` "
-            "argument overrides this default. Names missing from a spool "
-            "are ignored, which is why the legacy `network` and `station` "
-            "can stay: archives which predate `acquisition_key` partition "
-            "by them."
+            "Attributes which decide whether patches are the same kind; they "
+            "are categorical labels (strings), not quantities. Patches "
+            "holding conflicting values for any of these are never "
+            "combined: operators and ufuncs raise, concatenate and stack "
+            "skip them, and chunk puts them in separate outputs (its "
+            "per-call `group` argument overrides this default). Operators "
+            "and ufuncs read a missing or empty value as a wildcard which "
+            "matches anything; the operations which partition a collection "
+            "read it as a value, equal to another missing value and nothing "
+            "else. The legacy `network` and `station` can stay because a "
+            "name no patch in a spool states is ignored, and an archive "
+            "which predates `acquisition_key` states them throughout."
         ),
     )
 

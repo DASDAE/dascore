@@ -48,7 +48,7 @@ from dascore.core.attrs import PatchAttrs
 from dascore.core.coordmanager import CoordManager
 from dascore.core.coords import CoordSegmented
 from dascore.core.spool import Spool
-from dascore.core.summary import PatchSummary, normalize_source_patch_id
+from dascore.core.summary import PatchSummary, normalize_source_patch_key
 from dascore.exceptions import (
     DependencyError,
     InvalidFiberFileError,
@@ -60,8 +60,10 @@ from dascore.exceptions import (
     RemoteCacheError,
     UnknownFiberFormatError,
 )
+from dascore.utils.downloader import resolve_example_uri
 from dascore.utils.io import (
     IOResourceManager,
+    _normalize_source_patch_keys,
     get_handle_from_resource,
     release_handle,
 )
@@ -76,13 +78,22 @@ from dascore.utils.misc import (
     iterate,
     warn_or_raise,
 )
-from dascore.utils.paths import coerce_to_local_path, coerce_to_upath, is_local_path
+from dascore.utils.paths import (
+    coerce_to_local_path,
+    coerce_to_upath,
+    is_example_uri,
+    is_local_path,
+)
 from dascore.utils.plugins import FIBER_IO_GROUP, get_entry_point_loaders
 from dascore.utils.progress import track
 from dascore.utils.remote_io import (
     get_remote_cache_scope,
     remote_cache_scope,
     suppress_gc_pause_warning,
+)
+from dascore.workflow.identity import (
+    ids_enabled,
+    source_patch_id,
 )
 
 # What the scan dispatchers accept: one resource or patch, or an
@@ -108,7 +119,7 @@ class ScanPayload(TypedDict):
     dims: tuple[str, ...]
     shape: tuple[int, ...]
     dtype: str
-    source_patch_id: NotRequired[str]
+    source_patch_key: NotRequired[str]
     source_path: NotRequired[str | Path | UPath]
     source_format: NotRequired[str]
     source_version: NotRequired[str]
@@ -121,7 +132,7 @@ def make_scan_payload(
     dims: Sequence[str] | None = None,
     shape: Sequence[int] | None = None,
     dtype: str = "",
-    source_patch_id: str = "",
+    source_patch_key: str = "",
 ) -> ScanPayload:
     """
     Build one normalized FiberIO scan payload.
@@ -138,7 +149,7 @@ def make_scan_payload(
         The shape of the patch data. If None, use that of `coords`.
     dtype
         The string representation of the data's dtype.
-    source_patch_id
+    source_patch_key
         Identifies which logical patch of a multi-patch resource this is.
     """
     return {
@@ -147,7 +158,7 @@ def make_scan_payload(
         "dims": tuple(coords.dims if dims is None else dims),
         "shape": tuple(coords.shape if shape is None else shape),
         "dtype": str(dtype),
-        "source_patch_id": normalize_source_patch_id(source_patch_id),
+        "source_patch_key": normalize_source_patch_key(source_patch_key),
     }
 
 
@@ -234,7 +245,7 @@ def _validate_scan_payload(result, require_coord_manager: bool = False):
         msg = f"scan payload `dtype` is invalid: {dtype!r}."
         raise TypeError(msg) from exc
     optional_types = {
-        "source_patch_id": str,
+        "source_patch_key": str,
         "source_path": (str, Path, UPath),
         "source_format": str,
         "source_version": str,
@@ -262,7 +273,7 @@ def _scan_payload_to_summary(
     # missing value to "", so default to what it would normalize None to.
     source_format: str = "",
     source_version: str = "",
-    source_patch_id: str | None = None,
+    source_patch_key: str | None = None,
 ) -> PatchSummary:
     """Convert one structured FiberIO scan payload into a PatchSummary."""
     _validate_scan_payload(payload)
@@ -278,9 +289,9 @@ def _scan_payload_to_summary(
         source_path=source_path,
         source_format=source_format,
         source_version=source_version,
-        source_patch_id=(
-            normalize_source_patch_id(source_patch_id)
-            or normalize_source_patch_id(payload.get("source_patch_id"))
+        source_patch_key=(
+            normalize_source_patch_key(source_patch_key)
+            or normalize_source_patch_key(payload.get("source_patch_key"))
         ),
     )
 
@@ -291,18 +302,18 @@ def _scan_result_to_summary(
     source_path: str | Path | UPath | None = None,
     source_format: str | None = None,
     source_version: str | None = None,
-    source_patch_id: str | None = None,
+    source_patch_key: str | None = None,
 ) -> PatchSummary:
     """Convert scan metadata into a patch summary."""
     if isinstance(patch_summary, PatchSummary) and all(
         value in (None, "")
-        for value in (source_path, source_format, source_version, source_patch_id)
+        for value in (source_path, source_format, source_version, source_patch_key)
     ):
         return patch_summary
     normalized_source_path = "" if source_path in (None, "") else source_path
     normalized_source_format = "" if source_format in (None, "") else source_format
     normalized_source_version = "" if source_version in (None, "") else source_version
-    summary_source_patch_id = normalize_source_patch_id(source_patch_id)
+    summary_source_patch_key = normalize_source_patch_key(source_patch_key)
     # PatchSummary is checked first even though it is not a Mapping at
     # runtime: it is not final, so a checker must assume a subclass could be
     # both, and only this order narrows it out of the Mapping branch.
@@ -316,7 +327,7 @@ def _scan_result_to_summary(
             source_path=normalized_source_path or patch_summary.source_path,
             source_format=normalized_source_format or patch_summary.source_format,
             source_version=normalized_source_version or patch_summary.source_version,
-            source_patch_id=summary_source_patch_id or patch_summary.source_patch_id,
+            source_patch_key=summary_source_patch_key or patch_summary.source_patch_key,
         )
     if isinstance(patch_summary, Mapping):
         return _scan_payload_to_summary(
@@ -324,7 +335,7 @@ def _scan_result_to_summary(
             source_path=normalized_source_path,
             source_format=normalized_source_format,
             source_version=normalized_source_version,
-            source_patch_id=summary_source_patch_id,
+            source_patch_key=summary_source_patch_key,
         )
     if isinstance(patch_summary, dc.PatchAttrs):
         msg = (
@@ -365,27 +376,27 @@ def _patch_to_scan_payload(patch: dc.Patch) -> ScanPayload:
         dims=patch.dims,
         shape=patch.shape,
         dtype=str(np.dtype(patch.data.dtype)),
-        source_patch_id=patch.attrs.get("_source_patch_id", ""),
+        source_patch_key=patch.attrs.get("_source_patch_key", ""),
     )
 
 
-def _resolve_read_spool(spool, source_patch_id: object = "") -> dc.Patch:
+def _resolve_read_spool(spool, source_patch_key: object = "") -> dc.Patch:
     """
     Resolve one patch from a read result by source identity.
 
-    Readers that consume source_patch_id may return the single matching
+    Readers that consume source_patch_key may return the single matching
     patch without preserving that reload metadata on it; only trust that
     when the patch doesn't claim a different identity.
     """
-    source_patch_id = normalize_source_patch_id(source_patch_id)
-    if source_patch_id and len(spool) == 1:
-        found = normalize_source_patch_id(spool[0].attrs.get("_source_patch_id", ""))
-        if found == source_patch_id or (not found and not source_patch_id.isdigit()):
+    source_patch_key = normalize_source_patch_key(source_patch_key)
+    if source_patch_key and len(spool) == 1:
+        found = normalize_source_patch_key(spool[0].attrs.get("_source_patch_key", ""))
+        if found == source_patch_key or (not found and not source_patch_key.isdigit()):
             return spool[0]
-    return _select_patch_from_spool(spool, source_patch_id=source_patch_id)
+    return _select_patch_from_spool(spool, source_patch_key=source_patch_key)
 
 
-def _select_patch_from_spool(spool, source_patch_id: object = "") -> dc.Patch:
+def _select_patch_from_spool(spool, source_patch_key: object = "") -> dc.Patch:
     """Select one loaded patch from a spool using source identity."""
     if len(spool) == 0:
         # Iteration skips these with a warning, see #583.
@@ -394,25 +405,25 @@ def _select_patch_from_spool(spool, source_patch_id: object = "") -> dc.Patch:
             "range may have trimmed it to nothing."
         )
         raise MissingPatchError(msg)
-    if source_patch_id not in (None, ""):
-        source_patch_id = str(source_patch_id)
+    if source_patch_key not in (None, ""):
+        source_patch_key = str(source_patch_key)
         # Native source ids are preserved on patch attrs by their readers.
         matches = [
             patch
             for patch in spool
-            if normalize_source_patch_id(patch.attrs.get("_source_patch_id", ""))
-            == source_patch_id
+            if normalize_source_patch_key(patch.attrs.get("_source_patch_key", ""))
+            == source_patch_key
         ]
         if len(matches) == 1:
             return matches[0]
         # Synthesized ids are positional within the full source read.
         try:
-            index = int(source_patch_id)
+            index = int(source_patch_key)
         except (TypeError, ValueError):
             index = None
         if index is not None and 0 <= index < len(spool):
             return spool[index]
-        if len(spool) == 1 and spool[0].get_patch_name() == source_patch_id:
+        if len(spool) == 1 and spool[0].get_patch_name() == source_patch_key:
             return spool[0]
         msg = "Patch could not be uniquely resolved after applying load filters."
         raise PatchAttributeError(msg)
@@ -434,6 +445,9 @@ def _get_reloadable_source_path(
             continue
         if isinstance(candidate, IOResourceManager):
             candidate = candidate.source
+        # A reloadable path names the file, never the examples:// name,
+        # which no filesystem knows how to reopen.
+        candidate = resolve_example_uri(candidate)
         if isinstance(candidate, str | Path | UPath):
             return coerce_to_upath(candidate)
     return ""
@@ -758,7 +772,9 @@ class _FiberIOManager:
         # would be caught by the robustness handler below and read as
         # "wrong format", silently skipping the reader which does match.
         with IOResourceManager(path) as man, suppress_gc_pause_warning():
-            path = man.source
+            # The source may still be an examples:// name if a manager was
+            # handed in already wrapping one; the checks below need a path.
+            path = resolve_example_uri(man.source)
             if isinstance(path, UPath):
                 exists = path.exists()
                 suffix = path.suffix
@@ -959,7 +975,7 @@ class FiberIO:
 
         *kwargs should include support for selecting expected dimensions. For
         example, distance=(100, 200) would only read data with distance from
-        100 to 200. Multi-patch formats may also accept `source_patch_id` to
+        100 to 200. Multi-patch formats may also accept `source_patch_key` to
         load one or more logical patches from the source.
         """
         msg = f"FiberIO: {self.name} has no read method"
@@ -974,7 +990,7 @@ class FiberIO:
         metadata such as `path`, `file_format`, or `file_version`; DASCore
         attaches those in the higher-level `dc.scan(...)` pipeline.
 
-        Multi-patch formats should set `source_patch_id` when needed so
+        Multi-patch formats should set `source_patch_key` when needed so
         DASCore can reload the same logical patch later.
 
         Parameters
@@ -1113,6 +1129,201 @@ def _reinit_manager_lock():
     FiberIO.manager._lock = RLock()
 
 
+# What a reader which keeps its own patch ids leaves behind for `read` to
+# find. Only a format which stores an id sets it; see the DASDAE reader.
+STORED_PATCH_ID = "_stored_patch_id"
+
+
+def _source_stats(source) -> tuple[int | None, int | None]:
+    """
+    Return a source's size and modification time, or nothing for both.
+
+    Nothing is not a failure: a stream and some remote backends have
+    neither, and an id which says so is better than one which pretends
+    the fields were equal.
+
+    A remote source is stat-ed too. One metadata request is nothing
+    beside reading the bytes, and an object rewritten under the same key
+    would otherwise keep the id of what it replaced.
+
+    A directory is covered by its members rather than by itself: a
+    directory's own mtime moves when members come and go, but not when
+    one of them is rewritten, which is exactly the case worth catching.
+    """
+    try:
+        path = (
+            coerce_to_local_path(source)
+            if is_local_path(source)
+            else coerce_to_upath(source)
+        )
+        if path.is_dir():
+            return _directory_stats(path)
+        return _size_and_mtime(path.stat())
+    except Exception:
+        # A source which will not answer is one with no size and no
+        # mtime, which is what the id then says of it.
+        return None, None
+
+
+def _is_hidden(relative) -> bool:
+    """Return True when a path, or any directory above it, is hidden."""
+    return any(part.startswith(".") for part in relative.parts)
+
+
+def _size_and_mtime(stat) -> tuple[int | None, int | None]:
+    """Return one stat result's size and modification time in nanoseconds."""
+    size = getattr(stat, "st_size", None)
+    mtime = getattr(stat, "st_mtime_ns", None)
+    if mtime is None and (seconds := getattr(stat, "st_mtime", None)) is not None:
+        mtime = int(seconds * 1_000_000_000)
+    return (None if size is None else int(size), None if mtime is None else int(mtime))
+
+
+def _directory_stats(path) -> tuple[int, int]:
+    """
+    Return the total size and latest modification time of a directory.
+
+    A directory-format source is one scan unit made of many files, and
+    the two numbers stand for all of them: a member rewritten in place
+    moves the latest mtime, and one which changes length moves the total
+    even if a clock does not. A directory's own stat says neither, which
+    is why it is not used.
+
+    Hidden members are skipped, as they are in the index's own manifest
+    over a directory-format unit -- and so is anything under a hidden
+    directory, which is hidden for the same reason its parent is.
+    """
+    stats = [
+        _size_and_mtime(x.stat())
+        for x in path.rglob("*")
+        if x.is_file() and not _is_hidden(x.relative_to(path))
+    ]
+    return (
+        sum(size or 0 for size, _ in stats),
+        max((mtime or 0 for _, mtime in stats), default=0),
+    )
+
+
+def _source_path_string(source) -> str:
+    """
+    Return how a source spells itself, or nothing if it does not.
+
+    An open file names the path it was opened on, and a manager names
+    what it was built around, so reading a file by handle is reading the
+    same data as reading it by name.
+    """
+    if isinstance(source, IOResourceManager):
+        source = source.source
+    # An id names the file an examples:// name resolves to, not the name.
+    source = resolve_example_uri(source)
+    if isinstance(source, str | Path | UPath):
+        return _canonical_path(source)
+    for attribute in ("_dascore_source_path", "name", "filename"):
+        if value := getattr(source, attribute, ""):
+            # A file object opened on a descriptor names an int, which is
+            # not a path and is not the same one twice.
+            if isinstance(value, str | Path | UPath):
+                return _canonical_path(value)
+    return ""
+
+
+def _canonical_path(path) -> str:
+    """
+    Return the one spelling of a path an id is derived from.
+
+    A local path resolves, so a relative spelling, an absolute one and the
+    one a spool absolutizes out of its index all name a single datum --
+    which is what lets a patch scanned through a spool and the same patch
+    read straight off disk agree about which data they are.
+
+    A URI is left alone: it is already absolute, and resolving one would
+    only mangle it.
+    """
+    text = str(path)
+    if not is_local_path(text):
+        return text
+    try:
+        # `coerce_to_local_path` rather than `Path`: a local file may be
+        # spelled as a `file://` URI, which `Path` would read as a
+        # relative directory called `file:` and resolve against the
+        # working directory.
+        return str(coerce_to_local_path(text).resolve())
+    except Exception:
+        # A path the filesystem will not answer for is still a path, and
+        # a spelling nothing can canonicalize is better than none.
+        return text
+
+
+def source_identity(source) -> tuple[str, int | None, int | None]:
+    """
+    Return what a source is: its canonical path, its size and its mtime.
+
+    The three fields of a derived id which come from the source rather
+    than from the reader; see
+    [`source_patch_id`](`dascore.workflow.identity.source_patch_id`).
+    """
+    if not (path := _source_path_string(source)):
+        return "", None, None
+    return path, *_source_stats(path)
+
+
+def _stamp_source_ids(
+    spool, file_format: str, file_version: str, source, source_patch_key: object = ""
+):
+    """
+    Say which data each patch read from a file is.
+
+    An id derived from the source rather than minted, so reading the same
+    file twice gives the same answer and a result can be traced back to
+    what it came from. A format which stores its own ids keeps them: that
+    one survived a round trip and this one only names where the bytes are.
+
+    A source which cannot spell a path -- a stream, an open file object --
+    is left with the id its patches were built with. Deriving one from the
+    format alone would hand every such read the same id, which is the one
+    failure worth avoiding: two different data claiming to be one.
+
+    Parameters
+    ----------
+    spool
+        What the reader returned.
+    file_format
+        The format it was read as.
+    file_version
+        The version of that format.
+    source
+        What the caller asked to read.
+    source_patch_key
+        The key the caller asked for, when it asked for exactly one.
+        Used for a reader which honours the key without recording it: the
+        patch is then the only one returned, and its position here would
+        say 0 for whichever of the file's patches it is.
+    """
+    # A FiberIO is free to hand back whatever its format means; only a
+    # spool of patches has ids to stamp.
+    path, size_bytes, mtime_ns = source_identity(source)
+    if not path or not isinstance(spool, Spool) or not ids_enabled():
+        return spool
+    # The key the caller asked for stands in for a patch's own only when
+    # it named exactly this patch: a key naming several says which patches
+    # were wanted, not which one any of them is.
+    keys = _normalize_source_patch_keys(source_patch_key)
+    asked_for = keys.pop() if len(keys) == 1 and len(spool) == 1 else ""
+    out = []
+    for index, patch in enumerate(spool):
+        attrs = patch.attrs
+        stored = attrs.get(STORED_PATCH_ID, "")
+        key = attrs.get("_source_patch_key", "") or asked_for or index
+        patch_id = stored or source_patch_id(
+            file_format, file_version, path, key, size_bytes, mtime_ns
+        )
+        new_attrs = attrs.update(patch_id=patch_id)
+        if stored:
+            new_attrs = new_attrs.drop(STORED_PATCH_ID)
+        out.append(patch.new(attrs=new_attrs))
+    return dc.spool(out)
+
+
 def read(
     path: path_types | IOResourceManager,
     file_format: str | None = None,
@@ -1152,12 +1363,13 @@ def read(
     --------
     >>> import numpy as np
     >>> import dascore as dc
-    >>> from dascore.utils.downloader import fetch
     >>>
-    >>> file_path = fetch("terra15_das_1_trimmed.hdf5")
-    >>>
-    >>> patch = dc.read(file_path)
+    >>> patch = dc.read("examples://terra15_das_1_trimmed.hdf5")
     """
+    # Held because `path` is reassigned to whatever the reader wanted; the
+    # id names the source the caller asked for, not the handle it became.
+    # An examples:// name resolves first so the id names the file, not the URI.
+    source = path = resolve_example_uri(path)
     with remote_cache_scope("read"):
         with IOResourceManager(path) as man:
             inferred_format = not file_format or not file_version
@@ -1187,7 +1399,16 @@ def read(
             )
             # if resource has a seek go back to 0 so this stream can be re-used.
             getattr(path, "seek", lambda x: None)(0)
-            return out
+            # The reader's own spelling of its format, not the caller's:
+            # `dc.read(path, "netcdf_cf")` and `dc.read(path, "NETCDF_CF")`
+            # resolve to one FiberIO and must name one datum.
+            return _stamp_source_ids(
+                out,
+                fiber_io.name,
+                fiber_io.version,
+                source,
+                kwargs.get("source_patch_key", ""),
+            )
 
 
 def scan_to_df(
@@ -1226,11 +1447,8 @@ def scan_to_df(
     Examples
     --------
     >>> import dascore as dc
-    >>> from dascore.utils.downloader import fetch
     >>>
-    >>> file_path = fetch("terra15_das_1_trimmed.hdf5")
-    >>>
-    >>> df = dc.scan_to_df(file_path)
+    >>> df = dc.scan_to_df("examples://terra15_das_1_trimmed.hdf5")
     """
     if isinstance(path, pd.DataFrame):
         return path
@@ -1256,6 +1474,7 @@ def scan_to_df(
 def _iterate_scan_inputs(patch_source, ext, mtime, include_directories=True, **kwargs):
     """Yield scan candidates."""
     for el in iterate(patch_source):
+        el = resolve_example_uri(el)
         if isinstance(el, str | Path | UPath):
             path = (
                 coerce_to_local_path(el) if is_local_path(el) else coerce_to_upath(el)
@@ -1382,9 +1601,17 @@ def _iter_scan_results(
     *,
     snap: bool | None = None,
     payloads: bool = False,
-) -> Generator[tuple[ScanPayload | PatchSummary, dict[str, Any]], None, None]:
-    """Yield raw scan results with dispatcher-owned source information."""
+) -> Generator[tuple[ScanPayload | PatchSummary, dict[str, Any], int], None, None]:
+    """
+    Yield raw scan results with dispatcher-owned source information.
+
+    Each result is tagged with the index of the input it came from, which
+    is the only thing that tells a file's second patch apart from the same
+    file scanned twice: both spell one source path and, for a format which
+    names no patch within a file, one key.
+    """
     output_count = 0
+    input_index = -1
     fiber_io_hint: dict[str, FiberIO] = {}
     # A dict for keeping track of missing optional dependencies.
     missing_optional_deps = defaultdict(lambda: 0)
@@ -1412,6 +1639,7 @@ def _iter_scan_results(
     try:
         with remote_cache_scope("metadata"):
             for patch_source in tracker:
+                input_index += 1
                 # Normalize direct patch inputs to summary objects.
                 if isinstance(patch_source, dc.Patch):
                     if payloads:
@@ -1433,7 +1661,7 @@ def _iter_scan_results(
                             ),
                         )
                     output_count += 1
-                    yield result, source_info
+                    yield result, source_info, input_index
                     continue
                 with IOResourceManager(patch_source) as man:
                     try:
@@ -1498,7 +1726,7 @@ def _iter_scan_results(
                     }
                     for result in source:
                         output_count += 1
-                        yield result, source_info
+                        yield result, source_info, input_index
     # Ensure ctl + c exists scan.
     except KeyboardInterrupt:
         getattr(progress, "stop", lambda: None)()
@@ -1562,7 +1790,7 @@ def scan_payloads(
         snap=snap,
         payloads=True,
     )
-    for result, source_info in iterator:
+    for result, source_info, _ in iterator:
         _validate_scan_payload(result, require_coord_manager=True)
         # dict() erases a TypedDict's value types; the validation above has
         # already raised unless every key holds what ScanPayload declares.
@@ -1616,10 +1844,8 @@ def scan(
     Examples
     --------
     >>> import dascore as dc
-    >>> from dascore.utils.downloader import fetch
     >>>
-    >>> file_path = fetch("terra15_das_1_trimmed.hdf5")
-    >>> summary = dc.scan(file_path)[0]
+    >>> summary = dc.scan("examples://terra15_das_1_trimmed.hdf5")[0]
 
     See Also
     --------
@@ -1635,9 +1861,94 @@ def scan(
         timestamp=timestamp,
         progress=progress,
     )
-    for result, source_info in iterator:
+    inputs = []
+    for result, source_info, input_index in iterator:
         out.append(_scan_result_to_summary(result, **source_info))
+        inputs.append(input_index)
+    return _stamp_summary_ids(out, inputs)
+
+
+def _stamp_summary_ids(
+    summaries: list[PatchSummary], inputs: list[int]
+) -> list[PatchSummary]:
+    """
+    Say which data each scanned patch is, without reading any of it.
+
+    The same id `read` stamps, derived the same way from the same fields,
+    so a patch found through a spool's index and the same patch read
+    straight off disk agree about which data they are. A summary whose
+    attrs already name an id keeps it: a format which stores one has
+    already answered the question.
+
+    A source is stat-ed once however many patches it holds, and one which
+    names no path is left alone -- an id derived from the format alone
+    would make every such summary the same datum.
+
+    Parameters
+    ----------
+    summaries
+        What the scan produced.
+    inputs
+        Which scan input each summary came from. Ordinals count within
+        one input, so a file's second patch and the same file scanned
+        twice are told apart -- they are otherwise identical, both
+        spelling one path and, absent a key, one key.
+    """
+    if not ids_enabled():
+        return summaries
+    identities: dict[str, tuple[str, int | None, int | None]] = {}
+    out = []
+    ordinals: dict[tuple[int, str], int] = {}
+    for index, summary in enumerate(summaries):
+        attrs = summary.attrs
+        source = str(summary.source_path or "")
+        # Keyed by the input as well as the source: the ordinal is the
+        # reader's own position within one reading of one file, so
+        # scanning a file twice reads the same data twice rather than
+        # making the second copy that file's second patch.
+        key = (inputs[index], source)
+        ordinal = ordinals.get(key, 0)
+        ordinals[key] = ordinal + 1
+        # The marker, not the field: a patch pickled to a file carries the
+        # id it was minted with in some other process, and reading it back
+        # derives one from the file. Only a format which says it stored an
+        # id -- which is what the marker says -- is believed here, so the
+        # two routes cannot disagree.
+        if not source:
+            out.append(summary)
+            continue
+        if stored := attrs.get(STORED_PATCH_ID, ""):
+            out.append(_summary_with_id(summary, attrs, stored))
+            continue
+        if (identity := identities.get(source)) is None:
+            identity = identities[source] = source_identity(summary.source_path)
+        path, size_bytes, mtime_ns = identity
+        # A summary which names a source names a path: `source` is that
+        # path, and canonicalizing one never empties it.
+        assert path, f"{source!r} named a source but no path"
+        patch_id = source_patch_id(
+            summary.source_format,
+            summary.source_version,
+            path,
+            summary.source_patch_key or ordinal,
+            size_bytes,
+            mtime_ns,
+        )
+        out.append(_summary_with_id(summary, attrs, patch_id))
     return out
+
+
+def _summary_with_id(summary: PatchSummary, attrs, patch_id: str) -> PatchSummary:
+    """
+    Return a summary which says which data it is.
+
+    `model_copy` rather than `new`: nothing here needs revalidating, and a
+    scan of a large archive would pay for it once per patch. The marker a
+    reader left is consumed rather than carried, as it is when a patch is
+    read.
+    """
+    updated = attrs.update(patch_id=patch_id).drop(STORED_PATCH_ID)
+    return summary.model_copy(update={"attrs": updated})
 
 
 def get_format(
@@ -1674,12 +1985,10 @@ def get_format(
     Examples
     --------
     >>> import dascore as dc
-    >>> from dascore.utils.downloader import fetch
     >>>
-    >>> file_path = fetch("prodml_2.1.h5")
-    >>>
-    >>> file_format, file_version = dc.get_format(file_path)
+    >>> file_format, file_version = dc.get_format("examples://prodml_2.1.h5")
     """
+    path = resolve_example_uri(path)
     scope = get_remote_cache_scope()
     if scope == "read":
         return FiberIO.manager._get_format(
@@ -1807,6 +2116,8 @@ def write(
     ------
     [`UnknownFiberFormatError`](`dascore.exceptions.UnknownFiberFormatError`)
         - Could not determine the fiber format.
+    [`ParameterError`](`dascore.exceptions.ParameterError`)
+        - The path is an ``examples://`` name, which is read-only.
 
     Examples
     --------
@@ -1820,6 +2131,16 @@ def write(
     >>> assert path.exists()
     >>> path.unlink()
     """
+    # Example files are read-only; writing to one would land on top of the
+    # downloader's cached copy. A manager is unwrapped first so wrapping the
+    # uri is not a way around this.
+    target = path.source if isinstance(path, IOResourceManager) else path
+    if is_example_uri(target):
+        msg = (
+            f"Cannot write to {target}; examples:// names are read-only. "
+            f"Give a path to write to instead."
+        )
+        raise ParameterError(msg)
     fiber_io = FiberIO.manager.get_fiberio(format=file_format, version=file_version)
     if not isinstance(patch_or_spool, dc.Spool):
         patch_or_spool = dc.spool([patch_or_spool])

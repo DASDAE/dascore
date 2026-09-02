@@ -24,6 +24,11 @@ env:
   # ref rather than hard-coded so a manual run of another branch still links to
   # the branch it published.
   DASCORE_DOC_BRANCH: ${{ github.ref_name }}
+  # The dev docs publish to netlify rather than dascore.org, and the tutorial
+  # notebooks link back to the site they were built for. Left unset, they would
+  # point at the released docs, where any page added since the last release
+  # 404s.
+  DASCORE_DOC_SITE_URL: https://dascore.netlify.app
 
 # Publish only the newest dev commit. This is a netlify deployment, so it does
 # not share the "pages" group used by the stable docs; grouping them together
@@ -61,4 +66,7 @@ jobs:
           QUARTO_PRINT_STACK: true
           NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
         run: |
-            quarto publish docs --no-prompt --no-browser
+            python scripts/_doc_report.py time quarto_publish -- \
+              quarto publish docs --no-prompt --no-browser
+
+      - uses: ./.github/actions/report_doc_build

@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import gc
-import os
 import shutil
+import sys
 import threading
 import warnings
-from contextlib import contextmanager, suppress
+from contextlib import contextmanager
 from pathlib import Path
 
 import h5py
@@ -32,15 +32,55 @@ from dascore.utils.misc import register_func
 
 test_data_path = Path(__file__).parent.absolute() / "test_data"
 
-# A list to register functions that return general spools or patches
-# These are to be used for running many patches/spools through
-# Generic tests.
-SPOOL_FIXTURES = []
+# A list to register functions that return patches, for running many of
+# them through generic tests (the `patch` meta-fixture below).
 PATCH_FIXTURES = []
 
 # By default DASCore only issues a warning once per line. This ensures
 # they get issued every time so tests around warning behavior aren't flaky.
 warnings.filterwarnings("default", category=UserWarning)
+
+
+# A filesystem which has neither kind of link raises pathlib's
+# UnsupportedOperation (a NotImplementedError) rather than an OSError;
+# emscripten is one.
+_NO_LINK = (OSError, NotImplementedError)
+
+
+def _link_or_copy(source: Path, dest: Path) -> None:
+    """Populate one file path using the cheapest available local copy."""
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    if dest.exists():
+        return
+    try:
+        dest.hardlink_to(source)
+        return
+    except _NO_LINK:
+        pass
+    try:
+        dest.symlink_to(source)
+        return
+    except _NO_LINK:
+        pass
+    shutil.copy2(source, dest)
+
+
+@pytest.fixture
+def hide_module(monkeypatch):
+    """Return a function which makes a module unimportable for one test.
+
+    None in sys.modules is the interpreter's own record of a failed
+    import, so every import of that name raises ImportError -- which is
+    what dascore's optional_import turns into a
+    MissingOptionalDependencyError. Replacing the caller's own
+    optional_import instead only exercises the replacement.
+    """
+
+    def _hide(name: str) -> None:
+        monkeypatch.setitem(sys.modules, name, None)
+
+    return _hide
+
 
 # --- Pytest configuration
 
@@ -83,8 +123,10 @@ def pytest_sessionstart(session):
     and to set debug hook to True to avoid showing progress bars,
     except when explicitly being tested.
     """
-    # If running in CI make sure to turn off matplotlib.
-    if os.environ.get("CI", False):
+    # Headless everywhere rather than only under CI, so the viz tests run
+    # the same way on a laptop as they do there -- except under --pdb, where
+    # someone is sitting at a breakpoint and may want to look at a figure.
+    if not session.config.getoption("usepdb", False):
         matplotlib.use("Agg")
 
     # Test-time debug defaults are applied by fixture to avoid state leakage.
@@ -486,7 +528,7 @@ def patch(request):
     return request.getfixturevalue(request.param)
 
 
-@pytest.fixture(scope="class")
+@pytest.fixture(scope="session")
 def one_file_dir(tmp_path_factory, random_patch):
     """Create a directory with a single DAS file."""
     out = Path(tmp_path_factory.mktemp("one_file_file_spool"))
@@ -501,7 +543,7 @@ def random_directory_spool(tmp_path_factory):
     return dc.examples.random_directory_spool(path=path)
 
 
-@pytest.fixture(scope="class")
+@pytest.fixture(scope="session")
 def two_patch_directory(tmp_path_factory, terra15_das_example_path, random_patch):
     """Create a directory of DAS files for testing."""
     # first copy in a terra15 file
@@ -512,7 +554,7 @@ def two_patch_directory(tmp_path_factory, terra15_das_example_path, random_patch
     return dir_path
 
 
-@pytest.fixture(scope="class")
+@pytest.fixture(scope="session")
 def diverse_spool_directory(diverse_spool, tmp_path_factory):
     """Save the diverse spool contents to a directory.
 
@@ -524,29 +566,10 @@ def diverse_spool_directory(diverse_spool, tmp_path_factory):
     return ex.spool_to_directory(diverse_spool, path=out)
 
 
-@pytest.fixture(scope="class")
-def adjacent_spool_directory(tmp_path_factory, adjacent_spool_no_overlap):
-    """Create a directory of adjacent patches."""
-    # create a directory with several patch files in it.
-    dir_path = Path(tmp_path_factory.mktemp("data"))
-    for num, patch in enumerate(adjacent_spool_no_overlap):
-        path = dir_path / f"{num}_patch.hdf5"
-        dc.write(patch, path, file_format="dasdae")
-    return dir_path
-
-
 # --- Spool fixtures
 
 
-@pytest.fixture()
-@register_func(SPOOL_FIXTURES)
-def terra15_das_spool(terra15_das_example_path) -> SpoolType:
-    """Return the spool of Terra15 Das Array."""
-    return read(terra15_das_example_path, file_format="terra15")
-
-
 @pytest.fixture(scope="session")
-@register_func(SPOOL_FIXTURES)
 def terra15_das_unfinished_path() -> Path:
     """Return the spool of Terra15 Das Array."""
     out = fetch("terra15_das_unfinished.hdf5")
@@ -554,15 +577,13 @@ def terra15_das_unfinished_path() -> Path:
     return out
 
 
-@pytest.fixture(scope="class")
-@register_func(SPOOL_FIXTURES)
+@pytest.fixture(scope="session")
 def random_spool() -> SpoolType:
     """Init a random array."""
     return get_example_spool("random_das")
 
 
-@pytest.fixture(scope="class")
-@register_func(SPOOL_FIXTURES)
+@pytest.fixture(scope="session")
 def adjacent_spool_no_overlap(random_patch) -> dc.BaseSpool:
     """
     Create a spool with several patches within one time sample but not
@@ -584,22 +605,19 @@ def adjacent_spool_no_overlap(random_patch) -> dc.BaseSpool:
     return dc.spool([pa2, pa1, pa3])
 
 
-@pytest.fixture(scope="class")
-@register_func(SPOOL_FIXTURES)
+@pytest.fixture(scope="session")
 def one_file_directory_spool(one_file_dir):
     """Create a directory with a single DAS file."""
     return Spool.from_directory(one_file_dir).update()
 
 
-@pytest.fixture(scope="class")
-@register_func(SPOOL_FIXTURES)
+@pytest.fixture(scope="session")
 def diverse_spool():
     """Create a spool with a diverse set of patches for testing."""
     return ex.diverse_spool()
 
 
-@pytest.fixture(scope="class")
-@register_func(SPOOL_FIXTURES)
+@pytest.fixture(scope="session")
 def diverse_directory_spool(diverse_spool_directory):
     """Save the diverse spool contents to a directory."""
     out = dc.spool(diverse_spool_directory).update()
@@ -608,8 +626,7 @@ def diverse_directory_spool(diverse_spool_directory):
     out.indexer.close()
 
 
-@pytest.fixture(scope="class")
-@register_func(SPOOL_FIXTURES)
+@pytest.fixture(scope="session")
 def basic_file_spool(two_patch_directory):
     """Return a DAS bank on basic_bank_directory."""
     out = Spool.from_directory(two_patch_directory).update().update()
@@ -618,14 +635,12 @@ def basic_file_spool(two_patch_directory):
 
 
 @pytest.fixture(scope="class")
-@register_func(SPOOL_FIXTURES)
 def terra15_file_spool(terra15_v5_path):
     """A file spool for terra15."""
     return dc.spool(terra15_v5_path)
 
 
-@pytest.fixture(scope="class")
-@register_func(SPOOL_FIXTURES)
+@pytest.fixture(scope="session")
 def memory_spool_dim_1_patches():
     """
     Memory spool with patches that have length 1 in one dimension.
@@ -641,23 +656,23 @@ def memory_spool_dim_1_patches():
     return spool
 
 
-@pytest.fixture(scope="class")
-@register_func(SPOOL_FIXTURES)
-def all_examples_spool(terra15_das_example_path):
-    """Create a spool from all the examples."""
-    parent = terra15_das_example_path.parent
-    spool = dc.spool(parent)
-    try:
-        spool = spool.update()
-    except Exception:
-        with suppress(FileNotFoundError):
-            spool.indexer.index_path.unlink()  # delete index if problems found
-        spool = spool.update()  # then re-index
-    return spool
+@pytest.fixture(scope="session")
+def all_examples_spool(tmp_path_factory, terra15_das_example_path):
+    """Create a spool from all the example files."""
+    # Indexing the example files where they sit would write an index into the
+    # download cache, which every test process shares. Links cost nothing and
+    # give the index a directory of its own.
+    source = terra15_das_example_path.parent
+    directory = Path(tmp_path_factory.mktemp("all_examples"))
+    for path in source.rglob("*"):
+        # Skip the index (and anything else hidden) a previous run may have
+        # left in the cache: a hard link to it is that same file.
+        if path.is_file() and not path.name.startswith("."):
+            _link_or_copy(path, directory / path.relative_to(source))
+    return dc.spool(directory).update()
 
 
-@pytest.fixture(scope="class")
-@register_func(SPOOL_FIXTURES)
+@pytest.fixture(scope="session")
 def memory_spool_small_dt_differences(random_spool):
     """Create a memory spool with slightly different time_steps."""
     out = []
@@ -671,18 +686,11 @@ def memory_spool_small_dt_differences(random_spool):
 
 
 @pytest.fixture(scope="session")
-@register_func(SPOOL_FIXTURES)
 def spool_with_non_coords():
     """Return a spool which has some non-coordinate patches inside."""
     patches = list(dc.examples.get_example_spool(length=3))
     patches += [x.mean("time") for x in patches]
     return dc.spool(patches)
-
-
-@pytest.fixture(scope="class", params=SPOOL_FIXTURES)
-def spool(request):
-    """A meta-fixtures for collecting all spools used in testing."""
-    return request.getfixturevalue(request.param)
 
 
 # --- Misc. test fixtures

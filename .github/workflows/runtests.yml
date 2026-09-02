@@ -34,9 +34,9 @@ env:
   MPLBACKEND: Agg
   QT_QPA_PLATFORM: offscreen
 
-# Cancel previous runs when this one starts.
+# Supersede the previous run: by pull request, or by branch for pushes.
 concurrency:
-  group: TestCode-${{ github.event.pull_request.number || github.run_id }}
+  group: TestCode-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -48,8 +48,8 @@ jobs:
     outputs:
       # Shared values live in .github/actions/load-shared-vars/action.yml
       python-default: ${{ steps.load-vars.outputs.python-default }}
-      python-matrix: ${{ steps.load-vars.outputs.python-test-matrix }}
-      os-matrix: ${{ steps.load-vars.outputs.test-os-matrix }}
+      test-matrix: ${{ steps.load-vars.outputs.test-matrix }}
+      network-os-matrix: ${{ steps.load-vars.outputs.network-os-matrix }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
@@ -72,11 +72,8 @@ jobs:
       # One job failing used to cancel the rest, which both hid the other
       # results and wasted the work those jobs had already done.
       fail-fast: false
-      matrix:
-        # Defined in .github/actions/load-shared-vars/action.yml
-        os: ${{ fromJson(needs.setup.outputs.os-matrix) }}
-        # Defined in .github/actions/load-shared-vars/action.yml
-        python-version: ${{ fromJson(needs.setup.outputs.python-matrix) }}
+      # Defined in .github/actions/load-shared-vars/action.yml
+      matrix: ${{ fromJson(needs.setup.outputs.test-matrix) }}
 
     # only run if CI isn't turned off
     if: github.event_name == 'push' || !contains(github.event.pull_request.labels.*.name, 'no_ci')
@@ -84,6 +81,8 @@ jobs:
     env:
       debug_enabled: ${{ github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'debug') }}
       PYTEST_ADDOPTS: ${{ github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'debug') && '-vv --durations=100' || '' }}
+      # One data file per cell; the coverage_gate job combines them all.
+      COVERAGE_FILE: .coverage.${{ matrix.os }}-${{ matrix.python-version }}
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -97,8 +96,14 @@ jobs:
           python-version: ${{ matrix.python-version }}
           prepare-test-data: "true"
 
+      # The generated docs tests and the doctests are the same on every cell
+      # and cost minutes, so one cell runs each. The generated tests run
+      # inside the measured suite below, so their coverage reaches the gate;
+      # the doctests are not measured, and counting them would let a line
+      # reachable only from a docstring example satisfy the gate.
       - name: generate qmd docs tests
         id: generate_qmd_tests
+        if: matrix.os == 'ubuntu-latest' && matrix.python-version == needs.setup.outputs.python-default
         shell: bash
         run: python scripts/generate_doc_code_tests.py
 
@@ -113,6 +118,7 @@ jobs:
       # Runs examples in docstrings
       - name: test docstrings
         id: run_docstrings
+        if: matrix.os == 'ubuntu-latest' && matrix.python-version == needs.setup.outputs.python-default
         continue-on-error: ${{ env.debug_enabled == 'true' }}
         shell: bash
         run: ./.github/test_code.sh doctest
@@ -132,19 +138,196 @@ jobs:
         with:
           limit-access-to-actor: true
 
-      # Upload coverage files
-      - uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f  # v7.0.0
+      # The cell's coverage data, for the coverage_gate job to combine.
+      # Uploaded even when the tests failed, so a partial report is still
+      # readable; the gate then fails on the missing lines rather than on a
+      # missing artifact.
+      - name: upload coverage data
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
-          fail_ci_if_error: false
-          files: ./coverage.xml
-          flags: unittests
-          name: PR_tests
-          token: ${{ secrets.CODECOV_TOKEN }}
+          name: coverage-${{ matrix.os }}-${{ matrix.python-version }}
+          # A coverage data file starts with a dot.
+          path: ${{ env.COVERAGE_FILE }}
+          include-hidden-files: true
+          if-no-files-found: error
 
       - name: fail job after debug session if tests failed
         if: steps.generate_qmd_tests.outcome == 'failure' || steps.run_test_suite.outcome == 'failure' || steps.run_docstrings.outcome == 'failure'
         shell: bash
         run: exit 1
+
+  # Where the 100% coverage threshold is enforced. It has to run on the
+  # combined data rather than in any one cell: a handful of lines are
+  # reachable only on a case-insensitive filesystem (macOS, Windows), and
+  # the generated docs tests run on one cell.
+  coverage_gate:
+    needs: [setup, test_code]
+    timeout-minutes: 20
+    runs-on: ubuntu-latest
+
+    # Report on whatever the cells produced, including when one of them
+    # failed; do not wait on network_tests, which is allowed to fail.
+    if: ${{ !cancelled() && (github.event_name == 'push' || !contains(github.event.pull_request.labels.*.name, 'no_ci')) }}
+
+    permissions:
+      contents: read
+      # Needed to leave the missing-lines comment on the pull request.
+      pull-requests: write
+
+    env:
+      # Whether this run has a pull request to comment on, and something
+      # trustworthy to say. A push has no pull request; a fork's token is
+      # read-only, as test_doc_build.yml also has to allow for, and so is
+      # Dependabot's even though its branch is in this repository; and a
+      # failed test cell leaves a hole in the combined data.
+      can_comment: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'dependabot[bot]' && needs.test_code.result == 'success' }}
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Coverage alone: this job reads the source tree, it does not import
+      # dascore, so the dependency install is not worth its minute.
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: ${{ needs.setup.outputs.python-default }}
+
+      - name: install coverage
+        shell: bash
+        run: python -m pip install "coverage>=7.4,<8"
+
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131  # v7.0.0
+        with:
+          pattern: coverage-*
+          merge-multiple: true
+
+      # [tool.coverage.paths] in pyproject.toml is what lets the three
+      # operating systems' data files combine into one set of files.
+      - name: combine coverage
+        shell: bash
+        run: |
+          coverage combine
+          coverage report --show-missing
+          coverage xml
+
+      - uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f  # v7.0.0
+        if: ${{ !cancelled() }}
+        with:
+          fail_ci_if_error: true
+          files: ./coverage.xml
+          flags: unittests
+          name: combined_tests
+          token: ${{ secrets.CODECOV_TOKEN }}
+
+      # The comment says on the pull request what the log says here. It is
+      # skipped when a test cell failed: cells upload their data even when
+      # they fail, so a failed one leaves a hole in the combine and the
+      # missing lines would name code that is covered. The failing cell is
+      # the signal then.
+      - name: read the coverage back
+        id: coverage
+        if: ${{ env.can_comment == 'true' }}
+        shell: bash
+        run: |
+          # The command the gate itself runs, so the two cannot disagree.
+          # It exits 2 below the threshold; anything else is a real failure.
+          set +e
+          coverage report --fail-under=100 > /dev/null
+          status=$?
+          set -e
+          if [ "$status" -eq 0 ]; then
+            echo "complete=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          elif [ "$status" -ne 2 ]; then
+            echo "coverage report exited $status" >&2
+            exit "$status"
+          fi
+          echo "complete=false" >> "$GITHUB_OUTPUT"
+          # How bad it is, for the line which shows before the table is
+          # expanded. From the same data the table is built from.
+          coverage json -q -o coverage.json
+          summary=$(python -c "
+          import json
+          data = json.load(open('coverage.json'))
+          lines = data['totals']['missing_lines']
+          files = sum(1 for x in data['files'].values() if x['summary']['missing_lines'])
+          print(f\"{lines} line{'' if lines == 1 else 's'} in \"
+                f\"{files} file{'' if files == 1 else 's'}\")
+          ")
+          table=$(coverage report --format=markdown --show-missing --skip-covered)
+          # A comment past 65,536 characters is refused, which would turn a
+          # coverage problem into a workflow error. The log has every line.
+          # Sliced in bash rather than piped through head: the runner's shell
+          # sets pipefail, so head closing the pipe early on a large table
+          # would kill this step with SIGPIPE -- in exactly the case the cap
+          # is here for.
+          mapfile -t lines <<< "$table"
+          rows=$(( ${#lines[@]} - 2 ))  # less the header and its underline
+          if [ "$rows" -gt 40 ]; then
+            table=$(printf '%s\n' "${lines[@]:0:42}")
+            table="${table}"$'\n\n'"…and $((rows - 40)) more files; the job log lists them all."
+          fi
+          if [ "${#table}" -gt 60000 ]; then
+            table="${table:0:60000}"$'\n\n'"…truncated; the job log lists them all."
+          fi
+          # The table is folded away: what a reviewer needs at a glance is
+          # that coverage is short and by how much. The blank line after
+          # </summary> is what lets the table inside parse as markdown.
+          {
+            echo "body<<COVERAGE_REPORT_EOF"
+            echo "❌ **Coverage is not complete** — $summary."
+            echo
+            echo "<details>"
+            echo "<summary>Which lines</summary>"
+            echo
+            printf '%s\n' "$table"
+            echo
+            echo "</details>"
+            echo
+            echo "<sub>Every test cell's data, combined. This comment is updated"
+            echo "on re-run and deleted when coverage returns to 100%.</sub>"
+            echo "<!-- coverage-gate -->"
+            echo "COVERAGE_REPORT_EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      # The marker is hidden rather than the first line of the body, so the
+      # wording above can change without orphaning the comment it wrote.
+      - name: find the coverage comment
+        id: fc
+        if: ${{ env.can_comment == 'true' }}
+        uses: peter-evans/find-comment@b30e6a3c0ed37e7c023ccd3f1db5c6c0b0c23aad  # v4.0.0
+        with:
+          issue-number: ${{ github.event.pull_request.number }}
+          comment-author: 'github-actions[bot]'
+          body-includes: '<!-- coverage-gate -->'
+
+      - name: say which lines are missing
+        if: ${{ env.can_comment == 'true' && steps.coverage.outputs.complete == 'false' }}
+        uses: peter-evans/create-or-update-comment@e8674b075228eee787fea43ef493e45ece1004c9  # v5.0.0
+        with:
+          comment-id: ${{ steps.fc.outputs.comment-id }}
+          issue-number: ${{ github.event.pull_request.number }}
+          body: ${{ steps.coverage.outputs.body }}
+          edit-mode: replace
+
+      # Withdrawn rather than edited to say all is well: a pull request at
+      # 100% should carry no coverage comment at all.
+      - name: withdraw the comment once coverage is complete
+        if: ${{ env.can_comment == 'true' && steps.coverage.outputs.complete == 'true' && steps.fc.outputs.comment-id != '' }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          COMMENT_ID: ${{ steps.fc.outputs.comment-id }}
+        run: gh api -X DELETE "repos/{owner}/{repo}/issues/comments/$COMMENT_ID"
+
+      # Last, so the report is uploaded and the comment written whether or
+      # not this passes.
+      - name: require full coverage
+        shell: bash
+        run: coverage report --fail-under=100
 
   network_tests:
     needs: setup
@@ -154,10 +337,14 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: ${{ fromJson(needs.setup.outputs.os-matrix) }}
+        # Defined in .github/actions/load-shared-vars/action.yml
+        os: ${{ fromJson(needs.setup.outputs.network-os-matrix) }}
 
     # Keep remote-IO coverage visible without blocking unrelated changes.
     if: github.event_name == 'push' || !contains(github.event.pull_request.labels.*.name, 'no_ci')
+
+    env:
+      COVERAGE_FILE: .coverage.network-${{ matrix.os }}
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -175,7 +362,19 @@ jobs:
         shell: bash
         run: ./.github/test_code.sh network
 
+      # One network report per run, from one OS: the codecov comment waits
+      # for a fixed number of uploads (codecov.yml), and the three operating
+      # systems exercise the same remote code.
+      # !cancelled(), not the implicit success(): the tests here are allowed
+      # to fail, and skipping the xml would leave codecov waiting forever for
+      # the second of the two uploads it counts.
+      - name: write coverage xml
+        if: ${{ matrix.os == 'ubuntu-latest' && !cancelled() }}
+        shell: bash
+        run: coverage xml
+
       - uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f  # v7.0.0
+        if: ${{ matrix.os == 'ubuntu-latest' && !cancelled() }}
         with:
           fail_ci_if_error: false
           files: ./coverage.xml
@@ -211,14 +410,21 @@ jobs:
       - uses: ./.github/actions/mamba-install-dascore
         with:
           python-version: ${{ needs.setup.outputs.python-default }}
-          # [test] rather than the [dev] default: pip would otherwise layer
-          # ~30 PyPI distributions over the conda environment, which is the
-          # opposite of what this job is checking.
-          install-group-str: "[test]"
+          # Installed below with --no-deps instead: letting pip resolve the
+          # dependencies would layer PyPI distributions over the conda
+          # environment and so hide whatever environment.yml is missing.
+          install-package: "false"
           prepare-test-data: "true"
 
-      # No coverage upload: the uv jobs already cover this suite, and this job
-      # exists to prove environment.yml still solves and dascore works in it.
-      - name: run test suite
+      - name: install dascore on the conda environment alone
         shell: bash -el {0}
-        run: python -m pytest tests -m "not network" -q
+        run: |
+          pip install --no-deps -e .
+          pip check
+
+      # A smoke test, not the suite: every test already runs on the uv
+      # matrix, and what this job answers is whether environment.yml still
+      # solves and dascore reads a file in the environment it describes.
+      - name: run a subset of the test suite
+        shell: bash -el {0}
+        run: python -m pytest tests/test_io/test_dasdae tests/test_compat.py -q

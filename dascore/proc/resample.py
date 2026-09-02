@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import warnings
 from typing import Literal
 
 import numpy as np
@@ -17,7 +18,8 @@ from dascore.utils.patch import (
     get_start_stop_step,
     patch_function,
 )
-from dascore.utils.time import to_int, to_timedelta64
+from dascore.utils.time import dtype_time_like, to_int, to_timedelta64
+from dascore.warnings import DASCoreWarning
 
 scipy_decimate = lazy_import("scipy.signal", "decimate")
 
@@ -30,7 +32,7 @@ def _apply_scipy_decimation(patch, factor, ftype, axis):
         data = scipy_decimate(patch.data, factor, ftype=ftype, axis=axis)
     except ValueError as e:
         msg = (
-            "Scipy decimation failed. This can happen for dimensions with"
+            "Scipy decimation failed. This can happen for dimensions with "
             "few elements. Consider setting filter_type to False. The raised "
             f"exception was {e}"
         )
@@ -74,6 +76,16 @@ def decimate(
     - If the decimation dimension is small, this can fail due to lack of
       padding values.
 
+    - Coordinates measured on the decimated dimension are decimated with
+      it: taking every nth value of a dimension takes every nth value of
+      everything indexed by it.
+
+    See Also
+    --------
+    [resample](`dascore.proc.resample.resample`)
+        Change sampling to a specified interval or number of samples, rather
+        than by an integer decimation factor.
+
     Examples
     --------
     # Simple example using iir
@@ -94,6 +106,42 @@ def decimate(
         data = np.array(data) if copy else data
     # Update delta_dim since spacing along dimension has changed.
     return patch.new(data=data, coords=coords)
+
+
+def _interpolate_associated(cm, dim, coord_num, samples_num, kind) -> dict:
+    """
+    Interpolate the coordinates which ride the interpolated dimension.
+
+    A coordinate of numbers is a function of the dimension, so it is
+    interpolated the way the data is. Anything else is dropped, by
+    updating it to None: a label has nothing between its values, and a
+    time does not survive the trip through floating point -- a nanosecond
+    of the present is 1.6e18 of them, where the nearest float64 is
+    hundreds of nanoseconds away. Dropped explicitly, because
+    interpolating onto the same number of samples in different places
+    would otherwise leave the old values sitting on the new ones.
+    """
+    out = {}
+    for name, coord_dims in cm.dim_map.items():
+        coord = cm.coord_map[name]
+        if name == dim or dim not in coord_dims:
+            continue
+        # Asked before the number test, not after: numpy counts a
+        # timedelta64 as a number, and interpolating one gives back a
+        # float in whatever resolution it was stored in.
+        if dtype_time_like(coord.dtype) or not np.issubdtype(coord.dtype, np.number):
+            out[name] = None
+            continue
+        func = compat.interp1d(
+            coord_num,
+            coord.values,
+            axis=coord_dims.index(dim),
+            kind=kind,
+            fill_value="extrapolate",
+        )
+        values = func(samples_num)
+        out[name] = (coord_dims, dc.core.get_coord(data=values, units=coord.units))
+    return out
 
 
 @patch_function()
@@ -122,7 +170,17 @@ def interpolate(patch: PatchType, kind: str | int = "linear", **kwargs) -> Patch
     This function just uses scipy's interp1d function under the hood.
     See scipy.interpolate.interp1d for information.
 
-    See also [snap](`dascore.core.Patch.snap_coords`).
+    Coordinates measured on the interpolated dimension are interpolated
+    with it where they are numbers, and dropped otherwise: a label has
+    nothing between its values, and a time does not survive the trip
+    through floating point.
+
+    See Also
+    --------
+    [Patch.snap_coords](`dascore.Patch.snap_coords`)
+        Snap coordinates to evenly sampled values without interpolating data.
+    [resample](`dascore.proc.resample.resample`)
+        Resample data to a target sampling interval or number of samples.
 
     Examples
     --------
@@ -154,7 +212,9 @@ def interpolate(patch: PatchType, kind: str | int = "linear", **kwargs) -> Patch
     cm = patch.coords
     associated_dims = cm.dim_map[dim]
     coord_new = dc.core.get_coord(data=samples)
-    cm_new = cm.update(**{dim: (associated_dims, coord_new)})
+    updates = {dim: (associated_dims, coord_new)}
+    updates |= _interpolate_associated(cm, dim, coord_num, samples_num, kind)
+    cm_new = cm.update(**updates)
     return patch.new(data=out, coords=cm_new)
 
 
@@ -199,6 +259,9 @@ def resample(
     -----
     - Unless `samples` is `True`, this function requires a sampling_period.
     - The resulting Patch can be slightly shorter than the input Patch.
+    - Coordinates associated with the resampled dimension are dropped because
+      resampling cannot safely infer their new values. A `DASCoreWarning` names
+      any coordinates which were dropped.
 
     Examples
     --------
@@ -248,7 +311,18 @@ def resample(
     data, new_coord = compat.resample(
         patch.data, int(np.round(new_len)), t=coord, axis=axis, window=window
     )
-    cm = patch.coords.update(**{dim: new_coord})
+    associated = sorted(
+        name
+        for name, coord_dims in patch.coords.dim_map.items()
+        if name != dim and dim in coord_dims
+    )
+    cm = patch.coords
+    if associated:
+        names = ", ".join(associated)
+        msg = f"Resampling dimension {dim!r} dropped associated coordinates: {names}."
+        warnings.warn(msg, DASCoreWarning, stacklevel=3)
+        cm, _ = cm.drop_coords(*associated)
+    cm = cm.update(**{dim: new_coord})
     out = patch.new(data=data, coords=cm)
     # Interpolate if new sampling rate is not very close to desired sampling rate.
     if not samples and not np.isclose(new_len, np.round(new_len)):

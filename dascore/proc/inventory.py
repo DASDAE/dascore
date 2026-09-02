@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
-from typing import Literal, get_args
+from typing import get_args
 
 import numpy as np
 
 import dascore as dc
 from dascore.constants import (
+    ENRICH_CONFLICT,
     INVENTORY_ATTRS,
+    ON_MISSING,
     PatchType,
     enrich_attrs_description,
     enrich_conflict_description,
@@ -16,16 +18,26 @@ from dascore.constants import (
     enrich_on_missing_description,
 )
 from dascore.core._spool_inventory import (
+    COORD_REDUNDANT_ATTRS,
+    DATA_STATE_ATTRS,
+    VALID_ON_MISSING,
     attr_owner,
     get_coord_values,
     get_interrogator,
     is_unset,
     map_axis_coords,
     readable_on,
+    to_axis_units,
+    validate_enrich_conflict,
     validate_enrich_selection,
 )
 from dascore.core.coords import BaseCoord, get_coord
-from dascore.core.inventory import Interrogator, Inventory, ResolvedContext
+from dascore.core.inventory import (
+    Interrogator,
+    Inventory,
+    ResolvedContext,
+    axis_columns,
+)
 from dascore.exceptions import (
     InvalidInventoryError,
     ParameterError,
@@ -34,26 +46,10 @@ from dascore.exceptions import (
 )
 from dascore.models import values_equal
 from dascore.proc.coords import update_coords
-from dascore.utils.attrs import validate_conflict
 from dascore.utils.docs import compose_docstring
 from dascore.utils.misc import iterate, validate_acquisition_key, warn_or_raise
 from dascore.utils.patch import patch_function
 from dascore.utils.time import to_datetime64
-
-# Attrs describing the data as it now stands rather than the system which
-# recorded it. Processing functions maintain them, so blanket enrichment
-# leaves them alone; naming one explicitly restores the as-acquired value.
-_DATA_STATE_ATTRS = ("data_type", "data_category", "data_units")
-
-# Facts the patch's own coordinates already state: the time coordinate has
-# the sample rate and the distance coordinate the channel spacing, and
-# decimating changes both. Nothing should be redundant between coords and
-# attrs, so a blanket request leaves these alone; naming one restores the
-# as-acquired value.
-_COORD_REDUNDANT_ATTRS = ("sample_rate", "spatial_interval")
-
-OnMissing = Literal["raise", "warn", "ignore", "null"]
-_VALID_ON_MISSING = get_args(OnMissing)
 
 
 def _get_acquisition_key(patch, acquisition_key) -> str:
@@ -158,9 +154,9 @@ def _get_attr_values(inventory, context, attrs, on_missing) -> dict:
         return {}
     system = _get_system_attrs(inventory, context)
     if attrs is True:
-        return {i: v for i, v in system.items() if i not in _COORD_REDUNDANT_ATTRS}
+        return {i: v for i, v in system.items() if i not in COORD_REDUNDANT_ATTRS}
     available = dict(system)
-    for name in _DATA_STATE_ATTRS:
+    for name in DATA_STATE_ATTRS:
         value = getattr(context.acquisition, name)
         if not is_unset(value):
             available[name] = value
@@ -227,8 +223,11 @@ def _apply_conflict(patch, new_attrs, conflict) -> tuple[dict, list]:
             raise PatchError(msg)
         elif conflict == "drop":
             drops.append(name)
-        else:  # keep_first: enrichment puts the inventory's value first
+        elif conflict == "keep_last":
+            # The inventory is asked to correct the header rather than to
+            # agree with it, so its value is the one which stands.
             updates[name] = value
+        # keep_first: the patch stated it first, so the patch keeps it.
     return updates, drops
 
 
@@ -268,7 +267,8 @@ def _get_channel_distances(patch, acquisition) -> tuple[str, str, np.ndarray]:
         if len(dims) != 1:
             msg = f"The {name!r} coordinate must belong to exactly one dimension."
             raise PatchError(msg)
-        values = patch.coords.coord_map[name].values
+        coord = patch.coords.coord_map[name]
+        values = to_axis_units(coord.values, coord.units, axis, name)
         try:
             distances = acquisition.channel_to_distance(values, axis=axis)
         except InvalidInventoryError as error:
@@ -321,15 +321,26 @@ def _get_blanket_coord_names(inventory, path) -> list[str]:
     """
     Return the coordinate names a blanket request copies.
 
-    The geometry axes and the annotation groups: what the path says about
-    each channel. Optical distance and the typed-track fields are asked for
-    by name, since they restate what the patch's own axis and the inventory
-    already record.
+    The geometry columns, the label groups, and how each channel is
+    coupled: what the path says about each channel. Optical distance and
+    the other typed tracks are asked for by name, since they restate what
+    the patch's own axis and the inventory already record; a coupling
+    condition states something about the fiber's surroundings which
+    nothing else does, and is the first thing a deployment comparing
+    grouted with hanging fiber has to select on.
     """
-    labels = inventory.coordinate_reference_system.coordinate_labels
-    out = ["x", "y", "z"][: len(labels)] if path.geometry else []
-    seen = dict.fromkeys(x.group for x in path.annotations)
-    return out + [x for x in seen if x]
+    crs = inventory.coordinate_reference_system
+    axis_names = crs.coordinate_labels
+    # The axes are copied under their canonical names, and only where some
+    # segment actually places the fiber; the rest come under their own.
+    axes = {x for segment in path.geometry for x in axis_columns(segment, crs)}
+    out = ["x", "y", "z"][: len(axis_names)] if axes else []
+    out += [x for x in path.geometry_columns() if x not in axes]
+    seen = dict.fromkeys(x.group for x in path.labels)
+    out += [x for x in seen if x]
+    # A path with no coupling conditions resolves to nothing here, and a
+    # blanket request asks only for what the path itself states.
+    return out + (["coupling"] if path.coupling else [])
 
 
 def _coords_equal(existing, values) -> bool:
@@ -415,8 +426,8 @@ def enrich(
     coords: bool | tuple[str, ...] = True,
     acquisition_key: str | None = None,
     time=None,
-    on_missing: OnMissing = "raise",
-    conflict: Literal["drop", "raise", "keep_first"] = "keep_first",
+    on_missing: ON_MISSING = "raise",
+    conflict: ENRICH_CONFLICT = "keep_first",
 ) -> PatchType:
     """
     Copy inventory metadata onto a patch.
@@ -457,9 +468,9 @@ def enrich(
     ...     inventory, attrs=("gauge_length",), coords=("x", "y", "z"),
     ... )
     """
-    validate_conflict(conflict)
-    if on_missing not in _VALID_ON_MISSING:
-        msg = f"on_missing must be one of {_VALID_ON_MISSING}, got {on_missing!r}."
+    validate_enrich_conflict(conflict)
+    if on_missing not in VALID_ON_MISSING:
+        msg = f"on_missing must be one of {VALID_ON_MISSING}, got {on_missing!r}."
         raise ParameterError(msg)
     validate_enrich_selection(attrs, coords)
     source_id = _get_acquisition_key(patch, acquisition_key)

@@ -4,71 +4,156 @@ execute:
   warning: false
 ---
 
-# Viz
-The following provides some examples of patch visualization.
-See the [viz module documentation](`dascore.viz`) for a list of visualization functions
+DASCore plots are available from the object they describe: `Patch.viz`, `Spool.viz`, and `Inventory.viz`.
+
+# Patch
 
 ## Waterfall
-The [`waterfall patch function`](`dascore.viz.waterfall`) creates a waterfall plot of the patch data.
+
+[`Patch.viz.waterfall`](`dascore.viz.waterfall`) plots patch data as an image. Its default 1.5×IQR color limits reduce the influence of outliers.
 
 ```{python}
 import dascore as dc
 
-patch = dc.get_example_patch('example_event_2')
-
-# Default scaling uses IQR-based fence to handle outliers
+patch = dc.get_example_patch("example_event_2")
 patch.viz.waterfall(show=True);
 ```
 
-### Controlling color scaling
-
-The `scale` parameter controls the colorbar saturation. By default, waterfall uses a statistical fence (1.5×IQR) to exclude outliers and show the majority of the data clearly.
+`scale_type="relative"` interprets `scale` as a fraction of the dynamic range around the mean. `scale_type="absolute"` accepts explicit limits.
 
 ```{python}
 import matplotlib.pyplot as plt
-import dascore as dc
-
-patch = dc.get_example_patch('example_event_2')
 
 fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 4))
-
-# Relative scaling: 0.2 means ±20% of dynamic range around mean
 patch.viz.waterfall(scale=0.2, scale_type="relative", ax=ax1)
-ax1.set_title("Relative scaling (scale=0.2)")
-
-# Absolute scaling: directly set colorbar limits
 patch.viz.waterfall(scale=(-50, 50), scale_type="absolute", ax=ax2)
-ax2.set_title("Absolute scaling (scale=(-50, 50))")
-
+ax1.set_title("Relative")
+ax2.set_title("Absolute")
 plt.tight_layout()
 plt.show()
 ```
 
-## Wiggle
-The [`wiggle patch function`](`dascore.viz.wiggle`) creates a wiggle plot of the patch data. We'll use the same patch as above to model this function.
+Pass an existing Matplotlib axis to compose the plot with other panels. The returned axis can be customized with the normal Matplotlib API.
+
+### Inventory labels
+
+After [`Patch.enrich`](`dascore.proc.inventory.enrich`) adds inventory labels as coordinates, `label_coord` marks their ranges along the plot edges. Boolean coordinates mark membership under their coordinate name.
 
 ```{python}
-import dascore as dc
+from dascore.examples import inventory_patch_pair
 
-patch = (
-    dc.get_example_patch('example_event_1')
-    .set_units("mm/(m*s)", distance='m', time='s')
+zoned, inventory = inventory_patch_pair()
+zoned.enrich(inventory).viz.waterfall(label_coord="zone", show=True);
+```
+
+Labels are drawn on both spines of their associated dimension, with faint lines across the image at value changes. Missing labels leave the spine bare. Coordinates associated with `time` use the top and bottom spines; distance coordinates use the left and right.
+
+```{python}
+zoned.enrich(inventory).viz.waterfall(label_coord="noisy", show=True);
+```
+
+## Wiggle
+
+[`Patch.viz.wiggle`](`dascore.viz.wiggle`) draws offset traces. Time-like stacking axes are inverted; other axes retain their normal direction.
+
+The default stacks traces along distance, leaving positive amplitudes upward. If traces are stacked along time, the time axis is inverted and positive amplitudes point right in the conventional display.
+
+```{python}
+event = (
+    dc.get_example_patch("example_event_1")
     .taper(time=0.05)
     .pass_filter(time=(..., 300))
 )
-patch.viz.wiggle(scale = .5)
+event.viz.wiggle(scale=0.5, show=True);
 ```
 
-Another example using wiggle to plot a sine wave is demonstrated below.
+# Inventory
+
+Inventory plots show the observing system without loading patch data. These examples use the deployment from the [tunnel inventory recipe](../recipes/tunnel_inventory.qmd).
 
 ```{python}
-import dascore as dc
-
-patch = dc.examples.get_example_patch(
-    "sin_wav",
-    sample_rate=60,
-    frequency=[60, 10],
-    channel_count=1,
-)
-patch.viz.wiggle(show=True);
+inventory = dc.get_example_inventory("tunnel")
 ```
+
+## Path and map
+
+[`Inventory.viz.path`](`dascore.viz.inventory.path`) draws each track against optical distance. Use `distance=` to focus on part of the fiber.
+
+```{python}
+inventory.viz.path(time="2024-07-01", distance=(1495, 1780), show=True);
+```
+
+Tracks are drawn in optical order. Point features such as splices appear as ticks, while intervals such as boreholes occupy their measured spans.
+
+[`Inventory.viz.map`](`dascore.viz.inventory.map_path`) draws two physical coordinates. `color=` accepts optical distance, coupling, geometry columns, or label groups. Unsurveyed fiber is left as a gap.
+
+```{python}
+inventory.viz.map(x="x", y="z", color="section", time="2024-07-01", show=True);
+```
+
+The default color is optical distance, which links a distance read from a waterfall to its physical location. Choose `x` and `y` for the useful view; a vertical borehole collapses to a point in plan view.
+
+## Timeline
+
+[`Inventory.viz.timeline`](`dascore.viz.inventory.timeline`) shows when acquisitions and optical paths are valid. Hatched ends indicate unbounded epochs.
+
+```{python}
+inventory.viz.timeline(show=True);
+```
+
+Open-ended validity intervals continue beyond the corresponding side of the axis. Use the timeline before selecting a `time=` for the path or map when an inventory contains several configurations.
+
+# Spool
+
+Spool plots use index metadata, so they do not load patch arrays.
+
+```{python}
+spool = dc.get_example_spool("sparse_dss")
+```
+
+## Coverage
+
+[`Spool.viz.coverage`](`dascore.viz.spool.coverage`) gives each compatible patch group a lane showing its runs, gaps, and coverage percentage. It uses the same grouping and gaps as [`get_coverage`](`dascore.core.spool.Spool.get_coverage`) and [`get_gaps`](`dascore.core.spool.Spool.get_gaps`).
+
+```{python}
+spool.viz.coverage(show=True);
+```
+
+Lane names contain the metadata that separates compatible groups and append that group's coverage. A spool representation uses the same kind attributes for tracks, but coverage lanes may split a track further by sampling rate or coordinate structure.
+
+Time is the default dimension; pass another one as in `spool.viz.coverage("distance")`. Select a smaller spool before plotting when coverage percentages should describe a smaller window; change only the axes to zoom without changing the statistics.
+
+```{python}
+spool.select(time=("2024-01-15", "2024-01-25")).viz.coverage(show=True);
+```
+
+Setting axis limits instead keeps the full-spool percentages and only changes the viewport. A line continuing beyond an axis edge then correctly indicates data outside the visible window.
+
+```{python}
+import numpy as np
+
+ax = spool.viz.coverage()
+ax.set_xlim(np.datetime64("2024-01-15"), np.datetime64("2024-01-25"));
+```
+
+## Calendar
+
+[`Spool.viz.calendar`](`dascore.viz.spool.calendar`) summarizes long time ranges by day. Each cell is the union of all selected patch groups and cannot exceed 100%; grey cells are invalid calendar dates.
+
+```{python}
+spool.viz.calendar(show=True);
+```
+
+Because each day is a union, simultaneous acquisitions do not count twice. Empty valid dates represent no coverage; grey cells represent dates which do not exist, such as February 30.
+
+Select an acquisition before plotting it alone. Use `method="gap"` to emphasize short gaps or `method="count"` to show overlapping patch counts.
+
+```{python}
+spool.select(tag="temperature").viz.calendar(show=True);
+```
+
+```{python}
+spool.viz.calendar(method="gap", show=True);
+```
+
+The `group` argument controls which boundaries count as gaps; it does not select an acquisition. Filter the spool first when the calendar should describe only part of the archive.

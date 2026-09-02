@@ -2,7 +2,15 @@
 
 from __future__ import annotations
 
-from _index_api import _get_base_address, _is_environment_path, parse_project
+from types import SimpleNamespace
+
+import pytest
+from _index_api import (
+    _get_base_address,
+    _is_environment_path,
+    assert_documenting_this_checkout,
+    parse_project,
+)
 
 import dascore as dc
 
@@ -49,3 +57,28 @@ class TestAliases:
         """A name matching its object's own name is not treated as an alias."""
         data = parse_project(dc)
         assert data[str(id(dc.Patch))]["name"] == "Patch"
+
+
+class TestAssertDocumentingThisCheckout:
+    """Tests for catching a build which imported another checkout."""
+
+    def test_this_checkout_passes(self):
+        """The dascore in this checkout is the one the docs describe."""
+        assert_documenting_this_checkout(dc)
+
+    def test_other_checkout_raises(self, tmp_path):
+        """A dascore installed elsewhere is named in the error."""
+        with pytest.raises(RuntimeError, match="PYTHONPATH"):
+            assert_documenting_this_checkout(dc, tmp_path)
+
+    def test_nested_environment_raises(self, tmp_path):
+        """A .venv in the checkout holds a copy, not the checkout's own."""
+        installed = tmp_path / ".venv" / "lib" / "site-packages" / "dascore"
+        installed.mkdir(parents=True)
+        (installed / "__init__.py").write_text("")
+        module = SimpleNamespace(
+            __name__="dascore", __file__=str(installed / "__init__.py")
+        )
+
+        with pytest.raises(RuntimeError, match="PYTHONPATH"):
+            assert_documenting_this_checkout(module, tmp_path)

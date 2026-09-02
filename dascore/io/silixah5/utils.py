@@ -6,7 +6,12 @@ import pandas as pd
 import dascore as dc
 from dascore.core import get_coord, get_coord_manager
 from dascore.exceptions import InvalidFiberFileError
-from dascore.io.utils import build_patches, convert_attr_units, get_attr_names
+from dascore.io.utils import (
+    build_patches,
+    convert_attr_units,
+    drop_blank_attrs,
+    get_attr_names,
+)
 from dascore.utils.misc import maybe_get_items
 
 _ATTR_MAP = {
@@ -24,13 +29,29 @@ _ATTR_MAP = {
     "StartPosition[m]": "start_position",
     "SpatialResolution[m]": "spatial_resolution",
     # oops, they spelled information "infomation"
-    "SystemInfomation.Devices1.SerialNum": "interrogator.serial_number",
+    # HostName names the unit ("iDAS20110", "Carina-P52"). The Chassis and
+    # Devices<N> entries name COTS parts inside it, so their serials are not
+    # the interrogator's; these files state no interrogator serial.
+    "SystemInfomation.OS.HostName": "interrogator.name",
 }
+
+# A file may carry the host name but leave it empty.
+_BLANKABLE_ATTRS = ("interrogator.name",)
+
+# Read for metadata but not required to claim the format: a file which omits
+# HostName is still a Silixa file. Kept out of the fingerprints below so that
+# changing what is extracted cannot change which files the reader accepts.
+_OPTIONAL_ATTRS = frozenset({"SystemInfomation.OS.HostName"})
+
+# The detection fingerprints. Devices1.SerialNum is named here rather than in
+# _ATTR_MAP: it is no longer read (it names a card, not the interrogator) but
+# is still required to claim a file, so detection is unchanged.
+_FINGERPRINT_EXTRAS = frozenset({"SystemInfomation.Devices1.SerialNum"})
 
 # The header states these units in the key; patch attrs use seconds.
 _PULSE_WIDTH_UNITS = "ns"
 
-_EXPECTED_ATTRS = set(_ATTR_MAP)
+_EXPECTED_ATTRS = (frozenset(_ATTR_MAP) - _OPTIONAL_ATTRS) | _FINGERPRINT_EXTRAS
 
 
 def _get_version_string(resource, version):
@@ -62,13 +83,15 @@ def _get_time_coord(attr_dict, shape):
 
 
 def _get_distance_coord(attr_dict, data_shape):
-    """Get distance coordinate from AP sensing data."""
-    # Note: To be consistent with TDMS reader (see tdms.utils.get_distance_coord)
-    # We use this method for calculating distance, although start distance
-    # and stop distance are included.
+    """
+    Get the distance coordinate.
+
+    Channel i sits at ``start_distance + i * spatial_resolution *
+    fiber_length_multiplier``, the same convention as the Carina variant;
+    it lands on the file's Stop Distance to within the multiplier's rounding.
+    """
     multiplier = float(attr_dict["fiber_length_multiplier"])
-    total_length = float(attr_dict["measured_length"]) * multiplier
-    start = float(attr_dict["start_position"]) + total_length
+    start = float(attr_dict["start_distance"])
     step = float(attr_dict["spatial_resolution"]) * multiplier
     return get_coord(start=start, step=step, shape=(data_shape[1],), units="m")
 
@@ -89,6 +112,7 @@ def _get_attr_dict(resource):
     """Get the attribute map."""
     ds = resource["Acoustic"]
     attrs_dict = maybe_get_items(ds.attrs, _ATTR_MAP)
+    drop_blank_attrs(attrs_dict, _BLANKABLE_ATTRS)
     convert_attr_units(attrs_dict, "pulse_width", "s", from_units=_PULSE_WIDTH_UNITS)
     coords = _get_coords(attrs_dict, ds.shape)
     return attrs_dict, coords
@@ -139,7 +163,9 @@ _CARINA_ATTR_MAP = {k: v for k, v in _ATTR_MAP.items() if k != "Tags"} | {
     "StartTime": "start_time_us",
     "Samplerate": "sample_rate",
 }
-_CARINA_EXPECTED_ATTRS = set(_CARINA_ATTR_MAP)
+_CARINA_EXPECTED_ATTRS = (
+    frozenset(_CARINA_ATTR_MAP) - _OPTIONAL_ATTRS
+) | _FINGERPRINT_EXTRAS
 
 
 def _get_carina_version_string(resource, version):
@@ -214,6 +240,7 @@ def _get_carina_attrs_and_coords(resource):
     attrs_dict = maybe_get_items(
         resource.attrs, _CARINA_ATTR_MAP, unpack_names=set(_CARINA_ATTR_MAP)
     )
+    drop_blank_attrs(attrs_dict, _BLANKABLE_ATTRS)
     convert_attr_units(attrs_dict, "pulse_width", "s", from_units=_PULSE_WIDTH_UNITS)
     n_time, n_columns = resource[_CARINA_DATA_NAME].shape
     time_coord = _get_carina_time_coord(attrs_dict, n_time)

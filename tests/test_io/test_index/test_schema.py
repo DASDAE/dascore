@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import contextlib
 import sqlite3
+import time
 from concurrent.futures import ThreadPoolExecutor
 from threading import Barrier
 
@@ -59,7 +61,7 @@ class TestSchemaValidation:
         # on the NOT NULL check, which would pass with no FK declared.
         with pytest.raises(sqlite3.IntegrityError, match="FOREIGN KEY"):
             backend._execute(
-                "INSERT INTO patches (patch_id, source_id, source_patch_id, dims) "
+                "INSERT INTO patches (patch_id, source_id, source_patch_key, dims) "
                 "VALUES (1, 999, '0', 'time')"
             )
         backend.close()
@@ -74,7 +76,7 @@ class TestSchemaValidation:
         )
         with pytest.raises(sqlite3.IntegrityError, match="dims"):
             backend._execute(
-                "INSERT INTO patches (patch_id, source_id, source_patch_id, dims) "
+                "INSERT INTO patches (patch_id, source_id, source_patch_key, dims) "
                 "VALUES (1, 1, '0', NULL)"
             )
         backend.close()
@@ -87,17 +89,35 @@ class TestConcurrentInitialization:
     def test_concurrent_open(self, tmp_path):
         """Connections racing to create one index all open successfully."""
         path = tmp_path / "shared.sqlite3"
-        barrier = Barrier(4)
+        # Hold the write lock on the empty file. Every opener then gets past
+        # its "no tables yet" read and piles up waiting to create them, so
+        # exactly one wins and the rest take the re-check branch. Left to
+        # chance, a loaded machine runs the four openers one after another
+        # and that branch is never reached.
+        gate = sqlite3.connect(path, isolation_level=None)
+        gate.execute("BEGIN IMMEDIATE")
+        ready = Barrier(5)
 
         def open_index(_):
-            barrier.wait()
+            # The same read the backend makes first: proof this thread
+            # reached the gate while the database was still schema-less.
+            with contextlib.closing(sqlite3.connect(path)) as con:
+                assert not con.execute("SELECT name FROM sqlite_master").fetchall()
+            ready.wait(timeout=60)
             backend = get_backend(path)
             metadata = backend.get_metadata()
             backend.close()
             return metadata["index_version"]
 
         with ThreadPoolExecutor(max_workers=4) as pool:
-            versions = list(pool.map(open_index, range(4)))
+            futures = [pool.submit(open_index, num) for num in range(4)]
+            ready.wait(timeout=60)
+            # The openers only have a connect and a BEGIN left to run; give
+            # them that before the lock they are queueing for is released.
+            time.sleep(0.05)
+            gate.execute("ROLLBACK")
+            gate.close()
+            versions = [future.result() for future in futures]
         assert versions == [INDEX_VERSION] * 4
         backend = get_backend(path)
         assert len(backend._fetch_df("SELECT * FROM meta_data")) == 1

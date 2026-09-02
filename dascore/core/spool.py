@@ -2,18 +2,22 @@
 
 from __future__ import annotations
 
+import numbers
 import os
 import warnings
 from collections.abc import Callable, Generator, Iterator, Mapping, Sequence
+from contextlib import suppress
 from dataclasses import replace
 from functools import singledispatch
 from pathlib import Path
-from typing import TYPE_CHECKING, ClassVar, Literal, NamedTuple, TypeVar, overload
+from typing import TYPE_CHECKING, ClassVar, Literal, NamedTuple, Self, TypeVar, overload
 
 import numpy as np
 import pandas as pd
+from pandas.errors import (
+    PerformanceWarning,
+)
 from rich.text import Text
-from typing_extensions import Self
 
 import dascore as dc
 from dascore.compat import UPath, is_array
@@ -23,6 +27,7 @@ from dascore.constants import (
     ExecutorType,
     PatchType,
     attr_conflict_description,
+    dascore_styles,
     enrich_attrs_description,
     enrich_conflict_description,
     enrich_coords_description,
@@ -43,6 +48,8 @@ from dascore.core._spool_inventory import (
     check_stampable,
     combine_inventories,
     drops_samples,
+    effective_matches,
+    enriched_attr_names,
     get_attr_values,
     glob_filter,
     match_resolved,
@@ -67,32 +74,51 @@ from dascore.exceptions import (
     ParameterError,
     UnresolvedPatchError,
 )
+from dascore.units import Quantity
 from dascore.utils.chunk_plan import (
     _SOURCE_COLUMNS,
     ChunkPlan,
-    _combined_dtype,
     _ensure_patch_id,
+    _resolve_group_attrs,
+    _structural,
     build_chunk_plan,
+    build_concat_plan,
+    build_coverage_frame,
+    build_gap_frame,
     build_subdivision_plan,
     samples_adjusted_envelopes,
     subdivision_pieces,
 )
-from dascore.utils.display import get_dascore_text, get_nice_text
-from dascore.utils.docs import compose_docstring, get_docstring
+from dascore.utils.display import (
+    _TIME_TYPES,
+    ACQUISITION_ATTR,
+    NodeRepr,
+    Repr,
+    elision_text,
+    get_header_text,
+    get_nice_text,
+    group_names,
+    range_texts,
+    span_text,
+    split_block,
+)
+from dascore.utils.docs import compose_docstring
+from dascore.utils.downloader import resolve_example_uri
 from dascore.utils.misc import (
     _spool_map,
     deep_equality_check,
+    suppress_warnings,
 )
 from dascore.utils.namespace import NamespaceOwner
 from dascore.utils.patch import (
-    concatenate_patches,
     get_patch_names,
     stack_patches,
 )
 from dascore.utils.paths import coerce_to_upath, requires_local_directory
 from dascore.utils.pd import (
     drop_selector_names,
-    present_units_columns,
+    get_dim_names_from_columns,
+    present_columns,
     requested_selector_names,
     resolve_selector_namespaces,
     selector_spec_names,
@@ -102,24 +128,6 @@ if TYPE_CHECKING:
     from dascore.io.index.catalog import PatchCatalog
 
 T = TypeVar("T")
-
-
-# Copy-on-write is always on from pandas 3, which also deprecates the
-# option: reading it there warns on every access, so settle it by version
-# once and only consult the option on pandas 2.
-_COPY_ON_WRITE_ALWAYS = int(pd.__version__.split(".", maxsplit=1)[0]) >= 3
-
-
-def _copy_public_dataframe(frame: pd.DataFrame) -> pd.DataFrame:
-    """
-    Return a caller-owned view of an internally cached dataframe.
-
-    Copy-on-write makes a shallow copy enough, since the frames detach on
-    the first write. Only the literal True enables it; pandas 2 also
-    accepts "warn", which keeps the old sharing semantics.
-    """
-    copy_on_write = _COPY_ON_WRITE_ALWAYS or pd.options.mode.copy_on_write is True
-    return frame.copy(deep=not copy_on_write)
 
 
 class _InventoryQuery(NamedTuple):
@@ -140,7 +148,14 @@ class _InventoryQuery(NamedTuple):
     kwargs: dict
 
 
-class Spool(NamespaceOwner):
+# The types a dimension measured in time is stated in, instants and
+# offsets alike. Two such ends are a duration apart, which is a fact
+# neither end carries; every other dimension states its own magnitude
+# in its own units.
+_TIMES = _TIME_TYPES
+
+
+class Spool(NodeRepr, NamespaceOwner):
     """
     A container of patches: a view over a `PatchCatalog`.
 
@@ -169,14 +184,7 @@ class Spool(NamespaceOwner):
 
     _rich_style = "bold"
     _namespace_entry_point_group = "dascore.spool_namespace"
-    _namespace_attr_errors: ClassVar[dict[str, str]] = {
-        "viz": (
-            "'Spool' has no 'viz' namespace. "
-            "Apply 'viz' on a Patch object. "
-            "(you can merge a subset of the spool into a single patch using "
-            "the Chunk function. i.e., spool.chunk(time=None)[0].viz.waterfall())"
-        )
-    }
+    _namespace_attr_errors: ClassVar[dict[str, str]] = {}
     # synthetic catalog identity columns must not join patch kwargs
     # comparisons or chunk merge-compatibility checks
     _drop_columns = (
@@ -184,7 +192,7 @@ class Spool(NamespaceOwner):
         "source_path",
         "source_format",
         "source_version",
-        "source_patch_id",
+        "source_patch_key",
     )
     # The catalog backing this spool; every construction path sets one.
     _catalog: PatchCatalog
@@ -194,7 +202,7 @@ class Spool(NamespaceOwner):
     # patch the inventory does not describe.
     _inventory = None
     _enrich_kwargs: dict | None = None
-    _on_unresolved: str = "warn"
+    _on_unresolved: WARN_LEVELS = "warn"
     # Whether this spool has already said its inventory covers only part of
     # it; the warning is worth making once, not once per patch.
     _warned_unresolved: bool = False
@@ -249,13 +257,27 @@ class Spool(NamespaceOwner):
         changes the spool. Use ``frame.copy(deep=True)`` when an eager
         block copy is needed.
 
+        The columns the index keeps for itself are not part of the
+        frame: everything returned is public, so no column name starts
+        with an underscore. A few are private only because the chunk
+        planner polices public columns; those are presented under their
+        public names rather than dropped (`dascore.utils.pd.PRESENTERS`
+        lists them), so the frame states each patch's `dtype` and
+        `data_size` -- the samples its data array holds. A row which
+        does not know its size states none: a merged or subdivided
+        chunk output, or a patch a selection trims.
+
         Examples
         --------
         >>> import dascore as dc
         >>> spool = dc.get_example_spool("random_das")
         >>> df = spool.get_contents()
+        >>> assert not [x for x in df.columns if str(x).startswith("_")]
+        >>> assert df["data_size"].iloc[0] == spool[0].size
         """
-        return present_units_columns(_copy_public_dataframe(self._df))
+        # Shallow: copy-on-write is always on from pandas 3, so the
+        # caller's frame detaches from the cached one on its first write.
+        return present_columns(self._df.copy(deep=False))
 
     def __len__(self) -> int:
         """Return len of spool."""
@@ -263,27 +285,85 @@ class Spool(NamespaceOwner):
         # relation is never realized just for a length
         return len(self._catalog)
 
-    # An int selects one patch; a slice or array selects a sub-spool.
+    def _as_selector_array(self, item) -> np.ndarray:
+        """Convert an array-like selector to an array which fits the spool."""
+        if isinstance(item, pd.Series) and pd.api.types.is_integer_dtype(item):
+            # Keep the Series' own integer width: nullable Int64/UInt64 unbox
+            # to it (NA raises) and unsigned values can't wrap negative.
+            dtype = getattr(item.dtype, "numpy_dtype", item.dtype)
+            try:
+                array = item.to_numpy(dtype=dtype)
+            except ValueError:  # a nullable dtype holding NA has no position
+                msg = "An integer selector cannot contain missing values."
+                raise ParameterError(msg) from None
+        elif isinstance(item, pd.Series) and pd.api.types.is_bool_dtype(item):
+            # A mask is applied by position, so it must line up with the frame
+            # get_contents returns; one built from a filtered frame would
+            # otherwise silently select the wrong patches.
+            if not item.index.equals(self._df.index):
+                msg = (
+                    "The index of a boolean Series selector must match this "
+                    "spool's get_contents; build the mask from it, or pass a "
+                    "numpy array to select by position."
+                )
+                raise ParameterError(msg)
+            # to_numpy handles nullable boolean dtypes; NA counts as False.
+            array = item.to_numpy(dtype=bool, na_value=False)
+        else:
+            array = np.asarray(item)
+            if array.size == 0:  # an empty list selects nothing
+                array = array.astype(np.int64)
+        if array.ndim != 1:
+            msg = f"Spool selectors must be one dimensional, got {array.ndim}D."
+            raise ParameterError(msg)
+        length = len(self)
+        if np.issubdtype(array.dtype, np.bool_):
+            if len(array) != length:
+                msg = (
+                    f"Boolean selector has {len(array)} values but the spool "
+                    f"has {length} patches; it must have one per patch."
+                )
+                raise ParameterError(msg)
+        elif np.issubdtype(array.dtype, np.integer):
+            # numpy bounds-checks after casting to the platform's index type,
+            # which wraps a huge index into range on a 32 bit build.
+            if array.size and (array.min() < -length or array.max() >= length):
+                msg = f"Integer selector is out of bounds for {length} patches."
+                raise IndexError(msg)
+        else:
+            msg = "Only bool or int dtypes are supported for spool array selection."
+            raise ValueError(msg)
+        return array
+
+    # An int selects one patch; anything array-like selects a sub-spool.
     @overload
     def __getitem__(self, item: int) -> dc.Patch: ...
 
     @overload
-    def __getitem__(self, item: slice | np.ndarray) -> Spool: ...
+    def __getitem__(self, item: slice | np.ndarray | pd.Series | list) -> Spool: ...
 
     def __getitem__(self, item) -> dc.Patch | Spool:
-        """Return a patch, or a spool for a slice or array of indices."""
+        """
+        Return a patch (int index) or a new spool (anything else).
+
+        A slice, an array, a pandas Series, or a list selects patches: with
+        booleans, one per patch, True keeps; with integers, by position.
+        Boolean masks built from `get_contents` line up with the spool.
+
+        Notes
+        -----
+        A boolean Series is applied by position, and `get_contents` hands
+        out a fresh positional index, so a mask must come from the contents
+        of the spool it selects. A mask built from a differently ordered
+        view of the same patches has a matching index and selects by its
+        own positions rather than raising.
+        """
         if isinstance(item, slice):
             # a lazy id-membership window (D2); never realizes the flat
             # relation, and keeps split()/map() parts cheap
             return self._new_from_catalog(self._catalog.window(item))
-        if is_array(item):
-            array = np.asarray(item)
-            if not (
-                np.issubdtype(array.dtype, np.bool_)
-                or np.issubdtype(array.dtype, np.integer)
-            ):
-                msg = "Only bool or int dtypes are supported for spool array selection."
-                raise ValueError(msg)
+        if is_array(item) or isinstance(item, pd.Series | list):
+            array = self._as_selector_array(item)
             return self._new_from_catalog(self._catalog.restrict(array))
         try:
             return self._maybe_enrich(self._catalog.get_patch(int(item)))
@@ -318,7 +398,10 @@ class Spool(NamespaceOwner):
         metadata: file-backed patches stay unloaded, in-memory patches
         are shared (not copied), and the same source appearing in both
         spools keeps a single entry. Selections on the inputs carry over
-        by row membership.
+        by row membership. An attached inventory, and any enrichment set
+        up from it, is spool-wide state: the union carries whichever
+        operand has one and applies it to every patch it yields, as
+        attaching and enriching the union would; two different ones raise.
 
         Examples
         --------
@@ -617,7 +700,7 @@ class Spool(NamespaceOwner):
 
         A name which is also an attr resolves to the attr, as bare names
         always do, so only one the caller put in `_coords` is read as the
-        coordinate — an annotation group may share an acquisition field's
+        coordinate — a label group may share an acquisition field's
         name, and selecting on the field must keep working. A name the
         index already uses for a coordinate keeps that meaning outright:
         `distance` is the patch's own axis whether or not an inventory
@@ -710,15 +793,27 @@ class Spool(NamespaceOwner):
         """
         Keep the rows whose inventory-backed values match.
 
-        Precedence is per row: a row which states the name is judged by
-        the index, exactly as it would be without an inventory, and only
-        the rows leaving it unstated are resolved. A spool whose headers
-        state everything therefore never touches the inventory, and one
-        which states nothing resolves once per epoch rather than per row.
-        A row the inventory has no answer for is not selected, as a patch
-        lacking the attr entirely is not. Straddling is decided against
-        the row as it now stands, so a range which has already trimmed a
-        row inside one epoch leaves it resolvable.
+        Precedence is per row, and is the precedence extraction applies.
+        A row which states the name is judged by the index, exactly as it
+        would be without an inventory, and only the rows leaving it
+        unstated are resolved. A spool whose headers state everything
+        therefore touches the inventory only when enrichment will rewrite
+        the name, and one which states nothing resolves once per epoch
+        rather than per row. A row the inventory has no answer for is not
+        selected, as a patch lacking the attr entirely is not. Straddling
+        is decided against the row as it now stands, so a range which has
+        already trimmed a row inside one epoch leaves it resolvable.
+
+        Pending enrichment changes what a stated row comes out holding,
+        so stated rows are resolved too where it would write the name:
+        `conflict="keep_last"` makes the inventory's answer the row's
+        value, `conflict="drop"` leaves a disagreeing row with none, and
+        `on_missing="null"` on named attrs blanks a resolved row the
+        inventory cannot answer. A row extraction refuses rather than
+        rewrites -- a disagreeing header under `conflict="raise"`, a dated
+        row under a pending `time`, a stated key disagreeing with a
+        pending `acquisition_key` -- is judged as it stands; the refusal
+        is extraction's to make.
         """
         ids = np.asarray(self._catalog.ordered_ids(), dtype=np.int64)
         if not len(ids):
@@ -727,10 +822,21 @@ class Spool(NamespaceOwner):
         known = set(backend.attr_names())
         contexts = None
         mask = np.ones(len(ids), dtype=bool)
+        # How pending enrichment rewrites a stated header, if at all; the
+        # `raise` policy refuses rather than rewrites, `keep_first` leaves
+        # the header standing, and `on_missing` applies to named attrs only.
+        pending = self._enrich_kwargs or {}
+        conflict = pending.get("conflict")
+        rewritten = frozenset()
+        if conflict is not None and conflict not in ("raise", "keep_first"):
+            rewritten = enriched_attr_names(pending["attrs"])
+        nulls_missing = (
+            pending.get("on_missing") == "null" and pending.get("attrs") is not True
+        )
         for name, selector in query.items():
             # Which rows state the name is asked of the index rather than
             # read off the relation, so a spool whose headers state it
-            # everywhere is never realized: the index alone answers.
+            # everywhere is realized only when enrichment will rewrite it.
             stated = np.isin(ids, list(backend.attr_stated_ids(name, patch_ids=ids)))
             # A name no patch states is asked about rather than tried: the
             # index rejects it and the inventory answers for every row, and
@@ -746,16 +852,23 @@ class Spool(NamespaceOwner):
                 else np.empty(0, dtype=np.int64)
             )
             matched = np.isin(ids, index_ids)
-            if not stated.all():
+            # A stated row is resolved too when enrichment will rewrite it.
+            rewriting = name in rewritten
+            if not stated.all() or rewriting:
                 if contexts is None:
                     contexts = self._row_contexts(ids)
-                matched[~stated] = match_resolved(
-                    get_attr_values(
-                        self._resolved_inventory(), contexts[~stated], name
-                    ),
-                    name,
-                    selector,
-                    backend.attr_units(name),
+                answers = get_attr_values(self._resolved_inventory(), contexts, name)
+                resolved = None
+                if rewriting and nulls_missing:
+                    resolved = np.array([x is not None for x in contexts], dtype=bool)
+                matched = effective_matches(
+                    stated,
+                    matched,
+                    answers,
+                    match_resolved(answers, name, selector, backend.attr_units(name)),
+                    self._row_headers(ids, name) if rewriting else None,
+                    conflict if rewriting else None,
+                    resolved,
                 )
             mask &= matched
         return self._new_from_catalog(self._catalog.restrict(mask, ids=ids))
@@ -765,25 +878,42 @@ class Spool(NamespaceOwner):
         Resolve each presented row to its inventory context, or to None.
 
         This is where the relation is realized, which is why it is only
-        reached for a name the index does not state for every row.
+        reached for a name some row leaves unstated or pending enrichment
+        will rewrite. Rows resolve as extraction will, so pending
+        enrichment's own `acquisition_key` and `time` each stand in where
+        a row has none of its own.
         """
-        out = np.full(len(ids), None, dtype=object)
         df = self._df
-        columns = resolution_columns(df)
+        columns = resolution_columns(df, self._enrich_kwargs)
         if columns is None:
-            return out
-        # Aligned by id rather than by position: the relation is realized
-        # by a route of its own and need not present every row the id list
-        # does, and a row it leaves out is one nothing was resolved for.
-        resolved = dict(
-            zip(
-                df["_patch_id"].to_numpy(),
-                resolve_contexts(self._resolved_inventory(), *columns),
-                strict=True,
-            )
+            return np.full(len(ids), None, dtype=object)
+        return self._aligned(
+            ids, df, resolve_contexts(self._resolved_inventory(), *columns)
         )
+
+    def _row_headers(self, ids, name: str) -> np.ndarray:
+        """Each presented row's own value of a name, or None where unstated."""
+        df = self._df
+        values = (
+            df[name].to_numpy(dtype=object)
+            if name in df.columns
+            else np.full(len(df), None, dtype=object)
+        )
+        return self._aligned(ids, df, values)
+
+    @staticmethod
+    def _aligned(ids, df, values) -> np.ndarray:
+        """
+        Order per-relation-row values by the presented ids.
+
+        Aligned by id rather than by position: the relation is realized
+        by a route of its own and need not present every row the id list
+        does, and a row it leaves out is one nothing was resolved for.
+        """
+        by_id = dict(zip(df["_patch_id"].to_numpy(), values, strict=True))
+        out = np.full(len(ids), None, dtype=object)
         for position, patch_id in enumerate(ids):
-            out[position] = resolved.get(patch_id)
+            out[position] = by_id.get(patch_id)
         return out
 
     def attach_inventory(self, inventory=None) -> Self:
@@ -922,7 +1052,7 @@ class Spool(NamespaceOwner):
     def enrich(
         self,
         *,
-        on_unresolved: Literal["warn", "raise", "ignore"] = "warn",
+        on_unresolved: WARN_LEVELS = "warn",
         **kwargs,
     ) -> Self:
         """
@@ -959,10 +1089,11 @@ class Spool(NamespaceOwner):
             Held and passed to
             [`Patch.enrich`](`dascore.proc.inventory.enrich`) for each
             extracted patch. The names accepted are read from its
-            signature, so the two cannot disagree, and only the names are
-            checked at this point — the values each patch's own enrichment
-            checks as it is extracted. Calling `enrich` again replaces
-            these rather than adding to them. They are:
+            signature, so the two cannot disagree. The names, the policies
+            and the shape of an `acquisition_key` are checked now — the
+            rest each patch's own enrichment checks as it is extracted.
+            Calling `enrich` again replaces these rather than adding to
+            them. They are:
 
         Other Parameters
         ----------------
@@ -998,6 +1129,8 @@ class Spool(NamespaceOwner):
         new = self.__class__(self)
         new._enrich_kwargs = enrich_kwargs
         new._on_unresolved = on_unresolved
+        # What this enrichment leaves unresolved is worth saying once more.
+        new._warned_unresolved = False
         return new
 
     def expand_by(
@@ -1011,7 +1144,7 @@ class Spool(NamespaceOwner):
         """
         Expand the spool into one patch per value of an inventory coordinate.
 
-        Most often an annotation group. Every kind of group expands: a
+        Most often a label group. Every kind of group expands: a
         categorical one by each of its strings, a membership group into
         the channels it includes and those it does not, and a numeric one
         by each distinct measurement. Intervals of one group may overlap,
@@ -1096,7 +1229,7 @@ class Spool(NamespaceOwner):
 
     def _plan_contexts(self, working) -> np.ndarray:
         """Resolve each row of a planning frame to its inventory context."""
-        columns = resolution_columns(working)
+        columns = resolution_columns(working, self._enrich_kwargs)
         if columns is None:
             return np.full(len(working), None, dtype=object)
         return resolve_contexts(self._resolved_inventory(), *columns)
@@ -1104,7 +1237,7 @@ class Spool(NamespaceOwner):
     def conform_to_inventory(
         self,
         *,
-        on_unresolved: Literal["raise", "warn", "ignore"] = "raise",
+        on_unresolved: WARN_LEVELS = "raise",
     ) -> Self:
         """
         Return a spool the inventory describes exactly, patch for patch.
@@ -1130,7 +1263,8 @@ class Spool(NamespaceOwner):
         ----------
         on_unresolved
             What to do with a patch the inventory does not describe — one
-            carrying no `acquisition_key`, one carrying a key the
+            carrying no `acquisition_key` (and given none by a pending
+            `enrich`), one carrying a key the
             inventory does not resolve to exactly one entry, one reaching
             outside every matching epoch, or one with no instants to
             resolve at because its time axis is not physical. A patch is
@@ -1172,7 +1306,7 @@ class Spool(NamespaceOwner):
         # either is the same patch as the row beside it; the messages
         # below name files from one while judging the other.
         assert (source_rows["_patch_id"].to_numpy() == working["_patch_id"]).all()
-        columns = resolution_columns(working)
+        columns = resolution_columns(working, new._enrich_kwargs)
         epochs = (
             [NO_EPOCHS] * len(working)
             if columns is None
@@ -1546,7 +1680,7 @@ class Spool(NamespaceOwner):
         overlap: numeric_types | timeable_types | None = None,
         keep_partial: bool = False,
         snap_coords: bool = True,
-        tolerance: float = 1.5,
+        tolerance: float | Quantity | np.timedelta64 = 1.5,
         conflict: Literal["drop", "raise", "keep_first"] = "raise",
         group: str | Sequence[str] | None = None,
         missing_dim: Literal["raise", "drop"] = "raise",
@@ -1587,13 +1721,196 @@ class Spool(NamespaceOwner):
             **kwargs,
         )
 
+    def _report_relation(self) -> pd.DataFrame:
+        """
+        Return the relation a gap report reads: the rows the spool presents.
+
+        Unlike [`_plan_frames`](`dascore.core.spool.Spool._plan_frames`)
+        a plan-backed spool is never collapsed to its members. Chunk
+        collapses because re-planning a dimension replaces the plan; a
+        report describes the patches the spool actually holds, so it
+        reads the plan's outputs. Samples residuals still adjust the
+        envelopes, since they change what loads. No dimension is needed:
+        the whole relation is returned and the caller picks its columns.
+        """
+        base = _ensure_patch_id(self._df.reset_index(drop=True))
+        working = base.drop(columns=list(self._drop_columns), errors="ignore")
+        return samples_adjusted_envelopes(working, self._catalog.residuals)
+
+    def get_gaps(
+        self,
+        dim: str = "time",
+        *,
+        tolerance: float | Quantity | np.timedelta64 = 1.5,
+        group: str | Sequence[str] | None = None,
+        missing_dim: Literal["raise", "drop"] = "drop",
+    ) -> pd.DataFrame:
+        """
+        Return a dataframe with one row per gap along a dimension.
+
+        Gaps are found with the rules
+        [`chunk`](`dascore.Spool.chunk`) merges by, so every row is
+        exactly a boundary that `chunk` would refuse to close.
+
+        Parameters
+        ----------
+        dim
+            The dimension to look for gaps along.
+        tolerance
+            The maximum number of samples patches can be spaced and still
+            count as contiguous, or a quantity or timedelta stating that
+            limit in the coordinate's own units (eg `1 * s`). Same
+            meaning as chunk's `tolerance`.
+        group
+            Attributes which separate patches into unrelated groups; a gap
+            is never reported between two groups. Defaults to the config
+            option `patch_kind_attrs`. Sampling rate and coordinate
+            structure split groups too, exactly as they do for `chunk`,
+            so one attribute value can span several groups. A value
+            nobody recorded is a value of its own, so a patch which never
+            stated the attribute is not grouped with one which did.
+        missing_dim
+            What to do with patches lacking `dim`: "drop" (the default)
+            excludes them, "raise" refuses. Chunk defaults to "raise"
+            because it must produce those patches; a report need not.
+
+        Notes
+        -----
+        `{dim}_min` is the last sample before the gap and `{dim}_max` the
+        first sample after it, so `gap_size` is their difference — one
+        step wider than the missing extent. Subtract the magnitude of
+        the returned `{dim}_step` for the extent itself; the step keeps
+        the coordinate's sign, which is negative for a descending one.
+
+        `group_id` names the group each gap belongs to, and is the
+        column to join against
+        [`get_coverage`](`dascore.core.spool.Spool.get_coverage`).
+
+        Overlapping and fully-nested patches never open a gap: each
+        boundary is measured against the furthest point reached so far,
+        not the previous row.
+
+        A sample-count tolerance scales the step, so patches whose step
+        is unknown report no gaps. An absolute tolerance needs no step,
+        so it reports their gaps like any other patch's.
+
+        See Also
+        --------
+        [`Spool.get_coverage`](`dascore.core.spool.Spool.get_coverage`)
+
+        [`get_gap_edges`](`dascore.utils.gaps.get_gap_edges`) finds the
+        gaps *inside* one patch's coordinate, which is a different
+        question: this method reads the index and never loads data.
+
+        Examples
+        --------
+        >>> import numpy as np
+        >>> from dascore.examples import random_spool
+        >>>
+        >>> spool = random_spool(time_gap=np.timedelta64(1, "s"), length=3)
+        >>> gaps = spool.get_gaps()
+        >>> assert len(gaps) == 2
+        >>> # A contiguous spool has none.
+        >>> assert random_spool().get_gaps().empty
+        """
+        out = build_gap_frame(
+            self._report_relation(),
+            dim,
+            tolerance=tolerance,
+            group=group,
+            missing_dim=missing_dim,
+        )
+        return present_columns(out)
+
+    def get_coverage(
+        self,
+        dim: str = "time",
+        *,
+        tolerance: float | Quantity | np.timedelta64 = 1.5,
+        group: str | Sequence[str] | None = None,
+        missing_dim: Literal["raise", "drop"] = "drop",
+    ) -> pd.DataFrame:
+        """
+        Return a dataframe summarizing how complete the spool is.
+
+        One row per group of related patches — same kind, dims
+        signature, coordinate identity, units, and sampling rate,
+        exactly as `chunk` groups them before it looks at continuity.
+        Each row reports the extent the group spans along `dim` and how
+        much of that extent holds data.
+
+        Parameters
+        ----------
+        dim
+            The dimension to measure along.
+        tolerance
+            The maximum number of samples patches can be spaced and still
+            count as contiguous, or a quantity or timedelta stating that
+            limit in the coordinate's own units (eg `1 * s`). Same
+            meaning as chunk's `tolerance`.
+        group
+            Attributes which separate patches into unrelated groups.
+            Defaults to the config option `patch_kind_attrs`; sampling
+            and structural differences split groups too, so one
+            attribute value can span several rows. A value nobody
+            recorded is a value of its own, so a patch which never
+            stated the attribute is not grouped with one which did.
+        missing_dim
+            What to do with patches lacking `dim`: "drop" (the default)
+            excludes them, "raise" refuses.
+
+        Notes
+        -----
+        `span` is `{dim}_max - {dim}_min`, `gap_total` is the sum of the
+        group's gaps as
+        [`get_gaps`](`dascore.core.spool.Spool.get_gaps`) reports them,
+        `covered` is the rest, and `coverage` is `covered / span` (1.0
+        when the span is zero, meaning a single sample). `group_id`
+        matches the gap frame's, so the two join on it.
+
+        Coverage is measured between patches, from the envelopes the
+        index records; a hole *inside* a patch is not visible here. Nor
+        is one in a group whose step is unknown: a sample-count tolerance
+        has nothing to scale there, so the group reports no gaps and
+        counts as fully covered. An absolute tolerance does measure it.
+        Both are what `chunk` would make of the data, so a `coverage` of
+        1.0 says "nothing chunk would refuse to merge", not "nothing
+        missing".
+
+        See Also
+        --------
+        [`Spool.get_gaps`](`dascore.core.spool.Spool.get_gaps`)
+
+        [`get_gap_edges`](`dascore.utils.gaps.get_gap_edges`) finds the
+        gaps *inside* one patch's coordinate, which is a different
+        question: this method reads the index and never loads data.
+
+        Examples
+        --------
+        >>> import numpy as np
+        >>> from dascore.examples import random_spool
+        >>>
+        >>> spool = random_spool(time_gap=np.timedelta64(1, "s"), length=3)
+        >>> coverage = spool.get_coverage()
+        >>> assert (coverage["coverage"] < 1).all()
+        >>> assert (random_spool().get_coverage()["coverage"] == 1).all()
+        """
+        out = build_coverage_frame(
+            self._report_relation(),
+            dim,
+            tolerance=tolerance,
+            group=group,
+            missing_dim=missing_dim,
+        )
+        return present_columns(out)
+
     @compose_docstring(conflict_desc=attr_conflict_description)
     def chunk(
         self,
         overlap: numeric_types | timeable_types | None = None,
         keep_partial: bool = False,
         snap_coords: bool = True,
-        tolerance: float = 1.5,
+        tolerance: float | Quantity | np.timedelta64 = 1.5,
         conflict: Literal["drop", "raise", "keep_first"] = "raise",
         group: str | Sequence[str] | None = None,
         missing_dim: Literal["raise", "drop"] = "raise",
@@ -1613,19 +1930,29 @@ class Spool(NamespaceOwner):
         snap_coords
             If True (default), simplify the coordinates of joined patches to
             an evenly sampled range when doing so moves no coordinate value
-            by more than `tolerance` samples. Merges whose gaps exceed that
-            keep an exact segmented coordinate instead.
+            by more than `tolerance` (samples, or the length itself when
+            the tolerance states one). Merges whose gaps exceed that keep
+            an exact segmented coordinate instead.
         tolerance
             The maximum number of samples a block of data can be spaced (gap)
-            and still be considered contiguous.
+            and still be considered contiguous. A quantity or timedelta
+            states that limit in the coordinate's own units instead (eg
+            `tolerance=1 * s`), which also works for patches whose
+            sampling interval is unknown. Either way a boundary of one
+            sample is contiguous, so a tolerance below one sample never
+            splits adjacent patches.
         conflict
             {conflict_desc}
         group
-            Attributes which partition patches into separate outputs (their
-            values differing is never an error). Defaults to the config
-            option `groupby_attrs`; unlike the default, explicitly passed
-            names must exist on at least one patch. Dimensions and
-            coordinate identities always partition implicitly.
+            Attributes which partition patches into separate outputs:
+            conflicting values are never an error, the patches simply land
+            in different outputs. A missing value (null or "") is a value
+            like any other, so patches which never stated an attribute are
+            grouped together and apart from those which did. Defaults to
+            the config option
+            `patch_kind_attrs`; unlike the default, explicitly passed names
+            must exist on at least one patch. Dimensions and coordinate
+            identities always partition implicitly.
         missing_dim
             What to do when patches lack the chunked dimension: "raise"
             (default) or "drop" (exclude them from the output).
@@ -1688,7 +2015,9 @@ class Spool(NamespaceOwner):
         merge_kwargs = {
             "conflict": conflict,
             "snap_coords": snap_coords,
-            "tolerance": tolerance,
+            # the plan's copy is normalized (eg a dimensionless quantity
+            # has become the plain multiple it means)
+            "tolerance": plan.params["tolerance"],
         }
         catalog = derived_catalog(
             source_rows=source_rows,
@@ -1700,70 +2029,99 @@ class Spool(NamespaceOwner):
         )
         return self._new_from_catalog(catalog)
 
-    @compose_docstring(desc=get_docstring(concatenate_patches))
-    def concatenate(self, check_behavior: WARN_LEVELS = "warn", **kwargs) -> Self:
-        """{desc}"""
+    @compose_docstring(conflict_desc=attr_conflict_description)
+    def concatenate(
+        self,
+        check_behavior: WARN_LEVELS | None = None,
+        *,
+        conflict: Literal["drop", "raise", "keep_first"] = "raise",
+        group: str | Sequence[str] | None = None,
+        **kwargs,
+    ) -> Self:
+        """
+        Concatenate patches in order along a dimension.
+
+        Patches are partitioned as [`chunk`](`dascore.Spool.chunk`)
+        partitions them — by kind (see the
+        [patch compatibility note](`docs/notes/patch_compatibility`)),
+        dimensions, the identity of every other dimension, and the
+        concatenated dimension's units — and each partition's patches are
+        then joined by the requested count in the order of the dimension
+        (spool order when its step is unknown, or along a new dimension),
+        contiguous or not. Patches which cannot be concatenated together
+        land in separate outputs; nothing is skipped and planning does not
+        raise. A coordinate the index describes only by a summary cannot
+        be told from another with the same summary, so such an output is
+        settled when it loads: equal values concatenate, and different
+        ones raise there rather than being silently mixed.
+        Remaining attributes must agree within an output, policed by
+        `conflict` as `chunk` polices them. Coordinates are not policed:
+        a coordinate riding the concatenated dimension is joined along
+        it, every other coordinate must agree, and one which cannot be
+        reconciled raises when the output loads rather than being
+        dropped from a patch the catalog describes.
+
+        Parameters
+        ----------
+        check_behavior
+            Deprecated and ignored (kept in its old place for callers who
+            passed it positionally): patches which cannot be concatenated
+            together are placed in separate outputs rather than skipped.
+        conflict
+            {conflict_desc}
+        group
+            Attributes which partition patches into separate outputs,
+            instead of the config option `patch_kind_attrs`.
+        **kwargs
+            One keyword naming the dimension and the number of patches per
+            output; `None` puts every patch of a partition in one output. A
+            dimension no patch has concatenates along a new one.
+
+        Examples
+        --------
+        >>> import dascore as dc
+        >>> spool = dc.get_example_spool()
+        >>>
+        >>> # Concatenate every patch along time, contiguous or not.
+        >>> merged = spool.concatenate(time=None)
+        >>> assert len(merged) == 1
+        >>>
+        >>> # Concatenate copies of a patch along a new dimension; patches
+        >>> # sharing a new dimension must agree on the existing ones.
+        >>> patch = dc.get_example_patch()
+        >>> stacked = dc.spool([patch, patch.new()]).concatenate(wave_rank=None)
+        >>> assert stacked[0].shape[stacked[0].get_axis("wave_rank")] == 2
+
+        Notes
+        -----
+        - [`Spool.chunk`](`dascore.Spool.chunk`) performs a similar
+          operation but accounts for coordinate values.
+        - [`concatenate_patches`](`dascore.utils.patch.concatenate_patches`)
+          concatenates a list of patches directly, relative to the first.
+        """
         from dascore.io.index.planned import derived_catalog  # noqa: PLC0415
 
-        if len(kwargs) != 1:
+        if check_behavior is not None:
             msg = (
-                "concatenate requires exactly one dimension keyword, "
-                f"got {sorted(kwargs)}"
+                "check_behavior is deprecated and ignored by Spool.concatenate: "
+                "patches which cannot be concatenated together are placed in "
+                "separate outputs. Drop the argument."
             )
-            raise ParameterError(msg)
-        ((dim, value),) = kwargs.items()
-        value = None if value is Ellipsis else value
+            warnings.warn(msg, DeprecationWarning, stacklevel=2)
+        dim = next(iter(kwargs), None)
         source_rows, working = self._plan_frames(dim)
-        # a dim absent from the metadata envelopes is legal: concatenate
-        # can stack patches along a brand-new dimension
-        has_envelope = f"{dim}_min" in working.columns
-        count = len(working) if value in (None,) else int(value)
-        count = max(count, 1)
-        rows = working.reset_index(drop=True)
-        member_frames = []
-        output_rows = []
-        for output_id, start in enumerate(range(0, len(rows), count)):
-            group_rows = rows.iloc[start : start + count]
-            members = pd.DataFrame(
-                {
-                    "output_id": output_id,
-                    "_patch_id": group_rows["_patch_id"].values,
-                    "_modified": False,
-                }
-            )
-            member_frames.append(members)
-            first = group_rows.iloc[0].to_dict()
-            if "_dtype" in group_rows.columns:
-                # concatenation upcasts like a merge does, so the group's
-                # dtype is what the members combine to, not the first row's
-                combined = _combined_dtype(group_rows["_dtype"])
-                first["_dtype"] = "" if combined is None else str(combined)
-            if has_envelope:
-                first[f"{dim}_min"] = group_rows[f"{dim}_min"].min()
-                first[f"{dim}_max"] = group_rows[f"{dim}_max"].max()
-            first["output_id"] = output_id
-            first.pop("_patch_id", None)
-            output_rows.append(first)
-        outputs = pd.DataFrame(output_rows)
-        if member_frames:
-            members = pd.concat(member_frames, ignore_index=True)
-        else:  # nothing to concatenate: an empty spool stays empty
-            members = pd.DataFrame(
-                {
-                    "output_id": pd.Series(dtype=np.int64),
-                    "_patch_id": pd.Series(dtype=object),
-                    "_modified": pd.Series(dtype=bool),
-                }
-            )
-        plan = ChunkPlan(outputs, members, dim, None, {})
+        plan = build_concat_plan(working, conflict=conflict, group=group, **kwargs)
+        merge_kwargs = {"conflict": conflict, "count": plan.params["count"]}
         catalog = derived_catalog(
             source_rows=source_rows,
             plan=plan,
             parent=self._catalog,
-            merge_kwargs={},
+            merge_kwargs=merge_kwargs,
             mode="concat",
-            check_behavior=check_behavior,
             origin_path=self.spool_path,
+            # a plan which drops or picks among conflicting metadata must
+            # not be re-planned from its members, which still hold it all
+            lossy=conflict != "raise",
         )
         return self._new_from_catalog(catalog)
 
@@ -1967,17 +2325,29 @@ class Spool(NamespaceOwner):
             # synthetic per-catalog identities (memory:// paths, ids) and
             # backend provenance (format/version) are not content; equal
             # spools must compare equal without them, and column order
-            # (a construction artifact) must not matter. Coordinate def
-            # keys are representation artifacts too: a residual-trimmed
+            # (a construction artifact) must not matter. A patch's own
+            # lineage ids go too: a plan's outputs state none (a merged
+            # patch folds its members' rather than inheriting one), so
+            # keeping them would make a view unequal to its own
+            # materialization over a column neither describes it by.
+            # Coordinate def keys are representation artifacts too: a
+            # residual-trimmed
             # view cannot know its trimmed fingerprint without loading,
             # and data values are never compared here anyway.
             drop = [
                 "source_path",
                 "_patch_id",
-                "source_patch_id",
+                "patch_id",
+                "processing_id",
+                "source_patch_key",
                 "source_format",
                 "source_version",
                 "_modified",
+                # A plan states no size until its outputs are assembled,
+                # and equality holds between a view and its
+                # materialization: the envelopes already say what the
+                # rows describe, so the sample count adds nothing here.
+                "_data_size",
                 *[c for c in df.columns if str(c).endswith("_def_key")],
             ]
             out = df.drop(columns=drop, errors="ignore")
@@ -1992,37 +2362,255 @@ class Spool(NamespaceOwner):
             rows = samples_adjusted_envelopes(rows, catalog.residuals, drop_empty=False)
         return {"rows": _strip_identity(rows)}
 
-    def __rich__(self):
-        """Rich rep. of spool."""
-        base = get_dascore_text() + Text(" ")
-        base += Text(self.__class__.__name__, style=self._rich_style)
-        base += Text(" 🧵 ")
-        patch_len = len(self)
-        base += Text(f"({patch_len:d}")
-        base += Text(" Patches)") if patch_len != 1 else Text(" Patch)")
-        path = self.spool_path
-        if path is not None:
-            base += Text(f"\n    Path: {path}")
-        # Only render a time span when realization is cheap: live
-        # contents, single files, and derived catalogs are in memory; a
-        # huge directory index is not realized for a repr.
-        cheap = self.indexer is None
-        if cheap:
-            df = self._df
-            if df is not None and len(df) and "time_min" in df.columns:
-                t1, t2 = df["time_min"].min(), df["time_min"].max()
-                if pd.notna(t1) and pd.notna(t2):
-                    duration = get_nice_text(t2 - t1)
-                    base += Text(
-                        f"\n    Time Span: <{duration}> "
-                        f"{get_nice_text(t1)} to {get_nice_text(t2)}"
-                    )
+    def _repr_node(self) -> Repr:
+        """
+        What the spool is, what it spans, and the tracks it holds.
+
+        Summarizing realizes the index relation, which a spool of many
+        patches should not do for a glance; `display_max_patches` says
+        how many is too many, and past it the repr states its count and
+        path alone.
+        """
+        count = len(self)
+        plural = "" if count == 1 else "es"
+        name = f"{self.__class__.__name__} 🧵 ({count:,d} Patch{plural})"
+        blocks = [get_header_text(name, style=self._rich_style)]
+        if (path := self.spool_path) is not None:
+            blocks.append(Text(f"    Path: {path}"))
+        # The limit is what it says whatever the spool has been asked
+        # before: a repr which summarized only once a frame happened to
+        # be built would print two different things for one object.
+        limit = dc.get_config().display_max_patches
+        if count <= limit:
+            # A repr which raises makes an object undebuggable at the
+            # one moment someone needs to look at it, so nothing the
+            # summary does is allowed to stop the header from printing.
+            # Only the summary: counting the spool and asking for its
+            # path happen above, and a catalog which cannot answer
+            # either of those still raises.
+            # Nor is it allowed to warn about how pandas built the
+            # frame: a directory index warns once per insert that it is
+            # fragmented, a hundred lines of advice about a frame the
+            # caller never asked for, from typing a name.
+            #
+            # Only that category. A realized frame is cached, so the
+            # first reader is the only one who ever warns -- suppress
+            # anything else here and a repr does not delay it, it eats
+            # it, and the `get_contents` after it goes quiet too.
+            with suppress(Exception), suppress_warnings(PerformanceWarning):
+                blocks.extend(self._summary_blocks())
+        else:
+            blocks.append(
+                Text(
+                    f"    Not summarized: {count:,d} patches exceeds "
+                    f"display_max_patches={limit:,d}.",
+                    style=dascore_styles["keys"],
+                )
+            )
+        header, *rest = blocks
+        sections = tuple(split_block(x) for x in rest)
+        return Repr(header=header, body=sections)
+
+    def _stated_dims(self, df) -> list[str]:
+        """The dimensions this spool's patches actually have."""
+        stated = [
+            x for x in get_dim_names_from_columns(df) if self._measured(df, x).any()
+        ]
+        # Time leads where it is one of them: it is the dimension a
+        # reader looks for, and the one the tracks are measured along.
+        return sorted(stated, key=lambda x: (x != "time", x))
+
+    @staticmethod
+    def _measured(df, dim: str):
+        """
+        Which rows have this dimension as an axis and state both its ends.
+
+        Two things are asked, and the first is asked with the same
+        function `get_coverage` asks it with: the relation carries an
+        envelope for every coordinate, dimensional or not, and a patch
+        may ride a coordinate of this name along a different axis, so
+        `dims` is what says whose axis it is, row by row. A track and
+        the lane of the same patches have to agree on that, which they
+        cannot do from two spellings of one rule.
+
+        Being an axis is not enough on its own: a patch may name one
+        whose envelope it never filled in, and an unstated end bounds
+        nothing.
+        """
+        axis = pd.Series(_structural(df, dim), index=df.index)
+        return axis & df[f"{dim}_min"].notna() & df[f"{dim}_max"].notna()
+
+    def _comparable(self, df, dim: str) -> bool:
+        """Whether this dimension's ends can be measured against each other."""
+        measured = df[self._measured(df, dim)]
+        # Two kinds do not subtract, and neither do two units: a metre
+        # taken from a foot is a number standing for nothing.
+        return (
+            len(self._value_kinds(measured[f"{dim}_min"])) == 1
+            and len(self._dim_units(measured, dim)) <= 1
+        )
+
+    @staticmethod
+    def _value_kinds(values) -> set[str]:
+        """Which kinds of thing an envelope column holds."""
+        # One dimension name can be a time on one patch and a number on
+        # another. Their envelopes share a column and do not compare, so
+        # asking for the extent of the two together raises.
+        kinds = set()
+        for value in values.dropna():
+            # An instant and an offset are both times and still do not
+            # compare: a date is not a length, and asking for the
+            # smaller of the two raises.
+            if isinstance(value, pd.Timestamp | np.datetime64):
+                kinds.add("instant")
+            elif isinstance(value, pd.Timedelta | np.timedelta64):
+                kinds.add("offset")
+            elif isinstance(value, numbers.Number):
+                kinds.add("number")
+            else:
+                kinds.add("label")
+        return kinds
+
+    def _dims_text(self, df, dims: list[str]) -> Text:
+        """The extent this spool covers along each of its dimensions."""
+        key_style = dascore_styles["keys"]
+        base = Text("➤ ") + Text("Dimensions", style=dascore_styles["dc_blue"])
+        base += Text(" (") + Text(", ".join(dims), style="bold") + Text(")")
+        width = max(len(x) for x in dims)
+        for dim in dims:
+            measured = df[self._measured(df, dim)]
+            base += Text.assemble("\n    ", Text(f"{dim + ':':<{width + 1}} ", "bold"))
+            if len(self._value_kinds(measured[f"{dim}_min"])) > 1:
+                # Two kinds do not compare, so there are no two ends to
+                # state. Saying so beats the whole summary disappearing.
+                base += Text("mixed value kinds", key_style)
+                continue
+            low, high = measured[f"{dim}_min"].min(), measured[f"{dim}_max"].max()
+            units = self._dim_units(measured, dim)
+            near, far = range_texts(low, high)
+            base += near + Text(" to ", key_style) + far
+            if len(units) > 1:
+                # Envelopes are stored in the units each patch was read
+                # in, so a min and a max from two of them are not two
+                # ends of one extent. Say so rather than imply otherwise.
+                base += Text(f"  (mixed units: {', '.join(units)})", key_style)
+                continue
+            # A time states its units in the way it is written; every
+            # other dimension is named in what it was measured in.
+            if units and not isinstance(low, _TIMES):
+                base += Text(" ") + Text(units[0], dascore_styles["units"])
+            # How far the two ends lie apart, in what they are measured
+            # in: a width said bare beside a max which names its units
+            # reads as if it were in others, and the tracks under this
+            # line state theirs.
+            if (span := span_text(low, high, units[0] if units else None)) is not None:
+                base += Text("  ") + span
         return base
 
-    def __str__(self):
-        return str(self.__rich__())
+    @staticmethod
+    def _dim_units(df, dim: str) -> tuple[str, ...]:
+        """
+        What a dimension is measured in, as its patches state it.
 
-    __repr__ = __str__
+        The units column is private in the relation and renamed only on
+        the way out through `present_columns`, so both spellings are
+        asked for: a repr reads the frame before that rename.
+        """
+        stated = df.get(f"{dim}_units", df.get(f"_{dim}_units"))
+        # Only a dimension the relation describes is ever asked about,
+        # and it describes each of them with a units column, empty or not.
+        assert stated is not None, f"the relation states no units for {dim}"
+        return tuple(sorted({str(x) for x in stated.dropna().unique() if str(x)}))
+
+    def _span_text(self, low, high, units: tuple[str, ...]) -> Text | None:
+        """How wide an extent is, measured in what the dimension is."""
+        # A track states its units nowhere else, so the width carries
+        # them -- but only where every patch agrees on one, since
+        # stating the first of several would label a track in a unit it
+        # was not measured in.
+        stated = units[0] if len(units) == 1 else None
+        return span_text(low, high, stated)
+
+    def _tracks_text(self, df, dim: str) -> Text | None:
+        """
+        The kinds of patch this spool holds, named as its lanes are named.
+
+        A track is one kind of patch, which is the partition
+        [`chunk`](`dascore.Spool.chunk`) starts from. Coverage may cut a
+        kind finer still -- two sampling rates are two lanes of one tag
+        -- so a lane there is a track here or a part of one, and the two
+        are named by one rule rather than given one name.
+        """
+        # The same resolution chunk does, rather than a second reading
+        # of the config which could drift from it. It dedupes, which is
+        # what lets the config name an attribute twice: the groupby
+        # tolerates that, but reset_index will not put one column back
+        # under two labels.
+        keys = list(_resolve_group_attrs(None, set(df.columns)))
+        if not keys:
+            return None
+        low, high = f"{dim}_min", f"{dim}_max"
+        # A patch which does not have this dimension is not a track along
+        # it; get_coverage drops it too rather than report an empty one.
+        df = df[self._measured(df, dim)]
+        # The dimension came from _stated_dims, which is the set of them
+        # some row measures, so something is always left to group.
+        assert len(df), f"no patch measures {dim}"
+        frame = (
+            df.groupby(keys, dropna=False)
+            .agg(_n=(low, "size"), _low=(low, "min"), _high=(high, "max"))
+            .reset_index()
+        )
+        # One track is the whole spool, which the dimensions above
+        # already state; naming it would only repeat them.
+        if len(frame) < 2:
+            return None
+        units = self._dim_units(df, dim)
+        base = Text("➤ ") + Text("Tracks", style=dascore_styles["dc_red"])
+        base += Text(f" ({len(frame)} along ") + Text(dim, style="bold") + Text(")")
+        limit = dc.get_config().display_max_items
+        shown = frame.head(limit)
+        names = group_names(
+            frame,
+            ignore=("_n", "_low", "_high"),
+            # The same fallback the plot names a lane by, or a group
+            # nothing tells apart is a track called "group 0" and a lane
+            # called by its acquisition -- one rule, two names.
+            fallback=ACQUISITION_ATTR,
+        )[:limit]
+        counted = [f"{x:,d} patch{'' if x == 1 else 'es'}" for x in shown["_n"]]
+        # The columns are measured over the lines which are drawn: a name
+        # elided below should not pad the names above it.
+        width = max((len(x) for x in names), default=0)
+        held = max((len(x) for x in counted), default=0)
+        # iterrows, not itertuples: the aggregate columns are named
+        # privately so no attr of that name can collide with them, and
+        # itertuples renames a private column to its position.
+        for name, count, (_, row) in zip(names, counted, shown.iterrows(), strict=True):
+            base += Text.assemble("\n    ", Text(f"{name:<{width}}", "bold"), "  ")
+            base += Text(f"{count:>{held}}", dascore_styles["keys"])
+            base += Text("  ") + get_nice_text(row["_low"])
+            if (span := self._span_text(row["_low"], row["_high"], units)) is not None:
+                base += Text(" ") + span
+        if (left_out := len(frame) - len(shown)) > 0:
+            base += Text("\n    ") + elision_text(left_out)
+        base += Text("\n    (coverage: spool.viz.coverage())", dascore_styles["keys"])
+        return base
+
+    def _summary_blocks(self) -> list[Text]:
+        """The blocks stating what this spool spans and what it holds."""
+        df = self._df
+        if df is None or not len(df) or "dims" not in df.columns:
+            return []
+        if not (dims := self._stated_dims(df)):
+            return []
+        blocks = [self._dims_text(df, dims)]
+        # Tracks are measured along one dimension, which has to be one
+        # whose ends can be compared.
+        measurable = [x for x in dims if self._comparable(df, x)]
+        if measurable and (tracks := self._tracks_text(df, measurable[0])) is not None:
+            blocks.append(tracks)
+        return blocks
 
 
 # There is one spool class; the old ABC name stays as an alias so
@@ -2046,14 +2634,13 @@ def spool(obj: path_types | Spool | Sequence[PatchType], **kwargs) -> Spool:
     Examples
     --------
     >>> import dascore as dc
-    >>> from dascore.utils.downloader import fetch
     >>>
-    >>> # Get a spool from a single file
-    >>> single_file_path = fetch("example_dasdae_event_1.h5")
-    >>> file_spool = dc.spool(single_file_path)
+    >>> # Get a spool from a single file. An examples:// name refers to a
+    >>> # file in DASCore's example data registry; use your own path here.
+    >>> file_spool = dc.spool("examples://example_dasdae_event_1.h5")
     >>>
     >>> # get a spool from a directory of files
-    >>> directory_path = fetch("example_dasdae_event_1.h5").parent
+    >>> directory_path = dc.examples.spool_to_directory(dc.get_example_spool())
     >>> directory_spool = dc.spool(directory_path)
     >>>
     >>> # get a spool from a single patch
@@ -2069,7 +2656,7 @@ def spool(obj: path_types | Spool | Sequence[PatchType], **kwargs) -> Spool:
 @spool.register(UPath)
 def _spool_from_str(path, **kwargs):
     """Get a spool from a path."""
-    path = coerce_to_upath(path)
+    path = coerce_to_upath(resolve_example_uri(path))
     # A directory was passed; index it.
     if path.is_dir():
         requires_local_directory(path, label="Directory spool")

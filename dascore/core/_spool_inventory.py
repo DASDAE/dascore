@@ -19,13 +19,19 @@ import threading
 import warnings
 from collections.abc import Sequence, Sized
 from itertools import pairwise
-from typing import Any, NamedTuple
+from typing import Any, NamedTuple, get_args
 
 import numpy as np
 import pandas as pd
 from pydantic import ValidationError
 
 import dascore as dc
+from dascore.constants import (
+    ENRICH_CONFLICT,
+    INVENTORY_ATTRS,
+    ON_MISSING,
+    WARN_LEVELS,
+)
 from dascore.core.coords import BaseCoord, get_coord
 from dascore.core.inventory import (
     DISTANCE_MAP_AXES,
@@ -33,6 +39,7 @@ from dascore.core.inventory import (
     VALID_COORDINATE_LABELS,
     Inventory,
     ResolvedContext,
+    axis_columns,
 )
 from dascore.core.inventory_loader import BLESSED_NAME, find_inventory
 from dascore.exceptions import (
@@ -42,16 +49,28 @@ from dascore.exceptions import (
     MissingOptionalDependencyError,
     ParameterError,
     PatchError,
+    UnitError,
     UnresolvedPatchError,
 )
-from dascore.units import get_quantity_str
+from dascore.models import values_equal
+from dascore.units import convert_units, get_quantity_str
 from dascore.utils.intervals import interval_masks, value_kind
-from dascore.utils.misc import iterate
+from dascore.utils.misc import iterate, validate_acquisition_key
+from dascore.utils.time import to_datetime64
 
 # One vocabulary for both fiber verbs. What the quiet option leaves
 # behind still differs -- enrich leaves the patch as it was, conform
 # removes it -- but that is the verb's business rather than the value's.
-VALID_ON_UNRESOLVED = ("raise", "warn", "ignore")
+# Read off the annotation the verbs declare so a value cannot be accepted
+# by one and refused by the other.
+VALID_ON_UNRESOLVED = get_args(WARN_LEVELS)
+
+# What `Patch.enrich` does about a named attr the inventory leaves unset.
+VALID_ON_MISSING = get_args(ON_MISSING)
+
+# What `Patch.enrich` does when the patch and the inventory disagree,
+# read off the annotation enrich declares.
+VALID_ENRICH_CONFLICT = get_args(ENRICH_CONFLICT)
 
 # Written once because both fiber verbs refuse for it, and two spellings
 # would let them start explaining the same refusal differently.
@@ -192,11 +211,12 @@ def combine_inventories(first, second) -> tuple:
     """
     Return the (inventory, enrich kwargs) a union of two spools carries.
 
-    The two halves carry over independently: an inventory attached to one
-    operand still describes the patches it came with, and so does the
-    enrichment set up from it — which is why attaching the same inventory
-    to the other operand cannot turn a working union into an error. Two
-    operands answering either question differently have no single answer.
+    An inventory and its enrichment are spool-wide state, so the union
+    carries whichever either operand has and applies it to every patch
+    it yields -- including the other operand's, as attaching and
+    enriching the union would. Attaching the same inventory to both
+    operands therefore cannot turn a working union into an error, while
+    two operands carrying different ones have no single answer.
     """
     # At call time only; importing Spool at module top would be circular.
     from dascore.core.spool import Spool  # noqa: PLC0415
@@ -213,6 +233,14 @@ def combine_inventories(first, second) -> tuple:
     # from would enrich nothing while claiming to.
     assert inventory is not None or enrichment is None
     return inventory, enrichment
+
+
+def validate_enrich_conflict(conflict: str) -> str:
+    """Ensure enrich's conflict argument is one it supports."""
+    if conflict not in VALID_ENRICH_CONFLICT:
+        msg = f"conflict must be one of {VALID_ENRICH_CONFLICT}, got {conflict!r}."
+        raise ParameterError(msg)
+    return conflict
 
 
 def validate_enrich_selection(attrs, coords) -> None:
@@ -244,10 +272,18 @@ def normalize_enrich_kwargs(kwargs) -> dict:
         raise ParameterError(msg)
     bound = signature.bind_partial(**kwargs)
     bound.apply_defaults()
-    # Refused on this call rather than on whichever patch is pulled first.
+    # Refused on this call rather than on whichever patch is pulled first;
+    # selection reads the policies and the key too, so none can wait.
+    arguments = bound.arguments
     validate_enrich_selection(
-        bound.arguments.get("attrs", False), bound.arguments.get("coords", False)
+        arguments.get("attrs", False), arguments.get("coords", False)
     )
+    validate_enrich_conflict(arguments.get("conflict", "keep_first"))
+    if (on_missing := arguments.get("on_missing", "raise")) not in VALID_ON_MISSING:
+        msg = f"on_missing must be one of {VALID_ON_MISSING}, got {on_missing!r}."
+        raise ParameterError(msg)
+    if key := arguments.get("acquisition_key"):
+        validate_acquisition_key(key)
     # A collection of names means what it holds, not which container holds it.
     return {
         name: tuple(value) if isinstance(value, list) else value
@@ -256,10 +292,34 @@ def normalize_enrich_kwargs(kwargs) -> dict:
     }
 
 
+# Facts the patch's own coordinates already state: the time coordinate has
+# the sample rate and the distance coordinate the channel spacing, and
+# decimating changes both. Nothing should be redundant between coords and
+# attrs, so a blanket request leaves these alone; naming one asks for the
+# as-acquired value, which `conflict` then settles as it does any other.
+COORD_REDUNDANT_ATTRS = ("sample_rate", "spatial_interval")
+
+# Attrs describing the data as it now stands rather than the system which
+# recorded it. Processing functions maintain them, so blanket enrichment
+# leaves them alone; naming one explicitly asks for the as-acquired value.
+# `data_category` is not one of them: the family of instrument is a fact
+# about the acquisition, and no processing function rewrites it.
+DATA_STATE_ATTRS = ("data_type", "data_units")
+
+
+def enriched_attr_names(attrs) -> frozenset[str]:
+    """Return the attr names `Patch.enrich` may write for an `attrs` argument."""
+    if attrs is False:
+        return frozenset()
+    if attrs is True:
+        return frozenset(INVENTORY_ATTRS) - set(COORD_REDUNDANT_ATTRS)
+    return frozenset(iterate(attrs))
+
+
 # --- planning-frame helpers -------------------------------------------
 
 
-def resolution_columns(frame: pd.DataFrame) -> list | None:
+def resolution_columns(frame: pd.DataFrame, enrich_kwargs=None) -> list | None:
     """
     Return the columns a relation resolves against an inventory with.
 
@@ -268,12 +328,38 @@ def resolution_columns(frame: pd.DataFrame) -> list | None:
     `acquisition_key` has no identity to offer, and one whose time axis
     is not physical — lag times from a correlation, say — has no
     instants, which is the same thing `Patch.enrich` refuses to guess at.
+
+    Pending enrichment can supply both: its `acquisition_key` names the
+    entry for rows stating none, and its `time` the instant for rows
+    without instants of their own, so such rows resolve here as the
+    patches will on extraction. A dated row keeps its own instants and a
+    stated key stands, though `Patch.enrich` refuses either beside the
+    pending argument: the refusal is extraction's to make.
     """
-    columns = [frame.get(x) for x in ("acquisition_key", "time_min", "time_max")]
-    physical = all(column is not None for column in columns) and all(
-        np.issubdtype(column.dtype, np.datetime64) for column in columns[1:]
+    key, start, end = (
+        frame.get(x) for x in ("acquisition_key", "time_min", "time_max")
     )
-    return columns if physical else None
+    enrich_kwargs = enrich_kwargs or {}
+    if override := enrich_kwargs.get("acquisition_key"):
+        # A relation no row states the key in has no column for it.
+        if key is None:
+            key = pd.Series(override, index=frame.index, dtype=object)
+        else:
+            key = key.where(~_unstated(key), override)
+    if key is None:
+        return None
+    physical = all(column is not None for column in (start, end)) and all(
+        np.issubdtype(column.dtype, np.datetime64) for column in (start, end)
+    )
+    when = enrich_kwargs.get("time")
+    if when is None:
+        return [key, start, end] if physical else None
+    # A row without instants is NaT beside physical rows, and the whole
+    # column is something else when no row has them.
+    stamp = pd.Series(to_datetime64(when), index=frame.index)
+    if physical:
+        return [key, start.fillna(stamp), end.fillna(stamp)]
+    return [key, stamp, stamp]
 
 
 def _first_few(items, limit: int = 5) -> str:
@@ -404,17 +490,19 @@ def check_stampable(name: str, rows: pd.DataFrame) -> None:
     """
     Refuse a stamp which would overwrite the plan's own bookkeeping.
 
-    An annotation group may be named anything the inventory does not
+    A label group may be named anything the inventory does not
     reserve, and the stamp is assigned onto the outputs — so a group
     called `output_id` would replace the column binding each output to
     its members, and one called `time_min` an envelope. Overwriting a
     carried attr is fine and is how re-splitting restamps; these are not
-    attrs.
+    attrs. `acquisition_key` is one, but it is the identity every later
+    resolution goes by, and a label value is not a valid one.
     """
     envelopes = {
         x for x in rows.columns if x.rsplit("_", 1)[-1] in {"min", "max", "step"}
     }
-    if name not in {"output_id", "dims", *envelopes} and not name.startswith("_"):
+    structural = {"output_id", "dims", "acquisition_key", *envelopes}
+    if name not in structural and not name.startswith("_"):
         return
     msg = (
         f"{name!r} is how the spool itself describes a patch, so stamping "
@@ -479,6 +567,39 @@ def match_resolved(values, name: str, selector, units=None) -> np.ndarray:
     stated = ~_unstated(values)
     if stated.any():
         out[stated] = evaluate_attr_predicate(values[stated], name, selector, units)
+    return out
+
+
+def effective_matches(
+    stated, by_index, answers, by_inventory, headers=None, conflict=None, resolved=None
+) -> np.ndarray:
+    """
+    Combine the index's verdict with the inventory's the way extraction will.
+
+    An unstated row holds whatever the inventory answers, so its verdict
+    is the inventory's. A stated row keeps the index's verdict unless a
+    pending enrichment rewrites the name: under `keep_last` the
+    inventory's answer replaces the header where it has one, and under
+    `drop` a header disagreeing with the answer comes out blank, which
+    nothing selects. `keep_first` keeps the header, so it rewrites
+    nothing and never reaches here. `resolved` is given when
+    `on_missing="null"` is pending on a named attr: a resolved row the
+    inventory has no answer for then comes out blank too. `conflict` is
+    None when nothing rewrites.
+    """
+    out = np.where(stated, by_index, by_inventory)
+    if conflict is None:
+        return out
+    rewritten = stated & ~_unstated(answers)
+    if conflict == "keep_last":
+        out[rewritten] = by_inventory[rewritten]
+    else:
+        assert conflict == "drop" and headers is not None
+        for row in np.flatnonzero(rewritten):
+            if not values_equal(headers[row], answers[row]):
+                out[row] = False
+    if resolved is not None:
+        out[stated & resolved & _unstated(answers)] = False
     return out
 
 
@@ -565,6 +686,38 @@ def readable_on(dist_map) -> list[str]:
     return sorted({x for axis in dist_map.axes for x in AXIS_COORDS[axis]})
 
 
+# The units each map axis states its control points in. A channel number
+# counts channels and states no unit, while an instrument distance is the
+# interrogator's own meters, so a patch which carries feet must be
+# converted before the map can read it. Reading raw magnitudes instead
+# would place the channels somewhere else on the fiber, silently.
+AXIS_UNITS = {"channel": None, "instrument_distance": "m"}
+assert set(AXIS_UNITS) == set(DISTANCE_MAP_AXES)
+
+
+def to_axis_units(values, units, axis: str, name: str):
+    """
+    Return channel-like values in the units their map axis is written in.
+
+    Values which state no units are read as the axis's own, which is what
+    a patch that never mentioned units meant. Units the axis cannot be
+    expressed in are refused rather than silently taken as magnitudes.
+    """
+    to_units = AXIS_UNITS[axis]
+    if to_units is None or units is None or (isinstance(units, str) and not units):
+        return values
+    try:
+        return convert_units(values, to_units=to_units, from_units=units)
+    except UnitError as error:
+        msg = (
+            f"The patch's {name!r} coordinate is in "
+            f"{get_quantity_str(units)}, which the {axis!r} axis of the "
+            f"distance map cannot be read in; it states its control points "
+            f"in {to_units}. ({error})"
+        )
+        raise UnitError(msg) from error
+
+
 # Tracks whose fields enrich can project. The inventory names them, so a
 # track enrich can project and one selection can ask about are the same set.
 _TRACK_NAMES = tuple(TRACK_IDENTITY_FIELDS)
@@ -584,7 +737,7 @@ def _fill_from_intervals(distances, intervals, values, kind):
     coverage run included so the last channel of a run is not silently
     uncovered, and point markers covering nothing.
     """
-    fill = {"boolean": False, "numeric": np.nan}.get(kind, None)
+    fill = {"membership": False, "numeric": np.nan}.get(kind, None)
     out = np.full(len(distances), fill, dtype=object)
     for value, covered in zip(
         values, interval_masks(distances, intervals), strict=True
@@ -601,15 +754,13 @@ def _fill_from_intervals(distances, intervals, values, kind):
                 "a coordinate holds one value per channel."
             )
             raise PatchError(msg)
-        if kind == "boolean":
+        if kind == "membership":
             # Membership groups may overlap, so a channel belongs when any
-            # covering interval says it does: the group is the union of its
-            # true intervals.
-            if value:
-                out[covered] = True
+            # interval includes it: the group is the union of its intervals.
+            out[covered] = True
         else:
             out[covered] = value
-    if kind == "boolean":
+    if kind == "membership":
         return out.astype(bool)
     if kind == "numeric":
         return np.asarray([np.nan if x is None else x for x in out], dtype=float)
@@ -619,9 +770,9 @@ def _fill_from_intervals(distances, intervals, values, kind):
     return np.asarray(["" if x is None else x for x in out], dtype=str)
 
 
-def _get_annotation_coord(path, group, distances):
-    """Return the coordinate values of one annotation group."""
-    items = [x for x in path.annotations if x.group == group]
+def _get_label_coord(path, group, distances):
+    """Return the coordinate values of one label group."""
+    items = [x for x in path.labels if x.group == group]
     if not items:
         return None
     kind = value_kind(items[0].value)
@@ -632,12 +783,8 @@ def _get_annotation_coord(path, group, distances):
 
 def _get_track_coord(path, track, field, distances):
     """Return the coordinate values of one field of a typed track."""
-    if track == "optical_components":
-        items = path.optical_components
-        intervals = list(path.component_intervals())
-    else:
-        items = getattr(path, track)
-        intervals = [x.interval for x in items]
+    items = getattr(path, track)
+    intervals = [x.interval for x in items]
     if not items:
         return None
     values = [getattr(x, field, None) for x in items]
@@ -660,17 +807,30 @@ def _get_geometry_coord(inventory, path, label, distances):
     crs = inventory.coordinate_reference_system
     # A label this CRS does not define is a name the inventory has no answer
     # for, which is on_missing's business rather than an error of its own --
-    # a named annotation group the inventory lacks already behaves that way.
+    # a named label group the inventory lacks already behaves that way.
     try:
         index = crs.axis_index(label)
     except InvalidInventoryError:
         return None
-    if not path.geometry:
+    # Geometry which places nothing defines no axis, so the caller's
+    # on_missing policy rules rather than a column of nan.
+    if not any(axis_columns(x, crs) for x in path.geometry):
         return None
-    coords = path.coordinates_at(distances)
-    if index >= coords.shape[1]:
-        return None
+    # axis_index refuses a label this CRS has no axis for, and the array is
+    # one column per axis, so the index is always one of its columns.
+    coords = path.coordinates_at(distances, crs)
     return get_coord(data=coords[:, index], units=crs.units[index])
+
+
+def _get_geometry_column_coord(path, name, distances):
+    """Return one geometry column which is not a position, with its units."""
+    values = path.column_at(name, distances)
+    if values is None:
+        return None
+    # The path has already refused two segments measuring one column in two
+    # units, so whichever states it states the one they agree on.
+    units = next((x.units[name] for x in path.geometry if name in x.units), None)
+    return get_coord(data=values, units=units)
 
 
 def get_coord_values(inventory, path, name, distances):
@@ -687,8 +847,14 @@ def get_coord_values(inventory, path, name, distances):
             path, track, field or TRACK_IDENTITY_FIELDS[track], distances
         )
     if name in VALID_COORDINATE_LABELS:
-        return _get_geometry_coord(inventory, path, name, distances)
-    return _get_annotation_coord(path, name, distances)
+        # A coordinate label this CRS does not declare is not an axis here,
+        # and is free to be a geometry column of its own -- depth, where the
+        # CRS is spent on easting, northing, and elevation.
+        if (coord := _get_geometry_coord(inventory, path, name, distances)) is not None:
+            return coord
+    if (coord := _get_geometry_column_coord(path, name, distances)) is not None:
+        return coord
+    return _get_label_coord(path, name, distances)
 
 
 # --- epoch resolution over index rows ---------------------------------
@@ -707,22 +873,22 @@ def _epoch_bounds(inventory, acquisition_key: Sequence[str]) -> np.ndarray:
     for network in inventory.networks:
         if network.code != net_code:
             continue
-        times += [network.start_time, network.end_time]
+        times += [network.time_min, network.time_max]
         for array in network.fiber_arrays:
             if array.code != array_code:
                 continue
-            times += [array.start_time, array.end_time]
+            times += [array.time_min, array.time_max]
             times += [
                 x
                 for acq in array.acquisitions
                 if acq.code == acq_code and acq.location_code == location
-                for x in (acq.start_time, acq.end_time)
+                for x in (acq.time_min, acq.time_max)
             ]
             times += [
                 x
                 for path in array.optical_paths
                 if path.location_code == location
-                for x in (path.start_time, path.end_time)
+                for x in (path.time_min, path.time_max)
             ]
     stamps = [x for x in times if not np.isnat(x)]
     return np.unique(np.array(stamps, dtype="datetime64[ns]"))
@@ -1121,6 +1287,18 @@ class PlacedRow(NamedTuple):
         return self.grid, self.low, self.high
 
 
+def _frame_units(frame, name: str) -> list:
+    """
+    Return each row's stated units for one coordinate, or None where it
+    states none. A planning frame keeps them private and a presented one
+    public, and either may answer here.
+    """
+    for column in (f"_{name}_units", f"{name}_units"):
+        if column in frame.columns:
+            return [None if pd.isnull(x) else x for x in frame[column]]
+    return [None] * len(frame)
+
+
 def _placed_rows(contexts, placements, frame, name: str):
     """
     Yield each row's channel grid and where it lands on the optical path.
@@ -1131,12 +1309,13 @@ def _placed_rows(contexts, placements, frame, name: str):
     """
     steps = frame[f"{name}_step"].to_numpy()
     bounds = zip(frame[f"{name}_min"], frame[f"{name}_max"], strict=True)
+    units = _frame_units(frame, name)
     # Keyed by identity because that is what is cheap: sibling epochs
     # resolve to one shared context object, and `__eq__` on an inventory
     # model dumps the whole subtree. A miss only recomputes.
     cache: dict[tuple, tuple] = {}
-    for context, (dim, axis), (low, high), step in zip(
-        contexts, placements, bounds, steps, strict=True
+    for context, (dim, axis), (low, high), step, unit in zip(
+        contexts, placements, bounds, steps, units, strict=True
     ):
         if context is None or dim is None:
             yield PlacedRow(context, low, high, None, None, None)
@@ -1153,10 +1332,16 @@ def _placed_rows(contexts, placements, frame, name: str):
         # patch states a negative one, and counting samples with it would
         # give none at all.
         step = abs(step)
-        key = (id(context), axis, low, high, step)
+        # The units are part of the key because the envelope columns hold
+        # each row's native magnitudes: the same numbers in feet and in
+        # meters describe different channels.
+        key = (id(context), axis, low, high, step, unit)
         if (placed := cache.get(key)) is None:
             grid = np.arange(round((high - low) / step) + 1) * step + low
-            placed = (grid, context.acquisition.channel_to_distance(grid, axis=axis))
+            # The grid stays in the row's own units, which is what the
+            # pieces are cut in; only the map reads it in its own.
+            on_axis = to_axis_units(grid, unit, axis, name)
+            placed = (grid, context.acquisition.channel_to_distance(on_axis, axis=axis))
             cache[key] = placed
         grid, distances = placed
         yield PlacedRow(context, low, high, grid, distances, None)

@@ -32,7 +32,12 @@ from dascore.constants import (
     enrich_coords_description,
     enrich_on_missing_description,
 )
-from dascore.core._spool_inventory import InventoryRef, resolve_row_epochs
+from dascore.core._spool_inventory import (
+    InventoryRef,
+    _frame_units,
+    is_unset,
+    resolve_row_epochs,
+)
 from dascore.core.inventory import (
     _SYSTEM_FACT_NAMES,
     Acquisition,
@@ -44,7 +49,7 @@ from dascore.core.inventory import (
     Network,
     OpticalMeasurement,
     OpticalPath,
-    OpticalPathAnnotation,
+    OpticalPathLabel,
 )
 from dascore.core.inventory_loader import BLESSED_NAME
 from dascore.examples import get_example_patch, inventory_patch_pair
@@ -195,12 +200,12 @@ def write_inventory(root, files):
     return root
 
 
-@pytest.fixture(scope="class")
+@pytest.fixture(scope="module")
 def data_directory(tmp_path_factory, patch, inventory):
     """A directory of data which carries the inventory describing it."""
     path = tmp_path_factory.mktemp("blessed")
     dc.write(patch, path / "patch.h5", "dasdae")
-    inventory.to_yaml(path / f"{BLESSED_NAME}.yaml")
+    inventory.io.to_yaml(path / f"{BLESSED_NAME}.yaml")
     return path
 
 
@@ -246,7 +251,7 @@ class TestBlessedInventory:
     def test_a_visible_inventory_is_not_attached(self, tmp_path, patch, inventory):
         """`inventory.yaml` names the envelope, not a spool's inventory."""
         dc.write(patch, tmp_path / "patch.h5", "dasdae")
-        inventory.to_yaml(tmp_path / "inventory.yaml")
+        inventory.io.to_yaml(tmp_path / "inventory.yaml")
         assert dc.spool(tmp_path).update()._inventory is None
 
     def test_in_memory_spools_carry_none(self, patch):
@@ -256,7 +261,7 @@ class TestBlessedInventory:
     def test_a_file_spool_carries_none(self, tmp_path, patch, inventory):
         """A file is not a directory, whatever lies beside it."""
         dc.write(patch, tmp_path / "patch.h5", "dasdae")
-        inventory.to_yaml(tmp_path / f"{BLESSED_NAME}.yaml")
+        inventory.io.to_yaml(tmp_path / f"{BLESSED_NAME}.yaml")
         assert dc.spool(tmp_path / "patch.h5")._inventory is None
 
 
@@ -362,10 +367,10 @@ class TestLazyInventory:
     ):
         """An inventory is an input, not a cache: it is read once."""
         dc.write(patch, tmp_path / "patch.h5", "dasdae")
-        inventory.to_yaml(tmp_path / f"{BLESSED_NAME}.yaml")
+        inventory.io.to_yaml(tmp_path / f"{BLESSED_NAME}.yaml")
         spool = dc.spool(tmp_path).update()
         assert spool.enrich()[0].attrs.gauge_length == 10.0
-        _replace_acquisition(inventory, gauge_length=2.0).to_yaml(
+        _replace_acquisition(inventory, gauge_length=2.0).io.to_yaml(
             tmp_path / f"{BLESSED_NAME}.yaml"
         )
         assert spool.enrich()[0].attrs.gauge_length == 10.0
@@ -407,7 +412,7 @@ class TestLazyInventory:
         spool = dc.spool(tmp_path).update()
         with pytest.raises(InvalidInventoryError):
             spool.enrich()[0]
-        inventory.to_yaml(tmp_path / f"{BLESSED_NAME}.yaml")
+        inventory.io.to_yaml(tmp_path / f"{BLESSED_NAME}.yaml")
         assert spool.enrich()[0].attrs.gauge_length == 10.0
 
     def test_a_lazily_attached_spool_pickles(self, data_directory):
@@ -440,7 +445,7 @@ class TestAttachInventoryPath:
     def test_a_file_path(self, tmp_path, patch, inventory):
         """The serialized artifact shipped beside an archive."""
         path = tmp_path / "somewhere.yaml"
-        inventory.to_yaml(path)
+        inventory.io.to_yaml(path)
         spool = dc.spool(patch).attach_inventory(path)
         assert spool.enrich()[0].attrs.gauge_length == 10.0
 
@@ -460,7 +465,7 @@ class TestAttachInventoryPath:
     def test_a_path_is_read_lazily(self, tmp_path, patch, inventory):
         """As the blessed name is, and for the same reason."""
         path = tmp_path / "somewhere.yaml"
-        inventory.to_yaml(path)
+        inventory.io.to_yaml(path)
         spool = dc.spool(patch).attach_inventory(path)
         assert spool._inventory._inventory is None
 
@@ -480,7 +485,7 @@ class TestAttachInventoryPath:
     def test_a_named_file_of_any_suffix(self, tmp_path, patch, inventory):
         """A path is a path; only the blessed name insists on a spelling."""
         path = tmp_path / "inventory.txt"
-        path.write_text(inventory.to_yaml())
+        path.write_text(inventory.io.to_yaml())
         spool = dc.spool(patch).attach_inventory(path)
         assert spool.enrich()[0].attrs.gauge_length == 10.0
 
@@ -494,7 +499,7 @@ class TestAttachInventoryPath:
 
     def test_a_path_is_anchored_when_it_is_attached(self, tmp_path, patch, inventory):
         """The read comes later, possibly from another directory entirely."""
-        inventory.to_yaml(tmp_path / "somewhere.yaml")
+        inventory.io.to_yaml(tmp_path / "somewhere.yaml")
         here = os.getcwd()
         os.chdir(tmp_path)
         try:
@@ -506,7 +511,7 @@ class TestAttachInventoryPath:
     def test_conform_uses_an_attached_path(self, tmp_path, patch, inventory):
         """A lazily attached path is read by the eager verb too."""
         path = tmp_path / "somewhere.yaml"
-        inventory.to_yaml(path)
+        inventory.io.to_yaml(path)
         assert len(dc.spool(patch).attach_inventory(path).conform_to_inventory()) == 1
 
     @pytest.mark.parametrize("verb", ["enrich", "conform_to_inventory"])
@@ -551,7 +556,7 @@ class TestLazyInventoryEquality:
             root = tmp_path / name
             root.mkdir()
             dc.write(patch, root / "patch.h5", "dasdae")
-            inventory.to_yaml(root / f"{BLESSED_NAME}.yaml")
+            inventory.io.to_yaml(root / f"{BLESSED_NAME}.yaml")
             spools.append(dc.spool(root).update())
         assert spools[0] != spools[1]
         assert all(x._inventory._inventory is None for x in spools)
@@ -608,14 +613,14 @@ class TestLazyInventoryEquality:
             root.mkdir()
             dc.write(patch, root / "patch.h5", "dasdae")
         (broken / f"{BLESSED_NAME}.yaml").write_text("this: [is not: yaml\n")
-        inventory.to_yaml(whole / f"{BLESSED_NAME}.yaml")
+        inventory.io.to_yaml(whole / f"{BLESSED_NAME}.yaml")
         assert dc.spool(broken).update() not in [dc.spool(whole).update()]
 
 
 class TestOnUnresolved:
     """What a spool does with a patch its inventory does not describe."""
 
-    @pytest.fixture
+    @pytest.fixture(scope="class")
     def mixed(self, patch):
         """A spool of one patch the example inventory knows and one it does not."""
         return dc.spool([patch, dc.get_example_patch("random_das")])
@@ -652,6 +657,20 @@ class TestOnUnresolved:
             list(second.attach_inventory(inventory).enrich())
         assert len(caught) == 2
 
+    def test_a_new_attachment_says_it_again(self, patch, inventory):
+        """The warning is per spool, and a re-attached or re-enriched spool is
+        a new one: a different inventory covers a different part of it.
+        """
+        stranger = dc.spool([patch.update_attrs(acquisition_key="XX.A1..RAW")])
+        spool = stranger.attach_inventory(inventory).enrich()
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("default")
+            list(spool)
+            list(spool)
+            list(spool.attach_inventory(inventory).enrich())
+            list(spool.enrich(on_unresolved="warn"))
+        assert len(caught) == 3
+
     def test_ignore_is_silent(self, mixed, inventory):
         """The same, without saying so."""
         with warnings.catch_warnings():
@@ -681,8 +700,8 @@ class TestOnUnresolved:
             array,
             array.new(
                 acquisitions=(
-                    acquisition.new(end_time=middle),
-                    acquisition.new(start_time=middle, gauge_length=20.0),
+                    acquisition.new(time_max=middle),
+                    acquisition.new(time_min=middle, gauge_length=20.0),
                 )
             ),
         )
@@ -691,13 +710,14 @@ class TestOnUnresolved:
             spool[0]
 
     def test_malformed_explicit_id_is_not_swallowed(self, patch, inventory):
-        """A caller getting the argument wrong is not the inventory's silence."""
-        bare = dc.spool(patch.update_attrs(acquisition_key=""))
-        spool = bare.attach_inventory(inventory).enrich(
-            acquisition_key="broken", on_unresolved="ignore"
+        """A caller getting the argument wrong is not the inventory's silence,
+        and is settled before any patch is pulled or selected.
+        """
+        bare = dc.spool(patch.update_attrs(acquisition_key="")).attach_inventory(
+            inventory
         )
         with pytest.raises(ValueError, match="Invalid acquisition_key"):
-            spool[0]
+            bare.enrich(acquisition_key="broken", on_unresolved="ignore")
 
     def test_bad_policy_raises(self, patch, inventory):
         """An unknown policy names no behavior."""
@@ -729,12 +749,11 @@ class TestOnUnresolved:
         long_key = "DAS." + "A" * 70 + "..RAW"
         with pytest.raises(InvalidInventoryError, match="characters"):
             inventory.resolve(long_key)
-        bare = dc.spool(patch.update_attrs(acquisition_key=""))
-        spool = bare.attach_inventory(inventory).enrich(
-            acquisition_key=long_key, on_unresolved="ignore"
+        bare = dc.spool(patch.update_attrs(acquisition_key="")).attach_inventory(
+            inventory
         )
         with pytest.raises(InvalidInventoryError, match="characters"):
-            spool[0]
+            bare.enrich(acquisition_key=long_key, on_unresolved="ignore")
 
 
 class TestInventoryQueryError:
@@ -1054,8 +1073,8 @@ class TestInventorySelect:
             old,
             old.new(
                 acquisitions=(
-                    acq.new(end_time=middle, gauge_length=10.0),
-                    acq.new(start_time=middle, gauge_length=20.0),
+                    acq.new(time_max=middle, gauge_length=10.0),
+                    acq.new(time_min=middle, gauge_length=20.0),
                 )
             ),
         )
@@ -1163,6 +1182,220 @@ class TestInventorySelect:
             assert out == ["blank", "stated"], selector
 
 
+class TestSelectSeesPendingEnrichment:
+    """
+    Selection judges the patch extraction will yield, not only the header.
+
+    Under `conflict="keep_last"` or `"drop"` the inventory rewrites a
+    stated header; a selection which read the header would keep a patch
+    that comes out not matching it. The default `keep_first` leaves the
+    header standing, so there the header is what to read.
+    """
+
+    @pytest.fixture(scope="class")
+    def disagreeing(self, patch, inventory):
+        """Two patches stating gauge lengths; the inventory contradicts one."""
+        return dc.spool(
+            [
+                patch.update_attrs(tag="wrong", gauge_length=20.0),
+                patch.update_attrs(tag="right", gauge_length=10.0),
+            ]
+        ).attach_inventory(inventory)
+
+    @pytest.fixture(scope="class")
+    def two_epochs(self, patch, inventory):
+        """The acquisition split at the patch's first sample; gauge 12 after."""
+        when = patch.get_coord("time").min()
+        return _split_epochs(
+            inventory, when, acquisitions=True, second={"gauge_length": 12.0}
+        )
+
+    def test_keep_last_judges_by_the_inventory(self, disagreeing):
+        """The inventory's value is what comes out, so it is what is matched."""
+        spool = disagreeing.enrich(coords=False, conflict="keep_last")
+        assert len(spool.select(gauge_length=20.0)) == 0
+        selected = spool.select(gauge_length=10.0)
+        assert sorted(selected.get_contents()["tag"]) == ["right", "wrong"]
+        assert all(x.attrs.gauge_length == 10.0 for x in selected)
+        assert len(spool.unselect(gauge_length=10.0)) == 0
+
+    def test_keep_first_judges_by_the_header(self, disagreeing):
+        """The header stated it first, so it stands and is what is matched."""
+        spool = disagreeing.enrich(coords=False)
+        selected = spool.select(gauge_length=20.0)
+        assert selected.get_contents()["tag"].tolist() == ["wrong"]
+        assert selected[0].attrs.gauge_length == 20.0
+        assert spool.select(gauge_length=10.0).get_contents()["tag"].tolist() == [
+            "right"
+        ]
+
+    def test_drop_leaves_a_disagreeing_row_unselectable(self, disagreeing):
+        """A dropped attr is no value at all, which no selector matches."""
+        spool = disagreeing.enrich(coords=False, conflict="drop")
+        assert len(spool.select(gauge_length=20.0)) == 0
+        # An agreeing header is not a conflict, and stays selectable.
+        assert spool.select(gauge_length=10.0).get_contents()["tag"].tolist() == [
+            "right"
+        ]
+        assert spool.unselect(gauge_length=10.0).get_contents()["tag"].tolist() == [
+            "wrong"
+        ]
+
+    def test_raise_keeps_the_header(self, disagreeing):
+        """`raise` refuses the patch on extraction rather than rewriting it."""
+        spool = disagreeing.enrich(coords=False, conflict="raise")
+        wrong = spool.select(gauge_length=20.0)
+        assert wrong.get_contents()["tag"].tolist() == ["wrong"]
+        assert spool.select(gauge_length=10.0).get_contents()["tag"].tolist() == [
+            "right"
+        ]
+        with pytest.raises(PatchError, match="inventory says"):
+            wrong[0]
+
+    @pytest.mark.parametrize("attrs", [("pulse_width",), False])
+    @pytest.mark.parametrize("conflict", ["keep_first", "keep_last"])
+    def test_a_name_enrichment_leaves_alone_keeps_the_header(
+        self, disagreeing, attrs, conflict
+    ):
+        """Only the attrs enrichment writes change hands.
+
+        Under either policy: one which rewrites nothing rewrites this
+        name too, whether because it writes no attrs at all or because
+        the name is not among the ones it writes.
+        """
+        spool = disagreeing.enrich(attrs=attrs, coords=False, conflict=conflict)
+        selected = spool.select(gauge_length=20.0)
+        assert selected.get_contents()["tag"].tolist() == ["wrong"]
+        assert selected[0].attrs.gauge_length == 20.0
+
+    def test_without_enrichment_the_header_stands(self, disagreeing):
+        """Attaching alone rewrites nothing, so nothing changes hands."""
+        selected = disagreeing.select(gauge_length=20.0)
+        assert selected.get_contents()["tag"].tolist() == ["wrong"]
+
+    @pytest.mark.parametrize("conflict", ["keep_last", "drop"])
+    def test_null_on_missing_blanks_a_stated_header(self, patch, inventory, conflict):
+        """
+        `on_missing="null"` answers with a missing marker, which disagrees
+        with a stated header: `keep_last` writes the marker over it and
+        `drop` removes it, and either way the row is not selected by what
+        it stated.
+        """
+        stated = dc.spool(patch.update_attrs(pulse_rate=1.25))
+        spool = stated.attach_inventory(inventory)
+        assert len(spool.select(pulse_rate=1.25)) == 1
+        nulled = spool.enrich(
+            attrs=("pulse_rate",), coords=False, on_missing="null", conflict=conflict
+        )
+        assert len(nulled.select(pulse_rate=1.25)) == 0
+        assert len(nulled.unselect(pulse_rate=1.25)) == 1
+        assert is_unset(dict(nulled[0].attrs).get("pulse_rate"))
+        # A blanket request never blanks anything.
+        blanket = spool.enrich(coords=False, on_missing="null", conflict=conflict)
+        assert len(blanket.select(pulse_rate=1.25)) == 1
+
+    @pytest.mark.parametrize(
+        "bad", [{"conflict": "keep_both"}, {"on_missing": "blank"}]
+    )
+    def test_a_bad_policy_is_refused_at_once(self, patch, inventory, bad):
+        """Selection reads the policies, so a typo cannot wait for extraction."""
+        with pytest.raises(ParameterError, match="must be one of"):
+            dc.spool(patch).attach_inventory(inventory).enrich(**bad)
+
+    @pytest.mark.parametrize("with_a_stated_row", [False, True])
+    def test_the_enrichment_key_resolves_a_bare_row(
+        self, patch, inventory, with_a_stated_row
+    ):
+        """
+        A row stating no key resolves by the one enrichment will use.
+
+        Both with and without a neighbour stating its own key: a relation
+        no row states the key in has no column for it at all.
+        """
+        patches = [patch.update_attrs(acquisition_key="", tag="bare")]
+        if with_a_stated_row:
+            patches.append(patch.update_attrs(tag="keyed"))
+        bare = dc.spool(patches)
+        spool = bare.attach_inventory(inventory).enrich(
+            acquisition_key=patch.attrs.acquisition_key
+        )
+        selected = spool.select(gauge_length=10.0)
+        assert len(selected) == len(patches)
+        assert all(x.attrs.gauge_length == 10.0 for x in selected)
+        # Attached alone, the bare row names no entry and is not selected.
+        attached = bare.attach_inventory(inventory).select(gauge_length=10.0)
+        assert attached.get_contents()["tag"].tolist() == (
+            ["keyed"] if with_a_stated_row else []
+        )
+
+    def test_a_stated_key_disagreeing_with_the_enrichment_key_stands(
+        self, patch, inventory
+    ):
+        """
+        Extraction refuses the disagreement rather than resolving either
+        key, so the row is judged by the key it states.
+        """
+        stranger = patch.update_attrs(acquisition_key="XX.A1..RAW", tag="stranger")
+        bare = patch.update_attrs(acquisition_key="", tag="bare")
+        spool = dc.spool([bare, stranger]).attach_inventory(inventory)
+        spool = spool.enrich(acquisition_key=patch.attrs.acquisition_key)
+        assert spool.select(gauge_length=10.0).get_contents()["tag"].tolist() == [
+            "bare"
+        ]
+        with pytest.raises(PatchError, match="disagree"):
+            spool.select(tag="stranger")[0]
+
+    def test_the_enrichment_key_reaches_the_fiber_too(self, patch, inventory):
+        """
+        Channel selection, expansion and conformance resolve rows the same
+        way, so a bare row pending enrichment has a fiber to place on.
+        """
+        bare = dc.spool(patch.update_attrs(acquisition_key=""))
+        spool = bare.attach_inventory(inventory).enrich(
+            acquisition_key=patch.attrs.acquisition_key
+        )
+        assert len(spool.select(zone="north")) == 1
+        assert len(spool.expand_by("zone")) == 2
+        assert len(spool.conform_to_inventory(on_unresolved="raise")) == 1
+        attached = bare.attach_inventory(inventory)
+        assert len(attached.select(zone="north")) == 0
+        with pytest.raises(UnresolvedPatchError):
+            attached.conform_to_inventory(on_unresolved="raise")
+
+    def test_the_enrichment_time_resolves_a_lag_time_row(self, patch, two_epochs):
+        """A row without instants resolves at the instant enrichment will use."""
+        when = patch.get_coord("time").min()
+        lags = patch.get_coord("time").values - when
+        spool = dc.spool(patch.update_coords(time=lags)).attach_inventory(two_epochs)
+        assert len(spool.select(gauge_length=12.0)) == 0
+        before = spool.enrich(time=when - dc.to_timedelta64(1), coords=False)
+        assert len(before.select(gauge_length=12.0)) == 0
+        assert before.select(gauge_length=10.0)[0].attrs.gauge_length == 10.0
+        after = spool.enrich(time=when, coords=False)
+        assert len(after.select(gauge_length=10.0)) == 0
+        assert after.select(gauge_length=12.0)[0].attrs.gauge_length == 12.0
+
+    def test_a_dated_row_beside_a_lag_time_row_keeps_its_own_instants(
+        self, patch, two_epochs
+    ):
+        """
+        The pending time is for rows without instants; a dated row resolves
+        at its own, as it stands, and extraction is what refuses it.
+        """
+        when = patch.get_coord("time").min()
+        lags = patch.get_coord("time").values - when
+        lag = patch.update_coords(time=lags).update_attrs(tag="lag")
+        spool = dc.spool([patch, lag]).attach_inventory(two_epochs)
+        enriched = spool.enrich(time=when - dc.to_timedelta64(1), coords=False)
+        tags = enriched.select(gauge_length=10.0).get_contents()["tag"].tolist()
+        assert tags == ["lag"]
+        tags = enriched.select(gauge_length=12.0).get_contents()["tag"].tolist()
+        assert tags == ["random"]
+        assert enriched.select(tag="lag")[0].attrs.gauge_length == 10.0
+        with pytest.raises(PatchError, match="time coordinate"):
+            enriched.select(tag="random")[0]
+
+
 class TestInventoryUnselect:
     """Unselect reaches whatever select reaches."""
 
@@ -1233,9 +1466,9 @@ class TestInventorySelectCoverage:
         array = network.fiber_arrays[0]
         elsewhere = network.new(
             code="ZZ",
-            fiber_arrays=(array.new(code="L999", start_time="2001-01-01"),),
+            fiber_arrays=(array.new(code="L999", time_min="2001-01-01"),),
         )
-        sibling = array.new(code="L998", start_time="2001-01-02")
+        sibling = array.new(code="L998", time_min="2001-01-02")
         crowded = inventory.new(
             networks=(
                 elsewhere,
@@ -1332,8 +1565,8 @@ class TestNothingToResolveWith:
             array,
             array.new(
                 acquisitions=(
-                    acquisition.new(end_time=split, gauge_length=10.0),
-                    acquisition.new(start_time=split, gauge_length=20.0),
+                    acquisition.new(time_max=split, gauge_length=10.0),
+                    acquisition.new(time_min=split, gauge_length=20.0),
                 )
             ),
         )
@@ -1497,7 +1730,7 @@ class TestSharedNames:
 
     def test_a_group_may_share_an_attrs_name(self, patch, inventory):
         """
-        An annotation group is free to be named after an acquisition field.
+        A label group is free to be named after an acquisition field.
 
         Bare names resolve to attrs first, so selecting on the field has
         to keep working; only a caller who asked for `_coords` means the
@@ -1507,11 +1740,11 @@ class TestSharedNames:
         clash = inventory.replace(
             path,
             path.new(
-                annotations=(
-                    *path.annotations,
-                    OpticalPathAnnotation(
-                        start_distance=0.0,
-                        end_distance=100.0,
+                labels=(
+                    *path.labels,
+                    OpticalPathLabel(
+                        distance_min=0.0,
+                        distance_max=100.0,
                         group="gauge_length",
                         value="odd",
                     ),
@@ -1545,7 +1778,8 @@ class TestSharedNames:
                 optical_components=(
                     FiberSegment(
                         name="c",
-                        optical_length=100.0,
+                        distance_min=0.0,
+                        distance_max=100.0,
                         loss_db=loss,
                         loss_measurement=measurement,
                     ),
@@ -1577,7 +1811,7 @@ def _split_epochs(inventory, when, *, acquisitions=False, second=None):
     array = inventory.networks[0].fiber_arrays[0]
     old = array.acquisitions[0] if acquisitions else array.optical_paths[0]
     changed = {} if second is None else second
-    halves = (old.new(end_time=when), old.new(start_time=when, **changed))
+    halves = (old.new(time_max=when), old.new(time_min=when, **changed))
     field = "acquisitions" if acquisitions else "optical_paths"
     return inventory.replace(array, array.new(**{field: halves})).check()
 
@@ -1742,7 +1976,7 @@ class TestConformBoundaryPolicy:
         """
         other = patch.update_attrs(acquisition_key="DAS.R2D1..OTHER")
         spool = dc.spool([patch, other])
-        assert "acquisition_key" in dc.get_config().groupby_attrs
+        assert "acquisition_key" in dc.get_config().patch_kind_attrs
         merged = spool.chunk(time=None)
         assert sorted(merged.get_contents()["acquisition_key"]) == [
             "DAS.R2D1..OTHER",
@@ -1866,13 +2100,13 @@ class TestConformSubdivision:
         """
         coord = patch.get_coord("time")
         when = coord.min() + (coord.max() - coord.min()) / 2
-        moved = inventory.networks[0].fiber_arrays[0].optical_paths[0].annotations[0]
+        moved = inventory.networks[0].fiber_arrays[0].optical_paths[0].labels[0]
         split = _split_epochs(
             inventory,
             when,
             second={
-                "annotations": (
-                    moved.new(value="moved", start_distance=100.0, end_distance=400.0),
+                "labels": (
+                    moved.new(value="moved", distance_min=100.0, distance_max=400.0),
                 )
             },
         )
@@ -1890,9 +2124,9 @@ class TestConformSubdivision:
         old = array.optical_paths[0]
         edges = [coord.min() + coord.step * x for x in (500, 1000)]
         paths = (
-            old.new(end_time=edges[0]),
-            old.new(start_time=edges[0], end_time=edges[1], name="middle"),
-            old.new(start_time=edges[1], name="last"),
+            old.new(time_max=edges[0]),
+            old.new(time_min=edges[0], time_max=edges[1], name="middle"),
+            old.new(time_min=edges[1], name="last"),
         )
         split = inventory.replace(array, array.new(optical_paths=paths)).check()
         out = dc.spool(patch).attach_inventory(split).conform_to_inventory()
@@ -1913,9 +2147,9 @@ class TestConformSubdivision:
         old = array.optical_paths[0]
         edges = [coord.min() + coord.step * 500 + x for x in (-coord.step / 3, 0)]
         paths = (
-            old.new(end_time=edges[0]),
-            old.new(start_time=edges[0], end_time=edges[1], name="blink"),
-            old.new(start_time=edges[1], name="after"),
+            old.new(time_max=edges[0]),
+            old.new(time_min=edges[0], time_max=edges[1], name="blink"),
+            old.new(time_min=edges[1], name="after"),
         )
         split = inventory.replace(array, array.new(optical_paths=paths)).check()
         out = dc.spool(patch).attach_inventory(split).conform_to_inventory()
@@ -1949,8 +2183,8 @@ class TestConformSubdivision:
             network,
             network.new(
                 fiber_arrays=(
-                    array.new(end_time=when),
-                    array.new(start_time=when, description="renamed"),
+                    array.new(time_max=when),
+                    array.new(time_min=when, description="renamed"),
                 )
             ),
         ).check()
@@ -1980,8 +2214,8 @@ class TestConformSubdivision:
             network,
             network.new(
                 fiber_arrays=(
-                    array.new(end_time=when),
-                    array.new(start_time=when, description="renamed"),
+                    array.new(time_max=when),
+                    array.new(time_min=when, description="renamed"),
                 )
             ),
         ).check()
@@ -2093,7 +2327,7 @@ class TestConformPartialCoverage:
         lapsed = inventory.replace(
             array,
             array.new(
-                acquisitions=(array.acquisitions[0].new(end_time=off_grid_boundary),)
+                acquisitions=(array.acquisitions[0].new(time_max=off_grid_boundary),)
             ),
         ).check()
         spool = dc.spool(patch).attach_inventory(lapsed)
@@ -2118,7 +2352,7 @@ class TestConformPartialCoverage:
         lapsed = inventory.replace(
             array,
             array.new(
-                optical_paths=(array.optical_paths[0].new(end_time=off_grid_boundary),)
+                optical_paths=(array.optical_paths[0].new(time_max=off_grid_boundary),)
             ),
         ).check()
         out = dc.spool(patch).attach_inventory(lapsed).conform_to_inventory()
@@ -2185,13 +2419,13 @@ def two_zones(inventory):
     return inventory.replace(
         path,
         path.new(
-            annotations=(
-                *path.annotations,
-                OpticalPathAnnotation(
-                    start_distance=110.0, end_distance=150.0, group="hole", value="a"
+            labels=(
+                *path.labels,
+                OpticalPathLabel(
+                    distance_min=110.0, distance_max=150.0, group="hole", value="a"
                 ),
-                OpticalPathAnnotation(
-                    start_distance=300.0, end_distance=340.0, group="hole", value="a"
+                OpticalPathLabel(
+                    distance_min=300.0, distance_max=340.0, group="hole", value="a"
                 ),
             )
         ),
@@ -2714,11 +2948,11 @@ class TestChannelSelectEdges:
         numeric = inventory.replace(
             path,
             path.new(
-                annotations=(
-                    *path.annotations,
-                    OpticalPathAnnotation(
-                        start_distance=100.0,
-                        end_distance=200.0,
+                labels=(
+                    *path.labels,
+                    OpticalPathLabel(
+                        distance_min=100.0,
+                        distance_max=200.0,
                         group="frost_depth",
                         value=1.5,
                     ),
@@ -2804,11 +3038,11 @@ def uneven_spool(patch, inventory):
     array = inventory.networks[0].fiber_arrays[0]
     acquisition, path = array.acquisitions[0], array.optical_paths[0]
     holes = (
-        OpticalPathAnnotation(
-            start_distance=110.0, end_distance=150.0, group="hole", value="a"
+        OpticalPathLabel(
+            distance_min=110.0, distance_max=150.0, group="hole", value="a"
         ),
-        OpticalPathAnnotation(
-            start_distance=300.0, end_distance=340.0, group="hole", value="a"
+        OpticalPathLabel(
+            distance_min=300.0, distance_max=340.0, group="hole", value="a"
         ),
     )
     both = inventory.replace(
@@ -2816,8 +3050,8 @@ def uneven_spool(patch, inventory):
         array.new(
             acquisitions=(acquisition, acquisition.new(location_code="01")),
             optical_paths=(
-                path.new(annotations=(*path.annotations, *holes)),
-                path.new(location_code="01", annotations=(*path.annotations, holes[0])),
+                path.new(labels=(*path.labels, *holes)),
+                path.new(location_code="01", labels=(*path.labels, holes[0])),
             ),
         ),
     )
@@ -2913,11 +3147,13 @@ def _float_grid_pair(distance, span):
     path = OpticalPath(
         name="main",
         location_code="",
-        optical_components=(FiberSegment(name="c", optical_length=span + 10),),
-        annotations=(
-            OpticalPathAnnotation(
-                start_distance=span * 0.23,
-                end_distance=span * 0.61,
+        optical_components=(
+            FiberSegment(name="c", distance_min=0.0, distance_max=span + 10),
+        ),
+        labels=(
+            OpticalPathLabel(
+                distance_min=span * 0.23,
+                distance_max=span * 0.61,
                 group="zone",
                 value="mid",
             ),
@@ -2937,6 +3173,76 @@ def _float_grid_pair(distance, span):
             ),
         )
     ).check()
+
+
+class TestFrameUnits:
+    """Reading a frame's stated units under either spelling."""
+
+    def test_private_column(self):
+        """A planning frame keeps the units private."""
+        frame = pd.DataFrame({"_distance_units": ["m", "ft"]})
+
+        assert _frame_units(frame, "distance") == ["m", "ft"]
+
+    def test_public_column(self):
+        """A presented one makes them public."""
+        frame = pd.DataFrame({"distance_units": ["m", "ft"]})
+
+        assert _frame_units(frame, "distance") == ["m", "ft"]
+
+    def test_unstated_units_are_none(self):
+        """A row which states no units answers None, not NaN."""
+        frame = pd.DataFrame({"_distance_units": ["m", None]})
+
+        assert _frame_units(frame, "distance") == ["m", None]
+
+    def test_no_units_column(self):
+        """A frame with neither spelling states units for no row."""
+        frame = pd.DataFrame({"distance_min": [0.0, 0.0]})
+
+        assert _frame_units(frame, "distance") == [None, None]
+
+
+class TestChannelUnits:
+    """Placing an index row's channels reads its stated units."""
+
+    def test_selection_is_invariant_to_the_axis_units(self, patch, inventory):
+        """The same channels answer whether the row is in meters or feet."""
+        shapes = []
+        for candidate in (patch, patch.convert_units(distance="ft")):
+            spool = dc.spool(candidate).attach_inventory(inventory).enrich()
+            shapes.append(spool.select(zone="north")[0].shape)
+        assert shapes[0] == shapes[1]
+
+    def test_expansion_is_invariant_to_the_axis_units(self, patch, inventory):
+        """As is expanding by a group, which places the same channels."""
+        expanded = []
+        for candidate in (patch, patch.convert_units(distance="ft")):
+            spool = dc.spool(candidate).attach_inventory(inventory).enrich()
+            expanded.append([x.shape for x in spool.expand_by("zone")])
+        assert expanded[0] == expanded[1]
+
+    def test_rows_in_different_units_are_placed_apart(self, patch, inventory):
+        """
+        Envelope columns hold each row's own magnitudes, so two rows
+        stating the same numbers in different units are different
+        channels and may not share a cached placement.
+        """
+        feet = patch.set_units(distance="ft").update_attrs(tag="feet")
+        spool = dc.spool([patch, feet]).attach_inventory(inventory).enrich()
+        out = spool.select(zone="north")
+        assert len(out) == 2
+        # The whole feet patch is north: 299 feet is 91 meters.
+        shapes = {x.attrs.tag: x.shape for x in out}
+        assert shapes["feet"] == patch.shape
+        assert shapes["random"] == (100, patch.shape[1])
+
+    def test_incompatible_units_raise(self, patch, inventory):
+        """A coordinate which is not a length cannot be a distance."""
+        seconds = patch.set_units(distance="s")
+        spool = dc.spool(seconds).attach_inventory(inventory)
+        with pytest.raises(UnitError, match="instrument_distance"):
+            spool.select(zone="north")
 
 
 class TestChannelSelectContracts:
@@ -2983,8 +3289,8 @@ class TestChannelSelectContracts:
             path.new(
                 coupling=(
                     CouplingCondition(
-                        start_distance=100.0,
-                        end_distance=250.0,
+                        distance_min=100.0,
+                        distance_max=250.0,
                         coupling_type="trench",
                         medium="soil",
                         depth=2.0,
@@ -3075,10 +3381,10 @@ class TestChannelSelectContracts:
         clash = inventory.replace(
             path,
             path.new(
-                annotations=(
-                    OpticalPathAnnotation(
-                        start_distance=100.0,
-                        end_distance=200.0,
+                labels=(
+                    OpticalPathLabel(
+                        distance_min=100.0,
+                        distance_max=200.0,
                         group="output_id",
                         value="a",
                     ),
@@ -3090,6 +3396,31 @@ class TestChannelSelectContracts:
             spool.expand_by("output_id")
         # Splitting on it is still legal; only recording the value is not.
         assert len(spool.expand_by("output_id", stamp=False)) == 1
+
+    def test_a_stamp_cannot_replace_the_acquisition_key(self, patch, inventory):
+        """
+        The key is the identity every later resolution goes by, and a
+        label value is not a valid one; stamping it would give a spool
+        whose contents look fine and whose patches cannot be built.
+        """
+        path = inventory.networks[0].fiber_arrays[0].optical_paths[0]
+        clash = inventory.replace(
+            path,
+            path.new(
+                labels=(
+                    OpticalPathLabel(
+                        distance_min=100.0,
+                        distance_max=400.0,
+                        group="acquisition_key",
+                        value="bad",
+                    ),
+                )
+            ),
+        )
+        spool = dc.spool(patch).attach_inventory(clash)
+        with pytest.raises(InvalidSpoolQueryError, match="overwrite"):
+            spool.expand_by("acquisition_key")
+        assert len(spool.expand_by("acquisition_key", stamp=False)) == 1
 
     def test_a_no_op_channel_selector_does_not_veto_a_flag(self, patch, inventory):
         """

@@ -16,6 +16,7 @@ import re
 import sqlite3
 import sys
 import threading
+import warnings
 import warnings as warnings_mod
 from typing import Any
 
@@ -27,7 +28,7 @@ from test_index_contract import _time_coord, make_summaries
 
 import dascore as dc
 from dascore.core.spool import Spool
-from dascore.core.summary import PatchSummary, normalize_source_patch_id
+from dascore.core.summary import PatchSummary, normalize_source_patch_key
 from dascore.exceptions import (
     InvalidIndexError,
     MissingPatchError,
@@ -345,26 +346,26 @@ class TestNormalizeSourcePatchId:
 
     def test_missing_forms_become_empty(self):
         """None, empty string, and pandas NaN/NaT all normalize to ''."""
-        assert normalize_source_patch_id(None) == ""
-        assert normalize_source_patch_id("") == ""
-        assert normalize_source_patch_id(float("nan")) == ""
-        assert normalize_source_patch_id(np.nan) == ""
-        assert normalize_source_patch_id(pd.NaT) == ""
+        assert normalize_source_patch_key(None) == ""
+        assert normalize_source_patch_key("") == ""
+        assert normalize_source_patch_key(float("nan")) == ""
+        assert normalize_source_patch_key(np.nan) == ""
+        assert normalize_source_patch_key(pd.NaT) == ""
 
     def test_numpy_scalar_becomes_plain_string(self):
         """A numpy scalar is unwrapped before stringifying."""
-        assert normalize_source_patch_id(np.int64(42)) == "42"
+        assert normalize_source_patch_key(np.int64(42)) == "42"
 
     def test_plain_values_stringify(self):
         """Ordinary ids pass through as strings."""
-        assert normalize_source_patch_id("abc") == "abc"
-        assert normalize_source_patch_id(7) == "7"
+        assert normalize_source_patch_key("abc") == "abc"
+        assert normalize_source_patch_key(7) == "7"
 
     def test_non_scalar_falls_through(self):
         """A value pd.isnull cannot evaluate as a scalar still stringifies."""
         # pd.isnull on a list returns an array (truth value is ambiguous),
         # so the helper must swallow that and fall through to str().
-        assert normalize_source_patch_id([1, 2]) == "[1, 2]"
+        assert normalize_source_patch_key([1, 2]) == "[1, 2]"
 
 
 class TestCanonicalRange:
@@ -896,9 +897,16 @@ class TestIngestEdges:
         assert typed_value(np.array([1.0, 2.0]) * get_quantity("m")) is None
 
     def test_reserved_attr_name_warns(self):
-        """An attr named patch_id is skipped with a warning."""
+        """
+        An attr named for a structural column is skipped with a warning.
+
+        It used to be spelled with `patch_id`, which is now a field of
+        `PatchAttrs` in its own right -- a first-class id rather than a
+        user attr which happens to collide -- and is skipped silently.
+        `source_id` is still only a column, so it still warns.
+        """
         summary = PatchSummary(
-            attrs={"patch_id": 5, "tag": "x"},
+            attrs={"source_id": 5, "tag": "x"},
             coords={
                 "distance": {
                     "dtype": "float64",
@@ -917,7 +925,38 @@ class TestIngestEdges:
         )
         with pytest.warns(UserWarning, match="reserved attr name"):
             records = s2r([summary])
-        assert "patch_id" not in records[0].patches[0].attrs
+        assert "source_id" not in records[0].patches[0].attrs
+
+    @pytest.mark.parametrize("name", ["patch_id"])
+    def test_the_ids_are_indexed_silently(self, name):
+        """
+        An id is a search term: it is how a result finds its data again.
+
+        Every patch carries one, so a reserved-name warning would fire on
+        every patch; indexing them is quiet.
+        """
+        summary = PatchSummary(
+            attrs={name: "0123456789abcdef", "tag": "x"},
+            coords={
+                "distance": {
+                    "dtype": "float64",
+                    "min": 0.0,
+                    "max": 1.0,
+                    "dims": ("distance",),
+                    "len": 2,
+                }
+            },
+            dims=("distance",),
+            shape=(2,),
+            dtype="float32",
+            source_path="a.h5",
+            source_format="DASDAE",
+            source_version="1",
+        )
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            records = s2r([summary])
+        assert records[0].patches[0].attrs[name].value == "0123456789abcdef"
 
     @pytest.mark.parametrize("name", ["shape", "n_dims", "sample_count_total"])
     def test_dropped_columns_stay_reserved(self, random_patch, name):
@@ -956,7 +995,7 @@ class TestIngestEdges:
         assert _coord_record("x", stub) is None
 
     def test_multipatch_source_gets_positional_ids(self):
-        """Multi-patch sources get positional source_patch_ids."""
+        """Multi-patch sources get positional source_patch_keys."""
         base: dict[str, Any] = make_summaries()[0].dump_structured()
         one = PatchSummary(**base)
         # Bound and annotated: merging a str literal into the dict widens
@@ -965,7 +1004,7 @@ class TestIngestEdges:
         two = PatchSummary(**other)
         records = s2r([one, two])
         assert len(records) == 1
-        ids = [p.source_patch_id for p in records[0].patches]
+        ids = [p.source_patch_key for p in records[0].patches]
         assert ids == ["0", "1"]
 
 

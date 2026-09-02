@@ -12,7 +12,7 @@ The schema separates records with different lifetimes and cardinalities. This av
 |---|---|---|
 | `meta_data` | index | Identifies the file and its schema version |
 | `sources` | file or directory-format source | Tracks the source path, format, size, modification time, hive-style path attrs (JSON), and presentation ordinal |
-| `patches` | patch within a source | Stores patch identity and common time/distance envelopes |
+| `patches` | patch within a source | Stores patch identity, the data array's type and sample count, and common time/distance envelopes |
 | `attrs` | patch | Stores typed attribute values in dynamically added columns |
 | `attr_meta` | attribute name and value kind | Maps original attribute names to typed storage columns and canonical units |
 | `coord_defs` | unique coordinate value definition | Stores coordinate summaries and deduplicates identical definitions |
@@ -30,7 +30,7 @@ The current schema version is validated before any mutation. An unrelated or inc
 
 ## Hive-style path attributes
 
-Stored source paths are parsed for `key=value` pairs (each directory segment, and `__`-separated pairs in any segment including the extension-stripped file name). The pairs are merged into every patch's attrs at ingest as plain string values — the path wins over a same-named file attr, since renaming a path is the user's way of correcting metadata. The applied dict is also persisted on the source row (`sources.path_attrs`, JSON) and surfaced privately as `_path_attrs` in the flat relation: derived and union catalogs absolutize paths, so provenance must ride with the row for patch loading to stamp the attrs and for moves to rewrite them. Reserved/underscore key names follow the same skip rules as file attrs; values are never type-inferred.
+Stored source paths are parsed for `key=value` pairs (each directory segment containing the source, with `__`-separated pairs allowed in a segment). The last segment names the source itself — a file, or a directory-format unit's directory — and is never parsed: a file extension is indistinguishable from a value ending in one, which the `acquisition_key=XX.R2D1..RAW` partition in the example below would be if it named a source. The pairs are merged into every patch's attrs at ingest as plain string values — the path wins over a same-named file attr, since renaming a path is the user's way of correcting metadata. The applied dict is also persisted on the source row (`sources.path_attrs`, JSON) and surfaced privately as `_path_attrs` in the flat relation: derived and union catalogs absolutize paths, so provenance must ride with the row for patch loading to stamp the attrs and for moves to rewrite them. Reserved/underscore key names follow the same skip rules as file attrs; values are never type-inferred.
 
 Renames are detected during a directory update by exact `(mtime_ns, size_bytes)` stat identity (the rename-invariant manifest signature for directory-format units) between a disappeared and a brand-new path, each unique on its side. A detected move rewrites the source path and its path-derived attr values in SQL without re-reading file contents, so renaming a partition directory over a large archive is cheap. A rename that *removes* a hive key falls back to a rescan — the file's own value for that attr is only recoverable by reading it — and ambiguous stat matches also rescan rather than guess.
 
@@ -43,11 +43,11 @@ import dascore as dc
 root = Path(tempfile.mkdtemp())
 (root / "acquisition_key=XX.R2D1..RAW" / "cable=A").mkdir(parents=True)
 sub = root / "acquisition_key=XX.R2D1..RAW" / "cable=A"
-dc.get_example_patch().io.write(sub / "tag=raw.h5", "DASDAE")
+dc.get_example_patch().io.write(sub / "das_file.h5", "DASDAE")
 
 spool = dc.spool(root).update()
 row = spool.get_contents().iloc[0]
-assert (row["acquisition_key"], row["cable"], row["tag"]) == ("XX.R2D1..RAW", "A", "raw")
+assert (row["acquisition_key"], row["cable"]) == ("XX.R2D1..RAW", "A")
 assert spool[0].attrs.get("cable") == "A"
 
 # a directory rename is a pure metadata rewrite
@@ -65,7 +65,13 @@ SQLite permits concurrent readers and serializes writers. Initialization and upd
 
 ## The flat relation
 
-Spool-facing operations consume the tables through one flat relation: a dataframe with one row per patch carrying `{dim}_min/max/step` envelopes, private structural columns (`_patch_id`, `_{name}_def_key` coordinate identities, and `_{name}_units` original unit spellings, presented publicly as `{name}_units` by `get_contents` and normalized per dimensionality by the chunk planner before partitioning), the `dims` signature, and one column per attribute. Attrs and coords are independent namespaces, so an attr may share a name with a coordinate envelope column (e.g. an attr `channel_step` alongside a `channel` coordinate); in that rare genuine collision the envelope column owns the flat name, the attr column is omitted with a warning, and the attr remains queryable through the `_attrs` namespace. The chunk planner and selection both operate on this relation (see the [Spool Chunking](spool_chunking.qmd) and [Spool Selection](spool_selection.qmd) notes). The cell below runs against the real catalog so this description cannot silently drift.
+Spool-facing operations consume the tables through one flat relation: a dataframe with one row per patch carrying `{dim}_min/max/step` envelopes, private structural columns (`_patch_id`, `_{name}_def_key` coordinate identities, and `_{name}_units` original unit spellings, normalized per dimensionality by the chunk planner before partitioning), the `dims` signature, and one column per attribute. Attrs and coords are independent namespaces, so an attr may share a name with a coordinate envelope column (e.g. an attr `channel_step` alongside a `channel` coordinate); in that rare genuine collision the envelope column owns the flat name, the attr column is omitted with a warning, and the attr remains queryable through the `_attrs` namespace. The private columns are the index's own bookkeeping, so the relation a caller receives from `get_contents` (and from `get_gaps` and `get_coverage`) is the public one. `present_columns` builds it from an explicit list of steps (`dascore.utils.pd.PRESENTERS`): each step gives one private column back its public spelling — the unit spellings become `{name}_units`, `_dtype` and `_data_size` become `dtype` and `data_size` — and the last step drops every underscore-prefixed column that is left, so a column no step claims never leaves.
+
+`_dtype` and `_data_size` (the samples in the data array, the product of its shape) are private for the same reason: chunk's merge-compatibility grouping and conflict policing compare every public column, and patches of different element types — or, far more often, different lengths — must still merge. A row states no size when it does not know one. A patch assembled from several, a piece cut from one, and a row a selection trims all describe a patch which does not exist yet, and how many samples it comes out with is known only once it is loaded: those rows leave `data_size` null rather than repeating a member's count. An output which is one whole, untrimmed member *is* that patch, so it keeps that patch's size, and so does a row a selection leaves whole. Only a selection the presented envelopes cannot describe — sample indices, or a selector which is not a range — blanks every row it presents, since nothing then marks which rows it cut. The chunk planner and selection both operate on the full relation (see the [Spool Chunking](spool_chunking.qmd) and [Spool Selection](spool_selection.qmd) notes).
+
+A patch's own `patch_id` and `processing_id` are ordinary indexed attrs, so a patch can be found by the id it carries without loading anything. `patch_id` is the one name the storage schema and a patch both claim — a row id there, a datum here — so the row's is renamed `_patch_id` before attr columns are applied and the patch's keeps the public spelling. Neither id takes part in chunk's merge compatibility: every patch states a different one, and a merged patch folds its members' ids rather than inheriting any one of them.
+
+The cell below runs against the real catalog so this description cannot silently drift.
 
 ```{python}
 import dascore as dc
@@ -75,8 +81,11 @@ catalog = PatchCatalog.from_patches(list(dc.get_example_spool("random_das")))
 df = catalog.to_df()
 required = {
     "_patch_id",
+    "patch_id",
     "_time_def_key",
     "_time_units",
+    "_dtype",
+    "_data_size",
     "dims",
     "time_min",
     "time_max",
@@ -115,7 +124,7 @@ assert row["source_path"].startswith("memorypatch://")
 assert cat.resolve_row(row.to_dict()) is patch
 ```
 
-File-backed patches are identified by `(base_uri, source_path, source_patch_id)` instead; their rows resolve through readers rather than the registry.
+File-backed patches are identified by `(base_uri, source_path, source_patch_key)` instead; their rows resolve through readers rather than the registry.
 
 ## Federation
 

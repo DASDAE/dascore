@@ -9,7 +9,7 @@ from pathlib import Path
 import numpy as np
 
 import dascore as dc
-from dascore.io.utils import get_exact_coord
+from dascore.io.utils import get_exact_coord, get_gridded_coord
 from dascore.utils.misc import maybe_get_items, unbyte
 
 _G1_H5_BASE_DATASETS = frozenset(
@@ -207,7 +207,15 @@ def _get_g1_h5_base_coords(resource, dims, extra_coords=None, snap=True):
     # the jitter into a linear drift. Built exactly, and ignoring `snap`,
     # because that jitter is the signal.
     sample_span = get_exact_coord(dc.to_timedelta64(ends - starts))
-    distance = _coord(resource["distances"][...], units="m")
+    # The interrogator fixes the spatial sampling, so the stored distances
+    # only restate a grid, quantized to float32. That quantization can exceed
+    # the tolerance get_coord uses to recognize an even coordinate, leaving a
+    # monotonic coord with no step, so put it back on the grid it restates.
+    distances = resource["distances"][...]
+    if snap:
+        distance = get_gridded_coord(distances, units="m")
+    else:
+        distance = get_exact_coord(distances, units="m")
     temperature = _coord(resource["temperatures"][...], units="°C")
     coords = {
         "time": time,

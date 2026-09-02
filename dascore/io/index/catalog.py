@@ -30,7 +30,7 @@ import pandas as pd
 
 import dascore as dc
 from dascore.constants import PROGRESS_LEVELS, namespace_select_type
-from dascore.core.summary import normalize_source_patch_id
+from dascore.core.summary import normalize_source_patch_key
 from dascore.exceptions import MissingPatchError
 from dascore.io.core import _resolve_read_spool
 from dascore.io.index.backend import get_backend
@@ -41,7 +41,7 @@ from dascore.io.index.query import (
     Query,
     resolve_query,
 )
-from dascore.io.index.schema import SPOOL_PRIVATE_RENAMES
+from dascore.io.index.schema import SPOOL_LATE_RENAMES
 from dascore.utils.misc import (
     _canonical_range,
     _CanonicalRange,
@@ -125,9 +125,9 @@ def _canonical_coord_selectors(backend, coords: dict) -> tuple[dict, dict]:
     return query_coords, residual_coords
 
 
-def _row_source_patch_id(row: Mapping) -> str:
-    """Return the row's source_patch_id as a normalized string."""
-    return normalize_source_patch_id(row.get("source_patch_id"))
+def _row_source_patch_key(row: Mapping) -> str:
+    """Return the row's source_patch_key as a normalized string."""
+    return normalize_source_patch_key(row.get("source_patch_key"))
 
 
 def apply_exact_residuals(patch: dc.Patch, residuals) -> dc.Patch:
@@ -218,7 +218,7 @@ class FileResolver(PatchResolver):
     def __init__(self, root: Path | str | None = None):
         self._root = Path(root) if root is not None else None
 
-    def _read(self, path, row: Mapping, trim: dict, source_patch_id: str):
+    def _read(self, path, row: Mapping, trim: dict, source_patch_key: str):
         """
         Read one row's patch through dc.read.
 
@@ -227,7 +227,7 @@ class FileResolver(PatchResolver):
         called the reader directly re-read the file whenever the reader
         returned patches lazily).
         """
-        id_kwargs = {"source_patch_id": source_patch_id} if source_patch_id else {}
+        id_kwargs = {"source_patch_key": source_patch_key} if source_patch_key else {}
         kwargs = {"path": path}
         if row.get("source_format"):
             kwargs["file_format"] = row["source_format"]
@@ -243,14 +243,14 @@ class FileResolver(PatchResolver):
         if self._root is not None and "://" not in str(path):
             if not Path(path).is_absolute():
                 path = self._root / path
-        source_patch_id = _row_source_patch_id(row)
-        if source_patch_id.isdigit():
+        source_patch_key = _row_source_patch_key(row)
+        if source_patch_key.isdigit():
             # Positional (synthesized) ids index the full source read; a
             # trimmed read would shift or drop patches and bind the wrong
             # one, so these rows read the whole source.
             trim = {}
-        spool = self._read(path, row, trim, source_patch_id)
-        patch = _resolve_read_spool(spool, source_patch_id)
+        spool = self._read(path, row, trim, source_patch_key)
+        patch = _resolve_read_spool(spool, source_patch_key)
         # Hive-style path attrs override what the file recorded (renaming
         # a path is the user's way of correcting metadata), so loaded
         # patches agree with the index contents.
@@ -372,7 +372,7 @@ def _merge_source_records(existing, new):
 
     Union members export only their selected patches, so two members can
     hold disjoint (or overlapping) slices of one multi-patch file. The
-    merged record unions the patch lists by source_patch_id: a patch
+    merged record unions the patch lists by source_patch_key: a patch
     keeps its first-occurrence position, a duplicate identity takes the
     last occurrence's metadata (dict-merge semantics, matching the
     ordering contract), and the source-level metadata (mtime, size)
@@ -380,8 +380,8 @@ def _merge_source_records(existing, new):
     """
     if existing is None:
         return new
-    patches = {p.source_patch_id: p for p in existing.patches}
-    patches.update({p.source_patch_id: p for p in new.patches})
+    patches = {p.source_patch_key: p for p in existing.patches}
+    patches.update({p.source_patch_key: p for p in new.patches})
     return replace(new, patches=tuple(patches.values()))
 
 
@@ -439,6 +439,51 @@ class _Keep:
 
 
 _KEEP = _Keep()
+
+
+def _rides_the_envelopes(value) -> bool:
+    """True when a coord selector is one `adjust_segments` folds in."""
+    # A unit-bearing range arrives as a `_CanonicalRange`, which
+    # `_adjust_unit_segments` folds in per row unit.
+    return getattr(value, "magnitudes", None) is not None or is_range(value)
+
+
+def _residual_cuts_unmarked_rows(residuals) -> bool:
+    """
+    True when a residual selection can trim a row nothing marks trimmed.
+
+    A value range rides along with a query whose bounds `to_df` folds
+    into the presented envelopes, so `_modified` already names every row
+    it cuts. Sample indices have no envelope to fold into, and a
+    selector which is not a range never reached `adjust_segments`;
+    either trims at load with the row still claiming to be whole.
+    """
+    return any(
+        samples or not all(_rides_the_envelopes(x) for x in coords.values())
+        for coords, samples in residuals
+    )
+
+
+def _forget_trimmed_sizes(df: pd.DataFrame, residuals=()) -> pd.DataFrame:
+    """
+    Blank the stored sample count of every row a selection trims.
+
+    A trimmed row describes fewer samples than its source patch holds,
+    and how many is known only once the trim is applied, so it states no
+    size rather than the source's. A row a selection leaves whole keeps
+    its count: only what a selection actually cuts loses one.
+    """
+    if "_data_size" not in df.columns:
+        return df
+    if _residual_cuts_unmarked_rows(residuals):
+        trimmed = np.ones(len(df), dtype=bool)
+    elif "_modified" in df.columns:
+        trimmed = df["_modified"].to_numpy(dtype=bool)
+    else:
+        return df
+    if not trimmed.any():
+        return df
+    return df.assign(_data_size=df["_data_size"].astype("Int64").where(~trimmed))
 
 
 class PatchCatalog:
@@ -935,9 +980,10 @@ class PatchCatalog:
                 # id membership presents in its own (window/array) order
                 position = {pid: i for i, pid in enumerate(self._ids)}
                 df = df.sort_values(
-                    "patch_id", key=lambda s: s.map(position), kind="stable"
+                    "_patch_id", key=lambda s: s.map(position), kind="stable"
                 ).reset_index(drop=True)
-            df = df.rename(columns=dict(SPOOL_PRIVATE_RENAMES))
+            # The early ones are already done; see SPOOL_EARLY_RENAMES.
+            df = df.rename(columns=dict(SPOOL_LATE_RENAMES))
             # SQL identifies overlapping source patches. Expose the selected
             # envelopes, matching spool.get_contents() and the exact trim
             # applied when each patch is materialized. Each pass copies the
@@ -967,6 +1013,7 @@ class PatchCatalog:
                 for name, canonical in ranges.items():
                     if isinstance(canonical, _CanonicalRange):
                         df = _adjust_unit_segments(df, name, canonical)
+            df = _forget_trimmed_sizes(df, self._residuals)
             # Re-read the revision: bootstrapping the backend above can
             # bump it, and this frame reflects the state after that.
             return self._df_cache.set(df, self._revision.value)

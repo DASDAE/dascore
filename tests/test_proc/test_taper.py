@@ -11,7 +11,7 @@ from dascore.exceptions import ParameterError
 from dascore.proc.taper import taper
 from dascore.units import m, percent
 from dascore.utils.misc import broadcast_for_index
-from dascore.utils.signal import WINDOW_FUNCTIONS
+from dascore.utils.signal import WINDOW_NAMES, get_window
 
 gen = np.random.default_rng(32)
 
@@ -23,15 +23,39 @@ def patch_ones(random_patch):
     return patch
 
 
-@pytest.fixture(scope="session", params=sorted(WINDOW_FUNCTIONS))
+# Three shapes run through taper, rather than all thirteen; the window each
+# name resolves to is checked for every entry in test_every_window_tapers.
+TAPER_WINDOWS = ("hann", "triang", "blackmanharris")
+
+
+@pytest.fixture(scope="session", params=TAPER_WINDOWS)
 def time_tapered_patch(request, patch_ones):
     """Return a tapered trace."""
-    if "boxcar" in str(request.param):
-        pytest.skip("boxcar doesn't actually apply taper.")
     # first get a patch with all ones for easy testing
     patch = patch_ones.update(data=np.ones_like(patch_ones.data))
     out = taper(patch, time=0.05, window_type=request.param)
     return out
+
+
+def test_every_window_tapers():
+    """
+    Each documented name builds the window scipy has for it.
+
+    Two of them are aliases (`cos` for hann, `ramp` for triang), so a name
+    pointing at the wrong scipy symbol would still return an array of the
+    right length. Asserting the shape of the window is what catches that:
+    every one of them tapers to near zero at both ends, hamming's 0.08 being
+    the highest, and boxcar is the one which does not taper at all.
+    """
+    assert set(TAPER_WINDOWS) <= set(WINDOW_NAMES)
+    for name in WINDOW_NAMES:
+        window = np.asarray(get_window(name, 64))
+        assert window.shape == (64,), name
+        assert np.max(window) <= 1.0 + 1e-9, name
+        if name == "boxcar":
+            assert np.all(window == 1.0), name
+        else:
+            assert window[0] < 0.09 and window[-1] < 0.09, name
 
 
 def _get_start_end_indices(patch, dim):

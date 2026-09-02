@@ -4,20 +4,25 @@ from __future__ import annotations
 
 import json
 import pickle
+import re
 from collections.abc import Mapping
 from pathlib import Path
 
 import numpy as np
 import pytest
+import yaml
 from pydantic import ValidationError
+from rich.text import Text
 
 import dascore as dc
+from dascore.config import config_context
 from dascore.constants import INVENTORY_ATTRS
 from dascore.core import Inventory
 from dascore.core import inventory as inv
 from dascore.exceptions import InvalidInventoryError
 from dascore.models import InventoryModel, values_equal
 from dascore.utils.mapping import FrozenDict
+from dascore.utils.namespace import InventoryNameSpace
 
 
 def build_inventory() -> inv.Inventory:
@@ -25,7 +30,7 @@ def build_inventory() -> inv.Inventory:
     acquisition = inv.Acquisition(
         code="RAW",
         location_code="00",
-        start_time="2026-06-01",
+        time_min="2026-06-01",
         data_category="DAS",
         data_type="strain_rate",
         sample_rate=500.0,
@@ -36,28 +41,30 @@ def build_inventory() -> inv.Inventory:
     geometry = inv.Geometry(
         name="survey",
         distance=(0.0, 100.0, 200.0),
-        coordinates=((0.0, 0.0, 0.0), (1.0, 0.0, 0.0), (2.0, 0.0, 1.0)),
+        columns={"x": (0.0, 1.0, 2.0), "y": (0.0, 0.0, 0.0), "z": (0.0, 0.0, 1.0)},
     )
     path = inv.OpticalPath(
         name="main",
         location_code="00",
-        start_time="2026-06-01",
-        optical_components=(inv.FiberSegment(name="fiber", optical_length=250.0),),
+        time_min="2026-06-01",
+        optical_components=(
+            inv.FiberSegment(name="fiber", distance_min=0.0, distance_max=250.0),
+        ),
         geometry=(geometry,),
         coupling=(
             inv.CouplingCondition(
-                start_distance=0.0, end_distance=200.0, coupling_type="trench"
+                distance_min=0.0, distance_max=200.0, coupling_type="trench"
             ),
         ),
-        annotations=(
-            inv.OpticalPathAnnotation(
-                start_distance=0.0, end_distance=100.0, group="zone", value="east"
+        labels=(
+            inv.OpticalPathLabel(
+                distance_min=0.0, distance_max=100.0, group="zone", value="east"
             ),
         ),
     )
     array = inv.FiberArray(
         code="L001",
-        start_time="2026-06-01",
+        time_min="2026-06-01",
         acquisitions=(acquisition,),
         optical_paths=(path,),
     )
@@ -77,52 +84,57 @@ def build_full_inventory() -> inv.Inventory:
     path = inv.OpticalPath(
         name="main",
         location_code="00",
-        start_time="2026-06-01",
+        time_min="2026-06-01",
         optical_components=(
             inv.FiberSegment(
                 name="lead",
-                optical_length=100.0,
+                distance_min=0.0,
+                distance_max=100.0,
                 container=cable,
                 fiber_number=1,
                 loss_db=0.2,
                 loss_measurement=measurement,
             ),
-            inv.Connector(name="patch", container=enclosure),
-            inv.Splice(name="splice", container=enclosure),
-            inv.FiberSegment(name="run", optical_length=400.0, container=cable),
-            inv.Terminator(name="end", container=enclosure),
+            inv.Connector(name="patch", distance_min=100.0, container=enclosure),
+            inv.Splice(name="splice", distance_min=100.0, container=enclosure),
+            inv.FiberSegment(
+                name="run",
+                distance_min=100.0,
+                distance_max=500.0,
+                container=cable,
+            ),
+            inv.Terminator(name="end", distance_min=500.0, container=enclosure),
         ),
         geometry=(
             inv.Geometry(
                 name="trench",
                 distance=(100.0, 400.0),
-                coordinates=((-117.0, 40.0, 1500.0), (-117.0, 40.1, 1500.0)),
+                columns={
+                    "x": (-117.0, -117.0),
+                    "y": (40.0, 40.1),
+                    "z": (1500.0, 1500.0),
+                },
             ),
         ),
         coupling=(
             inv.CouplingCondition(
-                start_distance=100.0,
-                end_distance=250.0,
+                distance_min=100.0,
+                distance_max=250.0,
                 coupling_type="trench",
                 medium="soil",
                 depth=1.0,
             ),
         ),
-        annotations=(
-            inv.OpticalPathAnnotation(
-                start_distance=100.0, end_distance=200.0, group="zone", value="north"
+        labels=(
+            inv.OpticalPathLabel(
+                distance_min=100.0, distance_max=200.0, group="zone", value="north"
             ),
-            inv.OpticalPathAnnotation(
-                start_distance=150.0, end_distance=300.0, group="noisy", value=True
+            inv.OpticalPathLabel(distance_min=150.0, distance_max=300.0, group="noisy"),
+            inv.OpticalPathLabel(
+                distance_min=100.0, distance_max=200.0, group="count", value=0
             ),
-            inv.OpticalPathAnnotation(
-                start_distance=150.0, end_distance=300.0, group="quiet", value=False
-            ),
-            inv.OpticalPathAnnotation(
-                start_distance=100.0, end_distance=200.0, group="count", value=0
-            ),
-            inv.OpticalPathAnnotation(
-                start_distance=200.0, end_distance=300.0, group="offset", value=0.0
+            inv.OpticalPathLabel(
+                distance_min=200.0, distance_max=300.0, group="offset", value=0.0
             ),
         ),
         measurements=(measurement,),
@@ -130,7 +142,7 @@ def build_full_inventory() -> inv.Inventory:
     acquisition = inv.Acquisition(
         code="RAW",
         location_code="00",
-        start_time="2026-06-01",
+        time_min="2026-06-01",
         data_category="DAS",
         data_type="strain_rate",
         data_units="strain/s",
@@ -159,14 +171,14 @@ def build_full_inventory() -> inv.Inventory:
     array = inv.FiberArray(
         code="R2D1",
         name="array one",
-        start_time="2026-06-01",
+        time_min="2026-06-01",
         acquisitions=(acquisition,),
         optical_paths=(path,),
     )
     network = inv.Network(
         code="DAS",
         name="network one",
-        start_time="2026-06-01",
+        time_min="2026-06-01",
         fiber_arrays=(array,),
         stations=(station,),
     )
@@ -178,38 +190,466 @@ def build_full_inventory() -> inv.Inventory:
     ).check()
 
 
+class TestGeometryColumns:
+    """A geometry states named numeric columns, of which some are axes."""
+
+    @staticmethod
+    def _inventory(*geometry, crs=None, labels=()):
+        """Wrap geometry segments in the smallest inventory holding them."""
+        path = inv.OpticalPath(
+            optical_components=(
+                inv.FiberSegment(distance_min=0.0, distance_max=1000.0),
+            ),
+            geometry=geometry,
+            labels=labels,
+        )
+        array = inv.FiberArray(code="L001", optical_paths=(path,))
+        return inv.Inventory(
+            networks=(inv.Network(code="XX", fiber_arrays=(array,)),),
+            **({"coordinate_reference_system": crs} if crs else {}),
+        )
+
+    def test_a_column_which_is_not_a_position(self):
+        """Chainage is a curve along the fiber and no part of a position."""
+        chainage = inv.Geometry(
+            name="chainage",
+            distance=(0.0, 100.0),
+            columns={"chainage": (1200.0, 1300.0)},
+            units={"chainage": "m"},
+        )
+        assert self._inventory(chainage).check() is not None
+        out = chainage.interpolate([50.0])
+        assert out["chainage"][0] == 1250.0
+
+    def test_a_segment_with_no_axes_is_legal(self):
+        """A path may be described without ever being placed in space."""
+        depth = inv.Geometry(
+            distance=(0.0, 40.0), columns={"borehole_depth": (0.0, 40.0)}
+        )
+        inventory = self._inventory(depth)
+        assert inventory.check() is inventory
+        crs = inventory.coordinate_reference_system
+        path = inventory.networks[0].fiber_arrays[0].optical_paths[0]
+        assert np.all(np.isnan(path.coordinates_at([20.0], crs)))
+
+    def test_axes_are_all_or_none(self):
+        """Half a position is not a position."""
+        partial = inv.Geometry(
+            name="partial", distance=(0.0, 10.0), columns={"x": (0.0, 1.0)}
+        )
+        with pytest.raises(InvalidInventoryError, match="every axis or none"):
+            self._inventory(partial).check()
+
+    def test_an_axis_stated_twice(self):
+        """`x` and the label the CRS gives it are one axis, not two."""
+        crs = inv.CoordinateReferenceSystem(
+            coordinate_labels=("easting", "northing"), units=("meter", "meter")
+        )
+        doubled = inv.Geometry(
+            name="doubled",
+            distance=(0.0, 10.0),
+            columns={
+                "x": (0.0, 1.0),
+                "easting": (0.0, 1.0),
+                "northing": (0.0, 1.0),
+            },
+        )
+        with pytest.raises(InvalidInventoryError, match="twice"):
+            self._inventory(doubled, crs=crs).check()
+
+    def test_overlap_is_refused_per_column(self):
+        """Two segments may overlap unless they state the same column."""
+        first = inv.Geometry(distance=(0.0, 60.0), columns={"depth": (0.0, 6.0)})
+        second = inv.Geometry(distance=(50.0, 80.0), columns={"depth": (5.0, 8.0)})
+        with pytest.raises(InvalidInventoryError, match="for column 'depth'"):
+            self._inventory(first, second).check()
+
+    def test_different_columns_may_overlap(self):
+        """Each column is its own function track, so they are independent."""
+        depth = inv.Geometry(
+            name="hole 1", distance=(0.0, 60.0), columns={"depth": (0.0, 6.0)}
+        )
+        azimuth = inv.Geometry(
+            name="hole 1", distance=(50.0, 80.0), columns={"azimuth": (5.0, 8.0)}
+        )
+        inventory = self._inventory(depth, azimuth)
+        assert inventory.check() is inventory
+
+    def test_overlapping_segments_share_a_name(self):
+        """The bare `geometry` coordinate is that name, so there is one."""
+        depth = inv.Geometry(
+            name="depth survey",
+            distance=(0.0, 60.0),
+            columns={"depth": (0.0, 6.0)},
+        )
+        azimuth = inv.Geometry(
+            name="azimuth survey",
+            distance=(50.0, 80.0),
+            columns={"azimuth": (5.0, 8.0)},
+        )
+        with pytest.raises(InvalidInventoryError, match="share its name"):
+            self._inventory(depth, azimuth).check()
+
+    def test_a_reserved_column_name(self):
+        """A column becomes a coordinate, so it cannot shadow one."""
+        clash = inv.Geometry(distance=(0.0, 10.0), columns={"time": (0.0, 1.0)})
+        with pytest.raises(InvalidInventoryError, match="reserved name"):
+            self._inventory(clash).check()
+
+    def test_a_column_which_is_also_a_label_group(self):
+        """One name is one coordinate, whichever track would define it."""
+        column = inv.Geometry(distance=(0.0, 10.0), columns={"zone": (0.0, 1.0)})
+        label = inv.OpticalPathLabel(
+            distance_min=0.0, distance_max=10.0, group="zone", value=1.0
+        )
+        with pytest.raises(InvalidInventoryError, match="one name is one coordinate"):
+            self._inventory(column, labels=(label,)).check()
+
+    def test_units_on_an_axis_are_refused(self):
+        """The CRS states the units of its own axes."""
+        segment = inv.Geometry(
+            name="axed",
+            distance=(0.0, 10.0),
+            columns={"x": (0.0, 1.0), "y": (0.0, 1.0), "z": (0.0, 1.0)},
+            units={"x": "furlong"},
+        )
+        with pytest.raises(InvalidInventoryError, match="states the units of its own"):
+            self._inventory(segment).check()
+
+    def test_units_for_a_column_which_is_not_there(self):
+        """A unit sitting on nothing is a typo no reader would find."""
+        with pytest.raises(ValidationError, match="has no column"):
+            inv.Geometry(
+                distance=(0.0, 10.0),
+                columns={"depth": (0.0, 1.0)},
+                units={"dpeth": "m"},
+            )
+
+    def test_one_unit_per_column(self):
+        """Two segments cannot measure one column in two units."""
+        meters = inv.Geometry(
+            distance=(0.0, 10.0),
+            columns={"depth": (0.0, 1.0)},
+            units={"depth": "m"},
+        )
+        feet = inv.Geometry(
+            distance=(20.0, 30.0),
+            columns={"depth": (0.0, 1.0)},
+            units={"depth": "ft"},
+        )
+        with pytest.raises(InvalidInventoryError, match="has one unit"):
+            self._inventory(meters, feet).check()
+
+    def test_a_crs_label_the_crs_does_not_declare(self):
+        """`depth` is a column of its own where the CRS spends z on elevation."""
+        crs = inv.CoordinateReferenceSystem(
+            coordinate_labels=("easting", "northing", "elevation"),
+            units=("meter", "meter", "meter"),
+        )
+        segment = inv.Geometry(
+            distance=(0.0, 40.0),
+            columns={"depth": (0.0, 40.0)},
+            units={"depth": "m"},
+        )
+        inventory = self._inventory(segment, crs=crs)
+        assert inventory.check() is inventory
+        assert "depth" in inventory.get_names().coords
+
+    def test_a_column_never_bridges_two_segments(self):
+        """Distance between two segments is uncovered, whatever they hold."""
+        first = inv.Geometry(distance=(0.0, 10.0), columns={"depth": (0.0, 1.0)})
+        second = inv.Geometry(distance=(20.0, 30.0), columns={"depth": (2.0, 3.0)})
+        path = self._inventory(first, second).networks[0].fiber_arrays[0]
+        values = path.optical_paths[0].column_at("depth", [5.0, 15.0, 25.0])
+        assert not np.isnan(values[0]) and not np.isnan(values[2])
+        assert np.isnan(values[1])
+
+    def test_a_column_no_segment_states(self):
+        """None, so the caller's on_missing policy rules rather than a nan."""
+        segment = inv.Geometry(distance=(0.0, 10.0), columns={"depth": (0.0, 1.0)})
+        path = self._inventory(segment).networks[0].fiber_arrays[0].optical_paths[0]
+        assert path.column_at("azimuth", [5.0]) is None
+
+
+class TestGeometryColumnReviewFindings:
+    """What a review of the column form found, kept as regressions."""
+
+    @staticmethod
+    def _path(*geometry):
+        return inv.OpticalPath(
+            optical_components=(
+                inv.FiberSegment(distance_min=0.0, distance_max=100.0),
+            ),
+            geometry=geometry,
+        )
+
+    def _inventory(self, *geometry, crs=None):
+        array = inv.FiberArray(code="L001", optical_paths=(self._path(*geometry),))
+        return inv.Inventory(
+            networks=(inv.Network(code="XX", fiber_arrays=(array,)),),
+            **({"coordinate_reference_system": crs} if crs else {}),
+        )
+
+    def test_two_spellings_of_one_axis_overlap(self):
+        """Checking columns by name alone would let these two through."""
+        canonical = inv.Geometry(
+            name="a",
+            distance=(0.0, 10.0),
+            columns={"x": (0.0, 10.0), "y": (0.0, 10.0), "z": (0.0, 10.0)},
+        )
+        labelled = inv.Geometry(
+            name="b",
+            distance=(5.0, 15.0),
+            columns={
+                "longitude": (100.0, 110.0),
+                "latitude": (100.0, 110.0),
+                "elevation": (100.0, 110.0),
+            },
+        )
+        with pytest.raises(InvalidInventoryError, match="for axis"):
+            self._inventory(canonical, labelled).check()
+
+    def test_an_axis_stated_twice_is_refused_when_placing(self):
+        """Otherwise whichever spelling came last would win, silently."""
+        doubled = inv.Geometry(
+            name="doubled",
+            distance=(0.0, 10.0),
+            columns={
+                "x": (0.0, 10.0),
+                "longitude": (100.0, 110.0),
+                "y": (0.0, 1.0),
+                "z": (0.0, 1.0),
+            },
+        )
+        crs = inv.CoordinateReferenceSystem()
+        with pytest.raises(InvalidInventoryError, match="twice"):
+            self._path(doubled).coordinates_at([5.0], crs)
+
+    def test_a_column_segment_does_not_claim_a_position_run_end(self):
+        """The position track's coverage is the segments which place it."""
+        placed = inv.Geometry(
+            name="placed",
+            distance=(0.0, 10.0),
+            columns={"x": (0.0, 1.0), "y": (0.0, 1.0), "z": (0.0, 1.0)},
+        )
+        measured = inv.Geometry(
+            name="measured",
+            distance=(10.0, 20.0),
+            columns={"borehole_depth": (0.0, 10.0)},
+        )
+        crs = inv.CoordinateReferenceSystem()
+        out = self._path(placed, measured).coordinates_at([10.0], crs)
+        assert np.allclose(out, [[1.0, 1.0, 1.0]])
+
+    def test_a_dotted_column_name(self):
+        """A dotted name is how a field of a typed track is asked for."""
+        dotted = inv.Geometry(
+            distance=(0.0, 10.0), columns={"coupling.depth": (0.0, 1.0)}
+        )
+        with pytest.raises(InvalidInventoryError, match="dotted name"):
+            self._inventory(dotted).check()
+
+    def test_select_revalidates_the_columns_it_writes(self):
+        """model_copy would skip the validators and leave a mutable dict."""
+        segment = inv.Geometry(
+            name="run",
+            distance=(0.0, 10.0),
+            columns={"x": (0.0, 1.0), "y": (0.0, 1.0), "z": (0.0, 1.0)},
+        )
+        out = self._path(segment).select(distance=(2.0, 8.0))
+        columns = out.geometry[0].columns
+        assert isinstance(columns, Mapping)
+        with pytest.raises(TypeError):
+            columns["x"] = (0.0,)
+
+    def test_a_canonical_name_the_crs_has_no_axis_for(self):
+        """`z` is a column of its own where the CRS declares two axes."""
+        crs = inv.CoordinateReferenceSystem(
+            coordinate_labels=("easting", "northing"), units=("meter", "meter")
+        )
+        segment = inv.Geometry(
+            distance=(0.0, 10.0), columns={"z": (0.0, 1.0)}, units={"z": "m"}
+        )
+        inventory = self._inventory(segment, crs=crs)
+        assert inventory.check() is inventory
+        assert "z" in inventory.get_names().coords
+
+
 class TestGeometry:
     """Geometry segment rules."""
 
     def test_requires_two_points(self):
         """Requires two points."""
         with pytest.raises(ValidationError, match="at least 2 control points"):
-            inv.Geometry(distance=(1.0,), coordinates=((0.0, 0.0),))
+            inv.Geometry(distance=(1.0,), columns={"x": (0.0,), "y": (0.0,)})
 
     def test_strictly_increasing(self):
         """Strictly increasing."""
         with pytest.raises(ValidationError, match="strictly increasing"):
-            inv.Geometry(distance=(1.0, 1.0), coordinates=((0.0, 0.0), (1.0, 1.0)))
+            inv.Geometry(
+                distance=(1.0, 1.0), columns={"x": (0.0, 1.0), "y": (0.0, 1.0)}
+            )
 
     def test_paired_lengths(self):
         """Paired lengths."""
-        with pytest.raises(ValidationError, match="same length"):
-            inv.Geometry(distance=(0.0, 1.0), coordinates=((0.0, 0.0),))
+        with pytest.raises(ValidationError, match="one value per distance"):
+            inv.Geometry(distance=(0.0, 1.0), columns={"x": (0.0,), "y": (0.0,)})
 
     def test_coil_repeated_coordinates(self):
         """A coil interpolates to a constant coordinate."""
         coil = inv.Geometry(
             distance=(1200.0, 1300.0),
-            coordinates=((500.0, 120.0), (500.0, 120.0)),
+            columns={"x": (500.0, 500.0), "y": (120.0, 120.0)},
         )
         out = coil.interpolate([1200.0, 1250.0, 1299.0])
-        assert np.allclose(out, [[500.0, 120.0]] * 3)
+        assert np.allclose(out["x"], [500.0] * 3)
+        assert np.allclose(out["y"], [120.0] * 3)
 
     def test_uncovered_is_nan(self):
         """Uncovered is nan."""
-        geo = inv.Geometry(distance=(10.0, 20.0), coordinates=((0.0, 0.0), (1.0, 1.0)))
+        geo = inv.Geometry(
+            distance=(10.0, 20.0), columns={"x": (0.0, 1.0), "y": (0.0, 1.0)}
+        )
         out = geo.interpolate([5.0, 25.0])
-        assert np.all(np.isnan(out))
+        assert all(np.all(np.isnan(x)) for x in out.values())
+
+
+class TestComponentPlacement:
+    """Components state where they are, and tile the path between them."""
+
+    @staticmethod
+    def _path(*components):
+        """A path holding the given components."""
+        return inv.OpticalPath(optical_components=components)
+
+    def test_a_gap_is_refused(self):
+        """Fiber the path does not account for is fiber nobody can select."""
+        path = self._path(
+            inv.FiberSegment(name="a", distance_min=0.0, distance_max=100.0),
+            inv.FiberSegment(name="b", distance_min=120.0, distance_max=500.0),
+        )
+        with pytest.raises(InvalidInventoryError, match="leaves a gap of 20"):
+            path.check()
+
+    def test_an_overlap_is_refused(self):
+        """Two components over one stretch would count that fiber twice."""
+        path = self._path(
+            inv.FiberSegment(name="a", distance_min=0.0, distance_max=100.0),
+            inv.FiberSegment(name="b", distance_min=80.0, distance_max=500.0),
+        )
+        with pytest.raises(InvalidInventoryError, match="overlaps by 20"):
+            path.check()
+
+    def test_a_gap_within_tolerance_passes(self):
+        """Distances written to a few decimals must not read as a gap."""
+        path = self._path(
+            inv.FiberSegment(distance_min=0.0, distance_max=100.0),
+            inv.FiberSegment(distance_min=100.0 + 1e-12, distance_max=500.0),
+        )
+        assert path.check() is path
+
+    def test_a_point_component_states_one_distance(self):
+        """A splice occupies no length, so its end follows from its start."""
+        splice = inv.Splice(distance_min=100.0)
+        assert splice.interval == (100.0, 100.0)
+        assert splice.optical_length == 0.0
+
+    def test_a_point_component_may_still_state_both(self):
+        """A splice with a measurable length is not overruled."""
+        assert inv.Splice(distance_min=100.0, distance_max=100.5).optical_length == 0.5
+
+    def test_a_segment_must_state_both(self):
+        """A segment collapsing to a point would lose the fiber it stands for."""
+        with pytest.raises(ValidationError, match="distance_max"):
+            inv.FiberSegment(distance_min=0.0)
+
+    @pytest.mark.parametrize("moved", [3.0, 9.0])
+    def test_moving_a_point_marker_moves_both_ends(self, moved):
+        """`new` merges the fields already set, so the end must follow.
+
+        Left alone, moving one back silently gives the marker a length,
+        and moving one forward past its own end refuses outright.
+        """
+        marker = inv.Connector(distance_min=5.0)
+        assert marker.new(distance_min=moved).interval == (moved, moved)
+
+    def test_stating_an_end_gives_a_marker_a_length(self):
+        """Setting the end is not the mirror of moving the marker.
+
+        A marker's end is filled in, so moving the start carries it. The
+        start is the author's, so stating an end is them giving the item a
+        length rather than moving it -- and an end before the start is
+        refused here as on every other interval.
+        """
+        marker = inv.Connector(distance_min=5.0)
+        assert marker.new(distance_max=8.0).interval == (5.0, 8.0)
+        with pytest.raises(ValidationError, match="must not precede"):
+            marker.new(distance_max=3.0)
+
+    def test_a_sized_point_component_keeps_its_length(self):
+        """Only a marker's end follows; a stated length is the author's."""
+        splice = inv.Splice(distance_min=5.0, distance_max=5.5)
+        assert splice.new(distance_min=5.2).interval == (5.2, 5.5)
+
+    @pytest.mark.parametrize("blank", [None, {}])
+    def test_a_blank_end_is_an_unstated_one(self, blank):
+        """A CSV cell arrives dropped and a YAML one as None; both are blank."""
+        kwargs = {"distance_max": blank} if blank is None else blank
+        assert inv.Splice(distance_min=1.0, **kwargs).interval == (1.0, 1.0)
+
+    def test_a_segment_end_may_not_be_blank(self):
+        """Blank is unstated only where the item is a point by nature."""
+        with pytest.raises(ValidationError, match="distance_max"):
+            inv.FiberSegment(distance_min=0.0, distance_max=None)
+
+    def test_components_are_held_in_distance_order(self):
+        """Row order decides nothing; a point sorts before what it touches."""
+        path = self._path(
+            inv.FiberSegment(name="b", distance_min=100.0, distance_max=500.0),
+            inv.Splice(name="s", distance_min=100.0),
+            inv.FiberSegment(name="a", distance_min=0.0, distance_max=100.0),
+        )
+        assert [x.name for x in path.optical_components] == ["a", "s", "b"]
+        assert path.check() is path
+
+    def test_the_removed_origin_explains_itself(self):
+        """A path written against the old layout says what to write now."""
+        with pytest.raises(ValidationError, match="no longer takes start_distance"):
+            inv.OpticalPath(start_distance=100.0)
+
+    def test_extent_survives_a_copy_which_skips_validation(self):
+        """`model_copy` skips the ordering validator; the span must hold.
+
+        The extent is asked for before anything has checked that the
+        components tile, so reading the first and last would report a
+        path spanning (100, 100) for one covering [0, 200).
+        """
+        path = self._path(
+            inv.FiberSegment(distance_min=0.0, distance_max=100.0),
+            inv.FiberSegment(distance_min=100.0, distance_max=200.0),
+        )
+        jumbled = path.model_copy(
+            update={"optical_components": tuple(reversed(path.optical_components))}
+        )
+        assert (jumbled.distance_min, jumbled.distance_max) == (0.0, 200.0)
+
+    def test_a_path_with_no_components_spans_nothing(self):
+        """An empty path has no extent to take from anything."""
+        path = inv.OpticalPath()
+        assert (path.distance_min, path.distance_max) == (0.0, 0.0)
+        assert path.optical_length == 0.0
+
+    def test_optical_length_stays_selectable(self):
+        """A computed length is still a fact about the component.
+
+        `optical_length` is a property rather than a field now, so it is
+        only in the vocabulary because the model names it as one it
+        derives. The bounds it comes from are deliberately not: they place
+        the component rather than say anything about the fiber in it.
+        """
+        coords = build_inventory().get_names().coords
+        assert "optical_components.optical_length" in coords
+        assert "optical_components.distance_min" not in coords
 
 
 class TestPathTracks:
@@ -223,13 +663,15 @@ class TestPathTracks:
     def test_coupling_overlap_raises(self):
         """Coupling overlap raises."""
         path = inv.OpticalPath(
-            optical_components=(inv.FiberSegment(optical_length=100.0),),
+            optical_components=(
+                inv.FiberSegment(distance_min=0.0, distance_max=100.0),
+            ),
             coupling=(
                 inv.CouplingCondition(
-                    start_distance=0.0, end_distance=60.0, coupling_type="trench"
+                    distance_min=0.0, distance_max=60.0, coupling_type="trench"
                 ),
                 inv.CouplingCondition(
-                    start_distance=50.0, end_distance=70.0, coupling_type="conduit"
+                    distance_min=50.0, distance_max=70.0, coupling_type="conduit"
                 ),
             ),
         )
@@ -238,9 +680,11 @@ class TestPathTracks:
 
     def test_geometry_overlap_raises(self):
         """Geometry overlap raises."""
-        seg = dict(coordinates=((0.0, 0.0), (1.0, 1.0)))
+        seg = dict(columns={"x": (0.0, 1.0), "y": (0.0, 1.0)})
         path = inv.OpticalPath(
-            optical_components=(inv.FiberSegment(optical_length=100.0),),
+            optical_components=(
+                inv.FiberSegment(distance_min=0.0, distance_max=100.0),
+            ),
             geometry=(
                 inv.Geometry(distance=(0.0, 60.0), **seg),
                 inv.Geometry(distance=(50.0, 80.0), **seg),
@@ -249,76 +693,104 @@ class TestPathTracks:
         with pytest.raises(InvalidInventoryError, match="Overlapping geometry"):
             path.check()
 
-    def test_boolean_annotations_overlap_freely(self):
-        """Membership annotations overlap, within and across groups."""
+    def test_boolean_labels_overlap_freely(self):
+        """Membership labels overlap, within and across groups."""
         path = inv.OpticalPath(
-            optical_components=(inv.FiberSegment(optical_length=100.0),),
-            annotations=(
-                inv.OpticalPathAnnotation(
-                    start_distance=0.0, end_distance=60.0, group="noisy"
+            optical_components=(
+                inv.FiberSegment(distance_min=0.0, distance_max=100.0),
+            ),
+            labels=(
+                inv.OpticalPathLabel(
+                    distance_min=0.0, distance_max=60.0, group="noisy"
                 ),
-                inv.OpticalPathAnnotation(
-                    start_distance=50.0, end_distance=70.0, group="noisy"
+                inv.OpticalPathLabel(
+                    distance_min=50.0, distance_max=70.0, group="noisy"
                 ),
-                inv.OpticalPathAnnotation(
-                    start_distance=40.0, end_distance=80.0, group="repaired"
+                inv.OpticalPathLabel(
+                    distance_min=40.0, distance_max=80.0, group="repaired"
                 ),
             ),
         )
         assert path.check() is path
 
-    def test_valued_annotation_groups_may_not_overlap(self):
+    def test_valued_label_groups_may_not_overlap(self):
         """A single-valued group cannot claim two values at one distance."""
         path = inv.OpticalPath(
-            optical_components=(inv.FiberSegment(optical_length=100.0),),
-            annotations=(
-                inv.OpticalPathAnnotation(
-                    start_distance=0.0,
-                    end_distance=60.0,
+            optical_components=(
+                inv.FiberSegment(distance_min=0.0, distance_max=100.0),
+            ),
+            labels=(
+                inv.OpticalPathLabel(
+                    distance_min=0.0,
+                    distance_max=60.0,
                     group="rock_type",
                     value="granite",
                 ),
-                inv.OpticalPathAnnotation(
-                    start_distance=50.0,
-                    end_distance=70.0,
+                inv.OpticalPathLabel(
+                    distance_min=50.0,
+                    distance_max=70.0,
                     group="rock_type",
                     value="shale",
                 ),
             ),
         )
-        with pytest.raises(InvalidInventoryError, match="only boolean groups"):
+        with pytest.raises(InvalidInventoryError, match="only membership groups"):
             path.check()
 
-    def test_annotation_group_holds_one_kind_of_value(self):
+    def test_label_group_holds_one_kind_of_value(self):
         """Mixing value kinds in one group is a modeling error."""
         path = inv.OpticalPath(
-            optical_components=(inv.FiberSegment(optical_length=100.0),),
-            annotations=(
-                inv.OpticalPathAnnotation(
-                    start_distance=0.0, end_distance=10.0, group="zone", value="east"
+            optical_components=(
+                inv.FiberSegment(distance_min=0.0, distance_max=100.0),
+            ),
+            labels=(
+                inv.OpticalPathLabel(
+                    distance_min=0.0, distance_max=10.0, group="zone", value="east"
                 ),
-                inv.OpticalPathAnnotation(
-                    start_distance=20.0, end_distance=30.0, group="zone", value=True
+                inv.OpticalPathLabel(
+                    distance_min=20.0, distance_max=30.0, group="zone"
                 ),
             ),
         )
         with pytest.raises(InvalidInventoryError, match="one kind of value"):
             path.check()
 
-    def test_numeric_annotation_group(self):
+    def test_acquisition_key_is_a_reserved_group(self):
+        """A group becomes a stamped attr at expansion, and the key is the
+        patch's identity rather than a thing a label may say.
+        """
+        path = inv.OpticalPath(
+            optical_components=(
+                inv.FiberSegment(distance_min=0.0, distance_max=100.0),
+            ),
+            labels=(
+                inv.OpticalPathLabel(
+                    distance_min=0.0,
+                    distance_max=10.0,
+                    group="acquisition_key",
+                    value="bad",
+                ),
+            ),
+        )
+        with pytest.raises(InvalidInventoryError, match="reserved name"):
+            path.check()
+
+    def test_numeric_label_group(self):
         """Numeric groups are single valued but otherwise ordinary."""
         path = inv.OpticalPath(
-            optical_components=(inv.FiberSegment(optical_length=100.0),),
-            annotations=(
-                inv.OpticalPathAnnotation(
-                    start_distance=0.0,
-                    end_distance=40.0,
+            optical_components=(
+                inv.FiberSegment(distance_min=0.0, distance_max=100.0),
+            ),
+            labels=(
+                inv.OpticalPathLabel(
+                    distance_min=0.0,
+                    distance_max=40.0,
                     group="frost_depth",
                     value=1.2,
                 ),
-                inv.OpticalPathAnnotation(
-                    start_distance=40.0,
-                    end_distance=90.0,
+                inv.OpticalPathLabel(
+                    distance_min=40.0,
+                    distance_max=90.0,
                     group="frost_depth",
                     value=0.8,
                 ),
@@ -329,10 +801,12 @@ class TestPathTracks:
     def test_out_of_bounds_raises(self):
         """Out of bounds raises."""
         path = inv.OpticalPath(
-            optical_components=(inv.FiberSegment(optical_length=100.0),),
+            optical_components=(
+                inv.FiberSegment(distance_min=0.0, distance_max=100.0),
+            ),
             coupling=(
                 inv.CouplingCondition(
-                    start_distance=90.0, end_distance=150.0, coupling_type="trench"
+                    distance_min=90.0, distance_max=150.0, coupling_type="trench"
                 ),
             ),
         )
@@ -341,14 +815,18 @@ class TestPathTracks:
 
     def test_outer_endpoint_included(self):
         """The outermost covered endpoint of the geometry track resolves."""
-        path = build_inventory().networks[0].fiber_arrays[0].optical_paths[0]
-        coords = path.coordinates_at([200.0])
+        inventory = build_inventory()
+        path = inventory.networks[0].fiber_arrays[0].optical_paths[0]
+        crs = inventory.coordinate_reference_system
+        coords = path.coordinates_at([200.0], crs)
         assert np.allclose(coords, [[2.0, 0.0, 1.0]])
 
     def test_uncovered_distance_is_nan(self):
         """Uncovered distance is nan."""
-        path = build_inventory().networks[0].fiber_arrays[0].optical_paths[0]
-        assert np.all(np.isnan(path.coordinates_at([225.0])))
+        inventory = build_inventory()
+        path = inventory.networks[0].fiber_arrays[0].optical_paths[0]
+        crs = inventory.coordinate_reference_system
+        assert np.all(np.isnan(path.coordinates_at([225.0], crs)))
 
 
 class TestDistanceMap:
@@ -463,6 +941,95 @@ class TestAcquisition:
         assert acq.location_code == ""
 
 
+class TestEpochContainment:
+    """An entry may not describe time its container does not."""
+
+    @staticmethod
+    def _array(array_kwargs, path_kwargs):
+        """A fiber array holding one optical path, each with its own epoch."""
+        path = inv.OpticalPath(
+            name="main",
+            optical_components=(
+                inv.FiberSegment(distance_min=0.0, distance_max=100.0),
+            ),
+            **path_kwargs,
+        )
+        return inv.FiberArray(code="L001", optical_paths=(path,), **array_kwargs)
+
+    def test_a_path_starting_before_its_array(self):
+        """The array did not exist then, so nothing can resolve to the path."""
+        array = self._array({"time_min": "2024-01-01"}, {"time_min": "2020-01-01"})
+        with pytest.raises(InvalidInventoryError, match="outside its container"):
+            array.check()
+
+    def test_a_path_ending_after_its_array(self):
+        """The far bound is checked the same way as the near one."""
+        array = self._array(
+            {"time_min": "2024-01-01", "time_max": "2025-01-01"},
+            {"time_min": "2024-06-01", "time_max": "2030-01-01"},
+        )
+        with pytest.raises(InvalidInventoryError, match="outside its container"):
+            array.check()
+
+    def test_a_path_entirely_after_its_array(self):
+        """Neither bound is out of order, and the whole epoch is elsewhere."""
+        array = self._array(
+            {"time_min": "2024-01-01", "time_max": "2025-01-01"},
+            {"time_min": "2026-01-01"},
+        )
+        with pytest.raises(InvalidInventoryError, match="outside its container"):
+            array.check()
+
+    def test_an_unset_bound_defers_to_the_container(self):
+        """A path stating no start begins when its fiber array does."""
+        array = self._array({"time_min": "2024-01-01"}, {})
+        assert array.check() is array
+
+    def test_a_contained_epoch_is_legal(self):
+        """The ordinary case: a path living inside its array's lifetime."""
+        array = self._array(
+            {"time_min": "2024-01-01", "time_max": "2026-01-01"},
+            {"time_min": "2024-06-01", "time_max": "2025-01-01"},
+        )
+        assert array.check() is array
+
+    def test_an_acquisition_outside_its_array(self):
+        """Acquisitions are contained by the same rule as paths."""
+        array = inv.FiberArray(
+            code="L001",
+            time_min="2024-01-01",
+            acquisitions=(inv.Acquisition(code="RAW", time_min="2020-01-01"),),
+        )
+        with pytest.raises(InvalidInventoryError, match="outside its container"):
+            array.check()
+
+    def test_a_fiber_array_outside_its_network(self):
+        """And the rule holds one level up, for what a network contains."""
+        array = inv.FiberArray(code="L001", time_min="2020-01-01")
+        network = inv.Network(code="XX", time_min="2024-01-01", fiber_arrays=(array,))
+        with pytest.raises(InvalidInventoryError, match="outside its container"):
+            network.check()
+
+    def test_a_channel_outside_its_station(self):
+        """Stations contain channels the same way."""
+        station = inv.Station(
+            code="STA1",
+            time_min="2024-01-01",
+            channels=(inv.Channel(code="BHZ", time_min="2020-01-01"),),
+        )
+        with pytest.raises(InvalidInventoryError, match="outside its container"):
+            station.check()
+
+    def test_the_error_names_both_epochs(self):
+        """A reader has to see which range reaches outside which."""
+        array = self._array({"time_min": "2024-01-01"}, {"time_min": "2020-01-01"})
+        with pytest.raises(InvalidInventoryError) as info:
+            array.check()
+        message = str(info.value)
+        assert "2020-01-01" in message and "2024-01-01" in message
+        assert "'main'" in message
+
+
 class TestEpochs:
     """Half-open epoch rules across the tree."""
 
@@ -471,8 +1038,8 @@ class TestEpochs:
         array = inv.FiberArray(
             code="L001",
             optical_paths=(
-                inv.OpticalPath(name="a", start_time="2020-01-01"),
-                inv.OpticalPath(name="b", start_time="2021-01-01"),
+                inv.OpticalPath(name="a", time_min="2020-01-01"),
+                inv.OpticalPath(name="b", time_min="2021-01-01"),
             ),
         )
         with pytest.raises(InvalidInventoryError, match="overlap in time"):
@@ -483,8 +1050,8 @@ class TestEpochs:
         array = inv.FiberArray(
             code="L001",
             optical_paths=(
-                inv.OpticalPath(name="a", location_code="00", start_time="2020-01-01"),
-                inv.OpticalPath(name="b", location_code="01", start_time="2020-01-01"),
+                inv.OpticalPath(name="a", location_code="00", time_min="2020-01-01"),
+                inv.OpticalPath(name="b", location_code="01", time_min="2020-01-01"),
             ),
         )
         assert array.check() is array
@@ -494,10 +1061,8 @@ class TestEpochs:
         array = inv.FiberArray(
             code="L001",
             optical_paths=(
-                inv.OpticalPath(
-                    name="a", start_time="2020-01-01", end_time="2021-01-01"
-                ),
-                inv.OpticalPath(name="b", start_time="2021-01-01"),
+                inv.OpticalPath(name="a", time_min="2020-01-01", time_max="2021-01-01"),
+                inv.OpticalPath(name="b", time_min="2021-01-01"),
             ),
         )
         assert array.check() is array
@@ -507,8 +1072,8 @@ class TestEpochs:
         array = inv.FiberArray(
             code="L001",
             acquisitions=(
-                inv.Acquisition(code="RAW", start_time="2020-01-01"),
-                inv.Acquisition(code="RAW", start_time="2020-06-01"),
+                inv.Acquisition(code="RAW", time_min="2020-01-01"),
+                inv.Acquisition(code="RAW", time_min="2020-06-01"),
             ),
         )
         with pytest.raises(InvalidInventoryError, match="overlap in time"):
@@ -520,9 +1085,9 @@ class TestEpochs:
             code="L001",
             acquisitions=(
                 inv.Acquisition(
-                    code="RAW", start_time="2020-01-01", end_time="2020-06-01"
+                    code="RAW", time_min="2020-01-01", time_max="2020-06-01"
                 ),
-                inv.Acquisition(code="RAW", start_time="2020-07-15"),
+                inv.Acquisition(code="RAW", time_min="2020-07-15"),
             ),
         )
         assert array.check() is array
@@ -531,8 +1096,8 @@ class TestEpochs:
         """Station fiber code collision raises."""
         network = inv.Network(
             code="DAS",
-            fiber_arrays=(inv.FiberArray(code="L001", start_time="2020-01-01"),),
-            stations=(inv.Station(code="L001", start_time="2020-06-01"),),
+            fiber_arrays=(inv.FiberArray(code="L001", time_min="2020-01-01"),),
+            stations=(inv.Station(code="L001", time_min="2020-06-01"),),
         )
         with pytest.raises(InvalidInventoryError, match="share code"):
             network.check()
@@ -556,11 +1121,11 @@ class TestResolution:
             acquisitions=(
                 inv.Acquisition(
                     code="RAW",
-                    start_time="2020-01-01",
-                    end_time="2021-01-01",
+                    time_min="2020-01-01",
+                    time_max="2021-01-01",
                     gauge_length=10.0,
                 ),
-                inv.Acquisition(code="RAW", start_time="2021-01-01", gauge_length=20.0),
+                inv.Acquisition(code="RAW", time_min="2021-01-01", gauge_length=20.0),
             ),
         )
         inventory = inv.Inventory(
@@ -601,21 +1166,78 @@ class TestPathOperations:
         """Return the example path."""
         return build_inventory().networks[0].fiber_arrays[0].optical_paths[0]
 
-    def test_component_intervals(self, path):
-        """Components tile the absolute axis cumulatively."""
+    def test_components_place_themselves(self, path):
+        """Each component carries the absolute stretch it occupies."""
         two = inv.OpticalPath(
-            start_distance=100.0,
             optical_components=(
-                inv.FiberSegment(optical_length=50.0),
-                inv.Splice(optical_length=0.5),
+                inv.FiberSegment(distance_min=100.0, distance_max=150.0),
+                inv.Splice(distance_min=150.0, distance_max=150.5),
             ),
         )
-        assert two.component_intervals() == ((100.0, 150.0), (150.0, 150.5))
+        assert [x.interval for x in two.optical_components] == [
+            (100.0, 150.0),
+            (150.0, 150.5),
+        ]
+        # And the path takes its own extent from them, stating none itself.
+        assert (two.distance_min, two.distance_max) == (100.0, 150.5)
+        assert "distance_min" not in inv.OpticalPath.model_fields
+
+    @pytest.fixture()
+    def tiled(self):
+        """A path of three components, asymmetric so reversal shows.
+
+        The fixture path holds one component spanning its whole extent,
+        which maps onto itself under reversal and so cannot tell a working
+        `reverse` from one which only re-orders the tuple.
+        """
+        return inv.OpticalPath(
+            optical_components=(
+                inv.FiberSegment(name="a", distance_min=0.0, distance_max=100.0),
+                inv.Splice(name="s", distance_min=100.0),
+                inv.FiberSegment(name="b", distance_min=100.0, distance_max=250.0),
+            )
+        )
+
+    @pytest.mark.parametrize(
+        ("operation", "expected"),
+        [
+            (
+                lambda p: p.select(distance=(50.0, 150.0)),
+                [("a", (50.0, 100.0)), ("s", (100.0, 100.0)), ("b", (100.0, 150.0))],
+            ),
+            (
+                lambda p: p.split_at(100.0)[1],
+                [("s", (100.0, 100.0)), ("b", (100.0, 250.0))],
+            ),
+            (
+                lambda p: p.reverse(),
+                [("b", (0.0, 150.0)), ("s", (150.0, 150.0)), ("a", (150.0, 250.0))],
+            ),
+            (
+                lambda p: p + p,
+                [
+                    ("a", (0.0, 100.0)),
+                    ("s", (100.0, 100.0)),
+                    ("b", (100.0, 250.0)),
+                    ("a", (250.0, 350.0)),
+                    ("s", (350.0, 350.0)),
+                    ("b", (350.0, 500.0)),
+                ],
+            ),
+        ],
+        ids=["select", "split_at", "reverse", "add"],
+    )
+    def test_components_keep_absolute_distances(self, tiled, operation, expected):
+        """However a path is cut about, its components land where they are."""
+        out = operation(tiled)
+        assert [(x.name, x.interval) for x in out.optical_components] == expected
+        # And the result is still a path: the pieces tile what they span.
+        assert out.check() is out
 
     def test_select_preserves_absolute_distances(self, path):
         """Select preserves absolute distances."""
         piece = path.select(distance=(50.0, 150.0))
-        assert piece.start_distance == 50.0
+        assert piece.distance_min == 50.0
         assert np.isclose(piece.optical_length, 100.0)
         assert piece.geometry[0].distance[0] == 50.0
         piece.check()
@@ -623,7 +1245,7 @@ class TestPathOperations:
     def test_split_and_rejoin(self, path):
         """Split and rejoin."""
         left, right = path.split_at(100.0)
-        assert left.end_distance == right.start_distance == 100.0
+        assert left.distance_max == right.distance_min == 100.0
         joined = left + right
         assert np.isclose(joined.optical_length, path.optical_length)
         joined.check()
@@ -636,8 +1258,8 @@ class TestPathOperations:
     def test_reverse_rewrites_all_tracks(self, path):
         """Reverse rewrites all tracks."""
         rev = path.reverse()
-        # 0-100 annotation on a 0-250 path becomes 150-250.
-        assert rev.annotations[0].interval == (150.0, 250.0)
+        # 0-100 label on a 0-250 path becomes 150-250.
+        assert rev.labels[0].interval == (150.0, 250.0)
         # 0-200 coupling becomes 50-250.
         assert rev.coupling[0].interval == (50.0, 250.0)
         rev.check()
@@ -663,10 +1285,9 @@ class TestInventory:
 
     def test_yaml_roundtrip(self, tmp_path):
         """Yaml roundtrip."""
-        pytest.importorskip("yaml")
         inventory = build_inventory()
         path = tmp_path / "inventory.yaml"
-        inventory.to_yaml(path)
+        inventory.io.to_yaml(path)
         loaded = dc.inventory(path)
         assert loaded.model_dump(mode="json") == inventory.model_dump(mode="json")
 
@@ -695,10 +1316,9 @@ class TestInventory:
 
     def test_dc_namespace(self, tmp_path):
         """Dc namespace."""
-        pytest.importorskip("yaml")
         assert isinstance(dc.inventory(), inv.Inventory)
         path = tmp_path / "inv.yaml"
-        build_inventory().to_yaml(path)
+        build_inventory().io.to_yaml(path)
         assert isinstance(dc.inventory(path), inv.Inventory)
 
     def test_crs_vocabulary_enforced(self):
@@ -712,14 +1332,14 @@ class TestReviewRegressions:
 
     def test_far_future_open_epochs_overlap(self):
         """Ongoing epochs overlap finite epochs beyond any sentinel date."""
-        a = inv.OpticalPath(name="a", start_time="2259-01-01")
-        b = inv.OpticalPath(name="b", start_time="2261-01-01", end_time="2262-01-01")
+        a = inv.OpticalPath(name="a", time_min="2259-01-01")
+        b = inv.OpticalPath(name="b", time_min="2261-01-01", time_max="2262-01-01")
         assert a.overlaps(b) and b.overlaps(a)
 
     def test_reversed_epoch_raises(self):
         """End before start fails at construction."""
         with pytest.raises(ValidationError, match="must be after"):
-            inv.Acquisition(code="RAW", start_time="2022-01-01", end_time="2021-01-01")
+            inv.Acquisition(code="RAW", time_min="2022-01-01", time_max="2021-01-01")
 
     def test_replace_type_mismatch_raises(self):
         """Replace type mismatch raises."""
@@ -732,8 +1352,8 @@ class TestReviewRegressions:
         """A terminator at the path end survives full selection and splits."""
         path = inv.OpticalPath(
             optical_components=(
-                inv.FiberSegment(optical_length=100.0),
-                inv.Terminator(optical_length=0.0),
+                inv.FiberSegment(distance_min=0.0, distance_max=100.0),
+                inv.Terminator(distance_min=100.0),
             ),
         )
         full = path.select(distance=(None, None))
@@ -754,10 +1374,10 @@ class TestReviewRegressions:
                 resources=[inv.Cable(resource_id="x"), inv.Cable(resource_id="x")]
             )
 
-    def test_zero_dim_geometry_raises(self):
-        """Zero dim geometry raises."""
-        with pytest.raises(ValidationError, match="nonzero"):
-            inv.Geometry(distance=(0.0, 1.0), coordinates=((), ()))
+    def test_columnless_geometry_raises(self):
+        """A segment which measures nothing describes nothing."""
+        with pytest.raises(ValidationError, match="states no columns"):
+            inv.Geometry(distance=(0.0, 1.0), columns={})
 
     def test_station_extra_fields_forbidden(self):
         """Coordinates are canonical (x, y, z); label fields are not stored."""
@@ -817,7 +1437,7 @@ class TestResourcePool:
     def test_inline_resource_normalizes_to_pool(self):
         """An inline cable moves to the pool; the field keeps its id."""
         cable = inv.Cable(resource_id="cable-01", name="c")
-        seg = inv.FiberSegment(optical_length=100.0, container=cable)
+        seg = inv.FiberSegment(distance_min=0.0, distance_max=100.0, container=cable)
         inventory = self._inventory_with(seg)
         stored = (
             inventory.networks[0].fiber_arrays[0].optical_paths[0].optical_components[0]
@@ -830,8 +1450,8 @@ class TestResourcePool:
         coupler = inv.Enclosure(resource_id="coupler-01")
         path = inv.OpticalPath(
             optical_components=(
-                inv.Connector(container=coupler),
-                inv.Connector(container=coupler),
+                inv.Connector(distance_min=0.0, container=coupler),
+                inv.Connector(distance_min=0.0, container=coupler),
             ),
         )
         array = inv.FiberArray(code="L001", optical_paths=(path,))
@@ -846,8 +1466,8 @@ class TestResourcePool:
         b = inv.Cable(resource_id="cable-01", fiber_count=4)
         path = inv.OpticalPath(
             optical_components=(
-                inv.FiberSegment(optical_length=1.0, container=a),
-                inv.FiberSegment(optical_length=1.0, container=b),
+                inv.FiberSegment(distance_min=0.0, distance_max=1.0, container=a),
+                inv.FiberSegment(distance_min=1.0, distance_max=2.0, container=b),
             ),
         )
         array = inv.FiberArray(code="L001", optical_paths=(path,))
@@ -856,7 +1476,9 @@ class TestResourcePool:
 
     def test_dangling_reference_raises(self):
         """Dangling reference raises."""
-        seg = inv.FiberSegment(optical_length=1.0, container="no-such-cable")
+        seg = inv.FiberSegment(
+            distance_min=0.0, distance_max=1.0, container="no-such-cable"
+        )
         with pytest.raises(ValidationError, match="Dangling"):
             self._inventory_with(seg)
 
@@ -864,7 +1486,7 @@ class TestResourcePool:
         """A cable inside a pipe: both land in the pool, linked by id."""
         pipe = inv.Enclosure(resource_id="pipe-01", enclosure_type="pipe")
         cable = inv.Cable(resource_id="cable-01", container=pipe)
-        seg = inv.FiberSegment(optical_length=1.0, container=cable)
+        seg = inv.FiberSegment(distance_min=0.0, distance_max=1.0, container=cable)
         inventory = self._inventory_with(seg)
         assert inventory.get_resource("cable-01").container == "pipe-01"
         assert inventory.get_resource("pipe-01") == pipe
@@ -872,7 +1494,7 @@ class TestResourcePool:
     def test_interrogator_normalizes(self):
         """Interrogator normalizes."""
         unit = inv.Interrogator(resource_id="int-01", model="DAS-1000")
-        seg = inv.FiberSegment(optical_length=1.0)
+        seg = inv.FiberSegment(distance_min=0.0, distance_max=1.0)
         inventory = self._inventory_with(seg, interrogator=unit)
         acq = inventory.networks[0].fiber_arrays[0].acquisitions[0]
         assert acq.interrogator == "int-01"
@@ -881,7 +1503,7 @@ class TestResourcePool:
     def test_resource_correction_is_single_site(self):
         """Replacing a pooled resource touches only the pool."""
         cable = inv.Cable(resource_id="cable-01", fiber_count=1)
-        seg = inv.FiberSegment(optical_length=1.0, container=cable)
+        seg = inv.FiberSegment(distance_min=0.0, distance_max=1.0, container=cable)
         inventory = self._inventory_with(seg)
         fixed = cable.new(fiber_count=4)
         updated = inventory.replace(cable, fixed)
@@ -894,7 +1516,7 @@ class TestResourcePool:
     def test_resource_correction_must_keep_id(self):
         """Resource correction must keep id."""
         cable = inv.Cable(resource_id="cable-01")
-        seg = inv.FiberSegment(optical_length=1.0, container=cable)
+        seg = inv.FiberSegment(distance_min=0.0, distance_max=1.0, container=cable)
         inventory = self._inventory_with(seg)
         renamed = cable.new(resource_id="cable-02")
         with pytest.raises(InvalidInventoryError, match="same resource_id"):
@@ -902,11 +1524,10 @@ class TestResourcePool:
 
     def test_yaml_roundtrip_stays_flat(self, tmp_path):
         """Serialized form holds ids, not inline copies, and round-trips."""
-        pytest.importorskip("yaml")
         cable = inv.Cable(resource_id="cable-01", name="c")
-        seg = inv.FiberSegment(optical_length=100.0, container=cable)
+        seg = inv.FiberSegment(distance_min=0.0, distance_max=100.0, container=cable)
         inventory = self._inventory_with(seg)
-        text = inventory.to_yaml()
+        text = inventory.io.to_yaml()
         assert text.count("cable-01") >= 2
         loaded = inv.Inventory.from_yaml(text)
         assert loaded.model_dump(mode="json") == inventory.model_dump(mode="json")
@@ -923,7 +1544,7 @@ class TestInternalReviewRegressions:
     def test_new_preserves_union_discriminators(self):
         """new() works on models holding discriminated unions."""
         path = inv.OpticalPath(
-            optical_components=(inv.FiberSegment(optical_length=10.0),)
+            optical_components=(inv.FiberSegment(distance_min=0.0, distance_max=10.0),)
         )
         renamed = path.new(name="renamed")
         assert renamed.name == "renamed"
@@ -987,12 +1608,11 @@ class TestInternalReviewRegressions:
 
     def test_keyless_dict_resource_adopts_key(self):
         """A dict resource without resource_id adopts its pool key."""
-        pytest.importorskip("yaml")
         inventory = inv.Inventory(
             resources={"cab-1": {"object_type": "Cable", "name": "mycable"}}
         )
         assert inventory.get_resource("cab-1").resource_id == "cab-1"
-        loaded = inv.Inventory.from_yaml(inventory.to_yaml())
+        loaded = inv.Inventory.from_yaml(inventory.io.to_yaml())
         assert loaded.model_dump(mode="json") == inventory.model_dump(mode="json")
 
     def test_duplicate_array_codes_raise(self):
@@ -1000,29 +1620,35 @@ class TestInternalReviewRegressions:
         net = inv.Network(
             code="DAS",
             fiber_arrays=(
-                inv.FiberArray(code="L001", start_time="2020-01-01"),
-                inv.FiberArray(code="L001", start_time="2021-01-01"),
+                inv.FiberArray(code="L001", time_min="2020-01-01"),
+                inv.FiberArray(code="L001", time_min="2021-01-01"),
             ),
         )
         with pytest.raises(InvalidInventoryError, match="Duplicate fiber array"):
             net.check()
 
-    def test_mixed_dimensionality_geometry_raises(self):
-        """Segments with different coordinate dims fail the path check."""
+    def test_partial_axes_fail_the_inventory_check(self):
+        """A segment stating some axes and not others fails the check."""
         path = inv.OpticalPath(
-            optical_components=(inv.FiberSegment(optical_length=100.0),),
+            optical_components=(
+                inv.FiberSegment(distance_min=0.0, distance_max=100.0),
+            ),
             geometry=(
                 inv.Geometry(
-                    distance=(0.0, 10.0), coordinates=((0.0, 0.0), (1.0, 1.0))
+                    distance=(0.0, 10.0), columns={"x": (0.0, 1.0), "y": (0.0, 1.0)}
                 ),
                 inv.Geometry(
                     distance=(20.0, 30.0),
-                    coordinates=((0.0, 0.0, 0.0), (1.0, 1.0, 1.0)),
+                    columns={"x": (0.0, 1.0), "y": (0.0, 1.0), "z": (0.0, 1.0)},
                 ),
             ),
         )
-        with pytest.raises(InvalidInventoryError, match="dimensionalities"):
-            path.check()
+        array = inv.FiberArray(code="L001", optical_paths=(path,))
+        inventory = inv.Inventory(
+            networks=(inv.Network(code="XX", fiber_arrays=(array,)),)
+        )
+        with pytest.raises(InvalidInventoryError, match="every axis or none"):
+            inventory.check()
 
     def test_inventory_function_dispatch(self):
         """dc.inventory handles bad input with clear errors."""
@@ -1073,10 +1699,12 @@ class TestCodexReviewRegressions:
         """Nonfinite interval values raise."""
         with pytest.raises(ValidationError):
             inv.CouplingCondition(
-                start_distance=np.nan, end_distance=10.0, coupling_type="trench"
+                distance_min=np.nan, distance_max=10.0, coupling_type="trench"
             )
         with pytest.raises(ValidationError, match="finite"):
-            inv.Geometry(distance=(0.0, np.inf), coordinates=((0.0, 0.0), (1.0, 1.0)))
+            inv.Geometry(
+                distance=(0.0, np.inf), columns={"x": (0.0, 1.0), "y": (0.0, 1.0)}
+            )
         with pytest.raises(ValidationError, match="finite"):
             inv.DistanceMap(channel=(0.0, np.inf), distance=(0.0, 1.0))
 
@@ -1086,18 +1714,18 @@ class TestCoverageCompleteness:
 
     def test_attenuation_none_without_loss(self):
         """No loss value means no derivable attenuation rate."""
-        seg = inv.FiberSegment(optical_length=100.0)
+        seg = inv.FiberSegment(distance_min=0.0, distance_max=100.0)
         assert seg.attenuation_db_per_km is None
 
     def test_attenuation_scalar(self):
         """A scalar loss over a known length gives a per-km rate."""
-        seg = inv.FiberSegment(optical_length=2000.0, loss_db=0.8)
+        seg = inv.FiberSegment(distance_min=0.0, distance_max=2000.0, loss_db=0.8)
         assert seg.attenuation_db_per_km == pytest.approx(0.4)
 
     def test_interval_optical_length(self):
         """Interval items report their length from start/end distances."""
         cond = inv.CouplingCondition(
-            start_distance=10.0, end_distance=60.0, coupling_type="trench"
+            distance_min=10.0, distance_max=60.0, coupling_type="trench"
         )
         assert cond.optical_length == 50.0
 
@@ -1106,7 +1734,8 @@ class TestCoverageCompleteness:
         m1 = inv.OpticalMeasurement(resource_id="m1", method="otdr", wavelength=1550.0)
         m2 = inv.OpticalMeasurement(resource_id="m2", method="otdr", wavelength=1310.0)
         segment = inv.FiberSegment(
-            optical_length=10.0,
+            distance_min=0.0,
+            distance_max=10.0,
             loss_db=(0.4, 0.5),
             loss_measurement=("m1", "m2"),
         )
@@ -1144,15 +1773,18 @@ class TestCoverageCompleteness:
     def test_coordinates_at_without_geometry(self):
         """Coordinates at without geometry."""
         path = inv.OpticalPath(
-            optical_components=(inv.FiberSegment(optical_length=10.0),)
+            optical_components=(inv.FiberSegment(distance_min=0.0, distance_max=10.0),)
         )
-        assert np.all(np.isnan(path.coordinates_at([5.0])))
+        crs = inv.CoordinateReferenceSystem()
+        assert np.all(np.isnan(path.coordinates_at([5.0], crs)))
 
     def test_select_drops_out_of_range_geometry(self):
         """Selection drops segments entirely outside the clip."""
-        seg = dict(coordinates=((0.0, 0.0), (1.0, 1.0)))
+        seg = dict(columns={"x": (0.0, 1.0), "y": (0.0, 1.0)})
         path = inv.OpticalPath(
-            optical_components=(inv.FiberSegment(optical_length=100.0),),
+            optical_components=(
+                inv.FiberSegment(distance_min=0.0, distance_max=100.0),
+            ),
             geometry=(
                 inv.Geometry(distance=(0.0, 20.0), **seg),
                 inv.Geometry(distance=(80.0, 100.0), **seg),
@@ -1164,7 +1796,7 @@ class TestCoverageCompleteness:
     def test_add_rejects_non_path(self):
         """Add rejects non path."""
         path = inv.OpticalPath(
-            optical_components=(inv.FiberSegment(optical_length=10.0),)
+            optical_components=(inv.FiberSegment(distance_min=0.0, distance_max=10.0),)
         )
         with pytest.raises(TypeError):
             _ = path + 5
@@ -1177,8 +1809,8 @@ class TestCoverageCompleteness:
             code="L001",
             acquisitions=(inv.Acquisition(code="RAW"),),
             optical_paths=(
-                inv.OpticalPath(name="a", start_time="2020-01-01"),
-                inv.OpticalPath(name="b", start_time="2021-01-01"),
+                inv.OpticalPath(name="a", time_min="2020-01-01"),
+                inv.OpticalPath(name="b", time_min="2021-01-01"),
             ),
         )
         inventory = inv.Inventory(
@@ -1190,7 +1822,7 @@ class TestCoverageCompleteness:
     def test_replace_network_and_station_and_path(self):
         """Replace works at network, station, and path levels."""
         station = inv.Station(code="S1")
-        path = inv.OpticalPath(name="p", start_time="2020-01-01")
+        path = inv.OpticalPath(name="p", time_min="2020-01-01")
         array = inv.FiberArray(code="L001", optical_paths=(path,))
         net = inv.Network(code="DAS", fiber_arrays=(array,), stations=(station,))
         inventory = inv.Inventory(networks=(net,))
@@ -1210,7 +1842,6 @@ class TestCoverageCompleteness:
 
     def test_from_yaml_non_mapping_raises(self):
         """From yaml non mapping raises."""
-        pytest.importorskip("yaml")
         with pytest.raises(InvalidInventoryError, match="mapping"):
             inv.Inventory.from_yaml("- 1\n- 2\n")
 
@@ -1247,6 +1878,198 @@ class TestCoverageCompleteness:
         assert values_equal((1.0, np.nan), (1.0, np.nan))
 
 
+@pytest.fixture(scope="module")
+def tunnel():
+    """A populated inventory with two optical paths."""
+    return dc.get_example_inventory("tunnel")
+
+
+class TestDisplay:
+    """Tests for the inventory's text representation."""
+
+    def test_rich(self, tunnel):
+        """An inventory has a rich representation."""
+        assert isinstance(tunnel.__rich__(), Text)
+
+    def test_empty_inventory(self):
+        """An empty inventory still prints, and says it holds nothing."""
+        out = str(dc.Inventory())
+        assert "Networks (0)" in out
+        assert "schema_version: 1" in out
+
+    def test_names_the_tree(self, tunnel):
+        """The tree is composed of the reprs of what the inventory holds."""
+        out = str(tunnel)
+        network = tunnel.networks[0]
+        array = network.fiber_arrays[0]
+        assert str(network.__rich__()).splitlines()[0] in out
+        assert str(array.__rich__()).splitlines()[0] in out
+        for path in array.optical_paths:
+            assert str(path.__rich__()) in out
+
+    def test_shorter_than_a_field_dump(self, tunnel):
+        """A repr is a glance; the whole manifest is not."""
+        dumped = len(str(tunnel.model_dump()))
+        assert len(str(tunnel)) < dumped / 10
+
+    def test_coordinate_reference_system_stated(self, tunnel):
+        """The frame is shown even where it is the default one."""
+        assert "coordinate_reference_system" in str(tunnel)
+        assert "EPSG:4979" in str(dc.Inventory())
+
+    def test_path_states_its_extent(self, tunnel):
+        """An optical path shows the distances it covers."""
+        path = tunnel.networks[0].fiber_arrays[0].optical_paths[0]
+        assert f"[{path.distance_min:g}, {path.distance_max:g}) m" in str(path)
+
+    def test_interval_states_its_extent(self, tunnel):
+        """So does anything else which covers an interval of distance."""
+        label = tunnel.networks[0].fiber_arrays[0].optical_paths[0].labels[0]
+        assert "distance: [" in str(label)
+        assert "distance_min" not in str(label)  # stated by the interval
+
+    def test_distance_map_counts_points(self, tunnel):
+        """A measured map names its axes rather than listing its points."""
+        acquisition = tunnel.networks[0].fiber_arrays[0].acquisitions[0]
+        out = str(acquisition.distance_map)
+        assert "-> distance" in out
+        assert "control points" in out
+
+    def test_child_styles_do_not_bleed(self, tunnel):
+        """A container does not paint its children with its own style."""
+        network = tunnel.networks[0]
+        text = network.__rich__()
+        assert text.style == ""
+        # The indent a child is placed under carries no style of its own.
+        indent = text.plain.index("FiberArray") - 4
+        assert not [x for x in text.spans if x.start <= indent < x.end]
+
+    def test_crs_styles_only_its_name(self, tunnel):
+        """The frame's own line marks its class, not its axes."""
+        text = tunnel.coordinate_reference_system.__rich__()
+        assert text.style == ""
+        start = text.plain.index("local:tunnel")
+        assert not [x for x in text.spans if x.start <= start < x.end]
+
+    def test_children_elided(self):
+        """A container says how many children it is not showing."""
+        stations = [{"code": f"S{x}"} for x in range(5)]
+        network = inv.Network(code="XT", stations=stations)
+        with config_context(display_max_items=2):
+            out = str(network)
+        assert "... 3 more" in out
+
+    def test_a_model_holding_nothing_is_one_line(self):
+        """
+        What a model holds is a count on its line unless it says
+        otherwise.
+
+        A station lists no channels for the same reason an acquisition
+        lists no measurements: the count is the useful fact, and three
+        hundred channels would bury the tree they sit in.
+        """
+        station = inv.Station(code="S1", channels=[{"code": f"H{x}"} for x in range(3)])
+        assert str(station).count("\n") == 0
+        assert "channels: 3" in str(station)
+
+    def test_the_tree_is_indented_by_level(self, tunnel):
+        """
+        Each level is set in one step from the one above it.
+
+        Stated as the whole tree rather than as a rule each line is
+        checked against: a level which stopped being drawn matches no
+        rule and passes one, and dropping a level is exactly what a
+        rewrite of the tree gets wrong.
+        """
+        drawn = [
+            (len(x) - len(x.lstrip()), x.strip().split("(")[0])
+            for x in str(tunnel).split("\n")
+            # A model's line, which closes on " )"; the block titles
+            # above them close on a count in brackets instead.
+            if x.endswith(" )")
+        ]
+        assert drawn == [
+            (4, "Network"),
+            (8, "FiberArray"),
+            (12, "Acquisition"),
+            (12, "OpticalPath"),
+            (12, "OpticalPath"),
+            (4, "coordinate_reference_system: CoordinateReferenceSystem"),
+        ]
+
+    def test_a_field_value_which_holds_a_newline(self):
+        """
+        Every line of a model's line is set in, not just the first.
+
+        A description is free text and is routinely written over more
+        than one line. Indented only on its first, the rest falls to
+        column zero and reads as a block of its own -- which is the
+        misreading the indentation exists to prevent.
+        """
+        array = inv.FiberArray(code="FA1", description="line one\nline two")
+        network = inv.Network(code="XT", fiber_arrays=(array,))
+        drawn = str(inv.Inventory(networks=(network,))).split("\n")
+        assert "        FiberArray( description: line one" in drawn
+        assert "        line two code: FA1 )" in drawn
+
+    def test_a_tree_opens_where_it_was_put(self, tunnel):
+        """A model printed on its own is not indented; what it holds is."""
+        network = tunnel.networks[0]
+        assert not str(network).startswith(" ")
+        assert str(network).split("\n")[1].startswith("    FiberArray(")
+
+
+class TestPanel:
+    """Tests for the panel a notebook draws an inventory as."""
+
+    @pytest.fixture(scope="class")
+    def markup(self, tunnel):
+        """The panel with its stylesheet cut off the front."""
+        html = tunnel._repr_html_()
+        return html[html.index("</style>") + len("</style>") :]
+
+    def test_the_tree_nests(self, markup):
+        """
+        A network holds its arrays rather than standing beside them.
+
+        The blocks a reader folds are what says which thing is inside
+        which, so a flat list of them says nothing at all.
+        """
+        # Networks, then the network, then the array inside it.
+        assert markup.count("<details") == 4
+        network = markup.index('<summary><span class="dc-bold">Network</span>')
+        array = markup.index('<summary><span class="dc-bold">FiberArray</span>')
+        assert network < array < markup.index("</details>")
+
+    def test_a_long_line_is_no_longer_in_the_array_dump(self, markup):
+        """
+        An acquisition's line is a line, and can scroll as one.
+
+        Drawn inside one `pre` with the whole tree it could not: the
+        longest line in a block sets that block's scroll width, so
+        reading it drags every other line in the tree sideways.
+        """
+        assert "Acquisition" in markup
+        pres = re.findall(r"<pre[^>]*>(.*?)</pre>", markup, re.DOTALL)
+        # The attributes block is still one, so an empty list here would
+        # mean the search stopped working rather than the tree moving.
+        assert len(pres) == 1
+        assert not any("Acquisition" in x for x in pres)
+
+    def test_each_level_says_which_it_is(self, markup):
+        """A reader can tell an array's line from the network's above it."""
+        for depth in range(3):
+            assert f"dc-nest dc-d{depth}" in markup
+
+    def test_what_is_left_out_is_said(self):
+        """A tree which stops early says so where it stopped."""
+        network = inv.Network(code="XT", stations=[{"code": f"S{x}"} for x in range(5)])
+        inventory = inv.Inventory(networks=(network,))
+        with config_context(display_max_items=2):
+            html = inventory._repr_html_()
+        assert "... 3 more" in html
+
+
 class TestObjectTypeTag:
     """The union members' own tag field is invisible to users."""
 
@@ -1276,9 +2099,8 @@ class TestUniformAttachments:
 
     def test_yaml_omits_empty_fields(self):
         """Empty strings, dicts, and tuples do not serialize."""
-        pytest.importorskip("yaml")
         inventory = build_inventory()
-        text = inventory.to_yaml()
+        text = inventory.io.to_yaml()
         assert "description:" not in text
         assert "extra_fields:" not in text
         loaded = inv.Inventory.from_yaml(text)
@@ -1286,13 +2108,12 @@ class TestUniformAttachments:
 
     def test_extra_fields_contents_survive(self):
         """User values inside extra_fields are kept verbatim, even empty."""
-        pytest.importorskip("yaml")
         acq = inv.Acquisition(code="RAW", extra_fields={"vendor_flag": ""})
         array = inv.FiberArray(code="L001", acquisitions=(acq,))
         inventory = inv.Inventory(
             networks=(inv.Network(code="DAS", fiber_arrays=(array,)),)
         )
-        loaded = inv.Inventory.from_yaml(inventory.to_yaml())
+        loaded = inv.Inventory.from_yaml(inventory.io.to_yaml())
         got = loaded.networks[0].fiber_arrays[0].acquisitions[0]
         assert got.extra_fields == {"vendor_flag": ""}
 
@@ -1304,7 +2125,9 @@ class TestImmutability:
     def _stocked_inventory(resource_id="fixed"):
         """An inventory whose frozen mappings both carry contents."""
         cable = inv.Cable(resource_id="cable-01", name="c")
-        segment = inv.FiberSegment(optical_length=100.0, container=cable)
+        segment = inv.FiberSegment(
+            distance_min=0.0, distance_max=100.0, container=cable
+        )
         array = inv.FiberArray(
             code="L001",
             optical_paths=(inv.OpticalPath(optical_components=(segment,)),),
@@ -1379,9 +2202,8 @@ class TestImmutability:
 
     def test_hash_survives_a_yaml_round_trip(self):
         """Serializing and reloading does not move an inventory's hash."""
-        pytest.importorskip("yaml")
         inventory = self._stocked_inventory()
-        loaded = inv.Inventory.from_yaml(inventory.to_yaml())
+        loaded = inv.Inventory.from_yaml(inventory.io.to_yaml())
         assert loaded == inventory
         assert hash(loaded) == hash(inventory)
 
@@ -1399,7 +2221,9 @@ class TestImmutability:
     def test_json_mode_still_reaches_pooled_resources(self):
         """The pool's own serializer does not shadow what it holds."""
         run = inv.OpticalMeasurement(resource_id="otdr-1", time="2020-01-01")
-        segment = inv.FiberSegment(optical_length=10.0, loss_measurement=run)
+        segment = inv.FiberSegment(
+            distance_min=0.0, distance_max=10.0, loss_measurement=run
+        )
         array = inv.FiberArray(
             code="L001",
             optical_paths=(inv.OpticalPath(optical_components=(segment,)),),
@@ -1421,18 +2245,18 @@ class TestStationXmlAlignment:
         array = inv.FiberArray(code="L001", acquisitions=(acquisition,))
         first = inv.Network(
             code="XX",
-            start_time="2020-01-01",
-            end_time="2021-01-01",
+            time_min="2020-01-01",
+            time_max="2021-01-01",
             fiber_arrays=(array,),
         )
-        second = first.new(start_time="2021-01-01", end_time="")
+        second = first.new(time_min="2021-01-01", time_max="")
         inventory = inv.Inventory(networks=(first, second)).check()
         context = inventory.resolve("XX.L001..RAW", time="2022-06-01")
-        assert context.network.start_time == np.datetime64("2021-01-01")
+        assert context.network.time_min == np.datetime64("2021-01-01")
 
     def test_network_epochs(self):
         """Networks carry validity epochs like every other container."""
-        net = inv.Network(code="XX", start_time="2020-01-01", end_time="2022-01-01")
+        net = inv.Network(code="XX", time_min="2020-01-01", time_max="2022-01-01")
         assert net.is_effective_at("2021-06-01")
         assert not net.is_effective_at("2022-01-01")
 
@@ -1456,21 +2280,23 @@ class TestPointMarkers:
     def test_aerial_coupling_type(self):
         """Aerial coupling type."""
         cond = inv.CouplingCondition(
-            start_distance=0.0, end_distance=100.0, coupling_type="aerial"
+            distance_min=0.0, distance_max=100.0, coupling_type="aerial"
         )
         assert cond.coupling_type == "aerial"
 
     def test_point_clamp_inside_span_is_legal(self):
         """A point marker inside a covered span does not count as overlap."""
         path = inv.OpticalPath(
-            optical_components=(inv.FiberSegment(optical_length=100.0),),
+            optical_components=(
+                inv.FiberSegment(distance_min=0.0, distance_max=100.0),
+            ),
             coupling=(
                 inv.CouplingCondition(
-                    start_distance=0.0, end_distance=80.0, coupling_type="trench"
+                    distance_min=0.0, distance_max=80.0, coupling_type="trench"
                 ),
                 inv.CouplingCondition(
-                    start_distance=40.0,
-                    end_distance=40.0,
+                    distance_min=40.0,
+                    distance_max=40.0,
                     coupling_type="other",
                     description="clamp point",
                 ),
@@ -1478,62 +2304,68 @@ class TestPointMarkers:
         )
         assert path.check() is path
 
-    def test_point_annotation(self):
-        """Point annotation."""
-        anno = inv.OpticalPathAnnotation(
-            start_distance=350.0, end_distance=350.0, group="wellhead"
+    def test_point_label(self):
+        """Point label."""
+        label = inv.OpticalPathLabel(
+            distance_min=350.0, distance_max=350.0, group="wellhead"
         )
-        assert anno.interval == (350.0, 350.0)
+        assert label.interval == (350.0, 350.0)
 
     def test_point_markers_survive_select(self):
         """A clamp inside the clip is not coverage, but it is not nothing."""
         path = inv.OpticalPath(
-            optical_components=(inv.FiberSegment(optical_length=100.0),),
-            annotations=(
-                inv.OpticalPathAnnotation(
-                    start_distance=50.0, end_distance=50.0, group="clamp"
+            optical_components=(
+                inv.FiberSegment(distance_min=0.0, distance_max=100.0),
+            ),
+            labels=(
+                inv.OpticalPathLabel(
+                    distance_min=50.0, distance_max=50.0, group="clamp"
                 ),
             ),
             coupling=(
                 inv.CouplingCondition(
-                    start_distance=25.0, end_distance=25.0, coupling_type="other"
+                    distance_min=25.0, distance_max=25.0, coupling_type="other"
                 ),
             ),
         )
         kept = path.select(distance=(10.0, 90.0))
-        assert [x.interval for x in kept.annotations] == [(50.0, 50.0)]
+        assert [x.interval for x in kept.labels] == [(50.0, 50.0)]
         assert [x.interval for x in kept.coupling] == [(25.0, 25.0)]
 
     def test_point_markers_outside_the_clip_are_dropped(self):
         """A marker beyond the requested window does not belong to the piece."""
         path = inv.OpticalPath(
-            optical_components=(inv.FiberSegment(optical_length=100.0),),
-            annotations=(
-                inv.OpticalPathAnnotation(
-                    start_distance=95.0, end_distance=95.0, group="clamp"
+            optical_components=(
+                inv.FiberSegment(distance_min=0.0, distance_max=100.0),
+            ),
+            labels=(
+                inv.OpticalPathLabel(
+                    distance_min=95.0, distance_max=95.0, group="clamp"
                 ),
             ),
         )
-        assert path.select(distance=(10.0, 90.0)).annotations == ()
+        assert path.select(distance=(10.0, 90.0)).labels == ()
 
     def test_point_marker_at_the_outer_endpoint_is_kept(self):
         """The outermost endpoint of the path is included, as everywhere."""
         path = inv.OpticalPath(
-            optical_components=(inv.FiberSegment(optical_length=100.0),),
-            annotations=(
-                inv.OpticalPathAnnotation(
-                    start_distance=100.0, end_distance=100.0, group="end_cap"
+            optical_components=(
+                inv.FiberSegment(distance_min=0.0, distance_max=100.0),
+            ),
+            labels=(
+                inv.OpticalPathLabel(
+                    distance_min=100.0, distance_max=100.0, group="end_cap"
                 ),
             ),
         )
         kept = path.select(distance=(10.0, 100.0))
-        assert [x.interval for x in kept.annotations] == [(100.0, 100.0)]
+        assert [x.interval for x in kept.labels] == [(100.0, 100.0)]
 
     def test_reversed_interval_rejected(self):
         """An end before the start is rejected."""
         with pytest.raises(ValidationError, match="must not precede"):
             inv.CouplingCondition(
-                start_distance=10.0, end_distance=5.0, coupling_type="trench"
+                distance_min=10.0, distance_max=5.0, coupling_type="trench"
             )
 
 
@@ -1542,7 +2374,7 @@ class TestOpticalLoss:
 
     def test_scalar_loss_no_provenance(self):
         """Plain numbers with no measurement records are legal."""
-        splice = inv.Splice(loss_db=0.08, reflectance_db=-55.0)
+        splice = inv.Splice(distance_min=0.0, loss_db=0.08, reflectance_db=-55.0)
         assert splice.loss_db == 0.08
 
     def test_shared_measurement_pooled_once(self):
@@ -1557,9 +2389,13 @@ class TestOpticalLoss:
         path = inv.OpticalPath(
             optical_components=(
                 inv.FiberSegment(
-                    optical_length=1000.0, loss_db=0.3, loss_measurement=run
+                    distance_min=0.0,
+                    distance_max=1000.0,
+                    loss_db=0.3,
+                    loss_measurement=run,
                 ),
                 inv.Splice(
+                    distance_min=1000.0,
                     loss_db=0.05,
                     loss_measurement=run,
                     reflectance_db=-60.0,
@@ -1587,7 +2423,8 @@ class TestOpticalLoss:
             resource_id="ds-1310", method="datasheet", wavelength=1310.0
         )
         seg = inv.FiberSegment(
-            optical_length=2000.0,
+            distance_min=0.0,
+            distance_max=2000.0,
             loss_db=(0.6, 0.7),
             loss_measurement=(sheet_1550, sheet_1310),
         )
@@ -1596,13 +2433,14 @@ class TestOpticalLoss:
     def test_tuple_loss_requires_tuple_measurements(self):
         """Tuple loss requires tuple measurements."""
         with pytest.raises(ValidationError, match="equal-length"):
-            inv.FiberSegment(optical_length=10.0, loss_db=(0.1, 0.2))
+            inv.FiberSegment(distance_min=0.0, distance_max=10.0, loss_db=(0.1, 0.2))
 
     def test_length_mismatch_raises(self):
         """Length mismatch raises."""
         with pytest.raises(ValidationError, match="has 2 values"):
             inv.FiberSegment(
-                optical_length=10.0,
+                distance_min=0.0,
+                distance_max=10.0,
                 loss_db=(0.1, 0.2),
                 loss_measurement=("m1", "m2", "m3"),
             )
@@ -1610,7 +2448,10 @@ class TestOpticalLoss:
     def test_dangling_measurement_ref_raises(self):
         """Dangling measurement ref raises."""
         seg = inv.FiberSegment(
-            optical_length=10.0, loss_db=0.1, loss_measurement="no-such-run"
+            distance_min=0.0,
+            distance_max=10.0,
+            loss_db=0.1,
+            loss_measurement="no-such-run",
         )
         path = inv.OpticalPath(optical_components=(seg,))
         array = inv.FiberArray(code="L001", optical_paths=(path,))
@@ -1670,10 +2511,15 @@ class TestPrReviewFindings:
         with pytest.raises(ValidationError):
             inv.Acquisition(code="RAW", spatial_interval=np.nan)
 
-    def test_start_distance_explains_its_removal(self):
-        """An inventory written against the affine form says what to do."""
-        with pytest.raises(ValidationError, match="no longer takes start_distance"):
-            inv.Acquisition(code="RAW", start_distance=100.0)
+    @pytest.mark.parametrize("name", ["distance_min", "start_distance"])
+    def test_removed_origin_explains_itself(self, name):
+        """An inventory written against the affine form says what to do.
+
+        Both spellings are refused: the field's old name, and the name it
+        would carry now.
+        """
+        with pytest.raises(ValidationError, match=f"no longer takes {name}"):
+            inv.Acquisition(code="RAW", **{name: 100.0})
 
     def test_duplicate_channel_identity_raises(self):
         """Channel (location_code, code) names a stream; it must be unique."""
@@ -1695,8 +2541,8 @@ class TestPrReviewFindings:
         station = inv.Station(
             code="VA01",
             channels=(
-                inv.Channel(code="BHZ", start_time="2020-01-01", end_time="2021-01-01"),
-                inv.Channel(code="BHZ", start_time="2021-01-01"),
+                inv.Channel(code="BHZ", time_min="2020-01-01", time_max="2021-01-01"),
+                inv.Channel(code="BHZ", time_min="2021-01-01"),
             ),
         )
         assert station.check() is station
@@ -1705,7 +2551,7 @@ class TestPrReviewFindings:
         """Concatenating unrelated paths would misattribute the result."""
         left = inv.OpticalPath(
             location_code="00",
-            optical_components=(inv.FiberSegment(optical_length=10.0),),
+            optical_components=(inv.FiberSegment(distance_min=0.0, distance_max=10.0),),
         )
         right = left.new(location_code="01")
         with pytest.raises(InvalidInventoryError, match="one lineage and"):
@@ -1714,28 +2560,28 @@ class TestPrReviewFindings:
     def test_add_rejects_different_epoch(self):
         """Concatenating across epochs would advertise the wrong validity."""
         left = inv.OpticalPath(
-            start_time="2020-01-01",
-            optical_components=(inv.FiberSegment(optical_length=10.0),),
+            time_min="2020-01-01",
+            optical_components=(inv.FiberSegment(distance_min=0.0, distance_max=10.0),),
         )
-        right = left.new(start_time="2021-01-01")
+        right = left.new(time_min="2021-01-01")
         with pytest.raises(InvalidInventoryError, match="one lineage and"):
             _ = left + right
 
     def test_add_allows_matching_ongoing_epochs(self):
         """Two unset end times are the same epoch, not two unknowns."""
         path = inv.OpticalPath(
-            start_time="2020-01-01",
-            optical_components=(inv.FiberSegment(optical_length=10.0),),
+            time_min="2020-01-01",
+            optical_components=(inv.FiberSegment(distance_min=0.0, distance_max=10.0),),
         )
         assert (path + path).optical_length == 20.0
 
     def test_replace_rejects_ambiguous_match(self):
         """Equal items are indistinguishable, so replacing one is undefined."""
-        connector = inv.Connector(connector_type="E2000")
+        connector = inv.Connector(distance_min=0.0, connector_type="E2000")
         path = inv.OpticalPath(
             optical_components=(
                 connector,
-                inv.FiberSegment(optical_length=10.0),
+                inv.FiberSegment(distance_min=0.0, distance_max=10.0),
                 connector,
             ),
         )
@@ -1773,29 +2619,34 @@ class TestPrReviewFindings:
     def test_coordinates_at_rejects_mixed_dimensions(self):
         """An unchecked, mixed-dimension path fails loudly, not by broadcast."""
         path = inv.OpticalPath(
-            optical_components=(inv.FiberSegment(optical_length=100.0),),
+            optical_components=(
+                inv.FiberSegment(distance_min=0.0, distance_max=100.0),
+            ),
             geometry=(
                 inv.Geometry(
-                    distance=(0.0, 10.0), coordinates=((0.0, 0.0), (1.0, 1.0))
+                    distance=(0.0, 10.0), columns={"x": (0.0, 1.0), "y": (0.0, 1.0)}
                 ),
                 inv.Geometry(
                     distance=(20.0, 30.0),
-                    coordinates=((0.0, 0.0, 0.0), (1.0, 1.0, 1.0)),
+                    columns={"x": (0.0, 1.0), "y": (0.0, 1.0), "z": (0.0, 1.0)},
                 ),
             ),
         )
-        with pytest.raises(InvalidInventoryError, match="mix coordinate"):
-            path.coordinates_at([5.0])
+        crs = inv.CoordinateReferenceSystem()
+        with pytest.raises(InvalidInventoryError, match="every axis or none"):
+            path.coordinates_at([5.0], crs)
 
     def test_coordinate_width_must_match_crs(self):
         """Coordinates are read through the CRS, so they must fit its axes."""
         path = inv.OpticalPath(
-            optical_components=(inv.FiberSegment(optical_length=100.0),),
+            optical_components=(
+                inv.FiberSegment(distance_min=0.0, distance_max=100.0),
+            ),
             geometry=(
                 inv.Geometry(
                     name="flat",
                     distance=(0.0, 10.0),
-                    coordinates=((0.0, 0.0), (1.0, 1.0)),
+                    columns={"x": (0.0, 1.0), "y": (0.0, 1.0)},
                 ),
             ),
         )
@@ -1803,7 +2654,7 @@ class TestPrReviewFindings:
         inventory = inv.Inventory(
             networks=(inv.Network(code="XX", fiber_arrays=(array,)),)
         )
-        with pytest.raises(InvalidInventoryError, match="CRS declares 3 axes"):
+        with pytest.raises(InvalidInventoryError, match="every axis or none"):
             inventory.check()
 
     def test_station_coordinate_width_must_match_crs(self):
@@ -1845,8 +2696,10 @@ class TestConstraintsMatchDescriptions:
 
     def test_geometry_coordinates_must_be_finite(self):
         """A nan control point would read as uncovered distance."""
-        with pytest.raises(ValidationError, match="must be finite"):
-            inv.Geometry(distance=(0.0, 1.0), coordinates=((np.nan, 0.0), (1.0, 1.0)))
+        with pytest.raises(ValidationError, match="must hold finite"):
+            inv.Geometry(
+                distance=(0.0, 1.0), columns={"x": (np.nan, 1.0), "y": (0.0, 1.0)}
+            )
 
     def test_point_coordinates_must_be_finite(self):
         """Stations and channels name real positions."""
@@ -1865,29 +2718,33 @@ class TestConstraintsMatchDescriptions:
                 units=("meter",) * 4,
             )
 
-    def test_annotation_value_keeps_numpy_type(self):
-        """A mask element is a flag, not the number one."""
-        annotation = inv.OpticalPathAnnotation(
-            start_distance=0.0, end_distance=1.0, group="noisy", value=np.bool_(True)
-        )
-        assert annotation.value is True
-        counted = inv.OpticalPathAnnotation(
-            start_distance=0.0, end_distance=1.0, group="shots", value=np.int64(5)
+    def test_label_value_keeps_numpy_type(self):
+        """A numpy int is an identifier, not a measurement."""
+        counted = inv.OpticalPathLabel(
+            distance_min=0.0, distance_max=1.0, group="shots", value=np.int64(5)
         )
         assert isinstance(counted.value, int) and not isinstance(counted.value, bool)
+
+    @pytest.mark.parametrize("value", [True, False, np.bool_(True)])
+    def test_boolean_label_value_refused(self, value):
+        """Membership is stated by having no value, so a boolean states nothing."""
+        with pytest.raises(ValidationError, match="true and false are not"):
+            inv.OpticalPathLabel(
+                distance_min=0.0, distance_max=1.0, group="noisy", value=value
+            )
 
     def test_physical_quantities_must_be_finite(self):
         """A nan quantity is not a measurement."""
         with pytest.raises(ValidationError):
             inv.Acquisition(code="RAW", sample_rate=np.nan)
         with pytest.raises(ValidationError):
-            inv.FiberSegment(optical_length=10.0, loss_db=(0.4, np.inf))
+            inv.FiberSegment(distance_min=0.0, distance_max=10.0, loss_db=(0.4, np.inf))
 
-    def test_annotation_value_must_be_finite(self):
+    def test_label_value_must_be_finite(self):
         """A non-finite value cannot survive a JSON round trip."""
         with pytest.raises(ValidationError, match="must be finite"):
-            inv.OpticalPathAnnotation(
-                start_distance=0.0, end_distance=1.0, group="g", value=np.inf
+            inv.OpticalPathLabel(
+                distance_min=0.0, distance_max=1.0, group="g", value=np.inf
             )
 
 
@@ -1902,22 +2759,19 @@ def _sample_inventories() -> dict[str, inv.Inventory]:
         units=("m", "m"),
     )
     cable = inv.Cable(resource_id="cable-1", name="trunk")
-    segment = inv.FiberSegment(name="run", optical_length=100.0, container=cable)
-    annotations = (
-        inv.OpticalPathAnnotation(
-            start_distance=0.0, end_distance=50.0, group="zone", value="east"
+    segment = inv.FiberSegment(
+        name="run", distance_min=0.0, distance_max=100.0, container=cable
+    )
+    labels = (
+        inv.OpticalPathLabel(
+            distance_min=0.0, distance_max=50.0, group="zone", value="east"
         ),
-        inv.OpticalPathAnnotation(
-            start_distance=0.0, end_distance=50.0, group="noisy", value=True
+        inv.OpticalPathLabel(distance_min=0.0, distance_max=50.0, group="noisy"),
+        inv.OpticalPathLabel(
+            distance_min=0.0, distance_max=50.0, group="shots", value=0
         ),
-        inv.OpticalPathAnnotation(
-            start_distance=0.0, end_distance=50.0, group="masked", value=False
-        ),
-        inv.OpticalPathAnnotation(
-            start_distance=0.0, end_distance=50.0, group="shots", value=0
-        ),
-        inv.OpticalPathAnnotation(
-            start_distance=50.0, end_distance=100.0, group="offset", value=0.0
+        inv.OpticalPathLabel(
+            distance_min=50.0, distance_max=100.0, group="offset", value=0.0
         ),
     )
 
@@ -1960,7 +2814,7 @@ def _sample_inventories() -> dict[str, inv.Inventory]:
                                 inv.OpticalPath(
                                     location_code="01",
                                     optical_components=(segment,),
-                                    annotations=annotations,
+                                    labels=labels,
                                 ),
                             ),
                         ),
@@ -2069,21 +2923,21 @@ class TestSerializationIsLossless:
     @pytest.mark.parametrize("name", sorted(SAMPLE_INVENTORIES))
     def test_round_trip_equals(self, name):
         """Whatever was written comes back, in text and through a file."""
-        pytest.importorskip("yaml")
         inventory = SAMPLE_INVENTORIES[name]
-        assert dc.inventory(inventory.to_yaml()) == inventory
+        assert dc.inventory(inventory.io.to_yaml()) == inventory
 
-    def test_an_annotation_value_of_one_survives(self):
-        """`1 == True`, and the value's default is True, so it was dropped."""
-        pytest.importorskip("yaml")
+    def test_a_label_value_of_one_survives(self):
+        """`1 == True`; when the default was True, pruning defaults dropped it."""
         path = inv.OpticalPath(
-            optical_components=(inv.FiberSegment(optical_length=100.0),),
-            annotations=(
-                inv.OpticalPathAnnotation(
-                    start_distance=0.0, end_distance=10.0, group="hole", value=1
+            optical_components=(
+                inv.FiberSegment(distance_min=0.0, distance_max=100.0),
+            ),
+            labels=(
+                inv.OpticalPathLabel(
+                    distance_min=0.0, distance_max=10.0, group="hole", value=1
                 ),
-                inv.OpticalPathAnnotation(
-                    start_distance=20.0, end_distance=30.0, group="hole", value=2
+                inv.OpticalPathLabel(
+                    distance_min=20.0, distance_max=30.0, group="hole", value=2
                 ),
             ),
         )
@@ -2091,67 +2945,27 @@ class TestSerializationIsLossless:
         inventory = inv.Inventory(
             networks=(inv.Network(code="XX", fiber_arrays=(array,)),)
         )
-        text = inventory.to_yaml()
+        text = inventory.io.to_yaml()
         assert "value: 1" in text
-        # Without the value, the group reloads holding a boolean beside a
-        # number and is refused as mixing two kinds.
-        assert dc.inventory(text) == inventory
-
-    def test_an_annotation_still_names_its_class(self):
-        """Restoring the value must not displace the document's tag."""
-        annotation = inv.OpticalPathAnnotation(
-            start_distance=0.0, end_distance=1.0, group="hole", value=2
-        )
-        dumped = annotation.model_dump(mode="json")
-        assert dumped["object_type"] == "OpticalPathAnnotation"
-
-    def test_a_deliberately_excluded_value_stays_out(self):
-        """What a caller filtered is not what exclude_defaults dropped."""
-        annotation = inv.OpticalPathAnnotation(
-            start_distance=0.0, end_distance=1.0, group="hole", value=2
-        )
-        assert "value" not in annotation.model_dump(mode="json", exclude={"value"})
-        assert "value" not in annotation.model_dump(mode="json", include={"group"})
-
-    def test_a_flag_annotation_stays_terse(self):
-        """A value which really is the default is still left out."""
-        pytest.importorskip("yaml")
-        path = inv.OpticalPath(
-            optical_components=(inv.FiberSegment(optical_length=100.0),),
-            annotations=(
-                inv.OpticalPathAnnotation(
-                    start_distance=0.0, end_distance=10.0, group="noisy"
-                ),
-            ),
-        )
-        array = inv.FiberArray(code="L001", optical_paths=(path,))
-        inventory = inv.Inventory(
-            networks=(inv.Network(code="XX", fiber_arrays=(array,)),)
-        )
-        text = inventory.to_yaml()
-        assert "value:" not in text
         assert dc.inventory(text) == inventory
 
     def test_round_trip_through_file(self, tmp_path):
         """The writer taking a path writes what the text form holds."""
-        pytest.importorskip("yaml")
         inventory = build_full_inventory()
         path = tmp_path / "inventory.yaml"
-        inventory.to_yaml(path)
+        inventory.io.to_yaml(path)
         assert dc.inventory(path) == inventory
 
     def test_blank_crs_fields_survive(self):
         """A frame described by WKT alone must not reload as EPSG:4979."""
-        pytest.importorskip("yaml")
         inventory = SAMPLE_INVENTORIES["blank_crs"]
-        crs = dc.inventory(inventory.to_yaml()).coordinate_reference_system
+        crs = dc.inventory(inventory.io.to_yaml()).coordinate_reference_system
         assert (crs.authority, crs.code, crs.name) == ("", "", "")
 
     def test_blank_instrument_type_survives(self):
         """A blanked field with a non-empty default is not a missing one."""
-        pytest.importorskip("yaml")
         inventory = SAMPLE_INVENTORIES["blank_resources"]
-        loaded = dc.inventory(inventory.to_yaml())
+        loaded = dc.inventory(inventory.io.to_yaml())
         assert loaded.resources["int-1"].instrument_type == ""
 
     def test_every_blankable_field_survives(self):
@@ -2160,7 +2974,6 @@ class TestSerializationIsLossless:
         Sweeping the model tree, rather than listing the fields at risk,
         is what catches the next field added with a non-empty default.
         """
-        pytest.importorskip("yaml")
         inventory = build_full_inventory()
         checked = set()
         for model in _walk_models(inventory):
@@ -2175,7 +2988,7 @@ class TestSerializationIsLossless:
                     continue  # a field a validator refuses to blank
                 # Outside the catch: an inventory valid here but not once it
                 # has been written is a document the pruning damaged.
-                loaded = dc.inventory(candidate.to_yaml())
+                loaded = dc.inventory(candidate.io.to_yaml())
                 assert loaded == candidate, f"{type(model).__name__}.{name} was lost"
                 checked.add((type(model).__name__, name))
         # The fields the reported bug was found in must be among those swept.
@@ -2185,8 +2998,7 @@ class TestSerializationIsLossless:
 
     def test_defaulted_fields_are_dropped(self):
         """A field still holding its default is left out of the document."""
-        yaml = pytest.importorskip("yaml")
-        data = yaml.safe_load(build_inventory().to_yaml())
+        data = yaml.safe_load(build_inventory().io.to_yaml())
         assert not _empty_keys(data)
         assert "description" not in yaml.safe_dump(data)
 
@@ -2196,14 +3008,13 @@ class TestSerializationIsLossless:
         Every other defaulted field is dropped, so this is what says which
         envelope a document was written against.
         """
-        yaml = pytest.importorskip("yaml")
         default = inv.Inventory().schema_version
-        data = yaml.safe_load(build_inventory().to_yaml())
+        data = yaml.safe_load(build_inventory().io.to_yaml())
         assert data["schema_version"] == default
         other = inv.Inventory(schema_version=default + 1)
-        assert dc.inventory(other.to_yaml()).schema_version == default + 1
+        assert dc.inventory(other.io.to_yaml()).schema_version == default + 1
 
-    def test_empty_annotation_value_is_rejected(self):
+    def test_empty_label_value_is_rejected(self):
         """An empty value would have to survive serialization to mean anything.
 
         It used to be legal, and this guarded it against being pruned and
@@ -2212,8 +3023,8 @@ class TestSerializationIsLossless:
         the empty string, so a covered one could not be told apart.
         """
         with pytest.raises(ValidationError, match="may not be the empty string"):
-            inv.OpticalPathAnnotation(
-                start_distance=0.0, end_distance=50.0, group="rock", value=""
+            inv.OpticalPathLabel(
+                distance_min=0.0, distance_max=50.0, group="rock", value=""
             )
 
 
@@ -2222,12 +3033,11 @@ class TestLoadingValidates:
 
     def test_invalid_document_raises_on_load(self):
         """A document violating a whole-tree rule fails at its source."""
-        pytest.importorskip("yaml")
         station = inv.Station(code="VA01", coordinates=(1.0, 2.0))
         inventory = inv.Inventory(
             networks=(inv.Network(code="XX", stations=(station,)),)
         )
-        text = inventory.to_yaml()
+        text = inventory.io.to_yaml()
         with pytest.raises(InvalidInventoryError, match="coordinate values"):
             inv.Inventory.from_yaml(text)
         with pytest.raises(InvalidInventoryError, match="coordinate values"):
@@ -2245,20 +3055,24 @@ class TestFiberSegmentFields:
     def test_fiber_number_and_color(self):
         """Fiber identity within a cable uses telecom naming."""
         segment = inv.FiberSegment(
-            optical_length=10.0, fiber_number=3, fiber_color="blue"
+            distance_min=0.0, distance_max=10.0, fiber_number=3, fiber_color="blue"
         )
         assert segment.fiber_number == 3
         assert segment.fiber_color == "blue"
 
     def test_refractive_index(self):
         """The group index converts time of flight into distance."""
-        segment = inv.FiberSegment(optical_length=10.0, refractive_index=1.4682)
+        segment = inv.FiberSegment(
+            distance_min=0.0, distance_max=10.0, refractive_index=1.4682
+        )
         assert segment.refractive_index == 1.4682
 
     def test_refractive_index_must_be_finite(self):
         """A non-finite index would poison every distance it scales."""
         with pytest.raises(ValidationError):
-            inv.FiberSegment(optical_length=10.0, refractive_index=np.nan)
+            inv.FiberSegment(
+                distance_min=0.0, distance_max=10.0, refractive_index=np.nan
+            )
 
 
 class TestDepthLabel:
@@ -2338,7 +3152,7 @@ class TestGetNames:
         the distance map and interrogator hold whole records rather than
         values; none of them is something a patch could carry as an attr.
         """
-        excluded = {"code", "location_code", "start_time", "end_time"}
+        excluded = {"code", "location_code", "time_min", "time_max"}
         excluded |= {"distance_map", "interrogator", "extra_fields", "description"}
         assert not set(names.attrs) & excluded
 
@@ -2355,12 +3169,12 @@ class TestGetNames:
             inv._track_identity_fields()
 
     def test_coords_hold_the_tracks_and_groups(self, names):
-        """The path's tracks, their fields, and its annotation groups."""
+        """The path's tracks, their fields, and its label groups."""
         assert "coupling" in names.coords  # bare: the identity field
         assert "coupling.medium" in names.coords
         assert "geometry" in names.coords
         assert "optical_components.fiber_type" in names.coords
-        assert "zone" in names.coords  # the annotation group
+        assert "zone" in names.coords  # the label group
 
     def test_coords_hold_both_axis_spellings(self, names):
         """A CRS axis is selectable as stored and as this CRS reads it."""
@@ -2380,15 +3194,15 @@ class TestGetNames:
         geometry's control points are the segment itself; neither is a
         number a channel inside it carries.
         """
-        excluded = {"coupling.start_distance", "coupling.end_distance"}
-        excluded |= {"geometry.distance", "geometry.coordinates"}
+        excluded = {"coupling.distance_min", "coupling.distance_max"}
+        excluded |= {"geometry.distance", "geometry.columns"}
         assert not set(names.coords) & excluded
 
     def test_coords_omit_absent_tracks(self):
         """An inventory with no coupling has no coupling to select on."""
         base = build_inventory()
         path = base.networks[0].fiber_arrays[0].optical_paths[0]
-        bare = base.replace(path, path.new(coupling=(), annotations=()))
+        bare = base.replace(path, path.new(coupling=(), labels=()))
         coords = set(bare.get_names().coords)
         assert not {x for x in coords if x.startswith("coupling")}
         assert "zone" not in coords
@@ -2495,3 +3309,58 @@ class TestGetNamesRoundTrip:
             plain: float | None = None
 
         assert inv._value_field_names(_Probe) == ("plain",)
+
+
+class TestInventoryNamespaces:
+    """An inventory hosts method namespaces, as a patch and a spool do."""
+
+    def test_io_namespace(self):
+        """The io namespace DASCore registers is reachable."""
+        inventory = build_inventory()
+        assert inventory.io.to_yaml() == inv.inventory_to_yaml(inventory)
+
+    def test_copy_gets_its_own_binding(self):
+        """A copied inventory hands out a namespace bound to the copy."""
+        inventory = build_inventory()
+        inventory.io  # a namespace kept on the host would ride along
+        other = inventory.model_copy(update={"schema_version": 7})
+        assert other.io.to_yaml().startswith("schema_version: 7")
+
+    def test_local_namespace_attaches(self):
+        """A namespace defined without an entry point still attaches."""
+
+        class _Local(InventoryNameSpace):
+            name = "some_local_namespace"
+
+            def network_count(inventory) -> int:  # noqa: N805
+                """Return how many networks the inventory holds."""
+                return len(inventory.networks)
+
+        inventory = build_inventory()
+        assert inventory.some_local_namespace.network_count() == len(inventory.networks)
+
+    def test_unknown_attr_raises(self):
+        """A name no namespace claims raises DASCore's message."""
+        inventory = build_inventory()
+        with pytest.raises(AttributeError, match="Inventory has no attribute 'nope'"):
+            inventory.nope
+
+    def test_private_attrs_still_resolve(self):
+        """The namespace search does not stand in front of pydantic's own."""
+        # _cache is a private attribute pydantic resolves in __getattr__,
+        # which the namespace search would otherwise answer first.
+        assert build_inventory()._cache == {}
+
+    def test_unknown_private_attr_raises(self):
+        """A private name neither pydantic nor a namespace knows still fails."""
+        with pytest.raises(AttributeError, match="_not_a_field"):
+            build_inventory()._not_a_field
+
+    def test_cached_namespace_is_not_state(self):
+        """An attached namespace changes neither equality nor a dump."""
+        inventory = build_inventory()
+        other = inv.Inventory(**inventory.model_dump())
+        inventory.io.to_yaml()
+        assert inventory == other
+        assert hash(inventory) == hash(other)
+        assert inventory.model_dump(mode="json") == other.model_dump(mode="json")

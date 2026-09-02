@@ -1,0 +1,131 @@
+---
+title: Workflow
+execute:
+  warning: false
+---
+
+A workflow records processing as objects rather than only as a script. Its basic unit is an immutable [`Task`](`dascore.workflow.task.Task`): one operation and its parameters. DASCore records tasks and fingerprints; graph construction and scheduling belong to tools such as Dask and Ray.
+
+::: {.callout-note}
+The workflow module is new. Patch functions expose task objects, but DASCore processing does not yet route through a workflow graph.
+:::
+
+# Tasks
+
+Subclass `Task`, declare operation parameters as fields, and implement `run`:
+
+```{python}
+from dascore.workflow import Task
+
+
+class Scale(Task):
+    """Multiply patch data by a factor."""
+
+    factor: float = 1.0
+
+    def run(self, patch):
+        """Scale a patch."""
+        return patch.update(data=patch.data * self.factor)
+
+
+scale = Scale(factor=2)
+```
+
+Task parameters are frozen. Arrays are marked read-only without being copied, so copy a buffer before passing it if other code will continue writing to it.
+
+Because parameters are the model fields, task equality describes the operation rather than object identity. Calling a task supplies only its runtime inputs; stored parameters remain unchanged.
+
+## Fingerprints
+
+Each task has a deterministic fingerprint derived from its package, class, version, and parameters. Equivalent tasks compare equal and share a fingerprint.
+
+```{python}
+assert Scale(factor=2) == Scale(factor=2)
+assert Scale(factor=2).fingerprint == scale.fingerprint
+```
+
+Set a task class's `__version__` when the same parameters acquire different behavior. Module paths and function source are not fingerprinted, so moving code within a package does not change existing identities.
+
+Fingerprints are stable across processes and machines for supported parameter types. Packages are responsible for increasing `__version__` when behavior changes without a parameter change.
+
+## Tasks from functions
+
+The [`task`](`dascore.workflow.task.task`) decorator converts a function signature into a task class. Leading parameters are runtime inputs; remaining parameters become stored fields.
+
+```{python}
+from dascore.workflow import task
+
+
+@task
+def scale_number(number, factor=1):
+    """Scale a number."""
+    return number * factor
+
+
+operation = scale_number(factor=3)
+assert operation.run(2) == 6
+assert operation(2) == 6
+```
+
+Use `inputs=` when a function takes zero or multiple runtime inputs.
+
+```{python}
+@task(inputs=2)
+def add_numbers(left, right, offset=0):
+    """Add two runtime inputs and a stored offset."""
+    return left + right + offset
+
+
+assert add_numbers(offset=1)(2, 3) == 6
+```
+
+# Patch operations
+
+Functions decorated with `dc.patch_function` expose `.op(...)`, which binds arguments and defaults into a [`PatchOp`](`dascore.workflow.PatchOp`).
+
+```{python}
+import dascore as dc
+
+patch = dc.get_example_patch()
+normalize = dc.proc.normalize.op("time")
+
+assert normalize(patch).equals(patch.normalize("time"))
+print(normalize.fingerprint)
+```
+
+Registry names distinguish DASCore operations from similarly named plugin operations. [`fingerprint_call`](`dascore.workflow.fingerprint_call`) computes the same identity without constructing an operation. Ordinary patch calls do not fingerprint arguments unless provenance recording needs the operation.
+
+```{python}
+from dascore.workflow import fingerprint_call
+
+assert fingerprint_call(dc.proc.normalize, (), {"dim": "time"}) == normalize.fingerprint
+print(normalize.to_dict())
+```
+
+Advanced operations may use [`PatchProcessor`](`dascore.workflow.processor.PatchProcessor`) to separate metadata derivation from the array kernel or register kernels for other array libraries; these details are documented in the workflow API.
+
+Separating `derive_meta` from `kernel` lets planners inspect coordinate and metadata changes without touching an array. Registered kernels can then execute the same named operation on another array implementation without changing its fingerprint.
+
+# Saving and loading
+
+Tasks serialize to JSON or YAML and load through registered task names. Loading does not import arbitrary paths from the file, so the package defining a custom task must already be imported.
+
+```{python}
+import tempfile
+from pathlib import Path
+
+path = Path(tempfile.mkdtemp()) / "operation.yaml"
+normalize.save(path)
+loaded = Task.load(path)
+assert loaded == normalize
+```
+
+`.yaml` and `.yml` select YAML; `.json` and suffixless paths select JSON. Unsupported suffixes are rejected rather than guessed. Custom task classes must live at module level under a unique package registry name.
+
+# Patch provenance
+
+Tasks describe operations; `Patch.attrs` records their effect on data. `patch_id` identifies source data, while `processing_id` incorporates each operation fingerprint. See [Patch identity](patch.qmd#patch-identity) for persistence and lookup rules.
+
+Workflow objects do not schedule execution. Use `Spool.map`, Dask, Ray, or another executor to run operations over many patches.
+
+This boundary keeps saved operations portable: orchestration tools decide when and where work runs, while DASCore provides stable operation and patch identities.

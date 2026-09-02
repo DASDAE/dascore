@@ -4,7 +4,7 @@ execute:
     warning: false
 ---
 
-Known third-party packages that provide namespaces for DASCore's `Patch` and `Spool` objects.
+Known third-party packages that provide namespaces for DASCore's `Patch`, `Spool`, `Inventory` and `AnnotationSet` objects. The host column names the object a namespace attaches to.
 
 ```{python}
 #| echo: false
@@ -15,5 +15,5 @@ df = get_plugin_table()
 df["package_name"] = df.apply(
     lambda r: f"[{r['package_name']}]({r['package_url']})", axis=1
 )
-print(df[["namespace", "package_name"]].to_markdown(index=False, stralign="center") + "\n: {.striped}")
+print(df[["host", "namespace", "package_name"]].to_markdown(index=False, stralign="center") + "\n: {.striped}")
 ```

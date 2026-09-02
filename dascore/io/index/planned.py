@@ -23,7 +23,6 @@ import numpy as np
 import pandas as pd
 
 import dascore as dc
-from dascore.constants import WARN_LEVELS
 from dascore.core.coords import CoordSummary
 from dascore.io.index.backend import get_backend
 from dascore.io.index.catalog import (
@@ -31,7 +30,7 @@ from dascore.io.index.catalog import (
     PatchCatalog,
     PatchResolver,
     _adjust_unit_segments,
-    _row_source_patch_id,
+    _row_source_patch_key,
     apply_exact_residuals,
 )
 from dascore.io.index.ingest import (
@@ -42,9 +41,13 @@ from dascore.io.index.ingest import (
     typed_value,
 )
 from dascore.units import get_quantity
-from dascore.utils.chunk_plan import _SOURCE_COLUMNS, _ensure_patch_id
+from dascore.utils.chunk_plan import (
+    _SOURCE_COLUMNS,
+    _concatenated_steps,
+    _ensure_patch_id,
+)
 from dascore.utils.misc import _CanonicalRange, is_range
-from dascore.utils.patch import concatenate_patches
+from dascore.utils.patch import concatenate_planned
 from dascore.utils.patch_assembly import PatchAssembler
 from dascore.utils.pd import adjust_segments
 
@@ -114,7 +117,10 @@ def _dtype_str(value) -> str:
 
 
 def _coord_record_from_row(
-    row: Mapping, name: str, dims: tuple[str, ...] | None = None
+    row: Mapping,
+    name: str,
+    dims: tuple[str, ...] | None = None,
+    name_is_held: bool = False,
 ) -> CoordRecord | None:
     """
     Build the envelope coord record for one output coordinate.
@@ -124,11 +130,37 @@ def _coord_record_from_row(
     carried ``fp:`` def key survives for non-planned dims, and the
     planned dim's range fingerprint is reconstructed exactly. ``dims``
     names the dimensions the coordinate rides (itself by default).
+    `name_is_held` says the members hold this coordinate, so a record is
+    written even when nothing about its values can be stated: the patch
+    will carry it, and a catalog which omitted it would deny it.
     """
     dims = (name,) if dims is None else dims
     lo, hi = row.get(f"{name}_min"), row.get(f"{name}_max")
     if lo is None or (pd.isnull(lo) and pd.isnull(hi)):
-        return None
+        # a coordinate without values (a dimension a plan created, or one
+        # its members carry blank) has its identity and nothing else, as
+        # ingesting it would record. A "cat:" digest — what such a
+        # dimension is worth after a concatenation — identifies it here
+        # the same way, matching another output only when the members it
+        # joined were the same.
+        key = row.get(f"_{name}_def_key")
+        fingerprint = _def_key_fingerprint(key)
+        if fingerprint is None and isinstance(key, str) and key.startswith("cat:"):
+            fingerprint = key[4:]
+        if fingerprint is None and not name_is_held:
+            return None
+        units = row.get(f"_{name}_units")
+        if units == "" or (units is not None and pd.isnull(units)):
+            units = None
+        return CoordRecord(
+            coord_name=name,
+            value_kind="num",
+            dtype="float64",
+            coord_dims=",".join(dims),
+            length=None,
+            units=units,
+            coord_hash=fingerprint,
+        )
     step = row.get(f"{name}_step")
     step = None if step is None or pd.isnull(step) else step
     if isinstance(lo, str):
@@ -161,7 +193,8 @@ def _coord_record_from_row(
         dtype = "timedelta64[ns]"
     else:
         lo, hi = float(lo), float(hi)
-        step = None if step is None else abs(float(step))
+        # the sign says which way the coordinate runs, as ingest records it
+        step = None if step is None else float(step)
         dtype = "float64"
     if isinstance(step, pd.Timedelta):
         step = step.to_timedelta64()
@@ -179,7 +212,8 @@ def _coord_record_from_row(
     if step is not None:
         # lo, hi, and step always share a time kind (or are all floats), but
         # ty unions the branch types and rejects the mixed combinations.
-        length = round((hi - lo) / step) + 1  # ty: ignore[unsupported-operator]
+        span = (hi - lo) / step  # ty: ignore[unsupported-operator]
+        length = round(abs(span)) + 1
     key = row.get(f"_{name}_def_key")
     fingerprint = _def_key_fingerprint(key)
     summary = CoordSummary(
@@ -195,12 +229,32 @@ def _coord_record_from_row(
     return _coord_record(name, summary)
 
 
+def _extrema(grouped, how: str) -> np.ndarray:
+    """
+    One end of each group's envelope, None where the values do not compare.
+
+    Groups are taken one at a time because the column may hold more than
+    one kind of value (a name numeric in one output and text in another),
+    which pandas cannot aggregate whole.
+    """
+    values: list = []
+    for _, group in grouped:
+        stated = group.dropna()
+        try:
+            values.append(getattr(stated, how)() if len(stated) else None)
+        except TypeError:
+            # even within the output the values do not compare
+            values.append(None)
+    return np.array(values, dtype=object)
+
+
 def _aux_coord_info(
     source_rows: pd.DataFrame,
     members: pd.DataFrame,
     plan_dim: str,
     coord_dims_map: Mapping[str, str],
     trimmed_dims: frozenset[str] = frozenset(),
+    concat: bool = False,
 ) -> dict[int, dict[str, dict]]:
     """
     Aggregate per-output envelope info for auxiliary coordinates.
@@ -213,6 +267,11 @@ def _aux_coord_info(
     so only a lone unmodified member keeps identity there. Envelopes
     always aggregate — the catalog contract is candidacy, with exact
     values re-established at load.
+
+    A concatenation joins a rider's segments rather than merging them, so
+    a rider whose members share one step and meet end to end keeps that
+    step (its values still differ member by member, so not its identity).
+
     """
     out: dict[int, dict[str, dict]] = {}
     if not len(members) or not coord_dims_map:
@@ -229,7 +288,9 @@ def _aux_coord_info(
     )
     for name, dims_str in coord_dims_map.items():
         cmin, cmax = f"{name}_min", f"{name}_max"
-        if cmin not in joined.columns:
+        if cmin not in joined.columns or name == plan_dim:
+            # the planned dimension is described by its output row (a
+            # coordinate of that name a concatenation replaces is gone)
             continue
         dims = tuple(d for d in str(dims_str).split(",") if d)
         rides = plan_dim in dims
@@ -238,8 +299,8 @@ def _aux_coord_info(
         trimmed = bool(set(dims) & trimmed_dims)
         key_col, step_col = f"_{name}_def_key", f"{name}_step"
         unit_col = f"_{name}_units"
-        lows = grouped[cmin].min().to_numpy()
-        highs = grouped[cmax].max().to_numpy()
+        lows = _extrema(grouped[cmin], "min")
+        highs = _extrema(grouped[cmax], "max")
         # the *_first arrays are only read where their gate is True, and
         # a gate can only be True when its column exists
         no_gate = np.zeros(len(output_ids), dtype=bool)
@@ -248,18 +309,47 @@ def _aux_coord_info(
             keep = grouped[key_col].nunique().to_numpy() == 1
             key_first = grouped[key_col].first().to_numpy()
         keep = keep & (not trimmed)
+        all_null = pd.isnull(lows) & pd.isnull(highs)
         if rides:
-            keep = keep & single & ~modified
+            # a rider's values differ member by member, so only a lone
+            # member keeps identity — unless nobody states any values,
+            # which every member says the same way
+            keep = keep & ((single & ~modified) | all_null)
         step_ok, step_first = no_gate, None
         if step_col in joined.columns:
             step_ok = keep & (grouped[step_col].nunique().to_numpy() == 1)
             step_first = grouped[step_col].first().to_numpy()
+            if rides and concat:
+                # the joined coordinate is a range when the segments are
+                # (the members are already in the order they join in)
+                order = {v: i for i, v in enumerate(output_ids)}
+                codes = joined["output_id"].map(order).to_numpy()
+                step_first = _concatenated_steps(joined, codes, name)
+                step_ok = ~pd.isnull(step_first)
         unit_ok, unit_first = no_gate, None
         if unit_col in joined.columns:
             unit_ok = grouped[unit_col].nunique().to_numpy() == 1
             unit_first = grouped[unit_col].first().to_numpy()
-        # a coordinate absent from every member contributes nothing
-        absent = pd.isnull(lows) & pd.isnull(highs)
+            # members spelling one coordinate two ways (seconds beside
+            # milliseconds) have no envelope in common: the magnitudes mean
+            # different things, and only the loaded patch says which
+            # spelling wins. No units at all is one spelling, not two.
+            undecided = grouped[unit_col].nunique().to_numpy() > 1
+            if undecided.any():
+                lows = np.array(
+                    [None if u else v for v, u in zip(lows, undecided)], dtype=object
+                )
+                highs = np.array(
+                    [None if u else v for v, u in zip(highs, undecided)], dtype=object
+                )
+                step_ok = step_ok & ~undecided
+        # a coordinate no member holds contributes nothing; one the members
+        # do hold is always named, even when nothing about its values can
+        # be stated — the patch will have it, so the catalog says so
+        held = grouped[cmin].count().to_numpy() > 0
+        if key_col in joined.columns:
+            held = held | (grouped[key_col].count().to_numpy() > 0)
+        absent = ~held
         for index in np.flatnonzero(~absent):
             step = step_first[index] if step_first is not None else None
             key = key_first[index] if key_first is not None else None
@@ -280,8 +370,15 @@ def _output_records(
     outputs: pd.DataFrame,
     token: str,
     aux_info: Mapping[int, Mapping[str, Mapping]] | None = None,
+    sizes: Mapping[int, int] | None = None,
 ) -> list[SourceRecord]:
-    """Convert plan output rows into ingestible source records."""
+    """
+    Convert plan output rows into ingestible source records.
+
+    ``sizes`` names the outputs whose sample count is known (see
+    `_whole_member_sizes`); every other output states none.
+    """
+    sizes = sizes or {}
     records = []
     aux_info = aux_info or {}
     # Envelope columns belong to coordinates actually present in a row;
@@ -311,7 +408,9 @@ def _output_records(
         for name, info in aux.items():
             if name in dim_names:
                 continue
-            record = _coord_record_from_row(info, name, dims=info["dims"])
+            record = _coord_record_from_row(
+                info, name, dims=info["dims"], name_is_held=True
+            )
             if record is not None:
                 coords.append(record)
         cache_key = (dims, tuple(aux))
@@ -338,13 +437,14 @@ def _output_records(
             if typed is not None:
                 attrs[key] = typed
         patch = PatchRecord(
-            source_patch_id=str(output_id),
+            source_patch_key=str(output_id),
             dims=dims,
             # the plan carries the element dtype privately so a chained
             # chunk can still size patches by their memory footprint.
             # NaN is truthy, so `or ""` alone would store the string
             # "nan" and poison every later np.dtype() of this column.
             dtype=_dtype_str(row.get("_dtype")),
+            data_size=sizes.get(output_id),
             time_min=_ns(row.get("time_min")),
             time_max=_ns(row.get("time_max")),
             time_step=_ns(row.get("time_step")),
@@ -387,7 +487,6 @@ class PlanResolver(PatchResolver):
         merge_kwargs: Mapping,
         parent_residuals: tuple = (),
         mode: str = "chunk",
-        check_behavior: WARN_LEVELS = "warn",
         origin_path=None,
         stamped: tuple[str, ...] = (),
         lossy: bool = False,
@@ -403,7 +502,6 @@ class PlanResolver(PatchResolver):
         self.merge_kwargs = dict(merge_kwargs)
         self.parent_residuals = tuple(parent_residuals)
         self.mode = mode
-        self.check_behavior = check_behavior
         # informational only: the directory/file the plan derived from
         self.origin_path = origin_path
         # attrs the outputs state about themselves rather than inherit
@@ -425,10 +523,10 @@ class PlanResolver(PatchResolver):
         return nested
 
     def _assembler(self):
-
         return PatchAssembler(
             load_patch=self._load_member,
             merge_kwargs=self.merge_kwargs,
+            plan_dim=self.dim,
         )
 
     def _load_member(self, kwargs: Mapping) -> dc.Patch:
@@ -476,16 +574,19 @@ class PlanResolver(PatchResolver):
             return patch
         coord = patch.coords.coord_map.get(self.dim)
         current = getattr(coord, "units", None) if coord is not None else None
+        # `==`, not `units_match`: the plan asks whether the values are
+        # already at the right scale, and `m` and `100 cm` label the same
+        # ones. Converting between them would relabel and change nothing.
         if current is None or get_quantity(current) == get_quantity(plan_units):
             return patch
         # raw_function: the conversion serves the plan's own bookkeeping,
         # and a history entry on some members but not others would make
-        # otherwise-mergeable members conflict on attrs.
+        # the merge warn about histories differing.
         return dc.proc.units.convert_units.raw_function(patch, **{self.dim: plan_units})
 
     def resolve(self, row: Mapping, **trim) -> dc.Patch:
         """Assemble the output patch a plan row describes."""
-        output_id = int(_row_source_patch_id(row))
+        output_id = int(_row_source_patch_key(row))
         members = self.member_rows[self.member_rows["output_id"] == output_id]
         assert len(members), "no plan members found for output row"
         if self.mode == "identity":
@@ -493,14 +594,16 @@ class PlanResolver(PatchResolver):
             assert len(members) == 1
             patch = self._load_member(members.iloc[0].to_dict())
         elif self.mode == "concat":
+            # the plan decided what fits together; assembly executes it
             loaded = [
                 self._load_member(kwargs) for kwargs in members.to_dict("records")
             ]
-            out = concatenate_patches(
-                loaded, check_behavior=self.check_behavior, **{self.dim: None}
+            patch = concatenate_planned(
+                loaded,
+                self.dim,
+                count=self.merge_kwargs.get("count"),
+                conflict=self.merge_kwargs.get("conflict", "raise"),
             )
-            assert len(out) == 1
-            patch = out[0]
         else:
             joined = members.assign(current_index=output_id)
             assembled = self._assembler()._patch_from_instruction_df(joined)
@@ -517,11 +620,39 @@ class PlanResolver(PatchResolver):
         an operation which does know says so -- `Spool.expand_by`
         recording which value each patch was split on -- and it keeps
         the patch which comes out agreeing with the row `get_contents`
-        shows for it.
+        shows for it. Nothing else needs filling: under every `conflict`
+        policy the row and the assembled patch reach the same values --
+        the members agree, or both take the first member's, or both
+        carry nothing.
         """
         if not self.stamped:
             return patch
         return patch.update_attrs(**{x: row[x] for x in self.stamped})
+
+
+def _trimmed_dims(residuals, coord_dims_map: Mapping) -> frozenset[str]:
+    """The dimensions a residual (load-time) selection trims."""
+    names = {n for coords, _ in residuals for n in coords}
+    return frozenset(
+        d for n in names for d in str(coord_dims_map.get(n, n)).split(",") if d
+    )
+
+
+def stale_def_keys(residuals, coord_dims_map: Mapping, columns) -> list[str]:
+    """
+    The def-key columns which describe coordinates a residual will trim.
+
+    A residual selection is applied when a patch is loaded, so until then
+    the identity claims (def keys) of coordinates on the trimmed
+    dimensions describe the untrimmed values and must not be compared or
+    published.
+    """
+    trimmed = _trimmed_dims(residuals, coord_dims_map)
+    return [
+        f"_{c}_def_key"
+        for c, dims_str in coord_dims_map.items()
+        if set(str(dims_str).split(",")) & trimmed and f"_{c}_def_key" in columns
+    ]
 
 
 def _residual_ranges(residuals) -> dict:
@@ -545,6 +676,29 @@ def _residual_ranges(residuals) -> dict:
     return out
 
 
+def _whole_member_sizes(trims: pd.DataFrame, sources: pd.DataFrame) -> dict[int, int]:
+    """
+    The sample count of each output which is one whole member.
+
+    Such an output *is* that patch, so it holds the samples the patch
+    states. An output assembled from more than one member, or from a
+    member a trim cuts down, has a size only the loaded patch knows, and
+    states none rather than a member's.
+    """
+    if trims.empty or "_data_size" not in sources.columns:
+        return {}
+    counts = trims.groupby("output_id")["_patch_id"].transform("size").to_numpy()
+    modified = np.asarray(trims.get("_modified", False), dtype=bool)
+    whole = trims[(counts == 1) & ~modified]
+    lookup = sources.drop_duplicates("_patch_id").set_index("_patch_id")["_data_size"]
+    out = {}
+    for output_id, patch_id in zip(whole["output_id"], whole["_patch_id"], strict=True):
+        size = lookup.get(patch_id)
+        if not pd.isnull(size):
+            out[int(output_id)] = int(size)
+    return out
+
+
 def derived_catalog(
     *,
     source_rows: pd.DataFrame,
@@ -552,7 +706,6 @@ def derived_catalog(
     parent: PatchCatalog | None,
     merge_kwargs: Mapping,
     mode: str = "chunk",
-    check_behavior: WARN_LEVELS = "warn",
     origin_path=None,
     stamped: tuple[str, ...] = (),
     lossy: bool = False,
@@ -614,6 +767,7 @@ def derived_catalog(
             member_rows.get("source_path", pd.Series(dtype=str)).astype(str)
         )
         loader.absorb(parent.resolver, paths=member_paths)
+    coord_dims_map = {} if parent is None else parent.backend.coord_dims_map()
     resolver = PlanResolver(
         token=token,
         dim=name,
@@ -622,30 +776,25 @@ def derived_catalog(
         merge_kwargs=merge_kwargs,
         parent_residuals=parent_residuals,
         mode=mode,
-        check_behavior=check_behavior,
         origin_path=origin_path,
         stamped=stamped,
         lossy=lossy,
     )
     backend = get_backend(":memory:")
-    coord_dims_map = {} if parent is None else parent.backend.coord_dims_map()
     # residual selections trim at load; identity claims (def keys) for
     # coordinates on the trimmed dims would describe the untrimmed values
-    residual_names = {n for coords, _ in parent_residuals for n in coords}
-    trimmed_dims = frozenset(
-        d for n in residual_names for d in str(coord_dims_map.get(n, n)).split(",") if d
-    )
+    trimmed_dims = _trimmed_dims(parent_residuals, coord_dims_map)
     outputs = plan.outputs
-    stale_keys = [
-        f"_{c}_def_key"
-        for c, dims_str in coord_dims_map.items()
-        if set(str(dims_str).split(",")) & trimmed_dims
-        and f"_{c}_def_key" in outputs.columns
-    ]
+    stale_keys = stale_def_keys(parent_residuals, coord_dims_map, outputs.columns)
     if stale_keys:
         outputs = outputs.drop(columns=stale_keys)
-    aux_info = _aux_coord_info(sources, trims, name, coord_dims_map, trimmed_dims)
-    backend.write_sources(_output_records(outputs, token, aux_info=aux_info))
+    aux_info = _aux_coord_info(
+        sources, trims, name, coord_dims_map, trimmed_dims, concat=mode == "concat"
+    )
+    records = _output_records(
+        outputs, token, aux_info=aux_info, sizes=_whole_member_sizes(trims, sources)
+    )
+    backend.write_sources(records)
     return PatchCatalog(backend=backend, resolver=resolver)
 
 
@@ -673,7 +822,8 @@ def collapse_working_df(catalog: PatchCatalog) -> pd.DataFrame | None:
     members = resolver.member_rows
     if catalog.is_view:
         present = {
-            int(_row_source_patch_id(row)) for row in catalog.to_df().to_dict("records")
+            int(_row_source_patch_key(row))
+            for row in catalog.to_df().to_dict("records")
         }
         members = members[members["output_id"].isin(present)]
     ranges = _residual_ranges(catalog.residuals)

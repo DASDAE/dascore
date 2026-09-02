@@ -4,13 +4,17 @@ Functionality for Hampel despiking.
 
 from __future__ import annotations
 
+import math
+import warnings
+
 import numpy as np
 from scipy.ndimage import median_filter
 
 from dascore.constants import PatchType
 from dascore.exceptions import ParameterError
-from dascore.utils.moving import move_median
-from dascore.utils.patch import get_patch_window_size, patch_function
+from dascore.utils.moving import has_engine, move_median
+from dascore.utils.patch import patch_function
+from dascore.utils.window import resolve_window
 
 
 def _separable_median(data, size, mode, out):
@@ -125,8 +129,10 @@ def hampel_filter(
 
     Warning
     -------
-    Selecting windows with many samples can be *very* slow. It is recommended
-    window size in each dimension be <10 samples.
+    Runtime scales with the window's area when `approximate=False`, and
+    with the sum of its sides when `approximate=True`, so large windows
+    can be *very* slow. Installing `bottleneck` makes the approximate
+    filter nearly insensitive to window size.
 
     Returns
     -------
@@ -145,8 +151,9 @@ def hampel_filter(
 
     **Performance:**
     - `approximate=True` provides 3-4x speedup over exact calculations
-    - Installing `bottleneck` package can further improve approximate-mode
-      performance.
+    - Installing the `bottleneck` package further improves
+      approximate-mode performance, and makes it nearly insensitive to
+      window size. Without it scipy is used instead.
 
     See Also
     --------
@@ -186,9 +193,20 @@ def hampel_filter(
     # For now we just hardcode mode as it is probably the only one that
     # makes sense in a DAS data context.
     mode = "reflect"
-    size = get_patch_window_size(
-        patch, kwargs, samples, require_odd=True, warn_above=10, min_samples=3
-    )
+    # Only bottleneck's moving median is flat in window size; the exact
+    # filter and scipy's median_filter both grow with the window.
+    fast = approximate and has_engine("bottleneck")
+    size = resolve_window(
+        patch, kwargs, samples=samples, require_odd=True, min_samples=3
+    ).full_size()
+    # The cost tracks the window's area, so a 2D window is as expensive as
+    # its samples multiplied.
+    if not fast and math.prod(size) > 100:
+        msg = (
+            f"Large window size ({math.prod(size)} samples) may result in slow "
+            "performance. Consider reducing the window size."
+        )
+        warnings.warn(msg, UserWarning, stacklevel=2)
     # Need to convert ints to float for calculations to avoid roundoff error.
     # There were issues using np.issubdtype not working so this uses kind.
     is_int = data.dtype.kind in {"i", "u"}

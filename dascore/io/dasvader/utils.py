@@ -9,7 +9,7 @@ from h5py.h5r import Reference, dereference
 import dascore as dc
 from dascore.core.coords import get_coord
 from dascore.exceptions import DASVaderCompatibilityError
-from dascore.io.utils import build_patches
+from dascore.io.utils import build_patches, drop_blank_attrs
 from dascore.utils.misc import maybe_get_items, unbyte
 
 # Julia DateTime "instant" values (Dates.value) are milliseconds since
@@ -20,7 +20,7 @@ _JULIA_EPOCH_MS = 62135683200000
 
 attrs_map = {
     "GaugeLength": "gauge_length",
-    "Hostname": "host_name",
+    "Hostname": "interrogator.name",
     "PipelineTracker": "pipeline_tracker",
     "PulseRateFreq": "pulse_rate_frequency",
     "SamplingRate": "sampling_rate",
@@ -122,6 +122,7 @@ def _get_attr_dict(atrib) -> dict:
     """Map DASVader attrib values to PatchAttrs fields."""
     attrs = _dataset_to_dict(atrib)
     attrs = maybe_get_items(attrs, attrs_map)
+    drop_blank_attrs(attrs, ("interrogator.name",))
     attrs["data_category"] = "DAS"
     attrs["data_units"] = "nanostrain"
     return attrs

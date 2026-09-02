@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import numpy as np
+import pandas as pd
 import pytest
-from pydantic import BaseModel
+from pydantic import BaseModel, TypeAdapter, ValidationError
 
+from dascore.core import annotations, inventory
+from dascore.core.annotations import AnnotationSet
 from dascore.exceptions import ParameterError
 from dascore.utils.intervals import (
     clip_intervals,
@@ -19,8 +22,8 @@ from dascore.utils.intervals import (
 class _Span(BaseModel):
     """A minimal interval item with the default field names."""
 
-    start_distance: float
-    end_distance: float
+    distance_min: float
+    distance_max: float
     label: str = ""
 
 
@@ -88,28 +91,28 @@ class TestClipIntervals:
 
     def test_clipped_to_bounds(self):
         """An interval straddling the clip is trimmed to it."""
-        (out,) = clip_intervals([_Span(start_distance=0, end_distance=10)], 2, 6)
-        assert (out.start_distance, out.end_distance) == (2, 6)
+        (out,) = clip_intervals([_Span(distance_min=0, distance_max=10)], 2, 6)
+        assert (out.distance_min, out.distance_max) == (2, 6)
 
     def test_outside_dropped(self):
         """An interval left with no coverage is dropped."""
-        assert clip_intervals([_Span(start_distance=8, end_distance=10)], 2, 6) == []
+        assert clip_intervals([_Span(distance_min=8, distance_max=10)], 2, 6) == []
 
     def test_other_fields_kept(self):
         """Only the bounds change; the item itself is left alone."""
-        span = _Span(start_distance=0, end_distance=10, label="rail")
+        span = _Span(distance_min=0, distance_max=10, label="rail")
         (out,) = clip_intervals([span], 2, 6)
         assert out.label == "rail"
-        assert (span.start_distance, span.end_distance) == (0, 10)
+        assert (span.distance_min, span.distance_max) == (0, 10)
 
     def test_point_inside_survives(self):
         """A point marker inside the clip is kept as it was."""
-        point = _Span(start_distance=3, end_distance=3)
+        point = _Span(distance_min=3, distance_max=3)
         assert clip_intervals([point], 2, 6) == [point]
 
     def test_point_on_outer_end_survives(self):
         """A point on the outermost included endpoint is not lost."""
-        point = _Span(start_distance=6, end_distance=6)
+        point = _Span(distance_min=6, distance_max=6)
         assert clip_intervals([point], 2, 6) == []
         assert clip_intervals([point], 2, 6, outer=6) == [point]
 
@@ -117,7 +120,7 @@ class TestClipIntervals:
         """Any pair of start/end fields works, not just the inventory's."""
         window = _Window(time_start=0, time_end=10)
         (out,) = clip_intervals(
-            [window], 2, 6, start_field="time_start", end_field="time_end"
+            [window], 2, 6, min_field="time_start", max_field="time_end"
         )
         assert (out.time_start, out.time_end) == (2, 6)
 
@@ -125,9 +128,9 @@ class TestClipIntervals:
 class TestValueKind:
     """The kind decides the shape of the group a value belongs to."""
 
-    def test_bool_before_int(self):
-        """A bool is a boolean even though it is also an int."""
-        assert value_kind(True) == "boolean"
+    def test_none_is_membership(self):
+        """No value at all is how membership is stated."""
+        assert value_kind(None) == "membership"
 
     def test_string(self):
         """Text is a string kind."""
@@ -142,9 +145,11 @@ class TestValueKind:
 class TestNormalizeValue:
     """Values keep their python type and must be finite."""
 
-    def test_numpy_bool_unwrapped(self):
-        """A numpy bool becomes a python bool, not a number."""
-        assert normalize_value(np.bool_(True)) is True
+    @pytest.mark.parametrize("value", [True, False, np.bool_(True)])
+    def test_bool_refused(self, value):
+        """Membership is stated by having no value, so a boolean is not one."""
+        with pytest.raises(ParameterError, match="true and false are not values"):
+            normalize_value(value)
 
     def test_numpy_int_unwrapped(self):
         """A numpy int becomes a python int, not a float."""
@@ -169,3 +174,32 @@ class TestNormalizeValue:
 
         with pytest.raises(_MyError, match="must be finite"):
             normalize_value(np.nan, error=_MyError)
+
+
+class TestIntervalValueType:
+    """One value type, refused in each subsystem's own vocabulary."""
+
+    @pytest.mark.parametrize("annotated", ["LabelValue", "AnnotationValue"])
+    def test_the_refusal_reaches_the_caller(self, annotated):
+        """Both subsystems refuse a boolean, and say why.
+
+        The type each raises is not observable here: pydantic wraps
+        whatever a validator raises, keeping the message. The message is
+        therefore what the caller actually gets, so it is what is pinned.
+        """
+        module = inventory if annotated == "LabelValue" else annotations
+        adapter = TypeAdapter(getattr(module, annotated))
+        with pytest.raises(ValidationError, match="true and false are not values"):
+            adapter.validate_python(True)
+
+    def test_a_direct_call_raises_the_stated_error(self):
+        """Where the value is checked outside pydantic, the type survives.
+
+        `AnnotationSet` checks its own frame, so this is the path on which
+        the factory's `error` argument is the difference it claims to be.
+        """
+        frame = pd.DataFrame(
+            {"group": ["g"], "value": [True], "time_min": [0], "time_max": [1]}
+        )
+        with pytest.raises(ParameterError, match="true and false are not values"):
+            AnnotationSet(frame, dims=("time",))

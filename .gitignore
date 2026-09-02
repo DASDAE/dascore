@@ -71,6 +71,8 @@ target/
 
 # docs
 docs/api/*
+# The generated pages are not tracked, but the sidebar they use is.
+!docs/api/_metadata.yml
 # Where a local `quarto render docs` puts the built site.
 docs/_site/
 _autosummary
@@ -116,3 +118,14 @@ prof/
 .vscode/
 #JetBrains
 .idea/
+
+# JupyterLite site and the notebooks it is built from (see
+# scripts/build_notebooks.py); both are build artifacts.
+docs/lite/
+docs/lite_contents/
+docs/tutorial/lite_tmp_*
+# `jupyter lite build` keeps its incremental-build state here.
+.jupyterlite.doit.db
+
+# Written by scripts/_doc_report.py; a build artifact, not a page.
+doc_build_report.json

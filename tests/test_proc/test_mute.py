@@ -59,9 +59,17 @@ def _assert_point_values(
 
 
 @pytest.fixture(scope="session")
-def patch_ones(random_patch):
-    """Return a patch filled with ones."""
-    return random_patch.new(data=np.ones_like(random_patch.data))
+def patch_ones():
+    """Return a patch filled with ones.
+
+    A quarter of the default patch's pixels over the same 300 m by 8 s
+    extent: the tests below mute along lines given in metres and seconds,
+    so the extent has to stay while the sampling need not.
+    """
+    patch = dc.get_example_patch(
+        "random_das", shape=(150, 1000), distance_step=2, time_step=0.008
+    )
+    return patch.new(data=np.ones_like(patch.data))
 
 
 @pytest.fixture(scope="module")

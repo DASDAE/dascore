@@ -15,10 +15,13 @@ applied; `Spool.chunk` runs on these plans.
 
 from __future__ import annotations
 
+import hashlib
 import inspect
 import math
 import warnings
+from collections.abc import Sequence
 from dataclasses import dataclass, field
+from datetime import timedelta
 from pathlib import Path
 from typing import Any, Literal
 
@@ -26,6 +29,7 @@ import numpy as np
 import pandas as pd
 
 import dascore as dc
+from dascore.constants import attr_conflict_description
 from dascore.exceptions import (
     ChunkError,
     CoordMergeError,
@@ -36,23 +40,49 @@ from dascore.exceptions import (
 from dascore.units import (
     DimensionalityError,
     Quantity,
+    carries_units,
     convert_units,
     get_byte_count,
     get_quantity,
     is_data_size,
+    is_percent,
 )
-from dascore.utils.attrs import validate_conflict
+from dascore.utils.attrs import known_only, validate_conflict
 from dascore.utils.chunk import get_intervals
+from dascore.utils.docs import compose_docstring
 from dascore.utils.misc import get_middle_value, is_range
-from dascore.utils.pd import get_interval_columns
+from dascore.utils.pd import get_dim_names_from_columns, get_interval_columns
 from dascore.utils.time import is_datetime64, is_timedelta64, to_float, to_timedelta64
 
 # Columns which never participate in conflict policing and never carry to
-# outputs: source bookkeeping (outputs are not file rows).
-_SOURCE_COLUMNS = ("source_path", "source_format", "source_version", "source_patch_id")
+# outputs: source bookkeeping (outputs are not file rows) and the two
+# lineage ids, which every patch states differently and a merged patch
+# folds from its members rather than inheriting from any one of them.
+_SOURCE_COLUMNS = (
+    "source_path",
+    "source_format",
+    "source_version",
+    "source_patch_key",
+    "patch_id",
+    "processing_id",
+)
 # The default continuity tolerance; looser values warn when they force
 # merges (#662).
 _DEFAULT_TOLERANCE = 1.5
+
+
+@dataclass(frozen=True)
+class _AbsoluteTolerance:
+    """
+    A continuity tolerance stated in the coordinate's units, not in samples.
+
+    A quantity or timedelta tolerance resolves to one of these per cell,
+    since only the cell fixes the units and dtype to express it in. The
+    wrapper lets the gap test tell an absolute tolerance from a sample
+    count; on a unitless coordinate both are plain numbers.
+    """
+
+    value: Any
 
 
 @dataclass(frozen=True)
@@ -92,8 +122,28 @@ class ChunkPlan:
         return self.value is None
 
 
+def _kind_codes(df: pd.DataFrame, names: Sequence[str]) -> pd.Series:
+    """
+    Label each row by kind: rows sharing a label hold equal values.
+
+    A plan partitions a whole relation at once, which needs an
+    equivalence relation, so kind values are compared for equality: a
+    missing value (null or "") is a value like any other, equal to
+    another missing one and nothing else. `known_only` is what makes the
+    two spellings one value.
+    """
+    names = list(names)
+    if not names or df.empty:
+        return pd.Series(0, index=df.index, dtype=np.int64)
+    values = known_only(df[names].astype(object))
+    return values.groupby(names, dropna=False, sort=False).ngroup()
+
+
 def _resolve_group_attrs(group, columns) -> tuple[str, ...]:
     """Resolve the group attrs: per-call > config; explicit names must exist."""
+    # A name repeated says nothing twice; deduping here keeps it out of the
+    # recorded params as well as out of the groupby, which cannot take
+    # duplicate labels.
     if group is not None:
         group = (group,) if isinstance(group, str) else tuple(group)
         if missing := [x for x in group if x not in columns]:
@@ -101,9 +151,10 @@ def _resolve_group_attrs(group, columns) -> tuple[str, ...]:
                 f"group attribute(s) {missing} do not exist on any patch in the spool."
             )
             raise InvalidSpoolQueryError(msg)
-        return group
+        return tuple(dict.fromkeys(group))
     # Config (and default) names are best-effort.
-    return tuple(x for x in dc.get_config().groupby_attrs if x in columns)
+    names = (x for x in dc.get_config().patch_kind_attrs if x in columns)
+    return tuple(dict.fromkeys(names))
 
 
 def samples_adjusted_envelopes(
@@ -234,19 +285,162 @@ def _sampling_group(step: pd.Series, tolerance: float) -> pd.Series:
     return pd.Series(labels, index=step.index)
 
 
-def _continuity_group(start, stop, step, tolerance) -> pd.Series:
-    """Label maximal near-contiguous runs (spec 2.4)."""
-    args = np.argsort(start.to_numpy())
-    start_sorted = start.iloc[args]
-    stop_sorted = stop.iloc[args]
+def _check_tolerance_value(value, name, shown=None, *, allow_infinite=False):
+    """
+    Reject a tolerance no gap could be measured against.
+
+    An infinite sample count is a coherent request — no boundary is ever
+    a gap — but an infinite distance is not a distance, so only the
+    count is allowed to be one.
+    """
+    shown = value if shown is None else shown
+    # One tolerance, not one per patch: a one-element array passes every
+    # test below and then broadcasts through the gap comparison.
+    if np.asarray(value).ndim:
+        msg = (
+            f"The tolerance for {name!r} must be a single value, got an "
+            f"array of {np.asarray(value).size}."
+        )
+        raise ParameterError(msg)
+    try:
+        null = bool(pd.isnull(value))
+        # A bare 0 would make numpy cast the timedelta to a generic unit.
+        zero = to_timedelta64(0) if is_timedelta64(value) else 0
+        negative = not null and value < zero
+    except TypeError:
+        msg = (
+            f"The tolerance for {name!r} must be a sample count, a quantity, "
+            f"or a timedelta, got {shown!r}. A unit-bearing string becomes a "
+            "quantity with dascore.get_quantity."
+        )
+        raise ParameterError(msg) from None
+    if null or (not allow_infinite and not np.isfinite(value)):
+        msg = f"The tolerance for {name!r} must be finite, got {shown}."
+        raise ParameterError(msg)
+    if negative:
+        msg = f"The tolerance for {name!r} must not be negative, got {shown}."
+        raise ParameterError(msg)
+
+
+def _normalize_tolerance(tolerance, name):
+    """
+    Validate a continuity tolerance and reduce it to one of two forms.
+
+    A number is a multiple of the sampling interval; a quantity or
+    timedelta states the limit in the coordinate's own units, which only
+    a cell can resolve (it fixes the units and dtype), so it passes
+    through to be resolved there. A dimensionless quantity *is* the
+    multiple, so it becomes a number.
+    """
+    if isinstance(tolerance, timedelta) or is_timedelta64(tolerance):
+        # to_timedelta64 takes the several spellings of a timedelta
+        tolerance = to_timedelta64(tolerance)
+        _check_tolerance_value(tolerance, name)
+        return tolerance
+    if isinstance(tolerance, Quantity):
+        if is_data_size(tolerance):
+            msg = (
+                f"Cannot use a tolerance of {tolerance} for {name!r}: a data "
+                "size does not measure a gap along a coordinate."
+            )
+            raise UnitError(msg)
+        if is_percent(tolerance):
+            msg = (
+                f"Cannot use a tolerance of {tolerance} for {name!r}: a "
+                "percentage is neither a sample count nor a length. Pass the "
+                "count itself, or a length in the coordinate's units."
+            )
+            raise UnitError(msg)
+        if not tolerance.dimensionless:
+            _check_tolerance_value(tolerance.magnitude, name, shown=tolerance)
+            return tolerance
+        # a dimensionless quantity is the sample count it spells out
+        tolerance = float(tolerance.m_as("dimensionless"))
+    _check_tolerance_value(tolerance, name, allow_infinite=True)
+    return tolerance
+
+
+def _cell_tolerance(tolerance, sub, name):
+    """Resolve an absolute tolerance into one cell's own units."""
+    if not carries_units(tolerance):
+        return tolerance
+    start, _, _ = get_interval_columns(sub, name)
+    if isinstance(tolerance, Quantity):
+        shown = tolerance
+    else:
+        # said in seconds, which is what a timedelta measures and how
+        # the message reads back
+        shown = f"{to_float(tolerance)} s"
+        if is_datetime64(start.dtype) or is_timedelta64(start.dtype):
+            return _AbsoluteTolerance(tolerance)
+        # A numeric coordinate can still be measured in time (a relative
+        # time axis, say), so the timedelta converts like any quantity.
+        tolerance = get_quantity(f"{to_float(tolerance)} s")
+    prefix = f"Cannot use a tolerance of {shown} for {name!r}"
+    value = _quantity_to_dim_value(tolerance, sub, name, start.dtype, prefix=prefix)
+    return _AbsoluteTolerance(value)
+
+
+def _gap_boundaries(start, stop, step, tolerance):
+    """
+    Locate the discontinuities in one cell (spec 2.4).
+
+    Returns `(order, reach, has_gap)` over the start-ordered rows.
+    `reach` is the furthest stop seen *before* each row, so an
+    overlapping or fully-nested row can never open a gap behind it, and
+    `has_gap` marks each row whose start clears that reach by more than
+    the margin: `tolerance` steps for a sample count, or the tolerance
+    itself (never under one step) for an
+    [`_AbsoluteTolerance`](`dascore.utils.chunk_plan._AbsoluteTolerance`).
+    The first row has nothing behind it, and a row whose step is unknown
+    compares False against a sample count, so neither reports a gap.
+
+    Arrays rather than a frame, and an explicit first-row mask rather
+    than `shift`, whose NaN fill would upcast integer envelopes to
+    float — `reach` is a reported value, not just a comparand.
+    """
+    order = np.argsort(start.to_numpy())
+    starts = start.to_numpy()[order]
+    stops = stop.to_numpy()[order]
     # envelopes are value-ordered regardless of coordinate orientation,
     # so the continuity margin uses the step magnitude
-    step_sorted = step.iloc[args].abs()
-    stop_cum_max = stop_sorted.cummax()
-    end_markers = stop_cum_max.shift() + step_sorted * tolerance
-    has_gap = start_sorted > end_markers
-    group = has_gap.astype(np.int64).cumsum()
-    return group[start.index]
+    steps = np.abs(step.to_numpy()[order])
+    reach = np.empty_like(stops)
+    reach[:1] = stops[:1]
+    np.maximum.accumulate(stops[:-1], out=reach[1:])
+    # Measure the distance from the reach rather than comparing against
+    # `reach + step * tolerance`: a float margin promotes that sum, and
+    # an integer coordinate past 2**53 rounds both endpoints together,
+    # hiding the gap. The distance itself is small enough to compare.
+    # Only rows past the reach are measured — a row which starts at or
+    # before it cannot open a gap, and subtracting there would wrap an
+    # unsigned envelope into an enormous phantom one.
+    has_gap = np.zeros(len(starts), dtype=bool)
+    ahead = starts > reach
+    if ahead.any():
+        if isinstance(tolerance, _AbsoluteTolerance):
+            # Adjacent patches sit exactly one step apart, so a margin
+            # narrower than the step would open a gap where no sample is
+            # missing. An unknown step has no floor to apply.
+            step_ahead = steps[ahead]
+            margin = np.where(
+                pd.isnull(step_ahead),
+                tolerance.value,
+                np.maximum(step_ahead, tolerance.value),
+            )
+        else:
+            margin = steps[ahead] * tolerance
+        has_gap[ahead] = (starts[ahead] - reach[ahead]) > margin
+    has_gap[:1] = False
+    return order, reach, has_gap
+
+
+def _continuity_group(start, stop, step, tolerance) -> pd.Series:
+    """Label maximal near-contiguous runs (spec 2.4)."""
+    order, _, has_gap = _gap_boundaries(start, stop, step, tolerance)
+    out = pd.Series(0, index=start.index, dtype=np.int64)
+    out.iloc[order] = np.cumsum(has_gap)
+    return out
 
 
 def _normalize_chunk_units(df: pd.DataFrame, name: str) -> pd.DataFrame:
@@ -321,22 +515,80 @@ def _normalize_chunk_units(df: pd.DataFrame, name: str) -> pd.DataFrame:
     return df
 
 
-def _partition(
-    df, name, group_attrs, tolerance, sampling_tolerance
-) -> tuple[pd.Series, bool]:
-    """
-    Return (partition labels, forced_merge): rows sharing a label may
-    combine (spec 2).
+def _partition_unit(df: pd.DataFrame, name: str, row: int) -> str:
+    """The unit a partition's envelope is stated in, or "" if it states none."""
+    col = df.get(f"_{name}_units")
+    unit = None if col is None else col.iloc[row]
+    return "" if pd.isnull(unit) else str(unit)
 
-    Components: group attrs, dims signature, structural def keys of
-    non-chunked coords, sampling group, and continuity group. Continuity
-    is evaluated *within* each other-component cell so unrelated patches
-    can never bridge a gap. `forced_merge` is True when a loosened
-    tolerance merged patches the default would have kept apart (#662);
-    the caller owns warning about it.
+
+def _validate_missing_dim(missing_dim) -> None:
+    """Reject a missing_dim value that is neither policy."""
+    if missing_dim not in ("raise", "drop"):
+        msg = f"missing_dim must be 'raise' or 'drop', got {missing_dim!r}"
+        raise ParameterError(msg)
+
+
+def _prepare_relation(
+    df: pd.DataFrame,
+    name: str,
+    missing_dim: str,
+    dim_label: str = "chunk dimension",
+    operation: str = "chunking",
+) -> pd.DataFrame:
     """
-    _start, _stop, step = get_interval_columns(df, name)
-    cols = [x for x in group_attrs if x in df.columns]
+    Ready a flat relation for planning or reporting along ``name``.
+
+    Attaches patch ids, re-spells compatible units, then applies the
+    `missing_dim` policy. Missing envelopes, and patches carrying the
+    name only as a non-dimensional coordinate (spec 7 / D2), both count
+    as missing: envelope presence is not enough, because auxiliary
+    coordinates index their envelopes too but their patches cannot be
+    trimmed or merged *along* the name.
+
+    `dim_label` and `operation` word the error for the caller; a typo in
+    `missing_dim` raises here rather than silently taking the drop
+    branch, which would truncate exactly the report the user asked for.
+    """
+    _validate_missing_dim(missing_dim)
+    min_name, max_name = f"{name}_min", f"{name}_max"
+    df = _ensure_patch_id(df)
+    df = _normalize_chunk_units(df, name)
+    null_rows = pd.isnull(df[min_name]) | pd.isnull(df[max_name])
+    if "dims" in df.columns:
+        dim_lists = df["dims"].fillna("").astype(str).str.split(",")
+        not_a_dim = ~dim_lists.map(lambda dims: name in dims)
+    else:
+        not_a_dim = pd.Series(False, index=df.index)
+    unusable = null_rows | not_a_dim
+    if not unusable.any():
+        return df
+    if missing_dim == "raise":
+        bad = df.loc[unusable, "_patch_id"].tolist()
+        rides = int((not_a_dim & ~null_rows).sum())
+        detail = (
+            f" ({rides} of them carry {name!r} only as a non-dimensional "
+            f"coordinate; {operation} is defined on dimensions)"
+            if rides
+            else ""
+        )
+        msg = (
+            f"{int(unusable.sum())} patch(es) lack the {dim_label} "
+            f"{name!r}{detail} (patch ids {bad[:5]}...). Pass "
+            "missing_dim='drop' to exclude them."
+        )
+        raise ChunkError(msg)
+    return df[~unusable]
+
+
+def _cell_columns(df, name) -> list[str]:
+    """
+    Return the structural columns whose values decide a cell.
+
+    The kind attrs decide it too, but through `_kind_codes` rather than
+    their own values, so they are not listed here.
+    """
+    cols = []
     if "dims" in df.columns:
         cols.append("dims")
     # Structural identity: def keys of non-chunked *dimensions* only
@@ -352,23 +604,80 @@ def _partition(
     # coordinates either.
     if (unit_col := f"_{name}_units") in df.columns:
         cols.append(unit_col)
-    base = (
-        df.groupby(cols, dropna=False, sort=False).ngroup()
-        if cols
-        else pd.Series(0, index=df.index)
-    )
+    # A name repeated in `group` would repeat the column, and a frame
+    # with duplicate labels cannot be grouped or sorted.
+    return list(dict.fromkeys(cols))
+
+
+def _cell_labels(df, name, group_attrs, sampling_tolerance) -> pd.Series:
+    """
+    Label the cells a partition's continuity runs live inside (spec 2).
+
+    A cell holds the rows which could combine if only their envelopes
+    lined up: the same kind, dims signature, structural def keys of the
+    non-chunked dimensions, chunk-dim units, and sampling group.
+    Continuity is then evaluated *within* a cell, so unrelated patches
+    can never bridge (or fabricate) a gap.
+    """
+    _start, _stop, step = get_interval_columns(df, name)
+    kind = _kind_codes(df, [x for x in group_attrs if x in df.columns])
+    keys = [kind, *(df[x] for x in _cell_columns(df, name))]
+    base = df.groupby(keys, dropna=False, sort=False).ngroup()
     samp = _sampling_group(step, sampling_tolerance)
-    cell = base.astype(str) + "_" + samp.astype(str)
+    return base.astype(str) + "_" + samp.astype(str)
+
+
+def _may_exceed_default(tol, step: pd.Series) -> bool:
+    """True when an absolute margin can exceed the default anywhere in a cell.
+
+    The margin is `max(step, tol)` against the default's `1.5 * step`, so
+    the tolerance is looser exactly where it passes 1.5 steps — which is
+    at the cell's *smallest* step, since a cell may mix steps within the
+    sampling tolerance. A cell with no known step is never forced: the
+    default cannot close a boundary there at all.
+    """
+    steps = np.abs(to_float(step.to_numpy()))
+    if not np.isfinite(steps).any():
+        return False
+    return to_float(tol.value) > _DEFAULT_TOLERANCE * np.nanmin(steps)
+
+
+def _partition(
+    df, name, group_attrs, tolerance, sampling_tolerance
+) -> tuple[pd.Series, bool]:
+    """
+    Return (partition labels, forced_merge): rows sharing a label may
+    combine (spec 2).
+
+    A partition is a continuity run within a cell (see
+    [`_cell_labels`](`dascore.utils.chunk_plan._cell_labels`)).
+    `forced_merge` is True when a loosened tolerance merged patches the
+    default would have kept apart (#662); the caller owns warning about
+    it.
+    """
+    cell = _cell_labels(df, name, group_attrs, sampling_tolerance)
     cont = pd.Series(0, index=df.index, dtype=np.int64)
     forced_merge = False
+    absolute = carries_units(tolerance)
     for _, index in df.groupby(cell, sort=False).groups.items():
         sub = df.loc[index]
         s, e, st = get_interval_columns(sub, name)
-        labels = _continuity_group(s, e, st, tolerance).astype(np.int64)
+        tol = _cell_tolerance(tolerance, sub, name)
+        labels = _continuity_group(s, e, st, tol).astype(np.int64)
         cont.loc[index] = labels
-        if tolerance > _DEFAULT_TOLERANCE and not forced_merge:
-            default = _continuity_group(s, e, st, _DEFAULT_TOLERANCE)
-            forced_merge = default.nunique() > labels.nunique()
+        if forced_merge or not (absolute or tolerance > _DEFAULT_TOLERANCE):
+            continue
+        # An absolute tolerance can be looser than the default at one
+        # boundary and tighter at another, so it is checked against the
+        # default partition -- but only where it can be looser at all,
+        # since the second pass is not free.
+        if absolute and not _may_exceed_default(tol, st):
+            continue
+        # By containment, not by count: a partition holding more than one
+        # of the default's is one the tolerance forced together, even
+        # when the counts match.
+        default = _continuity_group(s, e, st, _DEFAULT_TOLERANCE)
+        forced_merge = bool(default.groupby(labels).nunique().gt(1).any())
     return cell + "_" + cont.astype(str), forced_merge
 
 
@@ -401,7 +710,7 @@ def _coerce_length_overlap(value, overlap, start_dtype):
 
 
 def _validate_quantity(label: str, quant, name: str) -> None:
-    """Reject quantity chunk lengths that cannot describe a length."""
+    """Reject a quantity chunk length or overlap that cannot describe one."""
     if not isinstance(quant, Quantity):
         return
     magnitude = np.asarray(quant.magnitude)
@@ -573,25 +882,36 @@ def _packing_factor(sub: pd.DataFrame, name: str, step_float: float) -> float:
     return 1.0 if packing < 1 + 1e-9 else packing
 
 
-def _quantity_to_dim_value(quant, sub, name, start_dtype):
-    """Convert a (non-size) quantity into the chunked dimension's units."""
+def _quantity_to_dim_value(quant, sub, name, start_dtype, prefix=None):
+    """
+    Convert a (non-size) quantity into the chunked dimension's units.
+
+    `prefix` opens the error messages; it names what the quantity was
+    for, since the same conversion serves a chunk length and a
+    continuity tolerance alike.
+    """
+    prefix = prefix if prefix is not None else f"Cannot chunk {name!r} by {quant}"
     if is_datetime64(start_dtype) or is_timedelta64(start_dtype):
         try:
             seconds = quant.to("s").magnitude
         except DimensionalityError:
             msg = (
-                f"Cannot chunk {name!r} by {quant}: the coordinate is "
-                "time-like, so the value must have units of time."
+                f"{prefix}: the coordinate is time-like, so the "
+                "value must have units of time."
             )
             raise UnitError(msg) from None
-        return to_timedelta64(seconds)
+        try:
+            return to_timedelta64(seconds)
+        except OverflowError:
+            msg = f"{prefix}: it is too large to express as a time."
+            raise ParameterError(msg) from None
     units_col = f"_{name}_units"
     if units_col in sub.columns:
         units = sub[units_col].iloc[0]
         if units is None or pd.isnull(units) or units == "":
             msg = (
-                f"Cannot chunk {name!r} by {quant}: the coordinate has no "
-                "units, so a unit-bearing length is ambiguous."
+                f"{prefix}: the coordinate has no units, so a "
+                "unit-bearing length is ambiguous."
             )
             raise UnitError(msg)
         try:
@@ -605,16 +925,13 @@ def _quantity_to_dim_value(quant, sub, name, start_dtype):
             end = convert_units(magnitude, to_units=units, from_units=from_units)
             return end - anchor
         except (DimensionalityError, UnitError):
-            msg = (
-                f"Cannot chunk {name!r} by {quant}: incompatible with the "
-                f"coordinate's units of {units}."
-            )
+            msg = f"{prefix}: incompatible with the coordinate's units of {units}."
             raise UnitError(msg) from None
     # A frame with no units column states no units at all; envelopes are
     # native magnitudes, so there is nothing to convert the quantity to.
     msg = (
-        f"Cannot chunk {name!r} by {quant}: the frame records no units "
-        "for the coordinate, so a unit-bearing length is ambiguous."
+        f"{prefix}: the frame records no units for the coordinate, "
+        "so a unit-bearing length is ambiguous."
     )
     raise UnitError(msg)
 
@@ -711,19 +1028,29 @@ def _member_envelopes(sorted_df: pd.DataFrame, seg_starts: np.ndarray, name: str
     Overlap-corrected source envelopes over the whole sorted relation.
 
     Within each partition (rows ordered by start, patch id) an
-    overlapping source's start moves to just past the previous source's
-    stop, so the earlier source owns the overlap (D3: complete overlaps
-    keep the first member, deterministically). Returns the corrected
-    starts, the row modification flags, and the kept-row mask (sources
-    left degenerate by the correction contribute nothing).
+    overlapping source's start moves to just past the furthest stop of
+    the sources before it, so the earliest source owns the overlap (D3:
+    complete overlaps keep the first member, deterministically). Returns
+    the corrected starts, the row modification flags, and the kept-row
+    mask (sources left degenerate by the correction contribute nothing).
     """
     start, stop, step = (x.to_numpy() for x in get_interval_columns(sorted_df, name))
     is_first = np.zeros(len(sorted_df), dtype=bool)
     is_first[seg_starts] = True
-    prev_stop = np.roll(stop, 1)
-    rolled_step = np.roll(step, 1)
-    isna = pd.isnull(rolled_step)
-    prev_step = np.where(~isna, rolled_step, np.zeros_like(rolled_step))
+    # The owner of the furthest stop so far in the partition: the last
+    # row whose stop set the running maximum. Comparing with the
+    # previous row alone would let a source nested in an earlier one
+    # re-emerge after a shorter neighbor and hand out samples the
+    # earlier source already owns.
+    codes = np.cumsum(is_first) - 1
+    running_max = pd.Series(stop).groupby(codes).cummax().to_numpy()
+    rows = np.arange(len(stop))
+    owner = np.maximum.accumulate(np.where(stop == running_max, rows, 0))
+    prev_owner = np.roll(owner, 1)
+    prev_stop = stop[prev_owner]
+    owner_step = step[prev_owner]
+    isna = pd.isnull(owner_step)
+    prev_step = np.where(~isna, owner_step, np.zeros_like(owner_step))
     # Add the step so consecutive sources do not share one sample; the
     # roll artifact at each partition's first row is masked out.
     overlaps = (start <= prev_stop) & ~is_first
@@ -746,14 +1073,17 @@ def _carried_columns(
     """
     Resolve every partition's carried columns at once (spec 2.5/6.4).
 
-    Group attrs, dims, and def keys are single-valued by construction.
-    Remaining public attrs must be single-valued per partition, policed
-    by `conflict`. Returns a mapping of column -> one carried value per
-    partition (null where a partition does not carry the column), in the
-    order columns ride onto outputs. A conflict raises for the first
-    active partition (in output order) and its first conflicting column,
-    exactly as per-partition policing did; partitions which produced no
-    outputs (`active` False) are never policed.
+    Dims and def keys are single-valued by construction. Public attrs
+    must hold equal values per partition, policed by `conflict`: a
+    missing value (null or "") is a value like any other, equal to
+    another missing one and nothing else, so a member which never
+    recorded an attr conflicts with one which did. Returns a mapping of
+    column -> one carried value per partition (null where a partition
+    does not carry the column), in the order columns ride onto outputs.
+    A conflict raises for the first active partition (in output order)
+    and its first conflicting column, exactly as per-partition policing
+    did; partitions which produced no outputs (`active` False) are never
+    policed.
     """
     n_parts = len(seg_starts)
     first = sorted_df.iloc[seg_starts].reset_index(drop=True)
@@ -783,36 +1113,37 @@ def _carried_columns(
         # were never policed (their values may not even be hashable),
         # and their carried values are never published.
         rows = active[codes]
-        grouped = sorted_df.loc[rows, policed].groupby(codes[rows], sort=True)
-        group_size = grouped.size()
-        part_index = group_size.index.to_numpy()
-        sizes = np.zeros(n_parts, dtype=np.intp)
-        sizes[part_index] = group_size.to_numpy()
+        # "" and null are one missing value, which is a value like any other.
+        known = known_only(sorted_df.loc[rows, policed])
+        grouped = known.groupby(codes[rows], sort=True)
+        part_index = grouped.size().index.to_numpy()
         nunique = np.zeros((n_parts, len(policed)), dtype=np.intp)
         # An unhashable attr value in an active partition raises
         # TypeError here. Per-partition policing raised it too, though
         # partition-major rather than at aggregation; such values are
         # outside the relation's contract, so the eager error is fine.
-        nunique[part_index] = grouped.nunique(dropna=True).to_numpy()
-        counts = np.zeros_like(nunique)
-        counts[part_index] = grouped.count().to_numpy()
-        # single-valued: one distinct value with no nulls beside it, or
-        # all null (matching Series.unique length semantics; nunique
-        # with dropna=False would differ — it counts None and NaN in an
-        # object column as two, where unique-length logic calls a
-        # partition holding only nulls single-valued)
-        single = ((nunique == 1) & (counts == sizes[:, None])) | (counts == 0)
+        # dropna=False: a member which recorded nothing is a distinct value.
+        nunique[part_index] = grouped.nunique(dropna=False).to_numpy()
+        # no conflict: exactly one distinct value
+        single = nunique <= 1
         conflicted = ~single & active[:, None]
-        # Group attrs and dims are partition keys, so they are always
-        # single-valued and never reach the conflict policy here.
+        # The first *row* of each partition, not `grouped.first()`, which
+        # skips nulls and would resurrect the old first-known rule. Only
+        # active partitions: `known_only` on the rest could meet an
+        # unhashable value, as the comment above says.
+        firsts = pd.DataFrame(index=range(n_parts), columns=policed, dtype=object)
+        stated = known_only(first.loc[part_index, policed])
+        firsts.loc[part_index] = stated.to_numpy()
+        # Dims are a partition key and group attrs never conflict within
+        # one, so neither reaches the conflict policy here.
         raising = conflicted & (owned | (conflict == "raise"))
         if raising.any():
             part = int(np.argmax(raising.any(axis=1)))
             col = policed[int(np.argmax(raising[part]))]
             msg = (
-                f"Cannot merge on dim {name} because all values for "
-                f"{col} are not equal. Consider using the `conflict` "
-                "argument to loosen this restriction."
+                f"Cannot merge on dim {name} because {col} holds conflicting "
+                "values. Consider using the `conflict` argument to loosen "
+                "this restriction."
             )
             raise CoordMergeError(msg)
         keep_first = conflict == "keep_first"
@@ -822,7 +1153,7 @@ def _carried_columns(
             keeps = single[:, index] | (conflicted[:, index] & keep_first)
             if not (keeps & active).any():
                 continue  # dropped by every active partition: omit entirely
-            values = first[col]
+            values = firsts[col]
             carried[col] = values if keeps.all() else values.where(keeps)
     # Structural (dimension) def keys carry — single-valued by
     # partitioning — and canonical units carry for every dimension, the
@@ -869,13 +1200,253 @@ def _uniform_dtype_str(value, cache: dict[str, str]) -> str:
     return cache[key]
 
 
+_REPORT_COLUMNS = ("span", "gap_total", "gap_size", "covered", "coverage", "group_id")
+
+
+def _report_dim_columns(df: pd.DataFrame, name: str, carried) -> tuple[str, str, str]:
+    """
+    Return the envelope columns of `name`, checked for a usable report.
+
+    `get_interval_columns` words its error for chunking, and a carried
+    attr sharing an emitted column's name would overwrite it rather than
+    fail, so both are policed here instead. The envelope columns count
+    as emitted: grouping by one would leave the frame two columns of
+    that name, which no longer answers to `frame[name]` as a series.
+    """
+    columns = (f"{name}_min", f"{name}_max", f"{name}_step")
+    if missing := set(columns) - set(df.columns):
+        dims = get_dim_names_from_columns(df)
+        msg = (
+            f"Cannot report on {name!r}: no {sorted(missing)} in the "
+            f"relation. Valid dimensions or columns are {dims}."
+        )
+        raise ParameterError(msg)
+    emitted = set(_REPORT_COLUMNS) | set(columns)
+    if collide := sorted(set(carried) & emitted):
+        msg = (
+            f"Cannot group a report by {collide}: the name(s) collide with "
+            "the columns the report emits."
+        )
+        raise ParameterError(msg)
+    return columns
+
+
+def _report_preamble(df, name, group, missing_dim):
+    """
+    Resolve what both reports need before they can differ.
+
+    Returns the prepared relation, its carried columns, and the
+    envelope column names -- kept in one place so the two reports
+    cannot drift apart in how they group, validate, or label.
+    """
+    group_attrs = _resolve_group_attrs(group, set(df.columns))
+    names = _report_dim_columns(df, name, group_attrs)
+    df = _prepare_relation(df, name, missing_dim, "dimension", "gap reporting")
+    return df, group_attrs, _gap_carried_columns(df, name, group_attrs), names
+
+
+def _gap_carried_columns(df: pd.DataFrame, name: str, group_attrs) -> list[str]:
+    """
+    Return the cell columns a report shows, in a stable order.
+
+    Def keys are opaque structural identity, so they partition a report
+    without appearing in it; `group_id` tells cells apart instead. The
+    dimension's units are kept: they name what the reported magnitudes
+    are in, and `present_units_columns` makes them public at the spool
+    boundary. The kind attrs are shown by value, which is why they are
+    listed here rather than reached through `_kind_codes`.
+    """
+    private = set(_dim_def_key_columns(df, name))
+    cols = [x for x in group_attrs if x in df.columns]
+    cols += [x for x in _cell_columns(df, name) if x not in private]
+    return list(dict.fromkeys(cols))
+
+
+def _cell_gaps(df: pd.DataFrame, name: str, group_attrs, tolerance):
+    """
+    Yield `(cell rows, gaps in that cell)` for every cell in `df`.
+
+    Cells come in envelope-min order, as partitions do (spec 8), and
+    ties break on what the cell states rather than on a patch id, which
+    is positional — so a report never depends on the order the relation
+    happened to arrive in. Each cell's ordinal rides on its gaps as
+    `group_id`, which is the only thing that always tells two cells
+    apart: sampling group and structural def keys partition without
+    being shown.
+    """
+    min_name, max_name, step_name = _dim_columns(df, name)
+    carried = _gap_carried_columns(df, name, group_attrs)
+    cells = _cell_labels(
+        df, name, group_attrs, dc.get_config().sampling_group_tolerance
+    )
+    grouped = df.groupby(cells, sort=False)
+    groups = grouped.groups
+    mins = grouped[min_name].min()
+    stated = {
+        label: tuple(df.loc[index, x].iloc[0] for x in carried)
+        for label, index in groups.items()
+    }
+    order = sorted(
+        groups, key=lambda label: (mins[label], [str(x) for x in stated[label]])
+    )
+    for group_id, label in enumerate(order):
+        sub = df.loc[groups[label]]
+        start, stop, step = get_interval_columns(sub, name)
+        tol = _cell_tolerance(tolerance, sub, name)
+        row_order, reach, has_gap = _gap_boundaries(start, stop, step, tol)
+        found = np.flatnonzero(has_gap)
+        # the row opening each gap states the step, signed as the
+        # coordinate is -- only the continuity margin needs a magnitude
+        starts = start.to_numpy()[row_order][found]
+        gaps = pd.DataFrame(
+            {
+                min_name: reach[found],
+                max_name: starts,
+                step_name: step.to_numpy()[row_order][found],
+                "gap_size": starts - reach[found],
+                "group_id": np.full(len(found), group_id, dtype=np.int64),
+            }
+            | {x: sub[x].iloc[:1].repeat(len(found)).to_numpy() for x in carried}
+        )
+        yield group_id, sub, gaps
+
+
+def _empty_report(columns: dict) -> pd.DataFrame:
+    """
+    Build a report frame with no rows but the right columns and dtypes.
+
+    Callers pass empty slices of relation columns, or expressions over
+    them, so a caller which sums or groups an empty report gets the
+    dtypes the same relation would give populated. Purely computed
+    columns (`coverage`, `group_id`) pass a bare typed Series instead.
+    """
+    return pd.DataFrame({k: v.iloc[:0] for k, v in columns.items()})
+
+
+def build_gap_frame(
+    df: pd.DataFrame,
+    name: str,
+    *,
+    tolerance: float | Quantity | np.timedelta64 = _DEFAULT_TOLERANCE,
+    group: str | Sequence[str] | None = None,
+    missing_dim: Literal["raise", "drop"] = "drop",
+) -> pd.DataFrame:
+    """
+    Report every discontinuity along ``name`` in a flat patch relation.
+
+    One row per gap, over the same cells and the same continuity rule
+    [`build_chunk_plan`](`dascore.utils.chunk_plan.build_chunk_plan`)
+    uses, so a gap here is exactly a boundary chunk refuses to merge.
+    `{name}_min` is the last sample before the gap and `{name}_max` the
+    first sample after it, so `gap_size` is their difference.
+    """
+    df, group_attrs, carried, names = _report_preamble(df, name, group, missing_dim)
+    min_name, max_name, step_name = names
+    tolerance = _normalize_tolerance(tolerance, name)
+    columns = [min_name, max_name, step_name, "gap_size", "group_id", *carried]
+    # Contiguous cells are dropped rather than concatenated: their empty
+    # frames carry object-dtype attr columns, which would widen the
+    # dtypes of the gappy cells they are concatenated with.
+    frames = [x for _, _, x in _cell_gaps(df, name, group_attrs, tolerance) if len(x)]
+    if not frames:
+        return _empty_report(
+            {
+                min_name: df[min_name],
+                max_name: df[max_name],
+                step_name: df[step_name],
+                "gap_size": df[max_name] - df[min_name],
+                "group_id": pd.Series(dtype=np.int64),
+            }
+            | {x: df[x] for x in carried},
+        )[columns]
+    out = pd.concat(frames, ignore_index=True)
+    return out[columns].sort_values(["group_id", min_name]).reset_index(drop=True)
+
+
+def build_coverage_frame(
+    df: pd.DataFrame,
+    name: str,
+    *,
+    tolerance: float | Quantity | np.timedelta64 = _DEFAULT_TOLERANCE,
+    group: str | Sequence[str] | None = None,
+    missing_dim: Literal["raise", "drop"] = "drop",
+) -> pd.DataFrame:
+    """
+    Summarize how much of each cell's span along ``name`` holds data.
+
+    One row per cell, over the same cells
+    [`build_gap_frame`](`dascore.utils.chunk_plan.build_gap_frame`)
+    reports in and sharing its `group_id`: `span` is the cell's full
+    extent, `gap_total` the sum of its gaps, `covered` the rest, and
+    `coverage` their ratio.
+    """
+    df, group_attrs, carried, names = _report_preamble(df, name, group, missing_dim)
+    min_name, max_name, step_name = names
+    tolerance = _normalize_tolerance(tolerance, name)
+    columns = [
+        min_name,
+        max_name,
+        step_name,
+        "span",
+        "gap_total",
+        "covered",
+        "coverage",
+        "group_id",
+        *carried,
+    ]
+    rows = []
+    for group_id, sub, gaps in _cell_gaps(df, name, group_attrs, tolerance):
+        low, high = sub[min_name].min(), sub[max_name].max()
+        span = high - low
+        # Sum through the span itself when there are no gaps, so a
+        # contiguous cell's total is a zero of the span's own dtype.
+        gap_total = gaps["gap_size"].sum() if len(gaps) else span - span
+        rows.append(
+            {
+                min_name: low,
+                max_name: high,
+                # D7: one step everywhere in a cell, as chunk advertises.
+                step_name: get_middle_value(sub[step_name].to_numpy()),
+                "span": span,
+                "gap_total": gap_total,
+                "group_id": group_id,
+            }
+            | {x: sub[x].iloc[0] for x in carried}
+        )
+    if not rows:
+        span = df[max_name] - df[min_name]
+        return _empty_report(
+            {
+                min_name: df[min_name],
+                max_name: df[max_name],
+                step_name: df[step_name],
+                "span": span,
+                "gap_total": span,
+                "covered": span,
+                "coverage": pd.Series(dtype=float),
+                "group_id": pd.Series(dtype=np.int64),
+            }
+            | {x: df[x] for x in carried},
+        )[columns]
+    out = pd.DataFrame(rows)
+    out["covered"] = out["span"] - out["gap_total"]
+    # A zero span is a single sample, which is wholly covered; dividing
+    # would make it NaN and read as "unknown" rather than "all there".
+    covered = np.asarray(to_float(out["covered"]), dtype=float)
+    total = np.asarray(to_float(out["span"]), dtype=float)
+    out["coverage"] = np.divide(
+        covered, total, out=np.ones_like(total), where=total != 0
+    )
+    return out[columns].reset_index(drop=True)
+
+
 def build_chunk_plan(
     df: pd.DataFrame,
     *,
     overlap=None,
     keep_partial: bool = False,
     snap_coords: bool = True,
-    tolerance: float = 1.5,
+    tolerance: float | Quantity | np.timedelta64 = 1.5,
     conflict: Literal["drop", "raise", "keep_first"] = "raise",
     group=None,
     missing_dim: Literal["raise", "drop"] = "raise",
@@ -897,6 +1468,7 @@ def build_chunk_plan(
     # offending chunk call. See #804.
     validate_conflict(conflict)
     ((name, value),) = kwargs.items()
+    tolerance = _normalize_tolerance(tolerance, name)
     value = None if value is Ellipsis else value
     # Police quantities before merge_mode is decided: a NaN magnitude is
     # null, so a nan-valued size would silently merge the whole spool
@@ -916,10 +1488,7 @@ def build_chunk_plan(
         if value <= zero:
             msg = "Chunk value must be greater than 0."
             raise ParameterError(msg)
-    if missing_dim not in ("raise", "drop"):
-        msg = f"missing_dim must be 'raise' or 'drop', got {missing_dim!r}"
-        raise ParameterError(msg)
-
+    _validate_missing_dim(missing_dim)
     min_name, max_name = f"{name}_min", f"{name}_max"
     if min_name not in df.columns and not df.empty:
         msg = f"No patch in the spool has a {name!r} dimension to chunk."
@@ -940,37 +1509,7 @@ def build_chunk_plan(
     if df.empty:
         outputs = pd.DataFrame(columns=[min_name, max_name, "output_id"])
         return ChunkPlan(outputs, empty_members, name, value, params)
-    df = _ensure_patch_id(df)
-    df = _normalize_chunk_units(df, name)
-    # Missing chunk-dim envelopes, and patches carrying the name only as
-    # a non-dimensional coordinate (spec 7 / D2): chunking is defined on
-    # dimensions, so both fall under missing_dim. Envelope presence is
-    # not enough — auxiliary coordinates index their envelopes too, but
-    # their patches cannot be trimmed or merged *along* the name.
-    null_rows = pd.isnull(df[min_name]) | pd.isnull(df[max_name])
-    if "dims" in df.columns:
-        dim_lists = df["dims"].fillna("").astype(str).str.split(",")
-        not_a_dim = ~dim_lists.map(lambda dims: name in dims)
-    else:
-        not_a_dim = pd.Series(False, index=df.index)
-    unusable = null_rows | not_a_dim
-    if unusable.any():
-        if missing_dim == "raise":
-            bad = df.loc[unusable, "_patch_id"].tolist()
-            rides = int((not_a_dim & ~null_rows).sum())
-            detail = (
-                f" ({rides} of them carry {name!r} only as a non-dimensional "
-                "coordinate; chunking is defined on dimensions)"
-                if rides
-                else ""
-            )
-            msg = (
-                f"{int(unusable.sum())} patch(es) lack the chunk dimension "
-                f"{name!r}{detail} (patch ids {bad[:5]}...). Pass "
-                "missing_dim='drop' to exclude them."
-            )
-            raise ChunkError(msg)
-        df = df[~unusable]
+    df = _prepare_relation(df, name, missing_dim)
     if df.empty:
         outputs = pd.DataFrame(columns=[min_name, max_name, "output_id"])
         return ChunkPlan(outputs, empty_members, name, value, params)
@@ -1018,7 +1557,7 @@ def build_chunk_plan(
         # and make the plan row disagree with the patch it assembles
         # (which spool equality compares). Uniform partitions (the
         # common case) resolve in one shot; mixed ones resolve per
-        # output below. Carried privately (see SPOOL_PRIVATE_RENAMES)
+        # output below. Carried privately (see SPOOL_EARLY_RENAMES)
         # because a size-based chunk needs it.
         dtype_all = sorted_df["_dtype"].to_numpy()
         kdtypes = dtype_all[keep_row]
@@ -1091,16 +1630,17 @@ def build_chunk_plan(
         rel_src = np.arange(total) - offsets + np.repeat(first_src, m_counts)
         lo = np.maximum(s1[rel_src], starts_p[rel_out])
         hi = np.minimum(s2[rel_src], stops_p[rel_out])
-        # Sources within a partition are continuous (partitioning splits
-        # on gaps) and start-corrected, so searchsorted never offers a
-        # source which does not overlap the output. Assert it rather
-        # than skipping: silently dropping a source would lose data, and
-        # the state cannot be reached from the public API.
+        # No sample lies between one source's stop and the next source's
+        # start, but an output edge can (any length that is not a whole
+        # number of samples). That edge selects an end source whose
+        # samples all fall outside the output, so its trim inverts;
+        # dropping it loses nothing (#1008).
         overlap_ok = lo <= hi
-        assert overlap_ok.all(), (
-            f"source {rel_src[int(np.argmax(~overlap_ok))]} does not "
-            f"overlap output {rel_out[int(np.argmax(~overlap_ok))]}"
-        )
+        if not overlap_ok.all():
+            rel_src, rel_out = rel_src[overlap_ok], rel_out[overlap_ok]
+            lo, hi = lo[overlap_ok], hi[overlap_ok]
+            m_counts = np.bincount(rel_out, minlength=n_out)
+            total = int(m_counts.sum())
         # Plan invariant: every published output has at least one member.
         # An advertised row that cannot assemble is never surfaced as a
         # runtime error; it is not surfaced at all.
@@ -1164,6 +1704,30 @@ def build_chunk_plan(
             warnings.warn(msg, UserWarning, stacklevel=_user_stacklevel())
     if not fed_counts.sum():
         msg = "Could not chunk. No segments with sufficient length found."
+        # Say how short the data actually is, and name the two knobs which
+        # make an over-long request work. Size chunks are excluded; their
+        # request is in bytes, not comparable to a coordinate duration.
+        if not merge_mode and not (isinstance(value, Quantity) and is_data_size(value)):
+            assert value is not None  # a null value is merge_mode
+            spans = (g_stops - g_starts) + np.abs(part_steps)
+            best = int(np.argmax(spans))
+            longest, requested = spans[best], value
+            if is_timedelta64(longest):
+                # seconds, which is what a time value is given in
+                longest = f"{to_float(longest)} s"
+                requested = f"{to_float(requested)} s"
+            else:
+                # the envelope is in the longest partition's own unit, so
+                # name it; the request may be stated in another (#1058)
+                unit = _partition_unit(sorted_df, name, seg_starts[best])
+                longest = f"{longest} {unit}".strip()
+            msg = (
+                f"Could not chunk. The longest contiguous segment along "
+                f"{name!r} is {longest}, shorter than the requested chunk "
+                f"value of {requested}. Use a smaller chunk value, a larger "
+                f"tolerance to join segments separated by gaps, or "
+                f"keep_partial=True to keep the short segments."
+            )
         raise ChunkError(msg)
     # Assemble the outputs table: envelopes and step, then the carried
     # columns (each partition's single value repeated over its outputs),
@@ -1204,6 +1768,474 @@ def build_chunk_plan(
         member_parts = np.concatenate(m_parts)
         members[unit_col] = first_units.take(member_parts).reset_index(drop=True)
     return ChunkPlan(outputs, members, name, value, params)
+
+
+@compose_docstring(conflict_desc=attr_conflict_description)
+def build_concat_plan(
+    df: pd.DataFrame,
+    *,
+    conflict: Literal["drop", "raise", "keep_first"] = "raise",
+    group=None,
+    **kwargs,
+) -> ChunkPlan:
+    """
+    Build a plan concatenating patches in order (`Spool.concatenate`).
+
+    Partitions as a chunk plan does — kind (the config's attrs, compared
+    for equality, so a missing value is a value), dimensions, the identity
+    of every other dimension, and how the concatenated dimension is
+    spelled (its units and value kind; a patch with no values along it
+    states neither, so it follows the one spelling the others share and
+    forms its own group when they state two) — and then groups each
+    partition's rows by the requested count in the order of the dimension
+    (ascending or descending as the data run; given order when the rows
+    have no envelope), with no sampling tolerance, no gap test, and no
+    overlap removal. Patches which cannot be concatenated together land in
+    separate outputs, never in an error. Remaining attributes must hold
+    equal values within an output, policed by `conflict` exactly as a
+    chunk plan polices them; non-dimensional coordinates are checked when
+    the output is assembled.
+
+    Parameters
+    ----------
+    df
+        The flat patch relation to plan over.
+    conflict
+        {conflict_desc}
+    group
+        Attributes to partition on instead of the config's `patch_kind_attrs`.
+    **kwargs
+        One keyword naming the dimension and the number of patches per
+        output; None (or ...) puts every patch of a partition in one
+        output. A dimension no patch has concatenates along a new one.
+    """
+    if len(kwargs) != 1:
+        msg = (
+            f"concatenate requires exactly one dimension keyword, got {sorted(kwargs)}"
+        )
+        raise ParameterError(msg)
+    validate_conflict(conflict)
+    ((name, value),) = kwargs.items()
+    value = None if value is Ellipsis else value
+    if value is not None and not isinstance(value, (int, np.integer)):
+        msg = (
+            "The number of patches per concatenated output is a whole number; "
+            f"got {value!r}. Pass None to put a whole partition in one output."
+        )
+        raise ParameterError(msg)
+    count = None if value is None else int(value)
+    if count is not None and count < 1:
+        msg = "The number of patches per concatenated output must be at least 1."
+        raise ParameterError(msg)
+    min_name, max_name, step_name = f"{name}_min", f"{name}_max", f"{name}_step"
+    unit_col = f"_{name}_units"
+    names = _resolve_group_attrs(group, set(df.columns))
+    params: dict[str, Any] = dict(mode="concat", count=count, conflict=conflict)
+    params["group"] = names
+    if df.empty:
+        outputs = pd.DataFrame({"output_id": pd.Series(dtype=np.int64)})
+        members = pd.DataFrame(
+            {
+                "output_id": pd.Series(dtype=np.int64),
+                "_patch_id": pd.Series(dtype=object),
+                "_modified": pd.Series(dtype=bool),
+            }
+        )
+        return ChunkPlan(outputs, members, name, value, params)
+    df = _ensure_patch_id(df).reset_index(drop=True)
+    # rows which carry the name as a dimension; the others (a non-dimensional
+    # coordinate of that name, or none) gain a new dimension in its place
+    along = _structural(df, name)
+    key_col = f"_{name}_def_key"
+    has_coord = along | (df[key_col].notna().to_numpy() if key_col in df else False)
+    # the public spelling names the coordinate just as the private one does
+    envelope_cols = [
+        x for x in (min_name, max_name, step_name, unit_col, f"{name}_units") if x in df
+    ]
+    if envelope_cols and (df[envelope_cols].notna().any(axis=1) & ~has_coord).any():
+        # the envelope names belong to the dimension about to be created
+        msg = (
+            f"Cannot concatenate along the new dimension {name!r}: the "
+            f"attributes {envelope_cols} would describe it. Rename them first."
+        )
+        raise ParameterError(msg)
+    has_envelope = min_name in df.columns and max_name in df.columns
+    if has_envelope:
+        # one spelling per dimensionality, as a chunk plan: metres and
+        # centimetres plan together and members convert on loading; only
+        # numbers are stored per spelling, so only they convert
+        df = _normalize_numeric_units(df, name)
+    # The concatenated dimension's spelling partitions too: values with no
+    # units cannot join values with units (they would be mixed), and a
+    # datetime cannot join a number sharing its name and unit. A row with
+    # no values along the dimension states no spelling; it follows the one
+    # spelling the stated rows share (assembly fills its placeholders from
+    # them, see `_joinable`) and forms its own group when they state two.
+    spelling = pd.Series("", index=df.index, dtype=object)
+    if unit_col in df.columns:
+        # `known_only` first: a coordinate stated with no units spells that
+        # null or "", and the two are one statement here as everywhere else.
+        units = known_only(df[unit_col]).fillna("unitless").astype(object)
+        if has_envelope:
+            units = units.where(df[min_name].notna(), "")
+        spelling = spelling.str.cat(units.where(along, ""))
+    if has_envelope:
+        family = df[min_name].map(_value_family)
+        spelling = spelling.str.cat(family.where(along, ""), sep="|")
+    keys: list = [_kind_codes(df, list(names))]
+    if "dims" in df.columns:
+        keys.append(df["dims"])
+    for dim_key in _dim_def_key_columns(df, name):
+        dim = dim_key[1 : -len("_def_key")]
+        key = df[dim_key] if dim_key in df.columns else pd.Series(None, index=df.index)
+        # a coordinate's identity partitions only the rows it is a dimension
+        # of; elsewhere it is non-dimensional and `conflict` polices it
+        key = key.astype(object).where(_structural(df, dim), "")
+        env_cols = [f"{dim}_{x}" for x in ("min", "max", "step")]
+        if all(x in df.columns for x in env_cols):
+            # a re-planned output states no identity key; its envelope says
+            # what it is, which is enough to tell two of them apart
+            spelled = df[env_cols].itertuples(index=False, name=None)
+            env = pd.Series(["env:" + "|".join(map(str, x)) for x in spelled])
+            key = key.where(key.notna(), env)
+        keys.append(key)
+    # Everything a row states about itself; the dimension's spelling then
+    # splits these further, the value-less rows following the stated ones.
+    base = df.groupby(keys, dropna=False, sort=False).ngroup()
+    stated = spelling.where(spelling.str.strip("|") != "")
+    by_base = stated.groupby(base, sort=False)
+    lone = by_base.transform("nunique") == 1
+    spelling = spelling.mask(stated.isna() & lone, by_base.transform("first"))
+    labels = df.groupby([base, spelling], dropna=False, sort=False).ngroup().to_numpy()
+    # Order: partitions in order of first appearance, rows within one the
+    # way the data run along the dimension (ascending by start, descending
+    # by stop), then cut into runs of `count`. A partition without a known
+    # step (irregular values, labels) or along a new dimension cannot tell
+    # its orientation from envelopes, so it keeps its order; rows without
+    # an envelope sort last.
+    within = np.zeros(len(df))
+    if has_envelope:
+        starts = _order_key(df[min_name])
+        stops = _order_key(df[max_name])
+        no_steps = np.full(len(df), np.nan)
+        steps = _directions(df[step_name]) if step_name in df else no_steps
+        # the first row's step, null or not: a partition whose first row
+        # has no step has no orientation, whatever a later row knows
+        rows = pd.Series(np.arange(len(df)))
+        first_step = steps[rows.groupby(labels).transform("first").to_numpy()]
+        descending = np.nan_to_num(first_step, nan=0.0) < 0
+        within = np.where(descending, -stops, starts)
+        within = np.where(np.isnan(first_step) | ~along, 0.0, within)
+        within = np.where(np.isnan(within), np.inf, within)
+    perm = np.lexsort((np.arange(len(df)), within, labels))
+    sorted_df = df.iloc[perm].reset_index(drop=True)
+    part = labels[perm]
+    position = pd.Series(part).groupby(part).cumcount().to_numpy()
+    run = np.zeros_like(position) if count is None else position // count
+    codes = pd.DataFrame({"p": part, "r": run}).groupby(["p", "r"], sort=False).ngroup()
+    codes = codes.to_numpy()
+    n_out = int(codes.max()) + 1
+    sizes = np.bincount(codes, minlength=n_out)
+    seg_starts = np.r_[0, np.cumsum(sizes)[:-1]]
+    active = np.ones(n_out, dtype=bool)
+    # non-dimensional coordinates are described from the members when the
+    # catalog is derived (riders of the dimension follow it member by
+    # member, so their envelopes differ by design) and policed by their
+    # identity keys below; their envelopes are not attrs to carry
+    blanked = {}
+    for coord in _identified_coords(sorted_df) - {name}:
+        structural = _structural(sorted_df, coord)
+        if structural.all():
+            continue
+        for suffix in ("min", "max", "step"):
+            if (col := f"{coord}_{suffix}") in sorted_df.columns:
+                # kept where the coordinate is a dimension of the row
+                blanked[col] = sorted_df[col].where(structural)
+    policed_df = sorted_df.assign(**blanked)
+    carried = _carried_columns(policed_df, codes, seg_starts, name, conflict, active)
+    data: dict[str, Any] = {k: v.reset_index(drop=True) for k, v in carried.items()}
+    if "data_units" in sorted_df.columns:
+        # Data units scale the data, so assembly converts every member to
+        # the first units any member states rather than letting a loosened
+        # policy splice differently scaled samples (`concatenate_planned`).
+        # The row has to say the same, or it would describe kilometre-scaled
+        # samples by a first member's silence -- or, under `drop`, not at all.
+        first_stated = known_only(sorted_df[["data_units"]])["data_units"]
+        first_stated = first_stated.groupby(codes, sort=True).first()
+        if first_stated.notna().any():
+            data["data_units"] = first_stated.reset_index(drop=True)
+    if has_envelope and not along.all():
+        # rows gaining the dimension have no values along it; what their
+        # column holds belongs to a coordinate the new dimension replaces
+        kept = along[perm]
+        blank = {c: sorted_df[c].where(kept) for c in envelope_cols if c in sorted_df}
+        sorted_df = sorted_df.assign(**blank)
+    by_output = sorted_df.groupby(codes, sort=True)
+    if has_envelope:
+        # A member with no values along the dimension (an aggregated
+        # coordinate) has a null envelope, which the output's skips.
+        # Labels are the awkward pair: they have no missing value, so a
+        # member which states none cannot join them, and such an output
+        # claims nothing until assembly refuses it.
+        families = sorted_df[min_name].map(_value_family)
+        by_family = families.replace("", np.nan).groupby(codes, sort=True)
+        text = (by_family.first() == "text").fillna(False).to_numpy()
+        blank = (families == "").groupby(codes, sort=True).any().to_numpy()
+        undecided = pd.Series(text & blank)
+        data[min_name] = by_output[min_name].min().where(~undecided).to_numpy()
+        data[max_name] = by_output[max_name].max().where(~undecided).to_numpy()
+        if unit_col in sorted_df.columns:
+            # a member with no values along the dimension states no unit;
+            # the output speaks the unit its stated members share, which is
+            # what assembly joins in
+            known = known_only(sorted_df[[unit_col]])[unit_col]
+            data[unit_col] = known.groupby(codes, sort=True).first().to_numpy()
+        if step_name in sorted_df.columns:
+            data[step_name] = _concatenated_steps(sorted_df, codes, name)
+    if "dims" in sorted_df.columns:
+        dims = sorted_df["dims"].to_numpy()[seg_starts].astype(str)
+        new_dim = np.array([name not in d.split(",") for d in dims])
+        # a dimension the members carry without values is resized the same
+        # way, and is identified the same way: by how long it comes out
+        stated = np.zeros(n_out, dtype=bool)
+        if min_name in data:
+            stated = ~pd.isnull(pd.Series(data[min_name])).to_numpy()
+        value_less = new_dim | ~stated
+        if new_dim.any():
+            # an output whose members lack the dimension gains it, one
+            # sample per member, as a dimension without values (the name
+            # may have been a non-dimensional coordinate, which the new
+            # dimension replaces, so no envelope is claimed for it)
+            data["dims"] = [
+                ",".join([*[x for x in d.split(",") if x], name]) if n else d
+                for d, n in zip(dims, new_dim)
+            ]
+            for x in (min_name, max_name, step_name):
+                if x in data:
+                    data[x] = [None if n else v for v, n in zip(data[x], new_dim)]
+            # its identity is that of a value-less coordinate of its length
+            # (what ingesting the assembled patch would record), so outputs
+            # of different counts stay apart when a later plan partitions
+            # on it
+            keys = list(data.get(key_col, pd.Series([None] * n_out, dtype=object)))
+            keys = [
+                f"fp:{dc.core.coords.get_coord(shape=(int(s),)).fingerprint()[:32]}"
+                if n
+                else k
+                for k, n, s in zip(keys, new_dim, sizes)
+            ]
+            data[key_col] = pd.Series(keys, dtype=object)
+        if (existing := value_less & ~new_dim).any():
+            # a dimension the members carry without values is resized too,
+            # and the relation says nothing about how long it comes out;
+            # what the members are is the best identity available, and it
+            # is not a fingerprint claim about values
+            keys = list(data.get(key_col, pd.Series([None] * n_out, dtype=object)))
+            member_keys = _member_key_digests(sorted_df, codes, name)
+            keys = [
+                digest if e and digest is not None else k
+                for k, e, digest in zip(keys, existing, member_keys)
+            ]
+            data[key_col] = pd.Series(keys, dtype=object)
+    if "_dtype" in sorted_df.columns:
+        all_dtypes = sorted_df["_dtype"]
+        dtypes = by_output["_dtype"]
+        uniform = dtypes.nunique(dropna=False).to_numpy() == 1
+        first = dtypes.first().to_numpy(dtype=object)
+        combined = [
+            first[i] if uniform[i] else _combined_dtype(all_dtypes.iloc[a : a + n])
+            for i, (a, n) in enumerate(zip(seg_starts, sizes))
+        ]
+        if conflict != "raise" and "data_units" in sorted_df.columns:
+            # settling on one spelling of the data units converts the members
+            # stated otherwise, which floats an integer array; `drop` reaches
+            # the same conversion, since units are reconciled either way
+            stated = known_only(sorted_df[["data_units"]])["data_units"]
+            converts = stated.groupby(codes, sort=True).nunique(dropna=True) > 1
+            combined = [
+                str(np.result_type(x, np.float64)) if c and not pd.isnull(x) else x
+                for x, c in zip(combined, converts.to_numpy())
+            ]
+        data["_dtype"] = ["" if pd.isnull(x) else str(x) for x in combined]
+    data["output_id"] = np.arange(n_out)
+    outputs = pd.DataFrame(data)
+    # members load whole unless the rows are themselves trims (a re-plan
+    # over a chunked view), whose ranges they then keep
+    members = pd.DataFrame(
+        {"output_id": codes, "_patch_id": sorted_df["_patch_id"].to_numpy()}
+    )
+    if has_envelope:
+        for col in (min_name, max_name, step_name, unit_col):
+            if col in sorted_df.columns:
+                members[col] = sorted_df[col].to_numpy()
+    modified = sorted_df["_modified"] if "_modified" in sorted_df.columns else False
+    members["_modified"] = np.asarray(modified, dtype=bool)
+    return ChunkPlan(outputs, members, name, value, params)
+
+
+def _normalize_numeric_units(df: pd.DataFrame, name: str) -> pd.DataFrame:
+    """
+    `_normalize_chunk_units` for the numeric rows of an envelope of mixed kinds.
+
+    A dimension name shared by numeric and, say, datetime coordinates holds
+    an object column, which the chunk normalizer leaves alone; the numeric
+    rows still deserve one spelling per dimensionality.
+    """
+    min_name, max_name, step_name = f"{name}_min", f"{name}_max", f"{name}_step"
+    if min_name not in df.columns:
+        return df
+    numeric = df[min_name].map(_value_family).to_numpy() == "number"
+    if not numeric.any():
+        return df
+    cols = [x for x in (min_name, max_name, step_name, f"_{name}_units") if x in df]
+    # the numeric rows are coerced from the column's kind-agnostic dtype;
+    # otherwise the chunk normalizer, which reads the dtype, would pass
+    # over rows which are numbers in an object column
+    part = df.loc[numeric, :].copy()
+    for col in (min_name, max_name, step_name):
+        if col in part:
+            part[col] = pd.to_numeric(part[col])
+    part = _normalize_chunk_units(part, name)
+    if numeric.all():
+        return df.assign(**{c: part[c] for c in cols})
+    out = df.copy()
+    for col in cols:
+        out[col] = out[col].astype(object)
+        out.loc[numeric, col] = part[col].astype(object)
+    return out
+
+
+def _directions(steps: pd.Series) -> np.ndarray:
+    """The sign of each step (±1.0), NaN where missing or without a sign."""
+
+    def direction(step):
+        if pd.isnull(step) or isinstance(step, str):
+            return np.nan
+        zero = step * 0
+        if step == zero:  # a constant coordinate runs neither way
+            return np.nan
+        return -1.0 if step < zero else 1.0
+
+    return np.array([direction(x) for x in steps], dtype=float)
+
+
+def _value_family(value) -> str:
+    """The kind of an envelope value: datetime, timedelta, number, or text."""
+    if pd.isnull(value):
+        return ""
+    if isinstance(value, np.datetime64 | pd.Timestamp):
+        return "datetime"
+    if isinstance(value, np.timedelta64 | pd.Timedelta):
+        return "timedelta"
+    if isinstance(value, str):
+        return "text"
+    return "number"
+
+
+def _identified_coords(df: pd.DataFrame) -> set[str]:
+    """The coordinates a relation identifies (those with a def-key column)."""
+    return {
+        col[1 : -len("_def_key")]
+        for col in df.columns
+        if col.startswith("_") and not col.startswith("__") and col.endswith("_def_key")
+    }
+
+
+def _structural(df: pd.DataFrame, coord: str) -> np.ndarray:
+    """Per row, whether `coord` is one of the row's dimensions."""
+    if "dims" not in df.columns:
+        return np.zeros(len(df), dtype=bool)
+    dims = df["dims"].astype(str).str.split(",")
+    return dims.apply(lambda d: coord in d).to_numpy(dtype=bool)
+
+
+def _member_key_digests(sorted_df: pd.DataFrame, codes: np.ndarray, name: str):
+    """
+    A "cat:" identity per output, digesting the identities it joins.
+
+    Outputs joining the same members in the same order come out the same;
+    the digest is deliberately not an "fp:" key, since it claims nothing
+    about values the relation never saw.
+    """
+    col = f"_{name}_def_key"
+    assert col in sorted_df.columns, "a value-less target states an identity"
+    out: list[str | None] = []
+    for _, group in sorted_df[col].groupby(codes, sort=True):
+        if group.isna().any():
+            out.append(None)
+            continue
+        if len(group) == 1:
+            # nothing was joined, so the member's own identity stands
+            out.append(str(group.iloc[0]))
+            continue
+        spelled = ",".join(map(str, group))
+        out.append(f"cat:{hashlib.sha256(spelled.encode()).hexdigest()[:32]}")
+    return out
+
+
+def _order_key(values: pd.Series) -> np.ndarray:
+    """
+    Sortable floats for an envelope column: dense ranks of the native values.
+
+    Ranks rather than float conversions, which would fold nanosecond
+    timestamps a few hundred apart into one key. Missing values rank NaN.
+    """
+    out = np.full(len(values), np.nan)
+    families = values.map(_value_family).to_numpy()
+    for family in {x for x in families if x}:
+        # each kind ranks among its own (kinds never share a partition)
+        mask = families == family
+        out[mask] = _coerce(values[mask], family).rank(method="dense").to_numpy()
+    return out
+
+
+def _coerce(values: pd.Series, family: str) -> pd.Series:
+    """Give an object column of one value family its native dtype."""
+    if family == "datetime":
+        return pd.to_datetime(values)
+    if family == "timedelta":
+        return pd.to_timedelta(values)
+    if family == "text":
+        return values.astype(str)
+    return pd.to_numeric(values)
+
+
+def _concatenated_steps(sorted_df: pd.DataFrame, codes: np.ndarray, name: str):
+    """
+    The step of each output's concatenated coordinate, where it stays even.
+
+    One shared step and each member starting one step after the previous
+    member stops keep the coordinate a range; anything else (a gap, an
+    overlap, mixed steps, no step) leaves it without a step, as the
+    assembled coordinate will be.
+    """
+    steps = sorted_df[f"{name}_step"]
+    by_output = steps.groupby(codes, sort=True)
+    one_step = (by_output.nunique(dropna=True) == 1) & (
+        by_output.count() == by_output.size()
+    )
+    starts, stops = sorted_df[f"{name}_min"], sorted_df[f"{name}_max"]
+    same_output = pd.Series(codes).shift(1).to_numpy() == codes
+    # descending data run from their max to their min, so the next member
+    # starts (at its max) one step below the previous member's min. Each
+    # value family does its own arithmetic (an output holds one family);
+    # labels have none, so a text output has no step.
+    families = starts.map(_value_family).to_numpy()
+    follows = np.zeros(len(sorted_df), dtype=bool)
+    for family in {x for x in families if x and x != "text"}:
+        mask = families == family
+        lo, hi = _coerce(starts[mask], family), _coerce(stops[mask], family)
+        step = steps[mask]
+        if family == "number":
+            step = pd.to_numeric(step)
+        ascending = _directions(step) >= 0
+        forward = (lo == hi.shift(1) + step).to_numpy()
+        backward = (hi == lo.shift(1) + step).to_numpy()
+        follows[mask] = np.where(ascending, forward, backward)
+    follows |= ~same_output
+    contiguous = pd.Series(follows).groupby(codes).all()
+    first = by_output.first()
+    return first.where(one_step & contiguous).to_numpy()
 
 
 def _snapped_cuts(cuts, start, step) -> list:
@@ -1344,7 +2376,8 @@ def build_subdivision_plan(df: pd.DataFrame, pieces, name: str) -> ChunkPlan:
     # Outputs are not file rows: source bookkeeping stays on the members,
     # and the dimension's structural identity described the whole row.
     outputs = df.iloc[positions].drop(
-        columns=["_patch_id", f"_{name}_def_key", *_SOURCE_COLUMNS], errors="ignore"
+        columns=["_patch_id", f"_{name}_def_key", "_data_size", *_SOURCE_COLUMNS],
+        errors="ignore",
     )
     outputs = outputs.assign(**{min_name: lows, max_name: highs, "output_id": ids})
     members = pd.DataFrame(

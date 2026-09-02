@@ -8,6 +8,7 @@ index design doc (see discussion #648).
 
 from __future__ import annotations
 
+import math
 import re
 
 import numpy as np
@@ -15,6 +16,8 @@ import pandas as pd
 import pytest
 
 import dascore as dc
+from dascore.config import config_context
+from dascore.core.coords import get_coord
 from dascore.core.summary import PatchSummary
 from dascore.exceptions import UnitError
 from dascore.io.index.backend import get_backend
@@ -210,9 +213,10 @@ class TestElementDtype:
     def test_dtype_is_private_in_flat_relation(self):
         """The spool sees `_dtype`, never a public `dtype` column."""
         spool = dc.get_example_spool("random_das")
-        df = spool.get_contents()
+        df = spool._df
         assert "dtype" not in df.columns
         assert set(df["_dtype"]) == {str(spool[0].data.dtype)}
+        assert "_dtype" not in spool.get_contents().columns
 
     def test_dtype_attr_does_not_shadow_column(self, tmp_path):
         """A patch attr named `dtype` is skipped, not written to the column."""
@@ -235,6 +239,60 @@ class TestElementDtype:
             df = back.query()
             # the structural column keeps the element dtype, not the attr
             assert df["dtype"].iloc[0] == summary.dtype
+        finally:
+            back.close()
+
+
+class TestDataSize:
+    """The samples a patch holds are recorded per patch."""
+
+    def test_data_size_round_trips(self, backend):
+        """Each patch keeps the sample count its summary's shape implied."""
+        df = backend.query()
+
+        def _key(path):
+            """Compare path-independently; Windows round-trips backslashes."""
+            return str(path).replace("\\", "/")
+
+        expected = {_key(x.source_path): math.prod(x.shape) for x in make_summaries()}
+        got = {
+            _key(k): int(v)
+            for k, v in zip(df["source_path"], df["data_size"], strict=True)
+        }
+        assert got == expected
+
+    def test_shapeless_summary_states_no_size(self, tmp_path):
+        """A summary with no shape states no size; none is inferred."""
+        summary = make_summaries()[0]
+        shapeless = summary.new(shape=())
+        path = tmp_path / "shapeless.sqlite3"
+        back = get_backend(path)
+        try:
+            back.write_sources(summaries_to_records([shapeless]))
+            assert pd.isnull(back.query()["data_size"].iloc[0])
+        finally:
+            back.close()
+
+    def test_data_size_attr_does_not_shadow_column(self, tmp_path):
+        """A patch attr named `data_size` is skipped, not written."""
+        summary = make_summaries()[0]
+        shadowed = PatchSummary(
+            attrs=dict(summary.attrs.model_dump(), data_size="not a size"),
+            coords={k: v.model_dump() for k, v in summary.coords.items()},
+            dims=summary.dims,
+            shape=summary.shape,
+            dtype=summary.dtype,
+            source_path=summary.source_path,
+            source_format=summary.source_format,
+            source_version=summary.source_version,
+        )
+        path = tmp_path / "shadow.sqlite3"
+        back = get_backend(path)
+        try:
+            with pytest.warns(UserWarning, match="data_size"):
+                back.write_sources(summaries_to_records([shadowed]))
+            df = back.query()
+            assert df["data_size"].iloc[0] == math.prod(summary.shape)
         finally:
             back.close()
 
@@ -557,3 +615,173 @@ class TestCoordPivot:
         df = backend.query(Query(attrs={"tag": "corr"}))
         assert df["lag_time_min"].notna().all()
         assert "frequency_min" not in df.columns or df["frequency_min"].isna().all()
+
+
+class TestLineageIds:
+    """A patch can be found by the id it carries, without loading it."""
+
+    @pytest.fixture(scope="class")
+    def written_spool(self, tmp_path_factory):
+        """Three patches on disk, each its own datum."""
+        path = tmp_path_factory.mktemp("lineage_ids")
+        with config_context(patch_provenance="disabled"):
+            for index, patch in enumerate(dc.get_example_spool("random_das")):
+                patch.io.write(path / f"{index}.h5", "dasdae")
+        return dc.spool(path).update()
+
+    def test_the_two_ids_are_different_columns(self, written_spool):
+        """The row's id is private; the patch's owns the public name."""
+        df = written_spool._df
+        assert {"_patch_id", "patch_id"}.issubset(df.columns)
+        assert df["_patch_id"].tolist() != df["patch_id"].tolist()
+        assert "_patch_id" not in written_spool.get_contents().columns
+
+    def test_scanning_and_reading_agree(self, tmp_path):
+        """Or an id found in the index would not name the patch it loads."""
+        path = tmp_path / "one.h5"
+        with config_context(patch_provenance="disabled"):
+            dc.get_example_patch().io.write(path, "dasdae")
+        assert dc.scan(path)[0].attrs.patch_id == dc.read(path)[0].attrs.patch_id
+
+    def test_selecting_by_id_finds_that_patch(self, written_spool):
+        """Which is what indexing the id is for."""
+        wanted = written_spool.get_contents()["patch_id"].iloc[1]
+        selected = written_spool.select(patch_id=wanted)
+        assert len(selected) == 1
+        assert selected[0].attrs.patch_id == wanted
+
+    def test_what_was_done_is_not_indexed(self, tmp_path):
+        """
+        `processing_id` advances whenever an operation runs, and a spool
+        runs one as it loads: a residual trim is a real `select` on the
+        patch. What the index recorded would not be what came back, so it
+        is not recorded. `patch_id` survives those same operations, which
+        is what makes it the one worth indexing.
+        """
+        patch = dc.get_example_patch().pass_filter(time=(1, 10))
+        patch.io.write(tmp_path / "filtered.h5", "dasdae")
+        spool = dc.spool(tmp_path).update()
+        assert "processing_id" not in spool.get_contents().columns
+
+    def test_a_trim_keeps_the_id_it_says_it_keeps(self, written_spool):
+        """The index and the patch which loads must not disagree."""
+        trimmed = written_spool.select(time=(10, 20), samples=True)
+        indexed = trimmed.get_contents()["patch_id"].iloc[0]
+        assert trimmed[0].attrs.patch_id == indexed
+
+    def test_a_memory_spool_too(self):
+        """A summary carries the ids, so a patch never written is findable."""
+        patches = list(dc.get_example_spool("random_das"))
+        spool = dc.spool(patches)
+        wanted = patches[1].attrs.patch_id
+        assert spool.select(patch_id=wanted)[0].attrs.patch_id == wanted
+
+    def test_an_id_no_patch_carries(self, written_spool):
+        """An id which names nothing selects nothing, rather than raising."""
+        assert len(written_spool.select(patch_id="0" * 16)) == 0
+
+    def test_a_renamed_source_forgets_its_id(self, tmp_path):
+        """
+        A derived id names the path it came from.
+
+        Renaming a file is how metadata is attached to an archive, and
+        the index rewrites the path without re-reading the file. The id
+        the row held is the id of where it used to be, so it is cleared
+        rather than left to select a patch which no longer carries it.
+        """
+        with config_context(patch_provenance="disabled"):
+            dc.get_example_patch().io.write(tmp_path / "x.h5", "dasdae")
+        spool = dc.spool(tmp_path).update()
+        stale = spool.get_contents()["patch_id"].iloc[0]
+        assert stale
+        (tmp_path / "x.h5").rename(tmp_path / "tag=renamed.h5")
+        moved = dc.spool(tmp_path).update()
+        assert moved.get_contents()["patch_id"].iloc[0] == ""
+        assert len(moved.select(patch_id=stale)) == 0
+        # The patch itself still says which data it is; only the index
+        # stopped claiming to know without looking.
+        assert moved[0].attrs.patch_id
+
+    def test_a_path_may_not_claim_the_lineage(self, tmp_path):
+        """
+        A directory name says where data is kept, not which data it is.
+
+        Hive-style path keys become ordinary attrs and override what a
+        file states, which is how a rename corrects metadata. Letting one
+        claim `patch_id` would rewrite the lineage of everything beneath
+        it -- on the loaded patch, not merely in the index.
+        """
+        directory = tmp_path / "patch_id=bogus"
+        directory.mkdir()
+        with config_context(patch_provenance="disabled"):
+            dc.get_example_patch().io.write(directory / "x.h5", "dasdae")
+        with pytest.warns(UserWarning, match="not which data it is"):
+            spool = dc.spool(tmp_path).update()
+        assert spool.get_contents()["patch_id"].iloc[0] != "bogus"
+        assert spool[0].attrs.patch_id != "bogus"
+
+    def test_a_rename_when_no_id_was_indexed(self, tmp_path):
+        """An archive indexed with the ids off has none to forget."""
+        with config_context(patch_provenance="disabled"):
+            dc.get_example_patch().io.write(tmp_path / "x.h5", "dasdae")
+            spool = dc.spool(tmp_path).update()
+            assert "patch_id" not in spool.get_contents().columns
+            (tmp_path / "x.h5").rename(tmp_path / "tag=renamed.h5")
+            moved = dc.spool(tmp_path).update()
+        assert len(moved) == 1
+
+    def test_chunk_still_merges_across_ids(self, written_spool):
+        """Every patch states a different id; none of them blocks a merge."""
+        assert len(set(written_spool.get_contents()["patch_id"])) == 3
+        assert len(written_spool.chunk(time=None)) == 1
+
+
+class TestCoordDefinitionDedup:
+    """One coordinate is stored once, however its values were written."""
+
+    def _definitions(self, spool, name):
+        """The def keys stored for one coordinate name."""
+        sql = (
+            "SELECT cd.def_key FROM patch_coords pc "
+            "JOIN coord_defs cd ON cd.coord_def_id = pc.coord_def_id "
+            "WHERE pc.coord_name = ?"
+        )
+        frame = spool._catalog.backend._fetch_df(sql, [name])
+        return frame["def_key"].tolist()
+
+    def test_scalar_spelling_shares_one_definition(self):
+        """A range written with an int start is the one written with a float."""
+        base = dc.get_example_patch()
+        n = base.shape[base.get_axis("distance")]
+        as_ints = base.update_coords(distance=get_coord(start=0, stop=n, step=1.0))
+        as_floats = base.update_coords(
+            distance=get_coord(start=0.0, stop=float(n), step=1.0)
+        )
+        keys = self._definitions(dc.spool([as_ints, as_floats]), "distance")
+        assert len(keys) == 2
+        assert len(set(keys)) == 1
+
+    def test_time_precision_shares_one_definition(self):
+        """A step in milliseconds is the same step in nanoseconds."""
+        t0 = np.datetime64("2020-01-01", "ns")
+        data = np.random.default_rng(0).random((2, 100))
+        coarse = get_coord(
+            start=t0, stop=t0 + np.timedelta64(400, "ms"), step=np.timedelta64(4, "ms")
+        )
+        fine = get_coord(
+            start=t0,
+            stop=t0 + np.timedelta64(400_000_000, "ns"),
+            step=np.timedelta64(4_000_000, "ns"),
+        )
+        distance = get_coord(values=np.array([0.0, 1.0]))
+        patches = [
+            dc.Patch(
+                data=data,
+                coords={"distance": distance, "time": x},
+                dims=("distance", "time"),
+            )
+            for x in (coarse, fine)
+        ]
+        keys = self._definitions(dc.spool(patches), "time")
+        assert len(keys) == 2
+        assert len(set(keys)) == 1

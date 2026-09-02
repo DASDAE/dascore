@@ -9,7 +9,6 @@ safe for concurrent threaded access within a single process.
 from __future__ import annotations
 
 import os
-import shutil
 import socketserver
 import threading
 import time
@@ -26,6 +25,7 @@ import pytest
 
 from dascore.compat import UPath
 from dascore.utils.downloader import fetch
+from tests.conftest import _link_or_copy
 from tests.test_io._common_io_test_utils import skip_on_timeout
 
 
@@ -163,24 +163,6 @@ class _RangeHTTPRequestHandler(_SilentSimpleHTTPRequestHandler):
         if start < 0 or end < start or start >= size:
             return (None, None)
         return (start, min(end, size - 1))
-
-
-def _link_or_copy(source: Path, dest: Path) -> None:
-    """Populate one served file path using the cheapest available local copy."""
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    if dest.exists():
-        return
-    try:
-        dest.hardlink_to(source)
-        return
-    except OSError:
-        pass
-    try:
-        dest.symlink_to(source)
-        return
-    except OSError:
-        pass
-    shutil.copy2(source, dest)
 
 
 def _prime_http_test_tree(

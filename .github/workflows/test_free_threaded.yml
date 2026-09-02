@@ -21,8 +21,9 @@ on:
 permissions:
   contents: read
 
+# Supersede the previous run: by pull request, or by branch for pushes.
 concurrency:
-  group: TestFreeThreaded-${{ github.event.pull_request.number || github.run_id }}
+  group: TestFreeThreaded-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 env:
@@ -59,7 +60,7 @@ jobs:
       - name: install dascore
         run: |
           python -m pip install --upgrade pip
-          pip install -e . pytest pytest-timeout
+          pip install -e . pytest pytest-timeout pytest-xdist
 
       - name: confirm the GIL is disabled
         run: |
@@ -73,4 +74,4 @@ jobs:
         uses: ./.github/actions/prime-test-data-cache
 
       - name: run test suite without the GIL
-        run: python -m pytest tests -m "not network" -q --timeout=900
+        run: python -m pytest tests -m "not network" -q --timeout=900 -n logical --dist loadfile

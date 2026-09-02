@@ -107,8 +107,12 @@ class TestTauP:
         """Ensures correct slowness and tau values are computed"""
         pytest.importorskip("numba")
         test_vels = np.linspace(1000, 3000, 101)
-        nch = 1000
-        nt = 2000
+        # The assertions below allow 20 m/s, which is exactly one step of
+        # test_vels, so argmax has to land on the right bin outright. At this
+        # aperture the runner-up peaks at 0.73 of the winner across the four
+        # cases; at 200x600 it reaches 0.996, close enough to tie.
+        nch = 400
+        nt = 1000
 
         # positive slope
         vel = 1500
@@ -176,3 +180,15 @@ class TestTauP:
         _jit_taup_uniform.func(data, dx, dt, p_vals)
         distance = np.arange(10) * dt
         _jit_taup_general.func(data, distance, dt, p_vals)
+
+    def test_time_distance_dim_order(self):
+        """Patches ordered (time, distance) transform like their transpose."""
+        pytest.importorskip("numba")
+        test_vels = np.linspace(1000, 3000, 21)
+        patch = linear_slope_patch(20, 100, 1500, 0.03)
+
+        expected = patch.tau_p(test_vels)
+        out = patch.transpose("time", "distance").tau_p(test_vels)
+
+        assert out.dims == expected.dims
+        assert np.array_equal(out.data, expected.data)

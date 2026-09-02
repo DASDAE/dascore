@@ -1419,6 +1419,27 @@ class TestConvertUnits:
         assert np.all(np.equal(time1.values, time2.values))
 
 
+class TestUnitNoOps:
+    """A manager rebuilds only the coords which actually changed."""
+
+    def test_one_of_two_coords_changing(self):
+        """
+        The coord which stays put is kept, not rebuilt.
+
+        Both coords are numeric, so the one which does not move does so
+        because its units match and not because it is time-like, which
+        coords have always refused to convert.
+        """
+        cm = get_coord_manager(
+            {"distance": np.arange(10) * 1.0, "depth": np.arange(4) * 1.0},
+            dims=("distance", "depth"),
+        ).set_units(distance="m", depth="m")
+        out = cm.convert_units(distance="ft", depth="m")
+        assert out is not cm
+        assert out.coord_map["depth"] is cm.coord_map["depth"]
+        assert out.coord_map["distance"] is not cm.coord_map["distance"]
+
+
 class TestDisassociate:
     """Ensure coordinates can be disassociated from coordinate manager."""
 

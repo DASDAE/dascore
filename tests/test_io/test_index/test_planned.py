@@ -55,6 +55,18 @@ class TestHelpers:
         assert record.value_kind == "time"
         assert record.min_ns == _ns(lo)
 
+    def test_coord_record_without_values(self):
+        """A null envelope is a coordinate only with a fingerprinted identity."""
+        row = {"rank_min": None, "rank_max": None}
+        assert _coord_record_from_row(row, "rank") is None
+        row["_rank_def_key"] = "sum:abc"
+        assert _coord_record_from_row(row, "rank") is None
+        row["_rank_def_key"] = "fp:" + "a" * 32
+        record = _coord_record_from_row(row, "rank")
+        assert record is not None
+        assert record.coord_hash == "a" * 32
+        assert record.min_num is None and record.length is None
+
     def test_coord_record_half_null_timedelta(self):
         """A one-sided timedelta envelope keeps NaT rather than raising."""
         row = {"time_min": pd.Timedelta(seconds=1), "time_max": pd.NaT}
@@ -97,8 +109,7 @@ class TestHelpers:
     def test_derived_catalog_adds_patch_ids(self, patches):
         """source_rows without _patch_id get positional ids."""
         spool = dc.spool(patches)
-        rows = spool.get_contents().drop(columns=["_patch_id"], errors="ignore")
-        rows = rows.reset_index(drop=True)
+        rows = spool._df.drop(columns=["_patch_id"]).reset_index(drop=True)
         members = pd.DataFrame(
             {"output_id": [0], "_patch_id": [0], "_modified": [False]}
         )

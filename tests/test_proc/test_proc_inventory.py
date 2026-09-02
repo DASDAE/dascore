@@ -17,13 +17,14 @@ from dascore.core.inventory import (
     Network,
     OpticalMeasurement,
     OpticalPath,
-    OpticalPathAnnotation,
+    OpticalPathLabel,
 )
 from dascore.examples import inventory_patch_pair
 from dascore.exceptions import (
     InvalidInventoryError,
     ParameterError,
     PatchError,
+    UnitError,
     UnresolvedPatchError,
 )
 
@@ -117,8 +118,8 @@ class TestResolution:
         old = inventory.networks[0].fiber_arrays[0]
         acq = old.acquisitions[0]
         middle = patch.get_coord("time").values[len(patch.get_coord("time")) // 2]
-        first = acq.new(end_time=middle, gauge_length=10.0)
-        second = acq.new(start_time=middle, gauge_length=20.0)
+        first = acq.new(time_max=middle, gauge_length=10.0)
+        second = acq.new(time_min=middle, gauge_length=20.0)
         split = inventory.replace(old, old.new(acquisitions=(first, second)))
         with pytest.raises(PatchError, match="spans a change of acquisition"):
             patch.enrich(split, coords=False)
@@ -143,7 +144,7 @@ class TestAttrs:
         assert "spatial_interval" not in dict(out.attrs)
 
     def test_named_coord_redundant_restores(self, patch, inventory):
-        """Naming one restores the as-acquired value, as for data state."""
+        """Naming one asks for the as-acquired value, as for data state."""
         out = patch.enrich(inventory, attrs=("sample_rate",), coords=False)
         assert out.attrs.sample_rate == 250.0
 
@@ -154,10 +155,30 @@ class TestAttrs:
         assert out.attrs.data_type == "strain_rate"
 
     def test_named_data_state_restores(self, patch, inventory):
-        """Naming one means exactly that: restore the as-acquired value."""
+        """Naming one asks for it; who wins a disagreement is `conflict`."""
         processed = patch.update_attrs(data_type="strain_rate")
-        out = processed.enrich(inventory, attrs=("data_type",), coords=False)
+        kwargs = dict(attrs=("data_type",), coords=False)
+        # The patch stated it, so by default the patch keeps it.
+        assert processed.enrich(inventory, **kwargs).attrs.data_type == "strain_rate"
+        out = processed.enrich(inventory, conflict="keep_last", **kwargs)
         assert out.attrs.data_type == "velocity"
+
+    def test_blanket_copies_data_category(self, patch, inventory):
+        """The instrument family is a system fact, not a data state. See #1043."""
+        bare = patch.update_attrs(data_category="")
+        assert bare.enrich(inventory, coords=False).attrs.data_category == "DAS"
+
+    def test_a_stated_data_category_is_settled_by_conflict(self, patch, inventory):
+        """Now that it is copied, it disagrees like any other attr."""
+        stated = patch.update_attrs(data_category="DTS")
+        kwargs = dict(coords=False)
+        assert stated.enrich(inventory, **kwargs).attrs.data_category == "DTS"
+        keep_last = stated.enrich(inventory, conflict="keep_last", **kwargs)
+        assert keep_last.attrs.data_category == "DAS"
+        dropped = stated.enrich(inventory, conflict="drop", **kwargs)
+        assert not dict(dropped.attrs).get("data_category")
+        with pytest.raises(PatchError, match="inventory says"):
+            stated.enrich(inventory, conflict="raise", **kwargs)
 
     def test_attrs_false(self, patch, inventory):
         """No attrs are copied when none are wanted."""
@@ -191,14 +212,6 @@ class TestAttrs:
             )
         assert "pulse_rate" not in dict(out.attrs)
 
-    def test_missing_named_coord_warn(self, patch, inventory):
-        """The coordinate half honors the same policy."""
-        with pytest.warns(UserWarning, match="defines no 'nope'"):
-            out = patch.enrich(
-                inventory, attrs=False, coords=("nope",), on_missing="warn"
-            )
-        assert "nope" not in out.coords.coord_map
-
     @pytest.mark.parametrize("kwargs", [{"attrs": None}, {"coords": None}])
     def test_none_is_not_the_off_switch(self, patch, inventory, kwargs):
         """False turns a half off; None is no longer a second spelling."""
@@ -220,10 +233,27 @@ class TestAttrs:
 class TestConflicts:
     """How disagreements between patch and inventory are settled."""
 
-    def test_keep_first_prefers_inventory(self, patch, inventory):
-        """Enrichment puts the inventory's value first, so it wins."""
+    def test_keep_first_prefers_the_patch(self, patch, inventory):
+        """The patch stated it first, so it keeps it. See #1043."""
         out = patch.update_attrs(gauge_length=99.0).enrich(inventory, coords=False)
+        assert out.attrs.gauge_length == 99.0
+
+    def test_keep_last_prefers_inventory(self, patch, inventory):
+        """The inventory is asked to correct the file, so it wins."""
+        stale = patch.update_attrs(gauge_length=99.0)
+        out = stale.enrich(inventory, coords=False, conflict="keep_last")
         assert out.attrs.gauge_length == 10.0
+
+    def test_an_unset_attr_is_filled_either_way(self, patch, inventory):
+        """Filling an empty attr is not a disagreement, so both fill it."""
+        for conflict in ("keep_first", "keep_last"):
+            out = patch.enrich(inventory, coords=False, conflict=conflict)
+            assert out.attrs.gauge_length == 10.0
+
+    def test_a_bad_conflict_is_refused(self, patch, inventory):
+        """The vocabulary is closed, so a typo says so."""
+        with pytest.raises(ParameterError, match="must be one of"):
+            patch.enrich(inventory, coords=False, conflict="keep_both")
 
     def test_raise_names_both_values(self, patch, inventory):
         """The misresolution guard says what disagreed and how."""
@@ -249,10 +279,18 @@ class TestConflicts:
         assert out.attrs.gauge_length == 10.0
 
     def test_re_enrich_is_a_refresh(self, patch, inventory):
-        """Enriching twice is not an error and changes nothing."""
+        """
+        Enriching twice is not an error and changes nothing.
+
+        Nothing but what the decorator maintains, that is: doing it twice
+        is two operations, so `processing_id` says so even though every
+        attr it copied is the one it copied the first time.
+        """
         once = patch.enrich(inventory, coords=False)
         twice = once.enrich(inventory, coords=False)
-        assert dict(twice.attrs.drop("history")) == dict(once.attrs.drop("history"))
+        managed = ("history", "processing_id")
+        assert dict(twice.attrs.drop(*managed)) == dict(once.attrs.drop(*managed))
+        assert twice.attrs.processing_id != once.attrs.processing_id
 
     def test_bad_conflicts_raises(self, patch, inventory):
         """The flag shares chunking's vocabulary and its validation."""
@@ -322,6 +360,131 @@ class TestChannelResolution:
             patch.enrich(inventory, attrs=False, coords=("distance",))
 
 
+class TestCoordinateUnits:
+    """The map reads its axis in its own units, not the patch's."""
+
+    def test_feet_place_the_same_channels(self, patch, inventory):
+        """Restating the axis in feet moves no channel along the fiber."""
+        in_meters = patch.enrich(inventory)
+        in_feet = patch.convert_units(distance="ft").enrich(inventory)
+        for name in ("zone", "x", "y", "z"):
+            first = in_meters.get_array(name)
+            second = in_feet.get_array(name)
+            if np.issubdtype(first.dtype, np.floating):
+                assert np.allclose(first, second, equal_nan=True)
+            else:
+                assert np.array_equal(first, second)
+
+    def test_incompatible_units_raise(self, patch, inventory):
+        """A coordinate which is not a length cannot be a distance."""
+        seconds = patch.set_units(distance="s")
+        with pytest.raises(UnitError, match="instrument_distance"):
+            seconds.enrich(inventory, attrs=False, coords=("zone",))
+
+    def test_a_channel_axis_ignores_units(self, patch, inventory):
+        """Channel numbers count channels, so they state no unit."""
+        channel_map = _replace_acquisition(
+            inventory, distance_map=DistanceMap(channel=(0.0,), distance=(100.0,))
+        )
+        channels = np.arange(len(patch.get_coord("distance")))
+        with_channel = patch.update_coords(channel=("distance", channels))
+        bare = with_channel.enrich(channel_map, attrs=False, coords=("zone",))
+        with_units = with_channel.set_units(channel="ft").enrich(
+            channel_map, attrs=False, coords=("zone",)
+        )
+        assert np.array_equal(bare.get_array("zone"), with_units.get_array("zone"))
+
+
+class TestGeometryColumns:
+    """A geometry column which is not a position still reaches the patch."""
+
+    @staticmethod
+    def _with_depth(inventory, **kwargs):
+        """Add a borehole-depth column over part of the path."""
+        segment = Geometry(
+            name="hole",
+            distance=(100.0, 200.0),
+            columns={"borehole_depth": (0.0, 100.0)},
+            units={"borehole_depth": "m"},
+            **kwargs,
+        )
+        path = inventory.networks[0].fiber_arrays[0].optical_paths[0]
+        return _replace_path(inventory, geometry=(*path.geometry, segment))
+
+    def test_a_column_becomes_a_coordinate(self, patch, inventory):
+        """With the units the segment states for it."""
+        inv = self._with_depth(inventory)
+        out = patch.enrich(inv, attrs=False, coords=("borehole_depth",))
+        coord = out.get_coord("borehole_depth")
+        # Channel 0 is path distance 100, the top of the hole.
+        assert coord.values[0] == 0.0
+        assert coord.units is not None and "m" in str(coord.units)
+
+    def test_uncovered_channels_are_nan(self, patch, inventory):
+        """The column covers 100 to 200; the path runs to 400."""
+        inv = self._with_depth(inventory)
+        out = patch.enrich(inv, attrs=False, coords=("borehole_depth",))
+        values = out.get_coord("borehole_depth").values
+        assert not np.isnan(values[0])
+        assert np.isnan(values[-1])
+
+    def test_a_blanket_request_includes_it(self, patch, inventory):
+        """It is one of the things the path says about a channel."""
+        inv = self._with_depth(inventory)
+        out = patch.enrich(inv, attrs=False)
+        assert "borehole_depth" in set(out.coords.coord_map)
+
+    def test_get_names_lists_it(self, inventory):
+        """So a reader can find it without opening the CSV."""
+        inv = self._with_depth(inventory)
+        assert "borehole_depth" in inv.get_names().coords
+
+    def test_selection_trims_channels(self, patch, inventory):
+        """Selecting on a column is selecting on the fiber it describes."""
+        inv = self._with_depth(inventory)
+        spool = dc.spool(patch).attach_inventory(inv)
+        out = spool.select(borehole_depth=(0, 50))[0]
+        depth = out.get_coord("distance")
+        # 100 to 150 m of path is the upper half of the hole, and the
+        # acquisition maps path distance 100 onto channel 0.
+        assert depth.max() < patch.get_coord("distance").max()
+
+    def test_an_axis_is_missing_where_nothing_places_the_fiber(self, patch, inventory):
+        """Geometry which measures but does not place defines no axis."""
+        segment = Geometry(
+            name="hole",
+            distance=(100.0, 200.0),
+            columns={"borehole_depth": (0.0, 100.0)},
+        )
+        inv = _replace_path(inventory, geometry=(segment,))
+        with pytest.raises(PatchError, match="defines no 'x'"):
+            patch.enrich(inv, attrs=False, coords=("x",))
+        # And a blanket request does not offer one either.
+        out = patch.enrich(inv, attrs=False)
+        assert "x" not in set(out.coords.coord_map)
+        assert "borehole_depth" in set(out.coords.coord_map)
+
+    def test_a_column_does_not_bridge_segments(self, patch, inventory):
+        """Two holes are two holes, and the fiber between them is neither."""
+        first = Geometry(
+            name="hole 1",
+            distance=(100.0, 150.0),
+            columns={"borehole_depth": (0.0, 50.0)},
+        )
+        second = Geometry(
+            name="hole 2",
+            distance=(300.0, 350.0),
+            columns={"borehole_depth": (0.0, 50.0)},
+        )
+        path = inventory.networks[0].fiber_arrays[0].optical_paths[0]
+        inv = _replace_path(inventory, geometry=(*path.geometry, first, second))
+        out = patch.enrich(inv, attrs=False, coords=("borehole_depth",))
+        values = out.get_coord("borehole_depth").values
+        assert not np.isnan(values[10])  # in the first hole
+        assert not np.isnan(values[200])  # channel 200 is the top of the second
+        assert np.isnan(values[100])  # between them, and in neither
+
+
 class TestCoords:
     """What the optical path projects onto the patch."""
 
@@ -330,6 +493,43 @@ class TestCoords:
         out = patch.enrich(inventory, attrs=False)
         names = set(out.coords.coord_map)
         assert {"x", "y", "z", "zone", "noisy"}.issubset(names)
+
+    def test_blanket_adds_coupling(self, patch, inventory):
+        """How a channel is coupled is a per-channel fact. See #1043."""
+        out = patch.enrich(inventory, attrs=False)
+        named = patch.enrich(inventory, attrs=False, coords=("coupling",))
+        assert "coupling" in set(out.coords.coord_map)
+        blanket, by_name = (x.get_array("coupling") for x in (out, named))
+        assert np.all(blanket == by_name)
+        # Which is what makes the grouted-versus-hanging comparison a select.
+        selected = out.select(coupling=blanket[0])
+        assert set(np.unique(selected.get_array("coupling"))) == {blanket[0]}
+
+    def test_a_patch_coupling_coordinate_collides(self, patch, inventory):
+        """A blanket name the patch already holds is a collision, as ever."""
+        held = patch.update_coords(
+            coupling=("distance", np.full(patch.coord_shapes["distance"], "mine"))
+        )
+        with pytest.raises(PatchError, match="already has a 'coupling'"):
+            held.enrich(inventory, attrs=False)
+        # Naming the coordinates wanted is the way past it, as it is for
+        # a label group of the same name.
+        out = held.enrich(inventory, attrs=False, coords=("x", "y", "z"))
+        assert np.all(out.get_array("coupling") == "mine")
+
+    def test_re_enriching_coupling_is_a_refresh(self, patch, inventory):
+        """The projection agreeing with itself is not a collision."""
+        once = patch.enrich(inventory, attrs=False)
+        assert np.array_equal(
+            once.enrich(inventory, attrs=False).get_array("coupling"),
+            once.get_array("coupling"),
+        )
+
+    def test_blanket_without_coupling(self, patch, inventory):
+        """A path stating no coupling conditions projects none."""
+        inv = _replace_path(inventory, coupling=())
+        out = patch.enrich(inv, attrs=False)
+        assert "coupling" not in set(out.coords.coord_map)
 
     def test_coords_false(self, patch, inventory):
         """No coordinates are added when none are wanted."""
@@ -343,7 +543,7 @@ class TestCoords:
         assert values[0] == "north" and values[-1] == "south"
 
     def test_membership_group(self, patch, inventory):
-        """A boolean group is False where uncovered, never null."""
+        """A membership group is False where uncovered, never null."""
         out = patch.enrich(inventory, attrs=False, coords=("noisy",))
         values = out.get_coord("noisy").values
         assert values.dtype == bool
@@ -351,12 +551,12 @@ class TestCoords:
 
     def test_numeric_group(self, patch, inventory):
         """A numeric group carries NaN where uncovered."""
-        annotations = (
-            OpticalPathAnnotation(
-                start_distance=100.0, end_distance=200.0, group="frost", value=1.5
+        labels = (
+            OpticalPathLabel(
+                distance_min=100.0, distance_max=200.0, group="frost", value=1.5
             ),
         )
-        inv = _replace_path(inventory, annotations=annotations)
+        inv = _replace_path(inventory, labels=labels)
         out = patch.enrich(inv, attrs=False, coords=("frost",))
         values = out.get_coord("frost").values
         assert values[0] == 1.5
@@ -420,13 +620,6 @@ class TestCoords:
         out = patch.enrich(inventory, attrs=False, coords=("nope",), on_missing="null")
         assert np.isnan(out.get_coord("nope").values).all()
 
-    def test_missing_coord_ignore(self, patch, inventory):
-        """Or omitted entirely."""
-        out = patch.enrich(
-            inventory, attrs=False, coords=("nope",), on_missing="ignore"
-        )
-        assert "nope" not in set(out.coords.coord_map)
-
     def test_blanket_without_geometry(self, patch, inventory):
         """A path with no geometry has no axes to project."""
         inv = _replace_path(inventory, geometry=())
@@ -435,13 +628,13 @@ class TestCoords:
         assert "zone" in set(out.coords.coord_map)
 
     def test_point_markers_cover_nothing(self, patch, inventory):
-        """An annotation marking a spot documents it without covering it."""
-        annotations = (
-            OpticalPathAnnotation(
-                start_distance=150.0, end_distance=150.0, group="zone", value="clamp"
+        """A label marking a spot documents it without covering it."""
+        labels = (
+            OpticalPathLabel(
+                distance_min=150.0, distance_max=150.0, group="zone", value="clamp"
             ),
         )
-        inv = _replace_path(inventory, annotations=annotations)
+        inv = _replace_path(inventory, labels=labels)
         out = patch.enrich(inv, attrs=False, coords=("zone",))
         values = out.get_coord("zone").values
         # Nothing is covered, so every channel takes the empty marker.
@@ -507,8 +700,8 @@ class TestEdgeCases:
         path = array.optical_paths[0]
         time = patch.get_coord("time")
         middle = time.values[len(time) // 2]
-        first = path.new(end_time=middle)
-        second = path.new(start_time=middle, name="repaired")
+        first = path.new(time_max=middle)
+        second = path.new(time_min=middle, name="repaired")
         split = inventory.replace(array, array.new(optical_paths=(first, second)))
         with pytest.raises(PatchError, match="spans a change of optical path"):
             patch.enrich(split, coords=False)
@@ -536,11 +729,18 @@ class TestEdgeCases:
             patch.enrich(inv, attrs=False, coords=("coupling.medium",))
 
     def test_axis_missing_from_geometry(self, patch, inventory):
-        """A two-dimensional geometry has no third axis to return."""
+        """A two-axis CRS has no third axis to return."""
         flat = Geometry(
-            name="flat", distance=(100.0, 400.0), coordinates=((0.0, 0.0), (1.0, 1.0))
+            name="flat",
+            distance=(100.0, 400.0),
+            columns={"x": (0.0, 1.0), "y": (0.0, 1.0)},
         )
-        inv = _replace_path(inventory, geometry=(flat,))
+        crs = CoordinateReferenceSystem(
+            coordinate_labels=("easting", "northing"), units=("meter", "meter")
+        )
+        inv = _replace_path(
+            inventory.new(coordinate_reference_system=crs), geometry=(flat,)
+        )
         with pytest.raises(PatchError, match="defines no 'z'"):
             patch.enrich(inv, attrs=False, coords=("z",))
 
@@ -604,7 +804,7 @@ class TestProjectionDetails:
     def test_blanket_needs_no_map_when_path_is_bare(self, patch, inventory):
         """A path with nothing to project asks nothing of the map either."""
         no_map = _replace_acquisition(inventory, distance_map=None)
-        bare = _replace_path(no_map, geometry=(), annotations=())
+        bare = _replace_path(no_map, geometry=(), labels=(), coupling=())
         out = patch.enrich(bare)
         assert set(out.coords.coord_map) == set(patch.coords.coord_map)
 
@@ -639,10 +839,10 @@ class TestProjectionDetails:
         inv = _replace_path(
             inventory,
             coupling=(
-                coupling.new(end_distance=200.0),
+                coupling.new(distance_max=200.0),
                 coupling.new(
-                    start_distance=200.0,
-                    end_distance=300.0,
+                    distance_min=200.0,
+                    distance_max=300.0,
                     medium="clay_and_gravel_backfill",
                 ),
             ),
@@ -668,7 +868,7 @@ class TestEnrichContracts:
     def test_endpoint_belongs_to_its_own_run(self, patch, inventory):
         """A track's coverage end is local: a later interval cannot move it."""
         path = inventory.networks[0].fiber_arrays[0].optical_paths[0]
-        far = path.coupling[0].new(start_distance=300.0, end_distance=400.0)
+        far = path.coupling[0].new(distance_min=300.0, distance_max=400.0)
         with_far = _replace_path(inventory, coupling=(path.coupling[0], far))
         near = patch.enrich(inventory, attrs=False, coords=("coupling.medium",))
         both = with_far.networks and patch.enrich(
@@ -680,8 +880,12 @@ class TestEnrichContracts:
 
     def test_geometry_endpoint_is_local(self, patch, inventory):
         """The same rule holds for the geometry track."""
-        first = Geometry(distance=(100.0, 200.0), coordinates=((0.0, 0.0), (1.0, 1.0)))
-        second = Geometry(distance=(300.0, 400.0), coordinates=((3.0, 3.0), (4.0, 4.0)))
+        columns = {"x": (0.0, 1.0), "y": (0.0, 1.0), "z": (0.0, 1.0)}
+        first = Geometry(distance=(100.0, 200.0), columns=columns)
+        second = Geometry(
+            distance=(300.0, 400.0),
+            columns={"x": (3.0, 4.0), "y": (3.0, 4.0), "z": (3.0, 4.0)},
+        )
         inv = _replace_path(inventory, geometry=(first, second))
         out = patch.enrich(inv, attrs=False, coords=("x",))
         # channel 100 is path distance 200, the last point of the first segment
@@ -745,26 +949,20 @@ class TestEnrichContracts:
         out = renamed.enrich(inv, attrs=False, coords=("distance",))
         assert out.get_coord("distance").values[10] == 110.0
 
-    def test_reserved_annotation_group_raises(self, inventory):
+    def test_reserved_label_group_raises(self, inventory):
         """A group named after a coordinate would shadow it at enrichment."""
         path = inventory.networks[0].fiber_arrays[0].optical_paths[0]
-        annotation = OpticalPathAnnotation(
-            start_distance=100.0, end_distance=200.0, group="time", value=True
-        )
+        label = OpticalPathLabel(distance_min=100.0, distance_max=200.0, group="time")
         with pytest.raises(InvalidInventoryError, match="reserved name"):
-            path.new(annotations=(annotation,)).check()
+            path.new(labels=(label,)).check()
 
-    def test_boolean_group_is_a_union(self, patch, inventory):
-        """Membership groups overlap, so any covering true interval wins."""
-        annotations = (
-            OpticalPathAnnotation(
-                start_distance=100.0, end_distance=400.0, group="wet", value=True
-            ),
-            OpticalPathAnnotation(
-                start_distance=200.0, end_distance=300.0, group="wet", value=False
-            ),
+    def test_membership_group_is_a_union(self, patch, inventory):
+        """Membership groups overlap; a channel belongs if any interval has it."""
+        labels = (
+            OpticalPathLabel(distance_min=100.0, distance_max=250.0, group="wet"),
+            OpticalPathLabel(distance_min=200.0, distance_max=400.0, group="wet"),
         )
-        inv = _replace_path(inventory, annotations=annotations)
+        inv = _replace_path(inventory, labels=labels)
         out = patch.enrich(inv, attrs=False, coords=("wet",))
         assert out.get_coord("wet").values.all()
 
@@ -917,11 +1115,11 @@ class TestPartialStringCoverage:
 class TestEmptyIsUnambiguous:
     """Absence has one spelling, so nothing legitimate can wear it."""
 
-    def test_empty_annotation_value_rejected(self):
+    def test_empty_label_value_rejected(self):
         """A group saying nothing would read as an uncovered channel."""
         with pytest.raises(ValidationError, match="may not be the empty string"):
-            OpticalPathAnnotation(
-                start_distance=0.0, end_distance=10.0, group="zone", value=""
+            OpticalPathLabel(
+                distance_min=0.0, distance_max=10.0, group="zone", value=""
             )
 
     def test_empty_key_is_not_resolvable(self, inventory):

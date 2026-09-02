@@ -13,6 +13,7 @@ from dascore.compat import random_state
 from dascore.exceptions import FilterValueError, ParameterError
 from dascore.units import Hz, m, s
 from dascore.utils.patch import get_start_stop_step
+from dascore.warnings import DASCoreWarning
 
 resample_mod = importlib.import_module("dascore.proc.resample")
 
@@ -73,6 +74,49 @@ class TestInterpolate:
         time = patch.coords.coord_map["time"]
         assert time.evenly_sampled and time.sorted
 
+    def test_associated_coords_interpolated(self, random_patch_many_coords):
+        """A numeric coord on the dim is interpolated with it. See #1041."""
+        patch = random_patch_many_coords
+        start, stop, step = get_start_stop_step(patch, "distance")
+        new_coord = np.arange(start, stop, step / 2)
+        out = patch.interpolate(distance=new_coord)
+        assert out.coords.dim_map["lat"] == ("distance",)
+        assert out.get_coord("lat").units == patch.get_coord("lat").units
+        assert len(out.get_array("lat")) == len(new_coord)
+        # The samples which did not move keep the values they had.
+        kept = out.get_array("lat")[::2]
+        assert np.allclose(kept, patch.get_array("lat")[: len(kept)])
+
+    @pytest.mark.parametrize("factor", (0.5, 1.0))
+    def test_uninterpolatable_coords_dropped(self, random_patch, factor):
+        """What cannot be resampled is dropped, however many samples remain.
+
+        At factor 1.0 the coordinate is the same length as before, which
+        is exactly when a stale one would go unnoticed.
+        """
+        shape = random_patch.coord_shapes["distance"]
+        stamps = np.arange(shape[0]).astype("datetime64[s]")
+        patch = random_patch.update_coords(
+            label=("distance", np.full(shape, "a")),
+            flag=("distance", np.ones(shape, dtype=bool)),
+            stamp=("distance", stamps),
+            # numpy counts a duration as a number; it is still a time.
+            lag=("distance", np.arange(shape[0]).astype("timedelta64[ns]")),
+        )
+        start, stop, step = get_start_stop_step(patch, "distance")
+        new_coord = np.arange(start, stop, step * factor) + step / 4
+        out = patch.interpolate(distance=new_coord)
+        assert {"label", "flag", "stamp", "lag"}.isdisjoint(out.coords.coord_map)
+
+    def test_multidimensional_coords_interpolated(self, random_patch_many_coords):
+        """A coordinate spanning both dimensions rides the one being set."""
+        patch = random_patch_many_coords
+        start, stop, step = get_start_stop_step(patch, "distance")
+        new_coord = np.arange(start, stop, step / 2)
+        out = patch.interpolate(distance=new_coord)
+        assert out.coords.dim_map["quality"] == ("distance", "time")
+        assert out.get_array("quality").shape == out.shape
+
 
 class TestDecimate:
     """Ensure Patch can be decimated."""
@@ -132,7 +176,7 @@ class TestDecimate:
     def test_decimate_small_dimension(self, random_patch):
         """Ensure decimation raises helpful error on small dimensions."""
         small_patch = random_patch.select(distance=(0, 10), samples=True)
-        match = "Scipy decimation failed."
+        match = "dimensions with few elements"
         with pytest.raises(FilterValueError, match=match):
             small_patch.decimate(distance=2)
 
@@ -155,9 +199,49 @@ class TestDecimate:
         assert patch is random_patch
         assert out.shape[axis] == random_patch.shape[axis] // factor
 
+    @pytest.mark.parametrize("filter_type", ("iir", None))
+    def test_associated_coords_decimated(self, random_patch_many_coords, filter_type):
+        """Coords on the decimated dim are subsampled with it. See #1041."""
+        patch = random_patch_many_coords
+        out = patch.decimate(distance=2, filter_type=filter_type)
+        assert np.allclose(out.get_array("lat"), patch.get_array("lat")[::2])
+        assert np.allclose(out.get_array("quality"), patch.get_array("quality")[::2])
+        assert np.allclose(out.get_array("time2"), patch.get_array("time2"))
+        assert out.coords.dim_map == patch.coords.dim_map
+
 
 class TestResample:
     """Tests for resampling along a given dimension."""
+
+    @pytest.mark.parametrize("samples", (False, True))
+    def test_associated_coords_dropped_with_warning(
+        self, random_patch_many_coords, samples
+    ):
+        """Coords on the resampled dimension are deliberately dropped. See #1090."""
+        patch = random_patch_many_coords
+        distance = patch.get_coord("distance")
+        value = len(distance) * 2 if samples else distance.step * 1.232132323222
+
+        with pytest.warns(DASCoreWarning, match="lat, quality") as warning_records:
+            out = patch.resample(distance=value, samples=samples)
+
+        assert warning_records[0].filename == __file__
+        assert {"lat", "quality"}.isdisjoint(out.coords.coord_map)
+        assert np.allclose(out.get_array("time2"), patch.get_array("time2"))
+
+    def test_same_length_resample_drops_associated_coords(self):
+        """Associated coordinates are dropped even when their shape still fits."""
+        distance = np.arange(8.0)
+        patch = dc.Patch(
+            data=distance,
+            coords={"distance": distance, "aux": ("distance", distance)},
+            dims=("distance",),
+        )
+
+        with pytest.warns(DASCoreWarning, match="aux"):
+            out = patch.resample(distance=len(distance), samples=True)
+
+        assert "aux" not in out.coords.coord_map
 
     def test_missing_period_raises(self, random_patch):
         """A null sampling period is rejected rather than producing NaN."""

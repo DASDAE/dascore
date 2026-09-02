@@ -104,16 +104,18 @@ def suppress_warnings(
         yield caught if record else None
 
 
-def validate_warn_level(behavior) -> WARN_LEVELS:
+def validate_warn_level(behavior, name: str = "behavior") -> WARN_LEVELS:
     """
     Ensure a warn-level argument is one of the supported values.
 
     Called where the argument arrives rather than where it is acted on:
     only an incompatible patch reaches `warn_or_raise`, so validating
     there would accept a retired spelling until the data made it matter.
+    `name` is the parameter the caller spells it as, so the refusal names
+    the argument the user actually passed.
     """
     if behavior not in get_args(WARN_LEVELS):
-        msg = f"behavior must be one of {get_args(WARN_LEVELS)}, got {behavior!r}."
+        msg = f"{name} must be one of {get_args(WARN_LEVELS)}, got {behavior!r}."
         raise ParameterError(msg)
     return behavior
 
@@ -200,11 +202,16 @@ def _all_null(maybe_ar):
 
 
 def _get_nullish(dtype=np.floating):
-    """Get nullish values for a given dtype."""
-    if np.issubdtype(dtype, np.datetime64):
-        return np.datetime64("NaT", "ns")
-    elif np.issubdtype(dtype, np.timedelta64):
-        return np.timedelta64("NaT", "ns")
+    """
+    Return the value which stands for a missing entry of this dtype.
+
+    Time-like dtypes get NaT at their own resolution rather than a fixed
+    one, so a datetime64[us] array is filled with microsecond NaT and
+    never has a nanosecond value cast into it. Everything else gets NaN,
+    which means an integer array widens to float to hold the result.
+    """
+    if np.issubdtype(dtype, np.datetime64) or np.issubdtype(dtype, np.timedelta64):
+        return np.array("NaT").astype(dtype)[()]
     return np.nan
 
 
@@ -515,7 +522,7 @@ def optional_import(
 
 def optional_import(
     package_name: str,
-    on_missing: Literal["raise", "warn", "ignore"] = "raise",
+    on_missing: WARN_LEVELS = "raise",
     required_for: str = "the requested functionality",
 ) -> ModuleType | None:
     """
@@ -815,6 +822,21 @@ def cached_method(func):
     return wrapper
 
 
+def _callable_name(func) -> str:
+    """
+    Return a human-readable name for a callable's progress label.
+
+    A `functools.partial` is named for the function it wraps. A callable
+    object and a `Task` have no `__name__`; a `Task` standing for more than
+    one operation names itself with `node_name`, and anything else falls
+    back to its class name.
+    """
+    while isinstance(func, functools.partial):
+        func = func.func
+    name = getattr(func, "__name__", None) or getattr(func, "node_name", None)
+    return name or type(func).__name__
+
+
 class _MapFuncWrapper:
     """A class for unwrapping spools to base applies."""
 
@@ -835,7 +857,7 @@ class _MapFuncWrapper:
             # displays the progress bar. A huge hack, maybe there is a better
             # way? See #265.
             if not getattr(spool, "_no_progress", False):
-                desc = f"Applying {self._func.__name__} to spool"
+                desc = f"Applying {_callable_name(self._func)} to spool"
                 iterable = track(spool, desc, self._progress)
             return [self._func(x, **self._kwargs) for x in iterable]
 
@@ -864,13 +886,13 @@ def _spool_map(
     **kwargs
         Keywords passed to func.
     """
-    # Checked before branching: with a client and an empty spool no
-    # patch is ever tracked, so a retired `progress=False` would be
-    # accepted or refused depending on how much data there was.
-    validate_progress_level(progress)
+    # Normalized before branching: with a client and an empty spool no
+    # patch is ever tracked, so an unsupported level would be accepted or
+    # refused depending on how much data there was.
+    progress = validate_progress_level(progress)
     # no client; simple for loop.
-    desc = f"Applying {func.__name__} to spool"
     if client is None:
+        desc = f"Applying {_callable_name(func)} to spool"
         return [func(patch, **kwargs) for patch in track(spool, desc, progress)]
     # Now things get interesting. We need to split the spool here
     # so that patches don't get serialized.
@@ -886,23 +908,6 @@ def _spool_map(
         sub_spool._no_progress = True
     new_func = _MapFuncWrapper(func, kwargs, get_config(), progress=progress)
     return [x for y in client.map(new_func, spools) for x in y]
-
-
-def _dict_list_diffs(dict_list):
-    """Return the keys which are not equal dicts in a list."""
-    out = set()
-    first = dict_list[0]
-    first_keys = set(first)
-    for other in dict_list[1:]:
-        if other == first:
-            continue
-        other_keys = set(other)
-        out |= (other_keys - first_keys) | (first_keys - other_keys)
-        common_keys = other_keys & first_keys
-        for key in common_keys:
-            if first[key] != other[key]:
-                out.add(key)
-    return sorted(out)
 
 
 def is_range(value) -> bool:
@@ -1388,11 +1393,14 @@ def tukey_fence(data, fence_multiplier=1.5) -> np.ndarray:
     """
     Apply Tukey's fence to determine data range without outliers.
     """
-    q1, q3 = np.nanpercentile(data, [25, 75])
-    dmin, dmax = np.nanmin(data), np.nanmax(data)
-    diff = q3 - q1  # Interquartile range (IQR)
-    q_lower = np.nanmax([q1 - diff * fence_multiplier, dmin])
-    q_upper = np.nanmin([q3 + diff * fence_multiplier, dmax])
+    with suppress_warnings(
+        category=RuntimeWarning, message="All-NaN (?:slice|axis) encountered"
+    ):
+        q1, q3 = np.nanpercentile(data, [25, 75])
+        dmin, dmax = np.nanmin(data), np.nanmax(data)
+        diff = q3 - q1  # Interquartile range (IQR)
+        q_lower = np.nanmax([q1 - diff * fence_multiplier, dmin])
+        q_upper = np.nanmin([q3 + diff * fence_multiplier, dmax])
     lower_and_top = np.asarray([q_lower, q_upper])
     return lower_and_top
 

@@ -1,13 +1,15 @@
 """
 Tests for hive-style path attributes on directory spools.
 
-key=value path segments (directories and file names) become string
-attrs in the index, override file-declared attrs, stamp onto loaded
-patches, and survive directory renames without content rescans.
+key=value directory segments become string attrs in the index,
+override file-declared attrs, stamp onto loaded patches, and survive
+directory renames without content rescans. The source's own name --
+the last path segment -- is never parsed.
 """
 
 from __future__ import annotations
 
+import json
 import os
 import pickle
 import sqlite3
@@ -19,7 +21,35 @@ import pytest
 import dascore as dc
 from dascore.core.spool import Spool
 from dascore.examples import spool_to_directory
+from dascore.io.index import ingest
+from dascore.io.index.schema import INDEX_VERSION
 from dascore.utils.paths import parse_hive_path_attrs
+from tests.test_io.test_xml_binary.test_xml_binary import metadata
+
+# The literal version stamped on indexes built while file names still
+# contributed attrs. Spelled out rather than derived from INDEX_VERSION,
+# so that retiring the parse without moving the version is a failure.
+_SOURCE_NAME_INDEX_VERSION = 10
+
+
+def _parse_including_name(rel_posix):
+    """The parser as it was when file names counted."""
+    out = parse_hive_path_attrs(rel_posix)
+    name = rel_posix.rsplit("/", 1)[-1].rsplit(".", 1)[0]
+    return out | parse_hive_path_attrs(f"{name}/x")
+
+
+def _stamp_index_version(directory, version):
+    """Write an index version onto a directory's index, then let go."""
+    # close explicitly: sqlite3's context manager only wraps the
+    # transaction, and a lingering handle blocks the rebuild's
+    # unlink on Windows.
+    con = sqlite3.connect(directory / ".dascore_index.sqlite3")
+    try:
+        con.execute("UPDATE meta_data SET index_version = ?", (version,))
+        con.commit()
+    finally:
+        con.close()
 
 
 @pytest.fixture()
@@ -38,11 +68,11 @@ def scan_calls(monkeypatch):
 
 @pytest.fixture()
 def hive_dir(tmp_path):
-    """One patch under network=XX/station=A with filename attrs."""
-    sub = tmp_path / "network=XX" / "station=A"
+    """One patch under network=XX/station=A/cable=north__tag=raw."""
+    sub = tmp_path / "network=XX" / "station=A" / "cable=north__tag=raw"
     sub.mkdir(parents=True)
     patch = dc.get_example_patch()
-    patch.io.write(sub / "cable=north__tag=raw.h5", "dasdae")
+    patch.io.write(sub / "das_file.h5", "dasdae")
     return tmp_path
 
 
@@ -62,10 +92,25 @@ class TestParseHivePathAttrs:
         out = parse_hive_path_attrs("network=XX/station=A/file.h5")
         assert out == {"network": "XX", "station": "A"}
 
-    def test_filename_pairs(self):
-        """The file name participates, extension stripped, __ separated."""
-        out = parse_hive_path_attrs("cable=north__tag=raw.h5")
+    def test_several_pairs_in_one_segment(self):
+        """One directory can hold several __-separated pairs."""
+        out = parse_hive_path_attrs("cable=north__tag=raw/file.h5")
         assert out == {"cable": "north", "tag": "raw"}
+
+    def test_source_name_is_not_parsed(self):
+        """The last segment names the source, so it contributes nothing."""
+        assert parse_hive_path_attrs("cable=north.h5") == {}
+        assert parse_hive_path_attrs("dir/cable=north") == {}
+
+    def test_value_ending_in_an_extension_survives(self):
+        """
+        A directory value keeps a trailing dotted token.
+
+        Telling "XX.R2D1..RAW" from a file extension is the ambiguity
+        which keeps the source's own name out of the parse.
+        """
+        out = parse_hive_path_attrs("acquisition_key=XX.R2D1..RAW/f.h5")
+        assert out == {"acquisition_key": "XX.R2D1..RAW"}
 
     def test_percent_decoding(self):
         """Keys/values decode after splitting so %3D survives."""
@@ -97,16 +142,16 @@ class TestParseHivePathAttrs:
         assert parse_hive_path_attrs("a=b=c/f.h5") == {"a": "b=c"}
 
     def test_numeric_value_keeps_fraction(self):
-        """A trailing .5 is a value fragment, not an extension."""
+        """Nothing is stripped from a directory value."""
         assert parse_hive_path_attrs("depth=1.5/f.h5") == {"depth": "1.5"}
-        assert parse_hive_path_attrs("depth=1.5") == {"depth": "1.5"}
+        assert parse_hive_path_attrs("depth=1.5/deeper/f.h5") == {"depth": "1.5"}
 
 
 class TestHiveIndexing:
     """Hive attrs land in the index and drive selection."""
 
     def test_contents_columns(self, hive_spool):
-        """Directory and filename attrs appear as string columns."""
+        """Every directory segment appears as a string column."""
         df = hive_spool.get_contents()
         row = df.iloc[0]
         assert row["network"] == "XX"
@@ -126,9 +171,8 @@ class TestHiveIndexing:
         patch.io.write(tmp_path / "plain_file.h5", "dasdae")
         spool = Spool.from_directory(tmp_path).update(progress=None)
         try:
-            df = spool.get_contents()
-            assert df["_path_attrs"].isnull().all()
-            assert "cable" not in df.columns
+            assert spool._df["_path_attrs"].isnull().all()
+            assert "cable" not in spool.get_contents().columns
         finally:
             spool.indexer.close()
 
@@ -250,7 +294,7 @@ class TestMoveDetection:
 
     def test_directory_rename_no_rescan(self, hive_spool, hive_dir, scan_calls):
         """Renaming a partition directory never re-reads file contents."""
-        df_before = hive_spool.get_contents()
+        ids_before = list(hive_spool._df["_patch_id"])
         (hive_dir / "network=XX" / "station=A").rename(
             hive_dir / "network=XX" / "station=Q"
         )
@@ -260,21 +304,21 @@ class TestMoveDetection:
         assert df["station"].iloc[0] == "Q"
         assert df["source_path"].iloc[0].startswith("network=XX/station=Q/")
         # patch/coord rows survived: same patch identity
-        assert list(df["_patch_id"]) == list(df_before["_patch_id"])
+        assert list(updated._df["_patch_id"]) == ids_before
         assert updated[0].attrs.station == "Q"
 
-    def test_file_rename_adds_attr_no_rescan(self, hive_spool, hive_dir, scan_calls):
-        """Adding a key via the file name is also a pure move."""
-        old = hive_dir / "network=XX" / "station=A" / "cable=north__tag=raw.h5"
-        old.rename(old.with_name("cable=north__tag=raw__phase=2.h5"))
+    def test_added_key_is_a_pure_move(self, hive_spool, hive_dir, scan_calls):
+        """Adding a key to an existing segment never re-reads contents."""
+        old = hive_dir / "network=XX" / "station=A" / "cable=north__tag=raw"
+        old.rename(old.with_name("cable=north__tag=raw__phase=2"))
         updated = hive_spool.update(progress=None)
         assert not scan_calls
         assert updated.get_contents()["phase"].iloc[0] == "2"
 
     def test_removed_key_triggers_rescan(self, hive_spool, hive_dir, scan_calls):
         """Dropping a hive key needs the file's own value back: rescan."""
-        old = hive_dir / "network=XX" / "station=A" / "cable=north__tag=raw.h5"
-        old.rename(old.with_name("cable=north.h5"))
+        old = hive_dir / "network=XX" / "station=A" / "cable=north__tag=raw"
+        old.rename(old.with_name("cable=north"))
         updated = hive_spool.update(progress=None)
         assert len(scan_calls) == 1
         df = updated.get_contents()
@@ -361,21 +405,66 @@ class TestEdgeCases:
         """An index stamped with an older version rebuilds transparently."""
         spool = Spool.from_directory(hive_dir).update(progress=None)
         spool.indexer.close()
-        index_path = hive_dir / ".dascore_index.sqlite3"
-        # close explicitly: sqlite3's context manager only wraps the
-        # transaction, and a lingering handle blocks the rebuild's
-        # unlink on Windows.
-        con = sqlite3.connect(index_path)
-        try:
-            con.execute("UPDATE meta_data SET index_version = 3")
-            con.commit()
-        finally:
-            con.close()
+        _stamp_index_version(hive_dir, 3)
         reopened = Spool.from_directory(hive_dir).update(progress=None)
         try:
             assert reopened.get_contents()["station"].iloc[0] == "A"
         finally:
             reopened.indexer.close()
+
+    def test_rebuild_drops_source_name_attrs(self, tmp_path, monkeypatch):
+        """
+        An index built when file names counted loses those attrs.
+
+        The rebuild is what retires them, so the index version has to
+        move with the parse: an index left at its old number would keep
+        serving attrs the current parser would never produce.
+        """
+        assert INDEX_VERSION > _SOURCE_NAME_INDEX_VERSION
+        sub = tmp_path / "station=A"
+        sub.mkdir()
+        dc.get_example_patch().io.write(sub / "cable=north.h5", "dasdae")
+        monkeypatch.setattr(ingest, "parse_hive_path_attrs", _parse_including_name)
+        spool = Spool.from_directory(tmp_path).update(progress=None)
+        assert spool.get_contents()["cable"].iloc[0] == "north"
+        spool.indexer.close()
+        monkeypatch.undo()
+        _stamp_index_version(tmp_path, _SOURCE_NAME_INDEX_VERSION)
+        reopened = Spool.from_directory(tmp_path).update(progress=None)
+        try:
+            assert "cable" not in reopened.get_contents().columns
+            stored = reopened._df["_path_attrs"].iloc[0]
+            assert json.loads(stored) == {"station": "A"}
+        finally:
+            reopened.indexer.close()
+
+    def test_source_file_name_is_not_indexed(self, tmp_path):
+        """A key=value file name under a partition contributes nothing."""
+        sub = tmp_path / "station=A"
+        sub.mkdir()
+        dc.get_example_patch().io.write(sub / "cable=north.h5", "dasdae")
+        spool = Spool.from_directory(tmp_path).update(progress=None)
+        try:
+            df = spool.get_contents()
+            assert df["station"].iloc[0] == "A"
+            assert "cable" not in df.columns
+            assert spool[0].attrs.get("cable") is None
+        finally:
+            spool.indexer.close()
+
+    def test_directory_format_unit_name_is_not_indexed(self, tmp_path):
+        """A directory-format source is named, not partitioned, by its dir."""
+        unit = tmp_path / "cable=north" / "tag=ignored"
+        unit.mkdir(parents=True)
+        (unit / "metadata.xml").write_text(metadata)
+        rand = np.random.default_rng(0).random((5000, 10)).astype("float32")
+        (unit / "DAS_20240530T011500_000000Z.raw").write_bytes(rand.tobytes())
+        spool = Spool.from_directory(tmp_path).update(progress=None)
+        try:
+            stored = spool._df["_path_attrs"].iloc[0]
+            assert json.loads(stored) == {"cable": "north"}
+        finally:
+            spool.indexer.close()
 
 
 class TestHiveAcquisitionKey:

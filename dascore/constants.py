@@ -89,7 +89,9 @@ ONE_SECOND_IN_NS = np.timedelta64(ONE_BILLION, "ns")
 # Valid strings for "datatype" attribute
 DataType = Literal[
     "",  # unspecified
+    "displacement",
     "velocity",
+    "acceleration",
     "strain_rate",
     "phase",
     "phase_difference",
@@ -136,6 +138,10 @@ max_lens = {
 # Tested against the models in tests/test_core/test_attrs.py.
 INVENTORY_ATTRS = (
     "closed_fiber_loop",
+    # The family of instrument, which is a fact about the acquisition
+    # rather than about the state the data is now in: processing turns
+    # velocity into strain rate, but DAS data stays DAS data.
+    "data_category",
     "firmware_version",
     "gauge_length",
     "interrogator.instrument_type",
@@ -154,16 +160,9 @@ INVENTORY_ATTRS = (
 # Methods FileFormatter needs to support
 FILE_FORMATTER_METHODS = ("read", "write", "get_format", "scan")
 
-# These attributes are the default to ignore when determine if patches
-# can be merged or broadcast together.
-DEFAULT_ATTRS_TO_IGNORE = ("history", "dims")
-
 # Large and small np.datetime64[ns] (used when defaults are needed)
 SMALLDT64 = np.datetime64(MININT64 + 5_000_000_000, "ns")
 LARGEDT64 = np.datetime64(MAXINT64 - 5_000_000_000, "ns")
-
-# Required shared attributes to merge patches together
-PATCH_MERGE_ATTRS = ("acquisition_key", "dims", "data_type", "data_category")
 
 # Storage provenance: where a patch's bytes live rather than where its
 # signal came from. The spool owns these and no reader may put them in
@@ -180,23 +179,36 @@ STORAGE_PROVENANCE_ATTRS = (
 )
 
 # Level of progress bar
-PROGRESS_LEVELS = Literal["standard", "basic", None]
+PROGRESS_LEVELS = Literal["standard", "basic", None, False]
 
 progress_description = """
 progress
     Controls the progress bar. "standard" produces the standard progress
     bar. "basic" is a simplified version with lower refresh rates, best
-    for high-latency environments, and None disables the progress bar.
+    for high-latency environments, and None (or False) disables the
+    progress bar.
 """.strip()
 
 # Options for handling specific warnings. One spelling of "do nothing":
 # "ignore", which every policy argument in the library also spells.
 WARN_LEVELS = Literal["warn", "raise", "ignore"]
 
+# What `enrich` does about a name the inventory leaves undefined: the warn
+# levels, spelled by reference so the two sets cannot drift apart, plus the
+# fourth answer only this question has -- fill the missing marker.
+ON_MISSING = Literal[WARN_LEVELS, "null"]
+
+# What `enrich` does when the patch and the inventory both state an attr
+# and disagree. The merge vocabulary plus `keep_last`: enrichment combines
+# two sources rather than a sequence of patches, so which of the two wins
+# has to be sayable, and `keep_first` means what it means everywhere else
+# -- the value which was there first, the patch's own.
+ENRICH_CONFLICT = Literal["drop", "raise", "keep_first", "keep_last"]
+
 # The actions warnings.simplefilter and warnings.filterwarnings accept.
 # Spelled out because the standard library's alias for them is stub-only.
 # "all" is deliberately absent: Python only began accepting it in 3.14, and
-# it raises on the 3.11-3.13 interpreters this project also supports.
+# it raises on the 3.12-3.13 interpreters this project also supports.
 WARNING_ACTIONS = Literal["default", "error", "ignore", "always", "module", "once"]
 
 # A map from the unit name to the code used in numpy.timedelta64. The codes
@@ -229,13 +241,15 @@ same units as the specified dimension, or have units attached.
 """
 
 attr_conflict_description = """
-Indicates how to handle conflicts in attributes other than those
-indicated by dim (eg tag, history, acquisition_key, etc). If "drop" simply
-drop conflicting attributes, or attributes not shared by all models.
-If "raise" raise an
-[AttributeMergeError](`dascore.exceptions.AttributeMergeError`] when
-issues are encountered. If "keep_first", just keep the first value
-for each attribute.
+Indicates how to handle attributes which hold conflicting values across
+the patches being combined (eg data_type, data_units, custom attrs). A
+missing value (None, NaN, "") is a value like any other: it equals
+another missing one and nothing else, so a patch which never stated an
+attribute conflicts with one which did. History and the ids are never
+compared. If "raise" (default) raise an
+[AttributeMergeError](`dascore.exceptions.AttributeMergeError`) for
+conflicting values. If "drop", omit the conflicting attributes from the
+output. If "keep_first", keep the first patch's value of each.
 """
 
 
@@ -269,20 +283,26 @@ enrich_attrs_description = """
 attrs
     True (the default) to copy the observing-system facts the inventory
     is authoritative for, a tuple of names to copy exactly those, or
-    False to copy none. The blanket form excludes `data_type`,
-    `data_category`, and `data_units`, which describe the data as it
-    now stands, and `sample_rate` and `spatial_interval`, which the
-    patch's own coordinates already state; naming one restores the
-    as-acquired value.
+    False to copy none. The blanket form is every scalar field of the
+    resolved acquisition (and of its interrogator) except `data_type`
+    and `data_units`, which describe the data as it now stands rather
+    than the system, and `sample_rate` and `spatial_interval`, which the
+    patch's own coordinates already state and a decimated patch would
+    contradict. Naming one of those four asks for the as-acquired value;
+    whether it lands over one the patch already states is `conflict`'s
+    business, as it is for every other name.
 """.strip()
 
 enrich_coords_description = """
 coords
-    True (the default) to add the geometry axes and annotation groups of
+    True (the default) to add the geometry axes and label groups of
     the resolved optical path, a tuple of names to add exactly those, or
-    False to add none. Names may be `distance` for optical distance, a
-    coordinate label the inventory's CRS defines, an annotation group, or
-    a qualified track field such as `coupling.medium`.
+    False to add none. The blanket form adds the geometry axes, the
+    label groups, and `coupling`, whose values are the coupling type of
+    each channel. Names may be `distance` for optical distance, one of
+    the axes the inventory's CRS names, a label group, a typed track
+    (`coupling`, `geometry`, `optical_components`), or a qualified track
+    field such as `coupling.medium`.
 """.strip()
 
 enrich_on_missing_description = """
@@ -300,28 +320,32 @@ on_missing
 enrich_conflict_description = f"""
 conflict
 {textwrap.indent(attr_conflict_description.strip(), "    ")}
-    Enrichment combines the inventory's values with the patch's own, so
-    the default `keep_first` lets the inventory win and re-enriching is
-    a refresh. `raise` is the misresolution guard: a header disagreeing
-    with the resolved acquisition usually means the `acquisition_key`
-    resolved to the wrong place.
+    Enrichment combines the inventory's values with the patch's own
+    rather than a sequence of patches, so it also accepts `keep_last`,
+    which is the inventory correcting the file. The default `keep_first`
+    keeps what the patch already stated: an attr a reader read out of the
+    file header was there first. Either way an attr the patch leaves
+    unset is filled, which is most of what enrichment does. `raise` is
+    the misresolution guard: a header disagreeing with the resolved
+    acquisition usually means the `acquisition_key` resolved to the
+    wrong place.
 """.strip()
 
 
-# Rich styles for various object displays.
+# Rich styles for various object displays. Every value has to be one rich can
+# parse: it resolves an unparsable style to a blank one rather than raising,
+# so a misspelling here does not fail, it silently stops coloring.
 dascore_styles = dict(
     dc_blue="blue",
     dc_red="red",
     dc_yellow="yellow",
     default_coord="bold",
     coord_range="bold green",
-    coord_monotonic="bold grey",
+    coord_monotonic="bold grey50",
     coord_segmented="bold cyan",
-    coord_array="bold orange",
-    coord_degenerate="bold red",
+    coord_array="bold dark_orange",
     coord_non="bold red",
-    units="bright blue",
-    dtypes="bright black",
+    units="bright_blue",
     keys="grey50",
     # these are for formatting date times
     ymd="blue",

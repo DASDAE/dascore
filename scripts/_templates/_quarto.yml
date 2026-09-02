@@ -4,10 +4,22 @@
 project:
   type: website
   output-dir: _site
+  # The JupyterLite site is built by scripts/build_notebooks.py plus
+  # `jupyter lite build` (see .github/actions/prep_doc_build); quarto only
+  # copies it. Both directories hold notebooks, and lite/ also holds prebuilt
+  # html, so they are kept out of the render list -- quarto would otherwise
+  # treat them as pages to render.
+  resources:
+    - lite/**
+  render:
+    - "**/*.qmd"
+    - "!lite/**"
+    - "!lite_contents/**"
 
 filters:
   - quarto
   - filters/fill_links.py
+  - filters/lite_button.lua
 
 execute:
   warning: false
@@ -109,6 +121,9 @@ website:
         - text: Transformations
           href: tutorial/transformations.qmd
 
+        - text: Workflow
+          href: tutorial/workflow.qmd
+
         - text: Visualization
           href: tutorial/visualization.qmd
 
@@ -153,6 +168,8 @@ website:
             - recipes/correlate.qmd
             - recipes/edge_effects.qmd
             - recipes/fk.qmd
+            - recipes/adaptive_spectral_filter.qmd
+            - recipes/windowing.qmd
             - recipes/real_time_proc.qmd
             - recipes/parallelization.qmd
             - recipes/low_freq_proc.qmd
@@ -236,6 +253,15 @@ website:
 
         - text: Spool Selection
           href: notes/spool_selection.qmd
+
+        - text: Spool Chunking
+          href: notes/spool_chunking.qmd
+
+        - text: Patch Compatibility
+          href: notes/patch_compatibility.qmd
+
+        - text: Inventory Attachment
+          href: notes/inventory_attachment.qmd
 
     - id: API
       title: "API"

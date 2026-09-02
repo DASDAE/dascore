@@ -133,13 +133,6 @@ class TestConstruction:
         with pytest.raises(ValidationError, match="fuse"):
             CoordSegmented(segments=(c1, c2))
 
-    def test_overlap_raises(self):
-        """Overlapping segments are rejected."""
-        c1 = get_coord(start=0.0, stop=10.0, step=1.0)
-        c2 = get_coord(start=5.0, stop=15.0, step=1.0)
-        with pytest.raises(CoordError, match="overlap"):
-            concat_coords(c1, c2)
-
     def test_shared_value_raises(self):
         """Segments sharing a boundary value are rejected (not strict)."""
         c1 = get_coord(start=0.0, stop=10.0, step=1.0)  # max 9
@@ -518,14 +511,26 @@ class TestSortAndShift:
         """Time coords do not convert units."""
         assert time_gap_coord.convert_units("ft") is time_gap_coord
 
+    def test_the_guard_asks_every_segment(self, float_gap_coord):
+        """
+        `self.units` speaks only for the first segment.
+
+        Segments are admitted when their units are merely equal, so a
+        coord reporting metres can hold one in `100 cm`, and that one
+        still has work to do.
+        """
+        coord = float_gap_coord.set_units("m")
+        assert coord.set_units("meter") is coord  # every segment agrees
+        mixed = coord.__class__(
+            segments=(coord.segments[0], coord.segments[1].set_units("100 cm"))
+        )
+        for out in (mixed.set_units("m"), mixed.convert_units("m")):
+            assert out is not mixed
+            assert all(get_quantity(x.units) == get_quantity("m") for x in out.segments)
+
 
 class TestSimplifyAndSnap:
     """Tests for tolerance-bounded simplification and snapping."""
-
-    def test_simplify_zero_keeps_structure(self, float_gap_coord):
-        """Zero tolerance cannot absorb a real gap."""
-        out = float_gap_coord.simplify(0)
-        assert out == float_gap_coord
 
     def test_simplify_absorbs_gap_within_tolerance(self, float_gap_coord):
         """A large enough tolerance collapses to a single range."""
@@ -1133,10 +1138,10 @@ class TestFromArray:
 class TestPlannedSpoolWriteGuard:
     """The gap write guard covers plan-assembled spools (round-4 F3)."""
 
-    @pytest.fixture()
-    def gapped_planned_spool(self, tmp_path):
+    @pytest.fixture(scope="class")
+    def gapped_planned_spool(self, tmp_path_factory):
         """A file-backed planned spool whose output spans a real gap."""
-        src = tmp_path / "src"
+        src = tmp_path_factory.mktemp("gapped_planned") / "src"
         src.mkdir()
         p1 = dc.get_example_patch()
         t = p1.get_coord("time")

@@ -16,14 +16,19 @@ on:
     paths:
       - 'dascore/**'
       - 'tests/**'
+      # The suite now runs the documentation examples, so a change to a qmd
+      # page or to the generator can break this workflow on its own.
+      - 'docs/**'
+      - 'scripts/generate_doc_code_tests.py'
       - 'scripts/test_wasm.mjs'
       - 'pyproject.toml'
       - '.github/workflows/test_wasm.yml'
       - '.github/actions/**/*.yml'
       - '.github/scripts/**'
 
+# Supersede the previous run: by pull request, or by branch for pushes.
 concurrency:
-  group: TestWasm-${{ github.event.pull_request.number || github.run_id }}
+  group: TestWasm-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 # Both jobs must exercise the same Pyodide release so their results are
@@ -102,10 +107,20 @@ jobs:
           python -m pip install "pyodide-build==$PYODIDE_BUILD_VERSION"
           pyodide xbuildenv install "$PYODIDE_VERSION"
           pyodide venv .venv-pyodide
-          .venv-pyodide/bin/pip install dist/*.whl pytest
+          # findiff, pyyaml, tabulate and ipython are not dascore requirements,
+          # but the documentation examples import them, so the doc tests below
+          # cannot run without them.
+          .venv-pyodide/bin/pip install dist/*.whl pytest \
+            findiff pyyaml tabulate ipython
 
       - name: prepare test data cache
         uses: ./.github/actions/prime-test-data-cache
+
+      # The documentation examples are what a reader actually runs when they
+      # open a tutorial in the browser, so they belong in the wasm suite. The
+      # generated modules land under tests/, so the run below picks them up.
+      - name: generate qmd docs tests
+        run: python scripts/generate_doc_code_tests.py
 
       - name: Run test suite in WebAssembly
         run: >

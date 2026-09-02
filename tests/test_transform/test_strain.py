@@ -235,6 +235,19 @@ class TestRadianToStrain:
         const = out.data / rad_patch.data
         assert np.allclose(const, expected_const)
 
+    def test_data_type_updated(self, rad_patch):
+        """Phase data should become strain, not stay phase."""
+        patch = rad_patch.update_attrs(data_type="phase")
+        out = patch.radians_to_strain()
+        assert out.attrs.data_type == "strain"
+
+    def test_data_type_rate(self, rad_patch):
+        """Data with a per-time component should become strain_rate."""
+        patch = rad_patch.update_attrs(data_units="rad/s", data_type="phase_rate")
+        out = patch.radians_to_strain()
+        assert out.attrs.data_type == "strain_rate"
+        assert get_quantity(out.attrs.data_units) == get_quantity("strain/s")
+
     def test_no_gauge_length_in_attrs(self, rad_patch):
         """Ensure an empty gauge length raises error."""
         patch = rad_patch.update_attrs(gauge_length=None)
@@ -244,6 +257,34 @@ class TestRadianToStrain:
 
         out = patch.radians_to_strain(gauge_length=1)
         assert isinstance(out, dc.Patch)
+
+    @pytest.mark.parametrize(
+        "bad", ["N.", b"10", float("nan"), float("inf"), 0, -5, True]
+    )
+    def test_non_positive_gauge_length_in_attrs(self, rad_patch, bad):
+        """A gauge length which is not a positive number should be rejected."""
+        patch = rad_patch.update_attrs(gauge_length=bad)
+        with pytest.raises(ParameterError, match="Gauge length must"):
+            patch.radians_to_strain()
+
+    @pytest.mark.parametrize("boxed", [np.array(10.0), np.array([10.0])])
+    def test_gauge_length_in_an_array_box(self, rad_patch, boxed):
+        """A scalar left in an array should still be a gauge length."""
+        patch = rad_patch.update_attrs(gauge_length=None)
+        out = patch.radians_to_strain(gauge_length=boxed)
+        assert out.equals(rad_patch.radians_to_strain(gauge_length=10))
+
+    def test_gauge_length_quantity(self, rad_patch):
+        """A gauge length with units should convert to meters."""
+        patch = rad_patch.update_attrs(gauge_length=None)
+        out = patch.radians_to_strain(gauge_length=10_000 * dc.get_quantity("mm"))
+        assert out.equals(rad_patch.radians_to_strain(gauge_length=10))
+
+    def test_example_patch_without_gauge_length(self):
+        """The example patch the docstrings use states no gauge length (#1078)."""
+        patch = dc.get_example_patch("deformation_rate_event_1")
+        with pytest.raises(ParameterError, match="Gauge length must"):
+            patch.update_attrs(data_units="rad").radians_to_strain()
 
     def test_no_radians(self, random_patch):
         """Ensure no radians in units returns same patch."""

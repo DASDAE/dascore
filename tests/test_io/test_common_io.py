@@ -33,7 +33,6 @@ from dascore.io.dashdf5 import DASHDF5
 from dascore.io.febus import Febus1, Febus2, FebusBSLH5V1, FebusMTXH5V1, FebusT1V1
 from dascore.io.gdr import GDR_V1
 from dascore.io.h5simple import H5Simple
-from dascore.io.hdas import HDASV1, HDASV2
 from dascore.io.mseed.core import MSeedV2
 from dascore.io.netcdf import NetCDFCFV18
 from dascore.io.neubrex import NeubrexDASV1, NeubrexRFSV1
@@ -52,6 +51,7 @@ from dascore.io.terra15 import (
     Terra15FormatterV5,
     Terra15FormatterV6,
 )
+from dascore.io.uptech import UptechH5V1
 from dascore.utils.downloader import fetch, get_registry_df
 from dascore.utils.misc import all_close, iterate, order_range_tuple
 from tests.test_io._common_io_test_utils import (
@@ -81,12 +81,12 @@ COMMON_IO_READ_TESTS = {
     FebusT1V1(): ("febus_dts.h5", "febus_dts_single_reading.h5"),
     GDR_V1(): ("gdr_1.h5",),
     H5Simple(): ("h5_simple_2.h5", "h5_simple_1.h5"),
-    HDASV1(): ("hdas_1.h5",),
-    HDASV2(): ("hdas_2.h5",),
     NeubrexDASV1(): ("neubrex_das_1.h5",),
     NeubrexRFSV1(): ("neubrex_dss_forge.h5", "neubrex_dts_forge.h5"),
     ODH4V1(): ("optasense_odh4_1.h5",),
-    OptoDASV8(): ("opto_das_1.hdf5",),
+    # decimated_optodas.hdf5 is the #419 regression file; it is in the matrix
+    # so every contract runs over it, not only a read.
+    OptoDASV8(): ("opto_das_1.hdf5", "decimated_optodas.hdf5"),
     SR4731V200(): ("ofl100_1.sor", "ofl100_2.sor", "ofl100_3.sor"),
     ProdMLV2_0(): ("prodml_2.0.h5", "opta_sense_quantx_v2.h5"),
     ProdMLV2_1(): (
@@ -108,6 +108,7 @@ COMMON_IO_READ_TESTS = {
     Terra15FormatterV6(): ("terra15_v6_test_file.hdf5",),
     NetCDFCFV18(): ("xdas_netcdf.nc",),
     MSeedV2(): ("etna_9n_3chan_10s.mseed",),
+    UptechH5V1(): ("uptech_as1000_1.hdf5",),
 }
 
 # This tuple is for fiber io which support a write method and can write
@@ -146,6 +147,8 @@ VENDOR_ATTRS = frozenset(
         "amppower",
         "api",
         "average",
+        "averaging_time",
+        "n_averages",
         "channel",
         "channel_step",
         "distance_decimation_filter",

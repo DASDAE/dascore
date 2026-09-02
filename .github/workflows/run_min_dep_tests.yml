@@ -29,9 +29,9 @@ env:
   # Must match the path used in .github/actions/prime-test-data-cache.
   DFS_DATA_DIR: ${{ github.workspace }}/.test_data_cache
 
-# Cancel previous runs when this one starts.
+# Supersede the previous run: by pull request, or by branch for pushes.
 concurrency:
-  group: TestCodeMinDeps-${{ github.event.pull_request.number || github.run_id }}
+  group: TestCodeMinDeps-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -42,8 +42,8 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       # Shared values live in .github/actions/load-shared-vars/action.yml
-      python-matrix: ${{ steps.load-vars.outputs.python-min-deps-matrix }}
-      os-matrix: ${{ steps.load-vars.outputs.test-os-matrix }}
+      min-deps-matrix: ${{ steps.load-vars.outputs.min-deps-matrix }}
+      min-deps-python-default: ${{ steps.load-vars.outputs.min-deps-python-default }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
@@ -64,11 +64,8 @@ jobs:
       # One job failing used to cancel the rest, which both hid the other
       # results and wasted the work those jobs had already done.
       fail-fast: false
-      matrix:
-        # Defined in .github/actions/load-shared-vars/action.yml
-        os: ${{ fromJson(needs.setup.outputs.os-matrix) }}
-        # Defined in .github/actions/load-shared-vars/action.yml
-        python-version: ${{ fromJson(needs.setup.outputs.python-matrix) }}
+      # Defined in .github/actions/load-shared-vars/action.yml
+      matrix: ${{ fromJson(needs.setup.outputs.min-deps-matrix) }}
 
     # only run if CI isn't turned off
     if: github.event_name == 'push' || !contains(github.event.pull_request.labels.*.name, 'no_ci')
@@ -101,9 +98,12 @@ jobs:
         shell: bash
         run: ./.github/test_code.sh
 
-      # Runs examples in docstrings
+      # Runs examples in docstrings. One cell: without numba the jit kernels'
+      # examples run in pure python, which costs minutes on every OS and
+      # version alike.
       - name: test docstrings
         id: run_docstrings
+        if: matrix.os == 'ubuntu-latest' && matrix.python-version == needs.setup.outputs.min-deps-python-default
         continue-on-error: ${{ env.debug_enabled == 'true' }}
         shell: bash
         run: ./.github/test_code.sh doctest

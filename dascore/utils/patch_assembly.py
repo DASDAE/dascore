@@ -21,7 +21,7 @@ import pandas as pd
 import dascore as dc
 from dascore.exceptions import CoordMergeError, UnitError
 from dascore.units import get_quantity
-from dascore.utils.attrs import combine_patch_attrs
+from dascore.utils.attrs import combine_patch_attrs, warn_if_histories_differ
 from dascore.utils.misc import broadcast_for_index, is_range
 from dascore.utils.patch import (
     _force_patch_merge,
@@ -102,13 +102,42 @@ def _match_merge_units(patch, merge_dim, target_units):
     return patch, target_units
 
 
-def _coord_only_kwargs(patch, kwargs) -> dict:
-    """Keep only the kwargs naming a dim or coordinate of patch."""
-    return {
-        k: v
-        for k, v in kwargs.items()
-        if k in patch.dims or k in patch.coords.coord_map
-    }
+def _drop_associated_ranges(row, kwargs, plan_dim) -> dict:
+    """
+    Drop the ranges of coordinates which merely ride a dimension.
+
+    `_convert_min_max_in_kwargs` collapses the row's `<name>_min`/
+    `<name>_max` pairs into `<name>: [min, max]` ranges, which travel on
+    as read hints. Only the planned dimension's range is a trim; an
+    associated (non-dimensional) coordinate's is its whole extent, and
+    asking a reader to select on it drops the channels a string
+    coordinate labels with neither endpoint, or a numeric one leaves NaN.
+    """
+    raw_dims = row["dims"]
+    assert isinstance(raw_dims, str), "a member row always names its dimensions"
+    dims = {x for x in raw_dims.split(",") if x}
+    ranged = {x.rsplit("_", 1)[0] for x in row if x.endswith(("_min", "_max"))}
+    drop = ranged - dims - {plan_dim}
+    return {k: v for k, v in kwargs.items() if k not in drop}
+
+
+def _plan_trim_kwargs(patch, kwargs, plan_dim) -> dict:
+    """
+    Keep only the trim the plan actually narrows.
+
+    A member row is its source row with the *planned* dimension's
+    envelope replaced by the member's trim range; every other range
+    column still describes the whole source. Selecting on those would
+    re-select a coordinate to its own extent, which is a no-op for a
+    sorted numeric range but not for a string coordinate (a range of
+    labels), one holding NaN (missing values fall outside every range),
+    or one which cannot be range-selected at all.
+    """
+    if plan_dim not in kwargs:  # an unmodified member states no range
+        return {}
+    coord_map = patch.coords.coord_map
+    assert plan_dim in coord_map, "the plan's dimension is on every member"
+    return {plan_dim: kwargs[plan_dim]}
 
 
 def _as_plan_units(patch, kwargs, row) -> dict:
@@ -154,13 +183,15 @@ class PatchAssembler:
     Assemble output patches from joined member rows.
 
     ``load_patch`` resolves one member row to its source patch (residual
-    selections included); ``merge_kwargs`` carries the merge behavior.
-    The plan resolver hands this the joined member frame for one output
-    at a time.
+    selections included); ``merge_kwargs`` carries the merge behavior;
+    ``plan_dim`` names the one dimension whose range the plan narrowed,
+    and so the only one a member needs trimming on. The plan resolver
+    hands this the joined member frame for one output at a time.
     """
 
     load_patch: Callable[[Mapping], dc.Patch]
     merge_kwargs: Mapping
+    plan_dim: str
 
     def _patch_from_instruction_df(self, joined):
         """Get the patches joined columns of instruction df."""
@@ -197,14 +228,15 @@ class PatchAssembler:
         """Load a single patch and trim it to its instruction range."""
         # convert kwargs to format understood by parser/patch.select
         kwargs = _convert_min_max_in_kwargs(patch_kwargs, joined)
+        kwargs = _drop_associated_ranges(patch_kwargs, kwargs, self.plan_dim)
         patch = self.load_patch(kwargs)
         # If the limits of the source patch were not modified, we can just
         # skip selection. This is important for missing coordinates
         # (NaN values) to not get trimmed out.
         source_kwargs = kwargs if kwargs.get("_modified") else {}
-        # attr-style entries filter rows above; only coordinate entries
-        # are valid patch selections.
-        if select_kwargs := _coord_only_kwargs(patch, source_kwargs):
+        # attr-style entries filter rows above, and the plan only ever
+        # narrows its own dimension; everything else loads untouched.
+        if select_kwargs := _plan_trim_kwargs(patch, source_kwargs, self.plan_dim):
             patch = patch.select(**_as_plan_units(patch, select_kwargs, patch_kwargs))
         return patch
 
@@ -283,6 +315,7 @@ class PatchAssembler:
         new_coord = _get_merged_coord(
             summary_df, merge_dim, coords, drop_conflicting, **coord_kwargs
         )
+        warn_if_histories_differ(attrs, "Merging")
         new_attrs = combine_patch_attrs(attrs, **attr_kwargs)
         return dc.Patch(data=buffer, coords=new_coord, attrs=new_attrs, dims=list(dims))
 

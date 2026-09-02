@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
+from typing import Any
 
 import numpy as np
 import pandas as pd
+from pydantic import ConfigDict
 from scipy.interpolate import interp1d
 
 import dascore as dc
@@ -21,6 +23,10 @@ from dascore.utils.array_api import array_namespace
 from dascore.utils.docs import compose_docstring
 from dascore.utils.misc import get_parent_code_name, iterate
 from dascore.utils.patch import patch_function
+from dascore.workflow.processor import (
+    PatchProcessor,
+    register_implementation,
+)
 
 
 @patch_function()
@@ -231,8 +237,31 @@ def rename_coords(self: PatchType, **kwargs) -> PatchType:
     >>> pa2 = pa.rename_coords(distance='fragrance')
     >>> assert 'fragrance' in pa2.dims
     """
-    new_coord = self.coords.rename_coord(**kwargs)
-    return self.new(coords=new_coord, dims=new_coord.dims, attrs=self.attrs)
+    return RenameCoords(**kwargs)._apply(self)
+
+
+class RenameCoords(PatchProcessor):
+    """
+    Give coordinates other names.
+
+    No kernel: the data are what they were, and only what they are
+    called changes. A processor which defines no kernel says exactly
+    that, and `_apply` hands the array through untouched.
+    """
+
+    # The renames arrive as whatever the caller named them, so the fields
+    # cannot be known in advance; `model_values` folds the extras back
+    # into the parameters, so the fingerprint and the document still hold
+    # every one of them.
+    model_config = ConfigDict(extra="allow", frozen=True)
+
+    def derive_meta(self, meta):
+        """Return the coordinates under their new names."""
+        coords = meta.coords.rename_coord(**self._params())
+        return meta.update(coords=coords)
+
+
+register_implementation("rename_coords", RenameCoords)
 
 
 @patch_function()
@@ -292,6 +321,8 @@ def drop_coords(self: PatchType, *coords: str | Iterable[str]) -> PatchType:
         msg = f"Cannot drop dimensional coordinates: {dim_coords}"
         raise ParameterError(msg)
     new_coord, data = self.coords.drop_coords(*names, array=self.data)
+    if new_coord is self.coords:  # none of the named coords were here
+        return self
     return self.new(coords=new_coord, dims=new_coord.dims, data=data)
 
 
@@ -317,10 +348,12 @@ def drop_private_coords(self: PatchType) -> PatchType:
     >>> assert "_private" not in pa_no_private.coords.coord_map
     """
     new_coord, data = self.coords.drop_private_coords(array=self.data)
+    if new_coord is self.coords:  # there were no private coords
+        return self
     return self.new(coords=new_coord, dims=new_coord.dims, data=data)
 
 
-@patch_function(backend="array_api")
+@patch_function()
 def make_broadcastable_to(
     self: PatchType,
     shape: tuple[int, ...],
@@ -712,7 +745,7 @@ def order(
     return patch.new(data=data, coords=new_coords)
 
 
-@patch_function(history=None, backend="array_api")
+@patch_function(history=None)
 def transpose(self: PatchType, *dims: str) -> PatchType:
     """
     Transpose the data array to any dimension order desired.
@@ -738,25 +771,44 @@ def transpose(self: PatchType, *dims: str) -> PatchType:
     >>> # Set distance as the first dimension.
     >>> out = pa.transpose("distance", ...)
     """
-    dims = tuple(dims)
-    old_dims = self.coords.dims
-    # Filter out ellipsis from dims to validate
-    dims_to_check = [d for d in dims if d is not ...]
-    # Check for invalid dimensions
-    if invalid_dims := set(dims_to_check) - set(old_dims):
-        invalid_list = sorted(invalid_dims)
-        valid_list = sorted(old_dims)
-        msg = f"Dimension(s) {invalid_list} not found in Patch dimensions: {valid_list}"
-        raise ParameterError(msg)
-    new_coord = self.coords.transpose(*dims)
-    # No-op transpose; the coord manager returned self, so reuse this patch.
-    if new_coord is self.coords:
-        return self
-    new_dims = new_coord.dims
-    axes = tuple(old_dims.index(x) for x in new_dims)
-    xp = array_namespace(self.data)
-    new_data = xp.permute_dims(self.data, axes)
-    return self.new(data=new_data, coords=new_coord)
+    return Transpose(dims=tuple(dims))._apply(self)
+
+
+class Transpose(PatchProcessor):
+    """Put the dimensions of a patch into another order."""
+
+    # Typed loosely because `...` is a legal element: `transpose(...,
+    # "distance")` means "distance last, the rest as they were".
+    dims: tuple[Any, ...] = ()
+
+    def derive_meta(self, meta):
+        """
+        Return the coordinates in their new order.
+
+        The coord manager hands back the very object it was given when
+        the order asked for is the order already held, and that is what
+        tells `_apply` the operation did nothing.
+        """
+        old_dims = meta.coords.dims
+        named = [x for x in self.dims if x is not ...]
+        if invalid := set(named) - set(old_dims):
+            msg = (
+                f"Dimension(s) {sorted(invalid)} not found in Patch "
+                f"dimensions: {sorted(old_dims)}"
+            )
+            raise ParameterError(msg)
+        coords = meta.coords.transpose(*self.dims)
+        return meta if coords is meta.coords else meta.update(coords=coords)
+
+    def kernel(self, data, meta, out_meta):
+        """Return the data with its axes permuted to the new order."""
+        if out_meta is meta:
+            return data
+        axes = tuple(meta.dims.index(x) for x in out_meta.dims)
+        return array_namespace(data).permute_dims(data, axes)
+
+
+register_implementation("transpose", Transpose)
 
 
 @patch_function(history=None)
@@ -825,7 +877,7 @@ def append_dims(patch: PatchType, *empty_dims, **dim_kwargs) -> PatchType:
     return patch.update(data=data, coords=coords)
 
 
-@patch_function(backend="array_api")
+@patch_function()
 def squeeze(self: PatchType, dim=None) -> PatchType:
     """
     Return a new object with len one dimensions flattened.
@@ -836,6 +888,13 @@ def squeeze(self: PatchType, dim=None) -> PatchType:
         Selects a subset of the length one dimensions. If a dimension
         is selected with length greater than one, an error is raised.
         If None, all length one dimensions are squeezed.
+
+    Raises
+    ------
+    CoordError
+        If a selected dimension does not exist or has more than one sample.
+    ParameterError
+        If squeezing would remove every dimension from the patch.
 
     Examples
     --------
@@ -854,6 +913,9 @@ def squeeze(self: PatchType, dim=None) -> PatchType:
     # Nothing to squeeze; the coord manager returned self, so reuse this patch.
     if coords is self.coords:
         return self
+    if not coords.dims:
+        msg = "Cannot squeeze all dimensions; at least one dimension must remain."
+        raise ParameterError(msg)
     if dim is None:
         axes = tuple(i for i, x in enumerate(self.shape) if x == 1)
     else:

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import copy
 import io
+import os
+import shutil
 import threading
 from pathlib import Path
 from typing import ClassVar, Literal, TypeVar
@@ -24,12 +26,16 @@ from dascore.exceptions import (
     InvalidFiberIOError,
     MissingOptionalDependencyError,
     MissingPatchError,
+    ParameterError,
     PatchAttributeError,
     RemoteCacheError,
     UnknownFiberFormatError,
 )
+from dascore.io import core as io_core
 from dascore.io.core import (
+    STORED_PATCH_ID,
     FiberIO,
+    _canonical_path,
     _FiberIOManager,
     _get_missing_install_name,
     _get_reloadable_source_path,
@@ -38,15 +44,25 @@ from dascore.io.core import (
     _resolve_read_spool,
     _scan_result_to_summary,
     _select_patch_from_spool,
+    _size_and_mtime,
+    _source_stats,
     _validate_scan_payload,
     is_directory_format,
     make_scan_payload,
 )
 from dascore.io.dasdae.core import DASDAEV1
 from dascore.io.utils import build_patches, convert_attr_units, get_exact_coord
-from dascore.utils.io import BinaryReader, BinaryWriter, IOResourceManager
+from dascore.utils.downloader import fetch
+from dascore.utils.hdf5 import H5Writer
+from dascore.utils.io import (
+    BinaryReader,
+    BinaryWriter,
+    IOResourceManager,
+    LocalPath,
+)
 from dascore.utils.misc import suppress_warnings
 from dascore.utils.time import to_datetime64
+from dascore.workflow.identity import source_patch_id
 
 tvar = TypeVar("tvar", int, float, str, Path)
 
@@ -206,6 +222,64 @@ class _MissingOptionalFormatter(FiberIO):
         if path.suffix == ".opt" and path.name == "missing_optional.opt":
             return self.name, self.version
         return False
+
+
+class _ScanBehaviorFormatter(FiberIO):
+    """A reader whose scan misbehaves in whichever way its file name asks.
+
+    Module level, because registration is permanent and keyed by
+    (name, version): a second definition of the same pair inside a test
+    function is ignored and this one keeps answering. It claims only its
+    own suffix, so no other get_format in the process changes.
+
+    The alternative -- patching `scan` on the live terra15 reader -- edits
+    an object every other test in the session shares.
+    """
+
+    name = "_scan_behavior_formatter"
+    version = "1"
+
+    def get_format(self, resource: Path, **kwargs) -> tuple[str, str] | Literal[False]:
+        """Claim only this test's sentinel files."""
+        return (
+            (self.name, self.version)
+            if Path(resource).suffix == ".scanbehavior"
+            else False
+        )
+
+    def scan(self, resource: Path, **kwargs):
+        """Do what the file name says, rather than scanning it."""
+        behavior = Path(resource).stem
+        if behavior == "os_error":
+            raise OSError("Simulated OS issue")
+        if behavior == "remote_cache_error":
+            raise RemoteCacheError("metadata cache blocked")
+        if behavior == "patch_attrs":  # the pre-ScanPayload return type
+            return [dc.PatchAttrs(tag="legacy")]
+        if behavior == "missing_keys":
+            return [{"unexpected": 1}]
+        if behavior == "non_mapping":
+            return ["not a payload"]
+        if behavior == "summary_coords":  # coords collapsed to summaries
+            patch = dc.get_example_patch()
+            return [
+                {
+                    "attrs": patch.attrs,
+                    "coords": patch.coords.to_summary_dict(),
+                    "dims": patch.dims,
+                    "shape": patch.shape,
+                    "dtype": str(patch.data.dtype),
+                }
+            ]
+        msg = f"no scan behavior called {behavior!r}"
+        raise LookupError(msg)
+
+
+def _misbehaving_scan_path(tmp_path, behavior: str) -> Path:
+    """Return a path _ScanBehaviorFormatter will scan in the named way."""
+    path = tmp_path / f"{behavior}.scanbehavior"
+    path.write_text("placeholder")
+    return path
 
 
 class _DependencyErrorFormatter(FiberIO):
@@ -438,7 +512,7 @@ class TestScanResultToSummary:
             "dims": patch.dims,
             "shape": patch.shape,
             "dtype": str(patch.data.dtype),
-            "source_patch_id": "node-1",
+            "source_patch_key": "node-1",
         }
         out = _scan_result_to_summary(payload, source_path="some_path")
         assert isinstance(out, dc.PatchSummary)
@@ -446,7 +520,7 @@ class TestScanResultToSummary:
             out.get_coord_summary("time").fingerprint
             == patch.get_coord("time").fingerprint()
         )
-        assert out.source_patch_id == "node-1"
+        assert out.source_patch_key == "node-1"
         assert str(out.source_path) == "some_path"
 
     def test_scan_payload_missing_dtype_raises(self):
@@ -496,31 +570,31 @@ class TestScanResultToSummary:
         with pytest.raises(ValueError, match=msg):
             _scan_result_to_summary(patch.attrs)
 
-    def test_summary_source_patch_id_sets_private_attr(self):
+    def test_summary_source_patch_key_sets_private_attr(self):
         """Summary source ids should be copied onto private attrs."""
         summary = dc.PatchSummary(
             attrs=dc.PatchAttrs(tag="x"),
-            source_patch_id="node-1",
+            source_patch_key="node-1",
         )
-        assert summary.source_patch_id == "node-1"
-        assert summary.attrs["_source_patch_id"] == "node-1"
+        assert summary.source_patch_key == "node-1"
+        assert summary.attrs["_source_patch_key"] == "node-1"
 
-    def test_private_attr_source_patch_id_sets_summary(self):
+    def test_private_attr_source_patch_key_sets_summary(self):
         """Private attr source ids should populate the summary field."""
         summary = dc.PatchSummary(
-            attrs=dc.PatchAttrs(tag="x", _source_patch_id="node-2"),
+            attrs=dc.PatchAttrs(tag="x", _source_patch_key="node-2"),
         )
-        assert summary.source_patch_id == "node-2"
-        assert summary.attrs["_source_patch_id"] == "node-2"
+        assert summary.source_patch_key == "node-2"
+        assert summary.attrs["_source_patch_key"] == "node-2"
 
-    def test_summary_source_patch_id_wins_on_conflict(self):
+    def test_summary_source_patch_key_wins_on_conflict(self):
         """Conflicting ids should resolve in favor of the summary field."""
         summary = dc.PatchSummary(
-            attrs=dc.PatchAttrs(tag="x", _source_patch_id="attrs-id"),
-            source_patch_id="summary-id",
+            attrs=dc.PatchAttrs(tag="x", _source_patch_key="attrs-id"),
+            source_patch_key="summary-id",
         )
-        assert summary.source_patch_id == "summary-id"
-        assert summary.attrs["_source_patch_id"] == "summary-id"
+        assert summary.source_patch_key == "summary-id"
+        assert summary.attrs["_source_patch_key"] == "summary-id"
 
 
 class TestFormatManager:
@@ -965,6 +1039,117 @@ class TestFileUri:
         assert dc.read(file_uri)[0] == dc.read(dasdae_path)[0]
 
 
+class TestExampleUri:
+    """The examples:// scheme names a file in the data registry."""
+
+    name = "terra15_das_1_trimmed.hdf5"
+
+    @pytest.fixture(scope="class")
+    def example_path(self):
+        """The local path the example uri resolves to."""
+        return fetch(self.name)
+
+    @pytest.fixture(scope="class")
+    def example_uri(self):
+        """The uri form of the same file."""
+        return f"examples://{self.name}"
+
+    def test_get_format(self, example_uri, example_path):
+        """get_format should agree for uri and path."""
+        assert dc.get_format(example_uri) == dc.get_format(example_path)
+
+    def test_scan(self, example_uri, example_path):
+        """Scanning a uri names the resolved file, not the uri."""
+        summary = dc.scan(example_uri)[0]
+        assert summary == dc.scan(example_path)[0]
+        assert str(summary.source_path) == str(example_path)
+
+    def test_scan_to_df(self, example_uri, example_path):
+        """scan_to_df should accept the uri."""
+        df = dc.scan_to_df(example_uri)
+        assert str(df["source_path"].iloc[0]) == str(example_path)
+
+    def test_read(self, example_uri, example_path):
+        """Read via uri should equal read via path."""
+        assert dc.read(example_uri)[0] == dc.read(example_path)[0]
+
+    def test_write_refused(self, example_uri, example_path):
+        """Writing to a uri must not overwrite the cached example file."""
+        before = example_path.read_bytes()
+        with pytest.raises(ParameterError, match="read-only"):
+            dc.write(dc.get_example_patch(), example_uri, "dasdae")
+        assert example_path.read_bytes() == before
+
+    def test_write_refused_through_manager(self, example_uri, example_path):
+        """Wrapping the uri in a manager is not a way around the refusal."""
+        before = example_path.read_bytes()
+        with pytest.raises(ParameterError, match="read-only"):
+            dc.write(dc.get_example_patch(), IOResourceManager(example_uri), "pickle")
+        assert example_path.read_bytes() == before
+
+    def test_manager_construction_is_lazy(self, monkeypatch, example_uri):
+        """Building a manager must not reach the network."""
+
+        def _no_fetch(*args, **kwargs):
+            raise AssertionError("the manager resolved its source eagerly")
+
+        monkeypatch.setattr("dascore.utils.downloader._fetch_cached", _no_fetch)
+        manager = IOResourceManager(example_uri)
+        assert manager.source == example_uri
+
+    def test_scan_payloads(self, example_uri):
+        """Payload scans accept the uri too."""
+        payload = dc.scan_payloads(example_uri, snap=False)[0]
+        assert "coords" in payload
+
+    def test_scan_through_manager_names_the_file(self, example_uri, example_path):
+        """A manager wrapping a uri still reports a reloadable source path."""
+        summary = dc.scan(IOResourceManager(example_uri))[0]
+        assert str(summary.source_path) == str(example_path)
+
+    def test_writer_handle_refused(self, example_uri, example_path):
+        """A writer handle would truncate the example, so it is refused."""
+        before = example_path.read_bytes()
+        for required_type in (BinaryWriter, H5Writer):
+            with pytest.raises(ParameterError, match="read-only"):
+                IOResourceManager(example_uri).get_resource(required_type)
+        assert example_path.read_bytes() == before
+
+    def test_modeless_handle_refused(self, example_uri, example_path):
+        """A handle which declares no mode is refused rather than trusted."""
+
+        class _ModelessWriter:
+            """A writer which forgot to say which mode it opens in."""
+
+            @classmethod
+            def get_handle(cls, resource):
+                """Truncate the resource, as an undeclared writer would."""
+                return open(resource, mode="wb")
+
+        before = example_path.read_bytes()
+        with pytest.raises(ParameterError, match="read-only"):
+            IOResourceManager(example_uri).get_resource(_ModelessWriter)
+        assert example_path.read_bytes() == before
+
+    def test_path_handles_allowed(self, example_uri, example_path):
+        """Types which name the file rather than open it stay allowed."""
+        for required_type in (Path, UPath, LocalPath):
+            resource = IOResourceManager(example_uri).get_resource(required_type)
+            assert str(resource) == str(example_path)
+
+    def test_reader_handle_allowed(self, example_uri):
+        """Reading through a manager is unaffected by the write refusal."""
+        with IOResourceManager(example_uri) as man:
+            assert man.get_resource(BinaryReader).read(4)
+
+    def test_ids_name_the_file(self, example_uri, example_path):
+        """A patch read by uri has the id of one read by path."""
+        by_uri = dc.read(example_uri)[0]
+        by_path = dc.read(example_path)[0]
+        assert by_uri.attrs.patch_id == by_path.attrs.patch_id
+        assert by_uri.attrs.history == by_path.attrs.history
+
+
 class TestScan:
     """Tests for scanning fiber files."""
 
@@ -980,13 +1165,19 @@ class TestScan:
         random_patch.io.write(path_3, "dasdae")
         return out
 
+    @pytest.fixture(scope="class")
+    def two_files(self, tmp_path_factory, random_patch):
+        """Two patch files, for the tests which only scan them."""
+        path = tmp_path_factory.mktemp("two_files")
+        paths = (path / "patch_1.h5", path / "patch_2.h5")
+        for each in paths:
+            random_patch.io.write(each, "dasdae")
+        return paths
+
     @pytest.mark.parametrize("func", [dc.scan, dc.scan_to_df, dc.scan_payloads])
-    def test_scan_accepts_a_collection(self, func, tmp_path, random_patch):
+    def test_scan_accepts_a_collection(self, func, two_files):
         """A collection of resources scans as the sum of its members."""
-        path_1 = tmp_path / "patch_1.h5"
-        path_2 = tmp_path / "patch_2.h5"
-        random_patch.io.write(path_1, "dasdae")
-        random_patch.io.write(path_2, "dasdae")
+        path_1, path_2 = two_files
         expected = len(func(path_1)) + len(func(path_2))
         assert len(func([path_1, path_2])) == expected
         # A set is a collection too, and the dispatcher does not index.
@@ -997,12 +1188,9 @@ class TestScan:
         assert len(dc.scan([random_patch, random_patch])) == 2
 
     @pytest.mark.parametrize("func", [dc.scan, dc.scan_to_df, dc.scan_payloads])
-    def test_scan_accepts_a_one_shot_iterable(self, func, tmp_path, random_patch):
+    def test_scan_accepts_a_one_shot_iterable(self, func, two_files):
         """A generator input scans every element, not silently nothing (#818)."""
-        path_1 = tmp_path / "patch_1.h5"
-        path_2 = tmp_path / "patch_2.h5"
-        random_patch.io.write(path_1, "dasdae")
-        random_patch.io.write(path_2, "dasdae")
+        path_1, path_2 = two_files
         expected = len(func([path_1, path_2]))
         assert expected == 2
         assert len(func(p for p in [path_1, path_2])) == expected
@@ -1058,7 +1246,7 @@ class TestScan:
         scanned = out[0]
         assert isinstance(scanned, dc.PatchSummary)
         assert scanned.dtype == str(random_patch.dtype)
-        assert not scanned.source_patch_id
+        assert not scanned.source_patch_key
 
     def test_scan_payloads_patch_returns_full_coords(self, random_patch):
         """Direct patch payload scans should retain full coordinate values."""
@@ -1083,14 +1271,14 @@ class TestScan:
         assert [payload["attrs"].tag for payload in out] == ["one", "two"]
         assert all(isinstance(payload["coords"], dc.CoordManager) for payload in out)
 
-    def test_scan_multi_patch_includes_source_patch_id(self, tmp_path):
+    def test_scan_multi_patch_includes_source_patch_key(self, tmp_path):
         """Multi-patch scan rows should include a stable source patch id."""
         path = tmp_path / "multi_patch.h5"
         spool = dc.examples.get_example_spool("random_das", length=2)
         dc.write(spool, path, "DASDAE", file_version="1")
         out = dc.scan_to_df(path)
-        assert "source_patch_id" in out.columns
-        assert out["source_patch_id"].astype(bool).all()
+        assert "source_patch_key" in out.columns
+        assert out["source_patch_key"].astype(bool).all()
 
     def test_scan_nested_directory(self, nested_directory_with_patches):
         """Ensure scan picks up files in nested directories."""
@@ -1216,110 +1404,50 @@ class TestReloadableSourcePath:
         with pytest.raises(NotImplementedError):
             fio.scan(bad_input)
 
-    def test_bad_checksum(self, monkeypatch, terra15_v6_path):
+    def test_bad_checksum(self, tmp_path):
         """Test for when format is identified but can't read part of file #346"""
-        # Monkey patch scan to raise OSError. This simulates observed behavior.
-        fname, ver = FiberIO.manager._get_format(path=terra15_v6_path)
-        fiber_io = FiberIO.manager.get_fiberio(format=fname, version=ver)
-
-        def raise_os_error(*args, **kwargs):
-            raise OSError("Simulated OS issue")
-
-        monkeypatch.setattr(fiber_io, "scan", raise_os_error)
-
+        path = _misbehaving_scan_path(tmp_path, "os_error")
         # Ensure scanning doesn't raise and warns
         msg = "Failed to scan"
         with pytest.warns(UserWarning, match=msg):
-            scan = dc.scan(terra15_v6_path)
+            scan = dc.scan(path)
         assert not len(scan)
 
-    def test_remote_cache_error_is_not_swallowed(self, monkeypatch, terra15_v6_path):
+    def test_remote_cache_error_is_not_swallowed(self, tmp_path):
         """Remote cache policy errors during scan should propagate to callers."""
-        fname, ver = FiberIO.manager._get_format(path=terra15_v6_path)
-        fiber_io = FiberIO.manager.get_fiberio(format=fname, version=ver)
-
-        def raise_remote_cache_error(*args, **kwargs):
-            raise RemoteCacheError("metadata cache blocked")
-
-        monkeypatch.setattr(fiber_io, "scan", raise_remote_cache_error)
-
+        path = _misbehaving_scan_path(tmp_path, "remote_cache_error")
         with pytest.raises(RemoteCacheError, match="metadata cache blocked"):
-            dc.scan(terra15_v6_path)
+            dc.scan(path)
 
-    def test_scan_legacy_patch_attrs_raises(self, monkeypatch, terra15_v6_path):
+    def test_scan_legacy_patch_attrs_raises(self, tmp_path):
         """FiberIO returning PatchAttrs should now fail loudly."""
-        fname, ver = FiberIO.manager._get_format(path=terra15_v6_path)
-        fiber_io = FiberIO.manager.get_fiberio(format=fname, version=ver)
-
-        def return_patch_attrs(*args, **kwargs):
-            return [dc.PatchAttrs(tag="legacy")]
-
-        monkeypatch.setattr(fiber_io, "scan", return_patch_attrs)
-
+        path = _misbehaving_scan_path(tmp_path, "patch_attrs")
         with pytest.raises(ValueError, match=r"PatchAttrs from FiberIO\.scan"):
-            dc.scan(terra15_v6_path)
+            dc.scan(path)
 
-    def test_scan_payloads_legacy_patch_attrs_raises(
-        self, monkeypatch, terra15_v6_path
-    ):
+    def test_scan_payloads_legacy_patch_attrs_raises(self, tmp_path):
         """Raw payload scans should reject legacy summary-only results."""
-        fname, ver = FiberIO.manager._get_format(path=terra15_v6_path)
-        fiber_io = FiberIO.manager.get_fiberio(format=fname, version=ver)
-
-        def return_patch_attrs(*args, **kwargs):
-            return [dc.PatchAttrs(tag="legacy")]
-
-        monkeypatch.setattr(fiber_io, "scan", return_patch_attrs)
-
+        path = _misbehaving_scan_path(tmp_path, "patch_attrs")
         with pytest.raises(ValueError, match="no longer accepts PatchAttrs"):
-            dc.scan_payloads(terra15_v6_path)
+            dc.scan_payloads(path)
 
-    def test_scan_payloads_missing_keys_raises(self, monkeypatch, terra15_v6_path):
+    def test_scan_payloads_missing_keys_raises(self, tmp_path):
         """Raw payload scans should validate all required payload keys."""
-        fname, ver = FiberIO.manager._get_format(path=terra15_v6_path)
-        fiber_io = FiberIO.manager.get_fiberio(format=fname, version=ver)
-
-        def return_malformed_payload(*args, **kwargs):
-            return [{"unexpected": 1}]
-
-        monkeypatch.setattr(fiber_io, "scan", return_malformed_payload)
-
+        path = _misbehaving_scan_path(tmp_path, "missing_keys")
         with pytest.raises(TypeError, match="missing required keys"):
-            dc.scan_payloads(terra15_v6_path)
+            dc.scan_payloads(path)
 
-    def test_scan_payloads_non_mapping_raises(self, monkeypatch, terra15_v6_path):
+    def test_scan_payloads_non_mapping_raises(self, tmp_path):
         """Raw payload scans should reject unsupported result types."""
-        fname, ver = FiberIO.manager._get_format(path=terra15_v6_path)
-        fiber_io = FiberIO.manager.get_fiberio(format=fname, version=ver)
-
-        def return_non_mapping(*args, **kwargs):
-            return ["not a payload"]
-
-        monkeypatch.setattr(fiber_io, "scan", return_non_mapping)
-
+        path = _misbehaving_scan_path(tmp_path, "non_mapping")
         with pytest.raises(TypeError, match="must return ScanPayload mappings"):
-            dc.scan_payloads(terra15_v6_path)
+            dc.scan_payloads(path)
 
-    def test_scan_payloads_requires_coord_manager(self, monkeypatch, terra15_v6_path):
+    def test_scan_payloads_requires_coord_manager(self, tmp_path):
         """Raw payload scans should reject collapsed coordinate summaries."""
-        fname, ver = FiberIO.manager._get_format(path=terra15_v6_path)
-        fiber_io = FiberIO.manager.get_fiberio(format=fname, version=ver)
-        patch = dc.get_example_patch()
-        payload = {
-            "attrs": patch.attrs,
-            "coords": patch.coords.to_summary_dict(),
-            "dims": patch.dims,
-            "shape": patch.shape,
-            "dtype": str(patch.data.dtype),
-        }
-
-        def return_summary_coords(*args, **kwargs):
-            return [payload]
-
-        monkeypatch.setattr(fiber_io, "scan", return_summary_coords)
-
+        path = _misbehaving_scan_path(tmp_path, "summary_coords")
         with pytest.raises(TypeError, match="must be a CoordManager"):
-            dc.scan_payloads(terra15_v6_path)
+            dc.scan_payloads(path)
 
     @pytest.mark.parametrize(
         ("key", "value"),
@@ -1334,7 +1462,7 @@ class TestReloadableSourcePath:
             ("shape", (1, -1)),
             ("dtype", np.dtype("float64")),
             ("dtype", "not-a-dtype"),
-            ("source_patch_id", 1),
+            ("source_patch_key", 1),
             ("source_path", 1),
             ("source_format", Path("format")),
             ("source_version", None),
@@ -1406,7 +1534,7 @@ class TestReloadableSourcePath:
         assert "source_path" not in out[0]
         assert "source_format" not in out[0]
         assert "source_version" not in out[0]
-        assert not out[0]["source_patch_id"]
+        assert not out[0]["source_patch_key"]
 
     def test_default_fiberio_scan_forwards_snap_dims(self, tmp_path):
         """Default scans should forward exact-coordinate mode to read()."""
@@ -1509,7 +1637,7 @@ class TestReloadableSourcePath:
         assert out[0]["source_format"] == fiber_io.name
         assert out[0]["source_version"] == fiber_io.version
 
-    def test_default_fiberio_scan_multi_patch_does_not_set_source_patch_id(
+    def test_default_fiberio_scan_multi_patch_does_not_set_source_patch_key(
         self, tmp_path, monkeypatch
     ):
         """Default scan should not invent source ids for multi-patch readers."""
@@ -1528,7 +1656,7 @@ class TestReloadableSourcePath:
         out = fio.scan(path)
 
         assert len(out) == 2
-        assert not any(summary["source_patch_id"] for summary in out)
+        assert not any(summary["source_patch_key"] for summary in out)
 
     @pytest.mark.concurrency
     def test_keyboard_interrupt(self, monkeypatch):
@@ -1731,16 +1859,16 @@ class TestIOCoreCoverageEdges:
         """A positional ID cannot resolve an anonymous trimmed singleton."""
         spool = dc.spool([dc.get_example_patch()])
         with pytest.raises(PatchAttributeError, match="uniquely resolved"):
-            _resolve_read_spool(spool, source_patch_id="1")
+            _resolve_read_spool(spool, source_patch_key="1")
 
     def test_non_unique_patch_resolution_raises(self):
         """An unresolvable source id in a multi-patch read raises clearly."""
         spool = dc.spool([dc.get_example_patch(tag="a"), dc.get_example_patch(tag="b")])
         with pytest.raises(PatchAttributeError, match="uniquely resolved"):
-            _select_patch_from_spool(spool, source_patch_id="neither-id-nor-index")
+            _select_patch_from_spool(spool, source_patch_key="neither-id-nor-index")
 
-    @pytest.mark.parametrize("source_patch_id", ["", "node-1"])
-    def test_empty_read_raises_missing_patch(self, source_patch_id):
+    @pytest.mark.parametrize("source_patch_key", ["", "node-1"])
+    def test_empty_read_raises_missing_patch(self, source_patch_key):
         """A read trimmed to nothing raises MissingPatchError, not IndexError.
 
         MissingPatchError subclasses IndexError so spool iteration can skip
@@ -1748,14 +1876,14 @@ class TestIOCoreCoverageEdges:
         with or without a requested source id.
         """
         with pytest.raises(MissingPatchError, match="No patch remained"):
-            _select_patch_from_spool(dc.spool([]), source_patch_id=source_patch_id)
+            _select_patch_from_spool(dc.spool([]), source_patch_key=source_patch_key)
 
     def test_single_patch_resolved_by_name(self):
         """A one-patch read resolves when the id matches the patch name."""
         patch = dc.get_example_patch()
         spool = dc.spool([patch])
         resolved = _select_patch_from_spool(
-            spool, source_patch_id=str(patch.get_patch_name())
+            spool, source_patch_key=str(patch.get_patch_name())
         )
         assert resolved == patch
 
@@ -1822,3 +1950,255 @@ class TestConvertAttrUnits:
         with pytest.warns(UserWarning, match="Dropping gauge_length"):
             out = convert_attr_units(attrs, "gauge_length", "m")
         assert "gauge_length" not in out
+
+
+class TestSummaryRoundTrip:
+    """What a summary keeps when it is rebuilt from itself."""
+
+    @pytest.fixture
+    def remote_summary(self, random_patch):
+        """A summary naming a source on a filesystem which is not local."""
+        return random_patch.summary.new(
+            source_path=UPath("memory://archive/one.h5"),
+            source_format="DASDAE",
+            source_version="1",
+        )
+
+    def test_a_remote_path_survives(self, remote_summary):
+        """
+        A remote path does not survive `model_dump` as a path.
+
+        It comes back as its parts, and a summary which cannot read those
+        back drops the path -- and then the format and version with it,
+        because a summary with nothing to reload from states no reload
+        metadata. Every `new` on a remote-backed summary went that way.
+        """
+        rebuilt = remote_summary.new(attrs=remote_summary.attrs.update(tag="x"))
+        assert str(rebuilt.source_path) == "memory://archive/one.h5"
+        assert rebuilt.source_format == "DASDAE"
+        assert rebuilt.source_version == "1"
+        assert rebuilt.attrs.tag == "x"
+
+    @pytest.mark.parametrize("path", ["one.h5", "/tmp/one.h5"])
+    def test_a_local_path_survives_too(self, random_patch, path):
+        """Local paths dump as themselves; this is the control."""
+        summary = random_patch.summary.new(source_path=path, source_format="DASDAE")
+        rebuilt = summary.new(dtype="float32")
+        assert str(rebuilt.source_path) == str(summary.source_path)
+        assert rebuilt.source_format == "DASDAE"
+
+    def test_a_mapping_naming_no_filesystem(self, random_patch):
+        """The parts of a local path, which is the form with no protocol."""
+        dumped = {"path": "/tmp/one.h5", "protocol": "", "storage_options": {}}
+        summary = random_patch.summary.new(
+            source_path=dumped, source_format="DASDAE", source_version="1"
+        )
+        # Compared as paths, not as text: windows spells this one with
+        # backslashes, and what matters is that it is the same path.
+        assert summary.source_path == UPath("/tmp/one.h5")
+        assert summary.source_format == "DASDAE"
+
+    def test_a_mapping_naming_no_such_filesystem(self, random_patch):
+        """A protocol nothing implements is not a path either."""
+        dumped = {"path": "/one.h5", "protocol": "nosuchfs", "storage_options": {}}
+        summary = random_patch.summary.new(source_path=dumped, source_format="DASDAE")
+        assert str(summary.source_path) == ""
+        assert summary.source_format == ""
+
+    def test_a_mapping_which_is_not_a_path(self, random_patch):
+        """Something else shaped like one is not one, and is dropped."""
+        summary = random_patch.summary.new(
+            source_path={"not": "a path"}, source_format="DASDAE"
+        )
+        assert str(summary.source_path) == ""
+        assert summary.source_format == ""
+
+
+class TestSourceIds:
+    """The id a patch gets from the file it was read out of."""
+
+    @pytest.fixture
+    def dasdae_path(self, random_patch, tmp_path):
+        """A written file, and the patch which was written to it."""
+        path = tmp_path / "one.h5"
+        random_patch.io.write(path, "dasdae")
+        return path
+
+    @pytest.fixture
+    def terra15_path(self):
+        """A file written by something other than DASCore."""
+        return fetch("terra15_das_1_trimmed.hdf5")
+
+    def test_reading_twice_is_the_same_data(self, terra15_path):
+        """Which is the whole point of deriving the id."""
+        first = dc.read(terra15_path)[0]
+        second = dc.read(terra15_path)[0]
+        assert first.attrs.patch_id
+        assert first.attrs.patch_id == second.attrs.patch_id
+
+    def test_the_id_names_the_source(self, terra15_path):
+        """Every field the index keeps, and nothing else."""
+        patch = dc.read(terra15_path)[0]
+        stat = Path(terra15_path).stat()
+        fmt, version = dc.get_format(terra15_path)
+        expected = source_patch_id(
+            fmt,
+            version,
+            str(terra15_path),
+            patch.attrs.get("_source_patch_key", "") or 0,
+            stat.st_size,
+            stat.st_mtime_ns,
+        )
+        assert patch.attrs.patch_id == expected
+
+    def test_a_rewritten_file_is_new_data(self, terra15_path, tmp_path):
+        """Data written over a path does not inherit the id it replaced."""
+        path = tmp_path / "rewritten.hdf5"
+        shutil.copy(terra15_path, path)
+        before = dc.read(path)[0].attrs.patch_id
+        stat = path.stat()
+        os.utime(path, ns=(stat.st_atime_ns, stat.st_mtime_ns + 1_000_000_000))
+        assert dc.read(path)[0].attrs.patch_id != before
+
+    def test_a_stored_id_beats_a_derived_one(self, dasdae_path, tmp_path):
+        """A DASDAE file carries its ids, so they survive being moved."""
+        patch = dc.read(dasdae_path)[0]
+        moved = tmp_path / "moved.h5"
+        patch.io.write(moved, "dasdae")
+        assert dc.read(moved)[0].attrs.patch_id == patch.attrs.patch_id
+
+    def test_the_marker_does_not_survive(self, dasdae_path):
+        """The stored id is consumed, not left lying on the attrs."""
+        patch = dc.read(dasdae_path)[0]
+        assert STORED_PATCH_ID not in dict(patch.attrs)
+
+    def test_an_open_file_is_the_file_it_was_opened_on(self, terra15_path):
+        """Reading by handle is reading the same data as reading by name."""
+        name, version = dc.get_format(terra15_path)
+        by_name = dc.read(terra15_path)[0]
+        with Path(terra15_path).open("rb") as fid:
+            by_handle = dc.read(fid, name, version)[0]
+        assert by_handle.attrs.patch_id == by_name.attrs.patch_id
+
+    def test_a_manager_names_what_it_was_built_around(self, terra15_path):
+        """A manager is a way of holding a source, not a source of its own."""
+        by_name = dc.read(terra15_path)[0]
+        with IOResourceManager(terra15_path) as man:
+            assert dc.read(man)[0].attrs.patch_id == by_name.attrs.patch_id
+
+    def test_a_source_with_no_path_keeps_its_own_id(self, terra15_path):
+        """Two streams must not derive one id out of having no path."""
+        name, version = dc.get_format(terra15_path)
+        data = Path(terra15_path).read_bytes()
+        streams = (io.BytesIO(data), io.BytesIO(data))
+        ids = {dc.read(x, name, version)[0].attrs.patch_id for x in streams}
+        assert all(ids) and len(ids) == 2
+
+    def test_a_key_naming_several_patches_names_none(self, idless_multi_patch):
+        """Or every patch asked for at once would answer to one id."""
+        spool = dc.read(idless_multi_patch)
+        keys = [x.attrs.get("_source_patch_key", "") for x in spool]
+        ids = {
+            x.attrs.patch_id for x in dc.read(idless_multi_patch, source_patch_key=keys)
+        }
+        assert len(ids) == len(keys)
+
+    def test_the_readers_spelling_of_its_format(self, terra15_path):
+        """Two spellings resolve to one reader, so they name one datum."""
+        name, version = dc.get_format(terra15_path)
+        spelled = dc.read(terra15_path, name.lower(), version)[0]
+        assert spelled.attrs.patch_id == dc.read(terra15_path)[0].attrs.patch_id
+
+    def test_a_hidden_member_is_not_part_of_a_directory(self, tmp_path):
+        """Including one under a hidden directory, which is hidden too."""
+        (tmp_path / "member.h5").write_bytes(b"data")
+        before = _source_stats(tmp_path)
+        (tmp_path / ".cache").mkdir()
+        (tmp_path / ".cache" / "member.h5").write_bytes(b"much more data")
+        assert _source_stats(tmp_path) == before
+
+    def test_one_file_spelled_two_ways(self, terra15_path, monkeypatch):
+        """
+        A relative and an absolute spelling name one datum.
+
+        The relative one is made by moving to the file's own directory:
+        `relpath` refuses to answer across windows drives, and where the
+        test data is cached is not this test's business.
+        """
+        absolute = dc.read(terra15_path)[0].attrs.patch_id
+        monkeypatch.chdir(Path(terra15_path).parent)
+        assert dc.read(Path(terra15_path).name)[0].attrs.patch_id == absolute
+
+    def test_a_path_which_cannot_be_canonicalized(self, monkeypatch):
+        """
+        A spelling nothing can resolve is still the spelling given.
+
+        Forced rather than found: which strings a filesystem refuses is
+        the filesystem's business, and differs by platform and python.
+        """
+
+        def _refuse(_):
+            raise OSError("no")
+
+        monkeypatch.setattr(io_core, "coerce_to_local_path", _refuse)
+        assert _canonical_path("one.h5") == "one.h5"
+
+    def test_scanning_with_the_ids_disabled(self, terra15_path):
+        """The config which turns the ids off turns scanning off too."""
+        with config_context(patch_provenance="disabled"):
+            assert dc.scan(terra15_path)[0].attrs.patch_id == ""
+
+    def test_a_source_which_will_not_answer(self):
+        """Nothing said is better than fields which pretend to be equal."""
+        assert _source_stats(Path("no/such/file.h5")) == (None, None)
+
+    def test_a_stat_which_counts_in_seconds(self):
+        """Not every filesystem answers in nanoseconds."""
+
+        class _Stat:
+            st_size = 12
+            st_mtime = 1.5
+
+        assert _size_and_mtime(_Stat()) == (12, 1_500_000_000)
+
+    def test_a_directory_format_covers_its_members(self, tmp_path):
+        """A member rewritten in place is not the data which was there."""
+        directory = fetch("dispersion_event.h5").parent
+        stats = _source_stats(directory)
+        assert all(x is not None for x in stats)
+        # The directory's own stat says nothing about a rewritten member.
+        assert stats != _size_and_mtime(Path(directory).stat())
+
+    @pytest.fixture
+    def idless_multi_patch(self, tmp_path):
+        """
+        A multi-patch file whose patches carry no ids of their own.
+
+        Built with the ids turned off, which is what a file written
+        before they existed holds, so the reader has to derive them.
+        """
+        path = tmp_path / "multi.h5"
+        with config_context(patch_provenance="disabled"):
+            first = dc.get_example_patch().update_attrs(tag="first")
+            second = dc.get_example_patch().update_attrs(tag="second")
+            assert not first.attrs.patch_id
+            dc.write(dc.spool([first, second]), path, "dasdae")
+        return path
+
+    def test_each_patch_of_a_file_is_its_own_data(self, idless_multi_patch):
+        """Or every patch of a file would answer to one id."""
+        ids = {patch.attrs.patch_id for patch in dc.read(idless_multi_patch)}
+        assert len(ids) == 2
+
+    def test_one_patch_read_by_key(self, idless_multi_patch):
+        """Asking for one patch gives the id reading them all would."""
+        spool = dc.read(idless_multi_patch)
+        wanted = spool[1]
+        key = wanted.attrs.get("_source_patch_key", "")
+        alone = dc.read(idless_multi_patch, source_patch_key=key)[0]
+        assert alone.attrs.patch_id == wanted.attrs.patch_id
+
+    def test_disabled_mints_nothing(self, terra15_path):
+        """The config which turns the ids off turns this off too."""
+        with config_context(patch_provenance="disabled"):
+            assert dc.read(terra15_path)[0].attrs.patch_id == ""

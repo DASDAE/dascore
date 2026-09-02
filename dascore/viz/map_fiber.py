@@ -1,4 +1,4 @@
-"""Module for waterfall plotting."""
+"""Module for drawing a fiber where it lies, colored by a per-channel value."""
 
 from __future__ import annotations
 
@@ -12,30 +12,65 @@ from dascore.constants import PatchType
 from dascore.exceptions import ParameterError
 from dascore.utils.patch import patch_function
 from dascore.utils.plotting import (
+    _add_colorbar,
     _get_ax,
     _get_cmap,
+    _get_data_label,
     _get_dim_label,
+    _get_label,
+    _get_scale,
 )
 
 
-def _set_scale(im, scale, scale_type, color_coords):
-    """Set the scale of the color bar based on scale and scale_type."""
-    # check scale parameters
-    if scale_type not in {"absolute", "relative"}:
-        msg = f"scale_type must be 'absolute' or 'relative', got {scale_type!r}"
+def _get_position(patch, position):
+    """
+    The values drawn along one axis, and the coordinate they came from.
+
+    An array is drawn as given, masked points and all, and belongs to no
+    coordinate, so its axis gets no label.
+    """
+    if not isinstance(position, str):
+        return np.asanyarray(position), None
+    if position not in patch.coords:
+        msg = f"{position} not found in patch coordinates"
         raise ParameterError(msg)
-    if not (isinstance(scale, float | int) or len(scale) == 2):
-        msg = "scale must be a number or a length-2 sequence"
+    return patch.coords.get_array(position), position
+
+
+def _get_data_to_color(patch, x):
+    """The patch's own data, checked against the points being drawn."""
+    points = np.shape(x)
+    data = patch.data
+    # An aggregated dimension is left as length one rather than squeezed
+    # out, and such a patch does hold one value per channel, so measure the
+    # dimensions which actually spread rather than the raw shape.
+    spread = [size for size in data.shape if size != 1]
+    if len(spread) > 1 or data.size != np.prod(points, dtype=int):
+        msg = (
+            "map_fiber draws one point per plotted coordinate, so coloring "
+            "by data needs one value for each. The patch data has shape "
+            f"{data.shape} and the plotted coordinates have shape {points}; "
+            "reduce the patch to one value per channel first, for example "
+            "with patch.std('time')."
+        )
         raise ParameterError(msg)
-    # make sure we have a len two array
-    modifier = 1
-    if scale_type == "relative":
-        modifier = 0.5 * (np.nanmax(color_coords) - np.nanmin(color_coords))
-        # only one scale parameter provided, center around mean
-    if isinstance(scale, float):
-        mean = np.nanmean(color_coords)
-        scale = np.array([mean - scale * modifier, mean + scale * modifier])
-    im.set_clim(scale)
+    return data.reshape(points)
+
+
+def _get_color(patch, color, x):
+    """The values to color by, and what the colorbar calls them."""
+    if not isinstance(color, str):
+        return np.asanyarray(color), ""
+    if color in patch.coords:
+        units = patch.coords.coord_map[color].units
+        return patch.coords.get_array(color), _get_label(color, units)
+    if color == "data":
+        return _get_data_to_color(patch, x), _get_data_label(patch)
+    msg = (
+        f"{color} not found in patch coordinates. Use 'data' to "
+        "color by the patch's own data."
+    )
+    raise ParameterError(msg)
 
 
 @patch_function()
@@ -62,19 +97,23 @@ def map_fiber(
     y
         y coordinate: can be an array or a str representing a patch coordinate.
     color
-        The color parameter to plot: can be an array or a str representing a patch
-        attribute.
+        The color parameter to plot: can be an array, the name of a patch
+        coordinate, or "data" to color by the patch's own data, which needs
+        one value for each point drawn. A coordinate of that name wins.
     ax
         A matplotlib object, if None create one.
     cmap
         A matplotlib colormap string or instance. Set to None to not plot the
         colorbar.
     scale
-        If not None, controls the saturation level of the colorbar.
-        Values can either be a float, to set upper and lower limit to the same
-        value centered around the mean of the data, or a length 2 tuple
-        specifying upper and lower limits. See `scale_type` for controlling how
-        values are scaled.
+        If not None, controls the saturation level of the colorbar. A single
+        number is symmetric: with `scale_type="relative"` the limits sit that
+        fraction of half the data range either side of the mean, and with
+        `scale_type="absolute"` they are -abs(scale) and abs(scale). A pair
+        of numbers gives the lower and upper limits: fractions of the data
+        range, from 0 to 1, when relative, or the values themselves when
+        absolute. Percent quantities, such as `10 * dc.units.percent`, are
+        converted to fractions.
     scale_type
         Controls the type of scaling specified by `scale` parameter. Options
         are:
@@ -90,50 +129,31 @@ def map_fiber(
     >>> patch = dc.get_example_patch("random_patch_with_lat_lon")
     >>> patch = patch.set_units(latitude="m", longitude="m")
     >>> _ = patch.viz.map_fiber("latitude", "longitude", "distance")
+    >>>
+    >>> # Color by the data itself, reduced to one value per channel.
+    >>> reduced = patch.std("time").squeeze()
+    >>> _ = reduced.viz.map_fiber("latitude", "longitude", "data")
     """
-    dims = []
-    if isinstance(x, str):
-        if x not in patch.coords:
-            msg = f"{x} not found in patch coordinates"
-            raise ParameterError(msg)
-        dims.append(x)
-        x = patch.coords.get_array(x)
-    if isinstance(y, str):
-        if y not in patch.coords:
-            msg = f"{y} not found in patch coordinates"
-            raise ParameterError(msg)
-        dims.append(y)
-        y = patch.coords.get_array(y)
-    if isinstance(color, str):
-        if color not in patch.coords:
-            msg = f"{color} not found in patch coordinates"
-            raise ParameterError(msg)
-        data_type = color
-        data_units = patch.coords.coord_map[color].units
-        color = patch.coords.get_array(color)
-    else:
-        data_type = ""
-        data_units = ""
+    x, x_dim = _get_position(patch, x)
+    y, y_dim = _get_position(patch, y)
+    color, label = _get_color(patch, color, x)
 
     ax = _get_ax(ax)
-    cmap = _get_cmap(cmap)
+    im = ax.scatter(x, y, c=color, cmap=_get_cmap(cmap))
 
-    im = ax.scatter(x, y, c=color, cmap=cmap)
-
-    # scale colorbar
     if scale is not None:
-        _set_scale(im, scale, scale_type, color)
+        scale = _get_scale(scale, scale_type, color)
+    # As in waterfall: limits are applied only where they are a finite pair.
+    if scale is not None and len(scale) == 2 and np.all(np.isfinite(scale)):
+        im.set_clim(np.asarray(scale))
 
-    # set axis labels
-    for dim, x in zip(dims, ["x", "y"]):
-        getattr(ax, f"set_{x}label")(_get_dim_label(patch, dim))
+    if x_dim is not None:
+        ax.set_xlabel(_get_dim_label(patch, x_dim))
+    if y_dim is not None:
+        ax.set_ylabel(_get_dim_label(patch, y_dim))
 
-    # add color bar with title
     if cmap is not None:
-        cb = ax.get_figure().colorbar(im, ax=ax, fraction=0.05, pad=0.025)
-        dunits = f" ({data_units})" if (data_type and data_units) else f"{data_units}"
-        label = f"{data_type}{dunits}"
-        cb.set_label(label)
+        _add_colorbar(ax, im, color, label, scale)
 
     if show:
         plt.show()

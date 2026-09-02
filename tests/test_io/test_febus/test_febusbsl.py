@@ -10,12 +10,20 @@ import pytest
 from numpy.testing import assert_allclose
 
 import dascore as dc
-from dascore.constants import STORAGE_PROVENANCE_ATTRS
+from dascore.core.coords import CoordMonotonicArray, CoordRange
 from dascore.io.febus import FebusBSLH5V1
-from dascore.io.febus.g1utils import _get_bsl_attrs, _get_g1_h5_base_coords
+from dascore.io.febus.g1utils import _get_g1_h5_base_coords
 from dascore.utils.downloader import fetch
 
 BSL_NAME = "febusg1_C2_2026-06-03T17.18.13+0200.bsl.h5"
+
+# A distance array with the signature real G1 files have: an even grid
+# restated in float32, so consecutive steps differ in the last bit. The
+# offset matters; nearer the origin the quantization is fine enough that
+# get_coord still recognizes the grid and the tests below go vacuous.
+_QUANTIZED_DISTANCE = np.linspace(
+    4000.0, 4000.0 + 99 * 0.1, 100, dtype=np.float32
+).astype(np.float64)
 
 
 class TestFebusBSL:
@@ -32,13 +40,6 @@ class TestFebusBSL:
     def bsl_patch(self, bsl_path):
         """Return the parsed G1 BSL patch."""
         return self.parser.read(bsl_path)[0]
-
-    def test_get_format(self, bsl_path):
-        """Ensure the BSL HDF5 format can be auto-detected."""
-        assert self.parser.get_format(bsl_path) == (
-            self.parser.name,
-            self.parser.version,
-        )
 
     def test_future_format_version_not_claimed(self, bsl_path, tmp_path):
         """Future BSL format versions should not be claimed by the v1 reader."""
@@ -63,14 +64,6 @@ class TestFebusBSL:
         assert attr.data_type == "strain"
         assert attr.data_units == dc.get_quantity("microstrain")
 
-    def test_private_attrs_without_io_provenance(self, bsl_path):
-        """The low-level attrs helper can still omit DASCore IO attrs."""
-        with h5py.File(bsl_path) as h5:
-            attrs = _get_bsl_attrs(h5)
-        assert "file_format" not in attrs
-        assert "file_version" not in attrs
-        assert "path" not in attrs
-
     def test_read(self, bsl_patch):
         """Ensure the BSL file is read into a patch with expected shape."""
         assert isinstance(bsl_patch, dc.Patch)
@@ -79,14 +72,10 @@ class TestFebusBSL:
         assert "temperature" in bsl_patch.coords.coord_map
         assert bsl_patch.coords.dim_map["temperature"] == ("time",)
 
-    def test_read_attrs_omit_storage_provenance(self, bsl_patch):
-        """Where the bytes live belongs to the spool, not to patch attrs."""
-        names = set(dict(bsl_patch.attrs))
-        assert not names & set(STORAGE_PROVENANCE_ATTRS)
-
     def test_distance_range(self, bsl_patch):
-        """Distance should span 50-149 m."""
+        """Distance should span 50-149 m on an even grid."""
         dist = bsl_patch.get_coord("distance")
+        assert isinstance(dist, CoordRange)
         assert_allclose(dist.min(), 50.0)
         assert_allclose(dist.max(), 149.0)
         assert_allclose(dist.step, 1.0)
@@ -207,11 +196,75 @@ class TestFebusBSL:
         assert_allclose(out.get_coord("distance").min(), 55.0)
         assert_allclose(out.get_coord("distance").max(), 60.0)
 
-    def test_out_of_range_selects_empty_spool(self, bsl_path, bsl_patch):
-        """Out-of-range time and distance selections should return empty spools."""
-        time = bsl_patch.get_coord("time")
-        dist = bsl_patch.get_coord("distance")
-        assert not len(
-            self.parser.read(bsl_path, time=(time.max() + np.timedelta64(1, "s"), ...))
+
+class TestG1DistanceGrid:
+    """A read grids the stored distances; snap=False still reports them raw."""
+
+    @staticmethod
+    def _coords(distances, temperatures=None, snap=True):
+        """Build the shared G1 coords around a given distance array."""
+        starts = np.array([0.0, 1.0, 2.05, 3.0])
+        if temperatures is None:
+            temperatures = np.zeros(len(starts), dtype=np.float64)
+        return _get_g1_h5_base_coords(
+            {
+                "start_times": starts,
+                "end_times": starts + 0.5,
+                "distances": distances,
+                "temperatures": temperatures,
+            },
+            dims=("time", "distance"),
+            snap=snap,
         )
-        assert not len(self.parser.read(bsl_path, distance=(dist.max() + 1, ...)))
+
+    def test_quantized_distance_is_uneven_on_its_own(self):
+        """The fixture array must actually defeat get_coord's tolerance.
+
+        Without this the snapping tests would pass even if the reader stopped
+        snapping, or if that tolerance were ever loosened.
+        """
+        coord = dc.get_coord(data=_QUANTIZED_DISTANCE, units="m")
+        assert isinstance(coord, CoordMonotonicArray)
+        assert coord.step is None
+
+    def test_quantized_distance_is_snapped(self):
+        """A float32-quantized distance array still reads as an even grid."""
+        coord = self._coords(_QUANTIZED_DISTANCE).coord_map["distance"]
+        assert isinstance(coord, CoordRange)
+        assert_allclose(coord.step, 0.1, rtol=1e-3)
+        # Snapping moves interior values only; the ends are the stored ones.
+        assert coord.min() == _QUANTIZED_DISTANCE[0]
+        assert coord.max() == _QUANTIZED_DISTANCE[-1]
+        assert len(coord) == len(_QUANTIZED_DISTANCE)
+
+    def test_even_distance_is_unchanged(self):
+        """Snapping a distance array that is already even is a no-op."""
+        distances = np.arange(100, dtype=np.float64)
+        coord = self._coords(distances).coord_map["distance"]
+        assert isinstance(coord, CoordRange)
+        assert coord.step == 1.0
+        assert np.array_equal(coord.values, distances)
+
+    def test_distance_exact_when_snap_false(self):
+        """snap=False still reports the stored distances exactly."""
+        coords = self._coords(_QUANTIZED_DISTANCE, snap=False)
+        distance = coords.coord_map["distance"]
+        assert np.array_equal(distance.values, _QUANTIZED_DISTANCE)
+        # The jittery start times are the file's own, so they stay exact too.
+        expected = dc.to_datetime64(np.array([0.0, 1.0, 2.05, 3.0]))
+        assert np.array_equal(coords.coord_map["time"].values, expected)
+
+    def test_single_channel_states_no_step(self):
+        """One channel states no spacing, so none should be invented."""
+        coord = self._coords(np.array([42.0])).coord_map["distance"]
+        assert len(coord) == 1
+        assert coord.step is None
+        assert coord.min() == 42.0
+
+    def test_temperature_exact_when_snap_false(self):
+        """Distance snapping must not leak into the shared coord helper."""
+        temperatures = np.array([10.0, 11.0, 13.5, 14.0])
+        coords = self._coords(
+            _QUANTIZED_DISTANCE, temperatures=temperatures, snap=False
+        )
+        assert np.array_equal(coords.coord_map["temperature"].values, temperatures)

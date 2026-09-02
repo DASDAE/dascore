@@ -15,8 +15,13 @@ import dascore as dc
 from dascore.core.attrs import PatchAttrs
 from dascore.core.coordmanager import get_coord_manager
 from dascore.core.coords import get_coord
-from dascore.io.core import make_scan_payload
-from dascore.io.dasdae._compat import strip_legacy_coord_fields, translate_legacy_attrs
+from dascore.io.core import STORED_PATCH_ID, make_scan_payload
+from dascore.io.dasdae._compat import (
+    NOT_DECODED,
+    decode_pytables_attr,
+    strip_legacy_coord_fields,
+    translate_legacy_attrs,
+)
 from dascore.io.utils import get_exact_coord
 from dascore.models.registry import get_model_tag, resolve_tagged_model
 from dascore.utils.array import (
@@ -29,7 +34,7 @@ from dascore.utils.pd import filter_df
 from dascore.utils.time import to_int
 
 # Keys not counted as true kwargs for determining if patch is filtered/selected.
-_KWARG_NON_KEYS = {"file_version", "file_format", "path", "source_patch_id"}
+_KWARG_NON_KEYS = {"file_version", "file_format", "path", "source_patch_key"}
 _ATTR_PREFIX = "_attrs_"
 _ATTR_TYPE_PREFIX = "_attr_type_"
 # Root marker set on files whose patch attr namespace holds only true attrs.
@@ -90,6 +95,11 @@ def _save_attrs_and_dims(patch, patch_group):
     # copy attrs to group attrs
     # TODO will need to test if objects are serializable
     attr_dict = patch.attrs.model_dump(exclude_unset=True)
+    # The ids are written. An older DASCore reads them as ordinary attrs
+    # and then refuses to merge two patches whose ids differ -- which is
+    # every pair -- so chunking such a spool there needs conflict="drop".
+    # Worth it: a stored id is the only one which survives a move, and
+    # everything else DASCore does with a patch already folds them.
     for i, v in attr_dict.items():
         encoded, attr_type = _encode_attr_value(i, v)
         patch_group.attrs[f"{_ATTR_PREFIX}{i}"] = encoded
@@ -167,13 +177,15 @@ def _save_patch(patch, wave_group, name):
 # --- Functions for reading
 
 
-def _get_attrs(patch_group):
+def _get_attrs(patch_group, legacy: bool = True):
     """Get the saved attributes from the group attrs."""
     out = {}
     attrs = [x for x in patch_group.attrs if x.startswith(_ATTR_PREFIX)]
     for attr_name in attrs:
-        key = attr_name.replace(_ATTR_PREFIX, "")
-        val = _decode_attr_value(patch_group.attrs, key, patch_group.attrs[attr_name])
+        key = attr_name.removeprefix(_ATTR_PREFIX)
+        val = _decode_attr_value(
+            patch_group.attrs, key, patch_group.attrs[attr_name], legacy=legacy
+        )
         # need to unpack one value arrays
         if isinstance(val, np.ndarray) and not val.shape:
             val = np.asarray([val])[0]
@@ -300,7 +312,7 @@ def _matches_attr_filters(attrs, kwargs):
 
 def _get_patch_attrs(patch_group, legacy: bool) -> dict:
     """Get the true patch attrs, cleaning legacy coord metadata if needed."""
-    attrs = _get_attrs(patch_group)
+    attrs = _get_attrs(patch_group, legacy=legacy)
     if legacy:
         dims = _get_dims(patch_group)
         coord_names = _get_group_coord_names(patch_group)
@@ -312,7 +324,7 @@ def _get_patch_attrs(patch_group, legacy: bool) -> dict:
 
 def _read_patch(patch_group, legacy: bool = True, **kwargs):
     """Read a patch group, return Patch."""
-    attrs = _get_attrs(patch_group)
+    attrs = _get_attrs(patch_group, legacy=legacy)
     dims = _get_dims(patch_group)
     if legacy:
         attrs["dims"] = ",".join(dims)
@@ -322,7 +334,11 @@ def _read_patch(patch_group, legacy: bool = True, **kwargs):
     else:
         coords = _get_coords(patch_group, dims, {})
         attr_info = attrs
-    attr_info["_source_patch_id"] = patch_group.name.rsplit("/", maxsplit=1)[-1]
+    attr_info["_source_patch_key"] = patch_group.name.rsplit("/", maxsplit=1)[-1]
+    # An id the file carries is the one which survived the round trip;
+    # `read` prefers it to the one it would derive from the path.
+    if stored := attr_info.get("patch_id", ""):
+        attr_info[STORED_PATCH_ID] = stored
     attrs = _get_attrs_class(patch_group).from_dict(attr_info)
     # Note, previously this was wrapped with try, except (Index, KeyError)
     # and the data = np.array(None) in except block. Not sure, why, removed
@@ -365,8 +381,8 @@ def _get_scan_payload_from_group(group, legacy: bool = True, snap=True):
     for key in attrs:
         if not key.startswith(_ATTR_PREFIX):
             continue
-        value = _decode_attr_value(attrs, key.replace(_ATTR_PREFIX, ""), attrs[key])
-        new_key = key.replace(_ATTR_PREFIX, "")
+        new_key = key.removeprefix(_ATTR_PREFIX)
+        value = _decode_attr_value(attrs, new_key, attrs[key], legacy=legacy)
         # need to unpack 0 dim arrays.
         if isinstance(value, np.ndarray) and not value.shape:
             value = np.atleast_1d(value)[0]
@@ -380,6 +396,11 @@ def _get_scan_payload_from_group(group, legacy: bool = True, snap=True):
     else:
         coords = _get_coords(group, dims, {}, snap=snap)
         attr_info = out
+    # Marked here as it is when the patch is read: an id the file carries
+    # is the one which survived the round trip, and `scan` prefers it to
+    # the one it would derive only when a format says it stored one.
+    if stored := attr_info.get("patch_id", ""):
+        attr_info[STORED_PATCH_ID] = stored
     # Data shape/dtype come from the stored data node without loading the array.
     data_node = group.get("data")
     dtype = str(data_node.dtype) if data_node is not None else ""
@@ -390,7 +411,7 @@ def _get_scan_payload_from_group(group, legacy: bool = True, snap=True):
         dims=dims,
         shape=shape,
         dtype=dtype,
-        source_patch_id=group.name.rsplit("/", maxsplit=1)[-1],
+        source_patch_key=group.name.rsplit("/", maxsplit=1)[-1],
     )
 
 
@@ -418,11 +439,11 @@ def _encode_attr_value(key, value):
     return value, None
 
 
-def _decode_attr_value(attrs, key, value):
+def _decode_attr_value(attrs, key, value, legacy: bool = True):
     """Decode one stored attr value using saved type metadata when present."""
     attr_type = unbyte(attrs.get(f"{_ATTR_TYPE_PREFIX}{key}", None))
     if attr_type is None:
-        return _decode_legacy_attr_value(value)
+        return _decode_legacy_attr_value(attrs, key, value, legacy=legacy)
     if attr_type == "none":
         return None
     if attr_type == "datetime64[ns]":
@@ -434,12 +455,41 @@ def _decode_attr_value(attrs, key, value):
     return value
 
 
-def _decode_legacy_attr_value(value):
-    """Decode legacy DASDAE attrs still used by the shipped fixture files."""
+def _holds_pytables_payload(attrs, key, value) -> bool:
+    """
+    Whether a legacy attr holds a PyTables pickle rather than text.
+
+    Nothing in the bytes separates the two -- a string attr of "N." is
+    byte-identical to a pickled None. PyTables wrote real strings as UTF-8
+    and pickled payloads as raw bytes, and HDF5 stores which of the two an
+    attribute holds as its character set, so that is what decides here.
+    """
+    if not isinstance(value, np.bytes_ | bytes):
+        return False
+    # Only an h5py attrs manager exposes the character set; a plain
+    # mapping of values cannot tell a payload from text.
+    get_id = getattr(attrs, "get_id", None)
+    if get_id is None:
+        return False
+    get_cset = getattr(get_id(f"{_ATTR_PREFIX}{key}").get_type(), "get_cset", None)
+    return get_cset is not None and get_cset() == 0
+
+
+def _decode_legacy_attr_value(attrs, key, value, legacy: bool = True):
+    """
+    Decode one attr value from a file written before attr types were stored.
+
+    A legacy file may hold the value as a PyTables payload, which only
+    ``legacy`` files are looked at for.
+    """
     if value.__class__.__name__ == "Empty":
         return ""
     if isinstance(value, np.ndarray) and not value.shape:
         value = np.asarray([value])[0]
+    if legacy and _holds_pytables_payload(attrs, key, value):
+        decoded = decode_pytables_attr(bytes(value))
+        if decoded is not NOT_DECODED:
+            return decoded
     if isinstance(value, np.bytes_ | bytes):
         try:
             return unbyte(value)

@@ -8,7 +8,7 @@ This note explains how DASCore interprets a few important attributes, and its in
 
 ## Metadata boundaries
 
-`Patch.coords` is the authoritative source for coordinate values, dimensions, units, and sampling. `Patch.summary` combines `PatchAttrs` with `CoordSummary` envelopes derived from those live coordinates. Scan-created `PatchSummary` objects additionally carry reload provenance in `source_path`, `source_format`, `source_version`, and `source_patch_id`.
+`Patch.coords` is the authoritative source for coordinate values, dimensions, units, and sampling. `Patch.summary` combines `PatchAttrs` with `CoordSummary` envelopes derived from those live coordinates. Scan-created `PatchSummary` objects additionally carry reload provenance in `source_path`, `source_format`, `source_version`, and `source_patch_key`.
 
 `PatchAttrs` rejects nested coordinate payloads and does not own `dims` or coordinate-summary fields such as `time_min` and `distance_step`. Keeping these values out of attrs prevents coordinate edits from leaving stale duplicated metadata. Use coordinate APIs for structural changes and `Patch.summary.get_coord_summary(...)` or `PatchSummary.flat_dump(...)` for summary/index views.
 

@@ -2,6 +2,8 @@
 Febus specific tests.
 """
 
+import shutil
+
 import h5py
 import numpy as np
 import pytest
@@ -10,6 +12,7 @@ import dascore as dc
 from dascore.io.febus import Febus2
 from dascore.io.febus.a1utils import _flatten_febus_info
 from dascore.utils.downloader import fetch
+from dascore.utils.misc import unbyte
 from dascore.utils.time import to_float
 
 
@@ -56,37 +59,81 @@ class TestFebus:
         sampling_rate = np.timedelta64(1, "s") / time.step
         assert np.isclose(sampling_rate, 250)
 
-    def test_scan_summaries_include_source_patch_id(self, febus_path):
+    def test_scan_summaries_include_source_patch_key(self, febus_path):
         """Scanned Febus summaries should carry a reloadable patch id."""
         summaries = dc.scan(febus_path)
         assert summaries
-        assert all(summary.source_patch_id for summary in summaries)
+        assert all(summary.source_patch_key for summary in summaries)
 
-    def test_read_source_patch_id_selects_single_patch(self, febus_path):
-        """Reading by source_patch_id should return the matching Febus patch."""
+    def test_read_source_patch_key_selects_single_patch(self, febus_path):
+        """Reading by source_patch_key should return the matching Febus patch."""
         summaries = dc.scan(febus_path)
         target = summaries[0]
-        out = dc.read(febus_path, source_patch_id=target.source_patch_id)
+        out = dc.read(febus_path, source_patch_key=target.source_patch_key)
         assert len(out) == 1
-        assert out[0].attrs["_source_patch_id"] == target.source_patch_id
+        assert out[0].attrs["_source_patch_key"] == target.source_patch_key
         assert (
             out[0].summary.get_coord_summary("time").min
             == target.get_coord_summary("time").min
         )
 
-    def test_read_source_patch_id_sequence_input(self, febus_path):
-        """Reading Febus with a sequence source_patch_id input should work."""
+    def test_read_source_patch_key_sequence_input(self, febus_path):
+        """Reading Febus with a sequence source_patch_key input should work."""
         summaries = dc.scan(febus_path)
-        targets = [summaries[0].source_patch_id]
-        out = dc.read(febus_path, source_patch_id=targets)
+        targets = [summaries[0].source_patch_key]
+        out = dc.read(febus_path, source_patch_key=targets)
         assert len(out) == 1
-        assert out[0].attrs["_source_patch_id"] == targets[0]
+        assert out[0].attrs["_source_patch_key"] == targets[0]
         assert (
             out[0].summary.get_coord_summary("time").min
             == summaries[0].get_coord_summary("time").min
         )
 
-    def test_read_source_patch_id_non_matching_returns_empty(self, febus_path):
-        """A non-matching source_patch_id should filter out Febus patches."""
-        out = dc.read(febus_path, source_patch_id="not-a-real-febus-patch")
+    def test_read_source_patch_key_non_matching_returns_empty(self, febus_path):
+        """A non-matching source_patch_key should filter out Febus patches."""
+        out = dc.read(febus_path, source_patch_key="not-a-real-febus-patch")
         assert len(out) == 0
+
+
+class TestFebusA1Interrogator:
+    """A1 Source attrs name the interrogator which wrote the file."""
+
+    @pytest.fixture(scope="class", params=["febus_1.h5", "febus_2.h5"])
+    def a1_path(self, request):
+        """Paths to A1 files of both schema versions."""
+        return fetch(request.param)
+
+    def test_interrogator_name_is_hostname(self, a1_path):
+        """The name is the Hostname the Source states."""
+        with h5py.File(a1_path, "r") as f:
+            hostname = _flatten_febus_info(f)[0].source.attrs["Hostname"]
+        attrs = dict(dc.scan(a1_path)[0].attrs)
+        assert attrs["interrogator.name"] == unbyte(hostname)
+
+    def test_hostname_wins_over_group_name(self, a1_path, tmp_path):
+        """A renamed container group does not rename the interrogator."""
+        path = tmp_path / "renamed_group.h5"
+        shutil.copy2(a1_path, path)
+        with h5py.File(path, "r+") as f:
+            group_name = next(iter(f))
+            hostname = unbyte(f[f"{group_name}/Source1"].attrs["Hostname"])
+            f.move(group_name, "container-alias")
+        attrs = dict(dc.scan(path)[0].attrs)
+        assert attrs["group"] == "container-alias"
+        assert attrs["interrogator.name"] == hostname
+
+    def test_blank_hostname_dropped(self, a1_path, tmp_path):
+        """An empty Hostname is not passed off as a name."""
+        path = tmp_path / "blank_hostname.h5"
+        shutil.copy2(a1_path, path)
+        with h5py.File(path, "r+") as f:
+            group_name = next(iter(f))
+            for node in (f[group_name]["Source1"], f[group_name]["Source1"]["Zone1"]):
+                node.attrs["Hostname"] = b"  "
+        assert "interrogator.name" not in dict(dc.scan(path)[0].attrs)
+
+    def test_scan_and_read_agree(self, a1_path):
+        """A read states the same interrogator a scan does."""
+        scanned = dict(dc.scan(a1_path)[0].attrs)
+        read = dict(Febus2().read(a1_path)[0].attrs)
+        assert scanned["interrogator.name"] == read["interrogator.name"]

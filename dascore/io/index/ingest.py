@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import re
 import warnings
 from collections.abc import Hashable
@@ -24,7 +25,7 @@ from typing import SupportsInt, TypedDict, cast
 import numpy as np
 import pandas as pd
 
-from dascore.core.summary import PatchSummary, normalize_source_patch_id
+from dascore.core.summary import PatchSummary, normalize_source_patch_key
 from dascore.exceptions import InvalidInventoryError
 from dascore.io.index.schema import (
     KINDS,
@@ -43,7 +44,19 @@ from dascore.utils.time import to_datetime64, to_int, to_timedelta64
 _SANITIZE_RE = re.compile(r"[^a-z0-9_]+")
 
 # Attrs handled structurally or intentionally excluded from the index.
-_SKIPPED_ATTRS = frozenset({"history", "dims", "coords"})
+# The ids are not indexed until the schema version which adds columns for
+# them; an index is for finding data, and an id is not a search term.
+# Attrs which are structure rather than metadata, and are never indexed.
+# `patch_id` is not here: it is an ordinary string, one per patch, and
+# indexing it is what lets a spool find a patch by the id it carries
+# rather than by loading every patch to look.
+#
+# `processing_id` is. It advances on every operation, and a spool applies
+# operations as it loads -- a residual trim is a real `select` on the
+# patch -- so what the index recorded is not what the patch which comes
+# back carries. `patch_id` survives those same operations by definition,
+# which is what makes it, and not this, the one worth indexing.
+_SKIPPED_ATTRS = frozenset({"history", "dims", "coords", "processing_id"})
 
 
 @dataclass(frozen=True)
@@ -134,9 +147,10 @@ class CoordRecord:
 class PatchRecord:
     """One patch: structural fields, typed attrs, coord rows."""
 
-    source_patch_id: str
+    source_patch_key: str
     dims: str
     dtype: str
+    data_size: int | None
     time_min: int | None
     time_max: int | None
     time_step: int | None
@@ -284,15 +298,31 @@ def _extract_attrs(summary: PatchSummary) -> dict[str, TypedValue]:
     return out
 
 
+# What a directory name may never claim to be. A path says where data is
+# kept, which is how renaming a directory corrects metadata; it does not
+# get to say which data it is, or a directory called `patch_id=x` would
+# rewrite the lineage of everything under it.
+_UNCLAIMABLE_BY_PATH = frozenset({"patch_id"})
+
+
 def hive_path_attrs(rel_posix: str, warn: bool = True) -> dict[str, str]:
     """
     Return the indexable hive-style path attrs for a stored relative path.
 
     Applies the same name rules as file attrs: structural/underscore
     names are dropped silently, reserved column collisions warn and drop.
+    A name only the data itself may state is dropped with a warning too.
     """
     out = {}
     for name, value in parse_hive_path_attrs(rel_posix).items():
+        if name in _UNCLAIMABLE_BY_PATH:
+            if warn:
+                msg = (
+                    f"Ignoring hive-style path key {name!r} in {rel_posix!r}; "
+                    "a path says where data is kept, not which data it is."
+                )
+                warnings.warn(msg, UserWarning, stacklevel=2)
+            continue
         status = _attr_name_status(name)
         if status == "reserved" and warn:
             msg = (
@@ -441,9 +471,15 @@ def patch_record(summary: PatchSummary) -> PatchRecord:
     time_min, time_max, time_step = _envelope(coords, "time", "time")
     dist_min, dist_max, dist_step = _envelope(coords, "distance", "num")
     return PatchRecord(
-        source_patch_id=normalize_source_patch_id(summary.source_patch_id),
+        source_patch_key=normalize_source_patch_key(summary.source_patch_key),
         dims=",".join(summary.dims),
         dtype=str(summary.dtype or ""),
+        # A summary with no shape states no size; nothing is inferred from
+        # the coords, which can describe a patch the shape does not. An
+        # empty shape is the unstated one, not a zero-dimensional patch:
+        # a patch always has at least one dimension (a coordinate manager
+        # of no dims does not match a 0-d array).
+        data_size=math.prod(summary.shape) if summary.shape else None,
         time_min=time_min,
         time_max=time_max,
         time_step=time_step,
@@ -503,9 +539,9 @@ def summaries_to_records(
         patches = []
         for num, summary in enumerate(group):
             record = patch_record(summary)
-            if record.source_patch_id == "" and len(group) > 1:
+            if record.source_patch_key == "" and len(group) > 1:
                 # positional identity within the source, per design doc
-                record = replace(record, source_patch_id=str(num))
+                record = replace(record, source_patch_key=str(num))
             patches.append(record)
         posix_path = path.replace("\\", "/")
         store_path = posix_path
@@ -517,7 +553,8 @@ def summaries_to_records(
             store_path = posix_path[len(root_prefix) :].lstrip("/") or "."
             # Hive-style key=value directory segments become string attrs
             # that override same-named file attrs (renaming a directory is
-            # the user's way of correcting metadata).
+            # the user's way of correcting metadata). The source's own
+            # name never contributes; see parse_hive_path_attrs.
             path_attrs = hive_path_attrs(store_path) or None
             if path_attrs:
                 typed = hive_typed_attrs(path_attrs)
@@ -562,7 +599,7 @@ _COORD_DEF_FIELDS = tuple(
 _PATCH_ROW_FIELDS = tuple(
     f.name
     for f in fields(PatchRecord)
-    if f.name not in ("source_patch_id", "dims", "dtype", "attrs", "coords")
+    if f.name not in ("source_patch_key", "dims", "dtype", "attrs", "coords")
 )
 # Backends with no boolean type hand these columns back as 0/1, which
 # def_key would hash differently than the bool a scan produced.
@@ -672,7 +709,7 @@ def assemble_source_records(
                 )
             patch_records.append(
                 PatchRecord(
-                    source_patch_id=normalize_source_patch_id(patch.source_patch_id),
+                    source_patch_key=normalize_source_patch_key(patch.source_patch_key),
                     dims=_py_scalar(patch.dims) or "",
                     dtype=_py_scalar(patch.dtype) or "",
                     attrs=typed,

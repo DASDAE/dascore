@@ -228,24 +228,34 @@ class TestSobelFilter:
         assert not np.any(pd.isnull(out.data))
 
 
+@pytest.mark.parametrize("name", ["median_filter", "notch_filter", "savgol_filter"])
+def test_filters_validate_their_dims(random_patch, name):
+    """Each filter routes its dimension arguments through the shared check.
+
+    pass_filter has its own check and its own error (TestPassFilterChecks),
+    so it cannot stand in for these three.
+    """
+    kwargs = {"savgol_filter": {"polyorder": 2}, "notch_filter": {"q": 30}}
+    with pytest.raises(ParameterError, match="You must"):
+        getattr(random_patch, name)(**kwargs.get(name, {}))
+
+
 class TestMedianFilter:
     """Simple tests on median filter."""
 
-    def test_median_no_kwargs_raises(self, random_patch):
-        """Apply default values."""
-        msg = "You must"
-        with pytest.raises(ParameterError, match=msg):
-            random_patch.median_filter()
-
-    def test_median_filter_time(self, random_patch):
+    def test_median_filter_time(self):
         """Test median filter in time dimension."""
-        out = random_patch.median_filter(time=0.5)
+        # A median filter costs the window size times the sample count, so a
+        # small patch says the same thing much sooner.
+        patch = dc.get_example_patch("random_das", shape=(30, 200))
+        out = patch.median_filter(time=0.5)
         assert isinstance(out, dc.Patch)
         assert not np.any(pd.isnull(out.data))
 
-    def test_median_filter_time_distance(self, random_patch):
+    def test_median_filter_time_distance(self):
         """Apply default values."""
-        out = random_patch.median_filter(time=0.05, distance=2)
+        patch = dc.get_example_patch("random_das", shape=(30, 200))
+        out = patch.median_filter(time=0.05, distance=2)
         assert isinstance(out, dc.Patch)
         assert not np.any(pd.isnull(out.data))
 
@@ -257,12 +267,6 @@ class TestMedianFilter:
 
 class TestNotchFilter:
     """Tests for the notch filter."""
-
-    def test_notch_no_kwargs_raises(self, random_patch):
-        """Test that no dimension raises an appropriate error."""
-        msg = "You must"
-        with pytest.raises(ParameterError, match=msg):
-            random_patch.notch_filter(q=30)
 
     def test_notch_filter_time(self, random_patch):
         """Test the notch filter along the time dimension."""
@@ -323,15 +327,12 @@ class TestNotchFilter:
 class TestSavgolFilter:
     """Simple tests on Savgol filter."""
 
-    def test_savgol_no_kwargs_raises(self, random_patch):
-        """Ensure no kwargs raises."""
-        msg = "You must"
-        with pytest.raises(ParameterError, match=msg):
-            random_patch.savgol_filter(polyorder=2)
-
-    def test_savgol_filter_time(self, random_patch):
+    def test_savgol_filter_time(self):
         """Test savgol filter in time dimension."""
-        out = random_patch.savgol_filter(polyorder=2, time=5)
+        # time=0.5 rather than 5 with the smaller patch: the window is a
+        # count of samples, and 5 seconds of it no longer fits.
+        patch = dc.get_example_patch("random_das", shape=(30, 200))
+        out = patch.savgol_filter(polyorder=2, time=0.5)
         assert isinstance(out, dc.Patch)
         assert not np.any(pd.isnull(out.data))
 
@@ -359,6 +360,25 @@ class TestSavgolFilter:
         out = event_patch_2.savgol_filter(distance=10, time=0.001, polyorder=4)
         assert out.shape == event_patch_2.shape
         assert not np.allclose(out.data, event_patch_2.data)
+
+    def test_each_dim_filtered_in_turn(self, random_patch):
+        """
+        Each pass filters the last one's output, not the original data.
+
+        Every pass used to filter patch.data, so only the last keyword's
+        axis survived: the two dimension call equaled the last keyword's
+        alone, and swapping the keywords changed the answer.
+        """
+        kwargs = {"samples": True, "polyorder": 2}
+        out = random_patch.savgol_filter(time=5, distance=7, **kwargs)
+        chained = random_patch.savgol_filter(time=5, **kwargs).savgol_filter(
+            distance=7, **kwargs
+        )
+        swapped = random_patch.savgol_filter(distance=7, time=5, **kwargs)
+        last_keyword = random_patch.savgol_filter(distance=7, **kwargs)
+        assert np.allclose(out.data, chained.data)
+        assert np.allclose(out.data, swapped.data)
+        assert not np.allclose(out.data, last_keyword.data)
 
 
 class TestGaussianFilter:
@@ -417,6 +437,13 @@ class TestSlopeFilter:
         assert isinstance(filtered_patch, dc.Patch)
         assert filtered_patch.shape == example_patch.shape
         assert not np.array_equal(filtered_patch.data, example_patch.data)
+
+    def test_associated_coords_kept(self, example_patch):
+        """The round trip through the fk domain keeps coords. See #1041."""
+        depth = example_patch.get_array("distance") * 2.0
+        patch = example_patch.update_coords(depth=("distance", depth))
+        out = patch.slope_filter(filt=[2e3, 2.2e3, 8e3, 2e4])
+        assert np.allclose(out.get_array("depth"), depth)
 
     def test_attenuated_slopes(self, event_patch_1):
         """Ensure attenuated slopes are much lower in absolute values."""

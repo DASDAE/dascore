@@ -2,18 +2,35 @@
 
 from __future__ import annotations
 
+import csv
+
+import numpy as np
 import pandas as pd
 import pytest
 
+from dascore.core.annotations import Line
 from dascore.exceptions import ParameterError
 from dascore.utils.tables import (
+    DOCUMENT_KEY,
+    drop_private_columns,
     ordered_rows,
+    parquet_table,
     parse_cell,
+    read_parquet,
+    read_parquet_metadata,
     read_table,
     require_columns,
     require_stated,
     row_cells,
+    write_parquet,
 )
+from dascore.utils.time import to_datetime64, to_timedelta64
+
+try:
+    import pyarrow
+    import pyarrow.parquet
+except ImportError:
+    pyarrow = None
 
 
 def _write(path, text: str, name: str = "table.csv", encoding: str = "utf-8"):
@@ -79,6 +96,50 @@ class TestReadTable:
         """An unreadable file raises the caller's error, not OSError."""
         with pytest.raises(ParameterError, match="Could not read"):
             read_table(tmp_path / "absent.csv")
+
+    def test_oversized_cell_refused(self, tmp_path):
+        """A cell past the csv module's limit stops the scan, not the caller."""
+        limit = csv.field_size_limit()
+        path = _write(tmp_path, "a,b\n" + "x" * (limit + 1) + ",2\n")
+        with pytest.raises(ParameterError, match="field larger than field limit"):
+            read_table(path)
+
+    def test_skipped_lines_are_not_the_header(self, tmp_path):
+        """A format may state something of its own above its table."""
+        path = _write(tmp_path, "# dims: time\na,b\n1,2\n")
+        frame = read_table(path, skip=1)
+        assert list(frame.columns) == ["a", "b"]
+
+    def test_skipped_lines_still_count(self, tmp_path):
+        """A row is named by the line a reader would look at."""
+        path = _write(tmp_path, "# dims: time\na,b\n1,2,3\n")
+        with pytest.raises(ParameterError, match="row 3"):
+            read_table(path, skip=1)
+
+
+class TestDropPrivateColumns:
+    """A column naming itself private is nobody's to read."""
+
+    def test_private_columns_go(self):
+        """An underscore says the column is not the format's."""
+        frame = pd.DataFrame({"group": ["rail"], "_crew": ["JD"], "_": ["x"]})
+        assert list(drop_private_columns(frame).columns) == ["group"]
+
+    def test_a_table_without_one_is_the_table(self):
+        """Nothing to drop leaves the frame as it was."""
+        frame = pd.DataFrame({"group": ["rail"]})
+        assert drop_private_columns(frame) is frame
+
+    def test_the_frame_given_is_not_changed(self):
+        """Dropping hands back a new table, as the rest of this module does."""
+        frame = pd.DataFrame({"group": ["rail"], "_crew": ["JD"]})
+        drop_private_columns(frame)
+        assert "_crew" in frame.columns
+
+    def test_an_underscore_inside_a_name_stays(self):
+        """The prefix states the intent; a name merely holding one does not."""
+        frame = pd.DataFrame({"distance_min": [0.0], "mid_": [1.0]})
+        assert list(drop_private_columns(frame).columns) == ["distance_min", "mid_"]
 
 
 class TestRowCells:
@@ -188,3 +249,220 @@ class TestParseCell:
     def test_text(self):
         """Anything else is the string it was written as."""
         assert parse_cell("car") == "car"
+
+    def test_a_whole_number_wider_than_a_float(self):
+        """A nanosecond epoch is 19 digits, which a float cannot hold."""
+        out = parse_cell("1600000000123456789")
+        assert out == 1600000000123456789 and isinstance(out, int)
+
+    # The digits are full width, which `float` reads and a table never writes.
+    @pytest.mark.parametrize("text", ["1_000", "\uff11\uff12\uff13", "nan", "inf"])
+    def test_what_a_table_does_not_spell_a_number_with(self, text):
+        """Python reads these as numbers; a table's cell does not state one."""
+        assert parse_cell(text) == text
+
+    def test_an_exponent_no_float_holds(self):
+        """A number which reads as infinity is not the number written."""
+        assert parse_cell("1e309") == "1e309"
+
+
+def _forge(frame: pd.DataFrame, path, documents: str) -> None:
+    """Write a parquet file whose document footer this library did not write."""
+    table = pyarrow.Table.from_pandas(frame, preserve_index=False)
+    kept = {**(table.schema.metadata or {}), DOCUMENT_KEY: documents}
+    pyarrow.parquet.write_table(table.replace_schema_metadata(kept), path)
+
+
+@pytest.mark.skipif(pyarrow is None, reason="pyarrow is not installed")
+class TestParquet:
+    """Parquet keeps what a column holds, and what the file says about itself."""
+
+    def test_types_survive(self, tmp_path):
+        """A column comes back as what it was written as."""
+        frame = pd.DataFrame({"a": [1.5], "b": [True], "c": ["text"]})
+        path = tmp_path / "table.parquet"
+        write_parquet(frame, path)
+        out, _ = read_parquet(path)
+        assert out.equals(frame)
+
+    def test_a_private_document_column_is_not_read(self, tmp_path):
+        """What a private column holds is not this reader's to parse."""
+        frame = pd.DataFrame({"group": ["rail"], "_crew": ["{oops"]})
+        path = tmp_path / "table.parquet"
+        _forge(frame, path, '["_crew"]')
+        out, _ = read_parquet(path)
+        assert out["_crew"][0] == "{oops"
+
+    def test_a_column_of_no_one_type(self, tmp_path):
+        """A column parquet has no shape for is written as documents."""
+        frame = pd.DataFrame({"value": ["car", True, 3]})
+        path = tmp_path / "table.parquet"
+        write_parquet(frame, path)
+        out, _ = read_parquet(path)
+        assert list(out["value"]) == ["car", True, 3]
+
+    def test_a_nested_cell(self, tmp_path):
+        """A mapping is a document, and reads back as the mapping it was."""
+        path = tmp_path / "table.parquet"
+        write_parquet(pd.DataFrame({"meta": [{"a": [1, 2]}, None]}), path)
+        out, _ = read_parquet(path)
+        assert list(out["meta"]) == [{"a": [1, 2]}, None]
+
+    def test_a_column_of_text_stays_a_column_of_text(self, tmp_path):
+        """Text is a type parquet has, so it is not written as documents."""
+        frame = pd.DataFrame({"note": pd.Series(["a", None], dtype=object)})
+        assert frame["note"].dtype == object  # the branch this is about
+        table = parquet_table(frame)
+        assert DOCUMENT_KEY.encode() not in (table.schema.metadata or {})
+        # Whichever width of string arrow picks, it is a string column.
+        assert "string" in str(table.schema.field("note").type)
+        path = tmp_path / "table.parquet"
+        write_parquet(frame, path)
+        out, _ = read_parquet(path)
+        assert out["note"][0] == "a" and pd.isna(out["note"][1])
+
+    def test_a_cell_holding_a_list(self, tmp_path):
+        """A container states itself; asking pandas answers once per element."""
+        path = tmp_path / "table.parquet"
+        write_parquet(pd.DataFrame({"tags": [["a", "b"], None]}), path)
+        out, _ = read_parquet(path)
+        assert list(out["tags"]) == [["a", "b"], None]
+
+    def test_numbers_numpy_made(self, tmp_path):
+        """A numpy scalar is the number it holds, not the text str() gives."""
+        path = tmp_path / "table.parquet"
+        frame = pd.DataFrame({"value": [np.int64(3), "text", np.bool_(True)]})
+        write_parquet(frame, path)
+        out, _ = read_parquet(path)
+        assert list(out["value"]) == [3, "text", True]
+
+    def test_a_time_of_any_spelling(self, tmp_path):
+        """A time has no JSON type, so every spelling of one is written alike."""
+        path = tmp_path / "table.parquet"
+        stamp = pd.Timestamp("2020-01-01T00:00:01")
+        # Three spellings of one instant, which arrive at different
+        # resolutions: a Timestamp reads back at microseconds, the others at
+        # nanoseconds, and the file holds one of them.
+        frame = pd.DataFrame(
+            {"when": [stamp, stamp.to_pydatetime(), stamp.to_datetime64(), "text"]}
+        )
+        write_parquet(frame, path)
+        out, _ = read_parquet(path)
+        written = list(out["when"])
+        assert written[3] == "text"
+        assert len(set(written[:3])) == 1
+        assert to_datetime64(written[0]) == np.datetime64("2020-01-01T00:00:01")
+
+    def test_a_duration_and_a_model(self, tmp_path):
+        """Neither has a JSON type; a model dumps itself, a duration is text."""
+        path = tmp_path / "table.parquet"
+        line = Line(start={"distance": 0.0}, end={"distance": 10.0})
+        frame = pd.DataFrame({"cell": [np.timedelta64(5, "s"), line, "text"]})
+        write_parquet(frame, path)
+        out, _ = read_parquet(path)
+        held = list(out["cell"])
+        assert to_timedelta64(held[0]) == np.timedelta64(5, "s")
+        assert Line(**held[1]) == line
+
+    def test_a_duration_of_any_spelling(self, tmp_path):
+        """A duration is written alike however it arrived, as a time is."""
+        path = tmp_path / "table.parquet"
+        span = pd.Timedelta(seconds=5)
+        frame = pd.DataFrame(
+            {"span": [span, span.to_pytimedelta(), span.to_numpy(), "text"]}
+        )
+        write_parquet(frame, path)
+        out, _ = read_parquet(path)
+        written = list(out["span"])
+        assert written[3] == "text"
+        assert len(set(written[:3])) == 1
+        assert to_timedelta64(written[0]) == np.timedelta64(5, "s")
+
+    def test_a_missing_value_inside_a_document(self, tmp_path):
+        """Missing is missing, not the text of whichever spelling it arrived in."""
+        path = tmp_path / "table.parquet"
+        write_parquet(pd.DataFrame({"meta": [{"score": pd.NA, "n": 1}, "text"]}), path)
+        out, _ = read_parquet(path)
+        assert list(out["meta"]) == [{"score": None, "n": 1}, "text"]
+
+    def test_a_document_column_keeps_its_own_type(self, tmp_path):
+        """A column of documents holds what its cells hold, not what pandas infers."""
+        path = tmp_path / "table.parquet"
+        write_parquet(pd.DataFrame({"code": pd.Series([1, 2], dtype=object)}), path)
+        out, _ = read_parquet(path)
+        assert out["code"].dtype == object
+        assert list(out["code"]) == [1, 2]
+
+    def test_metadata_round_trips(self, tmp_path):
+        """What a format states about its table comes back to it."""
+        path = tmp_path / "table.parquet"
+        write_parquet(pd.DataFrame({"a": [1]}), path, {"dascore:dims": '["time"]'})
+        _, stated = read_parquet(path)
+        assert stated == {"dascore:dims": '["time"]'}
+
+    def test_metadata_without_the_table(self, tmp_path):
+        """The footer alone, for a caller which only needs what it says."""
+        path = tmp_path / "table.parquet"
+        write_parquet(pd.DataFrame({"a": [1]}), path, {"dascore:dims": '["time"]'})
+        assert read_parquet_metadata(path) == {"dascore:dims": '["time"]'}
+
+    def test_no_columns_refused(self, tmp_path):
+        """An empty table states nothing, as an empty CSV does."""
+        path = tmp_path / "table.parquet"
+        write_parquet(pd.DataFrame(), path)
+        with pytest.raises(ParameterError, match="states no track"):
+            read_parquet(path, what="no track")
+
+    def test_a_file_which_is_not_parquet(self, tmp_path):
+        """Whatever pyarrow raises, the caller sees its own error."""
+        path = _write(tmp_path, "a,b\n1,2\n", name="table.parquet")
+        with pytest.raises(ParameterError, match="Could not read"):
+            read_parquet(path)
+        with pytest.raises(ParameterError, match="Could not read"):
+            read_parquet_metadata(path)
+
+    @pytest.mark.parametrize("key", [DOCUMENT_KEY, "pandas", "ARROW:schema"])
+    def test_a_key_the_file_states_for_itself(self, key, tmp_path):
+        """A caller states neither this writer's keys nor the format's own."""
+        path = tmp_path / "table.parquet"
+        with pytest.raises(ParameterError, match="not a caller's to state"):
+            write_parquet(pd.DataFrame({"a": [1]}), path, {key: '["a"]'})
+
+    def test_a_column_named_something_other_than_text(self, tmp_path):
+        """Arrow names a column with text, so a label is spelled as text."""
+        path = tmp_path / "table.parquet"
+        write_parquet(pd.DataFrame({"distance": [1.0], 7: ["x"]}), path)
+        out, _ = read_parquet(path)
+        assert list(out.columns) == ["distance", "7"]
+
+    def test_two_labels_which_spell_alike(self, tmp_path):
+        """One column states one thing, whatever the two labels were."""
+        path = tmp_path / "table.parquet"
+        frame = pd.DataFrame({7: ["a"], "7": ["b"]})
+        with pytest.raises(ParameterError, match="named more than once"):
+            write_parquet(frame, path)
+
+    def test_a_file_whose_pandas_metadata_is_not_json(self, tmp_path):
+        """Another writer's metadata is read here, so a bad one is named here."""
+        path = tmp_path / "table.parquet"
+        table = pyarrow.Table.from_pandas(
+            pd.DataFrame({"a": [1]}), preserve_index=False
+        )
+        kept = {**(table.schema.metadata or {}), b"pandas": b"not json"}
+        pyarrow.parquet.write_table(table.replace_schema_metadata(kept), path)
+        with pytest.raises(ParameterError, match="Could not read"):
+            read_parquet(path)
+
+    def test_a_document_column_which_is_not_there(self, tmp_path):
+        """A file naming a column it does not hold says so."""
+        path = tmp_path / "table.parquet"
+        _forge(pd.DataFrame({"a": [1]}), path, '["b"]')
+        with pytest.raises(ParameterError, match="holds no such column"):
+            read_parquet(path)
+
+    def test_a_document_which_does_not_parse(self, tmp_path):
+        """A cell a file names as a document is read as one, or named."""
+        path = tmp_path / "table.parquet"
+        _forge(pd.DataFrame({"a": ["{oops"]}), path, '["a"]')
+        with pytest.raises(ParameterError, match="not a JSON document"):
+            read_parquet(path)

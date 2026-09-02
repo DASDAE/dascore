@@ -11,6 +11,8 @@ from dascore.core.patch import Patch
 from dascore.core.attrs import PatchAttrs
 from dascore.core.summary import PatchSummary
 from dascore.core.spool import BaseSpool, Spool, spool
+from dascore.core.annotation_loader import annotations
+from dascore.core.annotations import AnnotationSet
 from dascore.core.inventory import Inventory
 from dascore.core.inventory_loader import inventory
 from dascore.core.coordmanager import get_coord_manager, CoordManager
@@ -22,7 +24,11 @@ from dascore.config import (
     reset_config,
     set_config,
 )
-from dascore.examples import get_example_patch, get_example_spool
+from dascore.examples import (
+    get_example_inventory,
+    get_example_patch,
+    get_example_spool,
+)
 from dascore.io.core import get_format, read, scan, scan_payloads, scan_to_df, write
 from dascore.units import get_quantity, get_unit
 from dascore.utils.patch import patch_function

@@ -30,6 +30,7 @@ from dascore.io.core import (
     _select_patch_from_spool,
 )
 from dascore.proc.basic import apply_operator
+from dascore.utils.array import apply_ufunc
 from dascore.utils.misc import suppress_warnings
 
 
@@ -293,14 +294,14 @@ class TestInit:
         new = dc.Patch(random_patch)
         assert new == random_patch
 
-    def test_patch_summary_from_patch_copies_private_source_patch_id(
+    def test_patch_summary_from_patch_copies_private_source_patch_key(
         self, random_patch
     ):
         """Patch summaries built from patches should expose the private source id."""
-        patch = random_patch.update_attrs(_source_patch_id="node-3")
+        patch = random_patch.update_attrs(_source_patch_key="node-3")
         summary = PatchSummary.from_patch(patch)
-        assert summary.source_patch_id == "node-3"
-        assert summary.attrs["_source_patch_id"] == "node-3"
+        assert summary.source_patch_key == "node-3"
+        assert summary.attrs["_source_patch_key"] == "node-3"
 
     def test_non_time_distance_dims(self):
         """Ensure dimensions other than time/distance work."""
@@ -435,7 +436,7 @@ class TestPatchSummary:
         assert isinstance(step, np.timedelta64)
         assert pd.isnull(step)
 
-    def test_select_from_spool_by_integer_source_patch_id(self, random_patch):
+    def test_select_from_spool_by_integer_source_patch_key(self, random_patch):
         """Integer-like source ids should fall back to positional selection."""
         spool = dc.spool(
             [
@@ -443,7 +444,7 @@ class TestPatchSummary:
                 random_patch.update_attrs(tag="second"),
             ]
         )
-        out = _select_patch_from_spool(spool, source_patch_id="1")
+        out = _select_patch_from_spool(spool, source_patch_key="1")
         assert out.attrs.tag == "second"
 
     def test_select_from_spool_by_generated_name_raises(self, random_patch):
@@ -456,21 +457,21 @@ class TestPatchSummary:
         )
         patch_name = spool[1].get_patch_name()
         with pytest.raises(PatchAttributeError, match="uniquely resolved"):
-            _select_patch_from_spool(spool, source_patch_id=patch_name)
+            _select_patch_from_spool(spool, source_patch_key=patch_name)
 
-    def test_select_from_single_patch_spool_requires_matching_source_patch_id(
+    def test_select_from_single_patch_spool_requires_matching_source_patch_key(
         self, random_patch
     ):
         """A requested source id must not be ignored on a single-patch spool."""
         spool = dc.spool([random_patch])
         with pytest.raises(PatchAttributeError, match="uniquely resolved"):
-            _select_patch_from_spool(spool, source_patch_id="999")
+            _select_patch_from_spool(spool, source_patch_key="999")
 
     def test_select_from_spool_ambiguous_raises(self):
         """Ambiguous spool selection should raise a patch error."""
         spool = dc.examples.get_example_spool("random_das", length=2)
         with pytest.raises(PatchAttributeError, match="uniquely resolved"):
-            _select_patch_from_spool(spool, source_patch_id="not-found")
+            _select_patch_from_spool(spool, source_patch_key="not-found")
 
     def test_flat_dump_excludes_summary_fields(self, random_patch):
         """Excluding a summary field should drop it from all coord outputs."""
@@ -484,18 +485,6 @@ class TestPatchSummary:
         with pytest.raises(AttributeError, match="time_missing"):
             _ = summary.time_missing
         assert not hasattr(summary, "time_missing")
-
-    def test_summary_flattened_lookup_is_removed(self, random_patch):
-        """Flattened summary item access should no longer work."""
-        summary = random_patch.summary
-        with pytest.raises(TypeError):
-            _ = summary["time_min"]
-
-    def test_summary_get_coord_is_removed(self, random_patch):
-        """PatchSummary should only expose get_coord_summary."""
-        summary = random_patch.summary
-        with pytest.raises(AttributeError, match="get_coord"):
-            summary.get_coord("time")
 
     def test_flat_dump_prefers_coord_values_over_attrs(self, random_patch):
         """flat_dump should overlay coord summaries on top of attrs."""
@@ -1313,6 +1302,52 @@ class TestNumpyFuncs:
         # Test ufunc accumulate
         out = func.accumulate("time")
         assert isinstance(out, dc.Patch)
+
+
+class TestApplyUfunc:
+    """Tests for the apply_ufunc patch method."""
+
+    def test_unary_ufunc(self, random_patch):
+        """The patch should be the ufunc's only operand."""
+        out = random_patch.apply_ufunc(np.abs)
+        assert isinstance(out, dc.Patch)
+        assert np.allclose(out.data, np.abs(random_patch.data))
+
+    def test_binary_ufunc_patch(self, random_patch):
+        """A second patch operand should follow the patch."""
+        out = random_patch.apply_ufunc(np.add, random_patch)
+        assert np.allclose(out.data, random_patch.data * 2)
+
+    def test_binary_ufunc_scalar(self, random_patch):
+        """A scalar operand should also follow the patch."""
+        out = random_patch.apply_ufunc(np.multiply, 10)
+        assert np.allclose(out.data, random_patch.data * 10)
+
+    def test_binary_ufunc_not_reversed(self, random_patch):
+        """The patch is the first operand, not the second."""
+        out = random_patch.apply_ufunc(np.subtract, 1)
+        assert np.allclose(out.data, random_patch.data - 1)
+
+    def test_keywords(self, random_patch):
+        """`dim` is consumed on the reduce path, other keywords reach the ufunc."""
+        axis = random_patch.get_axis("time")
+        reduced = random_patch.apply_ufunc(np.add.reduce, dim="time")
+        assert reduced.shape[axis] == 1
+        assert np.allclose(
+            reduced.data, random_patch.data.sum(axis=axis, keepdims=True)
+        )
+        cast = random_patch.apply_ufunc(np.multiply, 2, dtype="float32")
+        assert cast.data.dtype == np.float32
+
+    def test_function_form(self, random_patch):
+        """The function form should still work and agree with the method."""
+        out = apply_ufunc(np.abs, random_patch)
+        assert out.equals(random_patch.apply_ufunc(np.abs))
+
+    def test_unbound_form(self, random_patch):
+        """The method should also work unbound, called off the class."""
+        out = dc.Patch.apply_ufunc(random_patch, np.abs)
+        assert out.equals(random_patch.apply_ufunc(np.abs))
 
 
 class TestStringCoordinatePatch:

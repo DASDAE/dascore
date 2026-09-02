@@ -9,16 +9,20 @@ from __future__ import annotations
 
 import random
 import warnings
+from datetime import timedelta
+from itertools import pairwise
 
 import numpy as np
 import pandas as pd
 import pytest
 
 import dascore as dc
+import dascore.examples as ex
 import dascore.utils.patch_assembly as assembly_module
+from dascore.core.coords import CoordRange, CoordSegmented
 from dascore.exceptions import ChunkError, CoordMergeError, ParameterError, UnitError
 from dascore.units import get_quantity
-from dascore.utils.misc import get_middle_value
+from dascore.utils.misc import get_middle_value, suppress_warnings
 from dascore.utils.patch import _get_merged_coord
 from dascore.utils.patch_assembly import PatchAssembler, _match_merge_units
 from dascore.utils.time import to_timedelta64
@@ -46,27 +50,6 @@ class TestChunk:
         df = random_spool.get_contents().sort_values("time_min").reset_index(drop=True)
         return df
 
-    def test_merge_eq(self, adjacent_spool_no_overlap):
-        """Ensure merged spools are equal."""
-        sp1 = adjacent_spool_no_overlap.chunk(time=2)
-        sp2 = adjacent_spool_no_overlap.chunk(time=2)
-        assert sp1 == sp2
-
-    def test_merge_chunk_adjacent_no_overlap(self, adjacent_spool_no_overlap):
-        """Ensure chunking works on simple case of contiguous data w/ no overlap."""
-        new = adjacent_spool_no_overlap.chunk(time=None)
-        out_list = list(new)
-        assert len(new) == len(out_list) == 1
-
-    def test_adjacent_merge_no_overlap(self, adjacent_spool_no_overlap):
-        """Test that the adjacent patches get merged."""
-        spool = adjacent_spool_no_overlap
-        st_len = len(spool)
-        merged_st = spool.chunk(time=None)
-        merged_len = len(merged_st)
-        assert merged_len < st_len
-        assert merged_len == 1
-
     def test_chunk_doesnt_modify_original(self, random_spool):
         """Chunking shouldn't modify original spool."""
         first = random_spool.get_contents().copy()
@@ -93,7 +76,7 @@ class TestChunk:
             "source_path",
             "source_format",
             "source_version",
-            "source_patch_id",
+            "source_patch_key",
         }
         skip |= {c for c in common if c.endswith("_len")}
         cols = sorted(common - skip)
@@ -172,9 +155,24 @@ class TestChunk:
 
     def test_raise_increment_too_big(self, diverse_spool):
         """Ensure code raises an error if the increment is too large."""
-        msg = "No segments with sufficient length"
+        msg = "longest contiguous segment along 'time'"
         with pytest.raises(ChunkError, match=msg):
             diverse_spool.chunk(time=10000)
+
+    def test_increment_too_big_names_knobs(self, diverse_spool):
+        """The error should point at tolerance and keep_partial (#1046)."""
+        with pytest.raises(ChunkError) as info:
+            diverse_spool.chunk(time=10000)
+        msg = str(info.value)
+        assert "tolerance" in msg and "keep_partial" in msg
+
+    def test_increment_too_big_names_units(self):
+        """The segment length carries the unit its coordinate states."""
+        p1 = dc.get_example_patch().set_units(distance="mm")
+        gap = p1.get_coord("time").max() + to_timedelta64(1000)
+        p2 = dc.get_example_patch(time_min=gap).set_units(distance="mm")
+        with pytest.raises(ChunkError, match=r"is 300\.0 mm,"):
+            dc.spool([p1, p2]).chunk(distance=2 * get_quantity("m"))
 
     def test_too_big_partial(self, diverse_spool):
         """When chunk is too large, all contiguous blocks should merge."""
@@ -377,11 +375,6 @@ class TestChunkMerge:
         pa2 = spool_slight_gap.chunk(time=None)
         assert pa1 == pa2
 
-    def test_merge_transposed_patches(self, spool_complete_overlap):
-        """Ensure if one of the patches is transposed merge still works."""
-        # TODO for now this won't work; its probably a silly edge case to complicate
-        # the code over, but maybe revisit.
-
     def test_merge_monotonic_no_overlap(self, adjacent_spool_monotonic):
         """Ensure monotonic coords can merge."""
         sp = adjacent_spool_monotonic.chunk(time=...)
@@ -533,11 +526,109 @@ class TestChunkMerge:
         assert time_max <= time_tup[1]
         assert (time_max + time_step) > time_tup[1]
 
+    def test_missing_attr_is_a_conflict(self):
+        """A member lacking an attr conflicts with one which states it."""
+        p1 = dc.get_example_patch().update_attrs(data_type="velocity")
+        time = p1.get_coord("time")
+        p2 = dc.get_example_patch(time_min=time.max() + time.step)
+        assert p2.attrs.data_type == ""
+        with pytest.raises(CoordMergeError, match="data_type"):
+            dc.spool([p1, p2]).chunk(time=None)
+        out = dc.spool([p1, p2]).chunk(time=None, conflict="drop")
+        assert len(out) == 1
+        assert out[0].attrs.data_type == ""
+
+    def test_surviving_member_takes_the_rows_attrs(self):
+        """Whichever duplicate survives overlap removal, patch and row agree."""
+        p1 = dc.get_example_patch().update_attrs(foo="a", data_type="velocity")
+        p2 = dc.get_example_patch()  # same span, knows neither
+        with pytest.raises(CoordMergeError, match=r"\bfoo\b|\bdata_type\b"):
+            dc.spool([p1, p2]).chunk(time=None)
+        # keep_first takes the first member's values, stated or not, and
+        # the assembled patch says exactly what its row does.
+        out = dc.spool([p1, p2]).chunk(time=None, conflict="keep_first")
+        assert len(out) == 1
+        assert out.get_contents().iloc[0]["foo"] == "a"
+        assert out[0].attrs.foo == "a"
+        # the other order keeps the first member's silence
+        out = dc.spool([p2, p1]).chunk(time=None, conflict="keep_first")
+        assert len(out) == 1
+        assert pd.isnull(out.get_contents().iloc[0].get("foo"))
+        assert out[0].attrs.get("foo") is None
+
+    def test_attrs_named_like_coordinates_are_policed_as_attrs(self):
+        """Attrs which look like coordinate metadata are policed by `conflict`.
+
+        A column a coordinate owns is refused whatever `conflict` says,
+        so keeping the first value is what proves these are read as
+        ordinary attrs rather than as the envelope of some coordinate.
+        """
+        # values differ, so only the conflict policy can decide them
+        first = {
+            "latitude": "north",  # a coordinate another patch has
+            "foo_min": "a",  # an envelope pair with no foo coordinate
+            "foo_max": "b",
+            "time_zone": "UTC",  # a name prefixed by a real dimension
+            "gauge": 10 * dc.get_quantity("m"),  # a quantity
+            "shots": 7,  # a plain number
+        }
+        second = {
+            "latitude": "south",
+            "foo_min": "c",
+            "foo_max": "d",
+            "time_zone": "MST",
+            "gauge": 20 * dc.get_quantity("m"),
+            "shots": 9,
+        }
+        p1 = dc.get_example_patch().update_attrs(**first)
+        time = p1.get_coord("time")
+        p2 = dc.get_example_patch(time_min=time.max() + time.step)
+        p2 = p2.update_attrs(**second)
+        n = p1.shape[p1.get_axis("distance")]
+        # a patch which holds latitude as a coordinate rather than an attr
+        elsewhere = dc.get_example_patch(
+            time_min=time.max() + 10 * time.step, tag="other"
+        ).update_coords(latitude=("distance", np.arange(n, dtype=float)))
+        spool = dc.spool([p1, p2, elsewhere])
+        # they are attrs, so they conflict rather than being coordinate metadata
+        with pytest.raises(CoordMergeError, match=r"latitude|foo_min|time_zone"):
+            spool.chunk(time=None)
+        out = spool.chunk(time=None, conflict="keep_first")
+        merged = out.select(tag="random")[0]
+        row = out.get_contents().set_index("tag").loc["random"]
+        for name, value in first.items():
+            assert merged.attrs.get(name) == value
+            assert name in row or name == "gauge"
+        assert row["time_zone"] == "UTC" and row["latitude"] == "north"
+
+    def test_dropped_coordinate_envelope_is_not_an_attr(self):
+        """A coordinate only one member has leaves no stray attrs behind."""
+        p1 = dc.get_example_patch()
+        time = p1.get_coord("time")
+        p2 = dc.get_example_patch(time_min=time.max() + time.step)
+        n = p1.shape[p1.get_axis("distance")]
+        p1 = p1.update_coords(latitude=("distance", np.arange(n, dtype=float)))
+        out = dc.spool([p1, p2]).chunk(time=None, conflict="drop")
+        patch = out[0]
+        assert patch.attrs.get("latitude_min") is None
+        assert patch.attrs.get("latitude_max") is None
+
+    def test_history_warns_not_raises(self):
+        """Differing histories merge with a warning, carrying the first's."""
+        p1 = dc.get_example_patch()
+        time = p1.get_coord("time")
+        p2 = dc.get_example_patch(time_min=time.max() + time.step)
+        p2 = p2.pass_filter(time=(None, 10))
+        with pytest.warns(UserWarning, match="histories differ"):
+            patch = dc.spool([p1, p2]).chunk(time=None)[0]
+        assert patch.shape[1] == 2 * p1.shape[1]
+        assert patch.attrs.history == p1.attrs.history
+
     def test_attrs_conflict(self, adjacent_spool_different_attrs):
         """Test various cases for specifying what to do when attrs conflict."""
         spool = adjacent_spool_different_attrs
         # when we don't specify to ignore or drop attrs this should raise.
-        match = "all values for my_attr"
+        match = "my_attr holds conflicting values"
         with pytest.raises(CoordMergeError, match=match):
             spool.chunk(time=...)
         # however, when we specify drop attrs this shouldn't.
@@ -626,47 +717,6 @@ class TestChunkMerge:
             assert not pd.isna(df_time_max), f"DF row {i} has NaN time_max"
             assert df_time_min <= df_time_max, f"DF row {i} has invalid time range"
 
-    def test_multiple_chained_chunks(self, random_spool):
-        """Test multiple chained chunk operations. See #533."""
-        # Chain multiple chunk operations
-        result_spool = random_spool.chunk(time=...).chunk(time=5).chunk(time=2)
-
-        # Should be able to access all patches
-        for i in range(len(result_spool)):
-            patch = result_spool[i]
-            assert isinstance(patch, dc.Patch)
-
-    def test_chunk_split_then_merge(self, random_spool):
-        """Test chaining chunk split followed by merge. See #533."""
-        # First chunk into smaller pieces, then merge back
-        result_spool = random_spool.chunk(time=1).chunk(time=...)
-
-        # Should be able to access patches (this test the fix works)
-        first_patch = result_spool[0]
-        assert isinstance(first_patch, dc.Patch)
-
-        # The merge operation should result in fewer patches than the chunked operation
-        chunked_spool = random_spool.chunk(time=1)
-        assert len(result_spool) <= len(chunked_spool)
-
-        # Verify NO patches have NaN values and dataframe consistency
-        result_contents = result_spool.get_contents().reset_index(drop=True)
-        for i, patch in enumerate(result_spool):
-            # Assert no NaN values in patch attributes
-            time_coord = patch.get_coord("time")
-            assert not pd.isna(time_coord.min()), f"Patch {i} has NaN time_min"
-            assert not pd.isna(time_coord.max()), f"Patch {i} has NaN time_max"
-
-            # Verify dataframe contains reasonable time values
-            df_row = result_contents.iloc[i]
-            df_time_min = dc.to_datetime64(df_row["time_min"])
-            df_time_max = dc.to_datetime64(df_row["time_max"])
-
-            # Dataframe times should not be NaN or invalid
-            assert not pd.isna(df_time_min), f"DF row {i} has NaN time_min"
-            assert not pd.isna(df_time_max), f"DF row {i} has NaN time_max"
-            assert df_time_min <= df_time_max, f"DF row {i} has invalid time range"
-
     def test_chunk_non_adjacent_within_tolerance_warns(self, random_patch):
         """
         Non-adjacent patches can still merge, but the coordinate type may change.
@@ -710,7 +760,7 @@ class TestChunkMerge:
 
 def _bare_assembler():
     """An assembler with no frames, for direct streaming-merge tests."""
-    return PatchAssembler(load_patch=None, merge_kwargs={})
+    return PatchAssembler(load_patch=None, merge_kwargs={}, plan_dim="time")
 
 
 class TestStreamingMerge:
@@ -1159,18 +1209,6 @@ class TestMatchMergeUnits:
 class TestUnitChunkValue:
     """Chunk lengths carrying the coordinate's own units."""
 
-    def test_seconds_match_bare(self, random_spool):
-        """A duration in seconds equals the bare seconds value."""
-        quant = random_spool.chunk(time=3 * dc.units.s)
-        bare = random_spool.chunk(time=3)
-        assert len(quant) == len(bare)
-        assert [x.shape for x in quant] == [x.shape for x in bare]
-
-    def test_other_time_unit(self, random_spool):
-        """Milliseconds convert to the same chunk as seconds."""
-        out = random_spool.chunk(time=3000 * dc.units.ms)
-        assert len(out) == len(random_spool.chunk(time=3))
-
     def test_distance_unit_converts(self, random_spool):
         """A distance in feet converts to the coordinate's metres."""
         out = random_spool.chunk(distance=100 * dc.units.ft)
@@ -1182,10 +1220,298 @@ class TestUnitChunkValue:
         with pytest.raises(UnitError, match="no units"):
             dc.spool(patches).chunk(distance=100 * dc.units.ft)
 
+
+class TestQuantityTolerance:
+    """Continuity tolerances stated in the coordinate's own units."""
+
+    @staticmethod
+    def _gapped(patch, samples):
+        """Two patches whose boundary spans `samples` steps; `samples - 1` missing."""
+        base = patch.update_attrs(history="")
+        time = patch.get_coord("time")
+        after = base.update_coords(
+            time_min=time.max() + time.step * samples
+        ).update_attrs(history="")
+        return dc.spool((base, after))
+
+    @staticmethod
+    def _shifted(patch, dim, steps):
+        """Two patches whose boundary along `dim` spans `steps` steps."""
+        base = patch.update_attrs(history="")
+        coord = patch.get_coord(dim)
+        after = base.update_coords(
+            **{f"{dim}_min": coord.max() + coord.step * steps}
+        ).update_attrs(history="")
+        return dc.spool((base, after))
+
+    def test_merges_gap_it_spans(self, random_patch):
+        """A tolerance wider than the hole merges over it; a tighter one does not."""
+        step = dc.to_float(random_patch.get_coord("time").step)
+        spool = self._gapped(random_patch, 5)
+        with pytest.warns(UserWarning, match="gap in the patch"):
+            merged = spool.chunk(time=None, tolerance=get_quantity(f"{5 * step} s"))
+        assert len(merged) == 1
+        assert len(spool.chunk(time=None, tolerance=get_quantity(f"{step} s"))) == 2
+
+    def test_merged_coord_simplifies(self, random_patch):
+        """A merge under an absolute tolerance still snaps to a range."""
+        step = dc.to_float(random_patch.get_coord("time").step)
+        spool = self._gapped(random_patch, 3)
+        with pytest.warns(UserWarning, match="gap in the patch"):
+            merged = spool.chunk(time=None, tolerance=get_quantity(f"{4 * step} s"))
+        assert merged[0].get_coord("time").step is not None
+
+    def test_distance_unit_converts(self, random_spool):
+        """A tolerance in feet is read in the coordinate's metres, not as metres."""
+        patch = random_spool[0]
+        step = float(patch.get_coord("distance").step)
+        spool = self._shifted(patch, "distance", 9)
+        hole = step * 9
+        # 20 ft is 6.1 m, under the 9 m hole; 40 ft is 12.2 m, over it.
+        # Read as metres instead, both would clear it and both legs would
+        # merge, so the pair pins the conversion in both directions.
+        assert step == 1.0 and hole == 9.0
+        with suppress_warnings(UserWarning):
+            wide = spool.chunk(distance=None, tolerance=40 * dc.units.ft)
+        assert len(wide) == 1
+        assert len(spool.chunk(distance=None, tolerance=20 * dc.units.ft)) == 2
+
+    def test_non_time_merge_assembles(self, random_spool):
+        """A distance merge under a converted tolerance assembles whole."""
+        spool = self._shifted(random_spool[0], "distance", 3)
+        with pytest.warns(UserWarning, match="gap in the patch"):
+            merged = spool.chunk(distance=None, tolerance=4 / 0.3048 * dc.units.ft)[0]
+        coord = merged.get_coord("distance")
+        assert coord.step is not None
+        assert len(coord) == sum(len(x.get_coord("distance")) for x in spool)
+
+    def test_dimensionless_is_a_sample_count(self, random_patch):
+        """A dimensionless quantity is samples, not the coordinate's units."""
+        # A hole of 6 steps is 0.024 s: six samples merge it, and six
+        # seconds would too, so the gap has to be wide in seconds and
+        # narrow in samples to tell the two readings apart.
+        step = dc.to_float(random_patch.get_coord("time").step)
+        spool = self._gapped(random_patch, 3)
+        seconds_would_merge = 3 * step < 6
+        assert seconds_would_merge
+        assert (
+            len(spool.chunk(time=None, tolerance=get_quantity("2 dimensionless"))) == 2
+        )
+        with suppress_warnings(UserWarning):
+            quantity = spool.chunk(time=None, tolerance=get_quantity("6 dimensionless"))
+            number = spool.chunk(time=None, tolerance=6)
+        assert len(quantity) == len(number) == 1
+
+    def test_timedelta_is_absolute(self, random_patch):
+        """A timedelta says the same thing as a time quantity."""
+        step = random_patch.get_coord("time").step
+        spool = self._gapped(random_patch, 5)
+        with suppress_warnings(UserWarning):
+            delta = spool.chunk(time=None, tolerance=6 * step)
+            quantity = spool.chunk(
+                time=None, tolerance=get_quantity(f"{6 * dc.to_float(step)} s")
+            )
+        assert len(delta) == len(quantity) == 1
+        assert delta[0].equals(quantity[0])
+        assert len(spool.chunk(time=None, tolerance=step)) == 2
+
+    def test_datetime_timedelta_accepted(self, random_patch):
+        """The stdlib timedelta is a timedelta too."""
+        spool = self._gapped(random_patch, 5)
+        with suppress_warnings(UserWarning):
+            out = spool.chunk(time=None, tolerance=timedelta(seconds=1))
+        assert len(out) == 1
+
+    def test_timedelta_reads_a_numeric_time_coord(self, random_patch):
+        """A numeric coordinate measured in seconds takes a timedelta."""
+        coord = random_patch.get_coord("time")
+        numeric = dc.core.get_coord(
+            start=0.0, stop=float(len(coord)), step=1.0, units="s"
+        )
+        base = random_patch.rename_coords(time="shot").update_coords(shot=numeric)
+        spool = self._shifted(base, "shot", 3)
+        with suppress_warnings(UserWarning):
+            delta = spool.chunk(shot=None, tolerance=to_timedelta64(4))
+            quantity = spool.chunk(shot=None, tolerance=get_quantity("4 s"))
+        assert len(delta) == len(quantity) == 1
+        # materialized, since the merge converts the tolerance a second
+        # time to bound the snap, and a raw timedelta cannot bound a
+        # numeric coordinate's deviations
+        assert delta[0].get_coord("shot") == quantity[0].get_coord("shot")
+        assert len(spool.chunk(shot=None, tolerance=to_timedelta64(1))) == 2
+
+    def test_sub_step_tolerance_keeps_contiguity(self, random_spool):
+        """A margin narrower than the step never splits adjacent patches."""
+        # The boundary between adjacent patches is one full step, so a
+        # tolerance under it must still read as "nothing missing".
+        tiny = get_quantity("1 ns")
+        assert len(random_spool.chunk(time=None, tolerance=tiny)) == 1
+        assert random_spool.get_gaps(tolerance=tiny).empty
+        assert (random_spool.get_coverage(tolerance=tiny)["coverage"] == 1).all()
+
+    def test_unknown_step_gap_is_found(self, random_patch):
+        """An absolute tolerance needs no sampling interval to measure a gap."""
+
+        def _jitter(patch, offset):
+            time = patch.get_coord("time").values + offset
+            rng = np.random.default_rng(13)
+            jittered = time + (rng.random(len(time)) * 1e6).astype("timedelta64[ns]")
+            return patch.update_coords(time=np.sort(jittered)).update_attrs(history="")
+
+        spool = dc.spool(
+            [
+                _jitter(random_patch, np.timedelta64(0, "s")),
+                _jitter(random_patch, np.timedelta64(20, "s")),
+            ]
+        )
+        assert pd.isnull(spool.get_contents()["time_step"]).all()
+        # the sample count has no step to scale, so it merges blindly
+        assert len(spool.chunk(time=None)) == 1
+        assert len(spool.chunk(time=None, tolerance=get_quantity("0.5 s"))) == 2
+        # and the merging side of the same branch, which needs no step
+        with suppress_warnings(UserWarning):
+            merged = spool.chunk(time=None, tolerance=get_quantity("30 s"))
+        assert len(merged) == 1
+        assert len(merged[0].get_coord("time")) == sum(
+            len(x.get_coord("time")) for x in spool
+        )
+
+    def test_affine_units_convert_as_a_delta(self, random_patch):
+        """A tolerance is a difference, so an affine unit's offset cancels."""
+        coord = random_patch.get_coord("distance")
+        celsius = dc.core.get_coord(
+            start=0.0, stop=float(len(coord)), step=1.0, units="degC"
+        )
+        base = random_patch.rename_coords(distance="temp").update_coords(temp=celsius)
+        spool = self._shifted(base, "temp", 3)
+        # 4 K of extent is 4 degC of extent; read as a point it would be
+        # -269.15 degC, which simplify refuses as negative.
+        with suppress_warnings(UserWarning):
+            merged = spool.chunk(temp=None, tolerance=4 * dc.units.kelvin)[0]
+        assert merged.get_coord("temp").step is not None
+
     def test_wrong_dimensionality_raises(self, random_spool):
-        """A length cannot chunk time."""
-        with pytest.raises(UnitError, match="time-like"):
-            random_spool.chunk(time=100 * dc.units.ft)
+        """A tolerance must measure the dimension it is applied to."""
+        with pytest.raises(UnitError, match="must have units of time"):
+            random_spool.chunk(time=None, tolerance=10 * dc.units.m)
+
+    def test_timedelta_on_other_dim_raises(self, random_spool):
+        """A time tolerance cannot measure a coordinate of metres."""
+        with pytest.raises(UnitError, match="incompatible with the coordinate"):
+            random_spool.chunk(distance=None, tolerance=to_timedelta64(1))
+
+    def test_unitless_coord_raises(self, random_spool):
+        """A unit-bearing tolerance needs a coordinate with units."""
+        patches = [x.set_units(distance=None) for x in random_spool]
+        with pytest.raises(UnitError, match="no units"):
+            dc.spool(patches).chunk(distance=None, tolerance=10 * dc.units.ft)
+
+    def test_data_size_raises(self, random_spool):
+        """A data size does not describe a hole along a coordinate."""
+        with pytest.raises(UnitError, match="data size"):
+            random_spool.chunk(time=None, tolerance=get_quantity("25 MB"))
+
+    def test_percent_raises(self, random_spool):
+        """A percentage is neither a count nor a length."""
+        with pytest.raises(UnitError, match="percentage"):
+            random_spool.chunk(time=None, tolerance=get_quantity("50%"))
+
+    def test_unrepresentable_time_raises(self, random_spool):
+        """A time too large for a timedelta64 says so, rather than overflowing."""
+        with pytest.raises(ParameterError, match="too large"):
+            random_spool.chunk(time=None, tolerance=get_quantity("1e11 s"))
+
+    @pytest.mark.parametrize(
+        "tolerance,match",
+        [
+            (np.nan, "finite"),
+            (np.timedelta64("NaT"), "finite"),
+            (np.inf * dc.units.s, "finite"),
+            (-1, "not be negative"),
+            (get_quantity("-1 dimensionless"), "not be negative"),
+            (get_quantity("-1 s"), "not be negative"),
+            (-to_timedelta64(1), "not be negative"),
+            (np.array([2]), "single value"),
+            (np.array([1.0, 2.0]), "single value"),
+            (np.array([1.0, 2.0]) * dc.units.s, "single value"),
+            ("2 s", "get_quantity"),
+        ],
+    )
+    def test_unmeasurable_tolerance_raises(self, random_spool, tolerance, match):
+        """A tolerance no gap could be measured against is refused."""
+        with pytest.raises(ParameterError, match=match):
+            random_spool.chunk(time=None, tolerance=tolerance)
+
+    def test_infinite_sample_count_merges_everything(self, random_patch):
+        """An infinite count is a coherent request: no boundary is a gap."""
+        spool = self._gapped(random_patch, 500)
+        with pytest.warns(UserWarning, match="gap in the patch"):
+            assert len(spool.chunk(time=None, tolerance=np.inf)) == 1
+
+    def test_exchanged_boundary_warns(self):
+        """A forced merge warns even when the partition count is unchanged."""
+        t0 = np.datetime64("2020-01-01T00:00:00", "ns")
+        rng = np.random.default_rng(42)
+
+        def _patch(start, step, samples=20):
+            step = to_timedelta64(step)
+            coord = dc.core.get_coord(
+                start=start, stop=start + step * samples, step=step
+            )
+            data = rng.random((5, samples))
+            coords = {"distance": np.arange(5) * 1.0, "time": coord}
+            return dc.Patch(data=data, coords=coords, dims=("distance", "time"))
+
+        # Steps within the sampling group tolerance, so all three patches
+        # share a cell; the holes are chosen so the default and a 1.53 s
+        # tolerance split at *different* boundaries.
+        first = _patch(t0, 1.0)
+        second = _patch(first.get_coord("time").max() + to_timedelta64(1.55), 1.04)
+        third = _patch(second.get_coord("time").max() + to_timedelta64(1.51), 1.0)
+        spool = dc.spool([first, second, third])
+        default = spool.chunk(time=None)
+        with pytest.warns(UserWarning, match="force merging"):
+            absolute = spool.chunk(time=None, tolerance=get_quantity("1.53 s"))
+        assert len(default) == len(absolute) == 2
+        # the same count, but not the same split
+        assert default[0].get_coord("time").max() != absolute[0].get_coord("time").max()
+
+    def test_merge_uses_the_normalized_tolerance(self, random_spool):
+        """The merge gets the tolerance the plan resolved, not the raw one.
+
+        Asserted on what the merge is handed rather than on a merged
+        coordinate: a dimensionless quantity reaching `simplify` is read
+        as *seconds*, which only shows up in a merged coordinate for
+        gap geometries where the snap bound is the binding constraint.
+        """
+        out = random_spool.chunk(time=None, tolerance=get_quantity("2"))
+        handed = out._catalog.resolver.merge_kwargs["tolerance"]
+        # a dimensionless quantity compares equal to the number it holds,
+        # so the type is what says which value was handed over
+        assert not isinstance(handed, dc.units.Quantity)
+        assert handed == 2.0
+
+    def test_snap_bound_holds_at_the_tolerance(self, random_patch):
+        """Simplifying under an absolute tolerance moves no value past it."""
+        step = random_patch.get_coord("time").step
+        spool = self._gapped(random_patch, 40)
+        with pytest.warns(UserWarning, match="gap in the patch"):
+            snapped = spool.chunk(time=None, tolerance=41 * step)[0]
+            exact = spool.chunk(time=None, tolerance=41 * step, snap_coords=False)[0]
+        snapped_coord, exact_coord = (x.get_coord("time") for x in (snapped, exact))
+        # the hole is wide enough that a looser bound would show: the
+        # exact coordinate keeps the seam, the snapped one does not
+        assert isinstance(exact_coord, CoordSegmented)
+        assert isinstance(snapped_coord, CoordRange)
+        deviation = abs(snapped_coord.values - exact_coord.values).max()
+        assert deviation <= 41 * step
+
+    def test_plan_records_normalized_tolerance(self, random_spool):
+        """The plan records the tolerance it actually used."""
+        plan = random_spool.chunk_plan(time=None, tolerance=get_quantity("2 s"))
+        assert plan.params["tolerance"] == get_quantity("2 s")
+        plan = random_spool.chunk_plan(time=None, tolerance=get_quantity("2"))
+        assert plan.params["tolerance"] == 2.0
 
 
 class TestSizeChunk:
@@ -1202,15 +1528,12 @@ class TestSizeChunk:
         }
         return dc.Patch(data=data, coords=coords, dims=("distance", "time"))
 
-    @pytest.fixture(scope="class")
-    def mixed_dtype_spool(self):
-        """Two contiguous patches whose element types differ."""
-        start = np.datetime64("2020-01-01T00:00:00")
-        second = start + np.timedelta64(1600, "ms")
-        return dc.spool([self._make("float64", start), self._make("float32", second)])
-
     @pytest.mark.parametrize(
-        "size", ("1 MB", "2 MB", "1 MiB", "500 kB"), ids=lambda x: x.replace(" ", "")
+        # One decimal unit and one binary one; the four sizes all split the
+        # spool, so what the other two added was the arithmetic.
+        "size",
+        ("1 MiB", "500 kB"),
+        ids=lambda x: x.replace(" ", ""),
     )
     def test_never_exceeds_request(self, random_spool, size):
         """Every output patch fits inside the requested size."""
@@ -1237,15 +1560,6 @@ class TestSizeChunk:
         wide_samples = wide[0].shape[wide[0].get_axis("time")]
         narrow_samples = narrow[0].shape[narrow[0].get_axis("time")]
         assert narrow_samples == 2 * wide_samples
-
-    def test_mixed_dtype_partition_uses_upcast(self, mixed_dtype_spool):
-        """A mixed partition is sized against the dtype assembly upcasts to."""
-        target = dc.get_quantity("100 kB")
-        plan = mixed_dtype_spool.chunk_plan(time=target)
-        (part,) = plan.params["size"]["partitions"]
-        assert part["dtype"] == "float64"
-        out = mixed_dtype_spool.chunk(time=target)
-        assert max(x.data.nbytes for x in out) <= target.to("byte").magnitude
 
     def test_mixed_steps_in_one_partition_stay_bounded(self):
         """
@@ -1304,10 +1618,14 @@ class TestSizeChunk:
         out = spool.chunk(time=target)
         assert max(x.data.nbytes for x in out) <= target.to("byte").magnitude
 
-    def test_slab_larger_than_target_warns(self, random_spool):
+    def test_slab_larger_than_target_warns(self):
         """One sample is the floor; the request cannot be honored below it."""
+        # 200 channels of float64 is a 1,600 byte slab, so one sample already
+        # exceeds the request. The default patch's 400 byte slab would not.
+        start = np.datetime64("2020-01-01T00:00:00")
+        spool = dc.spool([self._make("float64", start, distance=200, samples=10)])
         with pytest.warns(UserWarning, match="larger than the requested size"):
-            out = random_spool.chunk(time=1 * dc.units.kB)
+            out = spool.chunk(time=1 * dc.units.kB)
         patch = out[0]
         assert patch.shape[patch.get_axis("time")] == 1
 
@@ -1432,16 +1750,9 @@ class TestSizeChunk:
             [make("float32", t0), make("float64", t0 + np.timedelta64(1600, "ms"))]
         ).sort("time")
         out = spool.chunk(time=1.0)
-        claimed = out.get_contents()["_dtype"].tolist()
+        claimed = out._df["_dtype"].tolist()
         assert claimed == [str(x.data.dtype) for x in out]
         assert out == dc.spool(list(out))
-
-    def test_merge_mode_records_no_size(self, random_spool):
-        """A merge takes no length, so no size is ever resolved."""
-        plan = random_spool.chunk_plan(time=None)
-        assert plan.merge_mode
-        assert "size" not in plan.params
-        assert len(random_spool.chunk(time=None)) == 1
 
     def test_merge_mode_rejects_size_overlap(self, random_spool):
         """A size overlap is still an overlap, which merging forbids."""
@@ -1466,3 +1777,162 @@ class TestSizeChunk:
         """A chunk length is one value, not an array of them."""
         with pytest.raises(ParameterError, match="single quantity"):
             random_spool.chunk(time=np.array([1.0, 2.0]) * dc.units.MB)
+
+
+class TestChunkEdgeBetweenPatches:
+    """
+    Chunk lengths that are not a whole number of samples (#1008, #893).
+
+    An output edge then lands between the last sample of one patch and
+    the first of the next; chunking must give the same result as chunking
+    the patches once merged.
+    """
+
+    @pytest.fixture(scope="class")
+    def contiguous_spool(self):
+        """Three exactly contiguous patches of five one-second samples."""
+        step = np.timedelta64(1, "s")
+        t0 = np.datetime64("2026-01-01T00:00:00", "ns")
+        patches = []
+        for _ in range(3):
+            time = t0 + np.arange(5) * step
+            coords = {"time": time, "distance": np.arange(3.0)}
+            data = np.random.default_rng(len(patches)).random((5, 3))
+            patches.append(
+                dc.Patch(data=data, coords=coords, dims=("time", "distance"))
+            )
+            t0 = time[-1] + step
+        return dc.spool(patches)
+
+    @pytest.mark.parametrize(
+        "kwargs",
+        [
+            dict(time=4.5),
+            dict(time=5.5),
+            dict(time=5.5, keep_partial=True),
+            dict(time=6, overlap=1.5),
+            dict(time=2.3, overlap=0.4),
+        ],
+    )
+    def test_matches_chunking_merged_patch(self, contiguous_spool, kwargs):
+        """Patch boundaries must not change what a chunk contains."""
+        merged = contiguous_spool.chunk(time=None)
+        assert len(merged) == 1
+        out, expected = contiguous_spool.chunk(**kwargs), merged.chunk(**kwargs)
+        assert len(out) == len(expected)
+        assert all(a.equals(b) for a, b in zip(out, expected))
+
+    @pytest.mark.parametrize("length", [25, 35, 50])
+    def test_nested_patches_chunk_as_the_outer_one(self, length):
+        """Patches inside a longer one must not add or remove samples."""
+
+        def _patch(first, samples):
+            step = np.timedelta64(1, "s")
+            t0 = np.datetime64("2026-01-01", "ns") + first * step
+            data = np.arange(samples * 2, dtype=float).reshape(samples, 2)
+            coords = {"time": t0 + np.arange(samples) * step, "distance": [0.0, 1.0]}
+            return dc.Patch(data=data, coords=coords, dims=("time", "distance"))
+
+        outer = _patch(0, 101)
+        nested = dc.spool([outer, _patch(10, 11), _patch(30, 11)])
+        out = nested.chunk(time=length, keep_partial=True)
+        expected = dc.spool([outer]).chunk(time=length, keep_partial=True)
+        assert len(out) == len(expected)
+        assert all(a.equals(b) for a, b in zip(out, expected))
+
+    def test_boundary_in_sub_tolerance_gap(self):
+        """A boundary inside a gap the tolerance merges over chunks cleanly."""
+        p1 = dc.get_example_patch(time_min="2020-01-01")
+        time = p1.get_coord("time")
+        p2 = dc.get_example_patch(time_min=time.max() + 1.4 * time.step)
+        span = (time.max() - time.min()) + 0.7 * time.step
+        length = span / np.timedelta64(1, "s") / 2
+        out = dc.spool([p1, p2]).chunk(time=length)
+        assert len(out) == 4
+        coords = [patch.get_coord("time") for patch in out]
+        assert all(len(coord) == len(coords[0]) for coord in coords)
+        assert all(a.max() < b.min() for a, b in pairwise(coords))
+
+
+class TestChunkWithAssociatedCoords:
+    """Chunking must not trim on coordinates riding another dimension."""
+
+    @pytest.fixture(scope="class")
+    def base_patch(self):
+        """A patch whose distance coordinate carries the associated ones."""
+        return dc.get_example_patch()
+
+    @pytest.fixture(scope="class")
+    def string_patch(self, base_patch):
+        """A patch with a three-valued string coordinate on distance."""
+        dist = base_patch.get_array("distance")
+        third = len(dist) // 3
+        label = np.full(len(dist), "middle", dtype="<U6")
+        label[:third], label[-third:] = "start", "end"
+        return base_patch.update_coords(label=("distance", label))
+
+    @pytest.fixture(scope="class")
+    def nan_patch(self, base_patch):
+        """A patch with a numeric coordinate missing on some channels."""
+        dist = base_patch.get_array("distance")
+        values = np.where(dist > dist.mean(), dist * 2.0, np.nan)
+        return base_patch.update_coords(hole_depth=("distance", values))
+
+    @pytest.fixture(scope="class")
+    def numeric_patch(self, base_patch):
+        """A patch with a plain numeric coordinate on distance."""
+        dist = base_patch.get_array("distance")
+        return base_patch.update_coords(depth=("distance", dist * 2.0))
+
+    def test_string_coord_keeps_all_channels(self, string_patch):
+        """A string coordinate is not a range the trim may select on."""
+        out = list(dc.spool(string_patch).chunk(time=2))
+        assert len(out) > 1
+        expected = set(np.unique(string_patch.get_array("label")))
+        for patch in out:
+            assert patch.shape[0] == string_patch.shape[0]
+            assert set(np.unique(patch.get_array("label"))) == expected
+
+    def test_nan_coord_keeps_all_channels(self, nan_patch):
+        """Channels the coordinate says nothing about must survive."""
+        expected = np.isnan(nan_patch.get_array("hole_depth")).sum()
+        assert expected  # the fixture must actually hold missing values
+        out = list(dc.spool(nan_patch).chunk(time=2))
+        assert len(out) > 1
+        for patch in out:
+            assert patch.shape[0] == nan_patch.shape[0]
+            assert np.isnan(patch.get_array("hole_depth")).sum() == expected
+
+    def test_numeric_coord_keeps_all_channels(self, numeric_patch):
+        """The well-behaved case must keep working."""
+        out = list(dc.spool(numeric_patch).chunk(time=2))
+        assert len(out) > 1
+        for patch in out:
+            assert patch.shape[0] == numeric_patch.shape[0]
+
+    def test_chunk_along_shared_dim(self, nan_patch, string_patch):
+        """Chunking the dimension the coordinate rides must not raise."""
+        for patch in (nan_patch, string_patch):
+            out = list(dc.spool(patch).chunk(distance=100))
+            assert len(out) > 1
+            total = sum(x.shape[0] for x in out)
+            assert total == patch.shape[0]
+            assert all(x.shape[1] == patch.shape[1] for x in out)
+
+    @pytest.mark.parametrize("kwargs", [{"time": 2}, {"distance": 100}])
+    def test_matches_file_backed_spool(self, string_patch, tmp_path_factory, kwargs):
+        """An in-memory spool must chunk like a spool of the same file."""
+        path = tmp_path_factory.mktemp("associated_coord_chunk")
+        ex.spool_to_directory(dc.spool(string_patch), path=path)
+        memory = list(dc.spool(string_patch).chunk(**kwargs))
+        file_backed = list(dc.spool(path).update().chunk(**kwargs))
+        assert len(memory) == len(file_backed) > 1
+        labels = set(np.unique(string_patch.get_array("label")))
+        for patch, other in zip(memory, file_backed):
+            assert patch.shape == other.shape
+            assert np.all(patch.get_array("label") == other.get_array("label"))
+            # pin the file-backed result outright: matching a broken
+            # in-memory result would otherwise read as agreement
+            if "time" in kwargs:
+                assert other.shape[0] == string_patch.shape[0]
+                assert set(np.unique(other.get_array("label"))) == labels

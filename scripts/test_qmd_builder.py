@@ -46,3 +46,30 @@ class TestGetRepoBranch:
         monkeypatch.setenv("DASCORE_DOC_BRANCH", "dev")
 
         assert _qmd_builder._get_repo_branch() == "dev"
+
+
+class TestApiTocTree:
+    """Tests for the API sidebar."""
+
+    def test_one_entry_per_section(self, tmp_path):
+        """The tree names sections, not the objects inside them."""
+        api_path = tmp_path / "api"
+        (api_path / "dascore" / "core").mkdir(parents=True)
+        (api_path / "dascore" / "core.qmd").write_text("")
+        (api_path / "dascore" / "io.qmd").write_text("")
+        (api_path / "dascore" / "core" / "Patch.qmd").write_text("")
+
+        out = _qmd_builder.build_api_toc_tree(api_path)
+
+        assert out == [
+            "- text: core",
+            "  href: api/dascore/core.qmd",
+            "- text: io",
+            "  href: api/dascore/io.qmd",
+        ]
+
+    def test_nothing_generated(self, tmp_path):
+        """A tree built before the API docs are is empty, not an error."""
+        (tmp_path / "api" / "dascore").mkdir(parents=True)
+
+        assert _qmd_builder.build_api_toc_tree(tmp_path / "api") == []

@@ -10,8 +10,11 @@ distance tracks, and the annotation sets which describe patch data.
 from __future__ import annotations
 
 import itertools
+from functools import partial
+from typing import Annotated
 
 import numpy as np
+from pydantic import BeforeValidator
 
 from dascore.exceptions import ParameterError
 
@@ -30,7 +33,7 @@ def interval_masks(values, intervals) -> list[np.ndarray]:
     values
         The values, along the interval axis, to test for coverage.
     intervals
-        A sequence of (start, end) pairs.
+        A sequence of (min, max) pairs.
 
     Examples
     --------
@@ -66,7 +69,7 @@ def intervals_overlap(intervals) -> tuple | None:
     Parameters
     ----------
     intervals
-        A sequence of (start, end) pairs.
+        A sequence of (min, max) pairs.
 
     Examples
     --------
@@ -88,8 +91,8 @@ def clip_intervals(
     lo: float,
     hi: float,
     outer: float | None = None,
-    start_field: str = "start_distance",
-    end_field: str = "end_distance",
+    min_field: str = "distance_min",
+    max_field: str = "distance_max",
 ) -> list:
     """
     Clip interval items to [lo, hi), dropping those left with no coverage.
@@ -100,8 +103,8 @@ def clip_intervals(
     Parameters
     ----------
     items
-        Models whose start and end are held by ``start_field`` and
-        ``end_field``, and which support pydantic's ``model_copy``.
+        Models whose bounds are held by ``min_field`` and ``max_field``,
+        and which support pydantic's ``model_copy``.
     lo
         The inclusive start of the clip.
     hi
@@ -109,25 +112,25 @@ def clip_intervals(
     outer
         The outermost value the clipped axis holds, if any. A point marker
         sitting exactly there survives, since nothing beyond it can claim it.
-    start_field
-        Name of the field holding each item's interval start.
-    end_field
-        Name of the field holding each item's interval end.
+    min_field
+        Name of the field holding each item's lower bound.
+    max_field
+        Name of the field holding each item's upper bound.
 
     Examples
     --------
     >>> from pydantic import BaseModel
     >>> from dascore.utils.intervals import clip_intervals
     >>> class Span(BaseModel):
-    ...     start_distance: float
-    ...     end_distance: float
-    >>> clipped = clip_intervals([Span(start_distance=0, end_distance=10)], 2, 6)
-    >>> clipped[0].start_distance, clipped[0].end_distance
+    ...     distance_min: float
+    ...     distance_max: float
+    >>> clipped = clip_intervals([Span(distance_min=0, distance_max=10)], 2, 6)
+    >>> clipped[0].distance_min, clipped[0].distance_max
     (2, 6)
     """
     out = []
     for item in items:
-        start, end = getattr(item, start_field), getattr(item, end_field)
+        start, end = getattr(item, min_field), getattr(item, max_field)
         if start == end:
             if lo <= start < hi or (outer is not None and start == hi == outer):
                 out.append(item)
@@ -135,7 +138,7 @@ def clip_intervals(
         new_lo, new_hi = max(start, lo), min(end, hi)
         if new_hi <= new_lo:
             continue
-        out.append(item.model_copy(update={start_field: new_lo, end_field: new_hi}))
+        out.append(item.model_copy(update={min_field: new_lo, max_field: new_hi}))
     return out
 
 
@@ -143,17 +146,19 @@ def value_kind(value) -> str:
     """
     Return the value kind which decides an interval group's shape.
 
-    Boolean groups state membership and may overlap; string and numeric
-    groups are single valued where they project onto a coordinate.
+    An item with no value states membership, and membership groups may
+    overlap; string and numeric groups are single valued where they
+    project onto a coordinate. Booleans never arrive here: `normalize_value`
+    refuses them.
 
     Examples
     --------
     >>> from dascore.utils.intervals import value_kind
-    >>> value_kind(True), value_kind("car"), value_kind(1)
-    ('boolean', 'string', 'numeric')
+    >>> value_kind(None), value_kind("car"), value_kind(1)
+    ('membership', 'string', 'numeric')
     """
-    if isinstance(value, bool):  # bool before int; bool is an int subclass
-        return "boolean"
+    if value is None:
+        return "membership"
     if isinstance(value, str):
         return "string"
     return "numeric"
@@ -164,7 +169,9 @@ def normalize_value(value, error: type[Exception] = ParameterError):
     Normalize an interval's value so its Python type survives validation.
 
     Numpy scalars are unwrapped: pydantic's smart union resolves every numpy
-    scalar to float, which would turn a mask element into a numeric group.
+    scalar to float, which would write a numpy 3 back as 3.0. A boolean is
+    refused: membership is stated by carrying no value, so true and false
+    are not values.
 
     Parameters
     ----------
@@ -177,12 +184,50 @@ def normalize_value(value, error: type[Exception] = ParameterError):
     --------
     >>> import numpy as np
     >>> from dascore.utils.intervals import normalize_value
-    >>> normalize_value(np.bool_(True)) is True
-    True
+    >>> normalize_value(np.int64(3))
+    3
     """
     if isinstance(value, np.generic):
         value = value.item()
+    if isinstance(value, bool):
+        msg = (
+            f"Got {value}, but true and false are not values. State "
+            "membership by leaving the value unset, and an interval outside "
+            "the group by giving it no row at all."
+        )
+        raise error(msg)
     if isinstance(value, float) and not np.isfinite(value):
-        msg = f"Annotation value must be finite; got {value}."
+        msg = f"A value must be finite; got {value}."
         raise error(msg)
     return value
+
+
+def interval_value_type(error: type[Exception] = ParameterError):
+    """
+    Return the annotated type of the one value an interval may carry.
+
+    An item states membership by carrying no value, so a value, when there
+    is one, is text or a number, and its Python type must survive
+    validation: a 1 must not be written back as 1.0.
+
+    Parameters
+    ----------
+    error
+        The exception raised for a value the interval cannot carry, so
+        each caller refuses in the vocabulary of its own subsystem. It
+        surfaces as itself only where `normalize_value` is called
+        directly; pydantic wraps whatever a validator raises in a
+        `ValidationError`, keeping the message but not the type.
+
+    Examples
+    --------
+    >>> from pydantic import BaseModel
+    >>> from dascore.utils.intervals import interval_value_type
+    >>> class Item(BaseModel):
+    ...     value: interval_value_type() | None = None
+    >>> Item(value=1).value
+    1
+    """
+    return Annotated[
+        str | int | float, BeforeValidator(partial(normalize_value, error=error))
+    ]

@@ -16,9 +16,9 @@ import os
 import tempfile
 from contextlib import suppress
 from pathlib import Path
+from typing import Self
 
 import pandas as pd
-from typing_extensions import Self
 
 import dascore as dc
 from dascore.compat import UPath
@@ -319,10 +319,10 @@ class DBDirectoryIndexer:
         so a stale path and a brand-new path with identical stats, each
         unique on its side, are the same bytes at a new location and the
         index can rewrite the path instead of re-reading contents. This
-        makes attaching metadata by renaming hive-style directories (or
-        files) cheap on large archives. Renames that *remove* a hive key
-        are excluded: restoring the file's own value for the dropped
-        attr requires a rescan.
+        makes attaching metadata by renaming hive-style directories cheap
+        on large archives. Renames that *remove* a hive key are excluded:
+        restoring the file's own value for the dropped attr requires a
+        rescan.
         """
         old_by_stats: dict[tuple[int, int], list[str]] = {}
         for rel in stale:

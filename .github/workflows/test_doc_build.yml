@@ -6,19 +6,33 @@ on:
   pull_request:
     types: [labeled, synchronize]
 
+  # A manual run is how a full build is measured without waiting for a label.
+  workflow_dispatch:
+
 permissions:
   contents: read
+
+concurrency:
+  group: TestDocBuild-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 env:
   # Where the test-data cache is restored; pooch reads files from here.
   # Must match the path used in .github/actions/prime-test-data-cache.
   DFS_DATA_DIR: ${{ github.workspace }}/.test_data_cache
+  # A pull request builds dev-based content, so the tutorial notebooks should
+  # link to the dev docs like BuildDeployDevDocs does. Left unset they would
+  # point at the released site, where a page added since the last release 404s
+  # and the preview misleads the reviewer.
+  DASCORE_DOC_SITE_URL: https://dascore.netlify.app
 
 jobs:
   test_build_docs:
     if: |
-      (github.event.action == 'labeled' && github.event.label.name == 'documentation')
-      || (github.event.action == 'synchronize' && contains(github.event.pull_request.labels.*.name, 'documentation'))
+      github.event_name == 'workflow_dispatch'
+      || (github.event.pull_request.state == 'open'
+      && ((github.event.action == 'labeled' && github.event.label.name == 'documentation')
+      || (github.event.action == 'synchronize' && contains(github.event.pull_request.labels.*.name, 'documentation'))))
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -43,6 +57,12 @@ jobs:
           prepare-test-data: "true"
 
       - uses: ./.github/actions/build-docs
+
+      # The artifact this job uploads is the size gate the plan measures
+      # against, so this build is the one which pays to compress the site.
+      - uses: ./.github/actions/report_doc_build
+        with:
+          archive: "true"
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
