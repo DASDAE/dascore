@@ -108,6 +108,15 @@ class InvalidTimeRangeError(TimeError):
     """Raised when an invalid time range is encountered."""
 
 
+class TimeOverflowError(OverflowError, TimeError):
+    """
+    Raised when a time cannot be represented in nanoseconds.
+
+    Also an OverflowError, which is what numpy raised for the same values
+    on the paths where it did not wrap, so existing handlers keep working.
+    """
+
+
 class FilterValueError(ValueError, DASCoreError):
     """Raise when something goes wrong with filtering or filter inputs."""
 
