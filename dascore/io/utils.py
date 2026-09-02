@@ -186,6 +186,17 @@ def windows_to_slices(
     return tuple(out)
 
 
+def slice_dataset(dataset, dims: Sequence[str], windows: Mapping[str, Any], shape=None):
+    """
+    Read the sample windows of an array stored in ``dims`` order.
+
+    ``shape`` defaults to the dataset's own; pass it when the scan grid
+    is shorter than the stored array (see `windows_to_slices`).
+    """
+    shape = dataset.shape if shape is None else shape
+    return dataset[windows_to_slices(windows, dims, shape)]
+
+
 def get_gridded_coord(values, units=None) -> BaseCoord:
     """
     Return a stored coordinate array forced onto an even grid.

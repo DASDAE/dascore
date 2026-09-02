@@ -12,9 +12,10 @@ import dascore as dc
 import dascore.io.neubrex.utils_das as das_utils
 import dascore.io.neubrex.utils_rfs as rfs_utils
 from dascore.io import FiberIO, ScanPayload, make_scan_payload
-from dascore.io.utils import build_patches
+from dascore.io.utils import build_patches, slice_dataset
 from dascore.models import OptionalFiniteFloat
 from dascore.utils.hdf5 import H5Reader
+from dascore.utils.misc import raise_on_extra_kwargs
 
 
 class NeubrexRFSPatchAttrs(dc.PatchAttrs):
@@ -87,6 +88,21 @@ class NeubrexRFSV1(FiberIO):
         )
         return dc.spool(patches)
 
+    def read_array(
+        self,
+        resource: H5Reader,
+        windows: dict[str, tuple[int, int]],
+        snap: bool = True,
+        **kwargs,
+    ) -> np.ndarray:
+        """
+        Slice the ``data`` dataset directly.
+
+        ``snap`` only changes coordinate values, never the grid.
+        """
+        raise_on_extra_kwargs(kwargs, "windows and snap")
+        return slice_dataset(resource["data"], ("time", "distance"), windows)
+
     def scan(self, resource: H5Reader, snap=True, **kwargs) -> list[ScanPayload]:
         """Get the attributes of a resource belong to this type."""
         cm = rfs_utils._get_coord_manager(resource, snap)
@@ -137,6 +153,13 @@ class NeubrexDASV1(FiberIO):
             selection={"time": time, "distance": distance},
         )
         return dc.spool(patches)
+
+    def read_array(
+        self, resource: H5Reader, windows: dict[str, tuple[int, int]], **kwargs
+    ) -> np.ndarray:
+        """Slice the ``Acoustic`` dataset directly."""
+        raise_on_extra_kwargs(kwargs, "windows")
+        return slice_dataset(resource["Acoustic"], ("time", "distance"), windows)
 
     def scan(self, resource: H5Reader, **kwargs) -> list[ScanPayload]:
         """Get the attributes of this format from File."""

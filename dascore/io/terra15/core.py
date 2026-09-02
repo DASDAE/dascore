@@ -9,7 +9,7 @@ import numpy as np
 import dascore as dc
 from dascore.constants import timeable_types
 from dascore.io import FiberIO, ScanPayload
-from dascore.io.utils import windows_to_slices
+from dascore.io.utils import slice_dataset
 from dascore.utils.hdf5 import H5Reader
 from dascore.utils.misc import raise_on_extra_kwargs
 
@@ -108,7 +108,7 @@ class Terra15FormatterV4(FiberIO):
         if snap_dims:
             _, _, time_len, _ = _get_scanned_time_info(data_node)
         shape = (time_len, len(_get_distance_coord(resource)))
-        return data[windows_to_slices(windows, ("time", "distance"), shape)]
+        return slice_dataset(data, ("time", "distance"), windows, shape)
 
 
 class Terra15FormatterV5(Terra15FormatterV4):

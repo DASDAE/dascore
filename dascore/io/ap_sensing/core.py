@@ -6,11 +6,15 @@ from __future__ import annotations
 
 from typing import Literal
 
+import numpy as np
+
 import dascore as dc
 from dascore.constants import opt_timeable_types
 from dascore.io import FiberIO, ScanPayload, make_scan_payload
+from dascore.io.utils import slice_dataset
 from dascore.models import OptionalFiniteFloat
 from dascore.utils.hdf5 import H5Reader
+from dascore.utils.misc import raise_on_extra_kwargs
 
 from .utils import _get_attrs_dict, _get_coords, _get_patches, _get_version_string
 
@@ -69,3 +73,10 @@ class APSensingV10(FiberIO):
             resource, time=time, distance=distance, attr_cls=APSensingPatchAttrs
         )
         return dc.spool(patches)
+
+    def read_array(
+        self, resource: H5Reader, windows: dict[str, tuple[int, int]], **kwargs
+    ) -> np.ndarray:
+        """Slice the ``DAS`` dataset directly."""
+        raise_on_extra_kwargs(kwargs, "windows")
+        return slice_dataset(resource["DAS"], ("time", "distance"), windows)

@@ -7,6 +7,8 @@ from __future__ import annotations
 import warnings
 from typing import Literal
 
+import numpy as np
+
 import dascore as dc
 from dascore.constants import (
     float_select_type,
@@ -16,9 +18,11 @@ from dascore.constants import (
 )
 from dascore.io import FiberIO, ScanPayload
 from dascore.io.core import make_scan_payload
+from dascore.io.utils import slice_dataset
 from dascore.models import OptionalFiniteFloat, UTF8Str
 from dascore.utils.hdf5 import H5Reader
 from dascore.utils.io import TextReader
+from dascore.utils.misc import raise_on_extra_kwargs
 
 from .a1utils import (
     _get_febus_version_str,
@@ -27,6 +31,8 @@ from .a1utils import (
     _yield_attrs_coords,
 )
 from .g1utils import (
+    _BSL_DIMS,
+    _MTX_DIMS,
     _bsl_version,
     _get_bsl_attrs,
     _get_bsl_coords,
@@ -249,6 +255,21 @@ class FebusMTXH5V1(FiberIO):
         )
         return dc.spool([] if patch is None else [patch])
 
+    def read_array(
+        self,
+        resource: H5Reader,
+        windows: dict[str, tuple[int, int]],
+        snap: bool = True,
+        **kwargs,
+    ) -> np.ndarray:
+        """
+        Slice the ``mtx`` dataset directly.
+
+        ``snap`` only changes coordinate values, never the grid.
+        """
+        raise_on_extra_kwargs(kwargs, "windows and snap")
+        return slice_dataset(resource["mtx"], _MTX_DIMS, windows)
+
 
 class FebusBSLH5V1(FiberIO):
     """
@@ -308,6 +329,21 @@ class FebusBSLH5V1(FiberIO):
         )
         return dc.spool([] if patch is None else [patch])
 
+    def read_array(
+        self,
+        resource: H5Reader,
+        windows: dict[str, tuple[int, int]],
+        snap: bool = True,
+        **kwargs,
+    ) -> np.ndarray:
+        """
+        Slice the ``bsl_data`` dataset directly.
+
+        ``snap`` only changes coordinate values, never the grid.
+        """
+        raise_on_extra_kwargs(kwargs, "windows and snap")
+        return slice_dataset(resource["bsl_data"], _BSL_DIMS, windows)
+
 
 class FebusT1V1(FiberIO):
     """
@@ -363,3 +399,20 @@ class FebusT1V1(FiberIO):
         if not pa.data.size:
             return dc.spool([])
         return dc.spool([pa])
+
+    def read_array(
+        self,
+        resource: H5Reader,
+        windows: dict[str, tuple[int, int]],
+        snap: bool = True,
+        **kwargs,
+    ) -> np.ndarray:
+        """
+        Slice the ``Data/Temperature`` dataset directly.
+
+        ``snap`` only changes coordinate values, never the grid.
+        """
+        raise_on_extra_kwargs(kwargs, "windows and snap")
+        return slice_dataset(
+            resource["Data/Temperature"], ("time", "distance"), windows
+        )

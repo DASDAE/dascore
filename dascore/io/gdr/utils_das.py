@@ -45,6 +45,19 @@ def _get_version(h5fi):
     return "GDR_DAS", _COMPOSITE_VERSIONS[(meta_fmt, data_fmt)]
 
 
+def _get_dims(dataset) -> tuple[str, ...]:
+    """The dimension names, from the dataset's DasDimensions attribute."""
+    das_dims = dataset.attrs["DasDimensions"]
+    out = [""] * 2
+    for num, dim in enumerate(das_dims):
+        if dim.startswith("time"):
+            out[num] = "time"
+        elif dim == "locus":
+            out[num] = "distance"
+    assert all(out)
+    return tuple(out)
+
+
 def _get_attrs_coords_and_data(resource, snap):
     """
     Get attributes, coordinates, and data from the file.
@@ -84,21 +97,9 @@ def _get_coord_manager(resource, snap=True):
         units = unbyte(group.attrs["SpatialSamplingIntervalUnit"])
         return get_coord(start=0, step=dx, shape=(length,), units=units)
 
-    def get_dims(dataset):
-        """Get the dimension names."""
-        das_dims = dataset.attrs["DasDimensions"]
-        out = [""] * 2
-        for num, dim in enumerate(das_dims):
-            if dim.startswith("time"):
-                out[num] = "time"
-            elif dim == "locus":
-                out[num] = "distance"
-        assert all(out)
-        return tuple(out)
-
     time_coord = get_time_coord(resource, snap)
     dataset = resource["DasRawData/RawData"]
-    dims = get_dims(dataset)
+    dims = _get_dims(dataset)
     # Get distance coord.
     dist_axis = dims.index("distance")
     dist_length = dataset.shape[dist_axis]

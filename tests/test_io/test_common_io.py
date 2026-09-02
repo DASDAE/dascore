@@ -18,6 +18,7 @@ from io import BufferedIOBase, BytesIO, UnsupportedOperation
 from operator import eq, ge, le
 from pathlib import Path
 
+import h5py
 import numpy as np
 import pandas as pd
 import pytest
@@ -28,6 +29,7 @@ from dascore.exceptions import CoordError, UnknownFiberFormatError
 from dascore.io import BinaryReader, FiberIO
 from dascore.io.ai4eps import AI4EPSV1
 from dascore.io.ap_sensing import APSensingV10
+from dascore.io.core import _required_resource_type
 from dascore.io.dasdae import DASDAEV1
 from dascore.io.dashdf5 import DASHDF5
 from dascore.io.febus import Febus1, Febus2, FebusBSLH5V1, FebusMTXH5V1, FebusT1V1
@@ -53,6 +55,7 @@ from dascore.io.terra15 import (
 )
 from dascore.io.uptech import UptechH5V1
 from dascore.utils.downloader import fetch, get_registry_df
+from dascore.utils.hdf5 import H5Reader
 from dascore.utils.misc import all_close, iterate, order_range_tuple
 from tests.test_io._common_io_test_utils import (
     get_flat_io_test,
@@ -575,6 +578,38 @@ class TestRead:
         expected = FiberIO.read_array(io, path, windows, **kwargs)
         assert out.dtype == expected.dtype
         assert np.array_equal(out, expected)
+
+    def test_hdf5_read_array_never_reads_the_array_whole(
+        self, io_path_tuple, monkeypatch
+    ):
+        """An HDF5 override slices its data array in the file."""
+        io, path = io_path_tuple
+        if not io.implements_read_array or not issubclass(
+            _required_resource_type(io.read_array), H5Reader
+        ):
+            pytest.skip(f"{io.name} has no HDF5 read_array override")
+        with skip_missing():
+            payload = dc.scan(path)[0]
+        key = payload.source_patch_key
+        kwargs = {"source_patch_key": key} if key else {}
+        sized = [
+            (d, n) for d, n in zip(payload.dims, payload.shape, strict=True) if n > 2
+        ]
+        assert sized, "no dimension long enough to window"
+        dim, size = sized[0]
+        reads = []
+        original = h5py.Dataset.__getitem__
+
+        def spy(self, index):
+            if self.ndim >= 2:
+                reads.append(index)
+            return original(self, index)
+
+        monkeypatch.setattr(h5py.Dataset, "__getitem__", spy)
+        io.read_array(path, {dim: (1, size - 1)}, **kwargs)
+        assert reads, "the data array was never read"
+        for index in reads:
+            assert isinstance(index, tuple) and slice(1, size - 1) in index, index
 
     def test_slice_single_dim_both_ends(self, io_path_tuple):
         """

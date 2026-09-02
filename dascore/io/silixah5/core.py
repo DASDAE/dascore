@@ -6,11 +6,15 @@ from __future__ import annotations
 
 from typing import Literal
 
+import numpy as np
+
 import dascore as dc
 from dascore.constants import opt_timeable_types
 from dascore.io import FiberIO, ScanPayload, make_scan_payload
+from dascore.io.utils import slice_dataset
 from dascore.models import OptionalFiniteFloat
 from dascore.utils.hdf5 import H5Reader
+from dascore.utils.misc import raise_on_extra_kwargs
 
 from .utils import (
     _get_attr,
@@ -80,6 +84,16 @@ class SilixaH5V1(FiberIO):
             resource, time=time, distance=distance, attr_cls=SilixaPatchAttrs
         )
         return dc.spool(patches)
+
+    def read_array(
+        self, resource: H5Reader, windows: dict[str, tuple[int, int]], **kwargs
+    ) -> np.ndarray:
+        """Slice the ``Acoustic`` dataset directly.
+
+        Version 2 files hold the array under ``Fiber``; ``_data_name`` says which.
+        """
+        raise_on_extra_kwargs(kwargs, "windows")
+        return slice_dataset(resource[self._data_name], ("time", "distance"), windows)
 
 
 class SilixaH5V2(SilixaH5V1):
