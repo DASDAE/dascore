@@ -267,6 +267,13 @@ class TestFilterDfAdvanced:
             ignore_bad_kwargs=True,
         )
         assert np.all(out)
+        # the _max spelling walks the sibling branch
+        out = filter_df(
+            df.drop(columns=["time_min", "time_max"]),
+            time_max=value,
+            ignore_bad_kwargs=True,
+        )
+        assert np.all(out)
 
     def test_timedelta_columns(self, example_df_timedeltas):
         """Ensure timedelta columns work when specifying ranges of single col."""
