@@ -1,150 +1,64 @@
 ---
 title: Documentation
+aliases:
+  - /recipes/contributing_to_documentation.html
 ---
-There are several levels of documentation in DASCore. These include: code comments (which are primarily for developers), docstrings (which are used to generate the API docs), and markdown documentation pages like this one which have a .qmd extension.
 
-# Code comments
+DASCore uses comments for implementation intent, NumPy-style docstrings for API documentation, and `.qmd` pages for guides and examples.
 
-Code comments are primarily for developers. They should describe useful information and not just restate obvious parts of the code. Consider refactoring with better named variables or smaller, well named functions if you find yourself making lots of these types of comments.
+# Comments and docstrings
 
-Don't be afraid to make multi-line comments if needed.
+Comments should explain non-obvious intent, not restate code. Prefer clearer names or smaller functions when comments merely narrate operations.
 
-# Doc-Strings
-
-Use [numpy style docstrings](https://numpydoc.readthedocs.io/en/latest/format.html). All public code (doesn't start with a `_`) should have a "full" docstring but private code (starts with a `_`) can have an abbreviated docstring.
-
-DASCore makes extensive use of Python 3's [type hints](https://docs.python.org/3/library/typing.html).
-Please make an effort to accurately annotate public functions/classes/methods.
-
-When documenting IO code, make sure the docstring reflects the actual contract boundary. In particular, `FiberIO.scan()` implementations return structured payloads with patch-local attrs and a full `CoordManager`; `snap=False` is the exact stored-value path for formats with per-sample coordinate arrays. Format implementations should not claim responsibility for `source_path`, `source_format`, or `source_version`, which are attached by DASCore's public scan pipeline.
-
-Here is an example:
+Use [NumPy-style docstrings](https://numpydoc.readthedocs.io/en/latest/format.html) and accurate type hints. Public objects need complete docstrings; private objects may use a short summary. Describe behavior and constraints, not types already expressed by annotations.
 
 ```{python}
 from __future__ import annotations
 
-import dascore
+import dascore as dc
 from dascore.constants import PatchType
 
-# example public Patch function
-@dascore.patch_function()
-def example_func(patch: PatchType, to_add: int | float | None = None) -> PatchType:
-    """
-    A simple, one line explanation of what this function does.
 
-    Additional details which might be useful, and are not limited to one
-    line. In fact, they might span several lines, especially if the author
-    of the docstring tends to include more details than needed.
+@dc.patch_function()
+def add_value(patch: PatchType, value: int | float = 0) -> PatchType:
+    """
+    Add a scalar to patch data.
 
     Parameters
     ----------
     patch
-        A description of this parameter
-    to_add
-        A description of this parameter
-
-    Returns
-    -------
-    If needed, more information about what this function returns.
-    You shouldn't simply specify the type here since that is already
-    given by the type annotation. If the returned object is self-explanatory
-    feel free to skip this section.
+        Patch to update.
+    value
+        Value added to each sample.
 
     Examples
     --------
-    >>> # Examples are included in the doctest style
-    >>> import dascore
-    ... pa = dascore.get_example_patch()
-    ...
-    ... out = example_func(pa)
+    >>> import dascore as dc
+    >>> patch = dc.get_example_patch()
+    >>> out = add_value(patch, 2)
+    >>> assert out.shape == patch.shape
     """
-
-# example private function
-def _recombobulate(df, arg1, arg2):
-    """
-    A private function can have a simple (multi-line) snippet
-    and doesn't need as much detail or type hinting as a public
-    function.
-    """
-
+    return patch.new(data=patch.data + value)
 ```
 
-## Examples in docstrings
+Docstring examples use [doctest](https://docs.python.org/3/library/doctest.html). Quarto options such as `>>> #| code-fold: true` and headings such as `>>> ### Detail` are preserved in generated API pages.
 
-Examples in docstrings can be done using the standard [doctest](https://docs.python.org/3/library/doctest.html) syntax as above, or [quarto code blocks](https://quarto.org/docs/output-formats/html-code.html) can be used directly. The latter gives more control over outputs and display options.
+For IO contracts, document only the formatter's responsibility. `FiberIO.scan()` returns patch-local attrs and a full `CoordManager`; the public scan pipeline adds source path, format, and version. Formats with stored per-sample coordinates use `snap=False` for exact values.
 
-You can also specify [quarto html code block options](https://quarto.org/docs/output-formats/html-code.html) using a "#|" type comment and add headings using "###". For example:
+# Build and test
 
-```python
-def my_func():
-    """
-    Example function.
-
-    Examples
-    --------
-    >>> #| code-fold: true
-    >>> # This is a base example
-    >>> print(1 + 2)
-    >>> ### This is a sub-section
-    >>> print("cool beans")
-    """
-```
-
-would produce the following code in the examples section:
-
-````raw
-```{{python}}
-#| code-fold: true
-# This is a base example
-print(1 + 2)
-```
-### This is a sub-section
-```{{python}}
-#| code-fold: true
-print("cool beans")
-```
-````
-
-# Generating Documentation
-
-DASCore's documentation is built with [quarto](https://quarto.org/). In order to build the documentation, you must first [install DASCore in development mode](dev_install.qmd) then [install quarto](https://quarto.org/docs/get-started/).
-
-Next, the automatic API documents are created with scripts/build_api_docs.py
+After the [development install](dev_install.qmd), install [Quarto](https://quarto.org/docs/get-started/) and run:
 
 ```bash
 python scripts/build_api_docs.py
-```
-
-Finally, the documentation can be built by calling quarto render on the docs folder:
-
-```bash
 quarto render docs
 ```
 
-The newly generated html can then be accessed by double-clicking on the html index at docs/_site/index.html.
+Use `quarto preview docs` for live editing. Generated HTML is under `docs/_site/`.
 
-Conversely, you can also preview the documentation so changes are rendered in real time in the browser:
+Edit `scripts/_templates/_quarto.yml` for navigation; `docs/_quarto.yml` is generated and overwritten. The API sidebar intentionally lists top-level sections rather than every object; `docs/api/_metadata.yml` assigns unlisted API pages to it.
 
-```bash
-quarto preview docs
-```
-
-:::{.callout-warning}
-If you need to change the structure of the site, like adding a new section/subsection, the file to edit is scripts/_templates/_quarto.yml.
-Do not modify docs/_quarto.yml because it will be overwritten.
-:::
-
-## The API sidebar
-
-The API sidebar lists the sixteen top level sections, not every documented object. A reader reaches an object from the page of whatever owns it: each module page lists the modules, classes, and functions it holds, and each class page lists its methods.
-
-It was not always so. Naming all 1,388 objects put 165 KiB in the generated config and repeated it into every rendered page, and that turned out to cost more than everything else the build did: against a section level sidebar, quarto's page phase fell from 105 to 34 minutes, the API html from 635 to 42 MiB, and a typical API page from 489 to 31 KiB.
-
-Because only the section pages are listed, `docs/api/_metadata.yml` tells quarto which sidebar the rest of them use. Without it an unlisted page gets the first sidebar in the config, which is the one for the front matter.
-
-## Measuring the build
-
-The documentation is by far the slowest thing CI builds, so each phase of it is timed and what it produced is measured. `scripts/_doc_report.py` collects that into one JSON report, which the doc workflows upload and summarize in the job summary. It runs the same way locally:
+The docs build records timing, output size, and URL changes:
 
 ```bash
 python scripts/_doc_report.py time build_api_docs -- python scripts/build_api_docs.py
@@ -154,89 +68,53 @@ python scripts/_doc_report.py site
 python scripts/_doc_report.py summary
 ```
 
-Run them in that order. `index` is what classifies each page by the output it produces, and `site` checks the rendered pages against that classification; skipping it leaves every page that printed something looking like a surprise.
+Run these in order. `scripts/_baselines/api_urls.tsv` protects published API URLs; regenerate it with `python scripts/_api_urls.py freeze` only when intentional URL changes are explained in the PR.
 
-The report keeps the page phase, quarto's wall time, and the end-to-end build apart, since they differ by several minutes, and it splits the rendered site into content pages, redirects, and everything else.
+Executable Python blocks in hand-written `.qmd` files are mirrored into pytest files; blocks with `eval: false` are not tested:
 
-`scripts/_baselines/api_urls.tsv` records where every documented object is published. Moving a page breaks the link anyone saved to it, so the report says which URLs moved or vanished against that baseline; regenerate it with `python scripts/_api_urls.py freeze` and say in the pull request why each one moved.
+```bash
+python scripts/generate_doc_code_tests.py
+pytest tests/test_autogenerated_doccode
+```
 
-## Runnable tutorials
+## JupyterLite tutorials
 
-Every tutorial page with runnable code carries an "Open in JupyterLite" link, which opens the same content as a live notebook in a [JupyterLite](https://jupyterlite.readthedocs.io) site. DASCore runs there through WebAssembly, so readers need nothing installed.
-
-The `.qmd` files remain the only source; the notebooks are build artifacts. They are produced by rendering each tutorial page to `.ipynb`, rewriting its cross-page links to absolute urls on whichever site is being built, and pointing it at the Pyodide kernel:
+Runnable tutorials become JupyterLite notebooks during CI. The `.qmd` files remain the source. Build the browser site before rendering docs locally:
 
 ```bash
 python -m build --wheel
 python scripts/build_notebooks.py
-jupyter lite build --contents docs/lite_contents --output-dir docs/lite --piplite-wheels dist/dascore-*.whl
+jupyter lite build \
+  --contents docs/lite_contents \
+  --output-dir docs/lite \
+  --piplite-wheels dist/dascore-*.whl \
+  --no-sourcemaps
 ```
 
-CI runs these steps in `.github/actions/prep_doc_build`, before quarto renders the site, and quarto copies `docs/lite` into `_site` as a project resource. A tutorial page only gets the link when a notebook exists for it, so a page with no code cells simply does not show one, and rendering the docs without building the notebooks first drops the links rather than producing broken ones.
+The bundled wheel pins notebooks to the documented checkout and avoids unavailable WebAssembly dependencies in older releases. Rendering without these steps omits the **Open in JupyterLite** links.
 
-The wheel passed to `--piplite-wheels` is bundled into the site and is what the notebooks' first cell installs. That deliberately pins the tutorials to the same DASCore the surrounding docs were built from, rather than whatever is currently on PyPI. It is also load-bearing rather than a nicety: the last release still requires PyTables, which has no WebAssembly build, so without the bundled wheel the install fails outright in the browser.
+Set `DASCORE_DOC_SITE_URL` for the deployment that notebook links should target. Add tutorial data to `MIRRORED_DATA` in `scripts/build_notebooks.py` to avoid browser downloads and shared-IP rate limits.
 
-The example data the tutorials read is mirrored into the site alongside the notebooks, and the setup cell points `DFS_DATA_DIR` at it. The browser kernel mounts the site's files at `/drive`, so `/drive/data/<DATA_VERSION>/<name>` is where pooch looks and nothing is downloaded from GitHub, which rate-limits per IP and would otherwise fail a room full of people sharing one connection. The mirrored files are listed in `MIRRORED_DATA` in `scripts/build_notebooks.py`; a page that reads something outside that list still downloads it as before, so the list falling behind costs a download rather than breaking a notebook.
+# Links, citations, and equations {#cross-references}
 
-Links from a notebook back to other doc pages are absolute, so they need to know which deployment they belong to. `DASCORE_DOC_SITE_URL` sets that base url, like `DASCORE_DOC_BRANCH` sets the "edit this page" branch; it defaults to the released site and the dev workflow points it at netlify. Without it, notebooks built from `dev` would link to pages that have not been released yet.
+Link API objects by placing their import path in backticks:
 
-# Cross references
-
-Cross references provide a means of linking parts of the documentation to the API docs for specific modules, classes, functions, or methods. They work just like normal markdown links except the reference is a dascore object surrounded by backticks like so:
-
-```
-This is a link to DASCore's [Patch](`dascore.core.Patch`).
+```markdown
+[Patch](`dascore.core.Patch`)
 ```
 
-To link to qmd files in the documentation folder (eg from a docstring) the path relative to the docs folder can be used:
+From docstrings, link pages relative to `docs/`, for example `[Documentation](`docs/contributing/documentation.qmd`)`. In `.qmd` pages, use ordinary relative paths.
 
-```
-This is a link to [this qmd file](`docs/contributing/documentation.qmd`).
-```
+Add publications to `docs/references.bib` and cite them with Pandoc syntax such as `@lindsey2021fiber` or `[@lindsey2021fiber]`.
 
-Cross references can be used in both docstrings and the qmd documentation pages.
+Use standard LaTeX: `$E=mc^2$` inline or a labeled display for cross-references:
 
-# Referencing publications
-
-New references should be added to the references.bib file in the docs folder.
-
-Then, publications can be referenced in standard
-[pandoc style](https://quarto.org/docs/authoring/footnotes-and-citations.html#sec-citations).
-
-Citing @lindsey2021fiber or [@lindsey2021fiber] is done like so:
-
-```
-Citing @lindsey2021fiber or [@lindsey2021fiber]
-```
-
-References then show up at the bottom of the page, or if the mouse pointer hovers over the link.
-
-# Equations
-
-Equations use standard LaTeX. Inline equations ($E=mc^2$) are surrounded by a single dollar sign (`$`) like this: `$E=mc^2$`. Multiline equations start and end with double dollar signs (`$$`) and can be given a referenceable label. For example:
-
+```text
 $$
-\begin{array}{l}
-\sigma_{n} = \sigma_1 cos^2 \theta + \sigma_3 sin^2 \theta \\
-\sigma_{p} = \sigma_1 sin^2 \theta + \sigma_3 cos^2 \theta \\
-\tau = (\sigma_1 - \sigma_3) sin \theta cos \theta
-\end{array}
-$${#eq-rotations}
+y = mx + b
+$$ {#eq-line}
 
-is generated by:
-
-```
-$$
-\begin{array}{l}
-\sigma_{n} = \sigma_1 cos^2 \theta + \sigma_3 sin^2 \theta \\
-\sigma_{p} = \sigma_1 sin^2 \theta + \sigma_3 cos^2 \theta \\
-\tau = (\sigma_1 - \sigma_3) sin \theta cos \theta
-\end{array}
-$${#eq-rotations}
+See @eq-line.
 ```
 
-and @eq-rotations is referenced by `@eq-rotations`.
-
-# Additional Tips
-
-For more information about figure alignment, code blocks, formatting, etc. checkout the excellent [quarto docs](https://quarto.org/).
+See the [Quarto documentation](https://quarto.org/docs/) for layout and formatting options.
