@@ -14,7 +14,7 @@ import dascore as dc
 from dascore.constants import VALID_DATA_TYPES
 from dascore.core.coords import get_coord
 from dascore.exceptions import InvalidSpoolError, PatchError
-from dascore.io.utils import convert_attr_units, get_exact_coord
+from dascore.io.utils import convert_attr_units, get_exact_coord, resolve_keyed_source
 from dascore.models import OptionalFiniteFloat, UTF8Str
 from dascore.units import get_quantity_str
 from dascore.utils.hdf5 import encode_h5_strings
@@ -483,6 +483,20 @@ def _write_prodml(spool, resource):
     raw_time.attrs.update(time_attrs)
 
 
+def _get_node_dims(node_info) -> tuple[str, ...]:
+    """The stored dimension order of a data node, as `scan` reports it."""
+    if node_info.patch_type == "raw":
+        return _get_dims_from_attrs(node_info.node["RawData"].attrs)
+    return _get_dims_from_attrs(node_info.parent_node.attrs)
+
+
+def _get_data_node(h5, source_patch_key=""):
+    """Return the (dataset, dims) the key names, keyed as `scan` keys them."""
+    nodes = {info.name: info for info in _yield_data_nodes(h5)}
+    info = resolve_keyed_source(nodes, source_patch_key, where=str(h5.filename))
+    return _NODE_DATA_PROCESSORS[info.patch_type](info), _get_node_dims(info)
+
+
 @register_func(_NODE_ATTRS_PROCESSORS, key="raw")
 def _get_raw_node_attr_coords(node_info, d_coord, base_info, snap=True):
     """Get the raw data information."""
@@ -493,7 +507,7 @@ def _get_raw_node_attr_coords(node_info, d_coord, base_info, snap=True):
     info["_source_patch_key"] = node_info.name
     coords = dc.get_coord_manager(
         coords={"time": t_coord, "distance": d_coord},
-        dims=_get_dims_from_attrs(node_info.node["RawData"].attrs),
+        dims=_get_node_dims(node_info),
     )
     return ProdMLRawPatchAttrs(**info), coords
 
@@ -520,7 +534,7 @@ def _get_processed_node_attr_coords(node_info, d_coord, base_info, snap=True):
     distance = d_coord[ind_1 : ind_1 + count]
     coords = dc.get_coord_manager(
         coords={"time": t_coord, "distance": distance},
-        dims=_get_dims_from_attrs(node_info.parent_node.attrs),
+        dims=_get_node_dims(node_info),
     )
     return ProdMLFbePatchAttrs.from_dict(out), coords
 

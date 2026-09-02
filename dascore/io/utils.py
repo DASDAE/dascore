@@ -12,7 +12,14 @@ import dascore as dc
 from dascore.constants import INVENTORY_ATTRS
 from dascore.core.coordmanager import CoordManager
 from dascore.core.coords import BaseCoord, CoordSegmented, get_coord
-from dascore.exceptions import CoordError, ParameterError, UnitError
+from dascore.core.summary import normalize_source_patch_key
+from dascore.exceptions import (
+    CoordError,
+    MissingPatchError,
+    ParameterError,
+    PatchAttributeError,
+    UnitError,
+)
 from dascore.models import ArrayLike
 from dascore.units import convert_units, get_quantity_str
 from dascore.utils.misc import _to_slice, _validate_sample_values, unbyte
@@ -184,6 +191,30 @@ def windows_to_slices(
         span = range(size)[_to_slice(windows[dim])]
         out.append(slice(span.start, max(span.stop, span.start)))
     return tuple(out)
+
+
+def resolve_keyed_source(sources: Mapping[str, Any], key, where: str = "the resource"):
+    """
+    Return the one source a ``source_patch_key`` names.
+
+    Resolves as the default `FiberIO.read_array` resolves it: an empty
+    resource is missing data, an unknown key or an ambiguous keyless one
+    cannot be resolved. ``sources`` maps each native key to whatever the
+    caller needs back.
+    """
+    key = normalize_source_patch_key(key)
+    if not sources:
+        msg = f"No patches in {where}."
+        raise MissingPatchError(msg)
+    if key:
+        if key not in sources:
+            msg = f"No patch named '{key}' in {where}."
+            raise PatchAttributeError(msg)
+        return sources[key]
+    if len(sources) > 1:
+        msg = f"{where} holds several patches; pass source_patch_key."
+        raise PatchAttributeError(msg)
+    return next(iter(sources.values()))
 
 
 def slice_dataset(dataset, dims: Sequence[str], windows: Mapping[str, Any], shape=None):

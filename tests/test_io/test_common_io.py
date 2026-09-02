@@ -609,7 +609,10 @@ class TestRead:
         io.read_array(path, {dim: (1, size - 1)}, **kwargs)
         assert reads, "the data array was never read"
         for index in reads:
-            assert isinstance(index, tuple) and slice(1, size - 1) in index, index
+            assert isinstance(index, tuple), index
+            # xarray spells the same slice with an explicit unit step
+            bounds = {(x.start, x.stop) for x in index if isinstance(x, slice)}
+            assert (1, size - 1) in bounds, index
 
     def test_slice_single_dim_both_ends(self, io_path_tuple):
         """
