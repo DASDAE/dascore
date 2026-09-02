@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import warnings
 from collections.abc import Iterable, Mapping, Sequence
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 
@@ -216,16 +216,17 @@ def resolve_keyed_source(
     if isinstance(sources, Mapping):
         # a mapping cannot hold a name twice, so it is read as it is: an
         # h5py group resolves a name without opening its siblings
-        if not len(sources):
+        mapping = cast("Mapping[str, Any]", sources)
+        if not len(mapping):
             raise MissingPatchError(f"No patches in {where}.")
         if key:
-            if key not in sources:
+            if key not in mapping:
                 raise PatchAttributeError(f"No patch named '{key}' in {where}.")
-            return sources[key]
-        if len(sources) > 1:
+            return mapping[key]
+        if len(mapping) > 1:
             msg = f"{where} holds several patches; pass source_patch_key."
             raise PatchAttributeError(msg)
-        return next(iter(sources.values()))
+        return next(iter(mapping.values()))
     pairs = list(sources)
     if not pairs:
         raise MissingPatchError(f"No patches in {where}.")
