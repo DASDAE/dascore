@@ -35,7 +35,7 @@ dar = patch.io.to_xarray()
 patch_from_dar = dc.io.xarray_to_patch(dar)
 ```
 
-A whole spool converts to a lazy, [dask](https://docs.dask.org/)-backed [DataTree](https://docs.xarray.dev/en/stable/user-guide/hierarchical-data.html) with one node per group of related patches (partitioned exactly as [`chunk`](`dascore.Spool.chunk`) partitions them) and one child node per merged output segment. Building the tree reads no data; computing a selection loads only the source patches it touches.
+A whole spool converts to a lazy, [dask](https://docs.dask.org/)-backed [DataTree](https://docs.xarray.dev/en/stable/user-guide/hierarchical-data.html) with one node per group of related patches (partitioned exactly as [`chunk`](`dascore.Spool.chunk`) partitions them) and one child node per merged output segment. Building the tree reads no data — even the tree's time coordinates are lazy (unlike the single-patch conversion above, which materializes its labels): an evenly sampled one is served from start and step on demand, so a segment spanning years of samples costs nothing to label. Computing a selection loads only the source patches it touches.
 
 ```python
 import dascore as dc
