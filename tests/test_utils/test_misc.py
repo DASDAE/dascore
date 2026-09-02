@@ -36,6 +36,7 @@ from dascore.utils.misc import (
     maybe_get_items,
     maybe_mem_map,
     optional_import,
+    raise_on_extra_kwargs,
     suppress_warnings,
     to_object_array,
     tukey_fence,
@@ -1256,3 +1257,16 @@ class TestIsStrictlyMonotonic:
         """Values which cannot be ordered are not monotonic."""
         values = np.array([{"a": 1}, {"b": 2}], dtype=object)
         assert not is_strictly_monotonic(values)
+
+
+class TestRaiseOnExtraKwargs:
+    """Tests for refusing keyword arguments a call does not take."""
+
+    def test_empty_passes(self):
+        """No leftovers, no error."""
+        assert raise_on_extra_kwargs({}, "nothing") is None
+
+    def test_leftovers_raise_with_names(self):
+        """The message names the offending arguments and what is accepted."""
+        with pytest.raises(ParameterError, match=r"\['b', 'z'\].*only a and b"):
+            raise_on_extra_kwargs({"z": 1, "b": 2}, "a and b")

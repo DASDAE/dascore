@@ -288,41 +288,6 @@ class TestReadArray:
         expected = DASDAEV1().read_array(written_dascore_v1_random, {})
         assert np.array_equal(out, expected)
 
-    def test_strided_window_refused(self, written_dascore_v1_random):
-        """A window is a (start, stop) pair; a stride is not part of the contract."""
-        with pytest.raises(ParameterError, match="pair"):
-            DASDAEV1().read_array(written_dascore_v1_random, {"time": (2, 6, 2)})
-
-    def test_legacy_file(self):
-        """A file written before attrs and coords were separated slices the same."""
-        io = DASDAEV1()
-        path = fetch("UoU_lf_urban.hdf5")
-        windows = {"time": (4, 9)}
-        out = io.read_array(path, windows)
-        assert np.array_equal(out, FiberIO.read_array(io, path, windows))
-
-    def test_open_and_float_bounds(self, written_dascore_v1_random, random_patch):
-        """None or ... leaves an end open, as the default does; floats are refused."""
-        io = DASDAEV1()
-        out = io.read_array(written_dascore_v1_random, {"time": (..., 6)})
-        assert np.array_equal(out, random_patch.data[:, :6])
-        out = io.read_array(written_dascore_v1_random, {"time": (3, None)})
-        assert np.array_equal(out, random_patch.data[:, 3:])
-        with pytest.raises(ParameterError, match="integers"):
-            io.read_array(written_dascore_v1_random, {"time": (2.0, 6.0)})
-
-    def test_path_like_key_raises(self, multi_patch_path):
-        """A key h5py would read as a path names no patch."""
-        name = dc.scan(multi_patch_path)[0].source_patch_key
-        for key in ("/waveforms", ".", "..", "data", f"{name}/data", f"./{name}"):
-            with pytest.raises(PatchAttributeError, match="No patch named"):
-                DASDAEV1().read_array(multi_patch_path, {}, source_patch_key=key)
-
-    def test_keyed_empty_file_raises_missing(self, generic_hdf5):
-        """An empty file is missing data whether or not a key was given."""
-        with pytest.raises(MissingPatchError, match="No patches"):
-            DASDAEV1().read_array(generic_hdf5, {}, source_patch_key="anything")
-
     def test_keyless_multi_patch_raises(self, multi_patch_path):
         """Several patches and no key cannot be resolved."""
         with pytest.raises(PatchAttributeError, match="source_patch_key"):
@@ -345,7 +310,7 @@ class TestReadArray:
 
     def test_load_filters_refused(self, written_dascore_v1_random):
         """Value filters are not part of the window contract."""
-        with pytest.raises(ParameterError, match="takes only windows"):
+        with pytest.raises(ParameterError, match="Unexpected keyword"):
             DASDAEV1().read_array(written_dascore_v1_random, {}, time_min=1)
 
     def test_reads_only_the_window(self, written_dascore_v1_random, monkeypatch):

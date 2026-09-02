@@ -16,7 +16,7 @@ from dascore.core.attrs import PatchAttrs
 from dascore.core.coordmanager import get_coord_manager
 from dascore.core.coords import get_coord
 from dascore.core.summary import normalize_source_patch_key
-from dascore.exceptions import MissingPatchError, ParameterError, PatchAttributeError
+from dascore.exceptions import MissingPatchError, PatchAttributeError
 from dascore.io.core import STORED_PATCH_ID, make_scan_payload
 from dascore.io.dasdae._compat import (
     NOT_DECODED,
@@ -320,30 +320,6 @@ def _get_patch_group(h5, source_patch_key=""):
         msg = f"{h5.filename} holds several patches; pass source_patch_key."
         raise PatchAttributeError(msg)
     return next(iter(waveforms.values()))
-
-
-def _window_slice(dim, window) -> slice:
-    """
-    A ``(start, stop)`` sample window as a slice.
-
-    Bounds are integers; ``None`` or ``...`` leaves that end open, as the
-    default `read_array` reads them through `Patch.select`.
-    """
-    try:
-        start, stop = window
-    except (TypeError, ValueError):
-        msg = f"The window for {dim!r} must be a (start, stop) pair, got {window!r}."
-        raise ParameterError(msg) from None
-    bounds = []
-    for bound in (start, stop):
-        if bound is None or bound is ...:
-            bounds.append(None)
-        elif isinstance(bound, int | np.integer) and not isinstance(bound, bool):
-            bounds.append(int(bound))
-        else:
-            msg = f"Window bounds for {dim!r} must be integers, got {window!r}."
-            raise ParameterError(msg)
-    return slice(*bounds)
 
 
 def _matches_attr_filters(attrs, kwargs):
