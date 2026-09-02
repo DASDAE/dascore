@@ -11,7 +11,7 @@ import numpy as np
 import dascore as dc
 from dascore.core import get_coord, get_coord_manager
 from dascore.core.coordmanager import CoordManager
-from dascore.io.utils import drop_blank_attrs
+from dascore.io.utils import drop_blank_attrs, windows_to_slices
 from dascore.utils.io import _normalize_source_patch_keys
 from dascore.utils.misc import (
     _maybe_unpack,
@@ -386,6 +386,36 @@ def _get_data_new_cm(cm, febus, distance=None, time=None):
             data = data_3d.reshape(-1, data_3d.shape[2])
     cm = get_coord_manager({"time": time_coord, "distance": dist_coord}, dims=cm.dims)
     return data, cm
+
+
+def _read_febus_array(febus: _FebusSlice, windows) -> np.ndarray:
+    """
+    Read a window of one zone's data as a (time, distance) array.
+
+    The zone stores a 3-D cube of ``(block, row, distance)`` whose rows
+    outside ``idx_start`` to ``idx_stop`` are the blocks' padding. The
+    time axis `scan` reports is what is left, flattened, so a time window
+    names a range of blocks and an offset into the first of them; only
+    those blocks are read.
+    """
+    time_info = _get_zone_time(febus)
+    data = febus.zone[febus.data_name]
+    rows = time_info.idx_stop - time_info.idx_start + 1
+    shape = (rows * data.shape[0], data.shape[2])
+    time_slice, dist_slice = windows_to_slices(windows, ("time", "distance"), shape)
+    length = time_slice.stop - time_slice.start
+    width = dist_slice.stop - dist_slice.start
+    if not length or not width:
+        return np.empty((length, width), dtype=data.dtype)
+    first = time_slice.start // rows
+    # the last block the window touches, counted from its last sample
+    last = (time_slice.stop - 1) // rows
+    block = data[
+        first : last + 1, time_info.idx_start : time_info.idx_stop + 1, dist_slice
+    ]
+    flat = block.reshape(-1, block.shape[2])
+    offset = time_slice.start - first * rows
+    return flat[offset : offset + length]
 
 
 def _read_febus(

@@ -581,7 +581,9 @@ class TestRead:
             out = io.read_array(path, windows, **kwargs)
             expected = FiberIO.read_array(io, path, windows, **kwargs)
             assert out.dtype == expected.dtype
-            assert np.array_equal(out, expected), windows
+            # a gap is stored as nan, which is never equal to itself
+            nan = np.issubdtype(out.dtype, np.inexact)
+            assert np.array_equal(out, expected, equal_nan=nan), windows
 
     def test_read_array_honors_labelling_options(self, io_path_tuple):
         """A labelling option selects the grid `scan` reports under it.
@@ -619,35 +621,34 @@ class TestRead:
             payload = dc.scan(path)[0]
         key = payload.source_patch_key
         kwargs = {"source_patch_key": key} if key else {}
-        sized = {
-            dim: size
+        # a small window, so reading the array whole is never mistaken
+        # for reading what was asked for
+        windows = {
+            dim: (1, min(size - 1, 4))
             for dim, size in zip(payload.dims, payload.shape, strict=True)
             if size > 2
         }
-        assert sized, "no dimension long enough to window"
-        windows = {dim: (1, size - 1) for dim, size in sized.items()}
-        # every axis is windowed, so a two-step read (whole axis, then
-        # trim) is visible as a slice this does not expect
-        wanted = tuple(
-            (1, size - 1) if dim in sized else (0, size)
-            for dim, size in zip(payload.dims, payload.shape, strict=True)
-        )
+        assert windows, "no dimension long enough to window"
         reads = []
         original = h5py.Dataset.__getitem__
 
+        patch_size = int(np.prod(payload.shape))
+
         def spy(self, index):
-            # a coordinate array has fewer dimensions than the data
-            if self.ndim == len(payload.dims):
-                reads.append(index)
-            return original(self, index)
+            out = original(self, index)
+            # the data array holds at least a sample per patch value;
+            # a coordinate or metadata array is smaller
+            if self.ndim > 1 and self.size >= patch_size:
+                reads.append((self.shape, np.shape(out)))
+            return out
 
         monkeypatch.setattr(h5py.Dataset, "__getitem__", spy)
         io.read_array(path, windows, **kwargs)
-        assert len(reads) == 1, reads
-        index = reads[0]
-        assert isinstance(index, tuple) and len(index) == len(wanted), index
-        # xarray spells the same slice with an explicit unit step
-        assert tuple((x.start, x.stop) for x in index) == wanted, index
+        assert reads, "the data array was never read"
+        # the stored array may be a cube of blocks, so what is read is not
+        # the window itself; it must never be the whole array
+        for stored, got in reads:
+            assert got != stored, (stored, got)
 
     def test_slice_single_dim_both_ends(self, io_path_tuple):
         """
