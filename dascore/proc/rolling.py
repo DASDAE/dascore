@@ -267,107 +267,39 @@ def rolling(
     patch
         The patch to apply the rolling function to.
     step
-        The window is evaluated at every step result, equivalent to slicing
-        at every step. If the step argument is not None, the result will
-        have a different shape than the input. Mutually exclusive with
-        overlap. Default None.
+        Evaluate every nth result, like slicing the output. This changes the
+        output length and is mutually exclusive with ``overlap``.
     center
-        If False, set the window labels as the right edge of the window index.
-        If True, set the window labels as the center of the window index. Default False.
+        Label each window by its center rather than its right edge.
     engine
-        Determines how the rolling operations are applied. If None, try to
-        determine which will be fastest for a given step. Options are:
-            "numpy" - which uses np.lib.stride_tricks.sliding_window_view.
-            "pandas" - which uses pandas.rolling.
-        If step < 10 samples, pandas is faster for all operations other than apply.
-        If step > 10 samples, or `apply` is the desired rolling operation, numpy
-        is probably better.
+        ``"numpy"`` uses ``sliding_window_view`` and ``"pandas"`` uses
+        ``pandas.rolling``. None selects based on the step; numpy is generally
+        preferred for ``apply`` or steps above 10 samples.
     samples
         {sample_explanation}
     overlap
-        The overlap between windows. Can be a number (assumed to be in units of
-        the rolling dimension if `samples`==False), a percent, or None. If
-        provided, step is calculated as `window - overlap`. Percent overlap is
-        always interpreted relative to the window length.
+        Window overlap in coordinate units, samples, or percent. When given,
+        ``step = window - overlap``; percentages are relative to the window.
     **kwargs
-        Used to pass dimension and window size.
-        For example `time=10` represents window size of
-        10*(default unit) along the time axis.
+        Dimension and window size, such as ``time=10``.
 
     Notes
     -----
-    Here we have included some useful notes for the rolling function.
-
-    #### Note 1: Length of the output and NaN values
-
-    Rolling is designed to behaves like Pandas [DataFrame.rolling](
+    Rolling follows Pandas [DataFrame.rolling](
     https://pandas.pydata.org/docs/reference/api/pandas.DataFrame.rolling.html)
-    which has some important implications:
+    semantics. With no step, the output retains the input shape and incomplete
+    leading windows are NaN; use [`Patch.dropna`](`dascore.Patch.dropna`) to
+    remove them. A step downsamples that output. For example, the mean of
+    ``[0, 1, 2, 3, 4, 5]`` is:
 
-    - First, when step is not defined or set to 1, the output patch will have the
-    same shape as the input patch. The consequence of this is that NaN values
-    will appear at the start of the dimension. You can use
-    [`patch.dropna`](`dascore.Patch.dropna`) to remove the NaN values.
+    - window 2: ``[NaN, 0.5, 1.5, 2.5, 3.5, 4.5]``
+    - window 3: ``[NaN, NaN, 1, 2, 3, 4]``
+    - window 3, step 2: ``[NaN, 1, 3]``
+    - window 3, step 3: ``[NaN, 2]``
 
-    - Second, the step parameter is equivalent applying to the output along the
-    specified dimension. For example, if step=2 the output of the chosen
-    dimension will be 1/2 of the input length.
-
-    Here are a few examples to help illustrate how rolling works.
-
-    Consider a patch with a simple 1D array in the dimension "time":
-        [0, 1, 2, 3, 4, 5]
-
-    - If time = 2 * dt the output is
-        [NaN, 0.5, 1.5, 2.5, 3.5, 4.5]
-
-    - If time = 3 * dt the output is
-        [NaN, NaN, 1.0, 2.0, 3.0, 4.0]
-
-    - if time = 3 * dt and step = 2 * dt
-        [NaN, 1.0, 3.0]
-
-    - if time = 3 * dt and step = 3 * dt
-        [NaN, 2.0]
-
-
-    #### Note 2: Applying custom functions with rolling operation
-
-    When `apply` is the desired rolling operation and we are interested to use our
-    own function over a desired window, we need to define our function the way that
-    it performs the operation on the last axis of the sliced matrix
-
-    Below is an example of applying a custom zero crossing rate function (zcr_std) with
-    rolling operation for a window size of 100 samples and skipping every other samples.
-    It applies the desired operation (which is multiplying every sample to its next
-    sample to determine the zero crossings) on the last axis of the sliced
-    frame (from rolling).
-
-
-    ```python
-    import numpy as np
-    import dascore as dc
-
-
-    def zcr_std(frame, axis=-1):
-        '''Compute standard deviation of zero crossing rate using rolling function.'''
-        zero_crossings = (frame[..., :-1] * frame[..., 1:]) < 0
-        return np.std(zero_crossings, axis=axis)
-
-
-    patch = dc.get_example_patch()
-    zcr_patch = patch.rolling(time=100, step=2, samples=True).apply(zcr_std)
-
-    # Additional arguments can be passed directly to apply.
-    def percentile(frame, q, axis=-1):
-        '''Compute a rolling percentile.'''
-        return np.percentile(frame, q, axis=axis)
-
-
-    percentile_patch = patch.rolling(time=100, step=2, samples=True).apply(
-        percentile, 80
-    )
-    ```
+    ``apply`` receives the rolling dimension as the last axis of each window;
+    custom functions should reduce that axis. Extra arguments passed to
+    ``apply`` are forwarded to the function.
 
     Examples
     --------

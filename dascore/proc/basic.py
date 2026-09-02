@@ -473,14 +473,10 @@ def normalize(
     dim
         The dimension along which the normalization takes place.
     norm
-        Determines the value to divide each sample by along a given axis.
-        Options are:
-            l1 - divide each sample by the l1 of the axis.
-            l2 - divide each sample by the l2 of the axis.
-            max - divide each sample by the maximum of the absolute value of the axis.
-            bit - sample-by-sample normalization (-1/+1)
+        Divisor: axis L1 norm (``"l1"``), L2 norm (``"l2"``), maximum
+        absolute value (``"max"``), or sample magnitude (``"bit"``).
     window
-        The length of the moving window, in units of `dim` unless `samples`
+        Moving-window length, in units of `dim` unless `samples`
         is True. The window is centered on the sample it scales and is
         reflected where it runs off either end of `dim`, so every sample is
         scaled. If None, the whole slice is one window. Not supported for
@@ -490,45 +486,25 @@ def normalize(
 
     Notes
     -----
-    - A window is centered on the sample it scales, so an even window length
-      is raised to the next odd one.
+    Even window lengths are raised to the next odd number. Reflection at each
+    edge gives every input sample an output without introducing new nulls,
+    unlike [`rolling`](`dascore.Patch.rolling`), which leaves nulls where a
+    window is incomplete.
 
-    - Every sample gets a value, the ends included: where a centered window
-      runs off the end of the dimension, the coordinate is reflected about
-      its last sample to fill it (scipy's `mode="reflect"`, the same rule
-      `median_filter` and the other windowed filters use). So the output has
-      the shape it was given and holds no nulls the input did not. This is
-      not what [`rolling`](`dascore.Patch.rolling`) does: rolling returns one
-      value per window rather than one per sample, and leaves nulls where a
-      window was not full. A null edge here would delete real data -- half a
-      window off each end of every trace, which for a one second window at
-      250 Hz is an eighth of an eight second record, first arrivals included.
-
-    - The windowed norms are means rather than sums: `l2` divides by the
-      window's RMS and `l1` by its mean absolute value. Were they sums, the
-      output would scale with the window length, and the reflected windows
-      at the edges of the dimension would not line up with the interior.
-      Over a whole slice the two differ only by a constant, so the
-      unwindowed norms are left as the sums they have always been.
+    Windowed L2 and L1 norms use RMS and mean absolute value, respectively, so
+    scale does not depend on window length. Whole-slice L2 and L1 retain their
+    established sum-based definitions.
 
     Examples
     --------
     >>> import dascore as dc
     >>> patch = dc.get_example_patch()
-    >>>
-    >>> # L2 normalization along time dimension
     >>> l2_norm = patch.normalize(dim="time", norm="l2")
-    >>>
-    >>> # Max normalization along distance dimension
     >>> max_norm = patch.normalize(dim="distance", norm="max")
-    >>>
-    >>> # Bit normalization (sign only)
     >>> bit_norm = patch.normalize(dim="time", norm="bit")
     >>>
     >>> # Automatic gain control: divide by the RMS of a 1 second window.
     >>> agc = patch.normalize(dim="time", norm="l2", window=1)
-    >>>
-    >>> # The same, with the window given in samples.
     >>> agc = patch.normalize(dim="time", norm="l2", window=251, samples=True)
     """
     return Normalize(dim=dim, norm=norm, window=window, samples=samples)._apply(self)

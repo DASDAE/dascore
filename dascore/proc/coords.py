@@ -515,77 +515,45 @@ def select(
     Examples
     --------
     >>> import numpy as np
-    >>> import dascore as dc
     >>> from dascore.examples import get_example_patch
     >>> patch = get_example_patch()
     >>>
-    >>> # select meters 50 to 300
+    >>> # Coordinate values and open bounds.
     >>> new_distance = patch.select(distance=(50, 300))
-    >>>
-    >>> # select channels less than 300
     >>> lt_dist = patch.select(distance=(..., 300))
     >>>
-    >>> # select time (1 second from start to -1 second from end)
-    >>> t1 = patch.get_coord("time").min() + dc.to_timedelta64(1)
-    >>> t2 = patch.get_coord("time").max() - dc.to_timedelta64(1)
-    >>> new_time1 = patch.select(time=(t1, t2))
+    >>> # One second from the start through one second before the end.
+    >>> new_time = patch.select(time=(1, -1), relative=True)
     >>>
-    >>> # this can be accomplished more simply using the relative keyword
-    >>> new_time2 = patch.select(time=(1, -1), relative=True)
-    >>>
-    >>> # filter 1 second from start time to 3 seconds from start time
-    >>> new_time3 = patch.select(time=(1, 3), relative=True)
-    >>>
-    >>> # filter 6 second from end time to 1 second from end time
-    >>> new_time4 = patch.select(time=(-6, -1), relative=True)
-    >>>
-    >>> # Select first 10 distance indices
+    >>> # Sample ranges and scalar sample indices.
     >>> new_distance1 = patch.select(distance=(..., 10), samples=True)
-    >>>
-    >>> # Select last time row/column
     >>> new_distance2 = patch.select(time=-1, samples=True)
     >>>
-    >>> # only include certain rows/columns based on a boolean array.
+    >>> # Boolean masks and explicit coordinate values.
     >>> time = patch.get_array("time")
-    >>> new_time_5 = patch.select(time=time>time[2])
-    >>>
-    >>> # Select only specific values along a dimension
+    >>> new_time_5 = patch.select(time=time > time[2])
     >>> distance = patch.get_array("distance")
     >>> new_distance_3 = patch.select(distance=distance[1::2])
 
     Notes
     -----
-    - It is important to remember select will not change the order of the
-      patch, only filter values. If the order of the patch should change, or
-      multiple rows/columns need to be repeated,
-      See [`Patch.order`](`dascore.Patch.order`).
+    Selection filters values without reordering or repeating them; use
+    [`Patch.order`](`dascore.Patch.order`) for those operations.
 
-    - A range of values includes both of its endpoints, but a range of
-      samples excludes its upper bound, like python's slicing. This means
-      -1 at the end of a sample range excludes the last sample, even
-      though -1 on its own selects it. Using the example patch, which has
-      300 distance channels and 2000 time samples:
+    Value ranges include both endpoints. Sample ranges are half-open like
+    Python slices, so ``-1`` as a range end excludes the final sample while
+    the scalar ``-1`` selects it:
 
       >>> import dascore as dc
       >>> patch = dc.get_example_patch()
-      >>> # Both endpoints included; 11 channels.
       >>> len(patch.select(distance=(0, 10)).get_array("distance"))
       11
-      >>> # Upper bound excluded; 10 samples.
       >>> len(patch.select(time=(0, 10), samples=True).get_array("time"))
       10
-      >>> # -1 as a range end drops the last sample.
       >>> len(patch.select(time=(0, -1), samples=True).get_array("time"))
       1999
-      >>> # But -1 on its own selects it.
       >>> len(patch.select(time=-1, samples=True).get_array("time"))
       1
-
-      A slice can be used in place of a tuple, and makes the half-open
-      behavior of sample ranges more obvious:
-
-      >>> len(patch.select(time=slice(0, -1), samples=True).get_array("time"))
-      1999
 
     """
     _check_coord_names(patch, kwargs)
