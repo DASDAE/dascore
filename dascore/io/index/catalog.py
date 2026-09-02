@@ -235,14 +235,21 @@ class FileResolver(PatchResolver):
             kwargs["file_version"] = row["source_version"]
         return dc.read(**kwargs, **id_kwargs, **trim)
 
-    def resolve(self, row: Mapping, **trim) -> dc.Patch:
-        """Read the patch, passing range trims down as read hints."""
-        path = row["source_path"]
-        # relative paths resolve against the catalog root; URIs and
-        # absolute paths pass through untouched.
+    def resolve_path(self, path: str | Path) -> str | Path:
+        """
+        Resolve a row's source path against the catalog root.
+
+        Relative paths resolve against the root; URIs and absolute paths
+        pass through untouched.
+        """
         if self._root is not None and "://" not in str(path):
             if not Path(path).is_absolute():
-                path = self._root / path
+                return self._root / path
+        return path
+
+    def resolve(self, row: Mapping, **trim) -> dc.Patch:
+        """Read the patch, passing range trims down as read hints."""
+        path = self.resolve_path(row["source_path"])
         source_patch_key = _row_source_patch_key(row)
         if source_patch_key.isdigit():
             # Positional (synthesized) ids index the full source read; a

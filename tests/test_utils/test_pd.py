@@ -250,6 +250,31 @@ class TestFilterDfAdvanced:
         out = filter_df(example_df_2, time=None)
         assert np.all(out)
 
+    def test_min_max_query_without_column(self, example_df_2):
+        """A {name}_min query whose bare column is absent is a bad kwarg.
+
+        It used to KeyError deep in the range filter, which broke readers
+        forwarding read hints (e.g. dc.read(dasdae_file, time_min=...)).
+        """
+        df = example_df_2.drop(columns=["time"], errors="ignore")
+        assert "time" not in df.columns
+        value = df["time_min"].iloc[0]
+        with pytest.raises(ParameterError, match="Bad filter parameter"):
+            filter_df(df.drop(columns=["time_min", "time_max"]), time_min=value)
+        out = filter_df(
+            df.drop(columns=["time_min", "time_max"]),
+            time_min=value,
+            ignore_bad_kwargs=True,
+        )
+        assert np.all(out)
+        # the _max spelling walks the sibling branch
+        out = filter_df(
+            df.drop(columns=["time_min", "time_max"]),
+            time_max=value,
+            ignore_bad_kwargs=True,
+        )
+        assert np.all(out)
+
     def test_timedelta_columns(self, example_df_timedeltas):
         """Ensure timedelta columns work when specifying ranges of single col."""
         df = example_df_timedeltas

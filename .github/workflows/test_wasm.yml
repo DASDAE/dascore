@@ -8,11 +8,13 @@ on:
     branches:
       - master
       - dev
+      - xarray_integration
       - wasm
   pull_request:
     branches:
       - master
       - dev
+      - xarray_integration
     paths:
       - 'dascore/**'
       - 'tests/**'
