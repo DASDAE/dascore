@@ -117,9 +117,11 @@ class TestFebus:
         # one window straddling a block boundary, one wholly inside a
         # later block, one at the start: the offset arithmetic both ways
         cases = [(rows - 2, rows + 3), (2 * rows + 1, 2 * rows + 4), (0, 3)]
+        cases = [x for x in cases if x[1] <= payload.shape[0]]
+        # the first case straddles a block boundary; without it the test
+        # would pass on arithmetic it never exercised
+        assert len(cases) > 1, cases
         for start, stop in cases:
-            if stop > payload.shape[0]:
-                continue
             windows = {"time": (start, stop)}
             out = io.read_array(febus_path, windows, source_patch_key=key)
             expected = FiberIO.read_array(io, febus_path, windows, source_patch_key=key)

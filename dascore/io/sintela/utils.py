@@ -188,13 +188,9 @@ def _get_attr_dict(header, extras=None):
     return out
 
 
-def _get_data_shape(fid, header) -> tuple[int, int]:
+def _get_data_shape(header) -> tuple[int, int]:
     """The (time, channel) shape the file's packets hold."""
-    dtype = np.dtype(header["dtype"])
-    per_packet = header["num_channels"] * header["num_samples"] * dtype.itemsize
-    packet_size = header["header_size"] + per_packet
-    packets = get_buffer_size(fid) // packet_size
-    return packets * header["num_samples"], header["num_channels"]
+    return header["num_packets"] * header["num_samples"], header["num_channels"]
 
 
 def _read_sample_range(fid, header, start=0, stop=None):
@@ -216,7 +212,7 @@ def _read_sample_range(fid, header, start=0, stop=None):
     raw = maybe_mem_map(fid)
     # Compute how many blocks
     block_count = raw.size // packet_size
-    total, _ = _get_data_shape(fid, header)
+    total, _ = _get_data_shape(header)
     start = max(start, 0)
     stop = total if stop is None else min(stop, total)
     if stop <= start:

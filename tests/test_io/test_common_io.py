@@ -639,16 +639,28 @@ class TestRead:
             # the data array holds at least a sample per patch value;
             # a coordinate or metadata array is smaller
             if self.ndim > 1 and self.size >= patch_size:
-                reads.append((self.shape, np.shape(out)))
+                reads.append((self.shape, np.shape(out), index))
             return out
 
         monkeypatch.setattr(h5py.Dataset, "__getitem__", spy)
         io.read_array(path, windows, **kwargs)
         assert reads, "the data array was never read"
-        # the stored array may be a cube of blocks, so what is read is not
-        # the window itself; it must never be the whole array
-        for stored, got in reads:
-            assert got != stored, (stored, got)
+        stored = reads[0][0]
+        if len(stored) == len(payload.dims):
+            # the plain case: one read, sliced on every windowed axis
+            assert len(reads) == 1, reads
+            wanted = tuple(
+                (1, min(size - 1, 4)) if dim in windows else (0, size)
+                for dim, size in zip(payload.dims, payload.shape, strict=True)
+            )
+            index = reads[0][2]
+            assert isinstance(index, tuple) and len(index) == len(wanted), index
+            # xarray spells the same slice with an explicit unit step
+            assert tuple((x.start, x.stop) for x in index) == wanted, index
+        else:
+            # a cube of blocks reads more than the window, never all of it
+            for shape, got, _ in reads:
+                assert got != shape, (shape, got)
 
     def test_slice_single_dim_both_ends(self, io_path_tuple):
         """

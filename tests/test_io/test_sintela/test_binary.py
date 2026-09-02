@@ -12,6 +12,7 @@ import dascore as dc
 from dascore.exceptions import InvalidFiberFileError
 from dascore.io.core import FiberIO
 from dascore.io.sintela import SintelaBinaryV3
+from dascore.io.sintela.utils import _get_complete_header
 from dascore.utils.downloader import fetch
 
 
@@ -56,6 +57,27 @@ class TestReadArray:
         assert out.dtype == expected.dtype
         assert np.array_equal(out, expected)
         assert np.array_equal(out, patch.data[3:11, 2:6])
+
+    def test_reads_only_touched_packets(self, binary_path):
+        """A window inside one packet copies that packet, not the file."""
+        io = SintelaBinaryV3()
+        with open(binary_path, "rb") as fi:
+            header = _get_complete_header(fi)
+        samples, channels = header["num_samples"], header["num_channels"]
+        packets = header["num_packets"]
+        if packets < 2:
+            pytest.skip("file holds one packet")
+        # a window wholly inside the last packet, so a whole-file read is
+        # visible in what the returned view is backed by
+        start = (packets - 1) * samples
+        out = io.read_array(binary_path, {"time": (start, start + 3)})
+        assert out.shape == (3, channels)
+        assert out.base is not None
+        whole = packets * samples * channels * np.dtype(header["dtype"]).itemsize
+        assert out.base.nbytes < whole
+        # and it is the right packet
+        expected = FiberIO.read_array(io, binary_path, {"time": (start, start + 3)})
+        assert np.array_equal(out, expected)
 
     def test_empty_window(self, binary_path):
         """A window past the end is empty, with the right width and dtype."""

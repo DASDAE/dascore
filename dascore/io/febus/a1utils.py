@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from collections import namedtuple
 from collections.abc import Iterator
-from functools import cache
 
 import numpy as np
 
@@ -118,7 +117,6 @@ def _get_zone_time(feb):
     return _FebusTime(block_time, dt, idx_start, idx_stop)
 
 
-@cache
 def _get_block_time(feb):
     """Get the block time (time in seconds between each block)."""
     # Some files have this set. We haven't yet seen any files where this

@@ -102,7 +102,7 @@ class SintelaBinaryV3(FiberIO):
         """
         raise_on_extra_kwargs(kwargs, "windows")
         header = _get_complete_header(resource)
-        shape = _get_data_shape(resource, header)
+        shape = _get_data_shape(header)
         time_slice, dist_slice = windows_to_slices(windows, DIMS, shape)
         data = _read_sample_range(resource, header, time_slice.start, time_slice.stop)
         return np.asarray(data[:, dist_slice])
