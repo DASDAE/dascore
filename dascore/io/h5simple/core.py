@@ -62,8 +62,9 @@ class H5Simple(FiberIO):
         """
         Slice the data node directly.
 
-        The dimensions are resolved from node shapes alone, as `read`
-        resolves them; ``snap`` only changes coordinate values.
+        The dimensions come from the file's ``dims`` attribute, or from
+        which node's length matches each axis, exactly as `read` resolves
+        them; no coordinate values are read either way.
         """
         raise_on_extra_kwargs(kwargs, "windows and snap")
         dims, data_node = _get_dims_and_data(resource)

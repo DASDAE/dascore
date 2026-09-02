@@ -61,6 +61,7 @@ class Terra15FormatterV4(FiberIO):
         time: tuple[timeable_types, timeable_types] | None = None,
         distance: tuple[float, float] | None = None,
         snap_dims: bool = True,
+        snap: bool | None = None,
         **kwargs,
     ) -> dc.Spool:
         """
@@ -78,7 +79,11 @@ class Terra15FormatterV4(FiberIO):
             If True, ensure the coordinates are evenly sampled monotonic.
             This will cause some loss in precision but it is usually
             negligible.
+        snap
+            The name `scan` gives ``snap_dims``, so a caller can forward
+            what it gave `scan`; it wins when both are given.
         """
+        snap_dims = snap_dims if snap is None else snap
         patch = _read_terra15(resource, time, distance, snap_dims=snap_dims)
         if not patch.data.size:
             return dc.spool([])
@@ -88,7 +93,8 @@ class Terra15FormatterV4(FiberIO):
         self,
         resource: H5Reader,
         windows: dict[str, tuple[int, int]],
-        snap_dims: bool = True,
+        snap: bool = True,
+        snap_dims: bool | None = None,
         **kwargs,
     ) -> np.ndarray:
         """
@@ -96,16 +102,18 @@ class Terra15FormatterV4(FiberIO):
 
         Besides the requested block, only the time node's ends and the
         header are read (the whole time node for an unfinished file, to
-        count the rows it actually wrote). ``snap_dims`` selects the grid,
-        spelled as ``read`` spells it (``scan`` calls the same option
-        ``snap``): snapped, the rows stop at the last written sample; raw,
-        every stored row counts, as the raw time coordinate does.
+        count the rows it actually wrote). ``snap`` selects the grid, and
+        unlike other formats it decides how many rows there are: snapped,
+        they stop at the last written sample; raw, every stored row
+        counts, as the raw time coordinate does. ``read`` calls the same
+        option ``snap_dims``, so both spellings are taken.
         """
-        raise_on_extra_kwargs(kwargs, "windows and snap_dims")
+        raise_on_extra_kwargs(kwargs, "windows, snap and snap_dims")
+        snap = snap if snap_dims is None else snap_dims
         _, data_node = _get_version_data_node(resource)
         data = data_node["data"]
         time_len = data.shape[0]
-        if snap_dims:
+        if snap:
             _, _, time_len, _ = _get_scanned_time_info(data_node)
         shape = (time_len, len(_get_distance_coord(resource)))
         return slice_dataset(data, ("time", "distance"), windows, shape)
