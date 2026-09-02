@@ -13,7 +13,9 @@ import pytest
 
 import dascore as dc
 from dascore.exceptions import MissingPatchError, ParameterError
+from dascore.io.core import FiberIO
 from dascore.io.index.planned import (
+    PLAN_SCHEME,
     PlanResolver,
     _aux_coord_info,
     _coord_record_from_row,
@@ -397,3 +399,145 @@ class TestStatedUnits:
     def test_stated_units_pass_through(self):
         """A real spelling survives as a string."""
         assert _stated_units("ft") == "ft"
+
+
+class TestLoadMemberArray:
+    """Tests for the resolver's read_array fast path and its gates."""
+
+    @pytest.fixture(scope="class")
+    def file_spool(self, tmp_path_factory):
+        """A directory spool of single-patch DASDAE files."""
+        path = tmp_path_factory.mktemp("load_member_array")
+        for num, patch in enumerate(dc.get_example_spool()):
+            patch.io.write(path / f"patch_{num}.h5", "dasdae")
+        return dc.spool(path).update()
+
+    @pytest.fixture
+    def resolver(self, file_spool):
+        """The plan resolver of the chunked file spool."""
+        return file_spool.chunk(time=None)._catalog.resolver
+
+    @pytest.fixture
+    def row(self, resolver):
+        """One member row of the plan."""
+        return resolver.member_rows.iloc[0].to_dict()
+
+    @pytest.fixture
+    def override(self, row):
+        """Give the row's format a counting read_array override."""
+        fiber_io = FiberIO.manager.get_fiberio(
+            format=row["source_format"], version=row["source_version"]
+        )
+        calls = []
+
+        def read_array(self, resource, windows, **kwargs):
+            # a real override's caster wrapper consumes _pre_cast; this
+            # raw function sees it and must not forward it to read
+            kwargs.pop("_pre_cast", None)
+            calls.append((windows, kwargs))
+            return FiberIO.read_array(self, resource, windows, **kwargs)
+
+        # set and delete by hand: monkeypatch would restore the inherited
+        # method as an own class attribute rather than remove it
+        type(fiber_io).read_array = read_array
+        yield calls
+        del type(fiber_io).read_array
+
+    def test_no_override_returns_none(self, resolver, row):
+        """A format without an override takes the patch path."""
+        assert resolver._load_member_array(row, {"time": (0, 5)}) is None
+
+    def test_override_loads_window(self, resolver, row, override):
+        """The override gets the windows and its array matches the patch path."""
+        out = resolver._load_member_array(row, {"time": (2, 9)})
+        expected = resolver._load_member(row).select(time=(2, 9), samples=True).data
+        assert np.array_equal(out, expected)
+        assert out.dtype == expected.dtype
+        # the row's own patch key rides along so multi-patch files resolve
+        expected_kwargs = {"source_patch_key": row["source_patch_key"]}
+        assert override == [({"time": (2, 9)}, expected_kwargs)]
+
+    def test_digit_key_returns_none(self, resolver, row, override):
+        """A synthesized positional key only binds against a full read."""
+        row = dict(row, source_patch_key="3")
+        assert resolver._load_member_array(row, {"time": (0, 5)}) is None
+        assert override == []
+
+    def test_null_row_cells_return_none(self, resolver, row, override):
+        """NaN cells (a left merge's misses) refuse like absent ones."""
+        for column in ("source_path", "source_format", "source_version"):
+            bad = dict(row, **{column: float("nan")})
+            assert resolver._load_member_array(bad, {"time": (0, 5)}) is None
+        assert override == []
+
+    def test_residuals_return_none(self, file_spool, override):
+        """A residual selection re-trims patches; windows cannot compose."""
+        sub = file_spool.select(time=(2, 100), samples=True).chunk(time=None)
+        resolver = sub._catalog.resolver
+        assert resolver.parent_residuals
+        row = resolver.member_rows.iloc[0].to_dict()
+        assert resolver._load_member_array(row, {"time": (0, 5)}) is None
+        assert override == []
+
+    def test_missing_version_returns_none(self, resolver, row, override):
+        """Without an exact version the reader cannot be resolved."""
+        row = dict(row, source_version="")
+        assert resolver._load_member_array(row, {"time": (0, 5)}) is None
+        assert override == []
+
+    def test_unknown_format_returns_none(self, resolver, row, override):
+        """An unknown format falls back rather than raising here."""
+        row = dict(row, source_format="not_a_real_format", source_version="1")
+        assert resolver._load_member_array(row, {"time": (0, 5)}) is None
+        assert override == []
+
+    def test_plan_path_returns_none(self, resolver, row, override):
+        """A nested plan row loads through its own resolver."""
+        row = dict(row, source_path=f"{PLAN_SCHEME}deadbeef/0")
+        assert resolver._load_member_array(row, {"time": (0, 5)}) is None
+        assert override == []
+
+    def test_memory_row_returns_none(self, override):
+        """An in-memory patch has no file to slice.
+
+        The scheme gate is defense in depth: a memory row's "memory"
+        format is unregistered, so a later gate would refuse it too.
+        """
+        resolver = dc.get_example_spool().chunk(time=None)._catalog.resolver
+        row = resolver.member_rows.iloc[0].to_dict()
+        row["source_version"] = "1"
+        assert resolver._load_member_array(row, {"time": (0, 5)}) is None
+        assert override == []
+
+    def test_non_file_loader_returns_none(self, resolver, row, override, monkeypatch):
+        """A loader with no file leg cannot resolve a path."""
+        monkeypatch.setattr(resolver, "loader", object())
+        assert resolver._load_member_array(row, {"time": (0, 5)}) is None
+        assert override == []
+
+    def test_override_gets_annotated_handle(self, resolver, row):
+        """The override receives the handle type it declares, like read.
+
+        The resource manager provisions it, so a remote path resolves the
+        same way dc.read's own reading does instead of arriving as a raw
+        URL string.
+        """
+        from dascore.utils.io import BinaryReader  # noqa: PLC0415
+
+        fiber_io = FiberIO.manager.get_fiberio(
+            format=row["source_format"], version=row["source_version"]
+        )
+        seen = {}
+
+        def read_array(self, resource, windows, **kwargs):
+            seen["resource"] = resource
+            return np.zeros(2)
+
+        read_array._required_type = BinaryReader
+        type(fiber_io).read_array = read_array
+        try:
+            out = resolver._load_member_array(row, {"time": (0, 2)})
+        finally:
+            del type(fiber_io).read_array
+        assert np.array_equal(out, np.zeros(2))
+        assert hasattr(seen["resource"], "read")  # a handle, not a path

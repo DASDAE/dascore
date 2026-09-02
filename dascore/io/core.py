@@ -963,6 +963,7 @@ class FiberIO:
     _automatic_type_casters = FrozenDict(
         {
             "read": 1,
+            "read_array": 1,
             "scan": 1,
             "write": 2,
             "get_format": 1,
@@ -980,6 +981,35 @@ class FiberIO:
         """
         msg = f"FiberIO: {self.name} has no read method"
         raise NotImplementedError(msg)
+
+    def read_array(
+        self, resource, windows: dict[str, tuple[int, int]], **kwargs
+    ) -> np.ndarray:
+        """
+        Return the raw data array for absolute sample windows.
+
+        A data-only fast path for callers which already know a resource's
+        structure (from an index) and need no Patch, no attrs, and no
+        coordinates back. ``windows`` maps dimension name to ``(start, stop)``,
+        half-open python indices on the resource's own sample grid;
+        dimensions absent from ``windows`` are returned whole. The array
+        comes back in the resource's stated dimension order (the order
+        ``scan`` reports), untransposed and uncast.
+
+        Multi-patch resources take ``source_patch_key`` (as ``read`` and
+        ``scan`` spell it) naming the one patch the windows index; without
+        it a multi-patch resource cannot be resolved and raises.
+
+        This default reads the whole resource through ``read`` and trims,
+        so every format is correct without overriding; formats override it
+        to slice storage directly.
+        """
+        source_patch_key = kwargs.pop("source_patch_key", "")
+        spool = self.read(resource, **kwargs)
+        patch = _resolve_read_spool(spool, source_patch_key)
+        if windows:
+            patch = patch.select(**dict(windows), samples=True)
+        return patch.data
 
     def scan(self, resource, *, snap: bool = True, **kwargs) -> list[ScanPayload]:
         """
@@ -1049,6 +1079,11 @@ class FiberIO:
     def implements_scan(self) -> bool:
         """Returns True if the subclass implements its own scan method else False."""
         return not _is_wrapped_func(self.scan, FiberIO.scan)
+
+    @property
+    def implements_read_array(self) -> bool:
+        """Return True if the subclass implements its own read_array method."""
+        return not _is_wrapped_func(self.read_array, FiberIO.read_array)
 
     @property
     def implements_get_format(self) -> bool:

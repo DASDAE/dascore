@@ -355,11 +355,18 @@ def _get_min_max_query(kwargs, df):
     to_kill = []
     for key, val in kwargs.items():
         val = None if val is ... else val  # handle ...
+        # Claim a min/max key only when the bare column exists; otherwise
+        # leave it for the bad-kwarg policy (claiming it used to KeyError
+        # deep in the range filter under its bare name).
         if key.endswith("_max") and key not in col_set:
-            out[key.replace("_max", "")][1] = val
+            if key.removesuffix("_max") not in col_set:
+                continue
+            out[key.removesuffix("_max")][1] = val
             to_kill.append(key)
         elif key.endswith("_min") and key not in col_set:
-            out[key.replace("_min", "")][0] = val
+            if key.removesuffix("_min") not in col_set:
+                continue
+            out[key.removesuffix("_min")][0] = val
             to_kill.append(key)
     # remove keys with min/max suffix
     for key in to_kill:

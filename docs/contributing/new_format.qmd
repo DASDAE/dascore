@@ -166,6 +166,18 @@ The rule is simple:
 
 For some formats, a numeric patch index is enough if patch ordering is stable. For others, a native identifier such as a group name, node name, or source/zone tuple is better. If your format only ever produces one patch per file, you usually do not need to set `source_patch_key`.
 
+## `read_array`: a data-only fast path
+
+[`FiberIO.read_array`](`dascore.io.core.FiberIO.read_array`) returns the raw data array for absolute sample windows, without building a `Patch`. Callers that already know a file's structure from a spool index (for example the lazy `Spool.io.to_xarray` blocks) use it to skip attribute and coordinate parsing on every read.
+
+You never have to implement it: the default reads the whole resource through `read` and trims, so it is correct for every format. Overriding pays off for formats that can slice storage directly (an HDF5 dataset, a memory-mapped binary). The contract for an override:
+
+- `windows` maps dimension name to `(start, stop)` half-open python indices on the file's own sample grid; dimensions absent from `windows` are returned whole.
+- Return the array in the file's stated dimension order (the order `scan` reports), untransposed and uncast. The caller transposes and casts.
+- Multi-patch formats receive `source_patch_key` naming the one patch the windows index; a multi-patch resource without a key should raise rather than guess. DASCore's own machinery only forwards native keys (ones your format emitted); for a synthesized positional key it bypasses `read_array` entirely and loads the patch the ordinary way.
+- The `resource` parameter participates in the same type coercion as `read`: annotate it (e.g. an HDF5 reader type) and DASCore hands you that handle.
+- Windows arrive as indices, never values: value-to-index conversion (including rounding) is the caller's job, done once through the coordinate machinery.
+
 ## What Belongs in `attrs`
 
 Every attr a reader emits is one of four kinds, and the kind decides both its
