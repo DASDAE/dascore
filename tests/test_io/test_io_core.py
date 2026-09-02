@@ -51,7 +51,12 @@ from dascore.io.core import (
     make_scan_payload,
 )
 from dascore.io.dasdae.core import DASDAEV1
-from dascore.io.utils import build_patches, convert_attr_units, get_exact_coord
+from dascore.io.utils import (
+    build_patches,
+    convert_attr_units,
+    get_exact_coord,
+    windows_to_slices,
+)
 from dascore.utils.downloader import fetch
 from dascore.utils.hdf5 import H5Writer
 from dascore.utils.io import (
@@ -2321,3 +2326,34 @@ class TestFiberIOReadArray:
         finally:
             del PlainFormat.read_array
         assert not plain.implements_read_array
+
+
+class TestWindowsToSlices:
+    """Tests for turning read_array windows into per-dimension slices."""
+
+    def test_absent_dimension_is_whole(self):
+        """A dimension without a window spans its whole length."""
+        out = windows_to_slices({"time": (2, 5)}, ("distance", "time"), (7, 9))
+        assert out == (slice(0, 7), slice(2, 5))
+
+    def test_open_negative_and_overlong_bounds_resolve(self):
+        """None, ..., negative, and past-the-end bounds resolve like numpy."""
+        out = windows_to_slices(
+            {"time": (..., 3), "distance": (-2, 50)}, ("time", "distance"), (9, 7)
+        )
+        assert out == (slice(0, 3), slice(5, 7))
+        assert windows_to_slices({"time": (4, None)}, ("time",), (9,)) == (slice(4, 9),)
+
+    def test_empty_window_stays_empty(self):
+        """A reversed window is empty, never negative-length."""
+        assert windows_to_slices({"time": (6, 2)}, ("time",), (9,)) == (slice(6, 6),)
+
+    def test_unknown_dimension_raises(self):
+        """A window on a dimension the array lacks raises."""
+        with pytest.raises(ParameterError, match="not among patch dims"):
+            windows_to_slices({"bob": (0, 1)}, ("time",), (9,))
+
+    def test_non_integer_bounds_raise(self):
+        """Bounds are sample indices, never values."""
+        with pytest.raises(ParameterError, match="integers"):
+            windows_to_slices({"time": (1.5, 3)}, ("time",), (9,))

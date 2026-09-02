@@ -4,12 +4,17 @@ from __future__ import annotations
 
 from typing import Literal
 
+import numpy as np
+
 import dascore as dc
 from dascore.constants import timeable_types
 from dascore.io import FiberIO, ScanPayload
+from dascore.io.utils import windows_to_slices
 from dascore.utils.hdf5 import H5Reader
+from dascore.utils.misc import raise_on_extra_kwargs
 
 from .utils import (
+    _get_scanned_time_info,
     _get_terra15_version_str,
     _get_version_data_node,
     _read_terra15,
@@ -77,6 +82,25 @@ class Terra15FormatterV4(FiberIO):
         if not patch.data.size:
             return dc.spool([])
         return dc.spool(patch)
+
+    def read_array(
+        self, resource: H5Reader, windows: dict[str, tuple[int, int]], **kwargs
+    ) -> np.ndarray:
+        """
+        Slice the data node directly.
+
+        Only the time node's ends (to count the samples a file actually
+        finished writing) and the requested block leave the file. The file
+        holds one patch, so no ``source_patch_key`` is taken.
+        """
+        raise_on_extra_kwargs(kwargs, "windows")
+        _, data_node = _get_version_data_node(resource)
+        _, _, time_len, _ = _get_scanned_time_info(data_node)
+        data = data_node["data"]
+        # an unfinished file has zero-filled rows past the last written
+        # sample; the scan grid stops at time_len, so the slices must too
+        shape = (time_len, data.shape[1])
+        return data[windows_to_slices(windows, ("time", "distance"), shape)]
 
 
 class Terra15FormatterV5(Terra15FormatterV4):

@@ -11,6 +11,8 @@ import pandas as pd
 import pytest
 
 import dascore as dc
+from dascore.io.core import FiberIO
+from dascore.io.terra15.core import Terra15FormatterV4
 from dascore.io.terra15.utils import _get_version_data_node
 
 
@@ -105,3 +107,51 @@ class TestTerra15Unfinished:
         """Ensure the time is increasing."""
         time = patch_unfinished.coords.get_array("time")
         assert np.all(np.diff(time) >= np.timedelta64(0, "s"))
+
+
+class TestReadArray:
+    """Tests for slicing the data node directly."""
+
+    @pytest.fixture(
+        params=["terra15_das_example_path", "terra15_v5_path", "terra15_v6_path"]
+    )
+    def terra15_path(self, request):
+        """Each Terra15 version's example file."""
+        return request.getfixturevalue(request.param)
+
+    def test_matches_default(self, terra15_path):
+        """The override returns what the read-and-trim default returns."""
+        io = Terra15FormatterV4()
+        windows = {"time": (3, 11), "distance": (2, 6)}
+        out = io.read_array(terra15_path, windows)
+        expected = FiberIO.read_array(io, terra15_path, windows)
+        assert out.dtype == expected.dtype
+        assert np.array_equal(out, expected)
+
+    def test_unfinished_file_stops_at_written_samples(
+        self, terra15_das_unfinished_path
+    ):
+        """Zero-filled rows past the last written sample are never returned."""
+        io = Terra15FormatterV4()
+        patch = dc.spool(terra15_das_unfinished_path)[0]
+        out = io.read_array(terra15_das_unfinished_path, {})
+        assert out.shape == patch.shape
+        assert np.array_equal(out, patch.data)
+        # a window past the end clips to the written samples, as select does
+        tail = io.read_array(terra15_das_unfinished_path, {"time": (-3, 10**6)})
+        assert np.array_equal(tail, patch.data[-3:])
+
+    def test_reads_only_the_window(self, terra15_v6_path, monkeypatch):
+        """The data node is sliced in the file, not read whole then trimmed."""
+        seen = []
+        original = h5py.Dataset.__getitem__
+
+        def spy(self, index):
+            if self.name.endswith("/data"):
+                seen.append(index)
+            return original(self, index)
+
+        monkeypatch.setattr(h5py.Dataset, "__getitem__", spy)
+        Terra15FormatterV4().read_array(terra15_v6_path, {"time": (2, 6)})
+        assert len(seen) == 1
+        assert seen[0][0] == slice(2, 6)

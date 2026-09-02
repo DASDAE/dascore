@@ -313,7 +313,9 @@ class TestReadArray:
         with pytest.raises(ParameterError, match="Unexpected keyword"):
             DASDAEV1().read_array(written_dascore_v1_random, {}, time_min=1)
 
-    def test_reads_only_the_window(self, written_dascore_v1_random, monkeypatch):
+    def test_reads_only_the_window(
+        self, written_dascore_v1_random, random_patch, monkeypatch
+    ):
         """The dataset is sliced in the file, not read whole then trimmed."""
         seen = []
         original = h5py.Dataset.__getitem__
@@ -324,7 +326,7 @@ class TestReadArray:
 
         monkeypatch.setattr(h5py.Dataset, "__getitem__", spy)
         DASDAEV1().read_array(written_dascore_v1_random, {"time": (2, 6)})
-        assert seen == [(slice(None), slice(2, 6))]
+        assert seen == [(slice(0, random_patch.shape[0]), slice(2, 6))]
 
 
 class TestScanDASDAE:

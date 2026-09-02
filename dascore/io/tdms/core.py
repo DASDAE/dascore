@@ -9,10 +9,19 @@ import numpy as np
 import dascore as dc
 from dascore.constants import timeable_types
 from dascore.io import FiberIO, ScanPayload, make_scan_payload
-from dascore.io.utils import build_patches
+from dascore.io.utils import build_patches, windows_to_slices
 from dascore.utils.io import BinaryReader, LocalBinaryReader
+from dascore.utils.misc import raise_on_extra_kwargs
 
-from .utils import _get_all_attrs, _get_data, _get_default_attrs, _get_version_str
+from .utils import (
+    _get_all_attrs,
+    _get_data,
+    _get_default_attrs,
+    _get_fileinfo,
+    _get_sample_count,
+    _get_version_str,
+    _read_sample_range,
+)
 
 
 class TDMSFormatterV4713(FiberIO):
@@ -74,3 +83,23 @@ class TDMSFormatterV4713(FiberIO):
             coords, data, attrs, selection={"time": time, "distance": distance}
         )
         return dc.spool(patches)
+
+    def read_array(
+        self,
+        resource: LocalBinaryReader,
+        windows: dict[str, tuple[int, int]],
+        **kwargs,
+    ) -> np.ndarray:
+        """
+        Decode only the segments a time window touches.
+
+        A segment interleaves its channels, so it is the finest unit read;
+        the distance window is applied after decoding. The file holds one
+        patch, so no ``source_patch_key`` is taken.
+        """
+        raise_on_extra_kwargs(kwargs, "windows")
+        fileinfo, _ = _get_fileinfo(resource)
+        shape = (_get_sample_count(resource, fileinfo), int(fileinfo["n_channels"]))
+        time_slice, dist_slice = windows_to_slices(windows, ("time", "distance"), shape)
+        data = _read_sample_range(resource, fileinfo, time_slice.start, time_slice.stop)
+        return data[:, dist_slice]
