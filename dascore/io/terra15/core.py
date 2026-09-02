@@ -96,10 +96,10 @@ class Terra15FormatterV4(FiberIO):
 
         Besides the requested block, only the time node's ends and the
         header are read (the whole time node for an unfinished file, to
-        count the rows it actually wrote). ``snap_dims`` selects the same
-        grid ``read`` and ``scan`` use: snapped, the rows stop at the last
-        written sample; raw, every row counts, as the raw time coordinate
-        does.
+        count the rows it actually wrote). ``snap_dims`` selects the grid,
+        spelled as ``read`` spells it (``scan`` calls the same option
+        ``snap``): snapped, the rows stop at the last written sample; raw,
+        every stored row counts, as the raw time coordinate does.
         """
         raise_on_extra_kwargs(kwargs, "windows and snap_dims")
         _, data_node = _get_version_data_node(resource)

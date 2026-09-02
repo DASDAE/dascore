@@ -103,6 +103,8 @@ return dc.spool(
 - Annotate `resource` with the same managed-resource type used by `read()`.
 - Accept indices, not coordinate values; callers perform value-to-index conversion.
 
+Accept the labelling options your `read` takes, usually `snap`, even when they change nothing: the default forwards them, so refusing one would make the same call work for one format and fail for another.
+
 The caller bypasses `read_array` for synthesized positional keys.
 
 ## Accept managed resources

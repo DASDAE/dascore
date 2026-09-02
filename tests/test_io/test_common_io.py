@@ -583,29 +583,27 @@ class TestRead:
             assert out.dtype == expected.dtype
             assert np.array_equal(out, expected), windows
 
-    def test_read_array_ignores_labelling_options(self, io_path_tuple):
-        """An option which only labels samples cannot move the window."""
+    def test_read_array_honors_labelling_options(self, io_path_tuple):
+        """A labelling option selects the grid `scan` reports under it.
+
+        Most formats' `snap` only labels samples, so it cannot move the
+        window; where it decides how many samples the resource has, the
+        array follows it. Either way the caller may forward what it gave
+        `scan`, and the shapes have to agree.
+        """
         io, path = io_path_tuple
         if not io.implements_read_array:
             pytest.skip(f"{io.name} inherits the default read_array")
         params = inspect.signature(io.read_array).parameters
-        labelling = [x for x in ("snap", "snap_dims") if x in params]
-        if not labelling:
+        if "snap" not in params:
             pytest.skip(f"{io.name}.read_array takes no labelling option")
         with skip_missing():
-            payload = dc.scan(path)[0]
-        key = payload.source_patch_key
+            payloads = {x: dc.scan_payloads(path, snap=x)[0] for x in (True, False)}
+        key = payloads[True].get("source_patch_key", "")
         kwargs = {"source_patch_key": key} if key else {}
-        dim = payload.dims[0]
-        windows = {dim: (0, max(payload.shape[0] - 1, 1))}
-        out = io.read_array(path, windows, **kwargs)
-        for name in labelling:
-            # Terra15's snap_dims is the exception: it says how many rows
-            # an unfinished file wrote, so it is allowed to change the count
-            other = io.read_array(path, windows, **{name: False}, **kwargs)
-            if name == "snap_dims":
-                continue
-            assert np.array_equal(out, other), name
+        for snap, payload in payloads.items():
+            out = io.read_array(path, {}, snap=snap, **kwargs)
+            assert out.shape == tuple(payload["shape"]), snap
 
     def test_hdf5_read_array_never_reads_the_array_whole(
         self, io_path_tuple, monkeypatch

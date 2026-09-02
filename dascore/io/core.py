@@ -1007,11 +1007,12 @@ class FiberIO:
             Reader-specific options. Multi-patch resources take
             ``source_patch_key`` (as ``read`` and ``scan`` spell it)
             naming the one patch the windows index; without it an
-            ambiguous resource raises rather than guesses. An option
-            which only labels samples, such as most formats' ``snap``,
-            is accepted and ignored, since the windows are indices on a
-            grid it cannot move; one which changes how many samples the
-            resource has (Terra15's ``snap_dims``) is honored.
+            ambiguous resource raises rather than guesses. A labelling
+            option is spelled as that format's ``read`` spells it, since
+            this default forwards to ``read``: usually ``snap``, which
+            only labels samples and so cannot move a window and is
+            ignored; where such an option decides how many samples the
+            resource has, it is honored.
 
         Returns
         -------
