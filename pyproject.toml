@@ -68,9 +68,11 @@ dependencies = [
 [project.optional-dependencies]
 
 extras = [
-    # A spool converts to a lazily-loaded DataTree, which entered xarray
-    # core in 2024.10; dask supplies the arrays.
-    "xarray>=2024.10",
+    # A spool converts to a lazily-loaded DataTree (xarray core since
+    # 2024.10) whose time coordinates are lazy transform indexes — the
+    # CoordinateTransform API joined xarray's public surface in 2025.07;
+    # dask supplies the arrays.
+    "xarray>=2025.7",
     "dask",
     # An annotation set may be stored as parquet rather than CSV; CSV is
     # the floor which needs nothing.
@@ -347,7 +349,12 @@ include = ["dascore"]
 # These files lazily import optional or untyped modules (xarray, numba,
 # h5py.h5r) that are not installed in the pre-commit hook's environment.
 [[tool.ty.overrides]]
-include = ["dascore/compat.py", "dascore/utils/jit.py", "dascore/io/dasvader/utils.py"]
+include = [
+    "dascore/compat.py",
+    "dascore/utils/jit.py",
+    "dascore/xarray/index.py",
+    "dascore/io/dasvader/utils.py",
+]
 
 [tool.ty.overrides.rules]
 unresolved-import = "ignore"

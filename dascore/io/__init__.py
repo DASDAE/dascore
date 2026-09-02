@@ -34,12 +34,10 @@ from dascore.utils.namespace import (
 )
 from dascore.utils.pd import dataframe_to_patch, patch_to_dataframe
 from dascore.utils.io import (
-    xarray_to_patch,
-    patch_to_xarray,
     patch_to_obspy,
     obspy_to_patch,
-    spool_to_xarray,
 )
+from dascore.xarray import patch_to_xarray, spool_to_xarray, xarray_to_patch
 
 
 class PatchIO(PatchNameSpace):
