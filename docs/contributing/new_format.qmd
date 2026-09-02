@@ -168,7 +168,7 @@ For some formats, a numeric patch index is enough if patch ordering is stable. F
 
 ## `read_array`: a data-only fast path
 
-[`FiberIO.read_array`](`dascore.io.core.FiberIO.read_array`) returns the raw data array for absolute sample windows, without building a `Patch`. Callers that already know a file's structure from a spool index (for example the lazy `Spool.io.to_xarray` blocks) use it to skip attribute and coordinate parsing on every read.
+[`FiberIO.read_array`](`dascore.io.core.FiberIO.read_array`) returns the raw data array for absolute sample windows, without building a `Patch`. Callers that already know a file's structure from a spool index use it to skip attribute and coordinate parsing on every read.
 
 You never have to implement it: the default reads the whole resource through `read` and trims, so it is correct for every format. Overriding pays off for formats that can slice storage directly (an HDF5 dataset, a memory-mapped binary). The contract for an override:
 
