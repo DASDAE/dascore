@@ -1419,6 +1419,7 @@ class TestSpoolToXarray:
         monkeypatch.setattr(PatchCatalog, "resolve_row", _fail)
         monkeypatch.setattr(FileResolver, "resolve", _fail)
         monkeypatch.setattr(PlanResolver, "_load_member", _fail)
+        monkeypatch.setattr(PlanResolver, "_load_member_array", _fail)
         tree = spool.io.to_xarray()
         assert len(self._leaves(tree))
 
@@ -1927,7 +1928,7 @@ class TestToXarrayReadArray:
         return path
 
     @pytest.fixture
-    def override_calls(self, monkeypatch):
+    def override_calls(self):
         """Give DASDAE a counting read_array override."""
         from dascore.io.core import FiberIO  # noqa: PLC0415
         from dascore.io.dasdae.core import DASDAEV1  # noqa: PLC0415
@@ -1938,8 +1939,11 @@ class TestToXarrayReadArray:
             calls.append(windows)
             return FiberIO.read_array(self, resource, windows, **kwargs)
 
-        monkeypatch.setattr(DASDAEV1, "read_array", read_array, raising=False)
-        return calls
+        # set and delete by hand: monkeypatch would restore the inherited
+        # method as an own class attribute rather than remove it
+        DASDAEV1.read_array = read_array
+        yield calls
+        del DASDAEV1.read_array
 
     def _leaf(self, tree):
         """The first dataset holding a data variable."""
@@ -1971,28 +1975,93 @@ class TestToXarrayReadArray:
         assert np.array_equal(out, sub.chunk(time=None)[0].data)
         assert override_calls == []
 
+    def test_chunked_spool_falls_back(self, dasdae_directory, override_calls):
+        """A plan-backed spool's trimmed rows never take the fast path.
+
+        Its collapsed member rows state trimmed envelopes, so a sample
+        window computed against them is not a window on the file grid;
+        the fast path must refuse or it reads the wrong samples.
+        """
+        spool = dc.spool(dasdae_directory).update().chunk(time=3)
+        eager = spool.chunk(time=None)[0].data
+        out = self._leaf(spool.io.to_xarray())["data"].data.compute()
+        assert np.array_equal(out, eager)
+        assert override_calls == []
+
+    def test_interior_window_fast_path(self, tmp_path, override_calls):
+        """An overlap-trimmed member reads an interior file window.
+
+        Two half-overlapping files merge into one segment, so the second
+        member's window starts mid-file — the case where a wrong window
+        anchor would silently read the wrong samples.
+        """
+        first = dc.get_example_patch()
+        time = first.get_coord("time")
+        half = time.values[len(time) // 2]
+        second = first.update_coords(time_min=half)
+        for num, patch in enumerate((first, second)):
+            patch.update_attrs(history=[]).io.write(tmp_path / f"p{num}.h5", "dasdae")
+        spool = dc.spool(tmp_path).update()
+        eager = spool.chunk(time=None)[0].data
+        out = self._leaf(spool.io.to_xarray())["data"].data.compute()
+        assert np.array_equal(out, eager)
+        # the trimmed member's window must not be anchored at the start
+        starts = sorted(window["time"][0] for window in override_calls)
+        assert len(override_calls) == 2
+        assert starts[0] == 0 and starts[1] > 0
+
     def test_transposes_source_order(self):
-        """A native-order array is transposed to the tree's dims."""
+        """A native-order array is transposed to the tree's dims.
+
+        Three dimensions with a cyclic permutation, so the permutation
+        differs from its inverse and a reversed mapping cannot pass.
+        """
         from dascore.utils.io import _load_xarray_block  # noqa: PLC0415
 
-        native = np.arange(12).reshape(3, 4)
+        native = np.arange(24).reshape(2, 3, 4)
 
         class _Fake:
             def _load_member_array(self, row, windows):
                 return native
 
-        row = {"dims": "time,distance", "source_path": "x"}
+        row = {"dims": "time,distance,depth", "source_path": "x"}
         out = _load_xarray_block(
             _Fake(),
             row,
             "time",
-            (0, 2),
-            ("distance", "time"),
-            (4, 3),
+            (0, 1),
+            ("distance", "depth", "time"),
+            (3, 4, 2),
             native.dtype,
-            (0, 3),
+            (0, 2),
         )
-        assert np.array_equal(out, native.T)
+        assert np.array_equal(out, native.transpose(1, 2, 0))
+
+    def test_mismatched_dims_fall_back(self, random_patch):
+        """A row stating different dims than the tree takes the patch path."""
+        from dascore.utils.io import _load_xarray_block  # noqa: PLC0415
+
+        patch = random_patch
+
+        class _Fake:
+            def _load_member_array(self, row, windows):
+                raise AssertionError("fast path consulted with foreign dims")
+
+            def _load_member(self, row):
+                return patch
+
+        coord = patch.get_coord("time")
+        out = _load_xarray_block(
+            _Fake(),
+            {"dims": "depth,time", "source_path": "x"},
+            "time",
+            (coord.min(), coord.max()),
+            patch.dims,
+            patch.shape,
+            patch.data.dtype,
+            (0, len(coord)),
+        )
+        assert np.array_equal(out, patch.data)
 
     def test_stale_shape_raises(self):
         """An array which breaks the index's promise raises."""

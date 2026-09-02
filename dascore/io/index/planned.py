@@ -64,6 +64,13 @@ PLAN_SCHEME = "plan://"
 _NON_ATTR = {"output_id", "dims", "coord_names", "patch"}
 
 
+def _row_str(value) -> str:
+    """A row cell as a string, with the frame's nulls (None/NaN) as ""."""
+    if value is None or (not isinstance(value, str) and pd.isnull(value)):
+        return ""
+    return str(value)
+
+
 def _stated_units(value) -> str | None:
     """Return a unit string, or None when the row states none.
 
@@ -569,22 +576,30 @@ class PlanResolver(PatchResolver):
         load whole. The array comes back in the source's stated dimension
         order, untransposed and uncast.
 
-        Returns None when the row cannot take the data-only path, and the
-        caller falls back to `_load_member`, which is exact for every
-        row. The fast path requires a plain file-backed row with a
-        concrete format and version, a format which overrides
-        ``read_array``, and no parent residuals — a residual re-trims the
-        loaded patch, so a window computed against the residual-adjusted
-        envelope is not a window on the raw grid.
+        The caller must anchor the windows on the raw file grid — a
+        window computed against a trimmed or residual-adjusted envelope
+        is not a window on that grid. Returns None when the row cannot
+        take the data-only path, and the caller falls back to
+        `_load_member`, which is exact for every row. The fast path
+        requires a plain file-backed row with a concrete format and
+        version, a natively keyed patch (a synthesized digit key means
+        "the nth patch of the full read", which only the whole-read
+        default honors), a format which overrides ``read_array``, and no
+        parent residuals — a residual re-trims the loaded patch, and a
+        data-only read would skip that trim. The fast path trusts the
+        index about the grid itself: the caller's shape guard catches a
+        resized file, not a shifted one.
         """
         if self.parent_residuals:
             return None
-        path = row.get("source_path")
-        fmt, version = row.get("source_format"), row.get("source_version")
-        if not path or not fmt or not version:
+        path = _row_str(row.get("source_path"))
+        if not path:
             return None
-        path = str(path)
         if is_memory_uri(path) or path.startswith(PLAN_SCHEME):
+            return None
+        fmt = _row_str(row.get("source_format"))
+        version = _row_str(row.get("source_version"))
+        if not fmt or not version:
             return None
         loader = self.loader
         if not isinstance(loader, FileResolver):
@@ -600,6 +615,11 @@ class PlanResolver(PatchResolver):
         if not fiber_io.implements_read_array:
             return None
         key = _row_source_patch_key(row)
+        if key.isdigit():
+            # A synthesized positional key binds against the full source
+            # read (see FileResolver.resolve); an override which resolves
+            # keys natively could match the wrong patch, or nothing.
+            return None
         kwargs = {"source_patch_key": key} if key else {}
         return fiber_io.read_array(loader.resolve_path(path), dict(windows), **kwargs)
 

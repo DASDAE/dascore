@@ -174,7 +174,7 @@ You never have to implement it: the default reads the whole resource through `re
 
 - `windows` maps dimension name to `(start, stop)` half-open python indices on the file's own sample grid; dimensions absent from `windows` are returned whole.
 - Return the array in the file's stated dimension order (the order `scan` reports), untransposed and uncast. The caller transposes and casts.
-- Multi-patch formats receive `source_patch_key` naming the one patch the windows index; a multi-patch resource without a key should raise rather than guess.
+- Multi-patch formats receive `source_patch_key` naming the one patch the windows index; a multi-patch resource without a key should raise rather than guess. DASCore's own machinery only forwards native keys (ones your format emitted); a synthesized positional key falls back to the default whole-read path instead.
 - Windows arrive as indices, never values: value-to-index conversion (including rounding) is the caller's job, done once through the coordinate machinery.
 
 ## What Belongs in `attrs`

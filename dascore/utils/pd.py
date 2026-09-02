@@ -656,6 +656,19 @@ def filter_df(
     container rather than relying on either.
     """
     min_max_query = _convert_times(df, _get_min_max_query(kwargs, df))
+    # A {name}_min/{name}_max query needs the bare column; treat one whose
+    # column is absent like any other bad kwarg rather than KeyError-ing.
+    if missing := set(min_max_query) - set(df.columns):
+        if not ignore_bad_kwargs:
+            bad_dict = {x: tuple(min_max_query[x]) for x in sorted(missing)}
+            msg = (
+                "Bad filter parameter found. Either the column does not "
+                f"exist or it's value is invalid. Keys/values are: {bad_dict}"
+            )
+            raise ParameterError(msg)
+        min_max_query = {
+            key: val for key, val in min_max_query.items() if key not in missing
+        }
     kwargs, range_query, _ = split_df_query(kwargs, df, ignore_bad_kwargs)
     multicolumn_range_query = _convert_times(df, range_query)
     multicolumn_range_query = {

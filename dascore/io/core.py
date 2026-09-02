@@ -963,7 +963,6 @@ class FiberIO:
     _automatic_type_casters = FrozenDict(
         {
             "read": 1,
-            "read_array": 1,
             "scan": 1,
             "write": 2,
             "get_format": 1,

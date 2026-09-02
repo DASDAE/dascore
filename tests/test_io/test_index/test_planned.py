@@ -423,7 +423,7 @@ class TestLoadMemberArray:
         return resolver.member_rows.iloc[0].to_dict()
 
     @pytest.fixture
-    def override(self, monkeypatch, row):
+    def override(self, row):
         """Give the row's format a counting read_array override."""
         fiber_io = FiberIO.manager.get_fiberio(
             format=row["source_format"], version=row["source_version"]
@@ -434,8 +434,11 @@ class TestLoadMemberArray:
             calls.append((windows, kwargs))
             return FiberIO.read_array(self, resource, windows, **kwargs)
 
-        monkeypatch.setattr(type(fiber_io), "read_array", read_array, raising=False)
-        return calls
+        # set and delete by hand: monkeypatch would restore the inherited
+        # method as an own class attribute rather than remove it
+        type(fiber_io).read_array = read_array
+        yield calls
+        del type(fiber_io).read_array
 
     def test_no_override_returns_none(self, resolver, row):
         """A format without an override takes the patch path."""
@@ -446,9 +449,23 @@ class TestLoadMemberArray:
         out = resolver._load_member_array(row, {"time": (2, 9)})
         expected = resolver._load_member(row).select(time=(2, 9), samples=True).data
         assert np.array_equal(out, expected)
+        assert out.dtype == expected.dtype
         # the row's own patch key rides along so multi-patch files resolve
         expected_kwargs = {"source_patch_key": row["source_patch_key"]}
         assert override == [({"time": (2, 9)}, expected_kwargs)]
+
+    def test_digit_key_returns_none(self, resolver, row, override):
+        """A synthesized positional key only binds against a full read."""
+        row = dict(row, source_patch_key="3")
+        assert resolver._load_member_array(row, {"time": (0, 5)}) is None
+        assert override == []
+
+    def test_null_row_cells_return_none(self, resolver, row, override):
+        """NaN cells (a left merge's misses) refuse like absent ones."""
+        for column in ("source_path", "source_format", "source_version"):
+            bad = dict(row, **{column: float("nan")})
+            assert resolver._load_member_array(bad, {"time": (0, 5)}) is None
+        assert override == []
 
     def test_residuals_return_none(self, file_spool, override):
         """A residual selection re-trims patches; windows cannot compose."""
@@ -481,7 +498,10 @@ class TestLoadMemberArray:
         """An in-memory patch has no file to slice."""
         resolver = dc.get_example_spool().chunk(time=None)._catalog.resolver
         row = resolver.member_rows.iloc[0].to_dict()
+        assert row["source_version"] == ""  # yet the scheme is what refuses
+        row["source_version"] = "1"
         assert resolver._load_member_array(row, {"time": (0, 5)}) is None
+        assert override == []
 
     def test_non_file_loader_returns_none(self, resolver, row, override, monkeypatch):
         """A loader with no file leg cannot resolve a path."""

@@ -463,8 +463,12 @@ def _load_xarray_block(resolver, row, dim, lims, dims, shape, dtype, window=None
     since read hints only reduce reading.
     """
     array = None
-    src_dims = tuple(str(row.get("dims") or "").split(","))
-    if window is not None and all(src_dims):
+    stated = row.get("dims")
+    src_dims = tuple(stated.split(",")) if isinstance(stated, str) else ()
+    # The row must state the same dimensions the tree promises, or the
+    # transpose below could not be built; disagreement means the patch
+    # path, whose own errors say what is wrong.
+    if window is not None and sorted(src_dims) == sorted(dims):
         array = resolver._load_member_array(row, {dim: window})
     if array is None:
         patch = resolver._load_member(row).select(**{dim: lims})
@@ -662,10 +666,18 @@ def spool_to_xarray(
     # Member grids in the plan's normalized units, so trims and envelopes
     # speak the same unit; the plan normalized the same frame identically.
     norm = _normalize_chunk_units(working, dim).set_index("_patch_id")
+    # A working row which is itself a trim (a collapsed plan's member)
+    # states a trimmed envelope, so a sample window measured against it
+    # is not anchored on the file's grid; such members load by value.
+    if "_modified" in norm.columns:
+        modified = members["_patch_id"].map(norm["_modified"]).fillna(True).astype(bool)
+    else:
+        modified = pd.Series(False, index=members.index)
     members = members.assign(
         _pos=np.arange(len(members)),
         _env_low=members["_patch_id"].map(norm[f"{dim}_min"]),
         _env_high=members["_patch_id"].map(norm[f"{dim}_max"]),
+        _env_anchored=~modified,
     )
     # One shared graph node for the resolver, not a copy inside every
     # block task — it can hold live patches or a large member table.
@@ -746,7 +758,14 @@ def spool_to_xarray(
                 lims = (m[f"{dim}_min"], m[f"{dim}_max"])
                 row = member_rows.iloc[int(m["_pos"])].to_dict()
                 delayed = dask.delayed(_load_xarray_block)(
-                    resolver_ref, row, dim, lims, dims, shape, dtype, window
+                    resolver_ref,
+                    row,
+                    dim,
+                    lims,
+                    dims,
+                    shape,
+                    dtype,
+                    window if m["_env_anchored"] else None,
                 )
                 blocks.append(da.from_delayed(delayed, shape=shape, dtype=dtype))
             array = da.concatenate(blocks, axis=axis)

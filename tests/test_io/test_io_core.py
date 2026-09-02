@@ -2229,12 +2229,15 @@ class TestFiberIOReadArray:
         return FiberIO.manager.get_fiberio(format=fmt, version=version)
 
     def test_default_matches_read_then_select(self, dasdae_io, single_patch_path):
-        """The default is read + samples-select, stated as arrays."""
+        """Windows are half-open python indices: plain numpy slicing."""
         patch = dc.read(single_patch_path)[0]
+        assert patch.dims == ("distance", "time")
         windows = {"time": (5, 50), "distance": (2, 9)}
         out = dasdae_io.read_array(single_patch_path, windows)
-        expected = patch.select(**windows, samples=True).data
+        expected = patch.data[2:9, 5:50]
         assert np.array_equal(out, expected)
+        # untransposed and uncast: the file's own order and dtype
+        assert out.dtype == patch.data.dtype
 
     def test_absent_dimensions_load_whole(self, dasdae_io, single_patch_path):
         """A dimension missing from windows comes back whole."""
@@ -2260,13 +2263,15 @@ class TestFiberIOReadArray:
         with pytest.raises(PatchAttributeError, match="uniquely resolved"):
             dasdae_io.read_array(multi_patch_path, {"time": (0, 5)})
 
-    def test_implements_flag(self, dasdae_io, monkeypatch):
+    def test_implements_flag(self, dasdae_io):
         """The flag says whether a format overrides the default."""
         assert not dasdae_io.implements_read_array
-        monkeypatch.setattr(
-            type(dasdae_io),
-            "read_array",
-            lambda self, resource, windows, **kw: np.empty(0),
-            raising=False,
-        )
-        assert dasdae_io.implements_read_array
+        cls = type(dasdae_io)
+        # set and delete by hand: monkeypatch would restore the inherited
+        # method as an own class attribute rather than remove it
+        cls.read_array = lambda self, resource, windows, **kw: np.empty(0)
+        try:
+            assert dasdae_io.implements_read_array
+        finally:
+            del cls.read_array
+        assert not dasdae_io.implements_read_array
