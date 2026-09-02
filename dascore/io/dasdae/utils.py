@@ -304,17 +304,18 @@ def _get_patch_group(h5, source_patch_key=""):
     """
     key = normalize_source_patch_key(source_patch_key)
     waveforms = h5.get("waveforms", {})
+    if not len(waveforms):
+        msg = f"No patches in {h5.filename}."
+        raise MissingPatchError(msg)
     if key:
-        # h5py reads a key as a path, so "../data" or "/waveforms" would
-        # resolve to something; only a direct child by that name is a patch
-        group = waveforms.get(key) if key in waveforms else None
+        # h5py reads a key as a path, so "<name>/data" or "/waveforms"
+        # would resolve to something; only a direct child by that name,
+        # which never holds a separator, is a patch
+        group = waveforms.get(key) if "/" not in key and key in waveforms else None
         if group is None or group.name != f"{waveforms.name}/{key}":
             msg = f"No patch named '{key}' in {h5.filename}."
             raise PatchAttributeError(msg)
         return group
-    if not len(waveforms):
-        msg = f"No patches in {h5.filename}."
-        raise MissingPatchError(msg)
     if len(waveforms) > 1:
         msg = f"{h5.filename} holds several patches; pass source_patch_key."
         raise PatchAttributeError(msg)

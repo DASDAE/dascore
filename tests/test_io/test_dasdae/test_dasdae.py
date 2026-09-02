@@ -313,9 +313,15 @@ class TestReadArray:
 
     def test_path_like_key_raises(self, multi_patch_path):
         """A key h5py would read as a path names no patch."""
-        for key in ("/waveforms", ".", "..", "data"):
+        name = dc.scan(multi_patch_path)[0].source_patch_key
+        for key in ("/waveforms", ".", "..", "data", f"{name}/data", f"./{name}"):
             with pytest.raises(PatchAttributeError, match="No patch named"):
                 DASDAEV1().read_array(multi_patch_path, {}, source_patch_key=key)
+
+    def test_keyed_empty_file_raises_missing(self, generic_hdf5):
+        """An empty file is missing data whether or not a key was given."""
+        with pytest.raises(MissingPatchError, match="No patches"):
+            DASDAEV1().read_array(generic_hdf5, {}, source_patch_key="anything")
 
     def test_keyless_multi_patch_raises(self, multi_patch_path):
         """Several patches and no key cannot be resolved."""
