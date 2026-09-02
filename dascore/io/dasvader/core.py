@@ -9,7 +9,7 @@ import numpy as np
 import dascore as dc
 from dascore.constants import opt_timeable_types
 from dascore.io import FiberIO, ScanPayload, make_scan_payload
-from dascore.io.utils import slice_dataset
+from dascore.io.utils import resolve_keyed_source, slice_dataset
 from dascore.utils.hdf5 import H5Reader
 from dascore.utils.misc import raise_on_extra_kwargs
 
@@ -90,14 +90,21 @@ class DASVaderV1(FiberIO):
         return dc.spool(patches)
 
     def read_array(
-        self, resource: H5Reader, windows: dict[str, tuple[int, int]], **kwargs
+        self,
+        resource: H5Reader,
+        windows: dict[str, tuple[int, int]],
+        source_patch_key="",
+        **kwargs,
     ) -> np.ndarray:
         """
         Slice the data reference's dataset directly.
 
         Only the ``dDAS`` record, which names the reference, is read
-        besides the requested block.
+        besides the requested block. A file holds one patch, so the key
+        `scan` reports is empty; any other is refused.
         """
-        raise_on_extra_kwargs(kwargs, "windows")
+        raise_on_extra_kwargs(kwargs, "windows and source_patch_key")
         dataset, dims = _get_data_and_dims(resource)
+        where = str(getattr(resource, "filename", "the resource"))
+        resolve_keyed_source({"": dataset}, source_patch_key, where=where)
         return slice_dataset(dataset, dims, windows)

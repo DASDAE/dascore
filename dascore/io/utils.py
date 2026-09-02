@@ -193,28 +193,54 @@ def windows_to_slices(
     return tuple(out)
 
 
-def resolve_keyed_source(sources: Mapping[str, Any], key, where: str = "the resource"):
+def resolve_keyed_source(
+    sources: Mapping[str, Any] | Iterable[tuple[str, Any]],
+    key,
+    where: str = "the resource",
+):
     """
     Return the one source a ``source_patch_key`` names.
 
-    Resolves as the default `FiberIO.read_array` resolves it: an empty
-    resource is missing data, an unknown key or an ambiguous keyless one
-    cannot be resolved. ``sources`` maps each native key to whatever the
-    caller needs back.
+    Resolves a native key as the default `FiberIO.read_array` does: an
+    empty resource is missing data, and an unknown key, an ambiguous
+    keyless one, or a key naming more than one source cannot be
+    resolved. Unlike the default it takes no positional key, since a
+    format which states its own keys never synthesizes one.
+
+    ``sources`` maps each native key to whatever the caller needs back,
+    and is read lazily, so an h5py group can be passed as it is. Pass
+    ``(key, value)`` pairs instead where a resource can state one key
+    twice, so the ambiguity is seen rather than silently resolved.
     """
     key = normalize_source_patch_key(key)
-    if not sources:
-        msg = f"No patches in {where}."
-        raise MissingPatchError(msg)
-    if key:
-        if key not in sources:
-            msg = f"No patch named '{key}' in {where}."
+    if isinstance(sources, Mapping):
+        # a mapping cannot hold a name twice, so it is read as it is: an
+        # h5py group resolves a name without opening its siblings
+        if not len(sources):
+            raise MissingPatchError(f"No patches in {where}.")
+        if key:
+            if key not in sources:
+                raise PatchAttributeError(f"No patch named '{key}' in {where}.")
+            return sources[key]
+        if len(sources) > 1:
+            msg = f"{where} holds several patches; pass source_patch_key."
             raise PatchAttributeError(msg)
-        return sources[key]
-    if len(sources) > 1:
+        return next(iter(sources.values()))
+    pairs = list(sources)
+    if not pairs:
+        raise MissingPatchError(f"No patches in {where}.")
+    if key:
+        found = [value for name, value in pairs if name == key]
+        if not found:
+            raise PatchAttributeError(f"No patch named '{key}' in {where}.")
+        if len(found) > 1:
+            msg = f"{where} names '{key}' more than once; it cannot be resolved."
+            raise PatchAttributeError(msg)
+        return found[0]
+    if len(pairs) > 1:
         msg = f"{where} holds several patches; pass source_patch_key."
         raise PatchAttributeError(msg)
-    return next(iter(sources.values()))
+    return pairs[0][1]
 
 
 def slice_dataset(dataset, dims: Sequence[str], windows: Mapping[str, Any], shape=None):

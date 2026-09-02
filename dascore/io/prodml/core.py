@@ -88,6 +88,7 @@ class ProdMLV2_0(FiberIO):  # noqa
         resource: H5Reader,
         windows: dict[str, tuple[int, int]],
         source_patch_key="",
+        snap: bool = True,
         **kwargs,
     ) -> np.ndarray:
         """
@@ -97,7 +98,7 @@ class ProdMLV2_0(FiberIO):  # noqa
         ``Raw[0]`` or ``FbeData[0]``); a file holding several nodes needs
         one.
         """
-        raise_on_extra_kwargs(kwargs, "windows and source_patch_key")
+        raise_on_extra_kwargs(kwargs, "windows, source_patch_key and snap")
         dataset, dims = _get_data_node(resource, source_patch_key)
         return slice_dataset(dataset, dims, windows)
 

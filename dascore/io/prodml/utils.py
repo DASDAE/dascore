@@ -484,15 +484,26 @@ def _write_prodml(spool, resource):
 
 
 def _get_node_dims(node_info) -> tuple[str, ...]:
-    """The stored dimension order of a data node, as `scan` reports it."""
+    """
+    The stored dimension order of a data node, as `scan` reports it.
+
+    A node states its own ``Dimensions`` where it has them; a raw node
+    states them on its data array, and a processed one which states none
+    falls back to its parent's.
+    """
     if node_info.patch_type == "raw":
         return _get_dims_from_attrs(node_info.node["RawData"].attrs)
-    return _get_dims_from_attrs(node_info.parent_node.attrs)
+    attrs = node_info.node.attrs
+    if "Dimensions" not in attrs:
+        attrs = node_info.parent_node.attrs
+    return _get_dims_from_attrs(attrs)
 
 
 def _get_data_node(h5, source_patch_key=""):
     """Return the (dataset, dims) the key names, keyed as `scan` keys them."""
-    nodes = {info.name: info for info in _yield_data_nodes(h5)}
+    # pairs, not a mapping: a file may name two nodes alike, and the
+    # default read refuses such a key rather than picking one
+    nodes = [(info.name, info) for info in _yield_data_nodes(h5)]
     info = resolve_keyed_source(nodes, source_patch_key, where=str(h5.filename))
     return _NODE_DATA_PROCESSORS[info.patch_type](info), _get_node_dims(info)
 
