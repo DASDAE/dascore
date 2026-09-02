@@ -5,18 +5,27 @@ from __future__ import annotations
 import contextlib
 from typing import Literal
 
+import numpy as np
 import pandas as pd
 
 import dascore as dc
+from dascore.exceptions import ParameterError
 from dascore.io import FiberIO
 from dascore.utils.hdf5 import H5Reader, H5Writer
 from dascore.utils.io import _normalize_source_patch_keys
-from dascore.utils.misc import unbyte
+from dascore.utils.misc import (
+    _to_slice,
+    _validate_sample_values,
+    raise_on_extra_kwargs,
+    unbyte,
+)
 from dascore.utils.patch import get_patch_names
 
 from .utils import (
     _get_contents_from_patch_groups_generic,
+    _get_dims,
     _get_patch_attrs,
+    _get_patch_group,
     _is_legacy_file,
     _is_legacy_group,
     _kwargs_empty,
@@ -138,6 +147,36 @@ class DASDAEV1(FiberIO):
                 continue
             patches.append(patch)
         return dc.spool(patches)
+
+    def read_array(
+        self,
+        resource: H5Reader,
+        windows: dict[str, tuple[int, int]],
+        source_patch_key="",
+        **kwargs,
+    ) -> np.ndarray:
+        """
+        Slice one patch's data dataset directly.
+
+        Only the group's ``_dims`` attribute and the requested hyperslab
+        leave the file; patch attrs and coordinates are never parsed. See
+        `FiberIO.read_array` for the window contract. ``source_patch_key``
+        is the waveform group name `scan` reports; a positional index is
+        not accepted, because DASDAE never synthesizes one.
+        """
+        raise_on_extra_kwargs(kwargs, "windows and source_patch_key")
+        group = _get_patch_group(resource, source_patch_key)
+        dims = _get_dims(group)
+        if unknown := sorted(set(windows) - set(dims)):
+            msg = f"Window dimensions {unknown} are not among patch dims {dims}."
+            raise ParameterError(msg)
+        # the same validation and (start, stop) reading as select(samples=True)
+        for window in windows.values():
+            _validate_sample_values(window)
+        index = tuple(
+            _to_slice(windows[dim]) if dim in windows else slice(None) for dim in dims
+        )
+        return group["data"][index]
 
     def scan(self, resource: H5Reader, snap: bool = True, **kwargs):
         """

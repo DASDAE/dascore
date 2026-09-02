@@ -1126,6 +1126,7 @@ class FiberIO:
                     "scan": fiberio.implements_scan,
                     "get_format": fiberio.implements_get_format,
                     "read": fiberio.implements_read,
+                    "read_array": fiberio.implements_read_array,
                     "write": fiberio.implements_write,
                 }
                 out.append(format_info)

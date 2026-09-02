@@ -95,7 +95,7 @@ return dc.spool(
 
 ## `read_array`: a data-only fast path
 
-[`FiberIO.read_array`](`dascore.io.core.FiberIO.read_array`) returns raw data for absolute sample windows. Its default calls `read()` and trims; override it only when the format can slice storage directly.
+[`FiberIO.read_array`](`dascore.io.core.FiberIO.read_array`) returns raw data for absolute sample windows. Its default calls `read()` and trims; override it only when the format can slice storage directly, as DASDAE's `DASDAEV1.read_array` does with its HDF5 dataset.
 
 - `windows` maps dimensions to half-open `(start, stop)` sample indices; omitted dimensions are returned whole.
 - Return the array in the dimension order reported by `scan()`, without transposing or casting.

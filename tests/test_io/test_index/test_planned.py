@@ -424,11 +424,35 @@ class TestLoadMemberArray:
         return resolver.member_rows.iloc[0].to_dict()
 
     @pytest.fixture
-    def override(self, row):
-        """Give the row's format a counting read_array override."""
+    def format_class(self, row):
+        """The class of the FiberIO which reads the row's file."""
         fiber_io = FiberIO.manager.get_fiberio(
             format=row["source_format"], version=row["source_version"]
         )
+        return type(fiber_io)
+
+    @pytest.fixture
+    def swap_read_array(self, format_class):
+        """Let a test replace the format's own read_array; restore it after."""
+        original = format_class.__dict__["read_array"]
+
+        def install(func):
+            if func is None:
+                del format_class.read_array
+            else:
+                format_class.read_array = func
+
+        yield install
+        format_class.read_array = original
+
+    @pytest.fixture
+    def no_override(self, swap_read_array):
+        """Strip the format of its own read_array so it inherits the default."""
+        swap_read_array(None)
+
+    @pytest.fixture
+    def override(self, swap_read_array):
+        """Give the row's format a counting read_array override."""
         calls = []
 
         def read_array(self, resource, windows, **kwargs):
@@ -438,15 +462,20 @@ class TestLoadMemberArray:
             calls.append((windows, kwargs))
             return FiberIO.read_array(self, resource, windows, **kwargs)
 
-        # set and delete by hand: monkeypatch would restore the inherited
-        # method as an own class attribute rather than remove it
-        type(fiber_io).read_array = read_array
-        yield calls
-        del type(fiber_io).read_array
+        swap_read_array(read_array)
+        return calls
 
-    def test_no_override_returns_none(self, resolver, row):
+    def test_no_override_returns_none(self, resolver, row, format_class, no_override):
         """A format without an override takes the patch path."""
+        assert not format_class().implements_read_array
         assert resolver._load_member_array(row, {"time": (0, 5)}) is None
+
+    def test_real_override_matches_patch_path(self, resolver, row):
+        """DASDAE's own override, through the resolver, matches the patch path."""
+        out = resolver._load_member_array(row, {"time": (2, 9)})
+        expected = resolver._load_member(row).select(time=(2, 9), samples=True).data
+        assert np.array_equal(out, expected)
+        assert out.dtype == expected.dtype
 
     def test_override_loads_window(self, resolver, row, override):
         """The override gets the windows and its array matches the patch path."""
@@ -516,16 +545,13 @@ class TestLoadMemberArray:
         assert resolver._load_member_array(row, {"time": (0, 5)}) is None
         assert override == []
 
-    def test_override_gets_annotated_handle(self, resolver, row):
+    def test_override_gets_annotated_handle(self, resolver, row, swap_read_array):
         """The override receives the handle type it declares, like read.
 
         The resource manager provisions it, so a remote path resolves the
         same way dc.read's own reading does instead of arriving as a raw
         URL string.
         """
-        fiber_io = FiberIO.manager.get_fiberio(
-            format=row["source_format"], version=row["source_version"]
-        )
         seen = {}
 
         def read_array(self, resource, windows, **kwargs):
@@ -533,10 +559,7 @@ class TestLoadMemberArray:
             return np.zeros(2)
 
         read_array._required_type = BinaryReader
-        type(fiber_io).read_array = read_array
-        try:
-            out = resolver._load_member_array(row, {"time": (0, 2)})
-        finally:
-            del type(fiber_io).read_array
+        swap_read_array(read_array)
+        out = resolver._load_member_array(row, {"time": (0, 2)})
         assert np.array_equal(out, np.zeros(2))
         assert hasattr(seen["resource"], "read")  # a handle, not a path

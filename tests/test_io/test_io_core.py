@@ -1799,6 +1799,15 @@ class TestGetSupportedIOTable:
         # assert that the length of the DataFrame is not 0
         assert len(result_df) > 0
 
+    def test_read_array_column(self):
+        """The table says which formats slice storage directly."""
+        table = FiberIO.get_supported_io_table()
+        flags = table.groupby("name")["read_array"].any()
+        assert flags["DASDAE"]
+        # a format which writes but inherits the default, so the column
+        # cannot be mistaken for the write flag
+        assert not flags["PICKLE"]
+
 
 class TestMissingInstallName:
     """Tests for guessing the package to install from a dependency error."""
@@ -2232,11 +2241,15 @@ class TestFiberIOReadArray:
         return FiberIO.manager.get_fiberio(format=fmt, version=version)
 
     def test_default_matches_read_then_select(self, dasdae_io, single_patch_path):
-        """Windows are half-open python indices: plain numpy slicing."""
+        """Windows are half-open python indices: plain numpy slicing.
+
+        DASDAE overrides read_array, so these tests call the base body
+        unbound to pin the default rather than the override.
+        """
         patch = dc.read(single_patch_path)[0]
         assert patch.dims == ("distance", "time")
         windows = {"time": (5, 50), "distance": (2, 9)}
-        out = dasdae_io.read_array(single_patch_path, windows)
+        out = FiberIO.read_array(dasdae_io, single_patch_path, windows)
         expected = patch.data[2:9, 5:50]
         assert np.array_equal(out, expected)
         # untransposed and uncast: the file's own order and dtype
@@ -2245,18 +2258,19 @@ class TestFiberIOReadArray:
     def test_absent_dimensions_load_whole(self, dasdae_io, single_patch_path):
         """A dimension missing from windows comes back whole."""
         patch = dc.read(single_patch_path)[0]
-        out = dasdae_io.read_array(single_patch_path, {"time": (0, 10)})
+        out = FiberIO.read_array(dasdae_io, single_patch_path, {"time": (0, 10)})
         expected = patch.select(time=(0, 10), samples=True).data
         assert np.array_equal(out, expected)
-        assert np.array_equal(dasdae_io.read_array(single_patch_path, {}), patch.data)
+        whole = FiberIO.read_array(dasdae_io, single_patch_path, {})
+        assert np.array_equal(whole, patch.data)
 
     def test_multi_patch_selects_keyed_patch(self, dasdae_io, multi_patch_path):
         """The key names which patch of the file the windows index."""
         for payload in dc.scan(multi_patch_path):
             key = payload.source_patch_key
             wanted = dc.read(multi_patch_path, source_patch_key=key)[0]
-            out = dasdae_io.read_array(
-                multi_patch_path, {"time": (3, 17)}, source_patch_key=key
+            out = FiberIO.read_array(
+                dasdae_io, multi_patch_path, {"time": (3, 17)}, source_patch_key=key
             )
             expected = wanted.select(time=(3, 17), samples=True).data
             assert np.array_equal(out, expected)
@@ -2264,7 +2278,7 @@ class TestFiberIOReadArray:
     def test_multi_patch_without_key_raises(self, dasdae_io, multi_patch_path):
         """Windows on an ambiguous grid never guess a patch."""
         with pytest.raises(PatchAttributeError, match="uniquely resolved"):
-            dasdae_io.read_array(multi_patch_path, {"time": (0, 5)})
+            FiberIO.read_array(dasdae_io, multi_patch_path, {"time": (0, 5)})
 
     def test_override_resource_coercion(self, single_patch_path):
         """An override's resource annotation is honored like read's.
@@ -2291,13 +2305,19 @@ class TestFiberIOReadArray:
 
     def test_implements_flag(self, dasdae_io):
         """The flag says whether a format overrides the default."""
-        assert not dasdae_io.implements_read_array
-        cls = type(dasdae_io)
+        assert dasdae_io.implements_read_array
+
+        class PlainFormat(FiberIO):
+            name = "_test_plain_read_array"
+            version = "1"
+
+        plain = PlainFormat()
+        assert not plain.implements_read_array
         # set and delete by hand: monkeypatch would restore the inherited
         # method as an own class attribute rather than remove it
-        cls.read_array = lambda self, resource, windows, **kw: np.empty(0)
+        PlainFormat.read_array = lambda self, resource, windows, **kw: np.empty(0)
         try:
-            assert dasdae_io.implements_read_array
+            assert plain.implements_read_array
         finally:
-            del cls.read_array
-        assert not dasdae_io.implements_read_array
+            del PlainFormat.read_array
+        assert not plain.implements_read_array

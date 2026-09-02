@@ -557,6 +557,25 @@ class TestRead:
         for patch1, patch2 in zip(spool1, spool2):
             assert patch1.equals(patch2)
 
+    def test_read_array_matches_default(self, io_path_tuple):
+        """A format's read_array override must agree with the read-and-trim default."""
+        io, path = io_path_tuple
+        if not io.implements_read_array:
+            pytest.skip(f"{io.name} inherits the default read_array")
+        with skip_missing():
+            payload = dc.scan(path)[0]
+        key = payload.source_patch_key
+        kwargs = {"source_patch_key": key} if key else {}
+        windows = {
+            dim: (1, size - 1)
+            for dim, size in zip(payload.dims, payload.shape, strict=True)
+            if size > 2
+        }
+        out = io.read_array(path, windows, **kwargs)
+        expected = FiberIO.read_array(io, path, windows, **kwargs)
+        assert out.dtype == expected.dtype
+        assert np.array_equal(out, expected)
+
     def test_slice_single_dim_both_ends(self, io_path_tuple):
         """
         Ensure each dimension can be passed as an argument to `read` and

@@ -15,7 +15,13 @@ import dascore as dc
 from dascore.compat import random_state
 from dascore.config import config_context
 from dascore.core.coords import CoordString
-from dascore.exceptions import InvalidFiberFileError
+from dascore.exceptions import (
+    InvalidFiberFileError,
+    MissingPatchError,
+    ParameterError,
+    PatchAttributeError,
+)
+from dascore.io.core import FiberIO
 from dascore.io.dasdae import utils as dasdae_utils
 from dascore.io.dasdae._compat import translate_legacy_attrs
 from dascore.io.dasdae.core import DASDAEV1
@@ -231,6 +237,94 @@ class TestReadDASDAE:
 
         assert len(out) == 1
         assert out[0].attrs.tag == "S120"
+
+
+@pytest.fixture(scope="class")
+def multi_patch_path(tmp_path_factory):
+    """A DASDAE file holding three patches with distinct data."""
+    path = tmp_path_factory.mktemp("read_array") / "multi.h5"
+    spool = dc.examples.get_example_spool("random_das", length=3)
+    patches = [p.update(data=p.data + i * 100) for i, p in enumerate(spool)]
+    dc.write(dc.spool(patches), path, "DASDAE", file_version="1")
+    return path
+
+
+class TestReadArray:
+    """Tests for the data-only hyperslab read."""
+
+    def test_matches_default(self, written_dascore_v1_random, random_patch):
+        """The override returns exactly what the read-and-trim default does."""
+        io = DASDAEV1()
+        windows = {"time": (3, 11), "distance": (2, 5)}
+        out = io.read_array(written_dascore_v1_random, windows)
+        expected = FiberIO.read_array(io, written_dascore_v1_random, windows)
+        assert np.array_equal(out, expected)
+        assert out.dtype == random_patch.data.dtype
+        assert np.array_equal(out, random_patch.data[2:5, 3:11])
+
+    def test_whole_array(self, written_dascore_v1_random, random_patch):
+        """No windows returns the whole array."""
+        out = DASDAEV1().read_array(written_dascore_v1_random, {})
+        assert np.array_equal(out, random_patch.data)
+
+    def test_keyed_patch(self, multi_patch_path):
+        """A source patch key picks that patch's data."""
+        io = DASDAEV1()
+        payloads = dc.scan(multi_patch_path)
+        assert len(payloads) == 3
+        for payload in payloads:
+            key = payload.source_patch_key
+            patch = dc.read(multi_patch_path, source_patch_key=key)[0]
+            out = io.read_array(
+                multi_patch_path, {"time": (1, 4)}, source_patch_key=key
+            )
+            assert np.array_equal(out, patch.data[:, 1:4])
+
+    def test_null_key_resolves_single_patch(self, written_dascore_v1_random):
+        """A NaN key (an index row with no stored key) means the lone patch."""
+        out = DASDAEV1().read_array(
+            written_dascore_v1_random, {}, source_patch_key=np.nan
+        )
+        expected = DASDAEV1().read_array(written_dascore_v1_random, {})
+        assert np.array_equal(out, expected)
+
+    def test_keyless_multi_patch_raises(self, multi_patch_path):
+        """Several patches and no key cannot be resolved."""
+        with pytest.raises(PatchAttributeError, match="source_patch_key"):
+            DASDAEV1().read_array(multi_patch_path, {})
+
+    def test_unknown_key_raises(self, multi_patch_path):
+        """A key naming no patch group raises."""
+        with pytest.raises(PatchAttributeError, match="No patch named"):
+            DASDAEV1().read_array(multi_patch_path, {}, source_patch_key="nope")
+
+    def test_no_patches_raises(self, generic_hdf5):
+        """A file without a waveform group has nothing to read."""
+        with pytest.raises(MissingPatchError, match="No patches"):
+            DASDAEV1().read_array(generic_hdf5, {})
+
+    def test_unknown_dimension_raises(self, written_dascore_v1_random):
+        """A window on a dimension the patch lacks raises."""
+        with pytest.raises(ParameterError, match="not among patch dims"):
+            DASDAEV1().read_array(written_dascore_v1_random, {"bob": (0, 1)})
+
+    def test_load_filters_refused(self, written_dascore_v1_random):
+        """Value filters are not part of the window contract."""
+        with pytest.raises(ParameterError, match="Unexpected keyword"):
+            DASDAEV1().read_array(written_dascore_v1_random, {}, time_min=1)
+
+    def test_reads_only_the_window(self, written_dascore_v1_random, monkeypatch):
+        """The dataset is sliced in the file, not read whole then trimmed."""
+        seen = []
+        original = h5py.Dataset.__getitem__
+
+        def spy(self, index):
+            seen.append(index)
+            return original(self, index)
+
+        monkeypatch.setattr(h5py.Dataset, "__getitem__", spy)
+        DASDAEV1().read_array(written_dascore_v1_random, {"time": (2, 6)})
+        assert seen == [(slice(None), slice(2, 6))]
 
 
 class TestScanDASDAE:

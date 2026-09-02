@@ -1090,6 +1090,25 @@ def check_filter_sequence(filt_range):
     return filt_range
 
 
+def raise_on_extra_kwargs(kwargs, accepted: str) -> None:
+    """
+    Raise ParameterError when a call received keyword arguments it does not take.
+
+    Parameters
+    ----------
+    kwargs
+        The leftover keyword arguments.
+    accepted
+        What the call does accept, for the message.
+    """
+    if kwargs:
+        msg = (
+            f"Unexpected keyword argument(s) {sorted(kwargs)}; "
+            f"only {accepted} are accepted."
+        )
+        raise ParameterError(msg)
+
+
 def check_filter_kwargs(kwargs):
     """Check filter kwargs and return dim name and filter range."""
     if len(kwargs) != 1:
