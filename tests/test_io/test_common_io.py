@@ -566,10 +566,9 @@ class TestRead:
             payload = dc.scan(path)[0]
         key = payload.source_patch_key
         kwargs = {"source_patch_key": key} if key else {}
-        expected = FiberIO.read_array(io, path, {}, **kwargs)
         windows = {
             dim: (1, size - 1)
-            for dim, size in zip(payload.dims, expected.shape, strict=True)
+            for dim, size in zip(payload.dims, payload.shape, strict=True)
             if size > 2
         }
         out = io.read_array(path, windows, **kwargs)

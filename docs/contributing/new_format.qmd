@@ -170,7 +170,7 @@ For some formats, a numeric patch index is enough if patch ordering is stable. F
 
 [`FiberIO.read_array`](`dascore.io.core.FiberIO.read_array`) returns the raw data array for absolute sample windows, without returning a `Patch` (the default still builds one internally; direct-storage overrides skip it). Callers that already know a file's structure from a spool index use it to skip attribute and coordinate parsing on every read.
 
-You never have to implement it: the default reads the whole resource through `read` and trims, so it is correct for every format. Overriding pays off for formats that can slice storage directly (an HDF5 dataset, a memory-mapped binary). DASDAE's override, which slices its HDF5 dataset, is the shipped example. The contract for an override:
+You never have to implement it: the default reads the whole resource through `read` and trims, so it is correct for every format. Overriding pays off for formats that can slice storage directly (an HDF5 dataset, a memory-mapped binary). DASDAE's override (`DASDAEV1.read_array` in `dascore/io/dasdae/core.py`), which slices its HDF5 dataset, is the shipped example. The contract for an override:
 
 - `windows` maps dimension name to `(start, stop)` half-open python indices on the file's own sample grid; dimensions absent from `windows` are returned whole.
 - Return the array in the file's stated dimension order (the order `scan` reports), untransposed and uncast. The caller transposes and casts.

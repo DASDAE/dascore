@@ -16,7 +16,7 @@ from dascore.core.attrs import PatchAttrs
 from dascore.core.coordmanager import get_coord_manager
 from dascore.core.coords import get_coord
 from dascore.core.summary import normalize_source_patch_key
-from dascore.exceptions import MissingPatchError, PatchAttributeError
+from dascore.exceptions import MissingPatchError, ParameterError, PatchAttributeError
 from dascore.io.core import STORED_PATCH_ID, make_scan_payload
 from dascore.io.dasdae._compat import (
     NOT_DECODED,
@@ -297,16 +297,21 @@ def _get_patch_group(h5, source_patch_key=""):
     """
     Return the one waveform group a source patch key names.
 
-    Without a key, a file holding exactly one patch resolves to it; an
-    empty or ambiguous file raises as the default `read_array` does.
+    Without a key, a file holding exactly one patch resolves to it. An
+    empty file raises MissingPatchError; several patches without a key,
+    or a key naming no group, raise PatchAttributeError, the types the
+    default `read_array` raises.
     """
     key = normalize_source_patch_key(source_patch_key)
     waveforms = h5.get("waveforms", {})
     if key:
-        if key not in waveforms:
+        # h5py reads a key as a path, so "../data" or "/waveforms" would
+        # resolve to something; only a direct child by that name is a patch
+        group = waveforms.get(key) if key in waveforms else None
+        if group is None or group.name != f"{waveforms.name}/{key}":
             msg = f"No patch named '{key}' in {h5.filename}."
             raise PatchAttributeError(msg)
-        return waveforms[key]
+        return group
     if not len(waveforms):
         msg = f"No patches in {h5.filename}."
         raise MissingPatchError(msg)
@@ -314,6 +319,30 @@ def _get_patch_group(h5, source_patch_key=""):
         msg = f"{h5.filename} holds several patches; pass source_patch_key."
         raise PatchAttributeError(msg)
     return next(iter(waveforms.values()))
+
+
+def _window_slice(dim, window) -> slice:
+    """
+    A ``(start, stop)`` sample window as a slice.
+
+    Bounds are integers; ``None`` or ``...`` leaves that end open, as the
+    default `read_array` reads them through `Patch.select`.
+    """
+    try:
+        start, stop = window
+    except (TypeError, ValueError):
+        msg = f"The window for {dim!r} must be a (start, stop) pair, got {window!r}."
+        raise ParameterError(msg) from None
+    bounds = []
+    for bound in (start, stop):
+        if bound is None or bound is ...:
+            bounds.append(None)
+        elif isinstance(bound, int | np.integer) and not isinstance(bound, bool):
+            bounds.append(int(bound))
+        else:
+            msg = f"Window bounds for {dim!r} must be integers, got {window!r}."
+            raise ParameterError(msg)
+    return slice(*bounds)
 
 
 def _matches_attr_filters(attrs, kwargs):

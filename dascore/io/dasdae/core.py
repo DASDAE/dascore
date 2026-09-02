@@ -27,6 +27,7 @@ from .utils import (
     _matches_attr_filters,
     _read_patch,
     _save_patch,
+    _window_slice,
     _write_meta,
 )
 
@@ -153,10 +154,11 @@ class DASDAEV1(FiberIO):
         """
         Slice one patch's data dataset directly.
 
-        Only the requested hyperslab leaves the file; attributes and
-        coordinates are never parsed. See `FiberIO.read_array` for the
-        window contract. ``source_patch_key`` is the waveform group name
-        `scan` reports; DASDAE keys are never positional.
+        Only the group's ``_dims`` attribute and the requested hyperslab
+        leave the file; patch attrs and coordinates are never parsed. See
+        `FiberIO.read_array` for the window contract. ``source_patch_key``
+        is the waveform group name `scan` reports; a positional index is
+        not accepted, because DASDAE never synthesizes one.
         """
         if kwargs:
             msg = (
@@ -169,22 +171,11 @@ class DASDAEV1(FiberIO):
         if unknown := sorted(set(windows) - set(dims)):
             msg = f"Window dimensions {unknown} are not among patch dims {dims}."
             raise ParameterError(msg)
-        index = []
-        for dim in dims:
-            window = windows.get(dim)
-            if window is None:
-                index.append(slice(None))
-                continue
-            try:
-                start, stop = window
-            except (TypeError, ValueError):
-                msg = (
-                    f"The window for {dim!r} must be a (start, stop) pair, "
-                    f"got {window!r}."
-                )
-                raise ParameterError(msg) from None
-            index.append(slice(start, stop))
-        return group["data"][tuple(index)]
+        index = tuple(
+            _window_slice(dim, windows[dim]) if dim in windows else slice(None)
+            for dim in dims
+        )
+        return group["data"][index]
 
     def scan(self, resource: H5Reader, snap: bool = True, **kwargs):
         """

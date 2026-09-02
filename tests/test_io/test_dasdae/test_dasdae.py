@@ -270,7 +270,9 @@ class TestReadArray:
     def test_keyed_patch(self, multi_patch_path):
         """A source patch key picks that patch's data."""
         io = DASDAEV1()
-        for payload in dc.scan(multi_patch_path):
+        payloads = dc.scan(multi_patch_path)
+        assert len(payloads) == 3
+        for payload in payloads:
             key = payload.source_patch_key
             patch = dc.read(multi_patch_path, source_patch_key=key)[0]
             out = io.read_array(
@@ -279,7 +281,7 @@ class TestReadArray:
             assert np.array_equal(out, patch.data[:, 1:4])
 
     def test_null_key_resolves_single_patch(self, written_dascore_v1_random):
-        """A null key (a pandas cell without one) means the lone patch."""
+        """A NaN key (an index row with no stored key) means the lone patch."""
         out = DASDAEV1().read_array(
             written_dascore_v1_random, {}, source_patch_key=np.nan
         )
@@ -291,19 +293,29 @@ class TestReadArray:
         with pytest.raises(ParameterError, match="pair"):
             DASDAEV1().read_array(written_dascore_v1_random, {"time": (2, 6, 2)})
 
-    def test_legacy_file(self, random_patch, tmp_path):
-        """A legacy (unmarked) file slices the same way; dims come from the group."""
-        path = tmp_path / "legacy.h5"
-        random_patch.io.write(path, "dasdae")
-        with h5py.File(path, "a") as h5:
-            del h5.attrs[_SEPARATE_ATTRS_KEY]
-            for group in h5["waveforms"].values():
-                del group.attrs[_SEPARATE_ATTRS_KEY]
+    def test_legacy_file(self):
+        """A file written before attrs and coords were separated slices the same."""
         io = DASDAEV1()
+        path = fetch("UoU_lf_urban.hdf5")
         windows = {"time": (4, 9)}
         out = io.read_array(path, windows)
         assert np.array_equal(out, FiberIO.read_array(io, path, windows))
-        assert np.array_equal(out, random_patch.data[:, 4:9])
+
+    def test_open_and_float_bounds(self, written_dascore_v1_random, random_patch):
+        """None or ... leaves an end open, as the default does; floats are refused."""
+        io = DASDAEV1()
+        out = io.read_array(written_dascore_v1_random, {"time": (..., 6)})
+        assert np.array_equal(out, random_patch.data[:, :6])
+        out = io.read_array(written_dascore_v1_random, {"time": (3, None)})
+        assert np.array_equal(out, random_patch.data[:, 3:])
+        with pytest.raises(ParameterError, match="integers"):
+            io.read_array(written_dascore_v1_random, {"time": (2.0, 6.0)})
+
+    def test_path_like_key_raises(self, multi_patch_path):
+        """A key h5py would read as a path names no patch."""
+        for key in ("/waveforms", ".", "..", "data"):
+            with pytest.raises(PatchAttributeError, match="No patch named"):
+                DASDAEV1().read_array(multi_patch_path, {}, source_patch_key=key)
 
     def test_keyless_multi_patch_raises(self, multi_patch_path):
         """Several patches and no key cannot be resolved."""

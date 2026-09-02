@@ -1804,7 +1804,9 @@ class TestGetSupportedIOTable:
         table = FiberIO.get_supported_io_table()
         flags = table.groupby("name")["read_array"].any()
         assert flags["DASDAE"]
-        assert not flags["TERRA15"]
+        # a format which writes but inherits the default, so the column
+        # cannot be mistaken for the write flag
+        assert not flags["PICKLE"]
 
 
 class TestMissingInstallName:
@@ -2238,22 +2240,16 @@ class TestFiberIOReadArray:
         fmt, version = dc.get_format(single_patch_path)
         return FiberIO.manager.get_fiberio(format=fmt, version=version)
 
-    @staticmethod
-    def default_read_array(fiber_io, resource, windows, **kwargs):
-        """
-        Run the base read_array body with this format's read.
-
-        DASDAE overrides read_array, so calling the method on the instance
-        would exercise the override; the default is what these tests pin.
-        """
-        return FiberIO.read_array(fiber_io, resource, windows, **kwargs)
-
     def test_default_matches_read_then_select(self, dasdae_io, single_patch_path):
-        """Windows are half-open python indices: plain numpy slicing."""
+        """Windows are half-open python indices: plain numpy slicing.
+
+        DASDAE overrides read_array, so these tests call the base body
+        unbound to pin the default rather than the override.
+        """
         patch = dc.read(single_patch_path)[0]
         assert patch.dims == ("distance", "time")
         windows = {"time": (5, 50), "distance": (2, 9)}
-        out = self.default_read_array(dasdae_io, single_patch_path, windows)
+        out = FiberIO.read_array(dasdae_io, single_patch_path, windows)
         expected = patch.data[2:9, 5:50]
         assert np.array_equal(out, expected)
         # untransposed and uncast: the file's own order and dtype
@@ -2262,10 +2258,10 @@ class TestFiberIOReadArray:
     def test_absent_dimensions_load_whole(self, dasdae_io, single_patch_path):
         """A dimension missing from windows comes back whole."""
         patch = dc.read(single_patch_path)[0]
-        out = self.default_read_array(dasdae_io, single_patch_path, {"time": (0, 10)})
+        out = FiberIO.read_array(dasdae_io, single_patch_path, {"time": (0, 10)})
         expected = patch.select(time=(0, 10), samples=True).data
         assert np.array_equal(out, expected)
-        whole = self.default_read_array(dasdae_io, single_patch_path, {})
+        whole = FiberIO.read_array(dasdae_io, single_patch_path, {})
         assert np.array_equal(whole, patch.data)
 
     def test_multi_patch_selects_keyed_patch(self, dasdae_io, multi_patch_path):
@@ -2273,7 +2269,7 @@ class TestFiberIOReadArray:
         for payload in dc.scan(multi_patch_path):
             key = payload.source_patch_key
             wanted = dc.read(multi_patch_path, source_patch_key=key)[0]
-            out = self.default_read_array(
+            out = FiberIO.read_array(
                 dasdae_io, multi_patch_path, {"time": (3, 17)}, source_patch_key=key
             )
             expected = wanted.select(time=(3, 17), samples=True).data
@@ -2282,7 +2278,7 @@ class TestFiberIOReadArray:
     def test_multi_patch_without_key_raises(self, dasdae_io, multi_patch_path):
         """Windows on an ambiguous grid never guess a patch."""
         with pytest.raises(PatchAttributeError, match="uniquely resolved"):
-            self.default_read_array(dasdae_io, multi_patch_path, {"time": (0, 5)})
+            FiberIO.read_array(dasdae_io, multi_patch_path, {"time": (0, 5)})
 
     def test_override_resource_coercion(self, single_patch_path):
         """An override's resource annotation is honored like read's.
