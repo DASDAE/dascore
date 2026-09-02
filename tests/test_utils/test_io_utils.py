@@ -1942,6 +1942,9 @@ class TestToXarrayReadArray:
         calls = []
 
         def read_array(self, resource, windows, **kwargs):
+            # a real override's caster wrapper consumes _pre_cast; this
+            # raw function sees it and must not forward it to read
+            kwargs.pop("_pre_cast", None)
             calls.append(windows)
             return FiberIO.read_array(self, resource, windows, **kwargs)
 

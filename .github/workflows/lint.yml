@@ -5,10 +5,12 @@ on:
     branches:
       - master
       - dev
+      - xarray_integration
   pull_request:
     branches:
       - master
       - dev
+      - xarray_integration
 
 permissions:
   contents: read

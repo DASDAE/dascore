@@ -431,6 +431,9 @@ class TestLoadMemberArray:
         calls = []
 
         def read_array(self, resource, windows, **kwargs):
+            # a real override's caster wrapper consumes _pre_cast; this
+            # raw function sees it and must not forward it to read
+            kwargs.pop("_pre_cast", None)
             calls.append((windows, kwargs))
             return FiberIO.read_array(self, resource, windows, **kwargs)
 
@@ -511,3 +514,30 @@ class TestLoadMemberArray:
         monkeypatch.setattr(resolver, "loader", object())
         assert resolver._load_member_array(row, {"time": (0, 5)}) is None
         assert override == []
+
+    def test_override_gets_annotated_handle(self, resolver, row):
+        """The override receives the handle type it declares, like read.
+
+        The resource manager provisions it, so a remote path resolves the
+        same way dc.read's own reading does instead of arriving as a raw
+        URL string.
+        """
+        from dascore.utils.io import BinaryReader  # noqa: PLC0415
+
+        fiber_io = FiberIO.manager.get_fiberio(
+            format=row["source_format"], version=row["source_version"]
+        )
+        seen = {}
+
+        def read_array(self, resource, windows, **kwargs):
+            seen["resource"] = resource
+            return np.zeros(2)
+
+        read_array._required_type = BinaryReader
+        type(fiber_io).read_array = read_array
+        try:
+            out = resolver._load_member_array(row, {"time": (0, 2)})
+        finally:
+            del type(fiber_io).read_array
+        assert np.array_equal(out, np.zeros(2))
+        assert hasattr(seen["resource"], "read")  # a handle, not a path

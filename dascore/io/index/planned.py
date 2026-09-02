@@ -25,7 +25,7 @@ import pandas as pd
 import dascore as dc
 from dascore.core.coords import CoordSummary
 from dascore.exceptions import UnknownFiberFormatError
-from dascore.io.core import FiberIO
+from dascore.io.core import FiberIO, _required_resource_type
 from dascore.io.index.backend import get_backend
 from dascore.io.index.catalog import (
     CompositeResolver,
@@ -49,6 +49,7 @@ from dascore.utils.chunk_plan import (
     _concatenated_steps,
     _ensure_patch_id,
 )
+from dascore.utils.io import IOResourceManager
 from dascore.utils.misc import _CanonicalRange, is_range
 from dascore.utils.patch import concatenate_planned
 from dascore.utils.patch_assembly import PatchAssembler
@@ -614,7 +615,16 @@ class PlanResolver(PatchResolver):
             # keys natively could match the wrong patch, or nothing.
             return None
         kwargs = {"source_patch_key": key} if key else {}
-        return fiber_io.read_array(loader.resolve_path(path), dict(windows), **kwargs)
+        # The resource manager resolves remote paths and opens the handle
+        # type the override's annotation asks for, exactly as dc.read
+        # provisions its reader; _pre_cast says the work is already done.
+        with IOResourceManager(loader.resolve_path(path)) as manager:
+            resource = manager.get_resource(
+                _required_resource_type(fiber_io.read_array)
+            )
+            return fiber_io.read_array(
+                resource, dict(windows), _pre_cast=True, **kwargs
+            )
 
     def _in_plan_units(self, patch: dc.Patch, kwargs: Mapping) -> dc.Patch:
         """
