@@ -26,6 +26,7 @@ from dascore.io.index.planned import (
 )
 from dascore.units import m
 from dascore.utils.chunk_plan import ChunkPlan, samples_adjusted_envelopes
+from dascore.utils.io import BinaryReader
 
 
 @pytest.fixture(scope="module")
@@ -522,8 +523,6 @@ class TestLoadMemberArray:
         same way dc.read's own reading does instead of arriving as a raw
         URL string.
         """
-        from dascore.utils.io import BinaryReader  # noqa: PLC0415
-
         fiber_io = FiberIO.manager.get_fiberio(
             format=row["source_format"], version=row["source_version"]
         )

@@ -989,20 +989,40 @@ class FiberIO:
         Return the raw data array for absolute sample windows.
 
         A data-only fast path for callers which already know a resource's
-        structure (from an index) and need no Patch, no attrs, and no
-        coordinates back. ``windows`` maps dimension name to ``(start, stop)``,
-        half-open python indices on the resource's own sample grid;
-        dimensions absent from ``windows`` are returned whole. The array
-        comes back in the resource's stated dimension order (the order
+        structure (from an index) and need no Patch, attrs, or
+        coordinates back. This default reads the whole resource through
+        ``read`` and trims — a Patch is still built internally, just not
+        returned — so every format is correct without overriding; formats
+        override it to slice storage directly and skip the Patch work.
+
+        Parameters
+        ----------
+        resource
+            The resource to read, as ``read`` takes it.
+        windows
+            Maps dimension name to ``(start, stop)`` half-open python
+            indices on the resource's own sample grid. Dimensions absent
+            from the mapping are returned whole.
+        **kwargs
+            Reader-specific options. Multi-patch resources take
+            ``source_patch_key`` (as ``read`` and ``scan`` spell it)
+            naming the one patch the windows index; without it an
+            ambiguous resource raises rather than guesses.
+
+        Returns
+        -------
+        The array in the resource's stated dimension order (the order
         ``scan`` reports), untransposed and uncast.
 
-        Multi-patch resources take ``source_patch_key`` (as ``read`` and
-        ``scan`` spell it) naming the one patch the windows index; without
-        it a multi-patch resource cannot be resolved and raises.
-
-        This default reads the whole resource through ``read`` and trims,
-        so every format is correct without overriding; formats override it
-        to slice storage directly.
+        Examples
+        --------
+        >>> from dascore.io.dasdae.core import DASDAEV1
+        >>> from dascore.utils.downloader import fetch
+        >>>
+        >>> path = fetch("example_dasdae_event_1.h5")
+        >>> array = DASDAEV1().read_array(path, {"time": (0, 50)})
+        >>> array.shape
+        (601, 50)
         """
         source_patch_key = kwargs.pop("source_patch_key", "")
         spool = self.read(resource, **kwargs)

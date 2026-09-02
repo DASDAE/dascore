@@ -235,7 +235,7 @@ class FileResolver(PatchResolver):
             kwargs["file_version"] = row["source_version"]
         return dc.read(**kwargs, **id_kwargs, **trim)
 
-    def resolve_path(self, path):
+    def resolve_path(self, path: str | Path) -> str | Path:
         """
         Resolve a row's source path against the catalog root.
 
