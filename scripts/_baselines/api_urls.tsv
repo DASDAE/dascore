@@ -1516,7 +1516,6 @@ dascore.core.spool.resolve_contexts	/api/dascore/core/_spool_inventory/resolve_c
 dascore.core.spool.resolve_row_epochs	/api/dascore/core/_spool_inventory/resolve_row_epochs.qmd
 dascore.core.spool.resolve_selector_namespaces	/api/dascore/utils/pd/resolve_selector_namespaces.qmd
 dascore.core.spool.resolve_split_pieces	/api/dascore/core/_spool_inventory/resolve_split_pieces.qmd
-dascore.core.spool.samples_adjusted_envelopes	/api/dascore/utils/chunk_plan/samples_adjusted_envelopes.qmd
 dascore.core.spool.selector_spec_names	/api/dascore/utils/pd/selector_spec_names.qmd
 dascore.core.spool.split_block	/api/dascore/utils/display/split_block.qmd
 dascore.core.spool.spool	/api/dascore/core/spool/spool.qmd
@@ -2342,7 +2341,6 @@ dascore.io.index.catalog.PatchResolver.live_entries	/api/dascore/io/index/catalo
 dascore.io.index.catalog.PatchResolver.resolve	/api/dascore/io/index/catalog/PatchResolver/resolve.qmd
 dascore.io.index.catalog.Query	/api/dascore/io/index/query/Query.qmd
 dascore.io.index.catalog.SourceRecord	/api/dascore/io/index/ingest/SourceRecord.qmd
-dascore.io.index.catalog.adjust_segments	/api/dascore/utils/pd/adjust_segments.qmd
 dascore.io.index.catalog.apply_exact_residuals	/api/dascore/io/index/catalog/apply_exact_residuals.qmd
 dascore.io.index.catalog.express_range_for_coord	/api/dascore/utils/misc/express_range_for_coord.qmd
 dascore.io.index.catalog.get_backend	/api/dascore/io/index/backend/get_backend.qmd
@@ -2350,7 +2348,6 @@ dascore.io.index.catalog.is_memory_uri	/api/dascore/utils/paths/is_memory_uri.qm
 dascore.io.index.catalog.is_range	/api/dascore/utils/misc/is_range.qmd
 dascore.io.index.catalog.normalize_source_patch_key	/api/dascore/core/summary/normalize_source_patch_key.qmd
 dascore.io.index.catalog.patch_record	/api/dascore/io/index/ingest/patch_record.qmd
-dascore.io.index.catalog.relative_ranges_to_absolute	/api/dascore/utils/pd/relative_ranges_to_absolute.qmd
 dascore.io.index.catalog.resolve_query	/api/dascore/io/index/query/resolve_query.qmd
 dascore.io.index.catalog.summaries_to_records	/api/dascore/io/index/ingest/summaries_to_records.qmd
 dascore.io.index.indexer	/api/dascore/io/index/indexer.qmd
@@ -2439,14 +2436,12 @@ dascore.io.index.planned.PlanResolver.live_entries	/api/dascore/io/index/planned
 dascore.io.index.planned.PlanResolver.plan_entries	/api/dascore/io/index/planned/PlanResolver/plan_entries.qmd
 dascore.io.index.planned.PlanResolver.resolve	/api/dascore/io/index/planned/PlanResolver/resolve.qmd
 dascore.io.index.planned.SourceRecord	/api/dascore/io/index/ingest/SourceRecord.qmd
-dascore.io.index.planned.adjust_segments	/api/dascore/utils/pd/adjust_segments.qmd
 dascore.io.index.planned.apply_exact_residuals	/api/dascore/io/index/catalog/apply_exact_residuals.qmd
 dascore.io.index.planned.collapse_working_df	/api/dascore/io/index/planned/collapse_working_df.qmd
 dascore.io.index.planned.concatenate_planned	/api/dascore/utils/patch/concatenate_planned.qmd
 dascore.io.index.planned.derived_catalog	/api/dascore/io/index/planned/derived_catalog.qmd
 dascore.io.index.planned.get_backend	/api/dascore/io/index/backend/get_backend.qmd
 dascore.io.index.planned.get_quantity	/api/dascore/units/get_quantity.qmd
-dascore.io.index.planned.is_range	/api/dascore/utils/misc/is_range.qmd
 dascore.io.index.planned.stale_def_keys	/api/dascore/io/index/planned/stale_def_keys.qmd
 dascore.io.index.planned.typed_value	/api/dascore/io/index/ingest/typed_value.qmd
 dascore.io.index.query	/api/dascore/io/index/query.qmd
@@ -4778,7 +4773,6 @@ dascore.utils.chunk_plan.is_datetime64	/api/dascore/utils/time/is_datetime64.qmd
 dascore.utils.chunk_plan.is_range	/api/dascore/utils/misc/is_range.qmd
 dascore.utils.chunk_plan.is_timedelta64	/api/dascore/utils/time/is_timedelta64.qmd
 dascore.utils.chunk_plan.known_only	/api/dascore/utils/attrs/known_only.qmd
-dascore.utils.chunk_plan.samples_adjusted_envelopes	/api/dascore/utils/chunk_plan/samples_adjusted_envelopes.qmd
 dascore.utils.chunk_plan.subdivision_pieces	/api/dascore/utils/chunk_plan/subdivision_pieces.qmd
 dascore.utils.chunk_plan.to_float	/api/dascore/utils/time/to_float.qmd
 dascore.utils.chunk_plan.to_timedelta64	/api/dascore/utils/time/to_timedelta64.qmd
@@ -5139,8 +5133,6 @@ dascore.utils.pd.present_columns	/api/dascore/utils/pd/present_columns.qmd
 dascore.utils.pd.present_data_size_column	/api/dascore/utils/pd/present_data_size_column.qmd
 dascore.utils.pd.present_dtype_column	/api/dascore/utils/pd/present_dtype_column.qmd
 dascore.utils.pd.present_units_columns	/api/dascore/utils/pd/present_units_columns.qmd
-dascore.utils.pd.relative_offset	/api/dascore/utils/pd/relative_offset.qmd
-dascore.utils.pd.relative_ranges_to_absolute	/api/dascore/utils/pd/relative_ranges_to_absolute.qmd
 dascore.utils.pd.requested_selector_names	/api/dascore/utils/pd/requested_selector_names.qmd
 dascore.utils.pd.resolve_selector_namespaces	/api/dascore/utils/pd/resolve_selector_namespaces.qmd
 dascore.utils.pd.rolling_df	/api/dascore/utils/pd/rolling_df.qmd
@@ -7563,8 +7555,6 @@ docs/api/dascore/utils/chunk_plan/build_gap_frame	/api/dascore/utils/chunk_plan/
 docs/api/dascore/utils/chunk_plan/build_gap_frame.qmd	/api/dascore/utils/chunk_plan/build_gap_frame.qmd
 docs/api/dascore/utils/chunk_plan/build_subdivision_plan	/api/dascore/utils/chunk_plan/build_subdivision_plan.qmd
 docs/api/dascore/utils/chunk_plan/build_subdivision_plan.qmd	/api/dascore/utils/chunk_plan/build_subdivision_plan.qmd
-docs/api/dascore/utils/chunk_plan/samples_adjusted_envelopes	/api/dascore/utils/chunk_plan/samples_adjusted_envelopes.qmd
-docs/api/dascore/utils/chunk_plan/samples_adjusted_envelopes.qmd	/api/dascore/utils/chunk_plan/samples_adjusted_envelopes.qmd
 docs/api/dascore/utils/chunk_plan/subdivision_pieces	/api/dascore/utils/chunk_plan/subdivision_pieces.qmd
 docs/api/dascore/utils/chunk_plan/subdivision_pieces.qmd	/api/dascore/utils/chunk_plan/subdivision_pieces.qmd
 docs/api/dascore/utils/coordmanager	/api/dascore/utils/coordmanager.qmd
@@ -7975,10 +7965,6 @@ docs/api/dascore/utils/pd/present_dtype_column	/api/dascore/utils/pd/present_dty
 docs/api/dascore/utils/pd/present_dtype_column.qmd	/api/dascore/utils/pd/present_dtype_column.qmd
 docs/api/dascore/utils/pd/present_units_columns	/api/dascore/utils/pd/present_units_columns.qmd
 docs/api/dascore/utils/pd/present_units_columns.qmd	/api/dascore/utils/pd/present_units_columns.qmd
-docs/api/dascore/utils/pd/relative_offset	/api/dascore/utils/pd/relative_offset.qmd
-docs/api/dascore/utils/pd/relative_offset.qmd	/api/dascore/utils/pd/relative_offset.qmd
-docs/api/dascore/utils/pd/relative_ranges_to_absolute	/api/dascore/utils/pd/relative_ranges_to_absolute.qmd
-docs/api/dascore/utils/pd/relative_ranges_to_absolute.qmd	/api/dascore/utils/pd/relative_ranges_to_absolute.qmd
 docs/api/dascore/utils/pd/requested_selector_names	/api/dascore/utils/pd/requested_selector_names.qmd
 docs/api/dascore/utils/pd/requested_selector_names.qmd	/api/dascore/utils/pd/requested_selector_names.qmd
 docs/api/dascore/utils/pd/resolve_selector_namespaces	/api/dascore/utils/pd/resolve_selector_namespaces.qmd

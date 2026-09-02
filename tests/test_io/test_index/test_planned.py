@@ -25,7 +25,7 @@ from dascore.io.index.planned import (
     derived_catalog,
 )
 from dascore.units import m
-from dascore.utils.chunk_plan import ChunkPlan, samples_adjusted_envelopes
+from dascore.utils.chunk_plan import ChunkPlan, patch_local_adjusted_envelopes
 from dascore.utils.io import BinaryReader
 
 
@@ -225,8 +225,8 @@ class TestRemainingEdges:
     def test_samples_adjust_skips_missing_columns(self):
         """Residuals naming absent envelope columns pass through."""
         df = pd.DataFrame({"time_min": [0.0], "time_max": [1.0]})
-        residuals = (({"depth": (0, 5)}, True),)
-        out = samples_adjusted_envelopes(df, residuals)
+        residuals = (({"depth": (0, 5)}, True, False),)
+        out = patch_local_adjusted_envelopes(df, residuals)
         assert out.equals(df)
 
 

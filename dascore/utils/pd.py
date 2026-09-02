@@ -16,7 +16,7 @@ import dascore as dc
 from dascore.constants import PatchType, namespace_select_type
 from dascore.core.attrs import PatchAttrs
 from dascore.exceptions import InvalidSpoolQueryError, ParameterError
-from dascore.utils.misc import is_range, order_range_tuple, sanitize_range_param
+from dascore.utils.misc import order_range_tuple, sanitize_range_param
 from dascore.utils.time import to_datetime64, to_timedelta64
 
 _RowType = TypeVar("_RowType")
@@ -149,53 +149,6 @@ def present_columns(df: pd.DataFrame) -> pd.DataFrame:
 def get_regex(seed_str):
     """Compile, and cache regex for str queries."""
     return fnmatch.translate(seed_str)  # translate to re
-
-
-def relative_offset(gmin, gmax, value):
-    """
-    Resolve one relative bound against a global [gmin, gmax] envelope.
-
-    Positive offsets measure from the start, negative from the end;
-    None/Ellipsis bounds stay open. Datetime envelopes take numeric
-    seconds offsets.
-    """
-    if value is None or value is Ellipsis:
-        return None
-    if isinstance(gmin, pd.Timestamp) or isinstance(gmin, np.datetime64):
-        delta = to_timedelta64(abs(float(value)))
-        return (gmin + delta) if value >= 0 else (gmax - delta)
-    return (gmin + value) if value >= 0 else (gmax + value)
-
-
-def relative_ranges_to_absolute(df, kwargs: dict) -> dict:
-    """
-    Resolve relative (start, stop) ranges against a frame's global envelopes.
-
-    Operates only on the dataframe's `{name}_min`/`{name}_max` envelope
-    columns, so both the generic dataframe select path and the catalog
-    share one relative-select implementation without either depending on
-    the index query builder.
-    """
-    out = {}
-    for name, value in kwargs.items():
-        lo_col, hi_col = f"{name}_min", f"{name}_max"
-        if lo_col not in df.columns or hi_col not in df.columns or df.empty:
-            msg = f"Cannot use relative select on {name!r}."
-            raise InvalidSpoolQueryError(msg)
-        if not is_range(value):
-            # same vocabulary as the catalog path's selector shaping
-            msg = (
-                f"relative=True accepts range selectors only (a (start, stop) "
-                f"tuple or slice), got {value!r}."
-            )
-            raise InvalidSpoolQueryError(msg)
-        gmin, gmax = df[lo_col].min(), df[hi_col].max()
-        lo, hi = value
-        out[name] = (
-            relative_offset(gmin, gmax, lo),
-            relative_offset(gmin, gmax, hi),
-        )
-    return out
 
 
 def normalize_range_forms(value):

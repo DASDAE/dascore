@@ -3,7 +3,8 @@ Selector-spec behavior of Spool.select (all spool types).
 
 These encode the hard-break semantics adopted for 0.2: unknown names
 raise (#435), samples selections are patch-local (#447), relative ranges
-work at spool level (#362), and _attrs/_coords disambiguate explicitly.
+resolve against each patch (#362), and _attrs/_coords disambiguate
+explicitly.
 """
 
 from __future__ import annotations
@@ -14,7 +15,12 @@ import numpy as np
 import pytest
 
 import dascore as dc
-from dascore.exceptions import InvalidSpoolQueryError, ParameterError, UnitError
+from dascore.exceptions import (
+    ChunkError,
+    InvalidSpoolQueryError,
+    ParameterError,
+    UnitError,
+)
 from dascore.io.index.catalog import PatchCatalog
 from dascore.io.index.planned import PlanResolver
 from dascore.units import get_quantity, m
@@ -160,6 +166,14 @@ class TestLazySelection:
         selected = fresh.select(tag="random")
         assert selected._catalog.is_view
 
+    def test_cold_relative_select(self, forbid_realization):
+        """Relative selection defers each patch-local coordinate envelope."""
+        patches = list(dc.get_example_spool("random_das"))
+        fresh = dc.spool(patches)
+        forbid_realization()
+        selected = fresh.select(time=(0, 2), relative=True)
+        assert selected._catalog.is_view
+
 
 class TestSamples:
     """samples=True never excludes patches; trims on load (#447)."""
@@ -200,20 +214,76 @@ class TestSamples:
         with pytest.raises(InvalidSpoolQueryError, match="coordinate-only"):
             materialized.select(tag="random", samples=True)
 
+    def test_contents_match_loaded_window(self, spool):
+        """Presented envelopes describe the trimmed patch, not its source."""
+        out = spool.select(time=(0, 100), samples=True)
+        for row, patch in zip(out.get_contents().itertuples(), out, strict=True):
+            coord = patch.get_coord("time")
+            assert row.time_min == coord.min()
+            assert row.time_max == coord.max()
+
+    def test_chunk_keeps_the_whole_selected_window(self, spool):
+        """The sample trim also belongs to the source, not to each chunk."""
+        chunked = spool.select(time=(25, 175), samples=True).chunk(time=2)
+        assert len(chunked)
+        rows = chunked.get_contents().itertuples()
+        for row, patch in zip(rows, chunked, strict=True):
+            coord = patch.get_coord("time")
+            assert coord.min() == row.time_min
+            assert coord.max() == row.time_max
+
+    def test_union_keeps_emptied_members(self, spool):
+        """An emptied sample window keeps members, as a relative one does."""
+        out = spool.select(time=(5000, 6000), samples=True)
+        assert len(out + dc.spool([])) == len(out) == len(spool)
+
 
 class TestRelative:
-    """relative=True resolves against the spool envelope (#362)."""
+    """relative=True resolves independently against each patch."""
 
-    def test_trims_both_ends(self, spool):
-        """One second off each end of the spool."""
-        df = spool.get_contents()
-        gmin = df["time_min"].min()
-        gmax = df["time_max"].max()
-        out = spool.select(time=(1, -1), relative=True)
-        merged = out.chunk(time=None)[0]
-        time = merged.get_coord("time")
-        assert time.min() >= np.datetime64(gmin) + np.timedelta64(1, "s")
-        assert time.max() <= np.datetime64(gmax) - np.timedelta64(1, "s")
+    @staticmethod
+    def _assert_patch_local(source, selected, selection):
+        """The spool result is the patch-level relative selection."""
+        expected = source.select(time=selection, relative=True)
+        assert selected.equals(expected)
+
+    def test_first_two_seconds_of_each_patch(self, spool):
+        """A positive range starts at every patch's own beginning."""
+        selection = (0, 2)
+        out = spool.select(time=selection, relative=True)
+        assert len(out) == len(spool)
+        for source, selected in zip(spool, out, strict=True):
+            self._assert_patch_local(source, selected, selection)
+
+    def test_trims_both_ends_of_each_patch(self, spool):
+        """Positive and negative bounds use each patch's endpoints."""
+        selection = (1, -1)
+        out = spool.select(time=selection, relative=True)
+        assert len(out) == len(spool)
+        for source, selected in zip(spool, out, strict=True):
+            self._assert_patch_local(source, selected, selection)
+
+    def test_contents_show_each_patch_local_window(self, spool):
+        """Presented envelopes match every loaded relative selection."""
+        out = spool.select(time=(0, 2), relative=True)
+        contents = out.get_contents()
+        for row, patch in zip(contents.itertuples(), out, strict=True):
+            coord = patch.get_coord("time")
+            assert row.time_min == coord.min()
+            assert row.time_max == coord.max()
+
+    def test_relative_then_absolute_preserves_order(self, spool):
+        """A later absolute window intersects the relative result in order."""
+        source = spool[0]
+        start = source.get_coord("time").min()
+        out = dc.spool([source]).select(time=(0, 2), relative=True)
+        out = out.select(time=(start + np.timedelta64(1, "s"), None))
+        expected = source.select(time=(0, 2), relative=True)
+        expected = expected.select(time=(start + np.timedelta64(1, "s"), None))
+        assert out[0].equals(expected)
+        assert (
+            out.get_contents()["time_max"].iloc[0] == expected.get_coord("time").max()
+        )
 
     def test_requires_range(self, spool):
         """Scalars are rejected with a clear message."""
@@ -221,21 +291,133 @@ class TestRelative:
             spool.select(time=5, relative=True)
 
     def test_namespaced_coord_with_attr(self, spool):
-        """Only the coordinate range is converted to relative offsets."""
-        out = spool.select(_coords={"time": (1, -1)}, tag="random", relative=True)
-        assert len(out)
+        """Attribute predicates still filter a patch-local relative view."""
+        selection = (1, -1)
+        out = spool.select(_coords={"time": selection}, tag="random", relative=True)
+        assert len(out) == len(spool)
         assert set(out.get_contents()["tag"]) == {"random"}
+        for source, selected in zip(spool, out, strict=True):
+            self._assert_patch_local(source, selected, selection)
 
     def test_relative_on_materialized_spool(self, spool):
-        """Relative select works after chunk (the dataframe select path)."""
+        """Patch-local relative selection survives a derived catalog."""
         materialized = spool.chunk(time=None)
-        gmin = materialized.get_contents()["time_min"].min()
-        gmax = materialized.get_contents()["time_max"].max()
-        out = materialized.select(time=(1, -1), relative=True)
-        merged = out.chunk(time=None)[0]
-        time = merged.get_coord("time")
-        assert time.min() >= np.datetime64(gmin) + np.timedelta64(1, "s")
-        assert time.max() <= np.datetime64(gmax) - np.timedelta64(1, "s")
+        selection = (0, 2)
+        out = materialized.select(time=selection, relative=True)
+        assert len(out) == len(materialized)
+        for source, selected in zip(materialized, out, strict=True):
+            self._assert_patch_local(source, selected, selection)
+
+    @pytest.mark.parametrize("selection", [(1000, None), (None, -1000)])
+    def test_open_bound_past_the_patch_selects_nothing(self, spool, selection):
+        """A one-sided window off the end keeps nothing, and reports that."""
+        out = spool.select(time=selection, relative=True)
+        assert len(out) == len(spool)
+        for source, selected in zip(spool, out, strict=True):
+            self._assert_patch_local(source, selected, selection)
+        # The open side is the envelope extreme already. If it stood in for
+        # the closed bound the row would present a one-instant window, and
+        # the plans below would describe data no patch actually has.
+        contents = out.get_contents()
+        assert contents["time_min"].isna().all()
+        assert contents["time_max"].isna().all()
+        assert not len(out.get_gaps())
+        assert not len(out.chunk(time=None))
+
+    def test_emptied_view_survives_union(self, spool):
+        """Union keeps emptied members and says why they cannot be chunked."""
+        empt = spool.select(time=(1000, 2000), relative=True)
+        other = dc.get_example_spool("random_das", length=2)
+        union = empt + other
+        assert len(union) == len(empt) + len(other)
+        # Baking the view writes through the index schema, which cannot
+        # carry the emptied marker, so these arrive with a null envelope
+        # and the error reports them as missing the dimension.
+        with pytest.raises(ChunkError, match="lack the"):
+            union.chunk(time=None)
+        assert len(union.chunk(time=None, missing_dim="drop")) >= 1
+
+    def test_chunk_keeps_the_whole_selected_window(self, spool):
+        """Chunking a relative view windows the selection, not each chunk."""
+        chunked = spool.select(time=(1, -1), relative=True).chunk(time=2)
+        assert len(chunked)
+        rows = chunked.get_contents().itertuples()
+        for row, patch in zip(rows, chunked, strict=True):
+            coord = patch.get_coord("time")
+            assert coord.min() == row.time_min
+            assert coord.max() == row.time_max
+
+    def test_absolute_after_relative_keeps_both_windows(self, spool):
+        """A later absolute window narrows the relative one, not the source."""
+        relative = spool.select(time=(1, -1), relative=True)
+        start = relative.get_contents()["time_min"].min()
+        window = (start + dc.to_timedelta64(1), start + dc.to_timedelta64(3))
+        out = relative.select(time=window)
+        assert len(out)
+        for row, patch in zip(out.get_contents().itertuples(), out, strict=True):
+            coord = patch.get_coord("time")
+            assert coord.min() == row.time_min
+            assert coord.max() == row.time_max
+
+    def test_string_coordinate_rejected(self, spool):
+        """String coordinates have no offset arithmetic; say so at select."""
+        labelled = dc.spool(
+            [
+                patch.update_coords(
+                    label=(
+                        "distance",
+                        np.array([f"s{i}" for i in range(patch.shape[0])]),
+                    )
+                )
+                for patch in spool
+            ]
+        )
+        with pytest.raises(InvalidSpoolQueryError, match="String coordinate"):
+            labelled.select(label=("s1", "s3"), relative=True)
+
+    def test_string_definitions_are_not_candidates(self):
+        """Where a name is a string on some patches, only the rest answer."""
+        patch = dc.get_example_patch("random_das")
+        size = patch.shape[0]
+        strings = patch.update_coords(
+            label=("distance", np.array([f"s{i}" for i in range(size)]))
+        )
+        numbers = patch.update_coords(label=("distance", np.arange(size, dtype=float)))
+        out = dc.spool([strings, numbers]).select(label=(0, 1), relative=True)
+        assert len(out) == len(out.get_contents()) == len(list(out)) == 1
+
+    def test_bounds_resolving_out_of_order_are_ordered(self, spool):
+        """A window whose ends resolve reversed is presented in order."""
+        selection = (-2, 2)
+        out = spool.select(time=selection, relative=True)
+        contents = out.get_contents()
+        assert (contents["time_min"] <= contents["time_max"]).all()
+        for source, selected in zip(spool, out, strict=True):
+            self._assert_patch_local(source, selected, selection)
+
+    def test_window_wider_than_the_patch_is_clipped(self, spool):
+        """A window past the end reports the patch, not the window."""
+        out = spool.select(time=(0, 100), relative=True)
+        for row, patch in zip(out.get_contents().itertuples(), out, strict=True):
+            coord = patch.get_coord("time")
+            assert row.time_min == coord.min()
+            assert row.time_max == coord.max()
+
+    def test_trimmed_size_is_forgotten(self, spool):
+        """A relative trim invalidates the source's recorded data size."""
+        out = spool.select(time=(0, 2), relative=True)
+        assert out.get_contents()["data_size"].isna().all()
+
+    def test_equals_its_own_materialization(self, spool):
+        """The emptied marker is internal and never splits equality."""
+        out = spool.select(time=(0, 2), relative=True)
+        assert out == (out + dc.spool([]))
+
+    def test_len_agrees_with_iteration_after_narrowing(self, spool):
+        """An emptied view narrowed again keeps len, contents and iteration together."""
+        out = spool.select(distance=(500, 600), relative=True)
+        out = out.select(distance=(0, 10))
+        assert len(out) == len(out.get_contents()) == len(list(out))
 
 
 class TestMaterializedNamespaces:
@@ -468,6 +650,30 @@ class TestUnitCanonicalSelection:
         for value in ((60, 20), (60 * m, 20 * m)):
             with pytest.raises(InvalidSpoolQueryError, match="lo > hi"):
                 len(dc.spool([ft_patch]).select(distance=value))
+
+    def test_relative_excludes_dimensionally_incompatible(self, ft_patch):
+        """A relative metre window drops a seconds coordinate, as absolute does."""
+        seconds = ft_patch.set_units(distance="s")
+        spool = dc.spool([ft_patch, seconds])
+        out = spool.select(distance=(1 * m, 2 * m), relative=True)
+        assert len(out) == len(out.get_contents()) == len(list(out)) == 1
+        assert str(out[0].get_coord("distance").units) == "1 ft"
+
+    def test_relative_only_unitless_survive_incompatible_units(self, ft_patch):
+        """When no stored unit fits, only unitless definitions stay candidates."""
+        seconds = ft_patch.set_units(distance="s")
+        plain = ft_patch.update_coords(
+            distance=ft_patch.get_coord("distance").set_units(None)
+        )
+        out = dc.spool([seconds, plain]).select(distance=(1 * m, 2 * m), relative=True)
+        contents = out.get_contents()
+        assert len(out) == len(contents) == 1
+        assert contents["distance_units"].isna().all()
+        # A unitless coordinate cannot answer a metre offset. The patch-level
+        # selection says so, and the spool passes that through rather than
+        # silently treating the magnitude as native.
+        with pytest.raises(UnitError):
+            list(out)
 
     def test_chunk_of_selected_view_converts_plan(self, ft_patch):
         """Chunking after a quantity select trims the converted interval."""
