@@ -1007,12 +1007,18 @@ class FiberIO:
             Reader-specific options. Multi-patch resources take
             ``source_patch_key`` (as ``read`` and ``scan`` spell it)
             naming the one patch the windows index; without it an
-            ambiguous resource raises rather than guesses.
+            ambiguous resource raises rather than guesses. An option
+            which only labels samples, such as most formats' ``snap``,
+            is accepted and ignored, since the windows are indices on a
+            grid it cannot move; one which changes how many samples the
+            resource has (Terra15's ``snap_dims``) is honored.
 
         Returns
         -------
         The array in the resource's stated dimension order (the order
-        ``scan`` reports), untransposed and uncast.
+        ``scan`` reports), untransposed and uncast. A resource whose
+        array is empty returns that empty array, where this default
+        raises instead, having no patch to build.
 
         Examples
         --------

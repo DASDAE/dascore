@@ -148,6 +148,7 @@ class DASDAEV1(FiberIO):
         resource: H5Reader,
         windows: dict[str, tuple[int, int]],
         source_patch_key="",
+        snap: bool = True,
         **kwargs,
     ) -> np.ndarray:
         """
@@ -159,7 +160,7 @@ class DASDAEV1(FiberIO):
         is the waveform group name `scan` reports; a positional index is
         not accepted, because DASDAE never synthesizes one.
         """
-        raise_on_extra_kwargs(kwargs, "windows and source_patch_key")
+        raise_on_extra_kwargs(kwargs, "windows, source_patch_key and snap")
         group = _get_patch_group(resource, source_patch_key)
         return slice_dataset(group["data"], _get_dims(group), windows)
 

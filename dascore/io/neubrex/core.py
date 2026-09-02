@@ -97,8 +97,6 @@ class NeubrexRFSV1(FiberIO):
     ) -> np.ndarray:
         """
         Slice the ``data`` dataset directly.
-
-        ``snap`` only changes coordinate values, never the grid.
         """
         raise_on_extra_kwargs(kwargs, "windows and snap")
         return slice_dataset(resource["data"], ("time", "distance"), windows)
@@ -155,10 +153,14 @@ class NeubrexDASV1(FiberIO):
         return dc.spool(patches)
 
     def read_array(
-        self, resource: H5Reader, windows: dict[str, tuple[int, int]], **kwargs
+        self,
+        resource: H5Reader,
+        windows: dict[str, tuple[int, int]],
+        snap: bool = True,
+        **kwargs,
     ) -> np.ndarray:
         """Slice the ``Acoustic`` dataset directly."""
-        raise_on_extra_kwargs(kwargs, "windows")
+        raise_on_extra_kwargs(kwargs, "windows and snap")
         return slice_dataset(resource["Acoustic"], ("time", "distance"), windows)
 
     def scan(self, resource: H5Reader, **kwargs) -> list[ScanPayload]:

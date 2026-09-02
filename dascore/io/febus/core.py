@@ -264,8 +264,6 @@ class FebusMTXH5V1(FiberIO):
     ) -> np.ndarray:
         """
         Slice the ``mtx`` dataset directly.
-
-        ``snap`` only changes coordinate values, never the grid.
         """
         raise_on_extra_kwargs(kwargs, "windows and snap")
         return slice_dataset(resource["mtx"], _MTX_DIMS, windows)
@@ -338,8 +336,6 @@ class FebusBSLH5V1(FiberIO):
     ) -> np.ndarray:
         """
         Slice the ``bsl_data`` dataset directly.
-
-        ``snap`` only changes coordinate values, never the grid.
         """
         raise_on_extra_kwargs(kwargs, "windows and snap")
         return slice_dataset(resource["bsl_data"], _BSL_DIMS, windows)
@@ -409,8 +405,6 @@ class FebusT1V1(FiberIO):
     ) -> np.ndarray:
         """
         Slice the ``Data/Temperature`` dataset directly.
-
-        ``snap`` only changes coordinate values, never the grid.
         """
         raise_on_extra_kwargs(kwargs, "windows and snap")
         return slice_dataset(

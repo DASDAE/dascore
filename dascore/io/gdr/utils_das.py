@@ -46,15 +46,21 @@ def _get_version(h5fi):
 
 
 def _get_dims(dataset) -> tuple[str, ...]:
-    """The dimension names, from the dataset's DasDimensions attribute."""
+    """
+    The dataset's dimension names, in DASCore's spelling.
+
+    The file states them in ``DasDimensions``, where the distance axis is
+    called ``locus``.
+    """
     das_dims = dataset.attrs["DasDimensions"]
     out = [""] * 2
     for num, dim in enumerate(das_dims):
+        dim = unbyte(dim)
         if dim.startswith("time"):
             out[num] = "time"
         elif dim == "locus":
             out[num] = "distance"
-    assert all(out)
+    assert all(out), f"unexpected DasDimensions {das_dims}"
     return tuple(out)
 
 
