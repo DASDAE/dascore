@@ -9,7 +9,7 @@ import numpy as np
 import pytest
 
 import dascore as dc
-from dascore.exceptions import PatchAttributeError
+from dascore.exceptions import ParameterError, PatchAttributeError
 from dascore.io.core import FiberIO
 from dascore.io.febus import Febus2
 from dascore.io.febus.a1utils import (
@@ -136,12 +136,69 @@ class TestFebus:
         out = io.read_array(febus_path, {"distance": (4, 2)}, source_patch_key=key)
         assert out.shape == (payload.shape[0], 0)
 
-    def test_read_array_without_key_raises(self, febus_path):
+    @pytest.fixture(scope="class")
+    def two_zone_path(self, febus_path, tmp_path_factory):
+        """A copy of the example file carrying a second, distinct zone."""
+        path = tmp_path_factory.mktemp("febus_two_zone") / "two_zone.h5"
+        shutil.copy(febus_path, path)
+        with h5py.File(path, "a") as h5:
+            zone = _flatten_febus_info(h5)[0]
+            source = zone.source
+            source.copy(zone.zone_name, "Zone_copy")
+            copied = source["Zone_copy"]
+            copied[zone.data_name][...] = -copied[zone.data_name][...]
+        return path
+
+    def test_read_array_reads_the_named_zone(self, two_zone_path):
+        """Each zone's key reads that zone, never its neighbor."""
+        io = Febus2()
+        payloads = dc.scan(two_zone_path)
+        assert len(payloads) == 2
+        arrays = [
+            io.read_array(two_zone_path, {}, source_patch_key=x.source_patch_key)
+            for x in payloads
+        ]
+        # the copy holds the negated data, so a wrong zone is visible
+        assert np.allclose(arrays[0], -arrays[1], equal_nan=True)
+        for payload, array in zip(payloads, arrays, strict=True):
+            expected = FiberIO.read_array(
+                io, two_zone_path, {}, source_patch_key=payload.source_patch_key
+            )
+            assert np.array_equal(array, expected, equal_nan=True)
+
+    def test_read_array_without_key_raises(self, two_zone_path):
         """A file holding several zones cannot resolve a keyless read."""
-        if len(dc.scan(febus_path)) < 2:
-            pytest.skip("file holds one zone")
-        with pytest.raises(PatchAttributeError):
-            Febus2().read_array(febus_path, {})
+        with pytest.raises(PatchAttributeError, match="source_patch_key"):
+            Febus2().read_array(two_zone_path, {})
+
+    def test_read_array_reads_only_touched_blocks(self, febus_path, monkeypatch):
+        """A one-block window decodes one block, not the whole cube."""
+        io = Febus2()
+        payload = dc.scan(febus_path)[0]
+        key = payload.source_patch_key
+        rows = self._rows_per_block(febus_path, key)
+        blocks = payload.shape[0] // rows
+        if blocks < 2:
+            pytest.skip("file holds one block")
+        reads = []
+        original = h5py.Dataset.__getitem__
+
+        def spy(self, index):
+            if self.ndim == 3:
+                reads.append(index[0])
+            return original(self, index)
+
+        monkeypatch.setattr(h5py.Dataset, "__getitem__", spy)
+        io.read_array(febus_path, {"time": (rows, rows + 2)}, source_patch_key=key)
+        assert reads == [slice(1, 2)], reads
+
+    def test_read_array_refuses_a_stepped_window(self, febus_path):
+        """A window is a contiguous range; a stride is not part of it."""
+        key = dc.scan(febus_path)[0].source_patch_key
+        with pytest.raises(ParameterError, match="contiguous"):
+            Febus2().read_array(
+                febus_path, {"time": slice(0, 10, 2)}, source_patch_key=key
+            )
 
 
 class TestFebusA1Interrogator:

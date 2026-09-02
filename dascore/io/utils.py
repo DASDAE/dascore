@@ -188,7 +188,11 @@ def windows_to_slices(
             out.append(slice(0, size))
             continue
         _validate_sample_values(windows[dim])
-        span = range(size)[_to_slice(windows[dim])]
+        window = _to_slice(windows[dim])
+        if window.step not in (None, 1):
+            msg = f"A window is a contiguous range; {dim!r} asked for {windows[dim]!r}."
+            raise ParameterError(msg)
+        span = range(size)[window]
         out.append(slice(span.start, max(span.stop, span.start)))
     return tuple(out)
 
