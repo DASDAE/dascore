@@ -162,9 +162,12 @@ class Febus2(FiberIO):
         reports; a file holding several zones needs one.
         """
         raise_on_extra_kwargs(kwargs, "windows and source_patch_key")
-        zones = {
-            _get_source_patch_key(zone): zone for zone in _flatten_febus_info(resource)
-        }
+        # pairs, not a mapping: two zones can generate one name, and the
+        # default read refuses such a key rather than picking one
+        zones = [
+            (_get_source_patch_key(zone), zone)
+            for zone in _flatten_febus_info(resource)
+        ]
         where = str(getattr(resource, "filename", "the resource"))
         febus = resolve_keyed_source(zones, source_patch_key, where=where)
         return _read_febus_array(febus, windows)

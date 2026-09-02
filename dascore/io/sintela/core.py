@@ -23,9 +23,10 @@ from .utils import (
     SYNC_WORD,
     _get_attrs_coords_header,
     _get_complete_header,
+    _get_data_shape,
     _get_patches,
-    _load_data,
     _read_base_header,
+    _read_sample_range,
 )
 
 
@@ -101,8 +102,10 @@ class SintelaBinaryV3(FiberIO):
         """
         raise_on_extra_kwargs(kwargs, "windows")
         header = _get_complete_header(resource)
-        data = _load_data(resource, header)
-        return np.asarray(data[windows_to_slices(windows, DIMS, data.shape)])
+        shape = _get_data_shape(resource, header)
+        time_slice, dist_slice = windows_to_slices(windows, DIMS, shape)
+        data = _read_sample_range(resource, header, time_slice.start, time_slice.stop)
+        return np.asarray(data[:, dist_slice])
 
 
 class SintelaProtobufV1(FiberIO):
