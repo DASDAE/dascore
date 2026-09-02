@@ -1799,6 +1799,13 @@ class TestGetSupportedIOTable:
         # assert that the length of the DataFrame is not 0
         assert len(result_df) > 0
 
+    def test_read_array_column(self):
+        """The table says which formats slice storage directly."""
+        table = FiberIO.get_supported_io_table()
+        flags = table.groupby("name")["read_array"].any()
+        assert flags["DASDAE"]
+        assert not flags["TERRA15"]
+
 
 class TestMissingInstallName:
     """Tests for guessing the package to install from a dependency error."""

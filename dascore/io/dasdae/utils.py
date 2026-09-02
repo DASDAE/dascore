@@ -15,6 +15,7 @@ import dascore as dc
 from dascore.core.attrs import PatchAttrs
 from dascore.core.coordmanager import get_coord_manager
 from dascore.core.coords import get_coord
+from dascore.core.summary import normalize_source_patch_key
 from dascore.exceptions import MissingPatchError, PatchAttributeError
 from dascore.io.core import STORED_PATCH_ID, make_scan_payload
 from dascore.io.dasdae._compat import (
@@ -299,7 +300,7 @@ def _get_patch_group(h5, source_patch_key=""):
     Without a key, a file holding exactly one patch resolves to it; an
     empty or ambiguous file raises as the default `read_array` does.
     """
-    key = str(source_patch_key) if source_patch_key not in (None, "") else ""
+    key = normalize_source_patch_key(source_patch_key)
     waveforms = h5.get("waveforms", {})
     if key:
         if key not in waveforms:

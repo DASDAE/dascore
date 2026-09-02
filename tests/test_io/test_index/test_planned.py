@@ -466,6 +466,13 @@ class TestLoadMemberArray:
         assert not fiber_io.implements_read_array
         assert resolver._load_member_array(row, {"time": (0, 5)}) is None
 
+    def test_real_override_matches_patch_path(self, resolver, row):
+        """DASDAE's own override, through the resolver, matches the patch path."""
+        out = resolver._load_member_array(row, {"time": (2, 9)})
+        expected = resolver._load_member(row).select(time=(2, 9), samples=True).data
+        assert np.array_equal(out, expected)
+        assert out.dtype == expected.dtype
+
     def test_override_loads_window(self, resolver, row, override):
         """The override gets the windows and its array matches the patch path."""
         out = resolver._load_member_array(row, {"time": (2, 9)})
@@ -534,16 +541,13 @@ class TestLoadMemberArray:
         assert resolver._load_member_array(row, {"time": (0, 5)}) is None
         assert override == []
 
-    def test_override_gets_annotated_handle(self, resolver, row):
+    def test_override_gets_annotated_handle(self, resolver, row, format_class):
         """The override receives the handle type it declares, like read.
 
         The resource manager provisions it, so a remote path resolves the
         same way dc.read's own reading does instead of arriving as a raw
         URL string.
         """
-        fiber_io = FiberIO.manager.get_fiberio(
-            format=row["source_format"], version=row["source_version"]
-        )
         seen = {}
 
         def read_array(self, resource, windows, **kwargs):
@@ -551,10 +555,11 @@ class TestLoadMemberArray:
             return np.zeros(2)
 
         read_array._required_type = BinaryReader
-        type(fiber_io).read_array = read_array
+        original = format_class.__dict__["read_array"]
+        format_class.read_array = read_array
         try:
             out = resolver._load_member_array(row, {"time": (0, 2)})
         finally:
-            del type(fiber_io).read_array
+            format_class.read_array = original
         assert np.array_equal(out, np.zeros(2))
         assert hasattr(seen["resource"], "read")  # a handle, not a path

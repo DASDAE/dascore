@@ -278,6 +278,33 @@ class TestReadArray:
             )
             assert np.array_equal(out, patch.data[:, 1:4])
 
+    def test_null_key_resolves_single_patch(self, written_dascore_v1_random):
+        """A null key (a pandas cell without one) means the lone patch."""
+        out = DASDAEV1().read_array(
+            written_dascore_v1_random, {}, source_patch_key=np.nan
+        )
+        expected = DASDAEV1().read_array(written_dascore_v1_random, {})
+        assert np.array_equal(out, expected)
+
+    def test_strided_window_refused(self, written_dascore_v1_random):
+        """A window is a (start, stop) pair; a stride is not part of the contract."""
+        with pytest.raises(ParameterError, match="pair"):
+            DASDAEV1().read_array(written_dascore_v1_random, {"time": (2, 6, 2)})
+
+    def test_legacy_file(self, random_patch, tmp_path):
+        """A legacy (unmarked) file slices the same way; dims come from the group."""
+        path = tmp_path / "legacy.h5"
+        random_patch.io.write(path, "dasdae")
+        with h5py.File(path, "a") as h5:
+            del h5.attrs[_SEPARATE_ATTRS_KEY]
+            for group in h5["waveforms"].values():
+                del group.attrs[_SEPARATE_ATTRS_KEY]
+        io = DASDAEV1()
+        windows = {"time": (4, 9)}
+        out = io.read_array(path, windows)
+        assert np.array_equal(out, FiberIO.read_array(io, path, windows))
+        assert np.array_equal(out, random_patch.data[:, 4:9])
+
     def test_keyless_multi_patch_raises(self, multi_patch_path):
         """Several patches and no key cannot be resolved."""
         with pytest.raises(PatchAttributeError, match="source_patch_key"):

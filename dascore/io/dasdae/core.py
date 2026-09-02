@@ -155,7 +155,8 @@ class DASDAEV1(FiberIO):
 
         Only the requested hyperslab leaves the file; attributes and
         coordinates are never parsed. See `FiberIO.read_array` for the
-        window contract.
+        window contract. ``source_patch_key`` is the waveform group name
+        `scan` reports; DASDAE keys are never positional.
         """
         if kwargs:
             msg = (
@@ -168,10 +169,22 @@ class DASDAEV1(FiberIO):
         if unknown := sorted(set(windows) - set(dims)):
             msg = f"Window dimensions {unknown} are not among patch dims {dims}."
             raise ParameterError(msg)
-        index = tuple(
-            slice(*windows[dim]) if dim in windows else slice(None) for dim in dims
-        )
-        return group["data"][index]
+        index = []
+        for dim in dims:
+            window = windows.get(dim)
+            if window is None:
+                index.append(slice(None))
+                continue
+            try:
+                start, stop = window
+            except (TypeError, ValueError):
+                msg = (
+                    f"The window for {dim!r} must be a (start, stop) pair, "
+                    f"got {window!r}."
+                )
+                raise ParameterError(msg) from None
+            index.append(slice(start, stop))
+        return group["data"][tuple(index)]
 
     def scan(self, resource: H5Reader, snap: bool = True, **kwargs):
         """
