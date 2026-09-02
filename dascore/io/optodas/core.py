@@ -81,10 +81,7 @@ class OptoDASV8(FiberIO):
         snap: bool = True,
         **kwargs,
     ) -> np.ndarray:
-        """Slice the ``data`` dataset directly, in the header's dimension order.
-
-        ``snap`` only changes coordinate values, never the grid.
-        """
+        """Slice the ``data`` dataset directly, in the header's dimension order."""
         raise_on_extra_kwargs(kwargs, "windows and snap")
         dims = tuple(unbyte(x) for x in resource["header"]["dimensionNames"])
         return slice_dataset(resource["data"], dims, windows)

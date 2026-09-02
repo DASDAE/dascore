@@ -133,9 +133,8 @@ class TestReadArray:
         expected = FiberIO.read_array(io, path, {"time": (-5, None)}, snap_dims=False)
         assert np.array_equal(out, expected)
         assert len(out) == 5
-        assert len(io.read_array(path, {}, snap_dims=False)) > len(
-            io.read_array(path, {})
-        )
+        raw = io.read_array(path, {}, snap_dims=False)
+        assert len(raw) > len(io.read_array(path, {}))
 
     def test_reads_only_the_window(self, terra15_v6_path, monkeypatch):
         """The data node is sliced in the file, not read whole then trimmed."""

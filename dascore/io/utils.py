@@ -221,8 +221,9 @@ def slice_dataset(dataset, dims: Sequence[str], windows: Mapping[str, Any], shap
     """
     Read the sample windows of an array stored in ``dims`` order.
 
-    ``shape`` defaults to the dataset's own; pass it when the scan grid
-    is shorter than the stored array (see `windows_to_slices`).
+    ``shape`` defaults to the dataset's own; pass it when an axis of the
+    grid `scan` reports is shorter than the stored one, as it is for a
+    Terra15 file whose trailing rows were never written.
     """
     shape = dataset.shape if shape is None else shape
     return dataset[windows_to_slices(windows, dims, shape)]

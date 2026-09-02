@@ -83,8 +83,6 @@ class GDR_V1(FiberIO):  # noqa
     ) -> np.ndarray:
         """
         Slice the ``DasRawData/RawData`` dataset directly.
-
-        ``snap`` only changes coordinate values, never the grid.
         """
         raise_on_extra_kwargs(kwargs, "windows and snap")
         return slice_dataset(

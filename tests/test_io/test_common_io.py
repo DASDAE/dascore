@@ -569,50 +569,85 @@ class TestRead:
             payload = dc.scan(path)[0]
         key = payload.source_patch_key
         kwargs = {"source_patch_key": key} if key else {}
-        windows = {
-            dim: (1, size - 1)
+        sized = [
+            (dim, size)
             for dim, size in zip(payload.dims, payload.shape, strict=True)
             if size > 2
-        }
-        out = io.read_array(path, windows, **kwargs)
-        expected = FiberIO.read_array(io, path, windows, **kwargs)
-        assert out.dtype == expected.dtype
-        assert np.array_equal(out, expected)
+        ]
+        every = {dim: (1, size - 1) for dim, size in sized}
+        # the partial and empty cases pin the other half of the contract:
+        # a dimension absent from windows comes back whole
+        for windows in (every, {sized[0][0]: every[sized[0][0]]}, {}):
+            out = io.read_array(path, windows, **kwargs)
+            expected = FiberIO.read_array(io, path, windows, **kwargs)
+            assert out.dtype == expected.dtype
+            assert np.array_equal(out, expected), windows
+
+    def test_read_array_honors_labelling_options(self, io_path_tuple):
+        """A labelling option selects the grid `scan` reports under it.
+
+        Most formats' `snap` only labels samples, so it cannot move the
+        window; where it decides how many samples the resource has, the
+        array follows it. Either way the caller may forward what it gave
+        `scan`, and the shapes have to agree.
+        """
+        io, path = io_path_tuple
+        if not io.implements_read_array:
+            pytest.skip(f"{io.name} inherits the default read_array")
+        params = inspect.signature(io.read_array).parameters
+        if "snap" not in params:
+            pytest.skip(f"{io.name}.read_array takes no labelling option")
+        with skip_missing():
+            payloads = {x: dc.scan_payloads(path, snap=x)[0] for x in (True, False)}
+        key = payloads[True].get("source_patch_key", "")
+        kwargs = {"source_patch_key": key} if key else {}
+        for snap, payload in payloads.items():
+            out = io.read_array(path, {}, snap=snap, **kwargs)
+            assert out.shape == tuple(payload["shape"]), snap
 
     def test_hdf5_read_array_never_reads_the_array_whole(
         self, io_path_tuple, monkeypatch
     ):
         """An HDF5 override slices its data array in the file."""
         io, path = io_path_tuple
-        if not io.implements_read_array or not issubclass(
-            _required_resource_type(io.read_array), H5Reader
-        ):
+        resource_type = (
+            _required_resource_type(io.read_array) if io.implements_read_array else None
+        )
+        if resource_type is None or not issubclass(resource_type, H5Reader):
             pytest.skip(f"{io.name} has no HDF5 read_array override")
         with skip_missing():
             payload = dc.scan(path)[0]
         key = payload.source_patch_key
         kwargs = {"source_patch_key": key} if key else {}
-        sized = [
-            (d, n) for d, n in zip(payload.dims, payload.shape, strict=True) if n > 2
-        ]
+        sized = {
+            dim: size
+            for dim, size in zip(payload.dims, payload.shape, strict=True)
+            if size > 2
+        }
         assert sized, "no dimension long enough to window"
-        dim, size = sized[0]
+        windows = {dim: (1, size - 1) for dim, size in sized.items()}
+        # every axis is windowed, so a two-step read (whole axis, then
+        # trim) is visible as a slice this does not expect
+        wanted = tuple(
+            (1, size - 1) if dim in sized else (0, size)
+            for dim, size in zip(payload.dims, payload.shape, strict=True)
+        )
         reads = []
         original = h5py.Dataset.__getitem__
 
         def spy(self, index):
-            if self.ndim >= 2:
+            # a coordinate array has fewer dimensions than the data
+            if self.ndim == len(payload.dims):
                 reads.append(index)
             return original(self, index)
 
         monkeypatch.setattr(h5py.Dataset, "__getitem__", spy)
-        io.read_array(path, {dim: (1, size - 1)}, **kwargs)
-        assert reads, "the data array was never read"
-        for index in reads:
-            assert isinstance(index, tuple), index
-            # xarray spells the same slice with an explicit unit step
-            bounds = {(x.start, x.stop) for x in index if isinstance(x, slice)}
-            assert (1, size - 1) in bounds, index
+        io.read_array(path, windows, **kwargs)
+        assert len(reads) == 1, reads
+        index = reads[0]
+        assert isinstance(index, tuple) and len(index) == len(wanted), index
+        # xarray spells the same slice with an explicit unit step
+        assert tuple((x.start, x.stop) for x in index) == wanted, index
 
     def test_slice_single_dim_both_ends(self, io_path_tuple):
         """
