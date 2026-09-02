@@ -55,6 +55,7 @@ from dascore.io.utils import (
     build_patches,
     convert_attr_units,
     get_exact_coord,
+    slice_dataset,
     windows_to_slices,
 )
 from dascore.utils.downloader import fetch
@@ -2357,3 +2358,30 @@ class TestWindowsToSlices:
         """Bounds are sample indices, never values."""
         with pytest.raises(ParameterError, match="integers"):
             windows_to_slices({"time": (1.5, 3)}, ("time",), (9,))
+
+
+class TestSliceDataset:
+    """Tests for reading the windows of a stored array."""
+
+    @pytest.fixture
+    def dataset(self, tmp_path):
+        """A 2-D HDF5 dataset of known values."""
+        path = tmp_path / "array.h5"
+        with h5py.File(path, "w") as h5:
+            h5.create_dataset("data", data=np.arange(60).reshape(10, 6))
+        with h5py.File(path, "r") as h5:
+            yield h5["data"]
+
+    def test_windows_read_in_the_file(self, dataset):
+        """Only the window's values come back, in the dataset's order."""
+        out = slice_dataset(dataset, ("time", "distance"), {"time": (2, 5)})
+        assert np.array_equal(out, dataset[2:5, :])
+
+    def test_shape_caps_a_shorter_grid(self, dataset):
+        """A grid shorter than the stored array never reads past its end."""
+        dims, short = ("time", "distance"), (4, 6)
+        whole = slice_dataset(dataset, dims, {}, short)
+        assert np.array_equal(whole, dataset[:4, :])
+        # a window past the shortened grid clips to it, not to the file
+        tail = slice_dataset(dataset, dims, {"time": (2, 50)}, short)
+        assert np.array_equal(tail, dataset[2:4, :])

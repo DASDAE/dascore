@@ -86,13 +86,14 @@ class SilixaH5V1(FiberIO):
         return dc.spool(patches)
 
     def read_array(
-        self, resource: H5Reader, windows: dict[str, tuple[int, int]], **kwargs
+        self,
+        resource: H5Reader,
+        windows: dict[str, tuple[int, int]],
+        snap: bool = True,
+        **kwargs,
     ) -> np.ndarray:
-        """Slice the ``Acoustic`` dataset directly.
-
-        Version 2 files hold the array under ``Fiber``; ``_data_name`` says which.
-        """
-        raise_on_extra_kwargs(kwargs, "windows")
+        """Slice the version's data dataset (``Acoustic`` or ``Fiber``)."""
+        raise_on_extra_kwargs(kwargs, "windows and snap")
         return slice_dataset(resource[self._data_name], ("time", "distance"), windows)
 
 
