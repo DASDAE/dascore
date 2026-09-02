@@ -1,5 +1,6 @@
 """
-A lazy, evenly sampled datetime/timedelta index for xarray.
+An xarray index which computes datetime64 and timedelta64 labels from a
+start, a step and a size, rather than storing them.
 
 xarray materializes every dimension coordinate into a numpy array and a
 pandas index, which for a long merged time coordinate costs 8 bytes a
