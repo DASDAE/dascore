@@ -424,11 +424,26 @@ class TestLoadMemberArray:
         return resolver.member_rows.iloc[0].to_dict()
 
     @pytest.fixture
-    def override(self, row):
-        """Give the row's format a counting read_array override."""
+    def format_class(self, row):
+        """The class of the FiberIO which reads the row's file."""
         fiber_io = FiberIO.manager.get_fiberio(
             format=row["source_format"], version=row["source_version"]
         )
+        return type(fiber_io)
+
+    @pytest.fixture
+    def no_override(self, format_class):
+        """Strip the format of its own read_array so it inherits the default."""
+        # set and delete by hand: monkeypatch would restore the inherited
+        # method as an own class attribute rather than remove it
+        original = format_class.__dict__["read_array"]
+        del format_class.read_array
+        yield
+        format_class.read_array = original
+
+    @pytest.fixture
+    def override(self, format_class):
+        """Give the row's format a counting read_array override."""
         calls = []
 
         def read_array(self, resource, windows, **kwargs):
@@ -438,14 +453,17 @@ class TestLoadMemberArray:
             calls.append((windows, kwargs))
             return FiberIO.read_array(self, resource, windows, **kwargs)
 
-        # set and delete by hand: monkeypatch would restore the inherited
-        # method as an own class attribute rather than remove it
-        type(fiber_io).read_array = read_array
+        original = format_class.__dict__["read_array"]
+        format_class.read_array = read_array
         yield calls
-        del type(fiber_io).read_array
+        format_class.read_array = original
 
-    def test_no_override_returns_none(self, resolver, row):
+    def test_no_override_returns_none(self, resolver, row, no_override):
         """A format without an override takes the patch path."""
+        fiber_io = FiberIO.manager.get_fiberio(
+            format=row["source_format"], version=row["source_version"]
+        )
+        assert not fiber_io.implements_read_array
         assert resolver._load_member_array(row, {"time": (0, 5)}) is None
 
     def test_override_loads_window(self, resolver, row, override):

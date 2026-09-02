@@ -15,6 +15,7 @@ import dascore as dc
 from dascore.core.attrs import PatchAttrs
 from dascore.core.coordmanager import get_coord_manager
 from dascore.core.coords import get_coord
+from dascore.exceptions import MissingPatchError, PatchAttributeError
 from dascore.io.core import STORED_PATCH_ID, make_scan_payload
 from dascore.io.dasdae._compat import (
     NOT_DECODED,
@@ -289,6 +290,29 @@ def _get_dims(patch_group):
     else:
         out = tuple(dims.split(","))
     return out
+
+
+def _get_patch_group(h5, source_patch_key=""):
+    """
+    Return the one waveform group a source patch key names.
+
+    Without a key, a file holding exactly one patch resolves to it; an
+    empty or ambiguous file raises as the default `read_array` does.
+    """
+    key = str(source_patch_key) if source_patch_key not in (None, "") else ""
+    waveforms = h5.get("waveforms", {})
+    if key:
+        if key not in waveforms:
+            msg = f"No patch named '{key}' in {h5.filename}."
+            raise PatchAttributeError(msg)
+        return waveforms[key]
+    if not len(waveforms):
+        msg = f"No patches in {h5.filename}."
+        raise MissingPatchError(msg)
+    if len(waveforms) > 1:
+        msg = f"{h5.filename} holds several patches; pass source_patch_key."
+        raise PatchAttributeError(msg)
+    return next(iter(waveforms.values()))
 
 
 def _matches_attr_filters(attrs, kwargs):
