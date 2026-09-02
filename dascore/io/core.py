@@ -963,6 +963,7 @@ class FiberIO:
     _automatic_type_casters = FrozenDict(
         {
             "read": 1,
+            "read_array": 1,
             "scan": 1,
             "write": 2,
             "get_format": 1,
@@ -988,8 +989,8 @@ class FiberIO:
         Return the raw data array for absolute sample windows.
 
         A data-only fast path for callers which already know a resource's
-        structure (from an index): no Patch is built and no coordinates are
-        parsed. ``windows`` maps dimension name to ``(start, stop)``,
+        structure (from an index) and need no Patch, no attrs, and no
+        coordinates back. ``windows`` maps dimension name to ``(start, stop)``,
         half-open python indices on the resource's own sample grid;
         dimensions absent from ``windows`` are returned whole. The array
         comes back in the resource's stated dimension order (the order

@@ -495,10 +495,13 @@ class TestLoadMemberArray:
         assert override == []
 
     def test_memory_row_returns_none(self, override):
-        """An in-memory patch has no file to slice."""
+        """An in-memory patch has no file to slice.
+
+        The scheme gate is defense in depth: a memory row's "memory"
+        format is unregistered, so a later gate would refuse it too.
+        """
         resolver = dc.get_example_spool().chunk(time=None)._catalog.resolver
         row = resolver.member_rows.iloc[0].to_dict()
-        assert row["source_version"] == ""  # yet the scheme is what refuses
         row["source_version"] = "1"
         assert resolver._load_member_array(row, {"time": (0, 5)}) is None
         assert override == []

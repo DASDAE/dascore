@@ -64,13 +64,6 @@ PLAN_SCHEME = "plan://"
 _NON_ATTR = {"output_id", "dims", "coord_names", "patch"}
 
 
-def _row_str(value) -> str:
-    """A row cell as a string, with the frame's nulls (None/NaN) as ""."""
-    if value is None or (not isinstance(value, str) and pd.isnull(value)):
-        return ""
-    return str(value)
-
-
 def _stated_units(value) -> str | None:
     """Return a unit string, or None when the row states none.
 
@@ -122,8 +115,8 @@ def _num(value) -> float | None:
     return float(value)
 
 
-def _dtype_str(value) -> str:
-    """Convert a stored element dtype to its string, "" when unknown."""
+def _row_str(value) -> str:
+    """A row cell as a string, with the frame's nulls (None/NaN) as ""."""
     return "" if value is None or pd.isnull(value) else str(value)
 
 
@@ -454,7 +447,7 @@ def _output_records(
             # chunk can still size patches by their memory footprint.
             # NaN is truthy, so `or ""` alone would store the string
             # "nan" and poison every later np.dtype() of this column.
-            dtype=_dtype_str(row.get("_dtype")),
+            dtype=_row_str(row.get("_dtype")),
             data_size=sizes.get(output_id),
             time_min=_ns(row.get("time_min")),
             time_max=_ns(row.get("time_max")),

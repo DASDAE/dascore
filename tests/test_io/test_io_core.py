@@ -2216,10 +2216,13 @@ class TestFiberIOReadArray:
 
     @pytest.fixture(scope="class")
     def multi_patch_path(self, tmp_path_factory):
-        """Two patches written to one DASDAE file."""
+        """Two patches with distinct data written to one DASDAE file."""
         path = tmp_path_factory.mktemp("read_array") / "multi.h5"
         spool = dc.examples.get_example_spool("random_das", length=2)
-        dc.write(spool, path, "dasdae")
+        # distinct arrays, or a wrong-patch resolution could pass parity
+        patches = [patch.new(data=patch.data + num) for num, patch in enumerate(spool)]
+        assert not np.array_equal(patches[0].data, patches[1].data)
+        dc.write(dc.spool(patches), path, "dasdae")
         return path
 
     @pytest.fixture(scope="class")
@@ -2262,6 +2265,29 @@ class TestFiberIOReadArray:
         """Windows on an ambiguous grid never guess a patch."""
         with pytest.raises(PatchAttributeError, match="uniquely resolved"):
             dasdae_io.read_array(multi_patch_path, {"time": (0, 5)})
+
+    def test_override_resource_coercion(self, single_patch_path):
+        """An override's resource annotation is honored like read's.
+
+        The type-casting layer promises FiberIO authors that a method's
+        resource parameter arrives as the annotated handle type; that
+        must hold for read_array or an override written like a read
+        method fails on the raw path it is handed.
+        """
+        seen = {}
+
+        class ReadArrayCastFormat(FiberIO):
+            name = "_test_read_array_cast"
+            version = "1"
+
+            def read_array(self, resource: BinaryReader, windows, **kwargs):
+                seen["resource"] = resource
+                return np.zeros(2)
+
+        fiber_io = ReadArrayCastFormat()
+        out = fiber_io.read_array(single_patch_path, {})
+        assert np.array_equal(out, np.zeros(2))
+        assert hasattr(seen["resource"], "read")  # a handle, not a path
 
     def test_implements_flag(self, dasdae_io):
         """The flag says whether a format overrides the default."""

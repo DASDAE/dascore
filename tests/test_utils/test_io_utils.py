@@ -1921,10 +1921,16 @@ class TestToXarrayReadArray:
 
     @pytest.fixture(scope="class")
     def dasdae_directory(self, tmp_path_factory):
-        """A directory of single-patch DASDAE files."""
+        """A directory of single-patch DASDAE files with distinct data.
+
+        Distinct arrays per file, or a block reading the wrong member
+        would still pass the parity assertions.
+        """
         path = tmp_path_factory.mktemp("to_xarray_read_array")
         for num, patch in enumerate(dc.get_example_spool()):
-            patch.io.write(path / f"patch_{num}.h5", "dasdae")
+            patch.new(data=patch.data + num).io.write(
+                path / f"patch_{num}.h5", "dasdae"
+            )
         return path
 
     @pytest.fixture
@@ -1998,7 +2004,8 @@ class TestToXarrayReadArray:
         first = dc.get_example_patch()
         time = first.get_coord("time")
         half = time.values[len(time) // 2]
-        second = first.update_coords(time_min=half)
+        # distinct data so reading the wrong file cannot pass parity
+        second = first.update_coords(time_min=half).new(data=first.data + 1)
         for num, patch in enumerate((first, second)):
             patch.update_attrs(history=[]).io.write(tmp_path / f"p{num}.h5", "dasdae")
         spool = dc.spool(tmp_path).update()
