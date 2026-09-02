@@ -554,6 +554,75 @@ class TestPandasParity:
         t = lazy["time"].values
         assert sub.sel(time=t[5]).compute().values == 5
 
+    def test_one_sample_period_keeps_dimension(self):
+        """A coarse string over one sample keeps the dimension, as pandas does."""
+        import xarray as xr  # noqa: PLC0415
+
+        from dascore.core.coords import get_coord  # noqa: PLC0415
+        from dascore.xarray.index import TemporalRangeIndex  # noqa: PLC0415
+
+        # an hourly segment whose first calendar day holds one sample
+        coord = get_coord(
+            start=np.datetime64("2019-12-31T23:00:00"),
+            step=np.timedelta64(1, "h"),
+            shape=(30,),
+        )
+        index = TemporalRangeIndex.from_coord("time", coord)
+        lazy = xr.DataArray(
+            np.arange(30), dims=("time",), coords=xr.Coordinates.from_xindex(index)
+        )
+        eager = xr.DataArray(
+            np.arange(30), dims=("time",), coords={"time": coord.values}
+        )
+        out, expected = lazy.sel(time="2019-12-31"), eager.sel(time="2019-12-31")
+        assert out.sizes == expected.sizes == {"time": 1}
+        # a string at the index's own resolution is a single stamp
+        assert (
+            lazy.sel(time="2019-12-31T23").ndim
+            == eager.sel(time="2019-12-31T23").ndim
+            == 0
+        )
+        with pytest.raises(KeyError):
+            lazy.sel(time="2020-01-01T05:30")
+
+    def test_numeric_labels_raise(self, hourly_pair):
+        """Pandas never reads a number as a stamp; neither does the lazy index."""
+        lazy, eager = hourly_pair
+        for label in (0, 5.0, [0, 1]):
+            with pytest.raises(KeyError):
+                eager.sel(time=label)
+            with pytest.raises(KeyError, match="Numeric"):
+                lazy.sel(time=label)
+
+    def test_negative_fancy_isel_labels_from_the_end(self, hourly_pair):
+        """A negative position labels the sample it selects, as the data does."""
+        lazy, eager = hourly_pair
+        out, expected = lazy.isel(time=[-1, 0]), eager.isel(time=[-1, 0])
+        np.testing.assert_array_equal(out["time"].values, expected["time"].values)
+        np.testing.assert_array_equal(out.compute().values, expected.values)
+
+    def test_boolean_isel_keeps_labels(self, hourly_pair):
+        """A boolean mask selects and labels the same samples."""
+        lazy, eager = hourly_pair
+        mask = np.arange(48) % 7 == 0
+        out, expected = lazy.isel(time=mask), eager.isel(time=mask)
+        np.testing.assert_array_equal(out["time"].values, expected["time"].values)
+        assert "time" in out.xindexes
+
+    def test_vectorized_isel_onto_another_dimension(self, hourly_pair):
+        """An indexer on a new dimension moves the labels there and drops the index."""
+        import xarray as xr  # noqa: PLC0415
+
+        lazy, eager = hourly_pair
+        picks = xr.DataArray([1, 5], dims="sample")
+        out, expected = lazy.isel(time=picks), eager.isel(time=picks)
+        assert out["time"].dims == expected["time"].dims == ("sample",)
+        assert "time" not in out.xindexes
+        np.testing.assert_array_equal(out["time"].values, expected["time"].values)
+        assert (
+            out.isel(sample=1)["time"].values == expected.isel(sample=1)["time"].values
+        )
+
 
 class TestInternalEdges:
     """Direct contracts the integration paths do not reach."""
@@ -579,6 +648,34 @@ class TestInternalEdges:
         assert td_index._period_bounds("0 days") is None
         assert small_index._period_bounds("not a date at all") is None
         assert small_index._period_bounds("nat") is None
+
+    def test_resolution_follows_start_and_step(self):
+        """The inferred resolution is the finest unit start or step carries."""
+        from dascore.xarray.index import (  # noqa: PLC0415
+            TemporalRangeIndex,
+            TemporalRangeTransform,
+        )
+
+        day = 86_400 * 10**9
+        midnight = int(np.datetime64("2020-01-01", "ns").astype("int64"))
+        daily = TemporalRangeIndex(
+            TemporalRangeTransform("time", 5, midnight, day, "datetime64[ns]")
+        )
+        assert daily._resolution == 6  # day
+        hourly = TemporalRangeIndex(
+            TemporalRangeTransform("time", 5, midnight, 3_600 * 10**9, "datetime64[ns]")
+        )
+        assert hourly._resolution == 5  # hour, from the step
+        # one sample at midnight has day resolution whatever the step says
+        lone = TemporalRangeIndex(
+            TemporalRangeTransform("time", 1, midnight, 1_000, "datetime64[ns]")
+        )
+        assert lone._resolution == 6
+        # a start off the hour drives the resolution below the step's
+        odd = TemporalRangeIndex(
+            TemporalRangeTransform("time", 5, midnight + 1, day, "datetime64[ns]")
+        )
+        assert odd._resolution == 0  # nanosecond
 
     def test_variable_label(self, small_array):
         """A bare Variable label resolves like a DataArray one."""

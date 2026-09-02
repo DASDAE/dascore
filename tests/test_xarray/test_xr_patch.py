@@ -42,3 +42,15 @@ class TestXarray:
         # Ensure it round-trips
         patch2 = xarray_to_patch(dar)
         assert isinstance(patch2, dc.Patch)
+
+
+class TestPublishedPaths:
+    """The conversions stay importable from where the docs published them."""
+
+    def test_utils_io_reexports(self):
+        """dascore.utils.io keeps the names it published before the move."""
+        from dascore.utils import io as utils_io  # noqa: PLC0415
+        from dascore.xarray import patch_to_xarray, xarray_to_patch  # noqa: PLC0415
+
+        assert utils_io.patch_to_xarray is patch_to_xarray
+        assert utils_io.xarray_to_patch is xarray_to_patch

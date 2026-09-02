@@ -33,6 +33,10 @@ from dascore.utils.paths import (
 from dascore.utils.remote_io import ensure_local_file as _ensure_local_file
 from dascore.utils.remote_io import get_local_handle
 from dascore.utils.time import to_float
+from dascore.xarray.patch import (  # noqa: F401  published under this module
+    patch_to_xarray,
+    xarray_to_patch,
+)
 
 HANDLE_FUNCTIONS = {
     Path: lambda x: Path(x),

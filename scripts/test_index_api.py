@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import importlib
+import sys
 from types import SimpleNamespace
 
 import pytest
 from _index_api import (
     _get_base_address,
     _is_environment_path,
+    _yield_get_submodules,
     assert_documenting_this_checkout,
     parse_project,
 )
@@ -82,3 +85,37 @@ class TestAssertDocumentingThisCheckout:
 
         with pytest.raises(RuntimeError, match="PYTHONPATH"):
             assert_documenting_this_checkout(module, tmp_path)
+
+
+class TestOptionalSubmodules:
+    """A submodule whose optional dependency is absent is skipped, not fatal."""
+
+    @pytest.fixture
+    def package(self, tmp_path, monkeypatch):
+        """A package with one importable and one dependency-less submodule."""
+        pkg = tmp_path / "optpkg"
+        pkg.mkdir()
+        (pkg / "__init__.py").write_text("")
+        (pkg / "plain.py").write_text("VALUE = 1\n")
+        (pkg / "needs_dep.py").write_text("import surely_not_installed_dep\n")
+        (pkg / "broken.py").write_text("import optpkg.no_such_submodule\n")
+        monkeypatch.syspath_prepend(str(tmp_path))
+        # one package name per test: a cached import would hide the new files
+        for name in [k for k in sys.modules if k.split(".")[0] == "optpkg"]:
+            monkeypatch.delitem(sys.modules, name)
+        return importlib.import_module("optpkg"), tmp_path
+
+    def test_missing_dependency_warns_and_skips(self, package):
+        """A third-party import failure skips the submodule with a warning."""
+        module, base = package
+        (base / "optpkg" / "broken.py").unlink()
+        with pytest.warns(UserWarning, match="surely_not_installed_dep"):
+            found = dict(_yield_get_submodules(module, base))
+        assert set(found) == {"optpkg.plain"}
+
+    def test_project_import_failure_still_raises(self, package):
+        """A missing module inside the project itself is a bug, not a skip."""
+        module, base = package
+        (base / "optpkg" / "needs_dep.py").unlink()
+        with pytest.raises(ModuleNotFoundError, match="no_such_submodule"):
+            dict(_yield_get_submodules(module, base))

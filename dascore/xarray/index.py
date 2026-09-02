@@ -30,10 +30,39 @@ from xarray.indexes import CoordinateTransform, CoordinateTransformIndex
 
 _NAT_I8 = np.iinfo("int64").min
 
+# pandas' Resolution ranks, finest first; a partial datetime string
+# names a span only when its resolution is coarser than the index's
+_PERIOD_RESO = {
+    "ns": 0,
+    "us": 1,
+    "ms": 2,
+    "s": 3,
+    "min": 4,
+    "h": 5,
+    "D": 6,
+    "M": 7,
+    "Q": 8,
+    "Y": 9,
+}
+_UNIT_NS = (1_000, 10**6, 10**9, 60 * 10**9, 3_600 * 10**9, 86_400 * 10**9)
+
+
+def _ns_resolution(value: int) -> int:
+    """The finest unit with a nonzero component in ``value`` (day at most)."""
+    for rank, divisor in enumerate(_UNIT_NS):
+        if value % divisor:
+            return rank
+    return _PERIOD_RESO["D"]
+
 
 def _label_ints(labels: np.ndarray, dtype) -> np.ndarray:
     """Labels as exact python-int nanoseconds, refusing NaT."""
     arr = np.atleast_1d(np.asarray(labels))
+    if arr.dtype.kind in "biufc":
+        # pandas never reads a number as a stamp; a materialized twin
+        # raises here, so the lazy index must not select the epoch
+        msg = f"Numeric label(s) {labels!r} do not name {np.dtype(dtype)} samples."
+        raise KeyError(msg)
     if arr.dtype == np.dtype(dtype):
         ints = arr.view("int64")
     else:
@@ -229,11 +258,20 @@ class TemporalRangeIndex(CoordinateTransformIndex):
                 return type(self)(new)
             positions = np.arange(start, stop, stride)
         else:
+            if getattr(idx, "dims", (self.dim,)) != (self.dim,):
+                # vectorized onto another dimension: the labels no
+                # longer index this one, so xarray drops the index
+                return None
             positions = np.asarray(getattr(idx, "values", idx))
             if positions.ndim != 1:
                 # multi-dimensional (vectorized) indexing has no 1-d
                 # labels to index; let xarray drop the index
                 return None
+            if positions.dtype == bool:
+                positions = np.flatnonzero(positions)
+            # the data reads a negative position from the end; so must
+            # its label
+            positions = np.where(positions < 0, positions + self.size, positions)
         from xarray.indexes import PandasIndex  # noqa: PLC0415
 
         labels = self.transform.forward({self.dim: positions})[self.dim]
@@ -277,7 +315,27 @@ class TemporalRangeIndex(CoordinateTransformIndex):
             return None
         if not isinstance(period, pd.Period):  # NaT parses without erroring
             return None
-        return period.start_time.to_datetime64(), period.end_time.to_datetime64()
+        reso = _PERIOD_RESO.get(period.freqstr.split("-")[0])
+        assert reso is not None, f"unexpected period frequency {period.freqstr!r}"
+        return (
+            period.start_time.to_datetime64(),
+            period.end_time.to_datetime64(),
+            reso,
+        )
+
+    @property
+    def _resolution(self) -> int:
+        """The finest unit any label carries, as pandas infers it.
+
+        pandas infers a DatetimeIndex's resolution from its values; the
+        samples here are ``start + k * step``, so the start's finest unit
+        and (past one sample) the step's finest unit decide it.
+        """
+        t = self.transform
+        reso = _ns_resolution(t.start_ns)
+        if self.size > 1:
+            reso = min(reso, _ns_resolution(t.step_ns))
+        return reso
 
     def sel(self, labels, method=None, tolerance=None) -> IndexSelResult:
         """Resolve label selection arithmetically."""
@@ -304,14 +362,17 @@ class TemporalRangeIndex(CoordinateTransformIndex):
                 return IndexSelResult({self.dim: label.copy(data=pos)})
             return IndexSelResult({self.dim: Variable(label.dims, pos)})
         if isinstance(label, str) and (bounds := self._period_bounds(label)):
-            # a partial datetime string names a span; answer as pandas
-            # answers, with the scalar form only when it names one sample
-            indexer = self._sel_slice(slice(*bounds))
+            # a datetime string coarser than the index names a span and
+            # keeps the dimension, even over one sample; one at least as
+            # fine names a single stamp, exactly as pandas resolves it
+            lo, hi, reso = bounds
+            if reso <= self._resolution:
+                pos = self._positions_for(lo, method)
+                return IndexSelResult({self.dim: int(pos[0])})
+            indexer = self._sel_slice(slice(lo, hi))
             if indexer.stop == indexer.start:
                 msg = f"No samples fall within the period named by {label!r}."
                 raise KeyError(msg)
-            if indexer.stop == indexer.start + 1:
-                return IndexSelResult({self.dim: indexer.start})
             return IndexSelResult({self.dim: indexer})
         # scalar and plain-array labels: exact by default, exactly as the
         # materialized segments of the same tree answer; nearest opts in.

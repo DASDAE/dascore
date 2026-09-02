@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import inspect
 import os
+import warnings
 from collections import defaultdict
 from importlib import import_module
 from pathlib import Path
@@ -86,16 +87,31 @@ def _yield_get_submodules(obj, base_path):
         # this is a directory, look for corresponding __init__.py
         if is_dir and (submod_path / "__init__.py").exists():
             mod_name = str(submod_path.relative_to(base_path)).replace(os.sep, ".")
-            mod = import_module(mod_name)
-            yield mod_name, mod
         elif submod_path.name.endswith(".py") and not is_init:
             mod_name = (
                 str(submod_path.relative_to(base_path))
                 .replace(".py", "")
                 .replace(os.sep, ".")
             )
-            mod = import_module(mod_name)
+        else:
+            continue
+        if (mod := _import_optional_module(mod_name)) is not None:
             yield mod_name, mod
+
+
+def _import_optional_module(mod_name):
+    """Import a project module, skipping one whose optional dependency is absent."""
+    try:
+        return import_module(mod_name)
+    except ModuleNotFoundError as exc:
+        missing = (exc.name or "").split(".")[0]
+        if not missing or mod_name.startswith(missing):
+            raise
+        warnings.warn(
+            f"Skipping {mod_name}: its dependency '{exc.name}' is not installed.",
+            stacklevel=2,
+        )
+        return None
 
 
 def assert_documenting_this_checkout(module, repo_path=None) -> None:
