@@ -24,9 +24,12 @@ import pandas as pd
 
 import dascore as dc
 from dascore.core.coords import CoordSummary
+from dascore.exceptions import UnknownFiberFormatError
+from dascore.io.core import FiberIO, _required_resource_type
 from dascore.io.index.backend import get_backend
 from dascore.io.index.catalog import (
     CompositeResolver,
+    FileResolver,
     PatchCatalog,
     PatchResolver,
     _adjust_unit_segments,
@@ -46,9 +49,11 @@ from dascore.utils.chunk_plan import (
     _concatenated_steps,
     _ensure_patch_id,
 )
+from dascore.utils.io import IOResourceManager
 from dascore.utils.misc import _CanonicalRange, is_range
 from dascore.utils.patch import concatenate_planned
 from dascore.utils.patch_assembly import PatchAssembler
+from dascore.utils.paths import is_memory_uri
 from dascore.utils.pd import adjust_segments
 
 # Row columns which name dc.read's own keyword arguments; passing one along
@@ -111,8 +116,8 @@ def _num(value) -> float | None:
     return float(value)
 
 
-def _dtype_str(value) -> str:
-    """Convert a stored element dtype to its string, "" when unknown."""
+def _row_str(value) -> str:
+    """A row cell as a string, with the frame's nulls (None/NaN) as ""."""
     return "" if value is None or pd.isnull(value) else str(value)
 
 
@@ -443,7 +448,7 @@ def _output_records(
             # chunk can still size patches by their memory footprint.
             # NaN is truthy, so `or ""` alone would store the string
             # "nan" and poison every later np.dtype() of this column.
-            dtype=_dtype_str(row.get("_dtype")),
+            dtype=_row_str(row.get("_dtype")),
             data_size=sizes.get(output_id),
             time_min=_ns(row.get("time_min")),
             time_max=_ns(row.get("time_max")),
@@ -555,6 +560,71 @@ class PlanResolver(PatchResolver):
         patch = self.loader.resolve(kwargs, **trim)
         patch = apply_exact_residuals(patch, self.parent_residuals)
         return self._in_plan_units(patch, kwargs)
+
+    def _load_member_array(self, row: Mapping, windows: Mapping) -> np.ndarray | None:
+        """
+        Load one member's raw array through the format's `read_array`.
+
+        ``windows`` maps dimension name to a half-open ``(start, stop)``
+        sample window on the member source's own grid; absent dimensions
+        load whole. The array comes back in the source's stated dimension
+        order, untransposed and uncast.
+
+        The caller must anchor the windows on the raw file grid — a
+        window computed against a trimmed or residual-adjusted envelope
+        is not a window on that grid. Returns None when the row cannot
+        take the data-only path, and the caller falls back to
+        `_load_member`, which is exact for every row. The fast path
+        requires a plain file-backed row with a concrete format and
+        version, a natively keyed patch (a synthesized digit key means
+        "the nth patch of the full read", which only the whole-read
+        default honors), a format which overrides ``read_array``, and no
+        parent residuals — a residual re-trims the loaded patch, and a
+        data-only read would skip that trim. The fast path trusts the
+        index about the grid itself: the caller's shape guard catches a
+        resized file, not a shifted one.
+        """
+        if self.parent_residuals:
+            return None
+        path = _row_str(row.get("source_path"))
+        if not path:
+            return None
+        if is_memory_uri(path) or path.startswith(PLAN_SCHEME):
+            return None
+        fmt = _row_str(row.get("source_format"))
+        version = _row_str(row.get("source_version"))
+        if not fmt or not version:
+            return None
+        loader = self.loader
+        if not isinstance(loader, FileResolver):
+            loader = getattr(loader, "file", None)
+        if not isinstance(loader, FileResolver):
+            return None
+        try:
+            # An exact version is required: without one the manager hands
+            # back the newest reader, which may not match this file.
+            fiber_io = FiberIO.manager.get_fiberio(format=fmt, version=version)
+        except UnknownFiberFormatError:
+            return None
+        if not fiber_io.implements_read_array:
+            return None
+        key = _row_source_patch_key(row)
+        if key.isdigit():
+            # A synthesized positional key binds against the full source
+            # read (see FileResolver.resolve); an override which resolves
+            # keys natively could match the wrong patch, or nothing.
+            return None
+        kwargs = {"source_patch_key": key} if key else {}
+        # The resource manager resolves remote paths and opens the handle
+        # type the override's annotation asks for, exactly as dc.read
+        # provisions its reader; _pre_cast says the work is already done.
+        with IOResourceManager(loader.resolve_path(path)) as manager:
+            resource = manager.get_resource(
+                _required_resource_type(fiber_io.read_array)
+            )
+            return fiber_io.read_array(
+                resource, dict(windows), _pre_cast=True, **kwargs
+            )
 
     def _in_plan_units(self, patch: dc.Patch, kwargs: Mapping) -> dc.Patch:
         """

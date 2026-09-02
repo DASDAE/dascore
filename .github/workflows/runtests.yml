@@ -6,10 +6,12 @@ on:
     branches:
     - master
     - dev
+    - xarray_integration
   pull_request:
     branches:
     - master
     - dev
+    - xarray_integration
     paths:
       - 'pyproject.toml'
       # The conda_env job exists to guard this file, so it has to run when
