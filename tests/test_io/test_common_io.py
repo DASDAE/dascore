@@ -596,9 +596,9 @@ class TestRead:
         io, path = io_path_tuple
         if not io.implements_read_array:
             pytest.skip(f"{io.name} inherits the default read_array")
-        params = inspect.signature(io.read_array).parameters
-        if "snap" not in params:
-            pytest.skip(f"{io.name}.read_array takes no labelling option")
+        # what scan takes, read_array must take: the caller forwards it
+        if "snap" not in inspect.signature(io.scan).parameters:
+            pytest.skip(f"{io.name}.scan takes no labelling option")
         with skip_missing():
             payloads = {x: dc.scan_payloads(path, snap=x)[0] for x in (True, False)}
         key = payloads[True].get("source_patch_key", "")

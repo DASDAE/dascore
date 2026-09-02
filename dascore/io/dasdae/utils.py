@@ -15,6 +15,8 @@ import dascore as dc
 from dascore.core.attrs import PatchAttrs
 from dascore.core.coordmanager import get_coord_manager
 from dascore.core.coords import get_coord
+from dascore.core.summary import normalize_source_patch_key
+from dascore.exceptions import PatchAttributeError
 from dascore.io.core import STORED_PATCH_ID, make_scan_payload
 from dascore.io.dasdae._compat import (
     NOT_DECODED,
@@ -298,8 +300,11 @@ def _get_patch_group(h5, source_patch_key=""):
     A key names a direct child of the waveform group, never an h5py path.
     """
     waveforms = h5.get("waveforms", {})
-    groups = dict(waveforms.items()) if len(waveforms) else {}
-    return resolve_keyed_source(groups, source_patch_key, where=str(h5.filename))
+    key = normalize_source_patch_key(source_patch_key)
+    if "/" in key:
+        # h5py would read the key as a path; a patch is a direct child
+        raise PatchAttributeError(f"No patch named '{key}' in {h5.filename}.")
+    return resolve_keyed_source(waveforms, key, where=str(h5.filename))
 
 
 def _matches_attr_filters(attrs, kwargs):

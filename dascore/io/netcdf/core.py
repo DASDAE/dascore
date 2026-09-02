@@ -139,6 +139,7 @@ class NetCDFCFV18(FiberIO):
         resource: H5Reader,
         windows: dict[str, tuple[int, int]],
         source_patch_key="",
+        snap: bool = True,
         **kwargs,
     ) -> np.ndarray:
         """
@@ -148,7 +149,7 @@ class NetCDFCFV18(FiberIO):
         so CF decoding (scaling, offsets, fill values) applies exactly as
         it does in `read`.
         """
-        raise_on_extra_kwargs(kwargs, "windows and source_patch_key")
+        raise_on_extra_kwargs(kwargs, "windows, source_patch_key and snap")
         with _open_xarray_dataset(resource) as dataset:
             data_var_name = get_xarray_data_var_name(dataset)
             resolve_keyed_source(

@@ -75,7 +75,11 @@ class DASHDF5(FiberIO):
         return dc.spool(patches)
 
     def read_array(
-        self, resource: H5Reader, windows: dict[str, tuple[int, int]], **kwargs
+        self,
+        resource: H5Reader,
+        windows: dict[str, tuple[int, int]],
+        snap: bool = True,
+        **kwargs,
     ) -> np.ndarray:
         """
         Slice the ``das`` dataset directly.
@@ -83,5 +87,5 @@ class DASHDF5(FiberIO):
         The dimension order is the one the dataset's shape implies, which
         is what `scan` reports.
         """
-        raise_on_extra_kwargs(kwargs, "windows")
+        raise_on_extra_kwargs(kwargs, "windows and snap")
         return slice_dataset(resource["das"], _get_cf_dims(resource), windows)
