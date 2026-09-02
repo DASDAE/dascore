@@ -4,13 +4,21 @@ from __future__ import annotations
 
 from typing import Literal
 
+import numpy as np
+
 import dascore as dc
 from dascore.constants import opt_timeable_types
 from dascore.io import FiberIO, ScanPayload, make_scan_payload
-from dascore.io.utils import build_patches
+from dascore.io.utils import build_patches, slice_dataset
 from dascore.utils.hdf5 import H5Reader
+from dascore.utils.misc import raise_on_extra_kwargs
 
-from .utils import _get_cf_attrs, _get_cf_coords, _get_cf_version_str
+from .utils import (
+    _get_cf_attrs,
+    _get_cf_coords,
+    _get_cf_dims,
+    _get_cf_version_str,
+)
 
 
 class DASHDF5(FiberIO):
@@ -65,3 +73,15 @@ class DASHDF5(FiberIO):
             selection={"time": time, "channel": channel},
         )
         return dc.spool(patches)
+
+    def read_array(
+        self, resource: H5Reader, windows: dict[str, tuple[int, int]], **kwargs
+    ) -> np.ndarray:
+        """
+        Slice the ``das`` dataset directly.
+
+        The dimension order is the one the dataset's shape implies, which
+        is what `scan` reports.
+        """
+        raise_on_extra_kwargs(kwargs, "windows")
+        return slice_dataset(resource["das"], _get_cf_dims(resource), windows)
