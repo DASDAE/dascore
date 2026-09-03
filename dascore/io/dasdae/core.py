@@ -9,16 +9,11 @@ import numpy as np
 import pandas as pd
 
 import dascore as dc
-from dascore.exceptions import ParameterError
 from dascore.io import FiberIO
+from dascore.io.utils import windows_to_slices
 from dascore.utils.hdf5 import H5Reader, H5Writer
 from dascore.utils.io import _normalize_source_patch_keys
-from dascore.utils.misc import (
-    _to_slice,
-    _validate_sample_values,
-    raise_on_extra_kwargs,
-    unbyte,
-)
+from dascore.utils.misc import raise_on_extra_kwargs, unbyte
 from dascore.utils.patch import get_patch_names
 
 from .utils import (
@@ -166,17 +161,8 @@ class DASDAEV1(FiberIO):
         """
         raise_on_extra_kwargs(kwargs, "windows and source_patch_key")
         group = _get_patch_group(resource, source_patch_key)
-        dims = _get_dims(group)
-        if unknown := sorted(set(windows) - set(dims)):
-            msg = f"Window dimensions {unknown} are not among patch dims {dims}."
-            raise ParameterError(msg)
-        # the same validation and (start, stop) reading as select(samples=True)
-        for window in windows.values():
-            _validate_sample_values(window)
-        index = tuple(
-            _to_slice(windows[dim]) if dim in windows else slice(None) for dim in dims
-        )
-        return group["data"][index]
+        data = group["data"]
+        return data[windows_to_slices(windows, _get_dims(group), data.shape)]
 
     def scan(self, resource: H5Reader, snap: bool = True, **kwargs):
         """

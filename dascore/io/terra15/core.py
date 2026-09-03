@@ -4,12 +4,18 @@ from __future__ import annotations
 
 from typing import Literal
 
+import numpy as np
+
 import dascore as dc
 from dascore.constants import timeable_types
 from dascore.io import FiberIO, ScanPayload
+from dascore.io.utils import windows_to_slices
 from dascore.utils.hdf5 import H5Reader
+from dascore.utils.misc import raise_on_extra_kwargs
 
 from .utils import (
+    _get_distance_coord,
+    _get_scanned_time_info,
     _get_terra15_version_str,
     _get_version_data_node,
     _read_terra15,
@@ -77,6 +83,32 @@ class Terra15FormatterV4(FiberIO):
         if not patch.data.size:
             return dc.spool([])
         return dc.spool(patch)
+
+    def read_array(
+        self,
+        resource: H5Reader,
+        windows: dict[str, tuple[int, int]],
+        snap_dims: bool = True,
+        **kwargs,
+    ) -> np.ndarray:
+        """
+        Slice the data node directly.
+
+        Besides the requested block, only the time node's ends and the
+        header are read (the whole time node for an unfinished file, to
+        count the rows it actually wrote). ``snap_dims`` selects the same
+        grid ``read`` and ``scan`` use: snapped, the rows stop at the last
+        written sample; raw, every row counts, as the raw time coordinate
+        does.
+        """
+        raise_on_extra_kwargs(kwargs, "windows and snap_dims")
+        _, data_node = _get_version_data_node(resource)
+        data = data_node["data"]
+        time_len = data.shape[0]
+        if snap_dims:
+            _, _, time_len, _ = _get_scanned_time_info(data_node)
+        shape = (time_len, len(_get_distance_coord(resource)))
+        return data[windows_to_slices(windows, ("time", "distance"), shape)]
 
 
 class Terra15FormatterV5(Terra15FormatterV4):

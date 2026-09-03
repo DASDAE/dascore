@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import warnings
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from typing import Any
 
 import numpy as np
@@ -12,10 +12,10 @@ import dascore as dc
 from dascore.constants import INVENTORY_ATTRS
 from dascore.core.coordmanager import CoordManager
 from dascore.core.coords import BaseCoord, CoordSegmented, get_coord
-from dascore.exceptions import CoordError, UnitError
+from dascore.exceptions import CoordError, ParameterError, UnitError
 from dascore.models import ArrayLike
 from dascore.units import convert_units, get_quantity_str
-from dascore.utils.misc import unbyte
+from dascore.utils.misc import _to_slice, _validate_sample_values, unbyte
 
 # Stored coordinate arrays often carry sub-step jitter (e.g. GPS-stamped DAS
 # time). ``CoordSegmented.from_array`` treats every isolated sampling change as
@@ -150,6 +150,40 @@ def build_patches(
         return []
     # Ellipsis rather than a slice so 0d data (a scalar patch) also loads.
     return [dc.Patch(data=data[...], coords=coords, attrs=patch_attrs)]
+
+
+def windows_to_slices(
+    windows: Mapping[str, Any], dims: Sequence[str], shape: Sequence[int]
+) -> tuple[slice, ...]:
+    """
+    Turn `FiberIO.read_array` windows into one slice per dimension.
+
+    Each window is validated as `Patch.select` validates ``samples=True``
+    values and resolved against its dimension's length, so every slice
+    comes back with explicit non-negative bounds and ``start <= stop`` (a
+    reversed window is empty); a dimension without a window is taken whole.
+
+    Parameters
+    ----------
+    windows
+        Dimension name to ``(start, stop)`` half-open sample indices.
+    dims
+        The dimensions in the array's stored order.
+    shape
+        The array's shape, in the same order.
+    """
+    if unknown := sorted(set(windows) - set(dims)):
+        msg = f"Window dimensions {unknown} are not among patch dims {tuple(dims)}."
+        raise ParameterError(msg)
+    out = []
+    for dim, size in zip(dims, shape, strict=True):
+        if dim not in windows:
+            out.append(slice(0, size))
+            continue
+        _validate_sample_values(windows[dim])
+        span = range(size)[_to_slice(windows[dim])]
+        out.append(slice(span.start, max(span.stop, span.start)))
+    return tuple(out)
 
 
 def get_gridded_coord(values, units=None) -> BaseCoord:
