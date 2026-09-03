@@ -150,11 +150,9 @@ def waterfall(
     """
     Create a waterfall plot of the Patch data.
 
-    Evenly sampled dimension coordinates are rendered with ``imshow`` for
-    efficient display and image interpolation. Finite, monotonic irregular
-    coordinates are rendered with ``pcolormesh`` so cell geometry follows the
-    coordinate values. Incomplete or nonmonotonic coordinates fall back to
-    ``imshow`` with index-based or minimum/maximum extents.
+    Evenly sampled coordinates use ``imshow``. Finite, monotonic irregular
+    coordinates use ``pcolormesh`` so cells follow their coordinate values;
+    incomplete or nonmonotonic coordinates fall back to ``imshow``.
 
     Parameters
     ----------
@@ -163,84 +161,48 @@ def waterfall(
     ax
         A matplotlib object, if None create one.
     cmap
-        A matplotlib colormap string or instance. If `None`, a colormap will be
-        chosen automatically, depending on the data_type of the patch.
+        Matplotlib colormap. None selects one from the patch ``data_type``.
     scale
-        If not None, controls the saturation level of the colorbar. A single
-        number is symmetric: with `scale_type="relative"` the limits sit that
-        fraction of half the data range either side of the mean, and with
-        `scale_type="absolute"` they are -abs(scale) and abs(scale). A pair
-        of numbers gives the lower and upper limits: fractions of the data
-        range, from 0 to 1, when relative, or the values themselves when
-        absolute. Percent quantities, such as `10 * dc.units.percent`, are
-        converted to fractions.
+        Color limits. A scalar produces symmetric limits: a fraction of half
+        the data range around its mean when relative, or ``±abs(scale)`` when
+        absolute. A relative pair maps fractions from 0 to 1 onto the data
+        minimum and maximum; an absolute pair gives the limits directly.
+        Percent quantities are converted to fractions.
     scale_type
-        Controls the type of scaling specified by `scale` parameter. Options
-        are:
-            relative - scale based on half the dynamic range in patch
-            absolute - scale based on absolute values provided to `scale`
+        Interpret ``scale`` as ``"relative"`` fractions or ``"absolute"``
+        values.
     interpolation
-        A value fed to matplotlib's imshow to handle downsampling large arrays,
-        which is relevant for DAS. Usually, "antialiased" works well, but if the
-        data look smeared disabling interpolation with None might help. Other
-        options are available, see matplotlib's documentation for more details.
-        This option does not apply when irregular coordinates select the
-        ``pcolormesh`` renderer.
+        Passed to matplotlib ``imshow``. ``"antialiased"`` handles large
+        arrays well; None can help if they look smeared. Ignored by
+        ``pcolormesh``.
     interpolation_stage
-        If 'data', interpolation is carried out on the data provided by the user.
-        If 'rgba', the interpolation is carried out after the colormapping has
-        been applied (visual interpolation).
-        'auto' (default) selects a suitable interpolation stage automatically.
-        See matplotlib's imshow documentation for more details. This option
-        does not apply when ``pcolormesh`` is used.
+        ``imshow`` interpolation stage: ``"data"``, ``"rgba"``, or
+        ``"auto"``. Ignored by ``pcolormesh``.
     gap_color
-        Matplotlib color used to display gaps in irregular dimension
-        coordinates. When a color is provided, a masked row or column is
-        inserted for each detected gap and displayed with this color. The
-        default of None bridges gaps by extending adjacent cells across them
-        without expanding the data matrix. This option only applies when
-        ``pcolormesh`` is used. Existing masked or NaN data receive the same
-        color as coordinate gaps.
+        Color for gaps in irregular coordinates. A color inserts masked cells
+        at detected gaps; None bridges them with adjacent cells. Existing NaN
+        or masked data use the same color. Applies only to ``pcolormesh``.
     gap_factor
-        When ``gap_color`` is provided, coordinate intervals larger than this
-        factor times the median interval are displayed as gaps. With the
-        default ``gap_color=None``, cells bridge intervals and this parameter
-        has no visual effect. Gap detection assumes the median interval
-        represents the sampling interval, so coordinates containing contiguous
-        regions with different sampling rates may classify the more coarsely
-        sampled region as gaps. For such data, use the default
-        ``gap_color=None``, increase ``gap_factor``, or plot/resample the
-        regions separately. Must be greater than 1.
+        Intervals larger than this multiple of the median are gaps. Must exceed 1,
+        even when ``gap_color`` is None and it has no visual effect. Mixed
+        sampling rates may classify coarser regions as gaps; increase this value
+        or plot or resample those regions separately.
     log
         If True, visualize the common logarithm of the absolute values of patch data.
         To avoid log(0), the abs(array) is cast to float64 and a small value
         added.
     cbar
-        If True, plot the colorbar, else do not. This controls only colorbar
-        display; use `cmap` to control colormap selection.
+        Whether to draw a colorbar.
     show
-        If True, show the plot, else just return axis.
+        Whether to show the plot.
     label_coord
-        The name of a coordinate whose values label stretches of one of the
-        plotted dimensions, such as a label group an inventory projected onto
-        the patch with [`Patch.enrich`](`dascore.proc.inventory.enrich`). Each
-        stretch is drawn as a bar on the two spines its dimension runs along,
-        colored by its label, so no data is covered or tinted; a hairline
-        joins them wherever the value changes, faint enough to locate a
-        boundary in the data without competing with it. A legend names the
-        labels, beyond any colorbar when this call owns the figure, and inside
-        the axes when the caller supplied one, since taking room from
-        someone else's figure would move every other axes on it. String and
-        numeric coordinates state one label per distinct value. A boolean
-        coordinate states membership, so only its True stretches are marked
-        and the legend names them by the coordinate. Absent values (the empty
-        string, NaN, or False) label nothing, and leave bare spine.
-
-        Raises `ParameterError` for a coordinate which is not a set of
-        labels: one stating more than 20 distinct values, one changing more
-        than 200 times, one whose every value is absent, and one which is a
-        dimension or spans both of them. All are judged before anything is
-        drawn, so a refusal leaves no figure behind.
+        Coordinate whose values label stretches along one plotted dimension,
+        drawn on its spines without tinting the data. Its legend is outside a
+        figure created here, or in the upper-right of a supplied ``ax``. String
+        and numeric values are categories; a boolean coordinate marks only True
+        stretches. Empty strings, NaN, and False are omitted. A coordinate that
+        is a dimension, spans both dimensions, has no labels, exceeds 20 labels,
+        or changes more than 200 times raises `ParameterError` before drawing.
 
     Examples
     --------
@@ -250,61 +212,24 @@ def waterfall(
     >>> patch = dc.get_example_patch("example_event_1").normalize("time")
     >>> _ = patch.viz.waterfall()
     >>>
-    >>> # Use relative scaling with a tuple to show a specific fraction
-    >>> # of data range. Scale values of (0.1, 0.9) map to 10% and 90%
-    >>> # of the data's [min, max] range
-    >>> _ = patch.viz.waterfall(scale=0.1, scale_type="relative")
-    >>> # Likewise, percent units can be used for additional clarity
-    >>> _ = patch.viz.waterfall(scale=10*percent, scale_type="absolute")
-    >>>
-    >>> # Use relative scaling with a tuple to show the middle 80% of data range
-    >>> # Scale values of (0.1, 0.9) map to 10% and 90% of [data_min, data_max]
     >>> _ = patch.viz.waterfall(scale=(0.1, 0.9), scale_type="relative")
-    >>>
-    >>> # Use absolute scaling to set specific colorbar limits
-    >>> # This directly sets the colorbar limits to [-0.5, 0.5]
+    >>> _ = patch.viz.waterfall(scale=10 * percent)
     >>> _ = patch.viz.waterfall(scale=(-0.5, 0.5), scale_type="absolute")
-    >>>
-    >>> # Visualize data on a logarithmic scale
-    >>> # Useful for data spanning multiple orders of magnitude
     >>> _ = patch.viz.waterfall(log=True)
     >>>
-    >>> # Compare scale types: relative vs absolute
-    >>> import matplotlib.pyplot as plt
-    >>> fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 4))
-    >>> # Relative: 0.5 means ±50% of dynamic range around mean
-    >>> _ = patch.viz.waterfall(scale=0.5, scale_type="relative", ax=ax1)
-    >>> _ = ax1.set_title("Relative scaling (scale=0.5)")
-    >>> # Absolute: 0.5 means colorbar limits are [-0.5, 0.5]
-    >>> _ = patch.viz.waterfall(scale=0.5, scale_type="absolute", ax=ax2)
-    >>> _ = ax2.set_title("Absolute scaling (scale=0.5)")
-    >>>
-    >>> # Mark where a label coordinate changes, such as the zones an
-    >>> # inventory places along the fiber.
     >>> from dascore.examples import inventory_patch_pair
     >>> zoned, inventory = inventory_patch_pair()
     >>> _ = zoned.enrich(inventory).viz.waterfall(label_coord="zone")
     >>>
-    >>> # Undo Y axis inversion which occurs when time is on the Y
     >>> ax = patch.viz.waterfall()
     >>> ax.invert_yaxis()
 
     Notes
     -----
-    - A Patch with an empty dimension raises `ParameterError` immediately
-      because it has no cells to render.
-
-    - The Y axis is automatically inverted if it is "time-like". This is to
-      be consistent with standard seismic plotting convention. If you don't
-      want this, simply invert the y axis of the returned axis object as
-      shown in the example section.
-
-    - Changes to default scale behavior: Until DASCore version 0.1.13, the
-      default behavior when scale=None was to scale along the entire range of
-      the data. However, very often in real data a few anomalously large or
-      small values would obscure most of the patch details. In version 0.1.13
-      the default behavior is to now use a statistical fence to avoid the
-      problem. To get the old behavior, simply set scale=1.0.
+    Empty dimensions raise `ParameterError`. Time-like Y axes are inverted by
+    seismic convention; call ``ax.invert_yaxis()`` to undo this. Since version
+    0.1.13, ``scale=None`` uses a statistical fence to limit outliers; use
+    ``scale=1.0`` for the full data range.
     """
     if 0 in patch.shape:
         msg = "Cannot plot a Patch with an empty dimension."
