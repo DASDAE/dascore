@@ -486,10 +486,11 @@ def normalize(
 
     Notes
     -----
-    Even window lengths are raised to the next odd number. Reflection at each
-    edge gives every input sample an output without introducing new nulls,
-    unlike [`rolling`](`dascore.Patch.rolling`), which leaves nulls where a
-    window is incomplete.
+    Even window lengths in coordinate units are raised to the next odd number;
+    with ``samples=True``, an even sample count raises `ParameterError`.
+    Reflection gives every input sample an output without introducing new
+    nulls, unlike [`rolling`](`dascore.Patch.rolling`), which leaves
+    incomplete windows null.
 
     Windowed L2 and L1 norms use RMS and mean absolute value, respectively, so
     scale does not depend on window length. Whole-slice L2 and L1 retain their

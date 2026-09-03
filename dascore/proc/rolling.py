@@ -273,8 +273,10 @@ def rolling(
         Label each window by its center rather than its right edge.
     engine
         ``"numpy"`` uses ``sliding_window_view`` and ``"pandas"`` uses
-        ``pandas.rolling``. None selects based on the step; numpy is generally
-        preferred for ``apply`` or steps above 10 samples.
+        ``pandas.rolling``. None selects pandas only when the step is below 10
+        and the squeezed patch has fewer than two dimensions; otherwise it
+        selects NumPy. Explicit pandas supports at most two dimensions and
+        raises `ParameterError` above that.
     samples
         {sample_explanation}
     overlap
@@ -287,10 +289,11 @@ def rolling(
     -----
     Rolling follows Pandas [DataFrame.rolling](
     https://pandas.pydata.org/docs/reference/api/pandas.DataFrame.rolling.html)
-    semantics. With no step, the output retains the input shape and incomplete
-    leading windows are NaN; use [`Patch.dropna`](`dascore.Patch.dropna`) to
-    remove them. A step downsamples that output. For example, the mean of
-    ``[0, 1, 2, 3, 4, 5]`` is:
+    semantics. With no step, the output retains the input shape. When
+    ``center=False``, incomplete leading windows are NaN; when
+    ``center=True``, incomplete windows at both edges are NaN. Use
+    [`Patch.dropna`](`dascore.Patch.dropna`) to remove them. A step downsamples
+    that output. For example, the mean of ``[0, 1, 2, 3, 4, 5]`` is:
 
     - window 2: ``[NaN, 0.5, 1.5, 2.5, 3.5, 4.5]``
     - window 3: ``[NaN, NaN, 1, 2, 3, 4]``
