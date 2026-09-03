@@ -492,6 +492,7 @@ class PlanResolver(PatchResolver):
         merge_kwargs: Mapping,
         parent_residuals: tuple = (),
         mode: str = "chunk",
+        aux_coords: frozenset[str] = frozenset(),
         origin_path=None,
         stamped: tuple[str, ...] = (),
         lossy: bool = False,
@@ -504,6 +505,7 @@ class PlanResolver(PatchResolver):
         self.dim = dim
         self.member_rows = member_rows.reset_index(drop=True)
         self.loader = loader
+        self.aux_coords = frozenset(aux_coords)
         self.merge_kwargs = dict(merge_kwargs)
         self.parent_residuals = tuple(parent_residuals)
         self.mode = mode
@@ -532,7 +534,30 @@ class PlanResolver(PatchResolver):
             load_patch=self._load_member,
             merge_kwargs=self.merge_kwargs,
             plan_dim=self.dim,
+            load_array=self._load_member_whole,
         )
+
+    def _load_member_whole(self, row: Mapping) -> np.ndarray | None:
+        """
+        Load an untrimmed member's whole array through its format's read_array.
+
+        The array path skips the member's own coordinates and attrs, so
+        it is taken only where the index can stand in for them: the
+        member is untrimmed (a trim is applied on the member's grid), and
+        the catalog holds no associated coordinates, whose values the
+        index does not carry. Returns None otherwise, and the caller
+        loads the patch.
+        """
+        if row.get("_modified") or self.aux_coords:
+            return None
+        # A residual re-trims a loaded patch by value. An unmodified row
+        # lies wholly inside any value selection on the plan's own
+        # dimension (a cut would have modified it), so such residuals
+        # are no-ops here; any other kind still needs the patch.
+        for coords, samples in self.parent_residuals:
+            if samples or set(coords) - {self.dim}:
+                return None
+        return self._load_member_array(row, {}, ignore_residuals=True)
 
     def _load_member(self, kwargs: Mapping) -> dc.Patch:
         """Load one member source patch, applying parent residuals."""
@@ -561,7 +586,9 @@ class PlanResolver(PatchResolver):
         patch = apply_exact_residuals(patch, self.parent_residuals)
         return self._in_plan_units(patch, kwargs)
 
-    def _load_member_array(self, row: Mapping, windows: Mapping) -> np.ndarray | None:
+    def _load_member_array(
+        self, row: Mapping, windows: Mapping, *, ignore_residuals: bool = False
+    ) -> np.ndarray | None:
         """
         Load one member's raw array through the format's `read_array`.
 
@@ -582,9 +609,10 @@ class PlanResolver(PatchResolver):
         parent residuals — a residual re-trims the loaded patch, and a
         data-only read would skip that trim. The fast path trusts the
         index about the grid itself: the caller's shape guard catches a
-        resized file, not a shifted one.
+        resized file, not a shifted one. ``ignore_residuals`` is for a
+        caller which has established the residuals cannot touch this row.
         """
-        if self.parent_residuals:
+        if self.parent_residuals and not ignore_residuals:
             return None
         path = _row_str(row.get("source_path"))
         if not path:
@@ -838,6 +866,8 @@ def derived_catalog(
         )
         loader.absorb(parent.resolver, paths=member_paths)
     coord_dims_map = {} if parent is None else parent.backend.coord_dims_map()
+    # a coordinate riding a dimension it is not named for is associated
+    aux_coords = frozenset(n for n, d in coord_dims_map.items() if d != n)
     resolver = PlanResolver(
         token=token,
         dim=name,
@@ -846,6 +876,7 @@ def derived_catalog(
         merge_kwargs=merge_kwargs,
         parent_residuals=parent_residuals,
         mode=mode,
+        aux_coords=aux_coords,
         origin_path=origin_path,
         stamped=stamped,
         lossy=lossy,

@@ -1156,7 +1156,8 @@ class SQLiteIndexBackend:
         ids = out["patch_id"].tolist()
         link_sql = (
             "SELECT pc.patch_id, pc.coord_name, cd.def_key, cd.fingerprint, "
-            "cd.value_kind, cd.is_relative, cd.units, cd.min_num, cd.max_num, "
+            "cd.value_kind, cd.dtype, cd.is_relative, cd.units, "
+            "cd.min_num, cd.max_num, "
             "cd.step_num, cd.min_ns, cd.max_ns, cd.step_ns, "
             "cd.min_str, cd.max_str "
             "FROM patch_coords pc "
@@ -1182,7 +1183,12 @@ class SQLiteIndexBackend:
             maxs = dict(zip(pids, group["_env_max"]))
             steps = dict(zip(pids, group["_env_step"]))
             units = dict(zip(pids, group["units"]))
+            dtypes = dict(zip(pids, group["dtype"]))
             out[f"_{name}_def_key"] = out["patch_id"].map(keys)
+            # the stored dtype: an envelope alone cannot say whether 0.0
+            # to 299.0 by 1.0 labels integers, and a member rebuilt from
+            # the row must match the patch the file would give
+            out[f"_{name}_dtype"] = out["patch_id"].map(dtypes)
             # the ORIGINAL unit spelling, matching the native envelope
             # values; chunk partitioning normalizes compatible spellings
             # to one unit per dimensionality before using this

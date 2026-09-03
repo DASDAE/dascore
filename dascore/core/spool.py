@@ -2349,6 +2349,9 @@ class Spool(NodeRepr, NamespaceOwner):
                 # rows describe, so the sample count adds nothing here.
                 "_data_size",
                 *[c for c in df.columns if str(c).endswith("_def_key")],
+                # a plan's outputs state a placeholder coordinate dtype
+                # for the same reason they state no def key
+                *[c for c in df.columns if str(c).endswith("_dtype")],
             ]
             out = df.drop(columns=drop, errors="ignore")
             return out[sorted(out.columns)]

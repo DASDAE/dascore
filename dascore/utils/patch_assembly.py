@@ -14,14 +14,18 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from typing import Any
 
 import numpy as np
 import pandas as pd
 
 import dascore as dc
+from dascore.core.coordmanager import CoordManager, get_coord_manager
+from dascore.core.coords import get_coord
 from dascore.exceptions import CoordMergeError, UnitError
 from dascore.units import get_quantity
 from dascore.utils.attrs import combine_patch_attrs, warn_if_histories_differ
+from dascore.utils.chunk_plan import _SOURCE_COLUMNS
 from dascore.utils.misc import broadcast_for_index, is_range
 from dascore.utils.patch import (
     _force_patch_merge,
@@ -178,6 +182,82 @@ def _as_plan_units(patch, kwargs, row) -> dict:
 
 
 @dataclass
+class _Member:
+    """What the streaming merge takes from one member, however it was loaded."""
+
+    dims: tuple[str, ...]
+    data: np.ndarray
+    coords: CoordManager
+    attrs: dc.PatchAttrs
+
+    def transpose(self, dims: tuple[str, ...]) -> _Member:
+        """The same member with its axes in ``dims`` order."""
+        order = [self.dims.index(d) for d in dims]
+        return _Member(
+            dims,
+            np.transpose(self.data, order),
+            self.coords.transpose(*dims),
+            self.attrs,
+        )
+
+
+def _attrs_from_row(row: Mapping, dims: tuple[str, ...]) -> dc.PatchAttrs:
+    """
+    The attrs an index row states for its member.
+
+    Every attr the file defined is a column; what is not a column is
+    the plan's own bookkeeping, the storage provenance, and the coordinate
+    envelopes, none of which is a patch attr. A field the file left
+    unset is absent from the row and takes its default, as it would on
+    the patch `read` builds.
+    """
+    envelope = {f"{d}_{x}" for d in dims for x in ("min", "max", "step", "units")}
+    skip = envelope | set(_SOURCE_COLUMNS) | {"dims", "output_id", "current_index"}
+    out = {
+        k: v
+        for k, v in row.items()
+        if not str(k).startswith("_") and k not in skip and not _is_null(v)
+    }
+    out["dims"] = dims
+    out["patch_id"] = row.get("patch_id", "")
+    out["_source_patch_key"] = row.get("source_patch_key", "")
+    return dc.PatchAttrs.from_dict(out)
+
+
+def _is_null(value) -> bool:
+    """True for a missing scalar; an array is a value."""
+    return np.ndim(value) == 0 and pd.isnull(value)
+
+
+def _row_range(row: Mapping, dim: str) -> tuple[Any, Any, Any] | None:
+    """
+    A dimension's evenly sampled range as the row states it, or None.
+
+    The frame hands datetimes back as pandas scalars, which `get_coord`
+    would keep as an object array; numpy scalars make the coordinate a
+    datetime64 one, as the patch path builds it.
+    """
+    values = []
+    for name in ("min", "max", "step"):
+        value = row.get(f"{dim}_{name}")
+        if value is None or _is_null(value):
+            return None
+        if isinstance(value, pd.Timestamp):
+            value = value.to_datetime64()
+        elif isinstance(value, pd.Timedelta):
+            value = value.to_timedelta64()
+        values.append(value)
+    lo, hi, step = values
+    stored = row.get(f"_{dim}_dtype")
+    if isinstance(stored, str) and np.issubdtype(np.dtype(stored), np.number):
+        # the frame holds every numeric envelope as float; the file's
+        # integer coordinate must come back an integer one
+        kind = np.dtype(stored).type
+        lo, hi, step = kind(lo), kind(hi), kind(step)
+    return lo, hi, step
+
+
+@dataclass
 class PatchAssembler:
     """
     Assemble output patches from joined member rows.
@@ -192,6 +272,10 @@ class PatchAssembler:
     load_patch: Callable[[Mapping], dc.Patch]
     merge_kwargs: Mapping
     plan_dim: str
+    # Hands back an untrimmed member's whole array, or None when the
+    # member must be loaded as a patch; the index then stands in for
+    # the member's coordinates and attrs.
+    load_array: Callable[[Mapping], np.ndarray | None] | None = None
 
     def _patch_from_instruction_df(self, joined):
         """Get the patches joined columns of instruction df."""
@@ -253,15 +337,18 @@ class PatchAssembler:
         coords, attrs, summaries = [], [], []
         target_units = None
         for patch_kwargs in df_dict_list:
-            patch = self._load_trimmed_patch(patch_kwargs, joined)
-            patch, target_units = _match_merge_units(patch, merge_dim, target_units)
+            member = self._member_from_index(patch_kwargs)
+            if member is None:
+                patch = self._load_trimmed_patch(patch_kwargs, joined)
+                patch, target_units = _match_merge_units(patch, merge_dim, target_units)
+                member = _Member(patch.dims, patch.data, patch.coords, patch.attrs)
             if dims is None:
-                dims = patch.dims
-                axis = patch.get_axis(merge_dim)
-            elif patch.dims != dims:
-                patch = patch.transpose(*dims)
+                dims = member.dims
+                axis = dims.index(merge_dim)
+            elif member.dims != dims:
+                member = member.transpose(dims)
             assert axis is not None  # set on the first pass through the loop
-            data = patch.data
+            data = member.data
             if buffer is None:
                 shape = list(data.shape)
                 shape[axis] = samples
@@ -290,9 +377,9 @@ class PatchAssembler:
                 )
                 raise CoordMergeError(msg) from e
             offset = end
-            coords.append(patch.coords)
-            attrs.append(patch.attrs)
-            summaries.append(patch.coords._get_dim_summary())
+            coords.append(member.coords)
+            attrs.append(member.attrs)
+            summaries.append(member.coords._get_dim_summary())
         # All set on the first pass of the loop, which always runs.
         assert buffer is not None
         assert axis is not None
@@ -318,6 +405,41 @@ class PatchAssembler:
         warn_if_histories_differ(attrs, "Merging")
         new_attrs = combine_patch_attrs(attrs, **attr_kwargs)
         return dc.Patch(data=buffer, coords=new_coord, attrs=new_attrs, dims=list(dims))
+
+    def _member_from_index(self, row: Mapping) -> _Member | None:
+        """
+        Build a member from its index row and the format's raw array.
+
+        The row states each dimension's evenly sampled range in the
+        plan's units and every attr the file defined, which is what
+        the merge needs from a member whose plan trims nothing; the
+        patch, its coordinate parsing and its attr decoding are skipped.
+        Anything the row cannot state (a dimension without a range, an
+        array whose shape the row did not predict) sends the member
+        down the patch path instead.
+        """
+        if self.load_array is None:
+            return None
+        data = self.load_array(row)
+        if data is None:
+            return None
+        dims = tuple(str(row["dims"]).split(","))
+        if data.ndim != len(dims):
+            return None
+        coord_map = {}
+        for axis, dim in enumerate(dims):
+            envelope = _row_range(row, dim)
+            if envelope is None:
+                return None
+            lo, hi, step = envelope
+            units = row.get(f"_{dim}_units")
+            coord = get_coord(start=lo, stop=hi + step, step=step, units=units)
+            if len(coord) != data.shape[axis]:
+                return None
+            coord_map[dim] = coord
+        coords = get_coord_manager(coord_map, dims=dims)
+        attrs = _attrs_from_row(row, dims)
+        return _Member(dims, data, coords, attrs)
 
     def _df_to_dict_list(self, df):
         """

@@ -1936,3 +1936,192 @@ class TestChunkWithAssociatedCoords:
             if "time" in kwargs:
                 assert other.shape[0] == string_patch.shape[0]
                 assert set(np.unique(other.get_array("label"))) == labels
+
+
+class TestChunkFromIndex:
+    """
+    The streaming merge builds untrimmed members from the index.
+
+    A member whose plan trims nothing has its dims, ranges and attrs in
+    its index row, so only its array is read, through the format's
+    read_array; the patch, its coordinate parsing and its attr decoding
+    are skipped. Anything the row cannot state sends the member down the
+    patch path, whose result must be identical.
+    """
+
+    @pytest.fixture(scope="class")
+    def dasdae_directory_spool(self, tmp_path_factory):
+        """Adjacent DASDAE files sharing their attrs, so they merge."""
+        path = tmp_path_factory.mktemp("chunk_from_index")
+        spool = ex.get_example_spool(
+            "random_das", length=6, time_gap=np.timedelta64(0, "s")
+        )
+        for num, patch in enumerate(spool):
+            patch = patch.update_attrs(tag="x", vendor_thing=5, data_type="strain")
+            patch.io.write(path / f"p{num}.h5", "dasdae")
+        return dc.spool(path).update()
+
+    @pytest.fixture
+    def calls(self, monkeypatch):
+        """Count patch and array loads through the plan resolver."""
+        from dascore.io.index import planned  # noqa: PLC0415
+
+        counts = {"patch": 0, "array": 0}
+        load_patch, load_array = (
+            planned.PlanResolver._load_member,
+            planned.PlanResolver._load_member_array,
+        )
+
+        def count_patch(self, kwargs):
+            counts["patch"] += 1
+            return load_patch(self, kwargs)
+
+        def count_array(self, row, windows, **kwargs):
+            counts["array"] += 1
+            return load_array(self, row, windows, **kwargs)
+
+        monkeypatch.setattr(planned.PlanResolver, "_load_member", count_patch)
+        monkeypatch.setattr(planned.PlanResolver, "_load_member_array", count_array)
+        return counts
+
+    @staticmethod
+    def _force_patch_path(monkeypatch):
+        """Make every member load as a patch, as a format without read_array would."""
+        from dascore.io.index import planned  # noqa: PLC0415
+
+        monkeypatch.setattr(
+            planned.PlanResolver, "_load_member_array", lambda self, row, w, **k: None
+        )
+
+    def test_matches_patch_path(self, dasdae_directory_spool, calls, monkeypatch):
+        """The index-built merge equals the patch-built one in every part."""
+        fast = dasdae_directory_spool.chunk(time=None)[0]
+        assert calls == {"patch": 0, "array": len(dasdae_directory_spool)}
+        self._force_patch_path(monkeypatch)
+        slow = dasdae_directory_spool.chunk(time=None)[0]
+        assert fast.dims == slow.dims
+        assert np.array_equal(fast.data, slow.data)
+        assert fast.coords == slow.coords
+        assert dict(fast.attrs) == dict(slow.attrs)
+
+    def test_trimmed_member_loads_patch(
+        self, dasdae_directory_spool, calls, monkeypatch
+    ):
+        """A member the plan trims is loaded as a patch, on its own grid.
+
+        The untrimmed members beside it still take the array path.
+        """
+        contents = dasdae_directory_spool.get_contents().sort_values("time_min")
+        # a range starting inside the second file trims it, keeps the rest
+        # whole, and drops the first
+        start = dc.to_datetime64(contents["time_min"].iloc[1]) + np.timedelta64(1, "s")
+        narrowed = dasdae_directory_spool.select(time=(start, None))
+        out = narrowed.chunk(time=None)[0]
+        assert out.get_coord("time").min() >= start
+        assert calls["patch"] == 1
+        assert calls["array"] == len(dasdae_directory_spool) - 2
+        # and the mix of paths assembles what the patch path alone would
+        self._force_patch_path(monkeypatch)
+        slow = narrowed.chunk(time=None)[0]
+        assert np.array_equal(out.data, slow.data)
+        assert out.coords == slow.coords
+        assert dict(out.attrs) == dict(slow.attrs)
+
+    def test_associated_coords_load_patch(self, tmp_path_factory, calls):
+        """A catalog holding an associated coordinate never takes the array path."""
+        path = tmp_path_factory.mktemp("chunk_assoc_coords")
+        spool = ex.get_example_spool(
+            "random_das", length=3, time_gap=np.timedelta64(0, "s")
+        )
+        for num, patch in enumerate(spool):
+            dist = patch.get_coord("distance")
+            lat = np.linspace(40, 41, len(dist))
+            patch = patch.update_coords(latitude=("distance", lat))
+            patch.io.write(path / f"p{num}.h5", "dasdae")
+        out = dc.spool(path).update().chunk(time=None)[0]
+        assert "latitude" in out.coords.coord_map
+        assert calls["array"] == 0
+        assert calls["patch"] == 3
+
+    def test_row_without_range_loads_patch(self):
+        """A dimension the row cannot state as a range means the patch path."""
+        assembler = PatchAssembler(
+            load_patch=lambda kwargs: None,
+            merge_kwargs={},
+            plan_dim="time",
+            load_array=lambda row: np.zeros((3, 4)),
+        )
+        row = {
+            "dims": "distance,time",
+            "distance_min": 0,
+            "distance_max": 2,
+            "distance_step": 1,
+        }
+        assert assembler._member_from_index(row) is None
+
+    def test_unpredicted_shape_loads_patch(self):
+        """An array the row did not predict is not trusted."""
+        row = {
+            "dims": "distance,time",
+            "distance_min": 0,
+            "distance_max": 2,
+            "distance_step": 1,
+            "time_min": np.datetime64("2020-01-01"),
+            "time_max": np.datetime64("2020-01-01T00:00:03"),
+            "time_step": np.timedelta64(1, "s"),
+        }
+        good = PatchAssembler(
+            load_patch=lambda kwargs: None,
+            merge_kwargs={},
+            plan_dim="time",
+            load_array=lambda row: np.zeros((3, 4)),
+        )
+        member = good._member_from_index(row)
+        assert member is not None
+        assert member.dims == ("distance", "time")
+        assert member.coords.shape == (3, 4)
+        bad = PatchAssembler(
+            load_patch=lambda kwargs: None,
+            merge_kwargs={},
+            plan_dim="time",
+            load_array=lambda row: np.zeros((3, 5)),
+        )
+        assert bad._member_from_index(row) is None
+        # a rank the row's dims do not match is refused too
+        rank = PatchAssembler(
+            load_patch=lambda kwargs: None,
+            merge_kwargs={},
+            plan_dim="time",
+            load_array=lambda row: np.zeros(12),
+        )
+        assert rank._member_from_index(row) is None
+
+    def test_attrs_from_row(self):
+        """The row's attrs are the file's; bookkeeping and envelopes are not."""
+        row = {
+            "dims": "distance,time",
+            "output_id": 3,
+            "_modified": False,
+            "_time_units": "s",
+            "time_min": 0,
+            "time_max": 1,
+            "time_step": 1,
+            "distance_min": 0,
+            "distance_max": 1,
+            "distance_step": 1,
+            "source_path": "/a.h5",
+            "source_format": "DASDAE",
+            "source_version": "1",
+            "source_patch_key": "DAS__x",
+            "patch_id": "abc",
+            "tag": "raw",
+            "vendor_thing": 5,
+            "blank": np.nan,
+        }
+        attrs = assembly_module._attrs_from_row(row, ("distance", "time"))
+        assert attrs.tag == "raw"
+        assert attrs["vendor_thing"] == 5
+        assert attrs.patch_id == "abc"
+        assert attrs["_source_patch_key"] == "DAS__x"
+        for name in ("output_id", "source_path", "time_min", "blank", "_modified"):
+            assert name not in dict(attrs)
