@@ -55,6 +55,8 @@ from dascore.io.utils import (
     build_patches,
     convert_attr_units,
     get_exact_coord,
+    resolve_keyed_source,
+    slice_dataset,
     windows_to_slices,
 )
 from dascore.utils.downloader import fetch
@@ -2357,3 +2359,67 @@ class TestWindowsToSlices:
         """Bounds are sample indices, never values."""
         with pytest.raises(ParameterError, match="integers"):
             windows_to_slices({"time": (1.5, 3)}, ("time",), (9,))
+
+
+class TestSliceDataset:
+    """Tests for reading the windows of a stored array."""
+
+    @pytest.fixture
+    def dataset(self, tmp_path):
+        """A 2-D HDF5 dataset of known values."""
+        path = tmp_path / "array.h5"
+        with h5py.File(path, "w") as h5:
+            h5.create_dataset("data", data=np.arange(60).reshape(10, 6))
+        with h5py.File(path, "r") as h5:
+            yield h5["data"]
+
+    def test_windows_read_in_the_file(self, dataset):
+        """Only the window's values come back, in the dataset's order."""
+        out = slice_dataset(dataset, ("time", "distance"), {"time": (2, 5)})
+        assert np.array_equal(out, dataset[2:5, :])
+
+    def test_shape_caps_a_shorter_grid(self, dataset):
+        """A grid shorter than the stored array never reads past its end."""
+        dims, short = ("time", "distance"), (4, 6)
+        whole = slice_dataset(dataset, dims, {}, short)
+        assert np.array_equal(whole, dataset[:4, :])
+        # a window past the shortened grid clips to it, not to the file
+        tail = slice_dataset(dataset, dims, {"time": (2, 50)}, short)
+        assert np.array_equal(tail, dataset[2:4, :])
+
+
+class TestResolveKeyedSource:
+    """Tests for resolving which source a key names."""
+
+    def test_mapping_resolves_by_key(self):
+        """A mapping is read as it is; a lone source needs no key."""
+        assert resolve_keyed_source({"a": 1, "b": 2}, "b") == 2
+        assert resolve_keyed_source({"a": 1}, "") == 1
+
+    def test_pairs_resolve_by_key(self):
+        """Pairs resolve like a mapping when the names are distinct."""
+        assert resolve_keyed_source([("a", 1), ("b", 2)], "b") == 2
+        assert resolve_keyed_source([("a", 1)], "") == 1
+
+    def test_empty_is_missing(self):
+        """Nothing to resolve is missing data, not a bad key."""
+        for empty in ({}, []):
+            with pytest.raises(MissingPatchError, match="No patches"):
+                resolve_keyed_source(empty, "a")
+
+    def test_unknown_key(self):
+        """A key naming nothing is refused either way."""
+        for sources in ({"a": 1}, [("a", 1)]):
+            with pytest.raises(PatchAttributeError, match="No patch named"):
+                resolve_keyed_source(sources, "b")
+
+    def test_keyless_ambiguous(self):
+        """Several sources and no key cannot be resolved."""
+        for sources in ({"a": 1, "b": 2}, [("a", 1), ("b", 2)]):
+            with pytest.raises(PatchAttributeError, match="source_patch_key"):
+                resolve_keyed_source(sources, "")
+
+    def test_repeated_name_in_pairs(self):
+        """A resource naming one key twice is ambiguous, never the last one."""
+        with pytest.raises(PatchAttributeError, match="more than once"):
+            resolve_keyed_source([("a", 1), ("a", 2)], "a")

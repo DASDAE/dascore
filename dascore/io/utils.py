@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import warnings
 from collections.abc import Iterable, Mapping, Sequence
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 
@@ -12,7 +12,14 @@ import dascore as dc
 from dascore.constants import INVENTORY_ATTRS
 from dascore.core.coordmanager import CoordManager
 from dascore.core.coords import BaseCoord, CoordSegmented, get_coord
-from dascore.exceptions import CoordError, ParameterError, UnitError
+from dascore.core.summary import normalize_source_patch_key
+from dascore.exceptions import (
+    CoordError,
+    MissingPatchError,
+    ParameterError,
+    PatchAttributeError,
+    UnitError,
+)
 from dascore.models import ArrayLike
 from dascore.units import convert_units, get_quantity_str
 from dascore.utils.misc import _to_slice, _validate_sample_values, unbyte
@@ -181,9 +188,81 @@ def windows_to_slices(
             out.append(slice(0, size))
             continue
         _validate_sample_values(windows[dim])
-        span = range(size)[_to_slice(windows[dim])]
+        window = _to_slice(windows[dim])
+        if window.step not in (None, 1):
+            msg = f"A window is a contiguous range; {dim!r} asked for {windows[dim]!r}."
+            raise ParameterError(msg)
+        span = range(size)[window]
         out.append(slice(span.start, max(span.stop, span.start)))
     return tuple(out)
+
+
+def resolve_keyed_source(
+    sources: Mapping[str, Any] | Iterable[tuple[str, Any]],
+    key,
+    where: str = "the resource",
+):
+    """
+    Return the one source a ``source_patch_key`` names.
+
+    Resolves a native key as the default `FiberIO.read_array` does: an
+    empty resource is missing data, and an unknown key, an ambiguous
+    keyless one, or a key naming more than one source cannot be
+    resolved. Unlike the default it takes no positional key, since a
+    format which states its own keys never synthesizes one.
+
+    ``sources`` maps each native key to whatever the caller needs back,
+    and is read lazily, so an h5py group can be passed as it is. Pass
+    ``(key, value)`` pairs instead where a resource can state one key
+    twice, so the ambiguity is seen rather than silently resolved.
+    """
+    key = normalize_source_patch_key(key)
+    if isinstance(sources, Mapping):
+        # a mapping cannot hold a name twice, so it is read as it is: an
+        # h5py group resolves a name without opening its siblings
+        mapping = cast("Mapping[str, Any]", sources)
+        if not len(mapping):
+            raise MissingPatchError(f"No patches in {where}.")
+        if key:
+            if key not in mapping:
+                raise PatchAttributeError(f"No patch named '{key}' in {where}.")
+            return mapping[key]
+        if len(mapping) > 1:
+            msg = f"{where} holds several patches; pass source_patch_key."
+            raise PatchAttributeError(msg)
+        return next(iter(mapping.values()))
+    pairs = list(sources)
+    if not pairs:
+        raise MissingPatchError(f"No patches in {where}.")
+    if key:
+        found = [value for name, value in pairs if name == key]
+        if not found:
+            raise PatchAttributeError(f"No patch named '{key}' in {where}.")
+        if len(found) > 1:
+            msg = f"{where} names '{key}' more than once; it cannot be resolved."
+            raise PatchAttributeError(msg)
+        return found[0]
+    if len(pairs) > 1:
+        msg = f"{where} holds several patches; pass source_patch_key."
+        raise PatchAttributeError(msg)
+    return pairs[0][1]
+
+
+def slice_dataset(
+    dataset: ArrayLike,
+    dims: Sequence[str],
+    windows: Mapping[str, Any],
+    shape: Sequence[int] | None = None,
+) -> np.ndarray:
+    """
+    Read the sample windows of an array stored in ``dims`` order.
+
+    ``shape`` defaults to the dataset's own; pass it when an axis of the
+    grid `scan` reports is shorter than the stored one, as it is for a
+    Terra15 file whose trailing rows were never written.
+    """
+    shape = dataset.shape if shape is None else shape
+    return dataset[windows_to_slices(windows, dims, shape)]
 
 
 def get_gridded_coord(values, units=None) -> BaseCoord:

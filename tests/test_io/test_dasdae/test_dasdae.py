@@ -288,6 +288,13 @@ class TestReadArray:
         expected = DASDAEV1().read_array(written_dascore_v1_random, {})
         assert np.array_equal(out, expected)
 
+    def test_path_like_key_raises(self, multi_patch_path):
+        """A key h5py would read as a path names no patch."""
+        name = dc.scan(multi_patch_path)[0].source_patch_key
+        for key in ("/waveforms", f"{name}/data", f"./{name}"):
+            with pytest.raises(PatchAttributeError, match="No patch named"):
+                DASDAEV1().read_array(multi_patch_path, {}, source_patch_key=key)
+
     def test_keyless_multi_patch_raises(self, multi_patch_path):
         """Several patches and no key cannot be resolved."""
         with pytest.raises(PatchAttributeError, match="source_patch_key"):

@@ -18,6 +18,7 @@ from io import BufferedIOBase, BytesIO, UnsupportedOperation
 from operator import eq, ge, le
 from pathlib import Path
 
+import h5py
 import numpy as np
 import pandas as pd
 import pytest
@@ -28,6 +29,7 @@ from dascore.exceptions import CoordError, UnknownFiberFormatError
 from dascore.io import BinaryReader, FiberIO
 from dascore.io.ai4eps import AI4EPSV1
 from dascore.io.ap_sensing import APSensingV10
+from dascore.io.core import _required_resource_type
 from dascore.io.dasdae import DASDAEV1
 from dascore.io.dashdf5 import DASHDF5
 from dascore.io.febus import Febus1, Febus2, FebusBSLH5V1, FebusMTXH5V1, FebusT1V1
@@ -53,6 +55,7 @@ from dascore.io.terra15 import (
 )
 from dascore.io.uptech import UptechH5V1
 from dascore.utils.downloader import fetch, get_registry_df
+from dascore.utils.hdf5 import H5Reader
 from dascore.utils.misc import all_close, iterate, order_range_tuple
 from tests.test_io._common_io_test_utils import (
     get_flat_io_test,
@@ -566,15 +569,98 @@ class TestRead:
             payload = dc.scan(path)[0]
         key = payload.source_patch_key
         kwargs = {"source_patch_key": key} if key else {}
+        sized = [
+            (dim, size)
+            for dim, size in zip(payload.dims, payload.shape, strict=True)
+            if size > 2
+        ]
+        every = {dim: (1, size - 1) for dim, size in sized}
+        # the partial and empty cases pin the other half of the contract:
+        # a dimension absent from windows comes back whole
+        for windows in (every, {sized[0][0]: every[sized[0][0]]}, {}):
+            out = io.read_array(path, windows, **kwargs)
+            expected = FiberIO.read_array(io, path, windows, **kwargs)
+            assert out.dtype == expected.dtype
+            # a gap is stored as nan, which is never equal to itself
+            nan = np.issubdtype(out.dtype, np.inexact)
+            assert np.array_equal(out, expected, equal_nan=nan), windows
+
+    def test_read_array_honors_labelling_options(self, io_path_tuple):
+        """A labelling option selects the grid `scan` reports under it.
+
+        Most formats' `snap` only labels samples, so it cannot move the
+        window; where it decides how many samples the resource has, the
+        array follows it. Either way the caller may forward what it gave
+        `scan`, and the shapes have to agree.
+        """
+        io, path = io_path_tuple
+        if not io.implements_read_array:
+            pytest.skip(f"{io.name} inherits the default read_array")
+        # what scan takes, read_array must take: the caller forwards it
+        if "snap" not in inspect.signature(io.scan).parameters:
+            pytest.skip(f"{io.name}.scan takes no labelling option")
+        with skip_missing():
+            payloads = {x: dc.scan_payloads(path, snap=x)[0] for x in (True, False)}
+        key = payloads[True].get("source_patch_key", "")
+        kwargs = {"source_patch_key": key} if key else {}
+        for snap, payload in payloads.items():
+            out = io.read_array(path, {}, snap=snap, **kwargs)
+            assert out.shape == tuple(payload["shape"]), snap
+
+    def test_hdf5_read_array_never_reads_the_array_whole(
+        self, io_path_tuple, monkeypatch
+    ):
+        """An HDF5 override slices its data array in the file."""
+        io, path = io_path_tuple
+        resource_type = (
+            _required_resource_type(io.read_array) if io.implements_read_array else None
+        )
+        if resource_type is None or not issubclass(resource_type, H5Reader):
+            pytest.skip(f"{io.name} has no HDF5 read_array override")
+        with skip_missing():
+            payload = dc.scan(path)[0]
+        key = payload.source_patch_key
+        kwargs = {"source_patch_key": key} if key else {}
+        # a small window, so reading the array whole is never mistaken
+        # for reading what was asked for
         windows = {
-            dim: (1, size - 1)
+            dim: (1, min(size - 1, 4))
             for dim, size in zip(payload.dims, payload.shape, strict=True)
             if size > 2
         }
-        out = io.read_array(path, windows, **kwargs)
-        expected = FiberIO.read_array(io, path, windows, **kwargs)
-        assert out.dtype == expected.dtype
-        assert np.array_equal(out, expected)
+        assert windows, "no dimension long enough to window"
+        reads = []
+        original = h5py.Dataset.__getitem__
+
+        patch_size = int(np.prod(payload.shape))
+
+        def spy(self, index):
+            out = original(self, index)
+            # the data array holds at least a sample per patch value;
+            # a coordinate or metadata array is smaller
+            if self.ndim > 1 and self.size >= patch_size:
+                reads.append((self.shape, np.shape(out), index))
+            return out
+
+        monkeypatch.setattr(h5py.Dataset, "__getitem__", spy)
+        io.read_array(path, windows, **kwargs)
+        assert reads, "the data array was never read"
+        stored = reads[0][0]
+        if len(stored) == len(payload.dims):
+            # the plain case: one read, sliced on every windowed axis
+            assert len(reads) == 1, reads
+            wanted = tuple(
+                (1, min(size - 1, 4)) if dim in windows else (0, size)
+                for dim, size in zip(payload.dims, payload.shape, strict=True)
+            )
+            index = reads[0][2]
+            assert isinstance(index, tuple) and len(index) == len(wanted), index
+            # xarray spells the same slice with an explicit unit step
+            assert tuple((x.start, x.stop) for x in index) == wanted, index
+        else:
+            # a cube of blocks reads more than the window, never all of it
+            for shape, got, _ in reads:
+                assert got != shape, (shape, got)
 
     def test_slice_single_dim_both_ends(self, io_path_tuple):
         """

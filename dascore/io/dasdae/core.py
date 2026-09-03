@@ -10,7 +10,7 @@ import pandas as pd
 
 import dascore as dc
 from dascore.io import FiberIO
-from dascore.io.utils import windows_to_slices
+from dascore.io.utils import slice_dataset
 from dascore.utils.hdf5 import H5Reader, H5Writer
 from dascore.utils.io import _normalize_source_patch_keys
 from dascore.utils.misc import raise_on_extra_kwargs, unbyte
@@ -148,6 +148,7 @@ class DASDAEV1(FiberIO):
         resource: H5Reader,
         windows: dict[str, tuple[int, int]],
         source_patch_key="",
+        snap: bool = True,
         **kwargs,
     ) -> np.ndarray:
         """
@@ -159,10 +160,9 @@ class DASDAEV1(FiberIO):
         is the waveform group name `scan` reports; a positional index is
         not accepted, because DASDAE never synthesizes one.
         """
-        raise_on_extra_kwargs(kwargs, "windows and source_patch_key")
+        raise_on_extra_kwargs(kwargs, "windows, source_patch_key and snap")
         group = _get_patch_group(resource, source_patch_key)
-        data = group["data"]
-        return data[windows_to_slices(windows, _get_dims(group), data.shape)]
+        return slice_dataset(group["data"], _get_dims(group), windows)
 
     def scan(self, resource: H5Reader, snap: bool = True, **kwargs):
         """

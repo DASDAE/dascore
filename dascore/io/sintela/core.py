@@ -11,16 +11,22 @@ import numpy as np
 import dascore as dc
 from dascore.constants import opt_timeable_types
 from dascore.io import FiberIO, ScanPayload, make_scan_payload
+from dascore.io.utils import windows_to_slices
 from dascore.models import OptionalFiniteFloat
 from dascore.utils.io import BinaryReader, LocalBinaryReader
+from dascore.utils.misc import raise_on_extra_kwargs
 
 from .protobuf_utils import get_supported_family_tag, read_payload, scan_payload
 from .utils import (
     _HEADER_SIZES,
+    DIMS,
     SYNC_WORD,
     _get_attrs_coords_header,
+    _get_complete_header,
+    _get_data_shape,
     _get_patches,
     _read_base_header,
+    _read_sample_range,
 )
 
 
@@ -84,6 +90,22 @@ class SintelaBinaryV3(FiberIO):
         )
 
         return dc.spool(patch)
+
+    def read_array(
+        self, resource: LocalBinaryReader, windows: dict[str, tuple[int, int]], **kwargs
+    ) -> np.ndarray:
+        """
+        Slice the memory-mapped packet payloads.
+
+        Only the header and the requested block leave the file; the map
+        skips each packet's header, so the window indexes samples.
+        """
+        raise_on_extra_kwargs(kwargs, "windows")
+        header = _get_complete_header(resource)
+        shape = _get_data_shape(header)
+        time_slice, dist_slice = windows_to_slices(windows, DIMS, shape)
+        data = _read_sample_range(resource, header, time_slice.start, time_slice.stop)
+        return np.asarray(data[:, dist_slice])
 
 
 class SintelaProtobufV1(FiberIO):

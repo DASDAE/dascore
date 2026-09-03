@@ -16,7 +16,7 @@ from dascore.core.attrs import PatchAttrs
 from dascore.core.coordmanager import get_coord_manager
 from dascore.core.coords import get_coord
 from dascore.core.summary import normalize_source_patch_key
-from dascore.exceptions import MissingPatchError, PatchAttributeError
+from dascore.exceptions import PatchAttributeError
 from dascore.io.core import STORED_PATCH_ID, make_scan_payload
 from dascore.io.dasdae._compat import (
     NOT_DECODED,
@@ -24,7 +24,7 @@ from dascore.io.dasdae._compat import (
     strip_legacy_coord_fields,
     translate_legacy_attrs,
 )
-from dascore.io.utils import get_exact_coord
+from dascore.io.utils import get_exact_coord, resolve_keyed_source
 from dascore.models.registry import get_model_tag, resolve_tagged_model
 from dascore.utils.array import (
     convert_bytes_to_strings,
@@ -297,29 +297,14 @@ def _get_patch_group(h5, source_patch_key=""):
     """
     Return the one waveform group a source patch key names.
 
-    Without a key, a file holding exactly one patch resolves to it. An
-    empty file raises MissingPatchError; several patches without a key,
-    or a key naming no group, raise PatchAttributeError, the types the
-    default `read_array` raises.
+    A key names a direct child of the waveform group, never an h5py path.
     """
-    key = normalize_source_patch_key(source_patch_key)
     waveforms = h5.get("waveforms", {})
-    if not len(waveforms):
-        msg = f"No patches in {h5.filename}."
-        raise MissingPatchError(msg)
-    if key:
-        # h5py reads a key as a path, so "<name>/data" or "/waveforms"
-        # would resolve to something; only a direct child by that name,
-        # which never holds a separator, is a patch
-        group = waveforms.get(key) if "/" not in key and key in waveforms else None
-        if group is None or group.name != f"{waveforms.name}/{key}":
-            msg = f"No patch named '{key}' in {h5.filename}."
-            raise PatchAttributeError(msg)
-        return group
-    if len(waveforms) > 1:
-        msg = f"{h5.filename} holds several patches; pass source_patch_key."
-        raise PatchAttributeError(msg)
-    return next(iter(waveforms.values()))
+    key = normalize_source_patch_key(source_patch_key)
+    if "/" in key:
+        # h5py would read the key as a path; a patch is a direct child
+        raise PatchAttributeError(f"No patch named '{key}' in {h5.filename}.")
+    return resolve_keyed_source(waveforms, key, where=str(h5.filename))
 
 
 def _matches_attr_filters(attrs, kwargs):

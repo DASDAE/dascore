@@ -158,11 +158,25 @@ def _get_coord_manager(h5, rec):
     dist = _get_distance_coord(rec)
     # The data axis is transposed based on if they are stored in "strainrate"
     # or "data" reference.
-    dims = ("distance", "time") if "data" in names else ("time", "distance")
     return dc.get_coord_manager(
         {"time": time, "distance": dist},
-        dims=dims,
+        dims=_get_dims(names),
     )
+
+
+def _get_dims(names) -> tuple[str, str]:
+    """The stored dimension order, which the data reference's name says."""
+    # The data axis is transposed based on if they are stored in
+    # "strainrate" or "data" reference.
+    return ("distance", "time") if "data" in names else ("time", "distance")
+
+
+def _get_data_and_dims(h5, rec=None):
+    """Resolve the data reference to its dataset, with its dimension order."""
+    rec = h5["dDAS"][()] if rec is None else rec
+    names = set(_get_reference_names(h5))
+    data_name = "data" if "data" in names else next(iter(DATA_NAMES & names))
+    return _dereference(h5, rec[data_name], data_name), _get_dims(names)
 
 
 # --- Reading
@@ -195,12 +209,8 @@ def _read_dasvader(h5, distance=None, time=None):
     """Read DASVader data into a Patch."""
     rec = h5["dDAS"][()]
     cm = _get_coord_manager(h5, rec)
-    # First, figure out what the data name is (this changes in different
-    # dasvader iterations), but if we get to here it has at least one.
     ref_names = set(_get_reference_names(h5))
-    data_name = "data" if "data" in ref_names else next(iter(DATA_NAMES & ref_names))
-    # data is a reference here; need to resolve it with h5 File.
-    data = _dereference(h5, rec[data_name], data_name)
+    data, _ = _get_data_and_dims(h5, rec)
     attrs = (
         _get_attr_dict(_dereference(h5, rec["atrib"], "atrib"))
         if "atrib" in ref_names
