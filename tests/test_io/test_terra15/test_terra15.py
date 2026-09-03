@@ -136,6 +136,25 @@ class TestReadArray:
         raw = io.read_array(path, {}, snap_dims=False)
         assert len(raw) > len(io.read_array(path, {}))
 
+    def test_both_spellings_agree(self, terra15_das_unfinished_path):
+        """`scan` calls it snap and `read` snap_dims; both are taken here.
+
+        The unfinished file is the one where the option changes how many
+        rows there are, so the two grids differ and a mix-up shows.
+        """
+        io = Terra15FormatterV4()
+        path = terra15_das_unfinished_path
+        snapped = io.read_array(path, {})
+        raw = io.read_array(path, {}, snap=False)
+        assert len(raw) > len(snapped)
+        # either spelling alone selects the same grid
+        assert len(io.read_array(path, {}, snap_dims=False)) == len(raw)
+        assert len(io.read_array(path, {}, snap=True)) == len(snapped)
+        # given both, snap wins, in read_array and in read alike
+        assert len(io.read_array(path, {}, snap=True, snap_dims=False)) == len(snapped)
+        both = io.read(path, snap=True, snap_dims=False)[0]
+        assert len(both.get_coord("time")) == len(snapped)
+
     def test_reads_only_the_window(self, terra15_v6_path, monkeypatch):
         """The data node is sliced in the file, not read whole then trimmed."""
         seen = []

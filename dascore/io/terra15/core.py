@@ -23,6 +23,18 @@ from .utils import (
 )
 
 
+def _resolve_snap(snap, snap_dims, default=True):
+    """
+    Read the option Terra15 spells two ways.
+
+    `scan` calls it ``snap`` and `read` calls it ``snap_dims``; a caller
+    may forward either, so both are taken and ``snap`` wins.
+    """
+    if snap is not None:
+        return snap
+    return default if snap_dims is None else snap_dims
+
+
 class Terra15FormatterV4(FiberIO):
     """Support for Terra15 data format, version 4."""
 
@@ -60,7 +72,7 @@ class Terra15FormatterV4(FiberIO):
         resource: H5Reader,
         time: tuple[timeable_types, timeable_types] | None = None,
         distance: tuple[float, float] | None = None,
-        snap_dims: bool = True,
+        snap_dims: bool | None = None,
         snap: bool | None = None,
         **kwargs,
     ) -> dc.Spool:
@@ -83,7 +95,7 @@ class Terra15FormatterV4(FiberIO):
             The name `scan` gives ``snap_dims``, so a caller can forward
             what it gave `scan`; it wins when both are given.
         """
-        snap_dims = snap_dims if snap is None else snap
+        snap_dims = _resolve_snap(snap, snap_dims)
         patch = _read_terra15(resource, time, distance, snap_dims=snap_dims)
         if not patch.data.size:
             return dc.spool([])
@@ -93,7 +105,7 @@ class Terra15FormatterV4(FiberIO):
         self,
         resource: H5Reader,
         windows: dict[str, tuple[int, int]],
-        snap: bool = True,
+        snap: bool | None = None,
         snap_dims: bool | None = None,
         **kwargs,
     ) -> np.ndarray:
@@ -106,10 +118,11 @@ class Terra15FormatterV4(FiberIO):
         unlike other formats it decides how many rows there are: snapped,
         they stop at the last written sample; raw, every stored row
         counts, as the raw time coordinate does. ``read`` calls the same
-        option ``snap_dims``, so both spellings are taken.
+        option ``snap_dims``, so both spellings are taken, and ``snap``
+        wins when both are given, as it does in `read`.
         """
         raise_on_extra_kwargs(kwargs, "windows, snap and snap_dims")
-        snap = snap if snap_dims is None else snap_dims
+        snap = _resolve_snap(snap, snap_dims)
         _, data_node = _get_version_data_node(resource)
         data = data_node["data"]
         time_len = data.shape[0]
