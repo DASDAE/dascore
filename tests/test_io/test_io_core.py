@@ -20,7 +20,12 @@ from upath import UPath
 import dascore as dc
 from dascore.config import config_context
 from dascore.core.coordmanager import get_coord_manager
-from dascore.core.coords import CoordSegmented, get_coord
+from dascore.core.coords import (
+    CoordMonotonicArray,
+    CoordRange,
+    CoordSegmented,
+    get_coord,
+)
 from dascore.exceptions import (
     DependencyError,
     InvalidFiberIOError,
@@ -51,7 +56,12 @@ from dascore.io.core import (
     make_scan_payload,
 )
 from dascore.io.dasdae.core import DASDAEV1
-from dascore.io.utils import build_patches, convert_attr_units, get_exact_coord
+from dascore.io.utils import (
+    build_patches,
+    convert_attr_units,
+    get_exact_coord,
+    get_gridded_coord,
+)
 from dascore.utils.downloader import fetch
 from dascore.utils.hdf5 import H5Writer
 from dascore.utils.io import (
@@ -299,6 +309,69 @@ class _DependencyErrorFormatter(FiberIO):
         if path.suffix == ".dep" and path.name == "dependency_error.dep":
             return self.name, self.version
         return False
+
+
+class TestGetGriddedCoord:
+    """Tests for forcing a stored array onto the grid it restates."""
+
+    def test_quantized_array_becomes_a_range(self):
+        """Quantization past get_coord's tolerance still yields a grid."""
+        values = np.linspace(4000.0, 4009.9, 100, dtype=np.float32).astype(np.float64)
+        assert isinstance(get_coord(data=values), CoordMonotonicArray)
+
+        coord = get_gridded_coord(values, units="m")
+
+        assert isinstance(coord, CoordRange)
+        assert coord.min() == values[0]
+        assert coord.max() == values[-1]
+        assert len(coord) == len(values)
+
+    def test_grid_depends_only_on_span_and_count(self):
+        """Two arrays stating the same span must agree on every sample.
+
+        One lands inside get_coord's evenness tolerance and one outside, so
+        anchoring on what get_coord infers rather than on the stored values
+        would make them disagree and stop them merging.
+        """
+        n = 2_000
+        even = np.linspace(850.0, 1049.9, n)
+        jittered = even.copy()
+        jittered[1:-1] += np.random.default_rng(1).normal(0, 5e-4, n - 2)
+        jittered[0], jittered[-1] = even[0], even[-1]
+        assert isinstance(get_coord(data=even), CoordRange)
+        assert isinstance(get_coord(data=jittered), CoordMonotonicArray)
+
+        first = get_gridded_coord(even, units="m")
+        second = get_gridded_coord(jittered, units="m")
+
+        np.testing.assert_array_equal(first.values, second.values)
+
+    def test_narrow_integer_range_does_not_overflow(self):
+        """An integer grid spanning most of its dtype keeps its own range.
+
+        Recomputing the span in the stored dtype would wrap it negative.
+        """
+        values = np.array([-30000, 0, 30000], dtype=np.int16)
+
+        coord = get_gridded_coord(values, units="m")
+
+        assert isinstance(coord, CoordRange)
+        np.testing.assert_array_equal(coord.values, values)
+
+    def test_single_sample_states_no_step(self):
+        """One sample states no spacing, so none should be invented."""
+        coord = get_gridded_coord(np.array([42.0]), units="m")
+
+        assert coord.step is None
+        assert coord.min() == 42.0
+
+    def test_non_monotonic_values_preserved(self):
+        """Values that are not a grid are returned untouched."""
+        values = np.array([0.0, 5.0, 2.0, 9.0])
+
+        coord = get_gridded_coord(values, units="m")
+
+        np.testing.assert_array_equal(coord.values, values)
 
 
 class TestGetExactCoord:

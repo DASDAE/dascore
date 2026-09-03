@@ -23,7 +23,9 @@ store a distance per sample, and those arrays can carry sub-step jitter: the
 G1 files seen so far hold an even grid restated in float32, whose
 quantization exceeds the tolerance ``get_coord`` uses to recognize an even
 coordinate and leaves a monotonic coord with no step. Those are put back on
-the grid they restate.
+the grid they restate, which depends only on the first and last stored values
+and the sample count, so files spanning the same fiber agree sample for
+sample and still merge.
 
 The correction is well under a millimeter on the files seen so far, but it is
 not bounded in principle: a file whose distance axis were genuinely
