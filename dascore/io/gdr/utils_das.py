@@ -4,6 +4,8 @@ Utilities functions for GDR DAS format.
 See: https://gdr.openei.org/das_data_standard for more info.
 """
 
+from __future__ import annotations
+
 import numpy as np
 
 import dascore as dc

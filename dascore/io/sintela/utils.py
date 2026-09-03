@@ -10,6 +10,8 @@ Notes
   start for version 4 support.
 """
 
+from __future__ import annotations
+
 import numpy as np
 
 import dascore as dc
