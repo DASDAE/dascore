@@ -12,10 +12,14 @@ import dascore as dc
 from dascore.exceptions import MissingOptionalDependencyError
 from dascore.io import FiberIO
 from dascore.io.core import ScanPayload, make_scan_payload
-from dascore.io.utils import get_exact_coord
+from dascore.io.utils import (
+    get_exact_coord,
+    resolve_keyed_source,
+    windows_to_slices,
+)
 from dascore.utils.hdf5 import H5Reader, get_h5py_file
 from dascore.utils.io import patch_to_xarray, xarray_to_patch
-from dascore.utils.misc import optional_import
+from dascore.utils.misc import optional_import, raise_on_extra_kwargs
 
 from .utils import (
     XDAS_PAYLOAD_VARIABLE,
@@ -129,6 +133,33 @@ class NetCDFCFV18(FiberIO):
         if not patch.data.size:
             return dc.spool([])
         return dc.spool([patch])
+
+    def read_array(
+        self,
+        resource: H5Reader,
+        windows: dict[str, tuple[int, int]],
+        source_patch_key="",
+        snap: bool = True,
+        **kwargs,
+    ) -> np.ndarray:
+        """
+        Slice the payload variable through xarray.
+
+        The selection goes through xarray rather than the stored dataset
+        so CF decoding (scaling, offsets, fill values) applies exactly as
+        it does in `read`.
+        """
+        raise_on_extra_kwargs(kwargs, "windows, source_patch_key and snap")
+        with _open_xarray_dataset(resource) as dataset:
+            data_var_name = get_xarray_data_var_name(dataset)
+            resolve_keyed_source(
+                {self._get_source_patch_key(data_var_name): data_var_name},
+                source_patch_key,
+                where=str(getattr(resource, "filename", "the resource")),
+            )
+            data_array = dataset[data_var_name]
+            slices = windows_to_slices(windows, data_array.dims, data_array.shape)
+            return data_array[slices].to_numpy()
 
     def _get_write_encoding(self, **kwargs):
         """Translate explicit write options into xarray encoding hints."""

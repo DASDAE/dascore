@@ -55,6 +55,7 @@ from dascore.io.utils import (
     build_patches,
     convert_attr_units,
     get_exact_coord,
+    resolve_keyed_source,
     slice_dataset,
     windows_to_slices,
 )
@@ -2385,3 +2386,40 @@ class TestSliceDataset:
         # a window past the shortened grid clips to it, not to the file
         tail = slice_dataset(dataset, dims, {"time": (2, 50)}, short)
         assert np.array_equal(tail, dataset[2:4, :])
+
+
+class TestResolveKeyedSource:
+    """Tests for resolving which source a key names."""
+
+    def test_mapping_resolves_by_key(self):
+        """A mapping is read as it is; a lone source needs no key."""
+        assert resolve_keyed_source({"a": 1, "b": 2}, "b") == 2
+        assert resolve_keyed_source({"a": 1}, "") == 1
+
+    def test_pairs_resolve_by_key(self):
+        """Pairs resolve like a mapping when the names are distinct."""
+        assert resolve_keyed_source([("a", 1), ("b", 2)], "b") == 2
+        assert resolve_keyed_source([("a", 1)], "") == 1
+
+    def test_empty_is_missing(self):
+        """Nothing to resolve is missing data, not a bad key."""
+        for empty in ({}, []):
+            with pytest.raises(MissingPatchError, match="No patches"):
+                resolve_keyed_source(empty, "a")
+
+    def test_unknown_key(self):
+        """A key naming nothing is refused either way."""
+        for sources in ({"a": 1}, [("a", 1)]):
+            with pytest.raises(PatchAttributeError, match="No patch named"):
+                resolve_keyed_source(sources, "b")
+
+    def test_keyless_ambiguous(self):
+        """Several sources and no key cannot be resolved."""
+        for sources in ({"a": 1, "b": 2}, [("a", 1), ("b", 2)]):
+            with pytest.raises(PatchAttributeError, match="source_patch_key"):
+                resolve_keyed_source(sources, "")
+
+    def test_repeated_name_in_pairs(self):
+        """A resource naming one key twice is ambiguous, never the last one."""
+        with pytest.raises(PatchAttributeError, match="more than once"):
+            resolve_keyed_source([("a", 1), ("a", 2)], "a")
