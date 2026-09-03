@@ -18,16 +18,18 @@ from dascore.constants import (
 )
 from dascore.io import FiberIO, ScanPayload
 from dascore.io.core import make_scan_payload
-from dascore.io.utils import slice_dataset
+from dascore.io.utils import resolve_keyed_source, slice_dataset
 from dascore.models import OptionalFiniteFloat, UTF8Str
 from dascore.utils.hdf5 import H5Reader
 from dascore.utils.io import TextReader
 from dascore.utils.misc import raise_on_extra_kwargs
 
 from .a1utils import (
+    _flatten_febus_info,
     _get_febus_version_str,
     _get_source_patch_key,
     _read_febus,
+    _read_febus_array,
     _yield_attrs_coords,
 )
 from .g1utils import (
@@ -145,6 +147,30 @@ class Febus2(FiberIO):
             attr_cls=FebusPatchAttrs,
         )
         return dc.spool(patches)
+
+    def read_array(
+        self,
+        resource: H5Reader,
+        windows: dict[str, tuple[int, int]],
+        source_patch_key="",
+        **kwargs,
+    ) -> np.ndarray:
+        """
+        Read one zone's window out of its block-structured data cube.
+
+        ``source_patch_key`` is the ``group:source:zone`` name `scan`
+        reports; a file holding several zones needs one.
+        """
+        raise_on_extra_kwargs(kwargs, "windows and source_patch_key")
+        # pairs, not a mapping: two zones can generate one name, and the
+        # default read refuses such a key rather than picking one
+        zones = [
+            (_get_source_patch_key(zone), zone)
+            for zone in _flatten_febus_info(resource)
+        ]
+        where = str(getattr(resource, "filename", "the resource"))
+        febus = resolve_keyed_source(zones, source_patch_key, where=where)
+        return _read_febus_array(febus, windows)
 
 
 class Febus1(Febus2):
