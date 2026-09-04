@@ -47,10 +47,15 @@ from dascore.utils.misc import (
     _CanonicalRange,
     express_range_for_coord,
     is_range,
+    order_range_tuple,
 )
 from dascore.utils.patch import record_call
 from dascore.utils.paths import is_memory_uri
-from dascore.utils.pd import adjust_segments, relative_ranges_to_absolute
+from dascore.utils.pd import (
+    adjust_segments,
+    relative_ranges_to_absolute,
+    yield_range_tuple_from_kwargs,
+)
 
 # Directory archives present in per-patch time order (source ordinals
 # alone cannot interleave multi-patch files); ordinal and patch id stay
@@ -138,17 +143,15 @@ def apply_exact_residuals(patch: dc.Patch, residuals, hinted=()) -> dc.Patch:
     Shared by catalog row resolution and plan-member loading so the
     two-stage select contract has exactly one implementation.
 
-    ``hinted`` names the coordinates whose bounds the reader was given
-    *and* cut something with. A selection carried out that way leaves
-    its `select` nothing to do, and a call which changes nothing records
-    nothing; the selection still happened, so it is recorded here
-    instead. Without this a trimmed patch would state the id of the
-    untrimmed one, and two patches holding the same samples would
-    disagree over which route trimmed them. A selection which cuts
-    nothing is passed no hint, so it records nothing here either, as it
-    would not on a patch.
+    ``hinted`` runs parallel to ``residuals``, naming per residual the
+    coordinates whose bounds went to the reader and cut this row. Such a
+    selection leaves its `select` nothing to do, and a call which
+    changes nothing records nothing, so it is recorded here instead and
+    a trimmed patch does not state the untrimmed patch's id. A shorter
+    sequence records nothing for the residuals past its end, which is
+    what a caller reading no hints out of the row wants.
     """
-    for coords, samples in residuals:
+    for index, (coords, samples) in enumerate(residuals):
         coord_map = patch.coords.coord_map
         usable = {
             k: express_range_for_coord(v, coord_map[k])
@@ -156,14 +159,15 @@ def apply_exact_residuals(patch: dc.Patch, residuals, hinted=()) -> dc.Patch:
             if k in coord_map
         }
         if usable:
+            cut = hinted[index] if index < len(hinted) else ()
             # residual bounds are already absolute (relative queries
             # resolve to absolute before the residual is recorded), and
-            # only the arguments a caller would give are passed: the
-            # defaults bind the same either way for the ids, but they
-            # would show in the history.
+            # only the arguments a caller would give are recorded:
+            # `relative=False` is still passed, but the defaults bind
+            # the same either way for the ids and would clutter history.
             called = dict(usable) if not samples else dict(usable, samples=True)
             out = patch.select(**called, relative=False)
-            if out is patch and any(name in hinted for name in usable):
+            if out is patch and any(name in cut for name in usable):
                 out = record_call(out, patch, dc.Patch.select, (), called)
             patch = out
     return patch
@@ -489,16 +493,33 @@ def _residual_cuts_unmarked_rows(residuals) -> bool:
     )
 
 
-def _forget_trimmed_sizes(df: pd.DataFrame, residuals=()) -> pd.DataFrame:
+# What a row states about the whole of its source patch, which a trim
+# leaves untrue. `patch_id` is deliberately not here; see below.
+_FORGOTTEN_ON_TRIM = ("_data_size", "processing_id")
+
+
+def _forget_what_a_trim_invalidates(df: pd.DataFrame, residuals=()) -> pd.DataFrame:
     """
-    Blank the stored sample count of every row a selection trims.
+    Blank what a trimmed row states about the whole of its source.
 
     A trimmed row describes fewer samples than its source patch holds,
     and how many is known only once the trim is applied, so it states no
-    size rather than the source's. A row a selection leaves whole keeps
-    its count: only what a selection actually cuts loses one.
+    size rather than the source's. `processing_id` goes the same way for
+    the same reason: a trim is an operation, the patch which comes back
+    carries the id that operation leads to, and the stored one names the
+    patch on disk. Stating it would let a provenance query compare a row
+    against an id its own patch does not carry.
+
+    `patch_id` stays. A trim does not change which data this is, so the
+    stored id is still the loaded patch's and selecting on it still
+    finds the row -- the two ids parting company here is what having two
+    of them is for.
+
+    A row a selection leaves whole keeps both: only what a selection
+    actually cuts loses what the cut invalidates.
     """
-    if "_data_size" not in df.columns:
+    present = [x for x in _FORGOTTEN_ON_TRIM if x in df.columns]
+    if not present:
         return df
     if _residual_cuts_unmarked_rows(residuals):
         trimmed = np.ones(len(df), dtype=bool)
@@ -508,7 +529,103 @@ def _forget_trimmed_sizes(df: pd.DataFrame, residuals=()) -> pd.DataFrame:
         return df
     if not trimmed.any():
         return df
-    return df.assign(_data_size=df["_data_size"].astype("Int64").where(~trimmed))
+    forgotten = {name: df[name].where(~trimmed) for name in present}
+    if "_data_size" in forgotten:
+        # nullable rather than float: a sample count is a count, and the
+        # column is compared and presented as one.
+        forgotten["_data_size"] = df["_data_size"].astype("Int64").where(~trimmed)
+    return df.assign(**forgotten)
+
+
+# One bit per residual. A view composed of more selections than this
+# states no mask, and its rows fall back to `_modified`.
+_MASK_BITS = 63
+
+_CUT_MASK_SUFFIX = "_cut_mask"
+
+
+def _cut_mask_column(name: str) -> str:
+    """The private column saying which residuals cut a coordinate."""
+    return f"_{name}{_CUT_MASK_SUFFIX}"
+
+
+def _is_reader_hintable(value) -> bool:
+    """
+    Whether a coordinate selector can be pushed into the reader.
+
+    Readers take numbers in their coordinate's own units, so a bound
+    converted from other units could narrow the read past what exactness
+    can restore. Only a bare range, meaning native units on both sides,
+    is safe to send.
+    """
+    return isinstance(value, tuple) and not any(
+        hasattr(bound, "units") for bound in value
+    )
+
+
+def _residual_cut_masks(df: pd.DataFrame, residuals) -> dict[str, np.ndarray]:
+    """
+    Per row and coordinate, which residuals actually narrow it.
+
+    Bit ``i`` is set where residual ``i`` cuts that row's coordinate.
+    The walk mirrors `apply_exact_residuals`: each bound is judged
+    against what the bounds before it left, exactly as each `select` is
+    applied to what the selects before it returned. A bound which cuts
+    nothing is then not credited with the cut of one which does, which
+    the row's single `_modified` flag cannot tell apart.
+
+    Only reader-hintable bounds are tracked, because only those can
+    reach the patch already applied and so need a bit to be recorded at
+    all; a sample-index or unit-bearing bound cuts for itself. What such
+    a bound leaves behind is not modelled, so a coordinate one touches
+    states no mask rather than a mask read off an envelope which is no
+    longer true.
+    """
+    masks: dict[str, np.ndarray] = {}
+    if len(residuals) > _MASK_BITS:
+        return masks
+    live: dict[str, tuple[np.ndarray, np.ndarray]] = {}
+    untracked: set[str] = set()
+    for index, (coords, samples) in enumerate(residuals):
+        for name, value in coords.items():
+            if name in untracked:
+                continue
+            if samples or not _is_reader_hintable(value):
+                untracked.add(name)
+                masks.pop(name, None)
+                live.pop(name, None)
+                continue
+            bounds = dict(yield_range_tuple_from_kwargs(df, {name: value}))
+            if name not in bounds:
+                continue
+            if name not in live:
+                start, stop = df[f"{name}_min"], df[f"{name}_max"]
+                if not _orderable(start) or not _orderable(stop):
+                    untracked.add(name)
+                    continue
+                live[name] = (start.to_numpy(), stop.to_numpy())
+                masks[name] = np.zeros(len(df), dtype=np.int64)
+            low, high = order_range_tuple(bounds[name])
+            start, stop = live[name]
+            cut = np.zeros(len(df), dtype=bool)
+            if low is not None:
+                cut |= start < low
+                start = np.maximum(start, low)
+            if high is not None:
+                cut |= stop > high
+                stop = np.minimum(stop, high)
+            live[name] = (start, stop)
+            masks[name] |= cut.astype(np.int64) << index
+    return masks
+
+
+def _orderable(series: pd.Series) -> bool:
+    """Whether an envelope column supports the min/max walk of the mask."""
+    return bool(
+        pd.api.types.is_numeric_dtype(series)
+        or pd.api.types.is_datetime64_any_dtype(series)
+        or pd.api.types.is_timedelta64_dtype(series)
+    )
 
 
 class PatchCatalog:
@@ -1027,6 +1144,15 @@ class PatchCatalog:
             names = [name for ranges in range_dicts for name in ranges]
             if range_dicts and len(set(names)) == len(names):
                 range_dicts = [{k: v for d in range_dicts for k, v in d.items()}]
+            # Read off the source envelopes, before the loop below trims
+            # them: which residual cut a row is a question about what it
+            # spanned on the way in. A mask inherited from a parent view
+            # answers it for that view's residuals, not these.
+            df = df.drop(
+                columns=[c for c in df.columns if str(c).endswith(_CUT_MASK_SUFFIX)]
+            )
+            if masks := _residual_cut_masks(df, self._residuals):
+                df = df.assign(**{_cut_mask_column(k): v for k, v in masks.items()})
             for ranges in range_dicts:
                 bare = {
                     k: v
@@ -1038,7 +1164,7 @@ class PatchCatalog:
                 for name, canonical in ranges.items():
                     if isinstance(canonical, _CanonicalRange):
                         df = _adjust_unit_segments(df, name, canonical)
-            df = _forget_trimmed_sizes(df, self._residuals)
+            df = _forget_what_a_trim_invalidates(df, self._residuals)
             # Re-read the revision: bootstrapping the backend above can
             # bump it, and this frame reflects the state after that.
             return self._df_cache.set(df, self._revision.value)
@@ -1076,23 +1202,43 @@ class PatchCatalog:
         trim_hint = {}
         for coords, samples in self._residuals:
             if not samples:
-                # Canonical-SI and quantity bounds stay out of reader
-                # hints: readers take numbers in their native units, so
-                # a converted-narrower hint could drop data exactness
-                # cannot restore.
                 trim_hint.update(
-                    {
-                        k: v
-                        for k, v in coords.items()
-                        if isinstance(v, tuple)
-                        and not any(hasattr(b, "units") for b in v)
-                    }
+                    {k: v for k, v in coords.items() if _is_reader_hintable(v)}
                 )
         trim_hint.update(extra_trim or {})
         patch = self.resolver.resolve(row, **trim_hint)
-        # a row nothing narrowed was read whole, so its hints cut nothing
-        hinted = set(trim_hint) if row.get("_modified") else set()
+        hinted = self._hinted_per_residual(row, set(trim_hint))
         return apply_exact_residuals(patch, self._residuals, hinted=hinted)
+
+    def _hinted_per_residual(self, row: Mapping, hint_names: set[str]):
+        """
+        Per residual, which of its coordinates the reader already cut.
+
+        A bound the reader applied leaves its `select` nothing to do, so
+        whether that selection was a trim or a no-op has to be answered
+        from the row. `to_df` answers it per residual in the cut masks;
+        a row carrying none -- one from a caller which built it itself,
+        or a coordinate the masks do not track -- falls back to the
+        row's `_modified` flag, which cannot say which residual did the
+        cutting and so credits every hinted one.
+        """
+        masks = {name: row.get(_cut_mask_column(name)) for name in hint_names}
+        modified = bool(row.get("_modified"))
+        out = []
+        for index, (coords, samples) in enumerate(self._residuals):
+            names = set()
+            if not samples:
+                for name in coords:
+                    if name not in hint_names:
+                        continue
+                    mask = masks.get(name)
+                    if mask is None or pd.isnull(mask):
+                        if modified:
+                            names.add(name)
+                    elif int(mask) >> index & 1:
+                        names.add(name)
+            out.append(names)
+        return tuple(out)
 
     def __iter__(self):
         """

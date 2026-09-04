@@ -705,6 +705,102 @@ class TestLineageIds:
         assert through_spool.attrs.processing_id == whole.attrs.processing_id
         assert through_spool.attrs.history == whole.attrs.history
 
+    def test_composed_trims_record_once_each(self, tmp_path):
+        """Two trims through a spool record what two trims on the patch do.
+
+        Only the narrower bound reaches the reader, so the wider
+        `select` also finds nothing to do; both still happened.
+        """
+        patch = dc.get_example_patch().pass_filter(time=(1, 10))
+        patch.io.write(tmp_path / "filtered.h5", "dasdae")
+        spool = dc.spool(tmp_path).update()
+        whole = spool[0]
+        time = whole.get_coord("time")
+        duration = time.max() - time.min()
+        wide = (time.min(), time.min() + duration / 2)
+        narrow = (time.min(), time.min() + duration / 4)
+        through_spool = spool.select(time=wide).select(time=narrow)[0]
+        on_patch = whole.select(time=wide).select(time=narrow)
+        assert through_spool.shape == on_patch.shape != whole.shape
+        assert through_spool.attrs.processing_id == on_patch.attrs.processing_id
+        assert through_spool.attrs.history == on_patch.attrs.history
+
+    def test_a_trim_beside_one_which_cuts_nothing_records_only_the_cut(self, tmp_path):
+        """One selection cutting must not make another one look like a trim.
+
+        The two are on different dimensions, so the patch route records
+        the distance trim alone; a spool which knows only that the row
+        was narrowed somewhere would record the time one as well.
+        """
+        patch = dc.get_example_patch().pass_filter(time=(1, 10))
+        patch.io.write(tmp_path / "filtered.h5", "dasdae")
+        spool = dc.spool(tmp_path).update()
+        whole = spool[0]
+        time, distance = whole.get_coord("time"), whole.get_coord("distance")
+        # wider than the patch on time, so that selection cuts nothing
+        span = time.max() - time.min()
+        wide = (time.min() - span, time.max() + span)
+        narrow = (distance.min(), distance.max() - 2 * distance.step)
+        view = spool.select(distance=narrow).select(time=wide)
+        on_patch = whole.select(distance=narrow).select(time=wide)
+        assert view[0].shape == on_patch.shape != whole.shape
+        assert view[0].attrs.processing_id == on_patch.attrs.processing_id
+        assert view[0].attrs.history == on_patch.attrs.history
+
+    def test_composed_trims_on_one_dim_record_only_the_ones_which_cut(self, tmp_path):
+        """A widening selection composed over a narrowing one is no trim.
+
+        Both bounds are on the same coordinate and the last one reaches
+        the reader, so both `select` calls find nothing to do; only the
+        one which would have cut the loaded patch is an operation.
+        """
+        patch = dc.get_example_patch().pass_filter(time=(1, 10))
+        patch.io.write(tmp_path / "filtered.h5", "dasdae")
+        spool = dc.spool(tmp_path).update()
+        whole = spool[0]
+        time = whole.get_coord("time")
+        span = time.max() - time.min()
+        wide = (time.min() - span, time.max() + span)
+        narrow = (time.min(), time.min() + span / 2)
+        view = spool.select(time=wide).select(time=narrow)
+        on_patch = whole.select(time=wide).select(time=narrow)
+        assert view[0].shape == on_patch.shape != whole.shape
+        assert view[0].attrs.processing_id == on_patch.attrs.processing_id
+        assert view[0].attrs.history == on_patch.attrs.history
+
+    def test_a_trimmed_row_states_no_processing_id(self, tmp_path):
+        """What the source had was undone by the trim, so the row states none.
+
+        Stating it would let a provenance query compare the row against
+        an id the patch it resolves to does not carry. `patch_id` is
+        untouched: a trim does not change which data this is.
+        """
+        patch = dc.get_example_patch().pass_filter(time=(1, 10))
+        patch.io.write(tmp_path / "filtered.h5", "dasdae")
+        spool = dc.spool(tmp_path).update()
+        time = spool[0].get_coord("time")
+        view = spool.select(time=(time.min(), time.min() + 10 * time.step))
+        contents = view.get_contents()
+        assert contents["processing_id"].isnull().all()
+        assert contents["patch_id"].iloc[0] == view[0].attrs.patch_id
+
+    def test_a_row_a_view_leaves_whole_still_states_its_id(self, tmp_path):
+        """A view which trims one patch has not trimmed the others."""
+        patches = list(dc.get_example_spool("random_das"))
+        for index, each in enumerate(patches):
+            each.pass_filter(time=(1, 10)).io.write(tmp_path / f"{index}.h5", "dasdae")
+        spool = dc.spool(tmp_path).update()
+        contents = spool.get_contents()
+        span = contents["time_max"].max() - contents["time_min"].min()
+        view = spool.select(
+            time=(contents["time_min"].min() + span / 6, contents["time_max"].max())
+        )
+        stated = view.get_contents()["processing_id"]
+        assert stated.notna().any() and stated.isnull().any()
+        for index, value in stated.items():
+            if pd.notna(value):
+                assert view[index].attrs.processing_id == value
+
     def test_a_trim_keeps_the_id_it_says_it_keeps(self, written_spool):
         """The index and the patch which loads must not disagree."""
         trimmed = written_spool.select(time=(10, 20), samples=True)

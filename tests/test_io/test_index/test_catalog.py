@@ -12,7 +12,11 @@ import pytest
 
 import dascore as dc
 from dascore.io.index import PatchCatalog
-from dascore.io.index.catalog import _adjust_unit_segments, _forget_trimmed_sizes
+from dascore.io.index.catalog import (
+    _adjust_unit_segments,
+    _forget_what_a_trim_invalidates,
+    _residual_cut_masks,
+)
 from dascore.io.index.query import InvalidSpoolQueryError, glob_to_regex
 from dascore.units import m
 from dascore.utils.misc import _canonical_range, _CanonicalRange
@@ -349,6 +353,67 @@ class TestAdjustUnitSegments:
         assert float(out["x_max"].iloc[0]) == 2.0
 
 
+class TestResidualCutMasks:
+    """Which residual actually narrowed each row, read off the envelopes."""
+
+    @pytest.fixture()
+    def rows(self):
+        """Three rows spanning 0-10, 5-15 and 20-30 on `time`."""
+        return pd.DataFrame(
+            {"time_min": [0.0, 5.0, 20.0], "time_max": [10.0, 15.0, 30.0]}
+        )
+
+    def test_one_bound_marks_only_the_rows_it_cuts(self, rows):
+        """The third row lies wholly inside, so nothing cut it."""
+        masks = _residual_cut_masks(rows, (({"time": (2.0, None)}, False),))
+        assert masks["time"].tolist() == [1, 0, 0]
+
+    def test_each_residual_owns_its_own_bit(self, rows):
+        """A bound is judged against what the bounds before it left."""
+        residuals = (
+            ({"time": (None, 100.0)}, False),  # cuts nothing
+            ({"time": (None, 12.0)}, False),  # cuts the last two
+        )
+        masks = _residual_cut_masks(rows, residuals)
+        assert masks["time"].tolist() == [0b00, 0b10, 0b10]
+
+    def test_a_bound_already_applied_cuts_nothing_again(self, rows):
+        """The second of two identical bounds finds the row where it left it."""
+        residuals = (({"time": (6.0, None)}, False),) * 2
+        masks = _residual_cut_masks(rows, residuals)
+        assert masks["time"].tolist() == [0b01, 0b01, 0b00]
+
+    def test_sample_bounds_leave_the_coordinate_untracked(self, rows):
+        """A sample index never reaches the reader and moves the envelope."""
+        residuals = (
+            ({"time": (None, 12.0)}, False),
+            ({"time": (0, 5)}, True),
+            ({"time": (None, 8.0)}, False),
+        )
+        assert "time" not in _residual_cut_masks(rows, residuals)
+
+    def test_unit_bearing_bounds_leave_the_coordinate_untracked(self, rows):
+        """Which units the row spells the bound in is not the row's to say."""
+        residuals = (({"time": _canonical_range((1 * m, 2 * m))}, False),)
+        assert "time" not in _residual_cut_masks(rows, residuals)
+
+    def test_unordered_envelopes_are_left_alone(self):
+        """A string envelope has no running minimum to walk."""
+        df = pd.DataFrame(
+            {"tag": ["a", "b"], "tag_min": ["a", "b"], "tag_max": ["c", "d"]}
+        )
+        assert _residual_cut_masks(df, (({"tag": ("a", "c")}, False),)) == {}
+
+    def test_a_coordinate_the_frame_lacks_states_no_mask(self, rows):
+        """Nothing to read the cut off, so the row answers for itself."""
+        assert _residual_cut_masks(rows, (({"depth": (1.0, 2.0)}, False),)) == {}
+
+    def test_more_residuals_than_bits_states_nothing(self, rows):
+        """Past the last bit a mask could only be wrong, so there is none."""
+        residuals = (({"time": (2.0, None)}, False),) * 64
+        assert _residual_cut_masks(rows, residuals) == {}
+
+
 class TestForgetTrimmedSizes:
     """Which rows keep the sample count the index stored for them."""
 
@@ -360,33 +425,33 @@ class TestForgetTrimmedSizes:
     def test_frame_without_sizes_passes_through(self):
         """A relation which states no size has none to forget."""
         df = pd.DataFrame({"time_min": [0.0]})
-        assert _forget_trimmed_sizes(df, ()).equals(df)
+        assert _forget_what_a_trim_invalidates(df, ()).equals(df)
 
     def test_frame_without_modified_passes_through(self):
         """Nothing marks a trim, so nothing is forgotten."""
         df = pd.DataFrame({"_data_size": [10]})
-        assert _forget_trimmed_sizes(df, ()).equals(df)
+        assert _forget_what_a_trim_invalidates(df, ()).equals(df)
 
     def test_untrimmed_rows_keep_their_size(self, sized):
         """A selection which cuts no row leaves every size alone."""
-        assert _forget_trimmed_sizes(sized, ()).equals(sized)
+        assert _forget_what_a_trim_invalidates(sized, ()).equals(sized)
 
     def test_trimmed_row_forgets_its_size(self, sized):
         """The row a selection cut no longer states a count."""
         df = sized.assign(_modified=[False, True])
-        out = _forget_trimmed_sizes(df, ())
+        out = _forget_what_a_trim_invalidates(df, ())
         assert out["_data_size"].tolist() == [10, pd.NA]
 
     def test_selector_off_the_envelopes_forgets_every_size(self, sized):
         """A selector `adjust_segments` never saw marks no row, so all go."""
         residuals = ((({"time": [1, 2, 3]}), False),)
-        out = _forget_trimmed_sizes(sized, residuals)
+        out = _forget_what_a_trim_invalidates(sized, residuals)
         assert out["_data_size"].isnull().all()
 
     def test_unit_bearing_range_rides_the_envelopes(self, sized):
         """A canonical range is folded in, so `_modified` still decides."""
         residuals = (({"distance": _canonical_range((1 * m, 2 * m))}, False),)
-        assert _forget_trimmed_sizes(sized, residuals).equals(sized)
+        assert _forget_what_a_trim_invalidates(sized, residuals).equals(sized)
 
 
 class TestViewSerialization:

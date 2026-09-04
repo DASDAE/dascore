@@ -258,11 +258,9 @@ def record_call(out, patch, patch_func, args, kwargs):
     The history string and the two ids, in one new attrs object: an
     operation should cost one new patch, not one per thing it stamps.
 
-    Public because a caller which realized an operation some other way
-    has to record the same thing. A spool pushes a selection into the
-    read, so the `select` it then applies has nothing left to do and
-    hands the patch straight through; the selection still happened, and
-    what it records must not depend on which way it was carried out.
+    Public because what an operation records must not depend on how it
+    was carried out: a spool which pushes a selection into the read
+    still has to record the `select` it then skips.
     """
     func = getattr(patch_func, "raw_function", patch_func)
     # what the function itself declared, so a call recorded here says

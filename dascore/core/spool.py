@@ -2320,6 +2320,7 @@ class Spool(NodeRepr, NamespaceOwner):
         here). Because the state is enumerated — never ``__dict__`` —
         new instance attributes cannot silently join equality.
         """
+        from dascore.io.index.catalog import _CUT_MASK_SUFFIX  # noqa: PLC0415
 
         def _strip_identity(df):
             # synthetic per-catalog identities (memory:// paths, ids) and
@@ -2352,6 +2353,10 @@ class Spool(NodeRepr, NamespaceOwner):
                 # a plan's outputs state a placeholder coordinate dtype
                 # for the same reason they state no def key
                 *[c for c in df.columns if str(c).endswith("_coord_dtype")],
+                # which residual narrowed a row says how this view
+                # reached its envelopes, not what the row describes; the
+                # trimmed envelopes it explains are compared instead
+                *[c for c in df.columns if str(c).endswith(_CUT_MASK_SUFFIX)],
             ]
             out = df.drop(columns=drop, errors="ignore")
             return out[sorted(out.columns)]
