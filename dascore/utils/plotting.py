@@ -193,6 +193,20 @@ def _maybe_invert_yaxis(ax, patch, dim, ascending=True):
         ax.invert_yaxis()
 
 
+def _in_a_fixed_unit(low, high, dtype):
+    """
+    Restate a calendar-unit pair in seconds.
+
+    A year and a month have no fixed length, so arithmetic on them is
+    done in an average one; the dates they name are exact, and seconds
+    measure the distance between those.
+    """
+    if np.datetime_data(dtype)[0] not in {"Y", "M"}:
+        return low, high
+    fixed = "datetime64[s]" if dtype.kind == "M" else "timedelta64[s]"
+    return low.astype(fixed), high.astype(fixed)
+
+
 def _cell_edge_limits(low, high, size):
     """
     Widen sample-centre limits to the outer edges of the cells.
@@ -206,11 +220,17 @@ def _cell_edge_limits(low, high, size):
     """
     if size < 2:
         return [low, high]
-    if np.asarray(low).dtype.kind in "mM":
-        # In nanoseconds, since a coarser unit divides as an integer and a
-        # second-resolution axis would round its half step down to nothing.
-        span = (high - low).astype("timedelta64[ns]")
+    dtype = np.asarray(low).dtype
+    if dtype.kind in "mM":
+        low, high = _in_a_fixed_unit(low, high, dtype)
+        span = high - low
         half_cell = span / (2 * (size - 1))
+        # A coarse unit divides as an integer, so a second-resolution axis
+        # would round its half step down to nothing; refine only then,
+        # since a span which survives the division is too long to state in
+        # nanoseconds without overflowing them.
+        if half_cell.astype("int64") == 0:
+            half_cell = span.astype("timedelta64[ns]") / (2 * (size - 1))
         return [low - half_cell, high + half_cell]
     # In float, since a narrow integer dtype wraps on the subtraction and a
     # coordinate spanning most of the float range overflows it.
