@@ -5,6 +5,7 @@ from __future__ import annotations
 import shutil
 
 import h5py
+import numpy as np
 import pytest
 
 import dascore as dc
@@ -61,14 +62,29 @@ class TestH5Simple:
         assert read_names == scan_names
 
     @pytest.mark.parametrize("name", ["__format__", "format", "file_format"])
-    def test_declared_format_is_recognized(self, h5simple_path, tmp_path, name):
-        """A root attr naming the format opts the file in, not out."""
-        path = tmp_path / f"{name}.h5"
+    @pytest.mark.parametrize("value", ["h5simple", np.bytes_(b"h5simple")])
+    def test_declared_format_is_recognized(self, h5simple_path, tmp_path, name, value):
+        """A root attr naming the format opts the file in, not out.
+
+        Files written through PyTables carry bytes rather than str, which
+        is why the value is decoded rather than compared as it is stored.
+        """
+        path = tmp_path / f"{name}_{type(value).__name__}.h5"
         shutil.copy(h5simple_path, path)
         with h5py.File(path, "r+") as h5:
-            h5.attrs[name] = "h5simple"
+            h5.attrs[name] = value
         assert dc.get_format(path) == ("H5Simple", "1")
         assert isinstance(dc.read(path)[0], dc.Patch)
+
+    def test_disagreeing_declared_formats_are_rejected(self, h5simple_path, tmp_path):
+        """Two root attrs naming different formats rule the file out."""
+        path = tmp_path / "disagree.h5"
+        shutil.copy(h5simple_path, path)
+        with h5py.File(path, "r+") as h5:
+            h5.attrs["format"] = "h5simple"
+            h5.attrs["__format__"] = "other"
+        with pytest.raises(UnknownFiberFormatError):
+            dc.get_format(path)
 
     def test_other_declared_format_is_rejected(self, h5simple_path, tmp_path):
         """A root attr naming another format still rules h5simple out."""

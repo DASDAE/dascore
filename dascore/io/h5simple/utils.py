@@ -8,7 +8,7 @@ import dascore as dc
 from dascore.constants import STORAGE_PROVENANCE_ATTRS
 from dascore.core import get_coord
 from dascore.io.utils import get_exact_coord
-from dascore.utils.misc import unbyte
+from dascore.utils.misc import _maybe_unpack, unbyte
 
 # --- Getting format/version
 
@@ -153,9 +153,7 @@ def _has_required_arrays(h5):
 def _no_format_or_simple_specified(h5):
     """Ensure no other format is specified, or that simpleH5 is."""
     attrs = h5.attrs
-    attr_names = set(attrs)
-    file_format = attr_names & FILE_FORMAT_ATTR_NAMES
-    format = unbyte(attrs[next(iter(file_format))]) if file_format else "h5simple"
-    if format == "h5simple":
-        return True
-    return False
+    names = set(attrs) & FILE_FORMAT_ATTR_NAMES
+    # Every name that states a format has to state this one; a file which
+    # names two disagreeing formats belongs to neither.
+    return all(unbyte(_maybe_unpack(attrs[name])) == "h5simple" for name in names)

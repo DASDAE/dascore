@@ -14,7 +14,10 @@ class TestDetection:
 
     @pytest.mark.parametrize("with_attrs", [True, False])
     def test_partial_layout_is_not_ap_sensing(self, tmp_path, with_attrs):
-        """A file with only the attrs, or only the groups, is refused cleanly."""
+        """
+        Half a layout is not the format; detection used to claim a file
+        unless both halves were missing.
+        """
         path = tmp_path / "partial.h5"
         with h5py.File(path, "w") as h5:
             if with_attrs:

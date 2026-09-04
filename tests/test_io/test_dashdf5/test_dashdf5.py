@@ -14,7 +14,10 @@ class TestSnap:
 
     @pytest.fixture(scope="class")
     def jittered_path(self, tmp_path_factory):
-        """A minimal DASHDF5 file whose time axis has a small jitter."""
+        """
+        A minimal DASHDF5 file whose time samples shift by a microsecond
+        halfway through, so snapping changes the values.
+        """
         path = tmp_path_factory.mktemp("dashdf5") / "jitter.h5"
         time = np.arange(20) * 0.001 + 1e9
         time[10:] += 1e-6
@@ -32,7 +35,10 @@ class TestSnap:
         return path
 
     def test_read_honours_snap(self, jittered_path):
-        """An exact read carries the same time values as an exact scan."""
+        """
+        With snap=False read returns the file's own time values, as scan
+        does; read used to snap them anyway.
+        """
         scanned = dc.scan_payloads(jittered_path, snap=False)[0]["coords"]
         patch = dc.read(jittered_path, snap=False)[0]
         np.testing.assert_array_equal(
