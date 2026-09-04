@@ -2181,7 +2181,16 @@ class Spool(NodeRepr, NamespaceOwner):
             raise FileNotFoundError(msg)
         from dascore.io.index.catalog import PatchCatalog  # noqa: PLC0415
 
-        _format, _version = dc.get_format(path, file_format, file_version)
+        if file_format and file_version:
+            # Both callers already know the format, and sniffing it again
+            # opens the file a second time; for a remote source that is a
+            # round trip. Resolve the reader to canonicalize the names.
+            fiber_io = dc.io.FiberIO.manager.get_fiberio(
+                format=file_format, version=file_version
+            )
+            _format, _version = fiber_io.name, fiber_io.version
+        else:
+            _format, _version = dc.get_format(path, file_format, file_version)
         out = cls()
         out._catalog = PatchCatalog.from_file(
             path, file_format=_format, file_version=_version

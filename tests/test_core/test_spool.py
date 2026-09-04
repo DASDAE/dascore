@@ -949,6 +949,32 @@ class TestGetSpool:
         assert isinstance(out2, BaseSpool)
         assert len(out1) == len(out2)
 
+    def test_single_file_format_probed_once(self, terra15_das_example_path):
+        """
+        Opening one file sniffs its format once.
+
+        from_file re-sniffed a format its caller had already resolved,
+        which opens the file again; for a remote source that is a second
+        round trip.
+        """
+        manager = dc.io.FiberIO.manager
+        with mock.patch.object(
+            manager, "_get_format", wraps=manager._get_format
+        ) as probe:
+            dc.spool(terra15_das_example_path)
+        assert probe.call_count == 1
+
+    def test_from_file_with_known_format_does_not_probe(self, terra15_das_example_path):
+        """A caller which states the format is believed."""
+        fmt, ver = dc.get_format(terra15_das_example_path)
+        manager = dc.io.FiberIO.manager
+        with mock.patch.object(
+            manager, "_get_format", wraps=manager._get_format
+        ) as probe:
+            spool = Spool.from_file(terra15_das_example_path, fmt, ver)
+        assert probe.call_count == 0
+        assert len(spool)
+
     def test_non_existent_file_raises(self):
         """A path that doesn't exist should raise."""
         with pytest.raises(Exception, match="get spool from"):
