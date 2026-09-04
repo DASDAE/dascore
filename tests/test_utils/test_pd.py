@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 import numpy as np
 import pandas as pd
 import pydantic
@@ -16,6 +18,7 @@ from dascore.utils.pd import (
     fill_defaults_from_pydantic,
     filter_df,
     get_interval_columns,
+    get_regex,
     list_ser_to_str,
     patch_to_dataframe,
     relative_ranges_to_absolute,
@@ -126,6 +129,12 @@ class TestFilterDfBasic:
         df = example_df.assign(last_name=["Mill\ner", *example_df["last_name"][1:]])
         out = filter_df(df, last_name="Mill*")
         assert "Mill\ner" in set(df[out].last_name)
+
+    def test_deprecated_translator_still_reads_fnmatch(self):
+        """The old translator warns and keeps its own dialect until removal."""
+        with pytest.warns(DeprecationWarning, match="get_regex"):
+            regex = get_regex("a[!b]*")
+        assert re.match(regex, "ac")
 
     def test_str_sequence(self, example_df):
         """Test str sequences find values in sequence."""
