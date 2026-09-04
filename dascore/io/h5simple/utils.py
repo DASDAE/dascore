@@ -155,7 +155,7 @@ def _no_format_or_simple_specified(h5):
     attrs = h5.attrs
     attr_names = set(attrs)
     file_format = attr_names & FILE_FORMAT_ATTR_NAMES
-    format = getattr(attrs, next(iter(file_format))) if file_format else "h5simple"
+    format = unbyte(attrs[next(iter(file_format))]) if file_format else "h5simple"
     if format == "h5simple":
         return True
     return False

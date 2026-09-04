@@ -15,7 +15,7 @@ def _get_version_string(resource):
     attrs_names = set(resource.attrs)
     group_names = set(resource)
     # This file doesn't have expected attrs and groups.
-    if not attrs.issubset(attrs_names) and not groups.issubset(group_names):
+    if not attrs.issubset(attrs_names) or not groups.issubset(group_names):
         return False
     file_version = resource.attrs["FileVersion"]
     return str(_maybe_unpack(file_version))

@@ -66,11 +66,16 @@ class OptoDASV8(FiberIO):
         resource: H5Reader,
         time: tuple[opt_timeable_types, opt_timeable_types] | None = None,
         distance: tuple[float | None, float | None] | None = None,
+        snap: bool = True,
         **kwargs,
     ) -> dc.Spool:
         """Read a OptoDAS spool of patches."""
         patches = _read_opto_das(
-            resource, time=time, distance=distance, attr_cls=OptoDASPatchAttrs
+            resource,
+            time=time,
+            distance=distance,
+            snap=snap,
+            attr_cls=OptoDASPatchAttrs,
         )
         return dc.spool(patches)
 

@@ -9,6 +9,7 @@ import pytest
 
 import dascore as dc
 from dascore.constants import STORAGE_PROVENANCE_ATTRS
+from dascore.exceptions import UnknownFiberFormatError
 from dascore.utils.downloader import fetch
 
 
@@ -58,3 +59,22 @@ class TestH5Simple:
         assert not read_names & set(STORAGE_PROVENANCE_ATTRS)
         # Stripping it in only one of the two is how they came to disagree.
         assert read_names == scan_names
+
+    @pytest.mark.parametrize("name", ["__format__", "format", "file_format"])
+    def test_declared_format_is_recognized(self, h5simple_path, tmp_path, name):
+        """A root attr naming the format opts the file in, not out."""
+        path = tmp_path / f"{name}.h5"
+        shutil.copy(h5simple_path, path)
+        with h5py.File(path, "r+") as h5:
+            h5.attrs[name] = "h5simple"
+        assert dc.get_format(path) == ("H5Simple", "1")
+        assert isinstance(dc.read(path)[0], dc.Patch)
+
+    def test_other_declared_format_is_rejected(self, h5simple_path, tmp_path):
+        """A root attr naming another format still rules h5simple out."""
+        path = tmp_path / "other.h5"
+        shutil.copy(h5simple_path, path)
+        with h5py.File(path, "r+") as h5:
+            h5.attrs["format"] = "other"
+        with pytest.raises(UnknownFiberFormatError):
+            dc.get_format(path)
