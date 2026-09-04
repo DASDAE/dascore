@@ -117,6 +117,16 @@ class TestFilterDfBasic:
         out = filter_df(example_df, last_name="Miller[")
         assert not set(example_df[out].last_name)
 
+    def test_wildcard_crosses_a_newline(self, example_df):
+        """A wildcard crosses a newline, as SQLite's does.
+
+        The flag saying so travels in the pattern text, since that is what
+        reaches pandas.
+        """
+        df = example_df.assign(last_name=["Mill\ner", *example_df["last_name"][1:]])
+        out = filter_df(df, last_name="Mill*")
+        assert "Mill\ner" in set(df[out].last_name)
+
     def test_str_sequence(self, example_df):
         """Test str sequences find values in sequence."""
         out = filter_df(example_df, last_name={"Miller", "Jacobson"})
