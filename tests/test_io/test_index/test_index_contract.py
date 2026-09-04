@@ -653,12 +653,16 @@ class TestLineageIds:
     def test_what_was_done_is_indexed(self, tmp_path):
         """
         `processing_id` says what was done, which provenance asks about,
-        so it is recorded. It advances on every operation, but not on the
-        ones a spool runs to present a row: the loader applies a
-        residual trim without advancing it, so what the index states is
-        what comes back, trimmed or not. It is lineage rather than a
-        describing attr, so merging never compares it (see
-        `_SOURCE_COLUMNS`); it is folded from the members instead.
+        so it is recorded: the column states what the stored patch had.
+        It is lineage rather than a describing attr, so merging never
+        compares it (see `_SOURCE_COLUMNS`); it is folded from the
+        members instead.
+
+        What the column states is not always what loading returns. A
+        value trim is pushed into the read, so no operation runs and the
+        id stands; a samples trim is a real `select` on the loaded patch
+        and advances it. Both are pinned here, since a provenance query
+        has to know which it is looking at.
         """
         patch = dc.get_example_patch().pass_filter(time=(1, 10))
         patch.io.write(tmp_path / "filtered.h5", "dasdae")
@@ -666,13 +670,16 @@ class TestLineageIds:
         indexed = spool.get_contents()["processing_id"].iloc[0]
         assert indexed == spool[0].attrs.processing_id
         assert indexed
-        # a pending trim presents the same id it will load with
+        # a value trim is read that way; the id it states is the id it loads
         time = spool[0].get_coord("time")
-        window = (time.min(), time.min() + 10 * time.step)
-        trimmed = spool.select(time=window)
-        assert trimmed[0].shape != patch.shape  # the trim really happened
-        assert trimmed.get_contents()["processing_id"].iloc[0] == indexed
-        assert trimmed[0].attrs.processing_id == indexed
+        valued = spool.select(time=(time.min(), time.min() + 10 * time.step))
+        assert valued[0].shape != patch.shape  # the trim really happened
+        assert valued.get_contents()["processing_id"].iloc[0] == indexed
+        assert valued[0].attrs.processing_id == indexed
+        # a samples trim selects after loading, which advances the id
+        sampled = spool.select(time=(0, 10), samples=True)
+        assert sampled.get_contents()["processing_id"].iloc[0] == indexed
+        assert sampled[0].attrs.processing_id != indexed
 
     def test_a_trim_keeps_the_id_it_says_it_keeps(self, written_spool):
         """The index and the patch which loads must not disagree."""
