@@ -962,7 +962,9 @@ class TestGetSpool:
         with mock.patch.object(
             manager, "_get_format", wraps=manager._get_format
         ) as probe:
-            dc.spool(terra15_das_example_path)
+            # Inside the block: a spool which sniffs while it builds rows
+            # lazily would otherwise slip past the count.
+            assert len(dc.spool(terra15_das_example_path))
         assert probe.call_count == 1
 
     def test_from_file_with_known_format_does_not_probe(self, terra15_das_example_path):
@@ -972,20 +974,21 @@ class TestGetSpool:
         with mock.patch.object(
             manager, "_get_format", wraps=manager._get_format
         ) as probe:
-            spool = Spool.from_file(terra15_das_example_path, fmt, ver)
+            assert len(Spool.from_file(terra15_das_example_path, fmt, ver))
         assert probe.call_count == 0
-        assert len(spool)
 
-    def test_update_rereads_a_rewritten_version(self, tmp_path):
-        """A file rewritten in another version is re-sniffed, not assumed."""
+    def test_update_rereads_a_rewritten_format(self, tmp_path):
+        """A file rewritten in another format is re-sniffed, not assumed."""
         path = tmp_path / "patch.h5"
         patch = dc.get_example_patch()
         patch.io.write(path, "dasdae")
         spool = dc.spool(path)
         assert len(spool) == 1
         path.unlink()
-        patch.io.write(path, "dasdae")
-        assert len(spool.update()) == 1
+        patch.io.write(path, "pickle")
+        updated = spool.update()
+        assert len(updated) == 1
+        assert updated[0].equals(patch)
 
     def test_stated_format_is_believed(self, terra15_das_example_path):
         """
