@@ -29,7 +29,6 @@ from dascore.utils.remote_io import (
     _FallbackFileObj,
     _get_cached_local_file,
     ensure_local_file,
-    get_local_handle,
     is_no_range_http_error,
     pause_gc,
     resume_gc,
@@ -355,15 +354,6 @@ class H5Reader(_H5CasterBase):
         )
 
 
-class LocalH5Reader(H5Reader):
-    """An h5py reader which first materializes remote resources locally."""
-
-    @classmethod
-    def get_handle(cls, resource):
-        """Get a local-file-backed h5py handle."""
-        return get_local_handle(resource, super().get_handle)
-
-
 class H5Writer(H5Reader):
     """A thin wrapper around h5py for writing files."""
 
@@ -426,10 +416,6 @@ class H5Writer(H5Reader):
             self._handle.close()
             self._temp_path.unlink(missing_ok=True)
             self._closed = True
-
-        def _abort(self):
-            """Backward-compatible alias for abort()."""
-            self.abort()
 
         def __enter__(self):
             return self

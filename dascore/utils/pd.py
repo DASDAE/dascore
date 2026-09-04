@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import fnmatch
 from collections import defaultdict
-from collections.abc import Collection, Generator, Iterator, Mapping, Sequence
+from collections.abc import Collection, Generator, Iterator, Mapping
 from functools import cache
 from typing import TypeVar, cast
 
@@ -765,24 +765,6 @@ def list_ser_to_str(ser: pd.Series) -> pd.Series:
         for x in ser.values
     ]
     return pd.Series(values, index=ser.index, dtype=object)
-
-
-def _model_list_to_df(mod_list: Sequence[dc.PatchAttrs], exclude=None) -> pd.DataFrame:
-    """
-    Get a dataframe from a sequence of pydantic models.
-
-    Optionally, exclude certain columns
-    """
-    records = []
-    for item in mod_list:
-        if hasattr(item, "flat_dump"):
-            records.append(item.flat_dump(exclude=exclude))
-        else:
-            records.append(item.summary.flat_dump(exclude=exclude))
-    df = pd.DataFrame(records)
-    if "dims" in df.columns:
-        df["dims"] = list_ser_to_str(df["dims"])
-    return df
 
 
 def _column_or_value(df, col, value):
