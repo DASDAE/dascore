@@ -19,6 +19,7 @@ from h5py import File as H5pyFile
 from dascore.compat import UPath
 from dascore.config import get_config
 from dascore.constants import http_protocols, remote_hdf5_tuned_protocols
+from dascore.utils.deprecate import deprecate
 from dascore.utils.misc import (
     _maybe_make_parent_directory,
     _maybe_unpack,
@@ -438,6 +439,14 @@ class H5Writer(H5Reader):
         return super().get_handle(resource)
 
 
+@deprecate(
+    info=(
+        "unpack_scalar_h5_dataset is deprecated. Use "
+        "dascore.utils.misc._maybe_unpack, which reads a scalar out of a "
+        "dataset of either shape and leaves anything else alone."
+    ),
+    removed_in="0.2.0",
+)
 def unpack_scalar_h5_dataset(dataset):
     """
     Unpack a scalar H5Py dataset.
