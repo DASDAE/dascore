@@ -2894,8 +2894,8 @@ class CoordString(BaseCoord):
 
     See ['Coordinate Internals'](`docs/notes/coordinate_internals.qmd`) for the
     constraints that make string coords differ from numeric and time-like
-    coords. Plain string selectors use exact matching unless they contain `*`
-    or `?`, in which case they are treated as unix-style wildcard patterns.
+    coords. Plain string selectors use exact matching unless they contain `*`,
+    `?` or `[`, in which case they are read as globs, as SQLite reads them.
     Compiled regular expressions are also supported as explicit pattern
     selectors.
     """

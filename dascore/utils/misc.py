@@ -1558,8 +1558,10 @@ def glob_to_regex(pattern: str) -> re.Pattern:
     return re.compile(r"(?s)" + "".join(out) + r"\Z")
 
 
-# A pattern which matches nothing, for a glob SQLite would not read.
-_MATCHES_NOTHING = re.compile(r"(?!)")
+# A pattern which matches nothing, for a glob SQLite would not read. An
+# empty character class rather than a failing lookahead, because pandas
+# hands the pattern text to a regex engine without lookahead support.
+_MATCHES_NOTHING = re.compile(r"(?s)[^\s\S]\Z")
 
 
 def _class_body(body: str) -> str:

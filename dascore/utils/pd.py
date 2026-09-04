@@ -667,8 +667,9 @@ def filter_df(
 
         Any condition to check against columns of df. Can be a single value
         or a collection of values (to check isin on columns). Str arguments
-        can also use unix style matching. Additionally, queries of the form
-        {column_name}_min or {column_name}_max can be used, provided columns
+        can also be globs, read as SQLite's GLOB reads them. Additionally,
+        queries of the form {column_name}_min or {column_name}_max can be
+        used, provided columns
         with the same name don't already exist.
 
     Returns

@@ -107,6 +107,16 @@ class TestFilterDfBasic:
         out = filter_df(example_df, last_name="M[!a]*")
         assert not set(example_df[out].last_name)
 
+    def test_unreadable_glob_matches_nothing(self, example_df):
+        """
+        A glob SQLite would refuse selects nothing rather than raising.
+
+        The never-match pattern has to be one every regex engine reads:
+        pandas hands the text to an engine without lookahead support.
+        """
+        out = filter_df(example_df, last_name="Miller[")
+        assert not set(example_df[out].last_name)
+
     def test_str_sequence(self, example_df):
         """Test str sequences find values in sequence."""
         out = filter_df(example_df, last_name={"Miller", "Jacobson"})
