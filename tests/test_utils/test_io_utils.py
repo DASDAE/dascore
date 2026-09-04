@@ -21,7 +21,6 @@ from dascore.exceptions import PatchConversionError, RemoteCacheError
 from dascore.utils.hdf5 import (
     H5Reader,
     H5Writer,
-    LocalH5Reader,
     open_h5_resource,
 )
 from dascore.utils.io import (
@@ -317,18 +316,6 @@ class TestGetHandleFromResource:
             handle.close()
             assert raw.id.valid == 0
 
-    def test_local_h5_reader_materializes_local_path(self, tmp_path):
-        """Ensure LocalH5Reader can open a local path through its adapter."""
-        path = tmp_path / "local_h5_reader.h5"
-        with h5py.File(path, "w") as handle:
-            handle.create_dataset("data", data=[1, 2, 3])
-        handle = LocalH5Reader.get_handle(path)
-        try:
-            assert type(handle).__name__ == "_ManagedH5pyFile"
-            assert list(handle["data"][:]) == [1, 2, 3]
-        finally:
-            handle.close()
-
     def test_h5_reader_wraps_local_path(self, tmp_path):
         """Local path opens should use the same managed HDF5 handle type."""
         path = tmp_path / "managed_local.h5"
@@ -599,8 +586,8 @@ class TestGetHandleFromResource:
         path = UPath("memory://dascore/upath-write-abort-twice.h5")
         handle = H5Writer.get_handle(path)
         handle.create_dataset("data", data=[1, 2, 3])
-        handle._abort()
-        handle._abort()
+        handle.abort()
+        handle.abort()
         assert not path.exists()
 
     def test_not_implemented(self):
