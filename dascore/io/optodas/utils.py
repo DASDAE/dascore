@@ -6,8 +6,7 @@ import dascore as dc
 import dascore.core
 from dascore.core.coords import get_coord
 from dascore.io.utils import build_patches, get_exact_coord
-from dascore.utils.hdf5 import unpack_scalar_h5_dataset
-from dascore.utils.misc import unbyte
+from dascore.utils.misc import _maybe_unpack, unbyte
 
 # --- Getting format/version
 
@@ -36,14 +35,14 @@ def _get_coord_manager(fi, snap=True):
     coords = {}
     for index, (dim, unit) in enumerate(zip(dims, units)):
         crange = header["dimensionRanges"][f"dimension{index}"]
-        step = unpack_scalar_h5_dataset(crange["unitScale"])
+        step = _maybe_unpack(crange["unitScale"])
 
         # Special case for time.
         if dim == "time":
             step = dc.to_timedelta64(step)
-            t1 = dc.to_datetime64(unpack_scalar_h5_dataset(header["time"]))
-            start = t1 + unpack_scalar_h5_dataset(crange["min"]) * step
-            stop = t1 + (unpack_scalar_h5_dataset(crange["max"]) + 1) * step
+            t1 = dc.to_datetime64(_maybe_unpack(header["time"]))
+            start = t1 + _maybe_unpack(crange["min"]) * step
+            stop = t1 + (_maybe_unpack(crange["max"]) + 1) * step
             coord = get_coord(min=start, max=stop, step=step, units=unit)
         else:  # and distance
             # The channels are ints so we multiply by step to get distance.
@@ -69,7 +68,7 @@ def _get_attr_dict(header):
     for head_name, attr_name in attr_map.items():
         value = header[head_name]
         if hasattr(value, "shape"):
-            value = unpack_scalar_h5_dataset(value)
+            value = _maybe_unpack(value)
         out[attr_name] = unbyte(value)
     return out
 

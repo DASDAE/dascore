@@ -23,6 +23,7 @@ from dascore.utils.misc import (
     _get_install_name,
     _iter_filesystem,
     _locked,
+    _maybe_unpack,
     _spool_map,
     all_diffs_close_enough,
     cached_method,
@@ -1270,3 +1271,41 @@ class TestRaiseOnExtraKwargs:
         """The message names the offending arguments and what is accepted."""
         with pytest.raises(ParameterError, match=r"\['b', 'z'\].*only a and b"):
             raise_on_extra_kwargs({"z": 1, "b": 2}, "a and b")
+
+
+class TestMaybeUnpack:
+    """Tests for reading a single value out of whatever holds it."""
+
+    @pytest.fixture(scope="class")
+    def h5_path(self, tmp_path_factory):
+        """A file holding scalar datasets of each awkward shape."""
+        h5py = pytest.importorskip("h5py")
+        path = tmp_path_factory.mktemp("maybe_unpack") / "scalars.h5"
+        with h5py.File(path, "w") as h5:
+            h5.create_dataset("zero_d", data=5.0)
+            h5.create_dataset("one_d", data=[5.0])
+            h5.create_dataset("text", data="hello")
+            h5.create_dataset("many", data=[1.0, 2.0, 3.0])
+        return path
+
+    def test_scalar_datasets_unpack(self, h5_path):
+        """A dataset of shape () holds a value, not an array."""
+        h5py = pytest.importorskip("h5py")
+        with h5py.File(h5_path, "r") as h5:
+            assert _maybe_unpack(h5["zero_d"]) == 5.0
+            assert _maybe_unpack(h5["one_d"]) == 5.0
+            assert _maybe_unpack(h5["text"]) == b"hello"
+            assert _maybe_unpack(h5["many"]) is not None
+
+    def test_zero_dimensional_array_unpacks(self):
+        """A 0-d array is a value with an array around it."""
+        out = _maybe_unpack(np.array(5.0))
+        assert not isinstance(out, np.ndarray)
+        assert out == 5.0
+
+    @pytest.mark.parametrize(
+        "value", [np.float64(1.0), np.str_("a"), np.bytes_(b"a"), 1.0, "a"]
+    )
+    def test_scalars_pass_through(self, value):
+        """An unpacked value is returned as it is; a string cannot be indexed."""
+        assert _maybe_unpack(value) is value

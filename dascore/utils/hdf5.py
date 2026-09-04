@@ -452,18 +452,6 @@ class H5Writer(H5Reader):
         return super().get_handle(resource)
 
 
-def unpack_scalar_h5_dataset(dataset):
-    """
-    Unpack a scalar H5Py dataset.
-    """
-    assert dataset.size == 1
-    # This gets weird because datasets can be of shape () or (1,).
-    value = dataset[()]
-    if isinstance(value, np.ndarray):
-        value = value[0]
-    return value
-
-
 def h5_matches_structure(h5file: H5pyFile, structure: Sequence[str]):
     """
     Check if an H5 file matches a spec given by a structure.

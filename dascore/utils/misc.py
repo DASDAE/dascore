@@ -723,12 +723,20 @@ def maybe_get_items(
 
 
 def _maybe_unpack(maybe_array):
-    """Unpack a single-element array-like object, else return input unchanged."""
-    size = getattr(maybe_array, "size", 0)
-    shape = getattr(maybe_array, "shape", ())
-    if size == 1 and shape:
-        maybe_array = maybe_array[0]
-    return maybe_array
+    """
+    Unpack a single-element array-like object, else return input unchanged.
+
+    A zero-dimensional container counts as single-element: an HDF5 scalar
+    dataset is stored that way, and returning the dataset itself leaves the
+    caller stringifying a handle. A numpy scalar is already unpacked and
+    cannot be indexed, and a string scalar refuses `[()]` besides.
+    """
+    if getattr(maybe_array, "size", 0) != 1 or isinstance(maybe_array, np.generic):
+        return maybe_array
+    if not hasattr(maybe_array, "shape"):
+        return maybe_array
+    value = maybe_array[()]
+    return value.flat[0] if isinstance(value, np.ndarray) else value
 
 
 @cache
