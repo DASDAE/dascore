@@ -534,8 +534,8 @@ def glob_filter(include, exclude):
     The patterns are matched against each value written as a string, so
     one vocabulary covers every kind a group can hold: `"hole_*"` reads a
     categorical group, and a membership group is `"True"` and `"False"`.
-    Globs mean what they mean everywhere else here, which is what SQLite
-    means by them rather than what `fnmatch` does.
+    Globs are SQLite's here as everywhere in DASCore; `glob_to_regex`
+    translates them and says why not `fnmatch`.
     """
     patterns = tuple(
         None if spec is None else [glob_to_regex(str(x)) for x in iterate(spec)]

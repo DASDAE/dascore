@@ -96,11 +96,11 @@ class TestFilterDfBasic:
 
     def test_character_class_uses_sqlite_spelling(self, example_df):
         """
-        A class is negated with `[^...]`, as the index reads it.
+        Globs use SQLite's class spelling, the one the index applies.
 
-        `filter_df` reached for fnmatch, which spells the negation `[!...]`
-        and reads a leading `^` as a member, so the same pattern selected
-        opposite halves depending on whether a frame or the index answered.
+        `[^...]` negates, so `M[^a]*` keeps both Ms; `!` is a plain member,
+        so `M[!a]*` asks for a name starting `M!` or `Ma` and this frame
+        has none. fnmatch reads both the other way round.
         """
         out = filter_df(example_df, last_name="M[^a]*")
         assert {"Miller", "Milner"} == set(example_df[out].last_name)

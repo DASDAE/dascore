@@ -1516,15 +1516,15 @@ def glob_to_regex(pattern: str) -> re.Pattern:
     """
     Translate a glob to the regex which matches what SQLite's GLOB does.
 
-    SQLite is the authority on what a glob selector means, since that is
-    what the index applies, and it is not `fnmatch`: a character class is
-    negated with `[^...]`, where fnmatch spells that `[!...]` and reads a
-    leading `!` as a literal. Translating here rather than reaching for
-    fnmatch is what keeps one pattern from selecting opposite halves of a
-    spool depending on which side answered it. An unterminated class
-    matches nothing, as it does in SQLite; a class a regex cannot express
-    at all (a reversed range, which SQLite reads leniently) matches
-    nothing here rather than being guessed at.
+    Every glob DASCore reads -- a spool query, a dataframe filter, a
+    string coordinate -- means what SQLite's GLOB means, since the index
+    answers some of those queries in SQL and one pattern must not mean two
+    things depending on which side answers it. SQLite is not `fnmatch`: a
+    class is negated with `[^...]`, where fnmatch spells that `[!...]` and
+    reads a leading `!` as a literal. An unterminated class matches
+    nothing, as it does in SQLite; a class a regex cannot express at all
+    (a reversed range, which SQLite reads leniently) matches nothing here
+    rather than being guessed at.
     """
     out, index, size = [], 0, len(pattern)
     while index < size:
@@ -1552,9 +1552,9 @@ def glob_to_regex(pattern: str) -> re.Pattern:
         else:
             out.append(re.escape(char))
         index += 1
-    # The DOTALL flag is written into the pattern, since SQLite's wildcards
-    # cross a newline like any other byte and pandas rejects a compiled
-    # pattern whose flags it did not set itself.
+    # SQLite's wildcards cross a newline like any other byte. The flag goes
+    # inline, not into re.compile, so it survives a caller that hands the
+    # pattern text on to something else.
     return re.compile(r"(?s)" + "".join(out) + r"\Z")
 
 

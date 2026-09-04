@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import fnmatch
 from collections import defaultdict
 from collections.abc import Collection, Generator, Iterator, Mapping, Sequence
+from functools import cache
 from typing import TypeVar, cast
 
 import numpy as np
@@ -14,6 +16,7 @@ import dascore as dc
 from dascore.constants import PatchType, namespace_select_type
 from dascore.core.attrs import PatchAttrs
 from dascore.exceptions import InvalidSpoolQueryError, ParameterError
+from dascore.utils.deprecate import deprecate
 from dascore.utils.misc import (
     glob_to_regex,
     is_range,
@@ -146,6 +149,20 @@ def present_columns(df: pd.DataFrame) -> pd.DataFrame:
     for present in PRESENTERS:
         df = present(df)
     return df
+
+
+@deprecate(
+    info=(
+        "get_regex is deprecated. Use dascore.utils.misc.glob_to_regex, "
+        "which reads a glob the way the index does: a character class is "
+        "negated with [^...] rather than fnmatch's [!...]."
+    ),
+    removed_in="0.2.0",
+)
+@cache
+def get_regex(seed_str):
+    """Compile, and cache regex for str queries."""
+    return fnmatch.translate(seed_str)  # translate to re
 
 
 def relative_offset(gmin, gmax, value):
@@ -435,6 +452,8 @@ def _filter_equality(query_dict, df, bool_index):
     for key, val in query_dict.items():
         if isinstance(val, str):
             regex = glob_to_regex(val)
+            # pandas refuses a compiled pattern with flags of its own; the
+            # source string carries the inline DOTALL.
             new = df[key].str.match(regex.pattern).values
             bool_index = np.logical_and(bool_index, new)
         else:

@@ -2968,7 +2968,7 @@ class CoordString(BaseCoord):
         if isinstance(args, re.Pattern):
             mask = np.array([bool(args.search(value)) for value in self.values])
             return self._select_by_value_array(self.values[mask])
-        if isinstance(args, str) and ("*" in args or "?" in args):
+        if isinstance(args, str) and any(char in args for char in "*?["):
             pattern = glob_to_regex(args)
             mask = np.array([bool(pattern.match(value)) for value in self.values])
             return self._select_by_value_array(self.values[mask])
