@@ -193,6 +193,22 @@ def _maybe_invert_yaxis(ax, patch, dim, ascending=True):
         ax.invert_yaxis()
 
 
+def _cell_edge_limits(low, high, size):
+    """
+    Widen sample-centre limits to the outer edges of the cells.
+
+    An image extent gives the outer edges of the image, so handing it the
+    first and last coordinate values would draw every sample half a cell
+    from where it belongs and squeeze the image into one cell less than it
+    has. The mesh path already draws cells around their centres, and this
+    is what keeps the two renderers agreeing.
+    """
+    if size < 2:
+        return [low, high]
+    half_cell = (high - low) / (2 * (size - 1))
+    return [low - half_cell, high + half_cell]
+
+
 def _get_extents(dims_r, coords):
     """Get the extents used for each dimension."""
 
@@ -233,7 +249,7 @@ def _get_extents(dims_r, coords):
         if np.isnan(array_min) or np.isnan(array_max):
             array_min = 0
             array_max = len(array) - 1
-        lims[dim] += [array_min, array_max]
+        lims[dim] += _cell_edge_limits(array_min, array_max, len(array))
     # find datetime coords and convert to numpy mtimes
     _convert_datetimes(coords, lims)
     _convert_timedeltas(coords, lims)
