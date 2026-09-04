@@ -94,6 +94,19 @@ class TestFilterDfBasic:
         out = filter_df(example_df, first_name="J???")
         assert {"Jake"} == set(example_df[out].first_name)
 
+    def test_character_class_uses_sqlite_spelling(self, example_df):
+        """
+        A class is negated with `[^...]`, as the index reads it.
+
+        `filter_df` reached for fnmatch, which spells the negation `[!...]`
+        and reads a leading `^` as a member, so the same pattern selected
+        opposite halves depending on whether a frame or the index answered.
+        """
+        out = filter_df(example_df, last_name="M[^a]*")
+        assert {"Miller", "Milner"} == set(example_df[out].last_name)
+        out = filter_df(example_df, last_name="M[!a]*")
+        assert not set(example_df[out].last_name)
+
     def test_str_sequence(self, example_df):
         """Test str sequences find values in sequence."""
         out = filter_df(example_df, last_name={"Miller", "Jacobson"})

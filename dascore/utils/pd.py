@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 
-import fnmatch
 from collections import defaultdict
 from collections.abc import Collection, Generator, Iterator, Mapping, Sequence
-from functools import cache
 from typing import TypeVar, cast
 
 import numpy as np
@@ -16,7 +14,12 @@ import dascore as dc
 from dascore.constants import PatchType, namespace_select_type
 from dascore.core.attrs import PatchAttrs
 from dascore.exceptions import InvalidSpoolQueryError, ParameterError
-from dascore.utils.misc import is_range, order_range_tuple, sanitize_range_param
+from dascore.utils.misc import (
+    glob_to_regex,
+    is_range,
+    order_range_tuple,
+    sanitize_range_param,
+)
 from dascore.utils.time import to_datetime64, to_timedelta64
 
 _RowType = TypeVar("_RowType")
@@ -143,12 +146,6 @@ def present_columns(df: pd.DataFrame) -> pd.DataFrame:
     for present in PRESENTERS:
         df = present(df)
     return df
-
-
-@cache
-def get_regex(seed_str):
-    """Compile, and cache regex for str queries."""
-    return fnmatch.translate(seed_str)  # translate to re
 
 
 def relative_offset(gmin, gmax, value):
@@ -437,8 +434,8 @@ def _filter_equality(query_dict, df, bool_index):
     # filter on non-collection queries
     for key, val in query_dict.items():
         if isinstance(val, str):
-            regex = get_regex(val)
-            new = df[key].str.match(regex).values
+            regex = glob_to_regex(val)
+            new = df[key].str.match(regex.pattern).values
             bool_index = np.logical_and(bool_index, new)
         else:
             new = (df[key] == val).values

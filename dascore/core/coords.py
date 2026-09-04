@@ -7,7 +7,6 @@ current coord-family and string-coordinate design notes.
 from __future__ import annotations
 
 import abc
-import fnmatch
 import hashlib
 import itertools
 import json
@@ -70,6 +69,7 @@ from dascore.utils.misc import (
     all_close,
     all_diffs_close_enough,
     cached_method,
+    glob_to_regex,
     is_strictly_monotonic,
     iterate,
     sanitize_range_param,
@@ -2969,7 +2969,7 @@ class CoordString(BaseCoord):
             mask = np.array([bool(args.search(value)) for value in self.values])
             return self._select_by_value_array(self.values[mask])
         if isinstance(args, str) and ("*" in args or "?" in args):
-            pattern = re.compile(fnmatch.translate(args))
+            pattern = glob_to_regex(args)
             mask = np.array([bool(pattern.match(value)) for value in self.values])
             return self._select_by_value_array(self.values[mask])
         values = np.asarray([args])
