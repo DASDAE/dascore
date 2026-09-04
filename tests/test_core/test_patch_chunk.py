@@ -1425,7 +1425,7 @@ class TestQuantityTolerance:
         "tolerance,match",
         [
             (np.nan, "finite"),
-            (np.timedelta64("NaT"), "finite"),
+            (np.timedelta64("NaT", "s"), "finite"),
             (np.inf * dc.units.s, "finite"),
             (-1, "not be negative"),
             (get_quantity("-1 dimensionless"), "not be negative"),
@@ -2003,6 +2003,13 @@ class TestChunkFromIndex:
         assert np.array_equal(fast.data, slow.data)
         assert fast.coords == slow.coords
         assert dict(fast.attrs) == dict(slow.attrs)
+        # coord equality compares values, so the two things the fast path
+        # rebuilds by hand -- the stored dtype and the stated units --
+        # have to be compared for themselves
+        for name, coord in fast.coords.coord_map.items():
+            other = slow.coords.coord_map[name]
+            assert coord.dtype == other.dtype, name
+            assert coord.units == other.units, name
         # the lineage ids are folded from the members, so they have to
         # come back from the row rather than at their defaults
         assert fast.attrs.patch_id
@@ -2116,7 +2123,7 @@ class TestChunkFromIndex:
             "distance_max": 2,
             "distance_step": 1,
         }
-        assert assembler._member_from_index(row) is None
+        assert assembler._meta_from_index(row) is None
 
     def test_unpredicted_shape_loads_patch(self):
         """An array the row did not predict is not trusted."""
@@ -2135,7 +2142,9 @@ class TestChunkFromIndex:
             plan_dim="time",
             load_array=lambda row: np.zeros((3, 4)),
         )
-        member = good._member_from_index(row)
+        meta = good._meta_from_index(row)
+        assert meta is not None
+        member = good._member_from_meta(row, meta)
         assert member is not None
         assert member.dims == ("distance", "time")
         assert member.coords.shape == (3, 4)
@@ -2145,7 +2154,7 @@ class TestChunkFromIndex:
             plan_dim="time",
             load_array=lambda row: np.zeros((3, 5)),
         )
-        assert bad._member_from_index(row) is None
+        assert bad._member_from_meta(row, meta) is None
         # a rank the row's dims do not match is refused too
         rank = PatchAssembler(
             load_patch=lambda kwargs: None,
@@ -2153,7 +2162,73 @@ class TestChunkFromIndex:
             plan_dim="time",
             load_array=lambda row: np.zeros(12),
         )
-        assert rank._member_from_index(row) is None
+        assert rank._member_from_meta(row, meta) is None
+
+    def test_whole_member_skips_a_residual_it_lies_inside(
+        self, dasdae_directory_spool, calls, monkeypatch
+    ):
+        """A value selection which cuts no member is a no-op on every one.
+
+        An unmodified row lies wholly inside such a selection, so the
+        exactness re-application has nothing to do and the member can be
+        built from the index anyway.
+        """
+        contents = dasdae_directory_spool.get_contents()
+        span = (contents["time_min"].min(), contents["time_max"].max())
+        selected = dasdae_directory_spool.select(time=span)
+        fast = selected.chunk(time=None)[0]
+        assert calls == {"patch": 0, "array": len(dasdae_directory_spool)}
+        self._force_patch_path(monkeypatch)
+        slow = selected.chunk(time=None)[0]
+        assert fast == slow
+
+    def test_unitless_dim_stays_unitless(self, tmp_path):
+        """A coordinate with no units does not gain one from the row.
+
+        Row values come out of a frame, so an unstated unit is NaN, and
+        a NaN unit builds a dimensionless quantity nothing can convert.
+        """
+        # a coordinate which states no units is what puts the NaN in the row
+        patch = dc.get_example_patch().set_units(distance=None)
+        assert patch.get_coord("distance").units is None
+        time = patch.get_coord("time")
+        for num in range(3):
+            start = time.min() + num * 100 * time.step
+            sub = patch.select(time=(start, start + 99 * time.step))
+            sub.io.write(tmp_path / f"m{num}.h5", "dasdae")
+        merged = dc.spool(tmp_path).update().chunk(time=None)[0]
+        units = {n: c.units for n, c in merged.coords.coord_map.items()}
+        assert units == {
+            n: c.units for n, c in patch.coords.coord_map.items() if n in units
+        }
+        # a unit which was never stated does not block a conversion
+        merged.convert_units(distance="ft")
+
+    def test_falling_back_reads_no_arrays(self):
+        """A merge the index cannot describe does not read arrays first.
+
+        The rows say whether the index can stand in for every member, so
+        a merge which must load patches pays for no discarded reads.
+        """
+        reads = []
+        assembler = PatchAssembler(
+            load_patch=lambda kwargs: None,
+            merge_kwargs={},
+            plan_dim="time",
+            load_array=lambda row: reads.append(row) or np.zeros((3, 4)),
+        )
+        stateable = {
+            "dims": "distance,time",
+            "distance_min": 0,
+            "distance_max": 2,
+            "distance_step": 1,
+            "time_min": np.datetime64("2020-01-01"),
+            "time_max": np.datetime64("2020-01-01T00:00:03"),
+            "time_step": np.timedelta64(1, "s"),
+        }
+        silent = dict(stateable, time_step=np.timedelta64("NaT", "s"))
+        assert assembler._member_meta_from_index([stateable, silent]) is None
+        assert not reads
 
     def test_row_range_refuses_what_it_cannot_state(self):
         """A range the row states differently than the file had is refused."""

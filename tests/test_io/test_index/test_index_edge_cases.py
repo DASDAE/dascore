@@ -27,6 +27,7 @@ import pytest
 from test_index_contract import _time_coord, make_summaries
 
 import dascore as dc
+from dascore.core.coords import get_coord
 from dascore.core.spool import Spool
 from dascore.core.summary import PatchSummary, normalize_source_patch_key
 from dascore.exceptions import (
@@ -52,6 +53,7 @@ from dascore.io.index.ingest import (
     _coord_record,
     _py_scalar,
     assemble_source_records,
+    coord_dtype_is_stateable,
     patch_record,
     summaries_to_records,
     typed_value,
@@ -998,6 +1000,7 @@ class TestIngestEdges:
         stub = _Stub()
         stub.dtype = dtype
         record = _coord_record("x", stub)
+        assert not coord_dtype_is_stateable(dtype)
         if dtype in ("", None):  # nothing stated, nothing recorded
             assert record is None
             return
@@ -1007,6 +1010,24 @@ class TestIngestEdges:
         # named, but no envelope: the values cannot be stated
         assert record.min_num is None and record.max_num is None
         assert record.min_ns is None and record.min_str is None
+
+    def test_undescribable_coord_is_not_selectable(self, tmp_path):
+        """A coord recorded by name alone is not a thing a query can reach.
+
+        The name is there for the reader rebuilding a patch, which has
+        to know the patch holds it. No predicate can be built against a
+        coordinate with no envelope, so asking for one says so rather
+        than filtering on nothing.
+        """
+        patch = dc.get_example_patch()
+        quality = get_coord(values=np.ones(patch.shape[0], dtype=bool))
+        patch.update_coords(quality=("distance", quality)).io.write(
+            tmp_path / "flagged.h5", "dasdae"
+        )
+        spool = dc.spool(tmp_path).update()
+        assert not [x for x in spool.get_contents().columns if "quality" in str(x)]
+        with pytest.raises(InvalidSpoolQueryError, match="quality"):
+            spool.select(quality=(0, 1))
 
     def test_multipatch_source_gets_positional_ids(self):
         """Multi-patch sources get positional source_patch_keys."""

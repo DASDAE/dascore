@@ -36,7 +36,7 @@ from typing import NamedTuple, get_args, get_type_hints
 # changes, not only when a column does. 14 reads a legacy DASDAE file's
 # PyTables attr payloads, so 13 stored the payload text where a value
 # is now stored (`gauge_length` of "N." rather than nothing).
-INDEX_VERSION = 14
+INDEX_VERSION = 15
 # Identity string so any tool can sanity-check what it opened.
 WHAT_IS_THIS = "dascore_spool_index"
 

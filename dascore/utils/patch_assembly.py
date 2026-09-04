@@ -23,6 +23,7 @@ import dascore as dc
 from dascore.core.coordmanager import CoordManager, get_coord_manager
 from dascore.core.coords import get_coord
 from dascore.exceptions import CoordMergeError, UnitError
+from dascore.io.index.schema import RESERVED_ATTR_COLUMNS
 from dascore.units import get_quantity
 from dascore.utils.attrs import combine_patch_attrs, warn_if_histories_differ
 from dascore.utils.chunk_plan import _SOURCE_COLUMNS
@@ -182,6 +183,15 @@ def _as_plan_units(patch, kwargs, row) -> dict:
 
 
 @dataclass
+class _MemberMeta:
+    """What an index row states about a member, before its array is read."""
+
+    dims: tuple[str, ...]
+    coords: CoordManager
+    attrs: dc.PatchAttrs
+
+
+@dataclass
 class _Member:
     """What the streaming merge takes from one member, however it was loaded."""
 
@@ -205,14 +215,19 @@ def _attrs_from_row(row: Mapping, dims: tuple[str, ...]) -> dc.PatchAttrs:
     """
     The attrs an index row states for its member.
 
-    Every attr the file defined is a column; what is not a column is
-    the plan's own bookkeeping, the storage provenance, and the coordinate
-    envelopes, none of which is a patch attr. A field the file left
-    unset is absent from the row and takes its default, as it would on
-    the patch `read` builds.
+    Every attr the index could hold is a column; what is not a column is
+    the plan's own bookkeeping, the coordinate envelopes, and the storage
+    provenance (the lineage ids of which are added back below). A field
+    the file left unset, or one ingest could not type -- a list, an
+    array, a name colliding with a structural column -- is null here and
+    takes its default, as it would on the patch `read` builds.
     """
     envelope = {f"{d}_{x}" for d in dims for x in ("min", "max", "step", "units")}
-    skip = envelope | set(_SOURCE_COLUMNS) | {"dims", "output_id", "current_index"}
+    # RESERVED_ATTR_COLUMNS names what an index row spends on structure
+    # rather than on attrs, the time and distance envelopes among them --
+    # those columns exist on every row, whether or not the member has
+    # those dimensions.
+    skip = envelope | set(_SOURCE_COLUMNS) | set(RESERVED_ATTR_COLUMNS)
     out = {
         k: v
         for k, v in row.items()
@@ -346,21 +361,40 @@ class PatchAssembler:
         """
         Merge the patches described by the instructions along merge_dim.
 
-        Each patch is copied into a pre-allocated output array as it is
-        loaded, then released; this avoids holding all source patches and
-        the merged output in memory at the same time, as concatenating
-        would.
+        All members come from the index or none do: a loaded patch can
+        carry what the index cannot hold (an array attr, a coordinate it
+        could not represent), and the merge would then see it on some
+        members and not others, refusing what it accepts whole. The rows
+        decide that before anything is read; an array whose shape the row
+        did not predict is only found once it is loaded, and abandons the
+        attempt.
+        """
+        metas = self._member_meta_from_index(df_dict_list)
+        if metas is not None:
+            out = self._stream(joined, df_dict_list, merge_dim, samples, metas)
+            if out is not None:
+                return out
+        return self._stream(joined, df_dict_list, merge_dim, samples, None)
+
+    def _stream(self, joined, df_dict_list, merge_dim, samples, metas):
+        """
+        Copy each member into the output buffer as it is loaded.
+
+        A member is released once copied; this avoids holding all source
+        patches and the merged output in memory at the same time, as
+        concatenating would. Returns None when ``metas`` promised an
+        array shape the file did not deliver, so the caller can start
+        over on the patch path.
         """
         buffer, offset, axis, dims = None, 0, None, None
         coords, attrs, summaries = [], [], []
         target_units = None
-        # All members come from the index or none do: a loaded patch can
-        # carry what the index cannot hold (an array attr, a coordinate
-        # it could not represent), and the merge would then see it on
-        # some members and not others, refusing what it accepts whole.
-        from_index = self._members_from_index(df_dict_list)
         for num, patch_kwargs in enumerate(df_dict_list):
-            member = None if from_index is None else from_index[num]
+            member = None
+            if metas is not None:
+                member = self._member_from_meta(patch_kwargs, metas[num])
+                if member is None:
+                    return None
             if member is None:
                 patch = self._load_trimmed_patch(patch_kwargs, joined)
                 patch, target_units = _match_merge_units(patch, merge_dim, target_units)
@@ -429,56 +463,65 @@ class PatchAssembler:
         new_attrs = combine_patch_attrs(attrs, **attr_kwargs)
         return dc.Patch(data=buffer, coords=new_coord, attrs=new_attrs, dims=list(dims))
 
-    def _members_from_index(self, rows) -> list[_Member] | None:
-        """Every member built from the index, or None if any cannot be."""
+    def _member_meta_from_index(self, rows) -> list[_MemberMeta] | None:
+        """What the rows state about every member, or None if any is silent.
+
+        Metadata only: nothing is read here, so a merge the index cannot
+        describe costs no array reads before it falls back.
+        """
         if self.load_array is None:
             return None
-        members = []
+        metas = []
         for row in rows:
-            member = self._member_from_index(row)
-            if member is None:
+            meta = self._meta_from_index(row)
+            if meta is None:
                 return None
-            members.append(member)
-        return members
+            metas.append(meta)
+        return metas
 
-    def _member_from_index(self, row: Mapping) -> _Member | None:
+    def _meta_from_index(self, row: Mapping) -> _MemberMeta | None:
         """
-        Build a member from its index row and the format's raw array.
+        What an index row states about one member, without reading it.
 
         The row states each dimension's evenly sampled range in the
-        plan's units and every attr the file defined, which is what
-        the merge needs from a member whose plan trims nothing; the
-        patch, its coordinate parsing and its attr decoding are skipped.
-        Anything the row cannot state (a dimension without a range, an
-        array whose shape the row did not predict) sends the member
-        down the patch path instead.
+        plan's units and every attr the file defined, which is what the
+        merge needs from a member whose plan trims nothing; the patch,
+        its coordinate parsing and its attr decoding are skipped.
+        Anything the row cannot state -- a dimension without a range --
+        sends the whole merge down the patch path instead.
 
         The index holds no history, a list rather than a column, so a
         member built here states none and the merged patch carries none.
         Only a format which stores a history to begin with (DASDAE) has
         one to lose, and only until it is read as a patch again.
         """
-        assert self.load_array is not None, "the caller checks for a loader"
-        data = self.load_array(row)
-        if data is None:
-            return None
         dims = tuple(str(row["dims"]).split(","))
-        if data.ndim != len(dims):
-            return None
         coord_map = {}
-        for axis, dim in enumerate(dims):
+        for dim in dims:
             envelope = _row_range(row, dim)
             if envelope is None:
                 return None
             lo, hi, step = envelope
-            units = row.get(f"_{dim}_units")
-            coord = get_coord(start=lo, stop=hi + step, step=step, units=units)
-            if len(coord) != data.shape[axis]:
-                return None
-            coord_map[dim] = coord
+            # a coordinate with no units is NaN in a frame, not None,
+            # and NaN would build a dimensionless quantity the patch
+            # path does not have.
+            units = None if _is_null(u := row.get(f"_{dim}_units")) else u
+            coord_map[dim] = get_coord(start=lo, stop=hi + step, step=step, units=units)
         coords = get_coord_manager(coord_map, dims=dims)
-        attrs = _attrs_from_row(row, dims)
-        return _Member(dims, data, coords, attrs)
+        return _MemberMeta(dims, coords, _attrs_from_row(row, dims))
+
+    def _member_from_meta(self, row: Mapping, meta: _MemberMeta) -> _Member | None:
+        """
+        The member a row describes, with its array read.
+
+        Returns None when the file did not deliver the shape the row
+        predicted, which the caller can only discover here.
+        """
+        assert self.load_array is not None, "the caller checks for a loader"
+        data = self.load_array(row)
+        if data is None or data.shape != meta.coords.shape:
+            return None
+        return _Member(meta.dims, data, meta.coords, meta.attrs)
 
     def _df_to_dict_list(self, df):
         """

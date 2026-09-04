@@ -43,23 +43,14 @@ from dascore.utils.time import to_datetime64, to_int, to_timedelta64
 
 _SANITIZE_RE = re.compile(r"[^a-z0-9_]+")
 
-# Attrs handled structurally or intentionally excluded from the index.
-# The ids are not indexed until the schema version which adds columns for
-# them; an index is for finding data, and an id is not a search term.
-# Attrs which are structure rather than metadata, and are never indexed.
-# `patch_id` is not here: it is an ordinary string, one per patch, and
-# indexing it is what lets a spool find a patch by the id it carries
-# rather than by loading every patch to look.
+# Attrs handled structurally rather than indexed: history is a list, so
+# never a scalar column, and dims and coords are structure.
 #
-# `processing_id` is. It advances on every operation, and a spool applies
-# operations as it loads -- a residual trim is a real `select` on the
-# patch -- so what the index recorded is not what the patch which comes
-# back carries. `patch_id` survives those same operations by definition,
-# which is what makes it, and not this, the one worth indexing.
-# history is a list, so never a scalar column; dims and coords are
-# structural. processing_id is indexed: it is lineage rather than a
-# describing attr, so the planner keeps it out of merge conflicts (see
-# _SOURCE_COLUMNS), but a provenance query needs to reach it.
+# Neither lineage id is here. `patch_id` is indexed so a spool can find a
+# patch by the id it carries rather than by loading every patch to look;
+# `processing_id` because a provenance query needs to reach it. Both are
+# lineage rather than describing attrs, so the planner keeps them out of
+# merge conflicts (see `_SOURCE_COLUMNS`).
 _SKIPPED_ATTRS = frozenset({"history", "dims", "coords"})
 
 
@@ -391,6 +382,20 @@ def hive_typed_attrs(path_attrs: dict[str, str]) -> dict[str, TypedValue]:
 def dump_path_attrs(path_attrs: dict[str, str] | None) -> str | None:
     """Serialize a path-attrs dict for the sources table (None when empty)."""
     return json.dumps(path_attrs, sort_keys=True) if path_attrs else None
+
+
+def coord_dtype_is_stateable(dtype) -> bool:
+    """Whether a coord of this dtype has an envelope the index can state.
+
+    A coordinate whose dtype no value kind covers (a boolean, say) is
+    still recorded by name -- a reader rebuilding a patch has to know the
+    patch holds it -- but nothing about its values is, so no query
+    predicate can be built against it either.
+    """
+    if not dtype:
+        return False
+    dtype = np.dtype(dtype)
+    return dtype.kind in "mM" or np.issubdtype(dtype, np.number) or dtype.kind in "USO"
 
 
 def _coord_record(name: str, summary) -> CoordRecord | None:

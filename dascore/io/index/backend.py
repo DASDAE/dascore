@@ -31,6 +31,7 @@ from dascore.io.index.ingest import (
     SourceRecord,
     assemble_source_records,
     attr_column_name,
+    coord_dtype_is_stateable,
     dump_path_attrs,
     hive_typed_attrs,
 )
@@ -1175,6 +1176,13 @@ class SQLiteIndexBackend:
             return out
         coords = self._add_envelope_objects(coords)
         for name, group in coords.groupby("coord_name"):
+            if not coord_dtype_is_stateable(group["dtype"].iloc[0]):
+                # Recorded by name alone, so there is no envelope to
+                # publish; null columns here would make the frame claim
+                # the coordinate has one. A coordinate whose dtype the
+                # index does state keeps its columns even when its values
+                # are all null, which the concat plan relies on.
+                continue
             pids = group["patch_id"]
             # last row wins for duplicate patch ids, like the mapping loop
             # this replaces.
@@ -1232,9 +1240,20 @@ class SQLiteIndexBackend:
         return set(self._attr_meta()["attr_name"])
 
     def coord_names(self) -> set[str]:
-        """Return coord names known to the index."""
-        df = self._fetch_df("SELECT DISTINCT coord_name FROM patch_coords")
-        return set(df["coord_name"])
+        """Return the coord names a query may select on.
+
+        A coordinate the index could only record by name states no
+        envelope, so no predicate can be built against it; it is not
+        selectable, and asking for it must say so rather than filter on
+        nothing. `coord_dims_map` still reports it -- what a patch holds
+        and what a query can reach are different questions.
+        """
+        sql = (
+            "SELECT DISTINCT pc.coord_name, cd.dtype FROM patch_coords pc "
+            "JOIN coord_defs cd ON cd.coord_def_id = pc.coord_def_id"
+        )
+        df = self._fetch_df(sql)
+        return set(df.loc[df["dtype"].map(coord_dtype_is_stateable), "coord_name"])
 
     def attr_units(self, name: str) -> dict[str, str | None]:
         """Return the canonical units the index stores one attr's kinds in."""
