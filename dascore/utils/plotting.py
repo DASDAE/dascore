@@ -193,20 +193,6 @@ def _maybe_invert_yaxis(ax, patch, dim, ascending=True):
         ax.invert_yaxis()
 
 
-def _in_a_fixed_unit(low, high, dtype):
-    """
-    Restate a calendar-unit pair in seconds.
-
-    A year and a month have no fixed length, so arithmetic on them is
-    done in an average one; the dates they name are exact, and seconds
-    measure the distance between those.
-    """
-    if np.datetime_data(dtype)[0] not in {"Y", "M"}:
-        return low, high
-    fixed = "datetime64[s]" if dtype.kind == "M" else "timedelta64[s]"
-    return low.astype(fixed), high.astype(fixed)
-
-
 def _cell_edge_limits(low, high, size):
     """
     Widen sample-centre limits to the outer edges of the cells.
@@ -216,24 +202,12 @@ def _cell_edge_limits(low, high, size):
     image one cell narrower than the patch. Widening by half a cell lands
     on the edges `get_gap_edges` gives the mesh, so both renderers cover
     the same ground. A lone sample has no step to halve, so its limits
-    pass through.
+    pass through, as does a span with no room left for another half cell.
     """
     if size < 2:
         return [low, high]
-    dtype = np.asarray(low).dtype
-    if dtype.kind in "mM":
-        low, high = _in_a_fixed_unit(low, high, dtype)
-        span = high - low
-        half_cell = span / (2 * (size - 1))
-        # A coarse unit divides as an integer, so a second-resolution axis
-        # would round its half step down to nothing; refine only then,
-        # since a span which survives the division is too long to state in
-        # nanoseconds without overflowing them.
-        if half_cell.astype("int64") == 0:
-            half_cell = span.astype("timedelta64[ns]") / (2 * (size - 1))
-        return [low - half_cell, high + half_cell]
-    # In float, since a narrow integer dtype wraps on the subtraction and a
-    # coordinate spanning most of the float range overflows it.
+    # In float, which is what the axis is drawn in: an integer dtype wraps
+    # on the subtraction, and a time unit divides a half step away.
     low, high = float(low), float(high)
     half_cell = (high - low) / (2 * (size - 1))
     if not np.isfinite(half_cell):
@@ -281,10 +255,16 @@ def _get_extents(dims_r, coords):
         if np.isnan(array_min) or np.isnan(array_max):
             array_min = 0
             array_max = len(array) - 1
-        lims[dim] += _cell_edge_limits(array_min, array_max, len(array))
+        lims[dim] += [array_min, array_max]
     # find datetime coords and convert to numpy mtimes
     _convert_datetimes(coords, lims)
     _convert_timedeltas(coords, lims)
+    # Widened after the conversion, where a half step is a fraction of a
+    # day rather than a whole number of whatever unit the coord states.
+    for dim in dims_r:
+        array = coords.get_array(dim) if hasattr(coords, "get_array") else coords[dim]
+        low, high = lims[dim]
+        lims[dim] = _cell_edge_limits(low, high, len(array))
     out = [x for dim in dims_r for x in lims[dim]]
     return out
 

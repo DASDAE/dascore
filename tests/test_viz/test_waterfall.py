@@ -18,7 +18,7 @@ from dascore.exceptions import ParameterError
 from dascore.units import get_quantity_str, percent
 from dascore.utils.gaps import get_gap_edges
 from dascore.utils.misc import suppress_warnings
-from dascore.utils.plotting import _cell_edge_limits
+from dascore.utils.plotting import _cell_edge_limits, _get_extents
 from dascore.utils.time import is_datetime64, to_timedelta64
 from dascore.viz._labels import BAR_GID, MAX_LABELS, MAX_RUNS, SEAM_GID
 from dascore.viz._lanes import string_colors
@@ -160,26 +160,31 @@ class TestWaterfall:
         assert _cell_edge_limits(low, high, size) == expected
 
     @pytest.mark.parametrize(
-        "low,high,size",
+        "step,size",
         [
+            # A half step of a second and a half, which no whole number of
+            # seconds is.
+            (np.timedelta64(3, "s"), 4),
             # Three centuries, which is more nanoseconds than there are.
-            (np.datetime64("1800-01-01", "s"), np.datetime64("2100-01-01", "s"), 1000),
-            # Two months, which are not two average months long.
-            (np.datetime64("2020-01", "M"), np.datetime64("2020-03", "M"), 3),
+            (np.timedelta64(110, "D"), 1000),
         ],
     )
-    def test_cell_edge_limits_on_awkward_time_units(self, low, high, size):
-        """A span too long for nanoseconds, and one in calendar units."""
-        one_second = np.timedelta64(1, "s")
-        # The dates are exact whatever unit names them, so the seconds
-        # between them are the oracle.
-        seconds = (high.astype("datetime64[s]") - low.astype("datetime64[s]")) / (
-            one_second
-        )
-        expected_half = seconds / (2 * (size - 1))
-        first, last = _cell_edge_limits(low, high, size)
-        assert (low - first) / one_second == pytest.approx(expected_half, abs=1)
-        assert last - high == low - first
+    def test_extent_half_step_on_awkward_time_spans(self, step, size):
+        """The padding is half a step whatever unit the step needs."""
+        start = np.datetime64("1800-01-01", "s")
+        time = start + np.arange(size) * step
+        low = _get_extents(("time",), {"time": time})[0]
+        first = mdates.date2num(dc.to_datetime64(time[0]))
+        half_step = step / np.timedelta64(2, "s")
+        assert (first - low) * 24 * 60 * 60 == pytest.approx(half_step, rel=1e-6)
+
+    def test_extent_half_step_in_calendar_units(self):
+        """A month is padded by half of the months it actually spans."""
+        time = np.datetime64("2020-01", "M") + np.arange(3)
+        low = _get_extents(("time",), {"time": time})[0]
+        first = mdates.date2num(dc.to_datetime64(time[0]))
+        # January to March is sixty days, so half a step is fifteen.
+        assert first - low == pytest.approx(15.0)
 
     def test_irregular_timedelta_coordinates_use_mesh(self, timedelta_patch):
         """Irregular timedelta coordinates are converted to seconds for meshes."""
