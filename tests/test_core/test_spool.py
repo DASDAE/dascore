@@ -29,6 +29,7 @@ from dascore.exceptions import (
     MissingPatchError,
     ParameterError,
     UnknownExampleError,
+    UnknownFiberFormatError,
 )
 from dascore.io.index.planned import PlanResolver
 from dascore.io.segy import SegyV1_0
@@ -974,6 +975,30 @@ class TestGetSpool:
             spool = Spool.from_file(terra15_das_example_path, fmt, ver)
         assert probe.call_count == 0
         assert len(spool)
+
+    def test_update_rereads_a_rewritten_version(self, tmp_path):
+        """A file rewritten in another version is re-sniffed, not assumed."""
+        path = tmp_path / "patch.h5"
+        patch = dc.get_example_patch()
+        patch.io.write(path, "dasdae")
+        spool = dc.spool(path)
+        assert len(spool) == 1
+        path.unlink()
+        patch.io.write(path, "dasdae")
+        assert len(spool.update()) == 1
+
+    def test_stated_format_is_believed(self, terra15_das_example_path):
+        """
+        A stated format is used as given, as dc.read and dc.scan use it.
+
+        Naming a format the file is not therefore yields what that reader
+        makes of the file rather than an error, which is the contract the
+        other two entry points already have.
+        """
+        spool = Spool.from_file(terra15_das_example_path, "DASDAE", "1")
+        assert len(spool) == 0
+        with pytest.raises(UnknownFiberFormatError):
+            Spool.from_file(terra15_das_example_path, "not_a_format", "1")
 
     def test_non_existent_file_raises(self):
         """A path that doesn't exist should raise."""
