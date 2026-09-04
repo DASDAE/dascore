@@ -197,15 +197,27 @@ def _cell_edge_limits(low, high, size):
     """
     Widen sample-centre limits to the outer edges of the cells.
 
-    An image extent gives the outer edges of the image, so handing it the
-    first and last coordinate values would draw every sample half a cell
-    from where it belongs and squeeze the image into one cell less than it
-    has. The mesh path already draws cells around their centres, and this
-    is what keeps the two renderers agreeing.
+    An image extent gives the image's outer edges, so the first and last
+    coordinate values would put every sample half a cell off and make the
+    image one cell narrower than the patch. Widening by half a cell lands
+    on the edges `get_gap_edges` gives the mesh, so both renderers cover
+    the same ground. A lone sample has no step to halve, so its limits
+    pass through.
     """
     if size < 2:
         return [low, high]
+    if np.asarray(low).dtype.kind in "mM":
+        # In nanoseconds, since a coarser unit divides as an integer and a
+        # second-resolution axis would round its half step down to nothing.
+        span = (high - low).astype("timedelta64[ns]")
+        half_cell = span / (2 * (size - 1))
+        return [low - half_cell, high + half_cell]
+    # In float, since a narrow integer dtype wraps on the subtraction and a
+    # coordinate spanning most of the float range overflows it.
+    low, high = float(low), float(high)
     half_cell = (high - low) / (2 * (size - 1))
+    if not np.isfinite(half_cell):
+        return [low, high]
     return [low - half_cell, high + half_cell]
 
 
