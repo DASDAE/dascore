@@ -74,7 +74,7 @@ def _get_attr_dict(header):
     for head_name, attr_name in attr_map.items():
         value = header[head_name]
         if hasattr(value, "shape"):
-            value = _maybe_unpack(value)
+            value = _scalar(value)
         out[attr_name] = unbyte(value)
     return out
 

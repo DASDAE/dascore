@@ -735,10 +735,16 @@ def _maybe_unpack(maybe_array):
         return maybe_array
     if not hasattr(maybe_array, "shape"):
         return maybe_array
-    # Through numpy, since the empty-tuple index a dataset wants is a label
-    # lookup on a pandas object and the [0] a pandas object wants is not
-    # what a zero-dimensional dataset understands.
-    return np.asarray(maybe_array).flat[0]
+    # A pandas object reads the empty-tuple index as a label rather than as
+    # "the whole of me", so it is asked by position.
+    if isinstance(maybe_array, pd.Series | pd.Index):
+        return maybe_array.to_numpy().flat[0]
+    value = maybe_array[()]
+    # An entry may itself hold an array, whole, and that array is the value;
+    # only a wrapper around one value is worth stripping.
+    if isinstance(value, np.ndarray) and value.size == 1:
+        value = value.flat[0]
+    return value
 
 
 @cache

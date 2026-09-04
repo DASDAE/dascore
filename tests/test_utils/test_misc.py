@@ -10,6 +10,7 @@ import warnings
 from io import BytesIO
 from pathlib import Path
 from threading import Lock
+from types import SimpleNamespace
 
 import numpy as np
 import pandas as pd
@@ -1295,7 +1296,7 @@ class TestMaybeUnpack:
             assert _maybe_unpack(h5["zero_d"]) == 5.0
             assert _maybe_unpack(h5["one_d"]) == 5.0
             assert _maybe_unpack(h5["text"]) == b"hello"
-            assert _maybe_unpack(h5["many"]) is not None
+            assert _maybe_unpack(h5["many"]).shape == (3,)
 
     def test_zero_dimensional_array_unpacks(self):
         """A 0-d array is a value with an array around it."""
@@ -1303,9 +1304,7 @@ class TestMaybeUnpack:
         assert not isinstance(out, np.ndarray)
         assert out == 5.0
 
-    @pytest.mark.parametrize(
-        "value", [np.float64(1.0), np.str_("a"), np.bytes_(b"a"), 1.0, "a"]
-    )
+    @pytest.mark.parametrize("value", [np.float64(1.0), np.str_("a"), np.bytes_(b"a")])
     def test_scalars_pass_through(self, value):
         """An unpacked value is returned as it is; a string cannot be indexed."""
         assert _maybe_unpack(value) is value
@@ -1314,3 +1313,14 @@ class TestMaybeUnpack:
     def test_pandas_single_element(self, value):
         """A one-element pandas object holds a value like any other."""
         assert _maybe_unpack(value) == 42
+
+    def test_sized_object_without_a_shape(self):
+        """Something claiming one element but no shape is left alone."""
+        value = SimpleNamespace(size=1)
+        assert _maybe_unpack(value) is value
+
+    def test_entry_holding_an_array_keeps_it_whole(self):
+        """A single entry which is itself an array is that array."""
+        value = np.empty((), dtype=object)
+        value[()] = np.array([1.0, 2.0])
+        assert np.array_equal(_maybe_unpack(value), np.array([1.0, 2.0]))
