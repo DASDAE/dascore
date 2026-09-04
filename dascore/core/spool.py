@@ -2351,7 +2351,7 @@ class Spool(NodeRepr, NamespaceOwner):
                 *[c for c in df.columns if str(c).endswith("_def_key")],
                 # a plan's outputs state a placeholder coordinate dtype
                 # for the same reason they state no def key
-                *[c for c in df.columns if str(c).endswith("_dtype")],
+                *[c for c in df.columns if str(c).endswith("_coord_dtype")],
             ]
             out = df.drop(columns=drop, errors="ignore")
             return out[sorted(out.columns)]

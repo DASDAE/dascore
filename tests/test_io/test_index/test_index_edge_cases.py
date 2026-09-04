@@ -975,8 +975,13 @@ class TestIngestEdges:
         assert len(merged) == 1
 
     @pytest.mark.parametrize("dtype", ["", np.dtype(bool)])
-    def test_unsupported_coord_dtype_skipped(self, dtype):
-        """A coord with a missing or unsupported dtype produces no record."""
+    def test_unsupported_coord_dtype_recorded_by_name(self, dtype):
+        """A coord the index cannot describe is still recorded by name.
+
+        Its values cannot be stated, but a reader rebuilding a patch
+        from the index has to know the patch holds it; a missing dtype
+        states nothing at all and produces no record.
+        """
 
         class _Stub:
             dtype: object = None
@@ -992,7 +997,16 @@ class TestIngestEdges:
         # dtype that none of the value-kind branches handle.
         stub = _Stub()
         stub.dtype = dtype
-        assert _coord_record("x", stub) is None
+        record = _coord_record("x", stub)
+        if dtype in ("", None):  # nothing stated, nothing recorded
+            assert record is None
+            return
+        assert record is not None
+        assert record.coord_name == "x"
+        assert record.coord_dims == "x"
+        # named, but no envelope: the values cannot be stated
+        assert record.min_num is None and record.max_num is None
+        assert record.min_ns is None and record.min_str is None
 
     def test_multipatch_source_gets_positional_ids(self):
         """Multi-patch sources get positional source_patch_keys."""

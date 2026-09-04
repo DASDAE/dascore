@@ -2003,13 +2003,72 @@ class TestChunkFromIndex:
         assert np.array_equal(fast.data, slow.data)
         assert fast.coords == slow.coords
         assert dict(fast.attrs) == dict(slow.attrs)
+        # the lineage ids are folded from the members, so they have to
+        # come back from the row rather than at their defaults
+        assert fast.attrs.patch_id
+
+    def test_history_is_not_rebuilt(self, tmp_path_factory, calls, monkeypatch):
+        """A member built from the index states no history, by design.
+
+        The index holds none, being a list rather than a column, so a
+        merge which takes the array path carries none; only a format
+        which stores a history has one to lose.
+        """
+        path = tmp_path_factory.mktemp("chunk_history")
+        spool = ex.get_example_spool(
+            "random_das", length=3, time_gap=np.timedelta64(0, "s")
+        )
+        for num, patch in enumerate(spool):
+            patch.pass_filter(time=(None, 100)).io.write(path / f"p{num}.h5", "dasdae")
+        file_spool = dc.spool(path).update()
+        assert file_spool[0].attrs.history  # the file kept it
+        fast = file_spool.chunk(time=None)[0]
+        assert calls["array"] == 3
+        assert fast.attrs.history == ()
+        self._force_patch_path(monkeypatch)
+        slow = file_spool.chunk(time=None)[0]
+        assert slow.attrs.history
+        # and history is the only thing the two paths disagree on
+        differs = {
+            k
+            for k in set(dict(fast.attrs)) | set(dict(slow.attrs))
+            if dict(fast.attrs).get(k) != dict(slow.attrs).get(k)
+        }
+        assert differs == {"history"}
+        # processing_id is indexed, so the fold sees what the members
+        # carried rather than a default
+        assert fast.attrs.processing_id == slow.attrs.processing_id
+        assert fast.attrs.processing_id
+
+    def test_unstateable_coord_loads_patch(self, tmp_path_factory, calls):
+        """A coordinate the index cannot describe is still known to exist.
+
+        Its values cannot be stated, so the member must be loaded; the
+        catalog records the name so the fast path knows to stand aside.
+        """
+        path = tmp_path_factory.mktemp("chunk_bool_coord")
+        spool = ex.get_example_spool(
+            "random_das", length=3, time_gap=np.timedelta64(0, "s")
+        )
+        for num, patch in enumerate(spool):
+            quality = np.arange(len(patch.get_coord("distance"))) % 2 == 0
+            patch.update_coords(quality=("distance", quality)).io.write(
+                path / f"p{num}.h5", "dasdae"
+            )
+        file_spool = dc.spool(path).update()
+        assert "quality" in file_spool._catalog.backend.coord_dims_map()
+        out = file_spool.chunk(time=None)[0]
+        assert "quality" in out.coords.coord_map
+        assert calls["array"] == 0
 
     def test_trimmed_member_loads_patch(
         self, dasdae_directory_spool, calls, monkeypatch
     ):
-        """A member the plan trims is loaded as a patch, on its own grid.
+        """One trimmed member sends its whole merge down the patch path.
 
-        The untrimmed members beside it still take the array path.
+        A loaded patch can carry what the index cannot hold, so mixing
+        the two sources within one merge could make it refuse attrs or
+        coordinates it accepts when every member is loaded alike.
         """
         contents = dasdae_directory_spool.get_contents().sort_values("time_min")
         # a range starting inside the second file trims it, keeps the rest
@@ -2018,8 +2077,8 @@ class TestChunkFromIndex:
         narrowed = dasdae_directory_spool.select(time=(start, None))
         out = narrowed.chunk(time=None)[0]
         assert out.get_coord("time").min() >= start
-        assert calls["patch"] == 1
-        assert calls["array"] == len(dasdae_directory_spool) - 2
+        assert calls["array"] == 0
+        assert calls["patch"] == len(dasdae_directory_spool) - 1
         # and the mix of paths assembles what the patch path alone would
         self._force_patch_path(monkeypatch)
         slow = narrowed.chunk(time=None)[0]
@@ -2095,6 +2154,25 @@ class TestChunkFromIndex:
             load_array=lambda row: np.zeros(12),
         )
         assert rank._member_from_index(row) is None
+
+    def test_row_range_refuses_what_it_cannot_state(self):
+        """A range the row states differently than the file had is refused."""
+        row_range = assembly_module._row_range
+        base = {"x_min": 0.0, "x_max": 4.0, "x_step": 1.0}
+        # no stored dtype: the envelope is taken as it stands
+        assert row_range(base, "x") == (0.0, 4.0, 1.0)
+        # an integer coordinate comes back an integer one
+        typed = base | {"_x_coord_dtype": "int64"}
+        assert [type(x).__name__ for x in row_range(typed, "x")] == ["int64"] * 3
+        # a descending coordinate: the row states the value order, not
+        # the sample order, so its start is unknown
+        assert row_range(base | {"x_step": -1.0}, "x") is None
+        # a converted envelope is float in truth, whatever the file held
+        converted = typed | {"_x_units_source": "cm", "_x_units": "m"}
+        assert row_range(converted, "x") is None
+        # and past 2**53 a float cannot have held the integer exactly
+        big = typed | {"x_min": 0.0, "x_max": float(2**53 + 8)}
+        assert row_range(big, "x") is None
 
     def test_attrs_from_row(self):
         """The row's attrs are the file's; bookkeeping and envelopes are not."""

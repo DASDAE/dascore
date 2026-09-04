@@ -219,8 +219,15 @@ def _attrs_from_row(row: Mapping, dims: tuple[str, ...]) -> dc.PatchAttrs:
         if not str(k).startswith("_") and k not in skip and not _is_null(v)
     }
     out["dims"] = dims
-    out["patch_id"] = row.get("patch_id", "")
-    out["_source_patch_key"] = row.get("source_patch_key", "")
+    # the lineage ids are source columns, so the comprehension drops
+    # them; a merged patch folds them, and folding nothing is not the
+    # same as folding what the members carried. A moved source has its
+    # patch id cleared until it is read again.
+    for name in ("patch_id", "processing_id"):
+        if not _is_null(value := row.get(name)):
+            out[name] = value
+    if not _is_null(key := row.get("source_patch_key")):
+        out["_source_patch_key"] = key
     return dc.PatchAttrs.from_dict(out)
 
 
@@ -248,13 +255,24 @@ def _row_range(row: Mapping, dim: str) -> tuple[Any, Any, Any] | None:
             value = value.to_timedelta64()
         values.append(value)
     lo, hi, step = values
-    stored = row.get(f"_{dim}_dtype")
-    if isinstance(stored, str) and np.issubdtype(np.dtype(stored), np.number):
-        # the frame holds every numeric envelope as float; the file's
-        # integer coordinate must come back an integer one
-        kind = np.dtype(stored).type
-        lo, hi, step = kind(lo), kind(hi), kind(step)
-    return lo, hi, step
+    if step < np.zeros((), dtype=np.asarray(step).dtype):
+        # the envelope orders values, not samples; a descending
+        # coordinate's start is its maximum, which the row does not say
+        return None
+    stored = row.get(f"_{dim}_coord_dtype")
+    if not (isinstance(stored, str) and np.issubdtype(np.dtype(stored), np.number)):
+        return lo, hi, step
+    # The frame holds every numeric envelope as float, so an integer
+    # coordinate must be cast back. That is only right when the values
+    # are the file's own: a unit conversion made them float in truth,
+    # and past 2**53 a float cannot have held the integer exactly.
+    source_units = row.get(f"_{dim}_units_source")
+    if not _is_null(source_units) and source_units != row.get(f"_{dim}_units"):
+        return None
+    kind = np.dtype(stored).type
+    if np.issubdtype(kind, np.integer) and max(abs(lo), abs(hi)) > 2**53:
+        return None
+    return kind(lo), kind(hi), kind(step)
 
 
 @dataclass
@@ -336,8 +354,13 @@ class PatchAssembler:
         buffer, offset, axis, dims = None, 0, None, None
         coords, attrs, summaries = [], [], []
         target_units = None
-        for patch_kwargs in df_dict_list:
-            member = self._member_from_index(patch_kwargs)
+        # All members come from the index or none do: a loaded patch can
+        # carry what the index cannot hold (an array attr, a coordinate
+        # it could not represent), and the merge would then see it on
+        # some members and not others, refusing what it accepts whole.
+        from_index = self._members_from_index(df_dict_list)
+        for num, patch_kwargs in enumerate(df_dict_list):
+            member = None if from_index is None else from_index[num]
             if member is None:
                 patch = self._load_trimmed_patch(patch_kwargs, joined)
                 patch, target_units = _match_merge_units(patch, merge_dim, target_units)
@@ -406,6 +429,18 @@ class PatchAssembler:
         new_attrs = combine_patch_attrs(attrs, **attr_kwargs)
         return dc.Patch(data=buffer, coords=new_coord, attrs=new_attrs, dims=list(dims))
 
+    def _members_from_index(self, rows) -> list[_Member] | None:
+        """Every member built from the index, or None if any cannot be."""
+        if self.load_array is None:
+            return None
+        members = []
+        for row in rows:
+            member = self._member_from_index(row)
+            if member is None:
+                return None
+            members.append(member)
+        return members
+
     def _member_from_index(self, row: Mapping) -> _Member | None:
         """
         Build a member from its index row and the format's raw array.
@@ -417,9 +452,13 @@ class PatchAssembler:
         Anything the row cannot state (a dimension without a range, an
         array whose shape the row did not predict) sends the member
         down the patch path instead.
+
+        The index holds no history, a list rather than a column, so a
+        member built here states none and the merged patch carries none.
+        Only a format which stores a history to begin with (DASDAE) has
+        one to lose, and only until it is read as a patch again.
         """
-        if self.load_array is None:
-            return None
+        assert self.load_array is not None, "the caller checks for a loader"
         data = self.load_array(row)
         if data is None:
             return None

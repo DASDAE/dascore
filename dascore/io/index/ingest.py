@@ -56,7 +56,11 @@ _SANITIZE_RE = re.compile(r"[^a-z0-9_]+")
 # patch -- so what the index recorded is not what the patch which comes
 # back carries. `patch_id` survives those same operations by definition,
 # which is what makes it, and not this, the one worth indexing.
-_SKIPPED_ATTRS = frozenset({"history", "dims", "coords", "processing_id"})
+# history is a list, so never a scalar column; dims and coords are
+# structural. processing_id is indexed: it is lineage rather than a
+# describing attr, so the planner keeps it out of merge conflicts (see
+# _SOURCE_COLUMNS), but a provenance query needs to reach it.
+_SKIPPED_ATTRS = frozenset({"history", "dims", "coords"})
 
 
 @dataclass(frozen=True)
@@ -412,7 +416,7 @@ def _coord_record(name: str, summary) -> CoordRecord | None:
     )
     dtype = np.dtype(summary.dtype) if summary.dtype else None
     if dtype is None:
-        return None  # unsupported coord representation: skip, per design
+        return None  # nothing to record: not even a dtype was stated
     if dtype.kind in "mM":  # datetime64 ("M") / timedelta64 ("m")
         is_datetime = dtype.kind == "M"
         convert = to_datetime64 if is_datetime else to_timedelta64
@@ -446,7 +450,11 @@ def _coord_record(name: str, summary) -> CoordRecord | None:
             max_str=str(summary.max),
             **common,
         )
-    return None  # unsupported coord representation: skip, per design
+    # A kind with no envelope representation (a boolean coordinate, say)
+    # is still recorded by name: the catalog states that the patch holds
+    # it, which is what a reader rebuilding the patch from the index
+    # must know, even though nothing about its values can be stated.
+    return CoordRecord(value_kind="num", **common)
 
 
 def _envelope(coords: tuple[CoordRecord, ...], name: str, kind: str):

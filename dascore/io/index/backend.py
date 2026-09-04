@@ -1188,7 +1188,7 @@ class SQLiteIndexBackend:
             # the stored dtype: an envelope alone cannot say whether 0.0
             # to 299.0 by 1.0 labels integers, and a member rebuilt from
             # the row must match the patch the file would give
-            out[f"_{name}_dtype"] = out["patch_id"].map(dtypes)
+            out[f"_{name}_coord_dtype"] = out["patch_id"].map(dtypes)
             # the ORIGINAL unit spelling, matching the native envelope
             # values; chunk partitioning normalizes compatible spellings
             # to one unit per dimensionality before using this
