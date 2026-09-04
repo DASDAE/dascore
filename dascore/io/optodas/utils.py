@@ -27,6 +27,12 @@ def _get_opto_das_version_str(hdf_fi) -> str:
     return version_str
 
 
+def _scalar(node):
+    """Read a header field which holds exactly one value."""
+    assert node.size == 1, f"expected one value, got {node.size}"
+    return _maybe_unpack(node)
+
+
 def _get_coord_manager(fi, snap=True):
     """Get the distance ranges and spacing."""
     header = fi["header"]
@@ -35,14 +41,14 @@ def _get_coord_manager(fi, snap=True):
     coords = {}
     for index, (dim, unit) in enumerate(zip(dims, units)):
         crange = header["dimensionRanges"][f"dimension{index}"]
-        step = _maybe_unpack(crange["unitScale"])
+        step = _scalar(crange["unitScale"])
 
         # Special case for time.
         if dim == "time":
             step = dc.to_timedelta64(step)
-            t1 = dc.to_datetime64(_maybe_unpack(header["time"]))
-            start = t1 + _maybe_unpack(crange["min"]) * step
-            stop = t1 + (_maybe_unpack(crange["max"]) + 1) * step
+            t1 = dc.to_datetime64(_scalar(header["time"]))
+            start = t1 + _scalar(crange["min"]) * step
+            stop = t1 + (_scalar(crange["max"]) + 1) * step
             coord = get_coord(min=start, max=stop, step=step, units=unit)
         else:  # and distance
             # The channels are ints so we multiply by step to get distance.

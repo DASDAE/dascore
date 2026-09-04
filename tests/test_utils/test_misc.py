@@ -1309,3 +1309,8 @@ class TestMaybeUnpack:
     def test_scalars_pass_through(self, value):
         """An unpacked value is returned as it is; a string cannot be indexed."""
         assert _maybe_unpack(value) is value
+
+    @pytest.mark.parametrize("value", [pd.Series([42]), pd.Index([42])])
+    def test_pandas_single_element(self, value):
+        """A one-element pandas object holds a value like any other."""
+        assert _maybe_unpack(value) == 42

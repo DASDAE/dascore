@@ -735,8 +735,10 @@ def _maybe_unpack(maybe_array):
         return maybe_array
     if not hasattr(maybe_array, "shape"):
         return maybe_array
-    value = maybe_array[()]
-    return value.flat[0] if isinstance(value, np.ndarray) else value
+    # Through numpy, since the empty-tuple index a dataset wants is a label
+    # lookup on a pandas object and the [0] a pandas object wants is not
+    # what a zero-dimensional dataset understands.
+    return np.asarray(maybe_array).flat[0]
 
 
 @cache
