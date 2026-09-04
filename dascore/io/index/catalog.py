@@ -48,6 +48,7 @@ from dascore.utils.misc import (
     express_range_for_coord,
     is_range,
 )
+from dascore.utils.patch import record_call
 from dascore.utils.paths import is_memory_uri
 from dascore.utils.pd import adjust_segments, relative_ranges_to_absolute
 
@@ -130,12 +131,22 @@ def _row_source_patch_key(row: Mapping) -> str:
     return normalize_source_patch_key(row.get("source_patch_key"))
 
 
-def apply_exact_residuals(patch: dc.Patch, residuals) -> dc.Patch:
+def apply_exact_residuals(patch: dc.Patch, residuals, hinted=()) -> dc.Patch:
     """
     Apply a view's exact residual selections to a loaded patch.
 
     Shared by catalog row resolution and plan-member loading so the
     two-stage select contract has exactly one implementation.
+
+    ``hinted`` names the coordinates whose bounds the reader was given
+    *and* cut something with. A selection carried out that way leaves
+    its `select` nothing to do, and a call which changes nothing records
+    nothing; the selection still happened, so it is recorded here
+    instead. Without this a trimmed patch would state the id of the
+    untrimmed one, and two patches holding the same samples would
+    disagree over which route trimmed them. A selection which cuts
+    nothing is passed no hint, so it records nothing here either, as it
+    would not on a patch.
     """
     for coords, samples in residuals:
         coord_map = patch.coords.coord_map
@@ -146,8 +157,15 @@ def apply_exact_residuals(patch: dc.Patch, residuals) -> dc.Patch:
         }
         if usable:
             # residual bounds are already absolute (relative queries
-            # resolve to absolute before the residual is recorded).
-            patch = patch.select(**usable, samples=samples, relative=False)
+            # resolve to absolute before the residual is recorded), and
+            # only the arguments a caller would give are passed: the
+            # defaults bind the same either way for the ids, but they
+            # would show in the history.
+            called = dict(usable) if not samples else dict(usable, samples=True)
+            out = patch.select(**called, relative=False)
+            if out is patch and any(name in hinted for name in usable):
+                out = record_call(out, patch, dc.Patch.select, (), called)
+            patch = out
     return patch
 
 
@@ -1072,7 +1090,9 @@ class PatchCatalog:
                 )
         trim_hint.update(extra_trim or {})
         patch = self.resolver.resolve(row, **trim_hint)
-        return apply_exact_residuals(patch, self._residuals)
+        # a row nothing narrowed was read whole, so its hints cut nothing
+        hinted = set(trim_hint) if row.get("_modified") else set()
+        return apply_exact_residuals(patch, self._residuals, hinted=hinted)
 
     def __iter__(self):
         """

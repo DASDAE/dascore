@@ -657,12 +657,6 @@ class TestLineageIds:
         It is lineage rather than a describing attr, so merging never
         compares it (see `_SOURCE_COLUMNS`); it is folded from the
         members instead.
-
-        What the column states is not always what loading returns. A
-        value trim is pushed into the read, so no operation runs and the
-        id stands; a samples trim is a real `select` on the loaded patch
-        and advances it. Both are pinned here, since a provenance query
-        has to know which it is looking at.
         """
         patch = dc.get_example_patch().pass_filter(time=(1, 10))
         patch.io.write(tmp_path / "filtered.h5", "dasdae")
@@ -670,16 +664,46 @@ class TestLineageIds:
         indexed = spool.get_contents()["processing_id"].iloc[0]
         assert indexed == spool[0].attrs.processing_id
         assert indexed
-        # a value trim is read that way; the id it states is the id it loads
-        time = spool[0].get_coord("time")
-        valued = spool.select(time=(time.min(), time.min() + 10 * time.step))
-        assert valued[0].shape != patch.shape  # the trim really happened
-        assert valued.get_contents()["processing_id"].iloc[0] == indexed
-        assert valued[0].attrs.processing_id == indexed
-        # a samples trim selects after loading, which advances the id
-        sampled = spool.select(time=(0, 10), samples=True)
-        assert sampled.get_contents()["processing_id"].iloc[0] == indexed
-        assert sampled[0].attrs.processing_id != indexed
+
+    @pytest.mark.parametrize("samples", [False, True])
+    def test_a_trim_records_what_a_trim_records(self, tmp_path, samples):
+        """
+        Trimming through a spool records what trimming the patch records.
+
+        A spool may carry a selection out by handing its bounds to the
+        reader rather than by selecting afterwards. That is an
+        optimization, so it must not show: the ids and history of the
+        patch which comes back are those of the same `select` applied to
+        the patch the spool would otherwise have loaded.
+        """
+        patch = dc.get_example_patch().pass_filter(time=(1, 10))
+        patch.io.write(tmp_path / "filtered.h5", "dasdae")
+        spool = dc.spool(tmp_path).update()
+        whole = spool[0]
+        time = whole.get_coord("time")
+        window = (0, 10) if samples else (time.min(), time.min() + 10 * time.step)
+        through_spool = spool.select(time=window, samples=samples)[0]
+        on_patch = whole.select(time=window, samples=samples)
+        assert through_spool.shape == on_patch.shape != whole.shape
+        assert through_spool.attrs.processing_id == on_patch.attrs.processing_id
+        assert through_spool.attrs.processing_id != whole.attrs.processing_id
+        assert through_spool.attrs.history == on_patch.attrs.history
+
+    def test_a_trim_which_cuts_nothing_records_nothing(self, tmp_path):
+        """A selection which leaves the patch whole is not an operation.
+
+        The same selection on the patch hands it straight back, so
+        neither route records anything.
+        """
+        patch = dc.get_example_patch().pass_filter(time=(1, 10))
+        patch.io.write(tmp_path / "filtered.h5", "dasdae")
+        spool = dc.spool(tmp_path).update()
+        whole = spool[0]
+        time = whole.get_coord("time")
+        through_spool = spool.select(time=(time.min(), time.max()))[0]
+        assert through_spool.shape == whole.shape
+        assert through_spool.attrs.processing_id == whole.attrs.processing_id
+        assert through_spool.attrs.history == whole.attrs.history
 
     def test_a_trim_keeps_the_id_it_says_it_keeps(self, written_spool):
         """The index and the patch which loads must not disagree."""

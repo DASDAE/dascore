@@ -251,6 +251,31 @@ def _stamp(patch, attrs, patch_func, args, kwargs):
     )
 
 
+def record_call(out, patch, patch_func, args, kwargs):
+    """
+    Return ``out`` carrying what a call to ``patch_func`` records.
+
+    The history string and the two ids, in one new attrs object: an
+    operation should cost one new patch, not one per thing it stamps.
+
+    Public because a caller which realized an operation some other way
+    has to record the same thing. A spool pushes a selection into the
+    read, so the `select` it then applies has nothing left to do and
+    hands the patch straight through; the selection still happened, and
+    what it records must not depend on which way it was carried out.
+    """
+    func = getattr(patch_func, "raw_function", patch_func)
+    # what the function itself declared, so a call recorded here says
+    # exactly what the same call made directly would (`select` records
+    # its ids and no history, and must here too)
+    history = getattr(patch_func, "_declared", {}).get("history", "full")
+    hist_str = _get_history_str(patch, func, *args, _history=history, **kwargs)
+    attrs = _maybe_add_history_str(out.attrs, hist_str)
+    if ids_enabled():
+        attrs = _stamp(patch, attrs, patch_func, args, kwargs)
+    return out if attrs is out.attrs else out.update(attrs=attrs)
+
+
 def _op_from_call(patch_func, *args, **kwargs):
     """Return the operation a call to a patch function is."""
     return PatchOp.from_call(patch_func, args, kwargs)
@@ -401,23 +426,11 @@ def patch_function(
             attr_updates = {}
             if data_type is not None:
                 attr_updates["data_type"] = data_type
-            # attach history string. Need to consider something a bit less hacky.
+            # Only when something new came back: an operation which
+            # handed the patch straight through did nothing, and nothing
+            # is what it records.
             if out is not patch and hasattr(out, "attrs"):
-                hist_str = _get_history_str(
-                    patch, func, *args, _history=history, **kwargs
-                )
-                attrs = _maybe_add_history_str(out.attrs, hist_str)
-                # What was done, folded into what the input carried, into
-                # the same attrs object the history went into: an operation
-                # should cost one new patch, not one per thing it stamps.
-                #
-                # Only when something new came back: an operation which
-                # handed the patch straight through did nothing, and nothing
-                # is what it records.
-                if ids_enabled():
-                    attrs = _stamp(patch, attrs, patch_func, args, kwargs)
-                if attrs is not out.attrs:
-                    out = out.update(attrs=attrs)
+                out = record_call(out, patch, patch_func, args, kwargs)
             if attr_updates and hasattr(out, "attrs"):
                 out = out.update_attrs(**attr_updates)
             return out
