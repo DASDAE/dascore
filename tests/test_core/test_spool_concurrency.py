@@ -5,6 +5,7 @@ from __future__ import annotations
 import multiprocessing
 import sys
 import threading
+import warnings
 from concurrent.futures import Future, ProcessPoolExecutor, ThreadPoolExecutor
 from contextlib import closing
 from functools import wraps
@@ -27,6 +28,7 @@ from dascore.exceptions import (
 )
 from dascore.io import FiberIO
 from dascore.io.dasdae.core import DASDAEV1
+from dascore.io.index import indexer as indexer_module
 from dascore.utils.misc import suppress_warnings
 
 
@@ -42,6 +44,9 @@ class _ScanErrorFormat(FiberIO):
 
     def scan(self, resource: Path, **kwargs):
         """Raise the scan error requested by the filename."""
+        if resource.stem == "warning":
+            warnings.warn("unsupported test source", RuntimeWarning)
+            return []
         if resource.stem == "dependency":
             raise DependencyError("incompatible test reader")
         raise ValueError("unreadable test source")
@@ -347,27 +352,32 @@ class TestUpdateExecutor:
             serial.indexer.close()
             parallel.indexer.close()
 
-    @pytest.mark.parametrize("kind", ["dependency", "corrupt"])
-    @pytest.mark.parametrize("action", ["always", "error"])
+    @pytest.mark.parametrize("kind", ["dependency", "corrupt", "warning"])
+    @pytest.mark.parametrize("action", ["always", "error", "ignore"])
     def test_scan_warnings_in_caller(self, directory, client, kind, action):
         """Caller warning capture and error filters apply across spawned workers."""
         source = directory / f"{kind}.scanerror"
         source.write_text("unreadable")
         root = dc.spool(directory)
-        message = (
-            "incompatible test reader" if kind == "dependency" else "Failed to scan"
-        )
+        message = {
+            "dependency": "incompatible test reader",
+            "corrupt": "Failed to scan",
+            "warning": "unsupported test source",
+        }[kind]
+        category = RuntimeWarning if kind == "warning" else UserWarning
         try:
             with suppress_warnings(action=action, record=True) as caught:
                 if action == "error":
-                    with pytest.raises(UserWarning, match=message):
+                    with pytest.raises(category, match=message):
                         root.update(progress=False, client=client)
                     assert not root.indexer._initial_update_done
                 else:
                     root.update(progress=False, client=client)
                     assert len(root) == 12
-                    assert len(caught) == 1
-                    assert message in str(caught[0].message)
+                    assert len(caught) == (0 if action == "ignore" else 1)
+                    if caught:
+                        assert message in str(caught[0].message)
+                        assert caught[0].category is category
         finally:
             root.indexer.close()
 
@@ -465,8 +475,8 @@ class TestUpdateBatches:
         finally:
             root.indexer.close()
 
-    def test_failed_collection_closes_results(self, directory):
-        """A caller-side error closes results even while its traceback lives."""
+    def test_interrupted_collection_closes_results(self, directory, monkeypatch):
+        """An interrupted collection closes results while its traceback lives."""
         closed = threading.Event()
 
         class Client:
@@ -478,14 +488,15 @@ class TestUpdateBatches:
                 finally:
                     closed.set()
 
-        (directory / "corrupt.scanerror").write_text("unreadable")
+        def interrupt(results, *args, **kwargs):
+            """Interrupt progress reporting with the source iterator suspended."""
+            next(results)
+            raise KeyboardInterrupt
+
+        monkeypatch.setattr(indexer_module, "track", interrupt)
         root = dc.spool(directory)
         try:
-            with (
-                config_context(debug=False),
-                suppress_warnings(action="error"),
-                pytest.raises(UserWarning, match="Failed to scan") as exc_info,
-            ):
+            with pytest.raises(KeyboardInterrupt) as exc_info:
                 root.update(client=Client())
             assert exc_info.traceback
             assert closed.is_set()
