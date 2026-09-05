@@ -15,6 +15,7 @@ from typing import Any, Literal
 import numpy as np
 import pandas as pd
 
+from dascore.config import get_config
 from dascore.constants import SpoolType
 from dascore.exceptions import PatchConversionError
 from dascore.utils.misc import optional_import
@@ -87,10 +88,13 @@ def _samples_per_block(block_size, dtype, sizes, dim) -> int | None:
     """
     How many samples along ``dim`` fit in one block, or None for no limit.
 
+    A budget of zero is no limit rather than no samples: it is how a
+    caller says one block per source patch.
+
     A block's other dimensions are whole, so its size grows only along
     the merge dimension: one sample of it costs the product of the rest.
     """
-    if block_size is None:
+    if not block_size:
         return None
     row_bytes = dtype.itemsize
     for name, size in sizes.items():
@@ -224,7 +228,7 @@ def spool_to_xarray(
     group: str | typing.Sequence[str] | None = None,
     tolerance=1.5,
     conflict: Literal["drop", "raise", "keep_first"] = "raise",
-    block_size: str | int | None = "128MiB",
+    block_size: str | int | None = None,
 ):
     """
     Convert a spool to a lazy, dask-backed xarray DataTree.
@@ -254,10 +258,12 @@ def spool_to_xarray(
         How attribute conflicts within a segment resolve, as in `chunk`.
     block_size
         The largest a single dask block may be, as a byte count or a
-        string dask parses ("128MiB", "1GB"). A source patch bigger than
+        string dask parses ("256MiB", "1GB"). A source patch bigger than
         this is read in several windows along ``dim`` rather than whole,
-        so one block never has to hold a whole large file. None reads
-        every source patch as one block. A patch whose format cannot
+        so one block never has to hold a whole large file. None takes
+        the configured ``xarray_block_size`` (256 MiB by default); zero
+        reads every source patch as one block, which makes any selection
+        touching a patch read all of it. A patch whose format cannot
         hand back a window (see `FiberIO.read_array`) stays one block
         whatever this says: splitting it would read the file once per
         block instead of once.
@@ -292,6 +298,8 @@ def spool_to_xarray(
     xr = optional_import("xarray")
     dask = optional_import("dask")
     da = optional_import("dask.array")
+    if block_size is None:
+        block_size = get_config().xarray_block_size
     if isinstance(block_size, str):
         block_size = optional_import("dask.utils").parse_bytes(block_size)
     # function-level to avoid circular imports through the package root

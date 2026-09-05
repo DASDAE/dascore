@@ -719,7 +719,7 @@ class TestToXarrayBlockSize:
     def test_a_member_splits_into_several_blocks(self, file_spool):
         """A block ceiling below a member's size cuts it into pieces."""
         quarter = file_spool[0].data.nbytes // 4
-        whole = self._leaf(file_spool.io.to_xarray(block_size=None))
+        whole = self._leaf(file_spool.io.to_xarray(block_size=0))
         split = self._leaf(file_spool.io.to_xarray(block_size=quarter))
         assert whole.data.npartitions == len(file_spool)
         assert split.data.npartitions == 4 * len(file_spool)
@@ -770,6 +770,18 @@ class TestToXarrayBlockSize:
         """A file well under the default ceiling is still one block."""
         data = self._leaf(file_spool.io.to_xarray())
         assert data.data.npartitions == len(file_spool)
+
+    def test_the_config_sets_the_default(self, file_spool):
+        """An unset `block_size` takes the configured ceiling."""
+        quarter = file_spool[0].data.nbytes // 4
+        with config_context(xarray_block_size=quarter):
+            configured = self._leaf(file_spool.io.to_xarray())
+        passed = self._leaf(file_spool.io.to_xarray(block_size=quarter))
+        assert configured.data.chunks == passed.data.chunks
+        # and an argument still wins over the configured value
+        with config_context(xarray_block_size=quarter):
+            override = self._leaf(file_spool.io.to_xarray(block_size=0))
+        assert override.data.npartitions == len(file_spool)
 
     def test_a_piece_falling_back_reads_its_own_bounds(self, file_spool, monkeypatch):
         """A piece whose window read fails still loads its own samples.
@@ -844,3 +856,10 @@ class TestBlockPieces:
 
         limit = _samples_per_block(10, np.dtype("float64"), {"x": 100, "t": 5}, "t")
         assert limit == 1
+
+    def test_a_zero_budget_is_no_limit(self):
+        """Zero says one block per patch, not a block holding no samples."""
+        from dascore.xarray.spool import _samples_per_block  # noqa: PLC0415
+
+        assert _samples_per_block(0, np.dtype("float64"), {"t": 5}, "t") is None
+        assert _samples_per_block(None, np.dtype("float64"), {"t": 5}, "t") is None
