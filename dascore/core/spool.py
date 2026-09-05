@@ -1519,13 +1519,21 @@ class Spool(NodeRepr, NamespaceOwner):
         if value <= 0:
             msg = f"Spool.split requires a positive size or count, got {value}."
             raise ParameterError(msg)
+        length = len(self)
         start = 0
         if count is not None:
-            step = int(np.ceil(len(self) / value))
+            step = int(np.ceil(length / value))
         else:
             step = int(np.ceil(value))  # tolerate a non-integral size
-        while start < len(self):
-            yield self[start : start + step]
+        if not length:
+            return
+        ids = self._catalog.ordered_ids()
+        length = len(ids)
+        if count is not None:
+            step = int(np.ceil(length / value))
+        while start < length:
+            catalog = self._catalog.window(slice(start, start + step), ids=ids)
+            yield self._new_from_catalog(catalog)
             start += step
 
     @compose_docstring(progress_desc=progress_description)

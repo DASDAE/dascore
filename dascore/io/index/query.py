@@ -741,7 +741,7 @@ def apply_residuals(
         keep = col.map(
             lambda x: bool(pattern.search(x)) if isinstance(x, str) else False
         )
-        df = df[keep]
+        df = df[keep.astype(bool)]
     return df
 
 
