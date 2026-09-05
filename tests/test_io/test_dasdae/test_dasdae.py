@@ -113,6 +113,27 @@ class TestWriteDASDAE:
 class TestReadDASDAE:
     """Test for reading a dasdae format."""
 
+    @pytest.mark.parametrize(
+        "indexers", [{"distance": 3}, {"time": 2}, {"distance": 3, "time": 2}]
+    )
+    @pytest.mark.parametrize("drop", [False, True])
+    def test_indexed_scalar_roundtrip(self, random_patch, tmp_path, indexers, drop):
+        """Indexed channels and scalar patches can be saved, scanned, and read."""
+        count = random_patch.shape[0]
+        patch = random_patch.update_coords(
+            channel=("distance", np.array(["sensor"] * count)),
+            delay=("distance", np.arange(count) * np.timedelta64(1, "ms")),
+        ).isel(indexers, drop=drop)
+        path = tmp_path / "indexed.h5"
+        dc.write(patch, path, "DASDAE")
+        restored = dc.read(path)[0]
+        assert restored.equals(patch)
+        assert restored.shape == patch.shape
+        scanned = dc.scan(path)[0]
+        assert scanned.shape == patch.shape
+        assert scanned.dims == patch.dims
+        assert dc.spool(path)[0].equals(patch)
+
     def test_round_trip_empty_patch(self, written_dascore_v1_empty):
         """Ensure an empty patch can be deserialized."""
         spool = dc.read(written_dascore_v1_empty)

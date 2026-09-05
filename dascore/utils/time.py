@@ -351,7 +351,7 @@ def _float_to_num(num: float | int) -> float | int:
 def _array_to_int(array: np.ndarray) -> np.ndarray:
     """Convert an array of possible dates to int64 nanoseconds."""
     array = np.asarray(array)
-    if not len(array):
+    if not array.size:
         return array.astype(np.int64)
     # dealing with an array of datetime64 or empty array
     is_dt = np.issubdtype(array.dtype, np.datetime64)

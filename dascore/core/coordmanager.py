@@ -54,6 +54,7 @@ from rich.text import Text
 from dascore.constants import dascore_styles, select_values_description
 from dascore.core.coords import (
     BaseCoord,
+    CoordArray,
     CoordPartial,
     CoordRange,
     CoordSummary,
@@ -81,6 +82,7 @@ from dascore.utils.display import (
     render_text,
 )
 from dascore.utils.docs import compose_docstring
+from dascore.utils.indexing import apply_indexers, get_indexers, positional_indexer
 from dascore.utils.mapping import FrozenDict
 from dascore.utils.misc import (
     _apply_union_indexers,
@@ -188,6 +190,8 @@ class CoordManager(RichRepr, DascoreBaseModel):
     """
 
     dims: tuple[str, ...]
+    # Distinguish scalar data from the legacy dimensionless empty placeholder.
+    scalar: bool = False
     coord_map: Annotated[
         FrozenDict[str, BaseCoord],
         frozen_dict_validator,
@@ -205,6 +209,8 @@ class CoordManager(RichRepr, DascoreBaseModel):
         """Validate the coordinates and dimensions."""
         coord_map, dim_map = values["coord_map"], values["dim_map"]
         dims = values["dims"]
+        if dims:
+            values["scalar"] = False
         try:
             dim_shapes = {dim: coord_map[dim].shape for dim in dims}
         except KeyError:
@@ -330,7 +336,8 @@ class CoordManager(RichRepr, DascoreBaseModel):
         # self.__class__ the way drop_coords does. Exact for CoordManager
         # itself; a subclass would already lose its type here, which is a
         # limitation of the factory rather than of this annotation.
-        return cast("Self", get_coord_manager(out, dims=dims))
+        shape = () if self.scalar and not dims else None
+        return cast("Self", get_coord_manager(out, dims=dims, shape=shape))
 
     # we need this here to maintain backwards compatibility
     update_coords = update
@@ -466,6 +473,7 @@ class CoordManager(RichRepr, DascoreBaseModel):
             dims=dims if dims is not None else self.dims,
             coord_map=coord_map if coord_map is not None else self.coord_map,
             dim_map=dim_map if dim_map is not None else self.dim_map,
+            scalar=kwargs.pop("scalar", self.scalar),
             **kwargs,
         )
         return out
@@ -513,7 +521,9 @@ class CoordManager(RichRepr, DascoreBaseModel):
             slice(None, None) if x not in coords_to_drop else slice(0, 0)
             for x in self.dims
         )
-        new = self.__class__(coord_map=coord_map, dim_map=dim_map, dims=dims)
+        new = self.__class__(
+            coord_map=coord_map, dim_map=dim_map, dims=dims, scalar=self.scalar
+        )
         return new, _apply_union_indexers(index, array)
 
     def disassociate_coord(self, *coord: str) -> Self:
@@ -579,7 +589,9 @@ class CoordManager(RichRepr, DascoreBaseModel):
         old_to_new = {i: v for i, v in zip(self.dims, dims, strict=True)}
         for coord_name, coord_dims in dim_map.items():
             dim_map[coord_name] = tuple(old_to_new[x] for x in coord_dims)
-        return self.__class__(dims=dims, coord_map=coord_map, dim_map=dim_map)
+        return self.__class__(
+            dims=dims, coord_map=coord_map, dim_map=dim_map, scalar=self.scalar
+        )
 
     def _get_single_dim_kwarg_list(self, kwargs):
         """Get a list of dicts where each dict uses a dimension at most once."""
@@ -642,6 +654,72 @@ class CoordManager(RichRepr, DascoreBaseModel):
             self = self.update(**new_coords)
             array = _apply_union_indexers(indexers, array)
         return self, array
+
+    def isel(
+        self,
+        indexers: Mapping[str, Any] | None = None,
+        *,
+        array: MaybeArray = None,
+        drop: bool = False,
+        missing_dims: str = "raise",
+        **indexers_kwargs: Any,
+    ) -> tuple[Self, MaybeArray]:
+        """Index dimensions by position, reducing scalar-indexed axes."""
+        requested = get_indexers(indexers, indexers_kwargs, self.dims, missing_dims)
+        if not requested:
+            return self, array
+        indices = {
+            dim: positional_indexer(value, len(self.coord_map[dim]))
+            for dim, value in requested.items()
+        }
+        reduced = {dim for dim, value in indices.items() if isinstance(value, int)}
+        coords = {}
+        for name, coord in self.coord_map.items():
+            old_dims = self.dim_map[name]
+            new_dims = tuple(dim for dim in old_dims if dim not in reduced)
+            if not set(old_dims) & set(indices):
+                coords[name] = (old_dims, coord)
+                continue
+            if (drop or coord._partial) and old_dims and not new_dims:
+                continue
+            key = tuple(indices.get(dim, slice(None)) for dim in old_dims)
+            # Keep range slices compact and array labels exact even when a
+            # selected subset looks almost evenly sampled.
+            if isinstance(coord, CoordRange) and isinstance(key[0], slice):
+                new_coord = coord[key[0]]
+                if not new_coord.size:
+                    new_coord = CoordArray(
+                        values=np.empty(new_coord.shape, dtype=coord.dtype),
+                        units=coord.units,
+                    )
+            elif isinstance(coord, CoordPartial) and new_dims:
+                shape = tuple(
+                    len(range(*ind.indices(size)))
+                    if isinstance(ind, slice)
+                    else len(ind)
+                    for size, ind in zip(coord.shape, key)
+                    if not isinstance(ind, int)
+                )
+                new_coord = get_coord(shape=shape, dtype=coord.dtype, units=coord.units)
+            else:
+                values = np.asarray(apply_indexers(coord.values, key))
+                new_coord = get_coord(data=values, units=coord.units)
+                if values.dtype.kind not in "US":
+                    original = CoordArray(values=values, units=coord.units)
+                    if new_coord._partial or _canonicalization_moved_values(
+                        original, new_coord
+                    ):
+                        new_coord = original
+            coords[name] = (new_dims, new_coord)
+        dims = tuple(dim for dim in self.dims if dim not in reduced)
+        out = self.__class__(
+            coord_map={name: item[1] for name, item in coords.items()},
+            dim_map={name: item[0] for name, item in coords.items()},
+            dims=dims,
+            scalar=not dims,
+        )
+        key = tuple(indices.get(dim, slice(None)) for dim in self.dims)
+        return out, apply_indexers(array, key)
 
     def order(
         self, array: MaybeArray = None, relative=False, samples=False, **kwargs
@@ -805,6 +883,8 @@ class CoordManager(RichRepr, DascoreBaseModel):
             return False
         if not set(self.dims) == set(other.dims):
             return False
+        if self.scalar != other.scalar:
+            return False
         # Account for private coords (which don't have to be equal).
         s1 = {x for x in self.coord_map if x in self.dims or not x.startswith("_")}
         s2 = {x for x in other.coord_map if x in other.dims or not x.startswith("_")}
@@ -823,7 +903,7 @@ class CoordManager(RichRepr, DascoreBaseModel):
         """Return the shape of the dimensions."""
         out = tuple(len(self.coord_map[x]) for x in self.dims)
         # empty arrays return (0,) as their shape, so we must do the same.
-        if not out:
+        if not out and not self.scalar:
             return (0,)
         return out
 
@@ -961,8 +1041,9 @@ class CoordManager(RichRepr, DascoreBaseModel):
             coord_map[new_name] = coord_map.pop(old_name)
             dim_map[new_name] = dim_map.pop(old_name)
 
-        out = dict(dims=dims, coord_map=coord_map, dim_map=dim_map)
-        return self.__class__(**out)
+        return self.__class__(
+            dims=dims, coord_map=coord_map, dim_map=dim_map, scalar=self.scalar
+        )
 
     def squeeze(self, dim: Sequence[str] | None = None) -> Self:
         """
@@ -1249,6 +1330,8 @@ def get_coord_manager(
         if dims is not None and dims != coords.dims:
             kwargs = {i: v for i, v in zip(coords.dims, dims, strict=True)}
             coords = coords.rename_coord(**kwargs)
+        if not coords.dims and shape is not None and coords.scalar != (shape == ()):
+            coords = coords.model_copy(update={"scalar": shape == ()})
         return coords
     # this allows a simple dict without dims to be passed and dims pulled
     # from dict keys.
@@ -1264,7 +1347,12 @@ def get_coord_manager(
         for name in missing_dims:
             coord_map[name] = get_coord(shape=shape[dims.index(name)])
             dim_map[name] = (name,)
-    out = CoordManager(coord_map=coord_map, dim_map=dim_map, dims=dims)
+    out = CoordManager(
+        coord_map=coord_map,
+        dim_map=dim_map,
+        dims=dims,
+        scalar=not dims and shape == (),
+    )
     return out
 
 
