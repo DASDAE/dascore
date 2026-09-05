@@ -74,7 +74,7 @@ def _strided_diff(order, patch, axes, dx_or_spacing, step):
     return new_data
 
 
-@patch_function(version="1.1")
+@patch_function(version="1.2")
 def differentiate(
     patch: PatchType,
     dim: str | Sequence[str] | None,
