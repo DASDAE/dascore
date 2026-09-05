@@ -275,17 +275,20 @@ def spool_to_xarray(
     all_dims = {
         d for dims_str in working["dims"].dropna() for d in str(dims_str).split(",")
     }
-    for selected, samples in spool._catalog.residuals:
+    for selected, samples, relative in spool._catalog.residuals:
         # A samples selection on a dimension adjusts that dimension's
         # envelopes exactly; anything else changes what loads in ways the
-        # envelopes do not state.
+        # envelopes do not state. A relative bound resolves against each
+        # patch as it loads, so the relation states a candidacy superset
+        # rather than the sample positions the blocks would need.
         if not selected or (samples and set(selected) <= all_dims):
             continue
-        kind = (
-            "sample selections on associated coordinates"
-            if samples
-            else ("value selections")
-        )
+        if samples:
+            kind = "sample selections on associated coordinates"
+        elif relative:
+            kind = "relative selections"
+        else:
+            kind = "value selections"
         msg = (
             f"Cannot convert a spool with pending {kind} (on "
             f"{sorted(selected)}): such bounds are candidacy, not sample "

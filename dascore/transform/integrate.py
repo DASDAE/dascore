@@ -30,7 +30,7 @@ def _quasi_mean(array):
     return np.asarray([out], dtype=array.dtype)
 
 
-def _get_definite_integral(patch, dxs_or_vals, dims, axes):
+def _get_definite_integral(patch, array, dxs_or_vals, dims, axes):
     """Get a definite integral along axes."""
 
     def _get_new_coords_and_array(patch, array, dims):
@@ -44,7 +44,6 @@ def _get_definite_integral(patch, dxs_or_vals, dims, axes):
         cm = patch.coords.update(**new_coords)
         return array, cm
 
-    array = patch.data
     ndims = len(patch.shape)
     for dxs_or_val, ax in zip(dxs_or_vals, axes):
         # Numpy 2/3 compat code
@@ -57,24 +56,24 @@ def _get_definite_integral(patch, dxs_or_vals, dims, axes):
     return array, coords
 
 
-def _get_indefinite_integral(patch, dxs_or_vals, axes):
+def _get_indefinite_integral(patch, array, dxs_or_vals, axes):
     """
     Get indefinite integral along dimensions.
 
     We need to calculate the distance weighted average for the areas between
     samples for the integration dimension.
     """
-    array = patch.data
     for dx_or_val, ax in zip(dxs_or_vals, axes):
         out = np.zeros_like(array)
         # if coordinate values are provided need to get diffs.
         if is_array(dx_or_val):
-            dx_or_val = dx_or_val[1:] - dx_or_val[:-1]
+            intervals = dx_or_val[1:] - dx_or_val[:-1]
+            indexer = broadcast_for_index(array.ndim, ax, slice(None), fill=None)
+            dx_or_val = intervals[indexer]
         ndim = len(out.shape)
         # get diffs along dimension
         stop_indexer = broadcast_for_index(ndim, ax, slice(1, None), fill=slice(None))
         start_indexer = broadcast_for_index(ndim, ax, slice(None, -1), fill=slice(None))
-        # first_indexer = broadcast_for_index(ndim, ax, slice(0, 1), fill=slice(None))
         # get average values of trapezoid between points
         avs = (array[stop_indexer] + array[start_indexer]) * (dx_or_val / 2)
         out[stop_indexer] = np.cumsum(avs, axis=ax)
@@ -82,7 +81,7 @@ def _get_indefinite_integral(patch, dxs_or_vals, axes):
     return array, patch.coords  # coords shouldn't change
 
 
-@patch_function(version="1.1")
+@patch_function(version="1.2")
 def integrate(
     patch: PatchType,
     dim: Sequence[str] | str | None,
@@ -111,6 +110,9 @@ def integrate(
     value. To remove dimensions with length 1, use
     [`Patch.squeeze`](`dascore.Patch.squeeze`).
 
+    Integer and boolean data are converted to float64 before integration.
+    Floating-point and complex data are used without an explicit dtype cast.
+
     The output `data_type` is mapped through the pairs an integral is
     known to relate, which are those of
     [differentiate](`dascore.Patch.differentiate`) read backwards: along
@@ -132,10 +134,13 @@ def integrate(
     """
     dims = iterate(dim if dim is not None else patch.dims)
     dxs_or_vals, axes = _get_dx_or_spacing_and_axes(patch, dims)
+    array = patch.data
+    if axes and array.dtype.kind in "biu":
+        array = array.astype(np.float64)
     if definite:
-        array, coords = _get_definite_integral(patch, dxs_or_vals, dims, axes)
+        array, coords = _get_definite_integral(patch, array, dxs_or_vals, dims, axes)
     else:
-        array, coords = _get_indefinite_integral(patch, dxs_or_vals, axes)
+        array, coords = _get_indefinite_integral(patch, array, dxs_or_vals, axes)
     new_units = _get_data_units_from_dims(patch, dims, mul)
     data_type = _get_data_type_from_dims(patch, dims, differentiate=False)
     attrs = patch.attrs.update(data_units=new_units, data_type=data_type)

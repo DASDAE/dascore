@@ -94,96 +94,63 @@ def correlate(
     """
     Correlate source row/columns in a 2D patch with all other row/columns.
 
-    Correlations are done in the frequency domain. This function can accept a
-    patch whose target dimension has already been transformed with the
-    [`Patch.dft`](`dascore.transform.fourier.dft`) method, otherwise the dft
-    will be performed. If the input has already been transformed,
-    [`Patch.correlation_shift`](`dascore.proc.correlate.correlate_shift`)
-    is useful to undo dft artefacts after the idft is applied.
-
-    While a 2D patch is required for input, a 3D patch is returned where the
-    3rd dimension corresponds to the source rows/columns. For the case of a
-    single source, the [`Patch.squeeze`](`dascore.Patch.squeeze`) method
-    can be helpful to remove length 1 dimensions.
+    The correlation runs in the frequency domain, transforming the target
+    dimension when needed. For an already transformed patch, apply
+    [`Patch.correlate_shift`](`dascore.proc.correlate.correlate_shift`) after
+    the inverse transform. The 2D input becomes 3D, with one new source
+    dimension; [`Patch.squeeze`](`dascore.Patch.squeeze`) removes it for a
+    single source.
 
     Parameters
     ----------
-    patch : PatchType
-        The input data patch to be cross-correlated. Must be 2-dimensional.
-        The patch can be in time or frequency domains.
-    samples : bool, optional (default = False)
-        If True, the argument specified in kwargs refers to the *sample* not
-        value along that axis. See examples for details.
+    patch
+        Two-dimensional patch in the original or frequency domain.
+    samples
+        Interpret source selectors as sample indices rather than coordinate
+        values.
     **kwargs
-        Specifies correlation dimension and the master source(s), to which
-        we want to cross-correlate all other channels/time samples. If the
-        master source is an array, the function will compute correlations for
-        all the possible pairs.
+        Source dimension mapped to one or more source values or indices.
 
     Examples
     --------
     >>> import dascore as dc
-    >>> from dascore.units import m, s
-
-    >>> # Get a patch composed of sin waves whose correlation results
-    >>> # can easily be checked.
+    >>> from dascore.units import m
     >>> patch = dc.get_example_patch(
     ...     "sin_wav",
     ...     sample_rate=100,
     ...     frequency=range(10, 20),
     ...     duration=5,
     ...     channel_count=10,
-    ... ).taper(time=0.05).set_units(distance='m')
+    ... ).taper(time=0.05).set_units(distance="m")
     >>>
-    >>> # Example 1
-    >>> # Calculate cc for all channels as receivers and
-    >>> # the 10 m channel as the master channel. Squeeze the output
-    >>> # so the returned patch is 2D.
-    >>> cc_patch = patch.correlate(distance = 10 * m).squeeze()
+    >>> # Correlate every channel with the 10 m channel.
+    >>> cc_patch = patch.correlate(distance=10 * m).squeeze()
     >>>
-    >>> # Example 2
-    >>> # Get cc within (-2,2) sec of lag for all channels as receivers
-    >>> # and the 10 m channel as the master channel. The new patch has dimensions
-    >>> # (lag_time, distance, source_distance)
+    >>> # Keep -2 through 2 seconds of lag.
     >>> cc_patch = (
-    ...     patch.correlate(distance = 10 * m)
+    ...     patch.correlate(distance=10 * m)
     ...     .select(lag_time=(-2, 2))
     ... )
     >>>
-    >>> # Example 3
-    >>> # First remove every other distance channel (less memory usage)
-    >>> # the use the new 2nd channel as the source.
+    >>> # Select a source by sample index after decimation.
     >>> cc_patch = (
     ...     patch.decimate(distance=2, filter_type=None)
     ...     .correlate(distance=1, samples=True)
     ... )
     >>>
-    >>> # Example 4
-    >>> # Correlate along time dimension (perhaps for template matching
-    >>> # applications)
     >>> cc_patch = patch.correlate(time=100, samples=True)
     >>>
-    >>> # Example 5
-    >>> # A pipeline of frequency domain correlation and an array of sources
-    >>> padded_patch = patch.pad(time="correlate")  # pad to at least 2n + 1
-    >>> dft_patch = patch.dft("time", real=True)
-    >>> # Any other pre-processing steps go here...
-    >>> # ...
-    >>> # Perform the correlation with 3 source channels
+    >>> # Correlate several sources in a frequency-domain pipeline.
+    >>> padded_patch = patch.pad(time="correlate")
+    >>> dft_patch = padded_patch.dft("time", real=True)
     >>> cc_patch = dft_patch.correlate(distance=[1, 3, 7], samples=True)
-    >>> # Perform any post-processing here
-    >>> # ...
-    >>> # Convert back to time domain, apply `correlate shift` to undo
-    >>> # fft related shifting and scaling as well as create lag coordinate.
     >>> cc_out = cc_patch.idft().correlate_shift("time")
 
     Notes
     -----
-    1 - The cross-correlation is performed in the frequency domain.
-
-    2 - The output dimension is opposite of the one specified in kwargs and
-      shares a name with the original coord except the string "lag_" is
-      prepended. For example, "lag_time".
+    Correlation runs along the dimension not named in ``kwargs``. That dimension
+    becomes a lag dimension prefixed with ``lag_``; for example, selecting a
+    ``distance`` source transforms ``time`` into ``lag_time``.
     """
     if "lag" in kwargs:
         msg = "The 'lag' parameter was removed. Select on the lag coordinate instead."

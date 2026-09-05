@@ -4,12 +4,7 @@ execute:
   warning: false
 ---
 
-Sometimes spatial coordinates are stored in a table which are associated with a patch dimension. For example, the results of a tap-test may associate X, Y, and Z values to the dimensions "distance". DASCore provides the patch function [`coords_from_df`](`dascore.proc.coords.coords_from_df`) for just this purpose. The functionality is not limited to spatial coordinates; it can be used to add any coordinates to any existing dimension.
-
-Here, we:
-- Make a patch and coordinates from example data
-- Call a command that extrapolates and adds the coordinates
-- Plot coordinates for comparison
+[`coords_from_df`](`dascore.proc.coords.coords_from_df`) maps table columns onto a patch dimension. This example adds surveyed X, Y, and Z coordinates along `distance`.
 
 ```{python}
 #| code-fold: true
@@ -17,23 +12,11 @@ import pandas as pd
 
 import dascore as dc
 
-# Get path for example coordinates. Pandas needs a path, so the example
-# file is fetched rather than named with an examples:// uri.
+# Pandas needs a local path rather than an examples:// URI.
 path = dc.examples.fetch("brady_hs_DAS_DTS_coords.csv")
-
-# Read coordinates data from csv file.
 coord_table = pd.read_csv(path).rename(columns={"Channel": "distance"})
-
-# Make patch from example.
 patch = dc.get_example_patch()
-
-# Get length of distance axis.
-dist_len = patch.coord_shapes["distance"][0]
-
-# Make a dictionary of units.
-units = {a:"m" for a in coord_table.columns[1:]}
-
-# Select portion of new coordinates to map to existing coordinate.
+units = {name: "m" for name in coord_table.columns[1:]}
 new_coordinates = coord_table.iloc[51:]
 
 ```
@@ -42,18 +25,14 @@ new_coordinates = coord_table.iloc[51:]
 ```{python}
 import matplotlib.pyplot as plt
 
-import dascore as dc
-
-patch = dc.get_example_patch()
-
-# Add coordinates to patch.
 patch_with_coords = patch.coords_from_df(
-    new_coordinates, units=units, extrapolate=True,
+    new_coordinates,
+    units=units,
+    extrapolate=True,
 )
 
-# Plot coordinates.
 coords = patch_with_coords.coords
-X = coords.get_array('X')
-Y = coords.get_array('Y')
-plt.scatter(X,Y);
+x = coords.get_array("X")
+y = coords.get_array("Y")
+plt.scatter(x, y);
 ```

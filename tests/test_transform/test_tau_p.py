@@ -138,11 +138,10 @@ class TestTauP:
         assert np.abs(1.0 / p_vals[p_ind] - vel) < 20
         assert np.abs((t_vals[t_ind] - t_vals[0]) / np.timedelta64(1, "s") - t0) < 0.02
 
-        dist = np.zeros(nch)
-        cumdist = 0
-        for i in range(nch):
-            dist[i] = cumdist
-            cumdist = cumdist + 1.0 + 1.0 * (i % 2 == 0)
+        # Random spacing so the increments are not their own reverse; the
+        # symmetry test below is the direct guard for the negative half.
+        rng = np.random.default_rng(0)
+        dist = np.concatenate([[0.0], np.cumsum(rng.uniform(0.5, 2.5, nch - 1))])
 
         # positive slope, non-equal distance
         vel = 1800
@@ -180,6 +179,23 @@ class TestTauP:
         _jit_taup_uniform.func(data, dx, dt, p_vals)
         distance = np.arange(10) * dt
         _jit_taup_general.func(data, distance, dt, p_vals)
+
+    def test_general_kernel_negative_half_symmetry(self):
+        """
+        The negative-slowness half of the general kernel equals the positive
+        half of the reversed problem. Non-palindromic spacing makes the two
+        halves sample different time positions.
+        """
+        rng = np.random.default_rng(0)
+        data = rng.standard_normal((12, 40))
+        dist = np.cumsum(rng.uniform(1.0, 9.0, 12))
+        p_vals = np.array([1 / 3000, 1 / 1500, 1 / 800])
+        _, fwd = _jit_taup_general.func(data, dist, 0.01, p_vals)
+        _, rev = _jit_taup_general.func(
+            data[::-1].copy(), dist[-1] - dist[::-1], 0.01, p_vals
+        )
+        n_slo = p_vals.size
+        assert np.allclose(fwd[:n_slo], rev[n_slo:][::-1])
 
     def test_time_distance_dim_order(self):
         """Patches ordered (time, distance) transform like their transpose."""

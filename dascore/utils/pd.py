@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import fnmatch
 from collections import defaultdict
-from collections.abc import Collection, Generator, Iterator, Mapping, Sequence
+from collections.abc import Collection, Generator, Iterator, Mapping
 from functools import cache
 from typing import TypeVar, cast
 
@@ -16,7 +16,12 @@ import dascore as dc
 from dascore.constants import PatchType, namespace_select_type
 from dascore.core.attrs import PatchAttrs
 from dascore.exceptions import InvalidSpoolQueryError, ParameterError
-from dascore.utils.misc import is_range, order_range_tuple, sanitize_range_param
+from dascore.utils.deprecate import deprecate
+from dascore.utils.misc import (
+    glob_to_regex,
+    order_range_tuple,
+    sanitize_range_param,
+)
 from dascore.utils.time import to_datetime64, to_timedelta64
 
 _RowType = TypeVar("_RowType")
@@ -145,57 +150,18 @@ def present_columns(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+@deprecate(
+    info=(
+        "get_regex is deprecated. Use dascore.utils.misc.glob_to_regex, "
+        "which reads a glob the way the index does: a character class is "
+        "negated with [^...] rather than fnmatch's [!...]."
+    ),
+    removed_in="0.2.0",
+)
 @cache
 def get_regex(seed_str):
     """Compile, and cache regex for str queries."""
     return fnmatch.translate(seed_str)  # translate to re
-
-
-def relative_offset(gmin, gmax, value):
-    """
-    Resolve one relative bound against a global [gmin, gmax] envelope.
-
-    Positive offsets measure from the start, negative from the end;
-    None/Ellipsis bounds stay open. Datetime envelopes take numeric
-    seconds offsets.
-    """
-    if value is None or value is Ellipsis:
-        return None
-    if isinstance(gmin, pd.Timestamp) or isinstance(gmin, np.datetime64):
-        delta = to_timedelta64(abs(float(value)))
-        return (gmin + delta) if value >= 0 else (gmax - delta)
-    return (gmin + value) if value >= 0 else (gmax + value)
-
-
-def relative_ranges_to_absolute(df, kwargs: dict) -> dict:
-    """
-    Resolve relative (start, stop) ranges against a frame's global envelopes.
-
-    Operates only on the dataframe's `{name}_min`/`{name}_max` envelope
-    columns, so both the generic dataframe select path and the catalog
-    share one relative-select implementation without either depending on
-    the index query builder.
-    """
-    out = {}
-    for name, value in kwargs.items():
-        lo_col, hi_col = f"{name}_min", f"{name}_max"
-        if lo_col not in df.columns or hi_col not in df.columns or df.empty:
-            msg = f"Cannot use relative select on {name!r}."
-            raise InvalidSpoolQueryError(msg)
-        if not is_range(value):
-            # same vocabulary as the catalog path's selector shaping
-            msg = (
-                f"relative=True accepts range selectors only (a (start, stop) "
-                f"tuple or slice), got {value!r}."
-            )
-            raise InvalidSpoolQueryError(msg)
-        gmin, gmax = df[lo_col].min(), df[hi_col].max()
-        lo, hi = value
-        out[name] = (
-            relative_offset(gmin, gmax, lo),
-            relative_offset(gmin, gmax, hi),
-        )
-    return out
 
 
 def normalize_range_forms(value):
@@ -437,8 +403,10 @@ def _filter_equality(query_dict, df, bool_index):
     # filter on non-collection queries
     for key, val in query_dict.items():
         if isinstance(val, str):
-            regex = get_regex(val)
-            new = df[key].str.match(regex).values
+            regex = glob_to_regex(val)
+            # pandas refuses a compiled pattern with flags of its own; the
+            # source string carries the inline DOTALL.
+            new = df[key].str.match(regex.pattern).values
             bool_index = np.logical_and(bool_index, new)
         else:
             new = (df[key] == val).values
@@ -651,8 +619,9 @@ def filter_df(
 
         Any condition to check against columns of df. Can be a single value
         or a collection of values (to check isin on columns). Str arguments
-        can also use unix style matching. Additionally, queries of the form
-        {column_name}_min or {column_name}_max can be used, provided columns
+        can also be globs, read as SQLite's GLOB reads them. Additionally,
+        queries of the form {column_name}_min or {column_name}_max can be
+        used, provided columns
         with the same name don't already exist.
 
     Returns
@@ -765,24 +734,6 @@ def list_ser_to_str(ser: pd.Series) -> pd.Series:
         for x in ser.values
     ]
     return pd.Series(values, index=ser.index, dtype=object)
-
-
-def _model_list_to_df(mod_list: Sequence[dc.PatchAttrs], exclude=None) -> pd.DataFrame:
-    """
-    Get a dataframe from a sequence of pydantic models.
-
-    Optionally, exclude certain columns
-    """
-    records = []
-    for item in mod_list:
-        if hasattr(item, "flat_dump"):
-            records.append(item.flat_dump(exclude=exclude))
-        else:
-            records.append(item.summary.flat_dump(exclude=exclude))
-    df = pd.DataFrame(records)
-    if "dims" in df.columns:
-        df["dims"] = list_ser_to_str(df["dims"])
-    return df
 
 
 def _column_or_value(df, col, value):

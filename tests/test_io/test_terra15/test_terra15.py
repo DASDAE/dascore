@@ -11,6 +11,8 @@ import pandas as pd
 import pytest
 
 import dascore as dc
+from dascore.io.core import FiberIO
+from dascore.io.terra15.core import Terra15FormatterV4
 from dascore.io.terra15.utils import _get_version_data_node
 
 
@@ -105,3 +107,65 @@ class TestTerra15Unfinished:
         """Ensure the time is increasing."""
         time = patch_unfinished.coords.get_array("time")
         assert np.all(np.diff(time) >= np.timedelta64(0, "s"))
+
+
+class TestReadArray:
+    """Tests for slicing the data node directly."""
+
+    def test_unfinished_file_stops_at_written_samples(
+        self, terra15_das_unfinished_path
+    ):
+        """Zero-filled rows past the last written sample are never returned."""
+        io = Terra15FormatterV4()
+        patch = dc.spool(terra15_das_unfinished_path)[0]
+        out = io.read_array(terra15_das_unfinished_path, {})
+        assert out.shape == patch.shape
+        assert np.array_equal(out, patch.data)
+        # a window past the end clips to the written samples, as select does
+        tail = io.read_array(terra15_das_unfinished_path, {"time": (-3, 10**6)})
+        assert np.array_equal(tail, patch.data[-3:])
+
+    def test_raw_grid_counts_every_row(self, terra15_das_unfinished_path):
+        """With snap_dims=False the window lives on the raw grid, as in read."""
+        io = Terra15FormatterV4()
+        path = terra15_das_unfinished_path
+        out = io.read_array(path, {"time": (-5, None)}, snap_dims=False)
+        expected = FiberIO.read_array(io, path, {"time": (-5, None)}, snap_dims=False)
+        assert np.array_equal(out, expected)
+        assert len(out) == 5
+        raw = io.read_array(path, {}, snap_dims=False)
+        assert len(raw) > len(io.read_array(path, {}))
+
+    def test_both_spellings_agree(self, terra15_das_unfinished_path):
+        """`scan` calls it snap and `read` snap_dims; both are taken here.
+
+        The unfinished file is the one where the option changes how many
+        rows there are, so the two grids differ and a mix-up shows.
+        """
+        io = Terra15FormatterV4()
+        path = terra15_das_unfinished_path
+        snapped = io.read_array(path, {})
+        raw = io.read_array(path, {}, snap=False)
+        assert len(raw) > len(snapped)
+        # either spelling alone selects the same grid
+        assert len(io.read_array(path, {}, snap_dims=False)) == len(raw)
+        assert len(io.read_array(path, {}, snap=True)) == len(snapped)
+        # given both, snap wins, in read_array and in read alike
+        assert len(io.read_array(path, {}, snap=True, snap_dims=False)) == len(snapped)
+        both = io.read(path, snap=True, snap_dims=False)[0]
+        assert len(both.get_coord("time")) == len(snapped)
+
+    def test_reads_only_the_window(self, terra15_v6_path, monkeypatch):
+        """The data node is sliced in the file, not read whole then trimmed."""
+        seen = []
+        original = h5py.Dataset.__getitem__
+
+        def spy(self, index):
+            if self.name.endswith("/data"):
+                seen.append(index)
+            return original(self, index)
+
+        monkeypatch.setattr(h5py.Dataset, "__getitem__", spy)
+        Terra15FormatterV4().read_array(terra15_v6_path, {"time": (2, 6)})
+        assert len(seen) == 1
+        assert seen[0][0] == slice(2, 6)

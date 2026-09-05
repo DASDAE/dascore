@@ -97,13 +97,21 @@ class TestSpoolToXarray:
         spool = dc.spool(diverse_spool_directory).update()
         tree = spool.io.to_xarray()
         calls = []
+        # A block reads through whichever path its format offers, so both
+        # are counted: what the test pins is how many members are read.
         original = PlanResolver._load_member
+        original_array = PlanResolver._load_member_array
 
         def _counting(self, kwargs):
-            calls.append(1)
+            calls.append("patch")
             return original(self, kwargs)
 
+        def _counting_array(self, row, windows, **kwargs):
+            calls.append("array")
+            return original_array(self, row, windows, **kwargs)
+
         monkeypatch.setattr(PlanResolver, "_load_member", _counting)
+        monkeypatch.setattr(PlanResolver, "_load_member_array", _counting_array)
         # The DAS2.R2D1..RAW random segment merges three source patches;
         # slicing inside the first must load exactly one of the three,
         # and the loaded values must match the eagerly chunked patch.
@@ -444,11 +452,17 @@ class TestToXarrayReadArray:
             calls.append(windows)
             return FiberIO.read_array(self, resource, windows, **kwargs)
 
-        # set and delete by hand: monkeypatch would restore the inherited
-        # method as an own class attribute rather than remove it
+        # set and restore by hand: monkeypatch would put the inherited
+        # method back as an own class attribute rather than remove it,
+        # and DASDAE has an override of its own to hand back afterwards.
+        missing = object()
+        stored = DASDAEV1.__dict__.get("read_array", missing)
         DASDAEV1.read_array = read_array
         yield calls
-        del DASDAEV1.read_array
+        if stored is missing:
+            del DASDAEV1.read_array
+        else:
+            DASDAEV1.read_array = stored
 
     def _leaf(self, tree):
         """The first dataset holding a data variable."""

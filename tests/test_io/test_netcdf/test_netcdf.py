@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib
 import importlib.util
+import tracemalloc
 from typing import ClassVar
 
 import h5py
@@ -810,3 +811,73 @@ class TestWriteRequiresHDF5Backend:
         with pytest.raises(MissingOptionalDependencyError, match="h5netcdf"):
             dc.write(random_patch, tmp_path / "refused.nc", "netcdf_cf")
         assert not (tmp_path / "refused.nc").exists()
+
+
+class TestSelectiveRead:
+    """A selection is applied before the payload is loaded."""
+
+    @pytest.fixture(scope="class")
+    def chunked_path(self, tmp_path_factory):
+        """A file large enough that loading all of it is measurable."""
+        xr = pytest.importorskip("xarray")
+        engine = _require_xarray_netcdf_engine()
+        path = tmp_path_factory.mktemp("netcdf_selective") / "chunked.nc"
+        dataset = xr.Dataset(
+            {"v": (("time", "distance"), np.zeros((5000, 400), "float32"))},
+            coords={"time": np.arange(5000.0), "distance": np.arange(400.0)},
+            attrs={"Conventions": "CF-1.8"},
+        )
+        # Chunked, as a file worth selecting from is: a contiguous layout
+        # has to touch every page of the fast axis whatever it is asked for.
+        dataset.to_netcdf(
+            path, engine=engine, encoding={"v": {"chunksizes": (100, 250)}}
+        )
+        return path
+
+    @pytest.fixture(scope="class")
+    def coordless_path(self, tmp_path_factory):
+        """A file which states no coordinates, as XDAS writes them."""
+        xr = pytest.importorskip("xarray")
+        engine = _require_xarray_netcdf_engine()
+        path = tmp_path_factory.mktemp("netcdf_coordless") / "coordless.nc"
+        data = np.arange(100 * 20, dtype="float32").reshape(100, 20)
+        dataset = xr.Dataset(
+            {"v": (("time", "distance"), data)}, attrs={"Conventions": "CF-1.8"}
+        )
+        dataset.to_netcdf(path, engine=engine)
+        return path
+
+    def _read_peak(self, path, **kwargs):
+        """Return the high-water mark of one read, in bytes."""
+        tracemalloc.start()
+        try:
+            dc.read(path, **kwargs)
+            return tracemalloc.get_traced_memory()[1]
+        finally:
+            tracemalloc.stop()
+
+    def test_selection_loads_only_what_it_keeps(self, chunked_path):
+        """Reading twenty of five thousand samples costs twenty samples."""
+        whole = self._read_peak(chunked_path)
+        part = self._read_peak(chunked_path, time=(0, 20))
+        assert part < whole / 4
+
+    def test_coordless_selection_keeps_its_place(self, coordless_path):
+        """
+        A sample keeps the number it has in the file.
+
+        With no coordinates stated, they are numbered from the file's own
+        shape, so trimming before they are built would restart them at
+        the beginning of the slice.
+        """
+        whole = dc.read(coordless_path)[0]
+        part = dc.read(coordless_path, time=(10, 20))[0]
+        assert part.get_coord("time").values[0] == 10
+        assert np.array_equal(part.data, whole.select(time=(10, 20)).data)
+
+    def test_selection_matches_selecting_afterwards(self, coordless_path):
+        """Selecting during the read gives what selecting after it gives."""
+        whole = dc.read(coordless_path)[0]
+        for kwargs in ({"time": (10, 20)}, {"distance": (2, 5)}):
+            part = dc.read(coordless_path, **kwargs)[0]
+            assert part.equals(whole.select(**kwargs))
