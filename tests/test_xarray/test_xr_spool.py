@@ -97,13 +97,21 @@ class TestSpoolToXarray:
         spool = dc.spool(diverse_spool_directory).update()
         tree = spool.io.to_xarray()
         calls = []
+        # A block reads through whichever path its format offers, so both
+        # are counted: what the test pins is how many members are read.
         original = PlanResolver._load_member
+        original_array = PlanResolver._load_member_array
 
         def _counting(self, kwargs):
-            calls.append(1)
+            calls.append("patch")
             return original(self, kwargs)
 
+        def _counting_array(self, row, windows, **kwargs):
+            calls.append("array")
+            return original_array(self, row, windows, **kwargs)
+
         monkeypatch.setattr(PlanResolver, "_load_member", _counting)
+        monkeypatch.setattr(PlanResolver, "_load_member_array", _counting_array)
         # The DAS2.R2D1..RAW random segment merges three source patches;
         # slicing inside the first must load exactly one of the three,
         # and the loaded values must match the eagerly chunked patch.
@@ -316,6 +324,12 @@ class TestSpoolToXarray:
         with pytest.raises(PatchConversionError, match="value selections"):
             sub.io.to_xarray()
 
+    def test_relative_select_refused(self, random_spool):
+        """A relative bound resolves per patch, so it cannot size blocks."""
+        sub = random_spool.select(time=(1, None), relative=True)
+        with pytest.raises(PatchConversionError, match="relative selections"):
+            sub.io.to_xarray()
+
     def test_samples_select_supported(self, random_spool):
         """A samples-based selection stays exact and converts."""
         sub = random_spool.select(time=(10, -10), samples=True)
@@ -444,11 +458,17 @@ class TestToXarrayReadArray:
             calls.append(windows)
             return FiberIO.read_array(self, resource, windows, **kwargs)
 
-        # set and delete by hand: monkeypatch would restore the inherited
-        # method as an own class attribute rather than remove it
+        # set and restore by hand: monkeypatch would put the inherited
+        # method back as an own class attribute rather than remove it,
+        # and DASDAE has an override of its own to hand back afterwards.
+        missing = object()
+        stored = DASDAEV1.__dict__.get("read_array", missing)
         DASDAEV1.read_array = read_array
         yield calls
-        del DASDAEV1.read_array
+        if stored is missing:
+            del DASDAEV1.read_array
+        else:
+            DASDAEV1.read_array = stored
 
     def _leaf(self, tree):
         """The first dataset holding a data variable."""
@@ -664,3 +684,190 @@ class TestToXarrayLazyCoords:
         np.testing.assert_array_equal(
             data["time"].values, merged.get_coord("time").values
         )
+
+
+class TestToXarrayBlockSize:
+    """A source patch larger than `block_size` is read in several windows."""
+
+    @pytest.fixture(autouse=True)
+    def _require_libs(self):
+        """These tests need both optional libraries."""
+        pytest.importorskip("xarray")
+        pytest.importorskip("dask")
+
+    @pytest.fixture(scope="class")
+    def dasdae_directory(self, tmp_path_factory):
+        """Three adjacent DASDAE files with distinct data per file."""
+        path = tmp_path_factory.mktemp("to_xarray_block_size")
+        spool = dc.get_example_spool("random_das", length=3, time_gap=0)
+        for num, patch in enumerate(spool):
+            patch.new(data=patch.data + num).io.write(path / f"p{num}.h5", "dasdae")
+        return path
+
+    @pytest.fixture(scope="class")
+    def file_spool(self, dasdae_directory):
+        """The indexed spool over those files."""
+        return dc.spool(dasdae_directory).update()
+
+    @staticmethod
+    def _leaf(tree):
+        """The one data variable such a single-group tree holds."""
+        leaves = [node for node in tree.subtree if "data" in node.dataset]
+        assert len(leaves) == 1
+        return leaves[0].dataset["data"]
+
+    def test_a_member_splits_into_several_blocks(self, file_spool):
+        """A block ceiling below a member's size cuts it into pieces."""
+        quarter = file_spool[0].data.nbytes // 4
+        whole = self._leaf(file_spool.io.to_xarray(block_size=0))
+        split = self._leaf(file_spool.io.to_xarray(block_size=quarter))
+        assert whole.data.npartitions == len(file_spool)
+        assert split.data.npartitions == 4 * len(file_spool)
+        # and the pieces say the same thing the one block said
+        assert np.array_equal(split.compute().values, whole.compute().values)
+
+    def test_pieces_hold_every_sample_once(self, file_spool):
+        """The split values equal the eagerly chunked patch, in order."""
+        eighth = file_spool[0].data.nbytes // 8
+        data = self._leaf(file_spool.io.to_xarray(block_size=eighth))
+        merged = file_spool.chunk(time=None)[0]
+        expected = merged.transpose(*data.dims).data
+        assert np.array_equal(data.compute().values, expected)
+        assert np.array_equal(np.asarray(data["time"].values), merged.get_array("time"))
+
+    def test_a_block_reads_only_its_own_window(self, file_spool, monkeypatch):
+        """Computing one piece reads that piece's samples, not the file."""
+        from dascore.io.index.planned import PlanResolver  # noqa: PLC0415
+
+        windows = []
+        original = PlanResolver._load_member_array
+
+        def _counting(self, row, member_windows, **kwargs):
+            windows.append(dict(member_windows))
+            return original(self, row, member_windows, **kwargs)
+
+        monkeypatch.setattr(PlanResolver, "_load_member_array", _counting)
+        quarter = file_spool[0].data.nbytes // 4
+        data = self._leaf(file_spool.io.to_xarray(block_size=quarter))
+        samples = len(file_spool[0].get_coord("time"))
+        piece = data.isel(time=slice(0, samples // 4)).compute()
+        assert windows == [{"time": (0, samples // 4)}]
+        assert piece.sizes["time"] == samples // 4
+
+    def test_a_member_the_index_cannot_window_stays_whole(self, random_spool):
+        """An in-memory member reads as a patch, so splitting it would cost."""
+        tree = random_spool.io.to_xarray(block_size=1)
+        assert self._leaf(tree).data.npartitions == len(random_spool)
+
+    def test_block_size_accepts_a_string(self, file_spool):
+        """A dask byte string sizes blocks like the count it names."""
+        quarter = file_spool[0].data.nbytes // 4
+        named = self._leaf(file_spool.io.to_xarray(block_size=f"{quarter}B"))
+        counted = self._leaf(file_spool.io.to_xarray(block_size=quarter))
+        assert named.data.chunks == counted.data.chunks
+
+    def test_the_default_leaves_ordinary_files_whole(self, file_spool):
+        """A file well under the default ceiling is still one block."""
+        data = self._leaf(file_spool.io.to_xarray())
+        assert data.data.npartitions == len(file_spool)
+
+    def test_the_config_sets_the_default(self, file_spool):
+        """An unset `block_size` takes the configured ceiling."""
+        quarter = file_spool[0].data.nbytes // 4
+        with config_context(xarray_block_size=quarter):
+            configured = self._leaf(file_spool.io.to_xarray())
+        passed = self._leaf(file_spool.io.to_xarray(block_size=quarter))
+        assert configured.data.chunks == passed.data.chunks
+        # and an argument still wins over the configured value
+        with config_context(xarray_block_size=quarter):
+            override = self._leaf(file_spool.io.to_xarray(block_size=0))
+        assert override.data.npartitions == len(file_spool)
+
+    def test_a_piece_falling_back_reads_its_own_bounds(self, file_spool, monkeypatch):
+        """A piece whose window read fails still loads its own samples.
+
+        The array path can decline at load (a file which changed since
+        indexing), and the piece then loads as a patch trimmed by value.
+        Those bounds are the piece's own, not its member's, or the block
+        would come back the size of the whole member.
+        """
+        from dascore.io.index.planned import PlanResolver  # noqa: PLC0415
+
+        quarter = file_spool[0].data.nbytes // 4
+        data = self._leaf(file_spool.io.to_xarray(block_size=quarter))
+        merged = file_spool.chunk(time=None)[0]
+        monkeypatch.setattr(
+            PlanResolver, "_load_member_array", lambda self, row, w, **k: None
+        )
+        assert np.array_equal(data.compute().values, merged.transpose(*data.dims).data)
+
+    def test_pieces_of_an_interior_window_stay_anchored(self, tmp_path):
+        """A member trimmed by an overlap splits from where it starts.
+
+        Two half-overlapping files merge into one segment, so the second
+        member's window starts mid-file. Its pieces are offsets from that
+        start, not from the file's; anchoring them at zero would read the
+        wrong samples and still fill every block.
+        """
+        first = dc.get_example_patch()
+        time = first.get_coord("time")
+        half = time.values[len(time) // 2]
+        # distinct data, or reading the wrong samples would still match
+        second = first.update_coords(time_min=half).new(data=first.data + 1)
+        for num, patch in enumerate((first, second)):
+            patch.update_attrs(history=[]).io.write(tmp_path / f"p{num}.h5", "dasdae")
+        spool = dc.spool(tmp_path).update()
+        merged = spool.chunk(time=None)[0]
+        data = self._leaf(spool.io.to_xarray(block_size=merged.data.nbytes // 8))
+        assert data.data.npartitions > 2
+        assert np.array_equal(data.compute().values, merged.transpose(*data.dims).data)
+
+
+class TestBlockPieces:
+    """The sample cut behind `block_size`."""
+
+    def test_a_count_under_the_limit_is_one_piece(self):
+        """Nothing is cut when the whole thing fits."""
+        from dascore.xarray.spool import _block_pieces  # noqa: PLC0415
+
+        assert _block_pieces(10, 10) == ((0, 10),)
+        assert _block_pieces(10, None) == ((0, 10),)
+
+    def test_pieces_tile_the_count(self):
+        """Every sample lands in exactly one piece, in order."""
+        from dascore.xarray.spool import _block_pieces  # noqa: PLC0415
+
+        for count, limit in ((10, 3), (10, 4), (1000, 7), (5, 1)):
+            pieces = _block_pieces(count, limit)
+            assert pieces[0][0] == 0 and pieces[-1][1] == count
+            assert all(b == pieces[i + 1][0] for i, (_, b) in enumerate(pieces[:-1]))
+            assert all(0 < b - a <= limit for a, b in pieces)
+
+    @pytest.mark.parametrize(
+        "count,limit", [(100, 30), (101, 30), (10, 3), (1000, 7), (37, 5)]
+    )
+    def test_pieces_are_even(self, count, limit):
+        """No piece is more than one sample shorter than another.
+
+        The counts which do not divide are the point: a size repeated
+        until the samples run out leaves the whole deficit in the last
+        piece, which the evenly divisible cases cannot show.
+        """
+        from dascore.xarray.spool import _block_pieces  # noqa: PLC0415
+
+        sizes = [b - a for a, b in _block_pieces(count, limit)]
+        assert max(sizes) - min(sizes) <= 1
+
+    def test_one_sample_rows_still_split(self):
+        """A row costing more than the ceiling still yields whole samples."""
+        from dascore.xarray.spool import _samples_per_block  # noqa: PLC0415
+
+        limit = _samples_per_block(10, np.dtype("float64"), {"x": 100, "t": 5}, "t")
+        assert limit == 1
+
+    def test_a_zero_budget_is_no_limit(self):
+        """Zero says one block per patch, not a block holding no samples."""
+        from dascore.xarray.spool import _samples_per_block  # noqa: PLC0415
+
+        assert _samples_per_block(0, np.dtype("float64"), {"t": 5}, "t") is None
+        assert _samples_per_block(None, np.dtype("float64"), {"t": 5}, "t") is None

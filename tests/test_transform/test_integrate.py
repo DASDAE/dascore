@@ -177,3 +177,88 @@ class TestDataType:
         patch = random_patch.update_attrs(data_type="strain")
         out = patch.differentiate("time").integrate("time")
         assert out.attrs.data_type == "strain"
+
+
+class TestNumericalIntegrals:
+    """Analytic expectations for dtype and axis handling."""
+
+    @pytest.mark.parametrize("definite", [False, True])
+    @pytest.mark.parametrize("dtype", [np.int64, np.bool_])
+    def test_no_dimensions(self, definite, dtype):
+        """An empty dimension selection preserves the original data exactly."""
+        data = np.array([2**53 + 1, 1 - 2**53], dtype=dtype)
+        patch = dc.Patch(
+            data=data, coords={"distance": np.arange(2)}, dims=("distance",)
+        )
+        out = patch.integrate((), definite=definite)
+        np.testing.assert_array_equal(out.data, data)
+        assert out.data.dtype == dtype
+        assert out.coords == patch.coords
+
+    @pytest.mark.parametrize("definite", [False, True])
+    @pytest.mark.parametrize("dtype", [np.int8, np.uint8, np.int64, np.bool_])
+    def test_integer_data(self, definite, dtype):
+        """Promote before adding samples, preserving fractional areas."""
+        data = np.array([0, 1, 1, 0], dtype=dtype)
+        patch = dc.Patch(
+            data=data, coords={"distance": np.arange(4)}, dims=("distance",)
+        )
+        out = patch.integrate("distance", definite=definite)
+        expected = np.array([0, 0.5, 1.5, 2])
+        np.testing.assert_array_equal(out.data, expected[-1:] if definite else expected)
+        assert out.data.dtype == np.float64
+        np.testing.assert_array_equal(patch.data, data)
+
+    @pytest.mark.parametrize("definite", [False, True])
+    @pytest.mark.parametrize("dtype", [np.int8, np.uint8])
+    def test_integer_overflow(self, definite, dtype):
+        """Narrow integer sample sums must not overflow before promotion."""
+        data = np.full(4, 100 if dtype == np.int8 else 200, dtype=dtype)
+        patch = dc.Patch(
+            data=data, coords={"distance": np.arange(4)}, dims=("distance",)
+        )
+        expected = np.arange(4, dtype=float) * float(data[0])
+        out = patch.integrate("distance", definite=definite)
+        np.testing.assert_array_equal(out.data, expected[-1:] if definite else expected)
+
+    @pytest.mark.parametrize("definite", [False, True])
+    @pytest.mark.parametrize(
+        "dtype", [np.float32, np.float64, np.complex64, np.complex128]
+    )
+    def test_inexact_data(self, definite, dtype):
+        """Floating precision and imaginary components survive integration."""
+        value = 1 + 2j if np.issubdtype(dtype, np.complexfloating) else 1
+        patch = dc.Patch(
+            data=np.full(4, value, dtype=dtype),
+            coords={"distance": np.arange(4)},
+            dims=("distance",),
+        )
+        expected = np.arange(4) * value
+        out = patch.integrate("distance", definite=definite)
+        np.testing.assert_array_equal(out.data, expected[-1:] if definite else expected)
+        if not definite:
+            assert out.data.dtype == dtype
+
+    @pytest.mark.parametrize("width", [2, 3])
+    @pytest.mark.parametrize("axis", [0, 1, 2])
+    def test_uneven_axis(self, width, axis):
+        """Uneven intervals weight the named axis in any array position."""
+        distance = np.array([0, 1, 3, 6])
+        patch = dc.Patch(
+            data=np.ones((4, 2, width)),
+            coords={"distance": distance, "x": np.arange(2), "y": np.arange(width)},
+            dims=("distance", "x", "y"),
+        )
+        dims = ["x", "y"]
+        dims.insert(axis, "distance")
+        out = patch.transpose(*dims).integrate("distance").transpose(*patch.dims)
+        expected = np.broadcast_to(distance[:, None, None], patch.shape)
+        np.testing.assert_array_equal(out.data, expected)
+        np.testing.assert_array_equal(out.data, patch.integrate("distance").data)
+
+    def test_multiple_uneven_axes(self):
+        """Integrating a constant over two uneven axes gives their product."""
+        x, y = np.array([0, 1, 3, 6]), np.array([0, 2, 5])
+        patch = dc.Patch(data=np.ones((4, 3)), coords={"x": x, "y": y}, dims=("x", "y"))
+        out = patch.integrate(None)
+        np.testing.assert_array_equal(out.data, x[:, None] * y[None, :])

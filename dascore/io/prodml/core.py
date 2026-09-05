@@ -4,12 +4,17 @@ from __future__ import annotations
 
 from typing import Literal
 
+import numpy as np
+
 import dascore as dc
 from dascore.constants import opt_timeable_types
 from dascore.io import FiberIO, ScanPayload, make_scan_payload
+from dascore.io.utils import slice_dataset
+from dascore.utils.misc import raise_on_extra_kwargs
 
 from ...utils.hdf5 import H5Reader, H5Writer
 from .utils import (
+    _get_data_node,
     _get_prodml_version_str,
     _read_prodml,
     _write_prodml,
@@ -77,6 +82,25 @@ class ProdMLV2_0(FiberIO):  # noqa
             source_patch_key=source_patch_key,
         )
         return dc.spool(patches)
+
+    def read_array(
+        self,
+        resource: H5Reader,
+        windows: dict[str, tuple[int, int]],
+        source_patch_key="",
+        snap: bool = True,
+        **kwargs,
+    ) -> np.ndarray:
+        """
+        Slice one acquisition node's data array directly.
+
+        ``source_patch_key`` is the node name `scan` reports (for example
+        ``Raw[0]`` or ``FbeData[0]``); a file holding several nodes needs
+        one.
+        """
+        raise_on_extra_kwargs(kwargs, "windows, source_patch_key and snap")
+        dataset, dims = _get_data_node(resource, source_patch_key)
+        return slice_dataset(dataset, dims, windows)
 
 
 class ProdMLV2_1(ProdMLV2_0):  # noqa

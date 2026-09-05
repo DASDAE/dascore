@@ -4,7 +4,7 @@ execute:
   warning: false
 ---
 
-Although DASCore provides much of the functionality needed for DFOS processing, it is not intended to do everything, and other libraries may be better suited for specific tasks. In addition to making it simple to access the underlying data as shown in the [patch tutorial](../tutorial/patch.qmd), DASCore provides convenience functions to convert data to formats used by other libraries. Here are a few examples:
+DASCore converts patches to common library objects and back.
 
 
 ## [Pandas](https://pandas.pydata.org/)
@@ -14,10 +14,7 @@ import dascore as dc
 
 patch = dc.get_example_patch()
 
-# Convert to a dataframe
 df = patch.io.to_dataframe()
-
-# Convert a dataframe to a patch
 patch_from_df = dc.io.dataframe_to_patch(df)
 ```
 
@@ -28,10 +25,7 @@ import dascore as dc
 
 patch = dc.get_example_patch()
 
-# Convert to xarray's DataArray
 dar = patch.io.to_xarray()
-
-# Convert a DataArray to a patch
 patch_from_dar = dc.io.xarray_to_patch(dar)
 ```
 
@@ -50,6 +44,8 @@ first = next(node for node in tree.subtree if "data" in node.dataset)
 small = first.dataset["data"].isel(time=slice(0, 100)).compute()
 ```
 
+A source patch larger than `block_size` is read in several windows along the merged dimension rather than whole, so one block never has to hold a whole large file. Unset, it takes the configured `xarray_block_size` (256 MiB by default); pass `0` to read every source patch as one block, which makes any selection touching a patch read all of it. A format which cannot hand back a window reads whole whatever the setting says, since splitting it would read the file once per block.
+
 ## [ObsPy](https://docs.obspy.org/)
 
 ```python
@@ -57,13 +53,10 @@ import dascore as dc
 
 patch = dc.get_example_patch()
 
-# Convert the patch to an ObsPy Stream
 stream = patch.io.to_obspy()
-
-# Convert an ObsPy Stream to a patch
-patch_from_dar = dc.io.obspy_to_patch(stream)
+patch_from_stream = dc.io.obspy_to_patch(stream)
 ```
 
 :::{.callout-note}
-As explained in the [`obspy_to_patch` docs](`dascore.utils.io.obspy_to_patch`), the stats dictionary must include a value for at least one non-time dimension. For example, each trace might include a `distance` key in `stats`, which DASCore uses to construct the distance coordinate.
+`obspy_to_patch` requires every trace to have the same data length and the requested dimension in `stats` (`distance` by default).
 :::

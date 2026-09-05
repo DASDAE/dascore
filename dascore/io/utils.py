@@ -3,19 +3,36 @@
 from __future__ import annotations
 
 import warnings
-from collections.abc import Iterable, Mapping
-from typing import Any
+from collections.abc import Iterable, Mapping, Sequence
+from typing import Any, cast
 
 import numpy as np
 
 import dascore as dc
 from dascore.constants import INVENTORY_ATTRS
 from dascore.core.coordmanager import CoordManager
-from dascore.core.coords import BaseCoord, CoordSegmented, get_coord
-from dascore.exceptions import CoordError, UnitError
+from dascore.core.coords import (
+    BaseCoord,
+    CoordMonotonicArray,
+    CoordSegmented,
+    get_coord,
+)
+from dascore.core.summary import normalize_source_patch_key
+from dascore.exceptions import (
+    CoordError,
+    MissingPatchError,
+    ParameterError,
+    PatchAttributeError,
+    UnitError,
+)
 from dascore.models import ArrayLike
 from dascore.units import convert_units, get_quantity_str
-from dascore.utils.misc import unbyte
+from dascore.utils.misc import (
+    _to_slice,
+    _validate_sample_values,
+    is_strictly_monotonic,
+    unbyte,
+)
 
 # Stored coordinate arrays often carry sub-step jitter (e.g. GPS-stamped DAS
 # time). ``CoordSegmented.from_array`` treats every isolated sampling change as
@@ -152,6 +169,112 @@ def build_patches(
     return [dc.Patch(data=data[...], coords=coords, attrs=patch_attrs)]
 
 
+def windows_to_slices(
+    windows: Mapping[str, Any], dims: Sequence[str], shape: Sequence[int]
+) -> tuple[slice, ...]:
+    """
+    Turn `FiberIO.read_array` windows into one slice per dimension.
+
+    Each window is validated as `Patch.select` validates ``samples=True``
+    values and resolved against its dimension's length, so every slice
+    comes back with explicit non-negative bounds and ``start <= stop`` (a
+    reversed window is empty); a dimension without a window is taken whole.
+
+    Parameters
+    ----------
+    windows
+        Dimension name to ``(start, stop)`` half-open sample indices.
+    dims
+        The dimensions in the array's stored order.
+    shape
+        The array's shape, in the same order.
+    """
+    if unknown := sorted(set(windows) - set(dims)):
+        msg = f"Window dimensions {unknown} are not among patch dims {tuple(dims)}."
+        raise ParameterError(msg)
+    out = []
+    for dim, size in zip(dims, shape, strict=True):
+        if dim not in windows:
+            out.append(slice(0, size))
+            continue
+        _validate_sample_values(windows[dim])
+        window = _to_slice(windows[dim])
+        if window.step not in (None, 1):
+            msg = f"A window is a contiguous range; {dim!r} asked for {windows[dim]!r}."
+            raise ParameterError(msg)
+        span = range(size)[window]
+        out.append(slice(span.start, max(span.stop, span.start)))
+    return tuple(out)
+
+
+def resolve_keyed_source(
+    sources: Mapping[str, Any] | Iterable[tuple[str, Any]],
+    key,
+    where: str = "the resource",
+):
+    """
+    Return the one source a ``source_patch_key`` names.
+
+    Resolves a native key as the default `FiberIO.read_array` does: an
+    empty resource is missing data, and an unknown key, an ambiguous
+    keyless one, or a key naming more than one source cannot be
+    resolved. Unlike the default it takes no positional key, since a
+    format which states its own keys never synthesizes one.
+
+    ``sources`` maps each native key to whatever the caller needs back,
+    and is read lazily, so an h5py group can be passed as it is. Pass
+    ``(key, value)`` pairs instead where a resource can state one key
+    twice, so the ambiguity is seen rather than silently resolved.
+    """
+    key = normalize_source_patch_key(key)
+    if isinstance(sources, Mapping):
+        # a mapping cannot hold a name twice, so it is read as it is: an
+        # h5py group resolves a name without opening its siblings
+        mapping = cast("Mapping[str, Any]", sources)
+        if not len(mapping):
+            raise MissingPatchError(f"No patches in {where}.")
+        if key:
+            if key not in mapping:
+                raise PatchAttributeError(f"No patch named '{key}' in {where}.")
+            return mapping[key]
+        if len(mapping) > 1:
+            msg = f"{where} holds several patches; pass source_patch_key."
+            raise PatchAttributeError(msg)
+        return next(iter(mapping.values()))
+    pairs = list(sources)
+    if not pairs:
+        raise MissingPatchError(f"No patches in {where}.")
+    if key:
+        found = [value for name, value in pairs if name == key]
+        if not found:
+            raise PatchAttributeError(f"No patch named '{key}' in {where}.")
+        if len(found) > 1:
+            msg = f"{where} names '{key}' more than once; it cannot be resolved."
+            raise PatchAttributeError(msg)
+        return found[0]
+    if len(pairs) > 1:
+        msg = f"{where} holds several patches; pass source_patch_key."
+        raise PatchAttributeError(msg)
+    return pairs[0][1]
+
+
+def slice_dataset(
+    dataset: ArrayLike,
+    dims: Sequence[str],
+    windows: Mapping[str, Any],
+    shape: Sequence[int] | None = None,
+) -> np.ndarray:
+    """
+    Read the sample windows of an array stored in ``dims`` order.
+
+    ``shape`` defaults to the dataset's own; pass it when an axis of the
+    grid `scan` reports is shorter than the stored one, as it is for a
+    Terra15 file whose trailing rows were never written.
+    """
+    shape = dataset.shape if shape is None else shape
+    return dataset[windows_to_slices(windows, dims, shape)]
+
+
 def get_gridded_coord(values, units=None) -> BaseCoord:
     """
     Return a stored coordinate array forced onto an even grid.
@@ -189,7 +312,9 @@ def get_exact_coord(values, units=None) -> BaseCoord:
     # array (0-d) becomes a length-1 coordinate rather than a scalar.
     values = np.atleast_1d(np.asarray(values))
     if _is_over_segmented(values):
-        return get_coord(data=values, units=units)
+        # The guard has established strict monotonicity. Keep the stored
+        # values: get_coord could approximate their jitter with a range.
+        return CoordMonotonicArray(values=values, units=units)
     try:
         return CoordSegmented.from_array(values, tolerance=0, units=units)
     except CoordError:
@@ -205,10 +330,9 @@ def _is_over_segmented(values) -> bool:
     """
     if values.ndim != 1 or len(values) < _MIN_SEGMENT_GUARD_SIZE:
         return False
-    diffs = np.diff(values)
-    zero = diffs[0] - diffs[0]
-    if not (np.all(diffs > zero) or np.all(diffs < zero)):
+    if not is_strictly_monotonic(values):
         return False  # non-monotonic; from_array handles its own fallback
+    diffs = np.diff(values)
     # A diff belongs to a run when it matches a neighbor; isolated diffs seam.
     eq_next = diffs[:-1] == diffs[1:]
     in_run = np.zeros(len(diffs), dtype=bool)
