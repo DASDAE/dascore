@@ -539,7 +539,44 @@ def _is_reader_hintable(value) -> bool:
     )
 
 
-def _residual_cut_masks(df: pd.DataFrame, residuals) -> dict[str, np.ndarray]:
+def _residual_cut_masks(df: pd.DataFrame, residuals) -> dict[str, pd.Series]:
+    """Compute masks within rows sharing coordinate precision and grid kind."""
+    if not residuals or len(residuals) > _MASK_BITS:
+        return {}
+    names = {name for coords, _, _ in residuals for name in coords}
+    # Associated coordinates can change another selector's samples. Their
+    # envelopes do not state that relationship, so let the patch replay it.
+    if "dims" in df and any(
+        names - set(dims.split(",")) for dims in df["dims"].unique()
+    ):
+        return {}
+    groups = {}
+    for name in sorted(names):
+        if f"{name}_min" not in df:
+            continue
+        groups[name] = df.get(f"_{name}_coord_dtype", "")
+        step = df.get(f"{name}_step")
+        regular = False
+        if step is not None and _orderable(step):
+            values = np.abs(step.to_numpy())
+            regular = np.isfinite(values) & (values > np.zeros((), dtype=values.dtype))
+        groups[f"{name}_regular"] = regular
+    if not groups:
+        return {}
+    frame = pd.DataFrame(groups, index=df.index)
+    out = {}
+    for positions in frame.groupby(
+        list(frame), sort=False, dropna=False
+    ).indices.values():
+        subset = df.iloc[positions]
+        for name, mask in _grid_cut_masks(subset, residuals).items():
+            if name not in out:
+                out[name] = pd.Series(pd.NA, index=df.index, dtype="Int64")
+            out[name].iloc[positions] = mask
+    return out
+
+
+def _grid_cut_masks(df: pd.DataFrame, residuals) -> dict[str, np.ndarray]:
     """
     Per row and coordinate, which residuals actually narrow it.
 
@@ -581,6 +618,12 @@ def _residual_cut_masks(df: pd.DataFrame, residuals) -> dict[str, np.ndarray]:
                     untracked.add(name)
                     continue
                 steps = None
+                dtype = df.get(f"_{name}_coord_dtype")
+                stored = dtype.iloc[0] if dtype is not None else ""
+                narrow = stored in ("float16", "float32")
+                if narrow and uses[name] > 1:
+                    untracked.add(name)
+                    continue
                 step = df.get(f"{name}_step")
                 if step is not None and _orderable(step):
                     values = np.abs(step.to_numpy())
@@ -595,6 +638,10 @@ def _residual_cut_masks(df: pd.DataFrame, residuals) -> dict[str, np.ndarray]:
                     untracked.add(name)
                     continue
                 start, stop = start.to_numpy(), stop.to_numpy()
+                if narrow:
+                    start, stop = start.astype(stored), stop.astype(stored)
+                    if steps is not None:
+                        steps = steps.astype(stored)
                 origin = start
                 if steps is not None:
                     stop = np.round((stop - origin) / steps)
@@ -609,12 +656,14 @@ def _residual_cut_masks(df: pd.DataFrame, residuals) -> dict[str, np.ndarray]:
             # would introduce rounding drift between composed selections.
             if low is not None:
                 if step is not None:
-                    low = np.ceil(np.round((low - origin) / step, 10))
+                    fraction = np.asarray((low - origin) / step, dtype="float64")
+                    low = np.ceil(np.round(fraction, 10))
                 cut |= start < low
                 start = np.maximum(start, low)
             if high is not None:
                 if step is not None:
-                    high = np.floor(np.round((high - origin) / step, 10))
+                    fraction = np.asarray((high - origin) / step, dtype="float64")
+                    high = np.floor(np.round(fraction, 10))
                 cut |= stop > high
                 stop = np.minimum(stop, high)
             live[name] = (start, stop, origin, step)

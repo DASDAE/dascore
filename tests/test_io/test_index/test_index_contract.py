@@ -711,6 +711,68 @@ class TestLineageIds:
         assert np.array_equal(selected.data, source.data)
         assert selected.attrs.processing_id == expected.attrs.processing_id
 
+    def test_associated_selections_replay_in_call_order(self, tmp_path):
+        """Trimming an axis can make a later associated-coordinate trim a no-op."""
+        patch = dc.get_example_patch().update_coords(
+            distance=np.arange(300), depth=("distance", 2 * np.arange(300))
+        )
+        patch.io.write(tmp_path / "source.h5", "dasdae")
+        for spool in (dc.spool([patch]), dc.spool(tmp_path).update()):
+            source = spool[0]
+            expected = source.select(distance=(2, None)).select(depth=(2, None))
+            view = spool.select(distance=(2, None)).select(depth=(2, None))
+            view.get_contents()
+            out = view[0]
+            assert out.attrs.processing_id == expected.attrs.processing_id
+            assert out.coords == expected.coords
+            assert np.array_equal(out.data, expected.data)
+
+    def test_float32_absolute_bound_uses_source_precision(self, tmp_path, monkeypatch):
+        """Native float32 rounding determines a no-op without losing reader hints."""
+        values = np.float32(538.14794921875) + np.arange(
+            300, dtype=np.float32
+        ) * np.float32(3.3)
+        patch = dc.get_example_patch().update_coords(distance=values)
+        patch.io.write(tmp_path / "source.h5", "dasdae")
+        spool = dc.spool(tmp_path).update()
+        source = spool[0]
+        calls = []
+        resolver = spool._catalog.resolver
+        original = resolver.resolve
+
+        def resolve(row, **trim):
+            calls.append(trim)
+            return original(row, **trim)
+
+        monkeypatch.setattr(resolver, "resolve", resolve)
+        for bounds in ((538.14795, None), (600.0, 650.0)):
+            expected = source.select(distance=bounds)
+            view = spool.select(distance=bounds)
+            view.get_contents()
+            out = view[0]
+            assert out.attrs.processing_id == expected.attrs.processing_id
+            assert out.coords == expected.coords
+            assert np.array_equal(out.data, expected.data)
+            assert calls[-1].get("distance") == bounds
+        expected = source.select(distance=(600.0, None)).select(distance=(650.0, None))
+        out = spool.select(distance=(600.0, None)).select(distance=(650.0, None))[0]
+        assert out.attrs.processing_id == expected.attrs.processing_id
+        assert np.array_equal(out.data, expected.data)
+
+    def test_other_grid_kinds_do_not_change_cached_selection_identity(self):
+        """Realizing mixed-grid metadata cannot change a regular row's lineage."""
+        base = dc.get_example_patch()
+        regular = base.update_coords(distance=np.arange(300, dtype=float))
+        values = np.arange(300, dtype=float)
+        values[150] += 0.25
+        uneven = base.update_coords(distance=values)
+        view = dc.spool([regular, uneven]).select(distance=(1e-12, None))
+        expected = regular.select(distance=(1e-12, None))
+        assert view[0].attrs.processing_id == expected.attrs.processing_id
+        view.get_contents()
+        assert view[0].attrs.processing_id == expected.attrs.processing_id
+        assert np.array_equal(view[0].data, expected.data)
+
     def test_a_trim_which_cuts_nothing_records_nothing(self, tmp_path):
         """A selection which leaves the patch whole is not an operation.
 
