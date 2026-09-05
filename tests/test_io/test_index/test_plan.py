@@ -17,6 +17,7 @@ from dascore.exceptions import (
     ParameterError,
 )
 from dascore.io.index.catalog import PatchCatalog
+from dascore.units import m, percent
 from dascore.utils.chunk_plan import (
     ChunkPlan,
     _directions,
@@ -26,7 +27,7 @@ from dascore.utils.chunk_plan import (
     _value_family,
     build_chunk_plan,
     build_concat_plan,
-    samples_adjusted_envelopes,
+    patch_local_adjusted_envelopes,
 )
 from dascore.utils.time import to_timedelta64
 
@@ -495,29 +496,37 @@ class TestSamplesAdjustedEnvelopes:
 
     def test_exclusive_stop(self):
         """The stop index is exclusive: (0, 5) ends at sample 4."""
-        out = samples_adjusted_envelopes(self._frame(), (({"time": (0, 5)}, True),))
+        out = patch_local_adjusted_envelopes(
+            self._frame(), (({"time": (0, 5)}, True, False),)
+        )
         assert out["time_max"].iloc[0] == 4.0
 
     def test_empty_window_drops_row(self):
         """A zero-length window contributes nothing."""
-        out = samples_adjusted_envelopes(self._frame(), (({"time": (3, 3)}, True),))
+        out = patch_local_adjusted_envelopes(
+            self._frame(), (({"time": (3, 3)}, True, False),)
+        )
         assert len(out) == 0
 
     def test_start_past_end_drops_row(self):
         """A window beyond the patch contributes nothing."""
-        out = samples_adjusted_envelopes(self._frame(), (({"time": (50, 60)}, True),))
+        out = patch_local_adjusted_envelopes(
+            self._frame(), (({"time": (50, 60)}, True, False),)
+        )
         assert len(out) == 0
 
     def test_stop_clamps(self):
         """A stop past the end clamps to the envelope max."""
-        out = samples_adjusted_envelopes(self._frame(), (({"time": (2, 99)}, True),))
+        out = patch_local_adjusted_envelopes(
+            self._frame(), (({"time": (2, 99)}, True, False),)
+        )
         assert out["time_min"].iloc[0] == 2.0
         assert out["time_max"].iloc[0] == 9.0
 
     def test_descending_orientation(self):
         """On a descending coord, sample 0 sits at the envelope max."""
         df = pd.DataFrame({"time_min": [0.0], "time_max": [9.0], "time_step": [-1.0]})
-        out = samples_adjusted_envelopes(df, (({"time": (0, 5)}, True),))
+        out = patch_local_adjusted_envelopes(df, (({"time": (0, 5)}, True, False),))
         assert out["time_max"].iloc[0] == 9.0
         assert out["time_min"].iloc[0] == 5.0
 
@@ -530,6 +539,140 @@ class TestSamplesAdjustedEnvelopes:
         got = out.get_contents()["time_max"].iloc[0]
         assert got == want
         assert patch.shape[patch.get_axis("time")] == 10
+
+
+class TestRelativeAdjustedEnvelopes:
+    """Relative residual envelope adjustment."""
+
+    def test_open_percent_bound(self):
+        """Open and percent bounds project in each row range."""
+        df = pd.DataFrame({"time_min": [0.0], "time_max": [9.0]})
+        residuals = (({"time": (None, -50 * percent)}, False, True),)
+        out = patch_local_adjusted_envelopes(df, residuals)
+        assert out["time_min"].iloc[0] == 0.0
+        assert out["time_max"].iloc[0] == 4.5
+
+    @pytest.mark.parametrize("bound", [1 * m, np.array([1, 2]), "bad"])
+    def test_unresolved_bound_keeps_envelope(self, bound):
+        """Bounds the relation cannot project defer to exact patch selection."""
+        df = pd.DataFrame({"time_min": [0.0], "time_max": [9.0]})
+        # Pair the unresolvable bound with a resolvable one: the control
+        # below moves time_max, so an untouched envelope here means the
+        # pair was deferred, not that nothing was projected at all.
+        residuals = (({"time": (bound, -4.5)}, False, True),)
+        assert patch_local_adjusted_envelopes(df, residuals).equals(df)
+        control = (({"time": (0.0, -4.5)}, False, True),)
+        out = patch_local_adjusted_envelopes(df, control)
+        assert out["time_max"].iloc[0] == 4.5
+
+    @pytest.mark.parametrize("bounds", [(-np.inf, -4.5), (4.5, np.inf)])
+    def test_infinity_away_from_the_patch_is_open(self, bounds):
+        """An infinity pointing away from the patch leaves that side open."""
+        df = pd.DataFrame({"time_min": [0.0], "time_max": [9.0]})
+        residuals = (({"time": bounds}, False, True),)
+        out = patch_local_adjusted_envelopes(df, residuals)
+        assert out["time_min"].iloc[0] == (0.0 if bounds[0] == -np.inf else 4.5)
+        assert out["time_max"].iloc[0] == (4.5 if bounds[0] == -np.inf else 9.0)
+
+    @pytest.mark.parametrize("bounds", [(np.inf, None), (None, -np.inf)])
+    def test_infinity_past_the_patch_empties_it(self, bounds):
+        """Numeric infinity is a real bound: past the patch selects nothing."""
+        df = pd.DataFrame({"time_min": [0.0], "time_max": [9.0]})
+        residuals = (({"time": bounds}, False, True),)
+        out = patch_local_adjusted_envelopes(df, residuals, drop_empty=False)
+        assert out["_patch_local_empty"].all()
+        assert out["time_min"].isna().all()
+
+    def test_non_finite_time_bound_is_open(self):
+        """A datetime coordinate cannot offset by infinity, so it loads whole."""
+        start = np.datetime64("2020-01-01")
+        df = pd.DataFrame(
+            {"time_min": [start], "time_max": [start + np.timedelta64(9, "s")]}
+        )
+        residuals = (({"time": (np.inf, None)}, False, True),)
+        out = patch_local_adjusted_envelopes(df, residuals)
+        assert out["time_min"].iloc[0] == start
+        assert out["time_max"].iloc[0] == df["time_max"].iloc[0]
+
+    def test_numeric_quantity_uses_row_units(self):
+        """Quantity offsets convert into each numeric coordinate's units."""
+        df = pd.DataFrame(
+            {"distance_min": [10.0], "distance_max": [19.0], "_distance_units": ["m"]}
+        )
+        residuals = (({"distance": (100 * dc.units.cm, None)}, False, True),)
+        out = patch_local_adjusted_envelopes(df, residuals)
+        assert out["distance_min"].iloc[0] == 11.0
+        assert out["distance_max"].iloc[0] == 19.0
+
+    def test_missing_envelope_columns_pass_through(self):
+        """A residual for an absent coordinate does not alter the relation."""
+        df = pd.DataFrame({"time_min": [0.0], "time_max": [9.0]})
+        residuals = (({"depth": (1, -1)}, False, True),)
+        out = patch_local_adjusted_envelopes(df, residuals)
+        assert out.equals(df)
+
+    def test_each_row_uses_its_own_envelope(self):
+        """Equal offsets produce different absolute ranges per patch."""
+        df = pd.DataFrame(
+            {
+                "time_min": [0.0, 100.0],
+                "time_max": [9.0, 109.0],
+                "time_step": [1.0, 1.0],
+            }
+        )
+        residuals = (({"time": (1, -1)}, False, True),)
+        out = patch_local_adjusted_envelopes(df, residuals)
+        assert out["time_min"].tolist() == [1.0, 101.0]
+        assert out["time_max"].tolist() == [8.0, 108.0]
+
+    def test_first_window_survives_chunk(self):
+        """A derived spool describes and loads each patch-local window."""
+        spool = dc.get_example_spool(
+            "random_das", shape=(20, 200), time_step=dc.to_timedelta64(0.04)
+        )
+        out = spool.select(time=(0, 2), relative=True).chunk(time=None)
+        assert len(out) == len(spool)
+        for source, selected in zip(spool, out, strict=True):
+            expected = source.select(time=(0, 2), relative=True)
+            assert selected.equals(expected)
+
+    @pytest.fixture()
+    def short_spool(self):
+        """Three patches whose patch-local windows are separated by gaps."""
+        return dc.get_example_spool(
+            "random_das", shape=(20, 200), time_step=dc.to_timedelta64(0.04)
+        )
+
+    def test_samples_take_precedence_over_relative(self, short_spool):
+        """Combined flags project with Patch.select's sample semantics."""
+        selected = short_spool.select(time=(0, 10), samples=True, relative=True).chunk(
+            time=None
+        )
+        assert len(selected) == len(short_spool)
+        assert all(x.shape[x.get_axis("time")] == 10 for x in selected)
+
+    @pytest.mark.parametrize(
+        "window",
+        [
+            (np.nan, 2),
+            (0 * dc.units.s, 2 * dc.units.s),
+            (0 * percent, 50 * percent),
+        ],
+        ids=("null", "quantity", "percent"),
+    )
+    def test_bound_forms_survive_chunk(self, short_spool, window):
+        """Null, quantity, and percent bounds plan the loaded windows exactly."""
+        selected = short_spool.select(time=window, relative=True).chunk(time=None)
+        assert len(selected) == len(short_spool)
+        for source, patch in zip(short_spool, selected, strict=True):
+            assert patch.equals(source.select(time=window, relative=True))
+
+    def test_empty_windows_produce_empty_plan(self, short_spool):
+        """Selected empty patches remain members but contribute no plan outputs."""
+        selected = short_spool.select(time=(100, 101), relative=True)
+        assert len(selected) == len(short_spool)
+        assert len(selected.chunk_plan(time=None).outputs) == 0
+        assert len(selected.chunk(time=None)) == 0
 
 
 class TestChunkOnlyOnDims:
@@ -659,27 +802,31 @@ class TestNegativeSamplesEnvelopes:
 
     def test_negative_start_resolves(self):
         """(-3, None) selects the last three samples."""
-        out = samples_adjusted_envelopes(self._frame(), (({"time": (-3, None)}, True),))
+        out = patch_local_adjusted_envelopes(
+            self._frame(), (({"time": (-3, None)}, True, False),)
+        )
         assert out["time_min"].iloc[0] == 7.0
         assert out["time_max"].iloc[0] == 9.0
 
     def test_negative_stop_resolves(self):
         """(None, -2) drops the last two samples."""
-        out = samples_adjusted_envelopes(self._frame(), (({"time": (None, -2)}, True),))
+        out = patch_local_adjusted_envelopes(
+            self._frame(), (({"time": (None, -2)}, True, False),)
+        )
         assert out["time_max"].iloc[0] == 7.0
 
     def test_unknown_step_keeps_envelope(self):
         """Rows whose count is unknown keep their candidacy envelope."""
         df = pd.DataFrame({"time_min": [0.0], "time_max": [9.0], "time_step": [np.nan]})
-        out = samples_adjusted_envelopes(df, (({"time": (-3, None)}, True),))
+        out = patch_local_adjusted_envelopes(df, (({"time": (-3, None)}, True, False),))
         assert len(out) == 1
         assert out["time_min"].iloc[0] == 0.0
         assert out["time_max"].iloc[0] == 9.0
 
     def test_drop_empty_false_keeps_rows(self):
         """Equality's variant keeps presented-but-empty rows."""
-        out = samples_adjusted_envelopes(
-            self._frame(), (({"time": (3, 3)}, True),), drop_empty=False
+        out = patch_local_adjusted_envelopes(
+            self._frame(), (({"time": (3, 3)}, True, False),), drop_empty=False
         )
         assert len(out) == 1
 
@@ -699,7 +846,9 @@ class TestNonIntSamplesIndices:
     def test_float_index_skipped(self):
         """A float index cannot adjust; the envelope stays candidacy."""
         df = pd.DataFrame({"time_min": [0.0], "time_max": [9.0], "time_step": [1.0]})
-        out = samples_adjusted_envelopes(df, (({"time": (0.5, None)}, True),))
+        out = patch_local_adjusted_envelopes(
+            df, (({"time": (0.5, None)}, True, False),)
+        )
         assert out["time_min"].iloc[0] == 0.0
         assert out["time_max"].iloc[0] == 9.0
 

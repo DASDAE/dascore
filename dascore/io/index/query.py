@@ -16,6 +16,7 @@ import re
 from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
 from enum import Enum, auto
+from typing import NamedTuple
 
 import numpy as np
 import pandas as pd
@@ -23,7 +24,7 @@ import pandas as pd
 from dascore.exceptions import InvalidSpoolQueryError, ParameterError, UnitError
 from dascore.io.index.ingest import typed_value
 from dascore.io.index.schema import glob_expr, quote
-from dascore.units import convert_units
+from dascore.units import convert_units, get_quantity
 from dascore.utils.misc import glob_to_regex, is_range
 from dascore.utils.pd import resolve_selector_namespaces
 
@@ -43,6 +44,24 @@ class _Unset(Enum):
 
 
 _UNSET = _Unset.UNSET
+
+
+@dataclass(frozen=True)
+class CoordExists:
+    """
+    Candidacy predicate for a patch-local coordinate selection.
+
+    The bounds are resolved per patch at load, so the index can only ask
+    that the coordinate exist. ``units_from`` carries the original range
+    when one of its bounds is a quantity: a metre window still has to
+    exclude a seconds coordinate, or metadata would claim a row that
+    raises `UnitError` on load.
+    """
+
+    units_from: tuple | None = None
+
+
+COORD_EXISTS = CoordExists()
 
 
 @dataclass(frozen=True)
@@ -417,6 +436,64 @@ def evaluate_attr_predicate(values, name: str, value, units=None) -> np.ndarray:
     return compare(value, operator.eq)
 
 
+class _UnitBound(NamedTuple):
+    """The only thing unit compatibility needs from a bound."""
+
+    units: str
+
+
+def _dimensional_bounds(value) -> list[_UnitBound]:
+    """
+    Return the bounds of a range which constrain the coordinate's units.
+
+    Relative bounds are never validated against each other here (a
+    reversed pair is legal per patch), so this reads their units directly
+    rather than coercing the range. Percentages are dimensionless: they
+    describe a fraction of whatever the patch spans, so they constrain
+    nothing.
+    """
+    out: list[_UnitBound] = []
+    for raw in value or ():
+        units = getattr(raw, "units", None)
+        quantity = None if units is None else get_quantity(units)
+        if quantity is None or quantity.dimensionless:
+            continue
+        out.append(_UnitBound(str(units)))
+    return out
+
+
+def _add_exists_clause(
+    where: _Where, rows: pd.DataFrame, name: str, value: CoordExists
+) -> None:
+    """Add an existence clause, narrowed to dimensionally usable units."""
+    conditions = ["pc.coord_name = ?"]
+    params: list = [name]
+    if "str" in set(rows["value_kind"]):
+        # String coordinates have no offset arithmetic (`Patch.select`
+        # refuses them), so they are never relative candidates. A
+        # population with no other kind is rejected eagerly, in select.
+        conditions.append("cd.value_kind != 'str'")
+    compatible = None
+    bounds = _dimensional_bounds(value.units_from)
+    if bounds and len(rows):
+        compatible = _compatible_coord_units(rows, bounds, name)
+    if compatible is not None:
+        # NULL-unit definitions can never be proven incompatible, so they
+        # stay candidates, exactly as the bounded clause treats them.
+        if not compatible:
+            conditions.append("cd.units IS NULL")
+        else:
+            marks = ", ".join("?" * len(compatible))
+            conditions.append(f"(cd.units IS NULL OR cd.units IN ({marks}))")
+            params.extend(sorted(compatible))
+    where.add(
+        "p.patch_id IN (SELECT pc.patch_id FROM patch_coords pc "
+        "JOIN coord_defs cd ON cd.coord_def_id = pc.coord_def_id "
+        "WHERE " + " AND ".join(conditions) + ")",
+        *params,
+    )
+
+
 def build_coord_clause(
     where: _Where,
     coord_meta: pd.DataFrame,
@@ -431,6 +508,9 @@ def build_coord_clause(
     membership/boolean masks are applied at patch load, above this layer.
     """
     rows = coord_meta[coord_meta["coord_name"] == name]
+    if isinstance(value, CoordExists):
+        _add_exists_clause(where, rows, name, value)
+        return
     if isinstance(value, tuple) and len(value) != 2:
         msg = f"Coordinate range for {name!r} must be a length 2 sequence."
         raise ParameterError(msg)
