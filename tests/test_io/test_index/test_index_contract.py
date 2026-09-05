@@ -819,6 +819,39 @@ class TestLineageIds:
         assert view[0].attrs.processing_id == direct.attrs.processing_id
         assert view[0].attrs.history == direct.attrs.history
 
+    @pytest.mark.parametrize("dim", ["distance", "time"])
+    @pytest.mark.parametrize("bounds", [(0, None), (None, None), (None, 1e9)])
+    def test_relative_noop_keeps_metadata(self, tmp_path, dim, bounds):
+        """A relative selection that leaves samples alone keeps source metadata."""
+        dc.get_example_patch().abs().io.write(tmp_path / "source.h5", "dasdae")
+        spool = dc.spool(tmp_path).update()
+        view = spool.select(**{dim: bounds}, relative=True)
+        columns = ["_data_size", "processing_id"]
+        assert view._df[columns].equals(spool._df[columns])
+        assert view[0].attrs.processing_id == spool[0].attrs.processing_id
+        assert np.array_equal(view[0].data, spool[0].data)
+
+    def test_relative_metadata_tracks_each_row(self, tmp_path):
+        """A shared relative window trims only the longer source patch."""
+        base = dc.get_example_patch().abs()
+        for size in (5, 20):
+            patch = base.select(distance=(0, size), samples=True)
+            patch.io.write(tmp_path / f"{size}.h5", "dasdae")
+        spool = dc.spool(tmp_path).update()
+        view = spool.select(distance=(0, 10), relative=True)
+        whole = spool._df["distance_max"] <= 10
+        assert whole.any() and not whole.all()
+        for column in ("_data_size", "processing_id"):
+            assert view._df.loc[~whole, column].isna().all()
+            assert (
+                view._df.loc[whole, column].to_numpy()
+                == spool._df.loc[whole, column].to_numpy()
+            ).all()
+        for original, selected in zip(spool, view, strict=True):
+            direct = original.select(distance=(0, 10), relative=True)
+            assert selected.attrs.processing_id == direct.attrs.processing_id
+            assert np.array_equal(selected.data, direct.data)
+
     def test_processing_id_queries_source_metadata(self, tmp_path):
         """Attribute predicates identify the source, before residual processing."""
         patch = dc.get_example_patch().abs()

@@ -453,15 +453,15 @@ def _residual_cuts_unmarked_rows(residuals) -> bool:
     """
     True when a residual selection can trim a row nothing marks trimmed.
 
-    A value range rides along with a query whose bounds `to_df` folds
-    into the presented envelopes, so `_modified` already names every row
-    it cuts. Sample indices have no envelope to fold into, and a
+    Absolute and relative ranges are projected onto the presented
+    envelopes, so `_modified` already names every row they cut or cannot
+    project. Sample indices do not mark their trims, and a
     selector which is not a range never reached `adjust_segments`;
     either trims at load with the row still claiming to be whole.
     """
     return any(
-        samples or relative or not all(_rides_the_envelopes(x) for x in coords.values())
-        for coords, samples, relative in residuals
+        samples or not all(_rides_the_envelopes(x) for x in coords.values())
+        for coords, samples, _ in residuals
     )
 
 
