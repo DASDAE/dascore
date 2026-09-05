@@ -148,7 +148,7 @@ found = spool.select(patch_id=wanted)
 assert found[0].attrs.patch_id == wanted
 ```
 
-`processing_id` is not indexed because loading advances processing provenance. Built or chunked spools may have no `patch_id`, and moving a source invalidates its derived ID until the directory is rescanned. See [Patch identity](patch.qmd#patch-identity) for the identity rules.
+`processing_id` is also indexed. Attribute queries match the stored source ID, including the empty string when no operations were recorded. Built or chunked spools may have no `patch_id`, and moving a source invalidates its derived ID until the directory is rescanned. See [Patch identity](patch.qmd#patch-identity) for the identity rules.
 
 An empty ID after a file move is intentional: retaining the path-derived value would point at a source which no longer exists. Calling `update()` rebuilds the row from its new location.
 
@@ -185,6 +185,8 @@ bounded = spool.chunk(time=1 * megabytes)
 ```
 
 `overlap` accepts the same coordinate-unit, quantity, or data-size forms as the chunk length. `keep_partial=True` retains a shorter final window. Passing `time=None` asks DASCore to merge every contiguous compatible segment.
+
+Eligible whole-file merges read arrays directly and reconstruct coordinates and scalar attributes from the index. Members requiring trims, associated coordinates, or metadata the index cannot reproduce use the patch reader. Index-built results retain patch and processing identities and omit stored history. To retain stored history, load the members first, as in `dc.spool(list(file_spool)).chunk(time=None)`.
 
 Data-size limits cover the array only, not coordinates, metadata, or later processing copies. `MB` is decimal and `MiB` is binary.
 

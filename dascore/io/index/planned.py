@@ -456,6 +456,8 @@ def _output_records(
             distance_step=_num(row.get("distance_step")),
             attrs=attrs,
             coords=tuple(coords),
+            # Plan attributes are resolved through members, not this row.
+            attrs_complete=False,
         )
         records.append(
             SourceRecord(
@@ -502,6 +504,7 @@ class PlanResolver(PatchResolver):
         merge_kwargs: Mapping,
         parent_residuals: tuple = (),
         mode: str = "chunk",
+        aux_coords: frozenset[str] = frozenset(),
         origin_path=None,
         stamped: tuple[str, ...] = (),
         lossy: bool = False,
@@ -514,6 +517,7 @@ class PlanResolver(PatchResolver):
         self.dim = dim
         self.member_rows = member_rows.reset_index(drop=True)
         self.loader = loader
+        self.aux_coords = frozenset(aux_coords)
         self.merge_kwargs = dict(merge_kwargs)
         self.parent_residuals = tuple(parent_residuals)
         self.mode = mode
@@ -542,7 +546,24 @@ class PlanResolver(PatchResolver):
             load_patch=self._load_member,
             merge_kwargs=self.merge_kwargs,
             plan_dim=self.dim,
+            load_array=self._load_member_whole,
+            can_load_array=self._can_load_member_whole,
         )
+
+    def _can_load_member_whole(self, row: Mapping) -> bool:
+        """Check every row-only fast-path condition before any array is read."""
+        if row.get("_modified") or self.aux_coords:
+            return False
+        # An unmodified row lies wholly inside any value selection on the
+        # plan's dimension; other residuals still need the loaded patch.
+        for coords, samples, relative in self.parent_residuals:
+            if samples or relative or set(coords) - {self.dim}:
+                return False
+        return self._array_read_info(row) is not None
+
+    def _load_member_whole(self, row: Mapping) -> np.ndarray | None:
+        """Read a whole member after all rows pass the metadata preflight."""
+        return self._load_member_array(row, {}, ignore_residuals=True)
 
     def _load_member(self, kwargs: Mapping) -> dc.Patch:
         """Load one member source patch, applying parent residuals."""
@@ -581,7 +602,9 @@ class PlanResolver(PatchResolver):
             patch = apply_exact_residuals(patch, self.parent_residuals)
         return self._in_plan_units(patch, kwargs)
 
-    def _load_member_array(self, row: Mapping, windows: Mapping) -> np.ndarray | None:
+    def _load_member_array(
+        self, row: Mapping, windows: Mapping, *, ignore_residuals: bool = False
+    ) -> np.ndarray | None:
         """
         Load one member's raw array through the format's `read_array`.
 
@@ -602,10 +625,29 @@ class PlanResolver(PatchResolver):
         parent residuals — a residual re-trims the loaded patch, and a
         data-only read would skip that trim. The fast path trusts the
         index about the grid itself: the caller's shape guard catches a
-        resized file, not a shifted one.
+        resized file, not a shifted one. ``ignore_residuals`` is for a
+        caller which has established the residuals cannot touch this row.
         """
-        if self.parent_residuals:
+        if self.parent_residuals and not ignore_residuals:
             return None
+        info = self._array_read_info(row)
+        if info is None:
+            return None
+        loader, path, fiber_io, key = info
+        kwargs = {"source_patch_key": key} if key else {}
+        # The resource manager resolves remote paths and opens the handle
+        # type the override's annotation asks for, exactly as dc.read
+        # provisions its reader; _pre_cast says the work is already done.
+        with IOResourceManager(loader.resolve_path(path)) as manager:
+            resource = manager.get_resource(
+                _required_resource_type(fiber_io.read_array)
+            )
+            return fiber_io.read_array(
+                resource, dict(windows), _pre_cast=True, **kwargs
+            )
+
+    def _array_read_info(self, row: Mapping):
+        """Resolve array-reader metadata without opening the source file."""
         path = _row_str(row.get("source_path"))
         if not path:
             return None
@@ -634,17 +676,7 @@ class PlanResolver(PatchResolver):
             # read (see FileResolver.resolve); an override which resolves
             # keys natively could match the wrong patch, or nothing.
             return None
-        kwargs = {"source_patch_key": key} if key else {}
-        # The resource manager resolves remote paths and opens the handle
-        # type the override's annotation asks for, exactly as dc.read
-        # provisions its reader; _pre_cast says the work is already done.
-        with IOResourceManager(loader.resolve_path(path)) as manager:
-            resource = manager.get_resource(
-                _required_resource_type(fiber_io.read_array)
-            )
-            return fiber_io.read_array(
-                resource, dict(windows), _pre_cast=True, **kwargs
-            )
+        return loader, path, fiber_io, key
 
     def _in_plan_units(self, patch: dc.Patch, kwargs: Mapping) -> dc.Patch:
         """
@@ -837,6 +869,11 @@ def derived_catalog(
         )
         loader.absorb(parent.resolver, paths=member_paths)
     coord_dims_map = {} if parent is None else parent.backend.coord_dims_map()
+    # a coordinate riding a dimension it is not named for, on any member,
+    # is associated; the array path rebuilds dimension coordinates only
+    aux_coords = frozenset(
+        () if parent is None else parent.backend.associated_coord_names()
+    )
     resolver = PlanResolver(
         token=token,
         dim=name,
@@ -845,6 +882,7 @@ def derived_catalog(
         merge_kwargs=merge_kwargs,
         parent_residuals=parent_residuals,
         mode=mode,
+        aux_coords=aux_coords,
         origin_path=origin_path,
         stamped=stamped,
         lossy=lossy,
@@ -861,7 +899,10 @@ def derived_catalog(
         sources, trims, name, coord_dims_map, trimmed_dims, concat=mode == "concat"
     )
     records = _output_records(
-        outputs, token, aux_info=aux_info, sizes=_whole_member_sizes(trims, sources)
+        outputs,
+        token,
+        aux_info=aux_info,
+        sizes=_whole_member_sizes(trims, sources),
     )
     backend.write_sources(records)
     return PatchCatalog(backend=backend, resolver=resolver)
