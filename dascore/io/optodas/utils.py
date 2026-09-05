@@ -86,9 +86,9 @@ def _get_opto_das_attrs(fi, snap=True) -> tuple[dict, dascore.core.CoordManager]
     return attrs, cm
 
 
-def _read_opto_das(fi, distance=None, time=None, attr_cls=dc.PatchAttrs):
+def _read_opto_das(fi, distance=None, time=None, snap=True, attr_cls=dc.PatchAttrs):
     """Read the OptoDAS values into a patch."""
-    attrs, coords = _get_opto_das_attrs(fi)
+    attrs, coords = _get_opto_das_attrs(fi, snap=snap)
     return build_patches(
         coords,
         fi["data"],
