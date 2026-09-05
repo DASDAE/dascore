@@ -527,6 +527,13 @@ def build_coord_clause(
         raise InvalidSpoolQueryError(msg)
 
     compatible_units = _compatible_coord_units(rows, typed_values, name)
+    if name == "time" and kind == "time" and compatible_units is None:
+        # These columns copy the absolute coordinate's exact ns envelope.
+        # Relative, numeric, and absent time coords leave them NULL.
+        for bound, column, op in ((lo, "time_max", ">="), (hi, "time_min", "<=")):
+            if bound is not None:
+                where.add(f"p.{column} {op} ?", bound)
+        return
 
     min_col, max_col = {
         "time": ("min_ns", "max_ns"),
@@ -633,8 +640,24 @@ def _order_clause(
     kind, name, ascending = order_by
     direction = "ASC" if ascending else "DESC"
     params: list = []
+    missing_time = ""
     if kind == "coord" and name in _HOT_COORDS:
         column = f"p.{quote(f'{name}_min')}"
+        rows = coord_meta[coord_meta["coord_name"] == name]
+        if name == "time" and (
+            rows["value_kind"].ne("time").any() or rows["is_relative"].any()
+        ):
+            # Only absolute times populate the hot column. Other time
+            # coordinate kinds sort by their own minimum after absolute times.
+            column = (
+                f"COALESCE({column}, (SELECT "
+                "COALESCE(cd.min_ns, cd.min_num, cd.min_str) "
+                "FROM patch_coords pc JOIN coord_defs cd "
+                "ON cd.coord_def_id = pc.coord_def_id "
+                "WHERE pc.patch_id = p.patch_id AND pc.coord_name = ?))"
+            )
+            params.append(name)
+            missing_time = "p.time_min IS NULL, "
     elif kind == "coord":
         rows = coord_meta[coord_meta["coord_name"] == name]
         # a coord observed under several kinds orders by its first kind
@@ -655,7 +678,10 @@ def _order_clause(
     # the ordinal renumberer's missing-time-last rule); the null key
     # repeats the column expression, so its parameters repeat too
     params = [*params, *params]
-    sql = f"ORDER BY {column} IS NULL, {column} {direction}, s.ordinal, p.patch_id"
+    sql = (
+        f"ORDER BY {missing_time}{column} IS NULL, "
+        f"{column} {direction}, s.ordinal, p.patch_id"
+    )
     return sql, params
 
 
