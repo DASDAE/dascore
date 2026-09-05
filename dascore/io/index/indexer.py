@@ -12,9 +12,12 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import tempfile
+from collections import Counter, defaultdict
 from contextlib import suppress
+from functools import partial
 from pathlib import Path
 from typing import Self
 
@@ -22,10 +25,15 @@ import pandas as pd
 
 import dascore as dc
 from dascore.compat import UPath
-from dascore.config import config_attr
-from dascore.constants import PROGRESS_LEVELS
+from dascore.config import config_attr, config_context, get_config
+from dascore.constants import PROGRESS_LEVELS, ExecutorType
 from dascore.exceptions import InvalidIndexVersionError
-from dascore.io.core import is_directory_format
+from dascore.io.core import (
+    _handle_missing_optionals,
+    _iter_scan_results,
+    _summarize_scan,
+    is_directory_format,
+)
 from dascore.io.index.backend import get_backend
 from dascore.io.index.ingest import (
     SourceRecord,
@@ -38,6 +46,40 @@ from dascore.utils.paths import (
     directory_writable,
     requires_local_directory,
 )
+from dascore.utils.progress import track, validate_progress_level
+
+
+def _scan_batch(paths, config):
+    """Open sources in a worker and defer dependency reporting until collection."""
+    missing = defaultdict(int)
+    with config_context(config):
+        iterator = _iter_scan_results(
+            paths, progress=None, _missing_optional_deps=missing
+        )
+        summaries = _summarize_scan(iterator)
+    return summaries, dict(missing)
+
+
+def _scan_with_client(paths, client, progress):
+    """Distribute batches while retaining serial scan's dependency semantics."""
+    # Standard-library pools expose capacity here. Map-only clients can omit
+    # it; host CPU count still gives them several batches to schedule.
+    workers = getattr(client, "_max_workers", None)
+    if not isinstance(workers, int) or workers < 1:
+        workers = os.cpu_count() or 1
+    size = max(1, math.ceil(len(paths) / (4 * workers)))
+    batches = [paths[start : start + size] for start in range(0, len(paths), size)]
+    func = partial(_scan_batch, config=get_config())
+    results = client.map(func, batches)
+    summaries, missing = [], Counter()
+    for batch, needed in track(
+        results, "Scanning file batches", progress, length=len(batches)
+    ):
+        summaries.extend(batch)
+        missing.update(needed)
+    if missing:
+        _handle_missing_optionals(len(summaries), missing)
+    return summaries
 
 
 def _path_digest(path) -> str:
@@ -347,7 +389,13 @@ class DBDirectoryIndexer:
             moves[old] = new
         return moves
 
-    def update(self, paths=None, progress: PROGRESS_LEVELS = "standard") -> Self:
+    def update(
+        self,
+        paths=None,
+        progress: PROGRESS_LEVELS = "standard",
+        *,
+        client: ExecutorType | None = None,
+    ) -> Self:
         """
         Update the index: scan new/changed sources, drop removed ones.
 
@@ -358,7 +406,10 @@ class DBDirectoryIndexer:
         units (e.g. XMLBinary) are rescanned whole when any member file
         changes. Renamed/moved sources are detected by their unchanged
         stats and rewritten in place, never rescanned (see _detect_moves).
+        An optional client scans batches of changed sources; all database
+        changes stay in the calling thread. The caller owns the client.
         """
+        progress = validate_progress_level(progress)
         files = self._walk()
         stats = self._backend.source_stats()
         stored = {
@@ -407,7 +458,11 @@ class DBDirectoryIndexer:
             # full-archive mtime/size maps for a tiny update).
             changed_stats = {rel: files[rel] for rel in changed}
             scan_paths = [stat[2] for stat in changed_stats.values()]
-            summaries = dc.scan(scan_paths, progress=progress)
+            summaries = (
+                dc.scan(scan_paths, progress=progress)
+                if client is None
+                else _scan_with_client(scan_paths, client, progress)
+            )
             # scan reports absolute source paths; stat maps use them too
             records = summaries_to_records(
                 summaries,

@@ -29,7 +29,7 @@ import numpy as np
 import pandas as pd
 
 import dascore as dc
-from dascore.constants import PROGRESS_LEVELS, namespace_select_type
+from dascore.constants import PROGRESS_LEVELS, ExecutorType, namespace_select_type
 from dascore.core.summary import normalize_source_patch_key
 from dascore.exceptions import MissingPatchError
 from dascore.io.core import _resolve_read_spool
@@ -1085,12 +1085,17 @@ class PatchCatalog:
             self._invalidate()
             return self
 
-    def update(self, progress: PROGRESS_LEVELS = "standard") -> PatchCatalog:
+    def update(
+        self,
+        progress: PROGRESS_LEVELS = "standard",
+        *,
+        client: ExecutorType | None = None,
+    ) -> PatchCatalog:
         """Sync a directory-backed catalog with the filesystem."""
         # The scan itself is long-running file IO; it manages its own
         # state, so only the cache invalidation needs the revision lock.
         if self._syncer is not None:
-            self._syncer.update(progress=progress)
+            self._syncer.update(progress=progress, client=client)
         self._invalidate()
         return self
 
