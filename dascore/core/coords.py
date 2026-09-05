@@ -2760,21 +2760,25 @@ class CoordSegmented(BaseCoord):
         if len(values) < 3:
             out = get_coord(data=values, units=units)
         else:
-            diffs = np.diff(values)
-            zero = diffs[0] - diffs[0]
-            if not (np.all(diffs > zero) or np.all(diffs < zero)):
+            if not is_strictly_monotonic(values):
                 msg = "from_array requires strictly monotonic values."
                 raise CoordError(msg)
+            diffs = np.diff(values)
             # A diff belongs to a uniform run when it matches a neighboring
             # diff; isolated diffs are seams (gaps or sampling changes).
             eq_next = diffs[:-1] == diffs[1:]
             in_run = np.zeros(len(diffs), dtype=bool)
             in_run[1:] |= eq_next
             in_run[:-1] |= eq_next
-            splits = np.flatnonzero(~in_run) + 1
-            blocks = np.split(values, splits)
-            segments = [CoordMonotonicArray(values=x, units=units) for x in blocks]
-            out = concat_coords(*segments)
+            if not np.any(in_run):
+                # Singleton segments carry no direction and would be sorted
+                # ascending by concat_coords. Keep the recorded order.
+                out = CoordMonotonicArray(values=values, units=units)
+            else:
+                splits = np.flatnonzero(~in_run) + 1
+                blocks = np.split(values, splits)
+                segments = [CoordMonotonicArray(values=x, units=units) for x in blocks]
+                out = concat_coords(*segments)
         if tolerance is not None:
             out = out.simplify(tolerance)
         return out
