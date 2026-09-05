@@ -765,6 +765,45 @@ class TestToXarrayBlockSize:
         data = self._leaf(file_spool.io.to_xarray())
         assert data.data.npartitions == len(file_spool)
 
+    def test_a_piece_falling_back_reads_its_own_bounds(self, file_spool, monkeypatch):
+        """A piece whose window read fails still loads its own samples.
+
+        The array path can decline at load (a file which changed since
+        indexing), and the piece then loads as a patch trimmed by value.
+        Those bounds are the piece's own, not its member's, or the block
+        would come back the size of the whole member.
+        """
+        from dascore.io.index.planned import PlanResolver  # noqa: PLC0415
+
+        quarter = file_spool[0].data.nbytes // 4
+        data = self._leaf(file_spool.io.to_xarray(block_size=quarter))
+        merged = file_spool.chunk(time=None)[0]
+        monkeypatch.setattr(
+            PlanResolver, "_load_member_array", lambda self, row, w, **k: None
+        )
+        assert np.array_equal(data.compute().values, merged.transpose(*data.dims).data)
+
+    def test_pieces_of_an_interior_window_stay_anchored(self, tmp_path):
+        """A member trimmed by an overlap splits from where it starts.
+
+        Two half-overlapping files merge into one segment, so the second
+        member's window starts mid-file. Its pieces are offsets from that
+        start, not from the file's; anchoring them at zero would read the
+        wrong samples and still fill every block.
+        """
+        first = dc.get_example_patch()
+        time = first.get_coord("time")
+        half = time.values[len(time) // 2]
+        # distinct data, or reading the wrong samples would still match
+        second = first.update_coords(time_min=half).new(data=first.data + 1)
+        for num, patch in enumerate((first, second)):
+            patch.update_attrs(history=[]).io.write(tmp_path / f"p{num}.h5", "dasdae")
+        spool = dc.spool(tmp_path).update()
+        merged = spool.chunk(time=None)[0]
+        data = self._leaf(spool.io.to_xarray(block_size=merged.data.nbytes // 8))
+        assert data.data.npartitions > 2
+        assert np.array_equal(data.compute().values, merged.transpose(*data.dims).data)
+
 
 class TestBlockPieces:
     """The sample cut behind `block_size`."""
