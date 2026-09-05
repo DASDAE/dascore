@@ -21,6 +21,7 @@ import dascore.examples as ex
 import dascore.utils.patch_assembly as assembly_module
 from dascore.core.coords import CoordRange, CoordSegmented
 from dascore.exceptions import ChunkError, CoordMergeError, ParameterError, UnitError
+from dascore.io.febus.core import FebusPatchAttrs
 from dascore.units import get_quantity
 from dascore.utils.misc import get_middle_value, suppress_warnings
 from dascore.utils.patch import _get_merged_coord
@@ -2205,6 +2206,51 @@ class TestChunkFromIndex:
         assert calls == {"patch": 2, "array": 0}
         read = dc.spool([dc.read(p)[0] for p in sorted(path.glob("*.h5"))])
         assert fast.attrs.patch_id == read.chunk(time=None)[0].attrs.patch_id
+
+    @pytest.mark.parametrize("value", ["unknown", "10"])
+    def test_directory_override_keeps_its_string_type(self, tmp_path, calls, value):
+        """A path override replaces a source number before reconstruction."""
+        directory = tmp_path / f"channel_count={value}"
+        directory.mkdir()
+        spool = ex.get_example_spool("random_das", length=2, time_gap=0)
+        for num, patch in enumerate(spool):
+            patch.update_attrs(channel_count=5).io.write(
+                directory / f"p{num}.h5", "dasdae"
+            )
+        with pytest.warns(UserWarning, match="override attrs"):
+            indexed = dc.spool(tmp_path).update()
+        out = indexed.chunk(time=None)[0]
+        assert out.attrs["channel_count"] == value
+        assert calls == {"patch": 0, "array": 2}
+        directory.rename(tmp_path / "channel_count=renamed")
+        moved = dc.spool(tmp_path).update().chunk(time=None)[0]
+        assert moved.attrs["channel_count"] == "renamed"
+
+    @pytest.mark.parametrize("case", ["empty", "envelope", "vendor"])
+    def test_unreconstructable_attributes_keep_the_patch_path(
+        self, tmp_path, calls, monkeypatch, case
+    ):
+        """Missing custom attrs, flat collisions, and vendor models survive merging."""
+        spool = ex.get_example_spool("random_das", length=2, time_gap=0)
+        for num, patch in enumerate(spool):
+            if case == "empty":
+                patch = patch.update_attrs(empty_extra="")
+            elif case == "envelope":
+                patch = patch.update_attrs(distance_units="custom")
+            else:
+                patch = patch.update(attrs=FebusPatchAttrs())
+            patch.io.write(tmp_path / f"p{num}.h5", "dasdae")
+        with suppress_warnings(UserWarning):
+            indexed = dc.spool(tmp_path).update()
+            out = indexed.chunk(time=None)[0]
+        assert calls == {"patch": 2, "array": 0}
+        self._force_patch_path(monkeypatch)
+        with suppress_warnings(UserWarning):
+            expected = indexed.chunk(time=None)[0]
+        assert type(out.attrs) is type(expected.attrs)
+        assert dict(out.attrs) == dict(expected.attrs)
+        assert np.array_equal(out.data, expected.data)
+        assert out.coords == expected.coords
 
     def test_an_attr_the_index_cannot_hold_loads_patch(self, tmp_path_factory, calls):
         """An array attr is on the patch and in no column, so no row stands in."""

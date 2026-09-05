@@ -244,7 +244,8 @@ def _attrs_from_row(row: Mapping, dims: tuple[str, ...]) -> dc.PatchAttrs:
     stored = row.get("_attr_dtypes")
     if isinstance(stored, str) and stored:
         for name, dtype in json.loads(stored).items():
-            if name in out:
+            # Directory overrides are strings, even for numeric source attrs.
+            if name in out and isinstance(out[name], int | float | np.number):
                 out[name] = np.dtype(dtype).type(out[name])
     out["dims"] = dims
     # the lineage ids are source columns, so the comprehension drops
