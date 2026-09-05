@@ -358,6 +358,18 @@ class TestGetExactCoord:
         assert coord.units == dc.get_quantity("m")
         assert coord.reverse_sorted == reverse
 
+    @pytest.mark.parametrize("repeats", [2, 250])
+    def test_unsigned_unsorted_selection(self, repeats):
+        """Unsigned difference wraparound must not select a monotonic search path."""
+        values = np.tile(np.array([0, 2, 1, 3], dtype=np.uint16), repeats)
+        coord = get_exact_coord(values)
+
+        np.testing.assert_array_equal(coord.values, values)
+        selected, indexer = coord.select((1, 1))
+        expected = np.ones(repeats, dtype=values.dtype)
+        np.testing.assert_array_equal(selected.values, expected)
+        np.testing.assert_array_equal(values[indexer], expected)
+
     def test_large_non_monotonic_array_preserved(self):
         """A large non-monotonic array skips the segment guard and stays exact."""
         rng = np.random.default_rng(1)

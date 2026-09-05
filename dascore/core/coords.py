@@ -2760,11 +2760,10 @@ class CoordSegmented(BaseCoord):
         if len(values) < 3:
             out = get_coord(data=values, units=units)
         else:
-            diffs = np.diff(values)
-            zero = diffs[0] - diffs[0]
-            if not (np.all(diffs > zero) or np.all(diffs < zero)):
+            if not is_strictly_monotonic(values):
                 msg = "from_array requires strictly monotonic values."
                 raise CoordError(msg)
+            diffs = np.diff(values)
             # A diff belongs to a uniform run when it matches a neighboring
             # diff; isolated diffs are seams (gaps or sampling changes).
             eq_next = diffs[:-1] == diffs[1:]

@@ -27,7 +27,12 @@ from dascore.exceptions import (
 )
 from dascore.models import ArrayLike
 from dascore.units import convert_units, get_quantity_str
-from dascore.utils.misc import _to_slice, _validate_sample_values, unbyte
+from dascore.utils.misc import (
+    _to_slice,
+    _validate_sample_values,
+    is_strictly_monotonic,
+    unbyte,
+)
 
 # Stored coordinate arrays often carry sub-step jitter (e.g. GPS-stamped DAS
 # time). ``CoordSegmented.from_array`` treats every isolated sampling change as
@@ -325,10 +330,9 @@ def _is_over_segmented(values) -> bool:
     """
     if values.ndim != 1 or len(values) < _MIN_SEGMENT_GUARD_SIZE:
         return False
-    diffs = np.diff(values)
-    zero = diffs[0] - diffs[0]
-    if not (np.all(diffs > zero) or np.all(diffs < zero)):
+    if not is_strictly_monotonic(values):
         return False  # non-monotonic; from_array handles its own fallback
+    diffs = np.diff(values)
     # A diff belongs to a run when it matches a neighbor; isolated diffs seam.
     eq_next = diffs[:-1] == diffs[1:]
     in_run = np.zeros(len(diffs), dtype=bool)
