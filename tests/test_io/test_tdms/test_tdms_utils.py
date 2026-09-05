@@ -166,6 +166,8 @@ class TestSampleOrder:
             payload = expected.tobytes()
         path = tmp_path / "samples.raw"
         path.write_bytes(payload)
+        # A finite declared end describes a closed segment. Its partial
+        # chunk, if any, has the same remaining sample count per channel.
         fileinfo = {
             "decimated": decimated,
             "chunk_size": chunk_size,
