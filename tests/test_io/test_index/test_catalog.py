@@ -13,12 +13,12 @@ import pytest
 import dascore as dc
 from dascore.io.index import PatchCatalog
 from dascore.io.index.catalog import (
-    _adjust_unit_segments,
     _forget_what_a_trim_invalidates,
     _residual_cut_masks,
 )
 from dascore.io.index.query import InvalidSpoolQueryError, glob_to_regex
 from dascore.units import m
+from dascore.utils.chunk_plan import _adjust_unit_segments
 from dascore.utils.misc import _canonical_range, _CanonicalRange
 
 
@@ -142,16 +142,23 @@ class TestResidualSelects:
         with pytest.raises(InvalidSpoolQueryError, match="coordinate-only"):
             live_catalog.select(tag="test", samples=True)
 
-    def test_relative_select(self, live_catalog):
-        """Relative bounds resolve against the global envelope (#362)."""
-        full = live_catalog.to_df()
-        span = (full["time_max"].max() - full["time_min"].min()).total_seconds()
-        view = live_catalog.select(time=(1, -1), relative=True)
-        patch = view.get_patch(0)
-        got_span = (
-            patch.get_coord("time").max() - patch.get_coord("time").min()
-        ) / np.timedelta64(1, "s")
-        assert got_span <= span - 1
+    def test_relative_select(self, live_catalog, patches):
+        """Relative bounds resolve independently against every patch."""
+        selection = (0, 2)
+        view = live_catalog.select(time=selection, relative=True)
+        assert len(view) == len(patches)
+        for source, selected in zip(patches, view, strict=True):
+            expected = source.select(time=selection, relative=True)
+            assert selected.equals(expected)
+
+    def test_relative_requires_coordinate_presence(self, patches):
+        """Relative bounds remain local but exclude patches without the coord."""
+        patch = patches[0]
+        without_time = patch.select(time=0, samples=True).squeeze()
+        catalog = PatchCatalog.from_patches((patch, without_time))
+        view = catalog.select(time=(0, 1), relative=True)
+        assert len(view) == 1
+        assert view.get_patch(0).dims == patch.dims
 
 
 class TestRelativeTimeCoords:
@@ -365,36 +372,36 @@ class TestResidualCutMasks:
 
     def test_one_bound_marks_only_the_rows_it_cuts(self, rows):
         """The third row lies wholly inside, so nothing cut it."""
-        masks = _residual_cut_masks(rows, (({"time": (2.0, None)}, False),))
+        masks = _residual_cut_masks(rows, (({"time": (2.0, None)}, False, False),))
         assert masks["time"].tolist() == [1, 0, 0]
 
     def test_each_residual_owns_its_own_bit(self, rows):
         """A bound is judged against what the bounds before it left."""
         residuals = (
-            ({"time": (None, 100.0)}, False),  # cuts nothing
-            ({"time": (None, 12.0)}, False),  # cuts the last two
+            ({"time": (None, 100.0)}, False, False),  # cuts nothing
+            ({"time": (None, 12.0)}, False, False),  # cuts the last two
         )
         masks = _residual_cut_masks(rows, residuals)
         assert masks["time"].tolist() == [0b00, 0b10, 0b10]
 
     def test_a_bound_already_applied_cuts_nothing_again(self, rows):
         """The second of two identical bounds finds the row where it left it."""
-        residuals = (({"time": (6.0, None)}, False),) * 2
+        residuals = (({"time": (6.0, None)}, False, False),) * 2
         masks = _residual_cut_masks(rows, residuals)
         assert masks["time"].tolist() == [0b01, 0b01, 0b00]
 
     def test_sample_bounds_leave_the_coordinate_untracked(self, rows):
         """A sample index never reaches the reader and moves the envelope."""
         residuals = (
-            ({"time": (None, 12.0)}, False),
-            ({"time": (0, 5)}, True),
-            ({"time": (None, 8.0)}, False),
+            ({"time": (None, 12.0)}, False, False),
+            ({"time": (0, 5)}, True, False),
+            ({"time": (None, 8.0)}, False, False),
         )
         assert "time" not in _residual_cut_masks(rows, residuals)
 
     def test_unit_bearing_bounds_leave_the_coordinate_untracked(self, rows):
         """Which units the row spells the bound in is not the row's to say."""
-        residuals = (({"time": _canonical_range((1 * m, 2 * m))}, False),)
+        residuals = (({"time": _canonical_range((1 * m, 2 * m))}, False, False),)
         assert "time" not in _residual_cut_masks(rows, residuals)
 
     def test_unordered_envelopes_are_left_alone(self):
@@ -402,15 +409,15 @@ class TestResidualCutMasks:
         df = pd.DataFrame(
             {"tag": ["a", "b"], "tag_min": ["a", "b"], "tag_max": ["c", "d"]}
         )
-        assert _residual_cut_masks(df, (({"tag": ("a", "c")}, False),)) == {}
+        assert _residual_cut_masks(df, (({"tag": ("a", "c")}, False, False),)) == {}
 
     def test_a_coordinate_the_frame_lacks_states_no_mask(self, rows):
         """Nothing to read the cut off, so the row answers for itself."""
-        assert _residual_cut_masks(rows, (({"depth": (1.0, 2.0)}, False),)) == {}
+        assert _residual_cut_masks(rows, (({"depth": (1.0, 2.0)}, False, False),)) == {}
 
     def test_more_residuals_than_bits_states_nothing(self, rows):
         """Past the last bit a mask could only be wrong, so there is none."""
-        residuals = (({"time": (2.0, None)}, False),) * 64
+        residuals = (({"time": (2.0, None)}, False, False),) * 64
         assert _residual_cut_masks(rows, residuals) == {}
 
 
@@ -444,13 +451,13 @@ class TestForgetTrimmedSizes:
 
     def test_selector_off_the_envelopes_forgets_every_size(self, sized):
         """A selector `adjust_segments` never saw marks no row, so all go."""
-        residuals = ((({"time": [1, 2, 3]}), False),)
+        residuals = ((({"time": [1, 2, 3]}), False, False),)
         out = _forget_what_a_trim_invalidates(sized, residuals)
         assert out["_data_size"].isnull().all()
 
     def test_unit_bearing_range_rides_the_envelopes(self, sized):
         """A canonical range is folded in, so `_modified` still decides."""
-        residuals = (({"distance": _canonical_range((1 * m, 2 * m))}, False),)
+        residuals = (({"distance": _canonical_range((1 * m, 2 * m))}, False, False),)
         assert _forget_what_a_trim_invalidates(sized, residuals).equals(sized)
 
 

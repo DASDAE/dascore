@@ -12,6 +12,7 @@ becomes a Patch.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any
@@ -23,6 +24,7 @@ import dascore as dc
 from dascore.core.coordmanager import CoordManager, get_coord_manager
 from dascore.core.coords import get_coord
 from dascore.exceptions import CoordMergeError, UnitError
+from dascore.io.index.ingest import _is_missing
 from dascore.io.index.schema import RESERVED_ATTR_COLUMNS
 from dascore.units import get_quantity
 from dascore.utils.attrs import combine_patch_attrs, warn_if_histories_differ
@@ -234,6 +236,16 @@ def _attrs_from_row(row: Mapping, dims: tuple[str, ...]) -> dc.PatchAttrs:
         for k, v in row.items()
         if not str(k).startswith("_") and k not in skip and not _is_null(v)
     }
+    for name, value in out.items():
+        if isinstance(value, pd.Timestamp):
+            out[name] = value.to_datetime64()
+        elif isinstance(value, pd.Timedelta):
+            out[name] = value.to_timedelta64()
+    stored = row.get("_attr_dtypes")
+    if isinstance(stored, str) and stored:
+        for name, dtype in json.loads(stored).items():
+            if name in out:
+                out[name] = np.dtype(dtype).type(out[name])
     out["dims"] = dims
     # the lineage ids are source columns, so the comprehension drops
     # them; a merged patch folds them, and folding nothing is not the
@@ -250,11 +262,6 @@ def _attrs_from_row(row: Mapping, dims: tuple[str, ...]) -> dc.PatchAttrs:
 def _is_null(value) -> bool:
     """True for a missing scalar; an array is a value."""
     return np.ndim(value) == 0 and pd.isnull(value)
-
-
-def _row_str(value) -> str:
-    """A row's string, with a missing one (null, or the empty string) as ""."""
-    return "" if _is_null(value) else str(value)
 
 
 def _row_range(row: Mapping, dim: str) -> tuple[Any, Any, Any] | None:
@@ -315,6 +322,7 @@ class PatchAssembler:
     # member must be loaded as a patch; the index then stands in for
     # the member's coordinates and attrs.
     load_array: Callable[[Mapping], np.ndarray | None] | None = None
+    can_load_array: Callable[[Mapping], bool] | None = None
 
     def _patch_from_instruction_df(self, joined):
         """Get the patches joined columns of instruction df."""
@@ -477,6 +485,10 @@ class PatchAssembler:
         """
         if self.load_array is None:
             return None
+        if self.can_load_array is not None and not all(
+            self.can_load_array(row) for row in rows
+        ):
+            return None
         metas = []
         for row in rows:
             meta = self._meta_from_index(row)
@@ -504,7 +516,7 @@ class PatchAssembler:
         # A moved source has its id cleared until it is read again, and
         # folding no id is not folding the one the patch carries; an attr
         # the index could not hold is on the patch and would be lost here.
-        if ids_enabled() and "patch_id" in row and not _row_str(row["patch_id"]):
+        if ids_enabled() and "patch_id" in row and _is_missing(row["patch_id"]):
             return None
         if not _is_null(complete := row.get("_attrs_complete")) and not complete:
             return None

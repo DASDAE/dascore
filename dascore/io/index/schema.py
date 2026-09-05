@@ -36,7 +36,7 @@ from typing import NamedTuple, get_args, get_type_hints
 # changes, not only when a column does. 14 reads a legacy DASDAE file's
 # PyTables attr payloads, so 13 stored the payload text where a value
 # is now stored (`gauge_length` of "N." rather than nothing).
-INDEX_VERSION = 15
+INDEX_VERSION = 16
 # Identity string so any tool can sanity-check what it opened.
 WHAT_IS_THIS = "dascore_spool_index"
 
@@ -123,6 +123,8 @@ class PatchRow(NamedTuple):
     # to leave one out (an array, a name a structural column owns), so a
     # row built into a patch would be missing what the file holds.
     attrs_complete: int
+    # JSON mapping for numeric attrs whose scalar dtype SQL would erase.
+    attr_dtypes: str | None
 
 
 class AttrsRow(NamedTuple):
@@ -291,6 +293,7 @@ RESERVED_ATTR_COLUMNS = frozenset(
         "dtype",
         "data_size",
         "attrs_complete",
+        "attr_dtypes",
         # These named structural columns until version 9 dropped them.
         # They stay reserved: the spool gives them a meaning whether or
         # not a column holds one, and un-reserving a name silently turns
@@ -344,7 +347,12 @@ RESERVED_ATTR_COLUMNS = frozenset(
 # free; the rest are renamed where the spool relation is built.
 SPOOL_EARLY_RENAMES = MappingProxyType({"patch_id": "_patch_id"})
 SPOOL_LATE_RENAMES = MappingProxyType(
-    {"dtype": "_dtype", "data_size": "_data_size", "attrs_complete": "_attrs_complete"}
+    {
+        "dtype": "_dtype",
+        "data_size": "_data_size",
+        "attrs_complete": "_attrs_complete",
+        "attr_dtypes": "_attr_dtypes",
+    }
 )
 
 # Explicit secondary indexes. Every other access path is covered by a

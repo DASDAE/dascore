@@ -63,11 +63,25 @@ class DASHDF5(FiberIO):
         resource: H5Reader,
         time: tuple[opt_timeable_types, opt_timeable_types] | None = None,
         channel: tuple[float | None, float | None] | None = None,
+        snap: bool = True,
         **kwargs,
     ):
-        """Read a CF file and return a Patch."""
+        """
+        Read a CF file and return a spool of patches.
+
+        Parameters
+        ----------
+        resource
+            The open h5 object.
+        time
+            An optional tuple for filtering time.
+        channel
+            An optional tuple for filtering channel.
+        snap
+            If True, snap each coordinate to be evenly sampled.
+        """
         patches = build_patches(
-            _get_cf_coords(resource),
+            _get_cf_coords(resource, snap=snap),
             resource["das"],
             _get_cf_attrs(resource),
             selection={"time": time, "channel": channel},

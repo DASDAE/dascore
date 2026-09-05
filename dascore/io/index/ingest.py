@@ -156,6 +156,7 @@ class PatchRecord:
     coords: tuple[CoordRecord, ...] = ()
     # whether ``attrs`` holds every attr the patch defines
     attrs_complete: bool = True
+    attr_dtypes: str | None = None
 
 
 @dataclass(frozen=True)
@@ -274,7 +275,9 @@ def _attr_name_status(name: str) -> str:
     return "ok"
 
 
-def _extract_attrs(summary: PatchSummary) -> tuple[dict[str, TypedValue], bool]:
+def _extract_attrs(
+    summary: PatchSummary,
+) -> tuple[dict[str, TypedValue], bool, str | None]:
     """
     Get indexable typed attrs from a patch summary.
 
@@ -285,6 +288,7 @@ def _extract_attrs(summary: PatchSummary) -> tuple[dict[str, TypedValue], bool]:
     raw = summary.attrs.model_dump()
     out = {}
     complete = True
+    dtypes = {}
     for name, value in raw.items():
         status = _attr_name_status(name)
         if status == "reserved":
@@ -300,11 +304,19 @@ def _extract_attrs(summary: PatchSummary) -> tuple[dict[str, TypedValue], bool]:
         typed = typed_value(value)
         if typed is not None:
             out[name] = typed
+            if typed.units is not None:
+                # The index stores a magnitude, not the original quantity.
+                complete = False
+            elif typed.kind == "num" and isinstance(value, int | float | np.number):
+                dtype = np.asarray(value).dtype
+                dtypes[name] = dtype.str
+                if dtype.kind in "iu" and int(typed.value) != int(value):
+                    complete = False  # SQL's float lost integer precision.
         elif not _is_missing(value):
             # unset is not unheld: a value the patch takes at its default
             # is one the row omits and the patch still has
             complete = False
-    return out, complete
+    return out, complete, json.dumps(dtypes) if dtypes else None
 
 
 # What a directory name may never claim to be. A path says where data is
@@ -497,7 +509,7 @@ def patch_record(summary: PatchSummary) -> PatchRecord:
     )
     time_min, time_max, time_step = _envelope(coords, "time", "time")
     dist_min, dist_max, dist_step = _envelope(coords, "distance", "num")
-    attrs, attrs_complete = _extract_attrs(summary)
+    attrs, attrs_complete, attr_dtypes = _extract_attrs(summary)
     return PatchRecord(
         source_patch_key=normalize_source_patch_key(summary.source_patch_key),
         dims=",".join(summary.dims),
@@ -517,6 +529,7 @@ def patch_record(summary: PatchSummary) -> PatchRecord:
         attrs=attrs,
         coords=coords,
         attrs_complete=attrs_complete,
+        attr_dtypes=attr_dtypes,
     )
 
 

@@ -768,6 +768,18 @@ class TestLineageIds:
         assert view[0].attrs.processing_id == on_patch.attrs.processing_id
         assert view[0].attrs.history == on_patch.attrs.history
 
+    def test_processing_id_queries_source_metadata(self, tmp_path):
+        """Attribute predicates identify the source, before residual processing."""
+        patch = dc.get_example_patch().abs()
+        patch.io.write(tmp_path / "source.h5", "dasdae")
+        spool = dc.spool(tmp_path).update()
+        source_id = spool[0].attrs.processing_id
+        trimmed = spool.select(distance=(10, 20)).select(processing_id=source_id)
+        assert len(trimmed) == 1
+        assert trimmed.get_contents()["processing_id"].isnull().all()
+        assert trimmed[0].attrs.processing_id != source_id
+        assert np.array_equal(trimmed[0].data, spool[0].select(distance=(10, 20)).data)
+
     def test_a_trimmed_row_states_no_processing_id(self, tmp_path):
         """What the source had was undone by the trim, so the row states none.
 

@@ -78,6 +78,7 @@ from dascore.units import Quantity
 from dascore.utils.chunk_plan import (
     _SOURCE_COLUMNS,
     ChunkPlan,
+    _drop_patch_local_empty,
     _ensure_patch_id,
     _resolve_group_attrs,
     _structural,
@@ -86,7 +87,6 @@ from dascore.utils.chunk_plan import (
     build_coverage_frame,
     build_gap_frame,
     build_subdivision_plan,
-    samples_adjusted_envelopes,
     subdivision_pieces,
 )
 from dascore.utils.display import (
@@ -440,9 +440,10 @@ class Spool(NodeRepr, NamespaceOwner):
         """
         Sub-select parts of the spool.
 
-        Can be used to specify dimension ranges, or unix-style matches
-        on string attributes. Bare keyword names resolve against
-        attributes first, then coordinates; unknown names raise.
+        Can be used to specify dimension ranges, or glob matches on
+        string attributes, read as SQLite's GLOB reads them. Bare keyword
+        names resolve against attributes first, then coordinates; unknown
+        names raise.
 
         Parameters
         ----------
@@ -459,8 +460,9 @@ class Spool(NodeRepr, NamespaceOwner):
             indices; they never exclude patches, but are applied to each
             patch as it loads.
         relative
-            If True, range bounds are relative to the spool's coordinate
-            envelope: positive from the start, negative from the end.
+            If True, coordinate range bounds are relative to each patch:
+            positive from its start, negative from its end. Patches without
+            the selected coordinate are excluded.
         **kwargs
             Specifies query. Can be of the form {dim_name=(start, stop)}
             or {attr_name=query}.
@@ -1619,8 +1621,7 @@ class Spool(NodeRepr, NamespaceOwner):
         from dascore.io.index.planned import derived_catalog  # noqa: PLC0415
 
         rows = self._df.reset_index(drop=True)
-        working = samples_adjusted_envelopes(rows, self._catalog.residuals)
-        working = working.reset_index(drop=True)
+        working = rows.reset_index(drop=True)
         ids = np.arange(len(working), dtype=np.int64)
         # outputs are not file rows: source bookkeeping stays on the
         # members (where loading needs it), never on the derived rows
@@ -1655,7 +1656,7 @@ class Spool(NodeRepr, NamespaceOwner):
         rows — restricted to the outputs the current view presents.
         Planning a *different* dimension must keep the already-assembled
         boundaries, so it plans over the current output rows themselves
-        (loaded through the plan resolver). Patch-local samples
+        (loaded through the plan resolver). Patch-local sample and relative
         residuals adjust the working envelopes so plans reflect the
         loading truth.
         """
@@ -1671,7 +1672,7 @@ class Spool(NodeRepr, NamespaceOwner):
             base = self._catalog.to_df().reset_index(drop=True)
         base = _ensure_patch_id(base)
         working = base.drop(columns=list(self._drop_columns), errors="ignore")
-        working = samples_adjusted_envelopes(working, self._catalog.residuals)
+        working = _drop_patch_local_empty(working)
         base = base[base["_patch_id"].isin(working["_patch_id"])]
         return base.reset_index(drop=True), working.reset_index(drop=True)
 
@@ -1729,13 +1730,13 @@ class Spool(NodeRepr, NamespaceOwner):
         a plan-backed spool is never collapsed to its members. Chunk
         collapses because re-planning a dimension replaces the plan; a
         report describes the patches the spool actually holds, so it
-        reads the plan's outputs. Samples residuals still adjust the
-        envelopes, since they change what loads. No dimension is needed:
-        the whole relation is returned and the caller picks its columns.
+        reads the plan's outputs. The catalog has already replayed residual
+        selections into those envelopes. No dimension is needed: the whole
+        relation is returned and the caller picks its columns.
         """
         base = _ensure_patch_id(self._df.reset_index(drop=True))
         working = base.drop(columns=list(self._drop_columns), errors="ignore")
-        return samples_adjusted_envelopes(working, self._catalog.residuals)
+        return _drop_patch_local_empty(working)
 
     def get_gaps(
         self,
@@ -2174,6 +2175,22 @@ class Spool(NodeRepr, NamespaceOwner):
         Create a spool over a single (multi-patch capable) fiber file.
 
         The file is scanned once; patches load lazily per row.
+
+        Parameters
+        ----------
+        path
+            The file to open.
+        file_format
+            The format name, sniffed from the file when not given.
+        file_version
+            The format version, sniffed from the file when not given.
+
+        Notes
+        -----
+        A format and version given together are believed rather than
+        checked against the file, as `dc.read` and `dc.scan` believe them.
+        Naming the wrong format therefore yields whatever that reader
+        makes of the file, which is usually an empty spool.
         """
         path = path if isinstance(path, UPath) else Path(path)
         if not path.exists() or path.is_dir():
@@ -2181,7 +2198,17 @@ class Spool(NodeRepr, NamespaceOwner):
             raise FileNotFoundError(msg)
         from dascore.io.index.catalog import PatchCatalog  # noqa: PLC0415
 
-        _format, _version = dc.get_format(path, file_format, file_version)
+        if file_format and file_version:
+            # Both internal callers already know the format, and sniffing
+            # it again opens the file a second time; for a remote source
+            # that is a round trip. Resolving the reader canonicalizes the
+            # names and still rejects a pair no reader claims.
+            fiber_io = dc.io.FiberIO.manager.get_fiberio(
+                format=file_format, version=file_version
+            )
+            _format, _version = fiber_io.name, fiber_io.version
+        else:
+            _format, _version = dc.get_format(path, file_format, file_version)
         out = cls()
         out._catalog = PatchCatalog.from_file(
             path, file_format=_format, file_version=_version
@@ -2250,9 +2277,9 @@ class Spool(NodeRepr, NamespaceOwner):
                 format=self._file_format, version=self._file_version
             )
             getattr(formatter, "index", lambda _: None)(self._file_path)
-            refreshed = self.from_file(
-                self._file_path, self._file_format, self._file_version
-            )
+            # Sniffed rather than reused: noticing that the file changed is
+            # what update is for, and it may now hold another version.
+            refreshed = self.from_file(self._file_path)
             # from_file builds a spool from the file alone, but an attached
             # inventory is the caller's state rather than the file's, and
             # re-reading the file is no reason to stop enriching.
@@ -2350,6 +2377,7 @@ class Spool(NodeRepr, NamespaceOwner):
                 "source_format",
                 "source_version",
                 "_modified",
+                "_patch_local_empty",
                 # A plan states no size until its outputs are assembled,
                 # and equality holds between a view and its
                 # materialization: the envelopes already say what the
@@ -2366,17 +2394,13 @@ class Spool(NodeRepr, NamespaceOwner):
                 # whether the index holds every attr a patch defines says
                 # what the index can state, not what the patch is
                 "_attrs_complete",
+                "_attr_dtypes",
             ]
             out = df.drop(columns=drop, errors="ignore")
             return out[sorted(out.columns)]
 
-        catalog = self._catalog
         rows = self._df
-        # value residuals already trim the presented envelopes (to_df);
-        # samples residuals fold in here. Presented-but-empty rows stay:
-        # a spool exposing an emptied patch is not equal to one without.
-        if catalog is not None and catalog.residuals:
-            rows = samples_adjusted_envelopes(rows, catalog.residuals, drop_empty=False)
+        # Catalog rows already reflect every coordinate residual in call order.
         return {"rows": _strip_identity(rows)}
 
     def _repr_node(self) -> Repr:

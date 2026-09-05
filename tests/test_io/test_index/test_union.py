@@ -376,6 +376,16 @@ class TestLossyStateUnion:
         combined = selected + dc.spool([])
         assert combined[0].shape == selected[0].shape
 
+    def test_empty_relative_results_survive_union(self):
+        """Union preserves selected patch membership even when patches are empty."""
+        source = dc.get_example_spool(
+            "random_das", shape=(20, 200), time_step=dc.to_timedelta64(0.04)
+        )
+        selected = source.select(time=(100, 101), relative=True)
+        combined = selected + dc.spool([])
+        assert len(combined) == len(selected)
+        assert all(patch.shape[patch.get_axis("time")] == 0 for patch in combined)
+
     def test_file_backed_value_trim_survives_union(self, dir_spool):
         """The same guarantee holds for file-backed catalogs."""
         patch = dir_spool[0]

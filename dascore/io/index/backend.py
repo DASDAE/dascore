@@ -602,6 +602,7 @@ class SQLiteIndexBackend:
                             patch.distance_max,
                             patch.distance_step,
                             int(patch.attrs_complete),
+                            patch.attr_dtypes,
                         )
                     )
                     attrs = patch.attrs
@@ -1177,7 +1178,7 @@ class SQLiteIndexBackend:
             return out
         coords = self._add_envelope_objects(coords)
         for name, group in coords.groupby("coord_name"):
-            if not coord_dtype_is_stateable(group["dtype"].iloc[0]):
+            if not any(coord_dtype_is_stateable(x) for x in group["dtype"].unique()):
                 # Recorded by name alone, so there is no envelope to
                 # publish; null columns here would make the frame claim
                 # the coordinate has one. A coordinate whose dtype the

@@ -2014,6 +2014,53 @@ class TestChunkFromIndex:
         # come back from the row rather than at their defaults
         assert fast.attrs.patch_id
 
+    @pytest.mark.parametrize(
+        "value", [np.datetime64("2021-01-01"), np.timedelta64(5, "s")]
+    )
+    def test_temporal_attrs_remain_writable(self, tmp_path, calls, monkeypatch, value):
+        """Index reconstruction keeps temporal and integer attrs usable by IO."""
+        directory = tmp_path / "sources"
+        patches = ex.get_example_spool("random_das", length=2, time_gap=0)
+        for index, patch in enumerate(patches):
+            patch.update_attrs(event_value=value, n_ch=5).io.write(
+                directory / f"{index}.h5", "dasdae"
+            )
+        spool = dc.spool(directory).update()
+        # Export/import the catalog too: dtype metadata must survive unions.
+        spool = spool + dc.spool([])
+        fast = spool.chunk(time=None)[0]
+        assert calls == {"patch": 0, "array": 2}
+        self._force_patch_path(monkeypatch)
+        slow = spool.chunk(time=None)[0]
+        for name in ("event_value", "n_ch"):
+            assert type(fast.attrs[name]) is type(slow.attrs[name])
+            assert fast.attrs[name] == slow.attrs[name]
+        path = tmp_path / "merged.h5"
+        fast.io.write(path, "dasdae")
+        restored = dc.read(path)[0]
+        assert restored.attrs.event_value == fast.attrs.event_value
+        assert restored.attrs.n_ch == fast.attrs.n_ch
+
+    def test_large_integer_attr_loads_patch(self, tmp_path, calls):
+        """An integer SQL cannot store exactly must never be rebuilt from it."""
+        value = 2**53 + 1
+        for index, patch in enumerate(ex.get_example_spool("random_das", length=2)):
+            patch.update_attrs(counter=value).io.write(
+                tmp_path / f"{index}.h5", "dasdae"
+            )
+        out = dc.spool(tmp_path).update().chunk(time=None)[0]
+        assert out.attrs.counter == value
+        assert calls == {"patch": 2, "array": 0}
+
+    def test_trailing_trim_reads_no_arrays(self, dasdae_directory_spool, calls):
+        """A trim on the last member prevents speculative reads of earlier ones."""
+        stop = dasdae_directory_spool.get_contents()["time_max"].max()
+        stop -= np.timedelta64(1, "s")
+        view = dasdae_directory_spool.select(time=(None, stop))
+        out = view.chunk(time=None)[0]
+        assert out.get_coord("time").max() <= stop
+        assert calls == {"patch": len(dasdae_directory_spool), "array": 0}
+
     def test_history_is_not_rebuilt(self, tmp_path_factory, calls, monkeypatch):
         """A member built from the index states no history, by design.
 
@@ -2168,9 +2215,31 @@ class TestChunkFromIndex:
         for num, patch in enumerate(spool):
             patch = patch.update_attrs(gauge=np.array([1.0, 2.0]))
             patch.io.write(path / f"p{num}.h5", "dasdae")
-        out = dc.spool(path).update().chunk(time=None)[0]
+        merged = dc.spool(path).update().chunk(time=None)
+        assert not merged._df["_attrs_complete"].any()
+        out = merged[0]
         assert np.array_equal(out.attrs["gauge"], [1.0, 2.0])
         assert calls == {"patch": 3, "array": 0}
+        # A plan on another dimension consumes the derived rows.
+        nested = merged.chunk(distance=100)
+        assert not nested._df["_attrs_complete"].any()
+        assert all(np.array_equal(p.attrs["gauge"], [1.0, 2.0]) for p in nested)
+
+    def test_complete_attrs_survive_derived_rows(self, dasdae_directory_spool):
+        """Fully indexed members remain complete after planning on either axis."""
+        merged = dasdae_directory_spool.chunk(time=None)
+        assert merged._df["_attrs_complete"].all()
+        assert merged.chunk(distance=100)._df["_attrs_complete"].all()
+
+    def test_mixed_attr_completeness(self):
+        """One incomplete member makes its output incomplete, in either order."""
+        patches = list(ex.get_example_spool("random_das", length=2, time_gap=0))
+        for index in (0, 1):
+            mixed = patches.copy()
+            mixed[index] = mixed[index].update_attrs(gauge=np.array([1.0, 2.0]))
+            merged = dc.spool(mixed).chunk(time=None, conflict="drop")
+            assert len(merged) == 1
+            assert not merged._df["_attrs_complete"].any()
 
     def test_row_the_index_could_not_fully_describe_loads_patch(self):
         """A cleared id or an attr the index could not hold means the patch path."""

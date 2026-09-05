@@ -1011,6 +1011,21 @@ class TestIngestEdges:
         assert record.min_num is None and record.max_num is None
         assert record.min_ns is None and record.min_str is None
 
+    @pytest.mark.parametrize("reverse", [False, True])
+    def test_mixed_coordinate_dtypes_keep_numeric_envelope(self, reverse):
+        """A name-only coordinate must not hide another patch's numeric range."""
+        patches = [
+            dc.Patch(data=np.ones(2), coords={"x": np.array(values)}, dims=("x",))
+            for values in ([False, True], [0.0, 1.0])
+        ]
+        spool = dc.spool(patches[::-1] if reverse else patches)
+        contents = spool.get_contents()
+        assert contents["x_min"].notna().sum() == 1
+        assert contents["x_max"].dropna().tolist() == [1.0]
+        selected = spool.select(x=(0.0, 1.0))
+        assert len(selected) == 1
+        assert selected[0].get_coord("x").dtype.kind == "f"
+
     def test_undescribable_coord_is_not_selectable(self, tmp_path):
         """A coord recorded by name alone is not a thing a query can reach.
 
@@ -1480,6 +1495,7 @@ class TestWhatARowCannotState:
             ({"tag": "x"}, True),
             ({"gauge": np.array([1.0, 2.0])}, False),
             ({"source_path": "user-path"}, False),
+            ({"gauge": get_quantity("2 km")}, False),
         ],
     )
     def test_the_row_says_whether_it_holds_every_attr(self, attrs, complete):

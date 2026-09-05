@@ -9,6 +9,7 @@ trivially current, and combined spools with file rows raise.
 
 from __future__ import annotations
 
+import numpy as np
 import pytest
 
 import dascore as dc
@@ -40,7 +41,9 @@ class TestEqualityContract:
         sel_2 = dc.spool(patches).select(distance=(0, 10))
         assert sel_1 == sel_2
 
-    @pytest.mark.parametrize("name", ["sensor_coord_dtype", "sensor_def_key"])
+    @pytest.mark.parametrize(
+        "name", ["sensor_coord_dtype", "sensor_def_key", "sensor_cut_mask"]
+    )
     def test_an_attr_spelled_like_a_private_column_still_counts(self, patches, name):
         """Only the generated `_<coord>...` column is stripped, not an attr."""
         one = dc.spool([p.update_attrs(**{name: "a"}) for p in patches])
@@ -48,6 +51,16 @@ class TestEqualityContract:
         other = dc.spool([p.update_attrs(**{name: "b"}) for p in patches])
         assert one == same
         assert one != other
+
+    def test_plan_dtype_placeholder_does_not_change_equality(self):
+        """A plan equals its materialization despite its placeholder dtype."""
+        patch = dc.get_example_patch()
+        patch = patch.update_coords(distance=np.arange(patch.shape[0], dtype=np.int32))
+        planned = dc.spool(patch).chunk(time=2)
+        materialized = dc.spool(list(planned))
+        assert set(planned._df["_distance_coord_dtype"]) == {"float64"}
+        assert set(materialized._df["_distance_coord_dtype"]) == {"int32"}
+        assert planned == materialized
 
     def test_order_matters(self, patches):
         """Same patches in a different order are not equal."""

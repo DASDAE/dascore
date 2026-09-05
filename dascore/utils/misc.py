@@ -723,12 +723,28 @@ def maybe_get_items(
 
 
 def _maybe_unpack(maybe_array):
-    """Unpack a single-element array-like object, else return input unchanged."""
-    size = getattr(maybe_array, "size", 0)
-    shape = getattr(maybe_array, "shape", ())
-    if size == 1 and shape:
-        maybe_array = maybe_array[0]
-    return maybe_array
+    """
+    Unpack a single-element array-like object, else return input unchanged.
+
+    A zero-dimensional container counts as single-element: an HDF5 scalar
+    dataset is stored that way, and returning the dataset itself leaves the
+    caller stringifying a handle. A numpy scalar is already unpacked and
+    cannot be indexed, and a string scalar refuses `[()]` besides.
+    """
+    if getattr(maybe_array, "size", 0) != 1 or isinstance(maybe_array, np.generic):
+        return maybe_array
+    if not hasattr(maybe_array, "shape"):
+        return maybe_array
+    # A pandas object reads the empty-tuple index as a label rather than as
+    # "the whole of me", so it is asked by position.
+    if isinstance(maybe_array, pd.Series | pd.Index):
+        return maybe_array.to_numpy().flat[0]
+    value = maybe_array[()]
+    # An entry may itself hold an array, whole, and that array is the value;
+    # only a wrapper around one value is worth stripping.
+    if isinstance(value, np.ndarray) and value.size == 1:
+        value = value.flat[0]
+    return value
 
 
 @cache
@@ -1509,3 +1525,81 @@ def validate_acquisition_key(value: str) -> str:
         )
         raise InvalidInventoryError(msg)
     return value
+
+
+@cache
+def glob_to_regex(pattern: str) -> re.Pattern:
+    """
+    Translate a glob to the regex which matches what SQLite's GLOB does.
+
+    Every glob DASCore reads -- a spool query, a dataframe filter, a
+    string coordinate -- means what SQLite's GLOB means, since the index
+    answers some of those queries in SQL and one pattern must not mean two
+    things depending on which side answers it. SQLite is not `fnmatch`: a
+    class is negated with `[^...]`, where fnmatch spells that `[!...]` and
+    reads a leading `!` as a literal. An unterminated class matches
+    nothing, as it does in SQLite; a class a regex cannot express at all
+    (a reversed range, which SQLite reads leniently) matches nothing here
+    rather than being guessed at.
+    """
+    out, index, size = [], 0, len(pattern)
+    while index < size:
+        char = pattern[index]
+        if char in "*?":
+            out.append(".*" if char == "*" else ".")
+        elif char == "[":
+            # A class may open with '^' to negate and may hold ']' as its
+            # first member; the class ends at the next ']' after those.
+            end = index + 1 + pattern[index + 1 : index + 2].count("^")
+            end += pattern[end : end + 1].count("]")
+            end = pattern.find("]", end)
+            if end < 0:
+                return _MATCHES_NOTHING
+            body = pattern[index + 1 : end]
+            negate, body = body.startswith("^"), body.removeprefix("^")
+            # A ']' opening a class is one of its members, and SQLite takes
+            # it as a plain one: it is not the low end of a range, so the
+            # dash which may follow it is a member too.
+            leading = ""
+            if body.startswith("]"):
+                leading, body = re.escape("]"), body[1:]
+            out.append(f"[{'^' if negate else ''}{leading}{_class_body(body)}]")
+            index = end
+        else:
+            out.append(re.escape(char))
+        index += 1
+    # SQLite's wildcards cross a newline like any other byte. The flag goes
+    # inline, not into re.compile, so it survives a caller that hands the
+    # pattern text on to something else.
+    return re.compile(r"(?s)" + "".join(out) + r"\Z")
+
+
+# A pattern which matches nothing, for a glob SQLite would not read. An
+# empty character class rather than a failing lookahead, because pandas
+# hands the pattern text to a regex engine without lookahead support.
+_MATCHES_NOTHING = re.compile(r"(?s)[^\s\S]\Z")
+
+
+def _class_body(body: str) -> str:
+    """
+    Escape the members of a glob character class for a regex one.
+
+    Ranges stay ranges, since a glob class means them, with each endpoint
+    escaped on its own — escaping the body wholesale would turn the dash
+    of a range into a member. A range's low endpoint is also emitted as a
+    member: SQLite tests it before testing the range, so `[z-a]` matches
+    `z` where the reversed range alone matches nothing.
+    """
+    out, index, size = [], 0, len(body)
+    while index < size:
+        low = body[index]
+        if index + 2 < size and body[index + 1] == "-":
+            high = body[index + 2]
+            out.append(re.escape(low))
+            if low <= high:
+                out.append(f"{re.escape(low)}-{re.escape(high)}")
+            index += 3
+            continue
+        out.append(re.escape(low))
+        index += 1
+    return "".join(out)

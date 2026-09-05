@@ -32,7 +32,6 @@ from dascore.io.index.catalog import (
     FileResolver,
     PatchCatalog,
     PatchResolver,
-    _adjust_unit_segments,
     _row_source_patch_key,
     apply_exact_residuals,
 )
@@ -48,13 +47,12 @@ from dascore.utils.chunk_plan import (
     _SOURCE_COLUMNS,
     _concatenated_steps,
     _ensure_patch_id,
+    patch_local_adjusted_envelopes,
 )
 from dascore.utils.io import IOResourceManager
-from dascore.utils.misc import _CanonicalRange, is_range
 from dascore.utils.patch import concatenate_planned
 from dascore.utils.patch_assembly import PatchAssembler
 from dascore.utils.paths import is_memory_uri
-from dascore.utils.pd import adjust_segments
 
 # Row columns which name dc.read's own keyword arguments; passing one along
 # as a trim hint would collide with the value the loader already supplies.
@@ -376,14 +374,17 @@ def _output_records(
     token: str,
     aux_info: Mapping[int, Mapping[str, Mapping]] | None = None,
     sizes: Mapping[int, int] | None = None,
+    attrs_complete: Mapping[int, bool] | None = None,
 ) -> list[SourceRecord]:
     """
     Convert plan output rows into ingestible source records.
 
     ``sizes`` names the outputs whose sample count is known (see
     `_whole_member_sizes`); every other output states none.
+    ``attrs_complete`` is true only when every member's attrs are indexed.
     """
     sizes = sizes or {}
+    attrs_complete = attrs_complete or {}
     records = []
     aux_info = aux_info or {}
     # Envelope columns belong to coordinates actually present in a row;
@@ -458,6 +459,7 @@ def _output_records(
             distance_step=_num(row.get("distance_step")),
             attrs=attrs,
             coords=tuple(coords),
+            attrs_complete=bool(attrs_complete.get(output_id, False)),
         )
         records.append(
             SourceRecord(
@@ -468,6 +470,18 @@ def _output_records(
             )
         )
     return records
+
+
+def _trim_loaded_member(patch: dc.Patch, trim: Mapping) -> dc.Patch:
+    """Apply the plan's window to a member the reader loaded whole."""
+    ranges = {
+        key: tuple(value)
+        for key, value in trim.items()
+        if key in set(patch.dims)
+        and isinstance(value, list | tuple | np.ndarray)
+        and len(value) == 2
+    }
+    return patch.select(**ranges) if ranges else patch
 
 
 class PlanResolver(PatchResolver):
@@ -535,28 +549,22 @@ class PlanResolver(PatchResolver):
             merge_kwargs=self.merge_kwargs,
             plan_dim=self.dim,
             load_array=self._load_member_whole,
+            can_load_array=self._can_load_member_whole,
         )
 
-    def _load_member_whole(self, row: Mapping) -> np.ndarray | None:
-        """
-        Load an untrimmed member's whole array through its format's read_array.
-
-        The array path skips the member's own coordinates and attrs, so
-        it is taken only where the index can stand in for them: the
-        member is untrimmed (a trim is applied on the member's grid), and
-        the catalog holds no associated coordinates, whose values the
-        index does not carry. Returns None otherwise, and the caller
-        loads the patch.
-        """
+    def _can_load_member_whole(self, row: Mapping) -> bool:
+        """Check every row-only fast-path condition before any array is read."""
         if row.get("_modified") or self.aux_coords:
-            return None
-        # A residual re-trims a loaded patch by value. An unmodified row
-        # lies wholly inside any value selection on the plan's own
-        # dimension (a cut would have modified it), so such residuals
-        # are no-ops here; any other kind still needs the patch.
-        for coords, samples in self.parent_residuals:
-            if samples or set(coords) - {self.dim}:
-                return None
+            return False
+        # An unmodified row lies wholly inside any value selection on the
+        # plan's dimension; other residuals still need the loaded patch.
+        for coords, samples, relative in self.parent_residuals:
+            if samples or relative or set(coords) - {self.dim}:
+                return False
+        return self._array_read_info(row) is not None
+
+    def _load_member_whole(self, row: Mapping) -> np.ndarray | None:
+        """Read a whole member after all rows pass the metadata preflight."""
         return self._load_member_array(row, {}, ignore_residuals=True)
 
     def _load_member(self, kwargs: Mapping) -> dc.Patch:
@@ -582,8 +590,18 @@ class PlanResolver(PatchResolver):
             if plan_units is not None and source_units != plan_units:
                 for suffix in ("_min", "_max", "_step"):
                     trim.pop(f"{self.dim}{suffix}", None)
-        patch = self.loader.resolve(kwargs, **trim)
-        patch = apply_exact_residuals(patch, self.parent_residuals)
+        patch_local = any(s or r for _, s, r in self.parent_residuals)
+        if trim and patch_local:
+            # A patch-local residual resolves against the source patch, so
+            # the plan's window cannot narrow the member before it runs;
+            # otherwise select(time=(1, -1), relative=True).chunk(time=2)
+            # would trim a second off each chunk instead of each file.
+            patch = self.loader.resolve(kwargs)
+            patch = apply_exact_residuals(patch, self.parent_residuals)
+            patch = _trim_loaded_member(patch, trim)
+        else:
+            patch = self.loader.resolve(kwargs, **trim)
+            patch = apply_exact_residuals(patch, self.parent_residuals)
         return self._in_plan_units(patch, kwargs)
 
     def _load_member_array(
@@ -614,6 +632,24 @@ class PlanResolver(PatchResolver):
         """
         if self.parent_residuals and not ignore_residuals:
             return None
+        info = self._array_read_info(row)
+        if info is None:
+            return None
+        loader, path, fiber_io, key = info
+        kwargs = {"source_patch_key": key} if key else {}
+        # The resource manager resolves remote paths and opens the handle
+        # type the override's annotation asks for, exactly as dc.read
+        # provisions its reader; _pre_cast says the work is already done.
+        with IOResourceManager(loader.resolve_path(path)) as manager:
+            resource = manager.get_resource(
+                _required_resource_type(fiber_io.read_array)
+            )
+            return fiber_io.read_array(
+                resource, dict(windows), _pre_cast=True, **kwargs
+            )
+
+    def _array_read_info(self, row: Mapping):
+        """Resolve array-reader metadata without opening the source file."""
         path = _row_str(row.get("source_path"))
         if not path:
             return None
@@ -642,17 +678,7 @@ class PlanResolver(PatchResolver):
             # read (see FileResolver.resolve); an override which resolves
             # keys natively could match the wrong patch, or nothing.
             return None
-        kwargs = {"source_patch_key": key} if key else {}
-        # The resource manager resolves remote paths and opens the handle
-        # type the override's annotation asks for, exactly as dc.read
-        # provisions its reader; _pre_cast says the work is already done.
-        with IOResourceManager(loader.resolve_path(path)) as manager:
-            resource = manager.get_resource(
-                _required_resource_type(fiber_io.read_array)
-            )
-            return fiber_io.read_array(
-                resource, dict(windows), _pre_cast=True, **kwargs
-            )
+        return loader, path, fiber_io, key
 
     def _in_plan_units(self, patch: dc.Patch, kwargs: Mapping) -> dc.Patch:
         """
@@ -730,7 +756,7 @@ class PlanResolver(PatchResolver):
 
 def _trimmed_dims(residuals, coord_dims_map: Mapping) -> frozenset[str]:
     """The dimensions a residual (load-time) selection trims."""
-    names = {n for coords, _ in residuals for n in coords}
+    names = {n for coords, _, _ in residuals for n in coords}
     return frozenset(
         d for n in names for d in str(coord_dims_map.get(n, n)).split(",") if d
     )
@@ -751,27 +777,6 @@ def stale_def_keys(residuals, coord_dims_map: Mapping, columns) -> list[str]:
         for c, dims_str in coord_dims_map.items()
         if set(str(dims_str).split(",")) & trimmed and f"_{c}_def_key" in columns
     ]
-
-
-def _residual_ranges(residuals) -> dict:
-    """Envelope-applicable value ranges from a residual tuple.
-
-    Bare ranges apply to the native envelope columns directly; a
-    `_CanonicalRange` passes through whole so the caller can convert it
-    per row unit.
-    """
-    out = {}
-    for coords, samples in residuals:
-        if samples:
-            continue
-        for name, value in coords.items():
-            if getattr(value, "magnitudes", None) is not None:
-                out[name] = value
-            elif is_range(value) and not any(
-                hasattr(b, "units") for b in value if b is not None
-            ):
-                out[name] = value
-    return out
 
 
 def _whole_member_sizes(trims: pd.DataFrame, sources: pd.DataFrame) -> dict[int, int]:
@@ -895,8 +900,21 @@ def derived_catalog(
     aux_info = _aux_coord_info(
         sources, trims, name, coord_dims_map, trimmed_dims, concat=mode == "concat"
     )
+    complete = {}
+    if "_attrs_complete" in member_rows:
+        complete = (
+            member_rows["_attrs_complete"]
+            .eq(1)
+            .groupby(member_rows["output_id"])
+            .all()
+            .to_dict()
+        )
     records = _output_records(
-        outputs, token, aux_info=aux_info, sizes=_whole_member_sizes(trims, sources)
+        outputs,
+        token,
+        aux_info=aux_info,
+        sizes=_whole_member_sizes(trims, sources),
+        attrs_complete=complete,
     )
     backend.write_sources(records)
     return PatchCatalog(backend=backend, resolver=resolver)
@@ -923,6 +941,8 @@ def collapse_working_df(catalog: PatchCatalog) -> pd.DataFrame | None:
     resolver = catalog.resolver
     if not isinstance(resolver, PlanResolver) or resolver.lossy:
         return None
+    if any(samples or relative for _, samples, relative in catalog.residuals):
+        return None
     members = resolver.member_rows
     if catalog.is_view:
         present = {
@@ -930,21 +950,13 @@ def collapse_working_df(catalog: PatchCatalog) -> pd.DataFrame | None:
             for row in catalog.to_df().to_dict("records")
         }
         members = members[members["output_id"].isin(present)]
-    ranges = _residual_ranges(catalog.residuals)
     # `_modified` carries: it says the member is a *trim* of its source
     # rather than the whole of it, which is exactly what the re-plan needs
     # to know. Dropping it left `_build_members` to assume no source was
     # modified, so a member which was a slice of a file came back marked
     # "load whole" and the loader read all of it.
     working = members.drop(columns=["output_id"], errors="ignore")
-    bare = {
-        name: value
-        for name, value in ranges.items()
-        if not isinstance(value, _CanonicalRange)
-    }
-    if bare:
-        working = adjust_segments(working, ignore_bad_kwargs=True, **bare)
-    for name, canonical in ranges.items():
-        if isinstance(canonical, _CanonicalRange):
-            working = _adjust_unit_segments(working, name, canonical)
+    working = patch_local_adjusted_envelopes(
+        working, catalog.residuals, drop_empty=True
+    )
     return working.reset_index(drop=True)
