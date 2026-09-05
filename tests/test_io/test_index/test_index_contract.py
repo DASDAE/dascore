@@ -650,18 +650,20 @@ class TestLineageIds:
         assert len(selected) == 1
         assert selected[0].attrs.patch_id == wanted
 
-    def test_what_was_done_is_not_indexed(self, tmp_path):
+    def test_what_was_done_is_indexed(self, tmp_path):
         """
-        `processing_id` advances whenever an operation runs, and a spool
-        runs one as it loads: a residual trim is a real `select` on the
-        patch. What the index recorded would not be what came back, so it
-        is not recorded. `patch_id` survives those same operations, which
-        is what makes it the one worth indexing.
+        `processing_id` says what was done, which provenance asks about,
+        so it is recorded: the column states what the stored patch had.
+        It is lineage rather than a describing attr, so merging never
+        compares it (see `_SOURCE_COLUMNS`); it is folded from the
+        members instead.
         """
         patch = dc.get_example_patch().pass_filter(time=(1, 10))
         patch.io.write(tmp_path / "filtered.h5", "dasdae")
         spool = dc.spool(tmp_path).update()
-        assert "processing_id" not in spool.get_contents().columns
+        indexed = spool.get_contents()["processing_id"].iloc[0]
+        assert indexed == spool[0].attrs.processing_id
+        assert indexed
 
     def test_a_trim_keeps_the_id_it_says_it_keeps(self, written_spool):
         """The index and the patch which loads must not disagree."""

@@ -43,20 +43,15 @@ from dascore.utils.time import to_datetime64, to_int, to_timedelta64
 
 _SANITIZE_RE = re.compile(r"[^a-z0-9_]+")
 
-# Attrs handled structurally or intentionally excluded from the index.
-# The ids are not indexed until the schema version which adds columns for
-# them; an index is for finding data, and an id is not a search term.
-# Attrs which are structure rather than metadata, and are never indexed.
-# `patch_id` is not here: it is an ordinary string, one per patch, and
-# indexing it is what lets a spool find a patch by the id it carries
-# rather than by loading every patch to look.
+# Attrs handled structurally rather than indexed: history is a list, so
+# never a scalar column, and dims and coords are structure.
 #
-# `processing_id` is. It advances on every operation, and a spool applies
-# operations as it loads -- a residual trim is a real `select` on the
-# patch -- so what the index recorded is not what the patch which comes
-# back carries. `patch_id` survives those same operations by definition,
-# which is what makes it, and not this, the one worth indexing.
-_SKIPPED_ATTRS = frozenset({"history", "dims", "coords", "processing_id"})
+# Neither lineage id is here. `patch_id` is indexed so a spool can find a
+# patch by the id it carries rather than by loading every patch to look;
+# `processing_id` because a provenance query needs to reach it. Both are
+# lineage rather than describing attrs, so the planner keeps them out of
+# merge conflicts (see `_SOURCE_COLUMNS`).
+_SKIPPED_ATTRS = frozenset({"history", "dims", "coords"})
 
 
 @dataclass(frozen=True)
@@ -159,6 +154,9 @@ class PatchRecord:
     distance_step: float | None
     attrs: dict[str, TypedValue] = field(default_factory=dict)
     coords: tuple[CoordRecord, ...] = ()
+    # whether ``attrs`` holds every attr the patch defines
+    attrs_complete: bool = True
+    attr_dtypes: str | None = None
 
 
 @dataclass(frozen=True)
@@ -277,10 +275,20 @@ def _attr_name_status(name: str) -> str:
     return "ok"
 
 
-def _extract_attrs(summary: PatchSummary) -> dict[str, TypedValue]:
-    """Get indexable typed attrs from a patch summary."""
+def _extract_attrs(
+    summary: PatchSummary,
+) -> tuple[dict[str, TypedValue], bool, str | None]:
+    """
+    Get indexable typed attrs from a patch summary.
+
+    Also says whether they are all of them: an attr the index cannot hold
+    (a value no kind covers, a name a structural column owns) stays on
+    the patch, and a row missing one cannot stand in for the patch.
+    """
     raw = summary.attrs.model_dump()
     out = {}
+    complete = True
+    dtypes = {}
     for name, value in raw.items():
         status = _attr_name_status(name)
         if status == "reserved":
@@ -290,12 +298,25 @@ def _extract_attrs(summary: PatchSummary) -> dict[str, TypedValue]:
                 "is not queryable through the spool."
             )
             warnings.warn(msg, UserWarning, stacklevel=2)
+            complete = False
         if status != "ok":
             continue
         typed = typed_value(value)
         if typed is not None:
             out[name] = typed
-    return out
+            if typed.units is not None:
+                # The index stores a magnitude, not the original quantity.
+                complete = False
+            elif typed.kind == "num" and isinstance(value, int | float | np.number):
+                dtype = np.asarray(value).dtype
+                dtypes[name] = dtype.str
+                if dtype.kind in "iu" and int(typed.value) != int(value):
+                    complete = False  # SQL's float lost integer precision.
+        elif not _is_missing(value):
+            # unset is not unheld: a value the patch takes at its default
+            # is one the row omits and the patch still has
+            complete = False
+    return out, complete, json.dumps(dtypes) if dtypes else None
 
 
 # What a directory name may never claim to be. A path says where data is
@@ -389,6 +410,20 @@ def dump_path_attrs(path_attrs: dict[str, str] | None) -> str | None:
     return json.dumps(path_attrs, sort_keys=True) if path_attrs else None
 
 
+def coord_dtype_is_stateable(dtype: str | np.dtype | None) -> bool:
+    """Whether a coord of this dtype has an envelope the index can state.
+
+    A coordinate whose dtype no value kind covers (a boolean, say) is
+    still recorded by name -- a reader rebuilding a patch has to know the
+    patch holds it -- but nothing about its values is, so no query
+    predicate can be built against it either.
+    """
+    if not dtype:
+        return False
+    dtype = np.dtype(dtype)
+    return dtype.kind in "mM" or np.issubdtype(dtype, np.number) or dtype.kind in "USO"
+
+
 def _coord_record(name: str, summary) -> CoordRecord | None:
     """Convert one CoordSummary into a CoordRecord."""
     fingerprint = getattr(summary, "fingerprint", None)
@@ -412,7 +447,7 @@ def _coord_record(name: str, summary) -> CoordRecord | None:
     )
     dtype = np.dtype(summary.dtype) if summary.dtype else None
     if dtype is None:
-        return None  # unsupported coord representation: skip, per design
+        return None  # nothing to record: not even a dtype was stated
     if dtype.kind in "mM":  # datetime64 ("M") / timedelta64 ("m")
         is_datetime = dtype.kind == "M"
         convert = to_datetime64 if is_datetime else to_timedelta64
@@ -446,7 +481,11 @@ def _coord_record(name: str, summary) -> CoordRecord | None:
             max_str=str(summary.max),
             **common,
         )
-    return None  # unsupported coord representation: skip, per design
+    # A kind with no envelope representation (a boolean coordinate, say)
+    # is still recorded by name: the catalog states that the patch holds
+    # it, which is what a reader rebuilding the patch from the index
+    # must know, even though nothing about its values can be stated.
+    return CoordRecord(value_kind="num", **common)
 
 
 def _envelope(coords: tuple[CoordRecord, ...], name: str, kind: str):
@@ -470,6 +509,7 @@ def patch_record(summary: PatchSummary) -> PatchRecord:
     )
     time_min, time_max, time_step = _envelope(coords, "time", "time")
     dist_min, dist_max, dist_step = _envelope(coords, "distance", "num")
+    attrs, attrs_complete, attr_dtypes = _extract_attrs(summary)
     return PatchRecord(
         source_patch_key=normalize_source_patch_key(summary.source_patch_key),
         dims=",".join(summary.dims),
@@ -486,8 +526,10 @@ def patch_record(summary: PatchSummary) -> PatchRecord:
         distance_min=dist_min,
         distance_max=dist_max,
         distance_step=dist_step,
-        attrs=_extract_attrs(summary),
+        attrs=attrs,
         coords=coords,
+        attrs_complete=attrs_complete,
+        attr_dtypes=attr_dtypes,
     )
 
 

@@ -162,3 +162,6 @@ assert combined == trimmed
 ## Scope
 
 The index answers metadata selection, identifies candidate patches, and plans chunk operations — all without touching patch data. Exact coordinate selection is applied again when a patch is loaded because summary envelopes cannot prove arbitrary-coordinate membership. Materialized derived data (persisting chunked results) remains future work.
+
+
+The index retains source `processing_id` values, original numeric attribute dtypes, coordinate dtypes, and whether scalar attributes fully describe a source patch (history remains excluded). Coordinate names are retained even when their values have no supported envelope representation; such names are not selectable. This metadata lets consumers distinguish rows they can reconstruct from those that require loading the source patch. Plan output rows require resolution through their members. Index version 15 adds this reconstruction metadata; older indexes are rebuilt when opened.

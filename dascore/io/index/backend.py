@@ -32,6 +32,7 @@ from dascore.io.index.ingest import (
     _envelope,
     assemble_source_records,
     attr_column_name,
+    coord_dtype_is_stateable,
     dump_path_attrs,
     hive_typed_attrs,
 )
@@ -606,6 +607,8 @@ class SQLiteIndexBackend:
                             patch.distance_min,
                             patch.distance_max,
                             patch.distance_step,
+                            int(patch.attrs_complete),
+                            patch.attr_dtypes,
                         )
                     )
                     attrs = patch.attrs
@@ -1174,7 +1177,8 @@ class SQLiteIndexBackend:
         ids = out["patch_id"].tolist()
         link_sql = (
             "SELECT pc.patch_id, pc.coord_name, cd.def_key, cd.fingerprint, "
-            "cd.value_kind, cd.is_relative, cd.units, cd.min_num, cd.max_num, "
+            "cd.value_kind, cd.dtype, cd.is_relative, cd.units, "
+            "cd.min_num, cd.max_num, "
             "cd.step_num, cd.min_ns, cd.max_ns, cd.step_ns, "
             "cd.min_str, cd.max_str "
             "FROM patch_coords pc "
@@ -1192,6 +1196,13 @@ class SQLiteIndexBackend:
             return out
         coords = self._add_envelope_objects(coords)
         for name, group in coords.groupby("coord_name"):
+            if not any(coord_dtype_is_stateable(x) for x in group["dtype"].unique()):
+                # Recorded by name alone, so there is no envelope to
+                # publish; null columns here would make the frame claim
+                # the coordinate has one. A coordinate whose dtype the
+                # index does state keeps its columns even when its values
+                # are all null, which the concat plan relies on.
+                continue
             pids = group["patch_id"]
             # last row wins for duplicate patch ids, like the mapping loop
             # this replaces.
@@ -1200,7 +1211,12 @@ class SQLiteIndexBackend:
             maxs = dict(zip(pids, group["_env_max"]))
             steps = dict(zip(pids, group["_env_step"]))
             units = dict(zip(pids, group["units"]))
+            dtypes = dict(zip(pids, group["dtype"]))
             out[f"_{name}_def_key"] = out["patch_id"].map(keys)
+            # the stored dtype: an envelope alone cannot say whether 0.0
+            # to 299.0 by 1.0 labels integers, and a member rebuilt from
+            # the row must match the patch the file would give
+            out[f"_{name}_coord_dtype"] = out["patch_id"].map(dtypes)
             # the ORIGINAL unit spelling, matching the native envelope
             # values; chunk partitioning normalizes compatible spellings
             # to one unit per dimensionality before using this
@@ -1244,9 +1260,21 @@ class SQLiteIndexBackend:
         return set(self._attr_meta()["attr_name"])
 
     def coord_names(self) -> set[str]:
-        """Return coord names known to the index."""
-        df = self._fetch_df("SELECT DISTINCT coord_name FROM patch_coords")
-        return set(df["coord_name"])
+        """Return the coord names a query may select on.
+
+        A coordinate the index could only record by name states no
+        envelope, so no predicate can be built against it; it is not
+        selectable, and asking for it must say so rather than filter on
+        nothing. `coord_dims_map` still reports it -- what a patch holds
+        and what a query can reach are different questions.
+        """
+        sql = (
+            "SELECT DISTINCT pc.coord_name, cd.dtype FROM patch_coords pc "
+            "JOIN coord_defs cd ON cd.coord_def_id = pc.coord_def_id"
+        )
+        with self._lock:
+            rows = self._con.execute(sql).fetchall()
+        return {name for name, dtype in rows if coord_dtype_is_stateable(dtype)}
 
     def attr_units(self, name: str) -> dict[str, str | None]:
         """Return the canonical units the index stores one attr's kinds in."""
@@ -1277,6 +1305,20 @@ class SQLiteIndexBackend:
             sql += " AND patch_id IN (SELECT value FROM json_each(?))"
             params.append(json.dumps([int(x) for x in patch_ids]))
         return {int(x) for x in self._fetch_df(sql, params)["patch_id"]}
+
+    def associated_coord_names(self) -> set[str]:
+        """Return every coord name some patch holds on a dimension not its own.
+
+        `coord_dims_map` keeps the first dims spelling seen per name, so a
+        name which is a dimension on one patch and rides another dimension
+        on the next reads as dimensional there; whether a name is
+        associated anywhere is a question about every pair.
+        """
+        sql = (
+            "SELECT DISTINCT coord_name FROM patch_coords "
+            "WHERE coord_dims != coord_name"
+        )
+        return set(self._fetch_df(sql)["coord_name"].astype(str))
 
     def coord_dims_map(self) -> dict[str, str]:
         """Return each coord name's dims string (first observed wins)."""

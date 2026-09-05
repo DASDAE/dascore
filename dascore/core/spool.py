@@ -2356,6 +2356,12 @@ class Spool(NodeRepr, NamespaceOwner):
         new instance attributes cannot silently join equality.
         """
 
+        def _private(column, suffix) -> bool:
+            # the generated `_<coord><suffix>` column, not an attr which
+            # happens to end the same way
+            name = str(column)
+            return name.startswith("_") and name.endswith(suffix)
+
         def _strip_identity(df):
             # synthetic per-catalog identities (memory:// paths, ids) and
             # backend provenance (format/version) are not content; equal
@@ -2384,7 +2390,14 @@ class Spool(NodeRepr, NamespaceOwner):
                 # materialization: the envelopes already say what the
                 # rows describe, so the sample count adds nothing here.
                 "_data_size",
-                *[c for c in df.columns if str(c).endswith("_def_key")],
+                *[c for c in df.columns if _private(c, "_def_key")],
+                # a plan's outputs state a placeholder coordinate dtype
+                # for the same reason they state no def key
+                *[c for c in df.columns if _private(c, "_coord_dtype")],
+                # whether the index holds every attr a patch defines says
+                # what the index can state, not what the patch is
+                "_attrs_complete",
+                "_attr_dtypes",
             ]
             out = df.drop(columns=drop, errors="ignore")
             return out[sorted(out.columns)]
