@@ -408,7 +408,8 @@ class Spool(NodeRepr, NamespaceOwner):
         enrichment, and skipping unresolvable patches follow ordinary spool
         iteration. The loading thread uses the DASCore configuration active
         when this method was called. Ordinary ``for patch in spool`` stays
-        synchronous. A positive window requires thread support. A zero
+        synchronous. A positive window requires thread support; on WebAssembly,
+        use ordinary iteration or explicitly set ``max_in_flight=0``. A zero
         window uses the configuration active when each patch is consumed,
         just like ordinary iteration. Threaded
         directory iteration requires a serialized SQLite build
@@ -2318,8 +2319,10 @@ class Spool(NodeRepr, NamespaceOwner):
         Process pools can parallelize HDF5 scans, whose h5py calls are
         serialized within one process. Reusing a pool avoids paying its
         startup cost on every update. Each worker opens its own sources and
-        uses the configuration active when update was called. Warnings stay
-        in the worker; configure their handling in the executor environment.
+        uses the configuration active when update was called. Warnings are
+        emitted where the scan runs. Parent-process warning capture and filters
+        do not automatically apply to process workers; configure their warning
+        handling in the worker initializer or environment.
         Missing optional dependencies are handled per batch, so an unreadable
         batch can raise even if other batches contain readable files. The
         caller is responsible for executor support and initialization.

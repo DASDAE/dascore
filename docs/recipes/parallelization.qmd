@@ -34,6 +34,7 @@ if __name__ == "__main__":
 ```{python}
 from contextlib import closing
 
+# The guard lets this share a script with the process-pool example above.
 if __name__ == "__main__":
     with closing(spool.iterate(max_in_flight=2)) as patches:
         for patch in patches:
