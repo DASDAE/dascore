@@ -113,8 +113,16 @@ def _block_pieces(count: int, limit: int | None) -> tuple[tuple[int, int], ...]:
     if limit is None or count <= limit:
         return ((0, count),)
     pieces = -(-count // limit)
-    size = -(-count // pieces)
-    return tuple((x, min(x + size, count)) for x in range(0, count, size))
+    size, extra = divmod(count, pieces)
+    # the remainder is spread one sample at a time over the leading
+    # pieces; repeating a rounded-up size instead would put the whole
+    # deficit in the last piece (101 in 30s as 26, 26, 26, 23)
+    sizes = [size + 1] * extra + [size] * (pieces - extra)
+    out, start = [], 0
+    for length in sizes:
+        out.append((start, start + length))
+        start += length
+    return tuple(out)
 
 
 def _lazy_temporal_index(name, coord):

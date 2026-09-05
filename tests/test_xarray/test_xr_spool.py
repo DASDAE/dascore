@@ -843,11 +843,19 @@ class TestBlockPieces:
             assert all(b == pieces[i + 1][0] for i, (_, b) in enumerate(pieces[:-1]))
             assert all(0 < b - a <= limit for a, b in pieces)
 
-    def test_pieces_are_even(self):
-        """No piece is more than one sample shorter than another."""
+    @pytest.mark.parametrize(
+        "count,limit", [(100, 30), (101, 30), (10, 3), (1000, 7), (37, 5)]
+    )
+    def test_pieces_are_even(self, count, limit):
+        """No piece is more than one sample shorter than another.
+
+        The counts which do not divide are the point: a size repeated
+        until the samples run out leaves the whole deficit in the last
+        piece, which the evenly divisible cases cannot show.
+        """
         from dascore.xarray.spool import _block_pieces  # noqa: PLC0415
 
-        sizes = [b - a for a, b in _block_pieces(100, 30)]
+        sizes = [b - a for a, b in _block_pieces(count, limit)]
         assert max(sizes) - min(sizes) <= 1
 
     def test_one_sample_rows_still_split(self):
