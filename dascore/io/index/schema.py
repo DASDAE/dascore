@@ -33,9 +33,9 @@ from typing import NamedTuple, get_args, get_type_hints
 # Version of the index schema, independent of dascore's version. Bump it
 # when an index written by an older dascore would be read wrongly rather
 # than merely incompletely -- including when what a *stored value* means
-# changes, not only when a column does. Version 15 stores numeric
-# attribute dtypes so index-built patches recover the original scalar
-# types. Earlier indexes lack the metadata required for reconstruction
+# changes, not only when a column does. Version 15 stores source
+# coordinate and numeric attribute dtypes so index-built patches recover
+# their original types. Earlier indexes lack the metadata required for reconstruction
 # and are rebuilt when opened.
 INDEX_VERSION = 15
 # Identity string so any tool can sanity-check what it opened.
@@ -193,6 +193,7 @@ class PatchCoordRow(NamedTuple):
     coord_name: str
     coord_dims: str
     coord_def_id: int
+    dtype: str  # source representation; shared definitions identify values
 
 
 # The row class declaring each stored table.

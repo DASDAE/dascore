@@ -25,6 +25,7 @@ from typing import SupportsInt, TypedDict, cast
 import numpy as np
 import pandas as pd
 
+from dascore.core.attrs import PatchAttrs
 from dascore.core.summary import PatchSummary, normalize_source_patch_key
 from dascore.exceptions import InvalidInventoryError
 from dascore.io.index.schema import (
@@ -287,7 +288,8 @@ def _extract_attrs(
     """
     raw = summary.attrs.model_dump()
     out = {}
-    complete = True
+    # Reconstruction creates base PatchAttrs; vendor models need their reader.
+    complete = type(summary.attrs) is PatchAttrs
     dtypes = {}
     for name, value in raw.items():
         status = _attr_name_status(name)
@@ -312,9 +314,9 @@ def _extract_attrs(
                 dtypes[name] = dtype.str
                 if dtype.kind in "iu" and int(typed.value) != int(value):
                     complete = False  # SQL's float lost integer precision.
-        elif not _is_missing(value):
-            # unset is not unheld: a value the patch takes at its default
-            # is one the row omits and the patch still has
+        elif name not in PatchAttrs.model_fields or not _is_missing(value):
+            # Only declared defaults can be recovered from an omitted value.
+            # An empty extra attribute still has a name and a representation.
             complete = False
     return out, complete, json.dumps(dtypes) if dtypes else None
 
@@ -743,9 +745,11 @@ def assemble_source_records(
                         coord_name=link.coord_name,
                         coord_dims=link.coord_dims,
                         coord_hash=_py_scalar(cdef.fingerprint),
+                        dtype=link.dtype,
                         **{
                             f: _py_scalar(getattr(cdef, f), f in _COORD_DEF_BOOLS)
                             for f in _COORD_DEF_FIELDS
+                            if f != "dtype"
                         },
                     )
                 )

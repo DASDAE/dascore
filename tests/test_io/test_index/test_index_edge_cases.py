@@ -38,6 +38,7 @@ from dascore.exceptions import (
     UnitError,
 )
 from dascore.io.core import is_directory_format
+from dascore.io.febus.core import FebusPatchAttrs
 from dascore.io.index.backend import (
     SQLiteIndexBackend,
     _ns_to_time,
@@ -1498,6 +1499,10 @@ class TestWhatARowCannotState:
             ({"source_path": "user-path"}, False),
             ({"gauge": get_quantity("2 km")}, False),
             ({"counter": 2**53 + 1}, False),
+            ({"empty_extra": ""}, False),
+            ({"empty_extra": None}, False),
+            ({"empty_extra": np.nan}, False),
+            ({"empty_extra": np.array([np.nan])}, False),
         ],
     )
     def test_the_row_says_whether_it_holds_every_attr(self, attrs, complete):
@@ -1524,6 +1529,37 @@ class TestWhatARowCannotState:
                 assert np.dtype(dtypes[name]) == expected
                 assert expected.type(row[name]) == patch.attrs[name]
             assert "_attr_dtypes" not in spool.get_contents().columns
+
+    def test_vendor_attribute_model_requires_loading(self):
+        """A scalar row cannot recreate a vendor's attribute class and defaults."""
+        patch = dc.get_example_patch().update(attrs=FebusPatchAttrs())
+        row = dc.spool([patch])._df.iloc[0]
+        assert not row["_attrs_complete"]
+
+    def test_source_dtypes_survive_shared_coordinate_definitions(self):
+        """Equal coordinate values share an identity while retaining source types."""
+        base = dc.get_example_patch()
+        patches = [
+            base.update_coords(
+                distance=get_coord(values=np.arange(300, dtype=dtype), units="m")
+            )
+            for dtype in (np.int32, np.float64)
+        ]
+        spool = dc.spool(patches)
+        copies = (spool, spool + dc.spool([]), pickle.loads(pickle.dumps(spool)))
+        for copied in copies:
+            rows = copied._df
+            assert list(rows["_distance_coord_dtype"]) == ["int32", "float64"]
+            assert rows["_distance_def_key"].nunique() == 1
+
+    def test_flat_attribute_collision_requires_loading(self):
+        """Queryable attrs omitted from flat rows cannot be reconstructed there."""
+        patch = dc.get_example_patch().update_attrs(distance_units="custom")
+        spool = dc.spool([patch])
+        with pytest.warns(UserWarning, match="collide with coordinate envelope"):
+            row = spool._df.iloc[0]
+        assert not row["_attrs_complete"]
+        assert len(spool.select(_attrs={"distance_units": "custom"})) == 1
 
     def test_associated_anywhere_is_associated(self):
         """A name dimensional on one patch and riding another on the next."""
