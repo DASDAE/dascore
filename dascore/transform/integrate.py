@@ -81,7 +81,7 @@ def _get_indefinite_integral(patch, array, dxs_or_vals, axes):
     return array, patch.coords  # coords shouldn't change
 
 
-@patch_function(version="1.1")
+@patch_function(version="1.2")
 def integrate(
     patch: PatchType,
     dim: Sequence[str] | str | None,
