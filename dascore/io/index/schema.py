@@ -33,10 +33,11 @@ from typing import NamedTuple, get_args, get_type_hints
 # Version of the index schema, independent of dascore's version. Bump it
 # when an index written by an older dascore would be read wrongly rather
 # than merely incompletely -- including when what a *stored value* means
-# changes, not only when a column does. 14 reads a legacy DASDAE file's
-# PyTables attr payloads, so 13 stored the payload text where a value
-# is now stored (`gauge_length` of "N." rather than nothing).
-INDEX_VERSION = 14
+# changes, not only when a column does. Version 15 stores source
+# coordinate and numeric attribute dtypes so index-built patches recover
+# their original types. Earlier indexes lack the metadata required for reconstruction
+# and are rebuilt when opened.
+INDEX_VERSION = 15
 # Identity string so any tool can sanity-check what it opened.
 WHAT_IS_THIS = "dascore_spool_index"
 
@@ -119,6 +120,12 @@ class PatchRow(NamedTuple):
     distance_min: float | None  # original units, as the coord states them
     distance_max: float | None
     distance_step: float | None
+    # 1 when every attr the patch defines is a column; 0 when ingest had
+    # to leave one out (an array, a name a structural column owns), so a
+    # row built into a patch would be missing what the file holds.
+    attrs_complete: int
+    # JSON mapping for numeric attrs whose scalar dtype SQL would erase.
+    attr_dtypes: str | None
 
 
 class AttrsRow(NamedTuple):
@@ -186,6 +193,7 @@ class PatchCoordRow(NamedTuple):
     coord_name: str
     coord_dims: str
     coord_def_id: int
+    dtype: str  # source representation; shared definitions identify values
 
 
 # The row class declaring each stored table.
@@ -286,6 +294,8 @@ RESERVED_ATTR_COLUMNS = frozenset(
         "dims",
         "dtype",
         "data_size",
+        "attrs_complete",
+        "attr_dtypes",
         # These named structural columns until version 9 dropped them.
         # They stay reserved: the spool gives them a meaning whether or
         # not a column holds one, and un-reserving a name silently turns
@@ -338,7 +348,14 @@ RESERVED_ATTR_COLUMNS = frozenset(
 # backend, before attr columns land, so the attr finds the public spelling
 # free; the rest are renamed where the spool relation is built.
 SPOOL_EARLY_RENAMES = MappingProxyType({"patch_id": "_patch_id"})
-SPOOL_LATE_RENAMES = MappingProxyType({"dtype": "_dtype", "data_size": "_data_size"})
+SPOOL_LATE_RENAMES = MappingProxyType(
+    {
+        "dtype": "_dtype",
+        "data_size": "_data_size",
+        "attrs_complete": "_attrs_complete",
+        "attr_dtypes": "_attr_dtypes",
+    }
+)
 
 # Explicit secondary indexes. Every other access path is covered by a
 # PRIMARY KEY or UNIQUE autoindex above — patch_coords(patch_id,

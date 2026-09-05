@@ -148,7 +148,7 @@ found = spool.select(patch_id=wanted)
 assert found[0].attrs.patch_id == wanted
 ```
 
-`processing_id` is not indexed because loading advances processing provenance. Built or chunked spools may have no `patch_id`, and moving a source invalidates its derived ID until the directory is rescanned. See [Patch identity](patch.qmd#patch-identity) for the identity rules.
+`processing_id` is also indexed. Attribute queries match the stored source ID, including the empty string when no operations were recorded. A value trim clears the ID in presented contents because the loaded patch records the selection and carries a different value; sample selections defer it until loading. Built or chunked spools may have no `patch_id`, and moving a source invalidates its derived ID until the directory is rescanned. See [Patch identity](patch.qmd#patch-identity) for the identity rules.
 
 An empty ID after a file move is intentional: retaining the path-derived value would point at a source which no longer exists. Calling `update()` rebuilds the row from its new location.
 

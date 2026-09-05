@@ -701,6 +701,27 @@ class TestRead:
         spool = io.read(path, time=(end_time + one_second, ...))
         assert len(spool) == 0
 
+    def test_a_read_bound_records_nothing(self, io_path_tuple):
+        """
+        A patch read under a coordinate bound carries what a whole read carries.
+
+        The bound is the read's business; a spool records the trim it
+        asked for, so a reader which recorded it too would record it twice.
+        """
+        io, path = io_path_tuple
+        with skip_missing():
+            whole = io.read(path)
+        if len(whole) != 1 or "time" not in whole[0].dims:
+            pytest.skip("Test requires a single patch with a time dimension.")
+        patch = whole[0]
+        values = patch.get_coord("time").values
+        if len(values) < 6:
+            pytest.skip("Test requires a time dimension with room to trim.")
+        bounded = io.read(path, time=(values[2], values[-3]))
+        assert len(bounded) == 1
+        assert bounded[0].attrs.processing_id == patch.attrs.processing_id
+        assert bounded[0].attrs.history == patch.attrs.history
+
     def test_slice_out_all_patches_distance(self, io_path_tuple):
         """Ensure slicing outside file distance range returns an empty spool."""
         io, path = io_path_tuple

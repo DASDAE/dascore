@@ -199,7 +199,8 @@ def _read_single_file(path, metadata, time, distance, attr_cls):
         coords=cm,
         attrs=attrs,
     )
-    return patch.select(time=time, distance=distance)
+    # Reading a window does not itself record a processing operation.
+    return patch.select.raw_function(patch, time=time, distance=distance)
 
 
 def _load_patches(paths, metadata, time, distance, attr_cls):
