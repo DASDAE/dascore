@@ -468,6 +468,193 @@ class TestToTimeDelta64:
         assert to_timedelta64(np.array(value)) == expected
 
 
+class TestNanosecondBounds:
+    """Tests for times which the nanosecond representation cannot hold."""
+
+    out_of_range = ("2500-01-01", "1000-01-01")
+
+    @pytest.mark.parametrize("iso", out_of_range)
+    def test_string(self, iso):
+        """A string outside the range used to come back centuries away."""
+        with pytest.raises(TimeError, match="outside the range"):
+            to_datetime64(iso)
+
+    @pytest.mark.parametrize("iso", out_of_range)
+    def test_array_of_strings(self, iso):
+        """The array path wrapped as silently as the scalar one."""
+        with pytest.raises(TimeError, match="outside the range"):
+            to_datetime64(np.array([iso]))
+
+    @pytest.mark.parametrize("iso", out_of_range)
+    def test_object_array(self, iso):
+        """An object array converts element wise and must check each one."""
+        with pytest.raises(TimeError, match="outside the range"):
+            to_datetime64(np.array([iso], dtype=object))
+
+    def test_only_one_bad_value_is_needed(self):
+        """A single unrepresentable element rejects the whole array."""
+        with pytest.raises(TimeError, match="outside the range"):
+            to_datetime64(np.array(["2020-01-01", "2500-01-01"]))
+
+    def test_seconds_from_epoch(self):
+        """Seconds from the epoch overflowed with an opaque OverflowError."""
+        with pytest.raises(TimeError, match="outside the range"):
+            to_datetime64(2e10)
+
+    def test_array_of_seconds(self):
+        """The array of seconds saturated at the maximum instead of raising."""
+        with pytest.raises(TimeError, match="outside the range"):
+            to_datetime64(np.array([2e10]))
+
+    def test_timedelta_seconds(self):
+        """Durations have the same bound as times."""
+        with pytest.raises(TimeError, match="outside the range"):
+            to_timedelta64(1e12)
+
+    def test_array_of_timedelta_seconds(self):
+        """The duration array saturated at the maximum instead of raising."""
+        with pytest.raises(TimeError, match="outside the range"):
+            to_timedelta64(np.array([1e12]))
+
+    @pytest.mark.parametrize("iso", ["2262-04-11", "1677-09-22"])
+    def test_outermost_days_still_convert(self, iso):
+        """The check must not refuse what the representation can hold."""
+        assert to_datetime64(iso) == np.datetime64(iso, "ns")
+
+    def test_null_values_are_untouched(self):
+        """Nulls are not out of range and still become NaT."""
+        out = to_datetime64(np.array([np.nan, 1.0]))
+        assert np.isnat(out[0])
+        assert out[1] == to_datetime64(1.0)
+
+    def test_empty_array(self):
+        """An empty array carries no value to check."""
+        assert len(to_datetime64(np.array([]))) == 0
+        assert len(to_timedelta64(np.array([]))) == 0
+
+    def test_message_names_the_value(self):
+        """The error has to say which time was refused."""
+        with pytest.raises(TimeError, match="2500"):
+            to_datetime64(np.array(["2020-01-01", "2500-01-01"]))
+
+    def test_error_is_also_an_overflow_error(self):
+        """Handlers written for the numpy error must keep catching it."""
+        with pytest.raises(OverflowError):
+            to_datetime64("2500-01-01")
+        with pytest.raises(OverflowError):
+            to_timedelta64(1e12)
+
+    # Strings with more than six fractional digits are parsed by numpy
+    # straight into nanoseconds, where an out of range value wraps silently.
+    nanosecond_strings = (
+        "2500-01-01T00:00:00.000000000",
+        "1000-01-01T00:00:00.000000000",
+        "2262-04-11T23:47:16.854775808",  # one ns past the last valid one
+        "1677-09-21T00:12:43.145224192",  # lands on the NaT sentinel
+        "1677-09-21T00:12:43.145224191",
+    )
+
+    @pytest.mark.parametrize("iso", nanosecond_strings)
+    def test_string_with_nanoseconds(self, iso):
+        """A string numpy parses straight into ns wrapped before any check."""
+        with pytest.raises(TimeError, match="outside the range"):
+            to_datetime64(iso)
+
+    @pytest.mark.parametrize("iso", nanosecond_strings)
+    def test_array_of_strings_with_nanoseconds(self, iso):
+        """The array path parses the same way and needs the same check."""
+        with pytest.raises(TimeError, match="outside the range"):
+            to_datetime64(np.array(["2020-01-01T00:00:00.000000001", iso]))
+
+    @pytest.mark.parametrize(
+        "iso", ["2262-04-11T23:47:16.854775807", "1677-09-21T00:12:43.145224193"]
+    )
+    def test_outermost_nanoseconds_still_convert(self, iso):
+        """The last valid nanosecond on each side is not out of range."""
+        expected = np.datetime64(iso, "ns")
+        assert to_datetime64(iso) == expected
+        assert to_datetime64(np.array([iso]))[0] == expected
+
+    def test_nat_string_next_to_nanoseconds(self):
+        """A NaT string is still NaT, not mistaken for a wrapped value."""
+        out = to_datetime64(np.array(["NaT", "2020-01-01T00:00:00.123456789"]))
+        assert np.isnat(out[0])
+        assert out[1] == np.datetime64("2020-01-01T00:00:00.123456789", "ns")
+
+    @pytest.mark.parametrize("sign", [1, -1])
+    def test_seconds_at_the_float_limit(self, sign):
+        """The float limit itself rounds to 2**63 and does not fit."""
+        limit = sign * np.iinfo(np.int64).max / 1_000_000_000
+        with pytest.raises(TimeError, match="outside the range"):
+            to_datetime64(np.array([limit]))
+        with pytest.raises(TimeError, match="outside the range"):
+            to_timedelta64(np.array([limit]))
+
+    def test_seconds_just_inside_the_float_limit(self):
+        """The largest float below the limit still converts."""
+        limit = np.nextafter(np.iinfo(np.int64).max / 1_000_000_000, -np.inf)
+        assert not np.isnat(to_datetime64(np.array([limit]))[0])
+
+    @pytest.mark.parametrize("seconds", [9_223_372_037, -9_223_372_037])
+    def test_whole_seconds_past_the_limit(self, seconds):
+        """Integer seconds are bounded on both sides, not by magnitude."""
+        with pytest.raises(TimeError, match="outside the range"):
+            to_timedelta64(np.array([seconds]))
+
+    @pytest.mark.parametrize("seconds", [9_223_372_036, -9_223_372_036])
+    def test_outermost_whole_seconds_still_convert(self, seconds):
+        """The last whole second on each side fits."""
+        out = to_timedelta64(np.array([seconds]))
+        assert out[0] == np.timedelta64(seconds, "s")
+
+    def test_most_negative_integer(self):
+        """np.abs of the lowest int64 is itself, so it must not slip through."""
+        with pytest.raises(TimeError, match="outside the range"):
+            to_timedelta64(np.array([np.iinfo(np.int64).min]))
+
+    def test_timedelta_array_in_coarse_unit(self):
+        """A temporal array narrows through the same check as a datetime one."""
+        with pytest.raises(TimeError, match="outside the range"):
+            to_timedelta64(np.array([1000], dtype="timedelta64[Y]"))
+        with pytest.raises(TimeError, match="outside the range"):
+            to_timedelta64(np.array(["2500-01-01"], dtype="datetime64[D]"))
+
+    def test_datetime64_scalar(self):
+        """A scalar in a coarse unit wrapped when rebuilt in nanoseconds."""
+        with pytest.raises(TimeError, match="outside the range"):
+            to_datetime64(np.datetime64("2500-01-01", "D"))
+        assert to_datetime64(np.datetime64("2020-01-01", "D")) == np.datetime64(
+            "2020-01-01", "ns"
+        )
+
+    def test_timedelta64_scalar(self):
+        """A scalar duration in a coarse unit overflowed with a numpy error."""
+        with pytest.raises(TimeError, match="outside the range"):
+            to_timedelta64(np.timedelta64(1000, "Y"))
+
+    def test_python_datetime(self):
+        """A datetime past the range wrapped when built in nanoseconds."""
+        with pytest.raises(TimeError, match="outside the range"):
+            to_datetime64(datetime(2500, 1, 1))
+        dt = datetime(2020, 1, 1, 12, 0, 0, 123456)
+        assert to_datetime64(dt) == np.datetime64(dt, "ns")
+
+    def test_python_timedelta(self):
+        """A timedelta spans far more than nanoseconds can count."""
+        with pytest.raises(TimeError, match="outside the range"):
+            to_timedelta64(timedelta(days=200_000))
+        td = timedelta(days=1, microseconds=1)
+        assert to_timedelta64(td) == np.timedelta64(td, "ns")
+
+    def test_pandas_timestamp(self):
+        """A timestamp in a coarser unit is still narrowed and checked."""
+        with pytest.raises(TimeError, match="outside the range"):
+            to_datetime64(pd.Timestamp("2500-01-01"))
+        out = to_datetime64(pd.Timestamp("2020-01-01 00:00:00.123456789"))
+        assert out == np.datetime64("2020-01-01T00:00:00.123456789", "ns")
+        assert out.dtype == np.dtype("datetime64[ns]")
+
+
 class TestDegenerateArrays:
     """Tests for 0-D array inputs to the array converters."""
 
