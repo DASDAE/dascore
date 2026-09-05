@@ -7,7 +7,6 @@ current coord-family and string-coordinate design notes.
 from __future__ import annotations
 
 import abc
-import fnmatch
 import hashlib
 import itertools
 import json
@@ -70,6 +69,7 @@ from dascore.utils.misc import (
     all_close,
     all_diffs_close_enough,
     cached_method,
+    glob_to_regex,
     is_strictly_monotonic,
     iterate,
     sanitize_range_param,
@@ -2894,8 +2894,8 @@ class CoordString(BaseCoord):
 
     See ['Coordinate Internals'](`docs/notes/coordinate_internals.qmd`) for the
     constraints that make string coords differ from numeric and time-like
-    coords. Plain string selectors use exact matching unless they contain `*`
-    or `?`, in which case they are treated as unix-style wildcard patterns.
+    coords. Plain string selectors use exact matching unless they contain `*`,
+    `?` or `[`, in which case they are read as globs, as SQLite reads them.
     Compiled regular expressions are also supported as explicit pattern
     selectors.
     """
@@ -2968,8 +2968,8 @@ class CoordString(BaseCoord):
         if isinstance(args, re.Pattern):
             mask = np.array([bool(args.search(value)) for value in self.values])
             return self._select_by_value_array(self.values[mask])
-        if isinstance(args, str) and ("*" in args or "?" in args):
-            pattern = re.compile(fnmatch.translate(args))
+        if isinstance(args, str) and any(char in args for char in "*?["):
+            pattern = glob_to_regex(args)
             mask = np.array([bool(pattern.match(value)) for value in self.values])
             return self._select_by_value_array(self.values[mask])
         values = np.asarray([args])

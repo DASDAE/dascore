@@ -440,9 +440,10 @@ class Spool(NodeRepr, NamespaceOwner):
         """
         Sub-select parts of the spool.
 
-        Can be used to specify dimension ranges, or unix-style matches
-        on string attributes. Bare keyword names resolve against
-        attributes first, then coordinates; unknown names raise.
+        Can be used to specify dimension ranges, or glob matches on
+        string attributes, read as SQLite's GLOB reads them. Bare keyword
+        names resolve against attributes first, then coordinates; unknown
+        names raise.
 
         Parameters
         ----------

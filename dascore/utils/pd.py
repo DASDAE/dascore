@@ -16,7 +16,13 @@ import dascore as dc
 from dascore.constants import PatchType, namespace_select_type
 from dascore.core.attrs import PatchAttrs
 from dascore.exceptions import InvalidSpoolQueryError, ParameterError
-from dascore.utils.misc import is_range, order_range_tuple, sanitize_range_param
+from dascore.utils.deprecate import deprecate
+from dascore.utils.misc import (
+    glob_to_regex,
+    is_range,
+    order_range_tuple,
+    sanitize_range_param,
+)
 from dascore.utils.time import to_datetime64, to_timedelta64
 
 _RowType = TypeVar("_RowType")
@@ -145,6 +151,14 @@ def present_columns(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+@deprecate(
+    info=(
+        "get_regex is deprecated. Use dascore.utils.misc.glob_to_regex, "
+        "which reads a glob the way the index does: a character class is "
+        "negated with [^...] rather than fnmatch's [!...]."
+    ),
+    removed_in="0.2.0",
+)
 @cache
 def get_regex(seed_str):
     """Compile, and cache regex for str queries."""
@@ -437,8 +451,10 @@ def _filter_equality(query_dict, df, bool_index):
     # filter on non-collection queries
     for key, val in query_dict.items():
         if isinstance(val, str):
-            regex = get_regex(val)
-            new = df[key].str.match(regex).values
+            regex = glob_to_regex(val)
+            # pandas refuses a compiled pattern with flags of its own; the
+            # source string carries the inline DOTALL.
+            new = df[key].str.match(regex.pattern).values
             bool_index = np.logical_and(bool_index, new)
         else:
             new = (df[key] == val).values
@@ -651,8 +667,9 @@ def filter_df(
 
         Any condition to check against columns of df. Can be a single value
         or a collection of values (to check isin on columns). Str arguments
-        can also use unix style matching. Additionally, queries of the form
-        {column_name}_min or {column_name}_max can be used, provided columns
+        can also be globs, read as SQLite's GLOB reads them. Additionally,
+        queries of the form {column_name}_min or {column_name}_max can be
+        used, provided columns
         with the same name don't already exist.
 
     Returns
