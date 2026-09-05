@@ -242,15 +242,22 @@ def _adjust_relative_envelopes(df, coords, drop_empty):
         if not set(cols).issubset(df.columns) or not is_range(value):
             df["_modified"] = True
             continue
-        unit_col = f"_{name}_units"
+        unit_col, dtype_col = f"_{name}_units", f"_{name}_coord_dtype"
+        groups = [col for col in (unit_col, dtype_col) if col in df.columns]
         grouped = (
-            df.groupby(df[unit_col], dropna=False, sort=False)
-            if unit_col in df.columns
-            else [(None, df)]
+            df.groupby(groups, dropna=False, sort=False) if groups else [(None, df)]
         )
         pieces = []
-        for unit, sub in grouped:
+        for _, sub in grouped:
+            unit = sub[unit_col].iloc[0] if unit_col in sub else None
             mins, maxs = (sub[c] for c in cols)
+            dtype = sub[dtype_col].iloc[0] if dtype_col in sub else None
+            narrow_float = False
+            if dtype is not None and pd.notna(dtype) and np.dtype(dtype).kind == "f":
+                # Match Patch.select's arithmetic precision. A float32
+                # endpoint can round inward even when float64 says whole.
+                mins, maxs = (x.astype(dtype) for x in (mins, maxs))
+                narrow_float = np.dtype(dtype).itemsize < 8
             lo, hi = value
             units = None if unit is None or pd.isnull(unit) or unit == "" else str(unit)
             left, left_unresolved, left_open = _relative_bound(
@@ -287,8 +294,18 @@ def _adjust_relative_envelopes(df, coords, drop_empty):
                 | (new_min > mins)
                 | (new_max < maxs)
             )
-            sub[cols[0]] = new_min.clip(lower=mins, upper=maxs)
-            sub[cols[1]] = new_max.clip(lower=mins, upper=maxs)
+            if narrow_float:
+                # Float32 grid-index rounding can also drop the last sample
+                # at an exactly matching closed endpoint. Keep this case
+                # conservative; open upper bounds do not index that endpoint.
+                closed_max = (~swap & (not right_open)) | (swap & (not left_open))
+                sub["_modified"] |= closed_max & (new_max == maxs)
+            sub[cols[0]] = new_min.clip(lower=mins, upper=maxs).astype(
+                sub[cols[0]].dtype
+            )
+            sub[cols[1]] = new_max.clip(lower=mins, upper=maxs).astype(
+                sub[cols[1]].dtype
+            )
             if drop_empty:
                 sub = sub[keep]
             else:

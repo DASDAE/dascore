@@ -831,6 +831,41 @@ class TestLineageIds:
         assert view[0].attrs.processing_id == spool[0].attrs.processing_id
         assert np.array_equal(view[0].data, spool[0].data)
 
+    @pytest.mark.parametrize("percent_bound", [False, True])
+    def test_relative_float32_keeps_precision(self, tmp_path, percent_bound):
+        """Relative endpoints use the loaded coordinate's arithmetic precision."""
+        origin, step = np.float32(538.14794921875), np.float32(3.3)
+        values = origin + np.arange(300, dtype=np.float32) * step
+        base = dc.get_example_patch().abs()
+        for dtype in (np.float32, np.float64):
+            base.update_coords(distance=values.astype(dtype)).io.write(
+                tmp_path / f"{np.dtype(dtype).name}.h5", "dasdae"
+            )
+        spool = dc.spool(tmp_path).update()
+        bound = (
+            100 * get_quantity("percent")
+            if percent_bound
+            else float(values.max()) - float(values.min())
+        )
+        view = spool.select(distance=(0, bound), relative=True)
+        for index, (source, selected) in enumerate(zip(spool, view, strict=True)):
+            direct = source.select(distance=(0, bound), relative=True)
+            assert np.array_equal(selected.data, direct.data)
+            assert selected.attrs.processing_id == direct.attrs.processing_id
+            row = view._df.iloc[index]
+            if selected.shape != source.shape:
+                assert pd.isna(row["_data_size"])
+                assert pd.isna(row["processing_id"])
+            else:
+                assert row["_data_size"] == selected.data.size
+                assert row["processing_id"] == selected.attrs.processing_id
+        if percent_bound:
+            assert view[0].shape != spool[0].shape
+        assert view[1].shape == spool[1].shape
+        noop = spool.select(distance=(0, None), relative=True)
+        columns = ["_data_size", "processing_id"]
+        assert noop._df[columns].equals(spool._df[columns])
+
     def test_relative_metadata_tracks_each_row(self, tmp_path):
         """A shared relative window trims only the longer source patch."""
         base = dc.get_example_patch().abs()
