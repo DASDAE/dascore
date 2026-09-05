@@ -309,8 +309,9 @@ def _get_segment_data(fileinfo, nch, dmap, nso, rdo):
         buffer=dmap,
         offset=rdo,
     )
-    # Rotate the axes to [chunk_size, nblk, nch]
-    raw_data = np.rollaxis(raw_data, 2)
+    # Flatten chunks in time order, keeping samples within each chunk
+    # together and channels on the final axis.
+    raw_data = raw_data.transpose(0, 2, 1)
     data_node = np.reshape(raw_data, (n_complete_blk * fileinfo["chunk_size"], nch))
     if n_complete_blk != seg_length / fileinfo["chunk_size"]:
         # If the last chunk isn't full there is some data left

@@ -144,6 +144,46 @@ class TestTDMSUtils:
         assert channel_length == 2
 
 
+class TestSampleOrder:
+    """Raw chunks must become chronological samples, including windowed reads."""
+
+    @pytest.mark.parametrize("shape", [(6, 1), (6, 2), (7, 2)])
+    @pytest.mark.parametrize("decimated", [True, False])
+    @pytest.mark.parametrize("bounds", [(0, None), (1, 5)])
+    def test_chunk_order(self, tmp_path, shape, decimated, bounds):
+        """Full chunks and a partial tail retain time and channel identities."""
+        expected = np.arange(np.prod(shape), dtype=np.float32).reshape(shape)
+        chunk_size = 2
+        if decimated:
+            # Storage writes each channel's samples in one chunk before
+            # moving to the next channel, then starts the next time chunk.
+            payload = b"".join(
+                expected[start : start + chunk_size, channel].tobytes()
+                for start in range(0, shape[0], chunk_size)
+                for channel in range(shape[1])
+            )
+        else:
+            payload = expected.tobytes()
+        path = tmp_path / "samples.raw"
+        path.write_bytes(payload)
+        # A finite declared end describes a closed segment. Its partial
+        # chunk, if any, has the same remaining sample count per channel.
+        fileinfo = {
+            "decimated": decimated,
+            "chunk_size": chunk_size,
+            "data_type": "float32",
+            "n_channels": shape[1],
+            "raw_data_offset": 0,
+            "next_segment_offset": len(payload),
+            "file_size": len(payload),
+        }
+        start, stop = bounds
+        with path.open("rb") as resource:
+            actual = tdms_utils._read_sample_range(resource, fileinfo, start, stop)
+        np.testing.assert_array_equal(actual, expected[start:stop])
+        assert actual.dtype == expected.dtype
+
+
 class TestMultiSegment:
     """A TDMS file can hold several segments, each a stretch of time."""
 
