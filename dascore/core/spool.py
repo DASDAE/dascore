@@ -2363,12 +2363,6 @@ class Spool(NodeRepr, NamespaceOwner):
             name = str(column)
             return name.startswith("_") and name.endswith(suffix)
 
-        def _private(column, suffix) -> bool:
-            # the generated `_<coord><suffix>` column, not an attr which
-            # happens to end the same way
-            name = str(column)
-            return name.startswith("_") and name.endswith(suffix)
-
         def _strip_identity(df):
             # synthetic per-catalog identities (memory:// paths, ids) and
             # backend provenance (format/version) are not content; equal

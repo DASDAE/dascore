@@ -595,8 +595,6 @@ def _grid_cut_masks(df: pd.DataFrame, residuals) -> dict[str, np.ndarray]:
     longer true.
     """
     masks: dict[str, np.ndarray] = {}
-    if len(residuals) > _MASK_BITS:
-        return masks
     uses = Counter(name for coords, _, _ in residuals for name in coords)
     live = {}
     untracked: set[str] = set()
