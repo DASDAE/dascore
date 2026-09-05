@@ -1471,6 +1471,37 @@ class TestReservedAttrNames:
         assert "data_units" in spool._catalog.backend.attr_names()
 
 
+class TestWhatARowCannotState:
+    """A row says when it does not hold everything its patch does."""
+
+    @pytest.mark.parametrize(
+        "attrs,complete",
+        [
+            ({"tag": "x"}, True),
+            ({"gauge": np.array([1.0, 2.0])}, False),
+            ({"source_path": "user-path"}, False),
+        ],
+    )
+    def test_the_row_says_whether_it_holds_every_attr(self, attrs, complete):
+        """An attr the index cannot hold (a value, a name) marks the row."""
+        patch = dc.get_example_patch().update_attrs(**attrs)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UserWarning)
+            spool = dc.spool([patch])
+        assert bool(spool._df["_attrs_complete"].iloc[0]) is complete
+        assert "_attrs_complete" not in spool.get_contents().columns
+
+    def test_associated_anywhere_is_associated(self):
+        """A name dimensional on one patch and riding another on the next."""
+        first = dc.get_example_patch()
+        second = first.rename_coords(distance="sensor")
+        values = second.get_coord("sensor").values * 2.0
+        second = second.update_coords(distance=("sensor", values))
+        backend = dc.spool([first, second])._catalog.backend
+        assert backend.coord_dims_map()["distance"] == "distance"
+        assert backend.associated_coord_names() == {"distance"}
+
+
 class TestTransactionIsolation:
     """The statement lock covers whole transactions (round-4 F5)."""
 

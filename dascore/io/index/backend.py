@@ -601,6 +601,7 @@ class SQLiteIndexBackend:
                             patch.distance_min,
                             patch.distance_max,
                             patch.distance_step,
+                            int(patch.attrs_complete),
                         )
                     )
                     attrs = patch.attrs
@@ -1284,6 +1285,20 @@ class SQLiteIndexBackend:
             sql += " AND patch_id IN (SELECT value FROM json_each(?))"
             params.append(json.dumps([int(x) for x in patch_ids]))
         return {int(x) for x in self._fetch_df(sql, params)["patch_id"]}
+
+    def associated_coord_names(self) -> set[str]:
+        """Return every coord name some patch holds on a dimension not its own.
+
+        `coord_dims_map` keeps the first dims spelling seen per name, so a
+        name which is a dimension on one patch and rides another dimension
+        on the next reads as dimensional there; whether a name is
+        associated anywhere is a question about every pair.
+        """
+        sql = (
+            "SELECT DISTINCT coord_name FROM patch_coords "
+            "WHERE coord_dims != coord_name"
+        )
+        return set(self._fetch_df(sql)["coord_name"].astype(str))
 
     def coord_dims_map(self) -> dict[str, str]:
         """Return each coord name's dims string (first observed wins)."""

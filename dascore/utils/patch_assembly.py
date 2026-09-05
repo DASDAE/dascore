@@ -38,6 +38,7 @@ from dascore.utils.pd import (
     _convert_min_max_in_kwargs,
     get_dim_names_from_columns,
 )
+from dascore.workflow.identity import ids_enabled
 
 
 def _get_varying_dim(df) -> str | None:
@@ -249,6 +250,11 @@ def _attrs_from_row(row: Mapping, dims: tuple[str, ...]) -> dc.PatchAttrs:
 def _is_null(value) -> bool:
     """True for a missing scalar; an array is a value."""
     return np.ndim(value) == 0 and pd.isnull(value)
+
+
+def _row_str(value) -> str:
+    """A row's string, with a missing one (null, or the empty string) as ""."""
+    return "" if _is_null(value) else str(value)
 
 
 def _row_range(row: Mapping, dim: str) -> tuple[Any, Any, Any] | None:
@@ -495,6 +501,13 @@ class PatchAssembler:
         Only a format which stores a history to begin with (DASDAE) has
         one to lose, and only until it is read as a patch again.
         """
+        # A moved source has its id cleared until it is read again, and
+        # folding no id is not folding the one the patch carries; an attr
+        # the index could not hold is on the patch and would be lost here.
+        if ids_enabled() and "patch_id" in row and not _row_str(row["patch_id"]):
+            return None
+        if not _is_null(complete := row.get("_attrs_complete")) and not complete:
+            return None
         dims = tuple(str(row["dims"]).split(","))
         coord_map = {}
         for dim in dims:

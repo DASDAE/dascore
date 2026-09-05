@@ -289,7 +289,11 @@ class NetCDFCFV18(FiberIO):
     def _select_from_kwargs(self, patch: dc.Patch, kwargs: dict) -> dc.Patch:
         """Apply coordinate selection kwargs to one loaded patch."""
         coord_kwargs = {k: v for k, v in kwargs.items() if k in patch.coords.coord_map}
-        return patch.select(**coord_kwargs) if coord_kwargs else patch
+        if not coord_kwargs:
+            return patch
+        # The bare function: a patch read under a bound carries what a
+        # whole read carries, and the spool records the trim it asked for.
+        return patch.select.raw_function(patch, **coord_kwargs)
 
     def _validate_and_extract_patch(self, spool: dc.Patch | dc.Spool) -> dc.Patch:
         """Validate write input and return the single supported patch."""

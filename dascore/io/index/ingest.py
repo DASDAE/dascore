@@ -154,6 +154,8 @@ class PatchRecord:
     distance_step: float | None
     attrs: dict[str, TypedValue] = field(default_factory=dict)
     coords: tuple[CoordRecord, ...] = ()
+    # whether ``attrs`` holds every attr the patch defines
+    attrs_complete: bool = True
 
 
 @dataclass(frozen=True)
@@ -272,10 +274,17 @@ def _attr_name_status(name: str) -> str:
     return "ok"
 
 
-def _extract_attrs(summary: PatchSummary) -> dict[str, TypedValue]:
-    """Get indexable typed attrs from a patch summary."""
+def _extract_attrs(summary: PatchSummary) -> tuple[dict[str, TypedValue], bool]:
+    """
+    Get indexable typed attrs from a patch summary.
+
+    Also says whether they are all of them: an attr the index cannot hold
+    (a value no kind covers, a name a structural column owns) stays on
+    the patch, and a row missing one cannot stand in for the patch.
+    """
     raw = summary.attrs.model_dump()
     out = {}
+    complete = True
     for name, value in raw.items():
         status = _attr_name_status(name)
         if status == "reserved":
@@ -285,12 +294,17 @@ def _extract_attrs(summary: PatchSummary) -> dict[str, TypedValue]:
                 "is not queryable through the spool."
             )
             warnings.warn(msg, UserWarning, stacklevel=2)
+            complete = False
         if status != "ok":
             continue
         typed = typed_value(value)
         if typed is not None:
             out[name] = typed
-    return out
+        elif not _is_missing(value):
+            # unset is not unheld: a value the patch takes at its default
+            # is one the row omits and the patch still has
+            complete = False
+    return out, complete
 
 
 # What a directory name may never claim to be. A path says where data is
@@ -483,6 +497,7 @@ def patch_record(summary: PatchSummary) -> PatchRecord:
     )
     time_min, time_max, time_step = _envelope(coords, "time", "time")
     dist_min, dist_max, dist_step = _envelope(coords, "distance", "num")
+    attrs, attrs_complete = _extract_attrs(summary)
     return PatchRecord(
         source_patch_key=normalize_source_patch_key(summary.source_patch_key),
         dims=",".join(summary.dims),
@@ -499,8 +514,9 @@ def patch_record(summary: PatchSummary) -> PatchRecord:
         distance_min=dist_min,
         distance_max=dist_max,
         distance_step=dist_step,
-        attrs=_extract_attrs(summary),
+        attrs=attrs,
         coords=coords,
+        attrs_complete=attrs_complete,
     )
 
 

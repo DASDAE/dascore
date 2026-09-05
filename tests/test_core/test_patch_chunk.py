@@ -2109,6 +2109,93 @@ class TestChunkFromIndex:
         assert calls["array"] == 0
         assert calls["patch"] == 3
 
+    def test_a_coord_associated_anywhere_loads_patch(self, tmp_path_factory, calls):
+        """
+        A name which is a dimension on one patch may ride another on the next.
+
+        The catalog keeps one dims spelling per name, the first seen, so
+        the first patch's dimensional `distance` would make the later
+        patches' associated one look dimensional, and the array path
+        would drop it.
+        """
+        path = tmp_path_factory.mktemp("chunk_assoc_anywhere")
+        spool = ex.get_example_spool(
+            "random_das", length=3, time_gap=np.timedelta64(0, "s")
+        )
+        spool[0].io.write(path / "a0.h5", "dasdae")
+        # indexed first, so its dimensional `distance` is the spelling seen first
+        dc.spool(path).update()
+        for num, patch in enumerate(spool[1:]):
+            patch = patch.rename_coords(distance="sensor")
+            values = patch.get_coord("sensor").values * 2.0
+            patch = patch.update_coords(distance=("sensor", values))
+            patch.io.write(path / f"b{num}.h5", "dasdae")
+        merged = dc.spool(path).update().chunk(time=None)
+        riding = [p for p in merged if "sensor" in p.dims]
+        assert len(riding) == 1
+        assert "distance" in riding[0].coords.coord_map
+        assert calls["array"] == 0
+
+    def test_a_moved_source_loads_patch(self, tmp_path_factory, calls):
+        """
+        A renamed file's row states no id until the file is read again.
+
+        Folding no id is not folding the one the patch carries, so a
+        merge built from such rows would not carry the id the patch
+        path's merge does.
+        """
+        path = tmp_path_factory.mktemp("chunk_moved")
+        spool = ex.get_example_spool(
+            "random_das", length=2, time_gap=np.timedelta64(0, "s")
+        )
+        for num, patch in enumerate(spool):
+            patch.io.write(path / f"p{num}.h5", "dasdae")
+        dc.spool(path).update()
+        (path / "p0.h5").rename(path / "q0.h5")
+        moved = dc.spool(path).update()
+        assert (moved.get_contents()["patch_id"] == "").any()
+        fast = moved.chunk(time=None)[0]
+        assert calls == {"patch": 2, "array": 0}
+        read = dc.spool([dc.read(p)[0] for p in sorted(path.glob("*.h5"))])
+        assert fast.attrs.patch_id == read.chunk(time=None)[0].attrs.patch_id
+
+    def test_an_attr_the_index_cannot_hold_loads_patch(self, tmp_path_factory, calls):
+        """An array attr is on the patch and in no column, so no row stands in."""
+        path = tmp_path_factory.mktemp("chunk_array_attr")
+        spool = ex.get_example_spool(
+            "random_das", length=3, time_gap=np.timedelta64(0, "s")
+        )
+        for num, patch in enumerate(spool):
+            patch = patch.update_attrs(gauge=np.array([1.0, 2.0]))
+            patch.io.write(path / f"p{num}.h5", "dasdae")
+        out = dc.spool(path).update().chunk(time=None)[0]
+        assert np.array_equal(out.attrs["gauge"], [1.0, 2.0])
+        assert calls == {"patch": 3, "array": 0}
+
+    def test_row_the_index_could_not_fully_describe_loads_patch(self):
+        """A cleared id or an attr the index could not hold means the patch path."""
+        assembler = PatchAssembler(
+            load_patch=lambda kwargs: None,
+            merge_kwargs={},
+            plan_dim="time",
+            load_array=lambda row: np.zeros((3, 4)),
+        )
+        row = {
+            "dims": "distance,time",
+            "distance_min": 0,
+            "distance_max": 2,
+            "distance_step": 1,
+            "time_min": np.datetime64("2020-01-01"),
+            "time_max": np.datetime64("2020-01-01T00:00:03"),
+            "time_step": np.timedelta64(1, "s"),
+            "patch_id": "abc",
+            "_attrs_complete": 1,
+        }
+        assert assembler._meta_from_index(row) is not None
+        assert assembler._meta_from_index(row | {"patch_id": ""}) is None
+        assert assembler._meta_from_index(row | {"patch_id": None}) is None
+        assert assembler._meta_from_index(row | {"_attrs_complete": 0}) is None
+
     def test_row_without_range_loads_patch(self):
         """A dimension the row cannot state as a range means the patch path."""
         assembler = PatchAssembler(

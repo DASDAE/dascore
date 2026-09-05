@@ -251,7 +251,13 @@ def _stamp(patch, attrs, patch_func, args, kwargs):
     )
 
 
-def record_call(out, patch, patch_func, args, kwargs):
+def record_call(
+    out: dc.Patch,
+    patch: dc.Patch,
+    patch_func: Callable,
+    args: tuple,
+    kwargs: Mapping[str, object],
+) -> dc.Patch:
     """
     Return ``out`` carrying what a call to ``patch_func`` records.
 

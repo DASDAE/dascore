@@ -866,8 +866,11 @@ def derived_catalog(
         )
         loader.absorb(parent.resolver, paths=member_paths)
     coord_dims_map = {} if parent is None else parent.backend.coord_dims_map()
-    # a coordinate riding a dimension it is not named for is associated
-    aux_coords = frozenset(n for n, d in coord_dims_map.items() if d != n)
+    # a coordinate riding a dimension it is not named for, on any member,
+    # is associated; the array path rebuilds dimension coordinates only
+    aux_coords = frozenset(
+        () if parent is None else parent.backend.associated_coord_names()
+    )
     resolver = PlanResolver(
         token=token,
         dim=name,

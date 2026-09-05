@@ -40,6 +40,15 @@ class TestEqualityContract:
         sel_2 = dc.spool(patches).select(distance=(0, 10))
         assert sel_1 == sel_2
 
+    @pytest.mark.parametrize("name", ["sensor_coord_dtype", "sensor_def_key"])
+    def test_an_attr_spelled_like_a_private_column_still_counts(self, patches, name):
+        """Only the generated `_<coord>...` column is stripped, not an attr."""
+        one = dc.spool([p.update_attrs(**{name: "a"}) for p in patches])
+        same = dc.spool([p.update_attrs(**{name: "a"}) for p in patches])
+        other = dc.spool([p.update_attrs(**{name: "b"}) for p in patches])
+        assert one == same
+        assert one != other
+
     def test_order_matters(self, patches):
         """Same patches in a different order are not equal."""
         assert dc.spool(patches) != dc.spool(list(reversed(patches)))
