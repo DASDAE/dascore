@@ -870,25 +870,28 @@ class TestLineageIds:
             else float(values.max()) - float(values.min())
         )
         view = spool.select(distance=(0, bound), relative=True)
+        noop = spool.select(distance=(0, None), relative=True)
+        columns = ["_data_size", "processing_id"]
         for index, (source, selected) in enumerate(zip(spool, view, strict=True)):
             direct = source.select(distance=(0, bound), relative=True)
             assert np.array_equal(selected.data, direct.data)
             assert selected.attrs.processing_id == direct.attrs.processing_id
             row = view._df.iloc[index]
+            noop_row = noop._df.iloc[index][columns]
+            assert noop[index].attrs.processing_id == source.attrs.processing_id
             if source.get_coord("distance").dtype == np.dtype("float32"):
                 assert pd.isna(row["_data_size"])
                 assert pd.isna(row["processing_id"])
+                assert noop_row.isna().all()
             else:
                 assert row["_data_size"] == selected.data.size
                 assert row["processing_id"] == selected.attrs.processing_id
-        if percent_bound:
-            assert view[0].shape != spool[0].shape
-        assert view[1].shape == spool[1].shape
-        noop = spool.select(distance=(0, None), relative=True)
-        columns = ["_data_size", "processing_id"]
-        assert noop._df.loc[0, columns].isna().all()
-        assert noop._df.loc[1, columns].equals(spool._df.loc[1, columns])
-        assert noop[0].attrs.processing_id == spool[0].attrs.processing_id
+                assert noop_row.equals(spool._df.iloc[index][columns])
+                assert selected.shape == source.shape
+            if percent_bound and source.get_coord("distance").dtype == np.dtype(
+                "float32"
+            ):
+                assert selected.shape != source.shape
 
     def test_relative_metadata_tracks_each_row(self, tmp_path):
         """A shared relative window trims only the longer source patch."""
