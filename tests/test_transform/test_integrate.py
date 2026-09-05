@@ -183,6 +183,19 @@ class TestNumericalIntegrals:
     """Analytic expectations for dtype and axis handling."""
 
     @pytest.mark.parametrize("definite", [False, True])
+    @pytest.mark.parametrize("dtype", [np.int64, np.bool_])
+    def test_no_dimensions(self, definite, dtype):
+        """An empty dimension selection preserves the original data exactly."""
+        data = np.array([2**53 + 1, 1 - 2**53], dtype=dtype)
+        patch = dc.Patch(
+            data=data, coords={"distance": np.arange(2)}, dims=("distance",)
+        )
+        out = patch.integrate((), definite=definite)
+        np.testing.assert_array_equal(out.data, data)
+        assert out.data.dtype == dtype
+        assert out.coords == patch.coords
+
+    @pytest.mark.parametrize("definite", [False, True])
     @pytest.mark.parametrize("dtype", [np.int8, np.uint8, np.int64, np.bool_])
     def test_integer_data(self, definite, dtype):
         """Promote before adding samples, preserving fractional areas."""

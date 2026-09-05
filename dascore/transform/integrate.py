@@ -135,7 +135,7 @@ def integrate(
     dims = iterate(dim if dim is not None else patch.dims)
     dxs_or_vals, axes = _get_dx_or_spacing_and_axes(patch, dims)
     array = patch.data
-    if array.dtype.kind in "biu":
+    if axes and array.dtype.kind in "biu":
         array = array.astype(np.float64)
     if definite:
         array, coords = _get_definite_integral(patch, array, dxs_or_vals, dims, axes)
