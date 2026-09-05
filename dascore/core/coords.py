@@ -199,6 +199,8 @@ def _conformed(value, dtype: np.dtype):
     difference truncated away, and two coordinates which are not equal
     would share an identity.
     """
+    if pd.isnull(value):
+        return value
     with suppress(TypeError, ValueError, OverflowError):
         original = np.asarray(value)
         converted = original.astype(dtype)
@@ -1107,7 +1109,7 @@ class BaseCoord(RichRepr, DascoreBaseModel, abc.ABC):
             dtype=self.dtype,
             units=self.units,
             dims=dims,
-            len=len(self),
+            len=self.shape[0] if self.ndim else 1,
             fingerprint=self.fingerprint(),
         )
 
@@ -2018,11 +2020,11 @@ class CoordArray(BaseCoord):
 
     def _min(self):
         """Return min value."""
-        return np.nanmin(self.values)
+        return np.nanmin(self.values) if self.size else _get_nullish(self.dtype)
 
     def _max(self):
         """Return max value in range."""
-        return np.nanmax(self.values)
+        return np.nanmax(self.values) if self.size else _get_nullish(self.dtype)
 
     def _fingerprint_components(self) -> tuple[Any, ...]:
         """Return the array payload needed to fingerprint array coords."""
@@ -3023,7 +3025,7 @@ class CoordString(BaseCoord):
             dtype=self.dtype,
             units=None,
             dims=dims,
-            len=len(self),
+            len=self.shape[0] if self.ndim else 1,
             fingerprint=self.fingerprint(),
         )
 

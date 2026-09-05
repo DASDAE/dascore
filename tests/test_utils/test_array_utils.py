@@ -1071,6 +1071,13 @@ class TestApplyArrayFunc:
 class TestHashArray:
     """Tests for hash_array."""
 
+    @pytest.mark.parametrize("dtype", ["int64", "float64", "datetime64[ns]"])
+    def test_empty_multidimensional(self, dtype):
+        """Empty arrays have stable fingerprints that still distinguish shapes."""
+        first = np.empty((2, 0), dtype=dtype)
+        assert hash_array(first) == hash_array(first.copy())
+        assert hash_array(first) != hash_array(np.empty((0, 2), dtype=dtype))
+
     def test_returns_hex_string_of_length_32(self):
         """Output is a 32-character hex string (16-byte digest)."""
         result = hash_array(np.array([1, 2, 3]))

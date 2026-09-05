@@ -228,6 +228,39 @@ window = patch.select(
 
 `select` and `order` accept slices as range shorthand; sample slices still require `samples=True`. Processing functions such as `pass_filter` and `taper` require tuples.
 
+## Xarray-style indexing
+
+[`Patch.sel`](`dascore.Patch.sel`) selects coordinate labels, and [`Patch.isel`](`dascore.Patch.isel`) selects sample positions. Both accept a dictionary or keyword indexers and return a Patch. Their supported indexing behavior is tested directly against xarray.
+
+```{python}
+label_window = patch.sel(distance=slice(10, 20))
+sample_window = patch.isel(time=slice(0, 100, 2))
+repeated_channels = patch.isel(distance=[20, 10, 20])
+nearest_channel = patch.sel(distance=10.2, method="nearest", tolerance=0.5)
+```
+
+Label slices include both endpoints; positional slices exclude the stop and support negative indices and strides. Array indexers preserve the requested order and repetitions. Arrays on different dimensions select every combination: three distance indices and two time indices produce three channels with two samples each. Missing scalar or array labels and out-of-bounds scalar or array positions raise; positional slices clip to the available samples.
+
+A scalar indexer removes its dimension and retains the selected coordinate as a scalar. Use `drop=True` to remove coordinates made scalar by the selection, or a one-element list to retain a length-one dimension:
+
+```{python}
+channel = patch.isel(distance=3)
+assert "distance" not in channel.dims
+assert channel.get_array("distance").shape == ()
+channel_without_label = patch.isel(distance=3, drop=True)
+assert "distance" not in channel_without_label.coords
+one_channel_patch = patch.isel(distance=[3])
+assert one_channel_patch.shape[0] == 1
+point = patch.isel(distance=3, time=0)
+assert point.shape == ()
+```
+
+Associated coordinates follow the same indexing: a latitude coordinate along distance becomes scalar after selecting one channel, while a coordinate spanning distance and time retains its time axis. Selecting every dimension with scalar indexers produces a scalar Patch. Existing scalar coordinates are retained even with `drop=True`.
+
+`sel` supports exact matches and `method="nearest"`, with an optional tolerance. Quantities convert to the coordinate's units, including unit-bearing tolerances. Datetime strings use pandas' partial-date rules, and datetime tolerances are durations. Slices follow coordinate order, so a descending coordinate requires descending bounds. `isel` accepts 1D boolean masks and supports `missing_dims="raise"`, `"warn"`, or `"ignore"`.
+
+The supported subset covers dimension names and scalar, slice, and unlabelled 1D array indexers. Labelled xarray indexers, multidimensional indexer arrays, MultiIndexes, auxiliary-coordinate lookup, and forward/backward filling are not supported. Dimensions without coordinate labels use positional indexing. Use `select` for DASCore's tuple range notation, relative selections, and filtering that preserves source order.
+
 ## Unselect and order
 
 [`Patch.unselect`](`dascore.Patch.unselect`) removes what `select` would keep. Removing an interior range creates a segmented coordinate.

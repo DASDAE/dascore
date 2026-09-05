@@ -221,6 +221,8 @@ CALLS: tuple[tuple[str, str, tuple, dict], ...] = (
     ("tile_apply", "default", (_halve,), {"time": 64, "distance": 16, "samples": True}),
     ("reassemble", "tiled", (), {"taper": "triang"}),
     ("select", "default", (), {"distance": (10, 40)}),
+    ("isel", "default", (), {"distance": [3, 1, 3], "time": slice(0, 20, 2)}),
+    ("sel", "default", (), {"distance": 10.2, "method": "nearest"}),
     ("unselect", "default", (), {"distance": (10, 40)}),
     ("order", "default", (), {"distance": (30, 10, 20), "samples": True}),
     ("decimate", "default", (), {"time": 2}),
