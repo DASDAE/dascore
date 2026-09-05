@@ -374,17 +374,14 @@ def _output_records(
     token: str,
     aux_info: Mapping[int, Mapping[str, Mapping]] | None = None,
     sizes: Mapping[int, int] | None = None,
-    attrs_complete: Mapping[int, bool] | None = None,
 ) -> list[SourceRecord]:
     """
     Convert plan output rows into ingestible source records.
 
     ``sizes`` names the outputs whose sample count is known (see
     `_whole_member_sizes`); every other output states none.
-    ``attrs_complete`` is true only when every member's attrs are indexed.
     """
     sizes = sizes or {}
-    attrs_complete = attrs_complete or {}
     records = []
     aux_info = aux_info or {}
     # Envelope columns belong to coordinates actually present in a row;
@@ -459,7 +456,8 @@ def _output_records(
             distance_step=_num(row.get("distance_step")),
             attrs=attrs,
             coords=tuple(coords),
-            attrs_complete=bool(attrs_complete.get(output_id, False)),
+            # Plan attributes are resolved through members, not this row.
+            attrs_complete=False,
         )
         records.append(
             SourceRecord(
@@ -900,21 +898,11 @@ def derived_catalog(
     aux_info = _aux_coord_info(
         sources, trims, name, coord_dims_map, trimmed_dims, concat=mode == "concat"
     )
-    complete = {}
-    if "_attrs_complete" in member_rows:
-        complete = (
-            member_rows["_attrs_complete"]
-            .eq(1)
-            .groupby(member_rows["output_id"])
-            .all()
-            .to_dict()
-        )
     records = _output_records(
         outputs,
         token,
         aux_info=aux_info,
         sizes=_whole_member_sizes(trims, sources),
-        attrs_complete=complete,
     )
     backend.write_sources(records)
     return PatchCatalog(backend=backend, resolver=resolver)

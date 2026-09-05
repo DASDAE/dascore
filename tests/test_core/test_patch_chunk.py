@@ -2216,30 +2216,12 @@ class TestChunkFromIndex:
             patch = patch.update_attrs(gauge=np.array([1.0, 2.0]))
             patch.io.write(path / f"p{num}.h5", "dasdae")
         merged = dc.spool(path).update().chunk(time=None)
-        assert not merged._df["_attrs_complete"].any()
         out = merged[0]
         assert np.array_equal(out.attrs["gauge"], [1.0, 2.0])
         assert calls == {"patch": 3, "array": 0}
         # A plan on another dimension consumes the derived rows.
         nested = merged.chunk(distance=100)
-        assert not nested._df["_attrs_complete"].any()
         assert all(np.array_equal(p.attrs["gauge"], [1.0, 2.0]) for p in nested)
-
-    def test_complete_attrs_survive_derived_rows(self, dasdae_directory_spool):
-        """Fully indexed members remain complete after planning on either axis."""
-        merged = dasdae_directory_spool.chunk(time=None)
-        assert merged._df["_attrs_complete"].all()
-        assert merged.chunk(distance=100)._df["_attrs_complete"].all()
-
-    def test_mixed_attr_completeness(self):
-        """One incomplete member makes its output incomplete, in either order."""
-        patches = list(ex.get_example_spool("random_das", length=2, time_gap=0))
-        for index in (0, 1):
-            mixed = patches.copy()
-            mixed[index] = mixed[index].update_attrs(gauge=np.array([1.0, 2.0]))
-            merged = dc.spool(mixed).chunk(time=None, conflict="drop")
-            assert len(merged) == 1
-            assert not merged._df["_attrs_complete"].any()
 
     def test_row_the_index_could_not_fully_describe_loads_patch(self):
         """A cleared id or an attr the index could not hold means the patch path."""

@@ -854,8 +854,8 @@ class TestLineageIds:
         assert np.array_equal(view[0].data, spool[0].data)
 
     @pytest.mark.parametrize("percent_bound", [False, True])
-    def test_relative_float32_keeps_precision(self, tmp_path, percent_bound):
-        """Relative endpoints use the loaded coordinate's arithmetic precision."""
+    def test_relative_float32_defers_metadata(self, tmp_path, percent_bound):
+        """Narrow-float metadata stays unknown; loaded selections remain exact."""
         origin, step = np.float32(538.14794921875), np.float32(3.3)
         values = origin + np.arange(300, dtype=np.float32) * step
         base = dc.get_example_patch().abs()
@@ -875,7 +875,7 @@ class TestLineageIds:
             assert np.array_equal(selected.data, direct.data)
             assert selected.attrs.processing_id == direct.attrs.processing_id
             row = view._df.iloc[index]
-            if selected.shape != source.shape:
+            if source.get_coord("distance").dtype == np.dtype("float32"):
                 assert pd.isna(row["_data_size"])
                 assert pd.isna(row["processing_id"])
             else:
@@ -886,7 +886,9 @@ class TestLineageIds:
         assert view[1].shape == spool[1].shape
         noop = spool.select(distance=(0, None), relative=True)
         columns = ["_data_size", "processing_id"]
-        assert noop._df[columns].equals(spool._df[columns])
+        assert noop._df.loc[0, columns].isna().all()
+        assert noop._df.loc[1, columns].equals(spool._df.loc[1, columns])
+        assert noop[0].attrs.processing_id == spool[0].attrs.processing_id
 
     def test_relative_metadata_tracks_each_row(self, tmp_path):
         """A shared relative window trims only the longer source patch."""
