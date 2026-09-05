@@ -1503,6 +1503,7 @@ class TestWhatARowCannotState:
             ({"empty_extra": None}, False),
             ({"empty_extra": np.nan}, False),
             ({"empty_extra": np.array([np.nan])}, False),
+            ({"coords": "user metadata"}, False),
         ],
     )
     def test_the_row_says_whether_it_holds_every_attr(self, attrs, complete):
