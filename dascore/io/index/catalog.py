@@ -19,6 +19,7 @@ from __future__ import annotations
 import abc
 import json
 import warnings
+from collections import Counter
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -556,7 +557,8 @@ def _residual_cut_masks(df: pd.DataFrame, residuals) -> dict[str, np.ndarray]:
     masks: dict[str, np.ndarray] = {}
     if len(residuals) > _MASK_BITS:
         return masks
-    live: dict[str, tuple[np.ndarray, np.ndarray, np.ndarray]] = {}
+    uses = Counter(name for coords, _, _ in residuals for name in coords)
+    live = {}
     untracked: set[str] = set()
     for index, (coords, samples, relative) in enumerate(residuals):
         for name, value in coords.items():
@@ -572,33 +574,47 @@ def _residual_cut_masks(df: pd.DataFrame, residuals) -> dict[str, np.ndarray]:
                 continue
             if name not in live:
                 start, stop = df[f"{name}_min"], df[f"{name}_max"]
+                if not all(_orderable(x) and x.notna().all() for x in (start, stop)):
+                    untracked.add(name)
+                    continue
+                steps = None
                 step = df.get(f"{name}_step")
-                if step is None or not all(_orderable(x) for x in (start, stop, step)):
+                if step is not None and _orderable(step):
+                    values = np.abs(step.to_numpy())
+                    if np.isfinite(values).all() and np.all(
+                        values > np.zeros((), dtype=values.dtype)
+                    ):
+                        steps = values
+                # Keep CoordRange's tolerance whenever its grid is known.
+                # Uneven extrema suffice for one range, but cannot locate
+                # the samples that an earlier selection left behind.
+                if steps is None and uses[name] > 1:
                     untracked.add(name)
                     continue
-                steps = np.abs(step.to_numpy())
-                if not np.isfinite(steps).all() or not np.all(
-                    steps > np.zeros((), dtype=steps.dtype)
-                ):
-                    untracked.add(name)
-                    continue
-                live[name] = (start.to_numpy(), stop.to_numpy(), steps)
+                start, stop = start.to_numpy(), stop.to_numpy()
+                origin = start
+                if steps is not None:
+                    stop = np.round((stop - origin) / steps)
+                    start = np.zeros(len(df))
+                live[name] = (start, stop, origin, steps)
                 masks[name] = np.zeros(len(df), dtype=np.int64)
             low, high = order_range_tuple(bounds[name])
-            start, stop, step = live[name]
+            start, stop, origin, step = live[name]
             cut = np.zeros(len(df), dtype=bool)
-            # Compare surviving samples, not unsnapped query envelopes:
-            # consecutive bounds inside one sample interval are one trim.
-            # Match CoordRange._get_index's floating-point tolerance.
+            # On a regular grid compare sample positions directly, using
+            # CoordRange._get_index's tolerance. Reconstructing their values
+            # would introduce rounding drift between composed selections.
             if low is not None:
-                low = start + np.ceil(np.round((low - start) / step, 10)) * step
+                if step is not None:
+                    low = np.ceil(np.round((low - origin) / step, 10))
                 cut |= start < low
                 start = np.maximum(start, low)
             if high is not None:
-                high = start + np.floor(np.round((high - start) / step, 10)) * step
+                if step is not None:
+                    high = np.floor(np.round((high - origin) / step, 10))
                 cut |= stop > high
                 stop = np.minimum(stop, high)
-            live[name] = (start, stop, step)
+            live[name] = (start, stop, origin, step)
             masks[name] |= cut.astype(np.int64) << index
     return masks
 
@@ -1192,8 +1208,8 @@ class PatchCatalog:
         for name in patch_local:
             trim_hint.pop(name, None)
         if self._residuals:
-            # Unknown grids and overlong selection chains cannot attribute
-            # hinted trims exactly; replay those coordinates on the patch.
+            # Untracked composed trims cannot be attributed exactly;
+            # replay those coordinates on the patch.
             trim_hint = {
                 name: value
                 for name, value in trim_hint.items()

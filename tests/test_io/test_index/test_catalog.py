@@ -420,13 +420,35 @@ class TestResidualCutMasks:
         assert _residual_cut_masks(rows, (({"depth": (1.0, 2.0)}, False, False),)) == {}
 
     @pytest.mark.parametrize("step", [None, 0.0, np.nan])
-    def test_unknown_grid_states_no_mask(self, rows, step):
-        """An unknown grid cannot distinguish an off-grid trim from a no-op."""
+    @pytest.mark.parametrize("composed", [False, True])
+    def test_unknown_grid_tracks_single_range(self, rows, step, composed):
+        """Source extrema suffice once; composed bounds need surviving samples."""
         if step is None:
             rows = rows.drop(columns="time_step")
         else:
             rows = rows.assign(time_step=step)
+        residuals = (({"time": (2.5, None)}, False, False),) * (2 if composed else 1)
+        masks = _residual_cut_masks(rows, residuals)
+        if composed:
+            assert masks == {}
+        else:
+            assert masks["time"].tolist() == [1, 0, 0]
+
+    def test_missing_extrema_state_no_mask(self, rows):
+        """A missing source endpoint cannot prove that a hinted range trims."""
+        rows.loc[0, "time_min"] = np.nan
         assert _residual_cut_masks(rows, (({"time": (2.5, None)}, False, False),)) == {}
+
+    def test_each_coordinate_can_be_selected_once(self, rows):
+        """Independent coordinates retain hints without either having a grid."""
+        rows = rows.assign(depth_min=0.0, depth_max=10.0).drop(columns="time_step")
+        residuals = (
+            ({"time": (2.5, None)}, False, False),
+            ({"depth": (None, 8.5)}, False, False),
+        )
+        masks = _residual_cut_masks(rows, residuals)
+        assert masks["time"].tolist() == [1, 0, 0]
+        assert masks["depth"].tolist() == [2, 2, 2]
 
     def test_more_residuals_than_bits_states_nothing(self, rows):
         """Past the last bit a mask could only be wrong, so there is none."""

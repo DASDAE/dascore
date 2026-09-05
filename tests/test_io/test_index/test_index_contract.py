@@ -666,28 +666,50 @@ class TestLineageIds:
         assert indexed
 
     @pytest.mark.parametrize("samples", [False, True])
-    def test_a_trim_records_what_a_trim_records(self, tmp_path, samples):
+    @pytest.mark.parametrize("bounds_type", [tuple, list])
+    def test_a_trim_records_what_a_trim_records(self, tmp_path, samples, bounds_type):
         """
-        Trimming through a spool records what trimming the patch records.
+        Native and sample ranges record identically through a spool or patch.
 
-        A spool may carry a selection out by handing its bounds to the
-        reader rather than by selecting afterwards. That is an
-        optimization, so it must not show: the ids and history of the
-        patch which comes back are those of the same `select` applied to
-        the patch the spool would otherwise have loaded.
+        Lists and tuples already serialize identically. Open ellipses and
+        quantity spellings have separate normalization semantics documented
+        in the spool selection note.
         """
         patch = dc.get_example_patch().pass_filter(time=(1, 10))
         patch.io.write(tmp_path / "filtered.h5", "dasdae")
         spool = dc.spool(tmp_path).update()
         whole = spool[0]
         time = whole.get_coord("time")
-        window = (0, 10) if samples else (time.min(), time.min() + 10 * time.step)
+        window = bounds_type(
+            (0, 10) if samples else (None, time.min() + 10 * time.step)
+        )
         through_spool = spool.select(time=window, samples=samples)[0]
         on_patch = whole.select(time=window, samples=samples)
         assert through_spool.shape == on_patch.shape != whole.shape
         assert through_spool.attrs.processing_id == on_patch.attrs.processing_id
         assert through_spool.attrs.processing_id != whole.attrs.processing_id
         assert through_spool.attrs.history == on_patch.attrs.history
+
+    @pytest.mark.parametrize("upper", [False, True])
+    @pytest.mark.parametrize("start,step", [(0.0, 1.0), (0.1, 0.1), (0.1, 0.001)])
+    def test_single_range_keeps_grid_tolerance(self, tmp_path, upper, start, step):
+        """A bound within CoordRange's edge tolerance does not advance lineage."""
+        patch = dc.get_example_patch().abs()
+        values = start + np.arange(patch.shape[0]) * step
+        patch.update_coords(distance=values).io.write(tmp_path / "source.h5", "dasdae")
+        spool = dc.spool(tmp_path).update()
+        source = spool[0]
+        coord = source.get_coord("distance")
+        bounds = (
+            (None, coord.max() - coord.step * 1e-12)
+            if upper
+            else (coord.min() + coord.step * 1e-12, None)
+        )
+        expected = source.select(distance=bounds)
+        selected = spool.select(distance=bounds)[0]
+        assert expected.shape == source.shape
+        assert np.array_equal(selected.data, source.data)
+        assert selected.attrs.processing_id == expected.attrs.processing_id
 
     def test_a_trim_which_cuts_nothing_records_nothing(self, tmp_path):
         """A selection which leaves the patch whole is not an operation.
