@@ -37,7 +37,10 @@ class SentekV5(FiberIO):
         # time/distance doesn't actually affect how much data is read from
         # the binary file. This is probably ok though since Sentek files
         # tend to be quite small.
-        return dc.spool(patch).select(time=time, distance=distance)
+        # The bare function: a patch read under a bound carries what a
+        # whole read carries, and the spool records the trim it asked for.
+        patch = patch.select.raw_function(patch, time=time, distance=distance)
+        return dc.spool([patch]) if patch.data.size else dc.spool([])
 
     def get_format(
         self,

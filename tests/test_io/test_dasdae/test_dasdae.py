@@ -336,6 +336,49 @@ class TestReadArray:
         assert seen == [(slice(0, random_patch.shape[0]), slice(2, 6))]
 
 
+class TestSpoolReadHints:
+    """Spool selection limits file data reads on even and uneven coordinates."""
+
+    @pytest.mark.parametrize("dim", ["distance", "time"])
+    @pytest.mark.parametrize("uneven", [False, True])
+    def test_single_range_reads_only_selected_data(
+        self, tmp_path, monkeypatch, dim, uneven
+    ):
+        """A single range needs no regular step to read only its selected samples."""
+        increments = [1, 2] if uneven else [1, 1]
+        distance = np.cumsum(np.resize(increments, 150)).astype(float)
+        time = np.datetime64("2020-01-01", "ns") + np.cumsum(
+            np.resize(increments, 200)
+        ) * np.timedelta64(1, "ms")
+        patch = dc.Patch(
+            data=np.arange(30_000).reshape(150, 200),
+            dims=("distance", "time"),
+            coords={"distance": distance, "time": time},
+        ).abs()
+        patch.io.write(tmp_path / "source.h5", "dasdae")
+        spool = dc.spool(tmp_path).update()
+        source = spool[0]
+        values = source.get_array(dim)
+        selection = {dim: (values[5], values[20])}
+        expected = source.select(**selection)
+        read_shapes = []
+        original = h5py.Dataset.__getitem__
+
+        def spy(dataset, index):
+            out = original(dataset, index)
+            if dataset.name.endswith("/data"):
+                read_shapes.append(out.shape)
+            return out
+
+        monkeypatch.setattr(h5py.Dataset, "__getitem__", spy)
+        selected = spool.select(**selection)[0]
+        assert read_shapes == [expected.shape]
+        assert selected.data.size < source.data.size / 8
+        assert np.array_equal(selected.data, expected.data)
+        assert selected.attrs.processing_id == expected.attrs.processing_id
+        assert selected.attrs.history == expected.attrs.history
+
+
 class TestScanDASDAE:
     """Tests for scanning the dasdae format."""
 

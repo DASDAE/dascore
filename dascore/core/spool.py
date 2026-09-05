@@ -2355,6 +2355,13 @@ class Spool(NodeRepr, NamespaceOwner):
         here). Because the state is enumerated — never ``__dict__`` —
         new instance attributes cannot silently join equality.
         """
+        from dascore.io.index.catalog import _CUT_MASK_SUFFIX  # noqa: PLC0415
+
+        def _private(column, suffix) -> bool:
+            # the generated `_<coord><suffix>` column, not an attr which
+            # happens to end the same way
+            name = str(column)
+            return name.startswith("_") and name.endswith(suffix)
 
         def _private(column, suffix) -> bool:
             # the generated `_<coord><suffix>` column, not an attr which
@@ -2394,6 +2401,10 @@ class Spool(NodeRepr, NamespaceOwner):
                 # a plan's outputs state a placeholder coordinate dtype
                 # for the same reason they state no def key
                 *[c for c in df.columns if _private(c, "_coord_dtype")],
+                # which residual narrowed a row says how this view
+                # reached its envelopes, not what the row describes; the
+                # trimmed envelopes it explains are compared instead
+                *[c for c in df.columns if _private(c, _CUT_MASK_SUFFIX)],
                 # whether the index holds every attr a patch defines says
                 # what the index can state, not what the patch is
                 "_attrs_complete",
