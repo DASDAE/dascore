@@ -18,6 +18,9 @@ from __future__ import annotations
 
 import abc
 import json
+import operator
+import re
+import sys
 import warnings
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
@@ -505,6 +508,7 @@ class PatchCatalog:
         self._ids = None if ids is None else tuple(int(x) for x in ids)
         self._revision = revision or _CatalogRevision()
         self._df_cache = _RevisionCache()
+        self._item_read_revision = -1
         self._live_cache = _RevisionCache()
         # Source records for rebuilding an in-memory backend (set by
         # __getstate__ so pickled catalogs survive losing the connection).
@@ -801,15 +805,33 @@ class PatchCatalog:
             )
         )
 
-    def window(self, item: slice) -> PatchCatalog:
+    def window(self, item: slice, ids: Sequence[int] | None = None) -> PatchCatalog:
         """
         Return a view restricted to a slice of the presented rows.
 
-        Membership realizes as an ordered id list (ids only — never the
-        flat relation); subsequent selections compose within the window
-        per the D2 rules.
+        Forward contiguous slices limit the SQL membership query. A caller
+        splitting the view can supply its already-fetched ordered ids.
         """
-        ids = self.ordered_ids()[item]
+        start = 0 if item.start is None else operator.index(item.start)
+        stop = None if item.stop is None else operator.index(item.stop)
+        step = 1 if item.step is None else operator.index(item.step)
+        if (
+            ids is None
+            and (self._ids is None or self._order is not None)
+            and step == 1
+            and start >= 0
+            and (stop is None or stop >= 0)
+        ):
+            start, stop, _ = item.indices(sys.maxsize)
+            ids = self.backend.query_ids(
+                list(self._queries) or None,
+                order_by=self._effective_order,
+                patch_ids=self._ids,
+                limit=None if item.stop is None else max(0, stop - start),
+                offset=start,
+            )
+        else:
+            ids = (self.ordered_ids() if ids is None else ids)[item]
         return self._view(self._queries, self._residuals, ids=tuple(ids))
 
     def restrict(self, indices, ids=None) -> PatchCatalog:
@@ -978,6 +1000,26 @@ class PatchCatalog:
             # bump it, and this frame reflects the state after that.
             return self._df_cache.set(df, self._revision.value)
 
+    def _requires_full_relation(self) -> bool:
+        """Keep exact positional filtering for regex and complex coordinate trims."""
+        if any(
+            isinstance(value, re.Pattern)
+            for query in self._queries
+            for value in query.attrs.values()
+        ):
+            return True
+        for coords, samples, relative in self._residuals:
+            if (
+                samples
+                or relative
+                or any(
+                    getattr(value, "magnitudes", None) is not None
+                    for value in coords.values()
+                )
+            ):
+                return True
+        return False
+
     def __len__(self) -> int:
         with self._revision.lock:
             if (live := self._cold_live_values()) is not None:
@@ -1003,7 +1045,22 @@ class PatchCatalog:
         with self._revision.lock:
             if (live := self._cold_live_values()) is not None:
                 return live[index]
-            row = self.to_df().iloc[index].to_dict()
+            df = self._df_cache.get(self._revision.value)
+            if df is None:
+                if (
+                    self._requires_full_relation()
+                    or getattr(self, "_item_read_revision", -1) == self._revision.value
+                ):
+                    # Repeated positional reads amortize projection through the
+                    # existing full-frame cache; a one-off preview stays bounded.
+                    df = self.to_df()
+                else:
+                    if index < 0:
+                        index = range(len(self))[index]
+                    df = self.window(slice(index, index + 1)).to_df()
+                    index = 0
+            row = df.iloc[index].to_dict()
+            self._item_read_revision = self._revision.value
         # Reading (and trimming) the patch happens outside the lock; only
         # the row it starts from must come from a consistent relation.
         return self.resolve_row(row)

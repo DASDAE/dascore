@@ -893,8 +893,16 @@ class SQLiteIndexBackend:
             df = apply_residuals(df, residuals, attr_columns)
         return df.reset_index(drop=True)
 
-    def query_ids(self, query=None, order_by=None, patch_ids=None) -> list[int]:
-        """Return matching patch ids in presentation order (ids only)."""
+    def query_ids(
+        self,
+        query=None,
+        order_by=None,
+        patch_ids=None,
+        *,
+        limit: int | None = None,
+        offset: int = 0,
+    ) -> list[int]:
+        """Return ordered patch ids, optionally limited after exact filtering."""
         queries, attr_meta, coord_meta = self._query_context(query, order_by=order_by)
         sql, params, residuals = build_sql(
             queries,
@@ -907,7 +915,11 @@ class SQLiteIndexBackend:
         if residuals:
             # regex residuals need string values; realize the relation
             df = self.query(queries, order_by=order_by, patch_ids=patch_ids)
-            return [int(x) for x in df["_patch_id"]]
+            stop = None if limit is None else offset + limit
+            return [int(x) for x in df["_patch_id"].iloc[offset:stop]]
+        if limit is not None or offset:
+            sql += " LIMIT ? OFFSET ?"
+            params.extend((-1 if limit is None else limit, offset))
         return [int(x) for x in self._fetch_df(sql, params)["patch_id"]]
 
     def count(self, query=None, patch_ids=None) -> int:
