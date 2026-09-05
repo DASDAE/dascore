@@ -8,6 +8,7 @@ from concurrent.futures import Future, ProcessPoolExecutor, ThreadPoolExecutor
 from contextlib import closing
 from functools import wraps
 from pathlib import Path
+from typing import Literal
 
 import numpy as np
 import pandas as pd
@@ -17,12 +18,35 @@ import dascore as dc
 from dascore.config import config_context, get_config
 from dascore.examples import inventory_patch_pair
 from dascore.exceptions import (
+    DependencyError,
     InvalidSpoolError,
     MissingOptionalDependencyError,
     MissingPatchError,
     ParameterError,
 )
+from dascore.io import FiberIO
 from dascore.io.dasdae.core import DASDAEV1
+from dascore.utils.misc import suppress_warnings
+
+
+class _ScanErrorFormat(FiberIO):
+    """A process-importable reader that fails only on this test's own files."""
+
+    name = "_spool_scan_error"
+    version = "1"
+
+    def get_format(self, resource: Path, **kwargs) -> tuple[str, str] | Literal[False]:
+        return (self.name, self.version) if resource.suffix == ".scanerror" else False
+
+    def scan(self, resource: Path, **kwargs):
+        if resource.stem == "dependency":
+            raise DependencyError("incompatible test reader")
+        raise ValueError("unreadable test source")
+
+
+def _register_scan_errors():
+    """Import this test module in spawned workers to register its test reader."""
+    _ScanErrorFormat()
 
 
 class _RecordingClient:
@@ -90,8 +114,9 @@ class TestSpoolIterate:
         assert len(actual) == length
         assert all(a is b for a, b in zip(actual, spool, strict=True))
 
-    def test_call_time_config(self, monkeypatch):
-        """The loading thread sees the configuration at iterate() call time."""
+    @pytest.mark.parametrize("limit", [0, 2])
+    def test_call_time_config(self, monkeypatch, limit):
+        """Threads capture call-time config; zero follows ordinary iteration."""
         spool = dc.get_example_spool(length=3, shape=(2, 5))
         seen = []
         original = dc.Spool.__iter__
@@ -102,11 +127,12 @@ class TestSpoolIterate:
                 yield patch
 
         monkeypatch.setattr(dc.Spool, "__iter__", iterate)
+        ambient = get_config().display_float_precision
         with config_context(display_float_precision=8):
-            iterator = spool.iterate()
+            iterator = spool.iterate(max_in_flight=limit)
         assert seen == []
         assert len(list(iterator)) == 3
-        assert seen == [8, 8, 8]
+        assert seen == [8 if limit else ambient] * 3
 
     def test_zero_stays_in_caller(self, monkeypatch):
         """A zero window creates no worker and follows ordinary iteration."""
@@ -265,7 +291,9 @@ class TestUpdateExecutor:
         """A caller-owned executor reused across multiple update calls."""
         if request.param == "process":
             pool = ProcessPoolExecutor(
-                2, mp_context=multiprocessing.get_context("spawn")
+                2,
+                mp_context=multiprocessing.get_context("spawn"),
+                initializer=_register_scan_errors,
             )
         else:
             pool = ThreadPoolExecutor(2)
@@ -290,6 +318,30 @@ class TestUpdateExecutor:
         finally:
             serial.indexer.close()
             parallel.indexer.close()
+
+    @pytest.mark.parametrize("kind", ["dependency", "corrupt"])
+    @pytest.mark.parametrize("action", ["always", "error"])
+    def test_scan_warnings_in_caller(self, directory, client, kind, action):
+        """Caller warning capture and error filters apply across spawned workers."""
+        source = directory / f"{kind}.scanerror"
+        source.write_text("unreadable")
+        root = dc.spool(directory)
+        message = (
+            "incompatible test reader" if kind == "dependency" else "Failed to scan"
+        )
+        try:
+            with suppress_warnings(action=action, record=True) as caught:
+                if action == "error":
+                    with pytest.raises(UserWarning, match=message):
+                        root.update(progress=False, client=client)
+                    assert not root.indexer._initial_update_done
+                else:
+                    root.update(progress=False, client=client)
+                    assert len(root) == 12
+                    assert len(caught) == 1
+                    assert message in str(caught[0].message)
+        finally:
+            root.indexer.close()
 
     def test_config_and_lifecycle(self, directory, client):
         """Workers inherit scoped config; changed and deleted files refresh."""
@@ -380,6 +432,32 @@ class TestUpdateBatches:
                     root.update(progress=False, client=_RecordingClient())
                 assert len(caught) == 1
                 assert len(root) == 6
+        finally:
+            root.indexer.close()
+
+    def test_failed_collection_closes_results(self, directory):
+        """A caller-side error closes results even while its traceback lives."""
+        closed = threading.Event()
+
+        class Client:
+            def map(self, func, iterable):
+                try:
+                    for batch in iterable:
+                        yield func(batch)
+                finally:
+                    closed.set()
+
+        (directory / "corrupt.scanerror").write_text("unreadable")
+        root = dc.spool(directory)
+        try:
+            with (
+                config_context(debug=False),
+                suppress_warnings(action="error"),
+                pytest.raises(UserWarning, match="Failed to scan") as exc_info,
+            ):
+                root.update(client=Client())
+            assert exc_info.traceback
+            assert closed.is_set()
         finally:
             root.indexer.close()
 

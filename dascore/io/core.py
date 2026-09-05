@@ -18,7 +18,7 @@ from collections.abc import (
     Sequence,
 )
 from contextlib import suppress
-from functools import cached_property, wraps
+from functools import cached_property, partial, wraps
 from numbers import Integral
 from pathlib import Path
 from threading import RLock
@@ -1665,6 +1665,7 @@ def _iter_scan_results(
     snap: bool | None = None,
     payloads: bool = False,
     _missing_optional_deps: dict[str, int] | None = None,
+    _scan_warnings: list[str] | None = None,
 ) -> Generator[tuple[ScanPayload | PatchSummary, dict[str, Any], int], None, None]:
     """
     Yield raw scan results with dispatcher-owned source information.
@@ -1681,6 +1682,11 @@ def _iter_scan_results(
     # so a wholly unreadable batch cannot fail an otherwise readable scan.
     missing_optional_deps = (
         defaultdict(int) if _missing_optional_deps is None else _missing_optional_deps
+    )
+    warn = (
+        partial(warnings.warn, category=UserWarning, stacklevel=2)
+        if _scan_warnings is None
+        else _scan_warnings.append
     )
     # A one-shot iterator (e.g. a generator) can't survive both walks
     # below, so materialize it once up front (see #818). The cast just
@@ -1770,7 +1776,7 @@ def _iter_scan_results(
                         # dependency/compatibility problems as warnings and keep
                         # scanning the remaining files.
                         except DependencyError as exc:
-                            warnings.warn(str(exc), UserWarning, stacklevel=2)
+                            warn(str(exc))
                             continue
                         except RemoteCacheError:
                             raise
@@ -1781,7 +1787,7 @@ def _iter_scan_results(
                             ValueError,
                             TypeError,
                         ):
-                            warnings.warn(f"Failed to scan {resource}", UserWarning)
+                            warn(f"Failed to scan {resource}")
                             continue
                     source_path = _get_reloadable_source_path(
                         resource, fallback=man.source

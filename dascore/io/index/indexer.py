@@ -15,6 +15,7 @@ import json
 import math
 import os
 import tempfile
+import warnings
 from collections import Counter, defaultdict
 from contextlib import suppress
 from functools import partial
@@ -51,13 +52,16 @@ from dascore.utils.progress import track, validate_progress_level
 
 def _scan_batch(paths, config):
     """Open sources in a worker and defer dependency reporting until collection."""
-    missing = defaultdict(int)
+    missing, scan_warnings = defaultdict(int), []
     with config_context(config):
         iterator = _iter_scan_results(
-            paths, progress=None, _missing_optional_deps=missing
+            paths,
+            progress=None,
+            _missing_optional_deps=missing,
+            _scan_warnings=scan_warnings,
         )
         summaries = _summarize_scan(iterator)
-    return summaries, dict(missing)
+    return summaries, dict(missing), scan_warnings
 
 
 def _scan_with_client(paths, client, progress):
@@ -72,11 +76,19 @@ def _scan_with_client(paths, client, progress):
     func = partial(_scan_batch, config=get_config())
     results = client.map(func, batches)
     summaries, missing = [], Counter()
-    for batch, needed in track(
-        results, "Scanning file batches", progress, length=len(batches)
-    ):
-        summaries.extend(batch)
-        missing.update(needed)
+    try:
+        for batch, needed, scan_warnings in track(
+            results, "Scanning file batches", progress, length=len(batches)
+        ):
+            for message in scan_warnings:
+                warnings.warn(message, UserWarning, stacklevel=2)
+            summaries.extend(batch)
+            missing.update(needed)
+    finally:
+        # Retained exception tracebacks must not keep queued work alive.
+        # Map-only clients are also allowed to return a plain iterable.
+        if closer := getattr(results, "close", None):
+            closer()
     if missing:
         _handle_missing_optionals(len(summaries), missing)
     return summaries

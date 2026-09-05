@@ -408,7 +408,10 @@ class Spool(NodeRepr, NamespaceOwner):
         enrichment, and skipping unresolvable patches follow ordinary spool
         iteration. The loading thread uses the DASCore configuration active
         when this method was called. Ordinary ``for patch in spool`` stays
-        synchronous.
+        synchronous. A zero window also uses the configuration active when
+        each patch is consumed, just like ordinary iteration. Threaded
+        directory iteration requires a serialized SQLite build
+        (``sqlite3.threadsafety == 3``).
 
         The limit counts patches, not bytes, and does not include patches the
         caller retains. Close the iterator when stopping early: pending reads

@@ -39,7 +39,7 @@ with closing(spool.iterate(max_in_flight=2)) as patches:
         result = process(patch)
 ```
 
-`max_in_flight` bounds upcoming patches, including the one being loaded. The patch yielded to the caller and any patches the caller retains are additional. Set it to zero to load synchronously. Use `closing` when the loop may stop early: closing cancels pending reads, waits for any running read, and shuts down the loading thread. A patch count does not impose a byte limit.
+`max_in_flight` bounds upcoming patches, including the one being loaded. The patch yielded to the caller and any patches the caller retains are additional. Set it to zero to load synchronously using the configuration active at consumption time, like ordinary iteration. Threaded directory iteration requires a serialized SQLite build (`sqlite3.threadsafety == 3`). Use `closing` when the loop may stop early: closing cancels pending reads, waits for any running read, and shuts down the loading thread. A patch count does not impose a byte limit.
 
 # Updating directory indexes
 
