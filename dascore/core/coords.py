@@ -2771,10 +2771,15 @@ class CoordSegmented(BaseCoord):
             in_run = np.zeros(len(diffs), dtype=bool)
             in_run[1:] |= eq_next
             in_run[:-1] |= eq_next
-            splits = np.flatnonzero(~in_run) + 1
-            blocks = np.split(values, splits)
-            segments = [CoordMonotonicArray(values=x, units=units) for x in blocks]
-            out = concat_coords(*segments)
+            if not np.any(in_run):
+                # Singleton segments carry no direction and would be sorted
+                # ascending by concat_coords. Keep the recorded order.
+                out = CoordMonotonicArray(values=values, units=units)
+            else:
+                splits = np.flatnonzero(~in_run) + 1
+                blocks = np.split(values, splits)
+                segments = [CoordMonotonicArray(values=x, units=units) for x in blocks]
+                out = concat_coords(*segments)
         if tolerance is not None:
             out = out.simplify(tolerance)
         return out

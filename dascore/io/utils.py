@@ -11,7 +11,12 @@ import numpy as np
 import dascore as dc
 from dascore.constants import INVENTORY_ATTRS
 from dascore.core.coordmanager import CoordManager
-from dascore.core.coords import BaseCoord, CoordSegmented, get_coord
+from dascore.core.coords import (
+    BaseCoord,
+    CoordMonotonicArray,
+    CoordSegmented,
+    get_coord,
+)
 from dascore.core.summary import normalize_source_patch_key
 from dascore.exceptions import (
     CoordError,
@@ -302,7 +307,9 @@ def get_exact_coord(values, units=None) -> BaseCoord:
     # array (0-d) becomes a length-1 coordinate rather than a scalar.
     values = np.atleast_1d(np.asarray(values))
     if _is_over_segmented(values):
-        return get_coord(data=values, units=units)
+        # The guard has established strict monotonicity. Keep the stored
+        # values: get_coord could approximate their jitter with a range.
+        return CoordMonotonicArray(values=values, units=units)
     try:
         return CoordSegmented.from_array(values, tolerance=0, units=units)
     except CoordError:

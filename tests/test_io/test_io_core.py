@@ -343,6 +343,21 @@ class TestGetExactCoord:
         np.testing.assert_array_equal(coord.values, values)
         assert not isinstance(coord, CoordSegmented)
 
+    @pytest.mark.parametrize("length", [999, 1000, 2000])
+    @pytest.mark.parametrize("reverse", [False, True])
+    def test_float_jitter_preserved(self, length, reverse):
+        """Avoiding excessive segments must not approximate floating-point values."""
+        values = np.arange(length, dtype=float)
+        values += np.random.default_rng(4).uniform(-1e-5, 1e-5, length)
+        values = values[::-1] if reverse else values
+
+        coord = get_exact_coord(values, units="m")
+
+        np.testing.assert_array_equal(coord.values, values)
+        assert not isinstance(coord, CoordSegmented)
+        assert coord.units == dc.get_quantity("m")
+        assert coord.reverse_sorted == reverse
+
     def test_large_non_monotonic_array_preserved(self):
         """A large non-monotonic array skips the segment guard and stays exact."""
         rng = np.random.default_rng(1)
