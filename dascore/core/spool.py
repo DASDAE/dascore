@@ -89,6 +89,7 @@ from dascore.utils.chunk_plan import (
     build_subdivision_plan,
     subdivision_pieces,
 )
+from dascore.utils.concurrency import _prefetch
 from dascore.utils.display import (
     _TIME_TYPES,
     ACQUISITION_ATTR,
@@ -389,6 +390,52 @@ class Spool(NodeRepr, NamespaceOwner):
         # cannot be resolved (see #583).
         for patch in self._catalog:
             yield self._maybe_enrich(patch)
+
+    def iterate(self, *, max_in_flight: int = 2) -> Generator[dc.Patch, None, None]:
+        """
+        Yield patches in order while a background thread loads ahead.
+
+        Parameters
+        ----------
+        max_in_flight
+            Maximum number of upcoming patches being loaded or buffered.
+            The patch already yielded to the caller is additional. Set to
+            zero to iterate in the calling thread without prefetching.
+
+        Notes
+        -----
+        Loading starts when iteration begins. Selection, chunking, inventory
+        enrichment, and skipping unresolvable patches follow ordinary spool
+        iteration. The loading thread uses the DASCore configuration active
+        when this method was called. Ordinary ``for patch in spool`` stays
+        synchronous. A positive window requires thread support; on WebAssembly,
+        use ordinary iteration or explicitly set ``max_in_flight=0``. A zero
+        window uses the configuration active when each patch is consumed,
+        just like ordinary iteration. Threaded
+        directory iteration requires a serialized SQLite build
+        (``sqlite3.threadsafety == 3``).
+
+        The limit counts patches, not bytes, and does not include patches the
+        caller retains. Close the iterator when stopping early: pending reads
+        are cancelled and any running read finishes before its thread exits.
+
+        Examples
+        --------
+        >>> from contextlib import closing
+        >>> import dascore as dc
+        >>> spool = dc.get_example_spool()
+        >>> with closing(spool.iterate(max_in_flight=2)) as patches:
+        ...     for patch in patches:
+        ...         result = patch.abs()
+        """
+        if (
+            isinstance(max_in_flight, bool)
+            or not isinstance(max_in_flight, numbers.Integral)
+            or max_in_flight < 0
+        ):
+            msg = "max_in_flight must be a non-negative integer."
+            raise ParameterError(msg)
+        return _prefetch(self, int(max_in_flight))
 
     def __add__(self, other) -> Spool:
         """
@@ -2249,7 +2296,12 @@ class Spool(NodeRepr, NamespaceOwner):
         return bool(self._catalog.resolver.live_entries())
 
     @compose_docstring(progress_desc=progress_description)
-    def update(self, progress: PROGRESS_LEVELS = "standard") -> Self:
+    def update(
+        self,
+        progress: PROGRESS_LEVELS = "standard",
+        *,
+        client: ExecutorType | None = None,
+    ) -> Self:
         """
         Updates the contents of the spool, return the updated spool.
 
@@ -2263,6 +2315,27 @@ class Spool(NodeRepr, NamespaceOwner):
         Parameters
         ----------
         {progress_desc}
+        client
+            Optional executor with an ordered ``map`` method. Directory
+            updates scan batches of changed sources in its workers; index
+            writes stay in the calling thread. None keeps scanning serial.
+            The caller owns the executor and may reuse it across updates.
+            Single-file and in-memory spools do not use it.
+
+        Notes
+        -----
+        Process pools can parallelize HDF5 scans, whose h5py calls are
+        serialized within one process. Reusing a pool avoids paying its
+        startup cost on every update. Each worker opens its own sources and
+        uses the configuration active when update was called. Warnings are
+        emitted where the scan runs. Parent-process warning capture and filters
+        do not automatically apply to process workers; configure their warning
+        handling in the worker initializer or environment.
+        Missing optional dependencies are handled per batch, so an unreadable
+        batch can raise even if other batches contain readable files. The
+        caller is responsible for executor support and initialization.
+        Use one writer and no concurrent readers while updating a directory
+        spool.
         """
         from dascore.io.index.catalog import LiveResolver  # noqa: PLC0415
 
@@ -2276,7 +2349,7 @@ class Spool(NodeRepr, NamespaceOwner):
         if catalog.is_view:
             raise InvalidSpoolError(derived_msg)
         if catalog.syncer is not None:
-            catalog.update(progress=progress)
+            catalog.update(progress=progress, client=client)
             return self._new_from_catalog(catalog)
         if self._file_path is not None:
             from dascore.io.core import FiberIO  # noqa: PLC0415

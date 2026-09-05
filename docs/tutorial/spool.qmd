@@ -229,6 +229,20 @@ joined = dc.spool([patch, later]).concatenate(time=None)
 
 Patches that cannot concatenate remain in separate output groups. Values are ordered along the concatenated dimension when it has a step; otherwise spool order is retained. Other coordinates must agree, while coordinates along the concatenated dimension are joined. For conflicting non-coordinate attributes, `conflict=` can raise (the default), drop them, or keep the first value.
 
+# Loading ahead
+
+Use [`Spool.iterate`](`dascore.core.spool.Spool.iterate`) to load upcoming patches in a background thread while processing the current patch:
+
+```{python}
+from contextlib import closing
+
+with closing(spool.iterate(max_in_flight=2)) as patches:
+    for patch in patches:
+        processed = patch.detrend("time")
+```
+
+A positive window requires thread support; use ordinary iteration or `max_in_flight=0` in WebAssembly. The limit counts upcoming patches; the current patch and any retained results are additional. Closing the iterator releases its loading thread even if the loop exits early. Ordinary iteration stays synchronous. The [parallel processing recipe](../recipes/parallelization.qmd) also shows how to scan directory updates with a reusable process executor.
+
 # Mapping
 
 [`Spool.map`](`dascore.core.spool.Spool.map`) eagerly applies a function to every patch. Chunk first to control work size.
