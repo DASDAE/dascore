@@ -604,8 +604,36 @@ class PlanResolver(PatchResolver):
         index about the grid itself: the caller's shape guard catches a
         resized file, not a shifted one.
         """
-        if self.parent_residuals:
+        if not self.can_read_array(row):
             return None
+        info = self._array_read_info(row)
+        assert info is not None, "can_read_array checked this row"
+        loader, path, fiber_io, key = info
+        kwargs = {"source_patch_key": key} if key else {}
+        # The resource manager resolves remote paths and opens the handle
+        # type the override's annotation asks for, exactly as dc.read
+        # provisions its reader; _pre_cast says the work is already done.
+        with IOResourceManager(loader.resolve_path(path)) as manager:
+            resource = manager.get_resource(
+                _required_resource_type(fiber_io.read_array)
+            )
+            return fiber_io.read_array(
+                resource, dict(windows), _pre_cast=True, **kwargs
+            )
+
+    def can_read_array(self, row: Mapping) -> bool:
+        """
+        Whether a row can take the data-only path, reading nothing.
+
+        A caller which sizes its reads ahead of time -- splitting a
+        member into several windows, say -- must know this before it
+        builds them: splitting a row which loads as a patch would read
+        the whole source once per window instead of once.
+        """
+        return not self.parent_residuals and self._array_read_info(row) is not None
+
+    def _array_read_info(self, row: Mapping):
+        """Resolve array-reader metadata without opening the source file."""
         path = _row_str(row.get("source_path"))
         if not path:
             return None
@@ -634,17 +662,7 @@ class PlanResolver(PatchResolver):
             # read (see FileResolver.resolve); an override which resolves
             # keys natively could match the wrong patch, or nothing.
             return None
-        kwargs = {"source_patch_key": key} if key else {}
-        # The resource manager resolves remote paths and opens the handle
-        # type the override's annotation asks for, exactly as dc.read
-        # provisions its reader; _pre_cast says the work is already done.
-        with IOResourceManager(loader.resolve_path(path)) as manager:
-            resource = manager.get_resource(
-                _required_resource_type(fiber_io.read_array)
-            )
-            return fiber_io.read_array(
-                resource, dict(windows), _pre_cast=True, **kwargs
-            )
+        return loader, path, fiber_io, key
 
     def _in_plan_units(self, patch: dc.Patch, kwargs: Mapping) -> dc.Patch:
         """

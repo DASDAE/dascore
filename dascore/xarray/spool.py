@@ -83,6 +83,36 @@ def _member_coord(low, high, step, env_low, env_high, get_coord, units=None):
     return coord, (start, stop)
 
 
+def _samples_per_block(block_size, dtype, sizes, dim) -> int | None:
+    """
+    How many samples along ``dim`` fit in one block, or None for no limit.
+
+    A block's other dimensions are whole, so its size grows only along
+    the merge dimension: one sample of it costs the product of the rest.
+    """
+    if block_size is None:
+        return None
+    row_bytes = dtype.itemsize
+    for name, size in sizes.items():
+        if name != dim:
+            row_bytes *= size
+    return max(1, int(block_size) // max(row_bytes, 1))
+
+
+def _block_pieces(count: int, limit: int | None) -> tuple[tuple[int, int], ...]:
+    """
+    Cut ``count`` samples into contiguous half-open pieces.
+
+    The pieces are as even as whole samples allow, so no block is much
+    smaller than its siblings; ``limit`` is a ceiling, not a target.
+    """
+    if limit is None or count <= limit:
+        return ((0, count),)
+    pieces = -(-count // limit)
+    size = -(-count // pieces)
+    return tuple((x, min(x + size, count)) for x in range(0, count, size))
+
+
 def _lazy_temporal_index(name, coord):
     """
     Return a lazy xarray index for an evenly sampled temporal coordinate.
@@ -194,6 +224,7 @@ def spool_to_xarray(
     group: str | typing.Sequence[str] | None = None,
     tolerance=1.5,
     conflict: Literal["drop", "raise", "keep_first"] = "raise",
+    block_size: str | int | None = "128MiB",
 ):
     """
     Convert a spool to a lazy, dask-backed xarray DataTree.
@@ -221,6 +252,15 @@ def spool_to_xarray(
         in `chunk` (not the sampling-step grouping tolerance).
     conflict
         How attribute conflicts within a segment resolve, as in `chunk`.
+    block_size
+        The largest a single dask block may be, as a byte count or a
+        string dask parses ("128MiB", "1GB"). A source patch bigger than
+        this is read in several windows along ``dim`` rather than whole,
+        so one block never has to hold a whole large file. None reads
+        every source patch as one block. A patch whose format cannot
+        hand back a window (see `FiberIO.read_array`) stays one block
+        whatever this says: splitting it would read the file once per
+        block instead of once.
 
     Notes
     -----
@@ -252,6 +292,8 @@ def spool_to_xarray(
     xr = optional_import("xarray")
     dask = optional_import("dask")
     da = optional_import("dask.array")
+    if isinstance(block_size, str):
+        block_size = optional_import("dask.utils").parse_bytes(block_size)
     # function-level to avoid circular imports through the package root
     from dascore.core.coords import concat_coords, get_coord  # noqa: PLC0415
     from dascore.io.index.planned import PlanResolver, derived_catalog  # noqa: PLC0415
@@ -431,23 +473,40 @@ def spool_to_xarray(
                 else:
                     coords[d] = coord.values
             blocks = []
+            limit = _samples_per_block(block_size, dtype, sizes, dim)
             zipped = zip(member_coords, member_windows, mem.iterrows(), strict=True)
             for member_coord, window, (_, m) in zipped:
-                count = len(member_coord)
-                shape = tuple(count if d == dim else sizes[d] for d in dims)
-                lims = (m[f"{dim}_min"], m[f"{dim}_max"])
                 row = member_rows.iloc[int(m["_pos"])].to_dict()
-                delayed = dask.delayed(_load_xarray_block)(
-                    resolver_ref,
-                    row,
-                    dim,
-                    lims,
-                    dims,
-                    shape,
-                    dtype,
-                    window if m["_env_anchored"] else None,
-                )
-                blocks.append(da.from_delayed(delayed, shape=shape, dtype=dtype))
+                # Only a member whose format hands back a window is worth
+                # splitting; every other one reads whole however it is cut.
+                anchored = bool(m["_env_anchored"])
+                splittable = anchored and resolver.can_read_array(row)
+                pieces = _block_pieces(len(member_coord), limit if splittable else None)
+                for start, stop in pieces:
+                    whole = (start, stop) == (0, len(member_coord))
+                    if whole:
+                        sub_coord = member_coord
+                        # the member's own envelope, as the row states it
+                        lims = (m[f"{dim}_min"], m[f"{dim}_max"])
+                    else:
+                        sub_coord = member_coord.select((start, stop), samples=True)[0]
+                        # the piece's own endpoints, which lie on the
+                        # member's grid because they are its samples
+                        lims = (sub_coord.min(), sub_coord.max())
+                    count = len(sub_coord)
+                    shape = tuple(count if d == dim else sizes[d] for d in dims)
+                    sub_window = (window[0] + start, window[0] + stop)
+                    delayed = dask.delayed(_load_xarray_block)(
+                        resolver_ref,
+                        row,
+                        dim,
+                        lims,
+                        dims,
+                        shape,
+                        dtype,
+                        sub_window if anchored else None,
+                    )
+                    blocks.append(da.from_delayed(delayed, shape=shape, dtype=dtype))
             array = da.concatenate(blocks, axis=axis)
             attrs = {
                 key: value
