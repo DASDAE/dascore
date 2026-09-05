@@ -2207,19 +2207,37 @@ class TestChunkFromIndex:
         read = dc.spool([dc.read(p)[0] for p in sorted(path.glob("*.h5"))])
         assert fast.attrs.patch_id == read.chunk(time=None)[0].attrs.patch_id
 
-    def test_extended_float_attribute_survives_merge(self, tmp_path):
+    def test_extended_float_coordinate_survives_merge(self, tmp_path, permanent_config):
+        """File coordinate precision survives merging, including extended floats."""
+        with permanent_config(allow_dasdae_format_unpickle=False):
+            start = np.nextafter(np.longdouble(1), np.longdouble(2))
+            coord = dc.get_coord(start=start, step=np.longdouble("0.1"), shape=10)
+            spool = ex.get_example_spool("random_das", length=2, time_gap=0)
+            for num, patch in enumerate(spool):
+                patch = patch.select(distance=(0, 10), samples=True)
+                patch.update_coords(distance=coord).io.write(
+                    tmp_path / f"p{num}.h5", "dasdae"
+                )
+            indexed = dc.spool(tmp_path).update()
+            source = indexed[0].get_coord("distance")
+            out = indexed.chunk(time=None)[0].get_coord("distance")
+            assert out.dtype == source.dtype
+            assert np.array_equal(out.values, source.values)
+
+    def test_extended_float_attribute_survives_merge(self, tmp_path, permanent_config):
         """A stored calibration scalar must retain all precision on every platform."""
-        value = np.nextafter(np.longdouble(1), np.longdouble(2))
-        spool = ex.get_example_spool("random_das", length=2, time_gap=0)
-        for num, patch in enumerate(spool):
-            patch.update_attrs(calibration=value).io.write(
-                tmp_path / f"p{num}.h5", "dasdae"
-            )
-        indexed = dc.spool(tmp_path).update()
-        assert indexed[0].attrs["calibration"] == value
-        out = indexed.chunk(time=None)[0]
-        assert out.attrs["calibration"] == value
-        assert np.asarray(out.attrs["calibration"]).dtype == np.asarray(value).dtype
+        with permanent_config(allow_dasdae_format_unpickle=False):
+            value = np.nextafter(np.longdouble(1), np.longdouble(2))
+            spool = ex.get_example_spool("random_das", length=2, time_gap=0)
+            for num, patch in enumerate(spool):
+                patch.update_attrs(calibration=value).io.write(
+                    tmp_path / f"p{num}.h5", "dasdae"
+                )
+            indexed = dc.spool(tmp_path).update()
+            assert indexed[0].attrs["calibration"] == value
+            out = indexed.chunk(time=None)[0]
+            assert out.attrs["calibration"] == value
+            assert np.asarray(out.attrs["calibration"]).dtype == np.asarray(value).dtype
 
     @pytest.mark.parametrize("value", ["unknown", "10"])
     def test_directory_override_keeps_its_string_type(self, tmp_path, calls, value):

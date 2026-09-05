@@ -298,7 +298,11 @@ def _row_range(row: Mapping, dim: str) -> tuple[Any, Any, Any] | None:
     source_units = row.get(f"_{dim}_units_source")
     if not _is_null(source_units) and source_units != row.get(f"_{dim}_units"):
         return None
-    kind = np.dtype(stored).type
+    dtype = np.dtype(stored)
+    kind = dtype.type
+    # SQLite float envelopes cannot retain extended coordinate precision.
+    if dtype.kind == "f" and dtype.itemsize > 8:
+        return None
     if np.issubdtype(kind, np.integer) and max(abs(lo), abs(hi)) > 2**53:
         return None
     return kind(lo), kind(hi), kind(step)
