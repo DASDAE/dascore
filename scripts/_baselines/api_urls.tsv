@@ -4844,8 +4844,6 @@ dascore.utils.hdf5.H5Reader	/api/dascore/utils/hdf5/H5Reader.qmd
 dascore.utils.hdf5.H5Reader.get_handle	/api/dascore/utils/hdf5/H5Reader/get_handle.qmd
 dascore.utils.hdf5.H5Writer	/api/dascore/utils/hdf5/H5Writer.qmd
 dascore.utils.hdf5.H5Writer.get_handle	/api/dascore/utils/hdf5/H5Writer/get_handle.qmd
-dascore.utils.hdf5.LocalH5Reader	/api/dascore/utils/hdf5/LocalH5Reader.qmd
-dascore.utils.hdf5.LocalH5Reader.get_handle	/api/dascore/utils/hdf5/LocalH5Reader/get_handle.qmd
 dascore.utils.hdf5.encode_h5_strings	/api/dascore/utils/hdf5/encode_h5_strings.qmd
 dascore.utils.hdf5.ensure_local_file	/api/dascore/utils/remote_io/ensure_local_file.qmd
 dascore.utils.hdf5.extract_h5_attrs	/api/dascore/utils/hdf5/extract_h5_attrs.qmd
@@ -5200,8 +5198,6 @@ dascore.utils.time.UnitError	/api/dascore/exceptions/UnitError.qmd
 dascore.utils.time.dtype_time_like	/api/dascore/utils/time/dtype_time_like.qmd
 dascore.utils.time.is_datetime64	/api/dascore/utils/time/is_datetime64.qmd
 dascore.utils.time.is_timedelta64	/api/dascore/utils/time/is_timedelta64.qmd
-dascore.utils.time.saturate_add	/api/dascore/utils/time/saturate_add.qmd
-dascore.utils.time.saturate_subtract	/api/dascore/utils/time/saturate_subtract.qmd
 dascore.utils.time.to_datetime64	/api/dascore/utils/time/to_datetime64.qmd
 dascore.utils.time.to_float	/api/dascore/utils/time/to_float.qmd
 dascore.utils.time.to_int	/api/dascore/utils/time/to_int.qmd
@@ -7667,10 +7663,6 @@ docs/api/dascore/utils/hdf5/H5Writer	/api/dascore/utils/hdf5/H5Writer.qmd
 docs/api/dascore/utils/hdf5/H5Writer.qmd	/api/dascore/utils/hdf5/H5Writer.qmd
 docs/api/dascore/utils/hdf5/H5Writer/get_handle	/api/dascore/utils/hdf5/H5Writer/get_handle.qmd
 docs/api/dascore/utils/hdf5/H5Writer/get_handle.qmd	/api/dascore/utils/hdf5/H5Writer/get_handle.qmd
-docs/api/dascore/utils/hdf5/LocalH5Reader	/api/dascore/utils/hdf5/LocalH5Reader.qmd
-docs/api/dascore/utils/hdf5/LocalH5Reader.qmd	/api/dascore/utils/hdf5/LocalH5Reader.qmd
-docs/api/dascore/utils/hdf5/LocalH5Reader/get_handle	/api/dascore/utils/hdf5/LocalH5Reader/get_handle.qmd
-docs/api/dascore/utils/hdf5/LocalH5Reader/get_handle.qmd	/api/dascore/utils/hdf5/LocalH5Reader/get_handle.qmd
 docs/api/dascore/utils/hdf5/encode_h5_strings	/api/dascore/utils/hdf5/encode_h5_strings.qmd
 docs/api/dascore/utils/hdf5/encode_h5_strings.qmd	/api/dascore/utils/hdf5/encode_h5_strings.qmd
 docs/api/dascore/utils/hdf5/extract_h5_attrs	/api/dascore/utils/hdf5/extract_h5_attrs.qmd
@@ -8055,10 +8047,6 @@ docs/api/dascore/utils/time/is_datetime64	/api/dascore/utils/time/is_datetime64.
 docs/api/dascore/utils/time/is_datetime64.qmd	/api/dascore/utils/time/is_datetime64.qmd
 docs/api/dascore/utils/time/is_timedelta64	/api/dascore/utils/time/is_timedelta64.qmd
 docs/api/dascore/utils/time/is_timedelta64.qmd	/api/dascore/utils/time/is_timedelta64.qmd
-docs/api/dascore/utils/time/saturate_add	/api/dascore/utils/time/saturate_add.qmd
-docs/api/dascore/utils/time/saturate_add.qmd	/api/dascore/utils/time/saturate_add.qmd
-docs/api/dascore/utils/time/saturate_subtract	/api/dascore/utils/time/saturate_subtract.qmd
-docs/api/dascore/utils/time/saturate_subtract.qmd	/api/dascore/utils/time/saturate_subtract.qmd
 docs/api/dascore/utils/time/to_datetime64	/api/dascore/utils/time/to_datetime64.qmd
 docs/api/dascore/utils/time/to_datetime64.qmd	/api/dascore/utils/time/to_datetime64.qmd
 docs/api/dascore/utils/time/to_float	/api/dascore/utils/time/to_float.qmd

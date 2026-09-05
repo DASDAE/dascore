@@ -440,9 +440,10 @@ class Spool(NodeRepr, NamespaceOwner):
         """
         Sub-select parts of the spool.
 
-        Can be used to specify dimension ranges, or unix-style matches
-        on string attributes. Bare keyword names resolve against
-        attributes first, then coordinates; unknown names raise.
+        Can be used to specify dimension ranges, or glob matches on
+        string attributes, read as SQLite's GLOB reads them. Bare keyword
+        names resolve against attributes first, then coordinates; unknown
+        names raise.
 
         Parameters
         ----------
@@ -2174,6 +2175,22 @@ class Spool(NodeRepr, NamespaceOwner):
         Create a spool over a single (multi-patch capable) fiber file.
 
         The file is scanned once; patches load lazily per row.
+
+        Parameters
+        ----------
+        path
+            The file to open.
+        file_format
+            The format name, sniffed from the file when not given.
+        file_version
+            The format version, sniffed from the file when not given.
+
+        Notes
+        -----
+        A format and version given together are believed rather than
+        checked against the file, as `dc.read` and `dc.scan` believe them.
+        Naming the wrong format therefore yields whatever that reader
+        makes of the file, which is usually an empty spool.
         """
         path = path if isinstance(path, UPath) else Path(path)
         if not path.exists() or path.is_dir():
@@ -2181,7 +2198,17 @@ class Spool(NodeRepr, NamespaceOwner):
             raise FileNotFoundError(msg)
         from dascore.io.index.catalog import PatchCatalog  # noqa: PLC0415
 
-        _format, _version = dc.get_format(path, file_format, file_version)
+        if file_format and file_version:
+            # Both internal callers already know the format, and sniffing
+            # it again opens the file a second time; for a remote source
+            # that is a round trip. Resolving the reader canonicalizes the
+            # names and still rejects a pair no reader claims.
+            fiber_io = dc.io.FiberIO.manager.get_fiberio(
+                format=file_format, version=file_version
+            )
+            _format, _version = fiber_io.name, fiber_io.version
+        else:
+            _format, _version = dc.get_format(path, file_format, file_version)
         out = cls()
         out._catalog = PatchCatalog.from_file(
             path, file_format=_format, file_version=_version
@@ -2250,9 +2277,9 @@ class Spool(NodeRepr, NamespaceOwner):
                 format=self._file_format, version=self._file_version
             )
             getattr(formatter, "index", lambda _: None)(self._file_path)
-            refreshed = self.from_file(
-                self._file_path, self._file_format, self._file_version
-            )
+            # Sniffed rather than reused: noticing that the file changed is
+            # what update is for, and it may now hold another version.
+            refreshed = self.from_file(self._file_path)
             # from_file builds a spool from the file alone, but an attached
             # inventory is the caller's state rather than the file's, and
             # re-reading the file is no reason to stop enriching.

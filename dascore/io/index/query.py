@@ -25,7 +25,7 @@ from dascore.exceptions import InvalidSpoolQueryError, ParameterError, UnitError
 from dascore.io.index.ingest import typed_value
 from dascore.io.index.schema import glob_expr, quote
 from dascore.units import convert_units, get_quantity
-from dascore.utils.misc import is_range
+from dascore.utils.misc import glob_to_regex, is_range
 from dascore.utils.pd import resolve_selector_namespaces
 
 _GLOB_CHARS = frozenset("*?[")
@@ -344,79 +344,6 @@ def build_attr_clause(
     return None
 
 
-def glob_to_regex(pattern: str) -> re.Pattern:
-    """
-    Translate a glob to the regex which matches what SQLite's GLOB does.
-
-    SQLite is the authority on what a glob selector means, since that is
-    what the index applies, and it is not `fnmatch`: a character class is
-    negated with `[^...]`, where fnmatch spells that `[!...]` and reads a
-    leading `!` as a literal. Translating here rather than reaching for
-    fnmatch is what keeps one pattern from selecting opposite halves of a
-    spool depending on which side answered it. An unterminated class
-    matches nothing, as it does in SQLite; a class a regex cannot express
-    at all (a reversed range, which SQLite reads leniently) matches
-    nothing here rather than being guessed at.
-    """
-    out, index, size = [], 0, len(pattern)
-    while index < size:
-        char = pattern[index]
-        if char in "*?":
-            out.append(".*" if char == "*" else ".")
-        elif char == "[":
-            # A class may open with '^' to negate and may hold ']' as its
-            # first member; the class ends at the next ']' after those.
-            end = index + 1 + pattern[index + 1 : index + 2].count("^")
-            end += pattern[end : end + 1].count("]")
-            end = pattern.find("]", end)
-            if end < 0:
-                return _MATCHES_NOTHING
-            body = pattern[index + 1 : end]
-            negate, body = body.startswith("^"), body.removeprefix("^")
-            # A ']' opening a class is one of its members, and SQLite takes
-            # it as a plain one: it is not the low end of a range, so the
-            # dash which may follow it is a member too.
-            leading = ""
-            if body.startswith("]"):
-                leading, body = re.escape("]"), body[1:]
-            out.append(f"[{'^' if negate else ''}{leading}{_class_body(body)}]")
-            index = end
-        else:
-            out.append(re.escape(char))
-        index += 1
-    # DOTALL, since SQLite's wildcards cross a newline like any other byte.
-    return re.compile("".join(out) + r"\Z", re.DOTALL)
-
-
-# A pattern which matches nothing, for a glob SQLite would not read.
-_MATCHES_NOTHING = re.compile(r"(?!)")
-
-
-def _class_body(body: str) -> str:
-    """
-    Escape the members of a glob character class for a regex one.
-
-    Ranges stay ranges, since a glob class means them, with each endpoint
-    escaped on its own — escaping the body wholesale would turn the dash
-    of a range into a member. A range's low endpoint is also emitted as a
-    member: SQLite tests it before testing the range, so `[z-a]` matches
-    `z` where the reversed range alone matches nothing.
-    """
-    out, index, size = [], 0, len(body)
-    while index < size:
-        low = body[index]
-        if index + 2 < size and body[index + 1] == "-":
-            high = body[index + 2]
-            out.append(re.escape(low))
-            if low <= high:
-                out.append(f"{re.escape(low)}-{re.escape(high)}")
-            index += 3
-            continue
-        out.append(re.escape(low))
-        index += 1
-    return "".join(out)
-
-
 def evaluate_attr_predicate(values, name: str, value, units=None) -> np.ndarray:
     """
     Evaluate one attr selector against values held in memory.
@@ -606,61 +533,57 @@ def build_coord_clause(
         "dur": ("min_ns", "max_ns"),
         "num": ("min_num", "max_num"),
         "str": ("min_str", "max_str"),
-        None: (None, None),
     }[kind]
     conditions = ["pc.coord_name = ?"]
     params: list = [name]
-    if kind is not None:
-        if kind in ("time", "dur"):
-            # absolute queries match absolute coords, durations relative.
-            conditions.append("cd.is_relative = ?")
-            params.append(kind == "dur")
-            kind_match = "time"
-        else:
-            kind_match = kind
-        conditions.append("cd.value_kind = ?")
-        params.append(kind_match)
-        # lo bounds the coord max (overlap), hi bounds the coord min.
-        # typed_values holds the coerced non-open bounds in (lo, hi) order,
-        # so each side pairs with its TypedValue (which knows the bound's
-        # own units) here.
-        sides = []
-        for bound, bound_col, op in ((lo, max_col, ">="), (hi, min_col, "<=")):
-            if bound is None:
-                continue
-            sides.append((bound, typed_values[len(sides)], bound_col, op))
-        if compatible_units is None:
-            # A bare range means each definition's native units: one plain
-            # predicate against the envelopes, which are stored in the
-            # coordinate's original units.
-            for bound, _typed, bound_col, op in sides:
-                conditions.append(f"cd.{bound_col} {op} ?")
-                params.append(bound)
-        elif not compatible_units:
-            conditions.append("cd.units IS NULL")
-        else:
-            # A unit-bearing range converts itself once per distinct
-            # compatible stored unit into an OR branch; a bare bound in a
-            # mixed range stays native per branch, exactly how the
-            # residual's per-bound _CanonicalRange reads it at load.
-            # NULL-unit defs stay unconstrained candidates: unitless
-            # values cannot be proven dimensionally incompatible.
-            branches = ["cd.units IS NULL"]
-            for unit in sorted(compatible_units):
-                sub_clauses = ["cd.units = ?"]
-                sub_params: list = [unit]
-                for bound, typed, bound_col, op in sides:
-                    if typed.units is None:
-                        val = bound
-                    else:
-                        val = convert_units(
-                            bound, to_units=unit, from_units=typed.units
-                        )
-                    sub_clauses.append(f"cd.{bound_col} {op} ?")
-                    sub_params.append(val)
-                branches.append("(" + " AND ".join(sub_clauses) + ")")
-                params.extend(sub_params)
-            conditions.append("(" + " OR ".join(branches) + ")")
+    if kind in ("time", "dur"):
+        # absolute queries match absolute coords, durations relative.
+        conditions.append("cd.is_relative = ?")
+        params.append(kind == "dur")
+        kind_match = "time"
+    else:
+        kind_match = kind
+    conditions.append("cd.value_kind = ?")
+    params.append(kind_match)
+    # lo bounds the coord max (overlap), hi bounds the coord min.
+    # typed_values holds the coerced non-open bounds in (lo, hi) order,
+    # so each side pairs with its TypedValue (which knows the bound's
+    # own units) here.
+    sides = []
+    for bound, bound_col, op in ((lo, max_col, ">="), (hi, min_col, "<=")):
+        if bound is None:
+            continue
+        sides.append((bound, typed_values[len(sides)], bound_col, op))
+    if compatible_units is None:
+        # A bare range means each definition's native units: one plain
+        # predicate against the envelopes, which are stored in the
+        # coordinate's original units.
+        for bound, _typed, bound_col, op in sides:
+            conditions.append(f"cd.{bound_col} {op} ?")
+            params.append(bound)
+    elif not compatible_units:
+        conditions.append("cd.units IS NULL")
+    else:
+        # A unit-bearing range converts itself once per distinct
+        # compatible stored unit into an OR branch; a bare bound in a
+        # mixed range stays native per branch, exactly how the
+        # residual's per-bound _CanonicalRange reads it at load.
+        # NULL-unit defs stay unconstrained candidates: unitless
+        # values cannot be proven dimensionally incompatible.
+        branches = ["cd.units IS NULL"]
+        for unit in sorted(compatible_units):
+            sub_clauses = ["cd.units = ?"]
+            sub_params: list = [unit]
+            for bound, typed, bound_col, op in sides:
+                if typed.units is None:
+                    val = bound
+                else:
+                    val = convert_units(bound, to_units=unit, from_units=typed.units)
+                sub_clauses.append(f"cd.{bound_col} {op} ?")
+                sub_params.append(val)
+            branches.append("(" + " AND ".join(sub_clauses) + ")")
+            params.extend(sub_params)
+        conditions.append("(" + " OR ".join(branches) + ")")
     # A semi-join the engine can evaluate once (idx_pcoords_name) beats a
     # correlated EXISTS probed per patch row (~2.5x on a 200k-source index).
     where.add(
