@@ -302,8 +302,13 @@ def _extract_attrs(
             warnings.warn(msg, UserWarning, stacklevel=2)
             complete = False
         if status != "ok":
+            if name not in PatchAttrs.model_fields and not name.startswith("_"):
+                complete = False
             continue
-        typed = typed_value(value)
+        # An empty identity means no recorded operations, not a missing field.
+        typed = (
+            TypedValue("str", value) if name == "processing_id" else typed_value(value)
+        )
         if typed is not None:
             out[name] = typed
             if typed.units is not None:
@@ -312,8 +317,10 @@ def _extract_attrs(
             elif typed.kind == "num" and isinstance(value, int | float | np.number):
                 dtype = np.asarray(value).dtype
                 dtypes[name] = dtype.str
-                if dtype.kind in "iu" and int(typed.value) != int(value):
-                    complete = False  # SQL's float lost integer precision.
+                if (dtype.kind in "iu" and int(typed.value) != int(value)) or (
+                    dtype.kind == "f" and typed.value != value
+                ):
+                    complete = False  # SQL's float lost precision.
         elif name not in PatchAttrs.model_fields or not _is_missing(value):
             # Only declared defaults can be recovered from an omitted value.
             # An empty extra attribute still has a name and a representation.
@@ -325,7 +332,7 @@ def _extract_attrs(
 # kept, which is how renaming a directory corrects metadata; it does not
 # get to say which data it is, or a directory called `patch_id=x` would
 # rewrite the lineage of everything under it.
-_UNCLAIMABLE_BY_PATH = frozenset({"patch_id"})
+_UNCLAIMABLE_BY_PATH = frozenset({"patch_id", "processing_id"})
 
 
 def hive_path_attrs(rel_posix: str, warn: bool = True) -> dict[str, str]:

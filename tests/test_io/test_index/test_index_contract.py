@@ -1027,6 +1027,17 @@ class TestLineageIds:
         indexed = trimmed.get_contents()["patch_id"].iloc[0]
         assert trimmed[0].attrs.patch_id == indexed
 
+    def test_empty_processing_identity_is_queryable(self, tmp_path):
+        """Sources with no recorded operations share the empty processing ID."""
+        patch = dc.get_example_patch()
+        assert patch.attrs.processing_id == ""
+        patch.io.write(tmp_path / "source.h5", "dasdae")
+        for spool in (dc.spool([patch]), dc.spool(tmp_path).update()):
+            selected = spool.select(processing_id="")
+            assert len(selected) == 1
+            assert selected.get_contents()["processing_id"].iloc[0] == ""
+            assert selected[0].attrs.processing_id == ""
+
     def test_a_memory_spool_too(self):
         """A summary carries the ids, so a patch never written is findable."""
         patches = list(dc.get_example_spool("random_das"))
@@ -1060,7 +1071,8 @@ class TestLineageIds:
         # stopped claiming to know without looking.
         assert moved[0].attrs.patch_id
 
-    def test_a_path_may_not_claim_the_lineage(self, tmp_path):
+    @pytest.mark.parametrize("name", ["patch_id", "processing_id"])
+    def test_a_path_may_not_claim_the_lineage(self, tmp_path, name):
         """
         A directory name says where data is kept, not which data it is.
 
@@ -1069,14 +1081,14 @@ class TestLineageIds:
         claim `patch_id` would rewrite the lineage of everything beneath
         it -- on the loaded patch, not merely in the index.
         """
-        directory = tmp_path / "patch_id=bogus"
+        directory = tmp_path / f"{name}=bogus"
         directory.mkdir()
         with config_context(patch_provenance="disabled"):
             dc.get_example_patch().io.write(directory / "x.h5", "dasdae")
         with pytest.warns(UserWarning, match="not which data it is"):
             spool = dc.spool(tmp_path).update()
-        assert spool.get_contents()["patch_id"].iloc[0] != "bogus"
-        assert spool[0].attrs.patch_id != "bogus"
+        assert spool.get_contents()[name].iloc[0] != "bogus"
+        assert spool[0].attrs[name] != "bogus"
 
     def test_a_rename_when_no_id_was_indexed(self, tmp_path):
         """An archive indexed with the ids off has none to forget."""
