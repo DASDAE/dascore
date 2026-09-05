@@ -3,14 +3,9 @@
 from __future__ import annotations
 
 import multiprocessing
-import sys
 import threading
-import warnings
 from concurrent.futures import Future, ProcessPoolExecutor, ThreadPoolExecutor
 from contextlib import closing
-from functools import wraps
-from pathlib import Path
-from typing import Literal
 
 import numpy as np
 import pandas as pd
@@ -20,41 +15,11 @@ import dascore as dc
 from dascore.config import config_context, get_config
 from dascore.examples import inventory_patch_pair
 from dascore.exceptions import (
-    DependencyError,
     InvalidSpoolError,
-    MissingOptionalDependencyError,
     MissingPatchError,
     ParameterError,
 )
-from dascore.io import FiberIO
-from dascore.io.dasdae.core import DASDAEV1
 from dascore.io.index import indexer as indexer_module
-from dascore.utils.misc import suppress_warnings
-
-
-class _ScanErrorFormat(FiberIO):
-    """A process-importable reader that fails only on this test's own files."""
-
-    name = "_spool_scan_error"
-    version = "1"
-
-    def get_format(self, resource: Path, **kwargs) -> tuple[str, str] | Literal[False]:
-        """Claim only this test's sentinel files."""
-        return (self.name, self.version) if resource.suffix == ".scanerror" else False
-
-    def scan(self, resource: Path, **kwargs):
-        """Raise the scan error requested by the filename."""
-        if resource.stem == "warning":
-            warnings.warn("unsupported test source", RuntimeWarning)
-            return []
-        if resource.stem == "dependency":
-            raise DependencyError("incompatible test reader")
-        raise ValueError("unreadable test source")
-
-
-def _register_scan_errors():
-    """Import this test module in spawned workers to register its test reader."""
-    _ScanErrorFormat()
 
 
 class _RecordingClient:
@@ -291,22 +256,6 @@ class TestSpoolIterate:
 class TestIterateValidation:
     """Invalid windows are rejected before starting a thread."""
 
-    @pytest.mark.parametrize("platform", ["emscripten", "wasi"])
-    def test_wasm_stays_in_caller(self, monkeypatch, platform):
-        """Threadless platforms still support iterate with its default window."""
-        spool = dc.get_example_spool(length=2, shape=(2, 5))
-        original = dc.Spool.__iter__
-        caller = threading.get_ident()
-
-        def iterate(self):
-            """Assert WebAssembly iteration never changes threads."""
-            assert threading.get_ident() == caller
-            yield from original(self)
-
-        monkeypatch.setattr(dc.Spool, "__iter__", iterate)
-        monkeypatch.setattr(sys, "platform", platform)
-        assert len(list(spool.iterate())) == 2
-
     @pytest.mark.parametrize("limit", [-1, 1.5, None, True, False, "2"])
     def test_bad_window(self, limit):
         """Only non-negative integers are accepted, even for an empty spool."""
@@ -326,7 +275,6 @@ class TestUpdateExecutor:
             pool = ProcessPoolExecutor(
                 2,
                 mp_context=multiprocessing.get_context("spawn"),
-                initializer=_register_scan_errors,
             )
         else:
             pool = ThreadPoolExecutor(2)
@@ -351,35 +299,6 @@ class TestUpdateExecutor:
         finally:
             serial.indexer.close()
             parallel.indexer.close()
-
-    @pytest.mark.parametrize("kind", ["dependency", "corrupt", "warning"])
-    @pytest.mark.parametrize("action", ["always", "error", "ignore"])
-    def test_scan_warnings_in_caller(self, directory, client, kind, action):
-        """Caller warning capture and error filters apply across spawned workers."""
-        source = directory / f"{kind}.scanerror"
-        source.write_text("unreadable")
-        root = dc.spool(directory)
-        message = {
-            "dependency": "incompatible test reader",
-            "corrupt": "Failed to scan",
-            "warning": "unsupported test source",
-        }[kind]
-        category = RuntimeWarning if kind == "warning" else UserWarning
-        try:
-            with suppress_warnings(action=action, record=True) as caught:
-                if action == "error":
-                    with pytest.raises(category, match=message):
-                        root.update(progress=False, client=client)
-                    assert not root.indexer._initial_update_done
-                else:
-                    root.update(progress=False, client=client)
-                    assert len(root) == 12
-                    assert len(caught) == (0 if action == "ignore" else 1)
-                    if caught:
-                        assert message in str(caught[0].message)
-                        assert caught[0].category is category
-        finally:
-            root.indexer.close()
 
     def test_config_and_lifecycle(self, directory, client):
         """Workers inherit scoped config; changed and deleted files refresh."""
@@ -445,33 +364,6 @@ class TestUpdateBatches:
         root = dc.spool(directory)
         try:
             assert len(root.update(progress=False, client=Client())) == 12
-        finally:
-            root.indexer.close()
-
-    @pytest.mark.parametrize("all_missing", [False, True])
-    def test_missing_dependencies(self, directory, monkeypatch, all_missing):
-        """An unreadable batch raises only if the entire scan has no output."""
-        original = DASDAEV1.scan
-
-        @wraps(original)
-        def scan(self, resource, **kwargs):
-            """Make selected files report a missing optional dependency."""
-            if all_missing or int(Path(resource.filename).stem) < 6:
-                raise MissingOptionalDependencyError("missing reader", name="obspy")
-            return original(self, resource, **kwargs)
-
-        monkeypatch.setattr(DASDAEV1, "scan", scan)
-        root = dc.spool(directory)
-        try:
-            if all_missing:
-                with pytest.raises(MissingOptionalDependencyError, match="12 files"):
-                    root.update(progress=False, client=_RecordingClient())
-                assert not root.indexer._initial_update_done
-            else:
-                with pytest.warns(UserWarning, match="6 files") as caught:
-                    root.update(progress=False, client=_RecordingClient())
-                assert len(caught) == 1
-                assert len(root) == 6
         finally:
             root.indexer.close()
 

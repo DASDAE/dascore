@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import sys
 from collections import deque
 from collections.abc import Generator, Iterable
 from concurrent.futures import ThreadPoolExecutor
@@ -19,7 +18,7 @@ def _prefetch(iterable: Iterable[T], max_in_flight: int) -> Generator[T, None, N
 
     def iterate() -> Generator[T, None, None]:
         """Keep a bounded set of next calls on the same worker thread."""
-        if not max_in_flight or sys.platform in {"emscripten", "wasi"}:
+        if not max_in_flight:
             yield from iterable
             return
         iterator = iter(iterable)

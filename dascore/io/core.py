@@ -1664,7 +1664,6 @@ def _iter_scan_results(
     *,
     snap: bool | None = None,
     payloads: bool = False,
-    _missing_optional_deps: dict[str, int] | None = None,
 ) -> Generator[tuple[ScanPayload | PatchSummary, dict[str, Any], int], None, None]:
     """
     Yield raw scan results with dispatcher-owned source information.
@@ -1677,11 +1676,8 @@ def _iter_scan_results(
     output_count = 0
     input_index = -1
     fiber_io_hint: dict[str, FiberIO] = {}
-    # Batched callers supply a collector and report once all workers finish,
-    # so a wholly unreadable batch cannot fail an otherwise readable scan.
-    missing_optional_deps = (
-        defaultdict(int) if _missing_optional_deps is None else _missing_optional_deps
-    )
+    # A dict for keeping track of missing optional dependencies.
+    missing_optional_deps = defaultdict(lambda: 0)
     # A one-shot iterator (e.g. a generator) can't survive both walks
     # below, so materialize it once up front (see #818). The cast just
     # keeps the element type ty loses when narrowing the union.
@@ -1798,7 +1794,7 @@ def _iter_scan_results(
     except KeyboardInterrupt:
         getattr(progress, "stop", lambda: None)()
         raise
-    if missing_optional_deps and _missing_optional_deps is None:
+    if missing_optional_deps:
         _handle_missing_optionals(output_count, missing_optional_deps)
 
 
@@ -1919,6 +1915,7 @@ def scan(
     [`scan_payloads`](`dascore.scan_payloads`)
         Return full coordinate managers instead of envelope summaries.
     """
+    out = []
     iterator = _iter_scan_results(
         path=path,
         file_format=file_format,
@@ -1927,12 +1924,6 @@ def scan(
         timestamp=timestamp,
         progress=progress,
     )
-    return _summarize_scan(iterator)
-
-
-def _summarize_scan(iterator) -> list[PatchSummary]:
-    """Normalize and stamp summaries identically for serial and batched scans."""
-    out = []
     inputs = []
     for result, source_info, input_index in iterator:
         out.append(_scan_result_to_summary(result, **source_info))

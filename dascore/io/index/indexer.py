@@ -14,11 +14,8 @@ import hashlib
 import json
 import math
 import os
-import sys
 import tempfile
-import warnings
-from collections import Counter, defaultdict
-from contextlib import nullcontext, suppress
+from contextlib import suppress
 from functools import partial
 from pathlib import Path
 from typing import Self
@@ -30,19 +27,14 @@ from dascore.compat import UPath
 from dascore.config import config_attr, config_context, get_config
 from dascore.constants import PROGRESS_LEVELS, ExecutorType
 from dascore.exceptions import InvalidIndexVersionError
-from dascore.io.core import (
-    _handle_missing_optionals,
-    _iter_scan_results,
-    _summarize_scan,
-    is_directory_format,
-)
+from dascore.io.core import is_directory_format
 from dascore.io.index.backend import get_backend
 from dascore.io.index.ingest import (
     SourceRecord,
     hive_path_attrs,
     summaries_to_records,
 )
-from dascore.utils.misc import _iter_filesystem, suppress_warnings
+from dascore.utils.misc import _iter_filesystem
 from dascore.utils.paths import (
     coerce_to_local_path,
     directory_writable,
@@ -51,30 +43,14 @@ from dascore.utils.paths import (
 from dascore.utils.progress import track, validate_progress_level
 
 
-def _scan_batch(paths, config, caller_pid):
-    """Open sources in a worker and return warnings across isolated contexts."""
-    missing = defaultdict(int)
-    # Process workers have isolated warning state. Thread workers can safely
-    # capture only when Python uses context-local warnings; older runtimes
-    # already share the caller's warning filters and recording machinery.
-    capture = os.getpid() != caller_pid or getattr(
-        sys.flags, "context_aware_warnings", False
-    )
-    warning_context = (
-        suppress_warnings(action="always", record=True) if capture else nullcontext([])
-    )
-    with config_context(config), warning_context as caught:
-        iterator = _iter_scan_results(
-            paths, progress=None, _missing_optional_deps=missing
-        )
-        summaries = _summarize_scan(iterator)
-    # WarningMessage can retain an open resource; send only its text/category.
-    scan_warnings = [(str(item.message), item.category) for item in caught]
-    return summaries, dict(missing), scan_warnings
+def _scan_batch(paths, config):
+    """Scan a source batch using the caller's DASCore configuration."""
+    with config_context(config):
+        return dc.scan(paths, progress=None)
 
 
 def _scan_with_client(paths, client, progress):
-    """Distribute batches while retaining serial scan's dependency semantics."""
+    """Collect ordered scan batches from a caller-owned executor."""
     # Standard-library pools expose capacity here. Map-only clients can omit
     # it; host CPU count still gives them several batches to schedule.
     workers = getattr(client, "_max_workers", None)
@@ -82,24 +58,19 @@ def _scan_with_client(paths, client, progress):
         workers = os.cpu_count() or 1
     size = max(1, math.ceil(len(paths) / (4 * workers)))
     batches = [paths[start : start + size] for start in range(0, len(paths), size)]
-    func = partial(_scan_batch, config=get_config(), caller_pid=os.getpid())
+    func = partial(_scan_batch, config=get_config())
     results = client.map(func, batches)
-    summaries, missing = [], Counter()
+    summaries = []
     try:
-        for batch, needed, scan_warnings in track(
+        for batch in track(
             results, "Scanning file batches", progress, length=len(batches)
         ):
-            for message, category in scan_warnings:
-                warnings.warn(message, category, stacklevel=2)
             summaries.extend(batch)
-            missing.update(needed)
     finally:
         # Retained exception tracebacks must not keep queued work alive.
         # Map-only clients are also allowed to return a plain iterable.
         if closer := getattr(results, "close", None):
             closer()
-    if missing:
-        _handle_missing_optionals(len(summaries), missing)
     return summaries
 
 
