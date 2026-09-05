@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import datetime
 import gc
+import json
 import os
 import pickle
 import re
@@ -27,6 +28,7 @@ import pytest
 from test_index_contract import _time_coord, make_summaries
 
 import dascore as dc
+from dascore.core.coords import get_coord
 from dascore.core.spool import Spool
 from dascore.core.summary import PatchSummary, normalize_source_patch_key
 from dascore.exceptions import (
@@ -36,6 +38,7 @@ from dascore.exceptions import (
     UnitError,
 )
 from dascore.io.core import is_directory_format
+from dascore.io.febus.core import FebusPatchAttrs
 from dascore.io.index.backend import (
     SQLiteIndexBackend,
     _ns_to_time,
@@ -52,6 +55,7 @@ from dascore.io.index.ingest import (
     _coord_record,
     _py_scalar,
     assemble_source_records,
+    coord_dtype_is_stateable,
     patch_record,
     summaries_to_records,
     typed_value,
@@ -975,8 +979,13 @@ class TestIngestEdges:
         assert len(merged) == 1
 
     @pytest.mark.parametrize("dtype", ["", np.dtype(bool)])
-    def test_unsupported_coord_dtype_skipped(self, dtype):
-        """A coord with a missing or unsupported dtype produces no record."""
+    def test_unsupported_coord_dtype_recorded_by_name(self, dtype):
+        """A coord the index cannot describe is still recorded by name.
+
+        Its values cannot be stated, but a reader rebuilding a patch
+        from the index has to know the patch holds it; a missing dtype
+        states nothing at all and produces no record.
+        """
 
         class _Stub:
             dtype: object = None
@@ -992,7 +1001,50 @@ class TestIngestEdges:
         # dtype that none of the value-kind branches handle.
         stub = _Stub()
         stub.dtype = dtype
-        assert _coord_record("x", stub) is None
+        record = _coord_record("x", stub)
+        assert not coord_dtype_is_stateable(dtype)
+        if dtype in ("", None):  # nothing stated, nothing recorded
+            assert record is None
+            return
+        assert record is not None
+        assert record.coord_name == "x"
+        assert record.coord_dims == "x"
+        # named, but no envelope: the values cannot be stated
+        assert record.min_num is None and record.max_num is None
+        assert record.min_ns is None and record.min_str is None
+
+    @pytest.mark.parametrize("reverse", [False, True])
+    def test_mixed_coordinate_dtypes_keep_numeric_envelope(self, reverse):
+        """A name-only coordinate must not hide another patch's numeric range."""
+        patches = [
+            dc.Patch(data=np.ones(2), coords={"x": np.array(values)}, dims=("x",))
+            for values in ([False, True], [0.0, 1.0])
+        ]
+        spool = dc.spool(patches[::-1] if reverse else patches)
+        contents = spool.get_contents()
+        assert contents["x_min"].notna().sum() == 1
+        assert contents["x_max"].dropna().tolist() == [1.0]
+        selected = spool.select(x=(0.0, 1.0))
+        assert len(selected) == 1
+        assert selected[0].get_coord("x").dtype.kind == "f"
+
+    def test_undescribable_coord_is_not_selectable(self, tmp_path):
+        """A coord recorded by name alone is not a thing a query can reach.
+
+        The name is there for the reader rebuilding a patch, which has
+        to know the patch holds it. No predicate can be built against a
+        coordinate with no envelope, so asking for one says so rather
+        than filtering on nothing.
+        """
+        patch = dc.get_example_patch()
+        quality = get_coord(values=np.ones(patch.shape[0], dtype=bool))
+        patch.update_coords(quality=("distance", quality)).io.write(
+            tmp_path / "flagged.h5", "dasdae"
+        )
+        spool = dc.spool(tmp_path).update()
+        assert not [x for x in spool.get_contents().columns if "quality" in str(x)]
+        with pytest.raises(InvalidSpoolQueryError, match="quality"):
+            spool.select(quality=(0, 1))
 
     def test_multipatch_source_gets_positional_ids(self):
         """Multi-patch sources get positional source_patch_keys."""
@@ -1434,6 +1486,91 @@ class TestReservedAttrNames:
         patch = dc.get_example_patch().update_attrs(data_units="strain")
         spool = dc.spool([patch])
         assert "data_units" in spool._catalog.backend.attr_names()
+
+
+class TestWhatARowCannotState:
+    """A row says when it does not hold everything its patch does."""
+
+    @pytest.mark.parametrize(
+        "attrs,complete",
+        [
+            ({"tag": "x"}, True),
+            ({"gauge": np.array([1.0, 2.0])}, False),
+            ({"source_path": "user-path"}, False),
+            ({"gauge": get_quantity("2 km")}, False),
+            ({"counter": 2**53 + 1}, False),
+            ({"empty_extra": ""}, False),
+            ({"empty_extra": None}, False),
+            ({"empty_extra": np.nan}, False),
+            ({"empty_extra": np.array([np.nan])}, False),
+            ({"coords": "user metadata"}, False),
+        ],
+    )
+    def test_the_row_says_whether_it_holds_every_attr(self, attrs, complete):
+        """An attr the index cannot hold (a value, a name) marks the row."""
+        patch = dc.get_example_patch().update_attrs(**attrs)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UserWarning)
+            spool = dc.spool([patch])
+        assert bool(spool._df["_attrs_complete"].iloc[0]) is complete
+        assert "_attrs_complete" not in spool.get_contents().columns
+
+    def test_numeric_types_survive_catalog_transfer(self):
+        """Exporting and combining catalogs retains original numeric scalar types."""
+        patch = dc.get_example_patch().update_attrs(
+            channel_count=5, scale=np.float32(1.25)
+        )
+        original = dc.spool([patch])
+        copied = original + dc.spool([])
+        for spool in (original, copied):
+            row = spool._df.iloc[0]
+            dtypes = json.loads(row["_attr_dtypes"])
+            for name in ("channel_count", "scale"):
+                expected = np.asarray(patch.attrs[name]).dtype
+                assert np.dtype(dtypes[name]) == expected
+                assert expected.type(row[name]) == patch.attrs[name]
+            assert "_attr_dtypes" not in spool.get_contents().columns
+
+    def test_vendor_attribute_model_requires_loading(self):
+        """A scalar row cannot recreate a vendor's attribute class and defaults."""
+        patch = dc.get_example_patch().update(attrs=FebusPatchAttrs())
+        row = dc.spool([patch])._df.iloc[0]
+        assert not row["_attrs_complete"]
+
+    def test_source_dtypes_survive_shared_coordinate_definitions(self):
+        """Equal coordinate values share an identity while retaining source types."""
+        base = dc.get_example_patch()
+        patches = [
+            base.update_coords(
+                distance=get_coord(values=np.arange(300, dtype=dtype), units="m")
+            )
+            for dtype in (np.int32, np.float64)
+        ]
+        spool = dc.spool(patches)
+        copies = (spool, spool + dc.spool([]), pickle.loads(pickle.dumps(spool)))
+        for copied in copies:
+            rows = copied._df
+            assert list(rows["_distance_coord_dtype"]) == ["int32", "float64"]
+            assert rows["_distance_def_key"].nunique() == 1
+
+    def test_flat_attribute_collision_requires_loading(self):
+        """Queryable attrs omitted from flat rows cannot be reconstructed there."""
+        patch = dc.get_example_patch().update_attrs(distance_units="custom")
+        spool = dc.spool([patch])
+        with pytest.warns(UserWarning, match="collide with coordinate envelope"):
+            row = spool._df.iloc[0]
+        assert not row["_attrs_complete"]
+        assert len(spool.select(_attrs={"distance_units": "custom"})) == 1
+
+    def test_associated_anywhere_is_associated(self):
+        """A name dimensional on one patch and riding another on the next."""
+        first = dc.get_example_patch()
+        second = first.rename_coords(distance="sensor")
+        values = second.get_coord("sensor").values * 2.0
+        second = second.update_coords(distance=("sensor", values))
+        backend = dc.spool([first, second])._catalog.backend
+        assert backend.coord_dims_map()["distance"] == "distance"
+        assert backend.associated_coord_names() == {"distance"}
 
 
 class TestTransactionIsolation:

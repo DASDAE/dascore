@@ -650,24 +650,37 @@ class TestLineageIds:
         assert len(selected) == 1
         assert selected[0].attrs.patch_id == wanted
 
-    def test_what_was_done_is_not_indexed(self, tmp_path):
+    def test_what_was_done_is_indexed(self, tmp_path):
         """
-        `processing_id` advances whenever an operation runs, and a spool
-        runs one as it loads: a residual trim is a real `select` on the
-        patch. What the index recorded would not be what came back, so it
-        is not recorded. `patch_id` survives those same operations, which
-        is what makes it the one worth indexing.
+        `processing_id` says what was done, which provenance asks about,
+        so it is recorded: the column states what the stored patch had.
+        It is lineage rather than a describing attr, so merging never
+        compares it (see `_SOURCE_COLUMNS`); it is folded from the
+        members instead.
         """
         patch = dc.get_example_patch().pass_filter(time=(1, 10))
         patch.io.write(tmp_path / "filtered.h5", "dasdae")
         spool = dc.spool(tmp_path).update()
-        assert "processing_id" not in spool.get_contents().columns
+        indexed = spool.get_contents()["processing_id"].iloc[0]
+        assert indexed == spool[0].attrs.processing_id
+        assert indexed
 
     def test_a_trim_keeps_the_id_it_says_it_keeps(self, written_spool):
         """The index and the patch which loads must not disagree."""
         trimmed = written_spool.select(time=(10, 20), samples=True)
         indexed = trimmed.get_contents()["patch_id"].iloc[0]
         assert trimmed[0].attrs.patch_id == indexed
+
+    def test_empty_processing_identity_is_queryable(self, tmp_path):
+        """Sources with no recorded operations share the empty processing ID."""
+        patch = dc.get_example_patch()
+        assert patch.attrs.processing_id == ""
+        patch.io.write(tmp_path / "source.h5", "dasdae")
+        for spool in (dc.spool([patch]), dc.spool(tmp_path).update()):
+            selected = spool.select(processing_id="")
+            assert len(selected) == 1
+            assert selected.get_contents()["processing_id"].iloc[0] == ""
+            assert selected[0].attrs.processing_id == ""
 
     def test_a_memory_spool_too(self):
         """A summary carries the ids, so a patch never written is findable."""
@@ -702,7 +715,8 @@ class TestLineageIds:
         # stopped claiming to know without looking.
         assert moved[0].attrs.patch_id
 
-    def test_a_path_may_not_claim_the_lineage(self, tmp_path):
+    @pytest.mark.parametrize("name", ["patch_id", "processing_id"])
+    def test_a_path_may_not_claim_the_lineage(self, tmp_path, name):
         """
         A directory name says where data is kept, not which data it is.
 
@@ -711,14 +725,14 @@ class TestLineageIds:
         claim `patch_id` would rewrite the lineage of everything beneath
         it -- on the loaded patch, not merely in the index.
         """
-        directory = tmp_path / "patch_id=bogus"
+        directory = tmp_path / f"{name}=bogus"
         directory.mkdir()
         with config_context(patch_provenance="disabled"):
             dc.get_example_patch().io.write(directory / "x.h5", "dasdae")
         with pytest.warns(UserWarning, match="not which data it is"):
             spool = dc.spool(tmp_path).update()
-        assert spool.get_contents()["patch_id"].iloc[0] != "bogus"
-        assert spool[0].attrs.patch_id != "bogus"
+        assert spool.get_contents()[name].iloc[0] != "bogus"
+        assert spool[0].attrs[name] != "bogus"
 
     def test_a_rename_when_no_id_was_indexed(self, tmp_path):
         """An archive indexed with the ids off has none to forget."""
