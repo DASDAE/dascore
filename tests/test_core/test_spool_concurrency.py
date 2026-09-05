@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import multiprocessing
 import threading
-from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
+from concurrent.futures import Future, ProcessPoolExecutor, ThreadPoolExecutor
 from contextlib import closing
 from functools import wraps
 from pathlib import Path
@@ -157,6 +157,53 @@ class TestSpoolIterate:
             iterator.close()
         assert closed.is_set()
         assert len(counts) == limit + 1
+        assert not any(t.ident == worker_ids[0] for t in threading.enumerate())
+
+    def test_close_cancels_pending(self, monkeypatch):
+        """Closing waits for the active read without starting queued reads."""
+        original = dc.Spool.__iter__
+        running, release = threading.Event(), threading.Event()
+        cancelled, closed = threading.Event(), threading.Event()
+        reads, cancellations, worker_ids = [], [], []
+        original_cancel = Future.cancel
+
+        def cancel(future):
+            result = original_cancel(future)
+            if result:
+                cancellations.append(future)
+                if len(cancellations) == 2:
+                    cancelled.set()
+            return result
+
+        def iterate(self):
+            worker_ids.append(threading.get_ident())
+            try:
+                for index, patch in enumerate(original(self)):
+                    reads.append(index)
+                    if index == 1:
+                        running.set()
+                        assert release.wait(10)
+                    yield patch
+            finally:
+                closed.set()
+
+        monkeypatch.setattr(Future, "cancel", cancel)
+        monkeypatch.setattr(dc.Spool, "__iter__", iterate)
+        spool = dc.get_example_spool(length=10, shape=(2, 5))
+        iterator = spool.iterate(max_in_flight=3)
+        next(iterator)
+        assert running.wait(5)
+        with ThreadPoolExecutor(1) as closer:
+            closing = closer.submit(iterator.close)
+            try:
+                assert cancelled.wait(5)
+                assert not closing.done()
+                assert not closed.is_set()
+            finally:
+                release.set()
+                closing.result(timeout=5)
+        assert reads == [0, 1]
+        assert closed.is_set()
         assert not any(t.ident == worker_ids[0] for t in threading.enumerate())
 
     def test_read_error_closes(self, monkeypatch):
