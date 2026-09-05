@@ -627,7 +627,9 @@ class SQLiteIndexBackend:
                     for c in patch.coords:
                         key = c.def_key
                         defs_needed.setdefault(key, c)
-                        link_rows.append((patch_id, c.coord_name, c.coord_dims, key))
+                        link_rows.append(
+                            (patch_id, c.coord_name, c.coord_dims, key, c.dtype)
+                        )
                     patch_id += 1
                 source_id += 1
             self._bulk_insert("sources", SourceRow._fields, source_rows)
@@ -638,7 +640,10 @@ class SQLiteIndexBackend:
             self._bulk_insert(
                 "patch_coords",
                 PatchCoordRow._fields,
-                [(pid, name, dims, def_ids[key]) for pid, name, dims, key in link_rows],
+                [
+                    (pid, name, dims, def_ids[key], dtype)
+                    for pid, name, dims, key, dtype in link_rows
+                ],
             )
             # meta_data.last_indexed_ns is the initial-update-complete
             # marker; only mark_initial_update_done (after renumbering
@@ -1098,6 +1103,7 @@ class SQLiteIndexBackend:
             warnings.warn(msg, UserWarning, stacklevel=2)
         for name, series in new_columns.items():
             if _collides(name):
+                out.loc[series.notna(), "attrs_complete"] = 0
                 continue
             out[name] = series
         return out
@@ -1177,7 +1183,7 @@ class SQLiteIndexBackend:
         ids = out["patch_id"].tolist()
         link_sql = (
             "SELECT pc.patch_id, pc.coord_name, cd.def_key, cd.fingerprint, "
-            "cd.value_kind, cd.dtype, cd.is_relative, cd.units, "
+            "cd.value_kind, pc.dtype, cd.is_relative, cd.units, "
             "cd.min_num, cd.max_num, "
             "cd.step_num, cd.min_ns, cd.max_ns, cd.step_ns, "
             "cd.min_str, cd.max_str "
@@ -1268,10 +1274,7 @@ class SQLiteIndexBackend:
         nothing. `coord_dims_map` still reports it -- what a patch holds
         and what a query can reach are different questions.
         """
-        sql = (
-            "SELECT DISTINCT pc.coord_name, cd.dtype FROM patch_coords pc "
-            "JOIN coord_defs cd ON cd.coord_def_id = pc.coord_def_id"
-        )
+        sql = "SELECT DISTINCT coord_name, dtype FROM patch_coords"
         with self._lock:
             rows = self._con.execute(sql).fetchall()
         return {name for name, dtype in rows if coord_dtype_is_stateable(dtype)}
