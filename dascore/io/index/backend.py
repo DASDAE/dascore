@@ -29,6 +29,7 @@ from dascore.exceptions import (
 )
 from dascore.io.index.ingest import (
     SourceRecord,
+    _envelope,
     assemble_source_records,
     attr_column_name,
     dump_path_attrs,
@@ -586,6 +587,11 @@ class SQLiteIndexBackend:
                     )
                 )
                 for patch in record.patches:
+                    # Plans and rebuilt records can carry incomplete or non-time
+                    # hot bounds. Coordinate records are the authority at ingest.
+                    time_min, time_max, time_step = _envelope(
+                        patch.coords, "time", "time"
+                    )
                     patch_rows.append(
                         (
                             patch_id,
@@ -594,9 +600,9 @@ class SQLiteIndexBackend:
                             patch.dims,
                             patch.dtype,
                             patch.data_size,
-                            patch.time_min,
-                            patch.time_max,
-                            patch.time_step,
+                            time_min,
+                            time_max,
+                            time_step,
                             patch.distance_min,
                             patch.distance_max,
                             patch.distance_step,
