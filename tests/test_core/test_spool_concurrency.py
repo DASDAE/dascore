@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import multiprocessing
+import sys
 import threading
 from concurrent.futures import Future, ProcessPoolExecutor, ThreadPoolExecutor
 from contextlib import closing
@@ -36,9 +37,11 @@ class _ScanErrorFormat(FiberIO):
     version = "1"
 
     def get_format(self, resource: Path, **kwargs) -> tuple[str, str] | Literal[False]:
+        """Claim only this test's sentinel files."""
         return (self.name, self.version) if resource.suffix == ".scanerror" else False
 
     def scan(self, resource: Path, **kwargs):
+        """Raise the scan error requested by the filename."""
         if resource.stem == "dependency":
             raise DependencyError("incompatible test reader")
         raise ValueError("unreadable test source")
@@ -55,9 +58,11 @@ class _RecordingClient:
     _max_workers = 2
 
     def __init__(self):
+        """Start with no submitted batches."""
         self.batches = []
 
     def map(self, func, iterable):
+        """Record each batch before scanning it synchronously."""
         for batch in iterable:
             self.batches.append(batch)
             yield func(batch)
@@ -122,6 +127,7 @@ class TestSpoolIterate:
         original = dc.Spool.__iter__
 
         def iterate(self):
+            """Record the configuration each patch observes."""
             for patch in original(self):
                 seen.append(get_config().display_float_precision)
                 yield patch
@@ -140,6 +146,7 @@ class TestSpoolIterate:
         caller = threading.get_ident()
 
         def iterate(self):
+            """Verify synchronous reads stay in the calling thread."""
             assert threading.get_ident() == caller
             yield from original(self)
 
@@ -156,6 +163,7 @@ class TestSpoolIterate:
         counts = []
 
         def iterate(self):
+            """Signal when loading reaches or exceeds the configured window."""
             worker_ids.append(threading.get_ident())
             try:
                 for index, patch in enumerate(original(self)):
@@ -194,6 +202,7 @@ class TestSpoolIterate:
         original_cancel = Future.cancel
 
         def cancel(future):
+            """Signal after both queued reads have been cancelled."""
             result = original_cancel(future)
             if result:
                 cancellations.append(future)
@@ -202,6 +211,7 @@ class TestSpoolIterate:
             return result
 
         def iterate(self):
+            """Hold the active read until the closing test releases it."""
             worker_ids.append(threading.get_ident())
             try:
                 for index, patch in enumerate(original(self)):
@@ -238,6 +248,7 @@ class TestSpoolIterate:
         closed = threading.Event()
 
         def iterate(self):
+            """Fail the second read and record source cleanup."""
             try:
                 yield next(original(self))
                 raise OSError("failed read")
@@ -260,6 +271,7 @@ class TestSpoolIterate:
         count = 0
 
         def resolve(row):
+            """Make only the second catalog row unresolvable."""
             nonlocal count
             count += 1
             if count == 2:
@@ -273,6 +285,22 @@ class TestSpoolIterate:
 
 class TestIterateValidation:
     """Invalid windows are rejected before starting a thread."""
+
+    @pytest.mark.parametrize("platform", ["emscripten", "wasi"])
+    def test_wasm_stays_in_caller(self, monkeypatch, platform):
+        """Threadless platforms still support iterate with its default window."""
+        spool = dc.get_example_spool(length=2, shape=(2, 5))
+        original = dc.Spool.__iter__
+        caller = threading.get_ident()
+
+        def iterate(self):
+            """Assert WebAssembly iteration never changes threads."""
+            assert threading.get_ident() == caller
+            yield from original(self)
+
+        monkeypatch.setattr(dc.Spool, "__iter__", iterate)
+        monkeypatch.setattr(sys, "platform", platform)
+        assert len(list(spool.iterate())) == 2
 
     @pytest.mark.parametrize("limit", [-1, 1.5, None, True, False, "2"])
     def test_bad_window(self, limit):
@@ -401,6 +429,7 @@ class TestUpdateBatches:
             """No worker-count, submit, or shutdown API."""
 
             def map(self, func, iterable):
+                """Return ordered results without an executor lifecycle API."""
                 return map(func, iterable)
 
         root = dc.spool(directory)
@@ -416,6 +445,7 @@ class TestUpdateBatches:
 
         @wraps(original)
         def scan(self, resource, **kwargs):
+            """Make selected files report a missing optional dependency."""
             if all_missing or int(Path(resource.filename).stem) < 6:
                 raise MissingOptionalDependencyError("missing reader", name="obspy")
             return original(self, resource, **kwargs)
@@ -441,6 +471,7 @@ class TestUpdateBatches:
 
         class Client:
             def map(self, func, iterable):
+                """Record closure while yielding actual worker results."""
                 try:
                     for batch in iterable:
                         yield func(batch)

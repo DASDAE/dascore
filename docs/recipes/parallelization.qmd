@@ -29,7 +29,7 @@ if __name__ == "__main__":
 
 # Loading ahead
 
-[`Spool.iterate`](`dascore.core.spool.Spool.iterate`) uses one background thread to load upcoming patches while the calling thread processes the current patch. This can overlap HDF5 reads with NumPy/SciPy work. Ordinary `for patch in spool` stays synchronous.
+[`Spool.iterate`](`dascore.core.spool.Spool.iterate`) uses one background thread to load upcoming patches while the calling thread processes the current patch. This can overlap HDF5 reads with NumPy/SciPy work. Ordinary `for patch in spool` stays synchronous. On WebAssembly, `iterate` also runs synchronously because threads are unavailable.
 
 ```{python}
 from contextlib import closing

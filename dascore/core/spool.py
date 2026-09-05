@@ -408,7 +408,8 @@ class Spool(NodeRepr, NamespaceOwner):
         enrichment, and skipping unresolvable patches follow ordinary spool
         iteration. The loading thread uses the DASCore configuration active
         when this method was called. Ordinary ``for patch in spool`` stays
-        synchronous. A zero window also uses the configuration active when
+        synchronous. WebAssembly also iterates synchronously because it
+        cannot start threads. A zero window uses the configuration active when
         each patch is consumed, just like ordinary iteration. Threaded
         directory iteration requires a serialized SQLite build
         (``sqlite3.threadsafety == 3``).
