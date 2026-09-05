@@ -324,6 +324,12 @@ class TestSpoolToXarray:
         with pytest.raises(PatchConversionError, match="value selections"):
             sub.io.to_xarray()
 
+    def test_relative_select_refused(self, random_spool):
+        """A relative bound resolves per patch, so it cannot size blocks."""
+        sub = random_spool.select(time=(1, None), relative=True)
+        with pytest.raises(PatchConversionError, match="relative selections"):
+            sub.io.to_xarray()
+
     def test_samples_select_supported(self, random_spool):
         """A samples-based selection stays exact and converts."""
         sub = random_spool.select(time=(10, -10), samples=True)
