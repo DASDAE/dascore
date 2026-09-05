@@ -381,7 +381,8 @@ class PatchAssembler:
         members and not others, refusing what it accepts whole. The rows
         decide that before anything is read; an array whose shape the row
         did not predict is only found once it is loaded, and abandons the
-        attempt.
+        attempt. Returning from that attempt releases its buffer before
+        the retry reloads the source coordinates, attrs, and arrays.
         """
         metas = self._member_meta_from_index(df_dict_list)
         if metas is not None:

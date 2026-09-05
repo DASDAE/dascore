@@ -768,6 +768,57 @@ class TestLineageIds:
         assert view[0].attrs.processing_id == on_patch.attrs.processing_id
         assert view[0].attrs.history == on_patch.attrs.history
 
+    @pytest.mark.parametrize(
+        "dim,scale", [("distance", 1), ("distance", 0.1), ("time", 1)]
+    )
+    @pytest.mark.parametrize("upper", [False, True])
+    def test_off_grid_noop_keeps_lineage(self, tmp_path, dim, scale, upper):
+        """Two bounds within one sample interval record only the effective trim."""
+        patch = dc.get_example_patch()
+        if scale != 1:
+            patch = patch.update_coords(distance=patch.get_array("distance") * scale)
+        patch.io.write(tmp_path / "source.h5", "dasdae")
+        spool = dc.spool(tmp_path).update()
+        whole = spool[0]
+        coord = whole.get_coord(dim)
+        base = coord.min() + 10 * coord.step
+        first = base + coord.step / 2
+        second = base + 7 * coord.step / 10
+        bounds = (
+            ((None, second), (None, first))
+            if upper
+            else ((first, None), (second, None))
+        )
+        view = spool.select(**{dim: bounds[0]}).select(**{dim: bounds[1]})
+        direct = whole.select(**{dim: bounds[0]}).select(**{dim: bounds[1]})
+        assert np.array_equal(view[0].data, direct.data)
+        assert view[0].attrs.processing_id == direct.attrs.processing_id
+        assert view[0].attrs.history == direct.attrs.history
+
+    @pytest.mark.parametrize("repeats", [2, 64])
+    @pytest.mark.parametrize("regular", [False, True])
+    def test_untracked_trims_replay_exactly(self, tmp_path, repeats, regular):
+        """Uneven grids and chains exceeding the mask still omit no-op calls."""
+        values = (
+            np.arange(5, dtype=float)
+            if regular
+            else np.array([0.0, 1.0, 3.0, 6.0, 10.0])
+        )
+        patch = dc.Patch(
+            data=np.arange(5),
+            coords={"distance": values},
+            dims=("distance",),
+        )
+        patch.io.write(tmp_path / "source.h5", "dasdae")
+        spool = dc.spool(tmp_path).update()
+        view, direct = spool, spool[0]
+        for _ in range(repeats):
+            view = view.select(distance=(1.5, None))
+            direct = direct.select(distance=(1.5, None))
+        assert np.array_equal(view[0].data, direct.data)
+        assert view[0].attrs.processing_id == direct.attrs.processing_id
+        assert view[0].attrs.history == direct.attrs.history
+
     def test_processing_id_queries_source_metadata(self, tmp_path):
         """Attribute predicates identify the source, before residual processing."""
         patch = dc.get_example_patch().abs()

@@ -509,8 +509,8 @@ def _forget_what_a_trim_invalidates(df: pd.DataFrame, residuals=()) -> pd.DataFr
     return df.assign(**forgotten)
 
 
-# One bit per residual. A view composed of more selections than this
-# states no mask, and its rows fall back to `_modified`.
+# One bit per residual. Longer chains state no mask and replay on the
+# loaded patch without pushing their bounds into the reader.
 _MASK_BITS = 63
 
 _CUT_MASK_SUFFIX = "_cut_mask"
@@ -556,7 +556,7 @@ def _residual_cut_masks(df: pd.DataFrame, residuals) -> dict[str, np.ndarray]:
     masks: dict[str, np.ndarray] = {}
     if len(residuals) > _MASK_BITS:
         return masks
-    live: dict[str, tuple[np.ndarray, np.ndarray]] = {}
+    live: dict[str, tuple[np.ndarray, np.ndarray, np.ndarray]] = {}
     untracked: set[str] = set()
     for index, (coords, samples, relative) in enumerate(residuals):
         for name, value in coords.items():
@@ -572,21 +572,33 @@ def _residual_cut_masks(df: pd.DataFrame, residuals) -> dict[str, np.ndarray]:
                 continue
             if name not in live:
                 start, stop = df[f"{name}_min"], df[f"{name}_max"]
-                if not _orderable(start) or not _orderable(stop):
+                step = df.get(f"{name}_step")
+                if step is None or not all(_orderable(x) for x in (start, stop, step)):
                     untracked.add(name)
                     continue
-                live[name] = (start.to_numpy(), stop.to_numpy())
+                steps = np.abs(step.to_numpy())
+                if not np.isfinite(steps).all() or not np.all(
+                    steps > np.zeros((), dtype=steps.dtype)
+                ):
+                    untracked.add(name)
+                    continue
+                live[name] = (start.to_numpy(), stop.to_numpy(), steps)
                 masks[name] = np.zeros(len(df), dtype=np.int64)
             low, high = order_range_tuple(bounds[name])
-            start, stop = live[name]
+            start, stop, step = live[name]
             cut = np.zeros(len(df), dtype=bool)
+            # Compare surviving samples, not unsnapped query envelopes:
+            # consecutive bounds inside one sample interval are one trim.
+            # Match CoordRange._get_index's floating-point tolerance.
             if low is not None:
+                low = start + np.ceil(np.round((low - start) / step, 10)) * step
                 cut |= start < low
                 start = np.maximum(start, low)
             if high is not None:
+                high = start + np.floor(np.round((high - start) / step, 10)) * step
                 cut |= stop > high
                 stop = np.minimum(stop, high)
-            live[name] = (start, stop)
+            live[name] = (start, stop, step)
             masks[name] |= cut.astype(np.int64) << index
     return masks
 
@@ -1179,39 +1191,27 @@ class PatchCatalog:
         trim_hint.update(extra_trim or {})
         for name in patch_local:
             trim_hint.pop(name, None)
+        if self._residuals:
+            # Unknown grids and overlong selection chains cannot attribute
+            # hinted trims exactly; replay those coordinates on the patch.
+            trim_hint = {
+                name: value
+                for name, value in trim_hint.items()
+                if pd.notna(row.get(_cut_mask_column(name)))
+            }
         patch = self.resolver.resolve(row, **trim_hint)
         hinted = self._hinted_per_residual(row, set(trim_hint))
         return apply_exact_residuals(patch, self._residuals, hinted=hinted)
 
     def _hinted_per_residual(self, row: Mapping, hint_names: set[str]):
-        """
-        Per residual, which of its coordinates the reader already cut.
-
-        A bound the reader applied leaves its `select` nothing to do, so
-        whether that selection was a trim or a no-op has to be answered
-        from the row. `to_df` answers it per residual in the cut masks;
-        a row carrying none -- one from a caller which built it itself,
-        or a coordinate the masks do not track -- falls back to the
-        row's `_modified` flag, which cannot say which residual did the
-        cutting and so credits every hinted one.
-        """
-        masks = {name: row.get(_cut_mask_column(name)) for name in hint_names}
-        modified = bool(row.get("_modified"))
-        out = []
-        for index, (coords, samples, relative) in enumerate(self._residuals):
-            names = set()
-            if not samples and not relative:
-                for name in coords:
-                    if name not in hint_names:
-                        continue
-                    mask = masks.get(name)
-                    if mask is None or pd.isnull(mask):
-                        if modified:
-                            names.add(name)
-                    elif int(mask) >> index & 1:
-                        names.add(name)
-            out.append(names)
-        return tuple(out)
+        """Attribute reader hints only through the row's exact cut masks."""
+        if not self._residuals:
+            return ()
+        masks = {name: int(row[_cut_mask_column(name)]) for name in hint_names}
+        return tuple(
+            {name for name in coords if name in masks and masks[name] >> index & 1}
+            for index, (coords, _, _) in enumerate(self._residuals)
+        )
 
     def __iter__(self):
         """

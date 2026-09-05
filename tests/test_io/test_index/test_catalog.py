@@ -367,7 +367,11 @@ class TestResidualCutMasks:
     def rows(self):
         """Three rows spanning 0-10, 5-15 and 20-30 on `time`."""
         return pd.DataFrame(
-            {"time_min": [0.0, 5.0, 20.0], "time_max": [10.0, 15.0, 30.0]}
+            {
+                "time_min": [0.0, 5.0, 20.0],
+                "time_max": [10.0, 15.0, 30.0],
+                "time_step": [1.0, 1.0, 1.0],
+            }
         )
 
     def test_one_bound_marks_only_the_rows_it_cuts(self, rows):
@@ -412,8 +416,17 @@ class TestResidualCutMasks:
         assert _residual_cut_masks(df, (({"tag": ("a", "c")}, False, False),)) == {}
 
     def test_a_coordinate_the_frame_lacks_states_no_mask(self, rows):
-        """Nothing to read the cut off, so the row answers for itself."""
+        """A missing coordinate provides no grid for attributing cuts."""
         assert _residual_cut_masks(rows, (({"depth": (1.0, 2.0)}, False, False),)) == {}
+
+    @pytest.mark.parametrize("step", [None, 0.0, np.nan])
+    def test_unknown_grid_states_no_mask(self, rows, step):
+        """An unknown grid cannot distinguish an off-grid trim from a no-op."""
+        if step is None:
+            rows = rows.drop(columns="time_step")
+        else:
+            rows = rows.assign(time_step=step)
+        assert _residual_cut_masks(rows, (({"time": (2.5, None)}, False, False),)) == {}
 
     def test_more_residuals_than_bits_states_nothing(self, rows):
         """Past the last bit a mask could only be wrong, so there is none."""
