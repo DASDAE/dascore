@@ -246,7 +246,7 @@ class TestIntegration:
         assert func({"distance": [2, 0]}).equals(func(distance=[2, 0]))
         with pytest.raises(ValueError):
             func({"distance": 2}, time=0)
-        with pytest.raises(TypeError):
+        with pytest.raises(ValueError):
             func([2, 0])
         with pytest.raises(ValueError):
             func(latitude=40)
@@ -299,13 +299,16 @@ class TestIntegration:
         assert_matches(patch, "sel", {"distance": slice(1, 6)})
 
     @pytest.mark.parametrize("backend", ["dask.array", "array_api_strict"])
-    def test_backend(self, patch, backend):
+    @pytest.mark.parametrize(
+        "distance", [[3, 0], [0], [False, True, False, False, False]]
+    )
+    def test_backend(self, patch, backend, distance):
         """Multiple array indexers retain the data backend and its laziness."""
         xp = pytest.importorskip(backend)
         data = xp.asarray(patch.data)
         other = patch.update(data=data)
-        out = other.isel(distance=[3, 0], time=1, component=[2, 0, 2])
-        expected = patch.isel(distance=[3, 0], time=1, component=[2, 0, 2])
+        out = other.isel(distance=distance, time=1, component=[2, 0, 2])
+        expected = patch.isel(distance=distance, time=1, component=[2, 0, 2])
         assert type(out.data) is type(data)
         np.testing.assert_array_equal(to_numpy(out.data), expected.data)
 
@@ -364,3 +367,17 @@ class TestIndexingBoundaries:
         assert not scalar.append_dims(x=2).coords.scalar
         restored = type(scalar.coords).model_validate(scalar.coords.model_dump())
         assert restored.shape == ()
+
+
+class TestTemporalLabelErrors:
+    """Bare numeric selectors must not silently become epoch timestamps."""
+
+    @pytest.mark.parametrize("value", [0, [0], slice(0, 2)])
+    def test_numeric_datetime_labels(self, value):
+        """Datetime label lookup rejects bare numbers as xarray does."""
+        time = np.arange(4).astype("datetime64[s]")
+        patch = dc.Patch(data=np.arange(4), coords={"time": time}, dims=("time",))
+        with pytest.raises((KeyError, TypeError)) as expected:
+            patch.io.to_xarray().sel(time=value)
+        with pytest.raises(type(expected.value)):
+            patch.sel(time=value)

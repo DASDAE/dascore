@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Any, Literal
 import numpy as np
 import pandas as pd
 
-from dascore.utils.array_api import array_namespace, device
+from dascore.utils.array_api import array_namespace, backend_name, device
 from dascore.utils.time import to_timedelta64
 
 if TYPE_CHECKING:
@@ -25,7 +25,7 @@ def get_indexers(
 ) -> dict[str, Any]:
     """Normalize dictionary/keyword indexers and validate dimension names."""
     if indexers is not None and not isinstance(indexers, Mapping):
-        raise TypeError("indexers must be a mapping of dimension names to indexers.")
+        raise ValueError("indexers must be a mapping of dimension names to indexers.")
     if indexers and kwargs:
         raise ValueError("Provide either indexers or keyword indexers, not both.")
     if missing_dims not in {"raise", "warn", "ignore"}:
@@ -92,7 +92,10 @@ def apply_indexers(array: Any, indexers: tuple) -> Any:
     for axis in reversed(range(len(indexers))):
         indexer = indexers[axis]
         if isinstance(indexer, np.ndarray):
-            inds = xp.asarray(indexer, dtype=xp.int64, device=device(array))
+            # Dask needs eager indices to infer the shape of a one-element take.
+            inds = indexer
+            if backend_name(array) != "dask":
+                inds = xp.asarray(indexer, dtype=xp.int64, device=device(array))
             array = xp.take(array, inds, axis=axis)
         elif indexer != slice(None):
             key = tuple(
@@ -118,7 +121,9 @@ def label_indexer(
     def compatible(label):
         # Keep datetime strings intact: pandas understands their precision and
         # includes the whole stated interval when they are used as slice bounds.
-        if isinstance(label, str):
+        if isinstance(label, str) or (
+            np.dtype(coord.dtype).kind in "mM" and not hasattr(label, "units")
+        ):
             return label
         return coord._get_compatible_value(label)
 
