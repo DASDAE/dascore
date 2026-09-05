@@ -2211,7 +2211,9 @@ class TestChunkFromIndex:
         """File coordinate precision survives merging, including extended floats."""
         with permanent_config(allow_dasdae_format_unpickle=False):
             start = np.nextafter(np.longdouble(1), np.longdouble(2))
-            coord = dc.get_coord(start=start, step=np.longdouble("0.1"), shape=10)
+            coord = dc.get_coord(
+                start=start, step=np.longdouble("0.1"), shape=10, units="m"
+            )
             spool = ex.get_example_spool("random_das", length=2, time_gap=0)
             for num, patch in enumerate(spool):
                 patch = patch.select(distance=(0, 10), samples=True)
@@ -2220,7 +2222,21 @@ class TestChunkFromIndex:
                 )
             indexed = dc.spool(tmp_path).update()
             source = indexed[0].get_coord("distance")
-            out = indexed.chunk(time=None)[0].get_coord("distance")
+
+            def read(row):
+                return dc.read(tmp_path / row["source_path"])[0]
+
+            # Exercise the two-file assembly independently of fingerprint grouping.
+            assembler = PatchAssembler(
+                load_patch=read,
+                load_array=lambda row: read(row).data,
+                merge_kwargs={},
+                plan_dim="time",
+            )
+            rows = indexed._catalog.to_df().assign(current_index=0)
+            merged = assembler._patch_from_instruction_df(rows)
+            assert len(merged) == 1
+            out = merged[0].get_coord("distance")
             assert out.dtype == source.dtype
             assert np.array_equal(out.values, source.values)
 
