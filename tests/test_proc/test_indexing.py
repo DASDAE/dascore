@@ -194,6 +194,12 @@ class TestSel:
             patch, "sel", {"distance": value}, method="nearest", tolerance=tolerance
         )
 
+    def test_tolerance_without_nearest(self, patch):
+        """Tolerance on exact label arrays keeps xarray's validation error."""
+        for obj in (patch, patch.io.to_xarray()):
+            with pytest.raises(ValueError):
+                obj.sel(distance=[2, 4], tolerance=1)
+
     def test_nearest_too_far(self, patch):
         """Tolerance failures raise rather than silently dropping requests."""
         for obj in (patch, patch.io.to_xarray()):
@@ -511,10 +517,11 @@ class TestCompactRangeIndexing:
         assert patch.select(x=(labels.min(), labels.max())).shape == (5,)
 
     @pytest.mark.parametrize("size", [200_000, 1_000_000_007])
-    @pytest.mark.parametrize("count", [1000, 20_000])
+    @pytest.mark.parametrize("count", [1000, 20_000, 200_000])
     @pytest.mark.parametrize("kind", ["float", "datetime"])
     @pytest.mark.parametrize("reverse", [False, True])
-    def test_bulk_labels(self, monkeypatch, size, count, kind, reverse):
+    @pytest.mark.parametrize("method", [None, "nearest"])
+    def test_bulk_labels(self, monkeypatch, size, count, kind, reverse, method):
         """Bulk queries neither expand the input nor search each label in Python."""
         start, step = 0, 0.5
         if kind == "datetime":
@@ -543,12 +550,13 @@ class TestCompactRangeIndexing:
 
         def bounded_values(self):
             """Only selected output coordinates may materialize."""
-            assert len(self) <= count, "Bulk lookup expanded the input coordinate"
+            assert self is not coord, "Bulk lookup expanded the input coordinate"
+            assert len(self) <= count
             return original_values(self)
 
         monkeypatch.setattr(CoordRange, "_get_index_values", bounded_calls)
         monkeypatch.setattr(CoordRange, "values", property(bounded_values))
-        actual = patch.sel(x=labels)
+        actual = patch.sel(x=labels, method=method)
         np.testing.assert_array_equal(actual.get_array("x"), labels)
         assert actual.shape == (count,)
 

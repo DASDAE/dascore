@@ -80,6 +80,13 @@ def positional_indexer(value: Any, size: int) -> int | slice | np.ndarray:
     return np.where(indexer < 0, indexer + size, indexer)
 
 
+def _range_estimate(coord, bounds):
+    """Reuse native selection arithmetic without casting non-finite positions."""
+    clipped = np.clip(bounds, coord.min(), coord.max())
+    clipped = np.where(np.isfinite(clipped), clipped, coord.min())
+    return np.clip(coord._get_index(clipped), 0, len(coord) - 1)
+
+
 def _range_searchsorted(coord, bounds, side):
     """Verify native range estimates, with bounded binary search as a fallback."""
     size = len(coord)
@@ -96,9 +103,7 @@ def _range_searchsorted(coord, bounds, side):
     if bounds.dtype.kind in "iufmM" and coord.step:
         # Reuse select's arithmetic lookup, but verify its bracket against
         # actual labels: grid rounding may move an estimate by a sample.
-        clipped = np.clip(bounds, coord.min(), coord.max())
-        clipped = np.where(np.isfinite(clipped), clipped, coord.min())
-        estimate = np.clip(coord._get_index(clipped), 0, size - 1)
+        estimate = _range_estimate(coord, bounds)
         if coord.reverse_sorted:
             estimate = size - 1 - estimate
         lower, upper = np.maximum(estimate - 1, 0), np.minimum(estimate + 2, size)
@@ -114,14 +119,10 @@ def _range_searchsorted(coord, bounds, side):
     return low
 
 
-def _label_index(coord, probes, require_unique=False):
-    """Use stored labels or query-sized samples; never expand a compact grid."""
-    if not isinstance(coord, CoordRange):
-        return pd.Index(coord.values), None
+def _require_unique_range(coord):
+    """Check range uniqueness without an unbounded scan of floating labels."""
     size = len(coord)
-    positions = np.unique([0, min(1, size - 1), max(0, size - 2), size - 1])
-    anchor = pd.Index(coord._get_index_values(positions))
-    if require_unique and size > 1 and np.dtype(coord.dtype).kind not in "mM":
+    if size > 1 and np.dtype(coord.dtype).kind not in "mM":
         endpoints = np.asarray([coord.start, coord.stop - coord.step])
         dtype = np.result_type(endpoints, 0.0)
         resolution = np.max(np.abs(np.spacing(endpoints.astype(dtype))))
@@ -136,6 +137,17 @@ def _label_index(coord, probes, require_unique=False):
                     "Range labels may repeat at this floating-point precision; "
                     "use positional indexing instead."
                 )
+
+
+def _label_index(coord, probes, require_unique=False):
+    """Use stored labels or query-sized samples; never expand a compact grid."""
+    if not isinstance(coord, CoordRange):
+        return pd.Index(coord.values), None
+    size = len(coord)
+    positions = np.unique([0, min(1, size - 1), max(0, size - 2), size - 1])
+    anchor = pd.Index(coord._get_index_values(positions))
+    if require_unique:
+        _require_unique_range(coord)
     pieces = [positions]
     values = np.asarray(probes)
     for side in ("left", "right"):
@@ -230,6 +242,37 @@ def label_indexer(
             tolerance = to_timedelta64(tolerance.to("s").magnitude)
         else:
             tolerance = compatible(tolerance)
+    if (
+        isinstance(coord, CoordRange)
+        and labels.ndim == 1
+        and method is None
+        and tolerance is None
+        and labels.dtype.kind in "iufmM"
+        and (
+            labels.dtype.kind == np.dtype(coord.dtype).kind
+            if np.dtype(coord.dtype).kind in "mM"
+            else labels.dtype.kind in "iuf"
+        )
+    ):
+        # Numeric exact arrays already carry their labels. Resolve positions
+        # directly instead of sorting a second candidate index for dense queries.
+        _require_unique_range(coord)
+        positions = (
+            _range_estimate(coord, labels)
+            if coord.step
+            else np.zeros(len(labels), dtype=np.intp)
+        )
+        missing = coord._get_index_values(positions) != labels
+        if np.any(missing):
+            found = _range_searchsorted(coord, labels[missing], "left")
+            if np.any(found == len(coord)):
+                raise KeyError("Not all requested labels were found in the coordinate.")
+            positions[missing] = (
+                len(coord) - 1 - found if coord.reverse_sorted else found
+            )
+        if not np.array_equal(coord._get_index_values(positions), labels):
+            raise KeyError("Not all requested labels were found in the coordinate.")
+        return positions
     index, positions = _label_index(
         coord,
         np.atleast_1d(labels),
