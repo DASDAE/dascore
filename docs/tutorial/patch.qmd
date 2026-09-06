@@ -171,7 +171,7 @@ print(patch.get_patch_name())
 
 ## Select
 
-[`Patch.select`](`dascore.Patch.select`) keeps coordinate values inside a range without reordering them. Use `...` or `None` for an open bound.
+[`Patch.select`](`dascore.Patch.select`) keeps coordinate values inside a range without reordering them. Use `...` or `None` for an open bound. For xarray-compatible label or positional indexing, use [`Patch.sel`](`dascore.Patch.sel`) or [`Patch.isel`](`dascore.Patch.isel`), respectively; see [Xarray-style indexing](#xarray-style-indexing).
 
 ```{python}
 time = patch.get_coord("time")
@@ -230,7 +230,7 @@ window = patch.select(
 
 ## Xarray-style indexing
 
-[`Patch.sel`](`dascore.Patch.sel`) selects coordinate labels, and [`Patch.isel`](`dascore.Patch.isel`) selects sample positions. Both accept a dictionary or keyword indexers and return a Patch. Their supported indexing behavior is tested directly against xarray.
+[`Patch.sel`](`dascore.Patch.sel`) selects coordinate labels, and [`Patch.isel`](`dascore.Patch.isel`) selects sample positions. These methods were added for compatibility with xarray's `DataArray.sel` and `DataArray.isel`, respectively. Both accept a dictionary or keyword indexers and return a Patch. The supported subset is described below and tested directly against xarray.
 
 ```{python}
 label_window = patch.sel(distance=slice(10, 20))
@@ -259,7 +259,7 @@ Associated coordinates follow the same indexing: a latitude coordinate along dis
 
 `sel` supports exact matches and `method="nearest"`, with an optional tolerance. Quantities convert to the coordinate's units, including unit-bearing tolerances. Datetime strings use pandas' partial-date rules, and datetime tolerances are durations. Slices follow coordinate order, so a descending coordinate requires descending bounds. `isel` accepts 1D boolean masks and supports `missing_dims="raise"`, `"warn"`, or `"ignore"`.
 
-The supported subset covers dimension names and scalar, slice, and unlabelled 1D array indexers. Labelled xarray indexers, multidimensional indexer arrays, MultiIndexes, auxiliary-coordinate lookup, and forward/backward filling are not supported. Dimensions without coordinate labels use positional indexing. Use `select` for DASCore's tuple range notation, relative selections, and filtering that preserves source order.
+The supported subset covers dimension names and scalar, slice, and unlabelled 1D array indexers. Labelled xarray indexers, multidimensional indexer arrays, MultiIndexes, auxiliary-coordinate lookup, and forward/backward filling are not supported. Dimensions without coordinate labels use positional indexing. Use [`Patch.select`](`dascore.Patch.select`) for DASCore's tuple range notation, relative selections, and filtering that preserves dimensions and source order.
 
 ## Unselect and order
 

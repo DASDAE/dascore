@@ -498,6 +498,11 @@ def select(
 
     {select_params}
 
+    For xarray-compatible indexing, use [`Patch.sel`](`dascore.Patch.sel`) for labels or
+    [`Patch.isel`](`dascore.Patch.isel`) for sample positions. These methods preserve
+    indexer order and repetitions and remove dimensions selected with scalar indexers.
+    `select` preserves dimensions and filters values in source order.
+
     Parameters
     ----------
     patch
@@ -556,6 +561,10 @@ def select(
       >>> len(patch.select(time=-1, samples=True).get_array("time"))
       1
 
+    See Also
+    --------
+    [Patch.sel](`dascore.Patch.sel`) : Xarray-compatible label indexing.
+    [Patch.isel](`dascore.Patch.isel`) : Xarray-compatible positional indexing.
     """
     _check_coord_names(patch, kwargs)
     new_coords, data = patch.coords.select(
@@ -582,6 +591,11 @@ def isel(
 ) -> PatchType:
     """
     Select sample positions with xarray-compatible dimension indexing.
+
+    This method is provided for compatibility with xarray's `DataArray.isel` for the
+    supported indexing operations described below. Use
+    [`Patch.select`](`dascore.Patch.select`) for DASCore's tuple range notation,
+    relative selections, and filtering that preserves dimensions and source order.
 
     Parameters
     ----------
@@ -615,6 +629,11 @@ def isel(
     >>> channel = patch.isel(distance=3)
     >>> assert channel.dims == ("time",)
     >>> assert channel.get_array("distance").shape == ()
+
+    See Also
+    --------
+    [Patch.sel](`dascore.Patch.sel`) : Xarray-compatible label indexing.
+    [Patch.select](`dascore.Patch.select`) : Range filtering and relative selections.
     """
     coords, data = patch.coords.isel(
         indexers,
@@ -639,6 +658,11 @@ def sel(
 ) -> PatchType:
     """
     Select coordinate labels with xarray-compatible dimension indexing.
+
+    This method is provided for compatibility with xarray's `DataArray.sel` for the
+    supported indexing operations described below. Use
+    [`Patch.select`](`dascore.Patch.select`) for DASCore's tuple range notation,
+    relative selections, and filtering that preserves dimensions and source order.
 
     Parameters
     ----------
@@ -678,6 +702,11 @@ def sel(
     >>> assert window.shape[0] == 11
     >>> channel = patch.sel(distance=10.2, method="nearest", tolerance=0.5)
     >>> assert channel.get_array("distance") == 10
+
+    See Also
+    --------
+    [Patch.isel](`dascore.Patch.isel`) : Xarray-compatible positional indexing.
+    [Patch.select](`dascore.Patch.select`) : Range filtering and relative selections.
     """
     if method not in (None, "nearest"):
         raise ValueError("method must be None or 'nearest'.")
