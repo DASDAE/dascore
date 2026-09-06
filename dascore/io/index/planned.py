@@ -456,6 +456,8 @@ def _output_records(
             distance_step=_num(row.get("distance_step")),
             attrs=attrs,
             coords=tuple(coords),
+            # Plan attributes are resolved through members, not this row.
+            attrs_complete=False,
         )
         records.append(
             SourceRecord(
