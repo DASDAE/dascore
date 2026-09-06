@@ -132,7 +132,10 @@ class TestReadDASDAE:
         scanned = dc.scan(path)[0]
         assert scanned.shape == patch.shape
         assert scanned.dims == patch.dims
+        payload = dc.scan_payloads(path)[0]
+        assert payload["coords"].shape == patch.shape
         assert dc.spool(path)[0].equals(patch)
+        assert dc.spool(path).get_contents()["data_size"].iloc[0] == patch.size
 
     def test_round_trip_empty_patch(self, written_dascore_v1_empty):
         """Ensure an empty patch can be deserialized."""

@@ -10,7 +10,7 @@ import pytest
 
 import dascore as dc
 from dascore.core.coordmanager import get_coord_manager
-from dascore.core.coords import CoordArray, concat_coords, get_coord
+from dascore.core.coords import CoordArray, CoordRange, concat_coords, get_coord
 from dascore.units import m, s
 from dascore.utils.array_api import to_numpy
 
@@ -276,6 +276,8 @@ class TestIntegration:
         """A scalar Patch stays scalar through updates, pickle, and export."""
         out = patch.isel(distance=1, time=2, component=3, drop=drop)
         assert out.shape == () and out.size == 1
+        assert list(range(out.size)) == [0]
+        assert dc.spool(out).get_contents()["data_size"].iloc[0] == 1
         assert out.update().shape == ()
         assert pickle.loads(pickle.dumps(out)).equals(out)
         assert (out + 1).shape == ()
@@ -381,3 +383,197 @@ class TestTemporalLabelErrors:
             patch.io.to_xarray().sel(time=value)
         with pytest.raises(type(expected.value)):
             patch.sel(time=value)
+
+
+class TestSharedSelection:
+    """Shared execution preserves each public method's indexing contract."""
+
+    @pytest.mark.parametrize("method", ["select", "order", "sel", "isel"])
+    @pytest.mark.parametrize("backend", ["numpy", "dask.array", "array_api_strict"])
+    def test_backend(self, patch, method, backend):
+        """All methods index multiple axes and dependent coordinates on each backend."""
+        xp = pytest.importorskip(backend)
+        other = patch.update(data=xp.asarray(patch.data))
+        kwargs = dict(distance=np.array([4, 0, 4]), time=np.array([3, 1]))
+        if method in {"select", "order"}:
+            kwargs["samples"] = True
+        elif method == "sel":
+            kwargs = {
+                name: patch.get_array(name)[inds] for name, inds in kwargs.items()
+            }
+        expected = getattr(patch, method)(**kwargs)
+        actual = getattr(other, method)(**kwargs)
+        assert type(actual.data) is type(other.data)
+        np.testing.assert_array_equal(to_numpy(actual.data), expected.data)
+        assert actual.coords == expected.coords
+
+    @pytest.mark.parametrize("method", ["select", "order", "sel", "isel"])
+    def test_scalar_noop(self, patch, method):
+        """A no-op selection retains the distinction between scalar and empty data."""
+        scalar = patch.isel(distance=0, time=0, component=0)
+        assert getattr(scalar, method)().shape == ()
+        assert getattr(dc.Patch(), method)().shape == (0,)
+
+
+class TestCompactRangeIndexing:
+    """Label lookup and positional selection must not expand large compact grids."""
+
+    @pytest.mark.parametrize("kind", ["int", "float", "datetime", "timedelta"])
+    @pytest.mark.parametrize("reverse", [False, True])
+    def test_large_range(self, monkeypatch, kind, reverse):
+        """Exact, nearest, strided, and empty selections allocate only their results."""
+        size = 100_000_000
+        start, step = 0, 2
+        if kind == "float":
+            start, step = 0.1, 0.25
+        elif kind in {"datetime", "timedelta"}:
+            start = (
+                np.datetime64("2020-01-01")
+                if kind == "datetime"
+                else np.timedelta64(0, "s")
+            )
+            step = np.timedelta64(2, "s")
+        coord = get_coord(start=start, step=step, shape=(size,))
+        if reverse:
+            coord = coord[::-1]
+        patch = dc.Patch(
+            data=np.broadcast_to(np.array(1), (size,)), coords={"x": coord}, dims=("x",)
+        )
+        original = CoordRange.values.fget
+        original_index_values = CoordRange._get_index_values
+
+        def bounded_index_values(self, indices):
+            """Refuse full-grid allocation through sparse evaluation as well."""
+            assert np.size(indices) < 1000, "Selection evaluated the original grid"
+            return original_index_values(self, indices)
+
+        def bounded_values(self):
+            """Allow output labels to materialize, but refuse a full input grid."""
+            assert len(self) < 1000, "Selection expanded the original coordinate"
+            return original(self)
+
+        monkeypatch.setattr(CoordRange, "values", property(bounded_values))
+        monkeypatch.setattr(CoordRange, "_get_index_values", bounded_index_values)
+        labels = coord._get_index_values(np.array([50, 54]))
+        assert patch.sel(x=labels[0]).get_array("x") == labels[0]
+        assert patch.sel(x=slice(None, labels[0])).shape == (51,)
+        if kind == "datetime":
+            with pytest.raises(KeyError):
+                patch.sel(x=0)
+        out = patch.sel(x=[labels[1], labels[0], labels[1]])
+        np.testing.assert_array_equal(out.get_array("x"), labels[[1, 0, 1]])
+        assert patch.sel(x=slice(*labels)).shape == (5,)
+        assert patch.sel(x=slice(labels[1], labels[0])).shape == (0,)
+        assert patch.sel(x=slice(labels[1], labels[0], -2)).shape == (3,)
+        assert patch.sel(x=labels[0], method="nearest").shape == ()
+        assert patch.isel(x=[]).shape == (0,)
+        assert patch.isel(x=slice(0, 0)).shape == (0,)
+        assert patch.select(x=(labels.min(), labels.max())).shape == (5,)
+
+    def test_bulk_labels(self, monkeypatch):
+        """Bulk label lookup batches work instead of searching each label in Python."""
+        coord = get_coord(start=0, step=0.5, shape=(200_000,))
+        patch = dc.Patch(data=np.arange(len(coord)), coords={"x": coord}, dims=("x",))
+        indices = np.arange(0, len(coord), 20)
+        labels = coord.values[indices]
+        original = CoordRange._get_index_values
+        calls = 0
+
+        def bounded_calls(self, indices):
+            """Allow batched value evaluation, but refuse repeated scalar searches."""
+            nonlocal calls
+            calls += 1
+            assert calls < 20, "Bulk lookup performed repeated scalar searches"
+            return original(self, indices)
+
+        monkeypatch.setattr(CoordRange, "_get_index_values", bounded_calls)
+        actual = patch.sel(x=labels)
+        np.testing.assert_array_equal(actual.data, indices)
+        np.testing.assert_array_equal(actual.get_array("x"), labels)
+
+    def test_select_float_dependents(self):
+        """DASCore filtering retains compact dependent grids just like the main grid."""
+        coord = get_coord(start=0.1, step=0.3, shape=(100_000,))
+        patch = dc.Patch(
+            data=np.arange(len(coord)),
+            coords={"x": coord, "dependent": ("x", coord)},
+            dims=("x",),
+        )
+        actual = patch.select(x=(1, 50))
+        for name in ("x", "dependent"):
+            selected = actual.get_coord(name)
+            assert isinstance(selected, CoordRange)
+            assert selected.step == coord.step
+            assert len(selected) == actual.size
+
+    @pytest.mark.parametrize("step", [1.1, 1.5, 1.8])
+    def test_rounded_duplicate_labels(self, step):
+        """Duplicate errors must account for rounding anywhere in the full grid."""
+        coord = get_coord(start=1e16, step=step, shape=(30,))
+        patch = dc.Patch(data=np.arange(len(coord)), coords={"x": coord}, dims=("x",))
+        for obj in (patch, patch.io.to_xarray()):
+            with pytest.raises(pd.errors.InvalidIndexError):
+                obj.sel(x=[coord.start])
+
+    def test_grid_below_float_resolution(self):
+        """Small slices of large-offset float grids can have repeated rounded labels."""
+        coord = get_coord(start=1e16, step=0.1, shape=(1000,))[:2]
+        patch = dc.Patch(data=np.arange(2), coords={"x": coord}, dims=("x",))
+        assert_matches(patch, "isel", {"x": 0})
+        assert_matches(patch, "sel", {"x": coord.start})
+
+    @pytest.mark.parametrize("reverse", [False, True])
+    @pytest.mark.parametrize(
+        "step", [0.1, 0.3, np.float32(0.1), 2, np.timedelta64(1, "ms")]
+    )
+    def test_exact_grid_labels(self, step, reverse):
+        """Sparse lookup preserves the exact labels used by materialized grids."""
+        start = (
+            np.datetime64("2020-01-01")
+            if np.issubdtype(type(step), np.timedelta64)
+            else type(step)(1)
+        )
+        coord = get_coord(start=start, step=step, shape=(37,))
+        if reverse:
+            coord = coord[::-1]
+        patch = dc.Patch(data=np.arange(37), coords={"x": coord}, dims=("x",))
+        labels = coord.values
+        for value in [
+            labels[17],
+            labels[[31, 2, 31]],
+            slice(labels[3], labels[29], 3),
+            slice(labels[29], labels[3], -3),
+        ]:
+            assert_matches(patch, "sel", {"x": value})
+        assert_matches(patch, "isel", {"x": [31, 2, 31]})
+        target = labels[17] + step / 2
+        assert_matches(patch, "sel", {"x": target}, method="nearest")
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            "2020-01",
+            "2019",
+            "2020-01-01T00:00:01",
+            slice("2020-01-01T00:00:01", "2020-01-01T00:00:03"),
+            slice("2020-01-01T00:00:03", "2020-01-01T00:00:01", -5),
+        ],
+    )
+    @pytest.mark.parametrize("reverse", [False, True])
+    def test_partial_datetime(self, value, reverse):
+        """Partial date bounds still include the entire requested precision interval."""
+        coord = get_coord(
+            start=np.datetime64("2020-01-01"),
+            step=np.timedelta64(10, "ms"),
+            shape=(500,),
+        )
+        if reverse:
+            coord = coord[::-1]
+        patch = dc.Patch(data=np.arange(500), coords={"time": coord}, dims=("time",))
+        try:
+            patch.io.to_xarray().sel(time=value)
+        except KeyError:
+            with pytest.raises(KeyError):
+                patch.sel(time=value)
+        else:
+            assert_matches(patch, "sel", {"time": value})

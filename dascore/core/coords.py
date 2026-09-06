@@ -1667,9 +1667,9 @@ class CoordRange(BaseCoord):
 
     def __getitem__(self, item):
         if isinstance(item, (int | np.integer)):
-            if item >= len(self):
+            if item >= len(self) or item < -len(self):
                 raise IndexError(f"{item} exceeds coord length of {self}")
-            return self.values[item]
+            return self._get_index_values(item)[()]
         # handle ... as None
         if isinstance(item, slice):
             start = None if item.start is ... else item.start
@@ -1683,8 +1683,31 @@ class CoordRange(BaseCoord):
                 new_step = self.step * indices.step
                 new_start = self.start + indices.start * self.step
                 return self._new_grid(new_start, new_step, len(indices))
+            return get_coord(data=np.empty(0, dtype=self.dtype), units=self.units)
         out = self.values[item]
         return get_coord(data=out, units=self.units)
+
+    def _get_index_values(self, indices):
+        """Evaluate only requested samples using the same grid as ``values``."""
+        indices = np.asarray(indices)
+        indices = np.where(indices < 0, indices + len(self), indices)
+        if len(self) == 1 or dtype_time_like(self.dtype):
+            return np.asarray(self.start + indices * self.step, dtype=self.dtype)
+        # Match linspace's inferred floating dtype, rounding, and exact endpoint.
+        stop = self.stop - self.step
+        dtype = np.result_type(self.start, stop, 0.0)
+        delta = np.subtract(stop, self.start, dtype=dtype)
+        step = delta / (len(self) - 1)
+        values = indices.astype(dtype)
+        if step == 0:
+            values = (values / (len(self) - 1)) * delta
+        else:
+            values = values * step
+        values = values + self.start
+        values = np.where(indices == len(self) - 1, stop, values)
+        if np.issubdtype(self.dtype, np.integer):
+            values = np.floor(values)
+        return values.astype(self.dtype)
 
     @cached_method
     def __len__(self):

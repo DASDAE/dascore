@@ -19,7 +19,9 @@ from upath import UPath
 
 import dascore as dc
 from dascore.exceptions import MissingOptionalDependencyError, ParameterError
+from dascore.utils.array_api import to_numpy
 from dascore.utils.misc import (
+    _apply_union_indexers,
     _callable_name,
     _get_install_name,
     _iter_filesystem,
@@ -1324,3 +1326,20 @@ class TestMaybeUnpack:
         value = np.empty((), dtype=object)
         value[()] = np.array([1.0, 2.0])
         assert np.array_equal(_maybe_unpack(value), np.array([1.0, 2.0]))
+
+
+class TestApplyUnionIndexers:
+    """Orthogonal indexing shares one implementation across array backends."""
+
+    @pytest.mark.parametrize("backend", ["numpy", "dask.array", "array_api_strict"])
+    def test_masks_and_scalar(self, backend):
+        """Boolean axes select every combination even when a scalar removes an axis."""
+        xp = pytest.importorskip(backend)
+        values = np.arange(120).reshape(5, 6, 4)
+        data = xp.asarray(values)
+        first = np.array([True, False, True, False, False])
+        last = np.array([False, True, False, True])
+        actual = _apply_union_indexers((first, 2, last), data)
+        expected = values[first, 2, :][:, last]
+        assert type(actual) is type(data)
+        np.testing.assert_array_equal(to_numpy(actual), expected)

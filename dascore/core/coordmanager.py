@@ -44,6 +44,7 @@ from __future__ import annotations
 from collections import defaultdict
 from collections.abc import Iterable, Mapping, Sequence
 from itertools import zip_longest
+from math import prod
 from types import EllipsisType
 from typing import Annotated, Any, Self, cast
 
@@ -82,7 +83,7 @@ from dascore.utils.display import (
     render_text,
 )
 from dascore.utils.docs import compose_docstring
-from dascore.utils.indexing import apply_indexers, get_indexers, positional_indexer
+from dascore.utils.indexing import get_indexers, positional_indexer
 from dascore.utils.mapping import FrozenDict
 from dascore.utils.misc import (
     _apply_union_indexers,
@@ -113,59 +114,24 @@ def _ensure_1d_coord(coord, coord_name: str):
         raise CoordError(msg)
 
 
-def _indirect_coord_updates(cm, dim_name, coord_name: str, reduction, new_coords):
-    """
-    Applies trim to coordinates.
-
-    Assumes other associated coordinates are trimmed.
-    """
-    other_coords = set(cm.dim_to_coord_map[dim_name]) - {coord_name}
-    # perform indirect updates.
-    for icoord in other_coords:
-        dims, coord = new_coords[icoord]
-        axis = cm.dim_map[icoord].index(dim_name)
-        new = coord.index(reduction, axis=axis)
-        new_coords[icoord] = (dims, new)
-
-
 def _get_indexers_and_new_coords_dict(
-    cm,
-    kwargs,
-    samples=False,
-    relative=False,
-    operation="select",
+    cm, kwargs, samples=False, relative=False, operation="select"
 ):
-    """Get reductions for each dimension."""
-    dim_reductions = {x: slice(None, None) for x in cm.dims}
-    new_coords = dict(cm._get_dim_coord_dict())
-    for coord_name, vals in kwargs.items():
-        # All coordinates should exist in coord_map (filtered by
-        # _get_single_dim_kwarg_list)
-        assert coord_name in cm.coord_map
-        coord = cm.coord_map[coord_name]
-        coord_dims = cm.dim_map[coord_name]
-        _ensure_1d_coord(coord, coord_name)
-        # Handle non-dimensional coordinates (not tied to any dimension)
-        if not len(coord_dims):
-            # Apply operation directly to the non-dimensional coordinate
-            method = getattr(coord, operation)
-            new_coord, _ = method(vals, relative=relative, samples=samples)
-            # Update only this coordinate in new_coords, don't affect array indexing
-            new_coords[coord_name] = (coord_dims, new_coord)
-            continue
-        # Handle dimensional coordinates (tied to exactly one dimension)
-        dim_name = coord_dims[0]
-        # different logic if we are using indices or values
-        method = getattr(coord, operation)
-        new_coord, reductions = method(vals, relative=relative, samples=samples)
-        # this handles the case of out-of-bound selections.
-        # These should be converted to degenerate coords.
-        dim_reductions[dim_name] = reductions
-        new_coords[coord_name] = (coord_dims, new_coord)
-        # update other coords affected by change.
-        _indirect_coord_updates(cm, dim_name, coord_name, reductions, new_coords)
-    indexers = tuple(dim_reductions[x] for x in cm.dims)
-    return new_coords, indexers
+    """Resolve DASCore queries using the existing coordinate selection methods."""
+    reductions, selected = {}, {}
+    for name, value in kwargs.items():
+        coord = cm.coord_map[name]
+        dims = cm.dim_map[name]
+        _ensure_1d_coord(coord, name)
+        new_coord, indexer = getattr(coord, operation)(
+            value, relative=relative, samples=samples
+        )
+        selected[name] = (dims, new_coord)
+        if dims:
+            reductions[dims[0]] = indexer
+    # Preserve the canonicalization performed by select/order's former update.
+    coord_map, _, _ = _get_coord_dim_map(selected, cm.dims)
+    return coord_map, reductions
 
 
 # Fields a table lines up on the right, where a reader compares them
@@ -643,17 +609,7 @@ class CoordManager(RichRepr, DascoreBaseModel):
 
         See also [`CoordManager.order`](`dascore.core.CoordManager.order`).
         """
-        if relative or samples:
-            self._check_multiple_relative(kwargs)
-        # Otherwise, we need to sort through kwargs and call in a loop.
-        kwarg_list = self._get_single_dim_kwarg_list(kwargs)
-        for kwargs in kwarg_list:
-            new_coords, indexers = _get_indexers_and_new_coords_dict(
-                self, kwargs, samples=samples, relative=relative, operation="select"
-            )
-            self = self.update(**new_coords)
-            array = _apply_union_indexers(indexers, array)
-        return self, array
+        return self._select(kwargs, array, relative=relative, samples=samples)
 
     def isel(
         self,
@@ -666,25 +622,67 @@ class CoordManager(RichRepr, DascoreBaseModel):
     ) -> tuple[Self, MaybeArray]:
         """Index dimensions by position, reducing scalar-indexed axes."""
         requested = get_indexers(indexers, indexers_kwargs, self.dims, missing_dims)
-        if not requested:
-            return self, array
-        indices = {
-            dim: positional_indexer(value, len(self.coord_map[dim]))
-            for dim, value in requested.items()
-        }
+        return self._select(requested, array, operation="isel", drop=drop)
+
+    def _select(
+        self,
+        queries,
+        array=None,
+        *,
+        operation="select",
+        relative=False,
+        samples=False,
+        drop=False,
+    ):
+        """Resolve queries, then apply every selection through one indexing engine."""
+        if relative or samples:
+            self._check_multiple_relative(queries)
+        groups = (
+            [queries]
+            if operation == "isel"
+            else self._get_single_dim_kwarg_list(queries)
+        )
+        for group in groups:
+            if not group:
+                continue
+            if operation == "isel":
+                indices, selected = group, {}
+            else:
+                selected, indices = _get_indexers_and_new_coords_dict(
+                    self, group, samples=samples, relative=relative, operation=operation
+                )
+            indices = {
+                dim: positional_indexer(value, len(self.coord_map[dim]))
+                for dim, value in indices.items()
+            }
+            self, array = self._apply_indexers(
+                indices, array, selected, drop=drop, exact=operation == "isel"
+            )
+        return self, array
+
+    def _apply_indexers(self, indices, array, selected, *, drop=False, exact=False):
+        """Index data and dependent coordinates through the same positional path."""
         reduced = {dim for dim, value in indices.items() if isinstance(value, int)}
         coords = {}
         for name, coord in self.coord_map.items():
             old_dims = self.dim_map[name]
             new_dims = tuple(dim for dim in old_dims if dim not in reduced)
-            if not set(old_dims) & set(indices):
-                coords[name] = (old_dims, coord)
+            if name in selected or not set(old_dims) & set(indices):
+                coords[name] = (old_dims, selected.get(name, coord))
                 continue
             if (drop or coord._partial) and old_dims and not new_dims:
                 continue
             key = tuple(indices.get(dim, slice(None)) for dim in old_dims)
-            # Keep range slices compact and array labels exact even when a
-            # selected subset looks almost evenly sampled.
+            # Slicing a floating grid can change its rounding. Evaluate only
+            # the requested labels, then reuse exact coordinate canonicalization.
+            if isinstance(coord, CoordRange) and isinstance(key[0], slice):
+                positions = range(len(coord))[key[0]]
+                if positions == range(len(coord)):
+                    coords[name] = (new_dims, coord)
+                    continue
+                if exact and np.dtype(coord.dtype).kind == "f":
+                    key = (np.asarray(positions, dtype=np.intp),)
+            # Preserve compact ranges unless exact float labels required evaluation.
             if isinstance(coord, CoordRange) and isinstance(key[0], slice):
                 new_coord = coord[key[0]]
                 if not new_coord.size:
@@ -702,7 +700,11 @@ class CoordManager(RichRepr, DascoreBaseModel):
                 )
                 new_coord = get_coord(shape=shape, dtype=coord.dtype, units=coord.units)
             else:
-                values = np.asarray(apply_indexers(coord.values, key))
+                values = (
+                    coord._get_index_values(key[0])
+                    if isinstance(coord, CoordRange)
+                    else np.asarray(_apply_union_indexers(key, coord.values))
+                )
                 new_coord = get_coord(data=values, units=coord.units)
                 if values.dtype.kind not in "US":
                     original = CoordArray(values=values, units=coord.units)
@@ -716,10 +718,10 @@ class CoordManager(RichRepr, DascoreBaseModel):
             coord_map={name: item[1] for name, item in coords.items()},
             dim_map={name: item[0] for name, item in coords.items()},
             dims=dims,
-            scalar=not dims,
+            scalar=self.scalar or (bool(reduced) and not dims),
         )
         key = tuple(indices.get(dim, slice(None)) for dim in self.dims)
-        return out, apply_indexers(array, key)
+        return out, _apply_union_indexers(key, array)
 
     def order(
         self, array: MaybeArray = None, relative=False, samples=False, **kwargs
@@ -741,21 +743,9 @@ class CoordManager(RichRepr, DascoreBaseModel):
 
         See also [`CoordManager.select`](`dascore.core.CoordManager.select`).
         """
-        if relative or samples:
-            self._check_multiple_relative(kwargs)
-        # Otherwise, we need to sort through kwargs and call in a loop.
-        kwarg_list = self._get_single_dim_kwarg_list(kwargs)
-        for kwargs in kwarg_list:
-            new_coords, indexers = _get_indexers_and_new_coords_dict(
-                self,
-                kwargs,
-                samples=samples,
-                relative=relative,
-                operation="order",
-            )
-            self = self.update(**new_coords)
-            array = _apply_union_indexers(indexers, array)
-        return self, array
+        return self._select(
+            kwargs, array, operation="order", relative=relative, samples=samples
+        )
 
     def make_broadcastable_to(
         self,
@@ -910,7 +900,7 @@ class CoordManager(RichRepr, DascoreBaseModel):
     @property
     def size(self):
         """Return the size of the patch data matrix."""
-        return np.prod(self.shape)
+        return prod(self.shape)
 
     @property
     def ndim(self):

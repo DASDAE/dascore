@@ -278,7 +278,9 @@ def _get_coords(patch_group, dims, attrs2, snap=True):
         assert name in coord_dict, "Should already have loaded coordinate array"
         coord_dim_dict[name] = (tuple(value.split(",")), coord_dict[name])
         # add dimensions to coordinates that have them.
-    cm = get_coord_manager(coord_dim_dict, dims=dims)
+    data = patch_group.get("data")
+    shape = tuple(data.shape) if data is not None else None
+    cm = get_coord_manager(coord_dim_dict, dims=dims, shape=shape)
     return cm
 
 

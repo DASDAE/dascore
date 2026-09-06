@@ -4,17 +4,15 @@ from __future__ import annotations
 
 import operator
 import warnings
+from bisect import bisect_left, bisect_right
 from collections.abc import Mapping, Sequence
-from typing import TYPE_CHECKING, Any, Literal
+from typing import Any, Literal
 
 import numpy as np
 import pandas as pd
 
-from dascore.utils.array_api import array_namespace, backend_name, device
+from dascore.core.coords import BaseCoord, CoordRange
 from dascore.utils.time import to_timedelta64
-
-if TYPE_CHECKING:
-    from dascore.core.coords import BaseCoord
 
 
 def get_indexers(
@@ -83,26 +81,64 @@ def positional_indexer(value: Any, size: int) -> int | slice | np.ndarray:
     return np.where(indexer < 0, indexer + size, indexer)
 
 
-def apply_indexers(array: Any, indexers: tuple) -> Any:
-    """Index axes independently, preserving backend and Cartesian semantics."""
-    if array is None:
-        return None
-    xp = array_namespace(array)
-    # Work backwards so scalar indexing cannot shift an axis still to index.
-    for axis in reversed(range(len(indexers))):
-        indexer = indexers[axis]
-        if isinstance(indexer, np.ndarray):
-            # Dask needs eager indices to infer the shape of a one-element take.
-            inds = indexer
-            if backend_name(array) != "dask":
-                inds = xp.asarray(indexer, dtype=xp.int64, device=device(array))
-            array = xp.take(array, inds, axis=axis)
-        elif indexer != slice(None):
-            key = tuple(
-                indexer if i == axis else slice(None) for i in range(array.ndim)
-            )
-            array = array[key]
-    return xp.asarray(array)
+def _label_index(coord, probes):
+    """Build pandas' index from stored labels or just the needed range samples."""
+    if not isinstance(coord, CoordRange):
+        return pd.Index(coord.values), None
+    size = len(coord)
+    # Vectorized pandas lookup is cheaper when many probes would each require
+    # two Python binary searches. Small queries still avoid expanding large grids.
+    if 4 * len(probes) * size.bit_length() > size:
+        return pd.Index(coord.values), None
+    if np.dtype(coord.dtype).kind not in "mM":
+        endpoints = np.asarray([coord.start, coord.stop - coord.step])
+        dtype = np.result_type(endpoints, 0.0)
+        resolution = np.max(np.abs(np.spacing(endpoints.astype(dtype))))
+        if abs(coord.step) < resolution:
+            # Rounding can introduce duplicate labels anywhere on this grid.
+            # Pandas must see the whole index to enforce its uniqueness rules.
+            return pd.Index(coord.values), None
+    positions = {0, min(1, size - 1), max(0, size - 2), size - 1}
+    anchor = pd.Index(coord._get_index_values(np.array(sorted(positions))))
+
+    def label_at(position):
+        """Expose the compact coordinate in increasing label order for bisect."""
+        return coord[size - 1 - position if coord.reverse_sorted else position]
+
+    for probe in probes:
+        if probe is None:
+            continue
+        for side, search in (("left", bisect_left), ("right", bisect_right)):
+            try:
+                # Reuse pandas' datetime precision and slice-bound type rules.
+                bound = anchor._maybe_cast_slice_bound(probe, side)
+                position = search(range(size), bound, key=label_at)
+            except (TypeError, ValueError):
+                # Let the final pandas operation report invalid labels using
+                # the same error category as a materialized index.
+                continue
+            for neighbor in (position - 1, position):
+                if 0 <= neighbor < size:
+                    positions.add(
+                        size - 1 - neighbor if coord.reverse_sorted else neighbor
+                    )
+    positions = np.array(sorted(positions), dtype=np.intp)
+    return pd.Index(coord._get_index_values(positions)), positions
+
+
+def _restore_indexer(indexer, positions):
+    """Map a sparse range lookup back to positions on the original coordinate."""
+    if positions is None:
+        return indexer
+    if not isinstance(indexer, slice):
+        return positions[indexer]
+    step = 1 if indexer.step is None else indexer.step
+    direction = 1 if step > 0 else -1
+    span = positions[slice(indexer.start, indexer.stop, direction)]
+    if not len(span):
+        return slice(0, 0)
+    stop = int(span[-1]) + direction
+    return slice(int(span[0]), None if stop < 0 else stop, step)
 
 
 def label_indexer(
@@ -116,7 +152,6 @@ def label_indexer(
         if method is not None or tolerance is not None:
             raise ValueError("Inexact matching requires coordinate labels.")
         return positional_indexer(value, len(coord))
-    index = pd.Index(coord.values)
 
     def compatible(label):
         # Keep datetime strings intact: pandas understands their precision and
@@ -132,12 +167,12 @@ def label_indexer(
             raise NotImplementedError(
                 "method and tolerance are not supported with slices."
             )
-        result = index.slice_indexer(
-            compatible(value.start), compatible(value.stop), value.step
-        )
+        start, stop = compatible(value.start), compatible(value.stop)
+        index, positions = _label_index(coord, (start, stop))
+        result = index.slice_indexer(start, stop, value.step)
         if not isinstance(result, slice):
             raise KeyError("Label slice cannot be represented as a positional slice.")
-        return result
+        return _restore_indexer(result, positions)
     if hasattr(value, "units"):
         value = compatible(value)
     labels = _unlabelled_array(value)
@@ -153,11 +188,21 @@ def label_indexer(
             tolerance = to_timedelta64(tolerance.to("s").magnitude)
         else:
             tolerance = compatible(tolerance)
+    index, positions = _label_index(coord, np.atleast_1d(labels))
     if labels.ndim == 0 and method is None:
-        return index.get_loc(labels[()])
+        result = index.get_loc(labels[()])
+        if positions is not None and isinstance(result, np.ndarray):
+            # Pandas returns arrays for partial dates on descending indexes.
+            # A range's matching interval is contiguous, including omitted samples.
+            matches = np.flatnonzero(result) if result.dtype.kind == "b" else result
+            if not len(matches):
+                return slice(0, 0)
+            result = slice(int(matches[0]), int(matches[-1]) + 1)
+        return _restore_indexer(result, positions)
     result = index.get_indexer(
         np.atleast_1d(labels), method=method, tolerance=tolerance
     )
     if np.any(result < 0):
         raise KeyError("Not all requested labels were found in the coordinate.")
+    result = _restore_indexer(result, positions)
     return int(result[0]) if labels.ndim == 0 else result

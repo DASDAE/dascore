@@ -42,6 +42,12 @@ A patch may carry segmented dimensional coordinates in memory. Most file formats
 
 Plain string selectors reserve `*` and `?` for wildcard behavior. Compiled `re.Pattern` instances provide explicit regular-expression matching. Any construction path for string coordinates should reject unit-bearing inputs explicitly rather than silently dropping units.
 
+## Selection and indexing
+
+[`Patch.select`](`dascore.Patch.select`), [`Patch.sel`](`dascore.Patch.sel`), [`Patch.isel`](`dascore.Patch.isel`), and [`Patch.order`](`dascore.Patch.order`) share the coordinate manager's `_select` execution path. The wrappers normalize their queries; existing coordinate `select`/`order` methods resolve DASCore queries, while `sel` resolves labels with pandas' xarray-compatible rules. All resulting positional indexers go through the same validation, dependent-coordinate updates, dimension reduction, and backend-aware array indexing.
+
+`select` and `order` retain dimensions; scalar `sel`/`isel` indexers reduce them. Small label queries evaluate only the needed samples of compact ranges. Bulk queries use vectorized pandas lookup when that avoids repeated Python searches. Grids whose floating-point resolution can introduce duplicate labels also use the full index to enforce pandas' uniqueness rules. Integer and temporal slices remain compact. `select` and `order` also preserve compact floating ranges. To match xarray exactly, `sel`/`isel` floating slices evaluate the selected labels and become a range only when canonicalization preserves every value; this can require memory proportional to the number of selected samples, including temporary position and value arrays. String label slices and exact matching in `sel` follow pandas' rules, while coordinate-level `select` retains DASCore's wildcard and range behavior.
+
 ## Summaries are envelopes, not full coordinates
 
 [`CoordSummary`](`dascore.core.coords.CoordSummary`) contains `min`, `max`, `step`, `dtype`, `units`, associated `dims`, length, and an exact coordinate fingerprint. The canonical construction path is `coord.to_summary()`, which starts from a live coordinate; build one with `get_coord(...)` first when starting from a raw value array.
