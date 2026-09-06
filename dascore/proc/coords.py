@@ -616,6 +616,8 @@ def isel(
     Notes
     -----
     Slices use Python's exclusive stop and support strides and negative indices.
+    Evenly sampled slice results stay compact; floating coordinate values can
+    differ from xarray by rounding relative to the original range, as with `select`.
     Arrays preserve order and repetitions; arrays on multiple dimensions select
     every combination of positions. Out-of-bounds scalar and array indices raise.
     Labelled xarray indexers and multidimensional indexer arrays are not supported.
@@ -689,6 +691,11 @@ def sel(
     Missing scalar or array labels raise KeyError. Slices follow coordinate
     order, including descending coordinates, and require sliceable labels.
     Datetime strings follow pandas' partial-date selection rules.
+    Evenly sampled coordinates stay compact during lookup and slicing.
+    Floating slice labels can differ from xarray by rounding relative to the
+    original range.
+    Array/nearest lookup on long grids below floating-point resolution raises
+    instead of expanding the grid to check whether every label is unique.
 
     This supports dimension coordinates, not arbitrary auxiliary coordinates or
     MultiIndexes. Labelled xarray indexers and multidimensional indexer arrays

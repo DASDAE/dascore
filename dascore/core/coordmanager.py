@@ -655,12 +655,10 @@ class CoordManager(RichRepr, DascoreBaseModel):
                 dim: positional_indexer(value, len(self.coord_map[dim]))
                 for dim, value in indices.items()
             }
-            self, array = self._apply_indexers(
-                indices, array, selected, drop=drop, exact=operation == "isel"
-            )
+            self, array = self._apply_indexers(indices, array, selected, drop=drop)
         return self, array
 
-    def _apply_indexers(self, indices, array, selected, *, drop=False, exact=False):
+    def _apply_indexers(self, indices, array, selected, *, drop=False):
         """Index data and dependent coordinates through the same positional path."""
         reduced = {dim for dim, value in indices.items() if isinstance(value, int)}
         coords = {}
@@ -673,16 +671,7 @@ class CoordManager(RichRepr, DascoreBaseModel):
             if (drop or coord._partial) and old_dims and not new_dims:
                 continue
             key = tuple(indices.get(dim, slice(None)) for dim in old_dims)
-            # Slicing a floating grid can change its rounding. Evaluate only
-            # the requested labels, then reuse exact coordinate canonicalization.
-            if isinstance(coord, CoordRange) and isinstance(key[0], slice):
-                positions = range(len(coord))[key[0]]
-                if positions == range(len(coord)):
-                    coords[name] = (new_dims, coord)
-                    continue
-                if exact and np.dtype(coord.dtype).kind == "f":
-                    key = (np.asarray(positions, dtype=np.intp),)
-            # Preserve compact ranges unless exact float labels required evaluation.
+            # Keep slice results compact, including floating grids, as select does.
             if isinstance(coord, CoordRange) and isinstance(key[0], slice):
                 new_coord = coord[key[0]]
                 if not new_coord.size:

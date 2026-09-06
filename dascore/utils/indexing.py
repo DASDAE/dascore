@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import operator
 import warnings
-from bisect import bisect_left, bisect_right
 from collections.abc import Mapping, Sequence
 from typing import Any, Literal
 
@@ -81,48 +80,91 @@ def positional_indexer(value: Any, size: int) -> int | slice | np.ndarray:
     return np.where(indexer < 0, indexer + size, indexer)
 
 
-def _label_index(coord, probes):
-    """Build pandas' index from stored labels or just the needed range samples."""
+def _range_searchsorted(coord, bounds, side):
+    """Verify native range estimates, with bounded binary search as a fallback."""
+    size = len(coord)
+    low = np.zeros(len(bounds), dtype=np.intp)
+    high = np.full(len(bounds), size, dtype=np.intp)
+    compare = np.less if side == "left" else np.less_equal
+
+    def values_at(positions):
+        positions = np.clip(positions, 0, size - 1)
+        if coord.reverse_sorted:
+            positions = size - 1 - positions
+        return coord._get_index_values(positions)
+
+    if bounds.dtype.kind in "iufmM" and coord.step:
+        # Reuse select's arithmetic lookup, but verify its bracket against
+        # actual labels: grid rounding may move an estimate by a sample.
+        clipped = np.clip(bounds, coord.min(), coord.max())
+        clipped = np.where(np.isfinite(clipped), clipped, coord.min())
+        estimate = np.clip(coord._get_index(clipped), 0, size - 1)
+        if coord.reverse_sorted:
+            estimate = size - 1 - estimate
+        lower, upper = np.maximum(estimate - 1, 0), np.minimum(estimate + 2, size)
+        low = np.where(compare(values_at(lower - 1), bounds), lower, low)
+        high = np.where(
+            (upper == size) | ~compare(values_at(upper), bounds), upper, high
+        )
+    while np.any(low < high):
+        middle = low + (high - low) // 2
+        right = compare(values_at(middle), bounds) & (low < high)
+        low = np.where(right, middle + 1, low)
+        high = np.where(right, high, middle)
+    return low
+
+
+def _label_index(coord, probes, require_unique=False):
+    """Use stored labels or query-sized samples; never expand a compact grid."""
     if not isinstance(coord, CoordRange):
         return pd.Index(coord.values), None
     size = len(coord)
-    # Vectorized pandas lookup is cheaper when many probes would each require
-    # two Python binary searches. Small queries still avoid expanding large grids.
-    if 4 * len(probes) * size.bit_length() > size:
-        return pd.Index(coord.values), None
-    if np.dtype(coord.dtype).kind not in "mM":
+    positions = np.unique([0, min(1, size - 1), max(0, size - 2), size - 1])
+    anchor = pd.Index(coord._get_index_values(positions))
+    if require_unique and size > 1 and np.dtype(coord.dtype).kind not in "mM":
         endpoints = np.asarray([coord.start, coord.stop - coord.step])
         dtype = np.result_type(endpoints, 0.0)
         resolution = np.max(np.abs(np.spacing(endpoints.astype(dtype))))
-        if abs(coord.step) < resolution:
-            # Rounding can introduce duplicate labels anywhere on this grid.
-            # Pandas must see the whole index to enforce its uniqueness rules.
-            return pd.Index(coord.values), None
-    positions = {0, min(1, size - 1), max(0, size - 2), size - 1}
-    anchor = pd.Index(coord._get_index_values(np.array(sorted(positions))))
-
-    def label_at(position):
-        """Expose the compact coordinate in increasing label order for bisect."""
-        return coord[size - 1 - position if coord.reverse_sorted else position]
-
-    for probe in probes:
-        if probe is None:
+        # Numeric ranges, including integer ranges, use linspace arithmetic.
+        grid_step = np.subtract(endpoints[1], endpoints[0], dtype=dtype) / (size - 1)
+        if abs(grid_step) < resolution:
+            # A bounded sample handles short grids. Long grids below floating
+            # precision cannot promise unique labels without a full-grid scan.
+            sample = coord._get_index_values(np.arange(min(size, 32)))
+            if size > 32 or not pd.Index(sample).is_unique:
+                raise pd.errors.InvalidIndexError(
+                    "Range labels may repeat at this floating-point precision; "
+                    "use positional indexing instead."
+                )
+    pieces = [positions]
+    values = np.asarray(probes)
+    for side in ("left", "right"):
+        # Pandas supplies partial-date precision and invalid-bound errors.
+        # Ordinary numeric and temporal arrays need no per-label Python work.
+        if values.dtype.kind in "iufmM":
+            bounds = values
+        else:
+            bounds = []
+            for probe in probes:
+                if probe is None:
+                    continue
+                try:
+                    bound = anchor._maybe_cast_slice_bound(probe, side)
+                    anchor[0] < bound  # Validate mixed types before batching.
+                except (TypeError, ValueError):
+                    continue  # The final pandas lookup reports invalid labels.
+                bounds.append(bound)
+            bounds = pd.Index(bounds).to_numpy()
+        try:
+            found = _range_searchsorted(coord, bounds, side)
+        except (TypeError, ValueError):
             continue
-        for side, search in (("left", bisect_left), ("right", bisect_right)):
-            try:
-                # Reuse pandas' datetime precision and slice-bound type rules.
-                bound = anchor._maybe_cast_slice_bound(probe, side)
-                position = search(range(size), bound, key=label_at)
-            except (TypeError, ValueError):
-                # Let the final pandas operation report invalid labels using
-                # the same error category as a materialized index.
-                continue
-            for neighbor in (position - 1, position):
-                if 0 <= neighbor < size:
-                    positions.add(
-                        size - 1 - neighbor if coord.reverse_sorted else neighbor
-                    )
-    positions = np.array(sorted(positions), dtype=np.intp)
+        neighbors = np.concatenate([found - 1, found])
+        neighbors = neighbors[(neighbors >= 0) & (neighbors < size)]
+        if coord.reverse_sorted:
+            neighbors = size - 1 - neighbors
+        pieces.append(neighbors)
+    positions = np.unique(np.concatenate(pieces))
     return pd.Index(coord._get_index_values(positions)), positions
 
 
@@ -188,7 +230,11 @@ def label_indexer(
             tolerance = to_timedelta64(tolerance.to("s").magnitude)
         else:
             tolerance = compatible(tolerance)
-    index, positions = _label_index(coord, np.atleast_1d(labels))
+    index, positions = _label_index(
+        coord,
+        np.atleast_1d(labels),
+        require_unique=labels.ndim != 0 or method is not None,
+    )
     if labels.ndim == 0 and method is None:
         result = index.get_loc(labels[()])
         if positions is not None and isinstance(result, np.ndarray):
