@@ -51,11 +51,9 @@ from dascore.utils.misc import (
     _canonical_range,
     express_range_for_coord,
     is_range,
-    order_range_tuple,
 )
 from dascore.utils.patch import record_call
 from dascore.utils.paths import is_memory_uri
-from dascore.utils.pd import yield_range_tuple_from_kwargs
 
 # Directory archives present in per-patch time order (source ordinals
 # alone cannot interleave multi-patch files); ordinal and patch id stay
@@ -513,16 +511,79 @@ def _forget_what_a_trim_invalidates(df: pd.DataFrame, residuals=()) -> pd.DataFr
     return df.assign(**forgotten)
 
 
-# One bit per residual. Longer chains state no mask and replay on the
-# loaded patch without pushing their bounds into the reader.
-_MASK_BITS = 63
+def _coord_from_envelope(envelope, dtype=None, units=None) -> object | None:
+    """
+    The coordinate a stashed envelope describes, or None if it cannot.
 
-_CUT_MASK_SUFFIX = "_cut_mask"
+    An envelope which states no step describes samples the index does
+    not hold, so nothing can be replayed on it and its bounds are not
+    sent to the reader. A numeric one is rebuilt at the precision the
+    coordinate was stored in: the frame widens a float32 coordinate to
+    float64, and a bound lands on its first sample in one and not the
+    other.
+    """
+    if not isinstance(envelope, Mapping):
+        return None
+    values = []
+    for key in ("min", "max", "step"):
+        value = next(v for k, v in envelope.items() if k.endswith(f"_{key}"))
+        if value is None or (np.ndim(value) == 0 and pd.isnull(value)):
+            return None
+        if isinstance(value, pd.Timestamp):
+            value = value.to_datetime64()
+        elif isinstance(value, pd.Timedelta):
+            value = value.to_timedelta64()
+        values.append(value)
+    low, high, step = values
+    if step <= np.zeros((), dtype=np.asarray(step).dtype):
+        return None
+    if isinstance(dtype, str) and dtype and np.issubdtype(np.dtype(dtype), np.floating):
+        kind = np.dtype(dtype).type
+        low, high, step = kind(low), kind(high), kind(step)
+    from dascore.core.coords import get_coord  # noqa: PLC0415
+
+    units = units if isinstance(units, str) and units else None
+    return get_coord(min=low, max=high + step, step=step, units=units)
 
 
-def _cut_mask_column(name: str) -> str:
-    """The private column saying which residuals cut a coordinate."""
-    return f"_{name}{_CUT_MASK_SUFFIX}"
+def _extremes_coord(envelope, units=None) -> object | None:
+    """
+    A coordinate of just the two values an envelope names.
+
+    An uneven coordinate's samples are not in the index, but its
+    smallest and largest are, and one selection cuts it exactly when it
+    excludes one of them. Selecting on those two answers that question
+    with the coordinate's own code. It answers only one, though: what
+    the first selection left is a sample this cannot name, so a
+    coordinate selected twice is left to the patch.
+    """
+    if not isinstance(envelope, Mapping):
+        return None
+    values = []
+    for key in ("min", "max"):
+        value = next(v for k, v in envelope.items() if k.endswith(f"_{key}"))
+        if value is None or (np.ndim(value) == 0 and pd.isnull(value)):
+            return None
+        if isinstance(value, pd.Timestamp):
+            value = value.to_datetime64()
+        elif isinstance(value, pd.Timedelta):
+            value = value.to_timedelta64()
+        values.append(value)
+    low, high = values
+    if low >= high:
+        return None
+    from dascore.core.coords import get_coord  # noqa: PLC0415
+
+    units = units if isinstance(units, str) and units else None
+    return get_coord(values=np.array(values), units=units)
+
+
+_SOURCE_SUFFIX = "_source_envelope"
+
+
+def _source_column(name: str) -> str:
+    """The private column holding a coordinate's untrimmed envelope."""
+    return f"_{name}{_SOURCE_SUFFIX}"
 
 
 def _is_reader_hintable(value) -> bool:
@@ -539,143 +600,55 @@ def _is_reader_hintable(value) -> bool:
     )
 
 
-def _residual_cut_masks(df: pd.DataFrame, residuals) -> dict[str, pd.Series]:
-    """Compute masks within rows sharing coordinate precision and grid kind."""
-    if not residuals or len(residuals) > _MASK_BITS:
+def _hintable_names(residuals) -> set[str]:
+    """
+    The coordinates whose bounds may be sent to the reader.
+
+    A sample-index, relative or unit-bearing selection anywhere in a
+    chain takes its coordinate out: what it leaves behind is not
+    something the envelopes state, so a later bound on the same
+    coordinate cannot be judged against them either.
+    """
+    out, barred = set(), set()
+    for coords, samples, relative in residuals:
+        for name, value in coords.items():
+            if samples or relative or not _is_reader_hintable(value):
+                barred.add(name)
+            elif name not in barred:
+                out.add(name)
+    return out - barred
+
+
+def _source_envelopes(df: pd.DataFrame, residuals) -> dict[str, pd.Series]:
+    """
+    Each hintable coordinate's envelope, before any selection trims it.
+
+    A reader given a bound applies it before the patch exists, so the
+    `select` which follows finds nothing to do and records nothing. What
+    the reader did has to be recovered from the coordinate the row
+    describes, and the envelope columns are about to be replayed onto,
+    so the untrimmed values are kept aside here while they are still
+    true.
+    """
+    names = _hintable_names(residuals)
+    if not names:
         return {}
-    names = {name for coords, _, _ in residuals for name in coords}
-    # Associated coordinates can change another selector's samples. Their
-    # envelopes do not state that relationship, so let the patch replay it.
+    # A coordinate riding a dimension is trimmed by a selection on that
+    # dimension, and the reverse; the envelopes state neither, so a view
+    # naming one leaves every coordinate in it to the patch.
+    named = {name for coords, _, _ in residuals for name in coords}
     if "dims" in df and any(
-        names - set(dims.split(",")) for dims in df["dims"].unique()
+        named - set(str(dims).split(",")) for dims in df["dims"].unique()
     ):
         return {}
-    groups = {}
-    for name in sorted(names):
-        if f"{name}_min" not in df:
-            continue
-        groups[name] = df.get(f"_{name}_coord_dtype", "")
-        step = df.get(f"{name}_step")
-        regular = False
-        if step is not None and _orderable(step):
-            values = np.abs(step.to_numpy())
-            regular = np.isfinite(values) & (values > np.zeros((), dtype=values.dtype))
-        groups[f"{name}_regular"] = regular
-    if not groups:
-        return {}
-    frame = pd.DataFrame(groups, index=df.index)
     out = {}
-    for positions in frame.groupby(
-        list(frame), sort=False, dropna=False
-    ).indices.values():
-        subset = df.iloc[positions]
-        for name, mask in _grid_cut_masks(subset, residuals).items():
-            if name not in out:
-                out[name] = pd.Series(pd.NA, index=df.index, dtype="Int64")
-            out[name].iloc[positions] = mask
+    for name in names:
+        columns = [f"{name}_{end}" for end in ("min", "max", "step")]
+        if not set(columns).issubset(df.columns):
+            continue
+        envelopes = df[columns].to_dict("records")
+        out[_source_column(name)] = pd.Series(envelopes, index=df.index, dtype=object)
     return out
-
-
-def _grid_cut_masks(df: pd.DataFrame, residuals) -> dict[str, np.ndarray]:
-    """
-    Per row and coordinate, which residuals actually narrow it.
-
-    Bit ``i`` is set where residual ``i`` cuts that row's coordinate.
-    The walk mirrors `apply_exact_residuals`: each bound is judged
-    against what the bounds before it left, exactly as each `select` is
-    applied to what the selects before it returned. A bound which cuts
-    nothing is then not credited with the cut of one which does, which
-    the row's single `_modified` flag cannot tell apart.
-
-    Only reader-hintable bounds are tracked, because only those can
-    reach the patch already applied and so need a bit to be recorded at
-    all; a sample-index or unit-bearing bound cuts for itself. What such
-    a bound leaves behind is not modelled, so a coordinate one touches
-    states no mask rather than a mask read off an envelope which is no
-    longer true.
-    """
-    masks: dict[str, np.ndarray] = {}
-    uses = Counter(name for coords, _, _ in residuals for name in coords)
-    live = {}
-    untracked: set[str] = set()
-    for index, (coords, samples, relative) in enumerate(residuals):
-        for name, value in coords.items():
-            if name in untracked:
-                continue
-            if samples or relative or not _is_reader_hintable(value):
-                untracked.add(name)
-                masks.pop(name, None)
-                live.pop(name, None)
-                continue
-            bounds = dict(yield_range_tuple_from_kwargs(df, {name: value}))
-            if name not in bounds:
-                continue
-            if name not in live:
-                start, stop = df[f"{name}_min"], df[f"{name}_max"]
-                if not all(_orderable(x) and x.notna().all() for x in (start, stop)):
-                    untracked.add(name)
-                    continue
-                steps = None
-                dtype = df.get(f"_{name}_coord_dtype")
-                stored = dtype.iloc[0] if dtype is not None else ""
-                narrow = stored in ("float16", "float32")
-                if narrow and uses[name] > 1:
-                    untracked.add(name)
-                    continue
-                step = df.get(f"{name}_step")
-                if step is not None and _orderable(step):
-                    values = np.abs(step.to_numpy())
-                    if np.isfinite(values).all() and np.all(
-                        values > np.zeros((), dtype=values.dtype)
-                    ):
-                        steps = values
-                # Keep CoordRange's tolerance whenever its grid is known.
-                # Uneven extrema suffice for one range, but cannot locate
-                # the samples that an earlier selection left behind.
-                if steps is None and uses[name] > 1:
-                    untracked.add(name)
-                    continue
-                start, stop = start.to_numpy(), stop.to_numpy()
-                if narrow:
-                    start, stop = start.astype(stored), stop.astype(stored)
-                    if steps is not None:
-                        steps = steps.astype(stored)
-                origin = start
-                if steps is not None:
-                    stop = np.round((stop - origin) / steps)
-                    start = np.zeros(len(df))
-                live[name] = (start, stop, origin, steps)
-                masks[name] = np.zeros(len(df), dtype=np.int64)
-            low, high = order_range_tuple(bounds[name])
-            start, stop, origin, step = live[name]
-            cut = np.zeros(len(df), dtype=bool)
-            # On a regular grid compare sample positions directly, using
-            # CoordRange._get_index's tolerance. Reconstructing their values
-            # would introduce rounding drift between composed selections.
-            if low is not None:
-                if step is not None:
-                    fraction = np.asarray((low - origin) / step, dtype="float64")
-                    low = np.ceil(np.round(fraction, 10))
-                cut |= start < low
-                start = np.maximum(start, low)
-            if high is not None:
-                if step is not None:
-                    fraction = np.asarray((high - origin) / step, dtype="float64")
-                    high = np.floor(np.round(fraction, 10))
-                cut |= stop > high
-                stop = np.minimum(stop, high)
-            live[name] = (start, stop, origin, step)
-            masks[name] |= cut.astype(np.int64) << index
-    return masks
-
-
-def _orderable(series: pd.Series) -> bool:
-    """Whether an envelope column supports the min/max walk of the mask."""
-    return bool(
-        pd.api.types.is_numeric_dtype(series)
-        or pd.api.types.is_datetime64_any_dtype(series)
-        or pd.api.types.is_timedelta64_dtype(series)
-    )
 
 
 class PatchCatalog:
@@ -1195,16 +1168,17 @@ class PatchCatalog:
                 ).reset_index(drop=True)
             # The early ones are already done; see SPOOL_EARLY_RENAMES.
             df = df.rename(columns=dict(SPOOL_LATE_RENAMES))
-            # Masks refer to this view's residuals, not its parent's.
+            # An envelope kept aside answers this view's residuals, not
+            # its parent's, so a parent's is dropped before one is taken.
             df = df.drop(
                 columns=[
                     c
                     for c in df.columns
-                    if str(c).startswith("_") and str(c).endswith(_CUT_MASK_SUFFIX)
+                    if str(c).startswith("_") and str(c).endswith(_SOURCE_SUFFIX)
                 ]
             )
-            if masks := _residual_cut_masks(df, self._residuals):
-                df = df.assign(**{_cut_mask_column(k): v for k, v in masks.items()})
+            if sources := _source_envelopes(df, self._residuals):
+                df = df.assign(**sources)
             # Circular import: chunk planning also uses the catalog.
             from dascore.utils.chunk_plan import (  # noqa: PLC0415
                 patch_local_adjusted_envelopes,
@@ -1311,27 +1285,58 @@ class PatchCatalog:
         trim_hint.update(extra_trim or {})
         for name in patch_local:
             trim_hint.pop(name, None)
+        coords = self._source_coords(row, set(trim_hint))
         if self._residuals:
-            # Untracked composed trims cannot be attributed exactly;
-            # replay those coordinates on the patch.
-            trim_hint = {
-                name: value
-                for name, value in trim_hint.items()
-                if pd.notna(row.get(_cut_mask_column(name)))
-            }
+            # A coordinate the row cannot describe cannot say what a
+            # reader did to it; it replays on the patch, which records it.
+            trim_hint = {k: v for k, v in trim_hint.items() if k in coords}
         patch = self.resolver.resolve(row, **trim_hint)
-        hinted = self._hinted_per_residual(row, set(trim_hint))
+        hinted = self._hinted_per_residual(coords)
         return apply_exact_residuals(patch, self._residuals, hinted=hinted)
 
-    def _hinted_per_residual(self, row: Mapping, hint_names: set[str]):
-        """Attribute reader hints only through the row's exact cut masks."""
+    def _source_coords(self, row: Mapping, names: set[str]) -> dict:
+        """Rebuild each hintable coordinate as the row had it untrimmed."""
+        once = Counter(name for coords, _, _ in self._residuals for name in coords)
+        out = {}
+        for name in names:
+            envelope = row.get(_source_column(name))
+            units = row.get(f"_{name}_units")
+            coord = _coord_from_envelope(
+                envelope, row.get(f"_{name}_coord_dtype"), units
+            )
+            if coord is None and once[name] == 1:
+                coord = _extremes_coord(envelope, units)
+            if coord is not None:
+                out[name] = coord
+        return out
+
+    def _hinted_per_residual(self, coords: dict):
+        """
+        Per residual, which of its coordinates the reader already cut.
+
+        ``coords`` holds each hinted coordinate as it was before
+        anything trimmed it, so the selections are replayed on the
+        coordinate itself: whichever shortens it is one the reader
+        carried out, which the `select` on the patch will not record.
+        Running the coordinate's own `select` is what makes this agree
+        with the patch about every edge -- a bound between two samples,
+        a coordinate stored at lower precision -- rather than being a
+        second implementation of the same arithmetic.
+        """
         if not self._residuals:
             return ()
-        masks = {name: int(row[_cut_mask_column(name)]) for name in hint_names}
-        return tuple(
-            {name for name in coords if name in masks and masks[name] >> index & 1}
-            for index, (coords, _, _) in enumerate(self._residuals)
-        )
+        out = []
+        for selection, samples, relative in self._residuals:
+            names = set()
+            for name, value in selection.items():
+                if (coord := coords.get(name)) is None:
+                    continue
+                new, _ = coord.select(value, samples=samples, relative=relative)
+                if len(new) != len(coord):
+                    names.add(name)
+                coords[name] = new
+            out.append(names)
+        return tuple(out)
 
     def __iter__(self):
         """

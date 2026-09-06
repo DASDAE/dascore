@@ -886,6 +886,31 @@ class TestLineageIds:
         assert view[0].attrs.processing_id == direct.attrs.processing_id
         assert view[0].attrs.history == direct.attrs.history
 
+    def test_two_bounds_on_an_uneven_coordinate_replay_on_the_patch(self, tmp_path):
+        """Extrema answer one selection, and cannot answer the next.
+
+        The index holds an uneven coordinate's smallest and largest
+        value but not the samples between, so it can say whether one
+        bound excludes an extreme and nothing after that. Two bounds
+        which each cut must still record twice, which only the patch
+        can decide.
+        """
+        values = np.array([0.0, 1.0, 3.0, 6.0, 10.0])
+        patch = dc.Patch(
+            data=np.arange(5), coords={"distance": values}, dims=("distance",)
+        ).abs()
+        patch.io.write(tmp_path / "source.h5", "dasdae")
+        spool = dc.spool(tmp_path).update()
+        source = spool[0]
+        view, direct = spool, source
+        for bound in (0.5, 2.0):
+            view = view.select(distance=(bound, None))
+            direct = direct.select(distance=(bound, None))
+        assert direct.shape != source.shape
+        assert np.array_equal(view[0].data, direct.data)
+        assert view[0].attrs.processing_id == direct.attrs.processing_id
+        assert view[0].attrs.history == direct.attrs.history
+
     @pytest.mark.parametrize("dim", ["distance", "time"])
     @pytest.mark.parametrize("bounds", [(0, None), (None, None), (None, 1e9)])
     def test_relative_noop_keeps_metadata(self, tmp_path, dim, bounds):

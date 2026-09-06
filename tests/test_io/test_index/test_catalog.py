@@ -13,8 +13,10 @@ import pytest
 import dascore as dc
 from dascore.io.index import PatchCatalog
 from dascore.io.index.catalog import (
+    _coord_from_envelope,
+    _extremes_coord,
     _forget_what_a_trim_invalidates,
-    _residual_cut_masks,
+    _source_envelopes,
 )
 from dascore.io.index.query import InvalidSpoolQueryError, glob_to_regex
 from dascore.units import m
@@ -360,8 +362,8 @@ class TestAdjustUnitSegments:
         assert float(out["x_max"].iloc[0]) == 2.0
 
 
-class TestResidualCutMasks:
-    """Which residual actually narrowed each row, read off the envelopes."""
+class TestSourceEnvelopes:
+    """What a view keeps of a coordinate before its selections trim it."""
 
     @pytest.fixture()
     def rows(self):
@@ -374,86 +376,130 @@ class TestResidualCutMasks:
             }
         )
 
-    def test_one_bound_marks_only_the_rows_it_cuts(self, rows):
-        """The third row lies wholly inside, so nothing cut it."""
-        masks = _residual_cut_masks(rows, (({"time": (2.0, None)}, False, False),))
-        assert masks["time"].tolist() == [1, 0, 0]
+    def test_a_hintable_selection_keeps_its_envelope(self, rows):
+        """The bounds go to the reader, so the row must say what it had."""
+        out = _source_envelopes(rows, (({"time": (2.0, None)}, False, False),))
+        assert set(out) == {"_time_source_envelope"}
+        assert out["_time_source_envelope"].iloc[0] == {
+            "time_min": 0.0,
+            "time_max": 10.0,
+            "time_step": 1.0,
+        }
 
-    def test_each_residual_owns_its_own_bit(self, rows):
-        """A bound is judged against what the bounds before it left."""
+    @pytest.mark.parametrize(
+        "residual",
+        [
+            ({"time": (0, 5)}, True, False),  # sample indices
+            ({"time": (1.0, None)}, False, True),  # relative bounds
+            ({"time": _canonical_range((1 * m, 2 * m))}, False, False),  # units
+        ],
+    )
+    def test_a_selection_the_reader_cannot_take_keeps_nothing(self, rows, residual):
+        """It cuts on the patch, which records it without any help."""
+        assert _source_envelopes(rows, (residual,)) == {}
+
+    def test_one_such_selection_bars_the_whole_coordinate(self, rows):
+        """What it left behind is not something the envelopes state."""
         residuals = (
-            ({"time": (None, 100.0)}, False, False),  # cuts nothing
-            ({"time": (None, 12.0)}, False, False),  # cuts the last two
-        )
-        masks = _residual_cut_masks(rows, residuals)
-        assert masks["time"].tolist() == [0b00, 0b10, 0b10]
-
-    def test_a_bound_already_applied_cuts_nothing_again(self, rows):
-        """The second of two identical bounds finds the row where it left it."""
-        residuals = (({"time": (6.0, None)}, False, False),) * 2
-        masks = _residual_cut_masks(rows, residuals)
-        assert masks["time"].tolist() == [0b01, 0b01, 0b00]
-
-    def test_sample_bounds_leave_the_coordinate_untracked(self, rows):
-        """A sample index never reaches the reader and moves the envelope."""
-        residuals = (
-            ({"time": (None, 12.0)}, False, False),
+            ({"time": (2.0, None)}, False, False),
             ({"time": (0, 5)}, True, False),
-            ({"time": (None, 8.0)}, False, False),
         )
-        assert "time" not in _residual_cut_masks(rows, residuals)
+        assert _source_envelopes(rows, residuals) == {}
 
-    def test_unit_bearing_bounds_leave_the_coordinate_untracked(self, rows):
-        """Which units the row spells the bound in is not the row's to say."""
-        residuals = (({"time": _canonical_range((1 * m, 2 * m))}, False, False),)
-        assert "time" not in _residual_cut_masks(rows, residuals)
-
-    def test_unordered_envelopes_are_left_alone(self):
-        """A string envelope has no running minimum to walk."""
-        df = pd.DataFrame(
-            {"tag": ["a", "b"], "tag_min": ["a", "b"], "tag_max": ["c", "d"]}
-        )
-        assert _residual_cut_masks(df, (({"tag": ("a", "c")}, False, False),)) == {}
-
-    def test_a_coordinate_the_frame_lacks_states_no_mask(self, rows):
-        """A missing coordinate provides no grid for attributing cuts."""
-        assert _residual_cut_masks(rows, (({"depth": (1.0, 2.0)}, False, False),)) == {}
-
-    @pytest.mark.parametrize("step", [None, 0.0, np.nan])
-    @pytest.mark.parametrize("composed", [False, True])
-    def test_unknown_grid_tracks_single_range(self, rows, step, composed):
-        """Source extrema suffice once; composed bounds need surviving samples."""
-        if step is None:
-            rows = rows.drop(columns="time_step")
-        else:
-            rows = rows.assign(time_step=step)
-        residuals = (({"time": (2.5, None)}, False, False),) * (2 if composed else 1)
-        masks = _residual_cut_masks(rows, residuals)
-        if composed:
-            assert masks == {}
-        else:
-            assert masks["time"].tolist() == [1, 0, 0]
-
-    def test_missing_extrema_state_no_mask(self, rows):
-        """A missing source endpoint cannot prove that a hinted range trims."""
-        rows.loc[0, "time_min"] = np.nan
-        assert _residual_cut_masks(rows, (({"time": (2.5, None)}, False, False),)) == {}
-
-    def test_each_coordinate_can_be_selected_once(self, rows):
-        """Independent coordinates retain hints without either having a grid."""
-        rows = rows.assign(depth_min=0.0, depth_max=10.0).drop(columns="time_step")
+    def test_an_associated_coordinate_bars_them_all(self, rows):
+        """Selecting one trims the other, which the envelopes do not state."""
+        rows = rows.assign(dims="time", depth_min=0.0, depth_max=8.0, depth_step=1.0)
         residuals = (
-            ({"time": (2.5, None)}, False, False),
-            ({"depth": (None, 8.5)}, False, False),
+            ({"time": (2.0, None)}, False, False),
+            ({"depth": (1.0, None)}, False, False),
         )
-        masks = _residual_cut_masks(rows, residuals)
-        assert masks["time"].tolist() == [1, 0, 0]
-        assert masks["depth"].tolist() == [2, 2, 2]
+        assert _source_envelopes(rows, residuals) == {}
 
-    def test_more_residuals_than_bits_states_nothing(self, rows):
-        """Past the last bit a mask could only be wrong, so there is none."""
-        residuals = (({"time": (2.0, None)}, False, False),) * 64
-        assert _residual_cut_masks(rows, residuals) == {}
+    def test_a_coordinate_the_frame_lacks_keeps_nothing(self, rows):
+        """No envelope columns, nothing to keep."""
+        assert _source_envelopes(rows, (({"depth": (1.0, 2.0)}, False, False),)) == {}
+
+
+class TestCoordFromEnvelope:
+    """Rebuilding the coordinate a kept envelope describes."""
+
+    def test_an_even_envelope_rebuilds(self):
+        """Three numbers are a range, and its samples are what select sees."""
+        coord = _coord_from_envelope(
+            {"time_min": 0.0, "time_max": 9.0, "time_step": 1.0}
+        )
+        assert len(coord) == 10
+        assert coord.min() == 0.0 and coord.max() == 9.0
+
+    @pytest.mark.parametrize(
+        "envelope",
+        [
+            {"x_min": 0.0, "x_max": 9.0, "x_step": np.nan},  # uneven
+            {"x_min": 0.0, "x_max": 9.0, "x_step": 0.0},  # no spacing
+            {"x_min": np.nan, "x_max": 9.0, "x_step": 1.0},  # no start
+            None,  # nothing kept
+        ],
+    )
+    def test_an_envelope_which_describes_no_samples(self, envelope):
+        """Nothing can be replayed on it, so the patch answers instead."""
+        assert _coord_from_envelope(envelope) is None
+
+    def test_the_stored_precision_is_used(self):
+        """A float32 coordinate rounds a bound differently than float64 does."""
+        envelope = {"x_min": 538.14794921875, "x_max": 1000.0, "x_step": 3.3}
+        wide = _coord_from_envelope(envelope)
+        narrow = _coord_from_envelope(envelope, "float32")
+        assert wide.dtype == np.dtype("float64")
+        assert narrow.dtype == np.dtype("float32")
+
+
+class TestExtremesCoord:
+    """The two-sample stand-in for a coordinate whose samples are unknown."""
+
+    def test_the_extremes_are_the_coordinate(self):
+        """One selection cuts it exactly when it excludes one of them."""
+        coord = _extremes_coord({"x_min": 0.0, "x_max": 9.0})
+        assert len(coord) == 2
+        assert coord.select((2.0, None))[0].shape[0] == 1
+        assert coord.select((-1.0, None))[0].shape[0] == 2
+
+    @pytest.mark.parametrize(
+        "low,high,kind",
+        [
+            (pd.Timestamp("2020-01-01"), pd.Timestamp("2020-01-02"), np.datetime64),
+            (pd.Timedelta("1s"), pd.Timedelta("2s"), np.timedelta64),
+        ],
+    )
+    def test_pandas_scalars_become_numpy_ones(self, low, high, kind):
+        """A frame hands temporal values back as pandas scalars, not numpy ones."""
+        coord = _extremes_coord({"t_min": low, "t_max": high})
+        assert np.issubdtype(coord.dtype, kind)
+
+    @pytest.mark.parametrize(
+        "envelope",
+        [
+            {"x_min": np.nan, "x_max": 9.0},  # no smallest value
+            {"x_min": 5.0, "x_max": 5.0},  # one value is no interval
+            None,  # nothing kept
+        ],
+    )
+    def test_an_envelope_naming_no_interval(self, envelope):
+        """Nothing to select on, so the patch answers instead."""
+        assert _extremes_coord(envelope) is None
+
+    def test_units_ride_along_here_too(self):
+        """A bound bearing units is compared against a coordinate with them."""
+        assert _extremes_coord({"x_min": 0.0, "x_max": 9.0}, "m").units is not None
+
+
+class TestCoordFromEnvelopeUnits:
+    """Units on a rebuilt range."""
+
+    def test_units_ride_along(self):
+        """A bound bearing units is compared against a coordinate with them."""
+        envelope = {"x_min": 0.0, "x_max": 9.0, "x_step": 1.0}
+        assert _coord_from_envelope(envelope, None, "m").units is not None
+        assert _coord_from_envelope(envelope, None, "").units is None
 
 
 class TestForgetTrimmedSizes:
