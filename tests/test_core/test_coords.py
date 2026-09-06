@@ -1249,6 +1249,13 @@ class TestReduceCoord:
 class TestCoordRange:
     """Tests for coords from array."""
 
+    def test_empty_slice_units(self):
+        """An empty compact slice keeps its coordinate units without expansion."""
+        coord = get_coord(start=0, stop=10, step=1, units="m")
+        selected = coord[5:5]
+        assert selected.shape == (0,)
+        assert selected.units == coord.units
+
     def test_init_array(self, evenly_sampled_coord):
         """Ensure the array can be initialized."""
         assert evenly_sampled_coord.step == 1.0
@@ -2981,3 +2988,17 @@ class TestUnitNoOps:
         """A class which did not implement it gets an error naming itself."""
         with pytest.raises(NotImplementedError, match="unit conversion"):
             BaseCoord._convert_units(evenly_sampled_coord, "m")
+
+
+class TestIndexCoordinate:
+    """The coordinate-level positional API remains usable independently."""
+
+    @pytest.mark.parametrize("axis", [0, 1])
+    def test_multidimensional(self, axis):
+        """An explicit axis indexes only that dimension and preserves units."""
+        values = np.arange(20).reshape(4, 5)
+        coord = get_coord(data=values, units="m")
+        actual = coord.index(slice(1, 3), axis=axis)
+        expected = values[1:3, :] if axis == 0 else values[:, 1:3]
+        np.testing.assert_array_equal(actual.values, expected)
+        assert actual.units == coord.units

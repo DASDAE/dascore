@@ -696,7 +696,6 @@ class TestSelect:
 
     def test_select_nonexistent_coordinate_ignores_gracefully(self, cm_basic):
         """Test that selecting on a non-existent coordinate is ignored gracefully."""
-        # This tests line 122 in _get_indexers_and_new_coords_dict
         original_shape = cm_basic.shape
         out, _ = cm_basic.select(nonexistent_coord=(1, 10))
 

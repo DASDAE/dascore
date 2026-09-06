@@ -42,6 +42,14 @@ A patch may carry segmented dimensional coordinates in memory. Most file formats
 
 Plain string selectors reserve `*` and `?` for wildcard behavior. Compiled `re.Pattern` instances provide explicit regular-expression matching. Any construction path for string coordinates should reject unit-bearing inputs explicitly rather than silently dropping units.
 
+## Selection and indexing
+
+[`Patch.select`](`dascore.Patch.select`), [`Patch.sel`](`dascore.Patch.sel`), [`Patch.isel`](`dascore.Patch.isel`), and [`Patch.order`](`dascore.Patch.order`) share the coordinate manager's `_select` execution path. The wrappers normalize their queries; existing coordinate `select`/`order` methods resolve DASCore queries, while `sel` resolves labels with pandas' xarray-compatible rules. All resulting positional indexers go through the same validation, dependent-coordinate updates, dimension reduction, and backend-aware array indexing.
+
+`select` and `order` retain dimensions; scalar `sel`/`isel` indexers reduce them. Label queries on compact ranges verify the existing coordinate lookup estimates, with batched binary searches as a fallback and a pandas index containing only candidate labels when needed for compatibility. Exact numeric label arrays resolve positions directly without constructing that index. Neither small nor bulk queries expand the input range: lookup memory is proportional to the number of requested labels, and search rounds grow logarithmically with axis length. Grids below floating-point resolution may contain repeated labels; array or nearest lookup rejects ambiguous long grids instead of scanning or materializing them to establish global uniqueness. Positional indexing remains available.
+
+Slice results remain compact for integer, temporal, and floating coordinates, following existing `select` behavior. Floating range slices may therefore differ from xarray by floating-point rounding relative to the source range's magnitude; bit-for-bit label preservation does not take priority over bounded memory. Scalar and array indexers in `sel`/`isel` evaluate only the requested output labels. These bounds apply to the new indexing methods; legacy array-based `select`/`order` paths can still materialize ranges. String label slices and exact matching in `sel` follow pandas' rules, while coordinate-level `select` retains DASCore's wildcard and range behavior.
+
 ## Summaries are envelopes, not full coordinates
 
 [`CoordSummary`](`dascore.core.coords.CoordSummary`) contains `min`, `max`, `step`, `dtype`, `units`, associated `dims`, length, and an exact coordinate fingerprint. The canonical construction path is `coord.to_summary()`, which starts from a live coordinate; build one with `get_coord(...)` first when starting from a raw value array.

@@ -1287,6 +1287,8 @@ def hash_array(arr: np.ndarray) -> str:
     # interpretations do not collide.
     h.update(arr.dtype.str.encode("ascii"))
     h.update(np.asarray(arr.shape, dtype=np.int64).tobytes())
+    if not arr.size:
+        return h.hexdigest()
 
     # .data rather than memoryview(...) throughout: it is the same zero-copy
     # object, and numpy types it as a memoryview.

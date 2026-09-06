@@ -37,6 +37,7 @@ from dascore.exceptions import (
     MissingOptionalDependencyError,
     ParameterError,
 )
+from dascore.utils.array_api import array_namespace, backend_name, device
 from dascore.utils.paths import (
     coerce_to_local_path,
     coerce_to_upath,
@@ -153,7 +154,7 @@ def warn_or_raise(
 def broadcast_for_index(
     n_dims: int,
     axis: int | Sequence[int],
-    value: slice | int | None,
+    value: slice | int | np.ndarray | None,
     fill=slice(None),
 ):
     """
@@ -1205,17 +1206,29 @@ def _apply_union_indexers(indexer, array):
     We also want row/column independent boolean indexing, so whenever there
     is more than one array in the indexer we need to apply each independently.
     """
-    if array is None:  # no array passed, just return.
-        return array
-    array_count = sum(is_array(x) for x in indexer)
-    if array_count > 1:
-        out = array
-        ndim = len(out.shape)
-        for axis, ind in enumerate(indexer):
-            out = out[broadcast_for_index(ndim, axis, ind)]
-    else:
-        out = array[indexer]
-    return out
+    if array is None:
+        return None
+    xp = array_namespace(array)
+    backend = backend_name(array)
+    # Preserve direct NumPy/file-backed reads when orthogonal expansion is unnecessary.
+    if backend == "numpy" and sum(is_array(ind) for ind in indexer) <= 1:
+        return xp.asarray(array[indexer])
+    # Work backwards so scalar indexing cannot shift an axis still to index.
+    for axis in reversed(range(len(indexer))):
+        ind = indexer[axis]
+        if is_array(ind):
+            if ind.dtype.kind == "b":
+                ind = np.flatnonzero(ind)
+            # Dask needs eager indices to infer the shape of a one-element take.
+            if backend == "numpy":
+                array = array[broadcast_for_index(array.ndim, axis, ind)]
+            else:
+                if backend != "dask":
+                    ind = xp.asarray(ind, dtype=xp.int64, device=device(array))
+                array = xp.take(array, ind, axis=axis)
+        elif ind != slice(None):
+            array = array[broadcast_for_index(array.ndim, axis, ind)]
+    return xp.asarray(array)
 
 
 def _maybe_array_to_slice(int_array, data_len):

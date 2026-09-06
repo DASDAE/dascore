@@ -172,8 +172,7 @@ def _save_patch(patch, wave_group, name):
     _save_attrs_and_dims(patch, patch_group)
     _save_coords(patch, patch_group)
     # add data
-    if patch.data.shape:
-        _save_array(patch.data, "data", patch_group)
+    _save_array(patch.data, "data", patch_group)
 
 
 # --- Functions for reading
@@ -210,7 +209,7 @@ def _get_attrs_class(patch_group) -> type[PatchAttrs]:
 
 def _read_array(table_array):
     """Read an array into numpy."""
-    data = table_array[:]
+    data = np.asarray(table_array[()])
     attrs = table_array.attrs
     if attrs.get("is_datetime64"):
         data = data.view("datetime64[ns]")
@@ -279,7 +278,9 @@ def _get_coords(patch_group, dims, attrs2, snap=True):
         assert name in coord_dict, "Should already have loaded coordinate array"
         coord_dim_dict[name] = (tuple(value.split(",")), coord_dict[name])
         # add dimensions to coordinates that have them.
-    cm = get_coord_manager(coord_dim_dict, dims=dims)
+    data = patch_group.get("data")
+    shape = tuple(data.shape) if data is not None else None
+    cm = get_coord_manager(coord_dim_dict, dims=dims, shape=shape)
     return cm
 
 
@@ -373,9 +374,9 @@ def _read_patch(patch_group, legacy: bool = True, **kwargs):
         if sub_kwargs:
             coords, data = coords.select(array=patch_group["data"], **sub_kwargs)
         else:
-            data = patch_group["data"][:]
+            data = patch_group["data"][()]
     else:
-        data = patch_group["data"][:]
+        data = patch_group["data"][()]
     return dc.Patch(data=data, coords=coords, dims=dims, attrs=attrs)
 
 
