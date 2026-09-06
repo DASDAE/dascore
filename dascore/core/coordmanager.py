@@ -114,9 +114,7 @@ def _ensure_1d_coord(coord, coord_name: str):
         raise CoordError(msg)
 
 
-def _get_indexers_and_new_coords_dict(
-    cm, kwargs, samples=False, relative=False, operation="select"
-):
+def _resolve_selection(cm, kwargs, samples=False, relative=False, operation="select"):
     """Resolve DASCore queries using the existing coordinate selection methods."""
     reductions, selected = {}, {}
     for name, value in kwargs.items():
@@ -648,7 +646,7 @@ class CoordManager(RichRepr, DascoreBaseModel):
             if operation == "isel":
                 indices, selected = group, {}
             else:
-                selected, indices = _get_indexers_and_new_coords_dict(
+                selected, indices = _resolve_selection(
                     self, group, samples=samples, relative=relative, operation=operation
                 )
             indices = {

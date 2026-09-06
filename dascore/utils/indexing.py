@@ -139,6 +139,27 @@ def _require_unique_range(coord):
                 )
 
 
+def _exact_range_indexer(coord, labels):
+    """Resolve exact label arrays using bounded coordinate lookup."""
+    # Numeric exact arrays already carry their labels. Resolve positions
+    # directly instead of sorting a second candidate index for dense queries.
+    _require_unique_range(coord)
+    positions = (
+        _range_estimate(coord, labels)
+        if coord.step
+        else np.zeros(len(labels), dtype=np.intp)
+    )
+    missing = coord._get_index_values(positions) != labels
+    if np.any(missing):
+        found = _range_searchsorted(coord, labels[missing], "left")
+        if np.any(found == len(coord)):
+            raise KeyError("Not all requested labels were found in the coordinate.")
+        positions[missing] = len(coord) - 1 - found if coord.reverse_sorted else found
+    if not np.array_equal(coord._get_index_values(positions), labels):
+        raise KeyError("Not all requested labels were found in the coordinate.")
+    return positions
+
+
 def _label_index(coord, probes, require_unique=False):
     """Use stored labels or query-sized samples; never expand a compact grid."""
     if not isinstance(coord, CoordRange):
@@ -254,25 +275,7 @@ def label_indexer(
             else labels.dtype.kind in "iuf"
         )
     ):
-        # Numeric exact arrays already carry their labels. Resolve positions
-        # directly instead of sorting a second candidate index for dense queries.
-        _require_unique_range(coord)
-        positions = (
-            _range_estimate(coord, labels)
-            if coord.step
-            else np.zeros(len(labels), dtype=np.intp)
-        )
-        missing = coord._get_index_values(positions) != labels
-        if np.any(missing):
-            found = _range_searchsorted(coord, labels[missing], "left")
-            if np.any(found == len(coord)):
-                raise KeyError("Not all requested labels were found in the coordinate.")
-            positions[missing] = (
-                len(coord) - 1 - found if coord.reverse_sorted else found
-            )
-        if not np.array_equal(coord._get_index_values(positions), labels):
-            raise KeyError("Not all requested labels were found in the coordinate.")
-        return positions
+        return _exact_range_indexer(coord, labels)
     index, positions = _label_index(
         coord,
         np.atleast_1d(labels),
