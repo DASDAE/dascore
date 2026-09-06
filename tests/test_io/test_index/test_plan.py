@@ -560,7 +560,9 @@ class TestRelativeAdjustedEnvelopes:
         # below moves time_max, so an untouched envelope here means the
         # pair was deferred, not that nothing was projected at all.
         residuals = (({"time": (bound, -4.5)}, False, True),)
-        assert patch_local_adjusted_envelopes(df, residuals).equals(df)
+        out = patch_local_adjusted_envelopes(df, residuals)
+        assert out[df.columns].equals(df)
+        assert out["_modified"].all()
         control = (({"time": (0.0, -4.5)}, False, True),)
         out = patch_local_adjusted_envelopes(df, control)
         assert out["time_max"].iloc[0] == 4.5
@@ -605,11 +607,12 @@ class TestRelativeAdjustedEnvelopes:
         assert out["distance_max"].iloc[0] == 19.0
 
     def test_missing_envelope_columns_pass_through(self):
-        """A residual for an absent coordinate does not alter the relation."""
+        """An absent envelope cannot claim that the source loads whole."""
         df = pd.DataFrame({"time_min": [0.0], "time_max": [9.0]})
         residuals = (({"depth": (1, -1)}, False, True),)
         out = patch_local_adjusted_envelopes(df, residuals)
-        assert out.equals(df)
+        assert out[df.columns].equals(df)
+        assert out["_modified"].all()
 
     def test_each_row_uses_its_own_envelope(self):
         """Equal offsets produce different absolute ranges per patch."""

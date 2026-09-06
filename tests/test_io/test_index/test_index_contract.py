@@ -665,6 +665,370 @@ class TestLineageIds:
         assert indexed == spool[0].attrs.processing_id
         assert indexed
 
+    @pytest.mark.parametrize("samples", [False, True])
+    @pytest.mark.parametrize("bounds_type", [tuple, list])
+    def test_a_trim_records_what_a_trim_records(self, tmp_path, samples, bounds_type):
+        """
+        Native and sample ranges record identically through a spool or patch.
+
+        Lists and tuples already serialize identically. Open ellipses and
+        quantity spellings have separate normalization semantics documented
+        in the spool selection note.
+        """
+        patch = dc.get_example_patch().pass_filter(time=(1, 10))
+        patch.io.write(tmp_path / "filtered.h5", "dasdae")
+        spool = dc.spool(tmp_path).update()
+        whole = spool[0]
+        time = whole.get_coord("time")
+        window = bounds_type(
+            (0, 10) if samples else (None, time.min() + 10 * time.step)
+        )
+        through_spool = spool.select(time=window, samples=samples)[0]
+        on_patch = whole.select(time=window, samples=samples)
+        assert through_spool.shape == on_patch.shape != whole.shape
+        assert through_spool.attrs.processing_id == on_patch.attrs.processing_id
+        assert through_spool.attrs.processing_id != whole.attrs.processing_id
+        assert through_spool.attrs.history == on_patch.attrs.history
+
+    @pytest.mark.parametrize("upper", [False, True])
+    @pytest.mark.parametrize("start,step", [(0.0, 1.0), (0.1, 0.1), (0.1, 0.001)])
+    def test_single_range_keeps_grid_tolerance(self, tmp_path, upper, start, step):
+        """A bound within CoordRange's edge tolerance does not advance lineage."""
+        patch = dc.get_example_patch().abs()
+        values = start + np.arange(patch.shape[0]) * step
+        patch.update_coords(distance=values).io.write(tmp_path / "source.h5", "dasdae")
+        spool = dc.spool(tmp_path).update()
+        source = spool[0]
+        coord = source.get_coord("distance")
+        bounds = (
+            (None, coord.max() - coord.step * 1e-12)
+            if upper
+            else (coord.min() + coord.step * 1e-12, None)
+        )
+        expected = source.select(distance=bounds)
+        selected = spool.select(distance=bounds)[0]
+        assert expected.shape == source.shape
+        assert np.array_equal(selected.data, source.data)
+        assert selected.attrs.processing_id == expected.attrs.processing_id
+
+    def test_associated_selections_replay_in_call_order(self, tmp_path):
+        """Trimming an axis can make a later associated-coordinate trim a no-op."""
+        patch = dc.get_example_patch().update_coords(
+            distance=np.arange(300), depth=("distance", 2 * np.arange(300))
+        )
+        patch.io.write(tmp_path / "source.h5", "dasdae")
+        for spool in (dc.spool([patch]), dc.spool(tmp_path).update()):
+            source = spool[0]
+            expected = source.select(distance=(2, None)).select(depth=(2, None))
+            view = spool.select(distance=(2, None)).select(depth=(2, None))
+            view.get_contents()
+            out = view[0]
+            assert out.attrs.processing_id == expected.attrs.processing_id
+            assert out.coords == expected.coords
+            assert np.array_equal(out.data, expected.data)
+
+    def test_float32_absolute_bound_uses_source_precision(self, tmp_path, monkeypatch):
+        """Native float32 rounding determines a no-op without losing reader hints."""
+        values = np.float32(538.14794921875) + np.arange(
+            300, dtype=np.float32
+        ) * np.float32(3.3)
+        patch = dc.get_example_patch().update_coords(distance=values)
+        patch.io.write(tmp_path / "source.h5", "dasdae")
+        spool = dc.spool(tmp_path).update()
+        source = spool[0]
+        calls = []
+        resolver = spool._catalog.resolver
+        original = resolver.resolve
+
+        def resolve(row, **trim):
+            calls.append(trim)
+            return original(row, **trim)
+
+        monkeypatch.setattr(resolver, "resolve", resolve)
+        for bounds in ((538.14795, None), (600.0, 650.0)):
+            expected = source.select(distance=bounds)
+            view = spool.select(distance=bounds)
+            view.get_contents()
+            out = view[0]
+            assert out.attrs.processing_id == expected.attrs.processing_id
+            assert out.coords == expected.coords
+            assert np.array_equal(out.data, expected.data)
+            assert calls[-1].get("distance") == bounds
+        expected = source.select(distance=(600.0, None)).select(distance=(650.0, None))
+        out = spool.select(distance=(600.0, None)).select(distance=(650.0, None))[0]
+        assert out.attrs.processing_id == expected.attrs.processing_id
+        assert np.array_equal(out.data, expected.data)
+
+    def test_other_grid_kinds_do_not_change_cached_selection_identity(self):
+        """Realizing mixed-grid metadata cannot change a regular row's lineage."""
+        base = dc.get_example_patch()
+        regular = base.update_coords(distance=np.arange(300, dtype=float))
+        values = np.arange(300, dtype=float)
+        values[150] += 0.25
+        uneven = base.update_coords(distance=values)
+        view = dc.spool([regular, uneven]).select(distance=(1e-12, None))
+        expected = regular.select(distance=(1e-12, None))
+        assert view[0].attrs.processing_id == expected.attrs.processing_id
+        view.get_contents()
+        assert view[0].attrs.processing_id == expected.attrs.processing_id
+        assert np.array_equal(view[0].data, expected.data)
+
+    @pytest.fixture(scope="class")
+    def filtered_spool(self, tmp_path_factory):
+        """One indexed patch which already carries a history entry."""
+        path = tmp_path_factory.mktemp("lineage_selections")
+        patch = dc.get_example_patch().pass_filter(time=(1, 10))
+        patch.io.write(path / "filtered.h5", "dasdae")
+        return dc.spool(path).update()
+
+    @staticmethod
+    def _spans(patch):
+        """Bounds wider than the patch, and two narrowing pairs, per dim."""
+        out = {}
+        for name in ("time", "distance"):
+            coord = patch.get_coord(name)
+            span = coord.max() - coord.min()
+            out[name] = {
+                "whole": (coord.min(), coord.max()),
+                "wider": (coord.min() - span, coord.max() + span),
+                "half": (coord.min(), coord.min() + span / 2),
+                "quarter": (coord.min(), coord.min() + span / 4),
+            }
+        return out
+
+    @pytest.mark.parametrize(
+        "selections,cuts",
+        [
+            # a selection which leaves the patch whole is not an operation
+            ((("time", "whole"),), False),
+            # two which both cut: only the narrower reaches the reader, so
+            # the wider `select` also finds nothing to do, but both happened
+            ((("time", "half"), ("time", "quarter")), True),
+            # one which cuts beside one which does not, on another
+            # dimension: a spool knowing only that the row was narrowed
+            # somewhere would record the second as well
+            ((("distance", "half"), ("time", "wider")), True),
+            # and on one dimension, where both `select` calls find nothing
+            # to do because the last bound reached the reader
+            ((("time", "wider"), ("time", "half")), True),
+        ],
+    )
+    def test_selections_record_what_the_patch_records(
+        self, filtered_spool, selections, cuts
+    ):
+        """However a selection reaches the data, it records what it did.
+
+        A bound pushed into the reader leaves its `select` nothing to
+        do, so what the spool records cannot be read off the calls it
+        makes; it must still match what the same calls on the patch
+        record, and nothing else.
+        """
+        whole = filtered_spool[0]
+        spans = self._spans(whole)
+        view, on_patch = filtered_spool, whole
+        for name, which in selections:
+            bounds = spans[name][which]
+            view = view.select(**{name: bounds})
+            on_patch = on_patch.select(**{name: bounds})
+        assert view[0].shape == on_patch.shape
+        assert (view[0].shape != whole.shape) is cuts
+        assert view[0].attrs.processing_id == on_patch.attrs.processing_id
+        assert view[0].attrs.history == on_patch.attrs.history
+
+    @pytest.mark.parametrize(
+        "dim,scale", [("distance", 1), ("distance", 0.1), ("time", 1)]
+    )
+    @pytest.mark.parametrize("upper", [False, True])
+    def test_off_grid_noop_keeps_lineage(self, tmp_path, dim, scale, upper):
+        """Two bounds within one sample interval record only the effective trim."""
+        patch = dc.get_example_patch()
+        if scale != 1:
+            patch = patch.update_coords(distance=patch.get_array("distance") * scale)
+        patch.io.write(tmp_path / "source.h5", "dasdae")
+        spool = dc.spool(tmp_path).update()
+        whole = spool[0]
+        coord = whole.get_coord(dim)
+        base = coord.min() + 10 * coord.step
+        first = base + coord.step / 2
+        second = base + 7 * coord.step / 10
+        bounds = (
+            ((None, second), (None, first))
+            if upper
+            else ((first, None), (second, None))
+        )
+        view = spool.select(**{dim: bounds[0]}).select(**{dim: bounds[1]})
+        direct = whole.select(**{dim: bounds[0]}).select(**{dim: bounds[1]})
+        assert np.array_equal(view[0].data, direct.data)
+        assert view[0].attrs.processing_id == direct.attrs.processing_id
+        assert view[0].attrs.history == direct.attrs.history
+
+    @pytest.mark.parametrize("repeats", [2, 64])
+    @pytest.mark.parametrize("regular", [False, True])
+    def test_untracked_trims_replay_exactly(self, tmp_path, repeats, regular):
+        """Uneven grids and chains exceeding the mask still omit no-op calls."""
+        values = (
+            np.arange(5, dtype=float)
+            if regular
+            else np.array([0.0, 1.0, 3.0, 6.0, 10.0])
+        )
+        patch = dc.Patch(
+            data=np.arange(5),
+            coords={"distance": values},
+            dims=("distance",),
+        )
+        patch.io.write(tmp_path / "source.h5", "dasdae")
+        spool = dc.spool(tmp_path).update()
+        view, direct = spool, spool[0]
+        for _ in range(repeats):
+            view = view.select(distance=(1.5, None))
+            direct = direct.select(distance=(1.5, None))
+        assert np.array_equal(view[0].data, direct.data)
+        assert view[0].attrs.processing_id == direct.attrs.processing_id
+        assert view[0].attrs.history == direct.attrs.history
+
+    def test_two_bounds_on_an_uneven_coordinate_replay_on_the_patch(self, tmp_path):
+        """Extrema answer one selection, and cannot answer the next.
+
+        The index holds an uneven coordinate's smallest and largest
+        value but not the samples between, so it can say whether one
+        bound excludes an extreme and nothing after that. Two bounds
+        which each cut must still record twice, which only the patch
+        can decide.
+        """
+        values = np.array([0.0, 1.0, 3.0, 6.0, 10.0])
+        patch = dc.Patch(
+            data=np.arange(5), coords={"distance": values}, dims=("distance",)
+        ).abs()
+        patch.io.write(tmp_path / "source.h5", "dasdae")
+        spool = dc.spool(tmp_path).update()
+        source = spool[0]
+        view, direct = spool, source
+        for bound in (0.5, 2.0):
+            view = view.select(distance=(bound, None))
+            direct = direct.select(distance=(bound, None))
+        assert direct.shape != source.shape
+        assert np.array_equal(view[0].data, direct.data)
+        assert view[0].attrs.processing_id == direct.attrs.processing_id
+        assert view[0].attrs.history == direct.attrs.history
+
+    @pytest.mark.parametrize("dim", ["distance", "time"])
+    @pytest.mark.parametrize("bounds", [(0, None), (None, None), (None, 1e9)])
+    def test_relative_noop_keeps_metadata(self, tmp_path, dim, bounds):
+        """A relative selection that leaves samples alone keeps source metadata."""
+        dc.get_example_patch().abs().io.write(tmp_path / "source.h5", "dasdae")
+        spool = dc.spool(tmp_path).update()
+        view = spool.select(**{dim: bounds}, relative=True)
+        columns = ["_data_size", "processing_id"]
+        assert view._df[columns].equals(spool._df[columns])
+        assert view[0].attrs.processing_id == spool[0].attrs.processing_id
+        assert np.array_equal(view[0].data, spool[0].data)
+
+    @pytest.mark.parametrize("percent_bound", [False, True])
+    def test_relative_float32_defers_metadata(self, tmp_path, percent_bound):
+        """Narrow-float metadata stays unknown; loaded selections remain exact."""
+        origin, step = np.float32(538.14794921875), np.float32(3.3)
+        values = origin + np.arange(300, dtype=np.float32) * step
+        base = dc.get_example_patch().abs()
+        for dtype in (np.float32, np.float64):
+            base.update_coords(distance=values.astype(dtype)).io.write(
+                tmp_path / f"{np.dtype(dtype).name}.h5", "dasdae"
+            )
+        spool = dc.spool(tmp_path).update()
+        bound = (
+            100 * get_quantity("percent")
+            if percent_bound
+            else float(values.max()) - float(values.min())
+        )
+        view = spool.select(distance=(0, bound), relative=True)
+        noop = spool.select(distance=(0, None), relative=True)
+        columns = ["_data_size", "processing_id"]
+        for index, (source, selected) in enumerate(zip(spool, view, strict=True)):
+            direct = source.select(distance=(0, bound), relative=True)
+            assert np.array_equal(selected.data, direct.data)
+            assert selected.attrs.processing_id == direct.attrs.processing_id
+            row = view._df.iloc[index]
+            noop_row = noop._df.iloc[index][columns]
+            assert noop[index].attrs.processing_id == source.attrs.processing_id
+            if source.get_coord("distance").dtype == np.dtype("float32"):
+                assert pd.isna(row["_data_size"])
+                assert pd.isna(row["processing_id"])
+                assert noop_row.isna().all()
+            else:
+                assert row["_data_size"] == selected.data.size
+                assert row["processing_id"] == selected.attrs.processing_id
+                assert noop_row.equals(spool._df.iloc[index][columns])
+                assert selected.shape == source.shape
+            if percent_bound and source.get_coord("distance").dtype == np.dtype(
+                "float32"
+            ):
+                assert selected.shape != source.shape
+
+    def test_relative_metadata_tracks_each_row(self, tmp_path):
+        """A shared relative window trims only the longer source patch."""
+        base = dc.get_example_patch().abs()
+        for size in (5, 20):
+            patch = base.select(distance=(0, size), samples=True)
+            patch.io.write(tmp_path / f"{size}.h5", "dasdae")
+        spool = dc.spool(tmp_path).update()
+        view = spool.select(distance=(0, 10), relative=True)
+        whole = spool._df["distance_max"] <= 10
+        assert whole.any() and not whole.all()
+        for column in ("_data_size", "processing_id"):
+            assert view._df.loc[~whole, column].isna().all()
+            assert (
+                view._df.loc[whole, column].to_numpy()
+                == spool._df.loc[whole, column].to_numpy()
+            ).all()
+        for original, selected in zip(spool, view, strict=True):
+            direct = original.select(distance=(0, 10), relative=True)
+            assert selected.attrs.processing_id == direct.attrs.processing_id
+            assert np.array_equal(selected.data, direct.data)
+
+    def test_processing_id_queries_source_metadata(self, tmp_path):
+        """Attribute predicates identify the source, before residual processing."""
+        patch = dc.get_example_patch().abs()
+        patch.io.write(tmp_path / "source.h5", "dasdae")
+        spool = dc.spool(tmp_path).update()
+        source_id = spool[0].attrs.processing_id
+        trimmed = spool.select(distance=(10, 20)).select(processing_id=source_id)
+        assert len(trimmed) == 1
+        assert trimmed.get_contents()["processing_id"].isnull().all()
+        assert trimmed[0].attrs.processing_id != source_id
+        assert np.array_equal(trimmed[0].data, spool[0].select(distance=(10, 20)).data)
+
+    def test_a_trimmed_row_states_no_processing_id(self, tmp_path):
+        """What the source had was undone by the trim, so the row states none.
+
+        Stating it would let a provenance query compare the row against
+        an id the patch it resolves to does not carry. `patch_id` is
+        untouched: a trim does not change which data this is.
+        """
+        patch = dc.get_example_patch().pass_filter(time=(1, 10))
+        patch.io.write(tmp_path / "filtered.h5", "dasdae")
+        spool = dc.spool(tmp_path).update()
+        time = spool[0].get_coord("time")
+        view = spool.select(time=(time.min(), time.min() + 10 * time.step))
+        contents = view.get_contents()
+        assert contents["processing_id"].isnull().all()
+        assert contents["patch_id"].iloc[0] == view[0].attrs.patch_id
+
+    def test_a_row_a_view_leaves_whole_still_states_its_id(self, tmp_path):
+        """A view which trims one patch has not trimmed the others."""
+        patches = list(dc.get_example_spool("random_das"))
+        for index, each in enumerate(patches):
+            each.pass_filter(time=(1, 10)).io.write(tmp_path / f"{index}.h5", "dasdae")
+        spool = dc.spool(tmp_path).update()
+        contents = spool.get_contents()
+        span = contents["time_max"].max() - contents["time_min"].min()
+        view = spool.select(
+            time=(contents["time_min"].min() + span / 6, contents["time_max"].max())
+        )
+        stated = view.get_contents()["processing_id"]
+        assert stated.notna().any() and stated.isnull().any()
+        for index, value in stated.items():
+            if pd.notna(value):
+                assert view[index].attrs.processing_id == value
+
     def test_a_trim_keeps_the_id_it_says_it_keeps(self, written_spool):
         """The index and the patch which loads must not disagree."""
         trimmed = written_spool.select(time=(10, 20), samples=True)

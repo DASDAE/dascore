@@ -22,6 +22,7 @@ import operator
 import re
 import sys
 import warnings
+from collections import Counter
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -51,6 +52,7 @@ from dascore.utils.misc import (
     express_range_for_coord,
     is_range,
 )
+from dascore.utils.patch import record_call
 from dascore.utils.paths import is_memory_uri
 
 # Directory archives present in per-patch time order (source ordinals
@@ -109,14 +111,22 @@ def _row_source_patch_key(row: Mapping) -> str:
     return normalize_source_patch_key(row.get("source_patch_key"))
 
 
-def apply_exact_residuals(patch: dc.Patch, residuals) -> dc.Patch:
+def apply_exact_residuals(patch: dc.Patch, residuals, hinted=()) -> dc.Patch:
     """
     Apply a view's exact residual selections to a loaded patch.
 
     Shared by catalog row resolution and plan-member loading so the
     two-stage select contract has exactly one implementation.
+
+    ``hinted`` runs parallel to ``residuals``, naming per residual the
+    coordinates whose bounds went to the reader and cut this row. Such a
+    selection leaves its `select` nothing to do, and a call which
+    changes nothing records nothing, so it is recorded here instead and
+    a trimmed patch does not state the untrimmed patch's id. A shorter
+    sequence records nothing for the residuals past its end, which is
+    what a caller reading no hints out of the row wants.
     """
-    for coords, samples, relative in residuals:
+    for index, (coords, samples, relative) in enumerate(residuals):
         coord_map = patch.coords.coord_map
         usable = {
             k: express_range_for_coord(v, coord_map[k])
@@ -124,7 +134,16 @@ def apply_exact_residuals(patch: dc.Patch, residuals) -> dc.Patch:
             if k in coord_map
         }
         if usable:
-            patch = patch.select(**usable, samples=samples, relative=relative)
+            called = dict(usable)
+            if samples:
+                called["samples"] = True
+            if relative:
+                called["relative"] = True
+            out = patch.select(**called)
+            cut = hinted[index] if index < len(hinted) else ()
+            if out is patch and any(name in cut for name in usable):
+                out = record_call(out, patch, dc.Patch.select, (), called)
+            patch = out
     return patch
 
 
@@ -436,28 +455,45 @@ def _residual_cuts_unmarked_rows(residuals) -> bool:
     """
     True when a residual selection can trim a row nothing marks trimmed.
 
-    A value range rides along with a query whose bounds `to_df` folds
-    into the presented envelopes, so `_modified` already names every row
-    it cuts. Sample indices have no envelope to fold into, and a
+    Absolute and relative ranges are projected onto the presented
+    envelopes, so `_modified` already names every row they cut or cannot
+    project. Sample indices do not mark their trims, and a
     selector which is not a range never reached `adjust_segments`;
     either trims at load with the row still claiming to be whole.
     """
     return any(
-        samples or relative or not all(_rides_the_envelopes(x) for x in coords.values())
-        for coords, samples, relative in residuals
+        samples or not all(_rides_the_envelopes(x) for x in coords.values())
+        for coords, samples, _ in residuals
     )
 
 
-def _forget_trimmed_sizes(df: pd.DataFrame, residuals=()) -> pd.DataFrame:
+# What a row states about the whole of its source patch, which a trim
+# leaves untrue. `patch_id` is deliberately not here; see below.
+_FORGOTTEN_ON_TRIM = ("_data_size", "processing_id")
+
+
+def _forget_what_a_trim_invalidates(df: pd.DataFrame, residuals=()) -> pd.DataFrame:
     """
-    Blank the stored sample count of every row a selection trims.
+    Blank what a trimmed row states about the whole of its source.
 
     A trimmed row describes fewer samples than its source patch holds,
     and how many is known only once the trim is applied, so it states no
-    size rather than the source's. A row a selection leaves whole keeps
-    its count: only what a selection actually cuts loses one.
+    size rather than the source's. `processing_id` goes the same way for
+    the same reason: a trim is an operation, the patch which comes back
+    carries the id that operation leads to, and the stored one names the
+    patch on disk. Attribute queries still match the stored source id;
+    clearing this presented value does not change SQL candidacy.
+
+    `patch_id` stays. A trim does not change which data this is, so the
+    stored id is still the loaded patch's and selecting on it still
+    finds the row -- the two ids parting company here is what having two
+    of them is for.
+
+    A row a selection leaves whole keeps both: only what a selection
+    actually cuts loses what the cut invalidates.
     """
-    if "_data_size" not in df.columns:
+    present = [x for x in _FORGOTTEN_ON_TRIM if x in df.columns]
+    if not present:
         return df
     if _residual_cuts_unmarked_rows(residuals):
         trimmed = np.ones(len(df), dtype=bool)
@@ -467,7 +503,152 @@ def _forget_trimmed_sizes(df: pd.DataFrame, residuals=()) -> pd.DataFrame:
         return df
     if not trimmed.any():
         return df
-    return df.assign(_data_size=df["_data_size"].astype("Int64").where(~trimmed))
+    forgotten = {name: df[name].where(~trimmed) for name in present}
+    if "_data_size" in forgotten:
+        # nullable rather than float: a sample count is a count, and the
+        # column is compared and presented as one.
+        forgotten["_data_size"] = df["_data_size"].astype("Int64").where(~trimmed)
+    return df.assign(**forgotten)
+
+
+def _coord_from_envelope(envelope, dtype=None, units=None) -> object | None:
+    """
+    The coordinate a stashed envelope describes, or None if it cannot.
+
+    An envelope which states no step describes samples the index does
+    not hold, so nothing can be replayed on it and its bounds are not
+    sent to the reader. A numeric one is rebuilt at the precision the
+    coordinate was stored in: the frame widens a float32 coordinate to
+    float64, and a bound lands on its first sample in one and not the
+    other.
+    """
+    if not isinstance(envelope, Mapping):
+        return None
+    values = []
+    for key in ("min", "max", "step"):
+        value = next(v for k, v in envelope.items() if k.endswith(f"_{key}"))
+        if value is None or (np.ndim(value) == 0 and pd.isnull(value)):
+            return None
+        if isinstance(value, pd.Timestamp):
+            value = value.to_datetime64()
+        elif isinstance(value, pd.Timedelta):
+            value = value.to_timedelta64()
+        values.append(value)
+    low, high, step = values
+    if step <= np.zeros((), dtype=np.asarray(step).dtype):
+        return None
+    if isinstance(dtype, str) and dtype and np.issubdtype(np.dtype(dtype), np.floating):
+        kind = np.dtype(dtype).type
+        low, high, step = kind(low), kind(high), kind(step)
+    from dascore.core.coords import get_coord  # noqa: PLC0415
+
+    units = units if isinstance(units, str) and units else None
+    return get_coord(min=low, max=high + step, step=step, units=units)
+
+
+def _extremes_coord(envelope, units=None) -> object | None:
+    """
+    A coordinate of just the two values an envelope names.
+
+    An uneven coordinate's samples are not in the index, but its
+    smallest and largest are, and one selection cuts it exactly when it
+    excludes one of them. Selecting on those two answers that question
+    with the coordinate's own code. It answers only one, though: what
+    the first selection left is a sample this cannot name, so a
+    coordinate selected twice is left to the patch.
+    """
+    if not isinstance(envelope, Mapping):
+        return None
+    values = []
+    for key in ("min", "max"):
+        value = next(v for k, v in envelope.items() if k.endswith(f"_{key}"))
+        if value is None or (np.ndim(value) == 0 and pd.isnull(value)):
+            return None
+        if isinstance(value, pd.Timestamp):
+            value = value.to_datetime64()
+        elif isinstance(value, pd.Timedelta):
+            value = value.to_timedelta64()
+        values.append(value)
+    low, high = values
+    if low >= high:
+        return None
+    from dascore.core.coords import get_coord  # noqa: PLC0415
+
+    units = units if isinstance(units, str) and units else None
+    return get_coord(values=np.array(values), units=units)
+
+
+_SOURCE_SUFFIX = "_source_envelope"
+
+
+def _source_column(name: str) -> str:
+    """The private column holding a coordinate's untrimmed envelope."""
+    return f"_{name}{_SOURCE_SUFFIX}"
+
+
+def _is_reader_hintable(value) -> bool:
+    """
+    Whether a coordinate selector can be pushed into the reader.
+
+    Readers take numbers in their coordinate's own units, so a bound
+    converted from other units could narrow the read past what exactness
+    can restore. Only a bare range, meaning native units on both sides,
+    is safe to send.
+    """
+    return isinstance(value, tuple) and not any(
+        hasattr(bound, "units") for bound in value
+    )
+
+
+def _hintable_names(residuals) -> set[str]:
+    """
+    The coordinates whose bounds may be sent to the reader.
+
+    A sample-index, relative or unit-bearing selection anywhere in a
+    chain takes its coordinate out: what it leaves behind is not
+    something the envelopes state, so a later bound on the same
+    coordinate cannot be judged against them either.
+    """
+    out, barred = set(), set()
+    for coords, samples, relative in residuals:
+        for name, value in coords.items():
+            if samples or relative or not _is_reader_hintable(value):
+                barred.add(name)
+            elif name not in barred:
+                out.add(name)
+    return out - barred
+
+
+def _source_envelopes(df: pd.DataFrame, residuals) -> dict[str, pd.Series]:
+    """
+    Each hintable coordinate's envelope, before any selection trims it.
+
+    A reader given a bound applies it before the patch exists, so the
+    `select` which follows finds nothing to do and records nothing. What
+    the reader did has to be recovered from the coordinate the row
+    describes, and the envelope columns are about to be replayed onto,
+    so the untrimmed values are kept aside here while they are still
+    true.
+    """
+    names = _hintable_names(residuals)
+    if not names:
+        return {}
+    # A coordinate riding a dimension is trimmed by a selection on that
+    # dimension, and the reverse; the envelopes state neither, so a view
+    # naming one leaves every coordinate in it to the patch.
+    named = {name for coords, _, _ in residuals for name in coords}
+    if "dims" in df and any(
+        named - set(str(dims).split(",")) for dims in df["dims"].unique()
+    ):
+        return {}
+    out = {}
+    for name in names:
+        columns = [f"{name}_{end}" for end in ("min", "max", "step")]
+        if not set(columns).issubset(df.columns):
+            continue
+        envelopes = df[columns].to_dict("records")
+        out[_source_column(name)] = pd.Series(envelopes, index=df.index, dtype=object)
+    return out
 
 
 class PatchCatalog:
@@ -987,15 +1168,24 @@ class PatchCatalog:
                 ).reset_index(drop=True)
             # The early ones are already done; see SPOOL_EARLY_RENAMES.
             df = df.rename(columns=dict(SPOOL_LATE_RENAMES))
-            # SQL only establishes candidacy. Replay residual coordinate
-            # operations in call order so presented envelopes match the
-            # patch-level selections, including relative-then-absolute chains.
+            # An envelope kept aside answers this view's residuals, not
+            # its parent's, so a parent's is dropped before one is taken.
+            df = df.drop(
+                columns=[
+                    c
+                    for c in df.columns
+                    if str(c).startswith("_") and str(c).endswith(_SOURCE_SUFFIX)
+                ]
+            )
+            if sources := _source_envelopes(df, self._residuals):
+                df = df.assign(**sources)
+            # Circular import: chunk planning also uses the catalog.
             from dascore.utils.chunk_plan import (  # noqa: PLC0415
                 patch_local_adjusted_envelopes,
             )
 
             df = patch_local_adjusted_envelopes(df, self._residuals, drop_empty=False)
-            df = _forget_trimmed_sizes(df, self._residuals)
+            df = _forget_what_a_trim_invalidates(df, self._residuals)
             # Re-read the revision: bootstrapping the backend above can
             # bump it, and this frame reflects the state after that.
             return self._df_cache.set(df, self._revision.value)
@@ -1089,16 +1279,64 @@ class PatchCatalog:
                 {
                     k: v
                     for k, v in coords.items()
-                    if k not in patch_local
-                    and isinstance(v, tuple)
-                    and not any(hasattr(b, "units") for b in v)
+                    if k not in patch_local and _is_reader_hintable(v)
                 }
             )
         trim_hint.update(extra_trim or {})
         for name in patch_local:
             trim_hint.pop(name, None)
+        coords = self._source_coords(row, set(trim_hint))
+        if self._residuals:
+            # A coordinate the row cannot describe cannot say what a
+            # reader did to it; it replays on the patch, which records it.
+            trim_hint = {k: v for k, v in trim_hint.items() if k in coords}
         patch = self.resolver.resolve(row, **trim_hint)
-        return apply_exact_residuals(patch, self._residuals)
+        hinted = self._hinted_per_residual(coords)
+        return apply_exact_residuals(patch, self._residuals, hinted=hinted)
+
+    def _source_coords(self, row: Mapping, names: set[str]) -> dict:
+        """Rebuild each hintable coordinate as the row had it untrimmed."""
+        once = Counter(name for coords, _, _ in self._residuals for name in coords)
+        out = {}
+        for name in names:
+            envelope = row.get(_source_column(name))
+            units = row.get(f"_{name}_units")
+            coord = _coord_from_envelope(
+                envelope, row.get(f"_{name}_coord_dtype"), units
+            )
+            if coord is None and once[name] == 1:
+                coord = _extremes_coord(envelope, units)
+            if coord is not None:
+                out[name] = coord
+        return out
+
+    def _hinted_per_residual(self, coords: dict):
+        """
+        Per residual, which of its coordinates the reader already cut.
+
+        ``coords`` holds each hinted coordinate as it was before
+        anything trimmed it, so the selections are replayed on the
+        coordinate itself: whichever shortens it is one the reader
+        carried out, which the `select` on the patch will not record.
+        Running the coordinate's own `select` is what makes this agree
+        with the patch about every edge -- a bound between two samples,
+        a coordinate stored at lower precision -- rather than being a
+        second implementation of the same arithmetic.
+        """
+        if not self._residuals:
+            return ()
+        out = []
+        for selection, samples, relative in self._residuals:
+            names = set()
+            for name, value in selection.items():
+                if (coord := coords.get(name)) is None:
+                    continue
+                new, _ = coord.select(value, samples=samples, relative=relative)
+                if len(new) != len(coord):
+                    names.add(name)
+                coords[name] = new
+            out.append(names)
+        return tuple(out)
 
     def __iter__(self):
         """

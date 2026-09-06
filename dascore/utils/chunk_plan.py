@@ -240,7 +240,15 @@ def _adjust_relative_envelopes(df, coords, drop_empty):
     for name, value in coords.items():
         cols = [f"{name}_min", f"{name}_max"]
         if not set(cols).issubset(df.columns) or not is_range(value):
+            df["_modified"] = True
             continue
+        dtype_col = f"_{name}_coord_dtype"
+        if dtype_col in df:
+            # Index arithmetic cannot prove a no-op at narrower precision.
+            # Leave size and identity unknown until the patch is selected.
+            df["_modified"] = df.get("_modified", False) | df[dtype_col].isin(
+                ("float16", "float32")
+            )
         unit_col = f"_{name}_units"
         grouped = (
             df.groupby(df[unit_col], dropna=False, sort=False)
@@ -277,6 +285,15 @@ def _adjust_relative_envelopes(df, coords, drop_empty):
             # resurrected as a one-sample envelope.
             keep = (new_min <= maxs) & (new_max >= mins)
             keep |= unresolved
+            # Preserve whole-source metadata for relative no-ops. Unknown
+            # projections still cannot claim that the source loads whole.
+            sub["_modified"] = (
+                sub.get("_modified", False)
+                | unresolved
+                | ~keep
+                | (new_min > mins)
+                | (new_max < maxs)
+            )
             sub[cols[0]] = new_min.clip(lower=mins, upper=maxs)
             sub[cols[1]] = new_max.clip(lower=mins, upper=maxs)
             if drop_empty:
