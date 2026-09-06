@@ -68,6 +68,11 @@ def _guarded(call: Callable, name: str, size: int):
     stops the conversion rather than reporting it afterwards. An
     operation which stays on the array's own backend never warns and is
     never stopped.
+
+    Any such warning during the call is taken to be about this array,
+    including one from a callback the caller passed in. Refusing an
+    operation which would have fit is the safe way to be wrong here,
+    and the message says which array was judged too large.
     """
     with warnings.catch_warnings():
         warnings.simplefilter("error", NumpyFallbackWarning)
@@ -96,8 +101,12 @@ class _PatchMethods:
 
     A dask-backed DataArray is passed through as it stands, so a method
     which works on the array's own backend leaves it lazy. One which
-    cannot warns and converts, as it does on a patch, unless the array
-    is too large for memory, in which case it raises instead of trying.
+    cannot warns and converts, as it does on a patch, and where it
+    announces that conversion and the array is larger than free memory
+    the warning is raised instead, so the conversion never starts. A
+    method which converts silently, without announcing it, is not
+    caught: it materializes the array as it would on a patch, and fails
+    on memory the same way.
     """
 
     def __init__(self, data_array):
@@ -105,15 +114,23 @@ class _PatchMethods:
 
     def __getattr__(self, name: str) -> Any:
         """Forward one name to the patch this DataArray describes."""
-        if name.startswith("_") or not hasattr(dc.Patch, name):
-            msg = f"Neither this accessor nor a Patch has an attribute {name!r}."
+        if name.startswith("_"):
+            msg = f"The accessor forwards a patch's public names, not {name!r}."
             raise AttributeError(msg)
         patch = xarray_to_patch(self._data_array)
-        value = getattr(patch, name)
+        try:
+            # asked of the patch, not of its class, so a namespace the
+            # patch resolves for itself is reachable and a name only its
+            # class has is not
+            value = getattr(patch, name)
+        except AttributeError as error:
+            msg = f"Neither this accessor nor a Patch has an attribute {name!r}."
+            raise AttributeError(msg) from error
         if not callable(value):
-            # a property states something about the patch; there is no
-            # call to convert arguments for, and no patch to convert back
-            return value
+            # a property states something about the patch, so there is no
+            # call to convert arguments for; a patch it states is still a
+            # patch, and comes back as the DataArray it describes
+            return _as_xarray(value)
         return self._method(patch, value, name)
 
     def _method(self, patch, bound: Callable, name: str) -> Callable:
@@ -131,8 +148,16 @@ class _PatchMethods:
         return call
 
     def __dir__(self) -> list[str]:
-        """Offer the patch's own names, so completion finds them."""
-        return sorted(x for x in dir(dc.Patch) if not x.startswith("_"))
+        """
+        Offer the patch's own names, so completion finds them.
+
+        A namespace is resolved when it is asked for rather than being
+        an attribute, so `dir` does not report one; the patch says which
+        it has, and they are as reachable here as any method.
+        """
+        patch = xarray_to_patch(self._data_array)
+        names = set(dir(patch)) | set(patch.get_registered_namespaces())
+        return sorted(x for x in names if not x.startswith("_"))
 
     def __repr__(self) -> str:
         """Say what this is and what it wraps."""

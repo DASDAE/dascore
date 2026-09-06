@@ -70,6 +70,33 @@ class TestForwarding:
         """Converting back is the one thing the accessor adds of its own."""
         assert data_array.dc.to_patch() == patch
 
+    def test_a_keyword_data_array_argument_is_a_patch(self, patch, data_array):
+        """A keyword is converted like a position; a patch method needs one.
+
+        `add` builds a patch out of what it is given, so an unconverted
+        DataArray does not merely give a different answer, it refuses.
+        """
+        out = data_array.dc.add(other=data_array)
+        assert np.allclose(out.values, patch.data * 2)
+
+    def test_a_property_stating_a_patch_states_a_data_array(self, data_array):
+        """`T` is a property whose value is a patch, so it converts too."""
+        import xarray as xr  # noqa: PLC0415
+
+        transposed = data_array.dc.T
+        assert isinstance(transposed, xr.DataArray)
+        assert transposed.dims == data_array.dims[::-1]
+
+    def test_a_namespace_is_reachable(self, patch, data_array):
+        """A patch resolves its namespaces itself, so asking the patch finds them."""
+        assert type(data_array.dc.io).__name__ == type(patch.io).__name__
+        assert "io" in dir(data_array.dc)
+
+    def test_a_name_only_the_class_has_is_not_forwarded(self, data_array):
+        """`mro` is a name of the type, not of a patch."""
+        with pytest.raises(AttributeError, match="mro"):
+            data_array.dc.mro
+
     def test_a_name_no_patch_has(self, data_array):
         """The error names what was asked for, and where it was looked for."""
         with pytest.raises(AttributeError, match="not_a_patch_method"):
