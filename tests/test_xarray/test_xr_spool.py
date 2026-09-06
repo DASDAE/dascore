@@ -735,6 +735,134 @@ class TestToXarrayBlockSize:
         assert np.array_equal(data.compute().values, expected)
         assert np.array_equal(np.asarray(data["time"].values), merged.get_array("time"))
 
+    def test_a_selection_reads_only_its_samples(self, file_spool, monkeypatch):
+        """A window reaches the reader as itself, whatever the blocks are.
+
+        The selection fuses into the segment source's own read, so the
+        blocks bound a bulk read and say nothing about this one.
+        """
+        from dascore.io.index.planned import PlanResolver  # noqa: PLC0415
+
+        for block_size in (0, file_spool[0].data.nbytes // 4):
+            windows = []
+            original = PlanResolver._load_member_array
+
+            def _counting(self, row, member_windows, _original=original, **kwargs):
+                windows.append(dict(member_windows))
+                return _original(self, row, member_windows, **kwargs)
+
+            monkeypatch.setattr(PlanResolver, "_load_member_array", _counting)
+            data = self._leaf(file_spool.io.to_xarray(block_size=block_size))
+            piece = data.isel(time=slice(3, 11)).compute()
+            monkeypatch.undo()
+            assert windows == [{"time": (3, 11)}], block_size
+            assert piece.sizes["time"] == 8
+
+    def test_a_selection_reads_only_the_members_it_covers(self, file_spool):
+        """A window inside one member never opens the others."""
+        from dascore.io.index.planned import PlanResolver  # noqa: PLC0415
+
+        samples = len(file_spool[0].get_coord("time"))
+        paths = []
+        original = PlanResolver._load_member_array
+
+        def _counting(self, row, member_windows, **kwargs):
+            paths.append(row.get("source_path"))
+            return original(self, row, member_windows, **kwargs)
+
+        data = self._leaf(file_spool.io.to_xarray())
+        with pytest.MonkeyPatch.context() as patcher:
+            patcher.setattr(PlanResolver, "_load_member_array", _counting)
+            # a window straddling the first seam covers two of three members
+            straddle = data.isel(time=slice(samples - 2, samples + 2)).compute()
+        assert straddle.sizes["time"] == 4
+        assert len(set(paths)) == 2
+
+    def test_a_selection_on_another_dimension_reads_less(self, file_spool):
+        """A distance window is pushed into the read, not applied after."""
+        from dascore.io.index.planned import PlanResolver  # noqa: PLC0415
+
+        sizes = []
+        original = PlanResolver._load_member_array
+
+        def _counting(self, row, member_windows, **kwargs):
+            out = original(self, row, member_windows, **kwargs)
+            sizes.append(0 if out is None else out.size)
+            return out
+
+        data = self._leaf(file_spool.io.to_xarray())
+        whole = file_spool[0].data.size
+        with pytest.MonkeyPatch.context() as patcher:
+            patcher.setattr(PlanResolver, "_load_member_array", _counting)
+            narrow = data.isel(distance=slice(0, 3)).compute()
+        assert narrow.sizes["distance"] == 3
+        assert max(sizes) < whole
+
+    @pytest.mark.parametrize("block_size", [0, 1_000_000])
+    def test_every_index_form_matches_the_merged_patch(self, file_spool, block_size):
+        """Reading is contiguous, so other index forms go through a window.
+
+        An integer drops its dimension, a stride and a reversal pick
+        from the span they cover, and an empty selection reads nothing;
+        each must still answer what the merged patch holds.
+        """
+        data = self._leaf(file_spool.io.to_xarray(block_size=block_size))
+        merged = file_spool.chunk(time=None)[0]
+        whole = merged.transpose(*data.dims).data
+        samples = data.sizes["time"]
+        seam = len(file_spool[0].get_coord("time"))
+        cases = {
+            "head": (slice(0, 5), whole[:, :5]),
+            "across a seam": (slice(seam - 5, seam + 5), whole[:, seam - 5 : seam + 5]),
+            "integer": (3, whole[:, 3]),
+            "negative integer": (-2, whole[:, -2]),
+            "stride": (slice(0, 20, 3), whole[:, 0:20:3]),
+            "reversed": (slice(None, None, -1), whole[:, ::-1]),
+            "positions": ([1, 5, samples - 1], whole[:, [1, 5, samples - 1]]),
+            "empty": (slice(0, 0), whole[:, 0:0]),
+            "no positions": ([], whole[:, []]),
+        }
+        for name, (index, expected) in cases.items():
+            got = np.asarray(data.isel(time=index).compute().values)
+            assert np.array_equal(got, expected), name
+        # and an index on both dimensions at once
+        pair = data.isel(distance=[0, 3], time=slice(0, 7)).compute().values
+        assert np.array_equal(pair, whole[[0, 3]][:, :7])
+
+    def test_a_selection_missing_every_member_reads_nothing(self, file_spool):
+        """An empty window has no member to ask, and is empty rather than absent."""
+        from dascore.io.index.planned import PlanResolver  # noqa: PLC0415
+
+        reads = []
+        original = PlanResolver._load_member_array
+        data = self._leaf(file_spool.io.to_xarray())
+        with pytest.MonkeyPatch.context() as patcher:
+            patcher.setattr(
+                PlanResolver,
+                "_load_member_array",
+                lambda self, row, w, **k: (
+                    reads.append(w) or original(self, row, w, **k)
+                ),
+            )
+            out = data.isel(time=slice(0, 0)).compute()
+        assert out.sizes["time"] == 0
+        assert reads == []
+
+    def test_a_fallback_read_still_narrows_other_dimensions(
+        self, file_spool, monkeypatch
+    ):
+        """A patch-path read applies the other dimensions' windows itself."""
+        from dascore.io.index.planned import PlanResolver  # noqa: PLC0415
+
+        data = self._leaf(file_spool.io.to_xarray())
+        merged = file_spool.chunk(time=None)[0]
+        whole = merged.transpose(*data.dims).data
+        monkeypatch.setattr(
+            PlanResolver, "_load_member_array", lambda self, row, w, **k: None
+        )
+        got = data.isel(distance=slice(0, 4), time=slice(0, 6)).compute().values
+        assert np.array_equal(got, whole[:4, :6])
+
     def test_a_block_reads_only_its_own_window(self, file_spool, monkeypatch):
         """Computing one piece reads that piece's samples, not the file."""
         from dascore.io.index.planned import PlanResolver  # noqa: PLC0415
@@ -821,6 +949,50 @@ class TestToXarrayBlockSize:
         data = self._leaf(spool.io.to_xarray(block_size=merged.data.nbytes // 8))
         assert data.data.npartitions > 2
         assert np.array_equal(data.compute().values, merged.transpose(*data.dims).data)
+
+
+class TestWindowAndKey:
+    """The split of one index into a window to read and what to take."""
+
+    @staticmethod
+    def _split(key, size=10):
+        from dascore.xarray.spool import _window_and_key  # noqa: PLC0415
+
+        return _window_and_key(key, size)
+
+    def test_a_plain_slice_is_the_window(self):
+        """A step-one slice needs nothing taken out of what it reads."""
+        assert self._split(slice(2, 6)) == ((2, 6), slice(None))
+        assert self._split(slice(None)) == ((0, 10), slice(None))
+
+    def test_a_backwards_slice_reads_nothing(self):
+        """A stop before its start selects nothing, and reads nothing."""
+        assert self._split(slice(6, 2)) == ((6, 6), slice(None))
+
+    def test_an_integer_drops_its_dimension(self):
+        """The window holds one sample and the take is an integer, not a slice."""
+        assert self._split(3) == ((3, 4), 0)
+        assert self._split(-2) == ((8, 9), 0)
+
+    def test_a_stride_reads_the_span_it_covers(self):
+        """Reading is contiguous, so a stride is taken from its span."""
+        window, take = self._split(slice(1, 8, 3))
+        assert window == (1, 8)
+        assert np.array_equal(take, [0, 3, 6])
+
+    def test_positions_are_read_as_the_span_enclosing_them(self):
+        """Scattered positions still name one window, and their offsets in it."""
+        window, take = self._split([7, 2, 4])
+        assert window == (2, 8)
+        assert np.array_equal(take, [5, 0, 2])
+
+    def test_no_positions_read_nothing(self):
+        """An empty index has no span, so it names an empty window.
+
+        Dask spells this as an empty slice before it reaches the source,
+        so only a direct caller sees this branch.
+        """
+        assert self._split([]) == ((0, 0), slice(None))
 
 
 class TestBlockPieces:

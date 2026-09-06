@@ -195,12 +195,12 @@ class DascoreConfig(BaseModel):
         default=268_435_456,  # 256 MiB
         ge=0,
         description=(
-            "Largest a single dask block may be, in bytes, when a spool "
-            "converts to an xarray tree. A source patch bigger than this is "
-            "read in several windows along the merged dimension rather than "
-            "whole, so one block never has to hold a whole large file. Zero "
-            "reads every source patch as one block, which makes any "
-            "selection touching a patch read all of it."
+            "Most a single dask block may hold, in bytes, when a spool "
+            "converts to an xarray tree. This bounds a bulk read: a source "
+            "patch bigger than this is read in several windows along the "
+            "merged dimension rather than whole. A selection reads only "
+            "what it asks for whatever this is. Zero makes each source "
+            "patch one block."
         ),
     )
     remote_hdf5_max_blocks: int = Field(
