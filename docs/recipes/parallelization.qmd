@@ -19,12 +19,47 @@ def process(patch):
     ...
 
 
-spool = dc.get_example_spool("random_das")
-with ProcessPoolExecutor() as executor:
-    results = spool.map(process, client=executor)
+if __name__ == "__main__":
+    spool = dc.get_example_spool("random_das")
+    with ProcessPoolExecutor() as executor:
+        results = spool.map(process, client=executor)
 ```
 
 `ThreadPoolExecutor` also works. Threads run Python in parallel on free-threaded CPython; on standard builds they mainly help operations that release the GIL, including IO and NumPy/SciPy work. Chunk inputs to fit memory. Standard executors use one machine; use MPI for multiple nodes.
+
+# Loading ahead
+
+[`Spool.iterate`](`dascore.core.spool.Spool.iterate`) uses one background thread to load upcoming patches while the calling thread processes the current patch. This can overlap HDF5 reads with NumPy/SciPy work. Ordinary `for patch in spool` stays synchronous. A positive window requires thread support; on WebAssembly, use ordinary iteration or explicitly set `max_in_flight=0`.
+
+```{python}
+from contextlib import closing
+
+# The guard lets this share a script with the process-pool example above.
+if __name__ == "__main__":
+    with closing(spool.iterate(max_in_flight=2)) as patches:
+        for patch in patches:
+            result = process(patch)
+```
+
+`max_in_flight` bounds upcoming patches, including the one being loaded. The patch yielded to the caller and any patches the caller retains are additional. Set it to zero to load synchronously using the configuration active at consumption time, like ordinary iteration. Threaded directory iteration requires a serialized SQLite build (`sqlite3.threadsafety == 3`). Use `closing` when the loop may stop early: closing cancels pending reads, waits for any running read, and shuts down the loading thread. A patch count does not impose a byte limit.
+
+# Updating directory indexes
+
+[`Spool.update`](`dascore.core.spool.Spool.update`) accepts the same `client=` protocol as `map`. It distributes batches of changed sources through the executor, then writes the index in the calling process. Each worker opens its own sources. Directory formats remain whole scan units. Without a client, scanning remains serial.
+
+```{python}
+if __name__ == "__main__":
+    root = dc.spool("/path/to/data")
+    with ProcessPoolExecutor(max_workers=4) as executor:
+        root = root.update(client=executor)
+        results = root.map(process, client=executor)
+        # Reuse the executor after more files arrive.
+        root = root.update(client=executor)
+```
+
+Reuse a process pool for sufficiently large or repeated updates so startup does not dominate the work. h5py serializes its API calls across threads, including calls on separate files; processes can scan those files concurrently. Threads can still overlap reading with computation, as in `iterate`. See [h5py's threading documentation](https://docs.h5py.org/en/stable/threads.html).
+
+The caller owns the executor and configures its worker environment; DASCore does not shut it down. Warnings are emitted where the scan runs, so parent-process warning capture and filters do not automatically apply to process workers. Configure warning handling in the worker initializer or environment if needed. Each batch uses ordinary `dc.scan` error handling: a batch with only files requiring missing optional dependencies can raise even when another batch has readable files. In a script, keep process-pool creation under `if __name__ == "__main__":` and define worker functions at module scope. An unchanged directory submits no scans. Single-file and in-memory updates do not use the client.
 
 # Thread safety
 
@@ -37,7 +72,7 @@ DASCore's core suite runs on free-threaded CPython. The supported sharing model 
 
 Use one writer, with no concurrent readers, for directory-spool updates, in-memory spool additions, and [`clear_remote_file_cache`](`dascore.utils.remote_io.clear_remote_file_cache`). Never access the same open IO handle from multiple threads; give each thread its own patch or spool. Third-party `FiberIO` plugins must protect their own mutable state.
 
-`set_config` changes process-wide defaults. `config_context` is context-local and does not automatically propagate to newly created threads. `Spool.map` captures and reapplies the active configuration; manually created threads must do so themselves.
+`set_config` changes process-wide defaults. `config_context` is context-local and does not automatically propagate to newly created threads. `Spool.map`, threaded `Spool.iterate`, and executor-backed `Spool.update` capture and reapply the active configuration; manually created threads must do so themselves.
 
 # MPI
 
