@@ -49,6 +49,21 @@ def _too_large_to_materialize(data) -> int | None:
     return int(size) if int(size) > available else None
 
 
+def _largest_to_materialize(values) -> int | None:
+    """
+    The size of the largest array in a call which would not fit, else None.
+
+    A conversion converts the arguments too, so an operation is refused
+    for an argument which will not fit just as it is for the patch it
+    is called on.
+    """
+    sizes = [
+        _too_large_to_materialize(x.data) for x in values if isinstance(x, dc.Patch)
+    ]
+    found = [x for x in sizes if x is not None]
+    return max(found) if found else None
+
+
 def _as_patch(value):
     """A DataArray as the patch it describes; anything else unchanged."""
     xr = optional_import("xarray")
@@ -142,10 +157,18 @@ class _PatchMethods:
             args = tuple(_as_patch(x) for x in args)
             kwargs = {k: _as_patch(v) for k, v in kwargs.items()}
             run = functools.partial(bound, *args, **kwargs)
-            size = _too_large_to_materialize(patch.data)
+            # an argument can be the large one, so every patch in the
+            # call is weighed, not only the one being called on
+            patches = [patch, *(x for x in (*args, *kwargs.values()))]
+            size = _largest_to_materialize(patches)
             out = run() if size is None else _guarded(run, name, size)
             return _as_xarray(out)
 
+        # `add` and its kind are objects with methods of their own
+        # (`reduce`, `accumulate`); wrapping the call must not hide them
+        for extra in ("reduce", "accumulate", "outer", "at"):
+            if (nested := getattr(bound, extra, None)) is not None:
+                setattr(call, extra, self._method(patch, nested, extra))
         return call
 
     def __dir__(self) -> list[str]:

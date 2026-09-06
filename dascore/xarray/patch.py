@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import numpy as np
+
 import dascore as dc
 from dascore.constants import PatchType
+from dascore.core.coords import get_coord
 from dascore.utils.misc import optional_import
 
 
@@ -43,8 +46,28 @@ def xarray_to_patch(data_array) -> dc.Patch:
     _ = optional_import("xarray")
 
     return dc.Patch(
-        coords={i: (x.dims, x.values) for i, x in data_array.coords.items()},
+        coords={i: _coord_from(data_array, i, x) for i, x in data_array.coords.items()},
         attrs=dict(data_array.attrs.items()),
         dims=data_array.dims,
         data=data_array.data,
     )
+
+
+def _coord_from(data_array, name, coord):
+    """
+    The dims and values a patch coordinate is built from.
+
+    A lazily indexed coordinate states its samples rather than storing
+    them, and reading its values would spell out every one -- which for
+    a tree spanning a long acquisition is what the lazy index exists to
+    avoid. The range it describes rebuilds the same coordinate from
+    three numbers.
+    """
+    index = data_array.xindexes.get(name)
+    transform = getattr(index, "transform", None)
+    if transform is not None and hasattr(transform, "start_ns"):
+        start = np.asarray(transform.start_ns).astype(transform.dtype)
+        step = np.asarray(transform.step_ns).astype("timedelta64[ns]")
+        size = transform.dim_size[name]
+        return coord.dims, get_coord(start=start, step=step, stop=start + step * size)
+    return coord.dims, coord.values

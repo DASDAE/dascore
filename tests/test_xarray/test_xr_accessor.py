@@ -9,6 +9,7 @@ import pytest
 
 import dascore as dc
 from dascore.exceptions import PatchConversionError
+from dascore.utils.misc import suppress_warnings
 from dascore.warnings import NumpyFallbackWarning
 
 # Importing the accessor registers it, which needs xarray; without it
@@ -99,6 +100,13 @@ class TestForwarding:
         with pytest.raises(AttributeError, match="mro"):
             data_array.dc.mro
 
+    def test_a_ufunc_keeps_the_methods_it_carries(self, patch, data_array):
+        """`add` and its kind are objects with `reduce` and `accumulate`."""
+        assert hasattr(data_array.dc.add, "reduce")
+        out = data_array.dc.add.reduce("time")
+        expected = patch.add.reduce("time")
+        assert np.allclose(out.values, expected.data)
+
     def test_a_name_no_patch_has(self, data_array):
         """The error names what was asked for, and where it was looked for."""
         with pytest.raises(AttributeError, match="not_a_patch_method"):
@@ -136,6 +144,44 @@ class TestLaziness:
         """Laziness is about when the work happens, not what it produces."""
         out = lazy_data_array.dc.abs().compute()
         assert np.array_equal(np.asarray(out.values), patch.abs().data)
+
+
+class TestLazyCoordinates:
+    """A coordinate the tree states rather than stores stays stated."""
+
+    @pytest.fixture()
+    def tree_leaf(self, random_spool):
+        """One segment of a tree, whose time coordinate is served lazily."""
+        pytest.importorskip("dask")
+        tree = random_spool.io.to_xarray()
+        return next(x for x in tree.subtree if "data" in x.dataset)["data"]
+
+    def test_the_index_is_lazy_to_begin_with(self, tree_leaf):
+        """Otherwise the test below would prove nothing."""
+        assert type(tree_leaf.xindexes["time"]).__name__ == "TemporalRangeIndex"
+
+    def test_converting_does_not_spell_out_the_labels(self, tree_leaf, monkeypatch):
+        """A range rebuilds from three numbers, not from every sample.
+
+        The labels are computed by the transform, so a conversion which
+        never calls it never built them. Asserting on the coordinate
+        which comes back would not show this: values spaced evenly infer
+        a range whether or not they were spelled out first.
+        """
+        from dascore.core.coords import CoordRange  # noqa: PLC0415
+        from dascore.xarray.index import TemporalRangeTransform  # noqa: PLC0415
+
+        def _refuse(self, dim_positions):
+            raise AssertionError("the labels were materialized")
+
+        monkeypatch.setattr(TemporalRangeTransform, "forward", _refuse)
+        coord = tree_leaf.dc.to_patch().get_coord("time")
+        assert isinstance(coord, CoordRange)
+
+    def test_the_coordinate_is_the_same_either_way(self, tree_leaf):
+        """Staying lazy must not change which samples it names."""
+        coord = tree_leaf.dc.to_patch().get_coord("time")
+        assert np.array_equal(coord.values, tree_leaf["time"].values)
 
 
 class TestMemoryLookAhead:
@@ -230,8 +276,7 @@ class TestMemoryLookAhead:
 
         self._announcing_method(monkeypatch)
         monkeypatch.setattr(accessor, "_available_memory", lambda: 10**12)
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", NumpyFallbackWarning)
+        with suppress_warnings(NumpyFallbackWarning):
             out = lazy_data_array.dc.announce_fallback()
         assert isinstance(out.values, np.ndarray)
 
@@ -241,9 +286,26 @@ class TestMemoryLookAhead:
 
         self._announcing_method(monkeypatch)
         monkeypatch.setattr(accessor, "_available_memory", lambda: 1)
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", NumpyFallbackWarning)
+        with suppress_warnings(NumpyFallbackWarning):
             assert data_array.dc.announce_fallback() is not None
+
+    def test_an_argument_too_large_refuses_the_call(
+        self, monkeypatch, data_array, lazy_data_array
+    ):
+        """A conversion converts the arguments, so they are weighed too."""
+        import dascore.xarray.accessor as accessor  # noqa: PLC0415
+
+        self._announcing_method(monkeypatch)
+
+        def method(self, other):
+            warnings.warn("falling back", NumpyFallbackWarning, stacklevel=1)
+            return self
+
+        monkeypatch.setattr(dc.Patch, "announce_with_arg", method, raising=False)
+        monkeypatch.setattr(accessor, "_available_memory", lambda: 1)
+        # the receiver is in memory; the argument is the lazy one
+        with pytest.raises(PatchConversionError, match="exceed what memory"):
+            data_array.dc.announce_with_arg(lazy_data_array)
 
     def test_a_call_which_announces_a_fallback_is_refused(self):
         """The warning comes before the conversion, so raising stops it."""
@@ -285,8 +347,7 @@ class TestRegistration:
         """Importing the module again must not raise or warn."""
         from dascore.xarray.accessor import register  # noqa: PLC0415
 
-        with warnings.catch_warnings():
-            warnings.simplefilter("error")
+        with suppress_warnings(action="error"):
             register()
 
     def test_a_tree_node_reaches_it_through_its_variable(self, random_spool):
