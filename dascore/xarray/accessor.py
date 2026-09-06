@@ -13,6 +13,7 @@ from __future__ import annotations
 import functools
 import warnings
 from collections.abc import Callable
+from importlib.util import find_spec
 from typing import Any
 
 import dascore as dc
@@ -185,6 +186,9 @@ def register() -> None:
     xr.register_dataarray_accessor("dc")(_PatchMethods)
 
 
-register()
+# Importing this module must not require xarray -- everything which
+# walks the package imports it -- while registering plainly does.
+if find_spec("xarray") is not None:
+    register()
 
 __all__ = ["register"]
