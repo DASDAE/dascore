@@ -773,82 +773,65 @@ class TestLineageIds:
         assert view[0].attrs.processing_id == expected.attrs.processing_id
         assert np.array_equal(view[0].data, expected.data)
 
-    def test_a_trim_which_cuts_nothing_records_nothing(self, tmp_path):
-        """A selection which leaves the patch whole is not an operation.
-
-        The same selection on the patch hands it straight back, so
-        neither route records anything.
-        """
+    @pytest.fixture(scope="class")
+    def filtered_spool(self, tmp_path_factory):
+        """One indexed patch which already carries a history entry."""
+        path = tmp_path_factory.mktemp("lineage_selections")
         patch = dc.get_example_patch().pass_filter(time=(1, 10))
-        patch.io.write(tmp_path / "filtered.h5", "dasdae")
-        spool = dc.spool(tmp_path).update()
-        whole = spool[0]
-        time = whole.get_coord("time")
-        through_spool = spool.select(time=(time.min(), time.max()))[0]
-        assert through_spool.shape == whole.shape
-        assert through_spool.attrs.processing_id == whole.attrs.processing_id
-        assert through_spool.attrs.history == whole.attrs.history
+        patch.io.write(path / "filtered.h5", "dasdae")
+        return dc.spool(path).update()
 
-    def test_composed_trims_record_once_each(self, tmp_path):
-        """Two trims through a spool record what two trims on the patch do.
+    @staticmethod
+    def _spans(patch):
+        """Bounds wider than the patch, and two narrowing pairs, per dim."""
+        out = {}
+        for name in ("time", "distance"):
+            coord = patch.get_coord(name)
+            span = coord.max() - coord.min()
+            out[name] = {
+                "whole": (coord.min(), coord.max()),
+                "wider": (coord.min() - span, coord.max() + span),
+                "half": (coord.min(), coord.min() + span / 2),
+                "quarter": (coord.min(), coord.min() + span / 4),
+            }
+        return out
 
-        Only the narrower bound reaches the reader, so the wider
-        `select` also finds nothing to do; both still happened.
+    @pytest.mark.parametrize(
+        "selections,cuts",
+        [
+            # a selection which leaves the patch whole is not an operation
+            ((("time", "whole"),), False),
+            # two which both cut: only the narrower reaches the reader, so
+            # the wider `select` also finds nothing to do, but both happened
+            ((("time", "half"), ("time", "quarter")), True),
+            # one which cuts beside one which does not, on another
+            # dimension: a spool knowing only that the row was narrowed
+            # somewhere would record the second as well
+            ((("distance", "half"), ("time", "wider")), True),
+            # and on one dimension, where both `select` calls find nothing
+            # to do because the last bound reached the reader
+            ((("time", "wider"), ("time", "half")), True),
+        ],
+    )
+    def test_selections_record_what_the_patch_records(
+        self, filtered_spool, selections, cuts
+    ):
+        """However a selection reaches the data, it records what it did.
+
+        A bound pushed into the reader leaves its `select` nothing to
+        do, so what the spool records cannot be read off the calls it
+        makes; it must still match what the same calls on the patch
+        record, and nothing else.
         """
-        patch = dc.get_example_patch().pass_filter(time=(1, 10))
-        patch.io.write(tmp_path / "filtered.h5", "dasdae")
-        spool = dc.spool(tmp_path).update()
-        whole = spool[0]
-        time = whole.get_coord("time")
-        duration = time.max() - time.min()
-        wide = (time.min(), time.min() + duration / 2)
-        narrow = (time.min(), time.min() + duration / 4)
-        through_spool = spool.select(time=wide).select(time=narrow)[0]
-        on_patch = whole.select(time=wide).select(time=narrow)
-        assert through_spool.shape == on_patch.shape != whole.shape
-        assert through_spool.attrs.processing_id == on_patch.attrs.processing_id
-        assert through_spool.attrs.history == on_patch.attrs.history
-
-    def test_a_trim_beside_one_which_cuts_nothing_records_only_the_cut(self, tmp_path):
-        """One selection cutting must not make another one look like a trim.
-
-        The two are on different dimensions, so the patch route records
-        the distance trim alone; a spool which knows only that the row
-        was narrowed somewhere would record the time one as well.
-        """
-        patch = dc.get_example_patch().pass_filter(time=(1, 10))
-        patch.io.write(tmp_path / "filtered.h5", "dasdae")
-        spool = dc.spool(tmp_path).update()
-        whole = spool[0]
-        time, distance = whole.get_coord("time"), whole.get_coord("distance")
-        # wider than the patch on time, so that selection cuts nothing
-        span = time.max() - time.min()
-        wide = (time.min() - span, time.max() + span)
-        narrow = (distance.min(), distance.max() - 2 * distance.step)
-        view = spool.select(distance=narrow).select(time=wide)
-        on_patch = whole.select(distance=narrow).select(time=wide)
-        assert view[0].shape == on_patch.shape != whole.shape
-        assert view[0].attrs.processing_id == on_patch.attrs.processing_id
-        assert view[0].attrs.history == on_patch.attrs.history
-
-    def test_composed_trims_on_one_dim_record_only_the_ones_which_cut(self, tmp_path):
-        """A widening selection composed over a narrowing one is no trim.
-
-        Both bounds are on the same coordinate and the last one reaches
-        the reader, so both `select` calls find nothing to do; only the
-        one which would have cut the loaded patch is an operation.
-        """
-        patch = dc.get_example_patch().pass_filter(time=(1, 10))
-        patch.io.write(tmp_path / "filtered.h5", "dasdae")
-        spool = dc.spool(tmp_path).update()
-        whole = spool[0]
-        time = whole.get_coord("time")
-        span = time.max() - time.min()
-        wide = (time.min() - span, time.max() + span)
-        narrow = (time.min(), time.min() + span / 2)
-        view = spool.select(time=wide).select(time=narrow)
-        on_patch = whole.select(time=wide).select(time=narrow)
-        assert view[0].shape == on_patch.shape != whole.shape
+        whole = filtered_spool[0]
+        spans = self._spans(whole)
+        view, on_patch = filtered_spool, whole
+        for name, which in selections:
+            bounds = spans[name][which]
+            view = view.select(**{name: bounds})
+            on_patch = on_patch.select(**{name: bounds})
+        assert view[0].shape == on_patch.shape
+        assert (view[0].shape != whole.shape) is cuts
         assert view[0].attrs.processing_id == on_patch.attrs.processing_id
         assert view[0].attrs.history == on_patch.attrs.history
 
