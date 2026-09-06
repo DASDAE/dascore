@@ -498,6 +498,14 @@ def spool_to_xarray(
         block_size = get_config().xarray_block_size
     if isinstance(block_size, str):
         block_size = optional_import("dask.utils").parse_bytes(block_size)
+    if block_size < 0:
+        # a negative ceiling fits no samples, which would otherwise round
+        # up to one block per sample and build a task for every one
+        msg = (
+            f"block_size must be a size in bytes or zero, not {block_size}. "
+            "Zero reads each source patch as one block."
+        )
+        raise PatchConversionError(msg)
     # function-level to avoid circular imports through the package root
     from dascore.core.coords import concat_coords, get_coord  # noqa: PLC0415
     from dascore.io.index.planned import PlanResolver, derived_catalog  # noqa: PLC0415

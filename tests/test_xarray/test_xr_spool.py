@@ -899,6 +899,12 @@ class TestToXarrayBlockSize:
         data = self._leaf(file_spool.io.to_xarray())
         assert data.data.npartitions == len(file_spool)
 
+    @pytest.mark.parametrize("block_size", [-1, "-1MiB"])
+    def test_a_negative_ceiling_is_refused(self, file_spool, block_size):
+        """No size fits in a negative budget, so it is an error, not one sample."""
+        with pytest.raises(PatchConversionError, match="block_size"):
+            file_spool.io.to_xarray(block_size=block_size)
+
     def test_the_config_sets_the_default(self, file_spool):
         """An unset `block_size` takes the configured ceiling."""
         quarter = file_spool[0].data.nbytes // 4
