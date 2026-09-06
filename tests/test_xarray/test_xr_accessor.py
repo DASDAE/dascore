@@ -11,6 +11,10 @@ import dascore as dc
 from dascore.exceptions import PatchConversionError
 from dascore.warnings import NumpyFallbackWarning
 
+# Importing the accessor registers it, which needs xarray; without it
+# there is no accessor to test rather than a failure to report.
+pytest.importorskip("xarray")
+
 
 @pytest.fixture(scope="module")
 def patch():
@@ -21,14 +25,12 @@ def patch():
 @pytest.fixture(scope="module")
 def data_array(patch):
     """That patch as a DataArray, which registers the accessor."""
-    pytest.importorskip("xarray")
     return patch.io.to_xarray()
 
 
 @pytest.fixture()
 def lazy_data_array(patch):
     """The same patch backed by a dask array."""
-    pytest.importorskip("xarray")
     da = pytest.importorskip("dask.array")
     lazy = patch.new(data=da.from_array(patch.data, chunks=(100, -1)))
     return lazy.io.to_xarray()
@@ -124,7 +126,7 @@ class TestLaziness:
 
     def test_an_operation_on_the_arrays_backend_stays_lazy(self, lazy_data_array):
         """Nothing is computed on the way in or the way out."""
-        import dask.array as da  # noqa: PLC0415
+        da = pytest.importorskip("dask.array")
 
         assert isinstance(lazy_data_array.data, da.Array)
         out = lazy_data_array.dc.abs()
@@ -151,7 +153,7 @@ class TestMemoryLookAhead:
 
     def test_a_lazy_array_which_fits_is_not_too_large(self, monkeypatch):
         """Room to spare, so nothing is refused."""
-        import dask.array as da  # noqa: PLC0415
+        da = pytest.importorskip("dask.array")
 
         import dascore.xarray.accessor as accessor  # noqa: PLC0415
 
@@ -160,7 +162,7 @@ class TestMemoryLookAhead:
 
     def test_a_lazy_array_which_does_not_fit_states_its_size(self, monkeypatch):
         """The size is what the message reports, so it is what is returned."""
-        import dask.array as da  # noqa: PLC0415
+        da = pytest.importorskip("dask.array")
 
         import dascore.xarray.accessor as accessor  # noqa: PLC0415
 
@@ -170,7 +172,7 @@ class TestMemoryLookAhead:
 
     def test_an_unknowable_budget_refuses_nothing(self, monkeypatch):
         """Without a memory figure there is no look-ahead to do."""
-        import dask.array as da  # noqa: PLC0415
+        da = pytest.importorskip("dask.array")
 
         import dascore.xarray.accessor as accessor  # noqa: PLC0415
 
@@ -264,7 +266,7 @@ class TestMemoryLookAhead:
         self, monkeypatch, lazy_data_array
     ):
         """The look-ahead refuses a conversion, not an operation."""
-        import dask.array as da  # noqa: PLC0415
+        da = pytest.importorskip("dask.array")
 
         import dascore.xarray.accessor as accessor  # noqa: PLC0415
 
@@ -277,7 +279,6 @@ class TestRegistration:
 
     def test_a_conversion_brings_it(self, patch):
         """Anything DASCore hands back carries the accessor."""
-        pytest.importorskip("xarray")
         assert hasattr(patch.io.to_xarray(), "dc")
 
     def test_registering_twice_is_not_an_error(self):
@@ -290,7 +291,6 @@ class TestRegistration:
 
     def test_a_tree_node_reaches_it_through_its_variable(self, random_spool):
         """A Dataset holds several arrays, so a variable is named first."""
-        pytest.importorskip("xarray")
         pytest.importorskip("dask")
         tree = random_spool.io.to_xarray()
         node = next(x for x in tree.subtree if "data" in x.dataset)
