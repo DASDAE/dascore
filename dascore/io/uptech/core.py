@@ -4,12 +4,15 @@ from __future__ import annotations
 
 from typing import Literal
 
+import numpy as np
+
 import dascore as dc
 from dascore.constants import opt_timeable_types
 from dascore.io import FiberIO, ScanPayload, make_scan_payload
-from dascore.io.utils import build_patches
+from dascore.io.utils import build_patches, slice_dataset
 from dascore.models import OptionalFiniteFloat
 from dascore.utils.hdf5 import H5Reader
+from dascore.utils.misc import raise_on_extra_kwargs
 
 from .utils import _DATASET, _get_attrs_dict, _get_coords, _is_uptech
 
@@ -62,3 +65,14 @@ class UptechH5V1(FiberIO):
             selection={"time": time, "distance": distance},
         )
         return dc.spool(patches)
+
+    def read_array(
+        self,
+        resource: H5Reader,
+        windows: dict[str, tuple[int, int]],
+        snap: bool = True,
+        **kwargs,
+    ) -> np.ndarray:
+        """Slice the ``Acquisition/StrainRate`` dataset directly."""
+        raise_on_extra_kwargs(kwargs, "windows and snap")
+        return slice_dataset(resource[_DATASET], ("time", "distance"), windows)

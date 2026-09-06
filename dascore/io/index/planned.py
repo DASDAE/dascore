@@ -32,7 +32,6 @@ from dascore.io.index.catalog import (
     FileResolver,
     PatchCatalog,
     PatchResolver,
-    _adjust_unit_segments,
     _row_source_patch_key,
     apply_exact_residuals,
 )
@@ -48,13 +47,12 @@ from dascore.utils.chunk_plan import (
     _SOURCE_COLUMNS,
     _concatenated_steps,
     _ensure_patch_id,
+    patch_local_adjusted_envelopes,
 )
 from dascore.utils.io import IOResourceManager
-from dascore.utils.misc import _CanonicalRange, is_range
 from dascore.utils.patch import concatenate_planned
 from dascore.utils.patch_assembly import PatchAssembler
 from dascore.utils.paths import is_memory_uri
-from dascore.utils.pd import adjust_segments
 
 # Row columns which name dc.read's own keyword arguments; passing one along
 # as a trim hint would collide with the value the loader already supplies.
@@ -470,6 +468,18 @@ def _output_records(
     return records
 
 
+def _trim_loaded_member(patch: dc.Patch, trim: Mapping) -> dc.Patch:
+    """Apply the plan's window to a member the reader loaded whole."""
+    ranges = {
+        key: tuple(value)
+        for key, value in trim.items()
+        if key in set(patch.dims)
+        and isinstance(value, list | tuple | np.ndarray)
+        and len(value) == 2
+    }
+    return patch.select(**ranges) if ranges else patch
+
+
 class PlanResolver(PatchResolver):
     """
     Assemble plan-output rows from their member source patches.
@@ -557,8 +567,18 @@ class PlanResolver(PatchResolver):
             if plan_units is not None and source_units != plan_units:
                 for suffix in ("_min", "_max", "_step"):
                     trim.pop(f"{self.dim}{suffix}", None)
-        patch = self.loader.resolve(kwargs, **trim)
-        patch = apply_exact_residuals(patch, self.parent_residuals)
+        patch_local = any(s or r for _, s, r in self.parent_residuals)
+        if trim and patch_local:
+            # A patch-local residual resolves against the source patch, so
+            # the plan's window cannot narrow the member before it runs;
+            # otherwise select(time=(1, -1), relative=True).chunk(time=2)
+            # would trim a second off each chunk instead of each file.
+            patch = self.loader.resolve(kwargs)
+            patch = apply_exact_residuals(patch, self.parent_residuals)
+            patch = _trim_loaded_member(patch, trim)
+        else:
+            patch = self.loader.resolve(kwargs, **trim)
+            patch = apply_exact_residuals(patch, self.parent_residuals)
         return self._in_plan_units(patch, kwargs)
 
     def _load_member_array(self, row: Mapping, windows: Mapping) -> np.ndarray | None:
@@ -584,8 +604,36 @@ class PlanResolver(PatchResolver):
         index about the grid itself: the caller's shape guard catches a
         resized file, not a shifted one.
         """
-        if self.parent_residuals:
+        if not self.can_read_array(row):
             return None
+        info = self._array_read_info(row)
+        assert info is not None, "can_read_array checked this row"
+        loader, path, fiber_io, key = info
+        kwargs = {"source_patch_key": key} if key else {}
+        # The resource manager resolves remote paths and opens the handle
+        # type the override's annotation asks for, exactly as dc.read
+        # provisions its reader; _pre_cast says the work is already done.
+        with IOResourceManager(loader.resolve_path(path)) as manager:
+            resource = manager.get_resource(
+                _required_resource_type(fiber_io.read_array)
+            )
+            return fiber_io.read_array(
+                resource, dict(windows), _pre_cast=True, **kwargs
+            )
+
+    def can_read_array(self, row: Mapping) -> bool:
+        """
+        Whether a row can take the data-only path, reading nothing.
+
+        A caller which sizes its reads ahead of time -- splitting a
+        member into several windows, say -- must know this before it
+        builds them: splitting a row which loads as a patch would read
+        the whole source once per window instead of once.
+        """
+        return not self.parent_residuals and self._array_read_info(row) is not None
+
+    def _array_read_info(self, row: Mapping):
+        """Resolve array-reader metadata without opening the source file."""
         path = _row_str(row.get("source_path"))
         if not path:
             return None
@@ -614,17 +662,7 @@ class PlanResolver(PatchResolver):
             # read (see FileResolver.resolve); an override which resolves
             # keys natively could match the wrong patch, or nothing.
             return None
-        kwargs = {"source_patch_key": key} if key else {}
-        # The resource manager resolves remote paths and opens the handle
-        # type the override's annotation asks for, exactly as dc.read
-        # provisions its reader; _pre_cast says the work is already done.
-        with IOResourceManager(loader.resolve_path(path)) as manager:
-            resource = manager.get_resource(
-                _required_resource_type(fiber_io.read_array)
-            )
-            return fiber_io.read_array(
-                resource, dict(windows), _pre_cast=True, **kwargs
-            )
+        return loader, path, fiber_io, key
 
     def _in_plan_units(self, patch: dc.Patch, kwargs: Mapping) -> dc.Patch:
         """
@@ -702,7 +740,7 @@ class PlanResolver(PatchResolver):
 
 def _trimmed_dims(residuals, coord_dims_map: Mapping) -> frozenset[str]:
     """The dimensions a residual (load-time) selection trims."""
-    names = {n for coords, _ in residuals for n in coords}
+    names = {n for coords, _, _ in residuals for n in coords}
     return frozenset(
         d for n in names for d in str(coord_dims_map.get(n, n)).split(",") if d
     )
@@ -723,27 +761,6 @@ def stale_def_keys(residuals, coord_dims_map: Mapping, columns) -> list[str]:
         for c, dims_str in coord_dims_map.items()
         if set(str(dims_str).split(",")) & trimmed and f"_{c}_def_key" in columns
     ]
-
-
-def _residual_ranges(residuals) -> dict:
-    """Envelope-applicable value ranges from a residual tuple.
-
-    Bare ranges apply to the native envelope columns directly; a
-    `_CanonicalRange` passes through whole so the caller can convert it
-    per row unit.
-    """
-    out = {}
-    for coords, samples in residuals:
-        if samples:
-            continue
-        for name, value in coords.items():
-            if getattr(value, "magnitudes", None) is not None:
-                out[name] = value
-            elif is_range(value) and not any(
-                hasattr(b, "units") for b in value if b is not None
-            ):
-                out[name] = value
-    return out
 
 
 def _whole_member_sizes(trims: pd.DataFrame, sources: pd.DataFrame) -> dict[int, int]:
@@ -889,6 +906,8 @@ def collapse_working_df(catalog: PatchCatalog) -> pd.DataFrame | None:
     resolver = catalog.resolver
     if not isinstance(resolver, PlanResolver) or resolver.lossy:
         return None
+    if any(samples or relative for _, samples, relative in catalog.residuals):
+        return None
     members = resolver.member_rows
     if catalog.is_view:
         present = {
@@ -896,21 +915,13 @@ def collapse_working_df(catalog: PatchCatalog) -> pd.DataFrame | None:
             for row in catalog.to_df().to_dict("records")
         }
         members = members[members["output_id"].isin(present)]
-    ranges = _residual_ranges(catalog.residuals)
     # `_modified` carries: it says the member is a *trim* of its source
     # rather than the whole of it, which is exactly what the re-plan needs
     # to know. Dropping it left `_build_members` to assume no source was
     # modified, so a member which was a slice of a file came back marked
     # "load whole" and the loader read all of it.
     working = members.drop(columns=["output_id"], errors="ignore")
-    bare = {
-        name: value
-        for name, value in ranges.items()
-        if not isinstance(value, _CanonicalRange)
-    }
-    if bare:
-        working = adjust_segments(working, ignore_bad_kwargs=True, **bare)
-    for name, canonical in ranges.items():
-        if isinstance(canonical, _CanonicalRange):
-            working = _adjust_unit_segments(working, name, canonical)
+    working = patch_local_adjusted_envelopes(
+        working, catalog.residuals, drop_empty=True
+    )
     return working.reset_index(drop=True)

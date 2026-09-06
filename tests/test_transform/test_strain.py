@@ -73,6 +73,20 @@ class TestStrainRateConversion:
         out2 = terra15_das_patch.velocity_to_strain_rate(step_multiple=4)
         assert isinstance(out2, dc.Patch)
 
+    def test_integer_velocity(self):
+        """Strided strain conversion preserves fractional integer derivatives."""
+        patch = dc.Patch(
+            data=np.arange(12, dtype=np.int64),
+            coords={"distance": np.arange(12) * 2},
+            dims=("distance",),
+            attrs={"data_type": "velocity", "data_units": "m/s"},
+        ).set_units(distance="m")
+        out = patch.velocity_to_strain_rate(step_multiple=4)
+        np.testing.assert_allclose(out.data, 0.5)
+        assert out.data.dtype == np.float64
+        assert out.attrs.data_type == "strain_rate"
+        assert out.attrs.gauge_length == 8
+
     def test_gauge_multiple_removed(self, terra15_das_patch):
         """Ensure the removed parameter is rejected."""
         with pytest.raises(TypeError, match="gauge_multiple"):

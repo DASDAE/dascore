@@ -21,6 +21,8 @@ from dascore.exceptions import (
     DependencyError,
     UnknownFiberFormatError,
 )
+from dascore.io.core import FiberIO
+from dascore.io.dasvader.core import DASVaderV1
 from dascore.io.dasvader.utils import (
     EXPECTED,
     _dereference,
@@ -364,3 +366,34 @@ class TestDASVader:
         # `is False` rather than a truthiness check: the empty intersection
         # used to be returned directly, so the answer was the empty set.
         assert _is_dasvader_jld2(_Resource()) is False
+
+    @pytest.fixture(
+        params=["dasvader_modern_path", "das_vader_strainrate_no_attrib_path"]
+    )
+    def read_array_path(self, request):
+        """Each readable layout: the `data` and `strainrate` references."""
+        return request.getfixturevalue(request.param)
+
+    def test_read_array_matches_default(self, read_array_path):
+        """The override returns what the read-and-trim default returns.
+
+        DASVader is kept out of the common IO tests, so its parity with
+        the default is checked here.
+        """
+        io = DASVaderV1()
+        patch = dc.spool(read_array_path)[0]
+        windows = {
+            dim: (1, size - 1)
+            for dim, size in zip(patch.dims, patch.shape, strict=True)
+        }
+        out = io.read_array(read_array_path, windows)
+        expected = FiberIO.read_array(io, read_array_path, windows)
+        assert out.dtype == expected.dtype
+        assert np.array_equal(out, expected)
+        assert out.shape == tuple(size - 2 for size in patch.shape)
+
+    def test_read_array_whole(self, read_array_path):
+        """No windows returns the array the patch holds."""
+        patch = dc.spool(read_array_path)[0]
+        out = DASVaderV1().read_array(read_array_path, {})
+        assert np.array_equal(out, patch.data)

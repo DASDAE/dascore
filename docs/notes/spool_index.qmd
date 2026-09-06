@@ -22,6 +22,12 @@ The last two tables are deliberately separate. Many patches can share a distance
 
 `attrs` and `attr_meta` are also complementary. Attribute names are open-ended, so the index cannot define every typed column in advance. `attr_meta` records the stable mapping and units needed to interpret the columns added to `attrs` as data is ingested.
 
+## Time queries
+
+Absolute-time range queries use the nanosecond `time_min` and `time_max` envelopes already stored on `patches`. Database writes derive these cached time bounds from the coordinate records, including auxiliary time coordinates in planned outputs; duration and numeric time coordinates leave the absolute-time bounds empty. These bounds select candidate patches; exact coordinate trimming still happens when a patch loads. Duration, numeric, string, and other coordinate queries retain the general coordinate-table path. Coordinate types and units remain in their existing tables.
+
+The direct predicates work with existing catalogs. No schema change, additional metadata table, or index rebuild is required.
+
 ## Lifecycle and validation
 
 The index is an incrementally updated cache. A directory update scans new or changed sources, transactionally replaces their patch rows, and removes rows for deleted sources. Foreign keys cascade source deletion through patches, attributes, and patch-coordinate links. Unreferenced coordinate definitions may remain available for reuse.
@@ -62,6 +68,12 @@ The base ordering contract is `(sources.ordinal, patch_id)`: ordinals are assign
 Directory catalogs additionally carry a **per-patch default presentation order**: rows present by time (`time IS NULL` last, then time, with ordinal and patch id as deterministic tiebreaks), because source-grain ordinals alone cannot interleave a multi-patch file whose span straddles a patch of another file. The default order is a catalog contract, not view state — a directory root still updates — and an explicit `sort(...)` replaces it. The directory indexer still renumbers source ordinals to time order (earliest patch per source, path as tiebreak) after each sync, which keeps the ordinal grain stable for replacement and union dedup.
 
 SQLite permits concurrent readers and serializes writers. Initialization and updates use an immediate write transaction and a 30-second busy timeout. This relies on correct local-filesystem locking; reliable operation on network filesystems with weak locking is not promised.
+
+## Bounded metadata access
+
+For an indexed spool, the first integer access projects the selected patch's metadata row, and forward contiguous slices limit the membership query in SQL. Use `spool[:10].get_contents()` for a small preview. A second integer access on the same view realizes and caches its metadata frame, so repeated positional reads do not repeatedly pay for SQL and dataframe setup. An update resets this behavior. Regex predicates and coordinate selections whose residual operations can remove candidate rows still require exact filtering before a positional limit can be applied.
+
+`split()` fetches the ordered candidate membership once and reuses it for every batch. A batch can be empty after exact filtering; candidate rows are not discarded merely because a refined count is smaller. Chunk planning and full iteration continue to realize metadata when their existing execution paths require it.
 
 ## The flat relation
 

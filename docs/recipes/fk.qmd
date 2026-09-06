@@ -6,7 +6,7 @@ execute:
 
 ## F-K transforms
 
-[F-K transforms](https://wiki.seg.org/wiki/F-k_filtering) are common in geophysical applications for various types of filtering. For the following examples we will use the example_event included in DASCore's example files.
+Use an [F-K transform](https://wiki.seg.org/wiki/F-k_filtering) to filter by frequency and apparent velocity.
 
 ```{python}
 import numpy as np
@@ -23,7 +23,7 @@ patch.viz.waterfall();
 
 ```
 
-With some simple processing, as shown in other parts of the tutorial, we can clean up the patch:
+Taper and band-pass before transforming:
 
 ```{python}
 import dascore as dc
@@ -36,25 +36,18 @@ patch_filtered = (
 patch_filtered.viz.waterfall(show=True);
 ```
 
-We can transform and visualize the patch in the F-K domain using the discrete Fourier transform (DFT).
+Transform both dimensions and plot amplitude because the DFT is complex:
 
 ```{python}
-# Apply transform on all dimensions
 fk_patch = patch_filtered.dft(patch.dims)
-
-# We can't plot complex arrays so only plot amplitude
 ax = fk_patch.abs().viz.waterfall()
-
-# Zoom in around interesting frequencies
 ax.set_xlim(-500, 500);
 ax.set_ylim(-.2, .2);
 ```
 
 ## Slope Filtering
 
-One advantage of the F-K transform is the ability to manipulate signals based on their apparent velocities. [`Patch.slope_filter`](`dascore.Patch.slope_filter`) can be used for this purpose.
-
-For example, given the first example event, we can apply a slope filter whose range covers reasonable seismic velocities. The `filt` parameter specifies the slope (apparent velocities). It is a 4 length sequence of the form [va, vb, vc, vd] where velocities between `vb` and `vc` are unchanged (or set to zero if `invert=True`) and values between `va` and `vb`, as well as those between `vc` and `vd`, are tapered.
+[`Patch.slope_filter`](`dascore.Patch.slope_filter`) takes `[va, vb, vc, vd]`: values between `vb` and `vc` pass (or are removed with `invert=True`), and the outer intervals taper.
 
 
 ```{python}  
@@ -64,15 +57,14 @@ patch_filtered_2.viz.waterfall(scale=1);
 ```
 
 :::{.callout-note}
-It's important to remember that *apparent* velocities (>= velocity) are filtered. For the case of local seismicity occurring near the cable the apparent velocity will approximate the medium velocity for part of the recording. Additional considerations are needed for more distant events.   
+The filter uses apparent velocity. It approximates medium velocity only for suitable local geometry.
 :::
 
 ### Phase Separation
 
-Another application of [`slope_filter`](`dascore.Patch.slope_filter`) is to separate P/S waves. In this case, the P velocity is about 4500 m/s and the S velocity is about 2700 m/s. The following code highlights S waves, but also introduces some artifacts: 
+This range highlights an S wave near 2700 m/s while rejecting a P wave near 4500 m/s:
 
 ```{python}
-# velocities in m/s (distance in meters, time in seconds)
 filt_s = np.array([1_000, 2_300, 3_000, 4_000])
 patch_filtered_s = patch_filtered.slope_filter(filt=filt_s)
 patch_filtered_s.viz.waterfall(scale=1);
@@ -80,7 +72,7 @@ patch_filtered_s.viz.waterfall(scale=1);
 
 ### Up/Down separation
 
-Up/down (or left/right) separation is also possible using the `directional` keyword. Up-going (waves moving toward the interrogator, i.e., decreasing distance coordinate) have positive velocities and down-going (waves moving away from the interrogator) have negative velocities. 
+On a near-linear fiber, `directional=True` separates positive velocities moving toward decreasing distance from negative velocities moving toward increasing distance.
 
 
 ```{python}  

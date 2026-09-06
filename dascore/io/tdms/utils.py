@@ -201,10 +201,14 @@ def _iter_segment_bounds(tdms_file, fileinfo, lead_in_length=28):
         nso = min(file_size, start + next_seg_nso)
 
 
+def _segment_sample_count(fileinfo, rdo, nso) -> int:
+    """How many samples per channel the segment at these byte bounds holds."""
+    per_sample = int(fileinfo["n_channels"]) * np.dtype(fileinfo["data_type"]).itemsize
+    return (nso - rdo) // per_sample
+
+
 def _get_sample_count(tdms_file, fileinfo, lead_in_length=28):
     """Return how many samples per channel the whole file holds."""
-    itemsize = np.dtype(fileinfo["data_type"]).itemsize
-    per_sample = fileinfo["n_channels"] * itemsize
     position = tdms_file.tell()
     try:
         bounds = list(_iter_segment_bounds(tdms_file, fileinfo, lead_in_length))
@@ -212,7 +216,7 @@ def _get_sample_count(tdms_file, fileinfo, lead_in_length=28):
         tdms_file.seek(position, 0)
     # Counting bytes to the end of the file instead would count every
     # segment's lead-in and metadata as data.
-    return sum((nso - rdo) // per_sample for rdo, nso in bounds)
+    return sum(_segment_sample_count(fileinfo, rdo, nso) for rdo, nso in bounds)
 
 
 def _get_all_attrs(tdms_file, lead_in_length=28):
@@ -286,75 +290,88 @@ def _get_fileinfo(tdms_file, lead_in_length=28):
     return fileinfo, attrs
 
 
-def _get_data(tdms_file, lead_in_length=28):
-    """Get all the data saved in the current file."""
+def _get_segment_data(fileinfo, nch, dmap, nso, rdo):
+    """Decode one segment of the mapped file as a (samples, channels) array."""
+    # samples per channel in this segment
+    seg_length = _segment_sample_count(fileinfo, rdo, nso)
 
-    def get_segment_data(fileinfo, nch, dmap, nso, rdo):
-        # seg1_length: length of recording indicated as raw_data in metadata for
-        # each channel in bytes
-        seg_length = int((nso - rdo) / nch / np.dtype(fileinfo["data_type"]).itemsize)
-        channel_length = seg_length
-
-        if fileinfo["decimated"]:
-            # number of completely full chunks
-            n_complete_blk = int(seg_length / fileinfo["chunk_size"])
-            ax_ord = "C"
-        else:
-            n_complete_blk = 0
-            ax_ord = "F"
-        # use data from mapped file to fill variable raw_data
-        raw_data = np.ndarray(
-            (n_complete_blk, nch, fileinfo["chunk_size"]),
+    if fileinfo["decimated"]:
+        # number of completely full chunks
+        n_complete_blk = int(seg_length / fileinfo["chunk_size"])
+        ax_ord = "C"
+    else:
+        n_complete_blk = 0
+        ax_ord = "F"
+    # use data from mapped file to fill variable raw_data
+    raw_data = np.ndarray(
+        (n_complete_blk, nch, fileinfo["chunk_size"]),
+        dtype=fileinfo["data_type"],
+        buffer=dmap,
+        offset=rdo,
+    )
+    # Flatten chunks in time order, keeping samples within each chunk
+    # together and channels on the final axis.
+    raw_data = raw_data.transpose(0, 2, 1)
+    data_node = np.reshape(raw_data, (n_complete_blk * fileinfo["chunk_size"], nch))
+    if n_complete_blk != seg_length / fileinfo["chunk_size"]:
+        # If the last chunk isn't full there is some data left
+        additional_samples = int(seg_length - n_complete_blk * fileinfo["chunk_size"])
+        additional_samples_offset = (
+            rdo
+            + n_complete_blk
+            * nch
+            * fileinfo["chunk_size"]
+            * np.dtype(fileinfo["data_type"]).itemsize
+        )
+        raw_last_chunk = np.ndarray(
+            (nch, additional_samples),
             dtype=fileinfo["data_type"],
             buffer=dmap,
-            offset=rdo,
+            offset=additional_samples_offset,
+            order=ax_ord,
         )
-        # Rotate the axes to [chunk_size, nblk, nch]
-        raw_data = np.rollaxis(raw_data, 2)
-        data_node = np.reshape(raw_data, (n_complete_blk * fileinfo["chunk_size"], nch))
-        if n_complete_blk != seg_length / fileinfo["chunk_size"]:
-            # If the last chunk isn't full there is some data left
-            additional_samples = int(
-                seg_length - n_complete_blk * fileinfo["chunk_size"]
-            )
-            additional_samples_offset = (
-                rdo
-                + n_complete_blk
-                * nch
-                * fileinfo["chunk_size"]
-                * np.dtype(fileinfo["data_type"]).itemsize
-            )
-            raw_last_chunk = np.ndarray(
-                (nch, additional_samples),
-                dtype=fileinfo["data_type"],
-                buffer=dmap,
-                offset=additional_samples_offset,
-                order=ax_ord,
-            )
-            # Rotate the axes to [samples, nch]
-            raw_last_chunk = np.rollaxis(raw_last_chunk, 1)
-            data_node = np.append(data_node, raw_last_chunk, axis=0)
-        # Outside the branch: a decimated segment whose chunks all happen to
-        # be full has nothing left over, and still has its data.
-        return data_node, channel_length
+        # Rotate the axes to [samples, nch]
+        raw_last_chunk = np.rollaxis(raw_last_chunk, 1)
+        data_node = np.append(data_node, raw_last_chunk, axis=0)
+    # Outside the branch: a decimated segment whose chunks all happen to
+    # be full has nothing left over, and still has its data.
+    return data_node
 
-    fileinfo, attrs = _get_fileinfo(tdms_file)
 
-    # map file contents to a variable dmap
+def _read_sample_range(tdms_file, fileinfo, start=0, stop=None, lead_in_length=28):
+    """
+    Read time samples ``start`` to ``stop`` (half-open) as (samples, channels).
+
+    ``start`` and ``stop`` are resolved, non-negative sample indices (or
+    ``stop`` None for the end). Only the segments the range touches are
+    decoded.
+    """
     dmap = mmap.mmap(tdms_file.fileno(), 0, access=mmap.ACCESS_READ)
-    # nch: number of channels
     nch = int(fileinfo["n_channels"])
-
-    data_node = None
-    channel_length = 0
+    parts, offset = [], 0
     for rdo, nso in _iter_segment_bounds(tdms_file, fileinfo, lead_in_length):
-        segment, seg_length = get_segment_data(fileinfo, nch, dmap, nso, rdo)
-        # A segment holds every channel for a stretch of time, so segments
-        # stack along time, which is the first axis of (samples, channels).
-        if data_node is None:
-            data_node = segment
-        else:
-            data_node = np.append(data_node, segment, axis=0)
-        channel_length += seg_length
+        seg_len = _segment_sample_count(fileinfo, rdo, nso)
+        seg_start, seg_stop = offset, offset + seg_len
+        offset = seg_stop
+        if stop is not None and seg_start >= stop:
+            break
+        if seg_stop <= start:
+            continue
+        segment = _get_segment_data(fileinfo, nch, dmap, nso, rdo)
+        low = max(start - seg_start, 0)
+        high = seg_len if stop is None else min(stop - seg_start, seg_len)
+        parts.append(segment[low:high])
+    if not parts:
+        return np.empty((0, nch), dtype=fileinfo["data_type"])
+    if len(parts) == 1:
+        # a decoded segment owns its data, so one part needs no copy
+        return parts[0]
+    # segments stack along time, the first axis of (samples, channels)
+    return np.concatenate(parts, axis=0)
 
-    return data_node, channel_length, attrs
+
+def _get_data(tdms_file, lead_in_length=28):
+    """Get all the data saved in the current file."""
+    fileinfo, attrs = _get_fileinfo(tdms_file)
+    data = _read_sample_range(tdms_file, fileinfo, lead_in_length=lead_in_length)
+    return data, len(data), attrs

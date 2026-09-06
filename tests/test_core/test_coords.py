@@ -2627,6 +2627,19 @@ class TestStringCoords:
         assert isinstance(indexer, np.ndarray)
         assert np.array_equal(indexer, np.array([True, True, False, False]))
 
+    def test_wildcard_select_character_class(self):
+        """
+        A class picks the characters it holds, negated with a caret.
+
+        Selection read fnmatch here and SQLite everywhere else, so a class
+        was spelled one way on a coordinate and the other on a spool.
+        """
+        coord = get_coord(data=np.array(["ch_1", "ch_2", "ch_3"]))
+        out, _ = coord.select("ch_[12]")
+        assert np.array_equal(out.values, np.array(["ch_1", "ch_2"]))
+        out, _ = coord.select("ch_[^12]")
+        assert np.array_equal(out.values, np.array(["ch_3"]))
+
     def test_wildcard_select_no_match_returns_empty(self, string_coord):
         """Wildcard selectors with no matches should return an empty coord."""
         out, indexer = string_coord.select("z*")

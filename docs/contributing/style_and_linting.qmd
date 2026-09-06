@@ -1,26 +1,11 @@
 ---
-title: "Style and Linting"
+title: Style and Linting
 ---
 
-# Linting
-
-DASCore uses [Black](https://github.com/ambv/black) and [flake8](http://flake8.pycqa.org/en/latest/) for code linting.
-If you have [properly installed DASCore's pre-commit hooks](dev_install.qmd#setup-pre-commit-hooks) they will be
-invoked automatically when you make a git commit. If any complaints are raised simply address them and try again.
-
-Alternatively, before making a commit, you can run all the hooks on all the code like so:
+DASCore's pre-commit hooks format, lint, and type-check the repository. Install them during the [development setup](dev_install.qmd), and run the full set twice before pushing because the first pass may modify files:
 
 ```shell
 pre-commit run --all
 ```
 
-It is often useful to run this command twice before making changes because many of the hooks
-will automatically fix the issue they raise on the first run.
-
-# Type Hints
-
-DASCore makes extensive use of Python 3's [type hints](https://docs.python.org/3/library/typing.html).
-Use them to annotate any public functions/methods. See the docstring section of the [documentation page](documentation.qmd)
-for more information and some examples.
-
-The hints are checked by [ty](https://github.com/astral-sh/ty) as part of the pre-commit hooks. ty always checks the whole `dascore` package (not just changed files); its configuration lives in `pyproject.toml` under `[tool.ty]`. Several rules with large pre-existing error counts are temporarily ignored there and will be re-enabled incrementally — please don't add new type errors in the categories that are already enforced.
+Annotate public functions and methods with [type hints](https://docs.python.org/3/library/typing.html). [ty](https://github.com/astral-sh/ty) checks the full `dascore` package using `[tool.ty]` in `pyproject.toml`; do not add errors in enforced categories. See [Documentation](documentation.qmd) for docstring conventions.

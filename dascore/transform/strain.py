@@ -17,6 +17,7 @@ from dascore.utils.patch import patch_function
 
 
 @patch_function(
+    version="1.1",
     required_dims=("distance",),
     required_attrs={"data_type": "velocity"},
 )

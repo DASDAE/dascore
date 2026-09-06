@@ -10,6 +10,8 @@ Notes
   start for version 4 support.
 """
 
+from __future__ import annotations
+
 import numpy as np
 
 import dascore as dc
@@ -188,8 +190,20 @@ def _get_attr_dict(header, extras=None):
     return out
 
 
-def _load_data(fid, header):
-    """Use numpy's memmap to get array information."""
+def _get_data_shape(header) -> tuple[int, int]:
+    """The (time, channel) shape the file's packets hold."""
+    return header["num_packets"] * header["num_samples"], header["num_channels"]
+
+
+def _read_sample_range(fid, header, start=0, stop=None):
+    """
+    Read time samples ``start`` to ``stop`` (half-open) as (samples, channels).
+
+    Each packet carries a header the samples must skip, so stripping them
+    leaves a view numpy cannot stride over and any read copies. A packet
+    is therefore the smallest unit read: only those the range touches
+    are.
+    """
     header_size = header["header_size"]
     num_channels = header["num_channels"]
     num_samples = header["num_samples"]
@@ -200,10 +214,22 @@ def _load_data(fid, header):
     raw = maybe_mem_map(fid)
     # Compute how many blocks
     block_count = raw.size // packet_size
+    total, _ = _get_data_shape(header)
+    start = max(start, 0)
+    stop = total if stop is None else min(stop, total)
+    if stop <= start:
+        return np.empty((0, num_channels), dtype=dtype)
+    first, last = start // num_samples, (stop - 1) // num_samples
     # Create a view that skips headers
-    data = raw.reshape(block_count, packet_size)[:, header_size:]
-    data = data.view(dtype).reshape(-1, num_channels)
-    return data
+    packets = raw.reshape(block_count, packet_size)[first : last + 1, header_size:]
+    data = packets.view(dtype).reshape(-1, num_channels)
+    offset = start - first * num_samples
+    return data[offset : offset + (stop - start)]
+
+
+def _load_data(fid, header):
+    """Use numpy's memmap to get array information."""
+    return _read_sample_range(fid, header)
 
 
 def _get_attrs_coords_header(rid, attr_class=PatchAttrs, extras=None):

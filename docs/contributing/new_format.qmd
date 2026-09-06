@@ -2,248 +2,84 @@
 title: Adding a New Format
 ---
 
-This page details how to add IO support for a new format to DASCore. The steps are:
+Adding IO support requires a `FiberIO` subclass, a small fixture, common IO registration, any format-specific tests, and a package entry point. This guide uses a fictional `jingle` format with extension `.jgl`.
 
-1. Create a new module, subclass `FiberIO`, and implement the appropriate methods.
+## Implement `FiberIO`
 
-2. Find a small test file to include in DASCore's test suite.
-
-3. Register the new `FiberIO` subclass(es) for generic tests.
-
-4. (Optional) Write format specific tests for the new format.
-
-5. Register the new `FiberIO` subclasses with DASCore's plugins.
-
-To demonstrate this process, imagine adding support for a format called `jingle` which conventionally uses a file extension of `jgl`.
-
-## Adding a New IO Module
-
-First, we create a new io module called 'jingle' in DASCore's io module (dascore/io/jingle). Make sure there is a \__init__.py file in this module whose docstring describes basic use of the format and lists any non-obvious implementation details that might help debug/improve the parser.
-
-contents of `dascore/io/jingle/__init__.py`
-```{python}
-"""
-Jingle format support module.
-
-Jingle is a really cool new DAS format.
-
-It supports all the "bells" and whistles.
-
-Examples
---------
-import dascore as dc
-
-jingle = dc.spool('path_to_file.jgl')
-"""
-```
-
-Next, create a `core.py` file in the new module (dascore/io/jingle/core.py). Start by creating a class called `JingleIOV1` which subclasses [`dascore.io.core.FiberIO`](`dascore.io.core.FiberIO`). Now, on your subclass, you need to implement the supported methods.
-
-Contents of `dascore/io/jingle/core.py`:
+Create `dascore/io/jingle/__init__.py` and `core.py`. The module docstring should describe basic use and non-obvious format details.
 
 ```{python filename="dascore/io/jingle/core.py"}
-"""
-Core module for jingle file format support.
-"""
-import dascore.exceptions
-from dascore.io import FiberIO, ScanPayload
+import dascore as dc
+from dascore.io import FiberIO, ScanPayload, make_scan_payload
 
 
 class JingleV1(FiberIO):
-    """
-    An IO class supporting version 1 of the jingle format.
-    """
-    # you must specify the format name using the name attribute
-    name = 'jingle'
-    # you can also define which file extensions are expected like so.
-    # this will speed up DASCore's automatic file format determination.
-    preferred_extensions = ('jgl',)
-    # also specify a version so when version 2 is released you can
-    # just make another class in the same module named JingleV2.
-    version = '1'
+    """Jingle version 1 support."""
 
-    def read(self, path, jingle_param=1, **kwargs):
-        """
-        Read should take a path and return a patch or sequence of patches.
+    name = "jingle"
+    preferred_extensions = ("jgl",)
+    version = "1"
 
-        It can also define its own optional parameters, and should always
-        accept kwargs. If the format supports partial reads, these should
-        be implemented as well.
-        """
+    def get_format(self, resource, **kwargs):
+        """Return (name, version) when resource is Jingle; otherwise false."""
 
-    def get_format(self, path, **kwargs):
-        """
-        Used to determine if path is a supported jingle file.
+    def scan(self, resource, snap: bool = True, **kwargs) -> list[ScanPayload]:
+        """Return one metadata payload per logical patch."""
+        return [
+            make_scan_payload(
+                attrs=patch_attrs,
+                coords=coord_manager,
+                dtype=dtype,
+                source_patch_key=patch_key,
+            )
+        ]
 
-        Returns a tuple of (format_name, file_version) if the file is a
-        supported jingle file, else return False or raise a
-        dascore.exceptions.UnknownFiberFormat exception.
-        """
+    def read(self, resource, source_patch_key=(), **kwargs) -> dc.Spool:
+        """Return requested patches."""
 
-    def scan(self, path, snap: bool = True, **kwargs) -> list[ScanPayload]:
-        """
-        Used to get metadata about a file without reading the whole file.
-
-        This should return a list of structured scan payloads. Each payload
-        should contain exact coord objects plus patch metadata. The
-        [`make_scan_payload`](`dascore.io.make_scan_payload`) helper builds
-        one, taking `dims` and `shape` from the coords:
-
-        [make_scan_payload(
-            attrs=patch_attrs,
-            coords=coord_manager,
-            dtype="...",
-            source_patch_key="...",  # when needed
-        )]
-
-        A plain dict with the same keys also works.
-
-        DASCore converts these payloads into
-        [`PatchSummary`](`dascore.PatchSummary`) objects in the higher-level
-        `dc.scan(...)` / `dc.scan_to_df(...)` pipeline. Returning
-        [`PatchAttrs`](`dascore.PatchAttrs`) from `scan()` is no longer
-        supported.
-
-        `scan()` should return patch-local attrs plus exact coords for each
-        logical patch. Do not populate source metadata such as `path`,
-        `file_format`, or `file_version` inside the `FiberIO`
-        implementation; DASCore adds those fields in the higher-level
-        `dc.scan(...)` / `dc.scan_to_df(...)` pipeline.
-        """
-
-    def write(self, patch, path, **kwargs):
-        """
-        Write a patch or spool back to disk in the jingle format.
-        """
+    def write(self, spool, resource, **kwargs):
+        """Write patches."""
 ```
 
-All 4 methods are optional; some formats will only support reading, others only writing. If `is_format` is not implemented the format will not be auto-detectable, meaning you will have to manually pass the format to [`read`](`dascore.read`) and [`spool`](`dascore.spool`).
+Implement only supported methods. Without `get_format`, callers must provide `file_format` and `file_version`. Every method should accept `**kwargs` so format-specific options compose with the public API.
 
+Scan payloads must match `read()` for attrs, shape, dtype, and patch identity; coordinates also match unless an exact `snap=False` scan intentionally exposes stored values that `read()` cannot return. Lazy spools plan from scan results.
 
-:::{.callout-note}
-Note that each of these methods should have `**kwargs` at the end. This allows certain formats to have special keywords while others are not required.
-:::
+## Scan coordinates
 
-:::{.callout-warning}
-It is very important that `scan()` returns attrs, coords, dims, shape, dtype,
-and `source_patch_key` values that match what `read()` would produce for the
-same logical patch. Otherwise the lazy planning done by `spool(...)` can be
-wrong.
-:::
+[`FiberIO.scan`](`dascore.io.core.FiberIO.scan`) returns full `CoordManager` objects in `ScanPayload` dictionaries. [`scan_payloads`](`dascore.scan_payloads`) exposes these and adds source provenance; [`scan`](`dascore.scan`) and [`scan_to_df`](`dascore.scan_to_df`) reduce them to index-friendly summaries. Do not add source path, format, or version inside the formatter.
 
-## Scan payloads and the `snap` contract
+Every scan implementation must accept `snap: bool = True`:
 
-[`FiberIO.scan`](`dascore.io.core.FiberIO.scan`) returns full `CoordManager` objects inside `ScanPayload` dictionaries. DASCore's public [`scan_payloads`](`dascore.scan_payloads`) function exposes those raw payloads and adds `source_path`, `source_format`, and `source_version` provenance. By contrast, [`scan`](`dascore.scan`) and [`scan_to_df`](`dascore.scan_to_df`) reduce coordinates to envelope summaries and remain the appropriate APIs for indexing whole directories.
+- `snap=True` may idealize stored coordinates as uniform ranges.
+- `snap=False` must preserve stored coordinate values exactly.
 
-The public payload boundary validates attrs, dimension names, shape, dtype, and provenance types. It also requires `dims` and `shape` to match the returned `CoordManager` exactly, so malformed formatter payloads fail immediately rather than entering indexing or lazy reload paths.
+For stored per-sample arrays, use [`get_exact_coord`](`dascore.io.utils.get_exact_coord`) rather than `get_coord(array)`, whose tolerance may hide jitter. Header-defined start/step/count coordinates may treat `snap=False` as a no-op. Exact payloads retain arrays, so use them for targeted files rather than whole directories.
 
-Every `FiberIO.scan` implementation must accept `snap: bool = True`, either explicitly or through `**kwargs`. The contract is:
+## Identify patches within a file
 
-- `snap=True` (the default) preserves existing behavior. Formats may represent stored sample times as an idealized uniform range.
-- `snap=False` means returned coords must represent stored coordinate values exactly. For header-defined formats whose coordinates are already specified by start, step, and sample count, this is a documented no-op.
+Multi-patch formats should emit a stable `source_patch_key` for every payload and accept it in `read()`. Set `attrs["_source_patch_key"]` on scan attrs and loaded patches; DASCore normalizes it to the public summary field. Native group or node names are preferable to positions unless ordering is guaranteed. Single-patch files usually need no key.
 
-Formats that read stored per-sample coordinate arrays must not use bare `get_coord(array)` for the exact path because its tolerant uniformity inference can snap small jitter. Use the shared [`get_exact_coord`](`dascore.io.utils.get_exact_coord`) helper, which builds a value-preserving coordinate via `CoordSegmented.from_array(values, tolerance=0, units=...)`: a truly uniform array becomes a `CoordRange`, a piecewise-uniform array exposes its internal sampling changes through `CoordSegmented`, and a non-monotonic array falls back to a plain array coordinate. The helper also guards against pathological input: an array whose sub-step jitter would produce roughly one segment per sample is returned as a plain monotonic coordinate rather than an over-segmented one, keeping every value exact without the memory and construction cost of per-sample seams.
+`source_patch_key` is the public summary and reload field; `_source_patch_key` is the private attr formatters set. If both are supplied to `PatchSummary`, the public value wins and is copied to the attr. Private attrs do not affect patch compatibility, and `read()` must handle one key or multiple keys.
 
-`snap=False` describes the coordinate values *stored* by the format, which are not necessarily what `read(...)` returns. A format whose `read` reconstructs coordinates from header start/step/count metadata (e.g. ProdML) will still return that idealized range from `read`, while `scan_payloads(..., snap=False)` reports the exact stored per-sample array. The common IO conformance test only compares scan and read coordinates for formats whose `read` also accepts `snap`/`snap_dims`.
+## Choose attrs
 
-`scan_payloads` retains real coordinate arrays, so callers should scan specific files and discard payloads promptly rather than retaining payloads for an entire large directory.
+Reader attrs fall into four groups:
 
-## `source_patch_key`
+1. `acquisition_key`: the inventory identity `network.fiber_array.location.acquisition`, only when the file carries it.
+2. Observing-system facts from `dascore.constants.INVENTORY_ATTRS`. Use canonical names and convert to their fixed units with [`convert_attr_units`](`dascore.io.utils.convert_attr_units`).
+3. Data state: `data_type`, `data_category`, and `data_units`.
+4. Genuine vendor fields, lightly normalized to snake case and listed in `VENDOR_ATTRS` in `tests/test_io/test_common_io.py`.
 
-If a single file can produce more than one patch, your format should usually provide a `source_patch_key` for each scan payload returned by `scan`.
+Declare vendor fields on a format-specific `PatchAttrs` subclass when they need validation; see [format-specific subclasses](`docs/notes/patch_attrs.qmd`). Reserve `_id` for opaque identifiers and `_key` for structured lookup keys. Source provenance belongs to spool contents, not patch attrs.
 
-`source_patch_key` is the per-patch identifier DASCore uses to get back to the same logical patch later. This matters most for `dc.spool(...)`, where DASCore may first `scan()` a file, store patch metadata, and only call `read()` for one patch much later.
+Optional numeric vendor attrs should not default to NaN or infinity.
 
-The rule is simple:
+## Build payloads and patches
 
-- `scan()` should emit a stable `source_patch_key` for each patch payload.
-- For FiberIO implementation, prefer setting `attrs["_source_patch_key"]` on both scan payload attrs and loaded patches; DASCore will normalize that onto `PatchSummary.source_patch_key` when summaries are built.
-- `read(..., source_patch_key=...)` should use that value to return the matching patch, or patches if given multiple ids.
-- `source_patch_key` remains the public summary/reload field, while `_source_patch_key` remains the private attr-level field FiberIO authors should set directly.
-- If both are provided when constructing a `PatchSummary`, `source_patch_key` wins and is copied back onto `attrs["_source_patch_key"]`.
-- Private attrs should not participate in normal patch compatibility checks.
-- `source_path`, `source_format`, and `source_version` are owned by the calling DASCore scan layer, not by `FiberIO.scan()`.
+[`make_scan_payload`](`dascore.io.make_scan_payload`) derives dims and shape from coords. DASCore's default scan can normalize a loaded patch, but custom scanning should avoid loading data.
 
-For some formats, a numeric patch index is enough if patch ordering is stable. For others, a native identifier such as a group name, node name, or source/zone tuple is better. If your format only ever produces one patch per file, you usually do not need to set `source_patch_key`.
-
-## `read_array`: a data-only fast path
-
-[`FiberIO.read_array`](`dascore.io.core.FiberIO.read_array`) returns the raw data array for absolute sample windows, without returning a `Patch` (the default still builds one internally; direct-storage overrides skip it). Callers that already know a file's structure from a spool index (for example the lazy `Spool.io.to_xarray` blocks) use it to skip attribute and coordinate parsing on every read.
-
-You never have to implement it: the default reads the whole resource through `read` and trims, so it is correct for every format. Overriding pays off for formats that can slice storage directly (an HDF5 dataset, a memory-mapped binary). The contract for an override:
-
-- `windows` maps dimension name to `(start, stop)` half-open python indices on the file's own sample grid; dimensions absent from `windows` are returned whole.
-- Return the array in the file's stated dimension order (the order `scan` reports), untransposed and uncast. The caller transposes and casts.
-- Multi-patch formats receive `source_patch_key` naming the one patch the windows index; a multi-patch resource without a key should raise rather than guess. DASCore's own machinery only forwards native keys (ones your format emitted); for a synthesized positional key it bypasses `read_array` entirely and loads the patch the ordinary way.
-- The `resource` parameter participates in the same type coercion as `read`: annotate it (e.g. an HDF5 reader type) and DASCore hands you that handle.
-- Windows arrive as indices, never values: value-to-index conversion (including rounding) is the caller's job, done once through the coordinate machinery.
-
-## What Belongs in `attrs`
-
-Every attr a reader emits is one of four kinds, and the kind decides both its
-name and who may change it later.
-
-1. **`acquisition_key`** — the inventory identity of the data source, spelled
-   `network.fiber_array.location.acquisition`. Set it only if the file really
-   carries those codes; most archives supply it through the directory layout
-   instead.
-2. **Observing-system facts** — what the instrument was doing. Use the names
-   in `dascore.constants.INVENTORY_ATTRS`, which are the
-   fields of the DASDAE inventory's acquisition (`gauge_length`,
-   `spatial_interval`, `pulse_width`, …) and of its interrogator, dotted
-   (`interrogator.serial_number`). Using a vendor spelling for one of these
-   splits one fact into two attrs that nothing downstream can reconcile.
-   These attrs carry fixed units — seconds, hertz, meters — so convert at the
-   parse boundary with
-   [`convert_attr_units`](`dascore.io.utils.convert_attr_units`) and never
-   emit a companion attr stating a value's units.
-3. **Data state** — `data_type`, `data_category`, and `data_units`, which
-   describe the data as it now stands. Processing functions rewrite these, so
-   they belong to the patch rather than to the observing system.
-4. **Vendor extras** — everything genuinely specific to the format, under
-   whatever name the format uses. These are welcome, but each new one must be
-   listed in the `VENDOR_ATTRS` set in `tests/test_io/test_common_io.py`,
-   which is where a reviewer checks that the value is not one of the facts
-   above wearing a vendor's name. Declaring them on a `PatchAttrs` subclass
-   gets them validated and coerced; see
-   [format-specific subclasses](`docs/notes/patch_attrs.qmd`) for how one is
-   spelled, and why an optional number is never defaulted to nan or inf.
-
-Stay as close to the file's own spelling as the rules above allow. A value
-that is one of the facts in (2) has to take the canonical name, because two
-spellings of one fact cannot be reconciled downstream; everything else keeps
-the name the format gave it, lightly normalized to `snake_case`. Renaming a
-vendor key to something that merely sounds more standard is how a value ends
-up filed under a name that means something else.
-
-Two suffixes carry meaning, informally but consistently. A name ending in
-`_id` should be free to hold an opaque token — usually a UUID — so nothing
-which is structurally *not* a UUID should take one. A name ending in `_key`
-is a structured lookup key, resolved against something else: `acquisition_key`
-is the only one so far.
-
-Storage provenance (`source_path`, `source_format`, `source_version`) is the
-spool's, not the patch's: it says where the bytes live rather than where the
-signal came from, and a patch merged from three files has no single answer.
-Read it from `get_contents()`.
-
-## Building Scan Payloads
-
-In implementation code, the simplest pattern is usually:
-
-1. Build normal `PatchAttrs` for one logical patch.
-2. Build the exact `CoordManager` you would use for `read()`.
-3. Return one payload built by [`make_scan_payload`](`dascore.io.make_scan_payload`), which fills `dims` and `shape` from the coords.
-
-If you already have a fully loaded `Patch`, DASCore's default `FiberIO.scan()`
-implementation will normalize it into the same structured payload shape. Format
-implementations should still provide a custom `scan()` whenever they can avoid
-loading the full data array.
-
-
-## Building Patches in `read`
-
-Most single-patch `read()` implementations share a tail: apply the caller's dimension selections, drop the patch when the selection empties it, then attach attrs. [`build_patches`](`dascore.io.utils.build_patches`) does exactly that, so a reader usually ends with:
+Most readers can finish with [`build_patches`](`dascore.io.utils.build_patches`), which applies selections, drops empty results, and attaches attrs:
 
 ```python
 return dc.spool(
@@ -257,155 +93,60 @@ return dc.spool(
 )
 ```
 
-where `attrs` is a dict (or `PatchAttrs`) and `attr_cls` is the format's `PatchAttrs` subclass, if it has one. Selections whose value is `None` are dropped, so a read with nothing to trim never touches the data source.
+## `read_array`: a data-only fast path
 
+[`FiberIO.read_array`](`dascore.io.core.FiberIO.read_array`) returns raw data for absolute sample windows. Its default calls `read()` and trims; override it only when the format can slice storage directly, as DASDAE's `DASDAEV1.read_array` does with its HDF5 dataset.
 
-## Support for Streams/Buffers
+- `windows` maps dimensions to half-open `(start, stop)` sample indices; omitted dimensions are returned whole.
+- Return the array in the dimension order reported by `scan()`, without transposing or casting.
+- Multi-patch formats receive the native `source_patch_key`; raise rather than guess when it is missing.
+- Annotate `resource` with the same managed-resource type used by `read()`.
+- Accept indices, not coordinate values; callers perform value-to-index conversion.
 
-Rather than using paths for the IO methods as shown above, it is better practice to write a `FiberIO` which supports the [python stream interface](https://docs.python.org/3/library/io.html#io.BufferedIOBase) or an opened HDF5 file in the form of an `h5py.File` object. There are a few reasons for this:
+Accept the labelling options your `read` takes, usually `snap`, even when they change nothing: the default forwards them, so refusing one would make the same call work for one format and fail for another.
 
-* More types of inputs can be supported, including steaming file contents from the web or in-memory streams like [`BytesIO`](https://docs.python.org/3/library/io.html#io.BytesIO).
-* It is usually more efficient since open-file handles can be automatically reused.
+The caller bypasses `read_array` for synthesized positional keys.
 
-To make this easy, DASCore will automatically manage and serve the right input to `FiberIO` methods based on type hints. Here are the ones currently supported, all of which are imported from [dascore.io](`dascore.io`):
+## Accept managed resources
 
-1. [BinaryReader](`dascore.io.BinaryReader`) - A stream-like object which must have a `read` and `seek` method.
+Type hints let DASCore open and reuse the right resource:
 
-2. [BinaryWriter](`dascore.io.BinaryWriter`) - A stream-like object which must have a `write` method.
+| Type | Contract |
+|---|---|
+| [`BinaryReader`](`dascore.io.BinaryReader`) | `read` and `seek` |
+| [`BinaryWriter`](`dascore.io.BinaryWriter`) | `write` |
+| [`H5Reader`](`dascore.io.H5Reader`) | `h5py.File` opened for reading |
+| [`H5Writer`](`dascore.io.H5Writer`) | `h5py.File` opened for append |
 
-3. [H5Reader](`dascore.io.H5Reader`) - An instance of `h5py.File` which is open in read mode.
-
-4. [H5Writer](`dascore.io.H5Writer`) - An instance of `h5py.File` which is open in append mode.
-
-
-Deciding which to use depends on whether the file is an HDF5-based or binary format, and which hdf5 library you want to use.
-
-:::{.callout-note}
-H5Reader should be preferred to PytablesReader, especially for the `get_format` method.
-:::
-
-
-:::{.callout-note}
-If a type hint other than the ones listed above is given to the relevant parameter (path, or resource in these examples) it will have no effect.
-:::
-
-Assuming Jingle is a binary file format, here is an implementation which supports binary streams (only showing the `read` method for brevity):
-
+Prefer `H5Reader` for HDF5 formats. Unsupported type hints have no resource-management effect.
 
 ```{python filename="dascore/io/jingle/core.py"}
-"""
-Core module for jingle file format support.
-"""
 import io
 
-import dascore.exceptions
-from dascore.io import FiberIO, BinaryReader, BinaryWriter
+from dascore.io import BinaryReader, FiberIO
 
 
 class JingleV1(FiberIO):
-    """
-    An IO class supporting version 1 of the jingle format.
-    """
-    name = 'jingle'
-    preferred_extensions = ('jgl',)
-    version = '1'
+    name = "jingle"
+    preferred_extensions = ("jgl",)
+    version = "1"
 
-    def read(self, resource: BinaryReader, jingle_param=1, **kwargs):
-        """
-        get_format now accepts a stream, which DASCore will ensure is provided.
-        """
-        # raise an error if we get the wrong type
-        assert isinstance(resource, io.BufferedReader)
-        # read first 50 bytes (maybe they have header info)
-        first_50_bytes = resource.read(50)
-        # seek back to byte 20
+    def read(self, resource: BinaryReader, **kwargs):
+        assert isinstance(resource, io.BufferedIOBase)
+        header = resource.read(50)
         resource.seek(20)
-        # etc.
-
-```
-
-Now, whether we call [`dascore.read`](`dascore.read`) or `JingleV1.read` a readable binary stream will be provided to our implementation. For example:
-
-```{python filename="JingleIO Demonstration"}
-from pathlib import Path
-
-import numpy as np
-
-import dascore as dc
-
-path = Path("test_numpy_binary_file.npy")
-# make a binary file to read
-array = np.random.random(100)
-np.save(path, array)
-
-out = dc.read(path, file_format="jingle", file_version="1")
-jingle_io = JingleV1()
-
-out = jingle_io.read(path)
-
-path.unlink()  # cleanup test file
-```
-
-## Writing Tests
-
-Next we need to write tests for the format (you weren't thinking of skipping this step were you!?). The hardest part of testing new file formats is finding a *small* (typically no more than 10 ish mb) file to include in the test suite. The `modify_h5_file.py` script in DASCore's scripts folder can help downsize an existing hdf5 file. Once you have a small test file, [Adding test data](adding_test_data.qmd) details how to add it to DASCore's registry.
-
-Once the test file is added to the data registry, you can register the new format so a suite of tests run automatically. This is done by adding the format to the appropriate data structures in `tests/test_io/test_common_io.py`. The comments at the top of the file will guide you through this process.
-
-For some formats, the generic tests will be sufficient. For others, additional test cases may be required. Place these in the `tests/test_io` folder. In our example, we would create the folder `dascore/tests/test_io/test_jingle`. Assuming you added a file called "jingle_test_file.jgl" to DASCore's data registry, then we could create the test file `dascore/tests/test_io/test_jingle/test_jingle.py` and its contents might look something like this:
-
-
-```{python filename="tests/test_io/test_jingle/test_jingle.py"}
-#| eval: false
-import pytest
-
-import dascore
-from dascore.utils.downloader import fetch
-from dascore.io.jingle import JingleV1
-
-@pytest.fixture(scope='class')
-def jingle_file_path():
-    """Return the path to the test jingle file."""
-    # fetch will ensure the data file is downloaded and cached.
-    path = fetch("jingle_test_file.jgl")
-    return path
-
-
-class TestJingleIO:
-    """Tests specific to the jingle IO format."""
-
-    def test_issue_xx(self, jingle_file_path):
-        """Test to capture a specific reported issue with this format."""
-        ...
-
-    def test_read_option(self, jingle_file_path):
-        """Tests for a jingle-specific read option"""
-        jingle = JingleV1()
-        patch = jingle.read(jingle_file_path, special_option=2)
         ...
 ```
 
-## Register Plugin
+## Test and register
 
-Now that the Jingle format support is implemented and tested, the final step is to register the jingle `FiberIO` subclasses in DASCore's entry points. This is done under the `[project.entry-points."dascore.fiber_io"]` section in DASCore's `pyproject.toml` file. For example, after adding jingle, the `pyproject.toml` section might look like this:
+Add a fixture under 10 MB using [Adding Test Data](adding_test_data.qmd), then register the format in `tests/test_io/test_common_io.py` to run common conformance tests. Add format-specific cases under `tests/test_io/test_jingle/`.
+
+Register each version in `pyproject.toml`; the entry-point name separates format and version with `__`:
 
 ```default
 [project.entry-points."dascore.fiber_io"]
-TERRA15__V4 = "dascore.io.terra15.core:Terra15FormatterV4"
-PICKLE = "dascore.io.pickle.core:PickleIO"
-WAV = "dascore.io.wav.core:WavIO"
-DASDAE__V1 = "dascore.io.dasdae.core:DASDAEV1"
 JINGLE__V1 = "dascore.io.jingle.core:JingleV1"
 ```
 
-:::{.callout-note}
-The name and version of the format are separated by a double underscore.
-:::
-
-## Directories as Inputs
-
-Some `FiberIO` formats may not be self-contained files, but rather must be understood in the context of an entire directory. In these cases, the `input_type` parameter on the `FiberIO` subclass should be set to "directory". See the [xml_binary](`dascore.io.xml_binary`) module for an example of a directory based `FiberIO` implementation. 
-
-:::{.callout-warning}
-DASCore assumes a directory-based `FiberIO` does not have any sub patch files of a different format. Once a valid `FiberIO` directory is found, contents of the directory are no longer searched for Patch files.  
-:::
+For a directory format, set `input_type = "directory"`; see [`xml_binary`](`dascore.io.xml_binary`). Once DASCore recognizes such a directory, it does not search its contents for other patch formats.

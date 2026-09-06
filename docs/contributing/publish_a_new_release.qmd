@@ -1,56 +1,43 @@
 ---
-title: "Publish a new release"
+title: Publish a New Release
 ---
 
-This page describes the maintainer workflow for publishing a DASCore release. DASCore's package version is derived from git tags, so the release tag is the source of truth and no version file needs to be edited by hand.
+DASCore's version comes from git tags; do not edit a version file.
 
-## Before releasing
+## Prepare and publish
 
-Make sure the docs build. Because the doc-build can take a bit of time, the doc-build is not automatically tested on each PR. You can test this using the `documentation` tag on a new PR, or run it locally following the [doc-build instructions](documentation.qmd#generating-documentation).
+1. Confirm the documentation builds locally or on a PR labeled `documentation`.
+2. Open [Draft a new release](https://github.com/DASDAE/dascore/releases/new).
+3. Choose the next `v*` tag using the [version policy](general_guidelines.qmd#branches-and-versions).
+4. Assemble notes from merged PR `## Changelog` sections. Use **Breaking Changes**, **Added**, **Changed**, **Deprecated**, **Removed**, **Fixed**, and **Security**, omitting empty sections. Repeat breaking entries in **Breaking Changes** and end each entry with its PR number.
+5. Publish the release to create the tag. GitHub Actions publishes PyPI distributions and builds the docs from that tag.
 
-Next, from the github interface navigate to DASCore's [release page](https://github.com/DASDAE/dascore/releases) and click on [draft new release](https://github.com/DASDAE/dascore/releases/new). For the tag, note the latest release, then choose the next version tag using DASCore's versioning policy in the [general guidelines](general_guidelines.qmd) (eg if the latest version is `v0.1.20` then type `v0.1.21` for a patch/bug fix release and `v0.2.0` for a larger feature release).
-
-## Draft the release notes
-
-DASCore keeps no changelog in the repository; the release notes *are* the changelog, and they are written from the pull requests merged since the previous tag. Scope them to the branch the release is cut from, which is `dev` for a pre-release and for any work not yet merged down to `master`.
-
-Each PR carries its own entries under a `## Changelog` heading, already written and categorized by its author following [Changelog entries](general_guidelines.qmd#changelog-entries), so drafting mostly means collecting and grouping them. Use these sections, omitting any that end up empty: **Breaking Changes** first, holding every `**breaking**` entry repeated from its own category so upgraders see them immediately, then **Added**, **Changed**, **Deprecated**, **Removed**, **Fixed**, and **Security**.
-
-The GitHub releases page can generate release notes automatically, but maintainers should review and edit the generated text so it is useful to users. Also note, DASCore includes an agent skill called "draft release" so a coding agent of your choice can help you do this. In the notes, prefer concise descriptions of behavior and API changes over internal implementation details. End each entry with its pull request in parentheses, e.g. `(#125)`, which GitHub renders as a link.
-
-Then click 'Publish Release'. This will kick off the doc-build and publishing task automatically, as well as publish the tagged source code to PyPI.
+GitHub can generate a draft, and the repository's `draft-release` agent skill can collect entries, but maintainers must verify the version, target, categories, and wording.
 
 ## Pre-releases
 
-A pre-release (alpha, beta, or release candidate) lets users try in-progress work without affecting anyone who installs DASCore normally. Publishing one differs from a stable release in four ways:
+For alpha, beta, or release-candidate builds:
 
-1. **Set the release Target to the branch the code lives on**, usually `dev`. The Target defaults to `master`, and workflows run from the tagged commit, so tagging the wrong branch publishes the wrong code.
-2. **Use a [PEP 440](https://peps.python.org/pep-0440/) pre-release tag**, appending `aN`, `bN`, or `rcN` to the version being worked toward for an alpha, beta, or release candidate: `v0.2.0a1`, `v0.2.0b1`, `v0.2.0rc1`. Do not use the plain `v0.2.0` tag, which belongs to the final release. `pip install dascore` ignores pre-releases, so only users who ask for one with `pip install --pre dascore` will get it.
-3. **Tick the "Set as a pre-release" checkbox.** This is load-bearing, not cosmetic: `BuildDeployStableDocs` keys on it to skip deploying, so an unticked pre-release replaces the stable documentation site with pre-release docs.
-4. **Skip the conda-forge section entirely.** conda has no equivalent of `--pre` and orders `0.2.0b1` above `0.1.20`, so publishing a pre-release to the main channel would serve it to every conda user. conda-forge handles pre-releases through a separate `rc` branch and label.
+1. Target the branch containing the code, usually `dev`; GitHub otherwise defaults to `master`.
+2. Use a [PEP 440](https://peps.python.org/pep-0440/) tag such as `v0.2.0a1`, `v0.2.0b1`, or `v0.2.0rc1`.
+3. Select **Set as a pre-release**. The docs workflow uses this flag to avoid replacing stable docs.
+4. Do not publish the pre-release to conda-forge's main channel.
 
-`BuildDeployStableDocs` still runs for a pre-release and still takes ~30 minutes. It builds the docs and attaches `docs.zip` to the release, but the deploy step is skipped by design, so the stable documentation site is expected to stay unchanged. Do not re-dispatch the workflow to "fix" this.
+State how to install it (`pip install --pre dascore==0.2.0b1`), that it is unavailable on conda-forge, where to report problems, and what breaks relative to the last stable release. The docs workflow still builds and attaches `docs.zip`; it intentionally skips deployment.
 
-Because pre-releases exist to gather feedback, say plainly in the notes that it is a pre-release, how to install it (`pip install --pre dascore==0.2.0b1`), that it is not available on conda-forge, and where to report problems. Call out breaking changes against the last stable release explicitly, including any public API that has been removed.
+## Verify and recover
 
-## Verify package and docs publishing
+Confirm these workflows succeed:
 
-After publishing, open [GitHub Actions](https://github.com/DASDAE/dascore/actions) and confirm the release workflows complete successfully.
+- `PublishPackage`: uploads distributions to [PyPI](https://pypi.org/project/dascore/).
+- `BuildDeployStableDocs`: builds docs, attaches `docs.zip`, and deploys stable releases.
 
-- `PublishPackage` builds the distributions and uploads DASCore to [PyPI](https://pypi.org/project/dascore/).
-- `BuildDeployStableDocs` builds the stable documentation, deploys it to GitHub Pages, and uploads `docs.zip` to the GitHub release. This may take 30 minutes or more.
+Then verify PyPI and, for stable releases, [dascore.org](https://dascore.org). For pre-releases, inspect `docs.zip` instead.
 
-Once the workflows finish, check that PyPI shows the new version and that the stable documentation site reflects the release. For a pre-release the documentation site is expected to be unchanged; check the `docs.zip` asset on the release instead.
-
-If a workflow fails, first check whether PyPI already has the files, since the recovery differs:
-
-- **Transient failure, nothing uploaded.** Re-run the job. Release workflows check out the release tag rather than the branch it was cut from, so a re-run builds the same commit and produces the same version even if the branch has moved on. Note PyPI refuses to replace a file it already has, so a re-run after a partial upload fails on the files that did land.
-- **A source change is needed.** Publish a new release with a new tag, bumping the patch version (`v0.1.21`) or the pre-release number (`v0.2.0b2`). Fix the underlying issue on the branch the release came from.
-
-Never move or replace a public release tag, and never delete a version from PyPI expecting to re-upload it: PyPI does not allow a filename to be reused, even after deletion.
+Release jobs check out the tag, so reruns use the same commit after its branch advances. Re-run a transient docs job as needed. Re-run `PublishPackage` only when nothing reached PyPI: PyPI never permits reusing a filename, even after deletion, so partial uploads or source fixes require a new tag. Never move a public tag.
 
 ## Conda-forge
 
-Unfortunately, simply creating the tag will not publish to conda-forge automatically. To do this, first wait until the new package appears on [DASCore's PyPI page](https://pypi.org/project/dascore/). Next, navigate to [DASCore's feedstock](https://github.com/conda-forge/dascore-feedstock) and open a new issue. Click "bot commands" and create an issue with the title "@conda-forge-admin, please update version". The conda-forge bot will then see there is a new release on PyPI and open a PR. Alternatively, the bot will automatically see the new version and open a new PR within a day or so.
+After a stable version reaches PyPI, check [dascore-feedstock](https://github.com/conda-forge/dascore-feedstock) for the bot's update PR or open a “bot commands” issue titled `@conda-forge-admin, please update version`. Verify its requirements against `pyproject.toml`, merge it, and confirm the package appears on [conda-forge](https://anaconda.org/conda-forge/dascore).
 
-When this PR opens, examine the requirements and dependencies listed, and make sure they have not gotten out of sync with DASCore's current pyproject.toml. In general, conda-forge should lean more towards including dependencies that are optional, although some have been abandoned if they are very slow at making conda releases. Once this is correct, merge the pull request. After the feedstock PR is merged, the new version should be published to conda-forge in an hour or so. Verify the new package appears on [conda-forge](https://anaconda.org/conda-forge/dascore).
+The feedstock may include useful optional dependencies unless their slow conda release cadence blocks DASCore releases.

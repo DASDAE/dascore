@@ -442,86 +442,49 @@ def line_mute(
         The patch instance.
     {smooth_param}
     invert
-        If True, invert the taper such that the values outside the defined region
-        are set to 0.
+        Zero values outside rather than inside the region.
     relative
-        If True (default), values are relative to coordinate edges.
-        Positive values are offsets from start, negative from end.
+        Interpret positive values from the coordinate start and negative values
+        from its end; False uses absolute coordinate values.
     **kwargs
-        Dimension specifications as (boundary_1, boundary_2) pairs.
-        Each boundary can be:
-        - Scalar: constant value (defines plane perpendicular to dimension)
-        - Length-2 sequence: coordinates defining a straight line (2D only)
-        - None or ...: edge of coordinate (min or max)
+        One or two dimensions mapped to boundary pairs. Each boundary is a
+        scalar, a length-2 straight line (2D only), or None/``...`` for the
+        coordinate edge.
 
     Examples
     --------
     >>> import dascore as dc
-    >>>
-    >>> # An example patch full of 1s with time on y axis and distance on x.
     >>> patch = dc.get_example_patch().full(1)
-    >>>
-    >>> # Mute first 0.5s (relative to start by default)
+    >>> # Mute the first 0.5 s, or retain only the middle section.
     >>> muted = patch.line_mute(time=(0, 0.5))
-    >>>
-    >>> # Mute everything except middle section
     >>> kept = patch.line_mute(time=(0.2, -0.2), invert=True)
     >>>
-    >>> # 1D Mute with smoothed absolute units for time.
+    >>> # Smooth boundaries with an explicit unit.
     >>> muted = patch.line_mute(time=(0.2, 0.8), smooth=0.02 * dc.units.s)
     >>>
-    >>> # Classic first break mute: mute early arrivals
-    >>> # Line from (t=0, d=0) to (t=0.3, d=300) defines velocity=1000 m/s
-    >>> # The other line (defined by time=0 and distance=None) is t=0 (over all
-    >>> # distances).
+    >>> # Mute early arrivals above a 1,000 m/s line.
     >>> muted = patch.line_mute(
     ...     time=(0, [0, 0.3]),
     ...     distance=(None, [0, 300]),
     ...     smooth=0.02,
     ... )
     >>>
-    >>> # Mute late arrivals: from velocity line to a vertical line with
-    >>> # with distance=0 (over all times).
-    >>> muted = patch.line_mute(
-    ...     time=([0, 0.3], None),
-    ...     distance=([0, 300], 0),
-    ... )
-    >>>
-    >>> # Mute wedge between two velocity lines
+    >>> # Mute between two velocity lines, or invert to keep the wedge.
     >>> muted = patch.line_mute(
     ...     time=([0, 0.375], [0, 0.25]),
     ...     distance=([0, 300], [0, 300]),
     ... )
-    >>>
-    >>> # Mute wedge outside two velocity lines
-    >>> muted = patch.line_mute(
+    >>> kept = patch.line_mute(
     ...     time=([0, 0.375], [0, 0.25]),
     ...     distance=([0, 300], [0, 300]),
     ...     invert=True,
     ... )
-    >>>
-    >>> # Apply custom tapering
-    >>> ones = patch.full(1.0)
-    >>> envelope = ones.line_mute(
-    ...     time=([0, 0.375], [0, 0.25]),
-    ...     distance=([0, 300], [0, 300]),
-    ... )
-    >>> # Knock down edges with rolling mean along the time dimension.
-    >>> smooth = envelope.rolling(time=5, samples=True).mean()
-    >>> # Then multiply the two patches.
-    >>> result = patch * smooth
 
     Notes
     -----
-    - By relative=True (the default) means values are offsets from coordinate
-      edges. Use relative=False for absolute coordinate values.
-
-    - Currently, mute doesn't support more than 2 dimensions, and 2D mutes
-      require straight-line boundaries.
-
-    - For more control over boundary smoothing, use a patch with one values
-      then apply custom tapering/smoothing before multiplying with the
-      original patch. See example section for more details.
+    At most two dimensions are supported, and 2D boundaries must be straight.
+    For custom smoothing, apply the mute to an all-ones patch, smooth that
+    envelope, then multiply it by the original patch.
 
     See Also
     --------

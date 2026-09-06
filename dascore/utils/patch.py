@@ -316,81 +316,52 @@ def patch_function(
     Parameters
     ----------
     required_dims
-        A dimension name, or a sequence of them, which must be found in the
-        Patch.
+        Required dimension name or names. Missing dimensions raise
+        `PatchCoordinateError`.
     required_coords
-        A coordinate name, or a sequence of them, which must be found in the
-        Patch.
+        Required coordinate name or names. Missing coordinates raise
+        `PatchCoordinateError`.
     required_attrs
-        An attr name, a sequence of them, or a mapping of names to the values
-        the Patch must hold for them.
+        Required attribute name or names, or a mapping of names to values.
+        Missing or mismatched attributes raise `PatchAttributeError`.
     history
-        Specifies how to track history on Patch.
-            Full - Records function name and str version of input arguments.
-            method_name - Only records method name. Useful if args are long.
-            None - Function call is not recorded in history attribute.
+        ``"full"`` records the function and arguments, ``"method_name"``
+        records only its name, and None records nothing.
     validate_call
-        If True, use pydantic to validate the function call. This can save
-        quite a lot of code in validation checks, but does have some overhead.
+        Whether Pydantic validates calls. This reduces manual checks but adds
+        overhead.
         See [validate_call](https://docs.pydantic.dev/latest/api/validate_call/).
     data_type
-        Controls the output patch's ``data_type`` attr. If None, leave the
-        returned patch's ``data_type`` unchanged. Otherwise, set to specified
-        value. Use an empty string ("") to clear.
+        Output ``data_type``. None preserves it; an empty string clears it.
     version
-        The version of the operation. Bump it when the same arguments should
-        mean a different answer, so that fingerprints recorded against the
-        old behaviour do not name the new one.
+        Operation version. Bump it when the same arguments mean a different
+        result, keeping new fingerprints distinct from old ones.
 
     Examples
     --------
     >>> import dascore as dc
     >>>
-    >>> # 1. A patch method which requires dimensions (time, distance)
-    >>> @dc.patch_function(required_dims=('time', 'distance'))
+    >>> @dc.patch_function(required_dims=("time", "distance"))
     ... def do_something(patch):
-    ...     ...   # raises a PatchCoordsError if patch doesn't have time,
-    ...     #  distance
+    ...     return patch
     >>>
-    >>> # 2. A patch method which requires an attribute 'data_type' == 'DAS'
-    >>> @dc.patch_function(required_attrs={'data_type': 'DAS'})
+    >>> @dc.patch_function(required_attrs={"data_type": "DAS"})
     ... def do_another_thing(patch):
-    ...     ...  # raise PatchAttributeError if patch doesn't have attribute
-    ...     # called "data_type" or its values is not equal to "DAS".
+    ...     return patch
     >>>
-    >>> # 3. A patch method which does type checking on inputs.
-    >>> # The `Field` instance can require various data properties (like ranges)
-    >>> from typing_extensions import Annotated, Literal
     >>> from pydantic import Field
     >>> @dc.patch_function(validate_call=True)
-    ... def do_type_thing(
-    ...     patch,
-    ...     int_le_10_ge_1: int = Field(ge=1, le=10, default=1),
-    ...     option: Literal["min", "max", None] = None,
-    ... ):
-    ...     ...
+    ... def validated(patch, count: int = Field(ge=1, le=10, default=1)):
+    ...     return patch
     >>>
-    >>> # 4. A patch method which sets the output data_type.
-    >>> @dc.patch_function(data_type="strain_rate")
-    ... def do_strain_rate(patch):
-    ...     ...
-    >>>
-    >>> # 5. A patch method which clears the output data_type.
-    >>> @dc.patch_function(data_type="")
-    ... def do_unknown_quantity(patch):
-    ...     ...
-    >>>
-    >>> # 6. A patch method whose body is written to the array API standard,
-    >>> # so it runs on any array backend rather than only on numpy.
+    >>> # Array API code supports non-NumPy backends.
     >>> from dascore.utils.array_api import array_namespace
     >>> @dc.patch_function()
-    ... def do_portable_thing(patch):
+    ... def absolute(patch):
     ...     xp = array_namespace(patch.data)
     ...     return patch.new(data=xp.abs(patch.data))
     >>>
-    >>> # 7. Every patch function builds the operation it is with `.op`:
-    >>> # the same call said as a task, which can be compared,
-    >>> # fingerprinted, and written to a file.
+    >>> # ``op`` builds a comparable, serializable PatchOp.
     >>> patch = dc.get_example_patch()
     >>> op = dc.proc.normalize.op(dim="time")
     >>> assert op(patch).equals(patch.normalize(dim="time"))
@@ -398,20 +369,14 @@ def patch_function(
 
     Notes
     -----
-    - The original function can still be accessed with the raw_function
-      attribute. This may be useful for avoiding calling the patch_func
-      machinery multiple times from within another patch function.
+    ``raw_function`` exposes the undecorated function, which avoids applying
+    this machinery twice inside another patch function. ``op`` builds a
+    [PatchOp](`dascore.workflow.processor.PatchOp`) with arguments bound to the
+    signature, so positional and keyword spellings share a fingerprint.
 
-    - The decorated function also carries ``op``, which builds the
-      [PatchOp](`dascore.workflow.processor.PatchOp`) a call to it is:
-      ``dc.proc.normalize.op(dim="time")``. The call is bound against the
-      signature, so a positional and a keyword spelling of one call are one
-      operation with one fingerprint.
-
-    - If using `PatchType` or `SpoolType` type variables from the
-      [constants module](`dascore.constants`), make sure dascore is imported
-      as dc at the top of the file where the patch function is defined so
-      the forward refs can be resolved properly for type checking.
+    When annotations use `PatchType` or `SpoolType` from
+    [constants](`dascore.constants`), import dascore as ``dc`` in that module
+    so their forward references resolve.
     """
     # Handled before the wrapper is built so the rest of this function sees
     # required_dims as the dimension names it is everywhere else, not as the

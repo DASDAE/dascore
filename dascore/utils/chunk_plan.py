@@ -50,8 +50,12 @@ from dascore.units import (
 from dascore.utils.attrs import known_only, validate_conflict
 from dascore.utils.chunk import get_intervals
 from dascore.utils.docs import compose_docstring
-from dascore.utils.misc import get_middle_value, is_range
-from dascore.utils.pd import get_dim_names_from_columns, get_interval_columns
+from dascore.utils.misc import _CanonicalRange, get_middle_value, is_range
+from dascore.utils.pd import (
+    adjust_segments,
+    get_dim_names_from_columns,
+    get_interval_columns,
+)
 from dascore.utils.time import is_datetime64, is_timedelta64, to_float, to_timedelta64
 
 # Columns which never participate in conflict policing and never carry to
@@ -66,6 +70,7 @@ _SOURCE_COLUMNS = (
     "patch_id",
     "processing_id",
 )
+_PATCH_LOCAL_EMPTY = "_patch_local_empty"
 # The default continuity tolerance; looser values warn when they force
 # merges (#662).
 _DEFAULT_TOLERANCE = 1.5
@@ -157,14 +162,143 @@ def _resolve_group_attrs(group, columns) -> tuple[str, ...]:
     return tuple(dict.fromkeys(names))
 
 
-def samples_adjusted_envelopes(
+def _adjust_unit_segments(df, name, canonical):
+    """Trim envelopes by a canonical range expressed in each row's units."""
+    unit_col = f"_{name}_units"
+    if df.empty:
+        return df
+    if unit_col not in df.columns:
+        return adjust_segments(
+            df, ignore_bad_kwargs=True, **{name: canonical.magnitudes}
+        )
+    pieces = []
+    for unit, sub in df.groupby(df[unit_col], dropna=False, sort=False):
+        if unit is None or pd.isnull(unit) or unit == "":
+            rng = canonical.magnitudes
+        else:
+            rng = canonical.magnitudes_in(str(unit))
+        pieces.append(adjust_segments(sub, ignore_bad_kwargs=True, **{name: rng}))
+    return pd.concat(pieces).sort_index()
+
+
+def _adjust_absolute_envelopes(df, coords):
+    """Project one absolute coordinate selection onto relation envelopes."""
+    for name, value in coords.items():
+        if isinstance(value, _CanonicalRange):
+            df = _adjust_unit_segments(df, name, value)
+        elif is_range(value):
+            df = adjust_segments(df, ignore_bad_kwargs=True, **{name: value})
+    return df
+
+
+def _relative_bound(mins, maxs, value, open_values, units=None):
+    """
+    Resolve one patch-local relative bound for every relation row.
+
+    Returns the per-row values, whether the bound could not be projected,
+    and whether it leaves its side of the range unbounded.
+    """
+    is_quantity = hasattr(value, "units")
+    if value is None or value is Ellipsis:
+        return open_values, False, True
+    if not is_quantity and np.ndim(value) == 0 and pd.isnull(value):
+        return open_values, False, True
+    try:
+        was_percent = is_percent(value)
+        sign = value.magnitude if is_quantity else to_float(value)
+        if np.ndim(sign):
+            return open_values, True, False
+        reference = mins if sign >= 0 else maxs
+        time_like = is_datetime64(mins) or is_timedelta64(mins)
+        if not np.isfinite(sign) and time_like:
+            # A non-finite offset becomes NaT, which `Patch.select` ignores,
+            # so the patch loads whole and the envelope stays open. A numeric
+            # coordinate takes the infinity literally and the arithmetic
+            # below already says so: +inf from the start selects nothing.
+            return open_values, False, True
+        if was_percent:
+            offset = (value.magnitude / 100) * (maxs - mins)
+        elif is_quantity:
+            target_units = "s" if time_like else units
+            if target_units is None or pd.isnull(target_units) or target_units == "":
+                raise UnitError("Cannot project a quantity without coordinate units.")
+            magnitude = convert_units(value.magnitude, target_units, value.units)
+            offset = to_timedelta64(magnitude) if time_like else magnitude
+        elif time_like:
+            offset = to_timedelta64(value)
+        else:
+            offset = value
+        return reference + offset, False, False
+    except (NotImplementedError, TypeError, UnitError, ValueError):
+        # Keep the source envelope as a candidacy superset. The loaded
+        # coordinate remains authoritative and applies the exact selection.
+        return open_values, True, False
+
+
+def _adjust_relative_envelopes(df, coords, drop_empty):
+    """Project patch-local relative ranges onto relation envelopes."""
+    for name, value in coords.items():
+        cols = [f"{name}_min", f"{name}_max"]
+        if not set(cols).issubset(df.columns) or not is_range(value):
+            continue
+        unit_col = f"_{name}_units"
+        grouped = (
+            df.groupby(df[unit_col], dropna=False, sort=False)
+            if unit_col in df.columns
+            else [(None, df)]
+        )
+        pieces = []
+        for unit, sub in grouped:
+            mins, maxs = (sub[c] for c in cols)
+            lo, hi = value
+            units = None if unit is None or pd.isnull(unit) or unit == "" else str(unit)
+            left, left_unresolved, left_open = _relative_bound(
+                mins, maxs, lo, mins, units
+            )
+            right, right_unresolved, right_open = _relative_bound(
+                mins, maxs, hi, maxs, units
+            )
+            unresolved = mins.isna() | maxs.isna()
+            if left_unresolved or right_unresolved:
+                unresolved |= True
+            # An open bound already sits at the envelope extreme on its own
+            # side, so it can never reorder the range. Swapping it back in
+            # would make a window that starts past the patch end look like
+            # one ending at it, hiding the emptiness the `keep` test finds.
+            if left_open or right_open:
+                swap = pd.Series(False, index=sub.index)
+            else:
+                swap = right < left
+            new_min = left.where(~swap, other=right)
+            new_max = right.where(~swap, other=left)
+            new_min = new_min.mask(unresolved, mins)
+            new_max = new_max.mask(unresolved, maxs)
+            # Test before clipping so an entirely out-of-range window is not
+            # resurrected as a one-sample envelope.
+            keep = (new_min <= maxs) & (new_max >= mins)
+            keep |= unresolved
+            sub[cols[0]] = new_min.clip(lower=mins, upper=maxs)
+            sub[cols[1]] = new_max.clip(lower=mins, upper=maxs)
+            if drop_empty:
+                sub = sub[keep]
+            else:
+                empty = ~keep & ~unresolved
+                sub[cols] = sub[cols].mask(empty)
+                sub[_PATCH_LOCAL_EMPTY] = sub.get(_PATCH_LOCAL_EMPTY, False) | empty
+            pieces.append(sub)
+        df = pd.concat(pieces).sort_index() if pieces else df.iloc[:0]
+    return df
+
+
+def patch_local_adjusted_envelopes(
     df: pd.DataFrame, residuals, drop_empty: bool = True
 ) -> pd.DataFrame:
     """
-    Adjust envelope columns for patch-local samples residuals.
+    Replay coordinate residuals onto relation envelopes in call order.
 
-    A ``samples=True`` index window trims each patch at load, so the
-    planner must consume the trimmed envelopes or it publishes outputs
+    Absolute residuals trim membership and envelopes. A patch-local sample
+    or relative selection preserves row membership, but the planner must
+    consume its trimmed envelopes or it publishes outputs
     that lie entirely outside the selected samples (phantom empties).
     Negative indices resolve per patch against the envelope-derived
     sample count (rows whose count is unknown keep their envelope as a
@@ -178,8 +312,12 @@ def samples_adjusted_envelopes(
         return value is None or isinstance(value, int | np.integer)
 
     df = df.copy(deep=False)
-    for coords, samples in residuals:
+    for coords, samples, relative in residuals:
         if not samples:
+            if relative:
+                df = _adjust_relative_envelopes(df, coords, drop_empty)
+            else:
+                df = _adjust_absolute_envelopes(df, coords)
             continue
         for name, value in coords.items():
             cols = [f"{name}_min", f"{name}_max", f"{name}_step"]
@@ -232,7 +370,17 @@ def samples_adjusted_envelopes(
             df[cols[1]] = new_max.clip(lower=mins, upper=maxs)
             if drop_empty:
                 df = df[keep]
+            else:
+                empty = ~keep & ~unresolved
+                df[cols] = df[cols].mask(empty)
+                df[_PATCH_LOCAL_EMPTY] = df.get(_PATCH_LOCAL_EMPTY, False) | empty
     return df
+
+
+def _drop_patch_local_empty(df: pd.DataFrame) -> pd.DataFrame:
+    """Drop rows whose selected patch is empty from data-bearing plans."""
+    empty = df.get(_PATCH_LOCAL_EMPTY)
+    return df if empty is None else df[~empty]
 
 
 def _ensure_patch_id(df: pd.DataFrame) -> pd.DataFrame:

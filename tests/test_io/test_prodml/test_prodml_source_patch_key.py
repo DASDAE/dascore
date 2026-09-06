@@ -2,9 +2,16 @@
 
 from __future__ import annotations
 
+import shutil
+
+import h5py
+import numpy as np
 import pytest
 
 import dascore as dc
+from dascore.exceptions import PatchAttributeError
+from dascore.io.core import FiberIO
+from dascore.io.prodml.core import ProdMLV2_0
 from dascore.utils.downloader import fetch
 
 
@@ -46,3 +53,68 @@ class TestProdMLSourcePatchId:
             summaries[0].get_coord_summary("time").min,
             summaries[1].get_coord_summary("time").min,
         }
+
+
+class TestReadArrayKeys:
+    """The key names which of a file's several nodes is read."""
+
+    @pytest.fixture(scope="class")
+    def prodml_fbe_path(self):
+        """A ProdML file holding several FBE nodes."""
+        return fetch("prodml_fbe_1.h5")
+
+    def test_each_key_reads_its_own_node(self, prodml_fbe_path):
+        """Every node is reachable, and none stands in for another."""
+        io = ProdMLV2_0()
+        payloads = dc.scan(prodml_fbe_path)
+        assert len(payloads) > 1
+        arrays = {}
+        for payload in payloads:
+            key = payload.source_patch_key
+            out = io.read_array(prodml_fbe_path, {}, source_patch_key=key)
+            expected = FiberIO.read_array(io, prodml_fbe_path, {}, source_patch_key=key)
+            assert np.array_equal(out, expected, equal_nan=True), key
+            arrays[key] = out
+        # the nodes share a shape, so only their values tell them apart
+        first = next(iter(arrays.values()))
+        assert any(
+            not np.array_equal(first, x, equal_nan=True) for x in arrays.values()
+        )
+
+    def test_unknown_key_raises(self, prodml_fbe_path):
+        """A key naming no node is not silently resolved to one."""
+        with pytest.raises(PatchAttributeError, match="No patch named"):
+            ProdMLV2_0().read_array(prodml_fbe_path, {}, source_patch_key="nope")
+
+    def test_keyless_multi_node_raises(self, prodml_fbe_path):
+        """Several nodes and no key cannot be resolved."""
+        with pytest.raises(PatchAttributeError, match="source_patch_key"):
+            ProdMLV2_0().read_array(prodml_fbe_path, {})
+
+
+class TestNodeDims:
+    """Where a node's stored dimension order comes from."""
+
+    @pytest.fixture
+    def fbe_without_dimensions(self, tmp_path):
+        """A copy of the FBE file whose nodes state no Dimensions."""
+        path = tmp_path / "no_dims.h5"
+        shutil.copy(fetch("prodml_fbe_1.h5"), path)
+        with h5py.File(path, "a") as h5:
+            for group in h5["Acquisition"].values():
+                for node in getattr(group, "values", dict)():
+                    for name, dataset in getattr(node, "items", dict)():
+                        if name.lower().startswith("fbedata["):
+                            dataset.attrs.pop("Dimensions", None)
+        return path
+
+    def test_missing_dimensions_falls_back(self, fbe_without_dimensions):
+        """A node stating nothing takes its parent's order, as scan does."""
+        io = ProdMLV2_0()
+        payload = dc.scan(fbe_without_dimensions)[0]
+        key = payload.source_patch_key
+        out = io.read_array(fbe_without_dimensions, {}, source_patch_key=key)
+        expected = FiberIO.read_array(
+            io, fbe_without_dimensions, {}, source_patch_key=key
+        )
+        assert out.shape == expected.shape == payload.shape

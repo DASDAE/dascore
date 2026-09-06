@@ -130,7 +130,7 @@ sources = diverse.select(acquisition_key={"DAS2.R2D1..RAW", "DAS3.R2D1..RAW"})
 tagged = diverse.select(tag="some*")
 ```
 
-Coordinate selections both discard patches outside the range and trim intersecting patches. Attribute selections only filter rows. Collections, Unix-style globs, and compiled regular expressions are accepted for string metadata.
+Coordinate selections both discard patches outside the range and trim intersecting patches. Attribute selections only filter rows. Collections, globs, and compiled regular expressions are accepted for string metadata. A glob means what SQLite's `GLOB` means, since that is what the index applies: `*` and `?` are wildcards, `[abc]` is a character class, and `[^abc]` negates one.
 
 ```{python}
 import re

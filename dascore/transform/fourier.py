@@ -242,61 +242,43 @@ def dft(
     patch
         Patch to transform.
     dim
-        A single, or multiple dimensions over which to perform dft. If
-        None, perform dft over all dimensions.
+        Dimension or dimensions to transform. None transforms all dimensions.
     real
-        Either 1) The name of the axis over which to perform a rfft, 2)
-        True, which means the last (possibly only) dimension should have an
-        rfft performed, or 3) None, meaning no rfft.
+        Dimension for a real FFT, True for the last requested dimension, or
+        None for complex FFTs along every dimension.
     pad
-        If True, pad patch before performing dft along desired dimensions to
-        the next fast length. This can avoid major slow-downs when dimension
-        lengths are prime numbers.
+        Pad each transformed dimension to its next fast FFT length.
     output
-        Spectral representation to return for each frequency bin
+        Spectral representation for each frequency bin:
         - ``'FFT'``: Complex Fourier coefficients scaled by sample spacing.
         - ``'AS'``: Amplitude spectrum in the original data units.
         - ``'PS'``: Power spectrum whose bin sum gives mean square.
         - ``'PSD'``: Spectral density whose bin-width-weighted sum gives
-                     mean square.
+          mean square.
     db
-        If True, converts the output into decibel units, if output is not FFT.
-        This applies ``20 * log10`` to ``'AS'`` and ``10 * log10`` to ``'PS'``
-        or ``'PSD'`` without a reference value.
-
+        Convert non-FFT output to decibels without a reference value: use
+        ``20 * log10`` for AS and ``10 * log10`` for PS or PSD.
 
     Notes
     -----
-    - Simply uses numpy's fft module but outputs are scaled by the sample
-      spacing along each transformed dimension and coordinates corresponding
-      to frequency bins are shifted so they remain ordered.
+    NumPy FFT output is scaled by each transformed dimension's sample spacing.
+    Frequency coordinates remain ordered, use reciprocal units, and are named
+    with an ``ft_`` prefix (for example, ``time`` becomes ``ft_time``).
 
-    - Each transformed dimension is renamed with a preceding `ft_`. e.g.,
-      `time` becomes `ft_time` (ft stands for fourier transform).
+    A non-dimensional coordinate measured on one transformed dimension is
+    removed from the output coordinates but retained for
+    [idft](`dascore.transform.fourier.idft`) to restore. One spanning multiple
+    dimensions is dropped.
 
-    - Each transformed dimension has units of 1/original units.
+    FFT data units combine the original data and transformed-dimension units;
+    other outputs are normalized as described under ``output``.
 
-    - A non-dimensional coordinate measured on a transformed dimension is
-      not a coordinate of the output -- the frequency axis is not what it
-      was measured on, and a real transform is not even the same length --
-      but it is kept for [idft](`dascore.transform.fourier.idft`) to
-      restore. One spanning more than one dimension is dropped.
+    With ``real=True``, AS, PS, and PSD do not double non-DC or non-Nyquist
+    bins for a one-sided spectrum; multiply the applicable bins when needed.
 
-    - For ``output='FFT'``, output data units are the original data units
-      multiplied by the units of each transformed dimension. Other output
-      types are normalized as described in the ``output`` parameter.
-
-    - For ``output='AS'``, ``'PS'``, or ``'PSD'`` with ``real=True``, the
-      non-DC and non-Nyquist bins have not been converted to one-sided spectra.
-      Depending on your use case, you may need to multiply non-zero bins by 2.
-
-    - If all requested dimensions are already transformed, ``dft`` returns
-      the input patch unchanged, regardless of the requested ``output``.
-
-    - Non-dimensional coordinates associated with transformed coordinates
-      will be dropped in the output.
-
-    - See the [FFT notes](`docs/notes/dft_notes.qmd`) for more details.
+    If every requested dimension is already transformed, ``dft`` returns the
+    input unchanged regardless of ``output``. See the
+    [FFT notes](`docs/notes/dft_notes.qmd`) for details.
 
     See Also
     --------
@@ -307,13 +289,9 @@ def dft(
     --------
     >>> import dascore as dc
     >>> patch = dc.get_example_patch()
-    >>> # perform dft (fft) on time axis
     >>> dft_time = patch.dft(dim="time")
-    >>> # make it a real fft (no negative frequencies)
     >>> dft_time_real = patch.dft(dim="time", real=True)
-    >>> # dft on specified dimensions, specify real dimension
     >>> dft_some_real = patch.dft(dim=("time", "distance"), real="time")
-    >>> # calculate a power spectral density along time
     >>> psd = patch.dft(dim="time", real=True, output="PSD")
     """
     output_type = output.upper()

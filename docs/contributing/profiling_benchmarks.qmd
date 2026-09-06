@@ -1,32 +1,23 @@
 ---
 title: Profiling and Benchmarks
 ---
+
 # Benchmarks
 
-DASCore uses [codspeed](https://codspeed.io/) to create and run a simple benchmark suite. The benchmarks are found in the benchmarks folder at the top level of the repository.
+[CodSpeed](https://codspeed.io/) runs the benchmarks under `benchmarks/` in CI. Run them locally with:
 
-To run the benchmarks:
 ```bash
 python -m pytest benchmarks/ --codspeed
 ```
 
-However, when you create a pull request, the benchmarks will be run in the CI/CD and a report displayed. If there are significant performance regressions, more discussion is needed before merging the pull request. 
-
-If you add significant new functionality, you should probably add a benchmark.
+Add a benchmark for substantial new behavior and investigate reported regressions before merging.
 
 # Profiling
 
-If you find a significant issue, you can profile the problematic benchmark(s) to see *why* their performance degraded. This can be done with the [pytest profile plugin](https://pypi.org/project/pytest-profiling/). 
-
-For example, suppose you notice a large increase in runtime for the pass_filter benchmark in the patch_benchmarks' TestProcessingBenchmarks class. Run the benchmark again under profiling: 
+Profile a specific benchmark with `pytest-profiling`, then inspect the generated `.prof` file with [SnakeViz](https://jiffyclub.github.io/snakeviz/):
 
 ```bash
+pip install snakeviz
 pytest benchmarks/test_patch_benchmarks.py::TestProcessingBenchmarks::test_pass_filter --profile
-```
-This will create a new `prof` folder with `test_pass_filter_performance.prof` as one of the files. You can view these with a variety of tools, such as [snakeviz](https://jiffyclub.github.io/snakeviz/) (assuming you installed snakeviz with `pip install snakeviz`).
-
-```bash 
 snakeviz prof/test_pass_filter_performance.prof
 ```
-
-You can then click through the call stack and see which functions can be improved. After tweaking them, re-run the profiling and see if the overall time improves.

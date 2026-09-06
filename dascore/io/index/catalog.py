@@ -18,6 +18,9 @@ from __future__ import annotations
 
 import abc
 import json
+import operator
+import re
+import sys
 import warnings
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
@@ -37,6 +40,7 @@ from dascore.io.index.backend import get_backend
 from dascore.io.index.indexer import DBDirectoryIndexer
 from dascore.io.index.ingest import SourceRecord, patch_record, summaries_to_records
 from dascore.io.index.query import (
+    CoordExists,
     InvalidSpoolQueryError,
     Query,
     resolve_query,
@@ -44,55 +48,15 @@ from dascore.io.index.query import (
 from dascore.io.index.schema import SPOOL_LATE_RENAMES
 from dascore.utils.misc import (
     _canonical_range,
-    _CanonicalRange,
     express_range_for_coord,
     is_range,
 )
 from dascore.utils.paths import is_memory_uri
-from dascore.utils.pd import adjust_segments, relative_ranges_to_absolute
 
 # Directory archives present in per-patch time order (source ordinals
 # alone cannot interleave multi-patch files); ordinal and patch id stay
 # the deterministic tiebreak inside the ORDER BY.
 _DIRECTORY_ORDER = ("coord", "time", True)
-
-
-def _envelope_range(value):
-    """Return the presented-envelope form of one range selector.
-
-    Bare ranges pass through untouched: they mean native units, and the
-    stored envelope columns are native, so the presented-envelope
-    adjustment is a direct comparison. Quantity ranges stay a
-    `_CanonicalRange` so `_adjust_unit_segments` can convert them per
-    distinct row unit.
-    """
-    canonical = _canonical_range(value)
-    return value if canonical is None else canonical
-
-
-def _adjust_unit_segments(df, name, canonical):
-    """Trim one coord's presented envelopes by a unit-bearing range.
-
-    Envelope columns hold each row's native magnitudes, so the range
-    re-expresses itself per distinct row unit (`magnitudes_in`); rows
-    with no stated unit take the magnitudes bare, matching the query
-    layer's rule that they stay candidates.
-    """
-    unit_col = f"_{name}_units"
-    if df.empty:
-        return df
-    if unit_col not in df.columns:
-        return adjust_segments(
-            df, ignore_bad_kwargs=True, **{name: canonical.magnitudes}
-        )
-    pieces = []
-    for unit, sub in df.groupby(df[unit_col], dropna=False, sort=False):
-        if unit is None or pd.isnull(unit) or unit == "":
-            rng = canonical.magnitudes
-        else:
-            rng = canonical.magnitudes_in(str(unit))
-        pieces.append(adjust_segments(sub, ignore_bad_kwargs=True, **{name: rng}))
-    return pd.concat(pieces).sort_index()
 
 
 def _canonical_coord_selectors(backend, coords: dict) -> tuple[dict, dict]:
@@ -125,6 +89,21 @@ def _canonical_coord_selectors(backend, coords: dict) -> tuple[dict, dict]:
     return query_coords, residual_coords
 
 
+def _reject_string_coords(backend, coords: dict) -> None:
+    """Refuse a relative selection a string coordinate cannot answer.
+
+    `Patch.select` has no offset arithmetic for strings, so such a view
+    could only raise at load. The index records each definition's kind,
+    and a name spelled as a string everywhere can be answered now.
+    """
+    meta = backend.coord_meta(set(coords))
+    for name in coords:
+        kinds = set(meta.loc[meta["coord_name"] == name, "value_kind"])
+        if kinds and kinds <= {"str"}:
+            msg = f"String coordinate {name!r} does not support relative selection."
+            raise InvalidSpoolQueryError(msg)
+
+
 def _row_source_patch_key(row: Mapping) -> str:
     """Return the row's source_patch_key as a normalized string."""
     return normalize_source_patch_key(row.get("source_patch_key"))
@@ -137,7 +116,7 @@ def apply_exact_residuals(patch: dc.Patch, residuals) -> dc.Patch:
     Shared by catalog row resolution and plan-member loading so the
     two-stage select contract has exactly one implementation.
     """
-    for coords, samples in residuals:
+    for coords, samples, relative in residuals:
         coord_map = patch.coords.coord_map
         usable = {
             k: express_range_for_coord(v, coord_map[k])
@@ -145,9 +124,7 @@ def apply_exact_residuals(patch: dc.Patch, residuals) -> dc.Patch:
             if k in coord_map
         }
         if usable:
-            # residual bounds are already absolute (relative queries
-            # resolve to absolute before the residual is recorded).
-            patch = patch.select(**usable, samples=samples, relative=False)
+            patch = patch.select(**usable, samples=samples, relative=relative)
     return patch
 
 
@@ -466,8 +443,8 @@ def _residual_cuts_unmarked_rows(residuals) -> bool:
     either trims at load with the row still claiming to be whole.
     """
     return any(
-        samples or not all(_rides_the_envelopes(x) for x in coords.values())
-        for coords, samples in residuals
+        samples or relative or not all(_rides_the_envelopes(x) for x in coords.values())
+        for coords, samples, relative in residuals
     )
 
 
@@ -509,7 +486,7 @@ class PatchCatalog:
         backend=None,
         syncer=None,
         queries: tuple[Query, ...] = (),
-        residuals: tuple[tuple[dict, bool], ...] = (),
+        residuals: tuple[tuple[dict, bool, bool], ...] = (),
         revision: _CatalogRevision | None = None,
         order: tuple | None = None,
         ids: tuple | None = None,
@@ -531,6 +508,7 @@ class PatchCatalog:
         self._ids = None if ids is None else tuple(int(x) for x in ids)
         self._revision = revision or _CatalogRevision()
         self._df_cache = _RevisionCache()
+        self._item_read_revision = -1
         self._live_cache = _RevisionCache()
         # Source records for rebuilding an in-memory backend (set by
         # __getstate__ so pickled catalogs survive losing the connection).
@@ -787,13 +765,13 @@ class PatchCatalog:
         return tuple(self.ordered_ids()) != by_ordinal
 
     @property
-    def residuals(self) -> tuple[tuple[dict, bool], ...]:
+    def residuals(self) -> tuple[tuple[dict, bool, bool], ...]:
         """
         The selections applied per patch when it is materialized.
 
-        Each is a ``(coords, samples)`` pair: the coordinate selectors
-        SQL could not answer exactly, and whether they index samples
-        rather than name values.
+        Each is a ``(coords, samples, relative)`` tuple: the coordinate
+        selectors SQL could not answer exactly, whether they index samples,
+        and whether their bounds are relative to each patch.
         """
         return self._residuals
 
@@ -827,15 +805,33 @@ class PatchCatalog:
             )
         )
 
-    def window(self, item: slice) -> PatchCatalog:
+    def window(self, item: slice, ids: Sequence[int] | None = None) -> PatchCatalog:
         """
         Return a view restricted to a slice of the presented rows.
 
-        Membership realizes as an ordered id list (ids only — never the
-        flat relation); subsequent selections compose within the window
-        per the D2 rules.
+        Forward contiguous slices limit the SQL membership query. A caller
+        splitting the view can supply its already-fetched ordered ids.
         """
-        ids = self.ordered_ids()[item]
+        start = 0 if item.start is None else operator.index(item.start)
+        stop = None if item.stop is None else operator.index(item.stop)
+        step = 1 if item.step is None else operator.index(item.step)
+        if (
+            ids is None
+            and (self._ids is None or self._order is not None)
+            and step == 1
+            and start >= 0
+            and (stop is None or stop >= 0)
+        ):
+            start, stop, _ = item.indices(sys.maxsize)
+            ids = self.backend.query_ids(
+                list(self._queries) or None,
+                order_by=self._effective_order,
+                patch_ids=self._ids,
+                limit=None if item.stop is None else max(0, stop - start),
+                offset=start,
+            )
+        else:
+            ids = (self.ordered_ids() if ids is None else ids)[item]
         return self._view(self._queries, self._residuals, ids=tuple(ids))
 
     def restrict(self, indices, ids=None) -> PatchCatalog:
@@ -923,9 +919,9 @@ class PatchCatalog:
         """
         Compose a selection; validation is eager, execution is lazy.
 
-        samples=True selectors are patch-local (never index predicates);
-        relative=True bounds resolve against the current view's global
-        envelope, then behave as absolute ranges.
+        samples=True selectors are patch-local and never become index
+        predicates. Relative coordinate bounds remain patch-local, while an
+        existence-only predicate excludes patches without the coordinate.
         """
         query = resolve_query(
             self.backend.attr_names(),
@@ -941,13 +937,17 @@ class PatchCatalog:
                     f"{sorted(query.attrs)}."
                 )
                 raise InvalidSpoolQueryError(msg)
-            residual = (dict(query.coords), True)
+            residual = (dict(query.coords), True, relative)
             return self._view(self._queries, (*self._residuals, residual))
         if relative and query.coords:
-            query = Query(
-                attrs=query.attrs,
-                coords=self._relative_to_absolute(query.coords),
-            )
+            _reject_string_coords(self.backend, query.coords)
+            residual = (dict(query.coords), False, True)
+            exists = {
+                name: CoordExists(value if is_range(value) else None)
+                for name, value in query.coords.items()
+            }
+            queries = (*self._queries, Query(attrs=query.attrs, coords=exists))
+            return self._view(queries, (*self._residuals, residual))
         # coord range predicates are re-applied exactly at patch load;
         # bare ranges are their own residual (native units on both
         # sides), unit-bearing ones carry canonical quantities so each
@@ -958,12 +958,8 @@ class PatchCatalog:
                 self.backend, query.coords
             )
             query = Query(attrs=query.attrs, coords=si_coords)
-            residuals = (*residuals, (residual_coords, False))
+            residuals = (*residuals, (residual_coords, False, False))
         return self._view((*self._queries, query), residuals)
-
-    def _relative_to_absolute(self, kwargs: dict) -> dict:
-        """Resolve relative bounds against the view's global envelopes."""
-        return relative_ranges_to_absolute(self.to_df(), kwargs)
 
     # --- realization ------------------------------------------------------
 
@@ -991,50 +987,57 @@ class PatchCatalog:
                 ).reset_index(drop=True)
             # The early ones are already done; see SPOOL_EARLY_RENAMES.
             df = df.rename(columns=dict(SPOOL_LATE_RENAMES))
-            # SQL identifies overlapping source patches. Expose the selected
-            # envelopes, matching spool.get_contents() and the exact trim
-            # applied when each patch is materialized. Each pass copies the
-            # frame, so disjoint-name range sets collapse into one pass.
-            range_dicts = [
-                ranges
-                for query in self._queries
-                if (
-                    ranges := {
-                        name: _envelope_range(value)
-                        for name, value in query.coords.items()
-                        if is_range(value)
-                    }
-                )
-            ]
-            names = [name for ranges in range_dicts for name in ranges]
-            if range_dicts and len(set(names)) == len(names):
-                range_dicts = [{k: v for d in range_dicts for k, v in d.items()}]
-            for ranges in range_dicts:
-                bare = {
-                    k: v
-                    for k, v in ranges.items()
-                    if not isinstance(v, _CanonicalRange)
-                }
-                if bare:
-                    df = adjust_segments(df, ignore_bad_kwargs=True, **bare)
-                for name, canonical in ranges.items():
-                    if isinstance(canonical, _CanonicalRange):
-                        df = _adjust_unit_segments(df, name, canonical)
+            # SQL only establishes candidacy. Replay residual coordinate
+            # operations in call order so presented envelopes match the
+            # patch-level selections, including relative-then-absolute chains.
+            from dascore.utils.chunk_plan import (  # noqa: PLC0415
+                patch_local_adjusted_envelopes,
+            )
+
+            df = patch_local_adjusted_envelopes(df, self._residuals, drop_empty=False)
             df = _forget_trimmed_sizes(df, self._residuals)
             # Re-read the revision: bootstrapping the backend above can
             # bump it, and this frame reflects the state after that.
             return self._df_cache.set(df, self._revision.value)
 
+    def _requires_full_relation(self) -> bool:
+        """Keep exact positional filtering for regex and complex coordinate trims."""
+        if any(
+            isinstance(value, re.Pattern)
+            for query in self._queries
+            for value in query.attrs.values()
+        ):
+            return True
+        for coords, samples, relative in self._residuals:
+            if (
+                samples
+                or relative
+                or any(
+                    getattr(value, "magnitudes", None) is not None
+                    for value in coords.values()
+                )
+            ):
+                return True
+        return False
+
     def __len__(self) -> int:
         with self._revision.lock:
             if (live := self._cold_live_values()) is not None:
                 return len(live)
-            # Count in SQL when the relation is not already realized: coord
-            # range residuals only drop patches the SQL candidacy already
-            # excludes and samples/relative residuals never drop patches, so
-            # the count matches len(to_df()) without projecting or pivoting.
             if (df := self._df_cache.get(self._revision.value)) is not None:
                 return len(df)
+            # A range residual *after* a patch-local one can drop rows SQL
+            # candidacy kept: the patch-local pass empties the envelope of a
+            # patch its window misses, and the range pass then finds nothing
+            # left to overlap. Only that order forces us to build the frame.
+            patch_local = False
+            for _, samples, relative in self._residuals:
+                if samples or relative:
+                    patch_local = True
+                elif patch_local:
+                    return len(self.to_df())
+            # Otherwise SQL candidacy already accounts for every drop, so the
+            # count matches len(to_df()) without projecting or pivoting.
             return self.backend.count(list(self._queries) or None, patch_ids=self._ids)
 
     def get_patch(self, index: int) -> dc.Patch:
@@ -1042,7 +1045,22 @@ class PatchCatalog:
         with self._revision.lock:
             if (live := self._cold_live_values()) is not None:
                 return live[index]
-            row = self.to_df().iloc[index].to_dict()
+            df = self._df_cache.get(self._revision.value)
+            if df is None:
+                if (
+                    self._requires_full_relation()
+                    or getattr(self, "_item_read_revision", -1) == self._revision.value
+                ):
+                    # Repeated positional reads amortize projection through the
+                    # existing full-frame cache; a one-off preview stays bounded.
+                    df = self.to_df()
+                else:
+                    if index < 0:
+                        index = range(len(self))[index]
+                    df = self.window(slice(index, index + 1)).to_df()
+                    index = 0
+            row = df.iloc[index].to_dict()
+            self._item_read_revision = self._revision.value
         # Reading (and trimming) the patch happens outside the lock; only
         # the row it starts from must come from a consistent relation.
         return self.resolve_row(row)
@@ -1056,21 +1074,29 @@ class PatchCatalog:
         hints they only reduce reading, exactness is re-applied above.
         """
         trim_hint = {}
-        for coords, samples in self._residuals:
-            if not samples:
-                # Canonical-SI and quantity bounds stay out of reader
-                # hints: readers take numbers in their native units, so
-                # a converted-narrower hint could drop data exactness
-                # cannot restore.
-                trim_hint.update(
-                    {
-                        k: v
-                        for k, v in coords.items()
-                        if isinstance(v, tuple)
-                        and not any(hasattr(b, "units") for b in v)
-                    }
-                )
+        patch_local: set = set()
+        for coords, samples, relative in self._residuals:
+            if samples or relative:
+                patch_local.update(coords)
+                continue
+            # Canonical-SI and quantity bounds stay out of reader hints:
+            # readers take numbers in their native units, so a
+            # converted-narrower hint could drop data exactness cannot
+            # restore. A coordinate an earlier patch-local residual owns
+            # stays out too -- that residual resolves against the source
+            # patch, so narrowing the read first would move its bounds.
+            trim_hint.update(
+                {
+                    k: v
+                    for k, v in coords.items()
+                    if k not in patch_local
+                    and isinstance(v, tuple)
+                    and not any(hasattr(b, "units") for b in v)
+                }
+            )
         trim_hint.update(extra_trim or {})
+        for name in patch_local:
+            trim_hint.pop(name, None)
         patch = self.resolver.resolve(row, **trim_hint)
         return apply_exact_residuals(patch, self._residuals)
 

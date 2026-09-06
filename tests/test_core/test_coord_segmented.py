@@ -1061,9 +1061,11 @@ class TestFromArray:
         coord = CoordSegmented.from_array(np.arange(10.0))
         assert isinstance(coord, CoordRange)
 
-    def test_irregular_returns_monotonic(self):
-        """Arrays with no uniform runs come back as one monotonic coord."""
+    @pytest.mark.parametrize("reverse", [False, True])
+    def test_irregular_returns_monotonic(self, reverse):
+        """Arrays with no uniform runs retain their values and direction."""
         values = np.array([0.0, 1.0, 2.1, 3.3, 4.0])
+        values = values[::-1] if reverse else values
         coord = CoordSegmented.from_array(values)
         assert isinstance(coord, CoordMonotonicArray)
         assert np.array_equal(coord.values, values)

@@ -10,11 +10,14 @@ evenly sampled time coordinates are served by the lazy index in
 from __future__ import annotations
 
 import typing
+from collections.abc import Mapping
+from dataclasses import dataclass
 from typing import Any, Literal
 
 import numpy as np
 import pandas as pd
 
+from dascore.config import get_config
 from dascore.constants import SpoolType
 from dascore.exceptions import PatchConversionError
 from dascore.utils.misc import optional_import
@@ -83,6 +86,68 @@ def _member_coord(low, high, step, env_low, env_high, get_coord, units=None):
     return coord, (start, stop)
 
 
+def _samples_per_block(block_size, dtype, sizes, dim) -> int | None:
+    """
+    How many samples along ``dim`` fit in one block, or None for no limit.
+
+    A budget of zero is no limit rather than no samples: it is how a
+    caller says one block per source patch.
+
+    A block's other dimensions are whole, so its size grows only along
+    the merge dimension: one sample of it costs the product of the rest.
+    """
+    if not block_size:
+        return None
+    row_bytes = dtype.itemsize
+    for name, size in sizes.items():
+        if name != dim:
+            row_bytes *= size
+    return max(1, int(block_size) // max(row_bytes, 1))
+
+
+def _block_pieces(count: int, limit: int | None) -> tuple[tuple[int, int], ...]:
+    """
+    Cut ``count`` samples into contiguous half-open pieces.
+
+    The pieces are as even as whole samples allow, so no block is much
+    smaller than its siblings; ``limit`` is a ceiling, not a target.
+    """
+    if limit is None or count <= limit:
+        return ((0, count),)
+    pieces = -(-count // limit)
+    size, extra = divmod(count, pieces)
+    # the remainder is spread one sample at a time over the leading
+    # pieces; repeating a rounded-up size instead would put the whole
+    # deficit in the last piece (101 in 30s as 26, 26, 26, 23)
+    sizes = [size + 1] * extra + [size] * (pieces - extra)
+    out, start = [], 0
+    for length in sizes:
+        out.append((start, start + length))
+        start += length
+    return tuple(out)
+
+
+def _segment_chunks(members, block_size, dtype, sizes, dims, dim):
+    """
+    Dask's chunks for one segment: member boundaries, cut by the ceiling.
+
+    A selection reads only what it asks for whatever these are, since it
+    fuses into the source's own read. They bound a *whole* read instead:
+    computing the segment asks for one chunk at a time, so a chunk is
+    the most one task has to hold. Members bound them because a chunk
+    spanning two members reads both.
+    """
+    limit = _samples_per_block(block_size, dtype, sizes, dim)
+    along = []
+    for member in members:
+        splittable = member.window is not None and member.resolver.can_read_array(
+            member.row
+        )
+        pieces = _block_pieces(member.count, limit if splittable else None)
+        along.extend(stop - start for start, stop in pieces)
+    return tuple(tuple(along) if d == dim else (sizes[d],) for d in dims)
+
+
 def _lazy_temporal_index(name, coord):
     """
     Return a lazy xarray index for an evenly sampled temporal coordinate.
@@ -109,30 +174,174 @@ def _lazy_temporal_index(name, coord):
     return TemporalRangeIndex.from_coord(name, coord)
 
 
-def _load_xarray_block(resolver, row, dim, lims, dims, shape, dtype, window=None):
+class _SegmentSource:
     """
-    Load one dask block: a source patch trimmed to its member window.
+    One merged segment's data, as an array which reads what it is asked.
 
-    Runs at compute time, once per block. When the row's format offers a
-    `read_array` fast path, only the raw array for the sample window is
-    read; otherwise member loading goes through the plan resolver — the
-    same path a chunked spool loads through — so residuals, units, and
-    nested plans are honored. The select re-applies the window exactly
-    since read hints only reduce reading.
+    Dask fuses a selection into the read of whatever it slices, but only
+    while nothing sits in between; joining one array per member with
+    `concatenate` puts a layer there, and every selection then reads the
+    whole of whichever blocks it touches. Spanning the segment instead
+    keeps the selection and the read adjacent, so a window reaches the
+    members it covers and no others, and each of those reads only its
+    part of it.
+    """
+
+    def __init__(self, members, dim, dims, shape, dtype):
+        self.members = tuple(members)
+        self.dim = dim
+        self.dims = tuple(dims)
+        self.shape = tuple(shape)
+        self.dtype = np.dtype(dtype)
+        self.ndim = len(self.shape)
+        self.axis = self.dims.index(dim)
+
+    def __getitem__(self, key) -> np.ndarray:
+        """Read what ``key`` selects, reading no more of a member than that."""
+        keys = key if isinstance(key, tuple) else (key,)
+        keys = keys + (slice(None),) * (self.ndim - len(keys))
+        pairs = [_window_and_key(k, n) for k, n in zip(keys, self.shape, strict=True)]
+        bounds = [window for window, _ in pairs]
+        out = self._by_window(bounds)
+        rest = tuple(rest for _, rest in pairs)
+        # a contiguous window is already the answer; anything else picks
+        # its samples out of the window read for it
+        if any(not isinstance(x, slice) or x != slice(None) for x in rest):
+            out = out[rest]
+        return out
+
+    def _by_window(self, bounds) -> np.ndarray:
+        """Read one contiguous window, in the tree's dims."""
+        low, high = bounds[self.axis]
+        parts = []
+        for member in self.members:
+            start, stop = (
+                max(low, member.offset),
+                min(high, member.offset + member.count),
+            )
+            if start >= stop:
+                continue
+            parts.append(
+                member.read(
+                    start - member.offset, stop - member.offset, bounds, self.shape
+                )
+            )
+        if not parts:
+            shape = tuple(hi - lo for lo, hi in bounds)
+            return np.empty(shape, dtype=self.dtype)
+        out = parts[0] if len(parts) == 1 else np.concatenate(parts, axis=self.axis)
+        return out.astype(self.dtype, copy=False)
+
+
+def _window_and_key(key, size: int):
+    """
+    Split one dimension's index into a window to read and what to take.
+
+    Reading is contiguous, so anything which is not a step-one slice --
+    an integer, a list of positions, a stride, a reversal -- is read as
+    the window enclosing what it selects and then picked out of it. The
+    second half is `slice(None)` when the window is already the answer.
+    """
+    if isinstance(key, slice):
+        start, stop, step = key.indices(size)
+        if step == 1:
+            return (start, max(stop, start)), slice(None)
+    positions = np.arange(size)[key]
+    if np.ndim(positions) == 0:
+        # an integer drops its dimension, and must still do so here
+        low = int(positions)
+        return (low, low + 1), 0
+    if positions.size == 0:
+        return (0, 0), slice(None)
+    low = int(positions.min())
+    return (low, int(positions.max()) + 1), positions - low
+
+
+@dataclass
+class _SegmentMember:
+    """One member's place in a segment, and how to read part of it."""
+
+    resolver: Any
+    row: Mapping
+    dim: str
+    dims: tuple[str, ...]
+    coord: Any
+    offset: int
+    count: int
+    window: tuple[int, int] | None
+    dtype: np.dtype
+
+    def read(self, start: int, stop: int, bounds, full_shape) -> np.ndarray:
+        """Read samples ``start`` to ``stop`` of this member, in tree dims."""
+        sub = self.coord.select((start, stop), samples=True)[0]
+        shape = tuple(
+            (stop - start) if d == self.dim else (hi - lo)
+            for d, (lo, hi) in zip(self.dims, bounds, strict=True)
+        )
+        window = None
+        if self.window is not None:
+            window = (self.window[0] + start, self.window[0] + stop)
+        lims = (sub.min(), sub.max())
+        return _load_xarray_block(
+            self.resolver,
+            self.row,
+            self.dim,
+            lims,
+            self.dims,
+            shape,
+            self.dtype,
+            window,
+            bounds,
+            full_shape,
+        )
+
+
+def _load_xarray_block(
+    resolver,
+    row,
+    dim,
+    lims,
+    dims,
+    shape,
+    dtype,
+    window=None,
+    bounds=None,
+    full_shape=None,
+):
+    """
+    Load one piece of a segment: a source patch trimmed to a window.
+
+    Runs at compute time. When the row's format offers a `read_array`
+    fast path, only the raw array for the sample window is read;
+    otherwise member loading goes through the plan resolver — the same
+    path a chunked spool loads through — so residuals, units, and nested
+    plans are honored. The select re-applies the window exactly since
+    read hints only reduce reading.
+
+    ``bounds`` is a half-open sample window per tree dimension. The
+    merge dimension's is already spent (``window`` and ``lims`` say it);
+    the rest narrow what is read where the format can take them, and are
+    applied to the array otherwise.
     """
     array = None
     stated = row.get("dims")
     src_dims = tuple(stated.split(",")) if isinstance(stated, str) else ()
+    others = _other_windows(dim, dims, full_shape or shape, bounds)
     # The row must state the same dimensions the tree promises, or the
     # transpose below could not be built; disagreement means the patch
     # path, whose own errors say what is wrong.
     if window is not None and sorted(src_dims) == sorted(dims):
-        array = resolver._load_member_array(row, {dim: window})
+        array = resolver._load_member_array(row, {dim: window, **others})
     if array is None:
         patch = resolver._load_member(row).select(**{dim: lims})
         if patch.dims != dims:
             patch = patch.transpose(*dims)
         array = patch.data
+        if others:
+            # the reader could not take them, so they are spent here
+            array = array[
+                tuple(slice(*others[d]) if d in others else slice(None) for d in dims)
+            ]
     elif src_dims != dims:
         array = np.transpose(array, [src_dims.index(d) for d in dims])
     if array.shape != shape:
@@ -145,6 +354,22 @@ def _load_xarray_block(resolver, row, dim, lims, dims, shape, dtype, window=None
     # A member narrower than the segment's combined dtype upcasts here so
     # the array holds the dtype its metadata states.
     return array.astype(dtype, copy=False)
+
+
+def _other_windows(dim, dims, sizes, bounds) -> dict[str, tuple[int, int]]:
+    """
+    Sample windows for every dimension but the merged one, when narrowed.
+
+    ``sizes`` is the whole segment's shape: a window is only worth
+    stating where it asks for less than all of its dimension.
+    """
+    if bounds is None:
+        return {}
+    out = {}
+    for name, (low, high), size in zip(dims, bounds, sizes, strict=True):
+        if name != dim and (low, high) != (0, size):
+            out[name] = (low, high)
+    return out
 
 
 def _xarray_group_nodes(outputs, group_attrs):
@@ -194,6 +419,7 @@ def spool_to_xarray(
     group: str | typing.Sequence[str] | None = None,
     tolerance=1.5,
     conflict: Literal["drop", "raise", "keep_first"] = "raise",
+    block_size: str | int | None = None,
 ):
     """
     Convert a spool to a lazy, dask-backed xarray DataTree.
@@ -221,9 +447,26 @@ def spool_to_xarray(
         in `chunk` (not the sampling-step grouping tolerance).
     conflict
         How attribute conflicts within a segment resolve, as in `chunk`.
+    block_size
+        The most a single dask block may hold, as a byte count or a
+        string dask parses ("256MiB", "1GB"). This bounds a *bulk* read:
+        computing a whole segment asks for one block at a time, so a
+        source patch bigger than this is read in several windows along
+        ``dim`` rather than whole. It does not affect a selection, which
+        reads only what it asks for whatever the blocks are. None takes
+        the configured ``xarray_block_size`` (256 MiB by default); zero
+        makes each source patch one block. A patch whose format cannot
+        hand back a window (see `FiberIO.read_array`) stays one block
+        whatever this says: splitting it would read the file once per
+        block instead of once.
 
     Notes
     -----
+    A selection reads only the samples it names: the arrays are backed
+    by a source spanning each segment, and dask fuses the selection into
+    that source's own read, which asks each member for its part of the
+    window and no other member at all.
+
     Requires ``xarray`` and ``dask``. Coordinates associated with a
     dimension (rather than defining one) are not carried into the tree,
     and coordinates are rebuilt from their indexed envelopes, whose
@@ -250,8 +493,19 @@ def spool_to_xarray(
     enriched attributes.
     """
     xr = optional_import("xarray")
-    dask = optional_import("dask")
     da = optional_import("dask.array")
+    if block_size is None:
+        block_size = get_config().xarray_block_size
+    if isinstance(block_size, str):
+        block_size = optional_import("dask.utils").parse_bytes(block_size)
+    if block_size < 0:
+        # a negative ceiling fits no samples, which would otherwise round
+        # up to one block per sample and build a task for every one
+        msg = (
+            f"block_size must be a size in bytes or zero, not {block_size}. "
+            "Zero reads each source patch as one block."
+        )
+        raise PatchConversionError(msg)
     # function-level to avoid circular imports through the package root
     from dascore.core.coords import concat_coords, get_coord  # noqa: PLC0415
     from dascore.io.index.planned import PlanResolver, derived_catalog  # noqa: PLC0415
@@ -275,17 +529,20 @@ def spool_to_xarray(
     all_dims = {
         d for dims_str in working["dims"].dropna() for d in str(dims_str).split(",")
     }
-    for selected, samples in spool._catalog.residuals:
+    for selected, samples, relative in spool._catalog.residuals:
         # A samples selection on a dimension adjusts that dimension's
         # envelopes exactly; anything else changes what loads in ways the
-        # envelopes do not state.
+        # envelopes do not state. A relative bound resolves against each
+        # patch as it loads, so the relation states a candidacy superset
+        # rather than the sample positions the blocks would need.
         if not selected or (samples and set(selected) <= all_dims):
             continue
-        kind = (
-            "sample selections on associated coordinates"
-            if samples
-            else ("value selections")
-        )
+        if samples:
+            kind = "sample selections on associated coordinates"
+        elif relative:
+            kind = "relative selections"
+        else:
+            kind = "value selections"
         msg = (
             f"Cannot convert a spool with pending {kind} (on "
             f"{sorted(selected)}): such bounds are candidacy, not sample "
@@ -348,9 +605,6 @@ def spool_to_xarray(
         _env_high=members["_patch_id"].map(norm[f"{dim}_max"]),
         _env_anchored=~modified,
     )
-    # One shared graph node for the resolver, not a copy inside every
-    # block task — it can hold live patches or a large member table.
-    resolver_ref = dask.delayed(resolver, pure=True)
     envelope_cols = {
         f"{d}_{end}"
         for dims_str in outputs["dims"].unique()
@@ -365,7 +619,6 @@ def spool_to_xarray(
         tree[node] = xr.Dataset(attrs=node_attrs)
         for segment, (_, out) in enumerate(sub.sort_values(f"{dim}_min").iterrows()):
             dims = tuple(str(out["dims"]).split(","))
-            axis = dims.index(dim)
             if (dtype_str := out["_dtype"]) is None or not str(dtype_str):
                 msg = (
                     "Cannot build a lazy array without a dtype in the spool "
@@ -427,25 +680,38 @@ def spool_to_xarray(
                     lazy_indexes[d] = index
                 else:
                     coords[d] = coord.values
-            blocks = []
+            segment_members, offset = [], 0
             zipped = zip(member_coords, member_windows, mem.iterrows(), strict=True)
             for member_coord, window, (_, m) in zipped:
-                count = len(member_coord)
-                shape = tuple(count if d == dim else sizes[d] for d in dims)
-                lims = (m[f"{dim}_min"], m[f"{dim}_max"])
                 row = member_rows.iloc[int(m["_pos"])].to_dict()
-                delayed = dask.delayed(_load_xarray_block)(
-                    resolver_ref,
-                    row,
-                    dim,
-                    lims,
-                    dims,
-                    shape,
-                    dtype,
-                    window if m["_env_anchored"] else None,
+                anchored = bool(m["_env_anchored"])
+                segment_members.append(
+                    _SegmentMember(
+                        resolver=resolver,
+                        row=row,
+                        dim=dim,
+                        dims=dims,
+                        coord=member_coord,
+                        offset=offset,
+                        count=len(member_coord),
+                        window=window if anchored else None,
+                        dtype=dtype,
+                    )
                 )
-                blocks.append(da.from_delayed(delayed, shape=shape, dtype=dtype))
-            array = da.concatenate(blocks, axis=axis)
+                offset += len(member_coord)
+            shape = tuple(sizes[d] for d in dims)
+            source = _SegmentSource(segment_members, dim, dims, shape, dtype)
+            array = da.from_array(
+                source,
+                chunks=_segment_chunks(
+                    segment_members, block_size, dtype, sizes, dims, dim
+                ),
+                meta=np.empty((0,) * len(dims), dtype=dtype),
+                # the source is the read; dask must not copy it into the
+                # graph piecewise, nor hash a thing which opens files
+                asarray=False,
+                name=f"dascore-segment-{out['output_id']}",
+            )
             attrs = {
                 key: value
                 for key, value in out.items()

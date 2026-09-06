@@ -5,11 +5,10 @@ execute:
 ---
 
 
-This recipe demonstrates how to use the `Correlate` module to cross-correlate a specific channel/time sample with other channel/time samples in a patch. The result is a new "correlate patch" that stores the cross-correlation output.
-We use the Ricker wavelet as an example signal and compute its cross-correlation using DASCore.
+Cross-correlate a moving Ricker wavelet against one channel used as a virtual source.
 
 
-## Load and visualize the Ricker wavelet
+## Example signal
 
 ```{python}
 import dascore as dc
@@ -23,22 +22,11 @@ patch = dc.get_example_patch(
 patch.viz.waterfall();
 ```
 
-## Compute Ricker wavelet's cross-correlation
+## Cross-correlation
 
-In this example, we cross-correlate all channels in the Ricker patch against channel 4 as the master channel (virtual source). In the correlate patch, the first three traces have negative time lag, and the fourth trace appears at 0.0 s lag (auto-correlation), followed by traces with positive lags. As expected, both the Ricker patch and the correlate patch show the same 100 m/s moveout.
+Use channel 4 (zero-based index 3) as the virtual source. Its autocorrelation is at zero lag; channels on either side have negative or positive lags while retaining the 100 m/s moveout.
 
 ```{python}
-import dascore as dc
-
-patch = dc.get_example_patch(
-    "ricker_moveout",
-    velocity=100,
-    duration=2,
-)
-
 corr = patch.correlate(distance=3, samples=True)
-
-# Note we squeeze the last dimension to get 2D patch
-
 corr.squeeze().viz.waterfall();
 ```

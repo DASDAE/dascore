@@ -193,6 +193,28 @@ def _maybe_invert_yaxis(ax, patch, dim, ascending=True):
         ax.invert_yaxis()
 
 
+def _cell_edge_limits(low, high, size):
+    """
+    Widen sample-centre limits to the outer edges of the cells.
+
+    An image extent gives the image's outer edges, so the first and last
+    coordinate values would put every sample half a cell off and make the
+    image one cell narrower than the patch. Widening by half a cell lands
+    on the edges `get_gap_edges` gives the mesh, so both renderers cover
+    the same ground. A lone sample has no step to halve, so its limits
+    pass through, as does a span with no room left for another half cell.
+    """
+    if size < 2:
+        return [low, high]
+    # In float, which is what the axis is drawn in: an integer dtype wraps
+    # on the subtraction, and a time unit divides a half step away.
+    low, high = float(low), float(high)
+    half_cell = (high - low) / (2 * (size - 1))
+    if not np.isfinite(half_cell):
+        return [low, high]
+    return [low - half_cell, high + half_cell]
+
+
 def _get_extents(dims_r, coords):
     """Get the extents used for each dimension."""
 
@@ -237,6 +259,12 @@ def _get_extents(dims_r, coords):
     # find datetime coords and convert to numpy mtimes
     _convert_datetimes(coords, lims)
     _convert_timedeltas(coords, lims)
+    # Widened after the conversion, where a half step is a fraction of a
+    # day rather than a whole number of whatever unit the coord states.
+    for dim in dims_r:
+        array = coords.get_array(dim) if hasattr(coords, "get_array") else coords[dim]
+        low, high = lims[dim]
+        lims[dim] = _cell_edge_limits(low, high, len(array))
     out = [x for dim in dims_r for x in lims[dim]]
     return out
 

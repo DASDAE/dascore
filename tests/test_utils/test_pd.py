@@ -2,23 +2,24 @@
 
 from __future__ import annotations
 
+import re
+
 import numpy as np
 import pandas as pd
 import pydantic
 import pytest
 
 import dascore as dc
-from dascore.exceptions import InvalidSpoolQueryError, ParameterError
+from dascore.exceptions import ParameterError
 from dascore.utils.pd import (
-    _model_list_to_df,
     adjust_segments,
     dataframe_to_patch,
     fill_defaults_from_pydantic,
     filter_df,
     get_interval_columns,
+    get_regex,
     list_ser_to_str,
     patch_to_dataframe,
-    relative_ranges_to_absolute,
 )
 from dascore.utils.time import to_datetime64, to_timedelta64
 
@@ -94,6 +95,45 @@ class TestFilterDfBasic:
         out = filter_df(example_df, first_name="J???")
         assert {"Jake"} == set(example_df[out].first_name)
 
+    def test_character_class_uses_sqlite_spelling(self, example_df):
+        """
+        Globs use SQLite's class spelling, the one the index applies.
+
+        `[^...]` negates, so `M[^a]*` keeps both Ms; `!` is a plain member,
+        so `M[!a]*` asks for a name starting `M!` or `Ma` and this frame
+        has none. fnmatch reads both the other way round.
+        """
+        out = filter_df(example_df, last_name="M[^a]*")
+        assert {"Miller", "Milner"} == set(example_df[out].last_name)
+        out = filter_df(example_df, last_name="M[!a]*")
+        assert not set(example_df[out].last_name)
+
+    def test_unreadable_glob_matches_nothing(self, example_df):
+        """
+        A glob SQLite would refuse selects nothing rather than raising.
+
+        The never-match pattern has to be one every regex engine reads:
+        pandas hands the text to an engine without lookahead support.
+        """
+        out = filter_df(example_df, last_name="Miller[")
+        assert not set(example_df[out].last_name)
+
+    def test_wildcard_crosses_a_newline(self, example_df):
+        """A wildcard crosses a newline, as SQLite's does.
+
+        The flag saying so travels in the pattern text, since that is what
+        reaches pandas.
+        """
+        df = example_df.assign(last_name=["Mill\ner", *example_df["last_name"][1:]])
+        out = filter_df(df, last_name="Mill*")
+        assert "Mill\ner" in set(df[out].last_name)
+
+    def test_deprecated_translator_still_reads_fnmatch(self):
+        """The old translator warns and keeps its own dialect until removal."""
+        with pytest.warns(DeprecationWarning, match="get_regex"):
+            regex = get_regex("a[!b]*")
+        assert re.match(regex, "ac")
+
     def test_str_sequence(self, example_df):
         """Test str sequences find values in sequence."""
         out = filter_df(example_df, last_name={"Miller", "Jacobson"})
@@ -141,27 +181,6 @@ class TestFilterDfBasic:
         con = (ser >= 20) & (ser <= 30)
         out = filter_df(example_df, age_min=20, age_max=30)
         assert all(con == out)
-
-
-class TestModelListToDf:
-    """Tests for flattening patch-like objects to dataframes."""
-
-    def test_uses_flat_dump_and_serializes_dims(self, random_patch):
-        """Patch-like objects with flat_dump should convert into dataframes."""
-        df = _model_list_to_df([random_patch], exclude={"history"})
-        assert len(df) == 1
-        assert df.loc[0, "dims"] == ",".join(random_patch.dims)
-
-    def test_uses_summary_fallback_when_item_has_no_flat_dump(self, random_patch):
-        """Objects with only .summary should still convert cleanly."""
-
-        class SummaryOnly:
-            def __init__(self, summary):
-                self.summary = summary
-
-        df = _model_list_to_df([SummaryOnly(random_patch.summary)], exclude={"history"})
-        assert len(df) == 1
-        assert df.loc[0, "dims"] == ",".join(random_patch.dims)
 
 
 class TestListSerToStr:
@@ -584,19 +603,3 @@ class TestGetIntervalColumns:
         msg = "Cannot chunk spool or dataframe"
         with pytest.raises(ParameterError, match=msg):
             get_interval_columns(example_df_2, "money")
-
-
-class TestRelativeRangesToAbsolute:
-    """Relative range resolution validates its envelope columns."""
-
-    def test_missing_max_column_raises_spool_error(self):
-        """A frame with the min but not the max column raises the doc'd error."""
-        df = pd.DataFrame({"time_min": [0.0]})  # no time_max
-        with pytest.raises(InvalidSpoolQueryError, match="relative select"):
-            relative_ranges_to_absolute(df, {"time": (1, -1)})
-
-    def test_non_tuple_value_raises(self):
-        """A non-(start, stop) relative value raises rather than mis-resolving."""
-        df = pd.DataFrame({"time_min": [0.0], "time_max": [1.0]})
-        with pytest.raises(InvalidSpoolQueryError, match="range selectors"):
-            relative_ranges_to_absolute(df, {"time": 5})

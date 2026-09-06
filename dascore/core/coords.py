@@ -7,7 +7,6 @@ current coord-family and string-coordinate design notes.
 from __future__ import annotations
 
 import abc
-import fnmatch
 import hashlib
 import itertools
 import json
@@ -70,6 +69,7 @@ from dascore.utils.misc import (
     all_close,
     all_diffs_close_enough,
     cached_method,
+    glob_to_regex,
     is_strictly_monotonic,
     iterate,
     sanitize_range_param,
@@ -2760,21 +2760,25 @@ class CoordSegmented(BaseCoord):
         if len(values) < 3:
             out = get_coord(data=values, units=units)
         else:
-            diffs = np.diff(values)
-            zero = diffs[0] - diffs[0]
-            if not (np.all(diffs > zero) or np.all(diffs < zero)):
+            if not is_strictly_monotonic(values):
                 msg = "from_array requires strictly monotonic values."
                 raise CoordError(msg)
+            diffs = np.diff(values)
             # A diff belongs to a uniform run when it matches a neighboring
             # diff; isolated diffs are seams (gaps or sampling changes).
             eq_next = diffs[:-1] == diffs[1:]
             in_run = np.zeros(len(diffs), dtype=bool)
             in_run[1:] |= eq_next
             in_run[:-1] |= eq_next
-            splits = np.flatnonzero(~in_run) + 1
-            blocks = np.split(values, splits)
-            segments = [CoordMonotonicArray(values=x, units=units) for x in blocks]
-            out = concat_coords(*segments)
+            if not np.any(in_run):
+                # Singleton segments carry no direction and would be sorted
+                # ascending by concat_coords. Keep the recorded order.
+                out = CoordMonotonicArray(values=values, units=units)
+            else:
+                splits = np.flatnonzero(~in_run) + 1
+                blocks = np.split(values, splits)
+                segments = [CoordMonotonicArray(values=x, units=units) for x in blocks]
+                out = concat_coords(*segments)
         if tolerance is not None:
             out = out.simplify(tolerance)
         return out
@@ -2894,8 +2898,8 @@ class CoordString(BaseCoord):
 
     See ['Coordinate Internals'](`docs/notes/coordinate_internals.qmd`) for the
     constraints that make string coords differ from numeric and time-like
-    coords. Plain string selectors use exact matching unless they contain `*`
-    or `?`, in which case they are treated as unix-style wildcard patterns.
+    coords. Plain string selectors use exact matching unless they contain `*`,
+    `?` or `[`, in which case they are read as globs, as SQLite reads them.
     Compiled regular expressions are also supported as explicit pattern
     selectors.
     """
@@ -2968,8 +2972,8 @@ class CoordString(BaseCoord):
         if isinstance(args, re.Pattern):
             mask = np.array([bool(args.search(value)) for value in self.values])
             return self._select_by_value_array(self.values[mask])
-        if isinstance(args, str) and ("*" in args or "?" in args):
-            pattern = re.compile(fnmatch.translate(args))
+        if isinstance(args, str) and any(char in args for char in "*?["):
+            pattern = glob_to_regex(args)
             mask = np.array([bool(pattern.match(value)) for value in self.values])
             return self._select_by_value_array(self.values[mask])
         values = np.asarray([args])

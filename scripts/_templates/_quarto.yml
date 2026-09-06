@@ -148,12 +148,6 @@ website:
       contents:
         - recipes/overview.qmd
 
-        - section: "Contributing"
-          contents:
-
-            - recipes/how_to_contribute.qmd
-            - recipes/contributing_to_documentation.qmd
-
         - section: "Coordinates"
           contents:
 

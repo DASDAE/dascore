@@ -12,9 +12,10 @@ import pytest
 
 import dascore as dc
 from dascore.io.index import PatchCatalog
-from dascore.io.index.catalog import _adjust_unit_segments, _forget_trimmed_sizes
+from dascore.io.index.catalog import _forget_trimmed_sizes
 from dascore.io.index.query import InvalidSpoolQueryError, glob_to_regex
 from dascore.units import m
+from dascore.utils.chunk_plan import _adjust_unit_segments
 from dascore.utils.misc import _canonical_range, _CanonicalRange
 
 
@@ -138,16 +139,23 @@ class TestResidualSelects:
         with pytest.raises(InvalidSpoolQueryError, match="coordinate-only"):
             live_catalog.select(tag="test", samples=True)
 
-    def test_relative_select(self, live_catalog):
-        """Relative bounds resolve against the global envelope (#362)."""
-        full = live_catalog.to_df()
-        span = (full["time_max"].max() - full["time_min"].min()).total_seconds()
-        view = live_catalog.select(time=(1, -1), relative=True)
-        patch = view.get_patch(0)
-        got_span = (
-            patch.get_coord("time").max() - patch.get_coord("time").min()
-        ) / np.timedelta64(1, "s")
-        assert got_span <= span - 1
+    def test_relative_select(self, live_catalog, patches):
+        """Relative bounds resolve independently against every patch."""
+        selection = (0, 2)
+        view = live_catalog.select(time=selection, relative=True)
+        assert len(view) == len(patches)
+        for source, selected in zip(patches, view, strict=True):
+            expected = source.select(time=selection, relative=True)
+            assert selected.equals(expected)
+
+    def test_relative_requires_coordinate_presence(self, patches):
+        """Relative bounds remain local but exclude patches without the coord."""
+        patch = patches[0]
+        without_time = patch.select(time=0, samples=True).squeeze()
+        catalog = PatchCatalog.from_patches((patch, without_time))
+        view = catalog.select(time=(0, 1), relative=True)
+        assert len(view) == 1
+        assert view.get_patch(0).dims == patch.dims
 
 
 class TestRelativeTimeCoords:
@@ -379,13 +387,13 @@ class TestForgetTrimmedSizes:
 
     def test_selector_off_the_envelopes_forgets_every_size(self, sized):
         """A selector `adjust_segments` never saw marks no row, so all go."""
-        residuals = ((({"time": [1, 2, 3]}), False),)
+        residuals = ((({"time": [1, 2, 3]}), False, False),)
         out = _forget_trimmed_sizes(sized, residuals)
         assert out["_data_size"].isnull().all()
 
     def test_unit_bearing_range_rides_the_envelopes(self, sized):
         """A canonical range is folded in, so `_modified` still decides."""
-        residuals = (({"distance": _canonical_range((1 * m, 2 * m))}, False),)
+        residuals = (({"distance": _canonical_range((1 * m, 2 * m))}, False, False),)
         assert _forget_trimmed_sizes(sized, residuals).equals(sized)
 
 

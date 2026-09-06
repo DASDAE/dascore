@@ -16,7 +16,9 @@ import dascore as dc
 from dascore.examples import inventory_patch_pair
 from dascore.exceptions import ParameterError
 from dascore.units import get_quantity_str, percent
+from dascore.utils.gaps import get_gap_edges
 from dascore.utils.misc import suppress_warnings
+from dascore.utils.plotting import _cell_edge_limits, _get_extents
 from dascore.utils.time import is_datetime64, to_timedelta64
 from dascore.viz._labels import BAR_GID, MAX_LABELS, MAX_RUNS, SEAM_GID
 from dascore.viz._lanes import string_colors
@@ -96,6 +98,93 @@ class TestWaterfall:
         ax = random_patch.viz.waterfall(cbar=False)
         assert isinstance(ax.images[0], AxesImage)
         assert not any(isinstance(x, QuadMesh) for x in ax.collections)
+
+    def test_image_cells_are_centred_on_their_samples(self):
+        """The image extent matches the mesh's cell edges, one step per sample."""
+        coords = {
+            "distance": 10.0 + 2.0 * np.arange(5),
+            "time": 100.0 + 0.5 * np.arange(8),
+        }
+        patch = dc.Patch(
+            data=np.zeros((5, 8)), coords=coords, dims=("distance", "time")
+        )
+        ax = patch.viz.waterfall(cbar=False)
+        x_low, x_high, y_low, y_high = ax.images[0].get_extent()
+        time_edges = get_gap_edges(coords["time"])[0]
+        distance_edges = get_gap_edges(coords["distance"])[0]
+        assert (x_low, x_high) == pytest.approx((time_edges[0], time_edges[-1]))
+        assert (y_low, y_high) == pytest.approx((distance_edges[0], distance_edges[-1]))
+        # One cell per sample, each a full step wide.
+        assert (x_high - x_low) / 8 == pytest.approx(0.5)
+        assert (y_high - y_low) / 5 == pytest.approx(2.0)
+
+    def test_image_cells_are_centred_on_their_samples_in_time(self, random_patch):
+        """A datetime axis is padded by half a step too."""
+        ax = random_patch.viz.waterfall(cbar=False)
+        coord = random_patch.get_coord("time")
+        x_low = ax.images[0].get_extent()[0]
+        first = mdates.date2num(dc.to_datetime64(np.asarray(coord)[0]))
+        half_step = coord.step / np.timedelta64(1, "s") / 2
+        # Absolute tolerance: a day number carries a microsecond of noise,
+        # which a relative one on this 2 ms half step cannot absorb.
+        assert (first - x_low) * 24 * 60 * 60 == pytest.approx(half_step, abs=1e-6)
+
+    def test_coarse_datetime_axis_is_padded(self):
+        """A second-resolution axis is padded by half a step, not by zero."""
+        time = np.datetime64("2020-01-01", "s") + np.arange(10) * np.timedelta64(1, "s")
+        patch = dc.Patch(
+            data=np.zeros((4, 10)),
+            coords={"distance": np.arange(4.0), "time": time},
+            dims=("distance", "time"),
+        )
+        ax = patch.viz.waterfall(cbar=False)
+        x_low = ax.images[0].get_extent()[0]
+        first = mdates.date2num(dc.to_datetime64(time[0]))
+        assert (first - x_low) * 24 * 60 * 60 == pytest.approx(0.5, abs=1e-6)
+
+    @pytest.mark.parametrize(
+        "low,high,size,expected",
+        [
+            (10.0, 10.0, 1, [10.0, 10.0]),
+            (-1e308, 1e308, 3, [-1e308, 1e308]),
+            (10.0, 18.0, 5, [9.0, 19.0]),
+        ],
+    )
+    def test_cell_edge_limits(self, low, high, size, expected):
+        """
+        A span with no width to share passes through.
+
+        One sample has no step to halve, and a span filling the float
+        range has no room for another half cell.
+        """
+        assert _cell_edge_limits(low, high, size) == expected
+
+    @pytest.mark.parametrize(
+        "step,size",
+        [
+            # A half step of a second and a half, which no whole number of
+            # seconds is.
+            (np.timedelta64(3, "s"), 4),
+            # Three centuries, which is more nanoseconds than there are.
+            (np.timedelta64(110, "D"), 1000),
+        ],
+    )
+    def test_extent_half_step_on_awkward_time_spans(self, step, size):
+        """The padding is half a step whatever unit the step needs."""
+        start = np.datetime64("1800-01-01", "s")
+        time = start + np.arange(size) * step
+        low = _get_extents(("time",), {"time": time})[0]
+        first = mdates.date2num(dc.to_datetime64(time[0]))
+        half_step = step / np.timedelta64(2, "s")
+        assert (first - low) * 24 * 60 * 60 == pytest.approx(half_step, rel=1e-6)
+
+    def test_extent_half_step_in_calendar_units(self):
+        """A month is padded by half of the months it actually spans."""
+        time = np.datetime64("2020-01", "M") + np.arange(3)
+        low = _get_extents(("time",), {"time": time})[0]
+        first = mdates.date2num(dc.to_datetime64(time[0]))
+        # January to March is sixty days, so half a step is fifteen.
+        assert first - low == pytest.approx(15.0)
 
     def test_irregular_timedelta_coordinates_use_mesh(self, timedelta_patch):
         """Irregular timedelta coordinates are converted to seconds for meshes."""
@@ -532,8 +621,6 @@ def _span_color(ax, axis, low, high):
 class TestLabelCoord:
     """Tests for marking the stretches a label coordinate covers."""
 
-    # Deliberately not size // 2, the one index where the extent's cell
-    # edge and the midpoint between two coordinate values coincide.
     split_fraction = 3
 
     @pytest.fixture(scope="class")
@@ -584,10 +671,10 @@ class TestLabelCoord:
     def _edge(self, patch, dim, index):
         """Where the image put the edge between two samples of a dimension."""
         coord = patch.get_coord(dim)
-        low, high = np.asarray(coord).min(), np.asarray(coord).max()
+        edge = get_gap_edges(np.asarray(coord))[0][index]
         if is_datetime64(coord.dtype):
-            low, high = (mdates.date2num(dc.to_datetime64(x)) for x in (low, high))
-        return float(low) + (float(high) - float(low)) * index / len(coord)
+            return float(mdates.date2num(dc.to_datetime64(edge)))
+        return float(edge)
 
     def test_each_label_gets_a_bar_on_both_spines(self, zone_patch):
         """Every stretch is marked on the two spines it runs between."""
@@ -673,15 +760,14 @@ class TestLabelCoord:
         assert _legend_labels(ax) == ["south", "north"]
 
     def test_bar_ends_on_the_image_cell_edge(self, zone_patch):
-        """The bar ends on the cell edge, not the coordinate midpoint."""
+        """The bar ends on the cell edge, which is the sample midpoint."""
         ax = zone_patch.viz.waterfall(label_coord="zone")
         coord = np.asarray(zone_patch.get_coord("distance"))
         split = len(coord) // self.split_fraction
         midpoint = (coord[split - 1] + coord[split]) / 2
         drawn = _spans(ax, "y")[0][1]
         assert drawn == pytest.approx(self._edge(zone_patch, "distance", split))
-        # The two genuinely differ here, so the test can tell them apart.
-        assert drawn != pytest.approx(midpoint)
+        assert drawn == pytest.approx(midpoint)
 
     def test_label_on_time_runs_along_the_other_spines(self, phase_patch):
         """A coordinate over time is marked on the bottom and top."""
@@ -689,9 +775,12 @@ class TestLabelCoord:
         size = phase_patch.coords.coord_size("time")
         split = size // self.split_fraction
         edges = [self._edge(phase_patch, "time", x) for x in (0, split, size)]
+        # Absolute, in day numbers: a relative tolerance on a number near
+        # 2e4 spans minutes, and the whole axis here is seconds long.
+        day = pytest.approx
         assert _spans(ax, "x") == [
-            (pytest.approx(edges[0]), pytest.approx(edges[1])),
-            (pytest.approx(edges[1]), pytest.approx(edges[2])),
+            (day(edges[0], abs=1e-9), day(edges[1], abs=1e-9)),
+            (day(edges[1], abs=1e-9), day(edges[2], abs=1e-9)),
         ]
         assert sorted(x[2] for x in _bars(ax, "x")) == [0.0, 0.0, 1.0, 1.0]
 
