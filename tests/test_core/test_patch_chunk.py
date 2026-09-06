@@ -21,6 +21,7 @@ import dascore.examples as ex
 import dascore.utils.patch_assembly as assembly_module
 from dascore.core.coords import CoordRange, CoordSegmented
 from dascore.exceptions import ChunkError, CoordMergeError, ParameterError, UnitError
+from dascore.io.febus.core import FebusPatchAttrs
 from dascore.units import get_quantity
 from dascore.utils.misc import get_middle_value, suppress_warnings
 from dascore.utils.patch import _get_merged_coord
@@ -1425,7 +1426,7 @@ class TestQuantityTolerance:
         "tolerance,match",
         [
             (np.nan, "finite"),
-            (np.timedelta64("NaT"), "finite"),
+            (np.timedelta64("NaT", "s"), "finite"),
             (np.inf * dc.units.s, "finite"),
             (-1, "not be negative"),
             (get_quantity("-1 dimensionless"), "not be negative"),
@@ -1936,3 +1937,578 @@ class TestChunkWithAssociatedCoords:
             if "time" in kwargs:
                 assert other.shape[0] == string_patch.shape[0]
                 assert set(np.unique(other.get_array("label"))) == labels
+
+
+class TestChunkFromIndex:
+    """
+    The streaming merge builds untrimmed members from the index.
+
+    A member whose plan trims nothing has its dims, ranges and attrs in
+    its index row, so only its array is read, through the format's
+    read_array; the patch, its coordinate parsing and its attr decoding
+    are skipped. Anything the row cannot state sends the member down the
+    patch path, whose result must be identical.
+    """
+
+    @pytest.fixture(scope="class")
+    def dasdae_directory_spool(self, tmp_path_factory):
+        """Adjacent DASDAE files sharing their attrs, so they merge."""
+        path = tmp_path_factory.mktemp("chunk_from_index")
+        spool = ex.get_example_spool(
+            "random_das", length=6, time_gap=np.timedelta64(0, "s")
+        )
+        for num, patch in enumerate(spool):
+            patch = patch.update_attrs(tag="x", vendor_thing=5, data_type="strain")
+            patch.io.write(path / f"p{num}.h5", "dasdae")
+        return dc.spool(path).update()
+
+    @pytest.fixture
+    def calls(self, monkeypatch):
+        """Count patch and array loads through the plan resolver."""
+        from dascore.io.index import planned  # noqa: PLC0415
+
+        counts = {"patch": 0, "array": 0}
+        load_patch, load_array = (
+            planned.PlanResolver._load_member,
+            planned.PlanResolver._load_member_array,
+        )
+
+        def count_patch(self, kwargs):
+            counts["patch"] += 1
+            return load_patch(self, kwargs)
+
+        def count_array(self, row, windows, **kwargs):
+            counts["array"] += 1
+            return load_array(self, row, windows, **kwargs)
+
+        monkeypatch.setattr(planned.PlanResolver, "_load_member", count_patch)
+        monkeypatch.setattr(planned.PlanResolver, "_load_member_array", count_array)
+        return counts
+
+    @staticmethod
+    def _force_patch_path(monkeypatch):
+        """Make every member load as a patch, as a format without read_array would."""
+        from dascore.io.index import planned  # noqa: PLC0415
+
+        monkeypatch.setattr(
+            planned.PlanResolver, "_load_member_array", lambda self, row, w, **k: None
+        )
+
+    def test_matches_patch_path(self, dasdae_directory_spool, calls, monkeypatch):
+        """The index-built merge equals the patch-built one in every part."""
+        fast = dasdae_directory_spool.chunk(time=None)[0]
+        assert calls == {"patch": 0, "array": len(dasdae_directory_spool)}
+        self._force_patch_path(monkeypatch)
+        slow = dasdae_directory_spool.chunk(time=None)[0]
+        assert fast.dims == slow.dims
+        assert np.array_equal(fast.data, slow.data)
+        assert fast.coords == slow.coords
+        assert dict(fast.attrs) == dict(slow.attrs)
+        # coord equality compares values, so the two things the fast path
+        # rebuilds by hand -- the stored dtype and the stated units --
+        # have to be compared for themselves
+        for name, coord in fast.coords.coord_map.items():
+            other = slow.coords.coord_map[name]
+            assert coord.dtype == other.dtype, name
+            assert coord.units == other.units, name
+        # the lineage ids are folded from the members, so they have to
+        # come back from the row rather than at their defaults
+        assert fast.attrs.patch_id
+
+    @pytest.mark.parametrize(
+        "value", [np.datetime64("2021-01-01"), np.timedelta64(5, "s")]
+    )
+    def test_temporal_attrs_remain_writable(self, tmp_path, calls, monkeypatch, value):
+        """Index reconstruction keeps temporal and integer attrs usable by IO."""
+        directory = tmp_path / "sources"
+        patches = ex.get_example_spool("random_das", length=2, time_gap=0)
+        for index, patch in enumerate(patches):
+            patch.update_attrs(event_value=value, n_ch=5).io.write(
+                directory / f"{index}.h5", "dasdae"
+            )
+        spool = dc.spool(directory).update()
+        # Export/import the catalog too: dtype metadata must survive unions.
+        spool = spool + dc.spool([])
+        fast = spool.chunk(time=None)[0]
+        assert calls == {"patch": 0, "array": 2}
+        self._force_patch_path(monkeypatch)
+        slow = spool.chunk(time=None)[0]
+        for name in ("event_value", "n_ch"):
+            assert type(fast.attrs[name]) is type(slow.attrs[name])
+            assert fast.attrs[name] == slow.attrs[name]
+        path = tmp_path / "merged.h5"
+        fast.io.write(path, "dasdae")
+        restored = dc.read(path)[0]
+        assert restored.attrs.event_value == fast.attrs.event_value
+        assert restored.attrs.n_ch == fast.attrs.n_ch
+
+    def test_large_integer_attr_loads_patch(self, tmp_path, calls):
+        """An integer SQL cannot store exactly must never be rebuilt from it."""
+        value = 2**53 + 1
+        for index, patch in enumerate(ex.get_example_spool("random_das", length=2)):
+            patch.update_attrs(counter=value).io.write(
+                tmp_path / f"{index}.h5", "dasdae"
+            )
+        out = dc.spool(tmp_path).update().chunk(time=None)[0]
+        assert out.attrs.counter == value
+        assert calls == {"patch": 2, "array": 0}
+
+    def test_trailing_trim_reads_no_arrays(self, dasdae_directory_spool, calls):
+        """A trim on the last member prevents speculative reads of earlier ones."""
+        stop = dasdae_directory_spool.get_contents()["time_max"].max()
+        stop -= np.timedelta64(1, "s")
+        view = dasdae_directory_spool.select(time=(None, stop))
+        out = view.chunk(time=None)[0]
+        assert out.get_coord("time").max() <= stop
+        assert calls == {"patch": len(dasdae_directory_spool), "array": 0}
+
+    def test_history_is_not_rebuilt(self, tmp_path_factory, calls, monkeypatch):
+        """A member built from the index states no history, by design.
+
+        The index holds none, being a list rather than a column, so a
+        merge which takes the array path carries none; only a format
+        which stores a history has one to lose.
+        """
+        path = tmp_path_factory.mktemp("chunk_history")
+        spool = ex.get_example_spool(
+            "random_das", length=3, time_gap=np.timedelta64(0, "s")
+        )
+        for num, patch in enumerate(spool):
+            patch.pass_filter(time=(None, 100)).io.write(path / f"p{num}.h5", "dasdae")
+        file_spool = dc.spool(path).update()
+        assert file_spool[0].attrs.history  # the file kept it
+        fast = file_spool.chunk(time=None)[0]
+        assert calls["array"] == 3
+        assert fast.attrs.history == ()
+        self._force_patch_path(monkeypatch)
+        slow = file_spool.chunk(time=None)[0]
+        assert slow.attrs.history
+        # and history is the only thing the two paths disagree on
+        differs = {
+            k
+            for k in set(dict(fast.attrs)) | set(dict(slow.attrs))
+            if dict(fast.attrs).get(k) != dict(slow.attrs).get(k)
+        }
+        assert differs == {"history"}
+        # processing_id is indexed, so the fold sees what the members
+        # carried rather than a default
+        assert fast.attrs.processing_id == slow.attrs.processing_id
+        assert fast.attrs.processing_id
+
+    def test_unstateable_coord_loads_patch(self, tmp_path_factory, calls):
+        """A coordinate the index cannot describe is still known to exist.
+
+        Its values cannot be stated, so the member must be loaded; the
+        catalog records the name so the fast path knows to stand aside.
+        """
+        path = tmp_path_factory.mktemp("chunk_bool_coord")
+        spool = ex.get_example_spool(
+            "random_das", length=3, time_gap=np.timedelta64(0, "s")
+        )
+        for num, patch in enumerate(spool):
+            quality = np.arange(len(patch.get_coord("distance"))) % 2 == 0
+            patch.update_coords(quality=("distance", quality)).io.write(
+                path / f"p{num}.h5", "dasdae"
+            )
+        file_spool = dc.spool(path).update()
+        assert "quality" in file_spool._catalog.backend.coord_dims_map()
+        out = file_spool.chunk(time=None)[0]
+        assert "quality" in out.coords.coord_map
+        assert calls["array"] == 0
+
+    def test_trimmed_member_loads_patch(
+        self, dasdae_directory_spool, calls, monkeypatch
+    ):
+        """One trimmed member sends its whole merge down the patch path.
+
+        A loaded patch can carry what the index cannot hold, so mixing
+        the two sources within one merge could make it refuse attrs or
+        coordinates it accepts when every member is loaded alike.
+        """
+        contents = dasdae_directory_spool.get_contents().sort_values("time_min")
+        # a range starting inside the second file trims it, keeps the rest
+        # whole, and drops the first
+        start = dc.to_datetime64(contents["time_min"].iloc[1]) + np.timedelta64(1, "s")
+        narrowed = dasdae_directory_spool.select(time=(start, None))
+        out = narrowed.chunk(time=None)[0]
+        assert out.get_coord("time").min() >= start
+        assert calls["array"] == 0
+        assert calls["patch"] == len(dasdae_directory_spool) - 1
+        # and the mix of paths assembles what the patch path alone would
+        self._force_patch_path(monkeypatch)
+        slow = narrowed.chunk(time=None)[0]
+        assert np.array_equal(out.data, slow.data)
+        assert out.coords == slow.coords
+        assert dict(out.attrs) == dict(slow.attrs)
+
+    def test_associated_coords_load_patch(self, tmp_path_factory, calls):
+        """A catalog holding an associated coordinate never takes the array path."""
+        path = tmp_path_factory.mktemp("chunk_assoc_coords")
+        spool = ex.get_example_spool(
+            "random_das", length=3, time_gap=np.timedelta64(0, "s")
+        )
+        for num, patch in enumerate(spool):
+            dist = patch.get_coord("distance")
+            lat = np.linspace(40, 41, len(dist))
+            patch = patch.update_coords(latitude=("distance", lat))
+            patch.io.write(path / f"p{num}.h5", "dasdae")
+        out = dc.spool(path).update().chunk(time=None)[0]
+        assert "latitude" in out.coords.coord_map
+        assert calls["array"] == 0
+        assert calls["patch"] == 3
+
+    def test_a_coord_associated_anywhere_loads_patch(self, tmp_path_factory, calls):
+        """
+        A name which is a dimension on one patch may ride another on the next.
+
+        The catalog keeps one dims spelling per name, the first seen, so
+        the first patch's dimensional `distance` would make the later
+        patches' associated one look dimensional, and the array path
+        would drop it.
+        """
+        path = tmp_path_factory.mktemp("chunk_assoc_anywhere")
+        spool = ex.get_example_spool(
+            "random_das", length=3, time_gap=np.timedelta64(0, "s")
+        )
+        spool[0].io.write(path / "a0.h5", "dasdae")
+        # indexed first, so its dimensional `distance` is the spelling seen first
+        dc.spool(path).update()
+        for num, patch in enumerate(spool[1:]):
+            patch = patch.rename_coords(distance="sensor")
+            values = patch.get_coord("sensor").values * 2.0
+            patch = patch.update_coords(distance=("sensor", values))
+            patch.io.write(path / f"b{num}.h5", "dasdae")
+        merged = dc.spool(path).update().chunk(time=None)
+        riding = [p for p in merged if "sensor" in p.dims]
+        assert len(riding) == 1
+        assert "distance" in riding[0].coords.coord_map
+        assert calls["array"] == 0
+
+    def test_a_moved_source_loads_patch(self, tmp_path_factory, calls):
+        """
+        A renamed file's row states no id until the file is read again.
+
+        Folding no id is not folding the one the patch carries, so a
+        merge built from such rows would not carry the id the patch
+        path's merge does.
+        """
+        path = tmp_path_factory.mktemp("chunk_moved")
+        spool = ex.get_example_spool(
+            "random_das", length=2, time_gap=np.timedelta64(0, "s")
+        )
+        for num, patch in enumerate(spool):
+            patch.io.write(path / f"p{num}.h5", "dasdae")
+        dc.spool(path).update()
+        (path / "p0.h5").rename(path / "q0.h5")
+        moved = dc.spool(path).update()
+        assert (moved.get_contents()["patch_id"] == "").any()
+        fast = moved.chunk(time=None)[0]
+        assert calls == {"patch": 2, "array": 0}
+        read = dc.spool([dc.read(p)[0] for p in sorted(path.glob("*.h5"))])
+        assert fast.attrs.patch_id == read.chunk(time=None)[0].attrs.patch_id
+
+    def test_extended_float_coordinate_survives_merge(self, tmp_path, permanent_config):
+        """File coordinate precision survives merging, including extended floats."""
+        with permanent_config(allow_dasdae_format_unpickle=False):
+            start = np.nextafter(np.longdouble(1), np.longdouble(2))
+            coord = dc.get_coord(
+                start=start, step=np.longdouble("0.1"), shape=10, units="m"
+            )
+            spool = ex.get_example_spool("random_das", length=2, time_gap=0)
+            for num, patch in enumerate(spool):
+                patch = patch.select(distance=(0, 10), samples=True)
+                patch.update_coords(distance=coord).io.write(
+                    tmp_path / f"p{num}.h5", "dasdae"
+                )
+            indexed = dc.spool(tmp_path).update()
+            source = indexed[0].get_coord("distance")
+
+            def read(row):
+                return dc.read(tmp_path / row["source_path"])[0]
+
+            # Exercise the two-file assembly independently of fingerprint grouping.
+            assembler = PatchAssembler(
+                load_patch=read,
+                load_array=lambda row: read(row).data,
+                merge_kwargs={},
+                plan_dim="time",
+            )
+            rows = indexed._catalog.to_df().assign(current_index=0)
+            merged = assembler._patch_from_instruction_df(rows)
+            assert len(merged) == 1
+            out = merged[0].get_coord("distance")
+            assert out.dtype == source.dtype
+            assert np.array_equal(out.values, source.values)
+
+    def test_extended_float_attribute_survives_merge(self, tmp_path, permanent_config):
+        """A stored calibration scalar must retain all precision on every platform."""
+        with permanent_config(allow_dasdae_format_unpickle=False):
+            value = np.nextafter(np.longdouble(1), np.longdouble(2))
+            spool = ex.get_example_spool("random_das", length=2, time_gap=0)
+            for num, patch in enumerate(spool):
+                patch.update_attrs(calibration=value).io.write(
+                    tmp_path / f"p{num}.h5", "dasdae"
+                )
+            indexed = dc.spool(tmp_path).update()
+            assert indexed[0].attrs["calibration"] == value
+            out = indexed.chunk(time=None)[0]
+            assert out.attrs["calibration"] == value
+            assert np.asarray(out.attrs["calibration"]).dtype == np.asarray(value).dtype
+
+    @pytest.mark.parametrize("value", ["unknown", "10"])
+    def test_directory_override_keeps_its_string_type(self, tmp_path, calls, value):
+        """A path override replaces a source number before reconstruction."""
+        directory = tmp_path / f"channel_count={value}"
+        directory.mkdir()
+        spool = ex.get_example_spool("random_das", length=2, time_gap=0)
+        for num, patch in enumerate(spool):
+            patch.update_attrs(channel_count=5).io.write(
+                directory / f"p{num}.h5", "dasdae"
+            )
+        with pytest.warns(UserWarning, match="override attrs"):
+            indexed = dc.spool(tmp_path).update()
+        out = indexed.chunk(time=None)[0]
+        assert out.attrs["channel_count"] == value
+        assert calls == {"patch": 0, "array": 2}
+        directory.rename(tmp_path / "channel_count=renamed")
+        moved = dc.spool(tmp_path).update().chunk(time=None)[0]
+        assert moved.attrs["channel_count"] == "renamed"
+
+    @pytest.mark.parametrize("case", ["empty", "envelope", "vendor", "skipped"])
+    def test_unreconstructable_attributes_keep_the_patch_path(
+        self, tmp_path, calls, monkeypatch, case
+    ):
+        """Missing custom attrs, flat collisions, and vendor models survive merging."""
+        spool = ex.get_example_spool("random_das", length=2, time_gap=0)
+        for num, patch in enumerate(spool):
+            if case == "empty":
+                patch = patch.update_attrs(empty_extra="")
+            elif case == "envelope":
+                patch = patch.update_attrs(distance_units="custom")
+            elif case == "skipped":
+                patch = patch.update_attrs(coords="user metadata")
+            else:
+                patch = patch.update(attrs=FebusPatchAttrs())
+            patch.io.write(tmp_path / f"p{num}.h5", "dasdae")
+        with suppress_warnings(UserWarning):
+            indexed = dc.spool(tmp_path).update()
+            out = indexed.chunk(time=None)[0]
+        assert calls == {"patch": 2, "array": 0}
+        self._force_patch_path(monkeypatch)
+        with suppress_warnings(UserWarning):
+            expected = indexed.chunk(time=None)[0]
+        assert type(out.attrs) is type(expected.attrs)
+        assert dict(out.attrs) == dict(expected.attrs)
+        assert np.array_equal(out.data, expected.data)
+        assert out.coords == expected.coords
+
+    def test_an_attr_the_index_cannot_hold_loads_patch(self, tmp_path_factory, calls):
+        """An array attr is on the patch and in no column, so no row stands in."""
+        path = tmp_path_factory.mktemp("chunk_array_attr")
+        spool = ex.get_example_spool(
+            "random_das", length=3, time_gap=np.timedelta64(0, "s")
+        )
+        for num, patch in enumerate(spool):
+            patch = patch.update_attrs(gauge=np.array([1.0, 2.0]))
+            patch.io.write(path / f"p{num}.h5", "dasdae")
+        merged = dc.spool(path).update().chunk(time=None)
+        out = merged[0]
+        assert np.array_equal(out.attrs["gauge"], [1.0, 2.0])
+        assert calls == {"patch": 3, "array": 0}
+        # A plan on another dimension consumes the derived rows.
+        nested = merged.chunk(distance=100)
+        assert all(np.array_equal(p.attrs["gauge"], [1.0, 2.0]) for p in nested)
+
+    def test_row_the_index_could_not_fully_describe_loads_patch(self):
+        """A cleared id or an attr the index could not hold means the patch path."""
+        assembler = PatchAssembler(
+            load_patch=lambda kwargs: None,
+            merge_kwargs={},
+            plan_dim="time",
+            load_array=lambda row: np.zeros((3, 4)),
+        )
+        row = {
+            "dims": "distance,time",
+            "distance_min": 0,
+            "distance_max": 2,
+            "distance_step": 1,
+            "time_min": np.datetime64("2020-01-01"),
+            "time_max": np.datetime64("2020-01-01T00:00:03"),
+            "time_step": np.timedelta64(1, "s"),
+            "patch_id": "abc",
+            "_attrs_complete": 1,
+        }
+        assert assembler._meta_from_index(row) is not None
+        assert assembler._meta_from_index(row | {"patch_id": ""}) is None
+        assert assembler._meta_from_index(row | {"patch_id": None}) is None
+        assert assembler._meta_from_index(row | {"_attrs_complete": 0}) is None
+
+    def test_row_without_range_loads_patch(self):
+        """A dimension the row cannot state as a range means the patch path."""
+        assembler = PatchAssembler(
+            load_patch=lambda kwargs: None,
+            merge_kwargs={},
+            plan_dim="time",
+            load_array=lambda row: np.zeros((3, 4)),
+        )
+        row = {
+            "dims": "distance,time",
+            "distance_min": 0,
+            "distance_max": 2,
+            "distance_step": 1,
+        }
+        assert assembler._meta_from_index(row) is None
+
+    def test_unpredicted_shape_loads_patch(self):
+        """An array the row did not predict is not trusted."""
+        row = {
+            "dims": "distance,time",
+            "distance_min": 0,
+            "distance_max": 2,
+            "distance_step": 1,
+            "time_min": np.datetime64("2020-01-01"),
+            "time_max": np.datetime64("2020-01-01T00:00:03"),
+            "time_step": np.timedelta64(1, "s"),
+        }
+        good = PatchAssembler(
+            load_patch=lambda kwargs: None,
+            merge_kwargs={},
+            plan_dim="time",
+            load_array=lambda row: np.zeros((3, 4)),
+        )
+        meta = good._meta_from_index(row)
+        assert meta is not None
+        member = good._member_from_meta(row, meta)
+        assert member is not None
+        assert member.dims == ("distance", "time")
+        assert member.coords.shape == (3, 4)
+        bad = PatchAssembler(
+            load_patch=lambda kwargs: None,
+            merge_kwargs={},
+            plan_dim="time",
+            load_array=lambda row: np.zeros((3, 5)),
+        )
+        assert bad._member_from_meta(row, meta) is None
+        # a rank the row's dims do not match is refused too
+        rank = PatchAssembler(
+            load_patch=lambda kwargs: None,
+            merge_kwargs={},
+            plan_dim="time",
+            load_array=lambda row: np.zeros(12),
+        )
+        assert rank._member_from_meta(row, meta) is None
+
+    def test_whole_member_skips_a_residual_it_lies_inside(
+        self, dasdae_directory_spool, calls, monkeypatch
+    ):
+        """A value selection which cuts no member is a no-op on every one.
+
+        An unmodified row lies wholly inside such a selection, so the
+        exactness re-application has nothing to do and the member can be
+        built from the index anyway.
+        """
+        contents = dasdae_directory_spool.get_contents()
+        span = (contents["time_min"].min(), contents["time_max"].max())
+        selected = dasdae_directory_spool.select(time=span)
+        fast = selected.chunk(time=None)[0]
+        assert calls == {"patch": 0, "array": len(dasdae_directory_spool)}
+        self._force_patch_path(monkeypatch)
+        slow = selected.chunk(time=None)[0]
+        assert fast == slow
+
+    def test_unitless_dim_stays_unitless(self, tmp_path):
+        """A coordinate with no units does not gain one from the row.
+
+        Row values come out of a frame, so an unstated unit is NaN, and
+        a NaN unit builds a dimensionless quantity nothing can convert.
+        """
+        # a coordinate which states no units is what puts the NaN in the row
+        patch = dc.get_example_patch().set_units(distance=None)
+        assert patch.get_coord("distance").units is None
+        time = patch.get_coord("time")
+        for num in range(3):
+            start = time.min() + num * 100 * time.step
+            sub = patch.select(time=(start, start + 99 * time.step))
+            sub.io.write(tmp_path / f"m{num}.h5", "dasdae")
+        merged = dc.spool(tmp_path).update().chunk(time=None)[0]
+        units = {n: c.units for n, c in merged.coords.coord_map.items()}
+        assert units == {
+            n: c.units for n, c in patch.coords.coord_map.items() if n in units
+        }
+        # a unit which was never stated does not block a conversion
+        merged.convert_units(distance="ft")
+
+    def test_falling_back_reads_no_arrays(self):
+        """A merge the index cannot describe does not read arrays first.
+
+        The rows say whether the index can stand in for every member, so
+        a merge which must load patches pays for no discarded reads.
+        """
+        reads = []
+        assembler = PatchAssembler(
+            load_patch=lambda kwargs: None,
+            merge_kwargs={},
+            plan_dim="time",
+            load_array=lambda row: reads.append(row) or np.zeros((3, 4)),
+        )
+        stateable = {
+            "dims": "distance,time",
+            "distance_min": 0,
+            "distance_max": 2,
+            "distance_step": 1,
+            "time_min": np.datetime64("2020-01-01"),
+            "time_max": np.datetime64("2020-01-01T00:00:03"),
+            "time_step": np.timedelta64(1, "s"),
+        }
+        silent = dict(stateable, time_step=np.timedelta64("NaT", "s"))
+        assert assembler._member_meta_from_index([stateable, silent]) is None
+        assert not reads
+
+    def test_row_range_refuses_what_it_cannot_state(self):
+        """A range the row states differently than the file had is refused."""
+        row_range = assembly_module._row_range
+        base = {"x_min": 0.0, "x_max": 4.0, "x_step": 1.0}
+        # no stored dtype: the envelope is taken as it stands
+        assert row_range(base, "x") == (0.0, 4.0, 1.0)
+        # an integer coordinate comes back an integer one
+        typed = base | {"_x_coord_dtype": "int64"}
+        assert [type(x).__name__ for x in row_range(typed, "x")] == ["int64"] * 3
+        # a descending coordinate: the row states the value order, not
+        # the sample order, so its start is unknown
+        assert row_range(base | {"x_step": -1.0}, "x") is None
+        # a converted envelope is float in truth, whatever the file held
+        converted = typed | {"_x_units_source": "cm", "_x_units": "m"}
+        assert row_range(converted, "x") is None
+        # and past 2**53 a float cannot have held the integer exactly
+        big = typed | {"x_min": 0.0, "x_max": float(2**53 + 8)}
+        assert row_range(big, "x") is None
+
+    def test_attrs_from_row(self):
+        """The row's attrs are the file's; bookkeeping and envelopes are not."""
+        row = {
+            "dims": "distance,time",
+            "output_id": 3,
+            "_modified": False,
+            "_time_units": "s",
+            "time_min": 0,
+            "time_max": 1,
+            "time_step": 1,
+            "distance_min": 0,
+            "distance_max": 1,
+            "distance_step": 1,
+            "source_path": "/a.h5",
+            "source_format": "DASDAE",
+            "source_version": "1",
+            "source_patch_key": "DAS__x",
+            "patch_id": "abc",
+            "tag": "raw",
+            "vendor_thing": 5,
+            "blank": np.nan,
+        }
+        attrs = assembly_module._attrs_from_row(row, ("distance", "time"))
+        assert attrs.tag == "raw"
+        assert attrs["vendor_thing"] == 5
+        assert attrs.patch_id == "abc"
+        assert attrs["_source_patch_key"] == "DAS__x"
+        for name in ("output_id", "source_path", "time_min", "blank", "_modified"):
+            assert name not in dict(attrs)
