@@ -494,6 +494,10 @@ def spool_to_xarray(
     """
     xr = optional_import("xarray")
     da = optional_import("dask.array")
+    # the tree's arrays carry the `.dc` accessor, like any conversion
+    from dascore.xarray.patch import _register_accessor  # noqa: PLC0415
+
+    _register_accessor()
     if block_size is None:
         block_size = get_config().xarray_block_size
     if isinstance(block_size, str):

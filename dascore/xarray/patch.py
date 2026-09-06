@@ -7,9 +7,20 @@ from dascore.constants import PatchType
 from dascore.utils.misc import optional_import
 
 
+def _register_accessor() -> None:
+    """Put the `.dc` accessor on what DASCore hands back.
+
+    Registering it means importing xarray, which DASCore will not do on
+    its own; here xarray is already imported, so anything converted
+    carries the accessor without a user asking for it.
+    """
+    from dascore.xarray import accessor  # noqa: F401, PLC0415
+
+
 def patch_to_xarray(patch: PatchType):
     """Return a data array with patch contents."""
     xr = optional_import("xarray")
+    _register_accessor()
     # Omit None-valued attrs because xarray backends may reject them during
     # NetCDF serialization, while a missing attr round-trips cleanly.
     attrs = {
