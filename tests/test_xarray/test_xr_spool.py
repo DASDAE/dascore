@@ -482,7 +482,11 @@ class TestToXarrayReadArray:
 
         spool = dc.spool(dasdae_directory).update()
         eager = spool.chunk(time=None)[0].data
+        # The eager reference can use dev's array fast path too; count
+        # only reads made by constructing and computing the xarray tree.
+        override_calls.clear()
         tree = spool.io.to_xarray()
+        assert not override_calls
 
         def _fail(*args, **kwargs):
             raise AssertionError("fast path fell back to patch loading")

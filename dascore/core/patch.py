@@ -442,6 +442,8 @@ class Patch(NodeRepr, NamespaceOwner):
 
     # --- processing funcs
 
+    sel = dascore.proc.sel
+    isel = dascore.proc.isel
     select = dascore.proc.select
     unselect = dascore.proc.unselect
     order = dascore.proc.order

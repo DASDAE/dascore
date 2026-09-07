@@ -12,7 +12,12 @@ import pytest
 
 import dascore as dc
 from dascore.io.index import PatchCatalog
-from dascore.io.index.catalog import _forget_trimmed_sizes
+from dascore.io.index.catalog import (
+    _coord_from_envelope,
+    _extremes_coord,
+    _forget_what_a_trim_invalidates,
+    _source_envelopes,
+)
 from dascore.io.index.query import InvalidSpoolQueryError, glob_to_regex
 from dascore.units import m
 from dascore.utils.chunk_plan import _adjust_unit_segments
@@ -357,6 +362,146 @@ class TestAdjustUnitSegments:
         assert float(out["x_max"].iloc[0]) == 2.0
 
 
+class TestSourceEnvelopes:
+    """What a view keeps of a coordinate before its selections trim it."""
+
+    @pytest.fixture()
+    def rows(self):
+        """Three rows spanning 0-10, 5-15 and 20-30 on `time`."""
+        return pd.DataFrame(
+            {
+                "time_min": [0.0, 5.0, 20.0],
+                "time_max": [10.0, 15.0, 30.0],
+                "time_step": [1.0, 1.0, 1.0],
+            }
+        )
+
+    def test_a_hintable_selection_keeps_its_envelope(self, rows):
+        """The bounds go to the reader, so the row must say what it had."""
+        out = _source_envelopes(rows, (({"time": (2.0, None)}, False, False),))
+        assert set(out) == {"_time_source_envelope"}
+        assert out["_time_source_envelope"].iloc[0] == {
+            "time_min": 0.0,
+            "time_max": 10.0,
+            "time_step": 1.0,
+        }
+
+    @pytest.mark.parametrize(
+        "residual",
+        [
+            ({"time": (0, 5)}, True, False),  # sample indices
+            ({"time": (1.0, None)}, False, True),  # relative bounds
+            ({"time": _canonical_range((1 * m, 2 * m))}, False, False),  # units
+        ],
+    )
+    def test_a_selection_the_reader_cannot_take_keeps_nothing(self, rows, residual):
+        """It cuts on the patch, which records it without any help."""
+        assert _source_envelopes(rows, (residual,)) == {}
+
+    def test_one_such_selection_bars_the_whole_coordinate(self, rows):
+        """What it left behind is not something the envelopes state."""
+        residuals = (
+            ({"time": (2.0, None)}, False, False),
+            ({"time": (0, 5)}, True, False),
+        )
+        assert _source_envelopes(rows, residuals) == {}
+
+    def test_an_associated_coordinate_bars_them_all(self, rows):
+        """Selecting one trims the other, which the envelopes do not state."""
+        rows = rows.assign(dims="time", depth_min=0.0, depth_max=8.0, depth_step=1.0)
+        residuals = (
+            ({"time": (2.0, None)}, False, False),
+            ({"depth": (1.0, None)}, False, False),
+        )
+        assert _source_envelopes(rows, residuals) == {}
+
+    def test_a_coordinate_the_frame_lacks_keeps_nothing(self, rows):
+        """No envelope columns, nothing to keep."""
+        assert _source_envelopes(rows, (({"depth": (1.0, 2.0)}, False, False),)) == {}
+
+
+class TestCoordFromEnvelope:
+    """Rebuilding the coordinate a kept envelope describes."""
+
+    def test_an_even_envelope_rebuilds(self):
+        """Three numbers are a range, and its samples are what select sees."""
+        coord = _coord_from_envelope(
+            {"time_min": 0.0, "time_max": 9.0, "time_step": 1.0}
+        )
+        assert len(coord) == 10
+        assert coord.min() == 0.0 and coord.max() == 9.0
+
+    @pytest.mark.parametrize(
+        "envelope",
+        [
+            {"x_min": 0.0, "x_max": 9.0, "x_step": np.nan},  # uneven
+            {"x_min": 0.0, "x_max": 9.0, "x_step": 0.0},  # no spacing
+            {"x_min": np.nan, "x_max": 9.0, "x_step": 1.0},  # no start
+            None,  # nothing kept
+        ],
+    )
+    def test_an_envelope_which_describes_no_samples(self, envelope):
+        """Nothing can be replayed on it, so the patch answers instead."""
+        assert _coord_from_envelope(envelope) is None
+
+    def test_the_stored_precision_is_used(self):
+        """A float32 coordinate rounds a bound differently than float64 does."""
+        envelope = {"x_min": 538.14794921875, "x_max": 1000.0, "x_step": 3.3}
+        wide = _coord_from_envelope(envelope)
+        narrow = _coord_from_envelope(envelope, "float32")
+        assert wide.dtype == np.dtype("float64")
+        assert narrow.dtype == np.dtype("float32")
+
+
+class TestExtremesCoord:
+    """The two-sample stand-in for a coordinate whose samples are unknown."""
+
+    def test_the_extremes_are_the_coordinate(self):
+        """One selection cuts it exactly when it excludes one of them."""
+        coord = _extremes_coord({"x_min": 0.0, "x_max": 9.0})
+        assert len(coord) == 2
+        assert coord.select((2.0, None))[0].shape[0] == 1
+        assert coord.select((-1.0, None))[0].shape[0] == 2
+
+    @pytest.mark.parametrize(
+        "low,high,kind",
+        [
+            (pd.Timestamp("2020-01-01"), pd.Timestamp("2020-01-02"), np.datetime64),
+            (pd.Timedelta("1s"), pd.Timedelta("2s"), np.timedelta64),
+        ],
+    )
+    def test_pandas_scalars_become_numpy_ones(self, low, high, kind):
+        """A frame hands temporal values back as pandas scalars, not numpy ones."""
+        coord = _extremes_coord({"t_min": low, "t_max": high})
+        assert np.issubdtype(coord.dtype, kind)
+
+    @pytest.mark.parametrize(
+        "envelope",
+        [
+            {"x_min": np.nan, "x_max": 9.0},  # no smallest value
+            {"x_min": 5.0, "x_max": 5.0},  # one value is no interval
+            None,  # nothing kept
+        ],
+    )
+    def test_an_envelope_naming_no_interval(self, envelope):
+        """Nothing to select on, so the patch answers instead."""
+        assert _extremes_coord(envelope) is None
+
+    def test_units_ride_along_here_too(self):
+        """A bound bearing units is compared against a coordinate with them."""
+        assert _extremes_coord({"x_min": 0.0, "x_max": 9.0}, "m").units is not None
+
+
+class TestCoordFromEnvelopeUnits:
+    """Units on a rebuilt range."""
+
+    def test_units_ride_along(self):
+        """A bound bearing units is compared against a coordinate with them."""
+        envelope = {"x_min": 0.0, "x_max": 9.0, "x_step": 1.0}
+        assert _coord_from_envelope(envelope, None, "m").units is not None
+        assert _coord_from_envelope(envelope, None, "").units is None
+
+
 class TestForgetTrimmedSizes:
     """Which rows keep the sample count the index stored for them."""
 
@@ -368,33 +513,33 @@ class TestForgetTrimmedSizes:
     def test_frame_without_sizes_passes_through(self):
         """A relation which states no size has none to forget."""
         df = pd.DataFrame({"time_min": [0.0]})
-        assert _forget_trimmed_sizes(df, ()).equals(df)
+        assert _forget_what_a_trim_invalidates(df, ()).equals(df)
 
     def test_frame_without_modified_passes_through(self):
         """Nothing marks a trim, so nothing is forgotten."""
         df = pd.DataFrame({"_data_size": [10]})
-        assert _forget_trimmed_sizes(df, ()).equals(df)
+        assert _forget_what_a_trim_invalidates(df, ()).equals(df)
 
     def test_untrimmed_rows_keep_their_size(self, sized):
         """A selection which cuts no row leaves every size alone."""
-        assert _forget_trimmed_sizes(sized, ()).equals(sized)
+        assert _forget_what_a_trim_invalidates(sized, ()).equals(sized)
 
     def test_trimmed_row_forgets_its_size(self, sized):
         """The row a selection cut no longer states a count."""
         df = sized.assign(_modified=[False, True])
-        out = _forget_trimmed_sizes(df, ())
+        out = _forget_what_a_trim_invalidates(df, ())
         assert out["_data_size"].tolist() == [10, pd.NA]
 
     def test_selector_off_the_envelopes_forgets_every_size(self, sized):
         """A selector `adjust_segments` never saw marks no row, so all go."""
         residuals = ((({"time": [1, 2, 3]}), False, False),)
-        out = _forget_trimmed_sizes(sized, residuals)
+        out = _forget_what_a_trim_invalidates(sized, residuals)
         assert out["_data_size"].isnull().all()
 
     def test_unit_bearing_range_rides_the_envelopes(self, sized):
         """A canonical range is folded in, so `_modified` still decides."""
         residuals = (({"distance": _canonical_range((1 * m, 2 * m))}, False, False),)
-        assert _forget_trimmed_sizes(sized, residuals).equals(sized)
+        assert _forget_what_a_trim_invalidates(sized, residuals).equals(sized)
 
 
 class TestViewSerialization:

@@ -22,7 +22,7 @@ import numpy as np
 import pandas as pd
 
 from dascore.exceptions import InvalidSpoolQueryError, ParameterError, UnitError
-from dascore.io.index.ingest import typed_value
+from dascore.io.index.ingest import TypedValue, typed_value
 from dascore.io.index.schema import glob_expr, quote
 from dascore.units import convert_units, get_quantity
 from dascore.utils.misc import glob_to_regex, is_range
@@ -108,6 +108,8 @@ def _coerce_scalar(value, target_kinds: set[str]):
     Follows the coercion table in the selector spec; datetime-like
     strings become time queries only when the target has a time kind.
     """
+    if isinstance(value, str) and value == "" and "str" in target_kinds:
+        return TypedValue("str", value)
     typed = typed_value(value)
     if typed is None:
         msg = f"Cannot use {value!r} as a spool query value."
