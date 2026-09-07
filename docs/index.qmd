@@ -1,4 +1,9 @@
 ---
+title: DASCore
+header-includes: |
+    <style>
+    #title-block-header { display: none; }
+    </style>
 execute:
     warning: false
 ---
@@ -26,31 +31,21 @@ DASCore is part of the [DAS Data Analysis Ecosystem (DASDAE)](https://dasdae.org
 
 ## Read a file
 
-```{python}
+```{.python}
 import dascore as dc
 
-# An examples:// name refers to one of DASCore's example files.
-# To read DAS data stored locally on your machine, simply replace it with:
-# spool = dc.spool("/path/to/data/directory/data.EXT")
-spool = dc.spool("examples://terra15_das_1_trimmed.hdf5")
+spool = dc.spool("/path/to/your/file.h5")
 patch = spool[0]
 ```
 
 ## Working with a directory of DAS files
 
-```{python}
-#| output: false
+```{.python}
 import dascore as dc
-
-# Write example DAS files to a local directory just to get a usable path.
-# To read a directory of DAS data stored on your machine,
-# simply replace the line below with:
-# directory_path = "/path/to/data/directory/"
-directory_path = dc.examples.spool_to_directory(dc.get_example_spool())
 
 spool = (
     # Create a spool to interact with directory data
-    dc.spool(directory_path)
+    dc.spool("path/to/data_archive")
     # Index the directory contents
     .update()
     # Sub-select a specific time range
@@ -65,6 +60,7 @@ spool = (
 ```{python}
 import dascore as dc
 
+#load example data
 spool = dc.get_example_spool('diverse_das')
 
 # Spools are like lists, you can get patches through iteration
