@@ -689,7 +689,9 @@ def spool_to_xarray(
                 # the source is the read; dask must not copy it into the
                 # graph piecewise, nor hash a thing which opens files
                 asarray=False,
-                name=f"dascore-segment-{out['output_id']}",
+                # Output ids are local to a plan; task keys must also
+                # distinguish independently converted spools.
+                name=f"dascore-segment-{resolver.token}-{out['output_id']}",
             )
             attrs = {
                 key: value

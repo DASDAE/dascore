@@ -71,6 +71,16 @@ class TestSpoolToXarray:
                 )
         assert not expected
 
+    def test_combines_independent_conversions(self, random_patch):
+        """Combining trees must keep each conversion's source data distinct."""
+        opposite = random_patch.new(data=-random_patch.data)
+        first = self._leaves(dc.spool([random_patch]).io.to_xarray())[0].dataset["data"]
+        second = self._leaves(dc.spool([opposite]).io.to_xarray())[0].dataset["data"]
+
+        actual = (first + second).compute().values
+
+        np.testing.assert_array_equal(actual, np.zeros_like(random_patch.data))
+
     def test_builds_without_reading(self, diverse_spool_directory, monkeypatch):
         """Constructing the tree must not read any patch data."""
         from dascore.io.index.catalog import FileResolver, PatchCatalog  # noqa: PLC0415
