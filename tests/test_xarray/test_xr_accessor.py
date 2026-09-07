@@ -333,6 +333,62 @@ class TestLazyCoordinates:
         # which is what a lazy index on `lag` would refuse to align
         assert (out - array).shape == array.shape
 
+    @staticmethod
+    def _offsets(tree_leaf):
+        """One value a channel, with no time coordinate of its own."""
+        xr = pytest.importorskip("xarray")
+
+        return xr.DataArray(
+            np.arange(tree_leaf.sizes["distance"]) * 1.0,
+            dims=("distance",),
+            coords={"distance": tree_leaf["distance"].values},
+        )
+
+    @pytest.mark.parametrize("keyword", [False, True])
+    def test_an_argument_says_how_its_coordinates_arrived(
+        self, tree_leaf, monkeypatch, keyword
+    ):
+        """The coordinate the result takes is the argument's, so it decides.
+
+        Adding per-channel offsets to a long acquisition takes that
+        acquisition's time coordinate whichever of the two is called on;
+        reading it from the receiver alone spells out every label in the
+        ordering where the receiver has no time coordinate at all.
+        """
+        offsets = self._offsets(tree_leaf)
+        self._refuse_to_materialize(monkeypatch)
+        out = offsets.dc.add(other=tree_leaf) if keyword else offsets.dc.add(tree_leaf)
+        assert type(out.xindexes["time"]).__name__ == "TemporalRangeIndex"
+
+    def test_either_order_states_it_the_same_way(self, tree_leaf):
+        """The same sum, so the same coordinate, however it is written."""
+        offsets = self._offsets(tree_leaf)
+        first, second = tree_leaf.dc.add(offsets), offsets.dc.add(tree_leaf)
+        assert type(first.xindexes["time"]).__name__ == "TemporalRangeIndex"
+        assert type(first.xindexes["time"]) is type(second.xindexes["time"])
+        assert np.allclose(first.transpose(*second.dims).values, second.values)
+
+    def test_a_coordinate_which_arrived_both_ways_is_spelled_out(self, tree_leaf):
+        """An eager index is what xarray aligns on, so it is not taken away.
+
+        One of the two stated the coordinate and the other spelled it
+        out; the result keeps what the stricter of them can align on,
+        the same way round either way.
+        """
+        spelled_out = tree_leaf.dc.to_patch().io.to_xarray()
+        assert type(spelled_out.xindexes["time"]).__name__ == "PandasIndex"
+        for out in (spelled_out.dc.add(tree_leaf), tree_leaf.dc.add(spelled_out)):
+            assert type(out.xindexes["time"]).__name__ == "PandasIndex"
+
+    @pytest.mark.parametrize("reverse", [False, True])
+    def test_an_unindexed_coordinate_does_not_force_eager(self, tree_leaf, reverse):
+        """Only an eager index requires the result to preserve eager alignment."""
+        unindexed = tree_leaf.dc.to_patch().io.to_xarray().drop_indexes("time")
+        first, second = (unindexed, tree_leaf) if reverse else (tree_leaf, unindexed)
+        out = first.dc.add(second)
+        assert type(out.xindexes["time"]).__name__ == "TemporalRangeIndex"
+        assert (out - unindexed).shape == tree_leaf.shape
+
     def test_a_duration_is_served_like_a_time(self):
         """A lag says its units in its dtype as a stamp does."""
         from dascore.core.coords import get_coord  # noqa: PLC0415

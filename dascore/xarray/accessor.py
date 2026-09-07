@@ -64,14 +64,32 @@ def _largest_to_materialize(values) -> int | None:
     return max(found) if found else None
 
 
-def _lazily_served(data_array) -> set[str]:
-    """The coordinates this DataArray states rather than stores."""
-    indexes = getattr(data_array, "xindexes", {})
-    return {
-        name
-        for name, index in indexes.items()
-        if hasattr(getattr(index, "transform", None), "start_ns")
-    }
+def _stated_coords(*values) -> set[str]:
+    """
+    Which coordinates a call's result states rather than spells out.
+
+    Every DataArray in the call says how its own coordinates arrived, an
+    argument as much as the one called on: an array with no time
+    coordinate added to one spanning a long acquisition takes that
+    coordinate, so it is the argument which says the coordinate arrived
+    stated. A name which arrived spelled out anywhere is spelled out in
+    the result -- a spelled-out index is what xarray aligns on, and one
+    participant having stated the coordinate is no reason to take that
+    away from the rest, whichever of the two is called on.
+    """
+    xr = optional_import("xarray")
+    stated, spelled_out = set(), set()
+    for value in values:
+        if not isinstance(value, xr.DataArray):
+            continue
+        names = {
+            name
+            for name, index in value.xindexes.items()
+            if hasattr(getattr(index, "transform", None), "start_ns")
+        }
+        stated.update(names)
+        spelled_out.update(set(value.xindexes) - names)
+    return stated - spelled_out
 
 
 def _as_patch(value):
@@ -171,15 +189,15 @@ class _PatchMethods:
             # a property states something about the patch, so there is no
             # call to convert arguments for; a patch it states is still a
             # patch, and comes back as the DataArray it describes
-            return _as_xarray(value, _lazily_served(self._data_array))
+            return _as_xarray(value, _stated_coords(self._data_array))
         return self._method(patch, value, name)
 
     def _method(self, patch, bound: Callable, name: str) -> Callable:
         """Wrap one patch method so it takes and returns DataArrays."""
-        lazy = _lazily_served(self._data_array)
 
         @functools.wraps(bound)
         def call(*args, **kwargs):
+            lazy = _stated_coords(self._data_array, *args, *kwargs.values())
             args = tuple(_as_patch(x) for x in args)
             kwargs = {k: _as_patch(v) for k, v in kwargs.items()}
             run = functools.partial(bound, *args, **kwargs)
