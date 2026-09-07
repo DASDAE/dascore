@@ -191,6 +191,18 @@ class DascoreConfig(BaseModel):
             "download the whole thing, so it is rejected."
         ),
     )
+    xarray_block_size: int = Field(
+        default=268_435_456,  # 256 MiB
+        ge=0,
+        description=(
+            "Most a single dask block may hold, in bytes, when a spool "
+            "converts to an xarray tree. This bounds a bulk read: a source "
+            "patch bigger than this is read in several windows along the "
+            "merged dimension rather than whole. A selection reads only "
+            "what it asks for whatever this is. Zero makes each source "
+            "patch one block."
+        ),
+    )
     remote_hdf5_max_blocks: int = Field(
         default=8,
         gt=0,

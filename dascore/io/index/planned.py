@@ -646,6 +646,17 @@ class PlanResolver(PatchResolver):
                 resource, dict(windows), _pre_cast=True, **kwargs
             )
 
+    def can_read_array(self, row: Mapping) -> bool:
+        """
+        Whether a row can take the data-only path, reading nothing.
+
+        A caller which sizes its reads ahead of time -- splitting a
+        member into several windows, say -- must know this before it
+        builds them: splitting a row which loads as a patch would read
+        the whole source once per window instead of once.
+        """
+        return not self.parent_residuals and self._array_read_info(row) is not None
+
     def _array_read_info(self, row: Mapping):
         """Resolve array-reader metadata without opening the source file."""
         path = _row_str(row.get("source_path"))

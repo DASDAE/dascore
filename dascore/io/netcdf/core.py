@@ -18,8 +18,8 @@ from dascore.io.utils import (
     windows_to_slices,
 )
 from dascore.utils.hdf5 import H5Reader, get_h5py_file
-from dascore.utils.io import patch_to_xarray
 from dascore.utils.misc import optional_import, raise_on_extra_kwargs
+from dascore.xarray import patch_to_xarray
 
 from .utils import (
     XDAS_PAYLOAD_VARIABLE,

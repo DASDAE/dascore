@@ -33,6 +33,10 @@ from dascore.utils.paths import (
 from dascore.utils.remote_io import ensure_local_file as _ensure_local_file
 from dascore.utils.remote_io import get_local_handle
 from dascore.utils.time import to_float
+from dascore.xarray.patch import (  # noqa: F401  published under this module
+    patch_to_xarray,
+    xarray_to_patch,
+)
 
 HANDLE_FUNCTIONS = {
     Path: lambda x: Path(x),
@@ -354,38 +358,6 @@ class IOResourceManager:
     def __del__(self):
         with suppress(Exception):
             self.close_all()
-
-
-def patch_to_xarray(patch: PatchType):
-    """Return a data array with patch contents."""
-    xr = optional_import("xarray")
-    # Omit None-valued attrs because xarray backends may reject them during
-    # NetCDF serialization, while a missing attr round-trips cleanly.
-    attrs = {
-        key: value for key, value in dict(patch.attrs).items() if value is not None
-    }
-    patch_dims = patch.dims
-    coords = {}
-    for name, coord in patch.coords.coord_map.items():
-        if coord._partial:
-            continue
-        dims = patch.coords.dim_map[name]
-        coords[name] = (dims, coord.values)
-    # Need to exclude non-coords
-    return xr.DataArray(patch.data, attrs=attrs, dims=patch_dims, coords=coords)
-
-
-def xarray_to_patch(data_array) -> dc.Patch:
-    """Convert an xarray dataarray to a patch."""
-    # this cant work if xarray isn't installed. This ensures it is.
-    _ = optional_import("xarray")
-
-    return dc.Patch(
-        coords={i: (x.dims, x.values) for i, x in data_array.coords.items()},
-        attrs=dict(data_array.attrs.items()),
-        dims=data_array.dims,
-        data=data_array.data,
-    )
 
 
 def patch_to_obspy(patch: PatchType):
