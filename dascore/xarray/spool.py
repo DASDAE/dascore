@@ -22,6 +22,7 @@ from dascore.constants import SpoolType
 from dascore.exceptions import PatchConversionError
 from dascore.utils.misc import optional_import
 from dascore.utils.time import to_float
+from dascore.xarray.patch import _lazy_temporal_index
 
 
 def _np_scalar(value):
@@ -146,32 +147,6 @@ def _segment_chunks(members, block_size, dtype, sizes, dims, dim):
         pieces = _block_pieces(member.count, limit if splittable else None)
         along.extend(stop - start for start, stop in pieces)
     return tuple(tuple(along) if d == dim else (sizes[d],) for d in dims)
-
-
-def _lazy_temporal_index(name, coord):
-    """
-    Return a lazy xarray index for an evenly sampled temporal coordinate.
-
-    None when the coordinate cannot be served lazily — an irregular
-    (segmented or array) coordinate, a descending one, or a numeric one,
-    whose materialized values are short in practice.
-    """
-    from dascore.core.coords import CoordRange  # noqa: PLC0415
-
-    step = getattr(coord, "step", None)
-    if not isinstance(coord, CoordRange) or step is None or pd.isnull(step):
-        return None
-    if not (
-        np.issubdtype(coord.dtype, np.datetime64)
-        or np.issubdtype(coord.dtype, np.timedelta64)
-    ):
-        return None
-    if np.asarray(step).astype("int64") <= 0:
-        return None
-    # function-level: xarray is an optional dependency
-    from dascore.xarray.index import TemporalRangeIndex  # noqa: PLC0415
-
-    return TemporalRangeIndex.from_coord(name, coord)
 
 
 class _SegmentSource:
@@ -494,6 +469,10 @@ def spool_to_xarray(
     """
     xr = optional_import("xarray")
     da = optional_import("dask.array")
+    # the tree's arrays carry the `.dc` accessor, like any conversion
+    from dascore.xarray.patch import _register_accessor  # noqa: PLC0415
+
+    _register_accessor()
     if block_size is None:
         block_size = get_config().xarray_block_size
     if isinstance(block_size, str):

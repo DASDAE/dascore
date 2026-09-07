@@ -46,6 +46,26 @@ small = first.dataset["data"].isel(time=slice(0, 100)).compute()
 
 A selection reads only the samples it names, however large the files behind it are. `block_size` bounds a bulk read instead: computing a whole segment asks for one block at a time, so a source patch larger than it is read in several windows rather than whole. Unset, it takes the configured `xarray_block_size` (256 MiB by default). A format which cannot hand back a window reads whole whatever the setting says, since splitting it would read the file once per block.
 
+### Patch methods on a DataArray
+
+A DataArray DASCore produced carries a `dc` accessor holding every public `Patch` method. A call converts to a patch, runs the method, and converts a patch it returns back; a result which is not a patch, such as an array or a spool, comes back as it is. A method taking another patch takes another DataArray.
+
+```python
+import dascore as dc
+
+dar = dc.get_example_patch().io.to_xarray()
+
+filtered = dar.dc.pass_filter(time=(1, 10))
+times = dar.dc.get_array("time")
+patch = dar.dc.to_patch()
+```
+
+A DataArray from somewhere else needs `import dascore.xarray.accessor` first, since registering the accessor means importing xarray, which DASCore does not do on its own.
+
+A dask-backed DataArray is passed through as it stands, so a method which works on the array's own backend leaves it lazy. One which cannot converts, as it does on a patch. Where such a method announces that conversion, and the array is larger than free memory, the accessor raises rather than attempting it; a method which converts silently is not caught, and fails on memory as it would anywhere else.
+
+A coordinate a tree states rather than stores -- an evenly sampled time coordinate, whose labels are computed from its range on demand -- is stated again in what a method hands back, so labelling a long acquisition costs no more after a call than before it. Every DataArray in the call says how its own coordinates arrived, an argument as much as the one called on. A coordinate which arrived spelled out anywhere is spelled out in the result, since a spelled-out index is what xarray aligns on. Laziness follows the name, so a method which renames such a coordinate spells its labels out under the new name.
+
 ## [ObsPy](https://docs.obspy.org/)
 
 ```python
