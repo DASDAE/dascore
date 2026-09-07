@@ -105,7 +105,8 @@ def _import_optional_module(mod_name):
         return import_module(mod_name)
     except ModuleNotFoundError as exc:
         missing = (exc.name or "").split(".")[0]
-        if not missing or mod_name.startswith(missing):
+        project_root = mod_name.split(".", 1)[0]
+        if not missing or missing == project_root:
             raise
         warnings.warn(
             f"Skipping {mod_name}: its dependency '{exc.name}' is not installed.",

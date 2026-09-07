@@ -72,7 +72,12 @@ def _label_ints(labels: np.ndarray, dtype) -> np.ndarray:
         # input unit and its int64 form would then be in that unit
         kind = np.dtype(dtype).kind
         converter = pd.to_timedelta if kind == "m" else pd.to_datetime
-        converted = converter(arr.ravel()).astype(np.dtype(dtype))
+        try:
+            converted = converter(arr.ravel())
+        except ValueError as err:
+            msg = f"Label(s) {labels!r} do not name {np.dtype(dtype)} samples."
+            raise KeyError(msg) from err
+        converted = converted.astype(np.dtype(dtype))
         ints = np.asarray(converted.astype("int64")).reshape(arr.shape)
     if np.any(ints == _NAT_I8):
         msg = "Cannot select with NaT labels on an evenly sampled coordinate."

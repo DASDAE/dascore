@@ -511,6 +511,14 @@ class TestPandasParity:
         with pytest.raises(KeyError, match="period"):
             lazy.sel(time="2019-06")
 
+    @pytest.mark.parametrize("label", ["not-a-date", ["not-a-date"]])
+    def test_unparsable_label_raises_key_error(self, hourly_pair, label):
+        """Invalid scalar and vector labels raise as the eager index does."""
+        lazy, eager = hourly_pair
+        for array in (eager, lazy):
+            with pytest.raises(KeyError):
+                array.sel(time=label)
+
     def test_out_of_ns_range_label_raises(self, hourly_pair):
         """A label the ns range cannot represent raises, never wraps."""
         lazy, _ = hourly_pair

@@ -9,6 +9,7 @@ from types import SimpleNamespace
 import pytest
 from _index_api import (
     _get_base_address,
+    _import_optional_module,
     _is_environment_path,
     _yield_get_submodules,
     assert_documenting_this_checkout,
@@ -119,3 +120,14 @@ class TestOptionalSubmodules:
         (base / "optpkg" / "needs_dep.py").unlink()
         with pytest.raises(ModuleNotFoundError, match="no_such_submodule"):
             dict(_yield_get_submodules(module, base))
+
+    @pytest.mark.parametrize("missing", ["opt", "opt.submodule"])
+    def test_dependency_prefix_warns_and_skips(self, monkeypatch, missing):
+        """A dependency sharing the project's prefix is still external."""
+
+        def missing_import(name):
+            raise ModuleNotFoundError(name=missing)
+
+        monkeypatch.setattr("_index_api.import_module", missing_import)
+        with pytest.warns(UserWarning, match="Skipping optpkg.needs_dep"):
+            assert _import_optional_module("optpkg.needs_dep") is None

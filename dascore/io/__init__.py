@@ -50,6 +50,8 @@ class PatchIO(PatchNameSpace):
 
 
 class SpoolIO(SpoolNameSpace):
+    """Namespace for Spool I/O conversions."""
+
     name = "io"
 
     to_xarray = spool_to_xarray
