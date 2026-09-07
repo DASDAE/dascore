@@ -239,6 +239,69 @@ class TestLazyCoordinates:
         coord = tree_leaf.dc.to_patch().get_coord("time")
         assert np.array_equal(coord.values, tree_leaf["time"].values)
 
+    @staticmethod
+    def _refuse_to_materialize(monkeypatch):
+        """Make spelling out a temporal label an error, either side of it.
+
+        A lazy coordinate is a transform on the xarray side and a range
+        on the patch side, and either can be asked for every label; a
+        conversion which builds one only to replace it has still paid
+        for it. Numeric coordinates are short and are left alone.
+        """
+        from dascore.core.coords import CoordRange  # noqa: PLC0415
+        from dascore.xarray.index import TemporalRangeTransform  # noqa: PLC0415
+
+        def _refuse_forward(self, dim_positions):
+            raise AssertionError("the labels were computed by the transform")
+
+        original = CoordRange.values
+
+        @property
+        def _refuse_values(self):
+            if np.issubdtype(self.dtype, np.datetime64):
+                raise AssertionError("the range spelled out its labels")
+            return original.__get__(self, CoordRange)
+
+        monkeypatch.setattr(TemporalRangeTransform, "forward", _refuse_forward)
+        monkeypatch.setattr(CoordRange, "values", _refuse_values)
+
+    def test_a_forwarded_call_never_spells_out_the_labels(self, tree_leaf, monkeypatch):
+        """Not on the way in, and not on the way back out.
+
+        Building the labels only to replace them with the range which
+        states them costs the whole array anyway -- eight bytes a sample,
+        which for a long acquisition is what staying lazy is for. So the
+        conversion must be told to state the coordinate rather than
+        having it stated back afterwards.
+        """
+        self._refuse_to_materialize(monkeypatch)
+        out = tree_leaf.dc.abs()
+        assert type(out.xindexes["time"]).__name__ == "TemporalRangeIndex"
+
+    def test_a_forwarded_property_never_spells_them_out_either(
+        self, tree_leaf, monkeypatch
+    ):
+        """A property states a patch by the same conversion a call does."""
+        self._refuse_to_materialize(monkeypatch)
+        assert type(tree_leaf.dc.T.xindexes["time"]).__name__ == "TemporalRangeIndex"
+
+    def test_a_renamed_coordinate_is_still_stated(self, tree_leaf, monkeypatch):
+        """It is the same coordinate under another name."""
+        self._refuse_to_materialize(monkeypatch)
+        out = tree_leaf.dc.rename_coords(time="t")
+        assert type(out.xindexes["t"]).__name__ == "TemporalRangeIndex"
+
+    def test_a_coordinate_which_no_longer_names_a_dimension(self, tree_leaf):
+        """An index labels a dimension, so a coordinate which stops
+        defining one is spelled out beside it rather than refused.
+        """
+        size = tree_leaf.sizes["time"]
+        with_sample = tree_leaf.assign_coords(sample=("time", np.arange(size)))
+        out = with_sample.dc.set_dims(time="sample")
+        renamed = tuple("sample" if x == "time" else x for x in tree_leaf.dims)
+        assert out.dims == renamed
+        assert out.coords["time"].dims == ("sample",)
+
 
 class TestAuxiliaryCoordinates:
     """A coordinate riding a dimension it is not named for."""

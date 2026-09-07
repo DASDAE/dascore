@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import numpy as np
+import pandas as pd
 
 import dascore as dc
 from dascore.constants import PatchType
@@ -20,8 +21,55 @@ def _register_accessor() -> None:
     from dascore.xarray import accessor  # noqa: F401, PLC0415
 
 
-def patch_to_xarray(patch: PatchType):
-    """Return a data array with patch contents."""
+def _lazy_temporal_index(name, coord):
+    """
+    Return a lazy xarray index for an evenly sampled temporal coordinate.
+
+    None when the coordinate cannot be served lazily — an irregular
+    (segmented or array) coordinate, a descending one, or a numeric one,
+    whose materialized values are short in practice.
+    """
+    from dascore.core.coords import CoordRange  # noqa: PLC0415
+
+    step = getattr(coord, "step", None)
+    if not isinstance(coord, CoordRange) or step is None or pd.isnull(step):
+        return None
+    if not (
+        np.issubdtype(coord.dtype, np.datetime64)
+        or np.issubdtype(coord.dtype, np.timedelta64)
+    ):
+        return None
+    if np.asarray(step).astype("int64") <= 0:
+        return None
+    # function-level: xarray is an optional dependency
+    from dascore.xarray.index import TemporalRangeIndex  # noqa: PLC0415
+
+    return TemporalRangeIndex.from_coord(name, coord)
+
+
+def patch_to_xarray(patch: PatchType, lazy_coords: bool = False):
+    """
+    Return a data array with patch contents.
+
+    Parameters
+    ----------
+    patch
+        The patch to convert.
+    lazy_coords
+        If True, serve each evenly sampled temporal dimension coordinate
+        by the range which states it rather than by an array of every
+        label. Such a coordinate then costs three numbers however long
+        the acquisition, and its labels are computed on demand. The
+        default spells the labels out, which is what xarray aligns
+        arithmetic on; see `dascore.xarray.index.TemporalRangeIndex` for
+        what a lazily served coordinate does not yet support.
+
+    Notes
+    -----
+    A DataArray states a coordinate by its labels, so a coordinate of a
+    single sample cannot say how far apart its samples would be: such a
+    step is lost unless the coordinate is served lazily, which states it.
+    """
     xr = optional_import("xarray")
     _register_accessor()
     # Omit None-valued attrs because xarray backends may reject them during
@@ -30,11 +78,18 @@ def patch_to_xarray(patch: PatchType):
         key: value for key, value in dict(patch.attrs).items() if value is not None
     }
     patch_dims = patch.dims
-    coords, units = {}, {}
+    coords, units, lazy = {}, {}, []
     for name, coord in patch.coords.coord_map.items():
         if coord._partial:
             continue
         dims = patch.coords.dim_map[name]
+        # An index labels a dimension, so only a coordinate which defines
+        # one can be served by it; a coordinate merely riding a dimension
+        # states its values as any other does.
+        if lazy_coords and dims == (name,):
+            if (index := _lazy_temporal_index(name, coord)) is not None:
+                lazy.append(index)
+                continue
         if coord.units is not None and not _is_temporal(coord.dtype):
             # a coordinate's units are its own; xarray states them the
             # way the CF conventions do, as an attribute beside it.
@@ -44,6 +99,8 @@ def patch_to_xarray(patch: PatchType):
         coords[name] = (dims, coord.values)
     # Need to exclude non-coords
     out = xr.DataArray(patch.data, attrs=attrs, dims=patch_dims, coords=coords)
+    for index in lazy:
+        out = out.assign_coords(xr.Coordinates.from_xindex(index))
     for name, value in units.items():
         out.coords[name].attrs["units"] = value
     return out
