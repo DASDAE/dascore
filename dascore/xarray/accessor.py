@@ -64,13 +64,14 @@ def _largest_to_materialize(values) -> int | None:
     return max(found) if found else None
 
 
-def _serves_lazily(data_array) -> bool:
-    """Whether this DataArray states a coordinate rather than storing it."""
+def _lazily_served(data_array) -> set[str]:
+    """The coordinates this DataArray states rather than stores."""
     indexes = getattr(data_array, "xindexes", {})
-    return any(
-        hasattr(getattr(index, "transform", None), "start_ns")
-        for index in indexes.values()
-    )
+    return {
+        name
+        for name, index in indexes.items()
+        if hasattr(getattr(index, "transform", None), "start_ns")
+    }
 
 
 def _as_patch(value):
@@ -79,15 +80,20 @@ def _as_patch(value):
     return xarray_to_patch(value) if isinstance(value, xr.DataArray) else value
 
 
-def _as_xarray(value, lazy: bool):
+def _as_xarray(value, lazy: set[str]):
     """
     A patch as the DataArray it describes; anything else unchanged.
 
     Whether a coordinate is spelled out belongs to the object, not to
-    the conversion: an ordinary DataArray keeps the eager index its
-    arithmetic aligns on, and one whose coordinates arrived stated keeps
-    them stated. The conversion is told which, so a coordinate a tree
-    never spelled out is never spelled out on the way back either.
+    the conversion: a coordinate which arrived stated goes back stated,
+    and every other keeps the eager index xarray aligns arithmetic on --
+    including a temporal one beside it, which is why the coordinates are
+    named rather than the array being called lazy as a whole. The
+    conversion is told which names, so one a tree never spelled out is
+    not spelled out on the way back either.
+
+    Laziness follows the name: a method which renames a coordinate
+    spells it out under its new name.
     """
     if not isinstance(value, dc.Patch):
         return value
@@ -165,12 +171,12 @@ class _PatchMethods:
             # a property states something about the patch, so there is no
             # call to convert arguments for; a patch it states is still a
             # patch, and comes back as the DataArray it describes
-            return _as_xarray(value, _serves_lazily(self._data_array))
+            return _as_xarray(value, _lazily_served(self._data_array))
         return self._method(patch, value, name)
 
     def _method(self, patch, bound: Callable, name: str) -> Callable:
         """Wrap one patch method so it takes and returns DataArrays."""
-        lazy = _serves_lazily(self._data_array)
+        lazy = _lazily_served(self._data_array)
 
         @functools.wraps(bound)
         def call(*args, **kwargs):

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Collection
+
 import numpy as np
 import pandas as pd
 
@@ -47,7 +49,7 @@ def _lazy_temporal_index(name, coord):
     return TemporalRangeIndex.from_coord(name, coord)
 
 
-def patch_to_xarray(patch: PatchType, lazy_coords: bool = False):
+def patch_to_xarray(patch: PatchType, lazy_coords: Collection[str] = ()):
     """
     Return a data array with patch contents.
 
@@ -56,13 +58,15 @@ def patch_to_xarray(patch: PatchType, lazy_coords: bool = False):
     patch
         The patch to convert.
     lazy_coords
-        If True, serve each evenly sampled temporal dimension coordinate
-        by the range which states it rather than by an array of every
-        label. Such a coordinate then costs three numbers however long
-        the acquisition, and its labels are computed on demand. The
-        default spells the labels out, which is what xarray aligns
-        arithmetic on; see `dascore.xarray.index.TemporalRangeIndex` for
-        what a lazily served coordinate does not yet support.
+        Names of coordinates to serve by the range which states them
+        rather than by an array of every label. Such a coordinate then
+        costs three numbers however long the acquisition, and its labels
+        are computed on demand. A name which does not belong to an
+        evenly sampled temporal dimension coordinate of this patch is
+        ignored; anything not named spells its labels out, which is what
+        xarray aligns arithmetic on. See
+        `dascore.xarray.index.TemporalRangeIndex` for what a lazily
+        served coordinate does not yet support.
 
     Notes
     -----
@@ -86,7 +90,7 @@ def patch_to_xarray(patch: PatchType, lazy_coords: bool = False):
         # An index labels a dimension, so only a coordinate which defines
         # one can be served by it; a coordinate merely riding a dimension
         # states its values as any other does.
-        if lazy_coords and dims == (name,):
+        if name in lazy_coords and dims == (name,):
             if (index := _lazy_temporal_index(name, coord)) is not None:
                 lazy.append(index)
                 continue

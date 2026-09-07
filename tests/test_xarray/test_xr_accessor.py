@@ -258,7 +258,9 @@ class TestLazyCoordinates:
 
         @property
         def _refuse_values(self):
-            if np.issubdtype(self.dtype, np.datetime64):
+            if np.issubdtype(self.dtype, np.datetime64) or np.issubdtype(
+                self.dtype, np.timedelta64
+            ):
                 raise AssertionError("the range spelled out its labels")
             return original.__get__(self, CoordRange)
 
@@ -285,11 +287,64 @@ class TestLazyCoordinates:
         self._refuse_to_materialize(monkeypatch)
         assert type(tree_leaf.dc.T.xindexes["time"]).__name__ == "TemporalRangeIndex"
 
-    def test_a_renamed_coordinate_is_still_stated(self, tree_leaf, monkeypatch):
-        """It is the same coordinate under another name."""
-        self._refuse_to_materialize(monkeypatch)
+    def test_a_renamed_coordinate_is_spelled_out(self, tree_leaf):
+        """Laziness follows the name, and a rename is a new name.
+
+        Nothing says the coordinate arriving under a new name is the one
+        which arrived stated, and guessing that it is would state a
+        coordinate which came in spelled out -- which is the failure
+        below. So a rename spells its labels out, as it did before any
+        of them were stated.
+        """
         out = tree_leaf.dc.rename_coords(time="t")
-        assert type(out.xindexes["t"]).__name__ == "TemporalRangeIndex"
+        assert type(out.xindexes["t"]).__name__ == "PandasIndex"
+        assert np.array_equal(
+            np.asarray(out["t"].values), np.asarray(tree_leaf["time"].values)
+        )
+
+    def test_an_eager_dimension_beside_a_lazy_one_stays_eager(self):
+        """Which is why the names are carried, not one flag for the array.
+
+        An eager index is what xarray aligns on, so making a coordinate
+        lazy because a coordinate beside it is refuses the arithmetic
+        which worked before the call. A correlation's lag is a second
+        temporal dimension, and is eligible to be served lazily without
+        having arrived that way.
+        """
+        from dascore.core.coords import get_coord  # noqa: PLC0415
+        from dascore.xarray.patch import patch_to_xarray  # noqa: PLC0415
+
+        start = np.datetime64("2020-01-01")
+        time = get_coord(start=start, step=np.timedelta64(4, "ms"), shape=(6,))
+        lag = get_coord(
+            start=np.timedelta64(0, "s"), step=np.timedelta64(1, "s"), shape=(4,)
+        )
+        patch = dc.Patch(
+            data=np.arange(24.0).reshape(6, 4),
+            dims=("time", "lag"),
+            coords={"time": time, "lag": lag},
+        )
+        # only `time` arrived stated, though `lag` could be served the same way
+        array = patch_to_xarray(patch, lazy_coords={"time"})
+        assert type(array.xindexes["lag"]).__name__ == "PandasIndex"
+        out = array.dc.abs()
+        assert type(out.xindexes["time"]).__name__ == "TemporalRangeIndex"
+        assert type(out.xindexes["lag"]).__name__ == "PandasIndex"
+        # which is what a lazy index on `lag` would refuse to align
+        assert (out - array).shape == array.shape
+
+    def test_a_duration_is_served_like_a_time(self):
+        """A lag says its units in its dtype as a stamp does."""
+        from dascore.core.coords import get_coord  # noqa: PLC0415
+        from dascore.xarray.patch import patch_to_xarray  # noqa: PLC0415
+
+        lag = get_coord(
+            start=np.timedelta64(0, "s"), step=np.timedelta64(1, "s"), shape=(4,)
+        )
+        patch = dc.Patch(data=np.arange(4.0), dims=("lag",), coords={"lag": lag})
+        array = patch_to_xarray(patch, lazy_coords={"lag"})
+        assert type(array.xindexes["lag"]).__name__ == "TemporalRangeIndex"
+        assert np.array_equal(np.asarray(array["lag"].values), lag.values)
 
     def test_a_coordinate_which_no_longer_names_a_dimension(self, tree_leaf):
         """An index labels a dimension, so a coordinate which stops
