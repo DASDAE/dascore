@@ -30,7 +30,7 @@ def patch_to_xarray(patch: PatchType):
         key: value for key, value in dict(patch.attrs).items() if value is not None
     }
     patch_dims = patch.dims
-    coords, lazy, units = {}, {}, {}
+    coords, units = {}, {}
     for name, coord in patch.coords.coord_map.items():
         if coord._partial:
             continue
@@ -41,34 +41,17 @@ def patch_to_xarray(patch: PatchType):
             # A datetime says its units in its dtype, and xarray spends
             # that same attribute on saying how to serialize it.
             units[name] = str(coord.units)
-        index = _lazy_index(name, coord)
-        if index is None:
-            coords[name] = (dims, coord.values)
-        else:
-            # spelling this one out is what the lazy index avoids
-            lazy[name] = index
+        coords[name] = (dims, coord.values)
     # Need to exclude non-coords
     out = xr.DataArray(patch.data, attrs=attrs, dims=patch_dims, coords=coords)
     for name, value in units.items():
-        if name in out.coords:
-            out.coords[name].attrs["units"] = value
-    for index in lazy.values():
-        # only a temporal coordinate is served lazily, and one states its
-        # units in its dtype, so none of these carries a units attribute
-        out = out.assign_coords(xr.Coordinates.from_xindex(index))
+        out.coords[name].attrs["units"] = value
     return out
 
 
 def _is_temporal(dtype) -> bool:
     """Whether a dtype states its own units, as a time or a duration does."""
     return np.issubdtype(dtype, np.datetime64) or np.issubdtype(dtype, np.timedelta64)
-
-
-def _lazy_index(name, coord):
-    """The lazy xarray index a coordinate can be served by, or None."""
-    from dascore.xarray.spool import _lazy_temporal_index  # noqa: PLC0415
-
-    return _lazy_temporal_index(name, coord)
 
 
 def xarray_to_patch(data_array) -> dc.Patch:

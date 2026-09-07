@@ -64,6 +64,44 @@ def _largest_to_materialize(values) -> int | None:
     return max(found) if found else None
 
 
+def _lazily_served(data_array) -> set[str]:
+    """The coordinates this DataArray states rather than stores."""
+    indexes = getattr(data_array, "xindexes", {})
+    return {
+        name
+        for name, index in indexes.items()
+        if hasattr(getattr(index, "transform", None), "start_ns")
+    }
+
+
+def _serve_lazily(out, names: set[str]):
+    """
+    Put back the lazy index on coordinates which arrived with one.
+
+    Whether a coordinate is spelled out belongs to the object, not to
+    the conversion: an ordinary DataArray keeps the eager index its
+    arithmetic aligns on, and one from a tree keeps the lazy index which
+    is why a long acquisition costs nothing to label. The result's own
+    coordinate is what is served, so a method which moved it is served
+    where it now is.
+    """
+    from dascore.xarray.spool import _lazy_temporal_index  # noqa: PLC0415
+
+    xr = optional_import("xarray")
+    if not names or not isinstance(out, xr.DataArray):
+        return out
+    patch = None
+    for name in names & set(out.coords):
+        # a lazy index is built for a dimension, so a coordinate served by
+        # one defines the dimension it is named for
+        assert out.coords[name].dims == (name,), "a lazy index names its dimension"
+        patch = xarray_to_patch(out) if patch is None else patch
+        index = _lazy_temporal_index(name, patch.coords.coord_map[name])
+        if index is not None:
+            out = out.drop_vars(name).assign_coords(xr.Coordinates.from_xindex(index))
+    return out
+
+
 def _as_patch(value):
     """A DataArray as the patch it describes; anything else unchanged."""
     xr = optional_import("xarray")
@@ -146,11 +184,12 @@ class _PatchMethods:
             # a property states something about the patch, so there is no
             # call to convert arguments for; a patch it states is still a
             # patch, and comes back as the DataArray it describes
-            return _as_xarray(value)
+            return _serve_lazily(_as_xarray(value), _lazily_served(self._data_array))
         return self._method(patch, value, name)
 
     def _method(self, patch, bound: Callable, name: str) -> Callable:
         """Wrap one patch method so it takes and returns DataArrays."""
+        lazy = _lazily_served(self._data_array)
 
         @functools.wraps(bound)
         def call(*args, **kwargs):
@@ -162,7 +201,7 @@ class _PatchMethods:
             patches = [patch, *(x for x in (*args, *kwargs.values()))]
             size = _largest_to_materialize(patches)
             out = run() if size is None else _guarded(run, name, size)
-            return _as_xarray(out)
+            return _serve_lazily(_as_xarray(out), lazy)
 
         # `add` and its kind are objects with methods of their own
         # (`reduce`, `accumulate`); wrapping the call must not hide them
@@ -180,7 +219,8 @@ class _PatchMethods:
         it has, and they are as reachable here as any method.
         """
         patch = xarray_to_patch(self._data_array)
-        names = set(dir(patch)) | set(patch.get_registered_namespaces())
+        own = {x for x in vars(type(self)) if not x.startswith("_")}
+        names = set(dir(patch)) | set(patch.get_registered_namespaces()) | own
         return sorted(x for x in names if not x.startswith("_"))
 
     def __repr__(self) -> str:

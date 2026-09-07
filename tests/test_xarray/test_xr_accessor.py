@@ -121,6 +121,8 @@ class TestForwarding:
         """Whatever can be forwarded should be offered."""
         names = dir(data_array.dc)
         assert "pass_filter" in names and "abs" in names
+        # what the accessor adds of its own is offered too
+        assert "to_patch" in names
         assert not any(x.startswith("_") for x in names)
 
     def test_it_says_what_it_is(self, data_array):
@@ -131,6 +133,13 @@ class TestForwarding:
 
 class TestLaziness:
     """A dask-backed array is passed through as it stands."""
+
+    @pytest.fixture()
+    def tree_leaf(self, random_spool):
+        """One segment of a tree, whose time coordinate is served lazily."""
+        pytest.importorskip("dask")
+        tree = random_spool.io.to_xarray()
+        return next(x for x in tree.subtree if "data" in x.dataset)["data"]
 
     def test_an_operation_on_the_arrays_backend_stays_lazy(self, lazy_data_array):
         """Nothing is computed on the way in or the way out."""
@@ -147,6 +156,44 @@ class TestLaziness:
         leaf = next(x for x in tree.subtree if "data" in x.dataset)["data"]
         assert type(leaf.xindexes["time"]).__name__ == "TemporalRangeIndex"
         out = leaf.dc.abs()
+        assert type(out.xindexes["time"]).__name__ == "TemporalRangeIndex"
+
+    def test_an_ordinary_array_keeps_its_eager_index(self, data_array):
+        """Whether a coordinate is spelled out belongs to the object.
+
+        An eager index is what xarray aligns arithmetic on, so a
+        conversion must not quietly swap one for a lazy index.
+        """
+        assert type(data_array.dc.abs().xindexes["time"]).__name__ == "PandasIndex"
+
+    def test_ordinary_arithmetic_still_works(self, data_array):
+        """Which is what replacing the index used to break."""
+        assert (data_array.dc.abs() - data_array).shape == data_array.shape
+        pair = data_array + data_array.isel(time=slice(1, 3))
+        assert pair.sizes["time"] == 2
+
+    def test_a_moved_coordinate_is_served_where_it_now_is(self, tree_leaf):
+        """A method which trims it is served lazily at its new bounds."""
+        values = np.asarray(tree_leaf["time"].values)
+        out = tree_leaf.dc.select(time=(None, values[100]))
+        assert type(out.xindexes["time"]).__name__ == "TemporalRangeIndex"
+        assert np.array_equal(np.asarray(out["time"].values), values[:101])
+
+    def test_a_property_keeps_it_lazy_too(self, tree_leaf):
+        """A property's value is converted like a method's result."""
+        assert type(tree_leaf.dc.T.xindexes["time"]).__name__ == "TemporalRangeIndex"
+
+    def test_a_coordinate_riding_a_dimension_is_left_alone(self, tree_leaf):
+        """Only a coordinate which defines its dimension can index it.
+
+        A lazy index is built for a dimension, so offering to serve a
+        coordinate riding one would build an index for a dimension that
+        coordinate does not define.
+        """
+        values = np.asarray(tree_leaf["time"].values)
+        with_aux = tree_leaf.assign_coords(aux_time=("time", values))
+        out = with_aux.dc.abs()
+        assert out.coords["aux_time"].dims == ("time",)
         assert type(out.xindexes["time"]).__name__ == "TemporalRangeIndex"
 
     def test_the_values_are_the_same_either_way(self, patch, lazy_data_array):
@@ -191,6 +238,19 @@ class TestLazyCoordinates:
         """Staying lazy must not change which samples it names."""
         coord = tree_leaf.dc.to_patch().get_coord("time")
         assert np.array_equal(coord.values, tree_leaf["time"].values)
+
+
+class TestAuxiliaryCoordinates:
+    """A coordinate riding a dimension it is not named for."""
+
+    def test_a_temporal_coordinate_on_another_dimension_converts(self, patch):
+        """Its index would be built for a dimension it does not define."""
+        aux = patch.update_coords(aux_time=("time", patch.get_array("time")))
+        out = aux.io.to_xarray()
+        assert out.coords["aux_time"].dims == ("time",)
+        assert np.array_equal(
+            np.asarray(out["aux_time"].values), patch.get_array("time")
+        )
 
 
 class TestUnits:
