@@ -323,7 +323,7 @@ class TestLazyEligibility:
 
     def test_descending_temporal_coord_refused(self):
         """A descending range is not an ascending transform; materialize."""
-        from dascore.xarray.spool import _lazy_temporal_index  # noqa: PLC0415
+        from dascore.xarray.patch import _lazy_temporal_index  # noqa: PLC0415
 
         start = np.datetime64("2020-01-01", "ns")
         coord = get_coord(start=start + 10 * ONE_MS, stop=start - ONE_MS, step=-ONE_MS)
