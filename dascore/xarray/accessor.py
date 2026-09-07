@@ -57,9 +57,9 @@ def _largest_to_materialize(values) -> int | None:
     for an argument which will not fit just as it is for the patch it
     is called on.
     """
-    sizes = [
-        _too_large_to_materialize(x.data) for x in values if isinstance(x, dc.Patch)
-    ]
+    # a bare array is converted like a patch's data, so it weighs the same
+    arrays = (x.data if isinstance(x, dc.Patch) else x for x in values)
+    sizes = [_too_large_to_materialize(x) for x in arrays]
     found = [x for x in sizes if x is not None]
     return max(found) if found else None
 

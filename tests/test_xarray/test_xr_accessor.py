@@ -140,6 +140,15 @@ class TestLaziness:
         out = lazy_data_array.dc.abs()
         assert isinstance(out.data, da.Array)
 
+    def test_a_result_keeps_a_lazy_coordinate_lazy(self, random_spool):
+        """Converting back out must not spell out what came in stated."""
+        pytest.importorskip("dask")
+        tree = random_spool.io.to_xarray()
+        leaf = next(x for x in tree.subtree if "data" in x.dataset)["data"]
+        assert type(leaf.xindexes["time"]).__name__ == "TemporalRangeIndex"
+        out = leaf.dc.abs()
+        assert type(out.xindexes["time"]).__name__ == "TemporalRangeIndex"
+
     def test_the_values_are_the_same_either_way(self, patch, lazy_data_array):
         """Laziness is about when the work happens, not what it produces."""
         out = lazy_data_array.dc.abs().compute()
@@ -182,6 +191,55 @@ class TestLazyCoordinates:
         """Staying lazy must not change which samples it names."""
         coord = tree_leaf.dc.to_patch().get_coord("time")
         assert np.array_equal(coord.values, tree_leaf["time"].values)
+
+
+class TestUnits:
+    """A coordinate's units survive both conversions."""
+
+    def test_units_come_back(self, patch):
+        """Otherwise a method which converts them has nothing to convert."""
+        with_units = patch.set_units(distance="m")
+        back = dc.io.xarray_to_patch(with_units.io.to_xarray())
+        assert (
+            back.get_coord("distance").units == with_units.get_coord("distance").units
+        )
+
+    def test_a_forwarded_conversion_converts(self, data_array):
+        """The point of carrying them: `convert_units` changes the values."""
+        before = np.asarray(data_array["distance"].values)
+        out = data_array.dc.set_units(distance="m").dc.convert_units(distance="km")
+        assert np.allclose(np.asarray(out["distance"].values), before / 1000)
+
+    def test_a_temporal_coordinate_states_no_units(self, data_array):
+        """A datetime says its units in its dtype, and xarray spends that
+        attribute on saying how to serialize it.
+        """
+        assert "units" not in data_array["time"].attrs
+
+    def test_a_rebuilt_range_states_a_scalar_step(self, patch, data_array):
+        """A step is divided into, which a zero-dimensional array breaks."""
+        step = dc.io.xarray_to_patch(data_array).get_coord("time").step
+        assert np.ndim(step) == 0 and not isinstance(step, np.ndarray)
+        assert step == patch.get_coord("time").step
+
+
+class TestEmptySelections:
+    """A selection which keeps nothing is still convertible."""
+
+    def test_an_empty_time_window_converts(self, random_spool):
+        """A range needs somewhere to go; an empty coordinate has nowhere."""
+        pytest.importorskip("dask")
+        tree = random_spool.io.to_xarray()
+        leaf = next(x for x in tree.subtree if "data" in x.dataset)["data"]
+        out = leaf.isel(time=slice(0, 0)).dc.to_patch()
+        assert out.shape[leaf.dims.index("time")] == 0
+
+    def test_a_property_of_an_empty_selection(self, random_spool):
+        """Anything forwarded has to convert first, so this failed too."""
+        pytest.importorskip("dask")
+        tree = random_spool.io.to_xarray()
+        leaf = next(x for x in tree.subtree if "data" in x.dataset)["data"]
+        assert 0 in leaf.isel(time=slice(0, 0)).dc.shape
 
 
 class TestMemoryLookAhead:
@@ -288,6 +346,15 @@ class TestMemoryLookAhead:
         monkeypatch.setattr(accessor, "_available_memory", lambda: 1)
         with suppress_warnings(NumpyFallbackWarning):
             assert data_array.dc.announce_fallback() is not None
+
+    def test_a_bare_array_argument_is_weighed(self, monkeypatch):
+        """A conversion converts a raw array argument as it does a patch's."""
+        import dascore.xarray.accessor as accessor  # noqa: PLC0415
+
+        da = pytest.importorskip("dask.array")
+        monkeypatch.setattr(accessor, "_available_memory", lambda: 8)
+        array = da.zeros((10, 10))
+        assert accessor._largest_to_materialize([array]) == array.nbytes
 
     def test_an_argument_too_large_refuses_the_call(
         self, monkeypatch, data_array, lazy_data_array
