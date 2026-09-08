@@ -15,6 +15,7 @@ from dascore.utils.gaps import get_gap_edges, is_monotonic_and_finite
 from dascore.utils.patch import patch_function
 from dascore.utils.plotting import (
     _add_colorbar,
+    _format_index_axis,
     _format_time_axis,
     _get_ax,
     _get_cmap,
@@ -56,7 +57,16 @@ def _validate_patch_dims(patch):
     return patch
 
 
-def _format_axis_labels(ax, patch, dims_r):
+def _index_dims(coords):
+    """Dims whose values double back, so are drawn one cell per sample."""
+    return {
+        dim
+        for dim, values in coords.items()
+        if np.all(np.isfinite(values)) and not is_monotonic_and_finite(values)
+    }
+
+
+def _format_axis_labels(ax, patch, dims_r, index_dims):
     """
     Format axis labels and handle time-like axes.
     """
@@ -64,7 +74,9 @@ def _format_axis_labels(ax, patch, dims_r):
         getattr(ax, f"set_{x}label")(_get_dim_label(patch, dim))
         # Check if special formatting is needed to make date times label correctly.
         dtype = patch.get_coord(dim).dtype
-        if is_datetime64(dtype):
+        if dim in index_dims:
+            _format_index_axis(ax, dim, x, patch.coords.get_array(dim))
+        elif is_datetime64(dtype):
             _format_time_axis(ax, dim, x)
         if x == "y":
             _maybe_invert_yaxis(ax, patch, dim)
@@ -152,7 +164,10 @@ def waterfall(
 
     Evenly sampled coordinates use ``imshow``. Finite, monotonic irregular
     coordinates use ``pcolormesh`` so cells follow their coordinate values;
-    incomplete or nonmonotonic coordinates fall back to ``imshow``.
+    incomplete coordinates fall back to ``imshow`` over their range. A
+    coordinate which doubles back on itself (a fiber looped down a borehole
+    reads 0, deepest, 0) is drawn one cell per sample, with each tick naming
+    the value at that sample, so the axis reads the way the coordinate runs.
 
     Parameters
     ----------
@@ -259,9 +274,15 @@ def waterfall(
     cmap = _get_waterfall_colormap(patch, cmap)
     scale = _get_scale(scale, scale_type, data)
     label_edges = None
+    index_dims = _index_dims(coords)
     use_image = all(coord.evenly_sampled for coord in dim_coords.values())
     if use_image or not all(is_monotonic_and_finite(x) for x in coords.values()):
-        extents = _get_extents(dims_r, coords)
+        # A dim drawn by sample index takes its extent from the sample count.
+        extent_coords = {
+            dim: np.arange(len(values)) if dim in index_dims else values
+            for dim, values in coords.items()
+        }
+        extents = _get_extents(dims_r, extent_coords)
         with mpl.rc_context({"image.resample": True}):
             im = ax.imshow(
                 data,
@@ -291,7 +312,7 @@ def waterfall(
     if scale is not None and len(scale) == 2 and np.all(np.isfinite(scale)):
         im.set_clim(np.asarray(scale))
     # Format axis labels and handle time-like dimensions
-    _format_axis_labels(ax, patch, dims_r)
+    _format_axis_labels(ax, patch, dims_r, index_dims)
     # Add colorbar if requested
     if cbar:
         label = _get_data_label(patch)

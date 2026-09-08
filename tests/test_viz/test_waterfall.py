@@ -209,14 +209,65 @@ class TestWaterfall:
         assert isinstance(mesh, QuadMesh)
         assert mesh.get_coordinates().shape[:2] == tuple(x + 1 for x in patch.shape)
 
-    def test_nonmonotonic_coordinate_uses_image(self, random_patch):
-        """Nonmonotonic coordinates retain the image-rendering fallback."""
-        distance = np.asarray(random_patch.get_coord("distance")).copy()
-        distance[[1, 2]] = distance[[2, 1]]
-        patch = random_patch.update_coords(distance=distance)
-        ax = patch.viz.waterfall(cbar=False)
+    @pytest.fixture()
+    def folded_patch(self, random_patch):
+        """A patch whose distance runs 0, deepest, 0, as on a looped fiber."""
+        size = random_patch.shape[0]
+        index = np.arange(size)
+        depth = np.minimum(index, size - 1 - index) * 2.5
+        return random_patch.update_coords(distance=depth)
+
+    def test_nonmonotonic_coordinate_uses_image(self, folded_patch):
+        """A folded coordinate is drawn as an image, one cell per sample."""
+        ax = folded_patch.viz.waterfall(cbar=False)
         assert isinstance(ax.images[0], AxesImage)
         assert not any(isinstance(x, QuadMesh) for x in ax.collections)
+        size = folded_patch.shape[0]
+        assert ax.images[0].get_extent()[2:] == pytest.approx((-0.5, size - 0.5))
+
+    def test_folded_axis_reads_the_way_the_coordinate_runs(self, folded_patch):
+        """Ticks name the value at each sample, so the axis reads 0 up and back."""
+        ax = folded_patch.viz.waterfall(cbar=False)
+        depth = np.asarray(folded_patch.get_coord("distance"))
+        formatter = ax.yaxis.get_major_formatter()
+        assert formatter(0) == "0"
+        assert formatter(len(depth) - 1) == "0"
+        assert formatter(np.argmax(depth)) == f"{depth.max():g}"
+        # A tick which lands between samples reads the nearest one; a tick
+        # beyond the samples reads nothing.
+        assert formatter(1.4) == f"{depth[1]:g}"
+        assert formatter(-1) == ""
+        assert formatter(len(depth)) == ""
+        assert ax.format_ydata(2) == f"{depth[2]:g}"
+        ax.get_figure().canvas.draw()
+        ticks = ax.get_yticks()
+        assert np.allclose(ticks, np.round(ticks))
+
+    def test_folded_datetime_axis(self, random_patch):
+        """A folded time axis reads dates at one precision, without the unit."""
+        time = np.asarray(random_patch.get_coord("time"))
+        half = len(time) // 2
+        folded = np.concatenate([time[:half], time[: len(time) - half][::-1]])
+        ax = random_patch.update_coords(time=folded).viz.waterfall(cbar=False)
+        formatter = ax.xaxis.get_major_formatter()
+        assert formatter(0) == np.datetime_as_string(folded[0], unit="ms")
+        assert formatter(half) == np.datetime_as_string(folded[half], unit="ms")
+        assert ax.get_xlabel() == "Time"
+
+    def test_folded_timedelta_axis(self, timedelta_patch):
+        """A folded timedelta axis reads seconds."""
+        time = np.asarray(timedelta_patch.get_coord("time"))
+        folded = np.concatenate([time[:3], time[:3][::-1], time[6:]])
+        ax = timedelta_patch.update_coords(time=folded).viz.waterfall(cbar=False)
+        assert ax.xaxis.get_major_formatter()(4) == "1"
+
+    def test_folded_axis_with_label_coord(self, folded_patch):
+        """Label bars still land on the image cells of a folded axis."""
+        zone = np.where(np.arange(folded_patch.shape[0]) < 10, "top", "rest")
+        patch = folded_patch.update_coords(zone=("distance", zone))
+        ax = patch.viz.waterfall(cbar=False, label_coord="zone")
+        spans = _spans(ax, "y")
+        assert spans[0] == pytest.approx((-0.5, 9.5))
 
     def test_gap_uses_masked_mesh(self, distance_gap_patch):
         """A gap color adds one masked mesh band."""

@@ -8,12 +8,13 @@ import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+from matplotlib.ticker import FuncFormatter, MaxNLocator
 
 from dascore.exceptions import ParameterError
 from dascore.units import Hz, get_quantity_str, maybe_convert_percent_to_fraction
 from dascore.units import s as seconds
 from dascore.utils.misc import suppress_warnings, tukey_fence
-from dascore.utils.time import dtype_time_like
+from dascore.utils.time import dtype_time_like, is_datetime64, is_timedelta64
 
 
 def _get_dim_label(patch, dim):
@@ -267,6 +268,45 @@ def _get_extents(dims_r, coords):
         lims[dim] = _cell_edge_limits(low, high, len(array))
     out = [x for dim in dims_r for x in lims[dim]]
     return out
+
+
+def _format_coord_values(values):
+    """Format coordinate values as tick labels, one unit of precision for all."""
+    if is_datetime64(values):
+        # The coarsest unit which loses nothing, shared by every label.
+        for unit in ("D", "s", "ms", "us", "ns"):
+            if np.all(values.astype(f"datetime64[{unit}]") == values):
+                break
+        return np.datetime_as_string(values, unit=unit)
+    if is_timedelta64(values):
+        values = values / np.timedelta64(1, "s")
+    return np.array([f"{x:g}" for x in values])
+
+
+def _format_index_axis(ax, dim, axis_name, values):
+    """
+    Label an axis drawn by sample index with the coordinate value at each tick.
+
+    A coordinate which doubles back on itself (a fiber looped down a
+    borehole reads 0, deepest, 0) has no single place per value, so the
+    image is drawn one cell per sample and each tick names the value found
+    at that sample. Ticks sit on whole samples so every label is a value the
+    coordinate holds, and a tick beyond the samples gets no label.
+    """
+    labels = _format_coord_values(values)
+    if is_datetime64(values):
+        # Dates carry their unit in the labels, as the time axis does.
+        getattr(ax, f"set_{axis_name}label")(string.capwords(str(dim)))
+
+    def _label(x, _pos=None):
+        i = int(np.round(x))
+        return labels[i] if 0 <= i < len(labels) else ""
+
+    axis = getattr(ax, f"{axis_name}axis")
+    axis.set_major_locator(MaxNLocator(integer=True))
+    axis.set_major_formatter(FuncFormatter(_label))
+    # The value under the mouse should read the same way as the ticks.
+    setattr(ax, f"format_{axis_name}data", _label)
 
 
 def _format_time_axis(ax, dim, axis_name):
