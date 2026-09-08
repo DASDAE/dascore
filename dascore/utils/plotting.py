@@ -282,7 +282,7 @@ def _get_extents(dims_r, coords):
 
 # Six significant figures, as "g" formatting uses by default.
 _MIN_LABEL_DIGITS = 6
-# The most digits a double carries, so the search for enough of them ends.
+# The most digits a double carries; more cannot separate two values.
 _MAX_LABEL_DIGITS = 17
 # A tick lands on a sample or it does not; floating point noise is smaller
 # than this, and a relative tolerance would grow with the sample index.
