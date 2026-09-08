@@ -271,7 +271,7 @@ def _get_extents(dims_r, coords):
 
 
 def _format_coord_values(values):
-    """Format coordinate values as tick labels, one unit of precision for all."""
+    """Format coordinate values as tick labels, one precision for all."""
     if is_datetime64(values):
         # The coarsest unit which loses nothing, shared by every label.
         for unit in ("D", "s", "ms", "us", "ns"):
@@ -280,7 +280,16 @@ def _format_coord_values(values):
         return np.datetime_as_string(values, unit=unit)
     if is_timedelta64(values):
         values = values / np.timedelta64(1, "s")
-    return np.array([f"{x:g}" for x in values])
+    if np.issubdtype(values.dtype, np.integer):
+        return values.astype(str)
+    # Enough digits that values which differ do not read alike; the default
+    # six significant figures label 1000000 and 1000001 identically.
+    distinct = len(np.unique(values))
+    for precision in range(6, 18):
+        labels = np.array([f"{x:.{precision}g}" for x in values])
+        if len(np.unique(labels)) == distinct:
+            break
+    return labels
 
 
 def _format_index_axis(ax, dim, axis_name, values):
@@ -290,8 +299,9 @@ def _format_index_axis(ax, dim, axis_name, values):
     A coordinate which doubles back on itself (a fiber looped down a
     borehole reads 0, deepest, 0) has no single place per value, so the
     image is drawn one cell per sample and each tick names the value found
-    at that sample. Ticks sit on whole samples so every label is a value the
-    coordinate holds, and a tick beyond the samples gets no label.
+    at that sample. Only a tick on a sample can be labeled, so a tick
+    between or beyond the samples is left bare rather than named for a
+    neighbor whose value it does not carry.
     """
     labels = _format_coord_values(values)
     if is_datetime64(values):
@@ -299,11 +309,15 @@ def _format_index_axis(ax, dim, axis_name, values):
         getattr(ax, f"set_{axis_name}label")(string.capwords(str(dim)))
 
     def _label(x, _pos=None):
-        i = int(np.round(x))
-        return labels[i] if 0 <= i < len(labels) else ""
+        index = np.round(x)
+        if not np.isclose(x, index) or not 0 <= index < len(labels):
+            return ""
+        return labels[int(index)]
 
     axis = getattr(ax, f"{axis_name}axis")
-    axis.set_major_locator(MaxNLocator(integer=True))
+    # min_n_ticks=1 keeps whole samples when a zoom leaves only one in view;
+    # the locator would otherwise fall back to fractions of a sample.
+    axis.set_major_locator(MaxNLocator(integer=True, min_n_ticks=1))
     axis.set_major_formatter(FuncFormatter(_label))
     # The value under the mouse should read the same way as the ticks.
     setattr(ax, f"format_{axis_name}data", _label)

@@ -81,3 +81,7 @@ class TestIsMonotonicAndFinite:
     def test_invalid(self, values):
         """Nonmonotonic and nonfinite values are invalid."""
         assert not is_monotonic_and_finite(values)
+
+    def test_unsigned_step_down(self):
+        """A step down in an unsigned dtype is not a step up."""
+        assert not is_monotonic_and_finite(np.array([0, 2, 1], dtype="uint16"))

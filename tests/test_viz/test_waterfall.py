@@ -233,9 +233,9 @@ class TestWaterfall:
         assert formatter(0) == "0"
         assert formatter(len(depth) - 1) == "0"
         assert formatter(np.argmax(depth)) == f"{depth.max():g}"
-        # A tick which lands between samples reads the nearest one; a tick
-        # beyond the samples reads nothing.
-        assert formatter(1.4) == f"{depth[1]:g}"
+        # Only a tick on a sample carries a value, so one between or beyond
+        # the samples is left bare.
+        assert formatter(1.4) == ""
         assert formatter(-1) == ""
         assert formatter(len(depth)) == ""
         assert ax.format_ydata(2) == f"{depth[2]:g}"
@@ -260,6 +260,38 @@ class TestWaterfall:
         folded = np.concatenate([time[:3], time[:3][::-1], time[6:]])
         ax = timedelta_patch.update_coords(time=folded).viz.waterfall(cbar=False)
         assert ax.xaxis.get_major_formatter()(4) == "1"
+
+    def test_folded_unsigned_coordinate(self, random_patch):
+        """A folded unsigned coordinate is drawn by sample, not as a mesh."""
+        size = random_patch.shape[0]
+        index = np.arange(size)
+        depth = np.minimum(index, size - 1 - index).astype("uint16")
+        patch = random_patch.update_coords(distance=depth)
+        ax = patch.viz.waterfall(cbar=False)
+        assert not any(isinstance(x, QuadMesh) for x in ax.collections)
+        assert ax.images[0].get_extent()[2:] == pytest.approx((-0.5, size - 0.5))
+
+    def test_folded_labels_keep_values_apart(self, random_patch):
+        """Values which differ read differently, however large they are."""
+        size = random_patch.shape[0]
+        index = np.arange(size)
+        depth = 1e6 + np.minimum(index, size - 1 - index)
+        ax = random_patch.update_coords(distance=depth).viz.waterfall(cbar=False)
+        formatter = ax.yaxis.get_major_formatter()
+        assert formatter(0) == "1000000"
+        assert formatter(1) == "1000001"
+
+    def test_folded_axis_zoomed_between_samples(self, folded_patch):
+        """A zoom keeps ticks on samples, and labels none which lands off one."""
+        ax = folded_patch.viz.waterfall(cbar=False)
+        ax.set_ylim(0.7, 1.3)
+        ax.get_figure().canvas.draw()
+        ticks = ax.get_yticks()
+        assert np.allclose(ticks, np.round(ticks))
+        # Zoomed within one cell there is no sample to name.
+        ax.set_ylim(1.2, 1.4)
+        ax.get_figure().canvas.draw()
+        assert not any(x.get_text() for x in ax.get_yticklabels())
 
     def test_folded_axis_with_label_coord(self, folded_patch):
         """Label bars still land on the image cells of a folded axis."""

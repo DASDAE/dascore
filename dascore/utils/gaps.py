@@ -28,8 +28,10 @@ def is_monotonic_and_finite(values) -> bool:
     values = _normalize_coord_values(values)
     if not np.all(np.isfinite(values)):
         return False
-    diffs = _to_numeric(np.diff(values))
-    return bool(not len(diffs) or np.all(diffs > 0) or np.all(diffs < 0))
+    # Adjacent values are compared rather than differenced: an unsigned
+    # dtype wraps on the subtraction, so a step down reads as a step up.
+    ahead, behind = values[1:], values[:-1]
+    return bool(not len(ahead) or np.all(ahead > behind) or np.all(ahead < behind))
 
 
 def get_gap_edges(values, gap_factor: float | None = None):
