@@ -293,6 +293,37 @@ class TestWaterfall:
         ax.get_figure().canvas.draw()
         assert not any(x.get_text() for x in ax.get_yticklabels())
 
+    def test_folded_labels_at_a_large_index(self, random_patch):
+        """A position off a sample is bare however far along the axis it is."""
+        size = random_patch.shape[0]
+        index = np.arange(size)
+        depth = 1e5 + np.minimum(index, size - 1 - index)
+        ax = random_patch.update_coords(distance=depth).viz.waterfall(cbar=False)
+        formatter = ax.yaxis.get_major_formatter()
+        assert formatter(1) == "100001"
+        assert formatter(1.4) == ""
+
+    def test_constant_coordinate(self, random_patch):
+        """A coordinate which never changes labels every sample alike."""
+        depth = np.full(random_patch.shape[0], 5.0)
+        ax = random_patch.update_coords(distance=depth).viz.waterfall(cbar=False)
+        assert ax.yaxis.get_major_formatter()(2) == "5"
+
+    def test_index_formatting_cleared_on_a_reused_axes(
+        self, folded_patch, random_patch
+    ):
+        """An axes drawn on twice labels the coordinate it holds now."""
+        size = random_patch.shape[0]
+        spread = random_patch.update_coords(distance=np.arange(size) * 100.0)
+        _, ax = plt.subplots()
+        folded_patch.viz.waterfall(ax=ax, cbar=False)
+        spread.viz.waterfall(ax=ax, cbar=False)
+        ax.get_figure().canvas.draw()
+        assert any(x.get_text() for x in ax.get_yticklabels())
+        # A distance past the sample count reads as itself, where the folded
+        # plot's labels had no sample there to name.
+        assert "3000" in ax.format_ydata(3000)
+
     def test_folded_axis_with_label_coord(self, folded_patch):
         """Label bars still land on the image cells of a folded axis."""
         zone = np.where(np.arange(folded_patch.shape[0]) < 10, "top", "rest")

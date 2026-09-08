@@ -15,6 +15,7 @@ from dascore.utils.gaps import get_gap_edges, is_monotonic_and_finite
 from dascore.utils.patch import patch_function
 from dascore.utils.plotting import (
     _add_colorbar,
+    _clear_index_axis,
     _format_index_axis,
     _format_time_axis,
     _get_ax,
@@ -76,8 +77,10 @@ def _format_axis_labels(ax, patch, dims_r, index_dims):
         dtype = patch.get_coord(dim).dtype
         if dim in index_dims:
             _format_index_axis(ax, dim, x, patch.coords.get_array(dim))
-        elif is_datetime64(dtype):
-            _format_time_axis(ax, dim, x)
+        else:
+            _clear_index_axis(ax, x)
+            if is_datetime64(dtype):
+                _format_time_axis(ax, dim, x)
         if x == "y":
             _maybe_invert_yaxis(ax, patch, dim)
 

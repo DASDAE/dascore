@@ -8,13 +8,23 @@ import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-from matplotlib.ticker import FuncFormatter, MaxNLocator
+from matplotlib.ticker import (
+    AutoLocator,
+    FuncFormatter,
+    MaxNLocator,
+    ScalarFormatter,
+)
 
 from dascore.exceptions import ParameterError
 from dascore.units import Hz, get_quantity_str, maybe_convert_percent_to_fraction
 from dascore.units import s as seconds
 from dascore.utils.misc import suppress_warnings, tukey_fence
-from dascore.utils.time import dtype_time_like, is_datetime64, is_timedelta64
+from dascore.utils.time import (
+    dtype_time_like,
+    is_datetime64,
+    is_timedelta64,
+    to_float,
+)
 
 
 def _get_dim_label(patch, dim):
@@ -270,26 +280,52 @@ def _get_extents(dims_r, coords):
     return out
 
 
-def _format_coord_values(values):
-    """Format coordinate values as tick labels, one precision for all."""
+# Six significant figures, as "g" formatting uses by default.
+_MIN_LABEL_DIGITS = 6
+# The most digits a double carries, so the search for enough of them ends.
+_MAX_LABEL_DIGITS = 17
+# A tick lands on a sample or it does not; floating point noise is smaller
+# than this, and a relative tolerance would grow with the sample index.
+_SAMPLE_TOLERANCE = 1e-8
+
+
+class _IndexFormatter(FuncFormatter):
+    """Formatter for an axis drawn by sample index rather than by value."""
+
+
+def _label_digits(values):
+    """Digits enough that the closest pair of values do not read alike."""
+    distinct = np.unique(values)
+    gaps = np.diff(distinct)
+    largest = np.max(np.abs(values)) if len(values) else 0
+    if not len(gaps) or not largest:
+        return _MIN_LABEL_DIGITS
+    # The leading digit of the largest value down to the smallest gap.
+    digits = int(np.ceil(np.log10(largest / np.min(gaps)))) + 1
+    return int(np.clip(digits, _MIN_LABEL_DIGITS, _MAX_LABEL_DIGITS))
+
+
+def _coord_labeler(values):
+    """
+    Return the values to label and a function formatting one of them.
+
+    A label is made when a tick asks for it: a coordinate can hold millions
+    of samples while an axis shows a handful of ticks.
+    """
     if is_datetime64(values):
         # The coarsest unit which loses nothing, shared by every label.
         for unit in ("D", "s", "ms", "us", "ns"):
             if np.all(values.astype(f"datetime64[{unit}]") == values):
                 break
-        return np.datetime_as_string(values, unit=unit)
+        return values, lambda value: np.datetime_as_string(value, unit=unit)
     if is_timedelta64(values):
-        values = values / np.timedelta64(1, "s")
+        values = to_float(values)
     if np.issubdtype(values.dtype, np.integer):
-        return values.astype(str)
-    # Enough digits that values which differ do not read alike; the default
-    # six significant figures label 1000000 and 1000001 identically.
-    distinct = len(np.unique(values))
-    for precision in range(6, 18):
-        labels = np.array([f"{x:.{precision}g}" for x in values])
-        if len(np.unique(labels)) == distinct:
-            break
-    return labels
+        return values, str
+    # Values far from zero need more than the six significant figures "g"
+    # gives by default, which labels 1000000 and 1000001 identically.
+    digits = _label_digits(values)
+    return values, lambda value: f"{value:.{digits}g}"
 
 
 def _format_index_axis(ax, dim, axis_name, values):
@@ -303,24 +339,41 @@ def _format_index_axis(ax, dim, axis_name, values):
     between or beyond the samples is left bare rather than named for a
     neighbor whose value it does not carry.
     """
-    labels = _format_coord_values(values)
     if is_datetime64(values):
         # Dates carry their unit in the labels, as the time axis does.
         getattr(ax, f"set_{axis_name}label")(string.capwords(str(dim)))
+    values, label_value = _coord_labeler(values)
+    size = len(values)
 
     def _label(x, _pos=None):
         index = np.round(x)
-        if not np.isclose(x, index) or not 0 <= index < len(labels):
+        if abs(x - index) > _SAMPLE_TOLERANCE or not 0 <= index < size:
             return ""
-        return labels[int(index)]
+        return label_value(values[int(index)])
 
     axis = getattr(ax, f"{axis_name}axis")
     # min_n_ticks=1 keeps whole samples when a zoom leaves only one in view;
     # the locator would otherwise fall back to fractions of a sample.
     axis.set_major_locator(MaxNLocator(integer=True, min_n_ticks=1))
-    axis.set_major_formatter(FuncFormatter(_label))
+    axis.set_major_formatter(_IndexFormatter(_label))
     # The value under the mouse should read the same way as the ticks.
     setattr(ax, f"format_{axis_name}data", _label)
+
+
+def _clear_index_axis(ax, axis_name):
+    """
+    Undo index formatting an earlier plot left on an axis.
+
+    An axis passed to two plots in turn shows the second one's coordinate,
+    whose values are not the sample numbers the first one's labels were
+    read from.
+    """
+    axis = getattr(ax, f"{axis_name}axis")
+    if not isinstance(axis.get_major_formatter(), _IndexFormatter):
+        return
+    axis.set_major_locator(AutoLocator())
+    axis.set_major_formatter(ScalarFormatter())
+    ax.__dict__.pop(f"format_{axis_name}data", None)
 
 
 def _format_time_axis(ax, dim, axis_name):
