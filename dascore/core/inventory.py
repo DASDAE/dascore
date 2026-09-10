@@ -648,7 +648,7 @@ class Geometry(InventoryModel):
     defines a half-open coverage span. Each named column supplies one value per
     distance. CRS axis columns use CRS units; other numeric columns declare their
     own units. Interpolation is linear within segments and undefined outside them.
-    Overlapping segments are allowed when they describe different columns.
+    Overlapping segments must describe different columns and share the same name.
 
     Examples
     --------
