@@ -16,6 +16,7 @@ from dascore.compat import UPath
 from dascore.core import get_coord, get_coord_manager
 from dascore.io import ScanPayload
 from dascore.io.core import make_scan_payload
+from dascore.io.utils import step_from_rate
 from dascore.models import DateTime64
 from dascore.utils.misc import iterate
 from dascore.utils.pd import adjust_segments, filter_df
@@ -93,7 +94,7 @@ def _make_distance_coord(metadata: XMLBinaryInfo):
 
 def _make_time_coord(file_start_times, metadata: XMLBinaryInfo):
     """Create time coord for each file."""
-    dt = dc.to_timedelta64(1.0 / metadata.output_temporal_sampling_rate)
+    dt = step_from_rate(metadata.output_temporal_sampling_rate)
     nt = metadata.number_of_frames
     for start in file_start_times:
         yield get_coord(start=start, step=dt, shape=(nt,), units="s")

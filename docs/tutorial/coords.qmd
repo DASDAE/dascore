@@ -42,6 +42,25 @@ Coordinates expose values, units, data type, ordering, sampling regularity, limi
 | `units` | Physical units, if present |
 | `degenerate` | Whether the coordinate is empty or zero-dimensional |
 | `min()`, `max()` | Coordinate limits |
+| `step_exact` | The spacing as an exact `Fraction` (seconds for time), or `None` for float coordinates |
+
+### Exact sampling rates
+
+Time and integer ranges keep their spacing exactly. A step may be given as a `Fraction` or a `(numerator, denominator)` tuple in the coordinate's units, so a 1024 Hz recording is `(1, 1024)` seconds rather than a step rounded to 976562 nanoseconds, which would drift by 1.8 ms an hour. Every label is the nearest tick to its position on the exact grid, and slicing, striding, reversing, and selecting all stay on that grid. `step` still reports the nearest whole-tick spacing for code that expects one.
+
+```{python}
+from fractions import Fraction
+
+t0 = np.datetime64("2020-01-01T00:00:00")
+time = get_coord(start=t0, step=(1, 1024), shape=(3_686_400,))
+
+assert time.step_exact == Fraction(1, 1024)
+assert time[::2].step_exact == Fraction(1, 512)
+assert time.stop == t0 + np.timedelta64(1, "h")
+assert time.step == np.timedelta64(976562, "ns")
+```
+
+Float coordinates have no tick to be exact against, so a fraction step on one raises and their `step_exact` is `None`.
 
 ## Segmented coordinates
 

@@ -116,7 +116,7 @@ def _get_coords(fi):
 
     # Get time array from SEGY headers
     starttime = _get_time_from_header(header_0)
-    dt = dc.to_timedelta64(header_0[trace_field.TRACE_SAMPLE_INTERVAL] / 1_000_000)
+    dt = np.timedelta64(int(header_0[trace_field.TRACE_SAMPLE_INTERVAL]), "us")
     ns = header_0[trace_field.TRACE_SAMPLE_COUNT]
     time_array = starttime + dt * np.arange(ns)
 

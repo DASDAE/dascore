@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import struct
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from fractions import Fraction
 from itertools import groupby
 from math import ceil, floor
@@ -70,11 +70,19 @@ class _TraceInfo:
     encoding: str
     publication_version: int
     record_length: int
+    # Where the ideal first sample sits after start_ns, in units of the
+    # step's nanosecond denominator; non-zero only after an exact trim.
+    origin_offset: int = field(default=0, kw_only=True)
 
     @property
     def sample_step_ns(self) -> int:
         """Return the sample spacing in nanoseconds."""
         return _duration_ns(self.sample_rate)
+
+    @property
+    def sample_step(self) -> Fraction:
+        """Return the exact sample spacing in seconds."""
+        return _duration_seconds(self.sample_rate)
 
     @property
     def next_start_ns(self) -> int:
@@ -111,6 +119,7 @@ class _TraceGroupKey:
     start_ns: int
     sample_rate: float
     sample_count: int
+    origin_offset: int = 0
 
 
 @dataclass(frozen=True)
@@ -123,16 +132,34 @@ class _PreparedGroup(Generic[_T]):
     attrs: dict
 
 
-def _duration_ns(sample_rate: float, sample_count: int = 1) -> int:
-    """Convert a sample count and MiniSEED sample rate to nanoseconds."""
+def _duration_seconds(sample_rate: float, sample_count: int = 1) -> Fraction:
+    """Convert a sample count and MiniSEED sample rate to exact seconds."""
     if sample_rate == 0:
         msg = "MiniSEED sample rate cannot be zero."
         raise ValueError(msg)
     # MiniSEED negative sample rates encode the sample period in seconds.
     rate = Fraction(str(sample_rate))
     samples = Fraction(sample_count, 1)
-    seconds = samples / rate if rate > 0 else samples * abs(rate)
-    return round(seconds * ONE_BILLION)
+    return samples / rate if rate > 0 else samples * abs(rate)
+
+
+def _continues(expected_start_ns: int, start_ns: int, sample_rate: float) -> bool:
+    """
+    Whether a record starting at start_ns continues a trace.
+
+    When the sample spacing is not a whole number of nanoseconds, a record's
+    start time is the writer's rounding of a fractional time and may differ
+    from the expected start by one nanosecond either way (1009 samples at
+    1024 Hz end at .5 ns). On a whole-nanosecond grid a nanosecond is a gap.
+    """
+    exact = (_duration_seconds(sample_rate) * ONE_BILLION).denominator == 1
+    tolerance = 0 if exact else 1
+    return abs(expected_start_ns - start_ns) <= tolerance
+
+
+def _duration_ns(sample_rate: float, sample_count: int = 1) -> int:
+    """Convert a sample count and MiniSEED sample rate to nanoseconds."""
+    return round(_duration_seconds(sample_rate, sample_count) * ONE_BILLION)
 
 
 def _get_time_limits(time=None) -> _TimeLimits:
@@ -256,20 +283,25 @@ def _trim_segment_time(
     start, stop = time_limits
     if start is None and stop is None:
         return segment
-    step = segment.sample_step_ns
-    start_index = (
-        0 if start is None else max(0, ceil((start - segment.start_ns) / step))
-    )
+    # Exact nanosecond arithmetic, so a 1024 Hz trace trimmed at a whole
+    # second keeps the sample on that second, and the trimmed origin stays
+    # on the trace's grid.
+    step = segment.sample_step * ONE_BILLION
+    origin = segment.start_ns + Fraction(segment.origin_offset, step.denominator)
+    start_index = 0 if start is None else max(0, ceil((start - origin) / step))
     stop_index = (
         segment.sample_count
         if stop is None
-        else min(segment.sample_count, floor((stop - segment.start_ns) / step) + 1)
+        else min(segment.sample_count, floor((stop - origin) / step) + 1)
     )
     if stop_index <= start_index:
         return None
+    new_origin = origin + start_index * step
+    start_ns = floor(new_origin)
     return replace(
         segment,
-        start_ns=segment.start_ns + start_index * step,
+        start_ns=start_ns,
+        origin_offset=int((new_origin - start_ns) * step.denominator),
         sample_count=stop_index - start_index,
         data=segment.data[start_index:stop_index].copy(),
     )
@@ -335,8 +367,11 @@ def _coalesce_source_segments(segments: list[_TraceSegment]) -> list[_TraceSegme
             can_merge = (
                 pending.sample_rate == seg.sample_rate
                 and pending.format_version == seg.format_version
-                and pending.start_ns + _duration_ns(pending.sample_rate, sample_count)
-                == seg.start_ns
+                and _continues(
+                    pending.start_ns + _duration_ns(pending.sample_rate, sample_count),
+                    seg.start_ns,
+                    pending.sample_rate,
+                )
                 and pending.data.dtype == seg.data.dtype
                 and pending.encoding == seg.encoding
             )
@@ -362,7 +397,7 @@ def _coalesce_source_summaries(summaries: list[_TraceSummary]) -> list[_TraceSum
         return (
             pending.sample_rate == summary.sample_rate
             and pending.format_version == summary.format_version
-            and pending.next_start_ns == summary.start_ns
+            and _continues(pending.next_start_ns, summary.start_ns, pending.sample_rate)
             and pending.dtype == summary.dtype
             and pending.encoding == summary.encoding
         )
@@ -417,6 +452,7 @@ def _get_group_key(segment: _TraceInfo) -> _TraceGroupKey:
         start_ns=segment.start_ns,
         sample_rate=segment.sample_rate,
         sample_count=segment.sample_count,
+        origin_offset=segment.origin_offset,
     )
 
 
@@ -493,11 +529,15 @@ def _get_coords(
         if channel_map is not None
         else tuple(range(len(segments)))
     )
-    step = np.timedelta64(first.sample_step_ns, "ns")
     start = np.datetime64(first.start_ns, "ns")
     return {
         "channel": get_coord(data=np.asarray(channel_values)),
-        "time": get_coord(start=start, step=step, shape=(sample_count,)),
+        "time": get_coord(
+            start=start,
+            step=first.sample_step,
+            shape=(sample_count,),
+            origin_offset=first.origin_offset,
+        ),
         "source_id": (("channel",), source_ids),
         "network": (("channel",), tuple(x.network for x in segments)),
         "station": (("channel",), tuple(x.station for x in segments)),

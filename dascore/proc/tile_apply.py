@@ -41,7 +41,6 @@ from dascore.utils.signal import (
     get_window_nd,
 )
 from dascore.utils.tiles import get_tile_plan
-from dascore.utils.time import is_datetime64, is_timedelta64, to_float
 from dascore.utils.window import Window, resolve_window
 from dascore.workflow.meta import PatchMeta
 from dascore.workflow.processor import PatchProcessor, register_implementation
@@ -62,12 +61,10 @@ def _offset_values(coord, offsets: np.ndarray):
     Return coordinate values `offsets` samples from the coordinate's first sample.
 
     From the first sample, not the minimum: a descending coordinate steps
-    down from where it starts.
+    down from where it starts. Only a range has a step, so only a range
+    gets here.
     """
-    first, step = coord.values[0], coord.step
-    if is_datetime64(coord.dtype) or is_timedelta64(coord.dtype):
-        return first + dc.to_timedelta64(offsets * to_float(step))
-    return first + offsets * step
+    return coord._labels(offsets)
 
 
 def _engine_for(engine: str, func) -> str:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 import time
+import unicodedata
 from decimal import Decimal
 from fractions import Fraction
 from html import unescape
@@ -896,9 +897,11 @@ class TestRateText:
         What is printed is rounded to the figures it was chosen at.
 
         A day step is 11.57 µHz; the shortest exact form of the float
-        behind it is 11.569999999999999.
+        behind it is 11.569999999999999. The micro prefix is compared after
+        NFKC normalization: pint 0.26 prints the Greek mu, 0.25 the micro sign.
         """
-        assert "11.57 µHz" in str(rate_text(np.timedelta64(1, "D")))
+        text = unicodedata.normalize("NFKC", str(rate_text(np.timedelta64(1, "D"))))
+        assert "11.57 μHz" in text
 
     def test_a_rate_never_reads_in_exponent_notation(self):
         """250 Hz needs two figures, and `g` prints those as 2.5e+02."""

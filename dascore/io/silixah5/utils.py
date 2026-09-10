@@ -11,6 +11,7 @@ from dascore.io.utils import (
     convert_attr_units,
     drop_blank_attrs,
     get_attr_names,
+    step_from_rate,
 )
 from dascore.utils.misc import maybe_get_items
 
@@ -75,8 +76,7 @@ def _get_time_coord(attr_dict, shape):
     gps_time = _read_time_string(attr_dict["gps_timestamp"])
     cpu_time = _read_time_string(attr_dict["cpu_timestamp"])
     time_min = cpu_time if pd.isnull(gps_time) else gps_time
-    sampling_rate = 1.0 / float(attr_dict["sampling_frequency"])
-    step = dc.to_timedelta64(sampling_rate)
+    step = step_from_rate(float(attr_dict["sampling_frequency"]))
     length = shape[0]
     coord = get_coord(start=time_min, step=step, shape=(length,))
     return coord
@@ -191,7 +191,7 @@ def _get_carina_time_coord(attrs_dict, n_time):
         msg = f"Silixa Carina file has an unusable Samplerate attr ({rate})."
         raise InvalidFiberFileError(msg)
     start = dc.to_datetime64(np.datetime64(start_us, "us"))
-    return get_coord(start=start, step=dc.to_timedelta64(1 / rate), shape=(n_time,))
+    return get_coord(start=start, step=step_from_rate(rate), shape=(n_time,))
 
 
 def _get_carina_distance_coord(attrs_dict, resource, n_columns):

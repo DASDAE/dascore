@@ -160,8 +160,22 @@ def _save_coords(patch, patch_group):
         patch_group.attrs[save_name] = ",".join(dims)
 
 
+def _check_storable(patch):
+    """Refuse a patch this format cannot store, before touching the file."""
+    for name, coord in patch.coords.coord_map.items():
+        if getattr(coord, "step_denominator", None) not in (None, 1):
+            # This format stores one whole-tick step and rebuilds the range
+            # from it, which would quietly move every label off its grid.
+            msg = (
+                f"Coordinate {name!r} has a fractional step "
+                f"({coord.step_exact}) which DASDAE format 1 cannot store."
+            )
+            raise NotImplementedError(msg)
+
+
 def _save_patch(patch, wave_group, name):
     """Save the patch to disk."""
+    _check_storable(patch)
     if name in wave_group:
         # Replace the entire patch group so stale datasets/attrs can't survive.
         del wave_group[name]

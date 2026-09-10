@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import warnings
 from collections.abc import Iterable, Mapping, Sequence
+from fractions import Fraction
 from typing import Any, cast
 
 import numpy as np
@@ -33,6 +34,7 @@ from dascore.utils.misc import (
     is_strictly_monotonic,
     unbyte,
 )
+from dascore.utils.time import to_exact_fraction
 
 # Stored coordinate arrays often carry sub-step jitter (e.g. GPS-stamped DAS
 # time). ``CoordSegmented.from_array`` treats every isolated sampling change as
@@ -340,3 +342,33 @@ def _is_over_segmented(values) -> bool:
     in_run[:-1] |= eq_next
     segment_count = int(np.count_nonzero(~in_run)) + 1
     return segment_count > _MAX_SEGMENT_FRACTION * len(values)
+
+
+def step_from_rate(rate) -> Fraction | np.timedelta64:
+    """
+    The time step a file states as a sampling rate in Hz.
+
+    A rate that is a simple number (1024.0, 3000.0, 62.5, 999.9) gives an
+    exact `Fraction` step in seconds, which `get_coord` keeps on its grid;
+    any other rate gives the nearest nanosecond timedelta, as before. A
+    float32 rate recovers only the values it holds exactly, which is the
+    honest reading of it.
+    """
+    frac = to_exact_fraction(rate)
+    if frac is not None and frac > 0:
+        return 1 / frac
+    return dc.to_timedelta64(1 / float(rate))
+
+
+def step_from_interval(seconds) -> Fraction | np.timedelta64:
+    """
+    The time step a file states as a sample interval in seconds.
+
+    The exact `Fraction` when the interval is a simple fraction (``1 /
+    3000``, ``0.004``), otherwise the nearest nanosecond timedelta, as
+    before.
+    """
+    frac = to_exact_fraction(seconds)
+    if frac is not None and frac > 0:
+        return frac
+    return dc.to_timedelta64(float(seconds))

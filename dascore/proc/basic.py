@@ -19,7 +19,7 @@ from dascore.core.coordmanager import (
     CoordManagerInput,
     get_coord_manager,
 )
-from dascore.core.coords import get_coord
+from dascore.core.coords import CoordRange, get_coord
 from dascore.exceptions import ParameterError
 from dascore.models import ArrayLike
 from dascore.units import Quantity, get_quantity
@@ -1037,13 +1037,11 @@ def pad(
         # an integer coordinate to hold a NaN nothing is going to write.
         if not any(pad_tuple):
             return coord
-        if expand_coords and coord.evenly_sampled:
-            new_start = coord.min() - pad_tuple[0] * coord.step
-            new_end = coord.max() + (pad_tuple[1] + 1) * coord.step
-            assert coord.evenly_sampled, "expand_coords requires evenly sampled."
-            new_coord = get_coord(
-                start=new_start, stop=new_end, step=coord.step, units=coord.units
-            )
+        if expand_coords and isinstance(coord, CoordRange):
+            # Extend the grid itself: rebuilding from the rounded step would
+            # move every label of a fractional grid.
+            total = len(coord) + pad_tuple[0] + pad_tuple[1]
+            new_coord = coord._sliced(-pad_tuple[0], 1, total)
         else:
             old_values = coord.values
             # Need to convert ints to float so NaN can be used.
