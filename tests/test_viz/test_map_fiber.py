@@ -116,7 +116,7 @@ class TestPlotMap:
         assert len(ax.figure.get_children()) == 2
 
     def test_units(self, random_patch_with_lat_lon):
-        """Test that units show up in labels."""
+        """Show units in labels."""
         # standard units
 
         pa = random_patch_with_lat_lon.set_units(distance="m/s")

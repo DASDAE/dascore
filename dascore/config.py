@@ -31,8 +31,7 @@ class DascoreConfig(BaseModel):
     model_config = ConfigDict(
         frozen=True,
         validate_default=True,
-        # Reject unknown fields so misspelled overrides raise rather than
-        # silently doing nothing.
+        # Reject misspelled overrides.
         extra="forbid",
     )
 
@@ -114,11 +113,8 @@ class DascoreConfig(BaseModel):
             "acquisition_key",
             "data_category",
             "tag",
-            # Legacy: these are not patch attrs any more, but archives
-            # predating acquisition_key partition by them and a name
-            # missing from a spool is ignored. Grouping too finely only
-            # leaves patches unmerged; too coarsely merges patches which
-            # describe different places.
+            # Preserve grouping for archives predating acquisition_key.
+            # Names absent from a spool are ignored.
             "network",
             "station",
         ),
@@ -231,10 +227,8 @@ class DascoreConfig(BaseModel):
         return Path(value).expanduser()
 
 
-# Runtime configuration has two tiers. `_GLOBAL_CONFIG` is the process-wide
-# base, visible from every thread and task; `set_config(...)` swaps it. Scoped
-# overrides from `config_context(...)` live in a ContextVar so concurrent
-# blocks stay isolated per thread/task and never clobber one another.
+# set_config swaps the process-wide base; config_context uses a ContextVar
+# for isolated thread/task overrides.
 _GLOBAL_CONFIG: DascoreConfig = DascoreConfig()
 _GLOBAL_CONFIG_LOCK = Lock()
 _CONFIG_OVERRIDE: ContextVar[DascoreConfig | None] = ContextVar(
@@ -313,9 +307,8 @@ def set_config(new_config: DascoreConfig | None = None, **kwargs) -> DascoreConf
 
     Notes
     -----
-    This is a permanent change to the process-wide base (it is not restored
-    automatically). For a temporary, thread/task-local override that restores
-    on exit, use [`config_context`](`dascore.config.config_context`) instead.
+    Changes persist until reset. Use [`config_context`](`dascore.config.config_context`)
+    for temporary thread/task-local overrides.
 
     Examples
     --------
@@ -349,14 +342,10 @@ def config_context(
 
     Notes
     -----
-    The override is stored in a ``ContextVar``, so it is isolated per thread and
-    task and restored when the block exits. Whether a newly started OS thread
-    inherits a copy of the override is runtime-dependent
-    (``sys.flags.thread_inherit_context`` -- normally enabled on free-threaded
-    builds and disabled otherwise); an inherited copy is not undone by this
-    block's exit. For deterministic propagation, capture
-    ``contextvars.copy_context()`` and run the worker with it, or rely on APIs
-    that bind the config for you such as
+    Overrides use a ``ContextVar`` and restore on exit. New OS threads inherit a copy
+    according to ``sys.flags.thread_inherit_context`` (normally enabled on free-threaded
+    builds); exiting this block does not restore inherited copies. For deterministic
+    propagation, run workers with ``contextvars.copy_context()`` or use
     [`Spool.map`](`dascore.core.spool.Spool.map`).
 
     Examples

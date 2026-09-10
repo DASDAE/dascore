@@ -582,13 +582,10 @@ class TestObjectTypeSerialization:
 
     def test_a_union_member_writes_its_own_tag(self, clean_registry):
         """
-        The nine union members declare the tag as a real field.
+        Union members retain their declared tag for Pydantic dispatch.
 
-        Pydantic must pick a class before an object exists, so their tag
-        cannot be a serializer concern. The base class must leave the value
-        alone rather than overwrite it with the registry's name for the
-        class: the two differ for a subclass declared out of tree, and the
-        closed Literal would refuse to read the registry's spelling back.
+        An external subclass has a different registry name that its inherited Literal
+        cannot read back.
         """
         dumped = json.loads(Cable(resource_id="c1").model_dump_json())
         assert dumped[registry.TAG_FIELD] == "Cable"

@@ -1,18 +1,8 @@
 """
-Tests for scripts/build_notebooks.py, which renders the tutorial pages into
-the notebooks the JupyterLite site serves.
+Test notebook links, Pyodide kernelspecs, and mirrored data paths.
 
-Scoped to the ways this build breaks *silently* -- a notebook that renders,
-deploys and passes CI, then fails in a reader's browser. A mis-rewritten link
-404s, the wrong kernelspec leaves the notebook unable to start, and mirroring
-the data to a path pooch does not look in sends everyone back to downloading
-it. None of those turn anything red on their own.
-
-Failures that already announce themselves are deliberately not covered here:
-a broken mermaid substitution makes quarto exit with "Chrome not found", an
-unknown data file makes pooch raise on the registry lookup, and a tutorial
-importing something the browser lacks fails the doc examples that
-test_wasm.yml runs under Pyodide.
+These can break in the browser despite a successful build. Build failures and
+unavailable browser imports are covered by Quarto, pooch, and Pyodide doc tests.
 """
 
 from __future__ import annotations

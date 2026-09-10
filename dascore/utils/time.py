@@ -149,7 +149,7 @@ def _string_array_to_datetime64(arr: pd.arrays.StringArray):
 
 @to_datetime64.register(np.datetime64)
 def _pass_datetime(datetime):
-    """Simply return the datetime."""
+    """Return the datetime unchanged."""
     return np.datetime64(datetime, "ns")
 
 
@@ -243,7 +243,7 @@ def _float_to_timedelta64(num: float | int) -> np.timedelta64:
 
 @to_timedelta64.register(np.timedelta64)
 def _pass_time_delta(time_delta):
-    """Simply return the time delta as ns precision."""
+    """Return the timedelta at nanosecond precision."""
     return time_delta.astype("<m8[ns]")
 
 
@@ -299,7 +299,7 @@ def _string_array_to_timedelta64(arr: pd.arrays.StringArray):
 
 @to_timedelta64.register(pd.Timedelta)
 def _unpack_pandas_time_delta(time_delta: pd.Timedelta):
-    """Simply return the time delta."""
+    """Return the timedelta unchanged."""
     return time_delta.to_numpy()
 
 
@@ -311,7 +311,7 @@ def _timedelta_to_timedelta64(td):
 
 @to_timedelta64.register(str)
 def _time_delta_from_str(time_delta_str: str):
-    """Simply return the time delta."""
+    """Return the timedelta unchanged."""
     match time_delta_str.split():
         # Can split string into (hopefully) units and values. Standard case.
         case [val, units]:
@@ -366,7 +366,7 @@ def _array_to_int(array: np.ndarray) -> np.ndarray:
 @_to_int.register(datetime)
 @_to_int.register(pd.Timestamp)
 def _time_to_int(datetime):
-    """Simply return the datetime converted to ns."""
+    """Return the datetime at nanosecond precision."""
     return to_int([to_datetime64(datetime)])[0]
 
 
@@ -475,7 +475,7 @@ def _series_to_float(series: pd.Series) -> pd.Series:
 @_to_float.register(datetime)
 @_to_float.register(pd.Timestamp)
 def _time_to_float(datetime):
-    """Simply return the datetime."""
+    """Return the datetime unchanged."""
     td = to_datetime64(datetime) - _EPOCH_DATETIME64
     return to_float(td)
 

@@ -892,7 +892,7 @@ class TestGetCoord:
     """Tests for the get_coord convenience function."""
 
     def test_returns_coord(self, random_patch):
-        """Simply ensure a coordinate is returned."""
+        """Return a coordinate."""
         for dim in random_patch.dims:
             coord = random_patch.get_coord(dim)
             assert isinstance(coord, BaseCoord)

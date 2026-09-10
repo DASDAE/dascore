@@ -91,7 +91,7 @@ class TestAbs:
     """Test absolute values."""
 
     def test_no_negatives(self, random_patch):
-        """Simply ensure the data has no negatives."""
+        """The output contains no negative values."""
         # add
         data = np.array(random_patch.data)
         data[:, 0] = -2
@@ -110,7 +110,7 @@ class TestReal:
     """Test for getting real data values."""
 
     def test_real_from_complex(self, random_complex_patch):
-        """Simply ensure data are real-valued."""
+        """The output is real-valued."""
         out1 = random_complex_patch.real()
         assert np.all(out1.data == np.real(out1.data))
 

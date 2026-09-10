@@ -122,11 +122,7 @@ def pytest_collection_modifyitems(config, items):
 
 def pytest_sessionstart(session):
     """
-    Hook to run before any other tests.
-
-    Used to ensure a non-visual backend is used so plots don't pop up
-    and to set debug hook to True to avoid showing progress bars,
-    except when explicitly being tested.
+    Use a non-visual plotting backend unless running with --pdb.
     """
     # Headless everywhere rather than only under CI, so the viz tests run
     # the same way on a laptop as they do there -- except under --pdb, where
@@ -162,12 +158,9 @@ def permanent_config():
 @pytest.fixture(scope="session")
 def run_in_threads():
     """
-    Return a helper which runs func(index) in several threads at once.
+    Return a helper that starts func(index) concurrently behind a barrier.
 
-    A barrier releases every thread together, so concurrency tests do not
-    need sleeps. The timeouts turn a deadlock into a failure rather than a
-    hung test run, and anything a worker raises is re-raised here rather
-    than being printed while the test carries on with a None result.
+    Timeouts fail deadlocks; worker exceptions propagate to the caller.
     """
 
     def _run(func, count=4, timeout=60):

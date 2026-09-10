@@ -33,9 +33,7 @@ def _get_unit_registry():
         return pint.UnitRegistry(cache_folder=":auto:")
 
 
-# The pint registry is mutable (it memoizes parsed units and conversions)
-# so every helper which touches it runs under this lock. Each such helper
-# is also cached, meaning the lock is only taken on a cache miss.
+# Protect pint's mutable caches; cached helpers acquire the lock only on misses.
 _UNIT_LOCK = RLock()
 _UNIT_REGISTRY: pint.UnitRegistry | None = None
 
@@ -138,10 +136,8 @@ def get_quantity(
     """
     Convert a value to a pint quantity.
 
-    Returns None for a null-ish input: None, Ellipsis, or the empty
-    string, which is how dascore spells "carries no units". Callers doing
-    arithmetic on the result have to handle that, since an unset unit
-    reaching a multiplication is a real error rather than a typing one.
+    Returns None for None, Ellipsis, or an empty string (no units). Handle this before
+    using the result in arithmetic.
 
     Parameters
     ----------
@@ -188,10 +184,8 @@ def units_match(units1: quantity_like, units2: quantity_like) -> bool:
     """
     Return True if two unit specifications name the same units.
 
-    Written for callers which can skip work when nothing would change,
-    so it is deliberately stricter than `==` on the quantities: 1 m and
-    100 cm compare equal but converting between them is real work, and
-    the spellings they leave behind differ.
+    Stricter than quantity equality: 1 m and 100 cm compare equal but require conversion
+    and retain different unit spellings.
 
     Parameters
     ----------
@@ -238,13 +232,9 @@ def convert_units(
     Parameters
     ----------
     data
-        The data to convert. Anything supporting `*` and `+` works, as does
-        a Quantity. Deliberately not a narrower annotation: the return type
-        follows the input rather than matching it (an int in yields a float
-        out) and callers legitimately pass values the checker only knows as
-        `object`. Note that data is returned untouched whenever from_units
-        is None or already names to_units, so None survives those paths but
-        raises a TypeError once there are real factors to apply.
+        Data supporting `*` and `+`, including a Quantity. Conversion may change its
+        type (e.g., int to float). Returned unchanged when from_units is None or matches
+        to_units; otherwise None raises TypeError.
     to_units
         The desired units after the conversion
     from_units
@@ -572,11 +562,8 @@ def get_byte_count(value: Quantity) -> float:
 
     Notes
     -----
-    This is the only correct way to get a byte count from a quantity.
-    In particular [`to_float`](`dascore.utils.time.to_float`) is not:
-    pint converts a dimensionless quantity to its base units, which for
-    information is *bits*, so anything routing a size through a plain
-    `float()` conversion is eight times too large.
+    Use this instead of [`to_float`](`dascore.utils.time.to_float`) or `float()`, which
+    return pint's base unit of bits: eight times the byte count.
 
     Examples
     --------
@@ -645,19 +632,9 @@ def maybe_convert_percent_to_fraction(obj):
 
 def __getattr__(name: str) -> Quantity:
     """
-    Allows arbitrary units (quantities) to be imported from this module.
+    Allow unit imports: `from dascore.units import m` returns `get_quantity("m")`.
 
-    For example:
-    from dascore.units import m
-
-    is the same as
-    from dascore.units import get_quantity
-    m = get_quantity("m")
-
-    Any non-empty name either resolves to a quantity or raises
-    UndefinedUnitError, so the cast holds. The empty string is the one input
-    get_quantity maps to None, and attribute access is the right place to
-    reject it.
+    Unknown names raise UndefinedUnitError; an empty name raises AttributeError.
     """
     if not name:
         raise AttributeError(name)

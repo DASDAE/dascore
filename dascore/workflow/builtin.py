@@ -1,14 +1,8 @@
-"""
-The operations DASCore performs which are not patch functions.
+"""Tasks for DASCore operations that are not patch functions.
 
-Concatenating, stacking and applying a ufunc are things done to patches,
-but none of them is written as a `@patch_function`, so none has an `op`.
-They still have to be named and fingerprinted, because they are what
-advances a patch's `processing_id` -- hence one small `Task` each.
-
-Anything which *is* a patch function needs nothing here:
-[`PatchOp`](`dascore.workflow.processor.PatchOp`) already names it, which
-is why there is no `Select` in this module.
+Concatenation, stacking, and ufunc application need stable names and
+fingerprints to advance a patch's ``processing_id``. Patch functions use
+[`PatchOp`](`dascore.workflow.processor.PatchOp`) instead.
 
 Examples
 --------

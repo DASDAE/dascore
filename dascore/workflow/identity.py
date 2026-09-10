@@ -1,23 +1,13 @@
-"""
-What a patch is, and what was done to it.
+"""Create and advance patch identity values.
 
-Two ids answer two different questions, and they move independently:
+``patch_id`` identifies source data. It survives operations that preserve what
+the data describe and changes when multiple sources are combined.
+``processing_id`` identifies the processing path and advances by folding each
+operation's fingerprint into its input ID.
 
-`patch_id` says **which data**. It survives every operation which does not
-change what the data is *of* -- filtering, decimating, transposing, changing
-units -- and changes only when data from more than one source is combined.
-
-`processing_id` says **what was done**. It advances on every operation, by
-folding the operation's fingerprint into the id the input carried, so that
-two patches which took the same route from the same source arrive at the
-same id and two which did not, do not.
-
-Neither is a random number after the first: they are digests of what came
-before, so the same data processed the same way gives the same
-`processing_id` on another machine, in another process, next year. That
-holds for `patch_id` too once a patch read from a file derives its id from
-the source; until then one is minted for each patch built in memory, and
-is stable only within the process which built it.
+Both IDs are deterministic after source identity is established. Patches built
+directly in memory receive process-local random IDs; readers may derive stable
+IDs from source metadata or use IDs stored by the format.
 
 Examples
 --------
@@ -155,9 +145,8 @@ def source_patch_id(
     """
     Return the id of data read from a file.
 
-    Derived rather than random, so reading the same file twice -- in two
-    processes, on two days -- gives the same answer and the ids in a
-    result can be traced back to what they came from.
+    The deterministic ID lets repeated reads of the same source agree and preserves
+    provenance across processes.
 
     Parameters
     ----------
@@ -177,21 +166,10 @@ def source_patch_id(
 
     Notes
     -----
-    Every field is one the index already stores, so a spool can derive the
-    id of a row without going back to the filesystem.
-
-    `size_bytes` and `mtime_ns` are in the id for the reason the index
-    already uses them to decide whether a source changed: without them,
-    data written over a path would silently inherit the id of what it
-    replaced. The price is that a file re-copied to the same path is a new
-    datum, which is the safe way round -- a missed match rather than a
-    wrong one. They are `None` where a source cannot be stat-ed at all, so
-    a stream still hashes to one deterministic answer.
-
-    An id derived this way is stable for a given archive laid out the same
-    way; it is not stable across hosts, because the path is part of it. A
-    format which stores an id -- DASDAE does -- keeps that one instead, and
-    those are stable everywhere.
+    Every field already exists in the index, so no filesystem access is required.
+    Size and modification time distinguish replaced sources; unavailable values may
+    be None. Path-derived IDs depend on archive layout and are not stable across
+    hosts. IDs stored by a format remain authoritative and portable.
     """
     return digest(
         {

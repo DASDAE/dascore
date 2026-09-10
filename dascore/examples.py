@@ -71,22 +71,21 @@ def random_patch(
     time_step
         The step between time samples.
     time_array
-        If not None, an array for time coordinate and`time_min` and
-        `time_step` will not be used.
+        Time coordinates; overrides `time_min` and `time_step` when provided.
     distance_min
         The start of the distance coordinate.
     distance_step
         The spacing between distance samples.
     dist_array
-        If not None, an array of distance values and `distance_min` and
-        `distance_step` will not be used.
+        Distance coordinates; overrides `distance_min` and `distance_step` when
+        provided.
     acquisition_key
         The inventory identity of the data source
         (network.fiber_array.location.acquisition).
     tag
         The patch tag
     shape
-        The shape pf data array.
+        The data array shape.
     """
     # get input data
     rand = np.random.RandomState(13)
@@ -477,9 +476,8 @@ def plane_wave(
     """
     A plane wave: one frequency crossing the array at one apparent velocity.
 
-    Every window of it has the same frequency-wavenumber content, a single
-    peak at ``(frequency, -frequency / velocity)``, which makes it a clean
-    input for spectral transforms and moveout filters.
+    Each window has a frequency-wavenumber peak at ``(frequency, -frequency /
+    velocity)``, useful for spectral transforms and moveout filters.
 
     Parameters
     ----------
@@ -529,10 +527,9 @@ def delta_patch(
     patch=None,
 ):
     """
-    Create a delta function patch (zeros everywhere except for
-    a unit value at the center) along the specified dimension.
-    The returned delta patch has single coordinate(s) along the
-    other dimensions.
+    Create a patch with a central unit impulse along `dim` and zeros elsewhere.
+
+    Other dimensions have one coordinate each.
 
     Parameters
     ----------
@@ -639,9 +636,8 @@ def random_spool(
         The start time of the first patch. Subsequent patches have start times
         after the end time of the previous patch, plus the time_gap.
     var
-        How much the patch lengths vary, in percent. Zero makes every patch
-        the same length; a positive value draws each from a normal
-        distribution that wide, as an archive of real files has.
+        Patch-length variation in percent. Zero gives equal lengths; positive values set
+        the normal distribution's relative width.
     **kwargs
         Passed to the [_random_patch](`dascore.examples.random_patch`) function.
     """
@@ -721,14 +717,9 @@ def sparse_dss_spool():
     """
     Two months of a sparsely sampled DSS deployment.
 
-    One patch per day of hourly samples along 20 channels, for a
-    temperature and a strain acquisition which start and end at
-    different times and lose different days to outages. Sampled once an
-    hour, so the whole thing is a few hundred kilobytes -- small enough
-    to build in memory, long enough to draw on a calendar.
-
-    A day short of its 24 samples leaves a hole after it, so the
-    acquisitions cover their spans by different amounts.
+    Daily patches contain hourly samples along 20 channels. Temperature and strain
+    acquisitions have different spans, outages, and incomplete days, producing unequal
+    coverage in a few hundred kilobytes.
     """
     hour = to_timedelta64(np.timedelta64(1, "h"))
     day_one = np.datetime64("2024-01-01")
@@ -884,11 +875,9 @@ def inventory_patch_pair():
     """
     Return a patch and an inventory which resolves it.
 
-    The patch is the random DAS example carrying the acquisition key of the
-    inventory's one acquisition. That acquisition places its 300 channels on
-    an optical path through a measured two-point distance map, so the path's
-    geometry, coupling, and labels project onto the patch. Used by the
-    enrich documentation and tests.
+    The random DAS patch identifies the inventory's single acquisition. A measured
+    two-point distance map projects path geometry, coupling, and labels onto its 300
+    channels.
     """
     patch = random_patch(acquisition_key="DAS.R2D1..RAW")
     distance = patch.get_coord("distance")
@@ -1263,10 +1252,8 @@ def _tunnel_repaired_components():
     """
     One row becomes five where the contractor cut the trench cable.
 
-    The repair leaves two meters more fiber than it replaced, so every
-    component past it sits two meters further along the path. That shift
-    is the price of an absolute distance, and it is applied here once
-    rather than retyped into every row below the break.
+    The repair adds two meters of fiber, shifting all subsequent components by two
+    meters.
     """
     rows = _tunnel_components(_TUNNEL_COMPONENTS).to_dict("records")
     index = next(
@@ -1303,16 +1290,12 @@ def tunnel_inventory_files(repaired: bool = True) -> dict[str, str]:
     """
     Return the tunnel inventory as a mapping of file name to file text.
 
-    This is the authoring directory the tunnel recipe writes, as data. It
-    is exposed so the recipe can display the same files the example
-    loads, rather than composing a second copy which could drift.
+    The tunnel recipe displays these same files to stay consistent with the example.
 
     Parameters
     ----------
     repaired
-        Whether to include the epoch added when the trench cable was
-        repaired. False is the deployment as first installed, which is
-        what the recipe shows before it gets to the repair.
+        Include the trench-cable repair epoch; False returns the original deployment.
     """
     array = "fiber_arrays/XT.TUN1"
     path, epoch = f"{array}/path.00", f"{array}/path.00@2024-09-01"

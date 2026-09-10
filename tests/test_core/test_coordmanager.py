@@ -1063,14 +1063,11 @@ class TestUpdate:
 
 
 class TestPreserveBaseCoord:
-    """Canonical coords should not be reparsed when passed through update/select.
+    """
+    Update/select preserve CoordRange and re-infer other coordinate types.
 
-    Only CoordRange (the canonical evenly-sampled representation) is returned
-    unchanged. Other coord types (CoordPartial, CoordArray, CoordMonotonicArray)
-    are still re-inferred so a fully-specified partial, or slicing that yields an
-    even/empty subset, is canonicalized. That re-inference keeps the coord it was
-    given whenever collapsing it to a range would move any value, since only the
-    exact case is a change of representation rather than of data.
+    Canonicalization must not change values: arrays become ranges only when the
+    representation is exact.
     """
 
     def test_update_preserves_range_coord_identity(self, cm_basic):

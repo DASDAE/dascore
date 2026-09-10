@@ -21,7 +21,6 @@ from dascore.utils.patch import (
 
 def _grad_diff(ar, axes, dxs):
     """Perform differentiation on the data using np.grad."""
-    # iteratively apply diff along each axis.
     for ax, dx in zip(axes, dxs):
         ar = np.gradient(ar, dx, axis=ax, edge_order=2)
     return ar
@@ -29,7 +28,6 @@ def _grad_diff(ar, axes, dxs):
 
 def _findiff_diff(data, axis, order, dx):
     """Use findiff to get differences along specified dimensions."""
-    # If more than one axis, need to make tuples.
     findiff = optional_import("findiff")
     if len(axis) > 1:
         orders = [1] * len(axis)  # always first order (first derivative).
@@ -159,7 +157,6 @@ def differentiate(
     # This avoids an extra copy of the array so probably merits its own case.
     else:
         new_data = _get_diff(order, patch.data, axes, dx_or_spacing)
-    # update units and what the data now is
     data_units = _get_data_units_from_dims(patch, dims, truediv)
     data_type = _get_data_type_from_dims(patch, dims, differentiate=True)
     attrs = patch.attrs.update(data_units=data_units, data_type=data_type)

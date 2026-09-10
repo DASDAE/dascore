@@ -1,26 +1,14 @@
-"""
-Canonical encoding, decoding and hashing for workflow objects, and the files
-those documents are written to.
+"""Canonical serialization and hashing for workflow objects.
 
-A [`Task`](`dascore.workflow.task.Task`) is identified by a fingerprint: a
-digest of what it is and what it was given. That only works if the same
-parameters always encode to the same bytes, so this module turns arbitrary
-python values into a JSON tree with a fixed shape, then hashes its canonical
-text.
+Fingerprint mode encodes parameters for hashing: arrays become byte digests and
+``None`` mapping values are omitted. Document mode preserves serializable values
+for storage, including arrays as nested lists. Callables and unsupported values
+are named rather than reconstructed; decoding them raises. `write_workflow` and
+`read_workflow` choose the storage format from the path suffix.
 
-Two modes exist. ``"fingerprint"`` encodes values for hashing: an array
-becomes a digest of its bytes and a value left at ``None`` is dropped.
-``"document"`` encodes values for storage: an array becomes a nested list and
-nothing is dropped, so most values read back. A function, a partial, or a
-value with no encoding of its own is named rather than reproduced in either
-mode, and a dataframe has no document form at all; decoding any of them
-raises. `write_workflow` and `read_workflow` put a document on disk in the
-format its suffix names, refusing a suffix which names none.
-
-Stability rests on `json`, `repr` of a float, numpy's byte layout and blake2b,
-none of which change between python versions, and -- for frames and quantities
-only -- on pandas' object hash and pint's short unit format. Python's own
-``hash`` is never used: it is salted per process.
+Canonical JSON and BLAKE2b provide stable hashes without Python's process-salted
+``hash``. Dataframes and quantities additionally depend on pandas object hashes
+and Pint's short unit format.
 """
 
 from __future__ import annotations

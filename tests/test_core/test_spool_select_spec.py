@@ -39,11 +39,8 @@ def spool(request, tmp_path_factory):
     parity net proving one selector engine serves identity and
     restructured spools alike.
     """
-    # 8,000 samples per patch rather than 600,000, at a step which keeps
-    # each of them 8 seconds long: the specs select windows in seconds, and
-    # a window narrower than one patch is what several of them are about.
-    # Distance stays wider than the 10-sample window TestSamples asks for,
-    # or that trim would be a no-op.
+    # Use 8,000 samples over 8 seconds to keep time windows narrower than a patch.
+    # Distance must exceed the 10-sample selection to make that trim meaningful.
     base = dc.get_example_spool(
         "random_das", shape=(40, 200), time_step=dc.to_timedelta64(0.04)
     )

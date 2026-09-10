@@ -644,24 +644,11 @@ class Geometry(InventoryModel):
     """
     Measured curves along an interval of an optical path.
 
-    A geometry is a piecewise segment placed by its ``distance`` array: at
-    least two strictly increasing optical distances, each paired with one
-    value of every column the segment states. Coverage is the half-open span
-    of the array; there is no separate length field. A coil, or other
-    "clump", is a segment whose columns repeat while distance advances.
-
-    A column whose name the inventory CRS declares -- or the canonical
-    ``x``, ``y``, ``z`` alias of one -- is that position axis, and takes the
-    CRS's units. Every other column is a numeric quantity along the fiber in
-    its own right, carrying its own entry in ``units``: borehole depth where
-    the CRS is spent on easting/northing/elevation, pipeline chainage, fiber
-    azimuth.
-
-    Interpolation between points is piecewise linear and never crosses
-    segments; uncovered distance has undefined values. Two segments may
-    cover the same distance as long as they state different columns -- a
-    depth survey and an azimuth survey of one borehole -- and then they
-    share a name, being two measurements of one stretch of fiber.
+    ``distance`` contains at least two strictly increasing optical distances and
+    defines a half-open coverage span. Each named column supplies one value per
+    distance. CRS axis columns use CRS units; other numeric columns declare their
+    own units. Interpolation is linear within segments and undefined outside them.
+    Overlapping segments are allowed when they describe different columns.
 
     Examples
     --------

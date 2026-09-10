@@ -1,10 +1,8 @@
 """
 The registry which lets a serialized document name the class it holds.
 
-A document states its class in an ``object_type`` key holding a registered
-name, never an import path. A dotted path would weld stored documents to
-today's module layout and make reading one an arbitrary-import surface;
-a registered name costs the same to write and has neither property.
+The ``object_type`` key holds a registered name, avoiding dependence on module paths and
+arbitrary imports when reading documents.
 """
 
 from __future__ import annotations
@@ -59,11 +57,9 @@ def get_model_tag(cls: type) -> str | None:
     """
     Return the tag which names a model class in a document, if it has one.
 
-    An out-of-tree class is namespaced by the package which declares it;
-    DASCore's own classes are bare. None means the class cannot be named:
-    a parametrized generic is spelled ``G[int]``, which no document could
-    state and this module could not read back. Writing such a tag anyway
-    would produce a file DASCore refuses to read.
+    External classes use their package namespace; DASCore classes use bare names. Return
+    None for invalid tags, such as parametrized generics (``G[int]``), which cannot
+    round-trip.
     """
     namespace = _derive_namespace(cls)
     if namespace == DASCORE_NAMESPACE:
@@ -77,10 +73,8 @@ def register_model(cls: type) -> None:
     """
     Add a model class to the registry under its derived tag.
 
-    Classes declared inside a function are skipped: nothing can resolve a
-    name which only exists while its enclosing call runs, and two of them
-    sharing a name is neither a mistake nor resolvable. So are classes
-    whose derived tag is not a legal one; see `get_model_tag`.
+    Skip function-local classes, whose names cannot be resolved globally, and classes
+    with invalid tags; see `get_model_tag`.
     """
     if "<locals>" in cls.__qualname__ or (tag := get_model_tag(cls)) is None:
         return
@@ -166,9 +160,7 @@ def resolve_model_tag(tag: str) -> type | None:
     """
     Return the class a tag names, or None if nothing registers it.
 
-    Raises if the tag could never name a class -- it is not a legal tag,
-    or two classes have claimed it -- which is a document this process
-    cannot read rather than one whose class it merely does not have.
+    Raise for invalid or ambiguous tags; only unregistered tags return None.
     """
     if not isinstance(tag, str) or not TAG_PATTERN.match(tag):
         msg = (

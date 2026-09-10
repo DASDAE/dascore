@@ -1,10 +1,5 @@
 """
-Tests for the plan/kernel seam.
-
-The nine converted operations exercise it from above, and the parity
-check proves they still answer what they answered. What is here is the
-seam itself: what a processor is allowed to leave out, what it is refused
-for getting wrong, and how a kernel for another array backend is found.
+Test processor requirements, validation, and array-backend kernel lookup.
 """
 
 from __future__ import annotations
@@ -248,12 +243,7 @@ class TestTheVersionTravels:
 
 class TestKnownReal:
     """
-    Whether a dtype alone says the data has no imaginary part.
-
-    The question is asked of every `real`, `conj` and `imag`, and the
-    answer decides whether the operation runs at all. A numpy dtype says
-    so with `kind`; the standard does not ask a dtype for one, so a
-    backend which omits it has to be asked another way.
+    Detect real dtypes even on array backends without NumPy dtype.kind.
     """
 
     def test_something_which_is_not_an_array(self):

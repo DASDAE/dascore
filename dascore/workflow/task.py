@@ -1,11 +1,8 @@
-"""
-The immutable, fingerprintable unit of work DASCore's workflows are built of.
+"""Define immutable, fingerprintable workflow tasks.
 
-A [`Task`](`dascore.workflow.task.Task`) is a frozen pydantic model whose
-fields are the parameters of one operation. Because the parameters are the
-object, a task can be compared, hashed, written to a file and read back, and
-identified by a fingerprint: a digest of which task it is, which version of
-it, and what it was given.
+A [`Task`](`dascore.workflow.task.Task`) is a frozen pydantic model whose fields
+are an operation's parameters. It can be compared, hashed, serialized, and
+identified by a digest of its type, version, and parameters.
 
 Examples
 --------

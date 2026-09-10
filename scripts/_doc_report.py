@@ -1,19 +1,13 @@
 """
-Measure what a documentation build costs, in time and in bytes.
+Measure documentation build time and output size in a JSON report.
 
-Three timings are easy to conflate: the page phase, where quarto renders one
-page after another, quarto's wall time, which also holds startup and post
-processing, and the end-to-end build, which also holds the preparation the
-workflow does first. This script keeps them apart, records them beside the
-size of what the build produced, and writes one JSON report, so a change to
-the API surface can be judged against a measured baseline.
+Record page-rendering time, Quarto wall time (including startup and postprocessing), and
+total build time (including preparation) separately for baseline comparisons.
 
-Sub commands, in the order a build uses them:
-
-    time <name> -- <command>   run a command and record what it cost
-    index                      measure the generated qmd files and the index
+    time <name> -- <command>    run and time a command
+    index                      measure generated qmd files and the index
     site                       measure the rendered site
-    summary                    write a markdown summary of the report
+    summary                    write a Markdown summary
 """
 
 from __future__ import annotations
@@ -132,12 +126,10 @@ def update_report(section: str, values: dict, path: Path | None = None) -> dict:
 
 def _page_timings(stamps: list[tuple[str, float]], wall: float) -> dict:
     """
-    Split a render's wall time into startup, the page phase, and the rest.
+    Split wall time into startup, page rendering, and finalization.
 
-    Quarto names a page when it starts rendering it, so a page costs the gap
-    to the next name. The last page has no next name, so its cost lands in
-    `finalize` along with the post processing; it is named here rather than
-    left to be read as one of the pages that were timed.
+    Quarto logs each page's start. The last page has no following timestamp, so its time
+    is included in finalization with postprocessing.
     """
     if not stamps:
         return {}

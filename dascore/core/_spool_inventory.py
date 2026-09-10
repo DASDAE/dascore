@@ -1,15 +1,9 @@
-"""
-Spool-side inventory machinery.
+"""Internal spool-side inventory operations.
 
-Everything a spool needs to answer questions from an attached DASDAE
-inventory lives here: resolving index rows to their inventory contexts,
-placing channels on the optical path, selecting and splitting along the
-fiber, and the reference type a spool carries an unread inventory as.
-`dascore.proc.inventory` keeps the patch-level verb (`Patch.enrich`) and
-imports the shared projection primitives from this module, so a selector
-means one thing whether a patch or an index row answers it.
-
-This module is internal; nothing here is public API.
+This module resolves index rows to inventory contexts, places channels on
+optical paths, selects and splits along fibers, and lazily references attached
+inventories. ``dascore.proc.inventory`` imports the shared projection operations
+so patches and index rows interpret selectors consistently.
 """
 
 from __future__ import annotations
@@ -1182,41 +1176,12 @@ def resolve_channel_pieces(
     inventory, contexts, frame, query, *, complement: bool = False
 ) -> tuple:
     """
-    Return the channel dimension, each row's kept pieces, and refusals.
+    Return the channel dimension, kept pieces per row, and refusals.
 
-    The pieces are what a selection along the fiber keeps: one per
-    contiguous run of matching channels, so a query a path answers in two
-    places subdivides the row into two. A row with no context keeps
-    nothing and says nothing about it — an inventory-backed selector
-    silently does not match a patch the inventory is silent about, just
-    as a patch lacking an attr is not selected on it.
-
-    Every value is projected onto the channels the way `Patch.enrich`
-    projects it and judged by the predicate the index applies to a stated
-    attr, so a selector cannot mean one thing here and another in either.
-
-    Parameters
-    ----------
-    inventory
-        The inventory to resolve against.
-    contexts
-        Each row's resolved context, or None where it has none.
-    frame
-        The relation being selected; one row per patch.
-    query
-        The channel-level selectors, by inventory name.
-    complement
-        Keep the channels the query does *not* match. The mask runs along
-        one dimension, so unlike a patch's rectangle its complement is
-        exactly expressible; a row with no context keeps everything,
-        being a row the selection never held.
-
-    Returns
-    -------
-    A `(name, pieces, reasons)` triple. `reasons` holds a refusal per row
-    and None elsewhere; when any row is refused `pieces` is None, since
-    the caller raises rather than selecting, and `name` is whatever the
-    rows which placed fine agreed on — possibly None.
+    Matching channel runs become separate pieces. Rows without inventory context do
+    not match, unless ``complement`` is true, when they remain whole. Values use the
+    same projection and predicates as ``Patch.enrich`` and index selection. If any
+    row is refused, ``pieces`` is None and ``reasons`` identifies each refusal.
     """
     name, placements, reasons = _channel_placements(contexts, frame)
     if any(x is not None for x in reasons) or name is None:

@@ -762,7 +762,7 @@ class _FiberIOManager:
         **kwargs,
     ) -> tuple[str, str]:
         """
-        Return the name of the format contained in the file and version number.
+        Return the file's format name and version.
 
         See [`dascore.io.core.get_format`](`dascore.io.core.get_format`)
         for docs.
@@ -943,23 +943,20 @@ def _is_wrapped_func(func1, func2):
 
 class FiberIO:
     """
-    An interface which adds support for a given filer format.
-
-    This class should be subclassed when adding support for new formats.
+    Interface for a fiber data format; subclass it to add format support.
     """
 
     name: str = ""
     version: str = ""
     preferred_extensions: tuple[str, ...] = ()
-    # Specifies if this fiber IO expects a directory or single file
+    # Whether this format expects a directory or a single file.
     input_type: Literal["file", "directory"] = "file"
     # True when a single resource can hold more than one patch.
     multi_patch_write: bool = False
 
     manager = _FiberIOManager(FIBER_IO_GROUP)
 
-    # A dict of methods which should implement automatic type casting.
-    # and the index of the parameter to type cast.
+    # Methods using automatic type casting and the parameter index to cast.
     _automatic_type_casters = FrozenDict(
         {
             "read": 1,
@@ -1061,9 +1058,7 @@ class FiberIO:
             no-op for formats whose coordinates are defined by start, step,
             and sample count metadata.
         """
-        # default scan method reads in the file and returns required attributes
-        # however, this can be very slow, so each parser should implement scan
-        # when possible.
+        # Reading is correct but slow; formats should implement metadata-only scans.
         read_params = inspect.signature(self.read).parameters
         read_kwargs = dict(kwargs)
         if "snap" in read_params:
@@ -1500,7 +1495,7 @@ def scan_to_df(
     ext
         The extensions to map.
     timestamp
-        Time stamp indicating the minimum mtime.
+        Minimum modification time.
     progress
         The type of progress bar to use. None disables progress bar and
         "basic" is best for low latency scenarios.
@@ -1790,7 +1785,7 @@ def _iter_scan_results(
                     for result in source:
                         output_count += 1
                         yield result, source_info, input_index
-    # Ensure ctl + c exists scan.
+    # Stop the progress display before propagating Ctrl+C.
     except KeyboardInterrupt:
         getattr(progress, "stop", lambda: None)()
         raise
@@ -1815,15 +1810,13 @@ def scan_payloads(
     path
         A resource containing fiber data.
     file_format
-        Format of the file. If not provided DASCore will try to determine it.
-        Only applicable for path-like inputs.
+        File format. DASCore detects it when omitted. Only applies to path-like inputs.
     file_version
-        Version of the file. If not provided DASCore will try to determine it.
-        Only applicable for path-like inputs.
+        File version. DASCore detects it when omitted. Only applies to path-like inputs.
     ext
         The extensions to map.
     timestamp
-        Time stamp indicating the minimum mtime.
+        Minimum modification time.
     progress
         The type of progress bar to use. None disables the progress bar.
     snap
@@ -1879,26 +1872,23 @@ def scan(
     progress: PROGRESS_LEVELS | Progress = "standard",
 ) -> list[PatchSummary]:
     """
-    Scan a potential patch source, return a list of patch summaries.
+    Scan a potential patch source and return its patch summaries.
 
     Parameters
     ----------
     path
         A resource containing Fiber data.
     file_format
-        Format of the file. If not provided DASCore will try to determine it.
-        Only applicable for path-like inputs.
+        File format. DASCore detects it when omitted. Only applies to path-like inputs.
     file_version
-        Version of the file. If not provided DASCore will try to determine it.
-        Only applicable for path-like inputs.
+        File version. DASCore detects it when omitted. Only applies to path-like inputs.
     ext
         The extensions to map.
     timestamp
-        Time stamp indicating the minimum mtime.
+        Minimum modification time.
     progress
-        The type of progress bar to use. None disables progress bar and
-        "basic" is best for low latency scenarios. Can also accept a subclass
-        of rich.progress.Progress.
+        Progress display. None disables it, ``"basic"`` suits low-latency
+        operations, and a ``rich.progress.Progress`` subclass customizes it.
 
     Returns
     -------
@@ -2022,7 +2012,7 @@ def get_format(
     **kwargs,
 ) -> tuple[str, str]:
     """
-    Return the name of the format contained in the file and version number.
+    Return the file's format name and version.
 
     Parameters
     ----------
@@ -2033,9 +2023,7 @@ def get_format(
     file_version
         The known file version.
     fiber_io_hint
-        A dict of {input_type: fiber_io}. This is an optimization
-        which assumes the last used fiberio (for a given input type)
-        is likely to be the next one.
+        Mapping of input type to the last-used FiberIO, used as a detection hint.
 
     Returns
     -------

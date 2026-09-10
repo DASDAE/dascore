@@ -275,27 +275,15 @@ FORMATS_WITH_DEFAULT_SCAN = frozenset({"PickleIO", "RSFV1", "WavIO"})
 
 class _CountingHandle(BufferedIOBase):
     """
-    A readable file object which tallies the bytes it hands out.
+    A readable file object that counts returned bytes.
 
-    Counting here rather than at the process keeps the number free of
-    page-cache and allocator noise, and drops the dependence on /proc, so this
-    measures on every platform DASCore tests rather than only Linux. It also
-    needs no warm-up scan, since module imports never reach this counter.
+    This platform-independent measure excludes page-cache and allocator noise. It
+    counts consumed bytes rather than kernel reads, which may differ by one small
+    buffer fill but still detects scans that consume every sample.
 
-    Counts bytes consumed, not bytes the kernel moved, so it reads lower than
-    /proc would by up to a buffer fill per reader. That gap is a few KB where
-    the budget is a quarter of a megabyte-plus file, and it cannot hide the
-    failure this guards: a scan that walks every sample consumes every sample.
-
-    Anything handing back the file underneath is refused, since reads through
-    it would not be counted: fileno, which also allows the whole file to be
-    mapped, plus raw, peek, and detach. No current reader needs any of them,
-    so one that does belongs in IGNORE_SCAN_CHECK.
-
-    The name attribute is the exception, and stays available: TDMS, sentek,
-    and Sintela_Binary consult it while scanning. They only stat the file
-    through it rather than read it, which is visible in their totals -- each
-    stays within a buffer fill of what /proc charges the whole scan.
+    Accessors that expose the underlying file (``fileno``, ``raw``, ``peek``, and
+    ``detach``) are refused because they bypass the counter. ``name`` remains
+    available for readers that inspect or stat the path.
     """
 
     _refused = frozenset({"raw", "peek", "detach"})
@@ -753,13 +741,9 @@ class TestScan:
         """
         Scanning must not pull a file's sample data off disk.
 
-        A reader that walks every sample to build a summary still returns the
-        right answer, which makes this easy to regress and expensive to live
-        with: indexing a directory then costs a full read of every file in it.
-
-        Measured in bytes rather than memory, because a reader can stream a
-        file without holding it, and because sample data lands in C-extension
-        buffers that Python's allocation tracing cannot see.
+        A full-data scan can return correct metadata while making directory indexing
+        cost a full read per file. Byte counts catch streaming and C-extension
+        buffers that Python memory tracing misses.
         """
         io, path = io_path_tuple
         if io.name.upper() in IGNORE_SCAN_CHECK:
@@ -785,10 +769,9 @@ class TestScan:
         """
         Formats should implement scan rather than inherit the default.
 
-        The budget above can only weigh formats that have a large enough test
-        file, so it cannot see a format which never implements scan at all and
-        so reads everything through the FiberIO default. That is what this
-        covers; see FORMATS_WITH_DEFAULT_SCAN for the known exceptions.
+        The byte budget only covers formats with large fixtures. This check catches
+        formats that inherit the full-read fallback; ``FORMATS_WITH_DEFAULT_SCAN``
+        lists accepted exceptions.
         """
         FiberIO.manager.load_plugins()
         # Other test modules register FiberIO subclasses globally on import,

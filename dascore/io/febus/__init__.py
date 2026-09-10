@@ -1,35 +1,27 @@
 """
-Support for Febus format.
+Read Febus DAS interrogator formats.
 
-This is used by the Febus DAS interrogator.
-
-More info about febus can be found here: https://www.febus-optics.com/en/
+See https://www.febus-optics.com/en/.
 
 Interrogator identity
 ---------------------
-A1 files report ``interrogator.name`` from the Source's ``Hostname`` (eg
-"fa1-24090193"). T1 files report it from ``device_name``, plus
-``interrogator.instrument_type`` from ``device``; their
-``interrogator.manufacturer`` and ``interrogator.model`` are asserted by the
-format, not read from the header. The G1 BSL and MTX HDF5 files carry no
-interrogator metadata, so they report none.
+A1 files derive ``interrogator.name`` from the source ``Hostname`` (for example,
+``"fa1-24090193"``). T1 files derive it from ``device_name`` and derive
+``interrogator.instrument_type`` from ``device``; the format supplies their
+manufacturer and model. G1 BSL and MTX HDF5 files contain no interrogator metadata.
 
 Distance sampling
 -----------------
-The interrogator fixes the spatial sampling, so a read returns an evenly
-sampled ``distance`` coordinate. A1 files state the spacing in the header and
-the coordinate is built from it. The G1 BSL/MTX HDF5 and T1 files instead
-store a distance per sample, and those arrays can carry sub-step jitter: the
-G1 files seen so far hold an even grid restated in float32, whose
-quantization exceeds the tolerance ``get_coord`` uses to recognize an even
-coordinate and leaves a monotonic coord with no step. Those are put back on
-the grid they restate.
+Reads return an evenly sampled ``distance`` coordinate because the interrogator fixes
+the spatial sampling. A1 files state the spacing in their headers. G1 BSL/MTX HDF5
+and T1 files store each sample's distance, which can contain sub-step jitter. Known
+G1 files store an even grid as float32; its quantization exceeds ``get_coord``'s
+tolerance, so DASCore restores the stated grid.
 
-The correction is well under a millimeter on the files seen so far, but it is
-not bounded in principle: a file whose distance axis were genuinely
-discontinuous, such as one covering several acquisition zones, would be
-smeared onto a single grid. ``scan(..., snap=False)`` reports the stored
-values exactly, for ``distance`` as for ``time``.
+The correction is well under a millimeter in known files but is not bounded. A
+genuinely discontinuous distance axis, such as one spanning several acquisition
+zones, would be mapped onto one grid. ``scan(..., snap=False)`` reports stored
+``distance`` and ``time`` values exactly.
 """
 
 from __future__ import annotations

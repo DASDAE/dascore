@@ -1,34 +1,16 @@
-"""
-Load a DASDAE inventory from an authoring directory.
+"""Load a DASDAE inventory from an authoring directory.
 
-The authoring format splits an inventory along its natural grain: small
-heterogeneous objects (acquisitions, interrogators, cables) live in YAML or
-JSON files matching the models, while long row-shaped track data lives in
-CSV files a field crew can maintain as a spreadsheet. A directory of these
-files is itself a loadable inventory, and ``io.to_yaml`` exports the
-single-file interchange artifact for shipping beside a data archive.
+YAML or JSON files hold model objects, while CSV files hold tabular track data.
+``<name>.csv`` fills the declared model's ``<name>`` attribute. Reserved
+``path`` directories address optical-path epochs; each location code forms a
+lineage whose epochs end when their successors begin.
 
-A table is matched to the model by name: ``<name>.csv`` fills the
-attribute ``<name>`` of the type its directory declares. ``path`` is the
-one reserved container stem -- those directories address an optical path
-epoch rather than serializing an attribute, and each location code is a
-lineage in which an epoch runs until its successor begins.
+Each object file declares its type, its container verifies that type, its
+filename determines identity, and the top-level ``inventory.yaml`` determines
+the format version. Facts repeated inside a file must agree with its address.
 
-The contract, in one line: **file declares object_type, container agrees, name
-implies identity, envelope implies version.** Every object file states what
-it is, its container checks that statement rather than supplying it, its
-name decides which entity it is, and the top-level ``inventory.yaml``
-versions the whole document. An address restated inside a file must agree
-with the name; there is never a precedence rule between two spellings of
-one fact.
-
-Loading is strict about near-misses and indifferent to clean misses:
-anything which claims to participate in a convention and gets it wrong
-raises, while anything which does not participate -- photos, field notes,
-deployment logs -- is ignored where it lies. A column does the same: a
-header beginning with an underscore is the crew's own record keeping, and
-no table reads it. What it holds stays in the file, so a note which should
-travel with the inventory goes in ``description`` instead.
+Malformed entries that resemble format members raise errors; unrelated files
+are ignored. Columns beginning with an underscore are also ignored.
 """
 
 from __future__ import annotations
@@ -755,36 +737,11 @@ def _table_stem(path: Path) -> str:
 
 def _refuse_near_miss(stem: str, child: Path, model) -> None:
     """
-    Refuse a table stem which claims to be a track and is not one here.
+    Refuse a table stem that resembles a misplaced or misspelled track table.
 
-    Three ways of claiming it. A stem this format used to read is the
-    plainest: it was written by this format, for this format, and only a
-    rename since made it unreadable, so it is told what to rename itself
-    to rather than ignored.
-
-    Two further ways. A stem which *is* one of this format's table
-    names, but not of this model, is the likeliest real mistake there is:
-    the right file one directory too high, a `geometry.csv` written before
-    the path directory was split out. It could not have said more plainly
-    that it is a track, so it is refused rather than dropped.
-
-    A stem which merely resembles one is refused too, and told which name
-    it nearly is. That comparison is against the attributes which are
-    actually tables, not every attribute: `names.csv` beside a fiber array
-    is a crew's own file, and suggesting `name.csv` would send them to a
-    second refusal saying this format does not read a name as a table.
-
-    Both tests fold case, as the suffix test above already does. A
-    `GEOMETRY.CSV` shares no characters with `geometry` as far as
-    `difflib` is concerned, so an unfolded comparison would let the one
-    spelling nobody picks for a personal file be the one which vanishes --
-    and would do it only on the platforms whose filesystems do not fold
-    case themselves.
-
-    The resemblance cutoff is deliberately high. A low one would start
-    reading a crew's own files as bad spellings of this format's, which is
-    the refusal this indifference exists to end; the cost of missing a
-    stranger typo is the old behaviour, one message later.
+    Reject retired table names, valid table names unsupported by this model, and
+    close matches to this model.s actual table attributes. Matching is case-folded
+    and deliberately strict to avoid treating unrelated field files as format errors.
     """
     folded = stem.casefold()
     if (now := _RETIRED_TABLES.get(folded)) is not None:

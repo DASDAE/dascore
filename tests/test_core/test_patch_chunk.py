@@ -996,12 +996,9 @@ class TestMixedUnitChunk:
         assert n == 600
 
     def test_rechunk_keeps_one_source_units_column(self):
-        """Re-chunking a derived view must not duplicate the unit column.
-
-        The plan records the file's own spelling beside its normalized
-        unit; renaming again on the second pass produced two columns of
-        one name, and one of them silently vanished when the rows became
-        load kwargs — so a member could be trimmed in the wrong unit.
+        """
+        Re-chunking preserves one source-units column so load kwargs trim in the correct
+        units.
         """
         pm = dc.get_example_patch().set_units(distance="m")
         d = pm.get_coord("distance")
@@ -1941,13 +1938,8 @@ class TestChunkWithAssociatedCoords:
 
 class TestChunkFromIndex:
     """
-    The streaming merge builds untrimmed members from the index.
-
-    A member whose plan trims nothing has its dims, ranges and attrs in
-    its index row, so only its array is read, through the format's
-    read_array; the patch, its coordinate parsing and its attr decoding
-    are skipped. Anything the row cannot state sends the member down the
-    patch path, whose result must be identical.
+    Untrimmed members use index metadata and read_array; incomplete rows fall back to
+    the equivalent patch-loading path.
     """
 
     @pytest.fixture(scope="class")

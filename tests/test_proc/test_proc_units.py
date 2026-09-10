@@ -15,7 +15,7 @@ class TestSetUnits:
     """Tests for setting units without conversions."""
 
     def test_data_units(self, random_patch_with_lat_lon):
-        """Simply test setting units for data."""
+        """Set the data units."""
         patch = random_patch_with_lat_lon
         unit_str = "km/µs"
         out = patch.set_units(unit_str)

@@ -1,17 +1,11 @@
 """
-Freeze the URLs the documentation publishes, so a later change can be checked.
+Record published documentation URLs and detect moved or removed pages.
 
-The cross reference maps every symbolic key the docs can link to, one per
-public object and one per alias of it, onto the qmd file that key resolves
-to. Those paths are the published URLs. Aggregating members onto their
-owner's page moves them, and a moved URL is a broken link for anyone who
-saved one, so the mapping is frozen here before it changes.
-
-Freezing a URL is not a promise that the object behind it is public; it only
-records where the object is published today.
+The baseline maps symbolic cross-reference keys (objects and aliases) to their published
+paths. It records existing URLs without declaring the objects public.
 
     freeze    write the current mapping to the baseline
-    check     report the keys which moved or vanished since the baseline
+    check     report keys that moved or vanished
 """
 
 from __future__ import annotations
@@ -60,19 +54,12 @@ def write_baseline(urls: dict[str, str], path: Path = BASELINE_PATH) -> None:
 
 def compare(current: dict[str, str], baseline: dict[str, str]) -> dict:
     """
-    Say how the published URLs differ from the frozen ones.
+    Compare cross-reference keys and published URLs with the baseline.
 
-    A key and a URL break differently. A key which vanishes breaks a cross
-    reference written as [name](`dotted.key`), which the link validator
-    catches at build time. A URL which vanishes breaks the link someone
-    saved, and nothing else notices, so the two are counted apart: an alias
-    can be dropped while the page it named is still published under another
-    key, and no saved link is broken.
-
-    A key which moves is its own case. The page it left may still be served
-    for some other key, so it does not show up as unpublished, but it no
-    longer documents the object the key names, which is what the reader who
-    saved the link came for.
+    Report dropped keys, unpublished URLs, and moved keys separately. Dropping an alias
+    can leave its page available through another key; moving a key can leave its old
+    page serving a different object. Only dropped keys are also caught by the
+    cross-reference validator.
     """
     moved = {k: (v, current[k]) for k, v in baseline.items() if current.get(k, v) != v}
     published = set(current.values())
@@ -95,13 +82,10 @@ def _summarize(difference: dict) -> str:
 
 def check(strict: bool = False, path: Path = BASELINE_PATH) -> int:
     """
-    Report how the current URLs differ from the frozen ones.
+    Report URL changes; fail strict checks for moved keys or unpublished pages.
 
-    A key which moved and a page which is no longer published both fail the
-    strict check; a key which was added or dropped does not, because neither
-    changes where an existing key resolves. A move which is meant to happen
-    is acknowledged by freezing the baseline again in the same commit and
-    saying in the pull request why it moved.
+    Added or dropped keys alone do not fail. For intentional moves, update the baseline
+    in the same commit and explain them in the PR.
     """
     baseline = load_baseline(path)
     if not baseline:

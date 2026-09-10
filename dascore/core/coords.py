@@ -2270,12 +2270,8 @@ class CoordSegmented(BaseCoord):
     """
     A coordinate composed of an ordered sequence of monotonic segments.
 
-    Segments are normal coordinates ([`CoordRange`](`dascore.core.coords.CoordRange`)
-    or [`CoordMonotonicArray`](`dascore.core.coords.CoordMonotonicArray`)); the
-    values of the segmented coordinate are exactly the concatenation of the
-    segment values. Segment boundaries record discontinuities (e.g. data gaps)
-    without altering any value, which makes this the natural coordinate for
-    data merged across nearly-contiguous blocks.
+    Values are the concatenation of the constituent monotonic coordinates. Segment
+    boundaries preserve discontinuities such as data gaps without changing values.
 
     Notes
     -----
@@ -3093,9 +3089,6 @@ def get_coord(
 ) -> BaseCoord:
     """
     Return a coordinate from provided inputs.
-
-    This function figures out which kind of Coordinate should be returned
-    for provided inputs.
 
     Parameters
     ----------
