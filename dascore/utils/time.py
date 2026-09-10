@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 from datetime import date, datetime, timedelta
+from fractions import Fraction
 from functools import singledispatch
 from typing import Any, SupportsFloat, cast, overload
 
@@ -570,3 +571,68 @@ def dtype_time_like(dtype_or_array) -> bool:
     if is_timedelta or is_datetime:
         return True
     return False
+
+
+def to_exact_fraction(
+    value, *, max_term: int = 100_000, rel_tol: float = 0.0
+) -> Fraction | None:
+    """
+    Recover the simple fraction a float was rounded from, or None.
+
+    A stored rate of ``1024.0`` or an interval computed as ``1 / 3000`` is
+    the nearest double to a ratio of small integers. This returns that
+    ratio when one whose numerator and denominator are both at most
+    ``max_term`` rounds to the very same double; otherwise None, and the
+    caller should keep the value as given. Exact agreement between small
+    terms is what makes the guess safe: an arbitrary double has about a
+    one-in-a-million chance of matching such a fraction.
+
+    A value stored with fewer digits than a double holds (``0.00033333333``,
+    or a float32) never matches exactly. ``rel_tol`` admits such a value,
+    but loosely: every real number is within a part in a billion of some
+    fraction with terms below a million (pi is 3126535/995207), so pair a
+    tolerance with a small ``max_term``. Never apply this to a derived
+    quantity.
+
+    Parameters
+    ----------
+    value
+        A finite number (int, float, numpy scalar, or Fraction).
+    max_term
+        The largest numerator or denominator considered.
+    rel_tol
+        The relative error allowed between the fraction and ``value``;
+        zero (the default) requires the same double.
+
+    Examples
+    --------
+    >>> from dascore.utils.time import to_exact_fraction
+    >>> to_exact_fraction(1024.0)
+    Fraction(1024, 1)
+    >>> to_exact_fraction(1 / 3000)
+    Fraction(1, 3000)
+    >>> to_exact_fraction(0.00033333333, rel_tol=1e-7, max_term=10_000)
+    Fraction(1, 3000)
+    >>> to_exact_fraction(0.1234567891234) is None
+    True
+    """
+    if isinstance(value, Fraction):
+        return value
+    if isinstance(value, bool | np.bool_):
+        return None
+    try:
+        as_float = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(as_float):
+        return None
+    if as_float == 0:
+        return Fraction(0)
+    frac = Fraction(as_float).limit_denominator(max_term)
+    if abs(frac.numerator) > max_term:
+        return None
+    if rel_tol == 0:
+        return frac if float(frac) == as_float else None
+    if not math.isclose(float(frac), as_float, rel_tol=rel_tol, abs_tol=0.0):
+        return None
+    return frac

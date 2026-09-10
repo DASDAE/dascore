@@ -4,7 +4,7 @@ Utility functions for AP sensing module.
 
 import dascore as dc
 from dascore.core import get_coord, get_coord_manager
-from dascore.io.utils import build_patches
+from dascore.io.utils import build_patches, step_from_rate
 from dascore.utils.misc import _maybe_unpack, unbyte
 
 
@@ -32,7 +32,7 @@ def _get_time_coord(resource, shape):
     assert trace_count == shape[0], "trace count doesn't match dim shape"
     # Create coord
     start = dc.to_datetime64(start_time_str)
-    step = dc.to_timedelta64(1 / sr)
+    step = step_from_rate(sr)
     return get_coord(start=start, step=step, shape=(trace_count,), units="s")
 
 

@@ -12,9 +12,9 @@ import numpy as np
 
 from dascore.core.attrs import PatchAttrs
 from dascore.core.coords import get_coord
-from dascore.io.utils import drop_blank_attrs, get_attr_names
+from dascore.io.utils import drop_blank_attrs, get_attr_names, step_from_rate
 from dascore.utils.misc import get_buffer_size
-from dascore.utils.time import to_datetime64, to_timedelta64
+from dascore.utils.time import to_datetime64
 
 DEFAULT_ATTRS = get_attr_names(PatchAttrs)
 
@@ -119,13 +119,9 @@ def _get_version_str(tdms_file, lead_in_length=28) -> str | Literal[False]:
 
 def _get_time_coord(attrs, num_samps):
     """Get the time array for the file."""
-    dt = to_timedelta64(1 / attrs["SamplingFrequency[Hz]"])
+    dt = step_from_rate(attrs["SamplingFrequency[Hz]"])
     t_min = to_datetime64(str(attrs["GPSTimeStamp"]))
-    # Note: Previously this was:
-    # out["time_min"] + np.timedelta64(
-    t_max = t_min + dt * (num_samps - 1)
-    coord = get_coord(start=t_min, stop=t_max + dt, step=dt, units="s")
-    return coord
+    return get_coord(start=t_min, step=dt, shape=(num_samps,), units="s")
 
 
 def _get_default_attrs(tdms_file, attrs=None):

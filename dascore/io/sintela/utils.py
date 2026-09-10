@@ -20,6 +20,7 @@ from dascore.core.attrs import PatchAttrs
 from dascore.core.coordmanager import get_coord_manager
 from dascore.core.coords import get_coord
 from dascore.exceptions import InvalidFiberFileError
+from dascore.io.utils import step_from_rate
 from dascore.utils.misc import get_buffer_size, maybe_mem_map
 
 SYNC_WORD = 0x11223344
@@ -153,7 +154,7 @@ def _get_complete_header(rid):
 def _get_time_coord(header):
     """Get the time coordinate."""
     starttime = np.asarray(header["start_time_ns"]).astype("datetime64[ns]")[()]
-    timestep = dc.to_timedelta64(1 / header["sample_rate"])
+    timestep = step_from_rate(header["sample_rate"])
     total_len = header["num_packets"] * header["num_samples"]
     return get_coord(start=starttime, step=timestep, shape=(total_len,))
 

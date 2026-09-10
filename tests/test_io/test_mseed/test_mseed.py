@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from fractions import Fraction
 from typing import Any
 
 import numpy as np
@@ -266,6 +267,45 @@ class TestMiniSeedRead:
         assert patch.shape == (2, 4)
         assert np.all(patch.get_coord("channel").values == np.array([1, 2]))
         assert patch.get_coord("time").min() == time_min
+
+    def test_fractional_rate_is_exact(self, tmp_path):
+        """A 40 Hz trace gets an exact 1/40 s step, not a rounded one."""
+        path = _write_mseed(tmp_path / "forty.mseed", sample_rates=[40.0] * 3)
+        patch = dc.read(path, file_format="MSEED", file_version="3")[0]
+        time = patch.get_coord("time")
+        assert time.step_exact == Fraction(1, 40)
+        assert time.step == np.timedelta64(25_000_000, "ns")
+        path = _write_mseed(tmp_path / "third.mseed", sample_rates=[3000.0] * 3)
+        time = dc.read(path, file_format="MSEED", file_version="3")[0].get_coord("time")
+        assert time.step_exact == Fraction(1, 3000)
+        assert time.stop == time.min() + np.timedelta64(10 * 10**9 // 3000, "ns")
+
+    def test_trim_keeps_grid_and_boundary_sample(self, tmp_path):
+        """Trimming at a whole second keeps that sample and the grid's phase."""
+        pymseed = pytest.importorskip("pymseed")
+        start = pymseed.timestr2nstime("2024-01-01T00:00:00Z")
+        data = [np.arange(3000, dtype=np.int32)] * 3
+        path = _write_mseed(
+            tmp_path / "trim.mseed", sample_rates=[1024.0] * 3, data_samples=data
+        )
+        full = dc.read(path, file_format="MSEED", file_version="3")[0]
+        t0 = np.datetime64(start, "ns")
+        lo, hi = t0 + np.timedelta64(1, "s"), t0 + np.timedelta64(2, "s")
+        trimmed = dc.read(path, file_format="MSEED", file_version="3", time=(lo, hi))[0]
+        time = trimmed.get_coord("time")
+        assert time.min() == lo and time.max() == hi
+        assert time.step_exact == Fraction(1, 1024)
+        # The trim discards the first record, so the grid is anchored on the
+        # writer's rounded start of the second; labels agree to the ns.
+        expected = full.get_coord("time").values[1024:2049]
+        assert np.all(np.abs(time.values - expected) <= np.timedelta64(1, "ns"))
+        odd = dc.read(
+            path,
+            file_format="MSEED",
+            file_version="3",
+            time=(full.get_coord("time")[3], None),
+        )[0].get_coord("time")
+        assert np.array_equal(odd.values, full.get_coord("time").values[3:])
 
     def test_incompatible_sample_rates_are_separate_patches(self, tmp_path):
         """Incompatible traces are returned as separate patches."""

@@ -26,7 +26,7 @@ from pydantic import ConfigDict
 import dascore as dc
 from dascore.constants import PatchType
 from dascore.core.coordmanager import get_coord_manager
-from dascore.core.coords import get_coord
+from dascore.core.coords import CoordRangeInt, get_coord
 from dascore.exceptions import (
     MissingOptionalDependencyError,
     ParameterError,
@@ -64,6 +64,8 @@ def _offset_values(coord, offsets: np.ndarray):
     From the first sample, not the minimum: a descending coordinate steps
     down from where it starts.
     """
+    if isinstance(coord, CoordRangeInt):
+        return coord._from_ticks(coord._ticks(np.asarray(offsets)))
     first, step = coord.values[0], coord.step
     if is_datetime64(coord.dtype) or is_timedelta64(coord.dtype):
         return first + dc.to_timedelta64(offsets * to_float(step))

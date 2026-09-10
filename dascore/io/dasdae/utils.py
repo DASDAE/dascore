@@ -149,6 +149,14 @@ def _save_coords(patch, patch_group):
         save_name = f"_coord_{name}"
         array_node = _save_array(data, save_name, patch_group)
         step = coord.step
+        if getattr(coord, "step_denominator", 1) != 1:
+            # This format stores one whole-tick step and rebuilds the range
+            # from it, which would quietly move every label off its grid.
+            msg = (
+                f"Coordinate {name!r} has a fractional step "
+                f"({coord.step_exact}) which DASDAE format 1 cannot store."
+            )
+            raise NotImplementedError(msg)
         if step is not None:
             is_td = np.issubdtype(np.asarray(step).dtype, np.timedelta64)
             array_node.attrs["step"] = to_int(step) if is_td else step

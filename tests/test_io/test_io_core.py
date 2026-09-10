@@ -7,6 +7,7 @@ import io
 import os
 import shutil
 import threading
+from fractions import Fraction
 from pathlib import Path
 from typing import ClassVar, Literal, TypeVar
 
@@ -57,6 +58,8 @@ from dascore.io.utils import (
     get_exact_coord,
     resolve_keyed_source,
     slice_dataset,
+    step_from_interval,
+    step_from_rate,
     windows_to_slices,
 )
 from dascore.utils.downloader import fetch
@@ -2450,3 +2453,45 @@ class TestResolveKeyedSource:
         """A resource naming one key twice is ambiguous, never the last one."""
         with pytest.raises(PatchAttributeError, match="more than once"):
             resolve_keyed_source([("a", 1), ("a", 2)], "a")
+
+
+class TestStepFromRate:
+    """Readers turn a stated rate or interval into an exact step when they can."""
+
+    def test_exact_rates(self):
+        """Simple rates give exact steps."""
+        assert step_from_rate(1024.0) == Fraction(1, 1024)
+        assert step_from_rate(3000) == Fraction(1, 3000)
+        assert step_from_rate(1000.0) == Fraction(1, 1000)
+
+    def test_inexact_rate_keeps_nanoseconds(self):
+        """An arbitrary rate keeps the rounded nanosecond step."""
+        rate = 1234.56789012345
+        out = step_from_rate(rate)
+        assert isinstance(out, np.timedelta64)
+        assert out == dc.to_timedelta64(1 / rate)
+
+    def test_float32_rate(self):
+        """A float32 rate recovers only what it holds exactly."""
+        assert step_from_rate(np.float32(1024.0)) == Fraction(1, 1024)
+        assert step_from_rate(np.float32(62.5)) == Fraction(2, 125)
+        # A float32 999.9 is 999.9000244; nothing is claimed for it.
+        assert isinstance(step_from_rate(np.float32(999.9)), np.timedelta64)
+        assert step_from_rate(999.9) == Fraction(10, 9999)
+
+    def test_interval(self):
+        """Simple intervals give exact steps."""
+        assert step_from_interval(0.004) == Fraction(1, 250)
+        assert step_from_interval(1 / 3000) == Fraction(1, 3000)
+        assert isinstance(step_from_interval(0.0012345678912345), np.timedelta64)
+
+    def test_nonpositive_falls_back(self):
+        """A non-positive rate is not a grid."""
+        assert isinstance(step_from_rate(-100.0), np.timedelta64)
+
+    def test_coordinate_from_step(self):
+        """The step feeds straight into get_coord."""
+        t0 = np.datetime64("2020-01-01T00:00:00", "ns")
+        coord = get_coord(start=t0, step=step_from_rate(1024.0), shape=(1024,))
+        assert coord.step_exact == Fraction(1, 1024)
+        assert coord.stop == t0 + np.timedelta64(1, "s")

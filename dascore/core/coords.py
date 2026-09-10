@@ -14,6 +14,7 @@ import math
 import re
 from collections.abc import Mapping, Sequence, Sized
 from contextlib import suppress
+from fractions import Fraction
 from functools import cache
 from operator import gt, lt
 from types import EllipsisType
@@ -243,6 +244,15 @@ class CoordSummary(DascoreBaseModel):
     dims: tuple[str, ...] = ()
     len: int | None = None
     fingerprint: str | None = None
+    # The exact grid of a CoordRangeInt, in ticks; None for other coords.
+    step_numerator: int | None = None
+    step_denominator: int | None = None
+    origin_offset: int | None = None
+
+    @property
+    def is_exact_grid(self) -> bool:
+        """Return True when the summary states an exact integer grid."""
+        return self.step_numerator is not None
 
     @property
     def is_range_like(self) -> bool:
@@ -295,17 +305,24 @@ class CoordSummary(DascoreBaseModel):
             raise CoordError(msg)
         step = self.step
         assert step is not None  # is_range_like above rules out a null step
+        if (num := self.step_numerator) is not None:
+            if self.len is None:
+                msg = "An exact grid summary needs its length to rebuild a coord."
+                raise CoordError(msg)
+            return CoordRangeInt(
+                start=self.min if num >= 0 else self.max,
+                shape=(self.len,),
+                step_numerator=num,
+                step_denominator=self.step_denominator or 1,
+                origin_offset=self.origin_offset or 0,
+                units=self.units,
+            )
         # this is a reverse coord
         if np.sign(step) == -1:
             start, stop = self.max, self.min + step
         else:
             start, stop = self.min, self.max + step
-        return CoordRange(
-            start=start,
-            stop=stop,
-            step=step,
-            units=self.units,
-        )
+        return _build_range(start=start, stop=stop, step=step, units=self.units)
 
 
 @cache
@@ -389,6 +406,9 @@ class BaseCoord(RichRepr, DascoreBaseModel, abc.ABC):
             """The coordinate's values."""
 
     _rich_style = dascore_styles["default_coord"]
+    # The name a repr states; a subclass which is an implementation detail
+    # of another coordinate kind states that kind's name.
+    _repr_name: str | None = None
     _evenly_sampled = False
     _sorted = False
     _reverse_sorted = False
@@ -673,7 +693,7 @@ class BaseCoord(RichRepr, DascoreBaseModel, abc.ABC):
     def __rich__(self):
         key_style = dascore_styles["keys"]
         base = Text("")
-        base += Text(self.__class__.__name__, style=self._rich_style)
+        base += Text(self._repr_name or self.__class__.__name__, style=self._rich_style)
         base += Text("(")
         for label, value, labelled in self._repr_fields():
             base += Text(f" {label}: ", key_style) if labelled else Text(" ")
@@ -792,6 +812,23 @@ class BaseCoord(RichRepr, DascoreBaseModel, abc.ABC):
         # math rather than np.prod: the shape is a tuple of ints, and numpy
         # hands back an np.int64 (or a float 1.0 for the empty shape).
         return math.prod(self.shape)
+
+    @property
+    def step_exact(self) -> Fraction | None:
+        """
+        The exact spacing as a fraction in coordinate units, or None.
+
+        A timedelta step is exact in seconds and an integer step in its own
+        units; a float step has no exact form and gives None.
+        """
+        step = self.step
+        if step is None or _is_null_scalar(step):
+            return None
+        if is_timedelta64(step):
+            return Fraction(int(to_int(step)), 10**9)
+        if _is_int_scalar(step):
+            return Fraction(int(step))
+        return None
 
     @property
     def evenly_sampled(self) -> bool:
@@ -1159,11 +1196,7 @@ class BaseCoord(RichRepr, DascoreBaseModel, abc.ABC):
         else:
             compat_val = self._get_compatible_value(value, relative=True)
             duration = compat_val - self.min()
-            # The magnitude of the step, because a window of 30 m is thirty
-            # samples whether the coordinate counts up or down. A descending
-            # coordinate has a negative step, and dividing by it signed would
-            # make the count negative.
-            ratio = duration / np.abs(self.step)
+            ratio = self._samples_in(duration)
             if np.issubdtype(self.dtype, np.floating):
                 nearest = np.round(ratio)
                 # Adding a relative float value to coord.min() and subtracting
@@ -1172,7 +1205,7 @@ class BaseCoord(RichRepr, DascoreBaseModel, abc.ABC):
                 tol = 10 * abs(np.spacing(self.min()) / self.step)
                 if abs(ratio - nearest) <= tol:
                     ratio = nearest
-            samples = int(np.ceil(ratio))
+            samples = math.ceil(ratio)
         if enforce_lt_coord and samples > len(self):
             msg = (
                 f"value of {value} with samples={samples} results in a window "
@@ -1180,6 +1213,18 @@ class BaseCoord(RichRepr, DascoreBaseModel, abc.ABC):
             )
             raise ParameterError(msg)
         return samples
+
+    def _samples_in(self, duration):
+        """How many steps a duration spans, unrounded."""
+        # The magnitude of the step, because a window of 30 m is thirty
+        # samples whether the coordinate counts up or down. A descending
+        # coordinate has a negative step, and dividing by it signed would
+        # make the count negative.
+        return duration / np.abs(self.step)
+
+    def _out_of_bounds_indices(self, array) -> np.ndarray:
+        """The positions values past either end of an evenly sampled coord map to."""
+        return ((array - self.min()) / self.step).astype(np.int64)
 
     def _get_index(self, value, forward=True):
         """
@@ -1258,8 +1303,7 @@ class BaseCoord(RichRepr, DascoreBaseModel, abc.ABC):
                 return array if input_array_like else array[0]
             # For absolute mode with evenly sampled coords, compute index from value
             if hasattr(self, "step") and self.step is not None:
-                # Calculate index: (value - min) / step
-                indices = ((array - min_val) / self.step).astype(np.int64)
+                indices = self._out_of_bounds_indices(array)
                 return indices if input_array_like else indices[0]
 
         # Clamp values to bounds for backward compatibility when not out of bounds
@@ -1918,6 +1962,812 @@ class CoordRange(BaseCoord):
         return self.step < zero
 
 
+_EXACT_GRID_FIELDS = ("step_numerator", "step_denominator", "origin_offset")
+# Seconds in one unit of each fixed-length numpy time unit. Months and
+# years are not fixed, and nothing finer than a nanosecond is supported.
+_SECONDS_PER_UNIT: Mapping[str, Fraction] = {
+    "W": Fraction(604_800),
+    "D": Fraction(86_400),
+    "h": Fraction(3_600),
+    "m": Fraction(60),
+    "s": Fraction(1),
+    "ms": Fraction(1, 10**3),
+    "us": Fraction(1, 10**6),
+    "ns": Fraction(1, 10**9),
+}
+
+
+def _unbox_scalar(value):
+    """Extract the scalar from a 0-d or 1-element array."""
+    if isinstance(value, np.ndarray) and value.size == 1:
+        return value.reshape(-1)[0]
+    return value
+
+
+def _is_int_scalar(value) -> bool:
+    """Return True for a python or numpy integer (not a bool)."""
+    value = _unbox_scalar(value)
+    return isinstance(value, int | np.integer) and not isinstance(
+        value, bool | np.bool_
+    )
+
+
+def _is_fraction_step(step) -> bool:
+    """Return True if step is a Fraction or a (numerator, denominator) tuple."""
+    return isinstance(step, Fraction | tuple)
+
+
+def _as_fraction(step) -> Fraction:
+    """A Fraction or (numerator, denominator) step as a Fraction."""
+    return Fraction(*step) if isinstance(step, tuple) else Fraction(step)
+
+
+def _is_null_scalar(value) -> bool:
+    """Return True for None or a null scalar (NaN, NaT); False for others."""
+    if value is None:
+        return True
+    if _is_fraction_step(value):
+        return False
+    return bool(pd.isnull(_unbox_scalar(value)))
+
+
+def _time_unit(dtype) -> tuple[str, int]:
+    """The unit and count of a time dtype, read from its string form."""
+    match = re.fullmatch(r"[<>|=]?[mM]8\[(\d*)([a-zA-Z]+)\]", np.dtype(dtype).str)
+    if match is None:  # a generic time dtype states no unit
+        return "generic", 1
+    return match.group(2), int(match.group(1) or 1)
+
+
+def _timedelta_dtype(dtype) -> np.dtype:
+    """The timedelta dtype with the unit of a time dtype."""
+    unit, count = _time_unit(dtype)
+    return np.dtype(f"m8[{count if count != 1 else ''}{unit}]")
+
+
+def _seconds_per_tick(dtype) -> Fraction | None:
+    """Seconds in one tick of a time dtype, or None if it has no fixed length."""
+    unit, count = _time_unit(dtype)
+    seconds = _SECONDS_PER_UNIT.get(unit)
+    return None if seconds is None else seconds * count
+
+
+def _tick_seconds(dtype) -> Fraction:
+    """Seconds in one tick of a time dtype known to have a fixed length."""
+    seconds = _seconds_per_tick(dtype)
+    assert seconds is not None, "callers check the unit first"
+    return seconds
+
+
+def _step_value(step_tick: int, dtype: np.dtype):
+    """A whole-tick step as a scalar of the coordinate's step type."""
+    if dtype.kind in "mM":
+        ticks = np.asarray(step_tick, dtype=np.int64)
+        return ticks.astype(_timedelta_dtype(dtype))[()]
+    return step_tick
+
+
+def _time_tick_dtype(start, stop, step) -> np.dtype | None:
+    """
+    The tick dtype an exact time range resolves to, or None to stay legacy.
+
+    A scalar step resolves as `start + step` does, to the finer unit. A
+    fraction step is stated in seconds, and nanoseconds hold it.
+    """
+    ends = [np.asarray(x).dtype for x in (start, stop) if not _is_null_scalar(x)]
+    if _is_fraction_step(step):
+        dtype = np.dtype(f"{ends[0].kind}8[ns]")
+    else:
+        parts = ends if step is None else [*ends, np.asarray(_unbox_scalar(step)).dtype]
+        try:
+            dtype = np.result_type(*parts)
+        except TypeError:  # not all time-like: let the legacy validator say so
+            return None
+    if dtype.kind not in "mM" or _seconds_per_tick(dtype) is None:
+        return None
+    return dtype
+
+
+def _to_tick(value, dtype: np.dtype) -> int:
+    """
+    Return value as an integer tick of ``dtype``: its unit for time, or itself.
+
+    Raises CoordError if the value does not sit on a tick.
+    """
+    value = _unbox_scalar(value)
+    if dtype.kind in "mM":
+        # A step is a timedelta whatever the coordinate holds, so the
+        # target keeps the unit and takes the value's own kind.
+        if is_timedelta64(value) and dtype.kind == "M":
+            dtype = _timedelta_dtype(dtype)
+        try:
+            converted = np.asarray(value).astype(dtype)
+            exact = converted.astype(np.asarray(value).dtype) == np.asarray(value)
+        except (TypeError, ValueError) as e:
+            msg = f"{value!r} is not a {dtype} value."
+            raise CoordError(msg) from e
+        if not exact:
+            msg = f"{value} does not sit on the {dtype} grid."
+            raise CoordError(msg)
+        return int(converted.view(np.int64))
+    if isinstance(value, float | np.floating):
+        if not float(value).is_integer():
+            msg = f"An integer coordinate cannot hold the non-integer value {value}."
+            raise CoordError(msg)
+        return int(value)
+    return int(value)
+
+
+def _range_class(start, stop, step, shape) -> type[CoordRange]:
+    """
+    Pick the range class for these inputs.
+
+    Time and integer inputs get an exact integer grid (CoordRangeInt);
+    everything else stays a plain CoordRange. A fraction step on a float
+    coordinate is rejected: floats have no tick to be a fraction of.
+    """
+    anchor = stop if _is_null_scalar(start) else start
+    fraction = _is_fraction_step(step)
+    if is_datetime64(anchor) or is_timedelta64(anchor):
+        if _time_tick_dtype(start, stop, step) is None:
+            return CoordRange
+        return CoordRangeInt
+    int_like = _is_int_scalar(anchor) and (
+        _is_null_scalar(stop) or _is_int_scalar(stop)
+    )
+    if int_like and fraction:
+        return CoordRangeInt
+    if int_like and _is_null_scalar(step):
+        # Without a step the spacing comes from the span and count, and an
+        # uneven division makes floats, as it always has.
+        both = not (_is_null_scalar(start) or _is_null_scalar(stop))
+        length = next(iter(iterate(shape))) if shape is not None else 0
+        if (
+            both
+            and length
+            and (int(_unbox_scalar(stop)) - int(_unbox_scalar(start))) % length
+        ):
+            return CoordRange
+        return CoordRangeInt
+    if int_like and _is_int_scalar(step):
+        return CoordRangeInt
+    if fraction:
+        msg = (
+            "A fraction step requires a datetime64, timedelta64, or integer "
+            f"coordinate, not {np.asarray(anchor).dtype}."
+        )
+        raise CoordError(msg)
+    return CoordRange
+
+
+def _build_range(**attrs) -> CoordRange:
+    """Construct a range coordinate of the class the inputs call for."""
+    cls = _range_class(
+        attrs.get("start"), attrs.get("stop"), attrs.get("step"), attrs.get("shape")
+    )
+    if cls is CoordRange:
+        for name in _EXACT_GRID_FIELDS:
+            attrs.pop(name, None)
+    return cls(**attrs)
+
+
+def _range_from_dump(payload: dict) -> CoordRange:
+    """Rebuild a range coordinate from its model_dump payload, class intact."""
+    if any(payload.get(name) is not None for name in _EXACT_GRID_FIELDS):
+        return CoordRangeInt(**payload)
+    return CoordRange(**payload)
+
+
+def _normalize_grid(num: int, den: int, offset: int) -> tuple[int, int, int]:
+    """
+    Reduce a grid by the common divisor of all three terms.
+
+    Reducing the step alone would move the ideal origin: from (num 3, den 2,
+    offset 1) the stride-two grid (6, 2, 1) must stay as it is, since (3, 1,
+    0) keeps the labels but shifts the origin by half a tick.
+    """
+    g = math.gcd(num, den, offset)
+    if g > 1:
+        num, den, offset = num // g, den // g, offset // g
+    return num, den, offset
+
+
+def _count_from_span(span: int, num: int, den: int, offset: int) -> int:
+    """
+    The number of ideal positions in [start, start + span), either direction.
+
+    Rounded to a tenth of a sample first, as CoordRange has always done, so
+    a stop stated a hair past a sample does not add one.
+    """
+    ratio = Fraction(span * den - offset, num)
+    # Rounded as a float, as the parent does, so halfway cases agree too.
+    return max(1, math.ceil(round(float(ratio), 1)))
+
+
+def _check_grid_fits(start_tick: int, num: int, den: int, count: int) -> None:
+    """Refuse a grid whose evaluation would overflow int64."""
+    limit = 2**63
+    reach = start_tick + (count * num + den) // den
+    if abs(count * num) + den >= limit or not -limit <= reach < limit:
+        msg = (
+            f"A grid of {count} samples with step {num}/{den} ticks from "
+            f"{start_tick} exceeds the int64 range."
+        )
+        raise CoordError(msg)
+
+
+class CoordRangeInt(CoordRange):
+    """
+    A range coordinate on an exact integer grid.
+
+    The class `get_coord` returns for datetime64, timedelta64, and integer
+    ranges. Labels are integer ticks: the coordinate's time unit
+    (nanoseconds unless coarser inputs say otherwise) or the integers
+    themselves. The ideal grid has a spacing of ``step_numerator /
+    step_denominator`` ticks and an origin ``origin_offset /
+    step_denominator`` ticks after ``start``; each label is the floor of its
+    ideal position. A slice, stride, or reversal therefore reproduces the
+    labels of the original exactly, and a 1024 Hz grid never drifts the way
+    a step rounded to 976562 ns would.
+
+    ``step`` is the nearest whole-tick step (ties to even), kept for every
+    consumer that reads a scalar spacing. ``step_exact`` is the exact
+    spacing in coordinate units (seconds for time). The two agree when the
+    denominator is one, which is every coordinate built from a scalar step.
+
+    Parameters
+    ----------
+    start
+        The first label.
+    stop
+        The exclusive end: the label the grid would place after the last.
+    step
+        The spacing; a scalar, a `Fraction`, or a ``(numerator,
+        denominator)`` tuple in coordinate units.
+    shape
+        The sample count, authoritative when given.
+    step_numerator, step_denominator, origin_offset
+        The exact grid in ticks, normally supplied only when rebuilding a
+        dumped coordinate.
+
+    Notes
+    -----
+    Its repr reads ``CoordRange``; the class is an implementation detail
+    which `isinstance(coord, CoordRange)` continues to cover.
+    """
+
+    step_numerator: int
+    step_denominator: int = 1
+    origin_offset: int = 0
+    _repr_name = "CoordRange"
+
+    @model_validator(mode="before")
+    @classmethod
+    def validate_start_stop_step_len(cls, values):
+        """Resolve the exact grid, then derive stop, step, and dtype from it."""
+        start, stop, step, shape = (
+            _unbox_scalar(values.get(x)) for x in ("start", "stop", "step", "shape")
+        )
+        start = None if _is_null_scalar(start) else start
+        stop = None if _is_null_scalar(stop) else stop
+        step = None if _is_null_scalar(step) else step
+        anchor = start if start is not None else stop
+        if anchor is None:
+            msg = f"CoordRangeInt requires start or stop; you passed {values}."
+            raise CoordError(msg)
+        time_like = is_datetime64(anchor) or is_timedelta64(anchor)
+        if time_like:
+            dtype = _time_tick_dtype(start, stop, step)
+            if dtype is None:
+                msg = f"{np.asarray(anchor).dtype} has no fixed tick length."
+                raise CoordError(msg)
+        else:
+            dtype = np.dtype(np.int64)  # placeholder until the step is known
+        start_tick = None if start is None else _to_tick(start, dtype)
+        stop_tick = None if stop is None else _to_tick(stop, dtype)
+        count = None
+        if shape is not None:
+            shape = tuple(iterate(shape))
+            if len(shape) != 1:
+                msg = "Coord range only works for 1D coords."
+                raise CoordError(msg)
+            count = int(shape[0])
+            if count < 1:
+                msg = "A range coordinate needs at least one sample."
+                raise CoordError(msg)
+        # The grid: a fraction step wins, then explicit grid fields, then a
+        # scalar step, then the span divided by the count.
+        offset = int(values.get("origin_offset") or 0)
+        if _is_fraction_step(step):
+            frac = _as_fraction(step)
+            if time_like:
+                frac = frac / _tick_seconds(dtype)
+            num, den = frac.numerator, frac.denominator
+        elif values.get("step_numerator") is not None:
+            num = int(values["step_numerator"])
+            den = int(values.get("step_denominator") or 1)
+        elif step is not None:
+            num, den, offset = _to_tick(step, dtype), 1, 0
+        else:
+            if start_tick is None or stop_tick is None or count is None:
+                msg = (
+                    "Three of ('start', 'stop', 'step', 'shape') are required "
+                    f"to create CoordRange. You passed {values}"
+                )
+                raise CoordError(msg)
+            frac = Fraction(stop_tick - start_tick, count)
+            num, den, offset = frac.numerator, frac.denominator, 0
+        if den < 1:
+            msg = "step_denominator must be positive."
+            raise CoordError(msg)
+        if 0 < abs(num) < den:
+            msg = "A step smaller than one tick would repeat labels."
+            raise CoordError(msg)
+        if not 0 <= offset < den:
+            msg = f"origin_offset must satisfy 0 <= offset < {den}, got {offset}."
+            raise CoordError(msg)
+        # Resolve start and count.
+        if count is None:
+            if start_tick is None or stop_tick is None:
+                msg = "start, stop, and step, or a shape, are needed."
+                raise CoordError(msg)
+            if num == 0 or start_tick == stop_tick:
+                count = 1
+            else:
+                span = stop_tick - start_tick
+                if (span > 0) != (num > 0):
+                    msg = "Sign of step must match sign of stop - start"
+                    raise CoordError(msg)
+                count = _count_from_span(span, num, den, offset)
+        if start_tick is None:
+            assert stop_tick is not None, "the anchor check above"
+            # The ideal origin is count steps before stop; start is its floor.
+            start_tick, offset = divmod(stop_tick * den - count * num, den)
+        num, den, offset = _normalize_grid(num, den, offset)
+        _check_grid_fits(start_tick, num, den, count)
+        step_tick = round(Fraction(num, den))
+        end_tick = start_tick + (offset + count * num) // den
+        if time_like:
+            start_value = np.asarray(start_tick, dtype=np.int64).astype(dtype)[()]
+        else:
+            start_value = start if start is not None else start_tick
+            dtype = np.asarray(start_value + step_tick).dtype
+        values.update(
+            start=start_value,
+            stop=np.asarray(end_tick, dtype=np.int64).astype(dtype)[()],
+            step=_step_value(step_tick, dtype),
+            shape=(count,),
+            dtype=dtype,
+            step_numerator=num,
+            step_denominator=den,
+            origin_offset=offset,
+        )
+        return values
+
+    # --- grid arithmetic
+
+    @property
+    @cached_method
+    def _start_tick(self) -> int:
+        return _to_tick(self.start, np.dtype(self.dtype))
+
+    @property
+    def _ideal_origin(self) -> Fraction:
+        """The ideal origin in ticks."""
+        den = self.step_denominator
+        return Fraction(self._start_tick * den + self.origin_offset, den)
+
+    @property
+    def step_exact(self) -> Fraction:
+        """The exact spacing in coordinate units (seconds for time)."""
+        frac = Fraction(self.step_numerator, self.step_denominator)
+        if dtype_time_like(self.dtype):
+            return frac * _tick_seconds(self.dtype)
+        return frac
+
+    def _ticks(self, indices) -> np.ndarray:
+        """The label ticks at these (non-negative) indices."""
+        indices = np.asarray(indices, dtype=np.int64)
+        num, den = self.step_numerator, self.step_denominator
+        if den == 1:
+            return self._start_tick + indices * num
+        return self._start_tick + (self.origin_offset + indices * num) // den
+
+    def _from_ticks(self, ticks) -> np.ndarray:
+        """Ticks to values of the coordinate dtype."""
+        return np.asarray(ticks, dtype=np.int64).astype(self.dtype)
+
+    def _grid(self, start_tick: int, num: int, den: int, offset: int, count: int):
+        """Construct a coordinate on a known grid without re-validation."""
+        num, den, offset = _normalize_grid(num, den, offset)
+        _check_grid_fits(start_tick, num, den, count)
+        dtype = np.dtype(self.dtype)
+        start = self._from_ticks(start_tick)[()]
+        stop = self._from_ticks(start_tick + (offset + count * num) // den)[()]
+        step_tick = round(Fraction(num, den))
+        step = _step_value(step_tick, dtype)
+        if not dtype_time_like(dtype):
+            step = type(self.step)(step_tick)
+        return self.model_construct(
+            _fields_set=set(self.model_fields_set) | set(_EXACT_GRID_FIELDS),
+            units=self.units,
+            step=step,
+            shape=(count,),
+            dtype=dtype,
+            start=start,
+            stop=stop,
+            step_numerator=num,
+            step_denominator=den,
+            origin_offset=offset,
+        )
+
+    def _new_grid(self, start, step, length: int) -> Self:
+        """A whole-tick grid from a start value and scalar step."""
+        dtype = np.dtype(self.dtype)
+        return self._grid(_to_tick(start, dtype), _to_tick(step, dtype), 1, 0, length)
+
+    def _sliced(self, first: int, stride: int, count: int):
+        """The coordinate of the samples first, first + stride, ... (count)."""
+        num, den = self.step_numerator, self.step_denominator
+        q, offset = divmod(self.origin_offset + first * num, den)
+        return self._grid(self._start_tick + q, stride * num, den, offset, count)
+
+    def _index_of(self, tick: int, forward: bool) -> int:
+        """
+        The sample index a label tick maps to.
+
+        Forward: the first index whose label is at or past ``tick`` in the
+        coordinate's direction. Otherwise the last index whose label is at
+        or before it. Exact, since a label is the floor of its ideal
+        position and ``tick`` is an integer.
+        """
+        num, den = self.step_numerator, self.step_denominator
+        rel = (tick - self._start_tick) * den - self.origin_offset
+        if num > 0:
+            if forward:  # label >= tick  <=>  ideal >= tick
+                return -((-rel) // num)
+            # label <= tick  <=>  ideal < tick + 1
+            return -((-(rel + den)) // num) - 1
+        if forward:  # label <= tick  <=>  ideal < tick + 1
+            return (rel + den) // num + 1
+        # label >= tick  <=>  ideal >= tick
+        return rel // num
+
+    def _indices_of_whole(self, ticks: np.ndarray, forward: bool) -> np.ndarray:
+        """Vectorized ``_index_of`` for a whole-tick grid."""
+        num = self.step_numerator
+        rel = ticks - self._start_tick
+        if num > 0:
+            if forward:
+                return -np.floor_divide(-rel, num)
+            return -np.floor_divide(-(rel + 1), num) - 1
+        if forward:
+            return np.floor_divide(rel + 1, num) + 1
+        return np.floor_divide(rel, num)
+
+    def _bound_ticks(self, values, forward: bool) -> np.ndarray:
+        """
+        The integer ticks an array of query bounds is equivalent to.
+
+        A bound between ticks asks for the labels past it, which are the
+        labels past the next tick in that direction.
+        """
+        values = np.atleast_1d(values)
+        toward_end = forward == self.sorted
+        dtype = np.dtype(self.dtype)
+        if dtype.kind in "mM":
+            ticks = values.astype(dtype)
+            back = ticks.astype(values.dtype)
+            ticks = ticks.view(np.int64)
+            # A bound finer than the tick: below the truncated tick when
+            # the cast went up, above it when the cast went down.
+            floor = np.where(back > values, ticks - 1, ticks)
+            return np.where(back == values, ticks, floor + toward_end)
+        if values.dtype.kind == "f":
+            values = (np.ceil if toward_end else np.floor)(values)
+        return values.astype(np.int64)
+
+    # --- overrides
+
+    def _fingerprint_components(self) -> tuple[Any, ...]:
+        """The parent's payload, plus the grid when it is not whole ticks."""
+        components = super()._fingerprint_components()
+        if self.step_denominator == 1:
+            return components
+        grid = (self.step_numerator, self.step_denominator, self.origin_offset)
+        return (*components, grid)
+
+    @staticmethod
+    def _coord_identity(coord: BaseCoord) -> str:
+        """Fingerprint as a CoordRange: the grid, not the class, is the identity."""
+        return f"{CoordRange.__module__}.{CoordRange.__qualname__}"
+
+    def _get_fingerprintable_coord(self) -> Self:
+        if self.step_denominator != 1:
+            return self
+        return super()._get_fingerprintable_coord()
+
+    def __getitem__(self, item):
+        if isinstance(item, int | np.integer):
+            if item >= len(self) or item < -len(self):
+                raise IndexError(f"{item} exceeds coord length of {self}")
+            return self._get_index_values(item)[()]
+        if isinstance(item, slice):
+            start = None if item.start is ... else item.start
+            end = None if item.stop is ... else item.stop
+            indices = range(len(self))[slice(start, end, item.step)]
+            if len(indices):
+                return self._sliced(indices.start, indices.step, len(indices))
+            return get_coord(data=np.empty(0, dtype=self.dtype), units=self.units)
+        return get_coord(data=self.values[item], units=self.units)
+
+    def _get_index_values(self, indices):
+        """Evaluate only the requested samples."""
+        indices = np.asarray(indices)
+        indices = np.where(indices < 0, indices + len(self), indices)
+        return self._from_ticks(self._ticks(indices))
+
+    @property
+    @cached_method
+    def values(self) -> ArrayLike:
+        """Return the values of the coordinate as an array."""
+        return array(self._from_ticks(self._ticks(np.arange(len(self)))))
+
+    def _min(self):
+        """Return min value."""
+        return np.min(self._get_index_values([0, len(self) - 1]))
+
+    def _max(self):
+        """Return max value."""
+        return np.max(self._get_index_values([0, len(self) - 1]))
+
+    @property
+    def sorted(self) -> bool:
+        """Returns true if sorted in ascending order."""
+        return self.step_numerator >= 0
+
+    @property
+    def reverse_sorted(self) -> bool:
+        """Returns true if sorted in descending order."""
+        return self.step_numerator < 0
+
+    def _get_index(self, value, forward=True):
+        """Get the index corresponding to a value."""
+        if (value := self._get_compatible_value(value)) is None:
+            return value
+        if isinstance(value, np.ndarray) and value.ndim == 0:
+            value = value[()]
+        if self.step_numerator == 0:
+            return self._get_zero_step_index(value, forward)
+        if not isinstance(value, Sized):
+            if isinstance(value, float | np.floating) and not math.isfinite(value):
+                # A bound past one end of the coordinate; its sign says
+                # which, and the checks below open that side.
+                out = len(self) if (value > 0) == self.sorted else -1
+            else:
+                tick = int(self._bound_ticks(value, forward)[0])
+                out = self._index_of(tick, forward)
+            if forward and out < 0:
+                return None
+            if not forward and out >= len(self):
+                return None
+            return out
+        ticks = self._bound_ticks(value, forward)
+        if self.step_denominator == 1:
+            return self._indices_of_whole(ticks, forward)
+        return np.asarray(
+            [self._index_of(int(t), forward) for t in ticks], dtype=np.int64
+        )
+
+    def select(
+        self, args, relative=False, samples=False
+    ) -> tuple[BaseCoord, slice | ArrayLike]:
+        """
+        Apply select, return selected coords and index to apply to array.
+
+        Can return a CoordDegenerate if selection is outside of range.
+        """
+        if is_array(args):
+            return self._select_by_array(args, relative=relative, samples=samples)
+        elif samples:
+            return self._select_by_samples(args)
+        args = self.get_slice_tuple(args, relative=relative)
+        start = self._get_index(args[0], forward=self.sorted)
+        stop = self._get_index(args[1], forward=self.reverse_sorted)
+        if self.reverse_sorted:
+            start, stop = stop, start
+        start = None if start == 0 else start
+        data = slice(start, (stop + 1) if stop is not None else stop)
+        if self._slice_degenerate(data):
+            return self.empty(), slice(0, 0)
+        return self[data], data
+
+    def sort(self, reverse=False) -> tuple[BaseCoord, slice | ArrayLike]:
+        """Sort the contents of the coord. Return new coord and slice for sorting."""
+        forward_forward = not reverse and self.sorted
+        reverse_reverse = reverse and self.reverse_sorted
+        if forward_forward or reverse_reverse:
+            return self, slice(None)
+        return self[::-1], slice(None, None, -1)
+
+    @compose_docstring(doc=get_docstring(BaseCoord.change_length))
+    def change_length(self, length: int) -> Self:
+        """
+        {doc}
+        """
+        length = _validate_new_length(length)
+        if len(self) == length:
+            return self
+        return self._grid(
+            self._start_tick,
+            self.step_numerator,
+            self.step_denominator,
+            self.origin_offset,
+            length,
+        )
+
+    def _translated(self, delta_tick: int) -> Self:
+        """Shift every label by whole ticks; the grid moves with them."""
+        return self._grid(
+            self._start_tick + delta_tick,
+            self.step_numerator,
+            self.step_denominator,
+            self.origin_offset,
+            len(self),
+        )
+
+    def _with_step(self, step) -> BaseCoord:
+        """The same start and count on a new cadence."""
+        dtype = np.dtype(self.dtype)
+        if _is_fraction_step(step):
+            frac = _as_fraction(step)
+            if dtype_time_like(dtype):
+                frac = frac / _tick_seconds(dtype)
+            num, den = frac.numerator, frac.denominator
+        else:
+            step = get_compatible_values(step, type(self.step))
+            try:
+                num, den = _to_tick(step, dtype), 1
+            except CoordError:
+                # A step this grid cannot hold (a float on integers, a finer
+                # time unit) re-dispatches to the class that can.
+                return get_coord(
+                    start=self.start, step=step, shape=self.shape, units=self.units
+                )
+        if 0 < abs(num) < den:
+            msg = "A step smaller than one tick would repeat labels."
+            raise CoordError(msg)
+        return self._grid(self._start_tick, num, den, 0, len(self))
+
+    def _samples_in(self, duration):
+        """How many exact steps a duration spans."""
+        if dtype_time_like(self.dtype):
+            ns = int(to_int(dc.to_timedelta64(duration)))
+            ticks = Fraction(ns) / (_tick_seconds(self.dtype) * 10**9)
+        else:
+            plain = duration.item() if isinstance(duration, np.generic) else duration
+            ticks = Fraction(plain)
+        return ticks / abs(Fraction(self.step_numerator, self.step_denominator))
+
+    def _out_of_bounds_indices(self, array) -> np.ndarray:
+        """Positions past either end, from the exact grid."""
+        # Toward the coordinate: past the last label its floor position,
+        # before the first its ceiling, as the truncating division did.
+        past_end = self._get_index(array, forward=False)
+        before_start = self._get_index(array, forward=True)
+        last = self._get_index_values(len(self) - 1)
+        beyond = (array > last) if self.sorted else (array < last)
+        return np.where(beyond, past_end, before_start).astype(np.int64)
+
+    @compose_docstring(doc=get_docstring(BaseCoord.update_limits))
+    def update_limits(self, min=None, max=None, step=None, **kwargs) -> BaseCoord:
+        """{doc}."""
+        if all(x is not None for x in [min, max, step]):
+            msg = "At most two parameters can be specified in update_limits."
+            raise ValueError(msg)
+        dtype = np.dtype(self.dtype)
+        out = self
+        if min is not None and max is not None:
+            # As for every range: min is the new start, max the new
+            # exclusive stop, and the count is kept. The spacing is exact
+            # when it is at least a tick; below that the labels are floats.
+            min = get_compatible_values(min, self.dtype)
+            max = get_compatible_values(max, self.dtype)
+            frac = Fraction(_to_tick(max, dtype) - _to_tick(min, dtype), len(self))
+            if abs(frac) < 1:
+                new_step = (max - min) / len(self)
+                out = get_coord(start=min, stop=max, step=new_step, units=self.units)
+            else:
+                out = self._grid(
+                    _to_tick(min, dtype), frac.numerator, frac.denominator, 0, len(self)
+                )
+            return out.new(**kwargs) if kwargs else out
+        if step is not None:
+            out = self._with_step(step)
+            if not isinstance(out, CoordRangeInt):  # re-dispatched to another class
+                return out.update_limits(min=min, max=max, **kwargs)
+        if min is not None:
+            min = get_compatible_values(min, self.dtype)
+            out = out._translated(_to_tick(min, dtype) - _to_tick(out.min(), dtype))
+        if max is not None:
+            max = get_compatible_values(max, self.dtype)
+            out = out._translated(_to_tick(max, dtype) - _to_tick(out.max(), dtype))
+        return out.new(**kwargs) if kwargs else out
+
+    def new(self, **kwargs):
+        """Update coordinate; the exact grid is kept unless the step changes."""
+        if "data" in kwargs or "values" in kwargs:
+            return super().new(**kwargs)
+        info = self.model_dump(exclude_unset=True, exclude_defaults=True)
+        # A new stop or step re-derives the count, as a range always has.
+        if "stop" in kwargs or "step" in kwargs:
+            info.pop("shape", None)
+        if "step" in kwargs:
+            for name in _EXACT_GRID_FIELDS:
+                info.pop(name, None)
+        info.update(kwargs)
+        return get_coord(**info)
+
+    def _convert_units(self, units) -> BaseCoord:  # ty: ignore[invalid-method-override]
+        """Convert units, or set units if none exist; integers become floats."""
+        if dtype_time_like(self.dtype):
+            return self
+        if self.step_denominator != 1:
+            msg = (
+                "Cannot convert the units of an integer coordinate with a "
+                f"fractional step ({self.step_exact}); the result is not an "
+                "integer grid."
+            )
+            raise CoordError(msg)
+        # Whole-tick integer grids convert exactly as a CoordRange does,
+        # which turns them into floats.
+        start = convert_units(self.start, to_units=units, from_units=self.units)
+        stop = convert_units(self.stop, to_units=units, from_units=self.units)
+        step = (stop - start) / len(self)
+        return get_coord(start=start, stop=stop, step=step, units=units)
+
+    def to_summary(self, dims=()) -> CoordSummary:
+        """Get the summary info about the coord, exact grid included."""
+        summary = super().to_summary(dims=dims)
+        num, den, offset = (
+            self.step_numerator,
+            self.step_denominator,
+            self.origin_offset,
+        )
+        if dtype_time_like(self.dtype):
+            # A summary holds time in nanoseconds, so the grid is stated in
+            # nanosecond ticks whatever unit the coordinate keeps.
+            scale = _tick_seconds(self.dtype) * 10**9
+            assert scale.denominator == 1, "finer than ns is never exact"
+            num, den, offset = _normalize_grid(
+                num * scale.numerator, den, offset * scale.numerator
+            )
+        return summary.model_copy(
+            update=dict(step_numerator=num, step_denominator=den, origin_offset=offset)
+        )
+
+    def _repr_fields(self) -> tuple[tuple[str, Text, bool], ...]:
+        fields = super()._repr_fields()
+        if self.step_denominator == 1:
+            return fields
+        # The rounded step misstates a fractional grid (976562 ns is not
+        # 1024 Hz), so the step is said exactly.
+        exact = self.step_exact
+        text = Text(f"{exact}")
+        if dtype_time_like(self.dtype):
+            rate = 1 / abs(exact)
+            rate_str = (
+                str(rate.numerator) if rate.denominator == 1 else f"{float(rate):g}"
+            )
+            text += Text(" s") + Text(f" ({rate_str} Hz)", dascore_styles["units"])
+        elif self.unit_str:
+            text += Text(f" {self.unit_str}", dascore_styles["units"])
+        return tuple(
+            ("step", text, True) if name == "step" else (name, value, labelled)
+            for name, value, labelled in fields
+        )
+
+
 class CoordArray(BaseCoord):
     """
     A coordinate with arbitrary values in an array.
@@ -2013,7 +2863,7 @@ class CoordArray(BaseCoord):
         else:
             start, stop = min_v, max_v + step
         # Get potential output, ensure it is the same length as original.
-        out = CoordRange(start=start, stop=stop, step=step, units=self.units)
+        out = get_coord(start=start, stop=stop, step=step, units=self.units)
         return out.change_length(len(self))
 
     @compose_docstring(doc=get_docstring(BaseCoord.update_limits))
@@ -2170,7 +3020,7 @@ def _coerce_segment(seg) -> BaseCoord:
         # Round-trip support: rebuild segments from model_dump payloads.
         if seg.get("values") is not None:
             return CoordMonotonicArray(**seg)
-        return CoordRange(**seg)
+        return _range_from_dump(seg)
     msg = f"Segments must be coordinates, got {type(seg)}."
     raise CoordError(msg)
 
@@ -2184,7 +3034,7 @@ def _maybe_promote_segment(seg: BaseCoord) -> BaseCoord:
     if len(np.unique(diffs)) != 1:
         return seg
     step = diffs[0]
-    candidate = CoordRange(
+    candidate = get_coord(
         start=values[0], stop=values[-1] + step, step=step, units=seg.units
     )
     # Only promote when the range reproduces the values bit-exactly; unlike
@@ -2194,16 +3044,26 @@ def _maybe_promote_segment(seg: BaseCoord) -> BaseCoord:
     return seg
 
 
+def _range_continues(prev: BaseCoord, seg: BaseCoord) -> bool:
+    """Return True if seg is the next samples of prev's grid."""
+    if not (isinstance(prev, CoordRange) and isinstance(seg, CoordRange)):
+        return False
+    if prev.step_exact != seg.step_exact:
+        return False
+    if isinstance(prev, CoordRangeInt) and isinstance(seg, CoordRangeInt):
+        # The ideal origins must line up, not just the rounded labels.
+        step = Fraction(prev.step_numerator, prev.step_denominator)
+        return seg._ideal_origin == prev._ideal_origin + len(prev) * step
+    return bool(prev.step == seg.step and prev.stop == seg.start)
+
+
 def _fuse_segments(segments: tuple[BaseCoord, ...]) -> tuple[BaseCoord, ...]:
     """Fuse adjacent segments that continue exactly (normal form)."""
     out = [segments[0]]
     for seg in segments[1:]:
         prev = out[-1]
-        both_ranges = isinstance(prev, CoordRange) and isinstance(seg, CoordRange)
-        if both_ranges and prev.step == seg.step and prev.stop == seg.start:
-            out[-1] = CoordRange(
-                start=prev.start, stop=seg.stop, step=prev.step, units=prev.units
-            )
+        if _range_continues(prev, seg):
+            out[-1] = prev.change_length(len(prev) + len(seg))
             continue
         both_arrays = isinstance(prev, CoordMonotonicArray) and isinstance(
             seg, CoordMonotonicArray
@@ -2688,7 +3548,7 @@ class CoordSegmented(BaseCoord):
         # Strictly monotonic segments guarantee a nonzero step matching the
         # sort direction.
         assert step != zero and (step > zero) == ascending
-        candidate = CoordRange(
+        candidate = _build_range(
             start=first, stop=last + step, step=step, units=self.units
         ).change_length(n)
         actual = np.concatenate([x.values for x in run])
@@ -3090,6 +3950,9 @@ def get_coord(
     shape: int | tuple[int, ...] | None = None,
     dtype: str | np.dtype | None = None,
     segments: tuple[BaseCoord, ...] | list[BaseCoord] | None = None,
+    step_numerator: int | None = None,
+    step_denominator: int | None = None,
+    origin_offset: int | None = None,
 ) -> BaseCoord:
     """
     Return a coordinate from provided inputs.
@@ -3125,6 +3988,11 @@ def get_coord(
         A sequence of monotonic coordinates to concatenate into one
         coordinate (see [`concat_coords`](`dascore.core.coords.concat_coords`)).
         Cannot be combined with other value inputs.
+    step_numerator, step_denominator, origin_offset
+        The exact grid of an integer or time range in ticks (see
+        [`CoordRangeInt`](`dascore.core.coords.CoordRangeInt`)). Normally
+        these come from a dumped coordinate; pass ``step`` as a `Fraction`
+        or ``(numerator, denominator)`` tuple to state a fractional step.
 
     Notes
     -----
@@ -3161,6 +4029,13 @@ def get_coord(
     >>>
     >>> # Create a partial coordinate of a given shape
     >>> partial_coord = get_coord(shape=(10,))
+    >>>
+    >>> # A time coordinate sampled at exactly 1024 Hz (a fraction of a
+    >>> # nanosecond) never drifts from its grid.
+    >>> time = get_coord(
+    ...     start=np.datetime64("2020-01-01"), step=(1, 1024), shape=(2048,)
+    ... )
+    >>> assert time.step_exact == 1 / 1024 and time[::2].step_exact == 1 / 512
     """
 
     def _check_data_compatibility(data, start, stop, step):
@@ -3241,13 +4116,28 @@ def get_coord(
 
     data = _get_array(data, values)
     shape = _get_shape(shape)
+    grid = dict(
+        step_numerator=step_numerator,
+        step_denominator=step_denominator,
+        origin_offset=origin_offset,
+    )
     if data is None and shape is not None:
         attrs = dict(
             shape=shape, start=start, stop=stop, step=step, units=units, dtype=dtype
         )
-        try:  # This could be a normal RangeCoord
-            return CoordRange(**attrs)
-        except (ValidationError, CoordError):  # If not it's a partial
+        # A 1D shape with two of start/stop/step states a range; anything
+        # less (or more dimensions) is a partial coord. A range that then
+        # fails to validate is an error, not a partial.
+        stated = sum(not _is_null_scalar(x) for x in (start, stop, step))
+        if len(shape) != 1 or shape[0] == 0 or stated < 2:
+            return CoordPartial(**attrs)
+        try:
+            return _build_range(**attrs, **grid)
+        except (ValidationError, CoordError):
+            # A float range that cannot be built is still a partial, as it
+            # always was; the exact class raises only for what is wrong.
+            if _range_class(start, stop, step, shape) is CoordRangeInt:
+                raise
             return CoordPartial(**attrs)
 
     # maybe convert min/max to start stop.
@@ -3285,13 +4175,13 @@ def get_coord(
         # special case of len 1 array either get range, if step specified
         # or sorted monotonic array if not.
         elif kind == "single":
-            if not pd.isnull(step):
+            if not _is_null_scalar(step):
                 val = data[0]
-                return CoordRange(start=val, stop=val + step, step=step, units=units)
+                return _build_range(start=val, shape=(1,), step=step, units=units)
             return CoordMonotonicArray(values=data, units=units)
         start, stop, step, monotonic = _maybe_get_start_stop_step(data)
         if start is not None:
-            out = CoordRange(start=start, stop=stop, step=step, units=units)
+            out = _build_range(start=start, stop=stop, step=step, units=units)
             # The change_length call helps with float off by one issues.
             return out.change_length(len(data))
         elif monotonic:
@@ -3315,4 +4205,4 @@ def get_coord(
             )
         return CoordArray(values=data, units=units)
     else:
-        return CoordRange(start=start, stop=stop, step=step, units=units)
+        return _build_range(start=start, stop=stop, step=step, units=units, **grid)
