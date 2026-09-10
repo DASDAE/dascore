@@ -23,6 +23,6 @@ from .spectral_descriptors import (
     spectral_entropy,
     spectral_flatness,
     spectral_kurtosis,
-    spectral_maxfrequency,
-    spectral_maxamp,
+    spectral_peak_frequency,
+    spectral_peak_amplitude,
 )

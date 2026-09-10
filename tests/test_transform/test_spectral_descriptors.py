@@ -22,13 +22,41 @@ def sine_dft(sine_patch):
     return sine_patch.dft("time", pad=False)
 
 
-class TestSpectralNamespace:
-    """Tests for the spectral descriptor namespace."""
+class TestSpectralAPI:
+    """Tests for the spectral descriptor public API."""
 
-    def test_namespace_exists(self, sine_dft):
-        """The spectral descriptors live on the spectral namespace."""
-        assert sine_dft.spectral._obj is sine_dft
-        assert hasattr(sine_dft.spectral, "spectral_centroid")
+    @pytest.mark.parametrize(
+        "name", ["spectral_peak_frequency", "spectral_peak_amplitude"]
+    )
+    def test_public_exports(self, sine_dft, name):
+        """Patch methods and transform exports produce the same result."""
+        expected = getattr(dc.transform, name)(sine_dft, fmin=1, fmax=3)
+        out = getattr(sine_dft, name)(fmin=1, fmax=3)
+        assert out.equals(expected)
+
+
+class TestSpectralPeaks:
+    """Tests for peak selection within a frequency band."""
+
+    @pytest.mark.parametrize(
+        "limits, frequency, amplitude",
+        [({}, 2.0, 5.0), ({"fmin": 3, "fmax": 4}, 3.0, 4.0)],
+    )
+    def test_peak_selection(self, limits, frequency, amplitude):
+        """Select the largest peak in the band and the first bin on ties."""
+        patch = dc.Patch(
+            data=np.array([[1.0, 5.0, 4.0, 4.0, 2.0]]),
+            coords={"distance": np.array([0.0]), "ft_time": np.arange(1.0, 6.0)},
+            dims=("distance", "ft_time"),
+        )
+        out_frequency = patch.spectral_peak_frequency(
+            spectral_format="amplitude", **limits
+        )
+        out_amplitude = patch.spectral_peak_amplitude(
+            spectral_format="amplitude", **limits
+        )
+        assert np.allclose(out_frequency.data, frequency)
+        assert np.allclose(out_amplitude.data, amplitude)
 
 
 class TestSpectralCentroid:
@@ -36,7 +64,7 @@ class TestSpectralCentroid:
 
     def test_dft_input(self, sine_dft):
         """Spectral centroid accepts DFT input."""
-        out = sine_dft.spectral.spectral_centroid(fmin=1, fmax=3)
+        out = sine_dft.spectral_centroid(fmin=1, fmax=3)
 
         assert out.dims == ("distance",)
         assert np.allclose(out.data, 2.0, rtol=0.01)
@@ -44,7 +72,7 @@ class TestSpectralCentroid:
     def test_stft_input(self, sine_patch):
         """Spectral centroid accepts STFT input."""
         spec = sine_patch.stft(time=100, overlap=0, samples=True)
-        out = spec.spectral.spectral_centroid(fmin=1, fmax=3)
+        out = spec.spectral_centroid(fmin=1, fmax=3)
 
         assert out.dims == ("distance", "time")
         assert np.all(np.isfinite(out.data))
@@ -56,28 +84,20 @@ class TestSpectralCentroid:
         power = sine_patch.dft("time", real=True, pad=False, output="PS")
         density = sine_patch.dft("time", real=True, pad=False, output="PSD")
 
-        expected = fft.spectral.spectral_centroid(fmin=1, fmax=3)
+        expected = fft.spectral_centroid(fmin=1, fmax=3)
 
-        assert amplitude.spectral.spectral_centroid(fmin=1, fmax=3).equals(
-            expected, close=True
-        )
-        assert power.spectral.spectral_centroid(fmin=1, fmax=3).equals(
-            expected, close=True
-        )
-        assert density.spectral.spectral_centroid(fmin=1, fmax=3).equals(
-            expected, close=True
-        )
+        assert amplitude.spectral_centroid(fmin=1, fmax=3).equals(expected, close=True)
+        assert power.spectral_centroid(fmin=1, fmax=3).equals(expected, close=True)
+        assert density.spectral_centroid(fmin=1, fmax=3).equals(expected, close=True)
 
     def test_real_spectra_need_known_type(self, sine_dft):
         """Real-valued spectra without metadata require an explicit format."""
         unknown = sine_dft.abs().update_attrs(data_type=None)
 
         with pytest.raises(ValueError, match="requires complex"):
-            unknown.spectral.spectral_centroid()
+            unknown.spectral_centroid()
 
-        out = unknown.spectral.spectral_centroid(
-            spectral_format="amplitude", fmin=1, fmax=3
-        )
+        out = unknown.spectral_centroid(spectral_format="amplitude", fmin=1, fmax=3)
 
         assert np.allclose(out.data, 2.0, rtol=0.01)
 
@@ -88,11 +108,11 @@ class TestFrequencySelection:
     def test_negative_frequencies_raise(self, sine_dft):
         """Negative frequency bins can be rejected."""
         with pytest.raises(ValueError, match="negative frequencies"):
-            sine_dft.spectral.spectral_centroid(negative_frequencies="raise")
+            sine_dft.spectral_centroid(negative_frequencies="raise")
 
     def test_negative_frequencies_auto_drops_symmetric(self, sine_dft):
         """Auto mode drops negative bins for symmetric spectra."""
-        out = sine_dft.spectral.max_frequency()
+        out = sine_dft.spectral_peak_frequency()
 
         assert np.all(out.data >= 0)
         assert np.allclose(out.data, 2.0, rtol=0.01)
@@ -106,11 +126,9 @@ class TestFrequencySelection:
         patch = sine_dft.update(data=data)
 
         with pytest.raises(ValueError, match="non-symmetric power"):
-            patch.spectral.spectral_centroid()
+            patch.spectral_centroid()
 
-        out = patch.spectral.spectral_centroid(
-            negative_frequencies="drop", fmin=1, fmax=3
-        )
+        out = patch.spectral_centroid(negative_frequencies="drop", fmin=1, fmax=3)
 
         assert np.allclose(out.data, 2.0, rtol=0.01)
 
@@ -119,9 +137,9 @@ class TestFrequencySelection:
         patch = sine_patch.dft(("time", "distance"), pad=False)
 
         with pytest.raises(ValueError, match="Multiple Fourier dimensions"):
-            patch.spectral.spectral_centroid()
+            patch.spectral_centroid()
 
-        out = patch.spectral.spectral_centroid(dim="time", fmin=1, fmax=3)
+        out = patch.spectral_centroid(dim="time", fmin=1, fmax=3)
 
         assert out.dims == ("ft_distance",)
 
@@ -132,12 +150,12 @@ class TestOtherDescriptors:
     def test_descriptors_accept_dft_input(self, sine_dft):
         """All descriptors accept Fourier-domain input."""
         funcs = (
-            sine_dft.spectral.median_frequency,
-            sine_dft.spectral.max_frequency,
-            sine_dft.spectral.spectral_max,
-            sine_dft.spectral.spectral_entropy,
-            sine_dft.spectral.spectral_kurtosis,
-            sine_dft.spectral.spectral_flatness,
+            sine_dft.median_frequency,
+            sine_dft.spectral_peak_frequency,
+            sine_dft.spectral_peak_amplitude,
+            sine_dft.spectral_entropy,
+            sine_dft.spectral_kurtosis,
+            sine_dft.spectral_flatness,
         )
 
         for func in funcs:
@@ -148,21 +166,21 @@ class TestOtherDescriptors:
     def test_time_domain_input_raises(self, sine_patch):
         """Descriptors reject non-Fourier input."""
         with pytest.raises(ValueError, match="Fourier-domain input"):
-            sine_patch.spectral.spectral_centroid()
+            sine_patch.spectral_centroid()
 
     def test_db_spectra_raise(self, sine_patch):
         """Decibel spectra are rejected."""
         spec = sine_patch.dft("time", real=True, output="PS", db=True)
 
         with pytest.raises(ValueError, match="Decibel-scaled"):
-            spec.spectral.spectral_centroid()
+            spec.spectral_centroid()
 
-    def test_spectral_max_returns_amplitude(self, sine_patch):
-        """Spectral max returns maximum amplitude, not the peak frequency."""
+    def test_peak_amplitude(self, sine_patch):
+        """Peak amplitude agrees across amplitude and power spectra."""
         amplitude = sine_patch.dft("time", real=True, pad=False, output="AS")
         power = sine_patch.dft("time", real=True, pad=False, output="PS")
 
-        expected = amplitude.spectral.spectral_max(fmin=1, fmax=3)
-        out = power.spectral.spectral_max(fmin=1, fmax=3)
+        expected = amplitude.spectral_peak_amplitude(fmin=1, fmax=3)
+        out = power.spectral_peak_amplitude(fmin=1, fmax=3)
 
         assert out.equals(expected, close=True)

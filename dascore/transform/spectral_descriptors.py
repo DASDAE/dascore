@@ -318,7 +318,7 @@ def spectral_centroid(
     >>> ax = patch.viz.waterfall(cmap='seismic', ax=axs[0])
     >>>
     >>> spec = patch.stft(time=.02, overlap=.019, taper_window="boxcar")
-    >>> centroid = spec.spectral.spectral_centroid(fmin=50, fmax=300)
+    >>> centroid = spec.spectral_centroid(fmin=50, fmax=300)
     >>> ax = centroid.viz.waterfall(cmap='turbo', ax=axs[1])
 
     """
@@ -404,7 +404,7 @@ def median_frequency(
     >>> ax = patch.viz.waterfall(cmap='seismic', ax=axs[0])
     >>>
     >>> spec = patch.stft(time=.02, overlap=.019, taper_window="boxcar")
-    >>> med = spec.spectral.median_frequency(fmin=50, fmax=300)
+    >>> med = spec.median_frequency(fmin=50, fmax=300)
     >>> ax = med.viz.waterfall(cmap='turbo', ax=axs[1], scale=[0,1])
     """
     freqs, power, freq_dim = _get_spectral_power(
@@ -439,7 +439,7 @@ def median_frequency(
 
 
 @patch_function()
-def spectral_maxfrequency(
+def spectral_peak_frequency(
     patch: PatchType,
     dim: str | None = None,
     fmin: float | None = None,
@@ -448,9 +448,12 @@ def spectral_maxfrequency(
     negative_frequencies: NegativeFrequencies = "auto",
 ) -> PatchType:
     """
-    Compute the dominant frequency of a Fourier-domain patch.
+    Compute the peak frequency of a Fourier-domain patch.
 
-    The dominant frequency is the frequency bin with maximum spectral power.
+    The peak frequency is the frequency bin with maximum spectral power
+    within the selected frequency range. This is the global maximum, not
+    a search for multiple local peaks. Ties select the first bin in coordinate
+    order.
     The input patch must already be transformed with
     [Patch.dft](`dascore.Patch.dft`) or [Patch.stft](`dascore.Patch.stft`).
 
@@ -496,7 +499,7 @@ def spectral_maxfrequency(
 
 
 @patch_function()
-def spectral_maxamp(
+def spectral_peak_amplitude(
     patch: PatchType,
     dim: str | None = None,
     fmin: float | None = None,
@@ -505,12 +508,13 @@ def spectral_maxamp(
     negative_frequencies: NegativeFrequencies = "auto",
 ) -> PatchType:
     """
-    Compute the maximum spectral amplitude of a Fourier-domain patch.
+    Compute the peak spectral amplitude of a Fourier-domain patch.
 
     The input patch must already be transformed with
     [Patch.dft](`dascore.Patch.dft`) or [Patch.stft](`dascore.Patch.stft`).
     The descriptor returns the largest linear spectral amplitude along the
-    requested Fourier dimension.
+    requested Fourier dimension within the selected frequency range. This is
+    the global maximum, not a search for multiple local peaks.
 
     Parameters
     ----------
