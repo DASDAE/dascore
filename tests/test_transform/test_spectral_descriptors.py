@@ -6,6 +6,7 @@ import numpy as np
 import pytest
 
 import dascore as dc
+from dascore.transform import spectral_descriptors
 
 
 @pytest.fixture(scope="class")
@@ -174,6 +175,30 @@ class TestSpectralValidation:
         patch = spectrum.update(data=spectrum.data.astype(complex))
         out = patch.spectral_centroid()
         assert np.allclose(out.data, 2.0)
+
+
+class TestSpectralHelpers:
+    """Tests for defensive paths in spectral helpers."""
+
+    def test_unhandled_format(self, sine_patch, monkeypatch):
+        """An unexpected normalized format triggers the internal assertion."""
+        monkeypatch.setattr(
+            spectral_descriptors,
+            "_normalize_spectral_format",
+            lambda patch, spectral_format: "unexpected",
+        )
+        with pytest.raises(
+            AssertionError, match="Unhandled spectral format 'unexpected'"
+        ):
+            spectral_descriptors._get_power(sine_patch, "auto")
+
+    def test_nonnegative_frequencies(self):
+        """Spectra without negative bins need no mirrored-power comparison."""
+        freqs = np.array([0.0, 1.0, 2.0])
+        power = np.array([[1.0, 4.0, 9.0]])
+        assert spectral_descriptors._power_has_symmetric_frequencies(
+            freqs, power, freq_axis=1
+        )
 
 
 class TestSpectralCentroid:
