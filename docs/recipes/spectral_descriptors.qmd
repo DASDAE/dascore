@@ -18,3 +18,5 @@ peak_amplitude = spec.spectral_peak_amplitude(fmin=1, fmax=3)
 `spectral_centroid` is the power-weighted center frequency. `spectral_peak_frequency` returns the frequency bin with the largest spectral power, while `spectral_peak_amplitude` returns the largest linear spectral amplitude. Both peak descriptors select the global maximum within the requested frequency range, rather than finding multiple local peaks.
 
 Other descriptors include `median_frequency`, `spectral_entropy`, `spectral_kurtosis`, and `spectral_flatness`. These methods accept DFT and STFT output and support frequency limits with `fmin` and `fmax`.
+
+Descriptor outputs remove the frequency dimension and coordinates that depend on it, while preserving all remaining coordinates and their units.

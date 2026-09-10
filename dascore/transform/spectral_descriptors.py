@@ -237,11 +237,11 @@ def _prepare_output(
     data_type: str,
     data_units: str | Quantity | None,
 ) -> PatchType:
-    """Return a patch with the frequency dimension removed."""
-    dims = tuple(dim for dim in patch.dims if dim != freq_dim)
-    coords = {dim: patch.get_array(dim) for dim in dims}
+    """Remove frequency-dependent coordinates and preserve remaining metadata."""
+    # Descriptor data is already reduced, so only drop coordinates here.
+    coords, _ = patch.coords.drop_coords(freq_dim)
     attrs = {"data_type": data_type, "data_units": data_units}
-    return dc.Patch(data=data, dims=dims, coords=coords, attrs=attrs)
+    return dc.Patch(data=data, dims=coords.dims, coords=coords, attrs=attrs)
 
 
 def _broadcast_freqs(
@@ -492,6 +492,7 @@ def spectral_peak_frequency(
     idx = np.argmax(power_f, axis=0)
 
     out = freqs[idx]
+    out = np.where(np.sum(power_f, axis=0) > 0, out, np.nan)
 
     data_units = patch.get_coord(freq_dim).units
     data_type = "Frequency at Maximum"
@@ -548,6 +549,9 @@ def spectral_peak_amplitude(
     out = np.max(amplitude, axis=freq_axis)
 
     data_units = patch.attrs.get("data_units")
+    resolved_format = _normalize_spectral_format(patch, spectral_format)
+    if resolved_format in {"power", "density"} and data_units is not None:
+        data_units = dc.get_quantity(data_units) ** 0.5
     data_type = "Maximum Spectral Amplitude"
     return _prepare_output(patch, out, freq_dim, data_type, data_units)
 
@@ -617,7 +621,9 @@ def spectral_entropy(
     )
 
     if normalize:
-        entropy /= np.log2(freqs.size)
+        entropy = (
+            np.zeros_like(entropy) if freqs.size == 1 else entropy / np.log2(freqs.size)
+        )
 
     data_units = None
     data_type = "Spectral Entropy"
