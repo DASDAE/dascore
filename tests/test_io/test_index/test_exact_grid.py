@@ -150,6 +150,22 @@ class TestFlatRelation:
         defs = chunked._catalog.backend._fetch_df("SELECT * FROM coord_defs")
         assert defs["step_numerator"].notna().any()
 
+    def test_descending_grid(self, indexed, hz_1024_patch):
+        """A descending grid rebuilds from its maximum, which the row states."""
+        row = indexed._catalog.to_df().iloc[0].to_dict()
+        reversed_time = hz_1024_patch.get_coord("time")[::-1]
+        num, den, offset = (
+            reversed_time.step_numerator,
+            reversed_time.step_denominator,
+            reversed_time.origin_offset,
+        )
+        row["time_step"] = -row["time_step"]
+        row["_time_grid"] = (num, den, offset, len(reversed_time))
+        assert coord_from_row(row, "time", units="s") == reversed_time
+        # without the grid the row cannot say where a descending range starts
+        row["_time_grid"] = None
+        assert coord_from_row(row, "time", units="s") is None
+
     def test_float_row_skips_grid(self):
         """A plan row stating a float placeholder dtype cannot use an integer grid."""
         row = {"x_min": 0.0, "x_max": 9.0, "x_step": 1.0, "_x_grid": (1, 1, 0, 10)}

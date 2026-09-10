@@ -16,6 +16,7 @@ from dascore.core.attrs import PatchAttrs
 from dascore.core.coordmanager import get_coord_manager
 from dascore.core.coords import (
     _EXACT_GRID_FIELDS,
+    CoordMonotonicArray,
     CoordRange,
     CoordSegmented,
     _scalar_dtype,
@@ -317,15 +318,23 @@ def _read_range(node, units):
     return coord._construct(dict(start=start, stop=stop, step=step, shape=shape))
 
 
+def _read_segment(node):
+    """Rebuild one segment of a version-2 segmented coordinate."""
+    units = node.attrs.get("units", None)
+    if unbyte(node.attrs.get("kind", "")) == "range":
+        return _read_range(node, units)
+    return CoordMonotonicArray(values=_read_array(node), units=units)
+
+
 def _read_coord(node, name, attrs2, snap):
     """Rebuild one coordinate from its node."""
     node_attrs = node.attrs
     units = node_attrs.get("units", None) or attrs2.get(f"{name}_units", None)
     kind = unbyte(node_attrs.get("kind", ""))
     if kind == "segmented":
-        segments = [
-            _read_coord(node[str(i)], name, attrs2, snap) for i in range(len(node))
-        ]
+        # the segments were settled exactly when written, so an array
+        # segment is read as the values it holds, never snapped to a range
+        segments = [_read_segment(node[str(i)]) for i in range(len(node))]
         return CoordSegmented(segments=segments, units=units)
     if kind == "range":
         return _read_range(node, units)

@@ -98,6 +98,15 @@ class TestNodeCodec:
         _save_coord(CASES["array"], "arr", h5, compact=True)
         assert h5["arr"].shape == (4,)
 
+    def test_array_segment_stays_exact(self, h5):
+        """A near-uniform array segment is not snapped to a range on read."""
+        jitter = CoordMonotonicArray(values=np.array([0.0, 1.0, 2.0005, 3.0, 4.0]))
+        coord = concat_coords(jitter, get_coord(start=10.0, stop=15.0, step=1.0))
+        _save_coord(coord, "jitter", h5, compact=True)
+        back = _read_coord(h5["jitter"], "jitter", {}, snap=True)
+        assert back == coord
+        assert isinstance(back.segments[0], CoordMonotonicArray)
+
     def test_float_step_keeps_its_precision(self, h5):
         """A float64 step on a float32 start counts the same samples back."""
         coord = get_coord(
