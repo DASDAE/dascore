@@ -1842,34 +1842,29 @@ class CoordRange(BaseCoord):
     are integer ticks (nanoseconds, or the integers themselves), the ideal
     grid has a spacing of ``step_numerator / step_denominator`` ticks and an
     origin ``origin_offset / step_denominator`` ticks after ``start``, and
-    each label is the floor of its ideal position. A slice, stride, or
-    reversal therefore reproduces the labels of the original exactly, and a
-    1024 Hz grid never drifts the way a step rounded to 976562 ns would.
-    ``step`` reports the nearest whole-tick spacing; ``step_exact`` the
-    fraction, in seconds for time.
+    each label is the floor of its ideal position. Slices, strides,
+    reversals, and selections therefore reproduce the labels of the original
+    exactly, and a 1024 Hz grid never drifts the way a step rounded to
+    976562 ns would. ``step`` reports the nearest whole-tick spacing;
+    ``step_exact`` the fraction, in seconds for time.
 
     Float ranges, and time ranges in units other than nanoseconds, keep a
-    scalar step and evaluate their labels by linear spacing; their grid
-    fields are None.
+    scalar step and linearly spaced labels; their grid fields are None.
 
     Parameters
     ----------
     start
-        The starting value
+        The starting value.
     stop
         The ending value, exclusive.
     step
-        The step between start and stop; for exact grids also a `Fraction`
-        or a ``(numerator, denominator)`` tuple in coordinate units.
+        The step between values; for exact grids also a `Fraction` or a
+        ``(numerator, denominator)`` tuple in coordinate units.
     shape
         The sample count.
     step_numerator, step_denominator, origin_offset
         The exact grid in ticks, normally supplied only when rebuilding a
         dumped coordinate.
-
-    Notes
-    -----
-    Like range and slice, CoordRange is exclusive of stop value.
     """
 
     start: Any = None
@@ -1884,7 +1879,7 @@ class CoordRange(BaseCoord):
     @model_validator(mode="before")
     @classmethod
     def validate_start_stop_step_len(cls, values):
-        """Coerce the needed values from the inputs."""
+        """Resolve the range from any three of start, stop, step, and shape."""
         get = values.get
         dtype = _exact_dtype(get("start"), get("stop"), get("step"), get("shape"))
         fields = (
@@ -1893,7 +1888,7 @@ class CoordRange(BaseCoord):
         values.update(fields)
         return values
 
-    # --- the two primitives every range operation is built from
+    # --- the grid
 
     @property
     def _exact(self) -> bool:
@@ -1919,30 +1914,22 @@ class CoordRange(BaseCoord):
         return Fraction(self._start_tick * den + offset, den)
 
     def _labels(self, indices) -> np.ndarray:
-        """The labels at these (non-negative, possibly out of range) indices."""
+        """The labels at these indices, which may lie outside the coordinate."""
         indices = np.asarray(indices)
         if self._exact:
-            indices = indices.astype(np.int64)
             num, den, offset = self._grid_terms
-            if den == 1:
-                ticks = self._start_tick + indices * num
-            else:
-                ticks = self._start_tick + (offset + indices * num) // den
-            return np.asarray(ticks).astype(self.dtype)
-        if len(self) == 1 or dtype_time_like(self.dtype):
+            ticks = (offset + indices.astype(np.int64) * num) // den
+            return np.asarray(self._start_tick + ticks).astype(self.dtype)
+        if len(self) == 1 or np.dtype(self.dtype).kind in "mMO":
             return np.asarray(self.start + indices * self.step, dtype=self.dtype)
         # Match linspace's inferred floating dtype, rounding, and exact endpoint.
-        stop = self.stop - self.step
-        dtype = np.result_type(self.start, stop, 0.0)
-        delta = np.subtract(stop, self.start, dtype=dtype)
+        last = self.stop - self.step
+        dtype = np.result_type(self.start, last, 0.0)
+        delta = np.subtract(last, self.start, dtype=dtype)
         step = delta / (len(self) - 1)
-        values = indices.astype(dtype)
-        if step == 0:
-            values = (values / (len(self) - 1)) * delta
-        else:
-            values = values * step
-        values = values + self.start
-        values = np.where(indices == len(self) - 1, stop, values)
+        scaled = indices.astype(dtype)
+        scaled = scaled / (len(self) - 1) * delta if step == 0 else scaled * step
+        values = np.where(indices == len(self) - 1, last, scaled + self.start)
         return values.astype(self.dtype)
 
     def _sliced(self, first: int, stride: int, count: int) -> Self:
@@ -1950,50 +1937,27 @@ class CoordRange(BaseCoord):
         if self._exact:
             num, den, offset = self._grid_terms
             q, offset = divmod(offset + first * num, den)
-            return self._grid(self._start_tick + q, stride * num, den, offset, count)
-        return self._new_grid(self.start + first * self.step, self.step * stride, count)
+            fields = _grid_fields(
+                self._start_tick + q, stride * num, den, offset, count, self.dtype
+            )
+        else:
+            start, step = self.start + first * self.step, self.step * stride
+            fields = dict(
+                start=start, stop=start + step * count, step=step, shape=(count,)
+            )
+        return self._construct(fields)
 
-    def _grid(self, start_tick: int, num: int, den: int, offset: int, count: int):
-        """Construct an exact grid without re-validation."""
-        return self.model_construct(
-            _fields_set=set(self.model_fields_set) | set(_EXACT_GRID_FIELDS),
-            units=self.units,
-            **_grid_fields(start_tick, num, den, offset, count, self.dtype),
-        )
-
-    def _new_grid(self, start, step, length: int) -> Self:
-        """
-        Return a CoordRange on an exactly known grid, skipping re-validation.
-
-        `validate_start_stop_step_len` exists to *derive* shape and a
-        normalized stop (always `start + step * length`) from loosely
-        specified inputs. Callers below already know the sample count exactly
-        -- it comes from index arithmetic on an existing, validated coord --
-        so re-deriving it costs ~60us per call and can only reproduce what is
-        passed in here.
-
-        Only use this where start/step come from an already-validated
-        CoordRange and length is computed from indices; anything taking user
-        input must go through the validating constructor.
-        """
-        if self._exact:
-            return self._grid(_to_tick(start), _to_tick(step), 1, 0, length)
+    def _construct(self, fields: dict) -> Self:
+        """Build from fields already on a known grid, skipping re-validation."""
+        # check_time_units forces time-like coords to seconds, testing start
+        # for truthiness; a coord starting at exactly zero is left alone.
+        start, dtype = fields["start"], fields.get("dtype", self.dtype)
         units = self.units
-        # Mirror check_time_units, which forces time-like coords to seconds.
-        # Note it tests `start` for truthiness, so a coord starting at exactly
-        # zero is left alone; that quirk is reproduced here deliberately.
         if start and (is_timedelta64(start) or is_datetime64(start)):
             units = _second_quantity()
         return self.model_construct(
-            # copy; model_construct stores the set by reference.
-            _fields_set=set(self.model_fields_set),
-            units=units,
-            step=step,
-            shape=(length,),
-            # matches what the validator stores for dtype.
-            dtype=np.asarray(start + step).dtype,
-            start=start,
-            stop=start + step * length,
+            _fields_set=set(self.model_fields_set) | set(fields),
+            **{"units": units, "dtype": dtype, **fields},
         )
 
     # --- identity and display
@@ -2004,8 +1968,7 @@ class CoordRange(BaseCoord):
         if not self._exact:
             return super().step_exact
         num, den, _ = self._grid_terms
-        frac = Fraction(num, den)
-        return frac / _NS_PER_S if dtype_time_like(self.dtype) else frac
+        return Fraction(num, den) / (_NS_PER_S if dtype_time_like(self.dtype) else 1)
 
     def _fingerprint_components(self) -> tuple[Any, ...]:
         """The scalar payload of a range, plus the grid when it is not whole ticks."""
@@ -2028,15 +1991,12 @@ class CoordRange(BaseCoord):
         fields = super()._repr_fields()
         if not self._exact or self.step_denominator == 1:
             return fields
-        # The rounded step misstates a fractional grid (976562 ns is not
-        # 1024 Hz), so the step is said exactly.
+        # The rounded step misstates a fractional grid, so it is said exactly.
         exact = cast("Fraction", self.step_exact)
         text = Text(f"{exact}")
         if dtype_time_like(self.dtype):
             rate = 1 / abs(exact)
-            rate_str = (
-                str(rate.numerator) if rate.denominator == 1 else f"{float(rate):g}"
-            )
+            rate_str = str(rate) if rate.denominator == 1 else f"{float(rate):g}"
             text += Text(" s") + Text(f" ({rate_str} Hz)", dascore_styles["units"])
         elif self.unit_str:
             text += Text(f" {self.unit_str}", dascore_styles["units"])
@@ -2060,21 +2020,7 @@ class CoordRange(BaseCoord):
     @cached_method
     def values(self) -> ArrayLike:
         """Return the values of the coordinate as an array."""
-        if self._exact or len(self) == 1:
-            # Cached, so it must be read-only like the other branch.
-            return array(self._labels(np.arange(len(self))))
-        # note: linspace works better for floats that might have slightly
-        # uneven spacing. It ensures the length of the output array is robust
-        # to small deviations in spacing. However, this doesnt work for datetimes.
-        if is_datetime64(self.start) or is_timedelta64(self.start):
-            out = np.arange(self.start, self.stop, self.step)
-        else:
-            out = np.linspace(
-                self.start, self.stop - self.step, num=len(self), dtype=self.dtype
-            )
-        # again, due to round-off error the array can one element longer than
-        # anticipated. The slice here just ensures shape and len match.
-        return array(out[: len(self)])
+        return array(self._labels(np.arange(len(self))))
 
     def _get_index_values(self, indices):
         """Evaluate only requested samples using the same grid as ``values``."""
@@ -2085,20 +2031,13 @@ class CoordRange(BaseCoord):
     def __len__(self):
         return self.shape[0]
 
-    def _ends(self) -> tuple:
-        """The first and last labels, in coordinate order."""
-        if self._exact:
-            return tuple(self._labels([0, len(self) - 1]))
-        # like range, coord range is exclusive of final value.
-        return self.start, self.stop - self.step
-
     def _min(self):
         """Return min value."""
-        return np.min(self._ends())
+        return np.min(self._labels([0, len(self) - 1]))
 
     def _max(self):
         """Return max value in range."""
-        return np.max(self._ends())
+        return np.max(self._labels([0, len(self) - 1]))
 
     @property
     def sorted(self) -> bool:
@@ -2109,8 +2048,7 @@ class CoordRange(BaseCoord):
     @property
     def reverse_sorted(self) -> bool:
         """Returns true if sorted in descending order."""
-        zero = _TD64_ZERO if is_timedelta64(self.step) else 0
-        return self.step < zero
+        return not self.sorted
 
     # --- indexing and selection
 
@@ -2119,13 +2057,10 @@ class CoordRange(BaseCoord):
             if item >= len(self) or item < -len(self):
                 raise IndexError(f"{item} exceeds coord length of {self}")
             return self._get_index_values(item)[()]
-        # handle ... as None
         if isinstance(item, slice):
             start = None if item.start is ... else item.start
             end = None if item.stop is ... else item.stop
-            # A (possibly strided) slice of an evenly sampled range is still
-            # evenly sampled, so preserve the step rather than collapsing to a
-            # CoordMonotonicArray (which loses step for len==1). See #567.
+            # A (strided) slice of a range is still a range; see #567.
             indices = range(len(self))[slice(start, end, item.step)]
             if len(indices):
                 return self._sliced(indices.start, indices.step, len(indices))
@@ -2142,21 +2077,16 @@ class CoordRange(BaseCoord):
         """The span of the coordinate; extended, to its exclusive end."""
         if not extend or not self._exact:
             return super().coord_range(extend=extend)
-        first, last = self._labels([0, len(self)])
-        return np.abs(last - first)
+        first, end = self._labels([0, len(self)])
+        return np.abs(end - first)
 
     @compose_docstring(doc=get_docstring(BaseCoord.change_length))
     def change_length(self, length: int) -> Self:
         """
         {doc}
         """
-        # CoordRange is always 1D by construction; keep as an internal invariant.
-        assert self.ndim == 1, "Can only change length for 1D coords."
         length = _validate_new_length(length)
-        if len(self) == length:
-            return self
-        # Only the sample count changes; start/step are already valid.
-        return self._sliced(0, 1, length)
+        return self if len(self) == length else self._sliced(0, 1, length)
 
     def select(
         self, args, relative=False, samples=False
@@ -2184,9 +2114,7 @@ class CoordRange(BaseCoord):
 
     def sort(self, reverse=False) -> tuple[BaseCoord, slice | ArrayLike]:
         """Sort the contents of the coord. Return new coord and slice for sorting."""
-        forward_forward = not reverse and self.sorted
-        reverse_reverse = reverse and self.reverse_sorted
-        if forward_forward or reverse_reverse:
+        if reverse == self.reverse_sorted:
             return self, slice(None)
         return self[::-1], slice(None, None, -1)
 
@@ -2194,51 +2122,28 @@ class CoordRange(BaseCoord):
         """
         Get the index of a value for a coord with a step of 0.
 
-        Every sample of such a coord equals start, so the index is either the
-        first sample or one just outside the coord, which makes the
-        selection degenerate.
+        Every sample equals start, so the index is the first sample or one
+        just outside the coord, which makes the selection degenerate.
         """
-        start = self.start
         if forward:  # index of the first sample >= value
-            return 0 if value <= start else len(self)
-        return 0 if value >= start else -1
+            return 0 if value <= self.start else len(self)
+        return 0 if value >= self.start else -1
 
-    def _index_of(self, tick: int, forward: bool) -> int:
+    def _index_of(self, ticks, forward: bool):
         """
-        The sample index a label tick of an exact grid maps to.
+        The sample index each label tick of an exact grid maps to.
 
-        Forward: the first index whose label is at or past ``tick`` in the
+        Forward: the first index whose label is at or past the tick in the
         coordinate's direction. Otherwise the last index whose label is at
         or before it. Exact, since a label is the floor of its ideal
-        position and ``tick`` is an integer.
+        position and a tick is an integer; Python integers, so no overflow.
         """
         num, den, offset = self._grid_terms
-        rel = (tick - self._start_tick) * den - offset
-        if num > 0:
-            if forward:  # label >= tick  <=>  ideal >= tick
-                return -((-rel) // num)
-            # label <= tick  <=>  ideal < tick + 1
-            return -((-(rel + den)) // num) - 1
-        if forward:  # label <= tick  <=>  ideal < tick + 1
-            return (rel + den) // num + 1
-        # label >= tick  <=>  ideal >= tick
-        return rel // num
-
-    def _indices_of(self, ticks: np.ndarray, forward: bool) -> np.ndarray:
-        """``_index_of`` for an array of ticks."""
-        if self.step_denominator != 1:
-            return np.asarray(
-                [self._index_of(int(t), forward) for t in ticks], dtype=np.int64
-            )
-        num, _, _ = self._grid_terms
-        rel = ticks - self._start_tick
-        if num > 0:
-            if forward:
-                return -np.floor_divide(-rel, num)
-            return -np.floor_divide(-(rel + 1), num) - 1
-        if forward:
-            return np.floor_divide(rel + 1, num) + 1
-        return np.floor_divide(rel, num)
+        rel = (np.asarray(ticks, dtype=object) - self._start_tick) * den - offset
+        if forward == (num > 0):  # label >= tick  <=>  ideal >= tick
+            return -((-rel) // num) if num > 0 else rel // num
+        # label <= tick  <=>  ideal < tick + 1
+        return -((-(rel + den)) // num) - 1 if num > 0 else (rel + den) // num + 1
 
     def _bound_ticks(self, values, forward: bool) -> np.ndarray:
         """
@@ -2266,62 +2171,45 @@ class CoordRange(BaseCoord):
             return self._get_float_index(value, forward)
         if self.step_numerator == 0:
             return self._get_zero_step_index(value, forward)
-        if not isinstance(value, Sized):
-            if isinstance(value, float | np.floating) and not math.isfinite(value):
-                # A bound past one end of the coordinate; its sign says
-                # which, and the checks below open that side.
-                out = len(self) if (value > 0) == self.sorted else -1
-            else:
-                tick = int(self._bound_ticks(value, forward)[0])
-                out = self._index_of(tick, forward)
-            if forward and out < 0:
-                return None
-            if not forward and out >= len(self):
-                return None
-            return out
-        return self._indices_of(self._bound_ticks(value, forward), forward)
+        if isinstance(value, Sized):
+            ticks = self._bound_ticks(value, forward)
+            return self._index_of(ticks, forward).astype(np.int64)
+        if isinstance(value, float | np.floating) and not math.isfinite(value):
+            # Past one end of the coordinate; the checks below open that side.
+            out = len(self) if (value > 0) == self.sorted else -1
+        else:
+            out = int(self._index_of(self._bound_ticks(value, forward), forward)[0])
+        if (forward and out < 0) or (not forward and out >= len(self)):
+            return None
+        return out
 
     def _get_float_index(self, value, forward=True):
         """Get the index corresponding to a value of a float range."""
         start, step = self.start, self.step
-        if not isinstance(value, Sized):
-            # Scalar fast path; avoids several small-array allocations.
-            # Due to float weirdness we need a little bit of a fudge factor.
-            # (float() first since rounding numpy scalars is ~10x slower)
-            # A step of 0 is handled after the division (python scalars raise,
-            # numpy scalars give inf/nan) since testing a numpy step for
-            # truthiness up front costs ~10x more on this hot path.
-            try:
-                fraction = round(float((value - start) / step), 10)
-            except ZeroDivisionError:
+        if isinstance(value, Sized):
+            func = np.ceil if forward else np.floor
+            # Due to float weirdness we need a little bit of a fudge factor here.
+            fraction = func(
+                np.round((np.atleast_1d(value) - start) / step, decimals=10)
+            )
+            return fraction.astype(np.int64)
+        # Scalar fast path. A zero step is caught after the division: python
+        # scalars raise, numpy scalars give inf/nan, and testing a numpy step
+        # for truthiness up front costs ~10x more on this hot path.
+        try:
+            fraction = round(float((value - start) / step), 10)
+        except ZeroDivisionError:
+            return self._get_zero_step_index(value, forward)
+        if not math.isfinite(fraction):
+            if not step:
                 return self._get_zero_step_index(value, forward)
-            if not math.isfinite(fraction):
-                # A zero step, whose samples all equal start, has a
-                # degenerate but defined index. Ask it by truthiness: a
-                # timedelta step compared to a bare 0 warns (and will
-                # eventually raise) about the generic unit that implies.
-                if not step:
-                    return self._get_zero_step_index(value, forward)
-                # Otherwise the fraction is infinite: a bound past one end of
-                # the coord, either because the bound itself is infinite or
-                # because it sits far enough from start to overflow the
-                # division. Its sign says which end, and the range checks
-                # below turn the end the samples are not on into an open
-                # side. It cannot be NaN; a null bound, NaN and NaT alike,
-                # is already None by the time it gets here.
-                out = len(self) if fraction > 0 else -1
-            else:
-                out = math.ceil(fraction) if forward else math.floor(fraction)
-            if forward and out < 0:
-                return None
-            if not forward and out >= len(self):
-                return None
-            return out
-        array = np.atleast_1d(value)
-        func = np.ceil if forward else np.floor
-        # Due to float weirdness we need a little bit of a fudge factor here.
-        fraction = func(np.round((array - start) / step, decimals=10))
-        return fraction.astype(np.int64)
+            # A bound past one end; its sign says which.
+            out = len(self) if fraction > 0 else -1
+        else:
+            out = math.ceil(fraction) if forward else math.floor(fraction)
+        if (forward and out < 0) or (not forward and out >= len(self)):
+            return None
+        return out
 
     def _samples_in(self, duration):
         """How many steps a duration spans, unrounded."""
@@ -2330,8 +2218,7 @@ class CoordRange(BaseCoord):
         if dtype_time_like(self.dtype):
             ticks = Fraction(int(to_int(dc.to_timedelta64(duration))))
         else:
-            plain = duration.item() if isinstance(duration, np.generic) else duration
-            ticks = Fraction(plain)
+            ticks = Fraction(_maybe_unpack(np.asarray(duration)).item())
         num, den, _ = self._grid_terms
         return ticks / abs(Fraction(num, den))
 
@@ -2339,23 +2226,26 @@ class CoordRange(BaseCoord):
         """Positions past either end, from the grid."""
         if not self._exact:
             return super()._out_of_bounds_indices(array)
-        # Toward the coordinate: past the last label its floor position,
-        # before the first its ceiling, as the truncating division did.
-        past_end = self._get_index(array, forward=False)
-        before_start = self._get_index(array, forward=True)
-        last = self._get_index_values(len(self) - 1)
+        # Past the last label its floor position, before the first its
+        # ceiling, as the truncating division did.
+        last = self._labels(len(self) - 1)
         beyond = (array > last) if self.sorted else (array < last)
-        return np.where(beyond, past_end, before_start).astype(np.int64)
+        return np.where(
+            beyond, self._get_index(array, forward=False), self._get_index(array)
+        ).astype(np.int64)
 
     # --- updates
 
     def _translated(self, delta) -> Self:
-        """Shift every label by a whole number of ticks; the grid moves with them."""
+        """Shift every label; the grid moves with them."""
         if self._exact:
             num, den, offset = self._grid_terms
             start_tick = self._start_tick + _to_tick(delta)
-            return self._grid(start_tick, num, den, offset, len(self))
-        return self._new_grid(self.start + delta, self.step, len(self))
+            fields = _grid_fields(start_tick, num, den, offset, len(self), self.dtype)
+        else:
+            start, stop = self.start + delta, self.stop + delta
+            fields = dict(start=start, stop=stop, step=self.step, shape=self.shape)
+        return self._construct(fields)
 
     def _with_step(self, step) -> CoordRange:
         """The same start and count on a new cadence."""
@@ -2368,15 +2258,17 @@ class CoordRange(BaseCoord):
                 start=self.start, step=step, shape=self.shape, units=self.units
             )
         if frac is not None:
-            if dtype_time_like(self.dtype):
-                frac = frac * _NS_PER_S
-            num, den = frac.numerator, frac.denominator
+            num, den = (
+                frac * (_NS_PER_S if dtype_time_like(self.dtype) else 1)
+            ).as_integer_ratio()
         else:
             num, den = _to_tick(step), 1
         if 0 < abs(num) < den:
             msg = "A step smaller than one tick would repeat labels."
             raise CoordError(msg)
-        return self._grid(self._start_tick, num, den, 0, len(self))
+        return self._construct(
+            _grid_fields(self._start_tick, num, den, 0, len(self), self.dtype)
+        )
 
     @compose_docstring(doc=get_docstring(BaseCoord.update_limits))
     def update_limits(self, min=None, max=None, step=None, **kwargs) -> BaseCoord:
@@ -2393,15 +2285,13 @@ class CoordRange(BaseCoord):
             max = get_compatible_values(max, self.dtype)
             span = _to_tick(max) - _to_tick(min) if self._exact else 0
             if abs(frac := Fraction(span, len(self))) >= 1:
-                out = self._grid(
-                    _to_tick(min), frac.numerator, frac.denominator, 0, len(self)
-                )
+                num, den = frac.as_integer_ratio()
+                fields = _grid_fields(_to_tick(min), num, den, 0, len(self), self.dtype)
+                out = self._construct(fields)
             else:
                 new_step = (max - min) / len(self)
                 out = get_coord(start=min, stop=max, step=new_step, units=self.units)
             return out.new(**kwargs) if kwargs else out
-        # For other combinations we just apply adjustments sequentially
-        # after ensuring that the types are compatible.
         if step is not None:
             out = out._with_step(step)
         if min is not None:
@@ -2423,13 +2313,11 @@ class CoordRange(BaseCoord):
         if "step" in kwargs:
             for name in _EXACT_GRID_FIELDS:
                 info.pop(name, None)
-        info.update(kwargs)
-        return get_coord(**info)
+        return get_coord(**{**info, **kwargs})
 
     def _convert_units(self, units) -> Self:
         """Convert units, or set units if none exist."""
-        # cant convert time units
-        if dtype_time_like(self.dtype):
+        if dtype_time_like(self.dtype):  # time units are fixed
             return self
         if self._exact and self.step_denominator != 1:
             msg = (
@@ -2438,12 +2326,10 @@ class CoordRange(BaseCoord):
                 "integer grid."
             )
             raise CoordError(msg)
-        out = dict(units=units)
         start = convert_units(self.start, to_units=units, from_units=self.units)
         stop = convert_units(self.stop, to_units=units, from_units=self.units)
         step = (stop - start) / len(self)
-        out["start"], out["stop"], out["step"] = start, stop, step
-        return self.__class__(**out)
+        return self.__class__(start=start, stop=stop, step=step, units=units)
 
 
 class CoordArray(BaseCoord):

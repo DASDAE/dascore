@@ -815,7 +815,7 @@ class TestValidationErrors:
     def test_non_integer_float(self):
         """A non-integer float cannot be a tick of an integer grid."""
         with pytest.raises(CoordError, match="non-integer"):
-            get_coord(start=0, stop=10, step=(5, 2))._new_grid(0.5, 1, 3)
+            get_coord(start=0, stop=10, step=1).update_limits(min=2.5)
 
     def test_month_unit(self):
         """A month step is not exact; a fraction step resolves to nanoseconds."""
@@ -855,11 +855,6 @@ class TestValidationErrors:
         """A new step below one tick is refused."""
         with pytest.raises(CoordError, match="smaller than one tick"):
             int_frac.update_limits(step=(1, 3))
-
-    def test_new_grid_helper(self, int_frac):
-        """The parent's grid constructor builds a whole-tick grid."""
-        out = int_frac._new_grid(4, 2, 5)
-        assert np.array_equal(out.values, [4, 6, 8, 10, 12])
 
     def test_descending_array_index(self):
         """The vectorized index of a descending whole-tick grid."""
