@@ -168,7 +168,8 @@ def source_patch_id(
     -----
     Every field already exists in the index, so no filesystem access is required.
     Size and modification time distinguish replaced sources; unavailable values may
-    be None. Path-derived IDs depend on archive layout and are not stable across
+    be None. Changing modification time changes the ID even if contents are unchanged.
+    Path-derived IDs depend on archive layout and are not stable across
     hosts. IDs stored by a format remain authoritative and portable.
     """
     return digest(

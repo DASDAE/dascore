@@ -647,7 +647,8 @@ class Geometry(InventoryModel):
     ``distance`` contains at least two strictly increasing optical distances and
     defines a half-open coverage span. Each named column supplies one value per
     distance. CRS axis columns use CRS units; other numeric columns declare their
-    own units. Interpolation is linear within segments and undefined outside them.
+    own units. For coils, optical distance advances while physical coordinates repeat.
+    Interpolation is linear within segments and undefined outside them.
     Overlapping segments must describe different columns and share the same name.
 
     Examples
