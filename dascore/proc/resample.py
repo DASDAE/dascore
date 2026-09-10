@@ -25,9 +25,7 @@ scipy_decimate = lazy_import("scipy.signal", "decimate")
 
 
 def _apply_scipy_decimation(patch, factor, ftype, axis):
-    """
-    Apply decimation along axis.
-    """
+    """Apply decimation along an axis."""
     try:
         data = scipy_decimate(patch.data, factor, ftype=ftype, axis=axis)
     except ValueError as e:
@@ -55,23 +53,18 @@ def decimate(
     patch
         The patch to decimate.
     filter_type
-        filter type to use to avoid aliasing. Options are:
-            iir - infinite impulse response
-            fir - finite impulse response
-            None - No pre-filtering, not recommended, may cause aliasing
+        Anti-aliasing filter: `"iir"`, `"fir"`, or None. None disables
+        pre-filtering and may cause aliasing.
     copy
-        If True, copy the decimated data array. This is needed if you want
-        the old array to get gc'ed to free memory otherwise a view is returned.
-        Only applies when filter_type == None.
+        Copy the sliced data so it does not retain the original array. Applies
+        only when `filter_type` is None.
     **kwargs
-        Used to pass dimension and factor. For example `time=10` is 10x
-        decimation along the time axis.
+        Dimension and factor; `time=10` decimates the time axis by 10.
 
     Notes
     -----
-    - Simply uses scipy.signal.decimate if filter_type is specified.
-      Otherwise,just slice data long specified dimension only including
-      every n samples.
+    - Uses `scipy.signal.decimate` when `filter_type` is specified; otherwise,
+      takes every nth sample along the dimension.
 
     - If the decimation dimension is small, this can fail due to lack of
       padding values.
@@ -97,14 +90,12 @@ def decimate(
     """
     dim, axis, factor = get_dim_axis_value(patch, kwargs=kwargs)[0]
     coords, slices = patch.coords.decimate(**{dim: int(factor)})
-    # Apply scipy.signal.decimate and get new coords
     if filter_type:
         data = _apply_scipy_decimation(patch, factor, ftype=filter_type, axis=axis)
-    else:  # No filter, simply slice along specified dimension.
+    else:
         data = patch.data[slices]
-        # Need to copy so array isn't a slice and holds onto reference of parent
+        # Copying releases the reference to the parent array.
         data = np.array(data) if copy else data
-    # Update delta_dim since spacing along dimension has changed.
     return patch.new(data=data, coords=coords)
 
 
@@ -167,8 +158,8 @@ def interpolate(patch: PatchType, kind: str | int = "linear", **kwargs) -> Patch
 
     Notes
     -----
-    This function just uses scipy's interp1d function under the hood.
-    See scipy.interpolate.interp1d for information.
+    Uses `scipy.interpolate.interp1d`; see its documentation for interpolation
+    details.
 
     Coordinates measured on the interpolated dimension are interpolated
     with it where they are numbers, and dropped otherwise: a label has
@@ -197,12 +188,10 @@ def interpolate(patch: PatchType, kind: str | int = "linear", **kwargs) -> Patch
     >>> patch_time_even = patch.interpolate(time=None)
     """
     dim, axis, samples = get_dim_axis_value(patch, kwargs=kwargs)[0]
-    # if samples is None, get evenly sampled coords along dimension.
     if samples is None:
         coord = patch.coords.coord_map[dim]
         samples = coord.snap().values
-    # we need to make sure only real numbers are used, interp1d doesn't support
-    # datetime64 yet.
+    # interp1d does not support datetime64.
     coord_num = to_int(patch.coords.get_array(dim))
     samples_num = to_int(samples)
     func = compat.interp1d(

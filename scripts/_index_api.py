@@ -117,16 +117,11 @@ def _import_optional_module(mod_name):
 
 def assert_documenting_this_checkout(module, repo_path=None) -> None:
     """
-    Raise if the imported module is not the one in this checkout.
+    Raise if the imported module is not this checkout's source.
 
-    Running a script from the scripts directory puts that directory first on
-    the path, not the working directory, so an editable install elsewhere on
-    the machine wins and the docs describe someone else's branch. Prefix the
-    command with `PYTHONPATH=$PWD` to document the checkout you are in.
-
-    An environment nested in the checkout, like a .venv, holds a copy of the
-    package rather than the checkout's own, so being inside the repository is
-    not enough.
+    Use `PYTHONPATH=$PWD` when running scripts: their directory leads sys.path, allowing
+    another editable install to win. Also reject package copies inside nested
+    environments such as .venv.
     """
     if repo_path is None:
         repo_path = Path(__file__).parent.parent
@@ -244,18 +239,12 @@ def parse_project(obj, key=None):
             path = inspect.getfile(obj)
             base_address = _get_base_address(path, base_path)
 
-            # this is referenced outside of its base address, skip this one.
-            # A prefix test rather than a substring one: the address of
-            # dascore/core/inventory.py is a substring of every key under
-            # dascore/core/inventory_loader.py, so a module named after
-            # another would claim as its own everything it merely imports.
+            # Require an address prefix: substring matching confuses similarly named
+            # modules, such as inventory and inventory_loader.
             if key != base_address and not key.startswith(f"{base_address}."):
                 return
-            # A second module-level name bound to the same object (eg
-            # BaseSpool = Spool) is an alias, not its own entity. The
-            # getmembers call above yields names alphabetically, so
-            # BaseSpool would arrive first, claim the page, and leave
-            # every cross ref to Spool dangling.
+            # Skip aliases so an alphabetically earlier name (BaseSpool) cannot claim
+            # the canonical object page (Spool).
             name = key.split(".")[-1]
             if not parent_is_class and getattr(obj, "__name__", name) != name:
                 return

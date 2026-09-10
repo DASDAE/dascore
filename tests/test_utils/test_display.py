@@ -543,13 +543,7 @@ class TestDascoreStyles:
         """
         A style nothing asks for is a style no one maintains.
 
-        Both of the styles removed with this test had gone unasked-for
-        long enough that one of them had stopped parsing unnoticed.
-
-        The name has to be matched where a style is *looked up*, not
-        wherever it appears: `dtypes` is also an unrelated dict key in
-        `workflow/serialize.py`, so a plain search for the word says it
-        is used when nothing styles anything with it.
+        Match style lookups rather than unrelated occurrences of the name.
         """
         sources = [
             x.read_text(encoding="utf-8")
@@ -596,14 +590,8 @@ class TestSplitBlock:
         """
         Splitting then rendering gives back what went in.
 
-        A node holds the `Text` its producer made rather than a recipe
-        for rebuilding it, which is what keeps the two reprs from
-        drifting: `render_text` reassembles, it does not re-derive.
-
-        Compared by what each character draws rather than with `==`,
-        which reads `Text.style` and `Text.spans` -- slicing moves a
-        base style into a span, so a block-level style would fail an
-        equality check while drawing exactly the same.
+        Compare rendered characters because slicing can move a base style into
+        a span while preserving the rendered result.
         """
         for name, text in repr_blocks.items():
             trip = render_text(split_block(text))
@@ -835,13 +823,8 @@ class TestRateText:
         """
         Whatever is printed has to describe the step beside it.
 
-        Held over the printed characters rather than the number they
-        came from, since a rate rounded for the check and then formatted
-        to fewer figures, or into exponent notation, states something
-        the step does not. A rate is quoted to four figures, so four
-        figures is how closely it has to agree -- not to a fixed
-        nanosecond, which only matches the code for steps stored in
-        them.
+        Validate the printed four-figure value, including any unit prefix,
+        against the original step.
         """
         magnitude, unit = str(rate_text(step)).strip().removeprefix("· ").split(" ")
         prefixes = {"mHz": 1e-3, "Hz": 1.0, "kHz": 1e3, "MHz": 1e6, "GHz": 1e9}
@@ -862,10 +845,8 @@ class TestRateText:
         """
         A step held to milliseconds is exact, not rounded.
 
-        An 8 ms step is exactly 125 Hz, and 120 Hz also inverts to
-        within half a millisecond of it. Taking the shortest rate which
-        lands inside the step's resolution states 120 Hz of sampling
-        which happens at 125, so an exact rate is preferred.
+        An 8 ms step is exactly 125 Hz although 120 Hz also falls within half
+        its storage resolution, so exact rates take precedence.
         """
         assert expected in str(rate_text(step))
 
@@ -1982,11 +1963,8 @@ class TestVisibleLines:
         """
         Every node is visited once, however deep the tree goes.
 
-        Asking a section how long it is and then asking again after
-        deciding to open it walks the same subtree twice at every level,
-        which doubles per level rather than adding one. Counted rather
-        than timed: the growth is the defect, and a clock only shows it
-        on a tree far larger than one anybody has.
+        Recounting after each open decision would revisit subtrees
+        exponentially, so count visits directly instead of timing them.
         """
         seen = []
         real = display._visible_lines
@@ -2732,18 +2710,8 @@ class TestHtmlRepr:
 
     def test_a_panel_which_cannot_be_drawn(self, monkeypatch):
         """
-        A traceback out of a formatter is printed into the cell on every
-        echo of the object, which makes it undebuggable exactly when
-        someone is looking at it.
-
-        Only the drawing is broken here, not the object: breaking
-        `_repr_node` breaks the text repr too, and an object which
-        cannot be printed cannot be reported on either.
-
-        Debug is turned off here because the suite runs with it on
-        (`tests/conftest.py`), which is the right way round: a panel
-        which cannot be drawn should fail in CI and stay quiet for a
-        reader. So this is a path only a reader takes.
+        A rendering failure stays quiet for users but propagates in debug mode.
+        Break `_render_html` so the object's text representation remains usable.
         """
         monkeypatch.setattr(display, "_render_html", _boom)
         with config_context(debug=False):
@@ -2759,11 +2727,8 @@ class TestHtmlRepr:
         """
         The two reprs are one repr shown two ways.
 
-        Tags stripped and entities read back, the panel holds every line
-        the text holds. Two things it legitimately does not: the leading
-        space, which it states with a margin rather than with
-        characters, and the arrow a terminal opens a title with, which
-        it draws as a disclosure triangle instead.
+        After parsing HTML, the panel preserves text lines except indentation
+        expressed by margins and arrows expressed by disclosure triangles.
         """
         for name, obj in html_objects.items():
             # As a sequence, so a section drawn twice or drawn out of
@@ -2774,12 +2739,8 @@ class TestHtmlRepr:
         """
         Every repr carries it, so a notebook carries one copy per cell.
 
-        Held on its own rather than on the panel, where growth in one
-        hides growth in the other. The ceiling sits about a section's
-        worth of rules above what ships, so a block of them trips it
-        rather than a rule or two -- which means it has to be raised
-        deliberately whenever a block is added. It counts the sheet as
-        it goes out, so a comment is free and a rule is not.
+        Measure the emitted stylesheet separately from panel markup. The ceiling
+        allows small additions but requires deliberate review for a new rule block.
         """
         assert len(_get_stylesheet().encode()) < 6_000
 

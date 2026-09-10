@@ -600,30 +600,11 @@ class Spool(NodeRepr, NamespaceOwner):
         """
         Return the spool without the patches a selection would keep.
 
-        The complement of
-        [`select`](`dascore.core.spool.Spool.select`): each keyword means
-        exactly what it means there, and the patches it would match are
-        the ones removed. This is how a spool says what it does not want —
-        one bad tag, an instrument being serviced — without spelling the
-        rest of the archive as a selection.
-
-        The patches' own coordinates are not accepted. Selecting on one
-        trims each patch to the range rather than choosing between
-        patches, so the complement is every patch cut into the pieces
-        outside it — one patch becoming two. Select the ranges to keep
-        instead, or use [`Patch.unselect`](`dascore.Patch.unselect`) on
-        each patch, which can take samples out of its middle.
-
-        The coordinates an attached inventory defines along the fiber are
-        different, and are accepted: removing one of those chooses which
-        channels a patch holds. A patch may then be cut into the pieces
-        the query did not match, so `len` can grow here as well.
-
-        Naming nothing raises, and so does naming only no-op selectors
-        (`None`, `...`). `select()` with no selection is the whole spool,
-        so its complement is an empty one — but "remove nothing" reads
-        just as naturally, and silently emptying a spool is not something
-        to guess at.
+        Keywords have the same meaning as in ``select``, but matched content is
+        removed. Patch-coordinate selectors are refused because their complement may
+        split patches. Inventory coordinates along the fiber are accepted and may
+        split patches into unmatched channel ranges. Calling without selectors, or
+        with only no-op selectors (``None``, ``...``), raises.
 
         Parameters
         ----------
@@ -840,29 +821,12 @@ class Spool(NodeRepr, NamespaceOwner):
 
     def _select_from_inventory(self, query: dict) -> Self:
         """
-        Keep the rows whose inventory-backed values match.
+        Keep rows whose effective inventory-backed values match.
 
-        Precedence is per row, and is the precedence extraction applies.
-        A row which states the name is judged by the index, exactly as it
-        would be without an inventory, and only the rows leaving it
-        unstated are resolved. A spool whose headers state everything
-        therefore touches the inventory only when enrichment will rewrite
-        the name, and one which states nothing resolves once per epoch
-        rather than per row. A row the inventory has no answer for is not
-        selected, as a patch lacking the attr entirely is not. Straddling
-        is decided against the row as it now stands, so a range which has
-        already trimmed a row inside one epoch leaves it resolvable.
-
-        Pending enrichment changes what a stated row comes out holding,
-        so stated rows are resolved too where it would write the name:
-        `conflict="keep_last"` makes the inventory's answer the row's
-        value, `conflict="drop"` leaves a disagreeing row with none, and
-        `on_missing="null"` on named attrs blanks a resolved row the
-        inventory cannot answer. A row extraction refuses rather than
-        rewrites -- a disagreeing header under `conflict="raise"`, a dated
-        row under a pending `time`, a stated key disagreeing with a
-        pending `acquisition_key` -- is judged as it stands; the refusal
-        is extraction's to make.
+        Explicit row values take precedence unless pending enrichment would replace
+        or clear them. Otherwise values are resolved once per inventory epoch. Rows
+        unresolved by the inventory do not match. Selection uses the same projection
+        and conflict rules as extraction.
         """
         ids = np.asarray(self._catalog.ordered_ids(), dtype=np.int64)
         if not len(ids):
@@ -969,15 +933,9 @@ class Spool(NodeRepr, NamespaceOwner):
         """
         Attach a DASDAE inventory to this spool.
 
-        The spool carries the reference and nothing else: attaching costs
-        no work per patch and adds nothing to the patches it yields. Call
-        [`Spool.enrich`](`dascore.core.spool.Spool.enrich`) to copy the
-        inventory's metadata onto the patches as they are extracted.
-
-        Attaching replaces whatever the spool carried before, and clears
-        enrichment set up from it — swapping the inventory silently under
-        a configured enrichment would change every patch's metadata, so
-        the new one has to be asked for. `enrich()` resumes with defaults.
+        Attaching is lazy and does not modify yielded patches. It replaces any
+        previous inventory and clears configured enrichment; call ``enrich`` to copy
+        inventory metadata onto extracted patches.
 
         Parameters
         ----------
@@ -1107,23 +1065,12 @@ class Spool(NodeRepr, NamespaceOwner):
         """
         Enrich each patch this spool yields from an inventory.
 
-        The work happens as each patch is extracted, not now, so this is
-        cheap on a large spool and costs one
-        [`Patch.enrich`](`dascore.proc.inventory.enrich`) per patch which
-        actually comes out. Enrichment survives `select`, `sort`, `chunk`
-        and friends; `Spool.remove_inventory` undoes it.
+        Enrichment runs lazily as patches are extracted and survives subsequent
+        spool operations. It never removes patches: ``on_unresolved`` controls
+        warnings or errors for unresolved patches. Use ``conform_to_inventory``
+        to restrict membership.
 
-        Enriching never removes a patch: one the inventory does not
-        describe comes out unchanged rather than missing, so an inventory
-        covering part of an archive needs no pruning first. Deciding
-        membership is
-        [`conform_to_inventory`](`dascore.core.spool.Spool.conform_to_inventory`)'s
-        job, and leaving it there is what keeps this lazy — nothing
-        resolves until a patch is pulled.
-
-        The inventory is the one
-        [`attach_inventory`](`dascore.core.spool.Spool.attach_inventory`)
-        put on the spool, which is the only way a spool gets one.
+        The inventory must first be attached with ``attach_inventory``.
 
         Parameters
         ----------
@@ -1193,14 +1140,9 @@ class Spool(NodeRepr, NamespaceOwner):
         """
         Expand the spool into one patch per value of an inventory coordinate.
 
-        Most often a label group. Every kind of group expands: a
-        categorical one by each of its strings, a membership group into
-        the channels it includes and those it does not, and a numeric one
-        by each distinct measurement. Intervals of one group may overlap,
-        but a channel still holds only one of its values, so the outputs
-        of one call divide the fiber rather than share it. A patch whose
-        channels take several values becomes several patches — this can
-        greatly expand the spool.
+        Each distinct categorical, membership, or numeric value produces the
+        channels carrying that value. The outputs partition the fiber, so a patch
+        containing several values may produce several patches.
 
         Parameters
         ----------
@@ -1291,22 +1233,9 @@ class Spool(NodeRepr, NamespaceOwner):
         """
         Return a spool the inventory describes exactly, patch for patch.
 
-        The one eager step of the inventory workflow: every row is
-        resolved now, patches the inventory does not describe are
-        dropped, and a patch whose span crosses a change of optical path
-        is subdivided at each such change — so the spool can grow as well
-        as shrink. A bound the answers survive unchanged is not a change,
-        and does not divide anything. It is metadata work; no patch data
-        is read.
-
-        Subdivision is exact. Each piece begins at the first sample at or
-        after the change which opens it, so together they hold every
-        sample the patch held and hold none of them twice, and `len` and
-        `get_contents` describe the pieces rather than the original.
-
-        The inventory is the one
-        [`attach_inventory`](`dascore.core.spool.Spool.attach_inventory`)
-        put on the spool, which is the only way a spool gets one.
+        This eager metadata step resolves every row, drops unmatched patches, and
+        splits rows at optical-path changes without loading patch data. Splits occur
+        at sample boundaries without duplicating or losing samples.
 
         Parameters
         ----------
@@ -1804,9 +1733,8 @@ class Spool(NodeRepr, NamespaceOwner):
         """
         Return a dataframe with one row per gap along a dimension.
 
-        Gaps are found with the rules
-        [`chunk`](`dascore.Spool.chunk`) merges by, so every row is
-        exactly a boundary that `chunk` would refuse to close.
+        Each row is a boundary that ``chunk`` would refuse to merge under the
+        same grouping and tolerance rules.
 
         Parameters
         ----------
@@ -1889,11 +1817,8 @@ class Spool(NodeRepr, NamespaceOwner):
         """
         Return a dataframe summarizing how complete the spool is.
 
-        One row per group of related patches — same kind, dims
-        signature, coordinate identity, units, and sampling rate,
-        exactly as `chunk` groups them before it looks at continuity.
-        Each row reports the extent the group spans along `dim` and how
-        much of that extent holds data.
+        Each row describes one ``chunk`` compatibility group, its extent along
+        ``dim``, and the portion of that extent containing data.
 
         Parameters
         ----------
@@ -2037,12 +1962,8 @@ class Spool(NodeRepr, NamespaceOwner):
 
         Notes
         -----
-        A data size measures the patch's data array only; coordinates and
-        attrs are extra, as are any copies a later processing step makes,
-        so the patch as a whole is somewhat larger. The sample count is
-        rounded down, so the data never exceeds the requested size, and a
-        merge of patches with different dtypes is sized against the dtype
-        they upcast to.
+        Data-size chunks measure only the data array and round sample counts down.
+        Mixed dtypes are sized after promotion.
 
         [`Spool.concatenate`](`dascore.Spool.concatenate`) performs a
         similar operation but disregards the coordinate values.
@@ -2097,25 +2018,10 @@ class Spool(NodeRepr, NamespaceOwner):
         """
         Concatenate patches in order along a dimension.
 
-        Patches are partitioned as [`chunk`](`dascore.Spool.chunk`)
-        partitions them — by kind (see the
-        [patch compatibility note](`docs/notes/patch_compatibility`)),
-        dimensions, the identity of every other dimension, and the
-        concatenated dimension's units — and each partition's patches are
-        then joined by the requested count in the order of the dimension
-        (spool order when its step is unknown, or along a new dimension),
-        contiguous or not. Patches which cannot be concatenated together
-        land in separate outputs; nothing is skipped and planning does not
-        raise. A coordinate the index describes only by a summary cannot
-        be told from another with the same summary, so such an output is
-        settled when it loads: equal values concatenate, and different
-        ones raise there rather than being silently mixed.
-        Remaining attributes must agree within an output, policed by
-        `conflict` as `chunk` polices them. Coordinates are not policed:
-        a coordinate riding the concatenated dimension is joined along
-        it, every other coordinate must agree, and one which cannot be
-        reconciled raises when the output loads rather than being
-        dropped from a patch the catalog describes.
+        Patches are partitioned using the compatibility rules from ``chunk``, then
+        joined in coordinate order, or spool order when no ordering is available.
+        Incompatible patches form separate outputs. Conflicting attributes follow
+        ``conflict``; irreconcilable coordinates raise when an output loads.
 
         Parameters
         ----------
@@ -2305,12 +2211,9 @@ class Spool(NodeRepr, NamespaceOwner):
         """
         Updates the contents of the spool, return the updated spool.
 
-        Update is allowed only on a root spool — one no operation has
-        been applied to. Directory roots re-index their directory,
-        single-file roots rescan the file, and purely in-memory roots
-        are trivially current (no-op). Any derived spool (the result of
-        select, slicing, sort, chunk, concatenate, or combining spools)
-        raises: update the root and re-apply the operations.
+        Only root spools can update. Directory roots re-index, single-file roots
+        rescan, and in-memory roots are already current. Derived spools raise; update
+        their root and reapply the operations.
 
         Parameters
         ----------

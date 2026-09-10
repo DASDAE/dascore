@@ -142,16 +142,10 @@ def unpact_annotation(obj, data_dict, address_dict) -> str:
 
 def get_type_hints(obj) -> dict:
     """
-    Get an object's type hints, tolerating names missing at runtime.
+    Return type hints, falling back to unevaluated annotations for missing names.
 
-    Annotations only imported under `TYPE_CHECKING` cannot be resolved when
-    the docs are built, so fall back to the unevaluated annotations rather
-    than failing the entire build.
-
-    The fallback is all-or-nothing because `get_type_hints` resolves an
-    object's annotations together. Today only class-level annotations hit
-    it, and those are never matched against the parameters a signature is
-    built from, so nothing renders differently.
+    Names imported under `TYPE_CHECKING` may be unavailable during doc builds. The
+    fallback applies to all annotations because `get_type_hints` resolves them together.
     """
     try:
         return typing.get_type_hints(obj)

@@ -1,14 +1,8 @@
-"""
-What an operation requires of a patch before it runs.
+"""Validate a patch before an operation runs.
 
-A patch function, and a `PatchProcessor` written by hand for one, may say
-which dimensions, coordinates and attributes it needs. Both ask here, so the
-answer is the same however the operation was reached.
-
-These live outside `dascore.utils.patch` because `dascore.workflow.processor`
-is imported while `dascore.utils.patch` is still being imported -- from its
-header, by way of this module -- so importing `dascore.utils.patch` back would
-raise on a partially initialized module.
+Patch functions and hand-written `PatchProcessor` classes share these checks
+for required dimensions, coordinates, and attributes. This module avoids an
+import cycle with ``dascore.utils.patch``.
 """
 
 from __future__ import annotations

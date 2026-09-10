@@ -283,13 +283,9 @@ class TestTheRulesOnRealPatches:
     )
     def test_building_a_patch_is_not_operating_on_one(self, patch, builder):
         """
-        `new` and `update` carry both ids through untouched.
+        New and update preserve both IDs to avoid double-counting processor operations.
 
-        They are how a patch function assembles its own result, so
-        stamping here would count every operation twice. The cost is that
-        changing data through `new` yourself leaves the ids saying it did
-        not change -- documented in the patch tutorial, and pinned here
-        because it is a policy rather than an accident.
+        Direct data changes through these methods therefore also preserve IDs.
         """
         # Operated on first: an unprocessed patch states no route, so
         # preserving it would be satisfied by dropping it.
@@ -707,15 +703,10 @@ class TestWhatTheReviewsFound:
 
     def test_the_cache_holds_the_function_it_named(self):
         """
-        An unnameable function is named partly by `id(func)`, and CPython
-        reuses an address once the function is collected -- so a cache
-        entry outliving its function could hand a later one the earlier
-        one's fingerprint.
+        Cache keys retain functions to prevent fingerprint collisions from reused IDs.
 
-        Asserted on the mechanism rather than by trying to collect one:
-        the key holds the function, which is exactly what stops it being
-        collected, so a test which deleted it and looked for a collision
-        would pass whether or not the fix were there.
+        Assert ownership directly: waiting for address reuse would not reliably expose
+        the regression.
         """
         patch = dc.get_example_patch()
 

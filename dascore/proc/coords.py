@@ -35,21 +35,17 @@ def snap_coords(patch: PatchType, *coords, reverse: bool = False) -> PatchType:
     """
     Snap coordinates to evenly spaced samples.
 
-    This ensures all of the specified coordinates are evenly spaced and
-    monotonic. First, the patch is sorted along specified coordinates,
-    then coordinates are assumed evenly-sampled from their min to max value.
-    Doing this can introduce some error since the coordinate labels are moved
-    and the data (apart from the sorting) are left unchanged.
-    Consider using [interpolate](`dascore.Patch.interpolate`) for a more expensive
-    but more accurate linear interpolation.
+    Sorts each specified coordinate, then replaces its labels with evenly spaced
+    values between its endpoints in the selected sort direction. Data remain
+    unchanged after sorting, so snapping can shift labels. Use
+    [interpolate](`dascore.Patch.interpolate`) when linear interpolation is preferable.
 
     Parameters
     ----------
     patch
         The patch whose coordinates should be snapped.
     *coords
-        Used to specify the dimension names to convert to CoordRanges. If not
-        specified convert all dimensional coordinates.
+        Dimensions to snap. By default, snap every dimensional coordinate.
     reverse
         If True, reverse the sorting of the coordinates.
 
@@ -508,8 +504,7 @@ def select(
     patch
         The patch object.
     copy
-        If True, copy the resulting data. This is needed so the old
-        array can get gc'ed and memory freed.
+        Copy the result so it does not retain the original data array.
     relative
         If True, select ranges are relative to the start of coordinate, if
         positive, or the end of the coordinate, if negative.
@@ -592,8 +587,7 @@ def isel(
     """
     Select sample positions with xarray-compatible dimension indexing.
 
-    This method is provided for compatibility with xarray's `DataArray.isel` for the
-    supported indexing operations described below. Use
+    Supports the `DataArray.isel` operations described below. Use
     [`Patch.select`](`dascore.Patch.select`) for DASCore's tuple range notation,
     relative selections, and filtering that preserves dimensions and source order.
 
@@ -661,8 +655,7 @@ def sel(
     """
     Select coordinate labels with xarray-compatible dimension indexing.
 
-    This method is provided for compatibility with xarray's `DataArray.sel` for the
-    supported indexing operations described below. Use
+    Supports the `DataArray.sel` operations described below. Use
     [`Patch.select`](`dascore.Patch.select`) for DASCore's tuple range notation,
     relative selections, and filtering that preserves dimensions and source order.
 
@@ -742,8 +735,7 @@ def unselect(
     patch
         The patch object.
     copy
-        If True, copy the resulting data. This is needed so the old
-        array can get gc'ed and memory freed.
+        Copy the result so it does not retain the original data array.
     relative
         If True, unselect ranges are relative to the start of coordinate, if
         positive, or the end of the coordinate, if negative.
@@ -823,8 +815,7 @@ def order(
     patch
         The patch object.
     copy
-        If True, copy the resulting data. This is needed so the old
-        array can get gc'ed and memory freed.
+        Copy the result so it does not retain the original data array.
     relative
         If True, order values are relative to the start/end of the coordinates.
     samples

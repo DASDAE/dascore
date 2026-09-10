@@ -55,16 +55,10 @@ def _drawn(axes) -> tuple[int, ...]:
 
 def _same_patch(one, other) -> bool:
     """
-    Whether two results are the same result.
+    Compare patch results with equal NaNs, or count content on returned axes.
 
-    `Patch.equals` compares data with `np.array_equal`, which reports a NaN
-    as unequal to itself, so a patch carrying one never equals even itself.
-    Several operations here produce NaN legitimately (`dropna`, `stalta`),
-    so the comparison is spelled out.
-
-    An operation which draws returns axes rather than a patch. There is no
-    equality for those, so what was drawn on them is counted -- which at
-    least tells a plot from an empty frame.
+    Patch.equals uses np.array_equal, which treats NaNs as unequal; operations such as
+    dropna and stalta can legitimately produce them.
     """
     if not isinstance(one, dc.Patch):
         return type(one) is type(other) and _drawn(one) == _drawn(other)
@@ -141,11 +135,8 @@ class TestEveryPatchFunction:
         direct = func(target, *args, **kwargs)
         through_op = func.op(*args, **kwargs)(target)
         assert _same_patch(direct, through_op)
-        # `_same_patch` compares attrs and history is one, so the history
-        # is already covered -- said again because it is the property
-        # which catches an operation that skipped the decorator, and it
-        # should not quietly go away if that comparison is loosened. Not
-        # every patch function returns a patch (the viz ones do not).
+        # Assert history explicitly to catch skipped decorators even if _same_patch
+        # changes. Plotting functions return axes, so only check patch results.
         if isinstance(direct, dc.Patch):
             assert through_op.attrs.history == direct.attrs.history
 
@@ -337,13 +328,9 @@ class TestCanonicalByHand:
 
     def test_a_name_with_an_implementation(self):
         """
-        A hand-built `PatchOp` for an implemented name is the same
-        operation, and says so where it counts.
+        Hand-built PatchOp and implementation instances share a fingerprint.
 
-        It is not the same *object*: `.op(...)` gives the class which
-        implements the name, and equality asks for one type. The
-        fingerprint is what provenance is written from, and that agrees,
-        so an id recorded either way still matches.
+        Their different types prevent object equality but must not change provenance.
         """
         by_hand = PatchOp(name="normalize", kwargs={"dim": "time", "norm": "l2"})
         by_call = dc.proc.normalize.op("time")
@@ -592,13 +579,9 @@ class TestDocuments:
 
     def test_the_registry_gains_one_tag(self):
         """
-        One class for every patch function, not one class each.
+        PatchOp registers one tag for all patch functions.
 
-        `PatchOp` is the whole cost of naming any of them in a document.
-        The module argues against a class per patch function, so a
-        processor class is allowed only where it is the registered
-        implementation of one -- and then only because it gives the
-        operation a seam a whole function does not have.
+        Processor classes register only where they implement an operation.
         """
         processors = {
             cls
@@ -644,13 +627,8 @@ class TestFingerprintCall:
 
     def test_a_call_is_not_fingerprinted_until_something_reads_it(self, patch):
         """
-        The decorator does not hash a call's arguments on every call.
-
-        Nothing consumes the answer until patch ids arrive, and taking it
-        eagerly costs a share of every call -- around a fifth of one whose
-        argument is a large array, since hashing it is proportional to its
-        size -- and turns an argument the serializer cannot encode into a
-        failure of a call which otherwise worked.
+        Fingerprint calls lazily to avoid hashing costs and rejecting unserializable
+        arguments before their fingerprint is needed.
         """
         deep = {}
         deep["self"] = deep
@@ -677,13 +655,11 @@ class TestFingerprintCall:
 
     def test_equal_quantities_are_two_calls(self):
         """
-        A pint quantity is not a cache key.
+        Equal quantities with different unit spellings must retain distinct
+        fingerprints.
 
-        `1 * m` and `100 * cm` are equal and hash alike, while the
-        serializer encodes them differently. Were the cache keyed on them,
-        whichever call ran second would be handed the first one's answer,
-        and the same call would fingerprint differently depending on what
-        a process happened to do before it.
+        Pint gives 1 m and 100 cm equal hashes; using them as cache keys would make
+        fingerprints depend on call order.
         """
         one_meter, hundred_cm = get_quantity("1 m"), get_quantity("100 cm")
         # The trap itself: equal to Python, and the same hash.

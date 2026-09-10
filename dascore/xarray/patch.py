@@ -51,28 +51,22 @@ def _lazy_temporal_index(name, coord):
 
 def patch_to_xarray(patch: PatchType, lazy_coords: Collection[str] = ()):
     """
-    Return a data array with patch contents.
+    Convert a patch to an xarray DataArray.
 
     Parameters
     ----------
     patch
         The patch to convert.
     lazy_coords
-        Names of coordinates to serve by the range which states them
-        rather than by an array of every label. Such a coordinate then
-        costs three numbers however long the acquisition, and its labels
-        are computed on demand. A name which does not belong to an
-        evenly sampled temporal dimension coordinate of this patch is
-        ignored; anything not named spells its labels out, which is what
-        xarray aligns arithmetic on. See
-        `dascore.xarray.index.TemporalRangeIndex` for what a lazily
-        served coordinate does not yet support.
+        Coordinates to represent as ranges instead of materialized labels. Names
+        that are not evenly sampled temporal dimension coordinates are ignored;
+        unnamed coordinates remain materialized for xarray alignment. See
+        `dascore.xarray.index.TemporalRangeIndex` for current limitations.
 
     Notes
     -----
-    A DataArray states a coordinate by its labels, so a coordinate of a
-    single sample cannot say how far apart its samples would be: such a
-    step is lost unless the coordinate is served lazily, which states it.
+    A one-sample materialized coordinate cannot retain its step; a lazy coordinate
+    can.
     """
     xr = optional_import("xarray")
     _register_accessor()

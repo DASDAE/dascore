@@ -1,29 +1,18 @@
 """
-Compare what patch functions return now against what they returned before.
+Compare patch-function results with a git ref using exact fingerprints.
 
-The patch data path is being rewritten to use the
-[array API standard](https://data-apis.org/array-api/latest/) so that patch
-data can be backed by libraries other than numpy. Those rewrites must not
-change a single number a numpy backed patch produces, and the test suite
-cannot prove that on its own: it only exercises what someone thought to
-assert, and it moves along with the code.
-
-This script settles it directly. It runs the same calls against a checkout
-of any git ref and against the working tree, fingerprints every result, and
-reports which ones differ. Nothing is compared approximately; the data are
-hashed, so a difference in the last bit is a difference.
+Verify NumPy results during the
+[array API migration](https://data-apis.org/array-api/latest/).
+Hashes detect every bit difference; no approximate comparison is used.
 
 Usage:
 
     python scripts/differential_check.py --ref <git ref>
 
-There are two lists of comparisons. get_calls holds calls against the
-example patches, which carry datetime coordinates, units, and complex data
-from a transform. MATRIX_CALLS is run against every array make_arrays
-builds, so each call is checked for every dtype and for the values
-implementations tend to disagree about: nan, infinities, a whole slice of
-nulls, and numbers big enough to overflow. Add to whichever fits when a
-patch function is rewritten; one which isn't listed isn't checked.
+`get_calls` covers example patches with datetime coordinates, units, and complex data.
+`MATRIX_CALLS` runs against every `make_arrays` dtype and edge case, including nan,
+infinities, null slices, and overflow. Add rewritten functions to the appropriate list;
+unlisted calls are not checked.
 """
 
 from __future__ import annotations
@@ -44,18 +33,14 @@ import numpy as np
 
 import dascore as dc
 
-# How hard to work at timing a call. A microsecond-scale call is repeated
-# until it has run for _TIMING_BUDGET so the reading means something; a
-# slow one stops at _TIMING_MIN_ROUNDS so the sweep stays quick.
+# Repeat fast calls for _TIMING_BUDGET; stop slow calls at _TIMING_MIN_ROUNDS.
 _TIMING_MIN_ROUNDS = 3
 _TIMING_MAX_ROUNDS = 200
 _TIMING_BUDGET = 0.002
 # Timings below this are noise on any machine, so they are not reported
 # however far they appear to have moved.
 _TIMING_FLOOR = 50e-6
-# How far a single call can read out with nothing changed at all. Measured
-# by running this script with --ref HEAD, which compares a checkout against
-# itself: the totals landed within 10% and individual calls within 35%.
+# Measured with --ref HEAD: totals varied within 10%, individual calls within 35%.
 _TIMING_NOISE = 0.35
 # How many times each leg is run. Two is enough to stop the leg which
 # happened to go first from looking slow.
@@ -65,10 +50,8 @@ _TIMING_PASSES = 3
 _BOOKKEEPING = {"_timing", "_dascore_path"}
 
 
-# Data covering the dtypes patch data can hold and the values which
-# implementations tend to disagree about. A hand written list of calls
-# misses these; the where in #921 kept a float32 patch float32 where numpy
-# had promoted it to float64, and only this matrix noticed.
+# Cover dtypes and edge values missed by example calls; this caught the
+# float32 promotion regression in #921.
 def make_arrays() -> dict:
     """Return arrays covering the dtypes and values patch data can hold."""
     rng = np.random.default_rng(42)
@@ -189,9 +172,7 @@ def get_calls() -> dict:
     int_patch = patch.new(data=(np.asarray(patch.data) * 10).astype("int32"))
     bool_patch = patch.new(data=np.asarray(patch.data) > 0.5)
     collapsed = patch.mean("time")
-    # A patch which states a data_type, so that clearing it is visible.
-    # Every other patch here already carries "", where a processor which
-    # forgot to clear it would read the same as one which cleared it.
+    # Use a nonempty data_type so failures to clear it are visible.
     typed = patch.update_attrs(data_type="strain_rate")
     with_nondim = patch.update_coords(
         quality=("distance", np.arange(patch.shape[0], dtype="float64"))
@@ -319,13 +300,8 @@ def digest(patch) -> dict:
     coords = {
         name: _hash(patch.get_array(name)) for name in sorted(patch.coords.coord_map)
     }
-    # History holds the repr of the arguments, which says nothing about the
-    # answer, so it is left out. `patch_id` goes with it for a harder
-    # reason: this dumps in two processes, and a patch not read from a
-    # file mints one, so every patch would differ and the check would say
-    # nothing. `processing_id` stays -- it is a digest of the route, the
-    # same in both processes, so it catches a call which stopped being
-    # stamped or started fingerprinting its arguments differently.
+    # Ignore argument reprs in history and process-specific patch IDs. Keep
+    # processing_id to detect changes in operation stamping and fingerprints.
     attrs = patch.attrs.model_dump(exclude={"history", "coords", "patch_id"})
     return {
         "dtype": str(data.dtype),
@@ -346,9 +322,7 @@ def dump(path: Path) -> None:
     """Write the fingerprint of every call to path."""
     warnings.simplefilter("ignore")
     calls = get_calls() | get_matrix_calls()
-    # Hashed before anything runs, so a call which writes into its own
-    # argument can be told from one which does not. Nothing else here
-    # would notice: every digest is taken from the call's own result.
+    # Hash inputs first to detect mutations that result fingerprints would miss.
     inputs_before = _input_digests(calls)
     out, timing = {}, {}
     for name, call in calls.items():
@@ -370,14 +344,10 @@ def dump(path: Path) -> None:
 
 def _timed(call) -> tuple[float, Any]:
     """
-    Return how long a call took, and what it returned.
+    Return the best repeated-call time and the last result.
 
-    Best of several, and enough of them to be worth reading: a call which
-    takes a microsecond gets repeated until it has run for a few
-    milliseconds, so the answer is about the code rather than about when
-    the scheduler happened to look away. A slow call is measured a few
-    times and left alone. The last result is the one fingerprinted; they
-    are all the same call, so any of them would do.
+    Repeat fast calls for a few milliseconds to reduce scheduling noise; limit slow
+    calls to a few rounds.
     """
     best, patch, spent, rounds = None, None, 0.0, 0
     while rounds < _TIMING_MAX_ROUNDS and (
@@ -394,16 +364,9 @@ def _timed(call) -> tuple[float, Any]:
 
 def _input_digests(calls) -> dict:
     """
-    Return a fingerprint of every patch the calls were given.
+    Fingerprint every input patch, including closures and default arguments.
 
-    Both ways a call can be holding one: `get_calls` closes over its
-    patches, and `get_matrix_calls` passes them as default arguments.
-    Reading only the closures left the matrix half unchecked, which is
-    the half carrying the dtypes and the special values -- so a call
-    which wrote into one of those would have gone unnoticed.
-
-    Every patch found is digested, not just the first: a call given two
-    of them can spoil either.
+    This detects mutations to any input, including matrix patches passed as defaults.
     """
     seen = {}
     for name, call in calls.items():
@@ -418,13 +381,10 @@ def _input_digests(calls) -> dict:
 
 def compare(before: dict, after: dict, fields: set[str] | None = None) -> list[str]:
     """
-    Return a report of the calls whose results differ.
+    Report calls with different results.
 
-    `fields` restricts the comparison to part of a fingerprint. Comparing
-    against a ref far enough back that the attrs schema itself changed --
-    master, at the time of writing -- otherwise reports every call as a
-    difference and so reports nothing; the numbers are still worth
-    checking there, and this is how.
+    `fields` restricts comparison to selected fingerprint fields, allowing data
+    comparisons across refs with different attribute schemas.
     """
     report = []
     # Timing is not a result; it is reported on its own and never compared.
@@ -500,9 +460,8 @@ def report_timing(before: dict, after: dict, slowest: int = 15) -> list[str]:
 
 def _dump_at(worktree: Path, out_path: Path) -> dict:
     """Dump the fingerprints using the dascore in worktree."""
-    # PYTHONPATH, not the working directory: running a script file puts the
-    # script's own directory on sys.path rather than the cwd, so a cwd of
-    # the worktree would silently import the installed dascore instead.
+    # Script execution adds the script directory to sys.path; set PYTHONPATH
+    # to import the requested worktree rather than another installed copy.
     env = {**os.environ, "PYTHONPATH": str(worktree)}
     subprocess.run(
         [sys.executable, str(Path(__file__).resolve()), "--dump", str(out_path)],
@@ -541,10 +500,8 @@ def main(ref: str, fields: set[str] | None = None, strict: bool = False) -> int:
             msg = f"could not check out {ref!r}: {error.stderr.strip()}"
             raise SystemExit(msg) from error
         try:
-            # Alternated, and more than once: run one leg after the other
-            # and the first pays for a cold cache and a CPU which has not
-            # yet ramped, which reads as the second being faster. Taking
-            # the best of each pass per call takes most of that out.
+            # Alternate runs and keep each call's best time to reduce cache and CPU
+            # warmup bias.
             before = _dump_at(worktree, temp / "before.json")
             after = _dump_at(repo, temp / "after.json")
             for index in range(_TIMING_PASSES - 1):
@@ -586,11 +543,11 @@ def _merge_timing(kept: dict, other: dict) -> dict:
 
 
 def _raised(dumped: dict) -> set[str]:
-    """Return the names of calls which recorded an error.
+    """
+    Return names of calls that recorded errors.
 
-    An error is stored as its message and compared like any other field,
-    so a call which fails the same way on both sides reads as a pass.
-    `--strict` is how to notice that the check is not checking anything.
+    Matching errors otherwise compare equal; `--strict` detects these failed
+    comparisons.
     """
     return {
         i

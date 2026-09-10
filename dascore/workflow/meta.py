@@ -1,16 +1,8 @@
-"""
-What a patch is, apart from its values.
+"""Represent a patch without its data.
 
-A [`PatchProcessor`](`dascore.workflow.processor.PatchProcessor`) is split
-in two: a metadata step which decides what the result's coordinates and
-attributes are, and a kernel which does the arithmetic. `PatchMeta` is
-what the metadata step works on, and the reason the two halves can be
-told apart -- the metadata step never sees an array, and the kernel never
-sees a coordinate.
-
-That separation is what makes an operation fusible: something which wants
-to compile a chain of them can ask each one what it does to the metadata
-without touching, or even holding, the data.
+A [`PatchProcessor`](`dascore.workflow.processor.PatchProcessor`) derives result
+metadata separately from running its array kernel. This separation lets callers
+plan and fuse operation chains without loading data.
 """
 
 from __future__ import annotations

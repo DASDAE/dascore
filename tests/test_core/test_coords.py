@@ -1849,12 +1849,9 @@ class TestPartialCoord:
     @pytest.mark.parametrize("dtype", ["datetime64[ns]", "timedelta64[us]"])
     def test_all_null_array_keeps_its_dtype(self, dtype):
         """
-        An array of nulls says nothing about when, but still says what.
+        All-null arrays retain their dtype in partial coords.
 
-        The values are gone, the kind of thing they were is not, and a
-        partial coord has a dtype to record it. Dropping it turned missing
-        datetimes into untyped NaN. Float is left out of the parameters:
-        an unset dtype already reads as float64, so it cannot regress.
+        Float is excluded because an unset dtype already defaults to float64.
         """
         dtype = np.dtype(dtype)
         coord = get_coord(data=np.full(3, "NaT", dtype=dtype))

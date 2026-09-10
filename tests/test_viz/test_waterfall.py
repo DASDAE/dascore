@@ -364,7 +364,7 @@ class TestWaterfall:
         _ = patch.transpose("distance", "time").viz.waterfall(scale=0.04)
 
     def test_time_axis_label_int_overflow(self, random_patch):
-        """Make sure the time axis labels are correct (windows compatibility)."""
+        """Keep time-axis labels correct on Windows."""
         ax = random_patch.viz.waterfall()
         name = ["y", "x"][random_patch.get_axis("time")]
         # Get the piece of the label corresponding to the starttime
@@ -381,7 +381,7 @@ class TestWaterfall:
         assert ax.images[-1].colorbar is None
 
     def test_units(self, random_patch):
-        """Test that units show up in labels."""
+        """Show units in labels."""
         # standard units
         pa = random_patch.set_units("m/s")
         ax = pa.viz.waterfall()
@@ -449,7 +449,7 @@ class TestWaterfall:
         spool = dc.get_example_spool()
         sub = spool.chunk(time=2, overlap=1)
         aggs = dc.spool([x.max("time") for x in sub]).concatenate(time=None)[0]
-        # This should not raise an error
+        # The call should succeed.
         ax = aggs.viz.waterfall()
         assert ax is not None
         assert isinstance(ax, plt.Axes)
@@ -548,7 +548,7 @@ class TestWaterfall:
         assert cbar.extend == "neither"
 
     def test_log_with_zero_data_has_finite_clim(self, random_patch):
-        """Ensure that color limits work with in log-scale with zeros"""
+        """Apply color limits to log-scaled data containing zeros."""
         patch = random_patch.update(data=np.zeros(random_patch.shape))
         ax = patch.viz.waterfall(log=True)
         assert np.all(np.isfinite(ax.images[0].get_clim()))

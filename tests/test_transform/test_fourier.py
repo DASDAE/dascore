@@ -555,7 +555,7 @@ class TestSTFT:
         assert out_numeric.equals(out_timedelta)
 
     def test_type(self, chirp_stft_patch, chirp_patch):
-        """Simply ensure the correct type was returned."""
+        """Return the expected type."""
         patch = chirp_stft_patch
         assert isinstance(patch, dc.Patch)
         assert len(patch.dims) == (len(chirp_patch.dims) + 1)

@@ -1,17 +1,9 @@
 """
-Render the tutorial pages to notebooks for the JupyterLite site.
+Render tutorial qmd pages as unexecuted notebooks for JupyterLite.
 
-The .qmd files stay the source of truth; the notebooks are build artifacts.
-Each page is rendered through quarto (from inside the docs project, so the
-cross-reference filter runs) and then adjusted for a browser kernel:
-
-* links to other doc pages become absolute urls on the site being built, since
-  a notebook is opened outside the site and cannot resolve relative ones,
-* the kernelspec points at the Pyodide kernel rather than a local interpreter,
-* a setup cell installing dascore is prepended.
-
-Cells are rendered without executing them; the point of the notebook is that
-the reader runs them.
+Render inside the Quarto project for cross-references, then make doc links absolute,
+select the Pyodide kernel, and prepend a dascore installation cell. Notebooks are build
+artifacts; qmd files remain the source.
 """
 
 from __future__ import annotations
@@ -42,12 +34,8 @@ OUT_DIR = CONTENTS_DIR / "tutorial"
 DATA_DIR_NAME = "data"
 BROWSER_DATA_DIR = f"/drive/{DATA_DIR_NAME}"
 
-# Links in the notebooks point back at the rendered site, which differs by
-# deployment: dev publishes to netlify and releases publish to dascore.org.
-# Pointing dev-built notebooks at dascore.org breaks every link to a page that
-# has not been released yet. Set like DASCORE_DOC_BRANCH in the doc workflows.
-# The site is served from the domain root; the `site-path: /docs` in
-# _quarto.yml does not appear in the public urls.
+# Use the deployment URL so dev notebooks can link to unreleased pages.
+# The site is served at the domain root, without the configured /docs prefix.
 DEFAULT_SITE_URL = "https://dascore.org"
 
 KERNELSPEC = {
@@ -61,13 +49,9 @@ KERNELSPEC = {
 # findiff -> velocity_to_strain_rate. IPython ships with the kernel.
 EXTRA_PACKAGES = ("pyyaml", "tabulate", "findiff")
 
-# Example data shipped with the site so the tutorials read it locally instead
-# of downloading it from GitHub, which rate-limits per IP and would fail a
-# room full of people on one connection. Only the files the tutorial pages
-# reach for; a page needing something else still downloads it as before, so
-# this list going stale costs a download, not a broken notebook. To refresh
-# it, run the tutorial doc-code tests with dascore.utils.downloader.fetch
-# wrapped and record the names.
+# Mirror tutorial data to avoid GitHub IP rate limits in shared classrooms.
+# Unlisted files still download. Refresh this list by recording fetch calls
+# during tutorial doc-code tests.
 MIRRORED_DATA = ("terra15_das_1_trimmed.hdf5", "example_dasdae_event_1.h5")
 
 SETUP_SOURCE = f"""\
@@ -122,17 +106,15 @@ def rewrite_links(cell_source: list[str], source: Path, site_url: str) -> list[s
 
 
 def prepare_source(source: Path) -> Path:
-    """Write a notebook-friendly copy of a page beside it, returning its path.
+    """
+    Write a notebook-compatible page copy beside the source and return its path.
 
-    Executable mermaid blocks are turned into plain fenced blocks. Quarto
-    renders `{mermaid}` to an image through headless chrome, which the notebook
-    build has no use for and CI has no browser for; as a fence the diagram
-    survives as markdown, which JupyterLab renders natively.
+    Convert executable mermaid blocks to plain fences for JupyterLab, avoiding Quarto's
+    headless Chrome rendering.
     """
     text = MERMAID_REGEX.sub("```mermaid", source.read_text())
-    # The copy has to stay inside the quarto project: project mode is what
-    # applies the cross-reference filter, and an excluded (underscore-prefixed)
-    # file renders without it. Build() sweeps any copy a crash leaves behind.
+    # Keep the copy in the Quarto project, without an underscore prefix, so the
+    # cross-reference filter runs. build() removes copies left by crashes.
     prepared = source.parent / f"{TEMP_PREFIX}{source.name}"
     prepared.write_text(text)
     return prepared
@@ -174,11 +156,8 @@ def post_process(notebook_path: Path, source: Path, site_url: str) -> dict | Non
     """Adjust a rendered notebook for the browser, or None if it has no code."""
     notebook = json.loads(notebook_path.read_text())
     cells = notebook.get("cells", [])
-    # Non-python executable blocks render as empty code cells; an empty cell
-    # in place of content is worse than no cell at all. This has to happen
-    # before the check below, or a page whose only code cells are empty
-    # becomes a notebook holding nothing but the setup cell, which the docs
-    # would then advertise as runnable.
+    # Remove empty cells from non-Python blocks before checking for runnable code;
+    # otherwise a notebook containing only the setup cell could get a launch link.
     cells = [
         c for c in cells if c["cell_type"] != "code" or "".join(c["source"]).strip()
     ]
@@ -210,12 +189,11 @@ def post_process(notebook_path: Path, source: Path, site_url: str) -> dict | Non
 
 
 def find_unrewritten_links(notebook: dict) -> list[str]:
-    """Return any .qmd link targets a notebook still carries.
+    """
+    Return qmd links left in a notebook.
 
-    LINK_REGEX only recognises the plain `](target.qmd)` form, so a titled or
-    angle-bracketed target would pass through and ship a relative link that
-    404s in JupyterLite. Checking the result catches that at build time rather
-    than leaving it for a reader to click.
+    Catch titled or angle-bracketed targets missed by LINK_REGEX before they become
+    broken JupyterLite links.
     """
     markdown = [
         "".join(c["source"]) for c in notebook["cells"] if c["cell_type"] == "markdown"
@@ -251,9 +229,7 @@ def build(out_dir: Path, site_url: str) -> int:
     """Render every tutorial page with code into out_dir."""
     if shutil.which("quarto") is None:
         sys.exit("quarto is required to build the notebooks but was not found")
-    # Rebuilt from scratch: a renamed page, or one that loses its last code
-    # cell, would otherwise leave a notebook behind that still gets published
-    # and still gets a launch link, with content the page no longer matches.
+    # Rebuild to remove stale notebooks and launch links after pages change.
     if out_dir.exists():
         shutil.rmtree(out_dir)
     out_dir.mkdir(parents=True)

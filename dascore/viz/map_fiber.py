@@ -86,16 +86,16 @@ def map_fiber(
     show=False,
 ) -> plt.Axes:
     """
-    Create a plot of the outline of the cable colorized by a given parameter.
+    Plot the cable path colored by a selected value.
 
     Parameters
     ----------
     patch
         The Patch object.
     x
-        x coordinate: can be an array or a str representing a patch coordinate.
+        X values or the name of a patch coordinate.
     y
-        y coordinate: can be an array or a str representing a patch coordinate.
+        Y values or the name of a patch coordinate.
     color
         The color parameter to plot: can be an array, the name of a patch
         coordinate, or "data" to color by the patch's own data, which needs
@@ -115,12 +115,9 @@ def map_fiber(
         absolute. Percent quantities, such as `10 * dc.units.percent`, are
         converted to fractions.
     scale_type
-        Controls the type of scaling specified by `scale` parameter. Options
-        are:
-            relative - scale based on half the dynamic range in patch
-            absolute - scale based on absolute values provided to `scale`
+        Interpret ``scale`` as relative fractions or absolute values.
     show
-        If True, show the plot, else just return axis.
+        Whether to show the plot.
 
     Examples
     --------

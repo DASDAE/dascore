@@ -1,11 +1,5 @@
 """
-Tests for the panel guard in the tests scripts/generate_doc_code_tests.py writes.
-
-A tutorial which prints a Patch, Spool or Inventory shows the reader the
-text repr where the docs site could have drawn the panel. Nothing about
-that is red: the page builds, the cell runs, and the only sign is output
-nobody can fold. The guard turns it into a failing doc example, and
-these tests are what say the guard is still installed.
+Test that generated doc examples reject printing objects with collapsible panels.
 """
 
 from __future__ import annotations
@@ -35,12 +29,8 @@ pytestmark = pytest.mark.skipif(
     reason="scripts/ and docs/ are not installed",
 )
 
-# Run out of process, because the whole chain has to be exercised at once:
-# the context installs the guard, and the generated module rebinds `print`
-# from `builtins` after every chunk, which only reaches the guard because
-# it reads the name then rather than at import. Out of process because
-# `qmd_test_context` deliberately leaves `sys.stdout` reconfigured, and a
-# doc example's harness should not follow the rest of the suite home.
+# Exercise guard installation and generated print rebinding together.
+# Use a subprocess because qmd_test_context leaves sys.stdout reconfigured.
 _RUN_GENERATED = """
 import builtins, importlib.util, sys, types
 from pathlib import Path
@@ -193,13 +183,8 @@ class TestNoPrintedPanels:
 
     def test_a_formatted_panel_goes_through(self, conftest_module, random_patch):
         """
-        The limit, pinned: an object formatted first arrives as a string.
-
-        `print(f"{patch}")` is what docs/recipes/parallelization.qmd
-        writes inside a loop, and by the time the guard sees it there is
-        nothing to tell it from any other text a document means to
-        print. Stated here so the boundary is a decision rather than a
-        gap somebody finds later.
+        Preformatted objects reach the guard as strings and cannot be distinguished from
+        ordinary text.
         """
         with conftest_module.no_printed_panels(_QMD):
             builtins.print(f"{random_patch}")  # noqa: T201

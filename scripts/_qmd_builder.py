@@ -24,13 +24,10 @@ def _build_content_string(path, api_path):
 
 def build_api_toc_tree(api_path=API_PATH):
     """
-    Build the API toc tree: one entry per top level section.
+    Build one API TOC entry per top-level section.
 
-    Naming every documented object put 165 KiB in the generated config and
-    repeated it into all 1,388 rendered pages, which cost more than anything
-    else the build did: against a section level tree, quarto's page phase
-    fell from 105 to 34 minutes and the API html from 635 to 42 MiB. Readers
-    reach an object from its owner's page, which lists what it owns.
+    Listing objects on their owner pages avoids repeating the full API index in every
+    rendered page.
     """
     base_path = api_path.parent
     out = []

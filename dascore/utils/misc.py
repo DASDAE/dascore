@@ -458,11 +458,7 @@ def _iter_remote_filesystem(
 
 def iterate(obj):
     """
-    Return an iterable from any object.
-
-    If a string, do not iterate characters, return str in tuple.
-
-    *This is how iteration *should* work in python.
+    Return an iterable, wrapping strings and scalars in tuples.
     """
     if obj is None:
         return ()
@@ -810,10 +806,9 @@ def _reinit_after_fork(func):
 
 def cached_method(func):
     """
-    Cache decorated method.
+    Cache a method by instance identity instead of hashing the instance.
 
-    Simply uses the id of self for the key rather than hashing it.
-    We can't use functools.cache due to pydantic #6787.
+    `functools.cache` is incompatible with pydantic; see #6787.
     """
     sentinel = object()  # unique object for cache misses.
 
@@ -1285,7 +1280,7 @@ def get_buffer_size(fid: IOBase):
 
 def maybe_mem_map(fid: IOBase, dtype="<u1") -> np.ndarray | np.memmap:
     """
-    Try to get a memory map array from fid, otherwise just return array.
+    Memory-map a file when possible, otherwise return an in-memory array.
 
     Parameters
     ----------
@@ -1309,12 +1304,10 @@ def maybe_mem_map(fid: IOBase, dtype="<u1") -> np.ndarray | np.memmap:
 
 def deep_equality_check(obj1, obj2, visited=None):
     """
-    Deep equality comparison for dictionaries and nested objects.
+    Compare nested objects while handling circular references.
 
-    Handles circular references, numpy arrays, pandas DataFrames,
-    and objects with __dict__ attributes. This function provides
-    comprehensive equality checking that goes beyond Python's
-    default equality operators.
+    Supports NumPy arrays, pandas DataFrames, dictionaries, and objects with
+    `__dict__` attributes.
 
     Parameters
     ----------

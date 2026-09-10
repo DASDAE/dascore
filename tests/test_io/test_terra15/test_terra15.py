@@ -75,7 +75,7 @@ class TestTerra15:
         )
 
     def test_unsupported_version_error(self):
-        """Test that unsupported Terra15 version raises NotImplementedError."""
+        """Reject unsupported Terra15 versions."""
 
         # Create a mock HDF5 root object with unsupported version
         class MockRoot:
@@ -83,7 +83,7 @@ class TestTerra15:
 
         mock_root = MockRoot()
 
-        # Test that it raises NotImplementedError
+        # Reject unsupported versions.
         with pytest.raises(NotImplementedError, match="Unknown Terra15 version"):
             _get_version_data_node(mock_root)
 

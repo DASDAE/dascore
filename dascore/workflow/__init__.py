@@ -1,11 +1,8 @@
-"""
-Machinery for describing, identifying and composing DASCore operations.
+"""Describe, identify, and compose DASCore operations.
 
-An operation is a [`Task`](`dascore.workflow.task.Task`): a frozen object
-whose fields are its parameters, which knows its own fingerprint and can be
-written to a document and read back. Alongside them are the two ids a patch
-carries -- which data it is, and what was done to it -- which is how a
-result says where it came from without a record of the run beside it.
+A [`Task`](`dascore.workflow.task.Task`) is an immutable operation whose fields
+hold its parameters. Tasks can be fingerprinted and serialized. Patches carry
+separate IDs for their source data and processing history.
 """
 
 from __future__ import annotations

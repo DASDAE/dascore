@@ -88,7 +88,7 @@ class TestSegyWrite:
         assert set(random_patch.shape) == set(patch2.shape)
 
     def test_loss_of_precision_raises(self, random_patch, tmp_path_factory):
-        """Ensure that loss of precision raises a PatchError."""
+        """Raise PatchError when writing would lose precision."""
         pytest.importorskip("segyio")
         path = tmp_path_factory.mktemp("test_loss_of_precision") / "temppath.segy"
         patch = random_patch.update_coords(time_step=np.timedelta64(10, "ns"))

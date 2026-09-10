@@ -761,10 +761,9 @@ class AnnotationSet(NodeRepr, NamespaceOwner):
         A dataframe, or anything a dataframe can be built from, holding one
         row per annotation.
     dims
-        The patch dimensions the annotations are stated in. Required unless
-        ``attrs`` states them. The columns spelling one hold numbers, times
-        or durations; text which merely looks like a number is refused,
-        since a bound stated in it compares by its spelling.
+        Patch dimensions represented by the annotations. Required unless ``attrs``
+        supplies them. Dimension columns accept numbers, times, or durations;
+        numeric-looking text is refused.
     vertices
         A tidy frame of one row per vertex, with ``id``, ``seq`` and one
         column per dimension. Required by every path and polygon row.
@@ -773,9 +772,7 @@ class AnnotationSet(NodeRepr, NamespaceOwner):
     creation_info
         What produced the annotations, and when.
     acquisition_key
-        Inventory identity of the data the annotations were made on. The
-        producer supplies it; ``AnnotationSet.from_patch`` will take it off
-        a patch once the spool integration lands.
+        Inventory identity of the annotated data.
     history
         Processing performed on that data, in ``PatchAttrs.history``'s shape.
     columns
@@ -2306,35 +2303,12 @@ def save_annotation_set(
     """
     Write the set to a directory, creating it if needed.
 
-    Reached as ``annotation_set.io.save``.
-
-    The directory states the set in three parts: what it is and which
-    dimensions it holds, its annotations, and -- where any path or
-    polygon needs them -- its vertices. It reads back through
-    [dascore.annotations](`dascore.annotations`).
-
-    The attributes are written as JSON rather than as YAML, so storing
-    a set needs nothing beyond the standard library; a set authored by
-    hand may spell them in YAML, which reads back the same.
-
-    Sets which were loaded together write one table rather than a
-    directory each: the ``set`` column already says which set every row
-    belongs to, and what each of them states for itself travels in the
-    attributes, so the flat spelling loses nothing.
-
-    The tables are CSV unless another encoding is asked for. Parquet
-    writes the same parts under the same names, with its own suffix, and
-    keeps a column's type rather than its spelling wherever it has one
-    for it; it needs pyarrow, where CSV needs nothing. A set whose
-    dimension is a duration is parquet's alone: CSV has no spelling for
-    one which reads back as a duration, so writing it is refused.
-
-    Writing states the whole directory, so a part this set does not
-    have is removed rather than left behind. A stale vertices table, the
-    YAML the attributes used to be spelled in, or the CSV a set was
-    written as before it was written as parquet, would otherwise sit
-    beside what was written and leave a directory which loaded before
-    the save refusing to load after it.
+    Reached as ``annotation_set.io.save``. The directory stores attributes,
+    annotations, and any required vertices, and reads through
+    [dascore.annotations](`dascore.annotations`). Attributes use JSON; tables use
+    CSV by default or Parquet when requested. Combined sets remain in one table.
+    Duration dimensions require Parquet. Saving replaces stale alternate-format
+    files and obsolete vertices.
 
     Parameters
     ----------

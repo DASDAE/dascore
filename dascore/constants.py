@@ -24,11 +24,7 @@ SpoolType = TypeVar("SpoolType", bound="dc.Spool")
 class ExecutorType(Protocol):
     """Protocol for Executors that DASCore can use."""
 
-    # Two positional-only parameters, which is how DASCore calls this.
-    # A named `iterables` plus **kwargs excluded ThreadPoolExecutor and
-    # ProcessPoolExecutor, and *iterables would exclude single-iterable
-    # clients. The annotations are what stop a map() of the wrong shape
-    # from satisfying this and failing at runtime.
+    # Positional-only parameters support both executor and single-iterable clients.
     def map(self, fn: Callable, iterable: Iterable, /) -> Iterable:
         """Map function for applying concurrency of some flavor."""
 
@@ -129,18 +125,12 @@ max_lens = {
     "data_category": 4,
 }
 
-# Observing-system facts a reader may put in patch attrs. Every name is a
-# field of the inventory's Acquisition, or of its Interrogator when dotted,
-# so a value read from a file header and the same value enriched from an
-# inventory are one attr rather than two spellings of one. The units are the
-# inventory's: seconds, hertz, and meters. Readers convert at the parse
-# boundary instead of shipping a companion units attr.
-# Tested against the models in tests/test_core/test_attrs.py.
+# Reader attrs use Acquisition fields (Interrogator fields when dotted) and
+# inventory units: seconds, hertz, meters. Convert while parsing.
+# Checked against the models in tests/test_core/test_attrs.py.
 INVENTORY_ATTRS = (
     "closed_fiber_loop",
-    # The family of instrument, which is a fact about the acquisition
-    # rather than about the state the data is now in: processing turns
-    # velocity into strain rate, but DAS data stays DAS data.
+    # Instrument family stays fixed when processing changes the data type.
     "data_category",
     "firmware_version",
     "gauge_length",
@@ -164,11 +154,8 @@ FILE_FORMATTER_METHODS = ("read", "write", "get_format", "scan")
 SMALLDT64 = np.datetime64(MININT64 + 5_000_000_000, "ns")
 LARGEDT64 = np.datetime64(MAXINT64 - 5_000_000_000, "ns")
 
-# Storage provenance: where a patch's bytes live rather than where its
-# signal came from. The spool owns these and no reader may put them in
-# patch attrs, since a patch merged from three files has no single answer.
-# The pre-rename spellings are listed too: a patch carrying one of those is
-# making the same claim under the old name.
+# Storage provenance belongs to spools, not patch attrs: merged patches can
+# span files. Include legacy spellings to enforce the same rule.
 STORAGE_PROVENANCE_ATTRS = (
     "source_path",
     "source_format",
@@ -193,22 +180,14 @@ progress
 # "ignore", which every policy argument in the library also spells.
 WARN_LEVELS = Literal["warn", "raise", "ignore"]
 
-# What `enrich` does about a name the inventory leaves undefined: the warn
-# levels, spelled by reference so the two sets cannot drift apart, plus the
-# fourth answer only this question has -- fill the missing marker.
+# Enrichment can fill missing metadata or use the standard warning policy.
 ON_MISSING = Literal[WARN_LEVELS, "null"]
 
-# What `enrich` does when the patch and the inventory both state an attr
-# and disagree. The merge vocabulary plus `keep_last`: enrichment combines
-# two sources rather than a sequence of patches, so which of the two wins
-# has to be sayable, and `keep_first` means what it means everywhere else
-# -- the value which was there first, the patch's own.
+# Enrichment conflicts use merge policies plus keep_last (inventory wins).
+# keep_first preserves the patch's value.
 ENRICH_CONFLICT = Literal["drop", "raise", "keep_first", "keep_last"]
 
-# The actions warnings.simplefilter and warnings.filterwarnings accept.
-# Spelled out because the standard library's alias for them is stub-only.
-# "all" is deliberately absent: Python only began accepting it in 3.14, and
-# it raises on the 3.12-3.13 interpreters this project also supports.
+# The stdlib warning-action alias is stub-only. Omit "all", unsupported on 3.12-3.13.
 WARNING_ACTIONS = Literal["default", "error", "ignore", "always", "module", "once"]
 
 # A map from the unit name to the code used in numpy.timedelta64. The codes
@@ -332,9 +311,7 @@ conflict
 """.strip()
 
 
-# Rich styles for various object displays. Every value has to be one rich can
-# parse: it resolves an unparsable style to a blank one rather than raising,
-# so a misspelling here does not fail, it silently stops coloring.
+# Invalid Rich styles silently lose coloring; keep these parseable.
 dascore_styles = dict(
     dc_blue="blue",
     dc_red="red",

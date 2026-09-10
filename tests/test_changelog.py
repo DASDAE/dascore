@@ -1,10 +1,7 @@
 """
-Test which enforces that DASCore keeps no changelog.
+Pin the changelog stub that preserves its published URL.
 
-Release notes are assembled from the pull requests merged since the last tag,
-each of which describes its own user-facing and breaking changes. The changelog
-page survives only as a stub preserving its published URL, so this test pins its
-contents exactly and fails if anything is added to it.
+Release notes come from merged PRs; additions to the stub must fail.
 """
 
 from __future__ import annotations
@@ -22,10 +19,8 @@ _DOC_PATH = _REPO_ROOT / "docs"
 _CHANGELOG_PATH = _DOC_PATH / "changelog.qmd"
 _CHECKER_PATH = _REPO_ROOT / ".github" / "scripts" / "check_pr_changelog.py"
 
-# Run wherever the docs are, skip where they are not. The sdist grafts tests but
-# ships only docs/LICENSE, so the directory existing is not enough to tell the
-# two apart; index.qmd is present iff the real docs tree is. Deliberately not
-# keyed on changelog.qmd, or deleting the page would skip rather than fail.
+# The sdist includes tests but only docs/LICENSE. Check index.qmd so deleting
+# changelog.qmd fails instead of skipping the test.
 _DOCS_PRESENT = (_DOC_PATH / "index.qmd").is_file()
 
 _EXPECTED = """# Changelog

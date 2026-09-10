@@ -1,24 +1,11 @@
-"""
-A patch operation, as a task.
+"""Represent patch operations as tasks.
 
-Any function decorated with `dascore.patch_function` is one operation, and
-[`PatchOp`](`dascore.workflow.processor.PatchOp`) is that operation said as
-an object: the function's name and the arguments it was given, which can be
-compared, fingerprinted, and written to a file.
-
-One class stands for every patch function, rather than one class each. What
-identifies an operation is its name and its arguments, and a name is a
-string; manufacturing ninety classes to hold ninety strings buys nothing and
-costs a registry tag, an import and a lookup for each.
-
-[`PatchProcessor`](`dascore.workflow.processor.PatchProcessor`) is the base
-for the few operations which are eventually written out by hand, because
-they want a kernel seam. When one exists, `fn.op(...)` returns it instead:
-one name, one implementation.
-
-An operation is named by a registry tag rather than by where a patch keeps
-it, so a function bound to nothing -- one a user has only just written -- is
-nameable too, and a plugin's `normalize` can never be read as DASCore's.
+[`PatchOp`](`dascore.workflow.processor.PatchOp`) records a decorated patch
+function's name and bound arguments so calls can be compared, fingerprinted,
+and serialized. [`PatchProcessor`](`dascore.workflow.processor.PatchProcessor`)
+supports operations that need reusable planning or backend-specific kernels.
+Registered implementations preserve the patch function as the public entry
+point.
 
 Examples
 --------

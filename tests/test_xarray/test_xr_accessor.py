@@ -219,10 +219,9 @@ class TestLazyCoordinates:
     def test_converting_does_not_spell_out_the_labels(self, tree_leaf, monkeypatch):
         """A range rebuilds from three numbers, not from every sample.
 
-        The labels are computed by the transform, so a conversion which
-        never calls it never built them. Asserting on the coordinate
-        which comes back would not show this: values spaced evenly infer
-        a range whether or not they were spelled out first.
+        The transform computes labels, so a conversion that never calls it keeps them
+        lazy. The returned coordinate alone cannot prove this because evenly spaced
+        materialized values also infer a range.
         """
         from dascore.core.coords import CoordRange  # noqa: PLC0415
         from dascore.xarray.index import TemporalRangeTransform  # noqa: PLC0415
@@ -243,10 +242,8 @@ class TestLazyCoordinates:
     def _refuse_to_materialize(monkeypatch):
         """Make spelling out a temporal label an error, either side of it.
 
-        A lazy coordinate is a transform on the xarray side and a range
-        on the patch side, and either can be asked for every label; a
-        conversion which builds one only to replace it has still paid
-        for it. Numeric coordinates are short and are left alone.
+        Either xarray's transform or the patch range can materialize labels. Refuse
+        both paths; numeric coordinates remain unaffected.
         """
         from dascore.core.coords import CoordRange  # noqa: PLC0415
         from dascore.xarray.index import TemporalRangeTransform  # noqa: PLC0415
@@ -270,11 +267,8 @@ class TestLazyCoordinates:
     def test_a_forwarded_call_never_spells_out_the_labels(self, tree_leaf, monkeypatch):
         """Not on the way in, and not on the way back out.
 
-        Building the labels only to replace them with the range which
-        states them costs the whole array anyway -- eight bytes a sample,
-        which for a long acquisition is what staying lazy is for. So the
-        conversion must be told to state the coordinate rather than
-        having it stated back afterwards.
+        Building labels before restoring the range still costs eight bytes per sample,
+        so the conversion must preserve the lazy representation throughout.
         """
         self._refuse_to_materialize(monkeypatch)
         out = tree_leaf.dc.abs()
@@ -290,11 +284,8 @@ class TestLazyCoordinates:
     def test_a_renamed_coordinate_is_spelled_out(self, tree_leaf):
         """Laziness follows the name, and a rename is a new name.
 
-        Nothing says the coordinate arriving under a new name is the one
-        which arrived stated, and guessing that it is would state a
-        coordinate which came in spelled out -- which is the failure
-        below. So a rename spells its labels out, as it did before any
-        of them were stated.
+        A renamed coordinate has no record that it arrived lazily, so it materializes
+        its labels.
         """
         out = tree_leaf.dc.rename_coords(time="t")
         assert type(out.xindexes["t"]).__name__ == "PandasIndex"

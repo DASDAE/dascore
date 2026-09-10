@@ -1,16 +1,9 @@
 """
-One call to every patch function, for comparing the routes to an operation.
+Exercise every patch function through each operation route.
 
-`PATCHES` names the patches a call may be made against; `CALLS` holds one
-entry per patch function DASCore defines, so a function added later fails
-`test_every_patch_function_is_covered` until it is given a call here.
-
-The arguments are chosen to do something -- an operation whose arguments the
-example patch is indifferent to compares equal whichever route made it, and
-would not notice an argument being dropped on the way.
-
-Seeded from `scripts/differential_check.py::get_calls`, which picks its
-arguments for the same reason.
+PATCHES supplies inputs; CALLS must cover every function or
+test_every_patch_function_is_covered fails. Arguments must affect results so dropped
+arguments are detectable. Seeded from scripts/differential_check.py::get_calls.
 """
 
 from __future__ import annotations
