@@ -603,7 +603,8 @@ class Spool(NodeRepr, NamespaceOwner):
         Keywords have the same meaning as in ``select``, but matched content is
         removed. Patch-coordinate selectors are refused because their complement may
         split patches. Inventory coordinates along the fiber are accepted and may
-        split patches into unmatched channel ranges. Empty selections raise.
+        split patches into unmatched channel ranges. Calling without selectors, or
+        with only no-op selectors (``None``, ``...``), raises.
 
         Parameters
         ----------
@@ -1065,8 +1066,9 @@ class Spool(NodeRepr, NamespaceOwner):
         Enrich each patch this spool yields from an inventory.
 
         Enrichment runs lazily as patches are extracted and survives subsequent
-        spool operations. Unresolved patches remain in the spool according to
-        ``on_unresolved``; use ``conform_to_inventory`` to restrict membership.
+        spool operations. It never removes patches: ``on_unresolved`` controls
+        warnings or errors for unresolved patches. Use ``conform_to_inventory``
+        to restrict membership.
 
         The inventory must first be attached with ``attach_inventory``.
 

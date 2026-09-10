@@ -2,9 +2,10 @@
 
 Fingerprint mode encodes parameters for hashing: arrays become byte digests and
 ``None`` mapping values are omitted. Document mode preserves serializable values
-for storage, including arrays as nested lists. Callables and unsupported values
-are named rather than reconstructed; decoding them raises. `write_workflow` and
-`read_workflow` choose the storage format from the path suffix.
+for storage, including arrays as nested lists. Dataframes and Series cannot be
+encoded in document mode. Callables and other unsupported values are named rather
+than reconstructed; decoding them raises. `write_workflow` and `read_workflow`
+choose the storage format from the path suffix.
 
 Canonical JSON and BLAKE2b provide stable hashes without Python's process-salted
 ``hash``. Dataframes and quantities additionally depend on pandas object hashes

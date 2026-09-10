@@ -740,7 +740,7 @@ def _refuse_near_miss(stem: str, child: Path, model) -> None:
     Refuse a table stem that resembles a misplaced or misspelled track table.
 
     Reject retired table names, valid table names unsupported by this model, and
-    close matches to this model.s actual table attributes. Matching is case-folded
+    close matches to this model's actual table attributes. Matching is case-folded
     and deliberately strict to avoid treating unrelated field files as format errors.
     """
     folded = stem.casefold()
