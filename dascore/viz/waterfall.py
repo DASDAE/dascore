@@ -42,7 +42,7 @@ def _validate_gap_factor(gap_factor):
 
 
 def _validate_patch_dims(patch):
-    """Validate that patch is 2D for waterfall plotting."""
+    """Validate patch dimensions and coordinate order for waterfall plotting."""
     if patch.ndim != 2:
         # Try squeezing out degenerate dims to visualize.
         patch = patch.squeeze()
@@ -52,6 +52,13 @@ def _validate_patch_dims(patch):
                 f"Can only make waterfall plot of 2D Patch, "
                 f"but got {patch.ndim}D patch with dims {dims}"
             )
+            raise ParameterError(msg)
+    for dim in patch.dims:
+        coord = patch.get_coord(dim)
+        if not (coord.sorted or coord.reverse_sorted) and np.all(
+            np.isfinite(coord.values)
+        ):
+            msg = f"Cannot plot nonmonotonic coordinate {dim!r} in a waterfall."
             raise ParameterError(msg)
     return patch
 
@@ -152,7 +159,8 @@ def waterfall(
 
     Evenly sampled coordinates use ``imshow``. Finite, monotonic irregular
     coordinates use ``pcolormesh`` so cells follow their coordinate values;
-    incomplete or nonmonotonic coordinates fall back to ``imshow``.
+    incomplete coordinates fall back to ``imshow``. Nonmonotonic coordinates
+    raise `ParameterError`.
 
     Parameters
     ----------

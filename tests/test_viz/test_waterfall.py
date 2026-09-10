@@ -209,14 +209,20 @@ class TestWaterfall:
         assert isinstance(mesh, QuadMesh)
         assert mesh.get_coordinates().shape[:2] == tuple(x + 1 for x in patch.shape)
 
-    def test_nonmonotonic_coordinate_uses_image(self, random_patch):
-        """Nonmonotonic coordinates retain the image-rendering fallback."""
-        distance = np.asarray(random_patch.get_coord("distance")).copy()
-        distance[[1, 2]] = distance[[2, 1]]
-        patch = random_patch.update_coords(distance=distance)
-        ax = patch.viz.waterfall(cbar=False)
-        assert isinstance(ax.images[0], AxesImage)
-        assert not any(isinstance(x, QuadMesh) for x in ax.collections)
+    @pytest.mark.parametrize("dim", ("distance", "time"))
+    @pytest.mark.parametrize(
+        "dtype", ("float64", "uint16", "datetime64[s]", "timedelta64[s]")
+    )
+    def test_nonmonotonic_coordinate_raises(self, random_patch, dim, dtype):
+        """Folded coordinates raise before creating a figure, on either axis."""
+        size = len(random_patch.get_coord(dim))
+        values = np.arange(size).astype(dtype)
+        values[[1, 2]] = values[[2, 1]]
+        patch = random_patch.update_coords(**{dim: values})
+        figure_numbers = plt.get_fignums()
+        with pytest.raises(ParameterError, match=f"nonmonotonic coordinate '{dim}'"):
+            patch.viz.waterfall(cbar=False)
+        assert plt.get_fignums() == figure_numbers
 
     def test_gap_uses_masked_mesh(self, distance_gap_patch):
         """A gap color adds one masked mesh band."""
