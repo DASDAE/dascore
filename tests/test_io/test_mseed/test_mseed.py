@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from fractions import Fraction
 from typing import Any
 
@@ -306,6 +307,21 @@ class TestMiniSeedRead:
             time=(full.get_coord("time")[3], None),
         )[0].get_coord("time")
         assert np.array_equal(odd.values, full.get_coord("time").values[3:])
+
+    def test_nanosecond_gap_on_whole_grid_is_not_merged(self):
+        """A one-nanosecond offset on a whole-nanosecond grid is a real gap."""
+        assert mseed_utils._continues(1_000_000, 1_000_000, 1000.0)
+        assert not mseed_utils._continues(1_000_000, 1_000_001, 1000.0)
+        assert mseed_utils._continues(985_351_562, 985_351_563, 1024.0)
+        assert not mseed_utils._continues(985_351_562, 985_351_565, 1024.0)
+
+    def test_group_key_includes_phase(self, tmp_path):
+        """Segments trimmed onto different phases are not stacked together."""
+        path = _write_mseed(tmp_path / "phase.mseed", sample_rates=[1024.0] * 3)
+        segments = mseed_utils._read_segments(path, pytest.importorskip("pymseed"))
+        shifted = replace(segments[1], origin_offset=1)
+        keys = {mseed_utils._get_group_key(s) for s in (segments[0], shifted)}
+        assert len(keys) == 2
 
     def test_incompatible_sample_rates_are_separate_patches(self, tmp_path):
         """Incompatible traces are returned as separate patches."""

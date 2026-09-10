@@ -12,7 +12,7 @@ This note explains the current internal coordinate model in DASCore, with partic
 |---|---|
 | `CoordPartial` | Shape and optional range metadata when coordinate values are unknown, empty, or entirely missing. |
 | `CoordRange` | A monotonic, evenly sampled coordinate represented by start, stop, and step. |
-| `CoordRangeInt` | The `CoordRange` subclass `get_coord` returns for datetime64, timedelta64, and integer ranges. It holds the exact grid (`step_numerator`, `step_denominator`, `origin_offset` in ticks) so a fractional step such as 1/1024 s never drifts; `step` stays the nearest whole-tick spacing and the repr reads `CoordRange`. `CoordRange` built directly is unchanged. |
+| `CoordRangeInt` | The `CoordRange` subclass `get_coord` returns for nanosecond datetime64/timedelta64 ranges and for integer ranges whose step is an integer, a `Fraction`, a tuple, or an evenly dividing span. It holds the exact grid (`step_numerator`, `step_denominator`, `origin_offset` in ticks) so a fractional step such as 1/1024 s never drifts; `step` stays the nearest whole-tick spacing and the repr reads `CoordRange`. Coarser time units, sub-nanosecond units, float steps, and unevenly divided integer spans (`get_coord(start=0, stop=10, shape=3)` is float) keep the plain `CoordRange`, which is unchanged. |
 | `CoordMonotonicArray` | A strictly increasing or decreasing array that is not evenly sampled. |
 | `CoordSegmented` | An ordered composition of non-overlapping monotonic segments whose concatenated values are preserved exactly. |
 | `CoordArray` | Arbitrary numeric, datetime, or timedelta values, including non-monotonic arrays. |

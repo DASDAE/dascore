@@ -119,6 +119,7 @@ class _TraceGroupKey:
     start_ns: int
     sample_rate: float
     sample_count: int
+    origin_offset: int = 0
 
 
 @dataclass(frozen=True)
@@ -142,15 +143,18 @@ def _duration_seconds(sample_rate: float, sample_count: int = 1) -> Fraction:
     return samples / rate if rate > 0 else samples * abs(rate)
 
 
-def _continues(expected_start_ns: int, start_ns: int) -> bool:
+def _continues(expected_start_ns: int, start_ns: int, sample_rate: float) -> bool:
     """
     Whether a record starting at start_ns continues a trace.
 
-    A record's start time is the writer's rounding of a fractional sample
-    time to whole nanoseconds, so it may differ from the expected start by
-    one nanosecond either way (1009 samples at 1024 Hz end at .5 ns).
+    When the sample spacing is not a whole number of nanoseconds, a record's
+    start time is the writer's rounding of a fractional time and may differ
+    from the expected start by one nanosecond either way (1009 samples at
+    1024 Hz end at .5 ns). On a whole-nanosecond grid a nanosecond is a gap.
     """
-    return abs(expected_start_ns - start_ns) <= 1
+    exact = (_duration_seconds(sample_rate) * ONE_BILLION).denominator == 1
+    tolerance = 0 if exact else 1
+    return abs(expected_start_ns - start_ns) <= tolerance
 
 
 def _duration_ns(sample_rate: float, sample_count: int = 1) -> int:
@@ -366,6 +370,7 @@ def _coalesce_source_segments(segments: list[_TraceSegment]) -> list[_TraceSegme
                 and _continues(
                     pending.start_ns + _duration_ns(pending.sample_rate, sample_count),
                     seg.start_ns,
+                    pending.sample_rate,
                 )
                 and pending.data.dtype == seg.data.dtype
                 and pending.encoding == seg.encoding
@@ -392,7 +397,7 @@ def _coalesce_source_summaries(summaries: list[_TraceSummary]) -> list[_TraceSum
         return (
             pending.sample_rate == summary.sample_rate
             and pending.format_version == summary.format_version
-            and _continues(pending.next_start_ns, summary.start_ns)
+            and _continues(pending.next_start_ns, summary.start_ns, pending.sample_rate)
             and pending.dtype == summary.dtype
             and pending.encoding == summary.encoding
         )
@@ -447,6 +452,7 @@ def _get_group_key(segment: _TraceInfo) -> _TraceGroupKey:
         start_ns=segment.start_ns,
         sample_rate=segment.sample_rate,
         sample_count=segment.sample_count,
+        origin_offset=segment.origin_offset,
     )
 
 

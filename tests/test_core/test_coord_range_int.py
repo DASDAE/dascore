@@ -103,19 +103,24 @@ class TestDispatch:
         coord = get_coord(start=start, stop=start + step * 10, step=step)
         assert type(coord) is CoordRange
 
-    def test_coarse_units_kept(self):
-        """A microsecond coordinate stays microseconds and works past 2262."""
+    def test_coarse_units_stay_legacy(self):
+        """Only nanosecond time is exact; coarser units keep the legacy class."""
         start = np.datetime64("2500-01-01T00:00:00", "us")
         coord = get_coord(start=start, step=np.timedelta64(2, "us"), shape=(5,))
-        assert isinstance(coord, CoordRangeInt)
+        assert type(coord) is CoordRange
         assert coord.dtype == np.dtype("datetime64[us]")
         assert coord.values[-1] == start + np.timedelta64(8, "us")
         assert coord.step_exact == Fraction(2, 10**6)
+        day = get_coord(start=np.datetime64("2020-01-01"), step=ONE_S, shape=(3,))
+        assert type(day) is CoordRange and day.dtype == np.dtype("datetime64[s]")
 
-    def test_coarse_start_fine_step_resolves_finer(self):
-        """A scalar step resolves the unit as start + step does."""
-        coord = get_coord(start=np.datetime64("2020-01-01"), step=ONE_S, shape=(3,))
-        assert coord.dtype == np.dtype("datetime64[s]")
+    def test_nanosecond_step_resolves_exact(self):
+        """A nanosecond step makes a coarse start resolve to nanoseconds."""
+        coord = get_coord(
+            start=np.datetime64("2020-01-01"), step=np.timedelta64(1, "ns"), shape=(3,)
+        )
+        assert isinstance(coord, CoordRangeInt)
+        assert coord.dtype == np.dtype("datetime64[ns]")
 
     def test_fraction_step_with_coarse_start_uses_nanoseconds(self):
         """A fraction step is in seconds, so nanoseconds hold it."""
@@ -227,9 +232,13 @@ class TestConstruction:
         assert isinstance(coord.select((6, 7))[0], CoordPartial)
 
     def test_overflow_raises(self):
-        """A grid past the int64 range is refused at construction."""
-        with pytest.raises(ValidationError, match="int64"):
+        """A grid past its dtype's range is refused at construction."""
+        with pytest.raises(ValidationError, match="int64 range"):
             get_coord(start=2**62, step=2**40, shape=(2**30,))
+        with pytest.raises(ValidationError, match="int8 range"):
+            get_coord(start=np.int8(120), step=np.int8(2), shape=(10,))
+        small = get_coord(start=np.int8(120), step=np.int8(2), shape=(3,))
+        assert small.dtype == np.dtype("int8") and small.max() == 124
 
     def test_grid_normalized_jointly(self):
         """(6, 2, 1) must not reduce to (3, 1, 0): that moves the origin."""
@@ -721,8 +730,7 @@ class TestStepExact:
     def test_time_units_are_seconds(self, hz_1024):
         """step_exact of a time coordinate is in seconds."""
         assert hz_1024.step_exact == Fraction(1, 1024)
-        start = np.datetime64("2020-01-01", "ms")
-        ms = get_coord(start=start, step=np.timedelta64(4, "ms"), shape=(3,))
+        ms = get_coord(start=T0, step=np.timedelta64(4, "ms"), shape=(3,))
         assert ms.step_exact == Fraction(4, 1000)
 
 
@@ -801,16 +809,9 @@ class TestValidationErrors:
         with pytest.raises(CoordError, match="length"):
             summary.to_coord()
 
-    def test_value_off_grid(self):
-        """A value finer than the tick does not sit on the grid."""
-        start = np.datetime64("2020-01-01T00:00:00.000001", "us")
-        coord = get_coord(start=start, step=np.timedelta64(1, "us"), shape=(4,))
-        with pytest.raises(CoordError, match="does not sit"):
-            coord._new_grid(start + np.timedelta64(1, "ns"), coord.step, 4)
-
     def test_non_time_value_on_time_grid(self):
         """A value that is not a time at all is refused."""
-        with pytest.raises(ValidationError, match="not a"):
+        with pytest.raises(ValidationError, match="not an integer or time"):
             CoordRangeInt(start=T0, stop="tomorrow", step=(1, 2))
 
     def test_non_integer_float(self):
@@ -819,7 +820,7 @@ class TestValidationErrors:
             CoordRangeInt(start=0, stop=10, step=2.5)
 
     def test_month_unit(self):
-        """A month is not a fixed number of seconds; a fraction step uses ns."""
+        """A month step stays legacy; a fraction step resolves to nanoseconds."""
         start = np.datetime64("2020-01", "M")
         from dascore.core.coords import _range_class  # noqa: PLC0415
 
@@ -849,9 +850,8 @@ class TestValidationErrors:
                 step_denominator=2,
                 origin_offset=2,
             )
-        with pytest.raises(ValidationError, match="fixed tick"):
-            month = np.datetime64("2020-01", "M")
-            CoordRangeInt(start=month, step=np.timedelta64(1, "M"), shape=(3,))
+        with pytest.raises(ValidationError, match="needs nanoseconds"):
+            CoordRangeInt(start=np.datetime64("2020-01-01"), step=ONE_S, shape=(3,))
 
     def test_update_limits_step_below_tick(self, int_frac):
         """A new step below one tick is refused."""
@@ -888,15 +888,7 @@ class TestValidationErrors:
 
 
 class TestUnitHelpers:
-    """Time unit parsing behind the exact grid."""
-
-    def test_generic_unit_has_no_tick(self):
-        """A generic time dtype states no unit and so no tick."""
-        from dascore.core.coords import _seconds_per_tick, _time_unit  # noqa: PLC0415
-
-        assert _time_unit(np.dtype("datetime64")) == ("generic", 1)
-        assert _seconds_per_tick(np.dtype("datetime64")) is None
-        assert _seconds_per_tick(np.dtype("datetime64[10us]")) == Fraction(1, 10**5)
+    """Dispatch details behind the exact grid."""
 
     def test_mixed_kinds_stay_legacy(self):
         """A time start with a non-time stop is left to the legacy validator."""
@@ -983,13 +975,12 @@ class TestLegacyCoordRange:
 class TestReviewFindings:
     """Consumers that rebuilt from the rounded step now stay on the grid."""
 
-    def test_summary_keeps_coarse_tick_unit(self):
-        """A microsecond grid summarised in nanoseconds rebuilds its labels."""
-        start = np.datetime64("2020-01-01", "us")
-        coord = get_coord(start=start, step=np.timedelta64(2, "us"), shape=(5,))
+    def test_summary_round_trip_of_odd_grid(self):
+        """A grid with a fractional origin survives the summary."""
+        coord = get_coord(start=T0, step=(3, 2 * 10**9), shape=(6,))[1:]
         rebuilt = coord.to_summary().to_coord()
         assert np.array_equal(rebuilt.values, coord.values)
-        assert rebuilt.step_exact == coord.step_exact
+        assert rebuilt == coord
 
     def test_pad_extends_the_grid(self, hz_1024):
         """Padding a fractional grid keeps every existing label."""
@@ -1011,11 +1002,15 @@ class TestReviewFindings:
         assert type(floats) is CoordRange and floats.step == 0.5
         moved = get_coord(start=0, stop=10, step=1).update_limits(step=0.5, min=1)
         assert type(moved) is CoordRange and moved.min() == 1 and moved.step == 0.5
-        start = np.datetime64("2020-01-01", "ms")
-        ms = get_coord(start=start, step=np.timedelta64(1, "ms"), shape=(4,))
-        finer = ms.update_limits(step=np.timedelta64(500, "us"))
+        legacy = get_coord(
+            start=np.datetime64("2020-01-01", "ms"),
+            step=np.timedelta64(1, "ms"),
+            shape=(4,),
+        )
+        assert type(legacy) is CoordRange
+        exact = get_coord(start=T0, step=np.timedelta64(1, "ms"), shape=(4,))
+        finer = exact.update_limits(step=np.timedelta64(500, "us"))
         assert finer.step_exact == Fraction(1, 2000) and len(finer) == 4
-        assert finer.min() == ms.min()
 
     def test_sample_count_uses_exact_step(self, hz_1024):
         """A second at 1024 Hz is 1024 samples, not 1025."""
@@ -1037,3 +1032,49 @@ class TestReviewFindings:
         out = _offset_values(hz_1024, np.array([0, 1024, 1025]))
         assert out[1] == T0 + ONE_S
         assert np.array_equal(out, hz_1024.values[[0, 1024, 1025]])
+
+
+class TestSecondReviewRound:
+    """Findings from the PR review."""
+
+    def test_decimate_keeps_grid(self, hz_1024):
+        """Decimating a patch on a fractional grid keeps the exact grid."""
+        patch = dc.get_example_patch().update_coords(time=hz_1024[:2000])
+        out = patch.decimate(time=3, filter_type=None)
+        time = out.get_coord("time")
+        assert isinstance(time, CoordRangeInt)
+        assert time.step_exact == Fraction(3, 1024)
+        assert np.array_equal(time.values, hz_1024.values[:2000:3])
+
+    def test_index_with_slice_and_array(self, hz_1024):
+        """index() with a slice keeps the grid; arrays go through values."""
+        assert hz_1024.index(slice(1, 10, 2)) == hz_1024[1:10:2]
+        out = hz_1024.index(np.array([1, 5, 9]))
+        assert np.array_equal(out.values, hz_1024.values[[1, 5, 9]])
+
+    def test_coord_range_uses_exact_end(self):
+        """The extended range reaches the exact exclusive end."""
+        coord = get_coord(start=T0, step=(1, 1024), shape=(1024,))
+        assert coord.coord_range() == np.timedelta64(1, "s")
+        assert coord[::-1].coord_range() == np.timedelta64(1, "s")
+        assert coord.coord_range(extend=False) == coord.max() - coord.min()
+
+    def test_huge_bounds(self):
+        """Bounds past the int64 range select the whole coordinate or nothing."""
+        coord = get_coord(start=0, stop=10, step=1)
+        sub, _ = coord.select((np.uint64(2**63 + 1), None))
+        assert isinstance(sub, CoordPartial)
+        sub, _ = coord.select((2**70, None))
+        assert isinstance(sub, CoordPartial)
+        sub, _ = coord.select((-(2**70), 2**70))
+        assert sub == coord
+
+    def test_dasdae_refuses_before_writing(self, hz_1024, tmp_path):
+        """A refused write leaves the existing file untouched."""
+        path = tmp_path / "keep.h5"
+        good = dc.get_example_patch()
+        good.io.write(path, "dasdae")
+        bad = good.update_coords(time=hz_1024[:2000])
+        with pytest.raises(NotImplementedError, match="fractional step"):
+            bad.io.write(path, "dasdae")
+        assert dc.spool(path)[0] == good

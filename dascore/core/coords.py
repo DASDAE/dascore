@@ -1963,18 +1963,8 @@ class CoordRange(BaseCoord):
 
 
 _EXACT_GRID_FIELDS = ("step_numerator", "step_denominator", "origin_offset")
-# Seconds in one unit of each fixed-length numpy time unit. Months and
-# years are not fixed, and nothing finer than a nanosecond is supported.
-_SECONDS_PER_UNIT: Mapping[str, Fraction] = {
-    "W": Fraction(604_800),
-    "D": Fraction(86_400),
-    "h": Fraction(3_600),
-    "m": Fraction(60),
-    "s": Fraction(1),
-    "ms": Fraction(1, 10**3),
-    "us": Fraction(1, 10**6),
-    "ns": Fraction(1, 10**9),
-}
+# Nanoseconds per second: the tick of every exact time grid.
+_NS_PER_S = 10**9
 
 
 def _unbox_scalar(value):
@@ -2011,91 +2001,47 @@ def _is_null_scalar(value) -> bool:
     return bool(pd.isnull(_unbox_scalar(value)))
 
 
-def _time_unit(dtype) -> tuple[str, int]:
-    """The unit and count of a time dtype, read from its string form."""
-    match = re.fullmatch(r"[<>|=]?[mM]8\[(\d*)([a-zA-Z]+)\]", np.dtype(dtype).str)
-    if match is None:  # a generic time dtype states no unit
-        return "generic", 1
-    return match.group(2), int(match.group(1) or 1)
-
-
-def _timedelta_dtype(dtype) -> np.dtype:
-    """The timedelta dtype with the unit of a time dtype."""
-    unit, count = _time_unit(dtype)
-    return np.dtype(f"m8[{count if count != 1 else ''}{unit}]")
-
-
-def _seconds_per_tick(dtype) -> Fraction | None:
-    """Seconds in one tick of a time dtype, or None if it has no fixed length."""
-    unit, count = _time_unit(dtype)
-    seconds = _SECONDS_PER_UNIT.get(unit)
-    return None if seconds is None else seconds * count
-
-
-def _tick_seconds(dtype) -> Fraction:
-    """Seconds in one tick of a time dtype known to have a fixed length."""
-    seconds = _seconds_per_tick(dtype)
-    assert seconds is not None, "callers check the unit first"
-    return seconds
-
-
-def _step_value(step_tick: int, dtype: np.dtype):
-    """A whole-tick step as a scalar of the coordinate's step type."""
-    if dtype.kind in "mM":
-        ticks = np.asarray(step_tick, dtype=np.int64)
-        return ticks.astype(_timedelta_dtype(dtype))[()]
-    return step_tick
-
-
-def _time_tick_dtype(start, stop, step) -> np.dtype | None:
+def _exact_time_dtype(start, stop, step) -> np.dtype | None:
     """
-    The tick dtype an exact time range resolves to, or None to stay legacy.
+    The nanosecond dtype an exact time range holds, or None to stay legacy.
 
-    A scalar step resolves as `start + step` does, to the finer unit. A
-    fraction step is stated in seconds, and nanoseconds hold it.
+    Ticks are nanoseconds, DASCore's time unit. A scalar step resolves as
+    `start + step` does, so only nanosecond inputs are exact; a fraction
+    step is stated in seconds and always resolves to nanoseconds.
     """
     ends = [np.asarray(x).dtype for x in (start, stop) if not _is_null_scalar(x)]
     if _is_fraction_step(step):
-        dtype = np.dtype(f"{ends[0].kind}8[ns]")
-    else:
-        parts = ends if step is None else [*ends, np.asarray(_unbox_scalar(step)).dtype]
-        try:
-            dtype = np.result_type(*parts)
-        except TypeError:  # not all time-like: let the legacy validator say so
-            return None
-    if dtype.kind not in "mM" or _seconds_per_tick(dtype) is None:
+        return np.dtype(f"{ends[0].kind}8[ns]")
+    parts = ends if step is None else [*ends, np.asarray(_unbox_scalar(step)).dtype]
+    try:
+        dtype = np.result_type(*parts)
+    except TypeError:  # not all time-like: let the legacy validator say so
         return None
-    return dtype
+    return dtype if dtype.kind in "mM" and dtype.str.endswith("[ns]") else None
 
 
-def _to_tick(value, dtype: np.dtype) -> int:
-    """
-    Return value as an integer tick of ``dtype``: its unit for time, or itself.
-
-    Raises CoordError if the value does not sit on a tick.
-    """
+def _to_tick(value) -> int:
+    """Return a time value as nanoseconds, or an integer value as itself."""
     value = _unbox_scalar(value)
-    if dtype.kind in "mM":
-        # A step is a timedelta whatever the coordinate holds, so the
-        # target keeps the unit and takes the value's own kind.
-        if is_timedelta64(value) and dtype.kind == "M":
-            dtype = _timedelta_dtype(dtype)
-        try:
-            converted = np.asarray(value).astype(dtype)
-            exact = converted.astype(np.asarray(value).dtype) == np.asarray(value)
-        except (TypeError, ValueError) as e:
-            msg = f"{value!r} is not a {dtype} value."
-            raise CoordError(msg) from e
-        if not exact:
-            msg = f"{value} does not sit on the {dtype} grid."
-            raise CoordError(msg)
-        return int(converted.view(np.int64))
+    if is_datetime64(value) or is_timedelta64(value):
+        return int(to_int(value))
     if isinstance(value, float | np.floating):
         if not float(value).is_integer():
             msg = f"An integer coordinate cannot hold the non-integer value {value}."
             raise CoordError(msg)
         return int(value)
-    return int(value)
+    try:
+        return int(value)
+    except (TypeError, ValueError) as e:
+        msg = f"{value!r} is not an integer or time value."
+        raise CoordError(msg) from e
+
+
+def _step_value(step_tick: int, dtype: np.dtype):
+    """A whole-tick step as a scalar of the coordinate's step type."""
+    if dtype.kind in "mM":
+        return np.timedelta64(step_tick, "ns")
+    return step_tick
 
 
 def _range_class(start, stop, step, shape) -> type[CoordRange]:
@@ -2109,7 +2055,7 @@ def _range_class(start, stop, step, shape) -> type[CoordRange]:
     anchor = stop if _is_null_scalar(start) else start
     fraction = _is_fraction_step(step)
     if is_datetime64(anchor) or is_timedelta64(anchor):
-        if _time_tick_dtype(start, stop, step) is None:
+        if _exact_time_dtype(start, stop, step) is None:
             return CoordRange
         return CoordRangeInt
     int_like = _is_int_scalar(anchor) and (
@@ -2184,14 +2130,16 @@ def _count_from_span(span: int, num: int, den: int, offset: int) -> int:
     return max(1, math.ceil(round(float(ratio), 1)))
 
 
-def _check_grid_fits(start_tick: int, num: int, den: int, count: int) -> None:
-    """Refuse a grid whose evaluation would overflow int64."""
-    limit = 2**63
-    reach = start_tick + (count * num + den) // den
-    if abs(count * num) + den >= limit or not -limit <= reach < limit:
+def _check_grid_fits(start_tick: int, num: int, den: int, count: int, dtype) -> None:
+    """Refuse a grid whose labels would not fit the dtype or int64 arithmetic."""
+    dtype = np.dtype(dtype)
+    info = np.iinfo(np.int64 if dtype.kind in "mM" else cast("Any", dtype))
+    last = start_tick + (count * num) // den
+    low, high = min(start_tick, last), max(start_tick, last)
+    if abs(count * num) + den >= 2**63 or low < info.min or high > info.max:
         msg = (
             f"A grid of {count} samples with step {num}/{den} ticks from "
-            f"{start_tick} exceeds the int64 range."
+            f"{start_tick} exceeds the {dtype} range."
         )
         raise CoordError(msg)
 
@@ -2200,15 +2148,14 @@ class CoordRangeInt(CoordRange):
     """
     A range coordinate on an exact integer grid.
 
-    The class `get_coord` returns for datetime64, timedelta64, and integer
-    ranges. Labels are integer ticks: the coordinate's time unit
-    (nanoseconds unless coarser inputs say otherwise) or the integers
-    themselves. The ideal grid has a spacing of ``step_numerator /
-    step_denominator`` ticks and an origin ``origin_offset /
-    step_denominator`` ticks after ``start``; each label is the floor of its
-    ideal position. A slice, stride, or reversal therefore reproduces the
-    labels of the original exactly, and a 1024 Hz grid never drifts the way
-    a step rounded to 976562 ns would.
+    The class `get_coord` returns for nanosecond datetime64 and timedelta64
+    ranges and for integer ranges. Labels are integer ticks: nanoseconds, or
+    the integers themselves. The ideal grid has a spacing of
+    ``step_numerator / step_denominator`` ticks and an origin
+    ``origin_offset / step_denominator`` ticks after ``start``; each label is
+    the floor of its ideal position. A slice, stride, or reversal therefore
+    reproduces the labels of the original exactly, and a 1024 Hz grid never
+    drifts the way a step rounded to 976562 ns would.
 
     ``step`` is the nearest whole-tick step (ties to even), kept for every
     consumer that reads a scalar spacing. ``step_exact`` is the exact
@@ -2257,14 +2204,12 @@ class CoordRangeInt(CoordRange):
             raise CoordError(msg)
         time_like = is_datetime64(anchor) or is_timedelta64(anchor)
         if time_like:
-            dtype = _time_tick_dtype(start, stop, step)
+            dtype = _exact_time_dtype(start, stop, step)
             if dtype is None:
-                msg = f"{np.asarray(anchor).dtype} has no fixed tick length."
+                msg = f"An exact time grid needs nanoseconds, not {values}."
                 raise CoordError(msg)
-        else:
-            dtype = np.dtype(np.int64)  # placeholder until the step is known
-        start_tick = None if start is None else _to_tick(start, dtype)
-        stop_tick = None if stop is None else _to_tick(stop, dtype)
+        start_tick = None if start is None else _to_tick(start)
+        stop_tick = None if stop is None else _to_tick(stop)
         count = None
         if shape is not None:
             shape = tuple(iterate(shape))
@@ -2281,13 +2226,13 @@ class CoordRangeInt(CoordRange):
         if _is_fraction_step(step):
             frac = _as_fraction(step)
             if time_like:
-                frac = frac / _tick_seconds(dtype)
+                frac = frac * _NS_PER_S
             num, den = frac.numerator, frac.denominator
         elif values.get("step_numerator") is not None:
             num = int(values["step_numerator"])
             den = int(values.get("step_denominator") or 1)
         elif step is not None:
-            num, den, offset = _to_tick(step, dtype), 1, 0
+            num, den, offset = _to_tick(step), 1, 0
         else:
             if start_tick is None or stop_tick is None or count is None:
                 msg = (
@@ -2324,7 +2269,6 @@ class CoordRangeInt(CoordRange):
             # The ideal origin is count steps before stop; start is its floor.
             start_tick, offset = divmod(stop_tick * den - count * num, den)
         num, den, offset = _normalize_grid(num, den, offset)
-        _check_grid_fits(start_tick, num, den, count)
         step_tick = round(Fraction(num, den))
         end_tick = start_tick + (offset + count * num) // den
         if time_like:
@@ -2332,6 +2276,7 @@ class CoordRangeInt(CoordRange):
         else:
             start_value = start if start is not None else start_tick
             dtype = np.asarray(start_value + step_tick).dtype
+        _check_grid_fits(start_tick, num, den, count, dtype)
         values.update(
             start=start_value,
             stop=np.asarray(end_tick, dtype=np.int64).astype(dtype)[()],
@@ -2349,7 +2294,7 @@ class CoordRangeInt(CoordRange):
     @property
     @cached_method
     def _start_tick(self) -> int:
-        return _to_tick(self.start, np.dtype(self.dtype))
+        return _to_tick(self.start)
 
     @property
     def _ideal_origin(self) -> Fraction:
@@ -2361,9 +2306,7 @@ class CoordRangeInt(CoordRange):
     def step_exact(self) -> Fraction:
         """The exact spacing in coordinate units (seconds for time)."""
         frac = Fraction(self.step_numerator, self.step_denominator)
-        if dtype_time_like(self.dtype):
-            return frac * _tick_seconds(self.dtype)
-        return frac
+        return frac / _NS_PER_S if dtype_time_like(self.dtype) else frac
 
     def _ticks(self, indices) -> np.ndarray:
         """The label ticks at these (non-negative) indices."""
@@ -2380,8 +2323,8 @@ class CoordRangeInt(CoordRange):
     def _grid(self, start_tick: int, num: int, den: int, offset: int, count: int):
         """Construct a coordinate on a known grid without re-validation."""
         num, den, offset = _normalize_grid(num, den, offset)
-        _check_grid_fits(start_tick, num, den, count)
         dtype = np.dtype(self.dtype)
+        _check_grid_fits(start_tick, num, den, count, dtype)
         start = self._from_ticks(start_tick)[()]
         stop = self._from_ticks(start_tick + (offset + count * num) // den)[()]
         step_tick = round(Fraction(num, den))
@@ -2403,8 +2346,7 @@ class CoordRangeInt(CoordRange):
 
     def _new_grid(self, start, step, length: int) -> Self:
         """A whole-tick grid from a start value and scalar step."""
-        dtype = np.dtype(self.dtype)
-        return self._grid(_to_tick(start, dtype), _to_tick(step, dtype), 1, 0, length)
+        return self._grid(_to_tick(start), _to_tick(step), 1, 0, length)
 
     def _sliced(self, first: int, stride: int, count: int):
         """The coordinate of the samples first, first + stride, ... (count)."""
@@ -2453,19 +2395,13 @@ class CoordRangeInt(CoordRange):
         labels past the next tick in that direction.
         """
         values = np.atleast_1d(values)
-        toward_end = forward == self.sorted
-        dtype = np.dtype(self.dtype)
-        if dtype.kind in "mM":
-            ticks = values.astype(dtype)
-            back = ticks.astype(values.dtype)
-            ticks = ticks.view(np.int64)
-            # A bound finer than the tick: below the truncated tick when
-            # the cast went up, above it when the cast went down.
-            floor = np.where(back > values, ticks - 1, ticks)
-            return np.where(back == values, ticks, floor + toward_end)
+        if values.dtype.kind in "mM":  # already nanoseconds, the tick
+            return values.astype("int64")
         if values.dtype.kind == "f":
-            values = (np.ceil if toward_end else np.floor)(values)
-        return values.astype(np.int64)
+            values = (np.ceil if forward == self.sorted else np.floor)(values)
+        # A bound past the int64 range lies past the coordinate either way.
+        limits = np.iinfo(np.int64)
+        return np.clip(values, limits.min, limits.max).astype(np.int64)
 
     # --- overrides
 
@@ -2506,6 +2442,19 @@ class CoordRangeInt(CoordRange):
         indices = np.asarray(indices)
         indices = np.where(indices < 0, indices + len(self), indices)
         return self._from_ticks(self._ticks(indices))
+
+    def index(self, indexer, axis: int | None = None) -> BaseCoord:
+        """Index the coordinate; a slice keeps the grid, as ``coord[slice]`` does."""
+        if isinstance(indexer, slice) and not axis:
+            return self[indexer]
+        return super().index(indexer, axis=axis)
+
+    def coord_range(self, extend: bool = True):
+        """The span of the coordinate; extended, its exact exclusive end."""
+        if not extend:
+            return super().coord_range(extend=False)
+        first, last = self._get_index_values([0, len(self)])
+        return np.abs(last - first)
 
     @property
     @cached_method
@@ -2618,16 +2567,15 @@ class CoordRangeInt(CoordRange):
 
     def _with_step(self, step) -> BaseCoord:
         """The same start and count on a new cadence."""
-        dtype = np.dtype(self.dtype)
         if _is_fraction_step(step):
             frac = _as_fraction(step)
-            if dtype_time_like(dtype):
-                frac = frac / _tick_seconds(dtype)
+            if dtype_time_like(self.dtype):
+                frac = frac * _NS_PER_S
             num, den = frac.numerator, frac.denominator
         else:
             step = get_compatible_values(step, type(self.step))
             try:
-                num, den = _to_tick(step, dtype), 1
+                num, den = _to_tick(step), 1
             except CoordError:
                 # A step this grid cannot hold (a float on integers, a finer
                 # time unit) re-dispatches to the class that can.
@@ -2642,8 +2590,7 @@ class CoordRangeInt(CoordRange):
     def _samples_in(self, duration):
         """How many exact steps a duration spans."""
         if dtype_time_like(self.dtype):
-            ns = int(to_int(dc.to_timedelta64(duration)))
-            ticks = Fraction(ns) / (_tick_seconds(self.dtype) * 10**9)
+            ticks = Fraction(int(to_int(dc.to_timedelta64(duration))))
         else:
             plain = duration.item() if isinstance(duration, np.generic) else duration
             ticks = Fraction(plain)
@@ -2665,7 +2612,6 @@ class CoordRangeInt(CoordRange):
         if all(x is not None for x in [min, max, step]):
             msg = "At most two parameters can be specified in update_limits."
             raise ValueError(msg)
-        dtype = np.dtype(self.dtype)
         out = self
         if min is not None and max is not None:
             # As for every range: min is the new start, max the new
@@ -2673,13 +2619,13 @@ class CoordRangeInt(CoordRange):
             # when it is at least a tick; below that the labels are floats.
             min = get_compatible_values(min, self.dtype)
             max = get_compatible_values(max, self.dtype)
-            frac = Fraction(_to_tick(max, dtype) - _to_tick(min, dtype), len(self))
+            frac = Fraction(_to_tick(max) - _to_tick(min), len(self))
             if abs(frac) < 1:
                 new_step = (max - min) / len(self)
                 out = get_coord(start=min, stop=max, step=new_step, units=self.units)
             else:
                 out = self._grid(
-                    _to_tick(min, dtype), frac.numerator, frac.denominator, 0, len(self)
+                    _to_tick(min), frac.numerator, frac.denominator, 0, len(self)
                 )
             return out.new(**kwargs) if kwargs else out
         if step is not None:
@@ -2688,10 +2634,10 @@ class CoordRangeInt(CoordRange):
                 return out.update_limits(min=min, max=max, **kwargs)
         if min is not None:
             min = get_compatible_values(min, self.dtype)
-            out = out._translated(_to_tick(min, dtype) - _to_tick(out.min(), dtype))
+            out = out._translated(_to_tick(min) - _to_tick(out.min()))
         if max is not None:
             max = get_compatible_values(max, self.dtype)
-            out = out._translated(_to_tick(max, dtype) - _to_tick(out.max(), dtype))
+            out = out._translated(_to_tick(max) - _to_tick(out.max()))
         return out.new(**kwargs) if kwargs else out
 
     def new(self, **kwargs):
@@ -2729,21 +2675,12 @@ class CoordRangeInt(CoordRange):
     def to_summary(self, dims=()) -> CoordSummary:
         """Get the summary info about the coord, exact grid included."""
         summary = super().to_summary(dims=dims)
-        num, den, offset = (
-            self.step_numerator,
-            self.step_denominator,
-            self.origin_offset,
-        )
-        if dtype_time_like(self.dtype):
-            # A summary holds time in nanoseconds, so the grid is stated in
-            # nanosecond ticks whatever unit the coordinate keeps.
-            scale = _tick_seconds(self.dtype) * 10**9
-            assert scale.denominator == 1, "finer than ns is never exact"
-            num, den, offset = _normalize_grid(
-                num * scale.numerator, den, offset * scale.numerator
-            )
         return summary.model_copy(
-            update=dict(step_numerator=num, step_denominator=den, origin_offset=offset)
+            update=dict(
+                step_numerator=self.step_numerator,
+                step_denominator=self.step_denominator,
+                origin_offset=self.origin_offset,
+            )
         )
 
     def _repr_fields(self) -> tuple[tuple[str, Text, bool], ...]:
