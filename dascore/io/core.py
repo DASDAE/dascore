@@ -2101,7 +2101,9 @@ def _may_hold_gaps(spool) -> bool:
 
 def _maybe_split_gapped_patches(spool, fiber_io, split):
     """Handle patches whose dimensional coords contain gaps before writing."""
-    if not _may_hold_gaps(spool):
+    # a destination which stores gaps needs no inspection, which would
+    # otherwise load every patch of a file-backed spool at once
+    if (fiber_io.segmented_write and not split) or not _may_hold_gaps(spool):
         return spool
 
     def _has_gaps(patch):
@@ -2112,7 +2114,7 @@ def _maybe_split_gapped_patches(spool, fiber_io, split):
     # splitting see the same patch sequence.
     contents = list(spool)
     gapped = [_has_gaps(x) for x in contents]
-    if not any(gapped) or (fiber_io.segmented_write and not split):
+    if not any(gapped):
         return spool
     if not split:
         msg = (
