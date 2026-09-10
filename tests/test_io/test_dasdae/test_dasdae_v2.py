@@ -98,6 +98,16 @@ class TestNodeCodec:
         _save_coord(CASES["array"], "arr", h5, compact=True)
         assert h5["arr"].shape == (4,)
 
+    def test_float_step_keeps_its_precision(self, h5):
+        """A float64 step on a float32 start counts the same samples back."""
+        coord = get_coord(
+            start=np.float32(92.97747), step=0.49223355932786406, shape=(5_482_063,)
+        )
+        _save_coord(coord, "mixed", h5, compact=True)
+        back = _read_coord(h5["mixed"], "mixed", {}, snap=True)
+        assert len(back) == len(coord)
+        assert back == coord
+
 
 class TestVersion2Files:
     """Whole-file behavior of the default (version 2) writer."""
@@ -122,11 +132,6 @@ class TestVersion2Files:
         summary = dc.scan(path)[0].coords["time"]
         assert summary.to_coord() == hz_1024_patch.get_coord("time")
 
-    def test_version_1_refuses_fraction(self, hz_1024_patch, tmp_path):
-        """Version 1 cannot hold the grid and says so."""
-        with pytest.raises(NotImplementedError, match="fractional step"):
-            dc.write(hz_1024_patch, tmp_path / "v1.h5", "dasdae", file_version="1")
-
     def test_gapped_patch_written_whole(self, gapped_patch, tmp_path):
         """A gapped patch is stored as one patch with its segments."""
         path = dc.write(gapped_patch, tmp_path / "gap.h5", "dasdae")
@@ -147,10 +152,23 @@ class TestVersion2Files:
         for patch in spool:
             assert isinstance(patch.get_coord("time"), CoordRange)
 
-    def test_version_1_refuses_gaps(self, gapped_patch, tmp_path):
-        """Version 1 keeps the contiguity rule."""
+    def test_gapped_file_still_guarded(self, gapped_patch, tmp_path):
+        """A gapped patch read from a file is guarded like one in memory."""
+        spool = dc.spool(dc.write(gapped_patch, tmp_path / "gap.h5", "dasdae"))
         with pytest.raises(ParameterError, match="split=True"):
-            dc.write(gapped_patch, tmp_path / "v1.h5", "dasdae", file_version="1")
+            dc.write(spool, tmp_path / "v1.h5", "dasdae", file_version="1")
+        path = dc.write(spool, tmp_path / "split.h5", "dasdae", split=True)
+        assert len(dc.spool(path)) == 2
+
+    def test_append_keeps_the_higher_version(self, random_patch, tmp_path):
+        """Appending version 1 patches to a version 2 file leaves it version 2."""
+        path = dc.write(random_patch, tmp_path / "both.h5", "dasdae")
+        second = random_patch.update_coords(
+            time_min=random_patch.get_coord("time").max()
+        )
+        dc.write(second, path, "dasdae", file_version="1")
+        assert dc.get_format(path) == ("DASDAE", "2")
+        assert len(dc.read(path)) == 2
 
     def test_array_coordinates(self, random_patch, tmp_path):
         """Irregular and string coordinates round trip as arrays."""
@@ -165,11 +183,15 @@ class TestVersion2Files:
         assert isinstance(back.get_coord("tag"), CoordString)
         assert back == patch
 
-    def test_read_array_window(self, hz_1024_patch, tmp_path):
-        """The direct array window matches the patch path."""
-        path = dc.write(hz_1024_patch, tmp_path / "hz.h5", "dasdae")
-        spool = dc.spool(path)
-        t0 = hz_1024_patch.get_coord("time").min()
-        window = (t0 + np.timedelta64(1, "s"), t0 + np.timedelta64(1500, "ms"))
-        out = spool.select(time=window)[0]
-        assert out == hz_1024_patch.select(time=window)
+    def test_lazy_array_sizes_by_grid(self, tmp_path):
+        """The lazy xarray view of a long fractional grid counts its samples."""
+        pytest.importorskip("xarray")
+        time = get_coord(start=T0, step=(1, 1024), shape=(2_500_000,))
+        data = np.zeros((1, len(time)), dtype=np.float32)
+        coords = {"distance": [0.0], "time": time}
+        patch = dc.Patch(data=data, coords=coords, dims=("distance", "time"))
+        spool = dc.spool(dc.write(patch, tmp_path / "long.h5", "dasdae"))
+        tree = spool.io.to_xarray()
+        leaf = next(node for node in tree.subtree if "data" in node.dataset)
+        assert leaf["data"].shape == data.shape
+        assert leaf["data"].data.compute().shape == data.shape

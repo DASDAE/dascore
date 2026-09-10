@@ -22,6 +22,7 @@ import numpy as np
 import pandas as pd
 
 import dascore as dc
+from dascore.core.coords import _EXACT_GRID_FIELDS
 from dascore.exceptions import (
     InvalidIndexError,
     InvalidIndexVersionError,
@@ -493,7 +494,7 @@ class SQLiteIndexBackend:
         new_keys = [k for k in keys if k not in mapping]
         next_id = self._next_id("coord_defs", "coord_def_id")
         def_rows = []
-        # the record spells the def row's columns, bar the three below
+        # CoordRecord names every def column after id, key, and fingerprint
         columns = CoordDefRow._fields[3:]
         for key in new_keys:
             c = defs_needed[key]
@@ -625,7 +626,7 @@ class SQLiteIndexBackend:
                 "patch_coords",
                 PatchCoordRow._fields,
                 [
-                    (pid, name, 0, dims, def_ids[key], dtype)
+                    (pid, name, dims, def_ids[key], dtype)
                     for pid, name, dims, key, dtype in link_rows
                 ],
             )
@@ -1151,11 +1152,12 @@ class SQLiteIndexBackend:
         # The exact grid with its length, as one object per row (None
         # where the row states no grid), so the whole-tick envelope above
         # can be rebuilt into the exact coordinate.
-        grid = coords[["step_numerator", "step_denominator", "origin_offset", "length"]]
-        terms = [
-            tuple(int(x) for x in row) if all(pd.notna(row)) else None
-            for row in grid.to_numpy().tolist()
-        ]
+        grid = coords[[*_EXACT_GRID_FIELDS, "length"]]
+        exact = np.flatnonzero(grid.notna().all(axis=1).to_numpy())
+        terms = np.empty(len(coords), dtype=object)
+        rows = grid.to_numpy()[exact].astype("int64").tolist()
+        for index, row in zip(exact, rows):
+            terms[index] = tuple(row)
         coords["_grid"] = pd.Series(terms, index=coords.index, dtype=object)
         return coords
 

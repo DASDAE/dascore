@@ -511,7 +511,7 @@ def _forget_what_a_trim_invalidates(df: pd.DataFrame, residuals=()) -> pd.DataFr
     return df.assign(**forgotten)
 
 
-def _coord_from_envelope(envelope, dtype=None, units=None) -> object | None:
+def _coord_from_envelope(envelope, name: str, units=None) -> object | None:
     """
     The coordinate a stashed envelope describes, or None if it cannot.
 
@@ -527,9 +527,8 @@ def _coord_from_envelope(envelope, dtype=None, units=None) -> object | None:
     # function-level: patch_assembly imports the index package
     from dascore.utils.patch_assembly import coord_from_row  # noqa: PLC0415
 
-    name = next(k for k in envelope if k.endswith("_min"))[: -len("_min")]
     units = units if isinstance(units, str) and units else None
-    return coord_from_row(envelope, name, dtype, units)
+    return coord_from_row(envelope, name, units)
 
 
 def _extremes_coord(envelope, units=None) -> object | None:
@@ -632,9 +631,10 @@ def _source_envelopes(df: pd.DataFrame, residuals) -> dict[str, pd.Series]:
         columns = [f"{name}_{end}" for end in ("min", "max", "step")]
         if not set(columns).issubset(df.columns):
             continue
-        # the grid, and the units which say whether it still applies
-        private = (f"_{name}_grid", f"_{name}_units", f"_{name}_units_source")
-        columns += [c for c in private if c in df]
+        # what rebuilds the coordinate exactly: its grid, dtype, and the
+        # units which say whether the grid still applies
+        suffixes = ("_grid", "_coord_dtype", "_units", "_units_source")
+        columns += [c for s in suffixes if (c := f"_{name}{s}") in df]
         envelopes = df[columns].to_dict("records")
         out[_source_column(name)] = pd.Series(envelopes, index=df.index, dtype=object)
     return out
@@ -1290,9 +1290,7 @@ class PatchCatalog:
         for name in names:
             envelope = row.get(_source_column(name))
             units = row.get(f"_{name}_units")
-            coord = _coord_from_envelope(
-                envelope, row.get(f"_{name}_coord_dtype"), units
-            )
+            coord = _coord_from_envelope(envelope, name, units)
             if coord is None and once[name] == 1:
                 coord = _extremes_coord(envelope, units)
             if coord is not None:

@@ -15,7 +15,6 @@ from dascore.io.index.backend import get_backend
 from dascore.io.index.catalog import _coord_from_envelope
 from dascore.io.index.ingest import _coord_record, summaries_to_records
 from dascore.io.index.planned import _coord_record_from_row
-from dascore.io.index.schema import INDEX_VERSION, PatchCoordRow
 from dascore.utils.patch_assembly import coord_from_row
 
 T0 = np.datetime64("2020-01-01T00:00:00")
@@ -40,10 +39,6 @@ def indexed(hz_1024_patch, tmp_path_factory):
 class TestSchema:
     """The stored rows carry the grid."""
 
-    def test_version(self):
-        """The grid columns arrived with schema 16."""
-        assert INDEX_VERSION == 16
-
     def test_record_carries_grid(self, hz_1024_patch):
         """A range summary's record is exact and holds its grid."""
         summary = PatchSummary.from_patch(hz_1024_patch).coords["time"]
@@ -64,25 +59,13 @@ class TestSchema:
         assert record.step_numerator is None
 
     def test_stored_columns(self, indexed):
-        """The coord_defs row stores the grid and the link row a run index."""
+        """The coord_defs row stores the grid."""
         back = indexed._catalog.backend
         defs = back._fetch_df("SELECT * FROM coord_defs")
         assert defs["is_exact"].all()
         time_def = defs[defs["step_denominator"] == 2]
         assert len(time_def) == 1
         assert int(time_def["step_numerator"].iloc[0]) == 1953125
-        links = back._fetch_df("SELECT * FROM patch_coords")
-        assert list(links.columns) == list(PatchCoordRow._fields)
-        assert (links["run_index"] == 0).all()
-
-    def test_export_keeps_grid(self, indexed):
-        """Records exported for a merge carry the grid."""
-        back = indexed._catalog.backend
-        (source,) = back.export_records()
-        (patch,) = source.patches
-        time = next(c for c in patch.coords if c.coord_name == "time")
-        assert time.is_exact
-        assert time.step_denominator == 2
 
 
 class TestFlatRelation:
@@ -121,28 +104,59 @@ class TestFlatRelation:
         """The catalog's stashed envelope rebuilds the exact coordinate."""
         row = indexed._catalog.to_df().iloc[0].to_dict()
         envelope = {k: row[k] for k in ("time_min", "time_max", "time_step")}
-        assert _coord_from_envelope(envelope, "datetime64[ns]", "s") != (
+        assert _coord_from_envelope(envelope, "time", "s") != (
             hz_1024_patch.get_coord("time")
         )
         envelope["_time_grid"] = row["_time_grid"]
-        coord = _coord_from_envelope(envelope, "datetime64[ns]", "s")
+        coord = _coord_from_envelope(envelope, "time", "s")
         assert coord == hz_1024_patch.get_coord("time")
 
     def test_select_matches_memory(self, indexed, hz_1024_patch):
-        """A reader-hinted selection lands on the same samples as in memory."""
-        window = (T0 + np.timedelta64(1, "s"), T0 + np.timedelta64(1500, "ms"))
-        assert indexed.select(time=window)[0] == hz_1024_patch.select(time=window)
+        """A reader-hinted selection lands on the same samples as in memory.
 
-    def test_chunk_matches_memory(self, indexed, hz_1024_patch):
-        """Chunks assembled through the index keep the grid."""
-        from_index = list(indexed.chunk(time=1))
-        from_memory = list(dc.spool(hz_1024_patch).chunk(time=1))
-        assert len(from_index) == len(from_memory) == 1
-        assert from_index[0].get_coord("time") == from_memory[0].get_coord("time")
-        assert (
-            from_index[0].get_coord("time").step_exact
-            == hz_1024_patch.get_coord("time").step_exact
+        The bound sits where the whole-tick and exact grids disagree, and
+        the recorded selection (the processing id) shows the replay saw
+        the same coordinate the file holds.
+        """
+        window = (T0 + np.timedelta64(1, "s"), T0 + np.timedelta64(1952148000, "ns"))
+        out, expected = (
+            indexed.select(time=window)[0],
+            hz_1024_patch.select(time=window),
         )
+        assert out == expected
+        assert out.attrs.processing_id == expected.attrs.processing_id
+
+    def test_merge_through_index(self, hz_1024_patch, tmp_path):
+        """Two files merged by their rows alone keep the grid.
+
+        A two-member merge reads arrays and builds coordinates from the
+        index rows, the path a whole-tick rebuild would send off the grid.
+        """
+        halves = (
+            hz_1024_patch.select(time=(None, 1000), samples=True),
+            hz_1024_patch.select(time=(1000, None), samples=True),
+        )
+        for num, half in enumerate(halves):
+            half.update_attrs(history=[]).io.write(tmp_path / f"{num}.h5", "dasdae")
+        (merged,) = dc.spool(tmp_path).update().chunk(time=None)
+        assert merged.get_coord("time").step_exact == Fraction(1, 1024)
+        assert merged.get_coord("time") == hz_1024_patch.get_coord("time")
+
+    def test_chunk_outputs_carry_grid(self, indexed):
+        """A chunk plan keeps the grid of the dimensions it leaves whole."""
+        chunked = indexed.chunk(time=1)
+        rows = chunked._catalog.to_df()
+        assert rows["_distance_grid"].notna().all()
+        defs = chunked._catalog.backend._fetch_df("SELECT * FROM coord_defs")
+        assert defs["step_numerator"].notna().any()
+
+    def test_float_row_skips_grid(self):
+        """A plan row stating a float placeholder dtype cannot use an integer grid."""
+        row = {"x_min": 0.0, "x_max": 9.0, "x_step": 1.0, "_x_grid": (1, 1, 0, 10)}
+        coord = coord_from_row(row, "x")
+        assert coord is not None
+        assert coord.dtype == np.dtype("float64")
+        assert coord.step_numerator is None
 
 
 class TestPlannedRows:

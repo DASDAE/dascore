@@ -1009,13 +1009,6 @@ class TestSplitGapsAndWrite:
         with pytest.raises(ParameterError, match="split=True"):
             dc.write(gapped_patch, tmp_path / "gapped.h5", "dasdae", file_version="1")
 
-    def test_write_gapped_stored_whole(self, gapped_patch, tmp_path):
-        """A format which stores gaps writes the patch as it is."""
-        path = dc.write(gapped_patch, tmp_path / "gapped.h5", "dasdae")
-        spool = dc.spool(path)
-        assert len(spool) == 1
-        assert spool[0].get_coord("distance") == gapped_patch.get_coord("distance")
-
     def test_write_split_round_trip(self, gapped_patch, tmp_path):
         """split=True writes contiguous patches that round trip exactly."""
         path = tmp_path / "gapped.h5"

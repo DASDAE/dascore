@@ -16,7 +16,7 @@ The schema separates records with different lifetimes and cardinalities. This av
 | `attrs` | patch | Stores typed attribute values in dynamically added columns |
 | `attr_meta` | attribute name and value kind | Maps original attribute names to typed storage columns and canonical units |
 | `coord_defs` | unique coordinate value definition | Stores coordinate summaries and deduplicates identical definitions |
-| `patch_coords` | coordinate attached to a patch | Links patches to coordinate definitions while retaining the coordinate name and dimensions; `run_index` orders a coordinate's definitions and is 0 today |
+| `patch_coords` | coordinate attached to a patch | Links patches to coordinate definitions while retaining the coordinate name and dimensions |
 
 The last two tables are deliberately separate. Many patches can share a distance coordinate, so `coord_defs` stores it once and `patch_coords` supplies the many-to-many attachment. Range coordinates receive an exact semantic fingerprint, reconstructed from the coordinate values when a scan did not supply one. Non-range coordinates only receive a merge-compatibility identity when the scan provides an exact fingerprint. This distinction prevents a matching envelope from being mistaken for matching coordinate values while retaining the deduplication needed by future merge planning.
 

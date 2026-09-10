@@ -1332,8 +1332,12 @@ def _carried_columns(
         if has_dims and not pd.isnull(dims_val):
             dim_names = set(str(dims_val).split(","))
         dim_names.discard(name)
+        # a kept identity brings the exact grid it describes
         part_cols = [
-            key for x in sorted(dim_names) if (key := f"_{x}_def_key") in columns
+            key
+            for x in sorted(dim_names)
+            for suffix in ("_def_key", "_grid")
+            if (key := f"_{x}{suffix}") in columns
         ]
         coord_names = set(police_dims[part].split(",")) | {name}
         part_cols += [key for x in coord_names if (key := f"_{x}_units") in columns]

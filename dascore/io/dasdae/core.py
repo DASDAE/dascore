@@ -183,9 +183,10 @@ class DASDAEV2(DASDAEV1):
     DASDAE format version 2.
 
     Reads and writes as version 1, except that each coordinate node
-    describes itself: a range is stored as its start and exact step (so
-    a fractional sampling rate never drifts and a billion labels cost a
-    few numbers), a segmented coordinate as a group of its segments, and
+    describes itself: a range is stored as its start, extent, and step
+    (the exact grid where the coordinate holds one, so a fractional
+    sampling rate never drifts) at the cost of a few numbers however
+    long it is; a segmented coordinate as a group of its segments; and
     only irregular coordinates as arrays of values. Gapped patches are
     therefore stored as they are rather than split.
     """

@@ -784,7 +784,7 @@ class TestPersistenceGuards:
         patch = dc.get_example_patch()
         assert patch.get_coord("time")._exact
         path = tmp_path / "whole.h5"
-        patch.io.write(path, "dasdae")
+        patch.io.write(path, "dasdae", file_version="1")
         assert dc.spool(path)[0].get_coord("time") == patch.get_coord("time")
 
     def test_xarray_lazy_index_skipped(self, hz_1024):

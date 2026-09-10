@@ -22,7 +22,7 @@ import pandas as pd
 
 import dascore as dc
 from dascore.core.coordmanager import CoordManager, get_coord_manager
-from dascore.core.coords import CoordRange, get_coord
+from dascore.core.coords import _EXACT_GRID_FIELDS, CoordRange, get_coord
 from dascore.exceptions import CoordMergeError, UnitError
 from dascore.io.index.ingest import _is_missing
 from dascore.io.index.schema import RESERVED_ATTR_COLUMNS
@@ -265,14 +265,13 @@ def _is_null(value) -> bool:
     return np.ndim(value) == 0 and pd.isnull(value)
 
 
-def _row_range(row: Mapping, dim: str, dtype=None) -> tuple[Any, Any, Any] | None:
+def _row_range(row: Mapping, dim: str) -> tuple[Any, Any, Any] | None:
     """
     A dimension's evenly sampled range as the row states it, or None.
 
     The frame hands datetimes back as pandas scalars, which `get_coord`
     would keep as an object array; numpy scalars make the coordinate a
-    datetime64 one, as the patch path builds it. ``dtype`` is the stored
-    coordinate dtype when the row does not carry it.
+    datetime64 one, as the patch path builds it.
     """
     values = []
     for name in ("min", "max", "step"):
@@ -286,10 +285,11 @@ def _row_range(row: Mapping, dim: str, dtype=None) -> tuple[Any, Any, Any] | Non
         values.append(value)
     lo, hi, step = values
     if step <= np.zeros((), dtype=np.asarray(step).dtype):
-        # the envelope orders values, not samples; a descending
-        # coordinate's start is its maximum, which the row does not say
+        # a zero step is not a range, and the envelope orders values, not
+        # samples: a descending coordinate's start is its maximum, which
+        # the row does not say
         return None
-    stored = row.get(f"_{dim}_coord_dtype", dtype)
+    stored = row.get(f"_{dim}_coord_dtype")
     if not (isinstance(stored, str) and np.issubdtype(np.dtype(stored), np.number)):
         return lo, hi, step
     # The frame holds every numeric envelope as float, so an integer
@@ -314,28 +314,29 @@ def _units_converted(row: Mapping, dim: str) -> bool:
     return not _is_null(source_units) and source_units != row.get(f"_{dim}_units")
 
 
-def coord_from_row(row: Mapping, dim: str, dtype=None, units=None):
+def coord_from_row(row: Mapping, dim: str, units=None):
     """
     The evenly sampled coordinate a row states for ``dim``, or None.
 
     The exact grid a row carries rebuilds the coordinate the file holds;
     the whole-tick envelope only approximates a fractional step. The grid
-    is in the file's units, so a converted envelope falls back to it.
+    counts ticks in the file's units and dtype, so a unit-converted row,
+    or one whose plan states a placeholder float dtype, is rebuilt from
+    its envelope alone.
     """
-    envelope = _row_range(row, dim, dtype)
+    envelope = _row_range(row, dim)
     if envelope is None:
         return None
     lo, hi, step = envelope
     grid = row.get(f"_{dim}_grid")
-    if isinstance(grid, tuple) and not _units_converted(row, dim):
-        num, den, offset, length = grid
+    ticks = np.asarray(lo).dtype.kind in "iuMm"
+    if isinstance(grid, tuple) and ticks and not _units_converted(row, dim):
+        *terms, length = grid
         return CoordRange(
             start=lo,
             shape=(length,),
-            step_numerator=num,
-            step_denominator=den,
-            origin_offset=offset,
             units=units,
+            **dict(zip(_EXACT_GRID_FIELDS, terms)),
         )
     return get_coord(start=lo, stop=hi + step, step=step, units=units)
 

@@ -79,7 +79,7 @@ class _CommonCoordFields(TypedDict):
 
 
 class _ExactFields(TypedDict):
-    """The CoordRecord fields describing a range's grid."""
+    """The CoordRecord fields describing a range's grid (ty needs the shape)."""
 
     is_exact: bool
     step_numerator: int | None

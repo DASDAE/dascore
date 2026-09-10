@@ -34,9 +34,18 @@ def _np_scalar(value):
     return value
 
 
-def _envelope_coord(low, high, step, get_coord):
-    """A dimension coordinate stated by its index envelope, either order."""
-    low, high, step = _np_scalar(low), _np_scalar(high), _np_scalar(step)
+def _envelope_coord(row, dim, get_coord):
+    """A dimension coordinate stated by its row's envelope, either order."""
+    # function-level: patch_assembly imports the io package, which imports this
+    from dascore.utils.patch_assembly import coord_from_row  # noqa: PLC0415
+
+    # the row's exact grid, where it carries one, sizes the array as
+    # loading will; the whole-tick envelope can be a sample off
+    if (coord := coord_from_row(row, dim)) is not None:
+        return coord
+    low, high, step = (
+        _np_scalar(row[f"{dim}_{end}"]) for end in ("min", "max", "step")
+    )
     if pd.isnull(step) or to_float(step) == 0:
         if low == high:
             return get_coord(data=[low])
@@ -45,27 +54,33 @@ def _envelope_coord(low, high, step, get_coord):
             f"{high} records no sampling step in the spool index."
         )
         raise PatchConversionError(msg)
-    if to_float(step) < 0:
-        # A descending coordinate starts at its max; stop is exclusive.
-        return get_coord(start=high, stop=low + step, step=step)
-    return get_coord(min=low, max=high + step, step=step)
+    # A descending coordinate starts at its max; stop is exclusive. An
+    # ascending one lands here only when its units were converted.
+    start, stop = (high, low + step) if to_float(step) < 0 else (low, high + step)
+    return get_coord(start=start, stop=stop, step=step)
 
 
-def _member_coord(low, high, step, env_low, env_high, get_coord, units=None):
+def _member_coord(low, high, source_row, dim, get_coord, units=None):
     """
     The coordinate a member presents inside its trim window.
 
-    The member's full coordinate is rebuilt from its envelope and trimmed
-    by the coordinate's own select, so block sizes and sample labels
-    follow exactly the rule loading follows, not a parallel rounding.
-    Units ride along so a unit-bearing tolerance can be read against the
-    merged coordinate, as chunk reads it.
+    The member's full coordinate is rebuilt from its row and trimmed by
+    the coordinate's own select, so block sizes and sample labels follow
+    exactly the rule loading follows, not a parallel rounding. A time
+    coordinate is rebuilt on its exact grid, which the whole-tick
+    envelope can miss by a sample; a numeric one from the envelope in
+    the plan's units, since members joined along it must share a dtype
+    and may not share a unit or an integer grid. Units ride along so a
+    unit-bearing tolerance can be read against the merged coordinate, as
+    chunk reads it.
 
     Also returns the window as half-open sample indices on the member's
     own grid — the form `FiberIO.read_array` takes.
     """
-    low, high, step = _np_scalar(low), _np_scalar(high), _np_scalar(step)
-    env_low, env_high = _np_scalar(env_low), _np_scalar(env_high)
+    low, high = _np_scalar(low), _np_scalar(high)
+    env_low, env_high, step = (
+        _np_scalar(source_row[f"{dim}_{end}"]) for end in ("min", "max", "step")
+    )
     # Rows state units as strings; anything else (absent, null) is none.
     units = units if isinstance(units, str) and units else None
     # A single-sample merge dimension never reaches here: the planner
@@ -76,7 +91,13 @@ def _member_coord(low, high, step, env_low, env_high, get_coord, units=None):
             "records no sampling step in the spool index."
         )
         raise PatchConversionError(msg)
-    full = get_coord(min=env_low, max=env_high + step, step=step, units=units)
+    from dascore.utils.patch_assembly import coord_from_row  # noqa: PLC0415
+
+    full = None
+    if np.asarray(step).dtype.kind == "m":
+        full = coord_from_row(source_row, dim, units=units)
+    if full is None:
+        full = get_coord(min=env_low, max=env_high + step, step=step, units=units)
     coord, indexer = full.select((low, high))
     # plan invariant: a published member always presents at least a sample
     assert len(coord), "a plan member never presents an empty window"
@@ -580,8 +601,6 @@ def spool_to_xarray(
         modified = pd.Series(False, index=members.index)
     members = members.assign(
         _pos=np.arange(len(members)),
-        _env_low=members["_patch_id"].map(norm[f"{dim}_min"]),
-        _env_high=members["_patch_id"].map(norm[f"{dim}_max"]),
         _env_anchored=~modified,
     )
     envelope_cols = {
@@ -615,9 +634,8 @@ def spool_to_xarray(
                 coord, window = _member_coord(
                     m[f"{dim}_min"],
                     m[f"{dim}_max"],
-                    m[f"{dim}_step"],
-                    m["_env_low"],
-                    m["_env_high"],
+                    norm.loc[m["_patch_id"]],
+                    dim,
                     get_coord,
                     units=m.get(f"_{dim}_units"),
                 )
@@ -646,9 +664,7 @@ def spool_to_xarray(
                             )
                     coord = merged
                 else:
-                    coord = _envelope_coord(
-                        out[f"{d}_min"], out[f"{d}_max"], out[f"{d}_step"], get_coord
-                    )
+                    coord = _envelope_coord(out, d, get_coord)
                 sizes[d] = len(coord)
                 # An evenly sampled temporal coordinate stays lazy: its
                 # labels cost 8 bytes a sample materialized, which for a

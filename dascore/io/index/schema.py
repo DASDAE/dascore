@@ -201,13 +201,10 @@ class PatchCoordRow(NamedTuple):
 
     Links a patch to its coord defs; the name and dims are patch-level
     semantics (two patches can share values under different names).
-    `run_index` orders the defs of one coordinate; today every
-    coordinate is one row (0), the key leaves room for one row per run.
     """
 
     patch_id: int
     coord_name: str
-    run_index: int
     coord_dims: str
     coord_def_id: int
     dtype: str  # source representation; shared definitions identify values
@@ -283,7 +280,7 @@ TABLE_CONSTRAINTS = MappingProxyType(
             "CHECK (is_relative IS NULL OR is_relative IN (0, 1))",
         ),
         "patch_coords": (
-            "PRIMARY KEY (patch_id, coord_name, run_index)",
+            "PRIMARY KEY (patch_id, coord_name)",
             "FOREIGN KEY (patch_id) REFERENCES patches(patch_id) ON DELETE CASCADE",
             "FOREIGN KEY (coord_def_id) REFERENCES coord_defs(coord_def_id)",
         ),
@@ -377,7 +374,7 @@ SPOOL_LATE_RENAMES = MappingProxyType(
 
 # Explicit secondary indexes. Every other access path is covered by a
 # PRIMARY KEY or UNIQUE autoindex above — patch_coords(patch_id,
-# coord_name, run_index), sources(base_uri, source_path), patches(source_id,
+# coord_name), sources(base_uri, source_path), patches(source_id,
 # source_patch_key), coord_defs(def_key) — and duplicating them measured
 # ~25% extra file size and slower writes for no query gain.
 INDEXES = (("idx_pcoords_name", "patch_coords", "coord_name"),)

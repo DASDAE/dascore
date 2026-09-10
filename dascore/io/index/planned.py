@@ -23,7 +23,7 @@ import numpy as np
 import pandas as pd
 
 import dascore as dc
-from dascore.core.coords import CoordSummary
+from dascore.core.coords import _EXACT_GRID_FIELDS, CoordSummary
 from dascore.exceptions import UnknownFiberFormatError
 from dascore.io.core import FiberIO, _required_resource_type
 from dascore.io.index.backend import get_backend
@@ -219,12 +219,13 @@ def _coord_record_from_row(
         length = round(abs(span)) + 1
     key = row.get(f"_{name}_def_key")
     fingerprint = _def_key_fingerprint(key)
-    # the exact grid describes the values only while their identity holds
+    # the grid is the source's; once the def key (value identity) is gone,
+    # so are the values it described
     grid = row.get(f"_{name}_grid") if fingerprint else None
     exact = {}
     if isinstance(grid, tuple):
-        num, den, offset, length = grid
-        exact = dict(step_numerator=num, step_denominator=den, origin_offset=offset)
+        *terms, length = grid
+        exact = dict(zip(_EXACT_GRID_FIELDS, terms))
     summary = CoordSummary(
         dtype=dtype,
         min=lo,

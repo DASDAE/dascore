@@ -14,7 +14,13 @@ import pandas as pd
 import dascore as dc
 from dascore.core.attrs import PatchAttrs
 from dascore.core.coordmanager import get_coord_manager
-from dascore.core.coords import CoordRange, CoordSegmented, get_coord
+from dascore.core.coords import (
+    _EXACT_GRID_FIELDS,
+    CoordRange,
+    CoordSegmented,
+    _scalar_dtype,
+    get_coord,
+)
 from dascore.core.summary import normalize_source_patch_key
 from dascore.exceptions import PatchAttributeError
 from dascore.io.core import STORED_PATCH_ID, make_scan_payload
@@ -54,6 +60,10 @@ _ATTRS_CLASS_KEY = "__attrs_class__"
 def _write_meta(hfile, file_version):
     """Write metadata to hdf5 file."""
     hfile.attrs["__format__"] = "DASDAE"
+    # appending never relabels a file below the version its groups need
+    existing = _get_file_version(hfile)
+    if existing and float(existing) > float(file_version):
+        file_version = existing
     hfile.attrs["__DASDAE_version__"] = file_version
     hfile.attrs["__dascore__version__"] = dc.__version__
     # Mark the file as holding only true attrs (no flat coord metadata),
@@ -139,19 +149,14 @@ def _save_array(data, name, group):
     return array_node
 
 
-def _duration_dtype(dtype) -> np.dtype:
-    """The dtype of a step along a coordinate of ``dtype``."""
-    return np.dtype(str(dtype).replace("datetime64", "timedelta64"))
-
-
 def _raw(value, dtype):
     """A time as its integer ticks in the coordinate's unit; else itself."""
     array = np.asarray(value)
     if array.dtype.kind not in "mM":
         return value
     # a range's start may state a coarser unit than its dtype
-    target = dtype if array.dtype.kind == "M" else _duration_dtype(dtype)
-    return array.astype(target).astype("int64")[()]
+    name = "start" if array.dtype.kind == "M" else "step"
+    return array.astype(_scalar_dtype(dtype, name)).astype("int64")[()]
 
 
 def _save_coord(coord, name, group, compact: bool):
@@ -173,9 +178,9 @@ def _save_coord(coord, name, group, compact: bool):
         node.attrs["kind"] = "range"
         node.attrs["dtype"] = str(coord.dtype)
         node.attrs["start"] = _raw(coord.start, coord.dtype)
+        node.attrs["length"] = len(coord)
         if coord._exact:
-            node.attrs["length"] = len(coord)
-            for field in ("step_numerator", "step_denominator", "origin_offset"):
+            for field in _EXACT_GRID_FIELDS:
                 node.attrs[field] = getattr(coord, field)
         else:
             node.attrs["stop"] = _raw(coord.stop, coord.dtype)
@@ -294,18 +299,22 @@ def _read_range(node, units):
     attrs = node.attrs
     dtype = np.dtype(unbyte(attrs["dtype"]))
     start = np.asarray(attrs["start"]).astype(dtype)[()]
+    shape = (int(attrs["length"]),)
     if "step_numerator" in attrs:
-        return CoordRange(
-            start=start,
-            shape=(int(attrs["length"]),),
-            step_numerator=int(attrs["step_numerator"]),
-            step_denominator=int(attrs["step_denominator"]),
-            origin_offset=int(attrs["origin_offset"]),
-            units=units,
-        )
+        grid = {name: int(attrs[name]) for name in _EXACT_GRID_FIELDS}
+        return CoordRange(start=start, shape=shape, units=units, **grid)
     stop = np.asarray(attrs["stop"]).astype(dtype)[()]
-    step = np.asarray(attrs["step"]).astype(_duration_dtype(dtype))[()]
-    return get_coord(start=start, stop=stop, step=step, units=units)
+    step = attrs["step"]
+    if dtype.kind in "mM":
+        step = np.asarray(step).astype(_scalar_dtype(dtype, "step"))[()]
+    elif isinstance(step, np.floating):
+        # as the python float it was written from: a numpy scalar would
+        # promote a float32 range to float64
+        step = step.item()
+    coord = CoordRange(start=start, stop=stop, step=step, units=units)
+    # The stored fields are a validated range's own; deriving the count
+    # from them again can move a float32 endpoint by a sample.
+    return coord._construct(dict(start=start, stop=stop, step=step, shape=shape))
 
 
 def _read_coord(node, name, attrs2, snap):

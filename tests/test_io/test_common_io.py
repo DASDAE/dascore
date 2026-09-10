@@ -17,6 +17,7 @@ from functools import cache
 from io import BufferedIOBase, BytesIO, UnsupportedOperation
 from operator import eq, ge, le
 from pathlib import Path
+from tempfile import mkdtemp
 
 import h5py
 import numpy as np
@@ -30,7 +31,7 @@ from dascore.io import BinaryReader, FiberIO
 from dascore.io.ai4eps import AI4EPSV1
 from dascore.io.ap_sensing import APSensingV10
 from dascore.io.core import _required_resource_type
-from dascore.io.dasdae import DASDAEV1
+from dascore.io.dasdae import DASDAEV1, DASDAEV2
 from dascore.io.dashdf5 import DASHDF5
 from dascore.io.febus import Febus1, Febus2, FebusBSLH5V1, FebusMTXH5V1, FebusT1V1
 from dascore.io.gdr import GDR_V1
@@ -63,6 +64,18 @@ from tests.test_io._common_io_test_utils import (
     skip_timeout,
 )
 
+# No shipped file is DASDAE version 2 yet: the current writer makes one
+# (see `_write_dasdae_v2`) so the format sits in the same matrix as the
+# version it succeeds.
+_DASDAE_V2_PATH = Path(mkdtemp("dasdae_v2")) / "example_dasdae_v2.h5"
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _write_dasdae_v2():
+    """Write the version 2 example before any fixture fetches it."""
+    dc.write(dc.get_example_patch("random_das"), _DASDAE_V2_PATH, "dasdae")
+
+
 # --- Fixtures
 
 # These fixtures are for attaching FiberIO objects to a suite of common
@@ -76,6 +89,7 @@ COMMON_IO_READ_TESTS = {
     AI4EPSV1(): ("ai4eps_1.h5",),
     APSensingV10(): ("ap_sensing_1.hdf5",),
     DASDAEV1(): ("example_dasdae_event_1.h5",),
+    DASDAEV2(): (str(_DASDAE_V2_PATH),),
     DASHDF5(): ("PoroTomo_iDAS_1.h5",),
     Febus1(): ("valencia_febus_example.h5",),
     Febus2(): ("febus_1.h5", "febus_2.h5"),
@@ -120,6 +134,7 @@ COMMON_IO_READ_TESTS = {
 COMMON_IO_WRITE_TESTS = (
     PickleIO(),
     DASDAEV1(),
+    DASDAEV2(),
 )
 
 # Specifies data registry entries which should not be tested.
