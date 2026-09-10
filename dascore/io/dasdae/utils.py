@@ -163,7 +163,7 @@ def _save_coords(patch, patch_group):
 def _check_storable(patch):
     """Refuse a patch this format cannot store, before touching the file."""
     for name, coord in patch.coords.coord_map.items():
-        if getattr(coord, "step_denominator", 1) != 1:
+        if getattr(coord, "step_denominator", None) not in (None, 1):
             # This format stores one whole-tick step and rebuilds the range
             # from it, which would quietly move every label off its grid.
             msg = (

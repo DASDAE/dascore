@@ -830,7 +830,7 @@ class CoordManager(RichRepr, DascoreBaseModel):
                 Row(
                     name=stated,
                     kind=Text(
-                        coord._repr_name or type(coord).__name__,
+                        type(coord).__name__,
                         style=coord._rich_style,
                     ),
                     fields=coord._repr_fields(),

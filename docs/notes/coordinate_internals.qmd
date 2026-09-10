@@ -11,8 +11,7 @@ This note explains the current internal coordinate model in DASCore, with partic
 | Type | Purpose |
 |---|---|
 | `CoordPartial` | Shape and optional range metadata when coordinate values are unknown, empty, or entirely missing. |
-| `CoordRange` | A monotonic, evenly sampled coordinate represented by start, stop, and step. |
-| `CoordRangeInt` | The `CoordRange` subclass `get_coord` returns for nanosecond datetime64/timedelta64 ranges and for integer ranges whose step is an integer, a `Fraction`, a tuple, or an evenly dividing span. It holds the exact grid (`step_numerator`, `step_denominator`, `origin_offset` in ticks) so a fractional step such as 1/1024 s never drifts; `step` stays the nearest whole-tick spacing and the repr reads `CoordRange`. Coarser time units, sub-nanosecond units, float steps, and unevenly divided integer spans (`get_coord(start=0, stop=10, shape=3)` is float) keep the plain `CoordRange`, which is unchanged. |
+| `CoordRange` | A monotonic, evenly sampled coordinate represented by start, stop, and step. Nanosecond time and integer ranges also hold their exact grid (`step_numerator`, `step_denominator`, `origin_offset` in ticks), so a fractional step such as 1/1024 s never drifts and `step_exact` reports it; `step` stays the nearest whole-tick spacing. Float ranges, time in coarser or finer units, and integer spans that do not divide by their count (`get_coord(start=0, stop=10, shape=3)` is float) keep a scalar step and linear spacing, with the grid fields None. |
 | `CoordMonotonicArray` | A strictly increasing or decreasing array that is not evenly sampled. |
 | `CoordSegmented` | An ordered composition of non-overlapping monotonic segments whose concatenated values are preserved exactly. |
 | `CoordArray` | Arbitrary numeric, datetime, or timedelta values, including non-monotonic arrays. |
@@ -55,7 +54,7 @@ Slice results remain compact for integer, temporal, and floating coordinates, fo
 
 [`CoordSummary`](`dascore.core.coords.CoordSummary`) contains `min`, `max`, `step`, `dtype`, `units`, associated `dims`, length, and an exact coordinate fingerprint. The canonical construction path is `coord.to_summary()`, which starts from a live coordinate; build one with `get_coord(...)` first when starting from a raw value array.
 
-The summary itself is intentionally lossy. A uniform `CoordRange` has a non-null `step` and can be reconstructed with `summary.to_coord()`; a `CoordRangeInt` also carries `step_numerator`, `step_denominator`, and `origin_offset`, so a fractional grid rebuilds exactly. Irregular, string, and segmented coordinates use `step=None`; their envelopes and fingerprints can support indexing and change detection, but neither field reconstructs their full values or segment boundaries.
+The summary itself is intentionally lossy. A uniform `CoordRange` has a non-null `step` and can be reconstructed with `summary.to_coord()`; an exact grid also carries `step_numerator`, `step_denominator`, and `origin_offset`, so a fractional step rebuilds exactly. Irregular, string, and segmented coordinates use `step=None`; their envelopes and fingerprints can support indexing and change detection, but neither field reconstructs their full values or segment boundaries.
 
 [`PatchSummary`](`dascore.PatchSummary`) keeps non-coordinate `PatchAttrs`, a mapping of coordinate summaries, patch dimensions/shape/dtype, and reload provenance. [`PatchSummary.flat_dump(...)`](`dascore.PatchSummary.flat_dump`) produces fields such as `time_min`, `time_max`, `time_step`, and `time_fingerprint` for dataframes and indexes. Those flattened fields are output records, not supported input for synthesizing a new structured `PatchSummary` or live coordinate.
 

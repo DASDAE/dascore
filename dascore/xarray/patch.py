@@ -45,7 +45,7 @@ def _lazy_temporal_index(name, coord):
         return None
     # The index holds one whole-tick step; a fractional grid would be
     # relabelled by it, so its values travel instead.
-    if getattr(coord, "step_denominator", 1) != 1:
+    if getattr(coord, "step_denominator", None) not in (None, 1):
         return None
     # function-level: xarray is an optional dependency
     from dascore.xarray.index import TemporalRangeIndex  # noqa: PLC0415
