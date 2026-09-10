@@ -346,7 +346,7 @@ class TestProbeSuppression:
         with warnings.catch_warnings():
             warnings.simplefilter("error", UserWarning)
             out = dc.get_format(UPath(path), file_format="DASDAE")
-        assert out == ("DASDAE", "1")
+        assert out == ("DASDAE", "2")
 
     def test_probe_does_not_warn(self, random_patch, tmp_path, monkeypatch):
         """Probing claims no HDF5 read; the resource may not even be one."""

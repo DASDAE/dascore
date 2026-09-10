@@ -33,11 +33,12 @@ from typing import NamedTuple, get_args, get_type_hints
 # Version of the index schema, independent of dascore's version. Bump it
 # when an index written by an older dascore would be read wrongly rather
 # than merely incompletely -- including when what a *stored value* means
-# changes, not only when a column does. Version 15 stores source
-# coordinate and numeric attribute dtypes so index-built patches recover
-# their original types. Earlier indexes lack the metadata required for reconstruction
-# and are rebuilt when opened.
-INDEX_VERSION = 15
+# changes, not only when a column does. Version 16 stores each range
+# coordinate's exact grid and names the envelope columns by storage type;
+# version 15 stored source coordinate and numeric attribute dtypes. Earlier
+# indexes lack the metadata required for reconstruction and are rebuilt
+# when opened.
+INDEX_VERSION = 16
 # Identity string so any tool can sanity-check what it opened.
 WHAT_IS_THIS = "dascore_spool_index"
 
@@ -157,6 +158,10 @@ class CoordDefRow(NamedTuple):
     reconstructed exactly from the range summary. Non-range coordinates
     without a fingerprint use a summary hash for storage deduplication,
     but it is not exposed as value identity.
+
+    The envelope columns are named by storage type: `_int` holds epoch
+    or duration nanoseconds, `_float` numbers in the coordinate's units,
+    `_str` text. `value_kind` and `is_relative` say what the integers mean.
     """
 
     coord_def_id: int
@@ -170,15 +175,24 @@ class CoordDefRow(NamedTuple):
     # the index shows what the patch shows. Unit-bearing queries convert
     # themselves per stored unit at query time.
     units: str | None
-    min_num: float | None
-    max_num: float | None
-    step_num: float | None
-    min_ns: int | None
-    max_ns: int | None
-    step_ns: int | None
+    # 1 when the row alone rebuilds every value of the coordinate (a
+    # range); 0 when it is only an envelope and the values live in the
+    # source (arrays, strings, segmented coordinates).
+    is_exact: bool
+    min_float: float | None
+    max_float: float | None
+    step_float: float | None
+    min_int: int | None
+    max_int: int | None
+    step_int: int | None
     min_str: str | None
     max_str: str | None
     is_relative: bool | None
+    # The exact grid of a nanosecond-time or integer range, in ticks (see
+    # CoordRange); NULL for float ranges and for rows which are not exact.
+    step_numerator: int | None
+    step_denominator: int | None
+    origin_offset: int | None
 
 
 class PatchCoordRow(NamedTuple):
@@ -187,10 +201,13 @@ class PatchCoordRow(NamedTuple):
 
     Links a patch to its coord defs; the name and dims are patch-level
     semantics (two patches can share values under different names).
+    `run_index` orders the defs of one coordinate; today every
+    coordinate is one row (0), the key leaves room for one row per run.
     """
 
     patch_id: int
     coord_name: str
+    run_index: int
     coord_dims: str
     coord_def_id: int
     dtype: str  # source representation; shared definitions identify values
@@ -262,10 +279,11 @@ TABLE_CONSTRAINTS = MappingProxyType(
             "PRIMARY KEY (coord_def_id)",
             "UNIQUE (def_key)",
             "CHECK (value_kind IN ('num', 'time', 'str'))",
+            "CHECK (is_exact IN (0, 1))",
             "CHECK (is_relative IS NULL OR is_relative IN (0, 1))",
         ),
         "patch_coords": (
-            "PRIMARY KEY (patch_id, coord_name)",
+            "PRIMARY KEY (patch_id, coord_name, run_index)",
             "FOREIGN KEY (patch_id) REFERENCES patches(patch_id) ON DELETE CASCADE",
             "FOREIGN KEY (coord_def_id) REFERENCES coord_defs(coord_def_id)",
         ),
@@ -359,7 +377,7 @@ SPOOL_LATE_RENAMES = MappingProxyType(
 
 # Explicit secondary indexes. Every other access path is covered by a
 # PRIMARY KEY or UNIQUE autoindex above — patch_coords(patch_id,
-# coord_name), sources(base_uri, source_path), patches(source_id,
+# coord_name, run_index), sources(base_uri, source_path), patches(source_id,
 # source_patch_key), coord_defs(def_key) — and duplicating them measured
 # ~25% extra file size and slower writes for no query gain.
 INDEXES = (("idx_pcoords_name", "patch_coords", "coord_name"),)

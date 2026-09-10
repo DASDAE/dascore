@@ -953,6 +953,9 @@ class FiberIO:
     input_type: Literal["file", "directory"] = "file"
     # True when a single resource can hold more than one patch.
     multi_patch_write: bool = False
+    # True when a written patch may keep gapped (segmented) dimensional
+    # coordinates; otherwise write splits or refuses them.
+    segmented_write: bool = False
 
     manager = _FiberIOManager(FIBER_IO_GROUP)
 
@@ -2104,7 +2107,7 @@ def _maybe_split_gapped_patches(spool, fiber_io, split):
     # splitting see the same patch sequence.
     contents = list(spool)
     gapped = [_has_gaps(x) for x in contents]
-    if not any(gapped):
+    if not any(gapped) or (fiber_io.segmented_write and not split):
         return spool
     if not split:
         msg = (

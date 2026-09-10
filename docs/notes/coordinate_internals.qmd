@@ -54,7 +54,7 @@ Slice results remain compact for integer, temporal, and floating coordinates, fo
 
 [`CoordSummary`](`dascore.core.coords.CoordSummary`) contains `min`, `max`, `step`, `dtype`, `units`, associated `dims`, length, and an exact coordinate fingerprint. The canonical construction path is `coord.to_summary()`, which starts from a live coordinate; build one with `get_coord(...)` first when starting from a raw value array.
 
-The summary itself is intentionally lossy. A uniform `CoordRange` has a non-null `step` and can be reconstructed with `summary.to_coord()`; an exact grid also carries `step_numerator`, `step_denominator`, and `origin_offset`, so a fractional step rebuilds exactly. Irregular, string, and segmented coordinates use `step=None`; their envelopes and fingerprints can support indexing and change detection, but neither field reconstructs their full values or segment boundaries.
+The summary itself is intentionally lossy. A uniform `CoordRange` has a non-null `step` and can be reconstructed with `summary.to_coord()`; an exact grid also carries `step_numerator`, `step_denominator`, and `origin_offset`, so a fractional step rebuilds exactly, and the spool index stores these fields with the summary. Irregular, string, and segmented coordinates use `step=None`; their envelopes and fingerprints can support indexing and change detection, but neither field reconstructs their full values or segment boundaries.
 
 [`PatchSummary`](`dascore.PatchSummary`) keeps non-coordinate `PatchAttrs`, a mapping of coordinate summaries, patch dimensions/shape/dtype, and reload provenance. [`PatchSummary.flat_dump(...)`](`dascore.PatchSummary.flat_dump`) produces fields such as `time_min`, `time_max`, `time_step`, and `time_fingerprint` for dataframes and indexes. Those flattened fields are output records, not supported input for synthesizing a new structured `PatchSummary` or live coordinate.
 
@@ -70,7 +70,9 @@ This separation keeps directory indexing compact while allowing targeted callers
 
 ## DASDAE coordinate storage and scanning
 
-DASDAE stores coordinate arrays separately from patch data. Full reads materialize those arrays into a `CoordManager`. Scans also construct a real `CoordManager`, but avoid loading the data array itself; `snap=False` uses the exact construction path for stored one-dimensional arrays, while explicit stored start/step metadata remains a range fast path.
+DASDAE stores coordinates separately from patch data. Format version 2, the default when writing, stores each coordinate as it is described: a `CoordRange` as its start and exact step (so a fractional sampling rate rebuilds the same labels and a billion-sample coordinate costs a few numbers), a `CoordSegmented` as a group of its segments, and only irregular coordinates as arrays of values. Gapped patches are therefore written whole rather than split. Version 1 files, and `file_version="1"` writes, store every coordinate as an array beside a whole-tick step, so version 1 refuses a fractional step rather than rounding it.
+
+Full reads rebuild those descriptions into a `CoordManager`. Scans also construct a real `CoordManager`, but avoid loading the data array itself; for stored arrays, `snap=False` uses the exact construction path, while explicit stored start/step metadata remains a range fast path.
 
 String-array serialization is separate from coordinate semantics. HDF5 backends cannot all store NumPy unicode arrays directly, so DASDAE encodes only arrays that are actually string-like and restores them before coordinate construction.
 

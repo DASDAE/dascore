@@ -56,6 +56,8 @@ class DASDAEV1(FiberIO):
     preferred_extensions = ("h5", "hdf5")
     version = "1"
     multi_patch_write = True
+    # Version 2 writes ranges and segments as descriptions, not values.
+    _compact_coords = False
 
     def write(
         self,
@@ -91,7 +93,7 @@ class DASDAEV1(FiberIO):
             num = counts.get(name, 0)
             counts[name] = num + 1
             unique_name = name if num == 0 else f"{name}__{num}"
-            _save_patch(patch, waveforms, unique_name)
+            _save_patch(patch, waveforms, unique_name, compact=self._compact_coords)
 
     def _get_patch_summary(self, patches) -> pd.DataFrame:
         """Get a patch summary to put into index."""
@@ -174,3 +176,20 @@ class DASDAEV1(FiberIO):
             A path to the file.
         """
         return _get_contents_from_patch_groups_generic(resource, snap=snap)
+
+
+class DASDAEV2(DASDAEV1):
+    """
+    DASDAE format version 2.
+
+    Reads and writes as version 1, except that each coordinate node
+    describes itself: a range is stored as its start and exact step (so
+    a fractional sampling rate never drifts and a billion labels cost a
+    few numbers), a segmented coordinate as a group of its segments, and
+    only irregular coordinates as arrays of values. Gapped patches are
+    therefore stored as they are rather than split.
+    """
+
+    version = "2"
+    segmented_write = True
+    _compact_coords = True

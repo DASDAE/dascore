@@ -457,7 +457,7 @@ class TestToXarrayReadArray:
     def override_calls(self):
         """Give DASDAE a counting read_array override."""
         from dascore.io.core import FiberIO  # noqa: PLC0415
-        from dascore.io.dasdae.core import DASDAEV1  # noqa: PLC0415
+        from dascore.io.dasdae.core import DASDAEV2  # noqa: PLC0415
 
         calls = []
 
@@ -472,13 +472,13 @@ class TestToXarrayReadArray:
         # method back as an own class attribute rather than remove it,
         # and DASDAE has an override of its own to hand back afterwards.
         missing = object()
-        stored = DASDAEV1.__dict__.get("read_array", missing)
-        DASDAEV1.read_array = read_array
+        stored = DASDAEV2.__dict__.get("read_array", missing)
+        DASDAEV2.read_array = read_array
         yield calls
         if stored is missing:
-            del DASDAEV1.read_array
+            del DASDAEV2.read_array
         else:
-            DASDAEV1.read_array = stored
+            DASDAEV2.read_array = stored
 
     def _leaf(self, tree):
         """The first dataset holding a data variable."""

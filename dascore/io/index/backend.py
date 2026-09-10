@@ -493,28 +493,12 @@ class SQLiteIndexBackend:
         new_keys = [k for k in keys if k not in mapping]
         next_id = self._next_id("coord_defs", "coord_def_id")
         def_rows = []
+        # the record spells the def row's columns, bar the three below
+        columns = CoordDefRow._fields[3:]
         for key in new_keys:
             c = defs_needed[key]
-            def_rows.append(
-                (
-                    next_id,
-                    key,
-                    c.coord_hash,
-                    c.value_kind,
-                    c.dtype,
-                    c.length,
-                    c.units,
-                    c.min_num,
-                    c.max_num,
-                    c.step_num,
-                    c.min_ns,
-                    c.max_ns,
-                    c.step_ns,
-                    c.min_str,
-                    c.max_str,
-                    c.is_relative,
-                )
-            )
+            values = (getattr(c, name) for name in columns)
+            def_rows.append((next_id, key, c.coord_hash, *values))
             mapping[key] = next_id
             next_id += 1
         self._bulk_insert("coord_defs", CoordDefRow._fields, def_rows)
@@ -641,7 +625,7 @@ class SQLiteIndexBackend:
                 "patch_coords",
                 PatchCoordRow._fields,
                 [
-                    (pid, name, dims, def_ids[key], dtype)
+                    (pid, name, 0, dims, def_ids[key], dtype)
                     for pid, name, dims, key, dtype in link_rows
                 ],
             )
@@ -1135,9 +1119,9 @@ class SQLiteIndexBackend:
             return series.astype(object).where(series.notna(), None).to_numpy()
 
         fields = (
-            ("_env_min", "min_num", "min_ns", "min_str"),
-            ("_env_max", "max_num", "max_ns", "max_str"),
-            ("_env_step", "step_num", "step_ns", None),
+            ("_env_min", "min_float", "min_int", "min_str"),
+            ("_env_max", "max_float", "max_int", "max_str"),
+            ("_env_step", "step_float", "step_int", None),
         )
         for out_col, num_col, ns_col, str_col in fields:
             values = np.empty(len(coords), dtype=object)
@@ -1164,6 +1148,15 @@ class SQLiteIndexBackend:
         # Summary-only definitions are useful for indexing/dedup but cannot
         # prove coordinate value identity for merge grouping.
         coords["_key"] = coords["def_key"].where(coords["fingerprint"].notna(), None)
+        # The exact grid with its length, as one object per row (None
+        # where the row states no grid), so the whole-tick envelope above
+        # can be rebuilt into the exact coordinate.
+        grid = coords[["step_numerator", "step_denominator", "origin_offset", "length"]]
+        terms = [
+            tuple(int(x) for x in row) if all(pd.notna(row)) else None
+            for row in grid.to_numpy().tolist()
+        ]
+        coords["_grid"] = pd.Series(terms, index=coords.index, dtype=object)
         return coords
 
     def _pivot_coords(self, out: pd.DataFrame) -> pd.DataFrame:
@@ -1183,10 +1176,10 @@ class SQLiteIndexBackend:
         ids = out["patch_id"].tolist()
         link_sql = (
             "SELECT pc.patch_id, pc.coord_name, cd.def_key, cd.fingerprint, "
-            "cd.value_kind, pc.dtype, cd.is_relative, cd.units, "
-            "cd.min_num, cd.max_num, "
-            "cd.step_num, cd.min_ns, cd.max_ns, cd.step_ns, "
-            "cd.min_str, cd.max_str "
+            "cd.value_kind, pc.dtype, cd.is_relative, cd.units, cd.length, "
+            "cd.min_float, cd.max_float, cd.step_float, "
+            "cd.min_int, cd.max_int, cd.step_int, cd.min_str, cd.max_str, "
+            "cd.step_numerator, cd.step_denominator, cd.origin_offset "
             "FROM patch_coords pc "
             "JOIN coord_defs cd ON cd.coord_def_id = pc.coord_def_id"
         )
@@ -1218,7 +1211,10 @@ class SQLiteIndexBackend:
             steps = dict(zip(pids, group["_env_step"]))
             units = dict(zip(pids, group["units"]))
             dtypes = dict(zip(pids, group["dtype"]))
+            grids = dict(zip(pids, group["_grid"]))
             out[f"_{name}_def_key"] = out["patch_id"].map(keys)
+            # the exact grid and length, for rebuilding the row's range
+            out[f"_{name}_grid"] = out["patch_id"].map(grids)
             # the stored dtype: an envelope alone cannot say whether 0.0
             # to 299.0 by 1.0 labels integers, and a member rebuilt from
             # the row must match the patch the file would give

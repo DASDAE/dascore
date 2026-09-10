@@ -56,7 +56,7 @@ class TestHelpers:
         record = _coord_record_from_row(row, "time")
         assert record is not None
         assert record.value_kind == "time"
-        assert record.min_ns == _ns(lo)
+        assert record.min_int == _ns(lo)
 
     def test_coord_record_without_values(self):
         """A null envelope is a coordinate only with a fingerprinted identity."""
@@ -68,15 +68,15 @@ class TestHelpers:
         record = _coord_record_from_row(row, "rank")
         assert record is not None
         assert record.coord_hash == "a" * 32
-        assert record.min_num is None and record.length is None
+        assert record.min_float is None and record.length is None
 
     def test_coord_record_half_null_timedelta(self):
         """A one-sided timedelta envelope keeps NaT rather than raising."""
         row = {"time_min": pd.Timedelta(seconds=1), "time_max": pd.NaT}
         record = _coord_record_from_row(row, "time")
         assert record is not None
-        assert record.min_ns == pd.Timedelta(seconds=1).value
-        assert pd.isnull(np.timedelta64(record.max_ns, "ns"))
+        assert record.min_int == pd.Timedelta(seconds=1).value
+        assert pd.isnull(np.timedelta64(record.max_int, "ns"))
 
     def test_coord_record_zero_step_length(self):
         """A degenerate step leaves length unknown instead of raising."""
@@ -437,17 +437,14 @@ class TestLoadMemberArray:
         original = format_class.__dict__["read_array"]
 
         def install(func):
-            if func is None:
-                del format_class.read_array
-            else:
-                format_class.read_array = func
+            format_class.read_array = FiberIO.read_array if func is None else func
 
         yield install
         format_class.read_array = original
 
     @pytest.fixture
     def no_override(self, swap_read_array):
-        """Strip the format of its own read_array so it inherits the default."""
+        """Give the format the default read_array in place of its own."""
         swap_read_array(None)
 
     @pytest.fixture

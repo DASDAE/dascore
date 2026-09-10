@@ -796,7 +796,7 @@ class TestExactNsFetch:
             },
             ("event_time",),
         )
-        # a numeric coord puts NULL min_ns rows in the same link fetch,
+        # a numeric coord puts NULL min_int rows in the same link fetch,
         # and no time coord leaves patches.time_min NULL for this patch.
         numeric_only = self._summary(
             "num.h5",
@@ -838,7 +838,7 @@ class TestExactNsFetch:
 
     def test_float_ns_column_rejected(self):
         """The conversion helper refuses already-corrupted float input."""
-        series = pd.Series([1.5e18, np.nan], name="min_ns")
+        series = pd.Series([1.5e18, np.nan], name="min_int")
         with pytest.raises(TypeError, match="already corrupted"):
             _ns_to_time(series, "datetime")
 
@@ -880,9 +880,9 @@ class TestIngestEdges:
         # Envelopes store the coordinate's original units, never converted,
         # which sidesteps the degC/K affine-offset hazard entirely: nothing
         # here needs to know that 0 degC is not 0 K.
-        assert out.min_num == pytest.approx(0.0)
-        assert out.max_num == pytest.approx(100.0)
-        assert out.step_num == pytest.approx(1.0)
+        assert out.min_float == pytest.approx(0.0)
+        assert out.max_float == pytest.approx(100.0)
+        assert out.step_float == pytest.approx(1.0)
         assert out.units == "°C"
 
     def test_relative_root_requires_path_boundary(self):
@@ -1010,8 +1010,8 @@ class TestIngestEdges:
         assert record.coord_name == "x"
         assert record.coord_dims == "x"
         # named, but no envelope: the values cannot be stated
-        assert record.min_num is None and record.max_num is None
-        assert record.min_ns is None and record.min_str is None
+        assert record.min_float is None and record.max_float is None
+        assert record.min_int is None and record.min_str is None
 
     @pytest.mark.parametrize("reverse", [False, True])
     def test_mixed_coordinate_dtypes_keep_numeric_envelope(self, reverse):

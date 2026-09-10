@@ -78,6 +78,15 @@ class _CommonCoordFields(TypedDict):
     coord_hash: str | None
 
 
+class _ExactFields(TypedDict):
+    """The CoordRecord fields describing a range's grid."""
+
+    is_exact: bool
+    step_numerator: int | None
+    step_denominator: int | None
+    origin_offset: int | None
+
+
 @dataclass(frozen=True)
 class CoordRecord:
     """One patch-coord entry (typed columns split by kind)."""
@@ -88,15 +97,19 @@ class CoordRecord:
     coord_dims: str
     length: int | None
     units: str | None
-    min_num: float | None = None
-    max_num: float | None = None
-    step_num: float | None = None
-    min_ns: int | None = None
-    max_ns: int | None = None
-    step_ns: int | None = None
+    is_exact: bool = False
+    min_float: float | None = None
+    max_float: float | None = None
+    step_float: float | None = None
+    min_int: int | None = None
+    max_int: int | None = None
+    step_int: int | None = None
     min_str: str | None = None
     max_str: str | None = None
     is_relative: bool | None = None
+    step_numerator: int | None = None
+    step_denominator: int | None = None
+    origin_offset: int | None = None
     coord_hash: str | None = None
 
     @property
@@ -120,21 +133,7 @@ class CoordRecord:
             # def_key index for archives with mostly-unique time coords
             key = f"fp:{self.coord_hash[:32]}"
             return f"{key}|{self.units}" if self.units else key
-        fields = (
-            self.value_kind,
-            self.dtype,
-            self.length,
-            self.units,
-            self.min_num,
-            self.max_num,
-            self.step_num,
-            self.min_ns,
-            self.max_ns,
-            self.step_ns,
-            self.min_str,
-            self.max_str,
-            self.is_relative,
-        )
+        fields = tuple(getattr(self, f) for f in _COORD_DEF_FIELDS)
         digest = hashlib.sha256(repr(fields).encode()).hexdigest()[:32]
         return f"sum:{digest}"
 
@@ -457,6 +456,14 @@ def _coord_record(name: str, summary) -> CoordRecord | None:
     dtype = np.dtype(summary.dtype) if summary.dtype else None
     if dtype is None:
         return None  # nothing to record: not even a dtype was stated
+    # A range's row rebuilds every value, and its grid comes along so a
+    # fractional step rebuilds the same labels the file holds.
+    exact = _ExactFields(
+        is_exact=getattr(summary, "is_range_like", False),
+        step_numerator=getattr(summary, "step_numerator", None),
+        step_denominator=getattr(summary, "step_denominator", None),
+        origin_offset=getattr(summary, "origin_offset", None),
+    )
     if dtype.kind in "mM":  # datetime64 ("M") / timedelta64 ("m")
         is_datetime = dtype.kind == "M"
         convert = to_datetime64 if is_datetime else to_timedelta64
@@ -464,9 +471,10 @@ def _coord_record(name: str, summary) -> CoordRecord | None:
         return CoordRecord(
             value_kind="time",
             is_relative=not is_datetime,
-            min_ns=_to_ns(convert(summary.min)),
-            max_ns=_to_ns(convert(summary.max)),
-            step_ns=None if pd.isnull(step) else _to_ns(to_timedelta64(step)),
+            min_int=_to_ns(convert(summary.min)),
+            max_int=_to_ns(convert(summary.max)),
+            step_int=None if pd.isnull(step) else _to_ns(to_timedelta64(step)),
+            **exact,
             **common,
         )
     if np.issubdtype(dtype, np.number):
@@ -478,9 +486,10 @@ def _coord_record(name: str, summary) -> CoordRecord | None:
         step = summary.step
         return CoordRecord(
             value_kind="num",
-            min_num=float(summary.min),
-            max_num=float(summary.max),
-            step_num=None if pd.isnull(step) else float(step),
+            min_float=float(summary.min),
+            max_float=float(summary.max),
+            step_float=None if pd.isnull(step) else float(step),
+            **exact,
             **common,
         )
     if dtype.kind in "USO":
@@ -503,9 +512,9 @@ def _envelope(coords: tuple[CoordRecord, ...], name: str, kind: str):
         if rec.coord_name != name or rec.value_kind != kind:
             continue
         if kind == "time" and not rec.is_relative:
-            return rec.min_ns, rec.max_ns, rec.step_ns
+            return rec.min_int, rec.max_int, rec.step_int
         if kind == "num":
-            return rec.min_num, rec.max_num, rec.step_num
+            return rec.min_float, rec.max_float, rec.step_float
     return None, None, None
 
 

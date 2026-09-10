@@ -524,26 +524,12 @@ def _coord_from_envelope(envelope, dtype=None, units=None) -> object | None:
     """
     if not isinstance(envelope, Mapping):
         return None
-    values = []
-    for key in ("min", "max", "step"):
-        value = next(v for k, v in envelope.items() if k.endswith(f"_{key}"))
-        if value is None or (np.ndim(value) == 0 and pd.isnull(value)):
-            return None
-        if isinstance(value, pd.Timestamp):
-            value = value.to_datetime64()
-        elif isinstance(value, pd.Timedelta):
-            value = value.to_timedelta64()
-        values.append(value)
-    low, high, step = values
-    if step <= np.zeros((), dtype=np.asarray(step).dtype):
-        return None
-    if isinstance(dtype, str) and dtype and np.issubdtype(np.dtype(dtype), np.floating):
-        kind = np.dtype(dtype).type
-        low, high, step = kind(low), kind(high), kind(step)
-    from dascore.core.coords import get_coord  # noqa: PLC0415
+    # function-level: patch_assembly imports the index package
+    from dascore.utils.patch_assembly import coord_from_row  # noqa: PLC0415
 
+    name = next(k for k in envelope if k.endswith("_min"))[: -len("_min")]
     units = units if isinstance(units, str) and units else None
-    return get_coord(min=low, max=high + step, step=step, units=units)
+    return coord_from_row(envelope, name, dtype, units)
 
 
 def _extremes_coord(envelope, units=None) -> object | None:
@@ -646,6 +632,9 @@ def _source_envelopes(df: pd.DataFrame, residuals) -> dict[str, pd.Series]:
         columns = [f"{name}_{end}" for end in ("min", "max", "step")]
         if not set(columns).issubset(df.columns):
             continue
+        # the grid, and the units which say whether it still applies
+        private = (f"_{name}_grid", f"_{name}_units", f"_{name}_units_source")
+        columns += [c for c in private if c in df]
         envelopes = df[columns].to_dict("records")
         out[_source_column(name)] = pd.Series(envelopes, index=df.index, dtype=object)
     return out

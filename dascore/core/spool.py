@@ -2368,6 +2368,7 @@ class Spool(NodeRepr, NamespaceOwner):
                 # rows describe, so the sample count adds nothing here.
                 "_data_size",
                 *[c for c in df.columns if _private(c, "_def_key")],
+                *[c for c in df.columns if _private(c, "_grid")],
                 # a plan's outputs state a placeholder coordinate dtype
                 # for the same reason they state no def key
                 *[c for c in df.columns if _private(c, "_coord_dtype")],
