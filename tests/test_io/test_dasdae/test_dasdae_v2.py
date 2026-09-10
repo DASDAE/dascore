@@ -186,6 +186,7 @@ class TestVersion2Files:
     def test_lazy_array_sizes_by_grid(self, tmp_path):
         """The lazy xarray view of a long fractional grid counts its samples."""
         pytest.importorskip("xarray")
+        pytest.importorskip("dask")
         time = get_coord(start=T0, step=(1, 1024), shape=(2_500_000,))
         data = np.zeros((1, len(time)), dtype=np.float32)
         coords = {"distance": [0.0], "time": time}
