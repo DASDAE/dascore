@@ -562,8 +562,8 @@ def get_byte_count(value: Quantity) -> float:
 
     Notes
     -----
-    Use this instead of [`to_float`](`dascore.utils.time.to_float`) or `float()`, which
-    return pint's base unit of bits: eight times the byte count.
+    For data sizes, `float()` returns bits: eight times the byte count.
+    [`to_float`](`dascore.utils.time.to_float`) instead raises UnitError.
 
     Examples
     --------

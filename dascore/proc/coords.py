@@ -36,9 +36,9 @@ def snap_coords(patch: PatchType, *coords, reverse: bool = False) -> PatchType:
     Snap coordinates to evenly spaced samples.
 
     Sorts each specified coordinate, then replaces its labels with evenly spaced
-    values from its minimum to maximum. Data remain unchanged after sorting, so
-    snapping can shift labels. Use [interpolate](`dascore.Patch.interpolate`) when
-    linear interpolation is preferable.
+    values between its endpoints in the selected sort direction. Data remain
+    unchanged after sorting, so snapping can shift labels. Use
+    [interpolate](`dascore.Patch.interpolate`) when linear interpolation is preferable.
 
     Parameters
     ----------
