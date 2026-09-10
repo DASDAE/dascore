@@ -576,6 +576,13 @@ class Patch(NamespaceOwner):
     hilbert = transform.hilbert
     envelope = transform.envelope
     phase_weighted_stack = transform.phase_weighted_stack
+    median_frequency = transform.median_frequency
+    spectral_centroid = transform.spectral_centroid
+    spectral_peak_frequency = transform.spectral_peak_frequency
+    spectral_peak_amplitude = transform.spectral_peak_amplitude
+    spectral_entropy = transform.spectral_entropy
+    spectral_kurtosis = transform.spectral_kurtosis
+    spectral_flatness = transform.spectral_flatness
 
     # --- Method Namespaces
     # Note: these can't be cached_property (from functools) or references
