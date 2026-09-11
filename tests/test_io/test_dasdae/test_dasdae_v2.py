@@ -93,6 +93,16 @@ class TestNodeCodec:
         assert isinstance(h5["seg"], h5py.Group)
         assert set(h5["seg"]) == {"0", "1"}
 
+    def test_every_node_states_its_class(self, h5):
+        """Each node names its coordinate class in plain typed attributes."""
+        for name in ("fraction", "segmented", "array"):
+            _save_coord(CASES[name], f"typed_{name}", h5, compact=True)
+        assert h5["typed_fraction"].attrs["object_type"] == "CoordRange"
+        assert h5["typed_segmented"].attrs["object_type"] == "CoordSegmented"
+        assert h5["typed_array"].attrs["object_type"] == "CoordMonotonicArray"
+        attrs = dict(h5["typed_fraction"].attrs)
+        assert attrs["step_denominator"] == 2 and attrs["length"] == 4096
+
     def test_extended_float_range_keeps_its_values(self, h5):
         """A long-double range exceeds a JSON double, so its values are stored."""
         start = np.nextafter(np.longdouble(1), np.longdouble(2))
