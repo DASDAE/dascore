@@ -3722,6 +3722,14 @@ def _grid_pieces(coord: BaseCoord) -> list[tuple[int, CoordRange]]:
                     shape=(stop - first,),
                     units=seg.units,
                 )
+                # floats pass _on_grid per spacing; the run must not drift
+                drift = np.abs(piece.values - values[first:stop])
+                if values.dtype.kind == "f" and np.max(drift) > abs(step) / 2:
+                    msg = (
+                        f"Values drift more than half a step from the grid of "
+                        f"step {step}; use snap_coords before filling gaps."
+                    )
+                    raise CoordError(msg)
                 pieces.append((offset + first, piece))
         else:
             msg = (

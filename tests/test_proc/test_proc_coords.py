@@ -15,6 +15,7 @@ from dascore.core.coords import (
     BaseCoord,
     CoordMonotonicArray,
     CoordRange,
+    _fill_layout,
     concat_coords,
     get_coord,
 )
@@ -1785,3 +1786,16 @@ class TestFillGaps:
             warnings.simplefilter("error")
             out = patch.fill_gaps("time")
         assert "time_start" not in out.coords.coord_map
+
+    def test_integer_nothing_to_fill(self, random_patch):
+        """An integer patch with nothing to fill ignores the default NaN."""
+        patch = random_patch.new(data=random_patch.data.astype(np.int32))
+        assert patch.fill_gaps("time") is patch
+
+    def test_float_array_drift_raises(self):
+        """A float array whose spacings drift off its declared step raises."""
+        values = np.arange(2_000_010) * (1 + 4e-7)
+        values = np.delete(values, [5])
+        coord = CoordMonotonicArray(values=values, step=1.0)
+        with pytest.raises(CoordError, match="drift"):
+            _fill_layout(coord)

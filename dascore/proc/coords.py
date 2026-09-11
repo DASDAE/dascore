@@ -1279,12 +1279,12 @@ def fill_gaps(
     >>> assert (patch.fill_gaps("distance", value=0).data[5:8] == 0).all()
     """
     dim, axis, limit = get_dim_axis_value(patch, args=args, kwargs=kwargs)[0]
-    data = to_numpy(patch.data)
-    fill = _fill_scalar(value, data.dtype)
     layout = _fill_layout(patch.get_coord(dim), limit, samples=samples)
     if layout is None:
         return patch
     coord, blocks = layout
+    data = to_numpy(patch.data)
+    fill = _fill_scalar(value, data.dtype)
     data = _place_blocks(data, axis, len(coord), blocks, fill)
     coords = drop_associated_coords(patch.coords, dim, "Filling gaps along")
     return patch.new(data=data, coords=coords._update_grid(dim, **{dim: coord}))
