@@ -290,7 +290,7 @@ class RadiansToStrain(PatchProcessor):
 
     def derive(self, patch):
         """Return the strain units and data_type; the patch if it has no radians."""
-        # The gauge length is checked first, as it always was.
+        # A bad gauge length raises even for a patch without radians.
         _get_gauge_length(patch, self.gauge_length)
         quant = dc.get_quantity(patch.attrs.data_units)
         # If units don't contain radians just return, so this is idempotent.

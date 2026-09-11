@@ -84,11 +84,14 @@ Calling a processor checks the patch, runs it, and records history and lineage i
 An operation whose metadata changes, or whose kernel needs numbers read from the metadata, splits the work so that no array is touched until the kernel runs:
 
 - `derive(patch)` returns the result's metadata from a patch without data, through the coord manager and `patch.new`; patch methods refuse a patch without data.
-- `plan(patch, out)` gets the same patch and `derive`'s result, and returns what the kernel needs as ints, floats, bools, tuples of those, or numeric arrays.
+- `plan(patch, out)` gets the same patch and `derive`'s result, and returns what the kernel needs as numbers, None, slices, tuples of those, or numeric arrays.
 - `kernel(data, **plan)` computes the array with the [array API](https://data-apis.org/array-api/latest/), so it runs on any backend; it never sees a patch. Where only numpy, scipy or numba can do the work, write `numpy_kernel` instead (or as well): numpy data run it, and other arrays run it on numpy copies with a `NumpyFallbackWarning`.
-- `reconcile(result, out)` is the one step which sees the kernel's result and the metadata together, for an output which depends on the values.
+- `reconcile(result, out)` sees the kernel's result and the metadata together; return a patch holding data when the output depends on the values.
 
 ```{python}
+from dascore.utils.array_api import array_namespace
+
+
 class RemoveMean(dc.PatchProcessor):
     """Remove the mean along a dimension."""
 
@@ -98,7 +101,8 @@ class RemoveMean(dc.PatchProcessor):
         return {"axis": patch.get_axis(self.dim)}
 
     def kernel(self, data, *, axis):
-        return data - data.mean(axis=axis, keepdims=True)
+        xp = array_namespace(data)
+        return data - xp.mean(data, axis=axis, keepdims=True)
 
 
 out = RemoveMean(dim="distance")(patch)

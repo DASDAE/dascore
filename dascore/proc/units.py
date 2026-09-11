@@ -60,7 +60,7 @@ class SetUnits(PatchProcessor):
 
     data_units: Any = None
 
-    model_config = ConfigDict(extra="allow", frozen=True, arbitrary_types_allowed=True)
+    model_config = ConfigDict(extra="allow")
 
     def derive(self, patch):
         """Return the coordinates and data units with the units set."""
@@ -120,7 +120,7 @@ class ConvertUnits(PatchProcessor):
 
     data_units: Any = None
 
-    model_config = ConfigDict(extra="allow", frozen=True, arbitrary_types_allowed=True)
+    model_config = ConfigDict(extra="allow")
 
     def derive(self, patch):
         """Return the coordinates and data units converted."""

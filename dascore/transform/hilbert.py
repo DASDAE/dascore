@@ -27,8 +27,15 @@ def analytic_signal(data, axis: int):
     of the FFT, double the positive ones, and transform back.
     """
     xp = array_namespace(data)
+    if xp.isdtype(data.dtype, "complex floating"):
+        msg = "x must be real."
+        raise ValueError(msg)
+    # A chunked (dask) array transforms along one chunk only.
+    if hasattr(data, "rechunk"):
+        data = data.rechunk({axis: -1})
+    single = data.dtype == xp.float32
     size = data.shape[axis]
-    weights = np.zeros(size)
+    weights = np.zeros(size, dtype=np.float32 if single else np.float64)
     weights[0] = 1
     if size % 2 == 0:
         weights[size // 2] = 1
@@ -39,7 +46,7 @@ def analytic_signal(data, axis: int):
     shape[axis] = size
     weights = asarray_like(weights.reshape(shape), data)
     # The standard's fft takes complex input only.
-    complex_dtype = xp.complex64 if data.dtype == xp.float32 else xp.complex128
+    complex_dtype = xp.complex64 if single else xp.complex128
     spectrum = xp.fft.fft(xp.astype(data, complex_dtype), axis=axis)
     return xp.fft.ifft(spectrum * weights, axis=axis)
 

@@ -203,8 +203,7 @@ class SobelFilter(PatchProcessor):
 
     def numpy_kernel(self, data, *, axis):
         """Return the Sobel gradient along the axis."""
-        _, mode, cval = _check_sobel_args(self.dim, self.mode, self.cval)
-        return ndimage.sobel(data, axis=axis, mode=mode, cval=cval)
+        return ndimage.sobel(data, axis=axis, mode=self.mode, cval=self.cval)
 
 
 sobel_filter = SobelFilter.patch_function

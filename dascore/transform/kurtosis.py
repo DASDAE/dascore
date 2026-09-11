@@ -77,7 +77,7 @@ class Kurtosis(PatchProcessor):
     samples: bool = False
     recursive: bool = True
 
-    model_config = ConfigDict(extra="allow", frozen=True)
+    model_config = ConfigDict(extra="allow")
     data_type = "kurtosis"
 
     def derive(self, patch):

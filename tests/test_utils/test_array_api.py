@@ -17,6 +17,7 @@ from dascore.utils.array_api import (
     asarray_like,
     backend_name,
     can_nan_reduce,
+    device,
     is_numpy,
     nan_reduce,
     to_numpy,
@@ -445,6 +446,10 @@ _CONVERTED = {
 }
 
 
+# The converted operations which have only a numpy kernel, so fall back.
+_NUMPY_ONLY = {"demedian", "detrend", "sobel_filter", "kurtosis"}
+
+
 class TestConvertedProcessorsOnBackends:
     """Every converted operation runs on every backend, or warns it falls back."""
 
@@ -453,13 +458,10 @@ class TestConvertedProcessorsOnBackends:
         """Native kernels are silent; numpy kernels warn; the backend comes back."""
         cls = getattr(dc.Patch, name).__processor__
         backend = backend_name(backend_patch.data)
-        native = any(
-            "kernel" in klass.__dict__ or "numpy_kernel" not in klass.__dict__
-            for klass in cls.__mro__
-            if klass is not dc.PatchProcessor and issubclass(klass, dc.PatchProcessor)
-        )
         call = _CONVERTED[name]
-        if backend == "numpy" or native:
+        # A kernel registered for the backend (dask's lazy median) is native.
+        registered = backend in cls.__dict__.get("_kernels", {})
+        if name not in _NUMPY_ONLY or registered:
             with warnings_as_errors():
                 out = call(backend_patch)
         else:
@@ -494,3 +496,73 @@ class TestArrayApiKernelBranches:
         out = odd.hilbert("time")
         expected = sp_hilbert(np.asarray(odd.data), axis=odd.get_axis("time"))
         assert np.allclose(np.asarray(out.data), expected)
+
+    def test_hilbert_keeps_single_precision(self, backend_patch):
+        """float32 in, complex64 out; the envelope float32."""
+        xp = array_namespace(backend_patch.data)
+        single = backend_patch.new(data=xp.astype(backend_patch.data, xp.float32))
+        assert single.hilbert("time").data.dtype == xp.complex64
+        assert single.envelope("time").data.dtype == xp.float32
+
+    def test_hilbert_refuses_complex(self, backend_patch):
+        """As scipy does: the analytic signal is of real data."""
+        xp = array_namespace(backend_patch.data)
+        data = xp.astype(backend_patch.data, xp.complex128)
+        with pytest.raises(ValueError, match="must be real"):
+            backend_patch.new(data=data).hilbert("time")
+
+    def test_full_with_a_numpy_scalar(self, backend_patch):
+        """A numpy scalar fill keeps its dtype, on the patch's backend."""
+        out = backend_patch.full(np.float32(2))
+        assert backend_name(out.data) == backend_name(backend_patch.data)
+        assert np.asarray(out.data).dtype == np.float32
+
+
+class TestDaskChunks:
+    """A dask array chunked along the transformed axis."""
+
+    def test_hilbert_across_chunks(self, random_patch):
+        """The chunks along the axis are joined before the transform."""
+        da = pytest.importorskip("dask.array")
+        data = np.asarray(random_patch.data)
+        chunked = random_patch.new(data=da.from_array(data, chunks=(50, 100)))
+        expected = np.asarray(random_patch.hilbert("time").data)
+        assert np.allclose(np.asarray(chunked.hilbert("time").data), expected)
+
+
+class TestDevices:
+    """Arrays built by a kernel live on the data's device."""
+
+    def test_fillna_and_full_keep_the_device(self, random_patch):
+        """array_api_strict refuses to mix devices, so this would raise."""
+        xp = pytest.importorskip("array_api_strict")
+        other = xp.__array_namespace_info__().devices()[1]
+        data = xp.asarray(np.where(np.asarray(random_patch.data) > 0.5, np.nan, 1.0))
+        patch = random_patch.new(data=xp.asarray(data, device=other))
+        assert device(patch.fillna(2.0).data) == other
+        assert device(patch.full(2.0).data) == other
+
+
+class TestDaskLaziness:
+    """Operations dask implements itself stay lazy."""
+
+    def test_demedian_stays_lazy(self, random_patch):
+        """No numpy copy, no warning, and the chunks kept."""
+        da = pytest.importorskip("dask.array")
+        data = da.from_array(np.asarray(random_patch.data), chunks=(50, 100))
+        with warnings_as_errors():
+            out = random_patch.new(data=data).demedian("time")
+        assert isinstance(out.data, da.Array)
+        assert np.allclose(np.asarray(out.data), random_patch.demedian("time").data)
+
+
+class TestFallbackWarningLocation:
+    """The fallback warning points at the caller, not at dascore."""
+
+    def test_points_at_the_call(self, random_patch):
+        """Whichever way the operation is reached."""
+        xp = pytest.importorskip("array_api_strict")
+        patch = random_patch.new(data=xp.asarray(np.asarray(random_patch.data)))
+        with pytest.warns(NumpyFallbackWarning) as record:
+            patch.detrend("time")
+        assert record[0].filename == __file__

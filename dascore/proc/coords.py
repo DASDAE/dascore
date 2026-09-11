@@ -267,7 +267,7 @@ class UpdateCoords(PatchProcessor):
     >>> assert np.allclose(pa2.coords.get_array('distance'), new_dist)
     """
 
-    model_config = ConfigDict(extra="allow", frozen=True, arbitrary_types_allowed=True)
+    model_config = ConfigDict(extra="allow")
 
     def derive(self, patch):
         """Return the coordinates with the given ones added or replaced."""
@@ -280,9 +280,7 @@ update_coords = UpdateCoords.patch_function
 
 class DropCoords(PatchProcessor):
     """
-    Update the coordinates of a patch.
-
-    Will either add new coordinates, or update existing ones.
+    Drop non-dimensional coordinates from a patch.
 
     Parameters
     ----------
@@ -324,10 +322,8 @@ class DropPrivateCoords(PatchProcessor):
     """
     Drop all private coords in the patch.
 
-    Parameters
-    ----------
-    self
-        Patch
+    A private coordinate which is a dimension cannot be dropped, and raises
+    a ParameterError.
 
     Examples
     --------
@@ -357,9 +353,7 @@ drop_private_coords = DropPrivateCoords.patch_function
 
 class MakeBroadcastableTo(PatchProcessor):
     """
-    Update the coordinates of a patch.
-
-    Will either add new coordinates, or update existing ones.
+    Make the patch broadcastable to a shape.
 
     Parameters
     ----------
@@ -980,7 +974,7 @@ class AppendDims(PatchProcessor):
 
     empty_dims: tuple[Any, ...] = ()
 
-    model_config = ConfigDict(extra="allow", frozen=True, arbitrary_types_allowed=True)
+    model_config = ConfigDict(extra="allow")
     history = None
     _var_positional = "empty_dims"
 

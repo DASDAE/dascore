@@ -22,7 +22,7 @@ from dascore.core.coordmanager import (
     get_coord_manager,
 )
 from dascore.core.coords import CoordRange, get_coord
-from dascore.core.processor import PatchProcessor
+from dascore.core.processor import PatchProcessor, register_kernel
 from dascore.exceptions import ParameterError
 from dascore.models import ArrayLike
 from dascore.units import get_quantity
@@ -32,6 +32,7 @@ from dascore.utils.array_api import (
     array_namespace,
     asarray_like,
     backend_name,
+    device,
     is_numpy,
     nan_reduce,
     to_numpy,
@@ -946,7 +947,8 @@ class Fillna(PatchProcessor):
         to_replace = ~xp.isfinite(data) if self.include_inf else xp.isnan(data)
         if not xp.any(to_replace):
             return data
-        return xp.where(to_replace, xp.asarray(self.value, dtype=data.dtype), data)
+        value = xp.asarray(self.value, dtype=data.dtype, device=device(data))
+        return xp.where(to_replace, value, data)
 
 
 fillna = Fillna.patch_function
@@ -1130,7 +1132,7 @@ class Roll(PatchProcessor):
     patch
         input patch
     samples
-        if True, value indicates coordinate or value of dimension
+        If True, the roll is a number of samples; else in coordinate units.
     update_coord
         if True, updates coord based on rolled amount
     **kwargs
@@ -1154,7 +1156,7 @@ class Roll(PatchProcessor):
     samples: bool = False
     update_coord: bool = False
 
-    model_config = ConfigDict(extra="allow", frozen=True)
+    model_config = ConfigDict(extra="allow")
 
     def _shift(self, patch):
         """Return the dimension, its axis, and the roll in samples."""
@@ -1330,13 +1332,13 @@ class Full(PatchProcessor):
 
     data_type = ""
 
-    def numpy_kernel(self, data):
-        """Return an array of the data's shape holding only the fill value."""
-        return np.full(data.shape, self.fill_value)
-
     def kernel(self, data):
         """Return an array of the data's shape holding only the fill value."""
-        return array_namespace(data).full(data.shape, self.fill_value)
+        # A numpy scalar keeps its dtype, as numpy's own full would.
+        fill = np.asarray(self.fill_value)
+        dtype = asarray_like(fill, data).dtype
+        xp = array_namespace(data)
+        return xp.full(data.shape, fill.item(), dtype=dtype, device=device(data))
 
 
 full = Full.patch_function
@@ -1402,6 +1404,11 @@ class Demedian(PatchProcessor):
     def numpy_kernel(self, data, *, axis):
         """Return the data with the NaN-ignoring median of each slice removed."""
         return data - np.nanmedian(data, axis=axis, keepdims=True)
+
+
+# Dask and cupy implement np.nanmedian themselves, so need no numpy copy.
+for _backend in ("dask", "cupy"):
+    register_kernel(Demedian, _backend)(Demedian.numpy_kernel)
 
 
 demedian = Demedian.patch_function

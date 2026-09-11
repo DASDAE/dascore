@@ -676,6 +676,40 @@ class TestNumpyKernel:
             out = self.Both()(strict_patch)
         assert np.allclose(np.asarray(out.data), np.asarray(strict_patch.data) * 3)
 
+    def test_fallback_converts_tuples_and_keeps_no_ops(self, strict_patch):
+        """Arrays inside a tuple come back too; the input handed back is a no-op."""
+
+        class Pair(PatchProcessor):
+            """Return the data and a mask, then rebuild from both."""
+
+            name = None
+
+            def numpy_kernel(self, data):
+                """Return the data, where it is positive, and a count."""
+                return data * 1, data > 0, 3
+
+            def reconcile(self, result, out):
+                """Check both came back on the input's backend."""
+                data, mask, count = result
+                assert backend_name(mask) == backend_name(data)
+                assert count == 3
+                return out.new(data=data)
+
+        class Same(PatchProcessor):
+            """Hand the data back unchanged."""
+
+            name = None
+
+            def numpy_kernel(self, data):
+                """Nothing to do."""
+                return data
+
+        with pytest.warns(NumpyFallbackWarning):
+            out = Pair()(strict_patch)
+        assert backend_name(out.data) == backend_name(strict_patch.data)
+        with pytest.warns(NumpyFallbackWarning):
+            assert Same()(strict_patch) is strict_patch
+
     def test_a_numpy_kernel_alone_falls_back(self, strict_patch):
         """Run on numpy copies, with a warning, handing back the backend."""
         with pytest.warns(NumpyFallbackWarning, match="NumpyOnly"):

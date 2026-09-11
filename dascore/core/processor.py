@@ -83,9 +83,9 @@ class PatchProcessor(DascoreBaseModel):
       It never sees a patch, so a chain of kernels can be compiled.
     - `numpy_kernel(data, **plan)`: the same with numpy, scipy or numba.
       Numpy data run it in preference to `kernel`; other arrays run it on
-      numpy copies, with a warning, when there is no `kernel`.
-    - `reconcile(result, out)`: the one hook which sees both halves; it
-      may return the result itself when the output depends on the values.
+      numpy copies, with a warning, unless the class defines a `kernel`.
+    - `reconcile(result, out)`: the one hook which sees both halves; return
+      a patch holding data when the output depends on the values.
 
     Each subclass is registered under `name` (snake case of the class name
     unless set) and gets a generated patch function, `cls.patch_function`:
@@ -245,13 +245,12 @@ class PatchProcessor(DascoreBaseModel):
 
     def reconcile(self, result, out: PatchType) -> PatchType:
         """
-        Return the result once the kernel has run; default `out` as it is.
+        Return the output patch, given the kernel's result; default `out`.
 
-        The one hook which sees both halves. It gets whatever the kernel
-        returned, which need not be an array, and `derive`'s patch. Return
-        a patch without data to have `result` attached to it, or a patch
-        holding data -- for an operation whose output depends on the values,
-        such as `dropna` -- to have it used as the result.
+        The one hook which sees both halves: whatever the kernel returned,
+        which need not be an array, and `derive`'s patch. Return a patch
+        without data to have `result` attached to it, or a patch holding
+        data -- when the output depends on the values -- to use it as is.
         """
         return out
 
@@ -466,8 +465,19 @@ def _via_numpy(numpy_kernel, name: str):
     """Return `numpy_kernel` run on numpy copies, its result sent back."""
 
     def run_on_numpy(processor, data, **plan):
-        warn_numpy_fallback(name, backend_name(data), stacklevel=4)
-        result = numpy_kernel(processor, to_numpy(data), **plan)
-        return asarray_like(result, data) if is_array_like(result) else result
+        warn_numpy_fallback(name, backend_name(data), skip_dascore=True)
+        numpy_data = to_numpy(data)
+        result = numpy_kernel(processor, numpy_data, **plan)
+        # Handed back unchanged is still "nothing to do".
+        return data if result is numpy_data else _back_to(result, data)
 
     return run_on_numpy
+
+
+def _back_to(result, like):
+    """Return a numpy kernel's result on the backend of `like`, tuples included."""
+    if isinstance(result, tuple):
+        return tuple(_back_to(x, like) for x in result)
+    if is_array_like(result) or isinstance(result, np.generic):
+        return asarray_like(result, like)
+    return result
