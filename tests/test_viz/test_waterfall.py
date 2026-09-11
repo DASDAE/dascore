@@ -1335,6 +1335,22 @@ class TestExplicitWaterfallCells:
         assert ax.get_ylim() == (-0.25, 5.75)
         assert len(ax.patches) == (gap_color is not None)
 
+    def test_declared_step_opens_gaps(self):
+        """A declared step, not the median spacing, sizes the cells beside it."""
+        patch = dc.Patch(
+            data=np.zeros((3, 4)),
+            dims=("x", "y"),
+            coords={
+                "x": [0.0, 2.0, 5.0],
+                "y": dc.get_coord(data=np.array([0.0, 3.0, 6.0, 7.0]), step=1.0),
+                "x_start": ("x", [-0.25, 1.75, 4.75]),
+                "x_stop": ("x", [0.75, 2.75, 5.75]),
+            },
+        )
+        ax = patch.viz.waterfall(cbar=False, gap_color="gray")
+        first = ax.collections[0].get_paths()[0].vertices[:, 0]
+        assert (first.min(), first.max()) == (-0.5, 0.5)
+
     def test_overlapping_cells(self, bounded):
         """Overlapping cells retain their full bounds without creating fake gaps."""
         patch = bounded.update_coords(x_stop=("x", [3.0, 6.0, 7.0]))

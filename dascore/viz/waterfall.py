@@ -190,7 +190,7 @@ def _plot_with_bounds(ax, data, patch, cmap, gap_color, gap_factor):
                 GapTolerance.samples(gap_factor) if gap_color is not None else None
             )
             cells[dim] = mesh_cell_edges(
-                *get_gap_edges(patch.get_array(dim), tolerance)
+                *get_gap_edges(patch.get_coord(dim), tolerance)
             )
     y0, y1 = cells[patch.dims[0]]
     x0, x1 = cells[patch.dims[1]]
