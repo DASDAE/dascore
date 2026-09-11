@@ -54,7 +54,7 @@ python scripts/build_api_docs.py
 quarto render dascore/docs
 ```
 
-Use `quarto preview docs` for live editing. Generated HTML is under `dascore/docs/_site/`.
+Use `quarto preview dascore/docs` for live editing. Generated HTML is under `dascore/docs/_site/`.
 
 Edit `scripts/_templates/_quarto.yml` for navigation; `dascore/docs/_quarto.yml` is generated and overwritten. The API sidebar intentionally lists top-level sections rather than every object; `dascore/docs/api/_metadata.yml` assigns unlisted API pages to it.
 

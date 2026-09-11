@@ -84,7 +84,12 @@ class TestDocumentationDistribution:
         for names in (source_names, wheel_names):
             assert "dascore/docs/tutorial/patch.qmd" in names
             assert "dascore/docs/recipes/tunnel_inventory.qmd" in names
-            assert "dascore/docs/_static/tunnel_deployment.svg" in names
+            assert not any("/docs/_static/" in name for name in names)
+            assert not any(
+                name.endswith((".png", ".svg", ".jpg", ".jpeg"))
+                for name in names
+                if "/docs/" in name
+            )
             assert not any(
                 "generated." in name or "page_files" in name or name.endswith(".ipynb")
                 for name in names
@@ -120,5 +125,9 @@ class TestDocumentationDistribution:
         assert result.returncode == 0, result.stdout + result.stderr
         assert "waterfall(" in result.stdout
         assert "DASCore" in result.stdout
+        assert (
+            "https://raw.githubusercontent.com/DASDAE/dascore/v0.0.1/"
+            "dascore/docs/_static/tunnel_deployment.svg"
+        ) in result.stdout
         manifest = json.loads((work / "cache/0.0.1/manifest.json").read_text())
         assert manifest["identity"]["version"] == "0.0.1"

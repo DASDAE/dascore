@@ -7,6 +7,7 @@ from types import ModuleType, SimpleNamespace
 
 import pytest
 
+import dascore as dc
 from dascore.utils import doc_corpus
 
 
@@ -31,6 +32,7 @@ class TestAuthoredDocuments:
             "{{< include fragment.md >}}\n"
             "[relative](fragment.qmd?mode=one#details)\n"
             "[absolute](/fragment.qmd)\n"
+            "[directory](./)\n"
             "[unavailable](missing.qmd)\n"
             "[API](`dascore.missing.Plugin`)\n"
             "```{python}\nraise AssertionError('must not run')\n```\n"
@@ -47,6 +49,7 @@ class TestAuthoredDocuments:
         assert "Included instructions." in text
         assert "(fragment.md?mode=one#details)" in text
         assert "(fragment.md)" in text
+        assert "[directory](./)" in text
         assert "https://dascore.org/missing.html" in text
         assert "https://dascore.org/api/dascore.html" in text
         assert "```python\nraise AssertionError" in text
@@ -65,6 +68,41 @@ class TestAuthoredDocuments:
         (source / "page.qmd").write_text(body)
         with pytest.raises(doc_corpus.DocumentationError, match=message):
             doc_corpus.write_corpus(output)
+
+    @pytest.mark.parametrize(
+        "version, ref",
+        [
+            ("0.2.0", "v0.2.0"),
+            ("0.2.0rc1", "v0.2.0rc1"),
+            ("0.2.0.dev4+gabc1234.d20260911", "abc1234"),
+            ("0.2.0.dev4", "dev"),
+        ],
+    )
+    def test_hosted_images(self, sources, monkeypatch, version, ref):
+        """Images stay hosted with versioned links, including without local assets."""
+        source, output = sources
+        page = source / "tutorial" / "page.qmd"
+        page.parent.mkdir()
+        page.write_text(
+            "![diagram](../_static/diagram.svg?raw=1#view)\n"
+            "[download](/_static/diagram.svg)\n"
+            "![external](https://example.com/image.png)\n",
+            encoding="utf-8",
+        )
+        asset = source / "_static" / "diagram.svg"
+        asset.parent.mkdir()
+        asset.write_text("Repository-only image", encoding="utf-8")
+        monkeypatch.setattr(dc, "__version__", version)
+        first = doc_corpus.write_corpus(output)
+        asset.unlink()
+        second = doc_corpus.write_corpus(output)
+        assert first == second
+        assert not (output / "_static").exists()
+        text = (output / "tutorial/page.md").read_text(encoding="utf-8")
+        base = f"https://raw.githubusercontent.com/DASDAE/dascore/{ref}/dascore/docs"
+        assert f"![diagram]({base}/_static/diagram.svg?raw=1#view)" in text
+        assert f"[download]({base}/_static/diagram.svg)" in text
+        assert "![external](https://example.com/image.png)" in text
 
     def test_readme(self, tmp_path, monkeypatch):
         """Installed metadata wins over an unrelated sibling README."""

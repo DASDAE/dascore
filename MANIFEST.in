@@ -16,11 +16,11 @@ graft tests
 # now re-remove compiled files
 global-exclude __pycache__ *pyc
 
-# Ship authored prose and its images, independently of generated build output.
+# Ship authored prose; images remain hosted with the website sources.
 prune dascore/docs
 include dascore/docs/LICENSE
 recursive-include dascore/docs *.qmd *.md
-recursive-include dascore/docs/_static *.png *.svg *.jpg *.jpeg
+prune dascore/docs/_static
 prune dascore/docs/api
 prune dascore/docs/_site
 prune dascore/docs/.quarto

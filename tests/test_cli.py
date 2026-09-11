@@ -95,6 +95,19 @@ class TestDocuments:
             root, index, "spool"
         )
 
+    @pytest.mark.parametrize("name", ["Inventory.from_yaml", "Spool.from_directory"])
+    def test_classmethod(self, corpus, name):
+        """Classmethod documentation identifies the automatically supplied class."""
+        text = doc_cache.read_document(*corpus, name)
+        assert "Python supplies the first class parameter." in text
+        assert "the instance supplies" not in text
+
+    def test_staticmethod(self, corpus):
+        """Processor patch functions require the caller to pass the patch."""
+        text = doc_cache.read_document(*corpus, "proc.basic.Abs.patch_function")
+        assert "Direct and static calls require all shown parameters." in text
+        assert "Python supplies the first class parameter." not in text
+
     def test_signature(self, corpus):
         """Signatures are inspected without evaluating string annotations."""
         signature = str(inspect.signature(dc.Patch.select, eval_str=False))

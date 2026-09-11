@@ -48,14 +48,6 @@ _MODEL_FIELDS = {
     },
 }
 
-# Key documentation availability on a page the
-# full documentation tree always contains, not on the files under test.
-_DOCS_PRESENT = (_DOC_PATH / "index.qmd").is_file()
-
-pytestmark = pytest.mark.skipif(
-    not _DOCS_PRESENT, reason="the documentation tree is not installed"
-)
-
 
 def _page_text() -> str:
     """Return the inventory tutorial source."""
@@ -78,7 +70,7 @@ def _parse_view_box(value: str) -> list[float]:
 
 @pytest.mark.parametrize("name", _DIAGRAMS)
 def test_page_references_each_diagram(name):
-    """Each shipped diagram is used exactly once by the inventory page."""
+    """Each website diagram is used exactly once by the inventory page."""
     pattern = rf"^!\[[^]]+\]\(\.\./_static/{re.escape(name)}\)"
     assert len(re.findall(pattern, _page_text(), re.MULTILINE)) == 1
 

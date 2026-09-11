@@ -33,7 +33,7 @@ _API_MODULES = (
     "dascore.utils.downloader",
     "dascore.utils.time",
 )
-_EXCLUDED = {"api", "filters", "_site", "site_libs", "lite", "lite_contents"}
+_EXCLUDED = {"api", "filters", "_static", "_site", "site_libs", "lite", "lite_contents"}
 _LINK = re.compile(r"(!?\[[^\n]*?\])\(([^\s)]+)\)")
 _INCLUDE = re.compile(r"\{\{<\s*include\s+([^>]+?)\s*>\}\}")
 
@@ -43,7 +43,7 @@ class DocumentationError(ValueError):
 
 
 def source_paths() -> list[Path]:
-    """Return authored documents and assets, pruning generated directories."""
+    """Return authored documents, pruning assets and generated directories."""
     out = []
     for parent, directories, files in DOC_PATH.walk():
         directories[:] = [
@@ -55,7 +55,7 @@ def source_paths() -> list[Path]:
         ]
         for name in files:
             path = parent / name
-            if path.suffix in {".qmd", ".md", ".png", ".svg", ".jpg", ".jpeg"}:
+            if path.suffix in {".qmd", ".md"}:
                 out.append(path)
     return sorted(out)
 
@@ -103,6 +103,7 @@ def _api_documents():
     def add(obj, alias, owner=None):
         is_property = isinstance(obj, (property, cached_property))
         is_ufunc = isinstance(obj, PatchUFunc)
+        is_classmethod = isinstance(obj, classmethod)
         obj = _unwrap(obj)
         module = (
             obj.__name__
@@ -156,8 +157,12 @@ def _api_documents():
                 prefix += f"```python\n{obj.__name__}{signature}\n```\n\n"
             if owner is not None and signature:
                 prefix += (
-                    "Method signatures are unbound; "
-                    "the instance supplies the first parameter.\n\n"
+                    "Class method signatures are unbound; "
+                    "Python supplies the first class parameter.\n\n"
+                    if is_classmethod
+                    else "Method signatures are unbound. For an instance method, "
+                    "its instance supplies the first parameter. "
+                    "Direct and static calls require all shown parameters.\n\n"
                 )
             records[key] = dict(
                 id=key,
@@ -280,6 +285,15 @@ def _frontmatter(text):
     return front, "\n---".join(parts[1:]).lstrip("\n")
 
 
+def _image_ref():
+    """Pin hosted images to the installed commit or release when known."""
+    version = dc.__version__
+    if commit := re.search(r"\+g([0-9a-f]+)", version):
+        return commit[1]
+    public = version.split("+", 1)[0]
+    return "dev" if ".dev" in public else f"v{public}"
+
+
 def _markdown(text, path, aliases, authored):
     """Normalize executable fences and links while keeping example code intact."""
 
@@ -300,6 +314,17 @@ def _markdown(text, path, aliases, authored):
         source = Path(os.path.normpath(str(Path(path).parent / url.path)))
         if url.path.startswith("/"):
             source = Path(url.path.lstrip("/"))
+        if source.suffix.lower() in {".png", ".svg", ".jpg", ".jpeg"}:
+            hosted = urlunsplit(
+                (
+                    "https",
+                    "raw.githubusercontent.com",
+                    f"/DASDAE/dascore/{_image_ref()}/dascore/docs/{source.as_posix()}",
+                    url.query,
+                    url.fragment,
+                )
+            )
+            return f"{label}({hosted})"
         if (
             source.suffix in {".qmd", ".md"}
             and source.with_suffix("").as_posix() in authored
@@ -359,15 +384,8 @@ def _disambiguate_paths(records):
 def write_corpus(destination: Path) -> dict:
     """Write the installed API and authored Markdown corpus and return its index."""
     records, omitted = _api_documents()
-    assets = []
     for source in source_paths():
         relative = source.relative_to(DOC_PATH)
-        if source.suffix not in {".qmd", ".md"}:
-            output = destination / relative
-            output.parent.mkdir(parents=True, exist_ok=True)
-            output.write_bytes(source.read_bytes())
-            assets.append(relative.as_posix())
-            continue
         front, body = _frontmatter(_read_source(source))
         key = relative.with_suffix("").as_posix()
         keywords = front.get("keywords", [])
@@ -411,6 +429,6 @@ def write_corpus(destination: Path) -> dict:
     return {
         "documents": list(records.values()),
         "aliases": aliases,
-        "assets": assets,
+        "assets": [],
         "omitted": omitted,
     }
