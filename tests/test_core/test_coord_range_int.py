@@ -777,14 +777,14 @@ class TestPersistenceGuards:
         """DASDAE format 1 refuses a fractional step rather than rounding it."""
         patch = dc.get_example_patch().update_coords(time=hz_1024[:2000])
         with pytest.raises(NotImplementedError, match="fractional step"):
-            patch.io.write(tmp_path / "frac.h5", "dasdae")
+            patch.io.write(tmp_path / "frac.h5", "dasdae", file_version="1")
 
     def test_dasdae_v1_writes_whole_ticks(self, tmp_path):
         """Whole-tick grids round-trip through DASDAE."""
         patch = dc.get_example_patch()
         assert patch.get_coord("time")._exact
         path = tmp_path / "whole.h5"
-        patch.io.write(path, "dasdae")
+        patch.io.write(path, "dasdae", file_version="1")
         assert dc.spool(path)[0].get_coord("time") == patch.get_coord("time")
 
     def test_xarray_lazy_index_skipped(self, hz_1024):
@@ -1099,8 +1099,8 @@ class TestSecondReviewRound:
         """A refused write leaves the existing file untouched."""
         path = tmp_path / "keep.h5"
         good = dc.get_example_patch()
-        good.io.write(path, "dasdae")
+        good.io.write(path, "dasdae", file_version="1")
         bad = good.update_coords(time=hz_1024[:2000])
         with pytest.raises(NotImplementedError, match="fractional step"):
-            bad.io.write(path, "dasdae")
+            bad.io.write(path, "dasdae", file_version="1")
         assert dc.spool(path)[0] == good

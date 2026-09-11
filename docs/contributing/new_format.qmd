@@ -41,7 +41,7 @@ class JingleV1(FiberIO):
         """Write patches."""
 ```
 
-Implement only supported methods. Without `get_format`, callers must provide `file_format` and `file_version`. Every method should accept `**kwargs` so format-specific options compose with the public API.
+Implement only supported methods. Without `get_format`, callers must provide `file_format` and `file_version`. Every method should accept `**kwargs` so format-specific options compose with the public API. Two class attributes describe what a writer can hold: `multi_patch_write` when one file takes several patches, and `segmented_write` when a patch may keep gapped (segmented) dimensional coordinates; without it, `dc.write` splits or refuses such patches.
 
 Scan payloads must match `read()` for attrs, shape, dtype, and patch identity; coordinates also match unless an exact `snap=False` scan intentionally exposes stored values that `read()` cannot return. Lazy spools plan from scan results.
 

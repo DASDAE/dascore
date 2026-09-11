@@ -224,7 +224,7 @@ class TestMemoryRemoteMetadataAccess:
 
     def test_dasdae_get_format_avoids_local_cache(self, memory_dasdae_path):
         """DASDAE format detection should stay remote-first."""
-        assert dc.get_format(memory_dasdae_path) == ("DASDAE", "1")
+        assert dc.get_format(memory_dasdae_path) == ("DASDAE", "2")
         assert not list(get_remote_cache_path().rglob(memory_dasdae_path.name))
 
     def test_dasdae_scan_avoids_local_cache(self, memory_dasdae_path):

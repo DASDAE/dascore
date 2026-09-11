@@ -22,6 +22,7 @@ import numpy as np
 import pandas as pd
 
 import dascore as dc
+from dascore.core.coords import _EXACT_GRID_FIELDS
 from dascore.exceptions import (
     InvalidIndexError,
     InvalidIndexVersionError,
@@ -44,6 +45,7 @@ from dascore.io.index.query import (
     build_sql,
 )
 from dascore.io.index.schema import (
+    GRID_NEEDED,
     INDEX_VERSION,
     INDEXES,
     KIND_STORAGE,
@@ -310,10 +312,9 @@ class SQLiteIndexBackend:
                 self._execute(
                     create_table_sql(name, columns, TABLE_CONSTRAINTS.get(name, ()))
                 )
-            for index_name, table, column in INDEXES:
-                self._execute(
-                    f"CREATE INDEX IF NOT EXISTS {index_name} ON {table} ({column})"
-                )
+            for index_name, table, column, where in INDEXES:
+                sql = f"CREATE INDEX IF NOT EXISTS {index_name} ON {table} ({column})"
+                self._execute(sql if where is None else f"{sql} WHERE {where}")
             self._execute(
                 "INSERT INTO meta_data VALUES (?, ?, ?, ?)",
                 (WHAT_IS_THIS, INDEX_VERSION, dc.__version__, 0),
@@ -493,28 +494,12 @@ class SQLiteIndexBackend:
         new_keys = [k for k in keys if k not in mapping]
         next_id = self._next_id("coord_defs", "coord_def_id")
         def_rows = []
+        # CoordRecord names every def column after id, key, and fingerprint
+        columns = CoordDefRow._fields[3:]
         for key in new_keys:
             c = defs_needed[key]
-            def_rows.append(
-                (
-                    next_id,
-                    key,
-                    c.coord_hash,
-                    c.value_kind,
-                    c.dtype,
-                    c.length,
-                    c.units,
-                    c.min_num,
-                    c.max_num,
-                    c.step_num,
-                    c.min_ns,
-                    c.max_ns,
-                    c.step_ns,
-                    c.min_str,
-                    c.max_str,
-                    c.is_relative,
-                )
-            )
+            values = (getattr(c, name) for name in columns)
+            def_rows.append((next_id, key, c.coord_hash, *values))
             mapping[key] = next_id
             next_id += 1
         self._bulk_insert("coord_defs", CoordDefRow._fields, def_rows)
@@ -1135,9 +1120,9 @@ class SQLiteIndexBackend:
             return series.astype(object).where(series.notna(), None).to_numpy()
 
         fields = (
-            ("_env_min", "min_num", "min_ns", "min_str"),
-            ("_env_max", "max_num", "max_ns", "max_str"),
-            ("_env_step", "step_num", "step_ns", None),
+            ("_env_min", "min_float", "min_int", "min_str"),
+            ("_env_max", "max_float", "max_int", "max_str"),
+            ("_env_step", "step_float", "step_int", None),
         )
         for out_col, num_col, ns_col, str_col in fields:
             values = np.empty(len(coords), dtype=object)
@@ -1166,6 +1151,32 @@ class SQLiteIndexBackend:
         coords["_key"] = coords["def_key"].where(coords["fingerprint"].notna(), None)
         return coords
 
+    def _grids(self, def_keys=None) -> dict[str, tuple[int, ...]]:
+        """
+        The exact grid and length, by def key, where the envelope cannot restate it.
+
+        An ascending grid of whole ticks on their tick is what the
+        envelope already states, so only the rest are fetched (see
+        GRID_NEEDED), from the deduplicated table rather than as four more
+        columns on every link row. ``def_keys`` narrows the fetch to the
+        definitions in hand; None reads them all, for a result covering
+        most of the archive.
+        """
+        columns = ", ".join(_EXACT_GRID_FIELDS)
+        sql = f"SELECT def_key, {columns}, length FROM coord_defs WHERE ({GRID_NEEDED})"
+        if def_keys is None:
+            rows = self._fetch_df(sql)
+        else:
+            frames = [
+                self._fetch_df(f"{sql} AND def_key IN ({marks})", chunk)
+                for chunk, marks in self._iter_in_batches(list(def_keys))
+            ]
+            rows = pd.concat(frames, ignore_index=True)
+        rows = rows.dropna()
+        return {
+            row[0]: tuple(int(x) for x in row[1:]) for row in rows.to_numpy().tolist()
+        }
+
     def _pivot_coords(self, out: pd.DataFrame) -> pd.DataFrame:
         """
         Add per-coord envelope columns to the flat relation.
@@ -1184,14 +1195,14 @@ class SQLiteIndexBackend:
         link_sql = (
             "SELECT pc.patch_id, pc.coord_name, cd.def_key, cd.fingerprint, "
             "cd.value_kind, pc.dtype, cd.is_relative, cd.units, "
-            "cd.min_num, cd.max_num, "
-            "cd.step_num, cd.min_ns, cd.max_ns, cd.step_ns, "
-            "cd.min_str, cd.max_str "
+            "cd.min_float, cd.max_float, cd.step_float, "
+            "cd.min_int, cd.max_int, cd.step_int, cd.min_str, cd.max_str "
             "FROM patch_coords pc "
             "JOIN coord_defs cd ON cd.coord_def_id = pc.coord_def_id"
         )
         n_patches = self._fetch_df("SELECT count(*) AS n FROM patches")["n"].iloc[0]
-        if len(ids) * 4 >= n_patches:
+        most = len(ids) * 4 >= n_patches
+        if most:
             # Most patches selected: one scan plus a pandas filter beats
             # many batched IN queries and their frame concatenation.
             coords = self._fetch_df(link_sql)
@@ -1201,6 +1212,11 @@ class SQLiteIndexBackend:
         if coords.empty:
             return out
         coords = self._add_envelope_objects(coords)
+        # the exact grid where the envelope cannot restate it (None
+        # elsewhere), so a row rebuilds the coordinate the file holds
+        grids = self._grids(None if most else coords["def_key"].unique())
+        grids = coords["def_key"].map(grids).astype(object)
+        coords["_grid"] = grids.where(grids.notna(), None)
         for name, group in coords.groupby("coord_name"):
             if not any(coord_dtype_is_stateable(x) for x in group["dtype"].unique()):
                 # Recorded by name alone, so there is no envelope to
@@ -1219,6 +1235,14 @@ class SQLiteIndexBackend:
             units = dict(zip(pids, group["units"]))
             dtypes = dict(zip(pids, group["dtype"]))
             out[f"_{name}_def_key"] = out["patch_id"].map(keys)
+            # the exact grid and length, for rebuilding the row's range;
+            # most coordinates state none, and skip the mapping
+            grids = group["_grid"]
+            out[f"_{name}_grid"] = (
+                out["patch_id"].map(dict(zip(pids, grids)))
+                if grids.notna().any()
+                else None
+            )
             # the stored dtype: an envelope alone cannot say whether 0.0
             # to 299.0 by 1.0 labels integers, and a member rebuilt from
             # the row must match the patch the file would give

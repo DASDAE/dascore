@@ -511,7 +511,7 @@ def _forget_what_a_trim_invalidates(df: pd.DataFrame, residuals=()) -> pd.DataFr
     return df.assign(**forgotten)
 
 
-def _coord_from_envelope(envelope, dtype=None, units=None) -> object | None:
+def _coord_from_envelope(envelope, name: str, units=None) -> object | None:
     """
     The coordinate a stashed envelope describes, or None if it cannot.
 
@@ -524,26 +524,11 @@ def _coord_from_envelope(envelope, dtype=None, units=None) -> object | None:
     """
     if not isinstance(envelope, Mapping):
         return None
-    values = []
-    for key in ("min", "max", "step"):
-        value = next(v for k, v in envelope.items() if k.endswith(f"_{key}"))
-        if value is None or (np.ndim(value) == 0 and pd.isnull(value)):
-            return None
-        if isinstance(value, pd.Timestamp):
-            value = value.to_datetime64()
-        elif isinstance(value, pd.Timedelta):
-            value = value.to_timedelta64()
-        values.append(value)
-    low, high, step = values
-    if step <= np.zeros((), dtype=np.asarray(step).dtype):
-        return None
-    if isinstance(dtype, str) and dtype and np.issubdtype(np.dtype(dtype), np.floating):
-        kind = np.dtype(dtype).type
-        low, high, step = kind(low), kind(high), kind(step)
-    from dascore.core.coords import get_coord  # noqa: PLC0415
+    # function-level: patch_assembly imports the index package
+    from dascore.utils.patch_assembly import coord_from_row  # noqa: PLC0415
 
     units = units if isinstance(units, str) and units else None
-    return get_coord(min=low, max=high + step, step=step, units=units)
+    return coord_from_row(envelope, name, units)
 
 
 def _extremes_coord(envelope, units=None) -> object | None:
@@ -646,6 +631,10 @@ def _source_envelopes(df: pd.DataFrame, residuals) -> dict[str, pd.Series]:
         columns = [f"{name}_{end}" for end in ("min", "max", "step")]
         if not set(columns).issubset(df.columns):
             continue
+        # what rebuilds the coordinate exactly: its grid, dtype, and the
+        # units which say whether the grid still applies
+        suffixes = ("_grid", "_coord_dtype", "_units", "_units_source")
+        columns += [c for s in suffixes if (c := f"_{name}{s}") in df]
         envelopes = df[columns].to_dict("records")
         out[_source_column(name)] = pd.Series(envelopes, index=df.index, dtype=object)
     return out
@@ -1301,9 +1290,7 @@ class PatchCatalog:
         for name in names:
             envelope = row.get(_source_column(name))
             units = row.get(f"_{name}_units")
-            coord = _coord_from_envelope(
-                envelope, row.get(f"_{name}_coord_dtype"), units
-            )
+            coord = _coord_from_envelope(envelope, name, units)
             if coord is None and once[name] == 1:
                 coord = _extremes_coord(envelope, units)
             if coord is not None:

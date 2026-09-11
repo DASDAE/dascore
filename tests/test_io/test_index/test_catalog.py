@@ -426,7 +426,7 @@ class TestCoordFromEnvelope:
     def test_an_even_envelope_rebuilds(self):
         """Three numbers are a range, and its samples are what select sees."""
         coord = _coord_from_envelope(
-            {"time_min": 0.0, "time_max": 9.0, "time_step": 1.0}
+            {"time_min": 0.0, "time_max": 9.0, "time_step": 1.0}, "time"
         )
         assert len(coord) == 10
         assert coord.min() == 0.0 and coord.max() == 9.0
@@ -442,13 +442,13 @@ class TestCoordFromEnvelope:
     )
     def test_an_envelope_which_describes_no_samples(self, envelope):
         """Nothing can be replayed on it, so the patch answers instead."""
-        assert _coord_from_envelope(envelope) is None
+        assert _coord_from_envelope(envelope, "x") is None
 
     def test_the_stored_precision_is_used(self):
         """A float32 coordinate rounds a bound differently than float64 does."""
         envelope = {"x_min": 538.14794921875, "x_max": 1000.0, "x_step": 3.3}
-        wide = _coord_from_envelope(envelope)
-        narrow = _coord_from_envelope(envelope, "float32")
+        wide = _coord_from_envelope(envelope, "x")
+        narrow = _coord_from_envelope({**envelope, "_x_coord_dtype": "float32"}, "x")
         assert wide.dtype == np.dtype("float64")
         assert narrow.dtype == np.dtype("float32")
 
@@ -498,8 +498,8 @@ class TestCoordFromEnvelopeUnits:
     def test_units_ride_along(self):
         """A bound bearing units is compared against a coordinate with them."""
         envelope = {"x_min": 0.0, "x_max": 9.0, "x_step": 1.0}
-        assert _coord_from_envelope(envelope, None, "m").units is not None
-        assert _coord_from_envelope(envelope, None, "").units is None
+        assert _coord_from_envelope(envelope, "x", "m").units is not None
+        assert _coord_from_envelope(envelope, "x", "").units is None
 
 
 class TestForgetTrimmedSizes:

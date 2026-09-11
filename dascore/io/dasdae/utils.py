@@ -14,7 +14,14 @@ import pandas as pd
 import dascore as dc
 from dascore.core.attrs import PatchAttrs
 from dascore.core.coordmanager import get_coord_manager
-from dascore.core.coords import get_coord
+from dascore.core.coords import (
+    _EXACT_GRID_FIELDS,
+    CoordMonotonicArray,
+    CoordRange,
+    CoordSegmented,
+    _scalar_dtype,
+    get_coord,
+)
 from dascore.core.summary import normalize_source_patch_key
 from dascore.exceptions import PatchAttributeError
 from dascore.io.core import STORED_PATCH_ID, make_scan_payload
@@ -54,6 +61,10 @@ _ATTRS_CLASS_KEY = "__attrs_class__"
 def _write_meta(hfile, file_version):
     """Write metadata to hdf5 file."""
     hfile.attrs["__format__"] = "DASDAE"
+    # appending never relabels a file below the version its groups need
+    existing = _get_file_version(hfile)
+    if existing and float(existing) > float(file_version):
+        file_version = existing
     hfile.attrs["__DASDAE_version__"] = file_version
     hfile.attrs["__dascore__version__"] = dc.__version__
     # Mark the file as holding only true attrs (no flat coord metadata),
@@ -139,32 +150,83 @@ def _save_array(data, name, group):
     return array_node
 
 
-def _save_coords(patch, patch_group):
-    """Save coordinates."""
-    cm = patch.coords
-    for name, coord in cm.coord_map.items():
-        dims = cm.dim_map[name]
-        # First save coordinate arrays
-        data = coord.values
-        save_name = f"_coord_{name}"
-        array_node = _save_array(data, save_name, patch_group)
+def _raw(value, dtype):
+    """A time as its integer ticks in the coordinate's unit; else itself."""
+    array = np.asarray(value)
+    if array.dtype.kind not in "mM":
+        return value
+    # a range's start may state a coarser unit than its dtype
+    name = "start" if array.dtype.kind == "M" else "step"
+    return array.astype(_scalar_dtype(dtype, name)).astype("int64")[()]
+
+
+def _extended_float(coord) -> bool:
+    """
+    Whether the coordinate's floats are wider than a double.
+
+    Judged by the scalar, not the item size: a long double stays a numpy
+    scalar under ``item()`` even where it is only 64 bits wide.
+    """
+    dtype = np.dtype(coord.dtype)
+    return dtype.kind == "f" and not isinstance(np.zeros((), dtype)[()].item(), float)
+
+
+# Version 2 nodes state the coordinate class they hold, as every DASCore
+# model states its class in a document (see dascore.models.registry).
+_OBJECT_TYPE = "object_type"
+
+
+def _save_coord(coord, name, group, compact: bool):
+    """
+    Save one coordinate node.
+
+    Version 2 (``compact``) states each node's class: a range is written
+    as its description and a segmented coordinate as a group of its
+    segments, so a long acquisition costs a few numbers and no label is
+    re-inferred on read; any other class, and version 1 throughout,
+    writes its values.
+    """
+    if compact and isinstance(coord, CoordSegmented):
+        node = group.create_group(name)
+        for i, segment in enumerate(coord.segments):
+            _save_coord(segment, str(i), node, compact)
+    elif compact and isinstance(coord, CoordRange) and not _extended_float(coord):
+        node = group.create_dataset(name, shape=(0,), dtype="int64")
+        node.attrs["dtype"] = str(coord.dtype)
+        node.attrs["start"] = _raw(coord.start, coord.dtype)
+        node.attrs["length"] = len(coord)
+        if coord._exact:
+            for field in _EXACT_GRID_FIELDS:
+                node.attrs[field] = getattr(coord, field)
+        else:
+            node.attrs["stop"] = _raw(coord.stop, coord.dtype)
+            node.attrs["step"] = _raw(coord.step, coord.dtype)
+    else:
+        node = _save_array(coord.values, name, group)
         step = coord.step
         if step is not None:
             is_td = np.issubdtype(np.asarray(step).dtype, np.timedelta64)
-            array_node.attrs["step"] = to_int(step) if is_td else step
-            array_node.attrs["step_is_timedelta64"] = is_td
-        if coord.units is not None:
-            array_node.attrs["units"] = str(coord.units)
-        # then save dimensions of coordinates
-        save_name = f"_cdims_{name}"
-        patch_group.attrs[save_name] = ",".join(dims)
+            node.attrs["step"] = to_int(step) if is_td else step
+            node.attrs["step_is_timedelta64"] = is_td
+    if compact:
+        node.attrs[_OBJECT_TYPE] = get_model_tag(type(coord))
+    if coord.units is not None:
+        node.attrs["units"] = str(coord.units)
+
+
+def _save_coords(patch, patch_group, compact: bool):
+    """Save coordinates and their dimensions."""
+    cm = patch.coords
+    for name, coord in cm.coord_map.items():
+        _save_coord(coord, f"_coord_{name}", patch_group, compact)
+        patch_group.attrs[f"_cdims_{name}"] = ",".join(cm.dim_map[name])
 
 
 def _check_storable(patch):
-    """Refuse a patch this format cannot store, before touching the file."""
+    """Refuse a patch version 1 cannot store, before touching the file."""
     for name, coord in patch.coords.coord_map.items():
         if getattr(coord, "step_denominator", None) not in (None, 1):
-            # This format stores one whole-tick step and rebuilds the range
+            # Version 1 stores one whole-tick step and rebuilds the range
             # from it, which would quietly move every label off its grid.
             msg = (
                 f"Coordinate {name!r} has a fractional step "
@@ -173,9 +235,10 @@ def _check_storable(patch):
             raise NotImplementedError(msg)
 
 
-def _save_patch(patch, wave_group, name):
+def _save_patch(patch, wave_group, name, compact: bool = False):
     """Save the patch to disk."""
-    _check_storable(patch)
+    if not compact:
+        _check_storable(patch)
     if name in wave_group:
         # Replace the entire patch group so stale datasets/attrs can't survive.
         del wave_group[name]
@@ -184,7 +247,7 @@ def _save_patch(patch, wave_group, name):
     # in the separated-attrs form and must not be legacy-stripped on read.
     patch_group.attrs[_SEPARATE_ATTRS_KEY] = True
     _save_attrs_and_dims(patch, patch_group)
-    _save_coords(patch, patch_group)
+    _save_coords(patch, patch_group, compact)
     # add data
     _save_array(patch.data, "data", patch_group)
 
@@ -249,40 +312,82 @@ def _read_array_sample(table_array, index):
     return out
 
 
+def _read_range(node, units):
+    """Rebuild a range from its version-2 description."""
+    attrs = node.attrs
+    dtype = np.dtype(unbyte(attrs["dtype"]))
+    start = np.asarray(attrs["start"]).astype(dtype)[()]
+    shape = (int(attrs["length"]),)
+    if "step_numerator" in attrs:
+        grid = {name: int(attrs[name]) for name in _EXACT_GRID_FIELDS}
+        return CoordRange(start=start, shape=shape, units=units, **grid)
+    stop = np.asarray(attrs["stop"]).astype(dtype)[()]
+    step = attrs["step"]
+    if dtype.kind in "mM":
+        step = np.asarray(step).astype(_scalar_dtype(dtype, "step"))[()]
+    elif isinstance(step, np.floating):
+        # as the python float it was written from: a numpy scalar would
+        # promote a float32 range to float64
+        step = step.item()
+    coord = CoordRange(start=start, stop=stop, step=step, units=units)
+    # The stored fields are a validated range's own; deriving the count
+    # from them again can move a float32 endpoint by a sample.
+    return coord._construct(dict(start=start, stop=stop, step=step, shape=shape))
+
+
+def _read_segment(node):
+    """Rebuild one segment of a version-2 segmented coordinate."""
+    units = node.attrs.get("units", None)
+    if "start" in node.attrs:
+        return _read_range(node, units)
+    # the segments were settled exactly when written, so an array
+    # segment is read as the values it holds, never snapped to a range
+    return CoordMonotonicArray(values=_read_array(node), units=units)
+
+
+def _read_coord(node, name, attrs2, snap):
+    """Rebuild one coordinate from its node."""
+    node_attrs = node.attrs
+    units = node_attrs.get("units", None) or attrs2.get(f"{name}_units", None)
+    object_type = unbyte(node_attrs.get(_OBJECT_TYPE, ""))
+    if object_type == "CoordSegmented":
+        segments = [_read_segment(node[str(i)]) for i in range(len(node))]
+        return CoordSegmented(segments=segments, units=units)
+    if object_type == "CoordRange" and "start" in node_attrs:
+        return _read_range(node, units)
+    # any other class, a range too wide to describe, and every version 1
+    # node hold their values
+    node_step = node_attrs.get("step", None)
+    if node_attrs.get("step_is_timedelta64", False):
+        node_step = np.timedelta64(node_step, "ns")
+    step = node_step if node_step is not None else attrs2.get(f"{name}_step", None)
+    shape = tuple(node.shape)
+    can_use_range_fast_path = (
+        node_step is not None
+        and not node_attrs.get("is_string", False)
+        and len(shape) == 1
+        and shape[0] > 0
+    )
+    if can_use_range_fast_path:
+        start = _read_array_sample(node, 0)
+        stop = start + node_step * shape[0]
+        return get_coord(start=start, stop=stop, step=node_step, units=units)
+    array = _read_array(node)
+    if snap or np.ndim(array) != 1:
+        return get_coord(data=array, units=units, step=step)
+    return get_exact_coord(array, units=units)
+
+
 def _get_coords(patch_group, dims, attrs2, snap=True):
     """Get the coordinates from a patch group."""
     coord_dict = {}  # just store coordinates here
     coord_dim_dict = {}  # stores {coord_name: ((dims, ...), coord)}
-    for coord in patch_group.values():
-        name = coord.name.rsplit("/", maxsplit=1)[-1]
+    for node in patch_group.values():
+        name = node.name.rsplit("/", maxsplit=1)[-1]
         if not name.startswith("_coord_"):
             continue
-        name = name.replace("_coord_", "")
-        node_attrs = coord.attrs
-        units = node_attrs.get("units", None)
-        node_step = node_attrs.get("step", None)
-        if node_attrs.get("step_is_timedelta64", False):
-            node_step = np.timedelta64(node_step, "ns")
-        units = units or attrs2.get(f"{name}_units", None)
-        step = node_step if node_step is not None else attrs2.get(f"{name}_step", None)
-        shape = tuple(coord.shape)
-        can_use_range_fast_path = (
-            node_step is not None
-            and not node_attrs.get("is_string", False)
-            and len(shape) == 1
-            and shape[0] > 0
-        )
-        if can_use_range_fast_path:
-            start = _read_array_sample(coord, 0)
-            stop = start + node_step * shape[0]
-            coord = get_coord(start=start, stop=stop, step=node_step, units=units)
-        else:
-            array = _read_array(coord)
-            if snap or np.ndim(array) != 1:
-                coord = get_coord(data=array, units=units, step=step)
-            else:
-                coord = get_exact_coord(array, units=units)
-        coord_dict[name] = coord
+        name = name.removeprefix("_coord_")
+        coord_dict[name] = _read_coord(node, name, attrs2, snap)
     # associates coordinates with dimensions
     group_attrs = patch_group.attrs
     c_dims = [x for x in group_attrs if x.startswith("_cdims")]

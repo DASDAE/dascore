@@ -23,7 +23,7 @@ import numpy as np
 import pandas as pd
 
 import dascore as dc
-from dascore.core.coords import CoordSummary
+from dascore.core.coords import _EXACT_GRID_FIELDS, CoordSummary
 from dascore.exceptions import UnknownFiberFormatError
 from dascore.io.core import FiberIO, _required_resource_type
 from dascore.io.index.backend import get_backend
@@ -219,6 +219,13 @@ def _coord_record_from_row(
         length = round(abs(span)) + 1
     key = row.get(f"_{name}_def_key")
     fingerprint = _def_key_fingerprint(key)
+    # the grid is the source's; once the def key (value identity) is gone,
+    # so are the values it described
+    grid = row.get(f"_{name}_grid") if fingerprint else None
+    exact = {}
+    if isinstance(grid, tuple):
+        *terms, length = grid
+        exact = dict(zip(_EXACT_GRID_FIELDS, terms))
     summary = CoordSummary(
         dtype=dtype,
         min=lo,
@@ -228,6 +235,7 @@ def _coord_record_from_row(
         dims=dims,
         len=length,
         fingerprint=fingerprint,
+        **exact,
     )
     return _coord_record(name, summary)
 
@@ -301,16 +309,19 @@ def _aux_coord_info(
         # the values of every coordinate on those dims
         trimmed = bool(set(dims) & trimmed_dims)
         key_col, step_col = f"_{name}_def_key", f"{name}_step"
-        unit_col = f"_{name}_units"
+        unit_col, grid_col = f"_{name}_units", f"_{name}_grid"
         lows = _extrema(grouped[cmin], "min")
         highs = _extrema(grouped[cmax], "max")
         # the *_first arrays are only read where their gate is True, and
         # a gate can only be True when its column exists
         no_gate = np.zeros(len(output_ids), dtype=bool)
         keep, key_first = no_gate, None
+        grid_first = None
         if key_col in joined.columns:
             keep = grouped[key_col].nunique().to_numpy() == 1
             key_first = grouped[key_col].first().to_numpy()
+            if grid_col in joined.columns:
+                grid_first = grouped[grid_col].first().to_numpy()
         keep = keep & (not trimmed)
         all_null = pd.isnull(lows) & pd.isnull(highs)
         if rides:
@@ -357,11 +368,13 @@ def _aux_coord_info(
             step = step_first[index] if step_first is not None else None
             key = key_first[index] if key_first is not None else None
             unit = unit_first[index] if unit_first is not None else None
+            grid = grid_first[index] if grid_first is not None else None
             info = {
                 cmin: lows[index],
                 cmax: highs[index],
                 step_col: step if step_ok[index] else None,
                 key_col: key if keep[index] else None,
+                grid_col: grid if keep[index] else None,
                 unit_col: unit if unit_ok[index] else None,
                 "dims": dims,
             }

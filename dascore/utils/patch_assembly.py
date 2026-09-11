@@ -22,7 +22,7 @@ import pandas as pd
 
 import dascore as dc
 from dascore.core.coordmanager import CoordManager, get_coord_manager
-from dascore.core.coords import get_coord
+from dascore.core.coords import _EXACT_GRID_FIELDS, CoordRange, get_coord
 from dascore.exceptions import CoordMergeError, UnitError
 from dascore.io.index.ingest import _is_missing
 from dascore.io.index.schema import RESERVED_ATTR_COLUMNS
@@ -269,6 +269,20 @@ def _row_range(row: Mapping, dim: str) -> tuple[Any, Any, Any] | None:
     """
     A dimension's evenly sampled range as the row states it, or None.
 
+    The envelope orders values, not samples: a descending coordinate's
+    start is its maximum, which the row does not say, so only an
+    ascending range is stated.
+    """
+    values = _row_values(row, dim)
+    if values is None or values[2] < np.zeros((), dtype=np.asarray(values[2]).dtype):
+        return None
+    return values
+
+
+def _row_values(row: Mapping, dim: str) -> tuple[Any, Any, Any] | None:
+    """
+    A dimension's (min, max, step) envelope in the file's dtype, or None.
+
     The frame hands datetimes back as pandas scalars, which `get_coord`
     would keep as an object array; numpy scalars make the coordinate a
     datetime64 one, as the patch path builds it.
@@ -284,10 +298,8 @@ def _row_range(row: Mapping, dim: str) -> tuple[Any, Any, Any] | None:
             value = value.to_timedelta64()
         values.append(value)
     lo, hi, step = values
-    if step < np.zeros((), dtype=np.asarray(step).dtype):
-        # the envelope orders values, not samples; a descending
-        # coordinate's start is its maximum, which the row does not say
-        return None
+    if step == np.zeros((), dtype=np.asarray(step).dtype):
+        return None  # a zero step is not a range
     stored = row.get(f"_{dim}_coord_dtype")
     if not (isinstance(stored, str) and np.issubdtype(np.dtype(stored), np.number)):
         return lo, hi, step
@@ -295,8 +307,7 @@ def _row_range(row: Mapping, dim: str) -> tuple[Any, Any, Any] | None:
     # coordinate must be cast back. That is only right when the values
     # are the file's own: a unit conversion made them float in truth,
     # and past 2**53 a float cannot have held the integer exactly.
-    source_units = row.get(f"_{dim}_units_source")
-    if not _is_null(source_units) and source_units != row.get(f"_{dim}_units"):
+    if _units_converted(row, dim):
         return None
     dtype = np.dtype(stored)
     kind = dtype.type
@@ -306,6 +317,42 @@ def _row_range(row: Mapping, dim: str) -> tuple[Any, Any, Any] | None:
     if np.issubdtype(kind, np.integer) and max(abs(lo), abs(hi)) > 2**53:
         return None
     return kind(lo), kind(hi), kind(step)
+
+
+def _units_converted(row: Mapping, dim: str) -> bool:
+    """Whether the row's envelope was converted from the file's own units."""
+    source_units = row.get(f"_{dim}_units_source")
+    return not _is_null(source_units) and source_units != row.get(f"_{dim}_units")
+
+
+def coord_from_row(row: Mapping, dim: str, units=None):
+    """
+    The evenly sampled coordinate a row states for ``dim``, or None.
+
+    The exact grid a row carries rebuilds the coordinate the file holds,
+    either way it runs; the whole-tick envelope only approximates a
+    fractional step and states no direction. The grid counts ticks in the
+    file's units and dtype, so a unit-converted row, or one whose plan
+    states a placeholder float dtype, is rebuilt from its envelope alone.
+    """
+    values = _row_values(row, dim)
+    if values is None:
+        return None
+    lo, hi, step = values
+    grid = row.get(f"_{dim}_grid")
+    ticks = np.asarray(lo).dtype.kind in "iuMm"
+    if isinstance(grid, tuple) and ticks and not _units_converted(row, dim):
+        *terms, length = grid
+        start = hi if terms[0] < 0 else lo
+        return CoordRange(
+            start=start,
+            shape=(length,),
+            units=units,
+            **dict(zip(_EXACT_GRID_FIELDS, terms)),
+        )
+    if step < np.zeros((), dtype=np.asarray(step).dtype):
+        return None
+    return get_coord(start=lo, stop=hi + step, step=step, units=units)
 
 
 @dataclass
@@ -529,15 +576,14 @@ class PatchAssembler:
         dims = tuple(str(row["dims"]).split(","))
         coord_map = {}
         for dim in dims:
-            envelope = _row_range(row, dim)
-            if envelope is None:
-                return None
-            lo, hi, step = envelope
             # a coordinate with no units is NaN in a frame, not None,
             # and NaN would build a dimensionless quantity the patch
             # path does not have.
             units = None if _is_null(u := row.get(f"_{dim}_units")) else u
-            coord_map[dim] = get_coord(start=lo, stop=hi + step, step=step, units=units)
+            coord = coord_from_row(row, dim, units=units)
+            if coord is None:
+                return None
+            coord_map[dim] = coord
         coords = get_coord_manager(coord_map, dims=dims)
         return _MemberMeta(dims, coords, _attrs_from_row(row, dims))
 

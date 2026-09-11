@@ -1005,9 +1005,9 @@ class TestSplitGapsAndWrite:
             gapped_patch.split_gaps(dim="bob")
 
     def test_write_gapped_raises_by_default(self, gapped_patch, tmp_path):
-        """Writing a gapped patch without split=True raises."""
+        """A format which cannot store gaps refuses a gapped patch."""
         with pytest.raises(ParameterError, match="split=True"):
-            dc.write(gapped_patch, tmp_path / "gapped.h5", "dasdae")
+            dc.write(gapped_patch, tmp_path / "gapped.h5", "dasdae", file_version="1")
 
     def test_write_split_round_trip(self, gapped_patch, tmp_path):
         """split=True writes contiguous patches that round trip exactly."""
@@ -1164,7 +1164,9 @@ class TestPlannedSpoolWriteGuard:
     def test_write_raises_without_split(self, gapped_planned_spool, tmp_path):
         """Writing a gapped planned spool raises the documented error."""
         with pytest.raises(ParameterError, match="split"):
-            dc.write(gapped_planned_spool, tmp_path / "out.h5", "DASDAE")
+            dc.write(
+                gapped_planned_spool, tmp_path / "out.h5", "DASDAE", file_version="1"
+            )
 
     def test_write_split_true(self, gapped_planned_spool, tmp_path):
         """split=True writes each contiguous section as its own patch."""

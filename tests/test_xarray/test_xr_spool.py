@@ -457,7 +457,7 @@ class TestToXarrayReadArray:
     def override_calls(self):
         """Give DASDAE a counting read_array override."""
         from dascore.io.core import FiberIO  # noqa: PLC0415
-        from dascore.io.dasdae.core import DASDAEV1  # noqa: PLC0415
+        from dascore.io.dasdae.core import DASDAEV2  # noqa: PLC0415
 
         calls = []
 
@@ -472,17 +472,34 @@ class TestToXarrayReadArray:
         # method back as an own class attribute rather than remove it,
         # and DASDAE has an override of its own to hand back afterwards.
         missing = object()
-        stored = DASDAEV1.__dict__.get("read_array", missing)
-        DASDAEV1.read_array = read_array
+        stored = DASDAEV2.__dict__.get("read_array", missing)
+        DASDAEV2.read_array = read_array
         yield calls
         if stored is missing:
-            del DASDAEV1.read_array
+            del DASDAEV2.read_array
         else:
-            DASDAEV1.read_array = stored
+            DASDAEV2.read_array = stored
 
     def _leaf(self, tree):
         """The first dataset holding a data variable."""
         return next(node for node in tree.subtree if "data" in node.dataset)
+
+    def test_mixed_unit_members_merge(self, tmp_path):
+        """Members spelling one distance in metres and feet join as chunk does.
+
+        Their rows state an integer and a float coordinate; the lazy tree
+        builds both in the plan's units so the segments share a dtype.
+        """
+        metres = dc.get_example_patch().set_units(distance="m")
+        dist = metres.get_coord("distance")
+        span = float(dist.max() - dist.min() + dist.step)
+        feet = metres.update_coords(distance=(dist.data + span) / 0.3048)
+        feet = feet.set_units(distance="ft")
+        dc.write(metres, tmp_path / "m.h5", "dasdae")
+        dc.write(feet, tmp_path / "ft.h5", "dasdae")
+        spool = dc.spool(tmp_path).update()
+        out = self._leaf(spool.io.to_xarray(dim="distance"))["data"].data.compute()
+        assert np.array_equal(out, spool.chunk(distance=None)[0].data)
 
     def test_fast_path_loads_blocks(
         self, dasdae_directory, override_calls, monkeypatch
@@ -658,6 +675,23 @@ class TestToXarrayLazyCoords:
     def _leaf(self, tree):
         """The first dataset holding a data variable."""
         return next(node for node in tree.subtree if "data" in node.dataset)
+
+    def test_mixed_unit_members_merge(self, tmp_path):
+        """Members spelling one distance in metres and feet join as chunk does.
+
+        Their rows state an integer and a float coordinate; the lazy tree
+        builds both in the plan's units so the segments share a dtype.
+        """
+        metres = dc.get_example_patch().set_units(distance="m")
+        dist = metres.get_coord("distance")
+        span = float(dist.max() - dist.min() + dist.step)
+        feet = metres.update_coords(distance=(dist.data + span) / 0.3048)
+        feet = feet.set_units(distance="ft")
+        dc.write(metres, tmp_path / "m.h5", "dasdae")
+        dc.write(feet, tmp_path / "ft.h5", "dasdae")
+        spool = dc.spool(tmp_path).update()
+        out = self._leaf(spool.io.to_xarray(dim="distance"))["data"].data.compute()
+        assert np.array_equal(out, spool.chunk(distance=None)[0].data)
 
     def test_time_coordinate_is_lazy(self, random_spool):
         """An evenly sampled merged time coordinate gets the lazy index."""

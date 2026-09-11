@@ -538,9 +538,9 @@ def build_coord_clause(
         return
 
     min_col, max_col = {
-        "time": ("min_ns", "max_ns"),
-        "dur": ("min_ns", "max_ns"),
-        "num": ("min_num", "max_num"),
+        "time": ("min_int", "max_int"),
+        "dur": ("min_int", "max_int"),
+        "num": ("min_float", "max_float"),
         "str": ("min_str", "max_str"),
     }[kind]
     conditions = ["pc.coord_name = ?"]
@@ -622,7 +622,7 @@ def _build_where(
 
 
 # typed coord_defs envelope-minimum column per value kind
-_COORD_MIN_COLUMNS = {"num": "min_num", "time": "min_ns", "str": "min_str"}
+_COORD_MIN_COLUMNS = {"num": "min_float", "time": "min_int", "str": "min_str"}
 # the two conventional dims cached as columns on the patches table
 _HOT_COORDS = ("time", "distance")
 
@@ -653,7 +653,7 @@ def _order_clause(
             # coordinate kinds sort by their own minimum after absolute times.
             column = (
                 f"COALESCE({column}, (SELECT "
-                "COALESCE(cd.min_ns, cd.min_num, cd.min_str) "
+                "COALESCE(cd.min_int, cd.min_float, cd.min_str) "
                 "FROM patch_coords pc JOIN coord_defs cd "
                 "ON cd.coord_def_id = pc.coord_def_id "
                 "WHERE pc.patch_id = p.patch_id AND pc.coord_name = ?))"

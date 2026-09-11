@@ -953,6 +953,9 @@ class FiberIO:
     input_type: Literal["file", "directory"] = "file"
     # True when a single resource can hold more than one patch.
     multi_patch_write: bool = False
+    # True when a written patch may keep gapped (segmented) dimensional
+    # coordinates; otherwise write splits or refuses them.
+    segmented_write: bool = False
 
     manager = _FiberIOManager(FIBER_IO_GROUP)
 
@@ -2072,28 +2075,35 @@ def is_directory_format(path) -> bool:
     return True
 
 
-def _resolves_assembled_patches(spool) -> bool:
+def _may_hold_gaps(spool) -> bool:
     """
-    Return True when the spool can produce patches that are not literal
-    persisted file reads (live patches or plan-assembled outputs).
+    Return True when the spool can produce a patch with gapped coordinates.
 
-    Persisted patches are always contiguous, so purely file-backed
-    spools skip gap inspection; plan resolvers can assemble several
-    sources across a real gap into a segmented coordinate.
+    Live patches and plan-assembled outputs can carry a segmented
+    coordinate, and so can a file read from a format which stores one
+    (`segmented_write`); every other file read is contiguous, so a spool
+    of those skips gap inspection rather than loading every patch.
     """
     if getattr(spool, "has_live_patches", False):
         return True
     catalog = getattr(spool, "_catalog", None)
     resolver = getattr(catalog, "resolver", None)
-    return bool(getattr(resolver, "plan_entries", dict)())
+    if getattr(resolver, "plan_entries", dict)():
+        return True
+    df = spool.get_contents()
+    sources = set(zip(df.get("source_format", ()), df.get("source_version", ())))
+    manager = FiberIO.manager
+    return any(
+        manager.get_fiberio(format=name, version=version).segmented_write
+        for name, version in sources
+    )
 
 
 def _maybe_split_gapped_patches(spool, fiber_io, split):
     """Handle patches whose dimensional coords contain gaps before writing."""
-    # Gap inspection depends on what the spool resolves, not on where
-    # its ultimate members live: only literal file reads are always
-    # contiguous (gapped patches are never persisted).
-    if not _resolves_assembled_patches(spool):
+    # a destination which stores gaps needs no inspection, which would
+    # otherwise load every patch of a file-backed spool at once
+    if (fiber_io.segmented_write and not split) or not _may_hold_gaps(spool):
         return spool
 
     def _has_gaps(patch):
@@ -2108,10 +2118,11 @@ def _maybe_split_gapped_patches(spool, fiber_io, split):
         return spool
     if not split:
         msg = (
-            "Cannot write patches whose dimensional coordinates contain "
-            "gaps (segmented coordinates); a written patch must be "
-            "contiguous. Pass split=True to write each contiguous section "
-            "as its own patch, or split explicitly with patch.split_gaps()."
+            f"Format {fiber_io.name} cannot write patches whose dimensional "
+            "coordinates contain gaps (segmented coordinates); its patches "
+            "must be contiguous. Pass split=True to write each contiguous "
+            "section as its own patch, or split explicitly with "
+            "patch.split_gaps()."
         )
         raise ParameterError(msg)
     patches = []
@@ -2155,12 +2166,12 @@ def write(
         Optionally specify the version of the file, else use the latest
         version for the format.
     split
-        A written patch must have contiguous (non-gapped) coordinates.
         If True, patches whose dimensional coordinates contain gaps
         (segmented coordinates, e.g. from merging nearly-contiguous data)
         are split into contiguous patches before writing; this requires a
         format which supports multiple patches per file. If False (default)
-        such patches raise a
+        a format which stores gapped patches (DASDAE version 2) writes them
+        whole and any other raises a
         [`ParameterError`](`dascore.exceptions.ParameterError`).
 
     Raises
