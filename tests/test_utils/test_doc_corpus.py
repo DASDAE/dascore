@@ -76,6 +76,7 @@ class TestAuthoredDocuments:
             ("0.2.0rc1", "v0.2.0rc1"),
             ("0.2.0.dev4+gabc1234.d20260911", "abc1234"),
             ("0.2.0.dev4", "dev"),
+            ("0.0.0", "dev"),
         ],
     )
     def test_hosted_images(self, sources, monkeypatch, version, ref):

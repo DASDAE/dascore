@@ -291,7 +291,7 @@ def _image_ref():
     if commit := re.search(r"\+g([0-9a-f]+)", version):
         return commit[1]
     public = version.split("+", 1)[0]
-    return "dev" if ".dev" in public else f"v{public}"
+    return "dev" if ".dev" in public or public == "0.0.0" else f"v{public}"
 
 
 def _markdown(text, path, aliases, authored):
