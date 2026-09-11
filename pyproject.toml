@@ -113,6 +113,7 @@ docs = [
 
 test = [
     "build",
+    "jinja2",  # documentation-link regression tests import the website renderer
     "markdown-it-py",
     "aiohttp",
     # A reference array API implementation used to catch numpy-only code.
