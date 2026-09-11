@@ -227,9 +227,14 @@ class TestConstruction:
 class TestProperties:
     """Tests for basic properties of segmented coords."""
 
-    def test_step_is_none(self, float_gap_coord):
-        """Segmented coords report no single step."""
-        assert float_gap_coord.step is None
+    def test_step_is_the_common_step(self, float_gap_coord):
+        """Runs of one step report it; runs of different steps report none."""
+        assert float_gap_coord.step == 1.0
+        mixed = concat_coords(
+            get_coord(start=0.0, stop=5.0, step=1.0),
+            get_coord(start=8.0, stop=13.0, step=0.5),
+        )
+        assert mixed.step is None
 
     def test_not_evenly_sampled(self, float_gap_coord):
         """Segmented coords are never evenly sampled."""

@@ -1447,12 +1447,19 @@ class TestCoordRange:
         assert coord1.shape == (1,)
 
     def test_monotonic_with_sampling(self):
-        """Ensure init'ing monotonic array with sampling also works."""
-        sample_rate = 1_000
-        t_array = np.linspace(0.0, 1, 1000)
-        sample_rate = 1 / sample_rate
-        out = get_coord(data=t_array, step=sample_rate)
+        """Values on the declared grid make a range of that step."""
+        step = 1 / 1_000
+        t_array = np.arange(1000) * step
+        out = get_coord(data=t_array, step=step)
+        assert isinstance(out, CoordRange)
         assert out.shape == out.data.shape == (len(out),)
+        assert out.step == step
+
+    def test_off_grid_values_with_step_raise(self):
+        """A declared step is a claim the values must meet."""
+        # linspace's spacing is 1/999, not the 1/1000 declared
+        with pytest.raises(CoordError, match="not on a grid"):
+            get_coord(data=np.linspace(0.0, 1, 1000), step=1 / 1_000)
 
     def test_len_one_array_like_start_no_deprecation(self):
         """Array-like scalar start should not emit numpy scalar conversion warning."""

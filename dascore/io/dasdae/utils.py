@@ -374,7 +374,11 @@ def _read_coord(node, name, attrs2, snap):
         return get_coord(start=start, stop=stop, step=node_step, units=units)
     array = _read_array(node)
     if snap or np.ndim(array) != 1:
-        return get_coord(data=array, units=units, step=step)
+        # A stored nominal step is a grid claim the values must meet, which
+        # a legacy file's jittered values need not; it names the spacing
+        # only for a single sample, where the values cannot.
+        single = np.ndim(array) == 1 and len(array) == 1
+        return get_coord(data=array, units=units, step=step if single else None)
     return get_exact_coord(array, units=units)
 
 
