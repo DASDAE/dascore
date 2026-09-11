@@ -1,12 +1,203 @@
-"""Utilities for detecting coordinate gaps and constructing cell edges."""
+"""
+One gap contract: a tolerance, its predicate, the sweep, and mesh edges.
+
+A gap is a spacing wider than a sampling step allows. Every place DASCore
+asks the question (a coordinate's discontinuities, a spool's chunk plan
+and gap report, a waterfall's painted seams) states its tolerance in its
+own spelling, converts it here, and gets one verdict for one
+``(spacing, step, tolerance)``.
+"""
 
 from __future__ import annotations
 
 import warnings
+from dataclasses import dataclass
+from datetime import timedelta
+from typing import Any
 
 import numpy as np
+import pandas as pd
 
-from dascore.utils.time import is_datetime64, is_timedelta64, to_float
+from dascore.exceptions import ParameterError, UnitError
+from dascore.units import Quantity, is_data_size, is_percent
+from dascore.utils.time import is_datetime64, is_timedelta64, to_float, to_timedelta64
+
+# The default continuity tolerance, in samples; looser values warn when
+# they force merges (#662).
+DEFAULT_TOLERANCE = 1.5
+
+
+def _check_tolerance_value(value, name, shown=None, *, allow_infinite=False):
+    """
+    Reject a tolerance no gap could be measured against.
+
+    An infinite sample count is a coherent request (no boundary is ever a
+    gap) but an infinite distance is not a distance, so only the count is
+    allowed to be one.
+    """
+    shown = value if shown is None else shown
+    # One tolerance, not one per patch: a one-element array passes every
+    # test below and then broadcasts through the gap comparison.
+    if np.asarray(value).ndim:
+        msg = (
+            f"The tolerance for {name!r} must be a single value, got an "
+            f"array of {np.asarray(value).size}."
+        )
+        raise ParameterError(msg)
+    try:
+        null = bool(pd.isnull(value))
+        # A bare 0 would make numpy cast the timedelta to a generic unit.
+        zero = to_timedelta64(0) if is_timedelta64(value) else 0
+        negative = not null and value < zero
+    except TypeError:
+        msg = (
+            f"The tolerance for {name!r} must be a sample count, a quantity, "
+            f"or a timedelta, got {shown!r}. A unit-bearing string becomes a "
+            "quantity with dascore.get_quantity."
+        )
+        raise ParameterError(msg) from None
+    if null or (not allow_infinite and not np.isfinite(value)):
+        msg = f"The tolerance for {name!r} must be finite, got {shown}."
+        raise ParameterError(msg)
+    if negative:
+        msg = f"The tolerance for {name!r} must not be negative, got {shown}."
+        raise ParameterError(msg)
+
+
+@dataclass(frozen=True)
+class GapTolerance:
+    """
+    How far past one step a spacing may reach before it is a gap.
+
+    Two constructors, one predicate. ``samples(k)`` allows ``k`` steps
+    between neighbouring samples (``k = 1`` is contiguity); ``absolute(q)``
+    allows one step plus ``q`` in the coordinate's own units, so the excess
+    over the step is what is bounded. An absolute quantity or timedelta is
+    resolved into the coordinate's scalar where the units are known
+    (`resolve`); until then `is_gap` cannot be asked of it.
+
+    Examples
+    --------
+    >>> from dascore.utils.gaps import GapTolerance
+    >>> tol = GapTolerance.samples(1.5)
+    >>> bool(tol.is_gap(2.0, step=1.0)), bool(tol.is_gap(1.4, step=1.0))
+    (True, False)
+    >>> GapTolerance.absolute(0.5).is_gap(1.6, step=1.0)
+    np.True_
+    """
+
+    # exactly one is set: the allowed spacing in steps, or in units
+    count: float | None = None
+    excess: Any = None
+
+    def __post_init__(self):
+        if (self.count is None) == (self.excess is None):
+            msg = "A GapTolerance is a sample count or an absolute excess, not both."
+            raise ParameterError(msg)
+
+    @classmethod
+    def samples(cls, count) -> GapTolerance:
+        """A spacing is a gap past ``count`` steps."""
+        return cls(count=float(count))
+
+    @classmethod
+    def absolute(cls, excess) -> GapTolerance:
+        """A spacing is a gap past one step plus ``excess``, in coordinate units."""
+        return cls(excess=excess)
+
+    @classmethod
+    def from_user(cls, tolerance, name: str = "tolerance") -> GapTolerance:
+        """
+        Read a tolerance as the public entry points spell it.
+
+        A number is a multiple of the sampling interval; a quantity or
+        timedelta states an absolute excess in the coordinate's units. A
+        dimensionless quantity is the multiple it spells out.
+        """
+        if isinstance(tolerance, GapTolerance):
+            return tolerance
+        if isinstance(tolerance, timedelta) or is_timedelta64(tolerance):
+            tolerance = to_timedelta64(tolerance)
+            _check_tolerance_value(tolerance, name)
+            return cls(excess=tolerance)
+        if isinstance(tolerance, Quantity):
+            if is_data_size(tolerance):
+                msg = (
+                    f"Cannot use a tolerance of {tolerance} for {name!r}: a data "
+                    "size does not measure a gap along a coordinate."
+                )
+                raise UnitError(msg)
+            if is_percent(tolerance):
+                msg = (
+                    f"Cannot use a tolerance of {tolerance} for {name!r}: a "
+                    "percentage is neither a sample count nor a length. Pass the "
+                    "count itself, or a length in the coordinate's units."
+                )
+                raise UnitError(msg)
+            if not tolerance.dimensionless:
+                _check_tolerance_value(tolerance.magnitude, name, shown=tolerance)
+                return cls(excess=tolerance)
+            tolerance = float(tolerance.m_as("dimensionless"))
+        _check_tolerance_value(tolerance, name, allow_infinite=True)
+        return cls(count=float(tolerance))
+
+    def is_gap(self, delta, step):
+        """
+        Whether each spacing ``delta`` is a gap against sampling ``step``.
+
+        Both are magnitudes or signed values in the coordinate's scalar
+        (an absolute tolerance must already be resolved). An unknown step
+        (NaN) is never a gap against a sample count, and against an
+        absolute excess the step counts as nothing.
+        """
+        delta = np.abs(np.asarray(delta))
+        step = np.abs(np.asarray(step))
+        if self.count is not None:
+            with np.errstate(invalid="ignore"):
+                return delta > step * self.count
+        margin = np.where(pd.isnull(step), 0, step) + self.excess
+        return delta > margin
+
+
+def gap_boundaries(start, stop, step, tolerance: GapTolerance):
+    """
+    Locate the gaps between value-ordered runs.
+
+    Each row is a run: its first and last value and its step. Returns
+    ``(order, reach, has_gap)`` over the start-ordered rows. ``reach`` is
+    the furthest stop seen *before* each row, so an overlapping or fully
+    nested row can never open a gap behind it, and ``has_gap`` marks each
+    row whose start clears that reach by more than the tolerance allows.
+    The first row has nothing behind it and never reports a gap.
+
+    Arrays rather than a frame, and an explicit first-row mask rather
+    than ``shift``, whose NaN fill would upcast integer values to float:
+    ``reach`` is a reported value, not just a comparand.
+    """
+    start, stop, step = (np.asarray(x) for x in (start, stop, step))
+    order = np.argsort(start)
+    starts, stops = start[order], stop[order]
+    # runs are value-ordered regardless of coordinate orientation, so
+    # the continuity margin uses the step magnitude
+    steps = np.abs(step[order])
+    reach = np.empty_like(stops)
+    reach[:1] = stops[:1]
+    np.maximum.accumulate(stops[:-1], out=reach[1:])
+    # Measure the distance from the reach rather than comparing against
+    # `reach + step * tolerance`: a float margin promotes that sum, and
+    # an integer coordinate past 2**53 rounds both endpoints together,
+    # hiding the gap. Only rows past the reach are measured: a row which
+    # starts at or before it cannot open a gap, and subtracting there
+    # would wrap an unsigned value into an enormous phantom one.
+    has_gap = np.zeros(len(starts), dtype=bool)
+    ahead = starts > reach
+    if ahead.any():
+        has_gap[ahead] = tolerance.is_gap(starts[ahead] - reach[ahead], steps[ahead])
+    has_gap[:1] = False
+    return order, reach, has_gap
+
+
+# --- mesh edges for plotting
 
 
 def _to_numeric(values):
@@ -32,28 +223,28 @@ def is_monotonic_and_finite(values) -> bool:
     return bool(not len(diffs) or np.all(diffs > 0) or np.all(diffs < 0))
 
 
-def get_gap_edges(values, gap_factor: float | None = None):
+def get_gap_edges(coord, tolerance: GapTolerance | None = None):
     """
-    Return cell edges and coordinate gap locations.
+    Return cell edges and gap locations for drawing a coordinate as cells.
 
-    Timedelta coordinates are converted to seconds. Datetime coordinates are
-    retained so plotting libraries with datetime support can convert them.
-    When ``gap_factor`` is None, adjacent cell edges meet halfway between
-    coordinate centers. Otherwise, intervals larger than ``gap_factor`` times
-    the median interval are expanded into a gap.
+    Cells follow the centre convention: an edge sits halfway between
+    neighbouring values, and across a gap each side gets a cell one step
+    wide instead. The step is the coordinate's declared one when it has
+    one and the median spacing otherwise. Timedelta coordinates are
+    converted to seconds; datetimes are kept for plotting libraries which
+    convert them.
 
     Parameters
     ----------
-    values
-        One-dimensional, monotonic coordinate centers.
-    gap_factor
-        Factor of the median interval above which an interval is a gap. If
-        None, no intervals are considered gaps.
+    coord
+        A one-dimensional monotonic coordinate (or its values).
+    tolerance
+        Which spacings are gaps. None means none are.
 
     Returns
     -------
     tuple[np.ndarray, np.ndarray]
-        Cell edges and a Boolean array marking gaps after each input value.
+        Cell edges and a Boolean array marking a gap after each value.
 
     See Also
     --------
@@ -61,7 +252,8 @@ def get_gap_edges(values, gap_factor: float | None = None):
     other gap question: where whole patches fail to meet, read from the
     index rather than from a coordinate's values.
     """
-    values = _normalize_coord_values(values)
+    declared = getattr(coord, "step", None)
+    values = _normalize_coord_values(getattr(coord, "values", coord))
     if len(values) == 1:
         msg = "Singleton coordinate has no inferred cell width; using a default width."
         warnings.warn(msg, UserWarning, stacklevel=2)
@@ -72,14 +264,15 @@ def get_gap_edges(values, gap_factor: float | None = None):
         return np.asarray([values[0] - step / 2, values[0] + step / 2]), np.zeros(
             0, dtype=bool
         )
-
     diffs = np.diff(values)
     numeric_diffs = _to_numeric(diffs)
+    if declared is None or pd.isnull(declared):
+        step = np.median(np.abs(diffs))
+    else:
+        step = np.abs(_normalize_coord_values(declared)[()])
     gap_mask = np.zeros(len(diffs), dtype=bool)
-    if gap_factor is not None:
-        representative_interval = np.median(np.abs(numeric_diffs))
-        gap_mask = np.abs(numeric_diffs) > representative_interval * gap_factor
-
+    if tolerance is not None:
+        gap_mask = tolerance.is_gap(numeric_diffs, _to_numeric(step))
     if not np.any(gap_mask):
         edges = np.concatenate(
             (
@@ -89,10 +282,8 @@ def get_gap_edges(values, gap_factor: float | None = None):
             )
         )
         return edges, gap_mask
-
-    representative_step = np.median(np.abs(diffs))
     direction = 1 if numeric_diffs[0] > 0 else -1
-    signed_step = direction * representative_step
+    signed_step = direction * step
     first_step = signed_step if gap_mask[0] else diffs[0]
     last_step = signed_step if gap_mask[-1] else diffs[-1]
     edges = [values[0] - first_step / 2]

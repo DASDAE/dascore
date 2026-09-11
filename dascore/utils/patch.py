@@ -33,7 +33,7 @@ from dascore.exceptions import (
     PatchCoordinateError,
     UnitError,
 )
-from dascore.units import carries_units, convert_units, get_quantity
+from dascore.units import get_quantity
 from dascore.utils.array_api import (
     asarray_like,
     backend_name,
@@ -51,12 +51,12 @@ from dascore.utils.attrs import (
 from dascore.utils.coordmanager import merge_coord_managers
 from dascore.utils.deprecate import deprecate
 from dascore.utils.docs import compose_docstring
+from dascore.utils.gaps import GapTolerance
 from dascore.utils.mapping import FrozenDict
 from dascore.utils.misc import (
     _apply_union_indexers,
     _get_nullish,
     _merge_tuples,
-    get_middle_value,
     iterate,
     to_object_array,
     validate_warn_level,
@@ -574,22 +574,6 @@ def _get_merge_dim(df) -> str | None:
     return dims_vary[dims_vary].index[0]
 
 
-def _middle_step(coords, dim, target_units):
-    """Return the middle member step expressed in the merged coord's units."""
-    steps = []
-    for manager in coords:
-        coord = manager.coord_map[dim]
-        step = coord.step
-        if pd.isnull(step):
-            continue
-        if target_units is not None and coord.units is not None:
-            step = convert_units(step, to_units=target_units, from_units=coord.units)
-        steps.append(step)
-    if not steps:
-        return None
-    return get_middle_value(np.asarray(steps))
-
-
 def _split_coord_merge_kwargs(merge_kwargs) -> tuple[dict, dict]:
     """Split spool merge kwargs into (attr kwargs, coord kwargs)."""
     merge_kwargs = dict(merge_kwargs or {})
@@ -609,11 +593,11 @@ def _get_merged_coord(
     The merged dimension coordinate is built by truth-preserving
     concatenation of the member coords (exactly contiguous members fuse to
     a plain range; recorded seams otherwise), then — when `snap_coords` —
-    simplified with bounded error: no value moves more than
-    `tolerance * step`, or than the tolerance itself when it is a
-    quantity or timedelta, which states the bound outright. Merges whose
-    gaps exceed that stay segmented (honestly non-uniform) rather than
-    being relabeled.
+    simplified with bounded error: no value moves more than the tolerance
+    allows, `tolerance` steps for a count or the excess itself for a
+    quantity or timedelta (see `dascore.utils.gaps.GapTolerance`). Merges
+    whose gaps exceed that stay segmented (honestly non-uniform) rather
+    than being relabeled.
     """
     from dascore.core.coords import concat_coords  # noqa: PLC0415
 
@@ -625,13 +609,8 @@ def _get_merged_coord(
         return merge_coord_managers(
             coords, dim=merge_dim, drop_conflicting=drop_conflicting
         )
-    step = _middle_step(coords, merge_dim, merged.units)
-    if snap_coords and carries_units(tolerance):
-        # A tolerance which states its own units needs no step: simplify
-        # reads it in the coordinate's units itself.
-        merged = merged.simplify(tolerance)
-    elif snap_coords and step is not None:
-        merged = merged.simplify(tolerance * np.abs(step))
+    if snap_coords:
+        merged = merged.simplify(GapTolerance.from_user(tolerance, merge_dim))
     # Passing the pre-built dim coord avoids materializing the members'
     # concatenated values only to discard them.
     return merge_coord_managers(

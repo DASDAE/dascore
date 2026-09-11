@@ -23,6 +23,7 @@ from dascore.core.coords import CoordRange, CoordSegmented
 from dascore.exceptions import ChunkError, CoordMergeError, ParameterError, UnitError
 from dascore.io.febus.core import FebusPatchAttrs
 from dascore.units import get_quantity
+from dascore.utils.gaps import GapTolerance
 from dascore.utils.misc import get_middle_value, suppress_warnings
 from dascore.utils.patch import _get_merged_coord
 from dascore.utils.patch_assembly import PatchAssembler, _match_merge_units
@@ -1461,15 +1462,15 @@ class TestQuantityTolerance:
             return dc.Patch(data=data, coords=coords, dims=("distance", "time"))
 
         # Steps within the sampling group tolerance, so all three patches
-        # share a cell; the holes are chosen so the default and a 1.53 s
-        # tolerance split at *different* boundaries.
+        # share a cell; the holes are chosen so the default (1.5 steps) and
+        # an excess of 0.51 s over the step split at *different* boundaries.
         first = _patch(t0, 1.0)
-        second = _patch(first.get_coord("time").max() + to_timedelta64(1.55), 1.04)
-        third = _patch(second.get_coord("time").max() + to_timedelta64(1.51), 1.0)
+        second = _patch(first.get_coord("time").max() + to_timedelta64(1.505), 1.0)
+        third = _patch(second.get_coord("time").max() + to_timedelta64(1.555), 1.04)
         spool = dc.spool([first, second, third])
         default = spool.chunk(time=None)
         with pytest.warns(UserWarning, match="force merging"):
-            absolute = spool.chunk(time=None, tolerance=get_quantity("1.53 s"))
+            absolute = spool.chunk(time=None, tolerance=get_quantity("0.51 s"))
         assert len(default) == len(absolute) == 2
         # the same count, but not the same split
         assert default[0].get_coord("time").max() != absolute[0].get_coord("time").max()
@@ -1484,10 +1485,8 @@ class TestQuantityTolerance:
         """
         out = random_spool.chunk(time=None, tolerance=get_quantity("2"))
         handed = out._catalog.resolver.merge_kwargs["tolerance"]
-        # a dimensionless quantity compares equal to the number it holds,
-        # so the type is what says which value was handed over
-        assert not isinstance(handed, dc.units.Quantity)
-        assert handed == 2.0
+        # a dimensionless quantity is the sample count it spells out
+        assert handed == GapTolerance.samples(2.0)
 
     def test_snap_bound_holds_at_the_tolerance(self, random_patch):
         """Simplifying under an absolute tolerance moves no value past it."""
@@ -1507,9 +1506,9 @@ class TestQuantityTolerance:
     def test_plan_records_normalized_tolerance(self, random_spool):
         """The plan records the tolerance it actually used."""
         plan = random_spool.chunk_plan(time=None, tolerance=get_quantity("2 s"))
-        assert plan.params["tolerance"] == get_quantity("2 s")
+        assert plan.params["tolerance"] == GapTolerance.absolute(get_quantity("2 s"))
         plan = random_spool.chunk_plan(time=None, tolerance=get_quantity("2"))
-        assert plan.params["tolerance"] == 2.0
+        assert plan.params["tolerance"] == GapTolerance.samples(2.0)
 
 
 class TestSizeChunk:

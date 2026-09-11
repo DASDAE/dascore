@@ -62,6 +62,7 @@ from dascore.utils.display import (
     span_text,
 )
 from dascore.utils.docs import compose_docstring, get_docstring
+from dascore.utils.gaps import GapTolerance
 from dascore.utils.misc import (
     _get_nullish,
     _maybe_array_to_slice,
@@ -71,6 +72,7 @@ from dascore.utils.misc import (
     all_close,
     all_diffs_close_enough,
     cached_method,
+    get_middle_value,
     glob_to_regex,
     is_strictly_monotonic,
     iterate,
@@ -3063,6 +3065,14 @@ class CoordSegmented(BaseCoord):
         """Coerce the tolerance to the dtype expected for value deviations."""
         if tolerance is None:
             tolerance = 0
+        if isinstance(tolerance, GapTolerance):
+            # a count of steps is measured against the runs' own step; an
+            # absolute excess is already a deviation in coordinate units
+            steps = [abs(x.step) for x in self.segments if not _is_null(x.step)]
+            if tolerance.count is None:
+                tolerance = tolerance.excess
+            else:
+                tolerance = tolerance.count * get_middle_value(steps) if steps else 0
         stated = None
         if is_timedelta64(tolerance) and not dtype_time_like(self.dtype):
             # A timedelta against a numeric coordinate is a length in
