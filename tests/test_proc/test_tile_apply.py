@@ -676,3 +676,13 @@ class TestPhysicalTileBounds:
             tiles.get_array("_tile_index_distance"),
         )
         assert converted.reassemble().equals(patch, close=True)
+
+    def test_arbitrary_permutation_without_bounds(self, patch):
+        """Dropping display bounds permits reordering while private indices remain."""
+        tiles = patch.tile_apply(identity, mode="stack", time=64, samples=True)
+        count = len(tiles.get_coord("time"))
+        permutation = np.roll(np.arange(count), 1)
+        reordered = tiles.drop_coords("time_start", "time_stop").order(
+            time=permutation, samples=True
+        )
+        assert reordered.reassemble().equals(patch, close=True)

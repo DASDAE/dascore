@@ -1700,3 +1700,23 @@ class TestCellBounds:
         cm = get_coord_manager(cell_coords, dims=("distance",))
         coords = {name: (cm.dim_map[name], coord.set_units(None)) for name, coord in cm}
         assert get_coord_manager(coords, dims=cm.dims)
+
+    def test_arbitrary_permutation_rejected(self, cell_coords):
+        """Reserved pairs require monotonic order, including after row selection."""
+        cm = get_coord_manager(cell_coords, dims=("distance",))
+        with pytest.raises(ValidationError, match="same direction"):
+            cm.isel(distance=[1, 0, 2])
+
+
+class TestSnapAuxiliary:
+    """Snapping retains the association of non-dimensional coordinates."""
+
+    def test_auxiliary_association(self):
+        """An irregular auxiliary can be snapped without becoming a dimension."""
+        cm = get_coord_manager(
+            {"x": [0.0, 1.0, 2.0], "latitude": ("x", [0.0, 1.1, 2.0])}, dims=("x",)
+        )
+        out, _ = cm.snap("latitude")
+        assert out["latitude"].evenly_sampled
+        assert out.dim_map["latitude"] == ("x",)
+        assert out.dims == ("x",)

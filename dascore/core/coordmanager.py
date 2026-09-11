@@ -530,7 +530,10 @@ class CoordManager(RichRepr, DascoreBaseModel):
                 updates[coord_name] = snapped
         if not updates:
             return cm, array
-        out = cm._update_grid(*(name for name in updates if name in cm.dims), **updates)
+        out = cm._update_grid(
+            *(name for name in updates if name in cm.dims),
+            **{name: (cm.dim_map[name], coord) for name, coord in updates.items()},
+        )
         assert out.shape == self.shape
         return out, array
 

@@ -48,7 +48,7 @@ The [adaptive spectral filter](adaptive_spectral_filter.qmd) uses the same machi
 
 ## Tiles, kept
 
-With `mode="stack"`, tiles remain separate. Windowed dimensions become tile-center axes, `{dim}_start` and `{dim}_stop` record physical cell edges in the dimension's units, and tile samples use `{dim}_offset`. Process the stack as a patch, then [`reassemble`](`dascore.Patch.reassemble`) it.
+With `mode="stack"`, tiles remain separate. Windowed dimensions become tile-center axes, `{dim}_start` and `{dim}_stop` record physical cell edges in the dimension's units, and tile samples use `{dim}_offset`. Process the stack as a patch, then [`reassemble`](`dascore.Patch.reassemble`) it. Paired physical bounds require monotonic row order; explicitly drop the public bounds before an arbitrary tile permutation. Private reconstruction indices follow the rows and still allow reassembly.
 
 ```{python}
 tiles = patch.tile_apply(lambda x: x, mode="stack", time=0.02, distance=40)

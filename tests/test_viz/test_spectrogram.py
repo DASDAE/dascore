@@ -7,6 +7,7 @@ import numpy as np
 import pytest
 
 from dascore.exceptions import ParameterError
+from dascore.utils.plotting import _get_plot_values
 from dascore.viz.spectrogram import _get_other_dim, _spectrogram_patch
 
 
@@ -156,3 +157,21 @@ class TestPlotSpectrogram:
             expected = power_2d.aggregate("distance", method="mean")
         expected = expected.squeeze()
         assert np.allclose(power.data, expected.data)
+
+    @pytest.mark.parametrize("window", [64, 512])
+    def test_overlapping_windows_stay_centred(self, random_patch, window):
+        """Overlap describes analysis support; displayed pixels retain hop centres."""
+        patch = random_patch.isel(distance=0)
+        power = _spectrogram_patch(
+            patch, "time", None, "frequency", time=window, samples=True
+        )
+        ax = patch.viz.spectrogram(time=window, samples=True)
+        assert len(ax.images) == 1
+        image = ax.images[0]
+        np.testing.assert_allclose(image.get_array(), power.data)
+        left, right = image.get_extent()[:2]
+        count = power.shape[power.dims.index("time")]
+        rendered = left + (np.arange(count) + 0.5) * ((right - left) / count)
+        expected = _get_plot_values(power.get_array("time"))
+        np.testing.assert_allclose(rendered, expected, rtol=0, atol=1e-10)
+        assert "time_start" in power.coords
