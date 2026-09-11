@@ -23,14 +23,14 @@ For a strictly monotonic one-dimensional array, [`CoordSegmented.from_array(...)
 
 ## Segmented coordinates
 
-`CoordSegmented` represents coordinate values as normal monotonic segments rather than flattening them into a single array or idealizing them as one range. Exact continuation points fuse automatically, while real sampling changes remain segment boundaries. The composite coordinate has `step=None` because no single step describes the whole coordinate.
+`CoordSegmented` represents coordinate values as normal monotonic segments rather than flattening them into a single array or idealizing them as one range. Exact continuation points fuse automatically, while real sampling changes remain segment boundaries. The composite coordinate reports a `step` only when every run declares the same one (its labels then follow one grid with positions missing between the runs) and `None` when its runs disagree; it is never `evenly_sampled`, and its summary carries no step, since a summary with a step rebuilds a range.
 
 There are two primary construction paths:
 
 - [`concat_coords(...)`](`dascore.core.coords.concat_coords`) combines already-known coordinate blocks, normalizes their ordering, and records non-contiguous boundaries.
-- `CoordSegmented.from_array(...)` detects uniform runs in one stored monotonic array. A difference belongs to a run when it equals a neighboring difference; isolated differences become seams.
+- `CoordSegmented.from_array(...)` detects uniform runs in one stored monotonic array. A difference belongs to a run when it equals a neighboring difference; isolated differences become seams. With `step` declared (as `get_coord(data=..., step=...)` does at every length), every spacing must be a whole number of steps or construction raises, each run of consecutive positions is a range of the step, and `missing()` counts the positions between runs. Past a thousand samples an array whose runs would outnumber a tenth of them keeps its values as one `CoordMonotonicArray` carrying the declared step, so `missing()` answers the same on both sides of that guard.
 
-[`get_discontinuities(...)`](`dascore.core.coords.BaseCoord.get_discontinuities`) reports segment boundaries without materializing the full coordinate. `kind="all"` returns every boundary and `kind="gaps"` keeps only boundaries whose excess spacing is greater than the requested tolerance.
+[`get_discontinuities(...)`](`dascore.core.coords.BaseCoord.get_discontinuities`) reports segment boundaries without materializing the full coordinate, and for a monotonic array every spacing that is not its declared step (its median spacing when it declares none). `kind="all"` returns every boundary and `kind="gaps"` keeps only the ones the tolerance calls gaps. The tolerance is a `GapTolerance` (`dascore.utils.gaps`): a bare number or quantity is an absolute excess over one step, `GapTolerance.samples(k)` counts steps. `Spool.chunk`, `get_gaps`, `get_coverage`, and `waterfall(gap_factor=)` apply the same predicate, so one spacing gets one verdict wherever it is asked.
 
 [`simplify(...)`](`dascore.core.coords.BaseCoord.simplify`) and [`snap(...)`](`dascore.core.coords.BaseCoord.snap`) make different promises. `simplify` may refit segments only when no value moves more than the supplied tolerance; `snap` forces one uniform range and has no bound on interior movement. With `tolerance=None` or `0`, `simplify` performs lossless simplification only.
 

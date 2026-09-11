@@ -193,10 +193,12 @@ def waterfall(
         at detected gaps; None bridges them with adjacent cells. Existing NaN
         or masked data use the same color. Applies only to ``pcolormesh``.
     gap_factor
-        Intervals larger than this multiple of the median are gaps. Must exceed 1,
-        even when ``gap_color`` is None and it has no visual effect. Mixed
-        sampling rates may classify coarser regions as gaps; increase this value
-        or plot or resample those regions separately.
+        Intervals larger than this many steps are gaps, measured against the
+        coordinate's declared step when it has one and its median spacing
+        otherwise (the rule `Spool.chunk` applies with `tolerance`). Must
+        exceed 1, even when ``gap_color`` is None and it has no visual
+        effect. Mixed sampling rates may classify coarser regions as gaps;
+        increase this value or plot or resample those regions separately.
     log
         If True, visualize the common logarithm of the absolute values of patch data.
         To avoid log(0), the abs(array) is cast to float64 and a small value
