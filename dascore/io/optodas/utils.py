@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import numpy as np
+
 import dascore as dc
 import dascore.core
 from dascore.core.coords import get_coord
@@ -86,6 +88,11 @@ def _read_opto_das(fi, distance=None, time=None, attr_cls=dc.PatchAttrs):
     cm, data = coords.select(array=data_node, distance=distance, time=time)
     if not data.size:
         return []
+    if "dataScale" in fi["header"]:
+        scale = float(unpack_scalar_h5_dataset(fi["header/dataScale"]))
+        # Storage scaling applies to floating-point data as well as integers.
+        dtype = np.result_type(data.dtype, np.float32)
+        data = data.astype(dtype, copy=False) * scale
     attrs["coords"] = cm.to_summary_dict()
     attrs["dims"] = cm.dims
     return [dc.Patch(data=data, coords=cm, attrs=attr_cls(**attrs))]
