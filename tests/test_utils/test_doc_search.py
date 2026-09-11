@@ -131,6 +131,39 @@ class TestIndex:
         identity = json.loads((directory / "identity.json").read_text(encoding="utf-8"))
         assert identity["engine"] == version("tantivy")
 
+    def test_native_failure(self, tmp_path, monkeypatch, engine, capsys):
+        """Native index errors produce a diagnostic and leave a recoverable cache."""
+        blocked = tmp_path / "not-a-directory"
+        blocked.write_text("occupied")
+        original = engine.Index
+
+        def blocked_index(schema, **kwargs):
+            return original(schema, path=str(blocked), reuse=False)
+
+        with dc.config_context(docs_cache_dir=tmp_path / "cache"):
+            with monkeypatch.context() as patcher:
+                patcher.setattr(engine, "Index", blocked_index)
+                assert main(["doc-search", "bandpass"]) == 1
+            captured = capsys.readouterr()
+            assert "Documentation search failed" in captured.err
+            assert "not-a-directory" in captured.err
+            assert not captured.out and "Traceback" not in captured.err
+            assert doc_search.search_documents("bandpass")
+
+    def test_keyword_spelling(self, tmp_path, monkeypatch):
+        """Results retain authored keyword case while filtering ignores it."""
+        source = tmp_path / "docs"
+        source.mkdir()
+        (source / "example.qmd").write_text(
+            "---\nkeywords: [MiXeD, Optical Distance]\n---\nExample topic."
+        )
+        monkeypatch.setattr(doc_corpus, "DOC_PATH", source)
+        with dc.config_context(docs_cache_dir=tmp_path / "cache"):
+            results = doc_search.search_documents(tag="mixed")
+            assert len(results) == 1
+            assert results[0]["id"] == "example"
+            assert results[0]["keywords"] == ["MiXeD", "Optical Distance"]
+
     def test_corpus_rebuild(self, search_cache):
         """Replacing the Markdown corpus also invalidates its search index."""
         expected = doc_search.search_documents("bandpass")

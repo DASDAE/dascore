@@ -62,7 +62,7 @@ def _index(engine, root: Path, manifest: dict):
             "title": record["title"],
             "kind": record["kind"],
             "aliases": " ".join(record["aliases"]),
-            "keywords": " ".join(tags),
+            "keywords": record["keywords"],
             "tags": tags,
             "body": body,
         }
@@ -104,7 +104,15 @@ def search_documents(
     engine = optional_import("tantivy", required_for="documentation search")
     with documentation_cache() as (root, manifest):
         # Finish the helper's index/reader lifetime before releasing the cache lock.
-        return _search_index(engine, _index(engine, root, manifest), query, tag, limit)
+        try:
+            return _search_index(
+                engine, _index(engine, root, manifest), query, tag, limit
+            )
+        except DocumentationError:
+            raise
+        except ValueError as exc:
+            # Tantivy translates native filesystem/index failures to ValueError.
+            raise DocumentationError(f"Documentation search failed: {exc}") from exc
 
 
 def _search_index(engine, index, query, tag, limit):
@@ -141,7 +149,7 @@ def _search_index(engine, index, query, tag, limit):
                 "id": document["identifier"][0],
                 "title": document["title"][0],
                 "kind": document["kind"][0],
-                "keywords": document["tags"],
+                "keywords": document["keywords"],
                 "excerpt": " ".join(excerpt.split()),
             }
         )
