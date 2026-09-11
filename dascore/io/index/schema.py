@@ -33,13 +33,15 @@ from typing import NamedTuple, get_args, get_type_hints
 # Version of the index schema, independent of dascore's version. Bump it
 # when an index written by an older dascore would be read wrongly rather
 # than merely incompletely -- including when what a *stored value* means
-# changes, not only when a column does. Version 17 links a segmented
-# coordinate to each of its runs; version 16 stored each range
-# coordinate's exact grid and named the envelope columns by storage type;
-# version 15 stored source coordinate and numeric attribute dtypes. Earlier
-# indexes lack the metadata required for reconstruction and are rebuilt
-# when opened.
-INDEX_VERSION = 17
+# changes, not only when a column does. When the new contents can be
+# derived from an old index's own rows, add an upgrade step to the backend
+# rather than forcing a rebuild. Version 18 counts patches and coordinate
+# variants; version 17 links a segmented coordinate to each of its runs;
+# version 16 stored each range coordinate's exact grid and named the
+# envelope columns by storage type; version 15 stored source coordinate and
+# numeric attribute dtypes. Version 17 upgrades in place; earlier indexes
+# are rebuilt when opened.
+INDEX_VERSION = 18
 # Identity string so any tool can sanity-check what it opened.
 WHAT_IS_THIS = "dascore_spool_index"
 
@@ -69,6 +71,8 @@ class MetaDataRow(NamedTuple):
     index_version: int
     dascore_version: str
     last_indexed_ns: int
+    # every patch in the index, maintained with each write
+    patch_count: int
 
 
 class SourceRow(NamedTuple):
@@ -216,6 +220,26 @@ class PatchCoordRow(NamedTuple):
     dtype: str  # source representation; shared definitions identify values
 
 
+class CoordVariantRow(NamedTuple):
+    """
+    A row of the coord_variants table: one per distinct stated coordinate.
+
+    Counts the whole-coordinate links (`run_index` 0) sharing a name,
+    dtype, kind, units and relativity, so coordinate discovery reads these
+    few rows rather than every link. Maintained in the transaction of each
+    write; `variant_key` is the other five as a JSON array, giving a tuple
+    with nullable members a unique identity.
+    """
+
+    variant_key: str
+    coord_name: str
+    dtype: str
+    value_kind: str
+    units: str | None
+    is_relative: bool | None
+    patch_count: int
+
+
 # The row class declaring each stored table.
 TABLE_ROWS = MappingProxyType(
     {
@@ -226,6 +250,7 @@ TABLE_ROWS = MappingProxyType(
         "attr_meta": AttrMetaRow,
         "coord_defs": CoordDefRow,
         "patch_coords": PatchCoordRow,
+        "coord_variants": CoordVariantRow,
     }
 )
 
@@ -290,6 +315,7 @@ TABLE_CONSTRAINTS = MappingProxyType(
             "FOREIGN KEY (patch_id) REFERENCES patches(patch_id) ON DELETE CASCADE",
             "FOREIGN KEY (coord_def_id) REFERENCES coord_defs(coord_def_id)",
         ),
+        "coord_variants": ("PRIMARY KEY (variant_key)",),
     }
 )
 

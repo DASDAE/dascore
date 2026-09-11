@@ -11,7 +11,7 @@ from threading import Barrier
 import pytest
 
 from dascore.exceptions import InvalidIndexError, InvalidIndexVersionError
-from dascore.io.index.backend import get_backend
+from dascore.io.index.backend import _UPGRADES, get_backend
 from dascore.io.index.schema import INDEX_VERSION, TABLES, TYPE_MAP
 
 
@@ -30,7 +30,7 @@ class TestSchemaDeclaration:
 
 
 class TestSchemaValidation:
-    """Existing files are validated without repair or implicit migration."""
+    """Existing files are validated, and upgraded only from known versions."""
 
     def test_unrelated_database_rejected(self, tmp_path):
         """A SQLite database belonging to another application is rejected."""
@@ -41,11 +41,24 @@ class TestSchemaValidation:
         with pytest.raises(InvalidIndexError, match="missing tables"):
             get_backend(path)
 
+    def test_missing_table_rejected(self, tmp_path):
+        """A current index missing one of its tables asks to be rebuilt."""
+        path = tmp_path / "index.sqlite3"
+        get_backend(path).close()
+        con = sqlite3.connect(path)
+        con.execute("DROP TABLE coord_variants")
+        con.commit()
+        con.close()
+        with pytest.raises(InvalidIndexError, match=r"missing tables \['coord_var"):
+            get_backend(path)
+
     def test_old_version_rejected(self, tmp_path):
-        """Prototype schemas require an explicit delete and rebuild."""
+        """A version older than any upgrade step requires a delete and rebuild."""
         path = tmp_path / "old.sqlite3"
         backend = get_backend(path)
-        backend._execute("UPDATE meta_data SET index_version = ?", (INDEX_VERSION - 1,))
+        backend._execute(
+            "UPDATE meta_data SET index_version = ?", (min(_UPGRADES) - 1,)
+        )
         backend.close()
         with pytest.raises(InvalidIndexVersionError, match="delete it and rebuild"):
             get_backend(path)
