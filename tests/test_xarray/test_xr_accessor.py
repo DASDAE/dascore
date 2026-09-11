@@ -25,8 +25,8 @@ def patch():
 
 @pytest.fixture(scope="module")
 def data_array(patch):
-    """That patch as a DataArray, which registers the accessor."""
-    return patch.io.to_xarray()
+    """That patch as a DataArray with materialized labels."""
+    return patch.io.to_xarray(lazy_coords=False)
 
 
 @pytest.fixture()
@@ -154,9 +154,9 @@ class TestLaziness:
         pytest.importorskip("dask")
         tree = random_spool.io.to_xarray()
         leaf = next(x for x in tree.subtree if "data" in x.dataset)["data"]
-        assert type(leaf.xindexes["time"]).__name__ == "TemporalRangeIndex"
+        assert type(leaf.xindexes["time"]).__name__ == "CoordIndex"
         out = leaf.dc.abs()
-        assert type(out.xindexes["time"]).__name__ == "TemporalRangeIndex"
+        assert type(out.xindexes["time"]).__name__ == "CoordIndex"
 
     def test_an_ordinary_array_keeps_its_eager_index(self, data_array):
         """Whether a coordinate is spelled out belongs to the object.
@@ -176,12 +176,12 @@ class TestLaziness:
         """A method which trims it is served lazily at its new bounds."""
         values = np.asarray(tree_leaf["time"].values)
         out = tree_leaf.dc.select(time=(None, values[100]))
-        assert type(out.xindexes["time"]).__name__ == "TemporalRangeIndex"
+        assert type(out.xindexes["time"]).__name__ == "CoordIndex"
         assert np.array_equal(np.asarray(out["time"].values), values[:101])
 
     def test_a_property_keeps_it_lazy_too(self, tree_leaf):
         """A property's value is converted like a method's result."""
-        assert type(tree_leaf.dc.T.xindexes["time"]).__name__ == "TemporalRangeIndex"
+        assert type(tree_leaf.dc.T.xindexes["time"]).__name__ == "CoordIndex"
 
     def test_a_coordinate_riding_a_dimension_is_left_alone(self, tree_leaf):
         """Only a coordinate which defines its dimension can index it.
@@ -194,7 +194,7 @@ class TestLaziness:
         with_aux = tree_leaf.assign_coords(aux_time=("time", values))
         out = with_aux.dc.abs()
         assert out.coords["aux_time"].dims == ("time",)
-        assert type(out.xindexes["time"]).__name__ == "TemporalRangeIndex"
+        assert type(out.xindexes["time"]).__name__ == "CoordIndex"
 
     def test_the_values_are_the_same_either_way(self, patch, lazy_data_array):
         """Laziness is about when the work happens, not what it produces."""
@@ -214,22 +214,22 @@ class TestLazyCoordinates:
 
     def test_the_index_is_lazy_to_begin_with(self, tree_leaf):
         """Otherwise the test below would prove nothing."""
-        assert type(tree_leaf.xindexes["time"]).__name__ == "TemporalRangeIndex"
+        assert type(tree_leaf.xindexes["time"]).__name__ == "CoordIndex"
 
     def test_converting_does_not_spell_out_the_labels(self, tree_leaf, monkeypatch):
-        """A range rebuilds from three numbers, not from every sample.
+        """The index hands back its coordinate, not every sample.
 
         The transform computes labels, so a conversion that never calls it keeps them
         lazy. The returned coordinate alone cannot prove this because evenly spaced
         materialized values also infer a range.
         """
         from dascore.core.coords import CoordRange  # noqa: PLC0415
-        from dascore.xarray.index import TemporalRangeTransform  # noqa: PLC0415
+        from dascore.xarray.index import CoordTransform  # noqa: PLC0415
 
         def _refuse(self, dim_positions):
             raise AssertionError("the labels were materialized")
 
-        monkeypatch.setattr(TemporalRangeTransform, "forward", _refuse)
+        monkeypatch.setattr(CoordTransform, "forward", _refuse)
         coord = tree_leaf.dc.to_patch().get_coord("time")
         assert isinstance(coord, CoordRange)
 
@@ -246,7 +246,7 @@ class TestLazyCoordinates:
         both paths; numeric coordinates remain unaffected.
         """
         from dascore.core.coords import CoordRange  # noqa: PLC0415
-        from dascore.xarray.index import TemporalRangeTransform  # noqa: PLC0415
+        from dascore.xarray.index import CoordTransform  # noqa: PLC0415
 
         def _refuse_forward(self, dim_positions):
             raise AssertionError("the labels were computed by the transform")
@@ -261,7 +261,7 @@ class TestLazyCoordinates:
                 raise AssertionError("the range spelled out its labels")
             return original.__get__(self, CoordRange)
 
-        monkeypatch.setattr(TemporalRangeTransform, "forward", _refuse_forward)
+        monkeypatch.setattr(CoordTransform, "forward", _refuse_forward)
         monkeypatch.setattr(CoordRange, "values", _refuse_values)
 
     def test_a_forwarded_call_never_spells_out_the_labels(self, tree_leaf, monkeypatch):
@@ -272,14 +272,14 @@ class TestLazyCoordinates:
         """
         self._refuse_to_materialize(monkeypatch)
         out = tree_leaf.dc.abs()
-        assert type(out.xindexes["time"]).__name__ == "TemporalRangeIndex"
+        assert type(out.xindexes["time"]).__name__ == "CoordIndex"
 
     def test_a_forwarded_property_never_spells_them_out_either(
         self, tree_leaf, monkeypatch
     ):
         """A property states a patch by the same conversion a call does."""
         self._refuse_to_materialize(monkeypatch)
-        assert type(tree_leaf.dc.T.xindexes["time"]).__name__ == "TemporalRangeIndex"
+        assert type(tree_leaf.dc.T.xindexes["time"]).__name__ == "CoordIndex"
 
     def test_a_renamed_coordinate_is_spelled_out(self, tree_leaf):
         """Laziness follows the name, and a rename is a new name.
@@ -319,7 +319,7 @@ class TestLazyCoordinates:
         array = patch_to_xarray(patch, lazy_coords={"time"})
         assert type(array.xindexes["lag"]).__name__ == "PandasIndex"
         out = array.dc.abs()
-        assert type(out.xindexes["time"]).__name__ == "TemporalRangeIndex"
+        assert type(out.xindexes["time"]).__name__ == "CoordIndex"
         assert type(out.xindexes["lag"]).__name__ == "PandasIndex"
         # which is what a lazy index on `lag` would refuse to align
         assert (out - array).shape == array.shape
@@ -349,13 +349,13 @@ class TestLazyCoordinates:
         offsets = self._offsets(tree_leaf)
         self._refuse_to_materialize(monkeypatch)
         out = offsets.dc.add(other=tree_leaf) if keyword else offsets.dc.add(tree_leaf)
-        assert type(out.xindexes["time"]).__name__ == "TemporalRangeIndex"
+        assert type(out.xindexes["time"]).__name__ == "CoordIndex"
 
     def test_either_order_states_it_the_same_way(self, tree_leaf):
         """The same sum, so the same coordinate, however it is written."""
         offsets = self._offsets(tree_leaf)
         first, second = tree_leaf.dc.add(offsets), offsets.dc.add(tree_leaf)
-        assert type(first.xindexes["time"]).__name__ == "TemporalRangeIndex"
+        assert type(first.xindexes["time"]).__name__ == "CoordIndex"
         assert type(first.xindexes["time"]) is type(second.xindexes["time"])
         assert np.allclose(first.transpose(*second.dims).values, second.values)
 
@@ -366,7 +366,7 @@ class TestLazyCoordinates:
         out; the result keeps what the stricter of them can align on,
         the same way round either way.
         """
-        spelled_out = tree_leaf.dc.to_patch().io.to_xarray()
+        spelled_out = tree_leaf.dc.to_patch().io.to_xarray(lazy_coords=False)
         assert type(spelled_out.xindexes["time"]).__name__ == "PandasIndex"
         for out in (spelled_out.dc.add(tree_leaf), tree_leaf.dc.add(spelled_out)):
             assert type(out.xindexes["time"]).__name__ == "PandasIndex"
@@ -374,11 +374,23 @@ class TestLazyCoordinates:
     @pytest.mark.parametrize("reverse", [False, True])
     def test_an_unindexed_coordinate_does_not_force_eager(self, tree_leaf, reverse):
         """Only an eager index requires the result to preserve eager alignment."""
-        unindexed = tree_leaf.dc.to_patch().io.to_xarray().drop_indexes("time")
+        patch = tree_leaf.dc.to_patch()
+        unindexed = patch.io.to_xarray(lazy_coords=False).drop_indexes("time")
         first, second = (unindexed, tree_leaf) if reverse else (tree_leaf, unindexed)
         out = first.dc.add(second)
-        assert type(out.xindexes["time"]).__name__ == "TemporalRangeIndex"
+        assert type(out.xindexes["time"]).__name__ == "CoordIndex"
         assert (out - unindexed).shape == tree_leaf.shape
+
+    def test_an_index_over_held_labels_survives(self):
+        """An index given to irregular labels by hand comes back as it was."""
+        from dascore.xarray.index import CoordIndex  # noqa: PLC0415
+
+        xr = pytest.importorskip("xarray")
+        array = xr.DataArray(np.arange(3.0), dims="x", coords={"x": [0.0, 1.0, 5.0]})
+        held = array.drop_indexes("x").set_xindex("x", CoordIndex)
+        out = held.dc.abs()
+        assert isinstance(out.xindexes["x"], CoordIndex)
+        assert (out + held).sizes == held.sizes
 
     def test_a_duration_is_served_like_a_time(self):
         """A lag says its units in its dtype as a stamp does."""
@@ -390,7 +402,7 @@ class TestLazyCoordinates:
         )
         patch = dc.Patch(data=np.arange(4.0), dims=("lag",), coords={"lag": lag})
         array = patch_to_xarray(patch, lazy_coords={"lag"})
-        assert type(array.xindexes["lag"]).__name__ == "TemporalRangeIndex"
+        assert type(array.xindexes["lag"]).__name__ == "CoordIndex"
         assert np.array_equal(np.asarray(array["lag"].values), lag.values)
 
     def test_a_coordinate_which_no_longer_names_a_dimension(self, tree_leaf):

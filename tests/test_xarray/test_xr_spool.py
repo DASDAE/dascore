@@ -685,16 +685,35 @@ class TestToXarrayLazyCoords:
 
     def test_time_coordinate_is_lazy(self, random_spool):
         """An evenly sampled merged time coordinate gets the lazy index."""
-        from dascore.xarray.index import TemporalRangeIndex  # noqa: PLC0415
+        from dascore.xarray.index import CoordIndex  # noqa: PLC0415
 
         data = self._leaf(random_spool.io.to_xarray())["data"]
-        assert isinstance(data.xindexes["time"], TemporalRangeIndex)
+        assert isinstance(data.xindexes["time"], CoordIndex)
         # the labels are served on demand, not stored as an array
         assert not isinstance(data["time"].variable._data, np.ndarray)
         merged = random_spool.chunk(time=None)[0]
         np.testing.assert_array_equal(
             data["time"].values, merged.get_coord("time").values
         )
+
+    def test_only_the_merged_dimension_is_lazy(self, random_spool):
+        """Distance keeps an ordinary index, so per-channel arrays combine."""
+        import xarray as xr  # noqa: PLC0415
+
+        from dascore.xarray.index import CoordIndex  # noqa: PLC0415
+
+        data = self._leaf(random_spool.io.to_xarray())["data"]
+        assert type(data.xindexes["distance"]).__name__ == "PandasIndex"
+        distance = data["distance"].values
+        gains = xr.DataArray(np.ones(len(distance)), coords={"distance": distance})
+        assert (data * gains).sizes == data.sizes
+        # along the merged dimension, an ordinary index is one swap away
+        times = xr.DataArray(
+            np.ones(data.sizes["time"]), coords={"time": data["time"].values}
+        )
+        assert isinstance(data.xindexes["time"], CoordIndex)
+        eager = data.drop_indexes("time").set_xindex("time")
+        assert (eager * times).sizes == data.sizes
 
     def test_sel_matches_patch_select(self, random_spool):
         """Label selection on the tree equals dascore's own select."""
@@ -706,9 +725,10 @@ class TestToXarrayLazyCoords:
         assert sub.sizes["time"] == expected.shape[expected.dims.index("time")]
         np.testing.assert_array_equal(sub.compute().values, expected.data)
 
-    def test_segmented_time_materializes(self, random_patch):
-        """A jittered merge is not one range; its labels spell out."""
-        from dascore.xarray.index import TemporalRangeIndex  # noqa: PLC0415
+    def test_segmented_time_stays_lazy(self, random_patch):
+        """A jittered merge is not one range; it is served as its segments."""
+        from dascore.core.coords import CoordSegmented  # noqa: PLC0415
+        from dascore.xarray.index import CoordIndex  # noqa: PLC0415
 
         coord = random_patch.get_coord("time")
         step = coord.step * 1.04  # within sampling tolerance, off-grid
@@ -717,7 +737,9 @@ class TestToXarrayLazyCoords:
         )
         spool = dc.spool([random_patch, second])
         data = self._leaf(spool.io.to_xarray())["data"]
-        assert not isinstance(data.xindexes["time"], TemporalRangeIndex)
+        index = data.xindexes["time"]
+        assert isinstance(index, CoordIndex)
+        assert isinstance(index.coordinate, CoordSegmented)
         merged = spool.chunk(time=None)[0]
         np.testing.assert_array_equal(
             data["time"].values, merged.get_coord("time").values

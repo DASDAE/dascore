@@ -29,7 +29,6 @@ from __future__ import annotations
 
 import inspect
 import numbers
-from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any, ClassVar
 
 import numpy as np
@@ -58,13 +57,11 @@ from dascore.utils.patch_registry import (
     _without_patches,
     patch_function_tag,
     register_patch_function,
-    resolve_patch_function,
 )
 from dascore.utils.serialize import model_values
 
 if TYPE_CHECKING:
     from dascore.core.attrs import PatchAttrs
-    from dascore.core.coordmanager import CoordManager
 
 
 class PatchProcessor(DascoreBaseModel):
@@ -103,6 +100,8 @@ class PatchProcessor(DascoreBaseModel):
     history: ClassVar[str | None] = "full"
     # The field a `*args` group fills in the generated function, if any.
     _var_positional: ClassVar[str | None] = None
+    # The fields a call may give positionally, in order; None for all.
+    _positional_fields: ClassVar[tuple[str, ...] | None] = None
     # Kernels registered per backend by `register_kernel`, looked up in each
     # class's own `__dict__` so a subclass never answers with its parent's.
     _kernels: ClassVar[dict[str, Any]] = {}
@@ -329,6 +328,8 @@ def _call_signature(cls: type[PatchProcessor]) -> inspect.Signature:
             if field.is_required()
             else field.get_default(call_default_factory=True)
         )
+        if cls._positional_fields is not None and name not in cls._positional_fields:
+            kind = inspect.Parameter.KEYWORD_ONLY
         annotation = field.annotation or inspect.Parameter.empty
         # A required field after a defaulted one (a subclass adding one) can
         # only be given by name.
@@ -415,105 +416,3 @@ def _is_plain(value) -> bool:
     if isinstance(value, tuple):
         return all(_is_plain(x) for x in value)
     return isinstance(value, np.ndarray) and value.dtype.kind in "biufc"
-
-
-# --- the old seam, kept only for tile_apply and adaptive_spectral_filter ---
-#
-# Both need a window in their kernels, which a plan cannot yet carry; they
-# move onto `PatchProcessor` in the next change, and this goes with them.
-
-
-@dataclass(frozen=True, slots=True)
-class PatchMeta:
-    """
-    Everything a patch carries except its data.
-
-    Parameters
-    ----------
-    coords
-        The coordinates, which carry the dimensions and the shape too.
-    attrs
-        The patch's attributes.
-    dtype
-        What the data are.
-    backend
-        Which array library the data belong to.
-    """
-
-    coords: CoordManager
-    attrs: PatchAttrs
-    dtype: Any
-    backend: str = "numpy"
-    patch_type: Any = None
-
-    @property
-    def dims(self) -> tuple[str, ...]:
-        """The dimension names, in order."""
-        return self.coords.dims
-
-    @property
-    def shape(self) -> tuple[int, ...]:
-        """The shape the data have."""
-        return self.coords.shape
-
-    @property
-    def ndim(self) -> int:
-        """How many dimensions the patch has."""
-        return len(self.coords.dims)
-
-    def get_axis(self, dim: str) -> int:
-        """Return the axis a dimension name refers to."""
-        return self.coords.get_axis(dim)
-
-    @classmethod
-    def from_patch(cls, patch) -> PatchMeta:
-        """Return what a patch is, apart from its values."""
-        data = patch.data
-        return cls(
-            coords=patch.coords,
-            attrs=patch.attrs,
-            dtype=data.dtype,
-            backend=backend_name(data),
-            patch_type=type(patch),
-        )
-
-    def update(self, **kwargs) -> PatchMeta:
-        """Return metadata with some of it changed."""
-        return replace(self, **kwargs)
-
-    def to_patch(self, data):
-        """Return the patch this metadata and some data make."""
-        patch_type = self.patch_type or dc.Patch
-        return patch_type(data=data, coords=self.coords, attrs=self.attrs)
-
-
-class _MetaProcessor(DascoreBaseModel):
-    """The old metadata/kernel seam: `derive_meta`, `kernel(data, meta, out)`."""
-
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-    # The patch function this class is the body of.
-    _patch_function: ClassVar[str] = ""
-
-    @property
-    def kwargs(self) -> dict[str, Any]:
-        """Return the validated fields, extras included."""
-        return model_values(self)
-
-    def __call__(self, patch: PatchType) -> PatchType:
-        """Run the operation through its patch function."""
-        return resolve_patch_function(self._patch_function)(patch, **self.kwargs)
-
-    def derive_meta(self, meta: PatchMeta) -> PatchMeta:
-        """Return the result's metadata; by default, unchanged."""
-        return meta
-
-    def _apply(self, patch: PatchType) -> PatchType:
-        """Run the operation; the patch function records history and ids."""
-        meta = PatchMeta.from_patch(patch)
-        out_meta = self.derive_meta(meta)
-        data = self.kernel(patch.data, meta, out_meta)  # ty: ignore[unresolved-attribute]
-        dtype = getattr(data, "dtype", out_meta.dtype)
-        if dtype != out_meta.dtype:
-            out_meta = out_meta.update(dtype=dtype)
-        return out_meta.to_patch(data)

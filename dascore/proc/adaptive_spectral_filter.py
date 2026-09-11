@@ -15,21 +15,19 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from functools import partial
-from typing import Any, ClassVar, Literal
+from typing import Any
 
 import numpy as np
 from pydantic import ConfigDict
 from scipy import fft as sp_fft
 
 from dascore.constants import PatchType
-from dascore.core.processor import PatchMeta, _MetaProcessor
+from dascore.core.processor import PatchProcessor
 from dascore.exceptions import MissingOptionalDependencyError, ParameterError
-from dascore.utils.patch import patch_function
 from dascore.utils.signal import get_taper
 from dascore.utils.tiles import TilePlan, get_tile_plan
 from dascore.utils.window import Window, resolve_window
 
-_AdaptiveSpectralEngine = Literal["auto", "numba", "scipy"]
 __all__ = ("AdaptiveSpectralFilter", "adaptive_spectral_filter")
 
 
@@ -222,24 +220,12 @@ def _get_engine(engine: str, selected_ndim: int) -> Callable:
     return _adaptive_spectral_filter_scipy
 
 
-@patch_function()
-def adaptive_spectral_filter(
-    patch: PatchType,
-    *,
-    overlap: Any = None,
-    exponent: float = 0.8,
-    normalize_power: bool = False,
-    samples: bool = False,
-    engine: _AdaptiveSpectralEngine = "auto",
-    **kwargs: Any,
-) -> PatchType:
+class AdaptiveSpectralFilter(PatchProcessor):
     """
     Suppress energy which is not coherent within a window: the AFK filter.
 
     Parameters
     ----------
-    patch
-        The patch to filter.
     overlap
         How far each window reaches into the next, in coordinate units or,
         with `samples`, in samples; a mapping gives each dimension its own.
@@ -289,29 +275,10 @@ def adaptive_spectral_filter(
       against the distance over which their moveout changes; a power of two
       transforms fastest.
     """
-    return AdaptiveSpectralFilter(
-        overlap=overlap,
-        exponent=exponent,
-        normalize_power=normalize_power,
-        samples=samples,
-        engine=engine,
-        **kwargs,
-    )._apply(patch)
-
-
-class AdaptiveSpectralFilter(_MetaProcessor):
-    """
-    Weight every window's spectrum by a power of its own magnitude.
-
-    The dimensions to filter arrive as extras carrying their window sizes,
-    as the patch function takes them. Windows and overlaps may be given in
-    coordinate units, so they are only sample counts once the coordinates
-    are known: `geometry` is that conversion, and where a kernel for any
-    backend starts.
-    """
 
     model_config = ConfigDict(extra="allow", frozen=True)
-    _patch_function: ClassVar[str] = "adaptive_spectral_filter"
+    # Every option by name, as before.
+    _positional_fields = ()
 
     overlap: Any = None
     exponent: float = 0.8
@@ -321,7 +288,7 @@ class AdaptiveSpectralFilter(_MetaProcessor):
     # `_get_engine` as a ParameterError like every other bad argument.
     engine: str = "auto"
 
-    def geometry(self, meta: PatchMeta) -> Window:
+    def geometry(self, patch: PatchType) -> Window:
         """Return the window in samples: the selected axes, sizes, and overlaps."""
         selected = self.model_extra or {}
         if len(selected) not in {1, 2}:
@@ -331,7 +298,7 @@ class AdaptiveSpectralFilter(_MetaProcessor):
             )
             raise ParameterError(msg)
         window = resolve_window(
-            meta,
+            patch,
             selected,
             samples=self.samples,
             overlap=self.overlap,
@@ -349,10 +316,13 @@ class AdaptiveSpectralFilter(_MetaProcessor):
         )
         return window
 
-    def kernel(self, data, meta, out_meta):
+    def plan(self, patch, out):
+        """Return the selected axes, and the window and overlap along each."""
+        window = self.geometry(patch)
+        return {"axes": window.axes, "size": window.size, "overlap": window.overlap}
+
+    def kernel(self, data, *, axes, size, overlap):
         """Filter every batch over the selected axes and stack the results."""
-        window = self.geometry(meta)
-        axes, windows, overlaps = window.axes, window.size, window.overlap
         engine = _get_engine(self.engine, len(axes))
         data = np.asarray(data)
         tail = tuple(range(-len(axes), 0))
@@ -362,10 +332,13 @@ class AdaptiveSpectralFilter(_MetaProcessor):
         for ind, array in enumerate(working):
             filtered[ind] = engine(
                 array,
-                window_size=windows,
-                overlap=overlaps,
+                window_size=size,
+                overlap=overlap,
                 exponent=float(self.exponent),
                 normalize_power=bool(self.normalize_power),
             )
         filtered = np.moveaxis(filtered.reshape(moved.shape), tail, axes)
         return _restore_dtype(filtered, data.dtype)
+
+
+adaptive_spectral_filter = AdaptiveSpectralFilter.patch_function

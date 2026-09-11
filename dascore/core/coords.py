@@ -1201,6 +1201,10 @@ class BaseCoord(RichRepr, DascoreBaseModel, abc.ABC):
         """Return the internal data. Same as values attribute."""
         return self.values
 
+    def _get_index_values(self, indices):
+        """The labels at these (possibly negative) sample indices."""
+        return np.asarray(self.values)[np.asarray(indices)]
+
     def _get_compatible_value(self, value, relative=False):
         """
         Return values that are compatible with dtype/units of coord.
@@ -3167,6 +3171,19 @@ class CoordSegmented(BaseCoord):
         """Return the values of the coordinate as an array."""
         out = np.concatenate([x.values for x in self.segments])
         return array(out.astype(self.dtype, copy=False))
+
+    def _get_index_values(self, indices):
+        """Evaluate only the requested samples, each in its own segment."""
+        indices = np.asarray(indices)
+        indices = np.where(indices < 0, indices + len(self), indices)
+        offsets = self._segment_offsets()
+        which = np.searchsorted(offsets, indices, side="right") - 1
+        out = np.empty(indices.shape, dtype=self.dtype)
+        for num in np.unique(which):
+            mask = which == num
+            local = indices[mask] - offsets[num]
+            out[mask] = self.segments[num]._get_index_values(local)
+        return out
 
     def _as_monotonic(self) -> CoordMonotonicArray:
         """

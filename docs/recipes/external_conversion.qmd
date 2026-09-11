@@ -29,7 +29,31 @@ dar = patch.io.to_xarray()
 patch_from_dar = dc.io.xarray_to_patch(dar)
 ```
 
-A whole spool converts to a lazy, [dask](https://docs.dask.org/)-backed [DataTree](https://docs.xarray.dev/en/stable/user-guide/hierarchical-data.html) with one node per group of related patches (partitioned exactly as [`chunk`](`dascore.Spool.chunk`) partitions them) and one child node per merged output segment. Building the tree reads no data — even the tree's time coordinates are lazy (unlike the single-patch conversion above, which materializes its labels): an evenly sampled one is served from start and step on demand, so a segment spanning years of samples costs nothing to label. Computing a selection loads only the source patches it touches.
+Coordinate labels are materialized, as in any xarray index. With `lazy_coords=True` (or a collection of names) the DataArray's index instead holds the patch's own coordinate and computes labels only for the samples a selection or `.values` asks about. Selection answers as it does on a materialized index (partial datetime strings, `method="nearest"`, `tolerance`), and converting back returns the coordinate exactly, fractional sampling rates and gaps included.
+
+```python
+import dascore as dc
+
+patch = dc.get_example_patch()
+
+lazy = patch.io.to_xarray(lazy_coords=True)
+```
+
+xarray aligns a lazy index only with others of its kind, so combining a lazy array with an array whose index holds its labels (built from numpy, loaded from netCDF, or converted with the default), or reindexing it to new labels, raises an `AlignmentError`. To combine them, give the lazy array ordinary indexes: `drop_indexes` removes the lazy index but keeps the coordinate's labels, and `set_xindex` builds an ordinary index from them, reading every label into memory (8 bytes a sample; a day at 1 kHz is about 0.7 GB). The data stays as it is. Select first where you can, so only the selection's labels are read:
+
+```python
+eager = lazy.drop_indexes(["time", "distance"]).set_xindex("time").set_xindex("distance")
+```
+
+The other way round often costs less: give the ordinary array the lazy index type instead. Its labels are already in memory, and where they equal the lazy array's the two align without reading the lazy labels at all (labels that differ are joined as ordinary indexes would be, which reads both).
+
+```python
+from dascore.xarray.index import CoordIndex
+
+aligned = eager.drop_indexes("time").set_xindex("time", CoordIndex)
+```
+
+A whole spool converts to a lazy, [dask](https://docs.dask.org/)-backed [DataTree](https://docs.xarray.dev/en/stable/user-guide/hierarchical-data.html) with one node per group of related patches (partitioned exactly as [`chunk`](`dascore.Spool.chunk`) partitions them) and one child node per merged output segment. Building the tree reads no data, and the coordinate of the dimension segments are merged along is lazy (as with `lazy_coords=True` above), so a segment spanning years of samples costs nothing to label. Other dimensions keep ordinary indexes, so per-channel arrays such as gains combine with a segment directly; along the merged dimension, use the `drop_indexes`/`set_xindex` swap above. Computing a selection loads only the source patches it touches.
 
 ```python
 import dascore as dc
@@ -64,7 +88,7 @@ A DataArray from somewhere else needs `import dascore.xarray.accessor` first, si
 
 A dask-backed DataArray is passed through as it stands, so a method which works on the array's own backend leaves it lazy. One which cannot converts, as it does on a patch. Where such a method announces that conversion, and the array is larger than free memory, the accessor raises rather than attempting it; a method which converts silently is not caught, and fails on memory as it would anywhere else.
 
-A coordinate a tree states rather than stores -- an evenly sampled time coordinate, whose labels are computed from its range on demand -- is stated again in what a method hands back, so labelling a long acquisition costs no more after a call than before it. Every DataArray in the call says how its own coordinates arrived, an argument as much as the one called on. A coordinate which arrived spelled out anywhere is spelled out in the result, since a spelled-out index is what xarray aligns on. Laziness follows the name, so a method which renames such a coordinate spells its labels out under the new name.
+A coordinate a DataArray states rather than stores (a lazy one, whose labels are computed on demand) is stated again in what a method hands back, so labelling a long acquisition costs no more after a call than before it. Every DataArray in the call says how its own coordinates arrived, an argument as much as the one called on. A coordinate which arrived spelled out anywhere is spelled out in the result, since a spelled-out index is what xarray aligns on. Laziness follows the name, so a method which renames such a coordinate spells its labels out under the new name.
 
 ## [ObsPy](https://docs.obspy.org/)
 
