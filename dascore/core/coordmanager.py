@@ -114,6 +114,86 @@ def _ensure_1d_coord(coord, coord_name: str):
         raise CoordError(msg)
 
 
+def _cell_edge_names(dim, coord_map):
+    """Return the reserved names only when both cell edges are attached."""
+    names = (f"{dim}_start", f"{dim}_stop")
+    return names if all(name in coord_map for name in names) else ()
+
+
+def _validate_cell_edges(dim, coord_map, dim_map):
+    """Validate explicit cell bounds against their dimensional labels."""
+    names = _cell_edge_names(dim, coord_map)
+    if not names:
+        return
+    label = coord_map[dim]
+    for name in names:
+        edge = coord_map[name]
+        if edge.ndim != 1 or dim_map[name] != (dim,):
+            raise CoordError(
+                f"Cell edges for {dim!r} must be 1-D and associated with {dim!r}."
+            )
+        if edge.shape != label.shape:
+            raise CoordError(
+                f"Cell edges for {dim!r} must have the same length as the dimension."
+            )
+        if edge.units != label.units:
+            raise CoordError(f"Cell edges for {dim!r} must have the dimension's units.")
+        if len(label) > 1 and not (
+            (label.sorted and edge.sorted)
+            or (label.reverse_sorted and edge.reverse_sorted)
+        ):
+            raise CoordError(
+                f"Cell edges for {dim!r} must be monotone in the same direction "
+                "as the labels."
+            )
+    start, stop = (coord_map[name].values for name in names)
+    if not np.all(start <= label.values):
+        raise CoordError(f"Cell edges for {dim!r} must satisfy start <= label.")
+    if not np.all(label.values < stop):
+        raise CoordError(f"Cell edges for {dim!r} must satisfy label < stop.")
+
+
+def _translation_delta(old, new):
+    """Return a label translation, allowing only floating arithmetic roundoff."""
+    if old.shape != new.shape or not old.size or new.units not in (None, old.units):
+        return None
+    old_kind, new_kind = old.dtype.kind, new.dtype.kind
+    numeric = old_kind in "iuf" and new_kind in "iuf"
+    temporal = old_kind in "mM" and new_kind == old_kind
+    if not (numeric or temporal):
+        return None
+    if numeric:
+        delta = new.values[0].item() - old.values[0].item()
+        values = old.values.astype(object) if old_kind in "iu" else old.values
+    else:
+        delta, values = new.values[0] - old.values[0], old.values
+    shifted = values + delta
+    same = np.array_equal(new.values, shifted)
+    if numeric and "f" in (old_kind, new_kind):
+        dtype = np.result_type(old.dtype, new.dtype)
+        # Canonicalizing the translated array may round once more than
+        # adding the offset to the original labels. This is a machine-
+        # precision bound, not the coordinate fitter's grid tolerance.
+        tolerance = 4 * np.finfo(dtype).eps * (np.abs(old.values) + abs(delta))
+        same = np.all(np.abs(new.values - shifted) <= tolerance)
+    return delta if same else None
+
+
+def _shift_cell_edge(edge, delta):
+    """Translate an edge, promoting integer values when its dtype cannot fit."""
+    if edge.dtype.kind in "iu":
+        limits = np.iinfo(edge.dtype)
+        in_range = (
+            limits.min <= int(edge.min()) + delta
+            and int(edge.max()) + delta <= limits.max
+        )
+        if isinstance(edge, CoordRange) and delta == int(delta) and in_range:
+            return edge._translated(int(delta))
+        values = np.asarray([value.item() + delta for value in edge.values])
+        return get_coord(data=values, units=edge.units)
+    return edge.update(min=edge.min() + delta)
+
+
 def _resolve_selection(cm, kwargs, samples=False, relative=False, operation="select"):
     """Resolve DASCore queries using the existing coordinate selection methods."""
     reductions, selected = {}, {}
@@ -181,6 +261,8 @@ class CoordManager(RichRepr, DascoreBaseModel):
             missing = set(dims) - set(coord_map)
             msg = f"All dimensions must have coordinates, {missing} are missing."
             raise CoordError(msg)
+        for dim in dims:
+            _validate_cell_edges(dim, coord_map, dim_map)
         # ensure non-dimensional coordinates have the same length as
         # corresponding coordinates.
         for name, coord_dims in dim_map.items():
@@ -282,6 +364,23 @@ class CoordManager(RichRepr, DascoreBaseModel):
         coord_updates, coord_to_drop, coord_to_add = _divide_kwargs(kwargs)
         # get coords to drop from selecting None
         coord_map, dim_map, dims = _get_coord_dim_map(coord_to_add, self.dims)
+        # A replacement that only translates labels translates their cells.
+        # Other replacements invalidate bounds unless the caller supplies new ones.
+        for dim in set(coord_map) & set(self.dims):
+            names = _cell_edge_names(dim, self.coord_map)
+            if not names or any(name in kwargs for name in names):
+                continue
+            old, new = self.coord_map[dim], coord_map[dim]
+            if (delta := _translation_delta(old, new)) is not None:
+                kwargs[dim] = (dim_map[dim], new.set_units(old.units))
+                for name in names:
+                    edge = self.coord_map[name]
+                    kwargs[name] = (
+                        self.dim_map[name],
+                        _shift_cell_edge(edge, delta),
+                    )
+                continue
+            coord_to_drop.extend(names)
         # find coords to drop because their dimension changed.
         indirect_coord_drops = _get_dim_change_drop(coord_map, dim_map)
         # drop coords then call get_coords to handle adding new ones.
@@ -290,9 +389,17 @@ class CoordManager(RichRepr, DascoreBaseModel):
         out.update({i: v for i, v in kwargs.items() if i not in coord_to_drop})
         # update based on keywords
         for item, value in coord_updates.items():
-            coord_name, attr = item.split("_")
+            coord_name, attr = item.rsplit("_", 1)
             coord_dims, coord = out[coord_name]
-            out[coord_name] = (coord_dims, coord.update(**{attr: value}))
+            new_coord = coord.update(**{attr: value})
+            out[coord_name] = (coord_dims, new_coord)
+            for name in _cell_edge_names(coord_name, out):
+                if attr == "step":
+                    out.pop(name)
+                else:
+                    edge_dims, edge = out[name]
+                    delta = new_coord.min() - coord.min()
+                    out[name] = (edge_dims, _shift_cell_edge(edge, delta))
 
         dims = tuple(x for x in dims if x not in coord_to_drop)
         # Cast because the factory normalizes the coord mapping in ways the
@@ -302,6 +409,14 @@ class CoordManager(RichRepr, DascoreBaseModel):
         # limitation of the factory rather than of this annotation.
         shape = () if self.scalar and not dims else None
         return cast("Self", get_coord_manager(out, dims=dims, shape=shape))
+
+    def _update_grid(self, *dims, **kwargs) -> Self:
+        """Replace a grid, discarding bounds belonging to its input cells."""
+        names = {name for dim in dims for name in _cell_edge_names(dim, self.coord_map)}
+        cm, _ = self.drop_coords(*names)
+        return cm.update(
+            **{name: value for name, value in kwargs.items() if name not in names}
+        )
 
     # we need this here to maintain backwards compatibility
     update_coords = update
@@ -416,7 +531,10 @@ class CoordManager(RichRepr, DascoreBaseModel):
                 updates[coord_name] = snapped
         if not updates:
             return cm, array
-        out = cm.new(coord_map={**cm.coord_map, **updates})
+        out = cm._update_grid(
+            *(name for name in updates if name in cm.dims),
+            **{name: (cm.dim_map[name], coord) for name, coord in updates.items()},
+        )
         assert out.shape == self.shape
         return out, array
 
@@ -926,11 +1044,19 @@ class CoordManager(RichRepr, DascoreBaseModel):
             return self
         return self.new(coord_map={**self.coord_map, **new_coords})
 
+    def _with_cell_edge_units(self, kwargs):
+        """Apply a dimension's unit request to its bounds unless explicitly given."""
+        out = dict(kwargs)
+        for dim in set(kwargs) & set(self.dims):
+            for name in _cell_edge_names(dim, self.coord_map):
+                out.setdefault(name, kwargs[dim])
+        return out
+
     def set_units(self, **kwargs):
         """Set the units of the coordinate manager."""
         cmap = self.coord_map
         new = {}
-        for name, units in kwargs.items():
+        for name, units in self._with_cell_edge_units(kwargs).items():
             if (coord := cmap[name].set_units(units)) is not cmap[name]:
                 new[name] = coord
         return self._replace_coords(new)
@@ -942,7 +1068,7 @@ class CoordManager(RichRepr, DascoreBaseModel):
         """
         cmap = self.coord_map
         new = {}
-        for name, units in kwargs.items():
+        for name, units in self._with_cell_edge_units(kwargs).items():
             if (coord := cmap[name].convert_units(units)) is not cmap[name]:
                 new[name] = coord
         return self._replace_coords(new)
@@ -1012,6 +1138,11 @@ class CoordManager(RichRepr, DascoreBaseModel):
 
         dims, coord_map = list(self.dims), dict(self.coord_map)
         dim_map = dict(self.dim_map)
+        kwargs = dict(kwargs)
+        for dim in set(kwargs) & set(self.dims):
+            new_dim = kwargs[dim]
+            for name in _cell_edge_names(dim, coord_map):
+                kwargs.setdefault(name, f"{new_dim}_{name.rsplit('_', 1)[1]}")
         for old_name, new_name in kwargs.items():
             if old_name == new_name:
                 continue

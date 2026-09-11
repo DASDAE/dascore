@@ -1125,3 +1125,296 @@ class TestTranspose:
         """CoordManager transpose to the current order returns self."""
         coords = random_patch.coords
         assert coords.transpose(*coords.dims) is coords
+
+
+class TestCellBoundsOperations:
+    """Bounds follow retained rows and are discarded for new grids."""
+
+    @pytest.fixture
+    def bounded_patch(self, random_patch):
+        """A patch with non-centred cells on both dimensions."""
+        updates = {}
+        for dim in random_patch.dims:
+            coord = random_patch.get_coord(dim)
+            updates[f"{dim}_start"] = (dim, coord)
+            updates[f"{dim}_stop"] = (dim, coord.update(min=coord.min() + coord.step))
+        return random_patch.update_coords(**updates)
+
+    @pytest.mark.parametrize("operation", ["select", "isel", "sel", "decimate"])
+    def test_retained_rows(self, bounded_patch, operation):
+        """Every selection path selects the same bounds as its labels."""
+        patch = bounded_patch
+        if operation == "select":
+            out = patch.select(distance=(2, 8), samples=True)
+        elif operation == "isel":
+            out = patch.isel(distance=slice(2, 8))
+        elif operation == "sel":
+            values = patch.get_array("distance")
+            out = patch.sel(distance=slice(values[2], values[7]))
+        else:
+            out = patch.decimate(distance=2, filter_type=None)
+        np.testing.assert_array_equal(
+            out.get_array("distance_start"), out.get_array("distance")
+        )
+        assert out.get_coord("time_start") == patch.get_coord("time_start")
+
+    @pytest.mark.parametrize(
+        "operation",
+        ["resample", "decimate", "interpolate", "pad", "rolling", "rolling_stride"],
+    )
+    def test_new_grid(self, bounded_patch, operation):
+        """Changing a grid drops only that dimension's pair."""
+        patch = bounded_patch
+        if operation == "resample":
+            out = patch.resample(distance=2)
+        elif operation == "decimate":
+            out = patch.decimate(distance=2)
+        elif operation == "interpolate":
+            out = patch.interpolate(distance=patch.get_array("distance") + 0.25)
+        elif operation == "pad":
+            out = patch.pad(distance=2, samples=True)
+        else:
+            step = 2 if operation.endswith("stride") else 1
+            out = patch.rolling(distance=4, step=step, samples=True).mean()
+        assert "distance_start" not in out.coords
+        assert "distance_stop" not in out.coords
+        assert out.get_coord("time_start") == patch.get_coord("time_start")
+
+    def test_convert_units(self, bounded_patch):
+        """Converting a dimension transforms both bounds in the same call."""
+        out = bounded_patch.convert_units(distance="km")
+        for name in ("distance", "distance_start", "distance_stop"):
+            np.testing.assert_allclose(
+                out.get_array(name), bounded_patch.get_array(name) / 1000
+            )
+            assert out.get_coord(name).units == out.get_coord("distance").units
+
+    @pytest.mark.parametrize("suffix", ["min", "max"])
+    def test_translate(self, bounded_patch, suffix):
+        """Time envelope updates shift bounds by the label translation."""
+        coord = bounded_patch.get_coord("time")
+        delta = np.timedelta64(3, "s")
+        target = getattr(coord, suffix)() + delta
+        out = bounded_patch.update_coords(**{f"time_{suffix}": target})
+        for name in ("time", "time_start", "time_stop"):
+            np.testing.assert_array_equal(
+                out.get_array(name), bounded_patch.get_array(name) + delta
+            )
+
+    def test_step_update(self, bounded_patch):
+        """Changing the declared step discards the old cells."""
+        out = bounded_patch.update_coords(distance_step=2)
+        assert "distance_start" not in out.coords
+        assert "distance_stop" not in out.coords
+
+    def test_rename(self, bounded_patch):
+        """Renaming a dimension retains the reserved pair's meaning."""
+        out = bounded_patch.rename_coords(distance="channel")
+        assert "channel_start" in out.coords
+        assert "distance_start" not in out.coords
+        assert out.coords.dim_map["channel_start"] == ("channel",)
+
+    def test_translate_values(self, bounded_patch):
+        """Replacing labels by a pure translation also translates the cells."""
+        out = bounded_patch.update_coords(
+            distance=bounded_patch.get_array("distance") + 10
+        )
+        for name in ("distance", "distance_start", "distance_stop"):
+            np.testing.assert_array_equal(
+                out.get_array(name), bounded_patch.get_array(name) + 10
+            )
+
+    def test_replace_grid(self, bounded_patch):
+        """A same-length replacement grid must not retain stale bounds."""
+        out = bounded_patch.update_coords(
+            distance=bounded_patch.get_array("distance") * 2
+        )
+        assert "distance_start" not in out.coords
+        assert "distance_stop" not in out.coords
+
+    def test_set_units(self, bounded_patch):
+        """Unit assignment changes the pair's units with the dimension."""
+        out = bounded_patch.set_units(distance="km")
+        for name in ("distance_start", "distance_stop"):
+            assert out.get_coord(name).units == out.get_coord("distance").units
+            np.testing.assert_array_equal(
+                out.get_array(name), bounded_patch.get_array(name)
+            )
+
+    def test_zero_pad(self, bounded_patch):
+        """An unchanged grid keeps its cell bounds."""
+        out = bounded_patch.pad(distance=0, samples=True)
+        assert out.coords == bounded_patch.coords
+
+    def test_coordinate_slices(self, bounded_patch):
+        """Coordinate bracket slicing reproduces the retained selection rows."""
+        out = bounded_patch.isel(distance=slice(1, 20, 3))
+        for name in ("distance", "distance_start", "distance_stop"):
+            np.testing.assert_array_equal(
+                out.get_array(name), bounded_patch.get_coord(name)[1:20:3].values
+            )
+
+    def test_tile_round_trip(self, bounded_patch):
+        """Windowing replaces input cells and reassembly restores their bounds."""
+        out = bounded_patch.tile_apply(lambda x: x, mode="stack", time=16, samples=True)
+        assert out.get_coord("time_start") != bounded_patch.get_coord("time_start")
+        assert out.reassemble().equals(bounded_patch, close=True)
+
+
+class TestBoundedGridReplacement:
+    """Translation detection distinguishes roundoff from new coordinate grids."""
+
+    @pytest.fixture
+    def patch(self):
+        """A simple bounded numeric grid."""
+        return dc.Patch(
+            data=np.zeros(3),
+            dims=("x",),
+            coords={
+                "x": [0.0, 1.0, 2.0],
+                "x_start": ("x", [-0.5, 0.5, 1.5]),
+                "x_stop": ("x", [0.5, 1.5, 2.5]),
+            },
+        )
+
+    @pytest.mark.parametrize("shift", [0.2, -0.2, 1e-12])
+    def test_decimal_translation(self, patch, shift):
+        """Decimal shifts retain physical edges despite canonicalization roundoff."""
+        out = patch.update_coords(x=patch.get_array("x") + shift)
+        for name in ("x_start", "x_stop"):
+            np.testing.assert_allclose(
+                out.get_array(name), patch.get_array(name) + shift, rtol=0, atol=1e-15
+            )
+
+    def test_small_stretch(self, patch):
+        """A small, real cadence change is not classified as roundoff."""
+        out = patch.update_coords(x=patch.get_array("x") * (1 + 1e-9) + 0.2)
+        assert "x_start" not in out.coords
+
+    @pytest.mark.parametrize("values", [["a", "b", "c"], dc.to_datetime64([0, 1, 2])])
+    def test_incompatible_replacement(self, patch, values):
+        """Categorical and temporal replacements discard numeric bounds."""
+        out = patch.update_coords(x=values)
+        assert "x_start" not in out.coords
+        assert "x_stop" not in out.coords
+
+    def test_time_to_numeric(self, patch):
+        """Changing time labels to numeric labels is a valid grid replacement."""
+        updates = {
+            name: (
+                "x",
+                dc.get_coord(data=dc.to_datetime64(patch.get_array(name)), units="s"),
+            )
+            for name in ("x", "x_start", "x_stop")
+        }
+        timed = patch.update_coords(**updates)
+        out = timed.update_coords(x=np.arange(3.0))
+        assert "x_start" not in out.coords
+
+    @pytest.mark.parametrize(
+        "replacement", [[0.0, 1.0], dc.get_coord(data=[0.0, 1.0, 2.0], units="m")]
+    )
+    def test_other_grid_replacement(self, patch, replacement):
+        """Different lengths and units also invalidate the old bounds."""
+        cm = patch.coords.update(x=replacement)
+        assert "x_start" not in cm
+        assert "x_stop" not in cm
+
+    def test_empty_replacement(self, patch):
+        """Replacing an empty grid has no translation to infer."""
+        empty = patch.isel(x=slice(0, 0))
+        out = empty.update_coords(x=np.array([]))
+        assert out.shape == (0,)
+        assert "x_start" not in out.coords
+
+    def test_integer_to_float_translation(self, patch):
+        """A fractional offset can promote integer labels without losing bounds."""
+        integer = patch.update_coords(x=np.arange(3))
+        out = integer.update_coords(x=integer.get_array("x") + 0.2)
+        np.testing.assert_allclose(
+            out.get_array("x_start"),
+            patch.get_array("x_start") + 0.2,
+            rtol=0,
+            atol=1e-15,
+        )
+
+    def test_time_translation(self, patch):
+        """A direct time-label shift translates the physical time bounds."""
+        updates = {
+            name: (
+                "x",
+                dc.get_coord(data=dc.to_datetime64(patch.get_array(name)), units="s"),
+            )
+            for name in ("x", "x_start", "x_stop")
+        }
+        timed = patch.update_coords(**updates)
+        delta = np.timedelta64(2, "s")
+        out = timed.update_coords(x=timed.get_array("x") + delta)
+        np.testing.assert_array_equal(
+            out.get_array("x_start"), timed.get_array("x_start") + delta
+        )
+
+    @pytest.mark.parametrize(
+        "edge_kind", ["centred", "unsigned_range", "unsigned_irregular"]
+    )
+    def test_unsigned_translation(self, edge_kind):
+        """A backward shift never wraps unsigned labels or cell edges."""
+        values = np.array(
+            [2, 4, 5] if edge_kind.endswith("irregular") else [2, 3, 4], dtype=np.uint64
+        )
+        width = 0.5 if edge_kind == "centred" else np.uint64(1)
+        original = dc.Patch(
+            data=np.zeros(3),
+            dims=("x",),
+            coords={
+                "x": values,
+                "x_start": ("x", values - width),
+                "x_stop": ("x", values + width),
+            },
+        )
+        out = original.update_coords(x=values - np.uint64(1))
+        np.testing.assert_array_equal(
+            out.get_array("x_start"), original.get_array("x_start").astype(float) - 1
+        )
+        np.testing.assert_array_equal(
+            out.get_array("x_stop"), original.get_array("x_stop").astype(float) - 1
+        )
+
+    def test_unsigned_edges_cross_zero(self):
+        """Physical edges can promote to signed values when a shift crosses zero."""
+        values = np.arange(1, 4, dtype=np.uint64)
+        original = dc.Patch(
+            data=np.zeros(3),
+            dims=("x",),
+            coords={
+                "x": values,
+                "x_start": ("x", values - np.uint64(1)),
+                "x_stop": ("x", values + np.uint64(1)),
+            },
+        )
+        out = original.update_coords(x=values - np.uint64(1))
+        np.testing.assert_array_equal(out.get_array("x_start"), [-1, 0, 1])
+
+
+class TestIntegerCellTranslation:
+    """Integer physical bounds promote when translated outside their dtype."""
+
+    @pytest.mark.parametrize("dtype", [np.int8, np.int64, np.uint64])
+    @pytest.mark.parametrize("shift", [0.5, 200])
+    def test_promoted_bounds(self, dtype, shift):
+        """Fractional and out-of-range shifts retain the actual physical edges."""
+        values = np.arange(2, 5, dtype=dtype)
+        patch = dc.Patch(
+            data=np.ones(3),
+            dims=("x",),
+            coords={
+                "x": values,
+                "x_start": ("x", values - 1),
+                "x_stop": ("x", values + 1),
+            },
+        )
+        out = patch.update_coords(x=values.astype(float) + shift)
+        for name in ("x_start", "x_stop"):
+            np.testing.assert_array_equal(
+                out.get_array(name), patch.get_array(name).astype(float) + shift
+            )

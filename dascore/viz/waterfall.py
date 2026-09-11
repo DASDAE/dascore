@@ -3,13 +3,16 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import Literal
+from typing import Literal, cast
 
 import matplotlib as mpl
 import matplotlib.pyplot as plt
 import numpy as np
+from matplotlib.collections import PolyCollection
+from matplotlib.patches import Rectangle
 
 from dascore.constants import DEFAULT_COLORMAPS, PatchType
+from dascore.core.coordmanager import _cell_edge_names
 from dascore.exceptions import ParameterError
 from dascore.utils.gaps import get_gap_edges, is_monotonic_and_finite
 from dascore.utils.patch import patch_function
@@ -21,6 +24,7 @@ from dascore.utils.plotting import (
     _get_data_label,
     _get_dim_label,
     _get_extents,
+    _get_plot_values,
     _get_scale,
     _maybe_invert_yaxis,
 )
@@ -138,6 +142,83 @@ def _plot_with_mesh(ax, data, dims, coords, cmap, gap_color, gap_factor):
     return mesh, cells
 
 
+def _bounds_fit_image(coords, dims):
+    """Whether explicit cells form contiguous, uniformly spaced image pixels."""
+    for dim in dims:
+        if not (names := _cell_edge_names(dim, coords)):
+            continue
+        start, stop = (coords[name] for name in names)
+        if len(start) < 2:
+            continue
+        low, high = start.values, stop.values
+        if coords[dim].reverse_sorted:
+            low, high = low[::-1], high[::-1]
+        if not (
+            start.evenly_sampled
+            and stop.evenly_sampled
+            and np.all(high - low == high[0] - low[0])
+        ):
+            return False
+        if not np.array_equal(high[:-1], low[1:]):
+            return False
+    return True
+
+
+def _plot_with_bounds(ax, data, patch, cmap, gap_color, gap_factor):
+    """Draw explicit cells individually, leaving unstated positions uncovered."""
+    cells = {}
+    for dim in patch.dims:
+        if names := _cell_edge_names(dim, patch.coords):
+            cells[dim] = tuple(
+                _get_plot_values(patch.get_array(name)) for name in names
+            )
+            if patch.get_coord(dim).reverse_sorted:
+                cells[dim] = cells[dim][::-1]
+        elif len(patch.get_coord(dim)) == 1 or not is_monotonic_and_finite(
+            patch.get_array(dim)
+        ):
+            cells[dim] = image_cell_edges(
+                _get_extents((dim,), patch.coords),
+                (dim,),
+                dim,
+                len(patch.get_coord(dim)),
+            )
+        else:
+            factor = gap_factor if gap_color is not None else None
+            cells[dim] = mesh_cell_edges(*get_gap_edges(patch.get_array(dim), factor))
+    y0, y1 = cells[patch.dims[0]]
+    x0, x1 = cells[patch.dims[1]]
+    vertices = np.empty((*data.shape, 4, 2))
+    vertices[..., 0] = np.stack((x0, x1, x1, x0), axis=-1)[None, :, :]
+    vertices[..., 1] = np.stack((y0, y0, y1, y1), axis=-1)[:, None, :]
+    if gap_color is not None:
+        cmap = cmap.with_extremes(bad=gap_color)
+    # Matplotlib accepts an ndarray here, though its stub asks for Sequence.
+    artist = PolyCollection(
+        cast("Sequence[np.ndarray]", vertices.reshape(-1, 4, 2)),
+        array=np.ma.asarray(data).ravel(),
+        cmap=cmap,
+        edgecolors="none",
+        antialiased=False,
+    )
+    ax.add_collection(artist)
+    limits = artist.get_datalim(ax.transData)
+    if gap_color is not None:
+        ax.add_patch(
+            Rectangle(
+                limits.p0,
+                limits.width,
+                limits.height,
+                facecolor=gap_color,
+                edgecolor="none",
+                zorder=0,
+            )
+        )
+    ax.set_xlim(limits.xmin, limits.xmax)
+    ax.set_ylim(limits.ymin, limits.ymax)
+    return artist, cells
+
+
 @patch_function()
 def waterfall(
     patch: PatchType,
@@ -159,8 +240,10 @@ def waterfall(
 
     Evenly sampled coordinates use ``imshow``. Finite, monotonic irregular
     coordinates use ``pcolormesh`` so cells follow their coordinate values;
-    incomplete coordinates fall back to ``imshow``. Nonmonotonic coordinates
-    raise `ParameterError`.
+    incomplete coordinates fall back to ``imshow``. Explicit cell bounds
+    take precedence; cells that cannot form uniform image pixels are drawn
+    individually, including overlapping cells and gaps. Nonmonotonic
+    coordinates raise `ParameterError`.
 
     Parameters
     ----------
@@ -268,11 +351,25 @@ def waterfall(
     scale = _get_scale(scale, scale_type, data)
     label_edges = None
     use_image = all(coord.evenly_sampled for coord in dim_coords.values())
-    if use_image or not all(is_monotonic_and_finite(x) for x in coords.values()):
-        extents = _get_extents(dims_r, coords)
+    has_bounds = any(_cell_edge_names(dim, patch.coords) for dim in dims)
+    explicit_cells = has_bounds and (
+        not use_image or not _bounds_fit_image(patch.coords, dims)
+    )
+    if explicit_cells:
+        im, cells = _plot_with_bounds(ax, data, patch, cmap, gap_color, gap_factor)
+        if plan is not None:
+            label_edges = cells[plan.dim]
+    elif use_image or not all(is_monotonic_and_finite(x) for x in coords.values()):
+        extents = _get_extents(dims_r, patch.coords)
+        # Extents are low-to-high; preserve the row-to-label mapping for
+        # descending coordinates by orienting the data to those limits.
+        reverse_axes = tuple(
+            axis for axis, dim in enumerate(dims) if dim_coords[dim].reverse_sorted
+        )
+        image_data = np.flip(data, axis=reverse_axes) if reverse_axes else data
         with mpl.rc_context({"image.resample": True}):
             im = ax.imshow(
-                data,
+                image_data,
                 extent=extents,
                 aspect="auto",
                 cmap=cmap,
@@ -284,6 +381,8 @@ def waterfall(
             label_edges = image_cell_edges(
                 extents, dims_r, plan.dim, len(coords[plan.dim])
             )
+            if dim_coords[plan.dim].reverse_sorted:
+                label_edges = tuple(edge[::-1] for edge in reversed(label_edges))
     else:
         im, cells = _plot_with_mesh(
             ax,

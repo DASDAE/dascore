@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from fractions import Fraction
+
 import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
 import numpy as np
@@ -18,7 +20,7 @@ from dascore.exceptions import ParameterError
 from dascore.units import get_quantity_str, percent
 from dascore.utils.gaps import get_gap_edges
 from dascore.utils.misc import suppress_warnings
-from dascore.utils.plotting import _cell_edge_limits, _get_extents
+from dascore.utils.plotting import _get_extents
 from dascore.utils.time import is_datetime64, to_timedelta64
 from dascore.viz._labels import BAR_GID, MAX_LABELS, MAX_RUNS, SEAM_GID
 from dascore.viz._lanes import string_colors
@@ -143,23 +145,6 @@ class TestWaterfall:
         assert (first - x_low) * 24 * 60 * 60 == pytest.approx(0.5, abs=1e-6)
 
     @pytest.mark.parametrize(
-        "low,high,size,expected",
-        [
-            (10.0, 10.0, 1, [10.0, 10.0]),
-            (-1e308, 1e308, 3, [-1e308, 1e308]),
-            (10.0, 18.0, 5, [9.0, 19.0]),
-        ],
-    )
-    def test_cell_edge_limits(self, low, high, size, expected):
-        """
-        A span with no width to share passes through.
-
-        One sample has no step to halve, and a span filling the float
-        range has no room for another half cell.
-        """
-        assert _cell_edge_limits(low, high, size) == expected
-
-    @pytest.mark.parametrize(
         "step,size",
         [
             # A half step of a second and a half, which no whole number of
@@ -179,7 +164,7 @@ class TestWaterfall:
         assert (first - low) * 24 * 60 * 60 == pytest.approx(half_step, rel=1e-6)
 
     def test_extent_half_step_in_calendar_units(self):
-        """A month is padded by half of the months it actually spans."""
+        """Raw calendar arrays retain the legacy average-spacing fallback."""
         time = np.datetime64("2020-01", "M") + np.arange(3)
         low = _get_extents(("time",), {"time": time})[0]
         first = mdates.date2num(dc.to_datetime64(time[0]))
@@ -1225,3 +1210,289 @@ class TestLabelCoord:
         patch = random_patch.update_coords(tag=("distance", values))
         ax = patch.viz.waterfall(label_coord="tag")
         assert ax.get_position().width > 0
+
+
+class TestCellExtents:
+    """Image limits describe cells using declared steps or explicit bounds."""
+
+    @pytest.mark.parametrize(
+        "start,step,size,expected",
+        [
+            (0, 2, 3, [-1, 5]),
+            (4, -2, 3, [-1, 5]),
+            (4, 2, 1, [3, 5]),
+            (4, -2, 1, [3, 5]),
+        ],
+    )
+    def test_half_step(self, start, step, size, expected):
+        """Ascending, descending, and singleton grids use the declared step."""
+        coord = dc.get_coord(start=start, step=step, shape=size)
+        assert _get_extents(("x",), {"x": coord}) == expected
+
+    def test_no_step(self):
+        """A singleton without a step has a degenerate extent."""
+        coord = dc.get_coord(data=[4])
+        assert _get_extents(("x",), {"x": coord}) == [4, 4]
+
+    def test_irregular(self):
+        """Irregular coordinates retain their label envelope."""
+        coord = dc.get_coord(data=[0, 1, 5])
+        assert _get_extents(("x",), {"x": coord}) == [0, 5]
+
+    @pytest.mark.parametrize("dtype", ["datetime64[ns]", "timedelta64[ns]"])
+    @pytest.mark.parametrize("size", [1, 1025])
+    def test_exact_time(self, dtype, size):
+        """Fractional grids use their rounded scalar step for plot limits."""
+        start = np.asarray(0, dtype=dtype)[()]
+        coord = dc.get_coord(start=start, step=Fraction(1, 1024), shape=size)
+        low, high = _get_extents(("time",), {"time": coord})
+        scale = 86400 if dtype.startswith("datetime") else 1
+        half = coord.step / np.timedelta64(1, "s") / 2
+        assert low * scale == pytest.approx(-half, abs=1e-12)
+        last = (coord.max() - start) / np.timedelta64(1, "s")
+        assert high * scale == pytest.approx(last + half, abs=1e-12)
+
+    @pytest.mark.parametrize("reverse", [False, True])
+    def test_pair(self, reverse):
+        """Explicit low/high edges take precedence over label centring."""
+        index = slice(None, None, -1 if reverse else 1)
+        coord = dc.get_coord(data=np.arange(3.0)[index])
+        cm = dc.get_coord_manager(
+            {"x": coord, "x_start": ("x", coord), "x_stop": ("x", coord.update(min=1))},
+            dims=("x",),
+        )
+        assert _get_extents(("x",), cm) == [0, 3]
+
+    def test_waterfall_pair(self):
+        """Waterfall forwards associated bounds to its image extent."""
+        coord = dc.get_coord(data=np.arange(3.0))
+        patch = dc.Patch(
+            data=np.zeros((3, 2)),
+            dims=("x", "y"),
+            coords={
+                "x": coord,
+                "y": np.arange(2),
+                "x_start": ("x", coord),
+                "x_stop": ("x", coord.update(min=1)),
+            },
+        )
+        assert patch.viz.waterfall(cbar=False).images[0].get_extent() == [
+            -0.5,
+            1.5,
+            0,
+            3,
+        ]
+
+    @pytest.mark.parametrize("reverse", [False, True])
+    def test_gap_seam(self, reverse):
+        """A missing position is bounded by full neighbouring half-cells."""
+        values = np.array([0.0, 1.0, 4.0, 5.0])
+        if reverse:
+            values = values[::-1]
+        edges, gaps = get_gap_edges(values, gap_factor=1.5)
+        assert gaps.tolist() == [False, True, False]
+        assert sorted(edges[2:4]) == [1.5, 3.5]
+        patch = dc.Patch(
+            data=np.zeros((4, 2)),
+            dims=("x", "y"),
+            coords={"x": values, "y": np.arange(2)},
+        )
+        mesh = patch.viz.waterfall(cbar=False, gap_color="gray").collections[0]
+        assert np.all(mesh.get_array().mask[2])
+        np.testing.assert_array_equal(mesh.get_coordinates()[:, 0, 1], edges)
+
+
+class TestExplicitWaterfallCells:
+    """Stated cells retain their locations, widths, and uncovered positions."""
+
+    @pytest.fixture
+    def bounded(self):
+        """Three irregular cells with gaps between them."""
+        return dc.Patch(
+            data=np.arange(6.0).reshape(3, 2),
+            dims=("x", "y"),
+            coords={
+                "x": [0.0, 2.0, 5.0],
+                "y": [0.0, 1.0],
+                "x_start": ("x", [-0.25, 1.75, 4.75]),
+                "x_stop": ("x", [0.75, 2.75, 5.75]),
+                "zone": ("x", ["a", "b", "c"]),
+            },
+        )
+
+    @pytest.mark.parametrize("reverse", [False, True])
+    @pytest.mark.parametrize("gap_color", [None, "gray"])
+    def test_physical_cells(self, bounded, reverse, gap_color):
+        """Each polygon follows its sample's explicit bounds, including gaps."""
+        patch = bounded.isel(x=slice(None, None, -1)) if reverse else bounded
+        ax = patch.viz.waterfall(gap_color=gap_color, label_coord="zone")
+        polygons = ax.collections[0]
+        np.testing.assert_array_equal(polygons.get_array(), patch.data.ravel())
+        low, high = patch.get_array("x_start"), patch.get_array("x_stop")
+        for index, path in enumerate(polygons.get_paths()):
+            assert path.vertices[:, 1].min() == low[index // 2]
+            assert path.vertices[:, 1].max() == high[index // 2]
+        assert ax.get_ylim() == (-0.25, 5.75)
+        assert len(ax.patches) == (gap_color is not None)
+
+    def test_overlapping_cells(self, bounded):
+        """Overlapping cells retain their full bounds without creating fake gaps."""
+        patch = bounded.update_coords(x_stop=("x", [3.0, 6.0, 7.0]))
+        ax = patch.viz.waterfall(cbar=False)
+        paths = ax.collections[0].get_paths()
+        assert paths[0].vertices[:, 1].max() == 3.0
+        assert paths[2].vertices[:, 1].min() == 1.75
+        assert not ax.patches
+
+    @pytest.mark.parametrize("time_like", ["datetime", "timedelta"])
+    def test_time_bounds(self, bounded, time_like):
+        """Physical time bounds use Matplotlib days or duration seconds."""
+        convert = dc.to_datetime64 if time_like == "datetime" else dc.to_timedelta64
+        updates = {
+            name: (("x",), convert(bounded.get_array(name)))
+            for name in ("x", "x_start", "x_stop")
+        }
+        patch = bounded.update_coords(**updates)
+        ax = patch.viz.waterfall(cbar=False)
+        scale = 86400 if time_like == "datetime" else 1
+        path = ax.collections[0].get_paths()[0]
+        assert path.vertices[:, 1].min() * scale == pytest.approx(-0.25)
+        assert path.vertices[:, 1].max() * scale == pytest.approx(0.75)
+
+    def test_singleton_other_axis(self, bounded):
+        """A singleton paired with irregular cells uses its known cell width."""
+        patch = bounded.isel(y=slice(0, 1))
+        ax = patch.viz.waterfall(cbar=False)
+        assert ax.get_xlim() == (-0.5, 0.5)
+
+    def test_irregular_bounds_on_even_labels(self):
+        """Nonuniform widths need individual cells even on an even label grid."""
+        patch = dc.Patch(
+            data=np.ones((3, 2)),
+            dims=("x", "y"),
+            coords={
+                "x": [0.0, 1.0, 2.0],
+                "y": [0.0, 1.0],
+                "x_start": ("x", [-0.25, 0.5, 1.5]),
+                "x_stop": ("x", [0.5, 1.5, 2.5]),
+            },
+        )
+        ax = patch.viz.waterfall(cbar=False)
+        assert not ax.images
+        assert len(ax.collections[0].get_paths()) == 6
+
+    def test_even_labels_with_explicit_gaps(self):
+        """Uniform labels do not imply coverage between narrow explicit cells."""
+        patch = dc.Patch(
+            data=np.ones((3, 2)),
+            dims=("x", "y"),
+            coords={
+                "x": [0.0, 1.0, 2.0],
+                "y": [0.0, 1.0],
+                "x_start": ("x", [-0.25, 0.75, 1.75]),
+                "x_stop": ("x", [0.25, 1.25, 2.25]),
+            },
+        )
+        assert not patch.viz.waterfall(cbar=False).images
+
+    def test_descending_image(self):
+        """Descending image data and spine labels follow their physical cells."""
+        patch = dc.Patch(
+            data=np.arange(6).reshape(3, 2),
+            dims=("x", "y"),
+            coords={
+                "x": [2.0, 1.0, 0.0],
+                "y": [1.0, 0.0],
+                "x_start": ("x", [2.0, 1.0, 0.0]),
+                "x_stop": ("x", [3.0, 2.0, 1.0]),
+                "zone": ("x", ["a", "b", "c"]),
+            },
+        )
+        ax = patch.viz.waterfall(cbar=False, label_coord="zone")
+        np.testing.assert_array_equal(ax.images[0].get_array(), patch.data[::-1, ::-1])
+        assert ax.images[0].get_extent() == [-0.5, 1.5, 0, 3]
+
+    def test_singleton_pair_image(self):
+        """A single explicit cell supplies its width without a label step."""
+        patch = dc.Patch(
+            data=np.ones((1, 2)),
+            dims=("x", "y"),
+            coords={
+                "x": dc.get_coord(start=2, step=1, shape=1),
+                "y": [0.0, 1.0],
+                "x_start": ("x", [1.5]),
+                "x_stop": ("x", [3.0]),
+            },
+        )
+        assert patch.viz.waterfall(cbar=False).images[0].get_extent() == [
+            -0.5,
+            1.5,
+            1.5,
+            3.0,
+        ]
+
+
+class TestExtentFallback:
+    """Legacy raw-array extents remain finite at floating-point limits."""
+
+    def test_overflowing_span(self):
+        """Do not widen an envelope that already fills the finite float range."""
+        array = np.array([-1e308, 0.0, 1e308])
+        assert _get_extents(("x",), {"x": array}) == [-1e308, 1e308]
+
+
+class TestReviewedCellRendering:
+    """Rendering regressions found by independent and caller review."""
+
+    def test_two_unequal_cells(self):
+        """Two edge arrays can be uniform while the two cell widths differ."""
+        patch = dc.Patch(
+            data=np.ones((2, 2)),
+            dims=("x", "y"),
+            coords={
+                "x": [0.0, 1.0],
+                "y": [0.0, 1.0],
+                "x_start": ("x", [-0.5, 0.5]),
+                "x_stop": ("x", [0.5, 2.5]),
+            },
+        )
+        ax = patch.viz.waterfall(cbar=False)
+        assert not ax.images
+        paths = ax.collections[0].get_paths()
+        assert paths[0].vertices[:, 1].max() == 0.5
+        assert paths[2].vertices[:, 1].min() == 0.5
+
+    def test_incomplete_other_axis(self):
+        """Bounds on one axis retain the existing index fallback on the other."""
+        patch = dc.Patch(
+            data=np.ones((2, 2)),
+            dims=("x", "y"),
+            coords={
+                "x": [0.0, 1.0],
+                "y": [np.nan, np.nan],
+                "x_start": ("x", [-0.5, 0.5]),
+                "x_stop": ("x", [0.5, 1.5]),
+            },
+        )
+        ax = patch.viz.waterfall(cbar=False)
+        assert ax.get_xlim() == (0.0, 1.0)
+        assert ax.get_ylim() == (-0.5, 1.5)
+
+    @pytest.mark.parametrize("gapped", [False, True])
+    def test_descending_grouped_label(self, gapped):
+        """A label spanning descending rows covers their entire cells."""
+        width = 0.5 if gapped else 1.0
+        patch = dc.Patch(
+            data=np.ones((3, 2)),
+            dims=("x", "y"),
+            coords={
+                "x": [2.0, 1.0, 0.0],
+                "y": [0.0, 1.0],
+                "x_start": ("x", [2.0, 1.0, 0.0]),
+                "x_stop": ("x", np.array([2.0, 1.0, 0.0]) + width),
+                "zone": ("x", ["a", "a", "b"]),
+            },
+        )
+        ax = patch.viz.waterfall(cbar=False, label_coord="zone")
+        bars = [line for line in ax.lines if str(line.get_gid()).startswith(BAR_GID)]
+        assert bars[0].get_ydata().tolist() == [2.0 + width, 1.0]

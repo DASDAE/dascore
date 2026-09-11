@@ -1111,7 +1111,9 @@ def pad(
 
     # Pad data, update coord manager, and return.
     new_data = np.pad(patch.data, pad_width, mode=mode, constant_values=constant_values)
-    new_coords = patch.coords.update(**new_coords)
+    new_coords = patch.coords._update_grid(
+        *(dim for dim, widths in pad_tuples.items() if any(widths)), **new_coords
+    )
     return patch.new(data=new_data, coords=new_coords)
 
 

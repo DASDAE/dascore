@@ -153,7 +153,7 @@ class TestAnalysisWindow:
             time=16,
             samples=True,
         )
-        starts = tiles.get_coord("time_start").values
+        starts = tiles.get_coord("_tile_index_time").values
         assert starts[0] == -12
         assert starts[1] - starts[0] == 4
 
@@ -327,13 +327,15 @@ class TestStack:
         """The tile axis is the centres; start and stop say where each came from."""
         starts = stacked.get_coord("time_start").values
         stops = stacked.get_coord("time_stop").values
-        assert starts[0] == -8 and stops[0] == 8  # one stride before the data
-        assert np.all(stops - starts == 16)
+        source = patch.get_coord("time")
+        indices = stacked.get_array("_tile_index_time")
+        assert indices[0] == -8
+        assert starts[0] == source.min() - 8 * source.step - source.step / 2
+        assert np.all(stops - starts == 16 * source.step)
         centres = stacked.get_coord("time").values
-        step = patch.get_coord("time").step
-        expected = patch.get_coord("time").min() + dc.to_timedelta64(
-            (starts + 8) * dc.to_float(step)
-        )
+        expected = source.min() + (indices + 8) * source.step
+        assert stacked.get_coord("time_start").units == source.units
+        assert stacked.get_coord("time_stop").units == source.units
         np.testing.assert_array_equal(centres, expected)
 
     def test_offsets(self, stacked, patch):
@@ -642,3 +644,61 @@ class TestArguments:
         op = dc.proc.tile_apply.op(halve, time=64, samples=True)
         with pytest.raises(ParameterError, match="cannot be written"):
             op.to_dict()
+
+
+class TestPhysicalTileBounds:
+    """Physical edges and reconstruction indices have independent contracts."""
+
+    @pytest.mark.parametrize("reverse", [False, True])
+    @pytest.mark.parametrize("time_like", [False, True])
+    def test_bounds_and_reassembly(self, reverse, time_like):
+        """Bounds contain every window centre in both coordinate directions."""
+        values = np.arange(32.0)
+        values = dc.to_timedelta64(values * 1e-9) if time_like else values
+        if reverse:
+            values = values[::-1]
+        original = dc.Patch(data=np.arange(32.0), coords={"x": values}, dims=("x",))
+        tiles = original.tile_apply(identity, mode="stack", x=4, samples=True)
+        low, high = tiles.get_array("x_start"), tiles.get_array("x_stop")
+        labels = tiles.get_array("x")
+        assert np.all(low <= labels)
+        assert np.all(labels < high)
+        assert tiles.get_coord("x_start").units == tiles.get_coord("x").units
+        assert tiles.reassemble().equals(original, close=True)
+        assert "_tile_index_x" not in tiles.reassemble().coords
+
+    def test_converted_units_reassemble(self, patch):
+        """Changing public distance units does not change reconstruction indices."""
+        tiles = patch.tile_apply(identity, mode="stack", distance=16, samples=True)
+        converted = tiles.convert_units(distance="km")
+        np.testing.assert_array_equal(
+            converted.get_array("_tile_index_distance"),
+            tiles.get_array("_tile_index_distance"),
+        )
+        assert converted.reassemble().equals(patch, close=True)
+
+    def test_arbitrary_permutation_without_bounds(self, patch):
+        """Dropping display bounds permits reordering while private indices remain."""
+        tiles = patch.tile_apply(identity, mode="stack", time=64, samples=True)
+        count = len(tiles.get_coord("time"))
+        permutation = np.roll(np.arange(count), 1)
+        reordered = tiles.drop_coords("time_start", "time_stop").order(
+            time=permutation, samples=True
+        )
+        assert reordered.reassemble().equals(patch, close=True)
+
+
+class TestUnsignedTileBounds:
+    """Padding a window can extend its physical bounds below unsigned zero."""
+
+    @pytest.mark.parametrize("dtype", [np.uint8, np.uint64])
+    def test_extrapolated_bounds(self, dtype):
+        """The first overlapping tile spans negative positions without wrapping."""
+        patch = dc.Patch(
+            data=np.arange(32.0), coords={"x": np.arange(32, dtype=dtype)}, dims=("x",)
+        )
+        tiles = patch.tile_apply(identity, mode="stack", x=4, samples=True)
+        assert tiles.get_array("x_start")[0] == -2.5
+        assert tiles.get_array("x_stop")[0] == 1.5
+        assert tiles.get_array("x")[0] == 0
+        assert tiles.reassemble().equals(patch, close=True)
