@@ -480,7 +480,8 @@ def spool_to_xarray(
     materialized labels, which per-channel arrays (gains, offsets) align
     with. xarray aligns a lazy index only with lazy ones: to combine a
     segment with arrays indexed along the merged dimension, or reindex
-    it, give it an ordinary index first, which reads its labels, e.g.
+    it, give it an ordinary index first, which reads all its labels into
+    memory (so select first where possible), e.g.
     ``data.drop_indexes("time").set_xindex("time")``.
 
     A spool with pending value-range selections cannot be converted: the

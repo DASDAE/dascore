@@ -39,7 +39,7 @@ patch = dc.get_example_patch()
 lazy = patch.io.to_xarray(lazy_coords=True)
 ```
 
-xarray aligns a lazy index only with others of its kind, so combining a lazy array with an array whose index holds its labels (built from numpy, loaded from netCDF, or converted with the default), or reindexing it to new labels, raises an `AlignmentError`. To combine them, give the lazy array ordinary indexes: `drop_indexes` removes the lazy index but keeps the coordinate's labels, and `set_xindex` builds an ordinary index from them, reading every label (8 bytes a sample). The data stays as it is:
+xarray aligns a lazy index only with others of its kind, so combining a lazy array with an array whose index holds its labels (built from numpy, loaded from netCDF, or converted with the default), or reindexing it to new labels, raises an `AlignmentError`. To combine them, give the lazy array ordinary indexes: `drop_indexes` removes the lazy index but keeps the coordinate's labels, and `set_xindex` builds an ordinary index from them, reading every label into memory (8 bytes a sample; a day at 1 kHz is about 0.7 GB). The data stays as it is. Select first where you can, so only the selection's labels are read:
 
 ```python
 eager = lazy.drop_indexes(["time", "distance"]).set_xindex("time").set_xindex("distance")
