@@ -20,7 +20,7 @@ import inspect
 import math
 import warnings
 from collections.abc import Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Literal
 
@@ -108,6 +108,32 @@ class ChunkPlan:
     def merge_mode(self) -> bool:
         """Return True when this plan merges (no segmenting length)."""
         return self.value is None
+
+
+def coalesce_runs(plan: ChunkPlan, working: pd.DataFrame) -> ChunkPlan:
+    """
+    Merge each output's consecutive members cut from one patch's runs.
+
+    A patch split into runs plans run by run (its rows share one
+    `_patch_id`), so a hole can end an output; the runs which land in
+    one output are read from their patch once, as one member spanning
+    them.
+    """
+    members = plan.members
+    ids = working["_patch_id"]
+    split = set(ids[ids.duplicated(keep=False)])
+    if not split or members.empty:
+        return plan
+    lo, hi = f"{plan.dim}_min", f"{plan.dim}_max"
+    out, pid = members["output_id"], members["_patch_id"]
+    same = (out == out.shift()) & (pid == pid.shift()) & pid.isin(split)
+    if not same.any():
+        return plan
+    piece = (~same).cumsum()
+    merged = members[~same].copy()
+    merged[lo] = members.groupby(piece, sort=False)[lo].min().to_numpy()
+    merged[hi] = members.groupby(piece, sort=False)[hi].max().to_numpy()
+    return replace(plan, members=merged.reset_index(drop=True))
 
 
 def _kind_codes(df: pd.DataFrame, names: Sequence[str]) -> pd.Series:

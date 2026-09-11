@@ -13,7 +13,6 @@ import dascore.utils.patch_registry as registry_module
 from dascore.exceptions import ParameterError
 from dascore.units import get_quantity
 from dascore.utils.patch_registry import (
-    _as_call,
     _bind,
     fingerprint_call,
     patch_function_tag,
@@ -243,15 +242,11 @@ class TestBinding:
         with pytest.raises(ParameterError, match="cannot be called that way"):
             _bind(dc.proc.normalize, (), {"dim": "time", "not_a_parameter": 1})
 
-    def test_a_positional_before_a_star_args_group(self, random_patch):
-        """The leading argument goes back to being positional to run."""
+    def test_a_positional_before_a_star_args_group(self):
+        """A leading positional and a `*args` group bind to their names."""
         func = registry_test_leading_then_group
         bound = _bind(func, (1, 2, 3), {"flag": True})
         assert bound == {"first": 1, "rest": (2, 3), "flag": True}
-        args, kwargs = _as_call(func, bound)
-        assert (args, kwargs) == ((1, 2, 3), {"flag": True})
-        with pytest.raises(ParameterError, match="cannot be called that way"):
-            _as_call(func, {"rest": (2, 3)})
 
 
 class TestFingerprintCall:

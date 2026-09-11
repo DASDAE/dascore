@@ -1361,6 +1361,12 @@ class SQLiteIndexBackend:
         )
         return set(self._fetch_df(sql)["coord_name"].astype(str))
 
+    def patch_ids_by_key(self) -> dict[str, int]:
+        """Each patch's id, by its source patch key (a plan's output id)."""
+        df = self._fetch_df("SELECT patch_id, source_patch_key FROM patches")
+        keys = df["source_patch_key"].astype(str)
+        return dict(zip(keys, df["patch_id"].astype(int), strict=True))
+
     def coord_runs(self, name: str, patch_ids) -> pd.DataFrame:
         """
         The runs one coordinate is stored as, per patch, as envelope objects.

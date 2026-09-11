@@ -242,24 +242,42 @@ def fingerprint_call(func, args: tuple = (), kwargs: dict | None = None) -> str:
     version = getattr(func, "__version__", "1.0")
     name = _call_name(func)
     bound = _without_patches(_bind(func, args, kwargs or {}))
-    # Answered from the cache when the same call has been made before,
-    # which in a loop over a spool is every call after the first. Hashing
-    # the bound arguments costs a few microseconds; the digest of their
-    # canonical JSON costs several times that.
+    return _memoized_fingerprint(func, name, bound, version)
+
+
+def _memoized_fingerprint(owner, name: str, params: dict, version: str) -> str:
+    """
+    Return `operation_fingerprint(name, params, version)`, cached.
+
+    A loop over a spool makes the same call every time. Hashing the
+    parameters costs a few microseconds; the digest of their canonical
+    JSON costs several times that.
+
+    Parameters
+    ----------
+    owner
+        What made the call: a patch function or a processor class.
+    name
+        The operation's name.
+    params
+        Its parameters, with any patch replaced by the patch marker.
+    version
+        Its version.
+    """
     try:
-        # The function itself is in the key, not just its name. For one
-        # which has no tag the name ends in `id(func)`, and CPython reuses
-        # an address once the function is collected -- so a factory making
-        # one patch function per call could hand a later one the earlier
-        # one's fingerprint. Holding the function here makes the key exact
-        # and keeps the address from being reused underneath it.
-        key = (func, name, version, _as_key(bound))
+        # The owner is in the key, not just its name. For one which has no
+        # tag the name ends in `id(owner)`, and CPython reuses an address
+        # once the owner is collected -- so a factory making one per call
+        # could hand a later one the earlier one's fingerprint. Holding the
+        # owner here makes the key exact and keeps the address from being
+        # reused underneath it.
+        key = (owner, name, version, _as_key(params))
     except TypeError:
         # Something unhashable -- an array argument, most often. Its
         # digest is the honest cost of saying which array it was.
-        return operation_fingerprint(name, bound, version)
+        return operation_fingerprint(name, params, version)
     if (found := _FINGERPRINTS.get(key)) is None:
-        found = operation_fingerprint(name, bound, version)
+        found = operation_fingerprint(name, params, version)
         # Bounded, and simply stops growing rather than evicting: the
         # entries are one small string each, and a process which has made
         # four thousand distinct calls is not one this is hot for.
@@ -425,35 +443,6 @@ def _bind(func, args: tuple, kwargs: dict) -> dict:
             raise ParameterError(msg)
         out |= extras
     return out
-
-
-def _as_call(func, kwargs: dict) -> tuple[tuple, dict]:
-    """
-    Return bound arguments as the call which can be made from them.
-
-    A `*args` group cannot be passed by name, and neither can anything in
-    front of one, so those go back to being positional. The result is bound
-    again, so a mapping which is not a call this function accepts is
-    refused here rather than part-way through running it.
-    """
-    signature = _signature(func)
-    parameters = list(signature.parameters.values())[1:]
-    packs = any(x.kind == inspect.Parameter.VAR_POSITIONAL for x in parameters)
-    args, rest = [], dict(kwargs)
-    for parameter in parameters:
-        positional = parameter.kind == inspect.Parameter.POSITIONAL_ONLY or (
-            packs and parameter.kind == inspect.Parameter.POSITIONAL_OR_KEYWORD
-        )
-        if parameter.kind == inspect.Parameter.VAR_POSITIONAL:
-            args.extend(rest.pop(parameter.name, ()))
-        elif positional and parameter.name in rest:
-            args.append(rest.pop(parameter.name))
-        elif positional:
-            # Absent, so everything after it would land in the wrong slot.
-            # `_check` says which name is missing.
-            break
-    _check(func, tuple(args), rest)
-    return tuple(args), rest
 
 
 def _resolve_default(default: Any) -> Any:

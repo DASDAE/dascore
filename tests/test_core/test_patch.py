@@ -857,6 +857,10 @@ class TestDataless:
         patch = random_patch.new(data=xp.asarray(random_patch.data))
         assert patch.drop_data().dtype == patch.dtype
 
+    def test_dropped_is_another_patch(self, source):
+        """A spool holds a patch and its data-less copy as two."""
+        assert len(dc.spool([source, source.drop_data()])) == 2
+
     def test_pickle_round_trip(self, described):
         """A patch without data pickles as one."""
         out = pickle.loads(pickle.dumps(described))

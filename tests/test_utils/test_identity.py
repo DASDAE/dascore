@@ -574,8 +574,8 @@ class TestOperationsWhichAreNotPatchFunctions:
         is stamped -- which is what those bypasses are for, and worth
         pinning so a refactor which removes one is a visible change.
         """
-        wrapped = dc.proc.normalize(patch, "time")
-        raw = dc.proc.normalize.raw_function(patch, "time")
+        wrapped = dc.proc.detrend(patch, "time")
+        raw = dc.proc.detrend.raw_function(patch, "time")
         assert wrapped.attrs.processing_id != raw.attrs.processing_id
         assert raw.attrs.processing_id == patch.attrs.processing_id
 
