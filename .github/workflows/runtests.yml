@@ -17,7 +17,7 @@ on:
       # The conda_env job exists to guard this file, so it has to run when
       # the file changes.
       - 'environment.yml'
-      - 'docs/**/*.qmd'
+      - 'dascore/docs/**/*.qmd'
       - '**.py'
       - '.github/workflows/*.yml'
       - '.github/actions/**/*.yml'

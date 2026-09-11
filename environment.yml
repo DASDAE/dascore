@@ -21,6 +21,7 @@ dependencies:
   - xarray
   - pre-commit
   - h5py
+  - filelock>=3.12
   - matplotlib>=3.10
   - scipy>=1.15.0
   - findiff

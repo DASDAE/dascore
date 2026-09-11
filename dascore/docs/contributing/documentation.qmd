@@ -51,19 +51,19 @@ After the [development install](dev_install.qmd), install [Quarto](https://quart
 
 ```bash
 python scripts/build_api_docs.py
-quarto render docs
+quarto render dascore/docs
 ```
 
-Use `quarto preview docs` for live editing. Generated HTML is under `docs/_site/`.
+Use `quarto preview dascore/docs` for live editing. Generated HTML is under `dascore/docs/_site/`.
 
-Edit `scripts/_templates/_quarto.yml` for navigation; `docs/_quarto.yml` is generated and overwritten. The API sidebar intentionally lists top-level sections rather than every object; `docs/api/_metadata.yml` assigns unlisted API pages to it.
+Edit `scripts/_templates/_quarto.yml` for navigation; `dascore/docs/_quarto.yml` is generated and overwritten. The API sidebar intentionally lists top-level sections rather than every object; `dascore/docs/api/_metadata.yml` assigns unlisted API pages to it.
 
 The docs build records timing, output size, and URL changes:
 
 ```bash
 python scripts/_doc_report.py time build_api_docs -- python scripts/build_api_docs.py
 python scripts/_doc_report.py index
-python scripts/_doc_report.py time quarto_render -- quarto render docs
+python scripts/_doc_report.py time quarto_render -- quarto render dascore/docs
 python scripts/_doc_report.py site
 python scripts/_doc_report.py summary
 ```
@@ -85,8 +85,8 @@ Runnable tutorials become JupyterLite notebooks during CI. The `.qmd` files rema
 python -m build --wheel
 python scripts/build_notebooks.py
 jupyter lite build \
-  --contents docs/lite_contents \
-  --output-dir docs/lite \
+  --contents dascore/docs/lite_contents \
+  --output-dir dascore/docs/lite \
   --piplite-wheels dist/dascore-*.whl \
   --no-sourcemaps
 ```
@@ -103,9 +103,9 @@ Link API objects by placing their import path in backticks:
 [Patch](`dascore.core.Patch`)
 ```
 
-From docstrings, link pages relative to `docs/`, for example `[Documentation](`docs/contributing/documentation.qmd`)`. In `.qmd` pages, use ordinary relative paths.
+From docstrings, link pages relative to `dascore/docs/`, for example `[Documentation](`dascore/docs/contributing/documentation.qmd`)`. In `.qmd` pages, use ordinary relative paths.
 
-Add publications to `docs/references.bib` and cite them with Pandoc syntax such as `@lindsey2021fiber` or `[@lindsey2021fiber]`.
+Add publications to `dascore/docs/references.bib` and cite them with Pandoc syntax such as `@lindsey2021fiber` or `[@lindsey2021fiber]`.
 
 Use standard LaTeX: `$E=mc^2$` inline or a labeled display for cross-references:
 
