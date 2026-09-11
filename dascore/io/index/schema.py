@@ -372,12 +372,18 @@ SPOOL_LATE_RENAMES = MappingProxyType(
     }
 )
 
-# Explicit secondary indexes. Every other access path is covered by a
-# PRIMARY KEY or UNIQUE autoindex above — patch_coords(patch_id,
-# coord_name), sources(base_uri, source_path), patches(source_id,
-# source_patch_key), coord_defs(def_key) — and duplicating them measured
-# ~25% extra file size and slower writes for no query gain.
-INDEXES = (("idx_pcoords_name", "patch_coords", "coord_name"),)
+# Explicit secondary indexes, as (name, table, columns, WHERE clause or
+# None). Every other access path is covered by a PRIMARY KEY or UNIQUE
+# autoindex above — patch_coords(patch_id, coord_name), sources(base_uri,
+# source_path), patches(source_id, source_patch_key), coord_defs(def_key)
+# — and duplicating them measured ~25% extra file size and slower writes
+# for no query gain. The partial index lists the few definitions whose
+# grid the envelope cannot restate, so a query need not scan them all.
+FRACTIONAL_GRID = "step_denominator != 1 OR origin_offset != 0"
+INDEXES = (
+    ("idx_pcoords_name", "patch_coords", "coord_name", None),
+    ("idx_cdefs_fractional", "coord_defs", "def_key", FRACTIONAL_GRID),
+)
 
 
 # --- SQL generation -----------------------------------------------------

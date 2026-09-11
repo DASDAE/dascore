@@ -45,6 +45,7 @@ from dascore.io.index.query import (
     build_sql,
 )
 from dascore.io.index.schema import (
+    FRACTIONAL_GRID,
     INDEX_VERSION,
     INDEXES,
     KIND_STORAGE,
@@ -311,10 +312,9 @@ class SQLiteIndexBackend:
                 self._execute(
                     create_table_sql(name, columns, TABLE_CONSTRAINTS.get(name, ()))
                 )
-            for index_name, table, column in INDEXES:
-                self._execute(
-                    f"CREATE INDEX IF NOT EXISTS {index_name} ON {table} ({column})"
-                )
+            for index_name, table, column, where in INDEXES:
+                sql = f"CREATE INDEX IF NOT EXISTS {index_name} ON {table} ({column})"
+                self._execute(sql if where is None else f"{sql} WHERE {where}")
             self._execute(
                 "INSERT INTO meta_data VALUES (?, ?, ?, ?)",
                 (WHAT_IS_THIS, INDEX_VERSION, dc.__version__, 0),
@@ -1162,8 +1162,7 @@ class SQLiteIndexBackend:
         """
         columns = ", ".join(_EXACT_GRID_FIELDS)
         rows = self._fetch_df(
-            f"SELECT def_key, {columns}, length FROM coord_defs "
-            "WHERE step_denominator != 1 OR origin_offset != 0"
+            f"SELECT def_key, {columns}, length FROM coord_defs WHERE {FRACTIONAL_GRID}"
         ).dropna()
         return {
             row[0]: tuple(int(x) for x in row[1:]) for row in rows.to_numpy().tolist()
