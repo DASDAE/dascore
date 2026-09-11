@@ -303,23 +303,22 @@ class TestDerived:
         assert merged.get_gaps()["gap_size"].tolist() == [HOLE]
         assert merged.get_gaps("distance").empty
 
-    def test_rechunk_lends_no_runs(self, gapped_patch):
-        """A re-chunk along the same dimension never lends one patch's runs.
+    def test_rechunk_reports_as_the_first_chunk(self, gapped_patch):
+        """A re-chunk along the same dimension reports what the first did.
 
-        Its members are the first plan's, whose ids are not the parent
-        index's, so no output takes runs and no patch drops out of the
-        report.
+        Its members stand in for the first plan's outputs, so each finds
+        the runs of the output holding it and no patch's runs reach
+        another.
         """
         later = dc.get_example_patch().update_coords(
             time_min=gapped_patch.get_coord("time").max() + 10_000 * MS
         )
         once = dc.spool([gapped_patch, later]).chunk(time=None)
         twice = once.chunk(time=None)
-        assert once.get_gaps()["gap_size"].tolist() == [HOLE, pd.Timedelta(10, "s")]
-        links = twice._catalog.backend._fetch_df("SELECT run_index FROM patch_coords")
-        assert (links["run_index"] == 0).all()
-        coverage = twice.get_coverage()
-        assert coverage["time_max"].max() == later.get_coord("time").max()
+        expected = [HOLE, pd.Timedelta(10, "s")]
+        assert once.get_gaps()["gap_size"].tolist() == expected
+        assert twice.get_gaps()["gap_size"].tolist() == expected
+        assert len(twice.get_coverage()) == 1
 
     def test_concatenated_members_state_no_runs(self, gapped_patch):
         """An output joined along a dimension takes no member's runs of it."""
@@ -476,3 +475,11 @@ class TestChunkPlansRuns:
         chained = spool.chunk(distance=None).chunk(x=None).chunk(distance=None)
         ends = [p.get_coord("distance").max() for p in chained]
         assert ends == [4.0, 19.0]
+
+    def test_stricter_rechunk_splits_a_bridged_hole(self, gapped_patch):
+        """A re-chunk with a smaller tolerance splits what a looser one bridged."""
+        bridged = dc.spool([gapped_patch]).chunk(time=None, tolerance=5)
+        assert len(bridged) == 1
+        assert len(bridged.chunk(time=None)) == 2
+        windows = bridged.chunk(time=1)
+        assert not any(isinstance(p.get_coord("time"), CoordSegmented) for p in windows)

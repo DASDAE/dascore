@@ -1755,8 +1755,12 @@ class Spool(NodeRepr, NamespaceOwner):
             return none
         # a row with no envelope here is one neither report nor plan can
         # place (a relative time among absolute ones), and its runs no better
-        placed = df[df[min_col].notna()]
-        runs = self._catalog.backend.coord_runs(dim, placed["_patch_id"].unique())
+        # rows name their patch in this spool's index by `_index_id` when
+        # they are plan members, else by `_patch_id`
+        key = "_index_id" if "_index_id" in df.columns else "_patch_id"
+        placed = df[df[min_col].notna() & df[key].notna()]
+        wanted = placed[key].astype("int64").unique()
+        runs = self._catalog.backend.coord_runs(dim, wanted)
         if runs.empty:
             return none
         by_patch = runs.groupby("patch_id")["_env_step"]
@@ -1764,8 +1768,9 @@ class Spool(NodeRepr, NamespaceOwner):
         runs = runs[(unstepped == 0) & (by_patch.transform("nunique") == 1)]
         if runs.empty:
             return none
-        runs = runs.rename(columns={"patch_id": "_patch_id"})
-        split = placed.merge(runs, on="_patch_id", how="inner")
+        runs = runs.rename(columns={"patch_id": key})
+        placed = placed.astype({key: "int64"})
+        split = placed.merge(runs, on=key, how="inner")
         for run_col, col in zip(
             ("_env_min", "_env_max", "_env_step"), (min_col, max_col, step_col)
         ):
@@ -1779,9 +1784,7 @@ class Spool(NodeRepr, NamespaceOwner):
             }
         )
         split = split[split[min_col] <= split[max_col]]
-        return split[df.columns].reset_index(drop=True), list(
-            runs["_patch_id"].unique()
-        )
+        return split[df.columns].reset_index(drop=True), list(runs[key].unique())
 
     def _with_runs(self, df: pd.DataFrame, dim: str) -> pd.DataFrame:
         """
@@ -1795,7 +1798,7 @@ class Spool(NodeRepr, NamespaceOwner):
         split, ids = self._run_rows(df, dim)
         if not ids:
             return df
-        whole = df[~df["_patch_id"].isin(ids)]
+        whole = df[~df["_patch_id"].isin(ids)]  # reports carry no `_index_id`
         return pd.concat([whole, split], ignore_index=True)
 
     def _runs_as_members(self, working: pd.DataFrame, dim: str) -> pd.DataFrame:
@@ -1811,8 +1814,9 @@ class Spool(NodeRepr, NamespaceOwner):
         split, ids = self._run_rows(working, dim)
         if not ids:
             return working
+        kept = working[~working["_index_id"].isin(ids)]
         working = pd.concat(
-            [working[~working["_patch_id"].isin(ids)], split.assign(_modified=True)],
+            [kept, split.assign(_modified=True)],
             ignore_index=True,
         )
         working["_modified"] = working["_modified"].fillna(False).astype(bool)
