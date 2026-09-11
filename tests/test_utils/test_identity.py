@@ -15,6 +15,7 @@ import pytest
 
 import dascore as dc
 import dascore.utils.patch_registry as registry_module
+from dascore.units import get_unit
 from dascore.utils.identity import (
     NOTHING_DONE,
     advance,
@@ -31,6 +32,7 @@ from dascore.utils.identity import (
 from dascore.utils.patch import concatenate_patches, concatenate_planned, stack_patches
 from dascore.utils.patch_registry import _as_key, _signature, fingerprint_call
 from dascore.utils.serialize import PATCH_ARGUMENT, encode
+from dascore.warnings import DASCoreWarning
 
 
 class TestNewDataId:
@@ -235,6 +237,27 @@ class TestOperationFingerprints:
         """Each call stamps the id recorded for it."""
         expected, call = _RECORDED_IDS[name]
         assert call(*pair).attrs.processing_id == expected
+
+    def test_arguments_tell_calls_apart(self, pair):
+        """Each site records its arguments, not just its kind."""
+        p, q, q2 = pair
+        ids = [
+            (p + 1).attrs.processing_id,
+            (p + 2).attrs.processing_id,
+            (1 - p).attrs.processing_id,
+            np.mean(p, axis=0).attrs.processing_id,
+            np.mean(p, axis=1).attrs.processing_id,
+            stack_patches([p, q]).attrs.processing_id,
+            stack_patches([p, q2], dim_vary="time").attrs.processing_id,
+        ]
+        assert len(set(ids)) == len(ids)
+
+    def test_a_unit_operand_does_not_warn(self, pair):
+        """A pint unit has no encoding of its own; stamping it stays quiet."""
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", DASCoreWarning)
+            _ = pair[0] * get_unit("m")
+            _ = np.multiply(pair[0], get_unit("m"))
 
     def test_an_array_operand_is_not_frozen(self, pair):
         """Fingerprinting an operand leaves the caller's array writable."""

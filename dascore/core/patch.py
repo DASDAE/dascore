@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from functools import cached_property
-from typing import Any, Final
+from typing import Any, Final, cast
 from uuid import uuid4
 
 import numpy as np
@@ -13,7 +13,7 @@ import dascore as dc
 import dascore.proc.coords
 import dascore.utils.io
 from dascore import transform
-from dascore.compat import DataArray, array
+from dascore.compat import array
 from dascore.core.attrs import PatchAttrs
 from dascore.core.coordmanager import CoordManager, get_coord_manager
 from dascore.core.summary import PatchSummary
@@ -43,6 +43,14 @@ from dascore.utils.patch import (
     get_patch_names,
 )
 from dascore.utils.time import to_float
+
+
+def _as_dtype(dtype):
+    """Return a numpy dtype where there is one, else the backend's own."""
+    try:
+        return np.dtype(dtype)
+    except TypeError:
+        return dtype
 
 
 class Patch(NodeRepr, NamespaceOwner):
@@ -87,13 +95,13 @@ class Patch(NodeRepr, NamespaceOwner):
     coords: CoordManager
     dims: tuple[str, ...]
     attrs: PatchAttrs
-    _data: ArrayLike
+    _data: ArrayLike | None
 
     _namespace_entry_point_group: Final[str] = "dascore.patch_namespace"
 
     def __init__(
         self,
-        data: ArrayLike | DataArray | None = None,
+        data: ArrayLike | None = None,
         coords: Mapping[str, Any] | CoordManager | None = None,
         dims: Sequence[str] | None = None,
         attrs: Mapping | PatchAttrs | None = None,
@@ -101,7 +109,7 @@ class Patch(NodeRepr, NamespaceOwner):
     ):
         # Init empty patch
         if all(x is None for x in (data, coords, dims, attrs)):
-            data = np.asarray([])
+            data = np.asarray([], dtype=dtype)
             coords = {}
             dims = ()
             attrs = dc.PatchAttrs()
@@ -109,8 +117,6 @@ class Patch(NodeRepr, NamespaceOwner):
         if isinstance(data, Patch):
             dtype = data.dtype if dtype is None else dtype
             data, attrs, coords = data._data, data.attrs, data.coords
-        elif isinstance(data, DataArray):
-            data, attrs, coords = data.data, data.attrs, data.coords
         if attrs is None:
             attrs = dc.PatchAttrs()
         if dims is None and isinstance(coords, CoordManager):
@@ -124,12 +130,12 @@ class Patch(NodeRepr, NamespaceOwner):
             raise ValueError(msg)
         if data is None:
             coords = get_coord_manager(coords, dims=dims)
-            self._dtype = np.dtype(dtype)
+            self._dtype = _as_dtype(dtype)
         else:
             data = array(data)
             coords = get_coord_manager(coords, dims=dims, shape=data.shape)
             data = array(coords.validate_data(data))
-            if dtype is not None and data.dtype != dtype:
+            if dtype is not None and _as_dtype(dtype) != _as_dtype(data.dtype):
                 msg = f"The data are {data.dtype}, not the dtype given: {dtype}."
                 raise ValueError(msg)
             self._dtype = data.dtype
@@ -336,7 +342,7 @@ class Patch(NodeRepr, NamespaceOwner):
         >>> data = patch.data
         >>> assert data.shape == patch.shape
         """
-        return check_patch_data(self)._data
+        return cast(ArrayLike, check_patch_data(self)._data)
 
     @property
     def shape(self) -> tuple[int, ...]:

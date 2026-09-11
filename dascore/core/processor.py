@@ -32,10 +32,10 @@ from dascore.constants import PatchType
 from dascore.exceptions import ParameterError
 from dascore.models.base import DascoreBaseModel
 from dascore.utils.array_api import backend_name
+from dascore.utils.identity import operation_fingerprint
 from dascore.utils.patch import attr_type, check_patch_attrs, check_patch_coords
 from dascore.utils.patch_registry import (
     _as_call,
-    _fingerprint,
     _signature,
     resolve_patch_function,
 )
@@ -147,7 +147,7 @@ class PatchProcessor(DascoreBaseModel):
         Spelled as the patch function's call is (`fingerprint_call`), not
         as this class, so both routes stamp the same `processing_id`.
         """
-        return _fingerprint(self.name, self.__version__, self.kwargs)
+        return operation_fingerprint(self.name, self.kwargs, self.__version__)
 
     def __eq__(self, other) -> bool:
         """Two processors are equal if they are the same operation."""

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import gc
 import operator
+import pickle
 import re
 import weakref
 from typing import Any, cast
@@ -779,6 +780,11 @@ class TestDataless:
             described.select()
         with pytest.raises(PatchDataError):
             described.abs()
+        # These never read the data, so only the guard stops them.
+        with pytest.raises(PatchDataError):
+            described.set_units("m")
+        with pytest.raises(PatchDataError):
+            described.squeeze()
 
     def test_new_fills_it(self, described, random_patch):
         """Data given to `new` make a patch with data again."""
@@ -811,6 +817,28 @@ class TestDataless:
         text = str(described)
         assert "no data" in text
         assert str(described.dtype) in text
+
+    def test_foreign_backend_dtype(self, random_patch):
+        """A backend whose dtypes are not numpy's can still drop its data."""
+        xp = pytest.importorskip("array_api_strict")
+        patch = random_patch.new(data=xp.asarray(random_patch.data))
+        assert patch.drop_data().dtype == patch.dtype
+
+    def test_pickle_round_trip(self, described):
+        """A patch without data pickles as one."""
+        out = pickle.loads(pickle.dumps(described))
+        assert out.dtype == described.dtype
+        assert out.coords == described.coords
+
+    def test_pickled_before_dtype_was_stored(self, random_patch):
+        """A patch with data reads its dtype from the data, not `_dtype`."""
+        patch = random_patch.new()
+        del patch.__dict__["_dtype"]
+        assert patch.dtype == random_patch.data.dtype
+
+    def test_empty_patch_takes_the_dtype(self):
+        """A dtype alone gives an empty patch of that dtype."""
+        assert Patch(dtype="i4").dtype == np.int32
 
     def test_summary(self, described, random_patch):
         """A summary needs only the metadata."""

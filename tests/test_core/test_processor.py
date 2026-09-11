@@ -273,5 +273,38 @@ class TestTheSeamIsInvisible:
         """Two processors are equal when they are one operation."""
         assert Normalize(dim="time") == Normalize(dim="time")
         assert hash(Normalize(dim="time")) == hash(Normalize(dim="time"))
+        assert hash(Normalize(dim="time")) != hash(Normalize(dim="distance"))
         assert Normalize(dim="time") != Normalize(dim="distance")
         assert Normalize(dim="time") != "normalize"
+
+    def test_another_class_is_another_operation(self):
+        """Even one which fingerprints alike."""
+
+        class OtherAbs(Abs):
+            """A subclass which inherits the registered name."""
+
+        assert OtherAbs().fingerprint == Abs().fingerprint
+        assert OtherAbs() != Abs()
+
+
+class TestCheck:
+    """`check` refuses a patch which cannot carry the operation."""
+
+    @pytest.mark.parametrize(
+        ("declared", "error"),
+        [
+            ({"required_dims": ("pressure",)}, "PatchCoordinateError"),
+            ({"required_coords": ("no_such_coord",)}, "PatchCoordinateError"),
+            ({"required_attrs": {"data_type": "velocity"}}, "PatchAttributeError"),
+        ],
+    )
+    def test_a_missing_requirement(self, patch, declared, error):
+        """A dimension, coordinate or attr the patch lacks is refused."""
+        processor = type("Needs", (PatchProcessor,), dict(declared))()
+        with pytest.raises(getattr(dc.exceptions, error)):
+            processor.check(patch)
+
+    def test_a_present_requirement(self, patch):
+        """A patch which carries it goes through untouched."""
+        processor = type("NeedsTime", (PatchProcessor,), {"required_dims": "time"})()
+        assert processor.check(patch) is patch

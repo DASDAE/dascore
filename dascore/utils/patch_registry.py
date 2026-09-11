@@ -28,9 +28,7 @@ from pydantic.fields import FieldInfo
 
 from dascore.exceptions import ParameterError
 from dascore.utils.identity import operation_fingerprint
-from dascore.utils.misc import suppress_warnings
 from dascore.utils.serialize import PATCH_ARGUMENT
-from dascore.warnings import DASCoreWarning
 
 # Stands in for the patch while a call is bound to a signature. The bind
 # only needs something to put in that slot; nothing ever looks at it.
@@ -260,9 +258,9 @@ def fingerprint_call(func, args: tuple = (), kwargs: dict | None = None) -> str:
     except TypeError:
         # Something unhashable -- an array argument, most often. Its
         # digest is the honest cost of saying which array it was.
-        return _fingerprint(name, version, bound)
+        return operation_fingerprint(name, bound, version)
     if (found := _FINGERPRINTS.get(key)) is None:
-        found = _fingerprint(name, version, bound)
+        found = operation_fingerprint(name, bound, version)
         # Bounded, and simply stops growing rather than evicting: the
         # entries are one small string each, and a process which has made
         # four thousand distinct calls is not one this is hot for.
@@ -359,20 +357,6 @@ def _call_name(func) -> str:
     # two closures over different values are two operations. The identity
     # is process-local, which is honest -- so is the function.
     return f"{_spell(func)}#{id(func):x}"
-
-
-def _fingerprint(name: str, version: str, kwargs: dict) -> str:
-    """
-    Return the digest a name, a version and bound arguments make.
-
-    The serializer's warning about a value it has no encoding for is
-    suppressed: it would fire on every ordinary call carrying, say, a numpy
-    dtype, and hashing such a value by its type is all an id needs of it.
-    """
-    with suppress_warnings(
-        DASCoreWarning, message="A value of type .* has no encoding"
-    ):
-        return operation_fingerprint(name, kwargs, version)
 
 
 # Bounded, and it holds function references: a process which builds patch

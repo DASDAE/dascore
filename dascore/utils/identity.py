@@ -27,7 +27,9 @@ from collections.abc import Iterable, Mapping, Sequence
 from typing import Any
 from uuid import uuid4
 
+from dascore.utils.misc import suppress_warnings
 from dascore.utils.serialize import combine_hashes, digest
+from dascore.warnings import DASCoreWarning
 
 # What a patch carries before anything has been done to it. Not a digest:
 # an empty string is the identity element of `advance`, and reads as "this
@@ -205,7 +207,12 @@ def operation_fingerprint(
         The operation's version; bump it when the same parameters mean a
         different result.
     """
-    return digest({"operation": name, "version": version, "params": params})
+    # A value with no encoding of its own (a pint unit, say) is hashed by its
+    # type, which is all an id needs; warning on every call would be noise.
+    with suppress_warnings(
+        DASCoreWarning, message="A value of type .* has no encoding"
+    ):
+        return digest({"operation": name, "version": version, "params": params})
 
 
 def advance(processing_id: str, fingerprint: str) -> str:

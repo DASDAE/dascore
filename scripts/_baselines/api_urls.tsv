@@ -4631,14 +4631,12 @@ dascore.units.unbyte	/api/dascore/utils/misc/unbyte.qmd
 dascore.units.units_match	/api/dascore/units/units_match.qmd
 dascore.utils	/api/dascore/utils.qmd
 dascore.utils.array	/api/dascore/utils/array.qmd
-dascore.utils.array.ArrayFunc.new	/api/dascore/models/base/DascoreBaseModel/new.qmd
 dascore.utils.array.DASCoreWarning	/api/dascore/warnings/DASCoreWarning.qmd
 dascore.utils.array.ParameterError	/api/dascore/exceptions/ParameterError.qmd
 dascore.utils.array.PatchBroadcastError	/api/dascore/exceptions/PatchBroadcastError.qmd
 dascore.utils.array.PatchUFunc	/api/dascore/utils/array/PatchUFunc.qmd
 dascore.utils.array.PatchUFunc.accumulate	/api/dascore/utils/array/PatchUFunc/accumulate.qmd
 dascore.utils.array.PatchUFunc.reduce	/api/dascore/utils/array/PatchUFunc/reduce.qmd
-dascore.utils.array.Ufunc.new	/api/dascore/models/base/DascoreBaseModel/new.qmd
 dascore.utils.array.UnitError	/api/dascore/exceptions/UnitError.qmd
 dascore.utils.array.align_patch_coords	/api/dascore/utils/patch/align_patch_coords.qmd
 dascore.utils.array.apply_array_func	/api/dascore/utils/array/apply_array_func.qmd
@@ -4957,7 +4955,6 @@ dascore.utils.namespace.PatchNameSpace	/api/dascore/utils/namespace/PatchNameSpa
 dascore.utils.namespace.SpoolNameSpace	/api/dascore/utils/namespace/SpoolNameSpace.qmd
 dascore.utils.namespace.maybe_load_entry_point	/api/dascore/utils/plugins/maybe_load_entry_point.qmd
 dascore.utils.patch	/api/dascore/utils/patch.qmd
-dascore.utils.patch.Concatenate.new	/api/dascore/models/base/DascoreBaseModel/new.qmd
 dascore.utils.patch.CoordDataError	/api/dascore/exceptions/CoordDataError.qmd
 dascore.utils.patch.CoordError	/api/dascore/exceptions/CoordError.qmd
 dascore.utils.patch.CoordMergeError	/api/dascore/exceptions/CoordMergeError.qmd
@@ -4967,8 +4964,6 @@ dascore.utils.patch.IncompatiblePatchError	/api/dascore/exceptions/IncompatibleP
 dascore.utils.patch.ParameterError	/api/dascore/exceptions/ParameterError.qmd
 dascore.utils.patch.PatchCoordinateError	/api/dascore/exceptions/PatchCoordinateError.qmd
 dascore.utils.patch.PatchDataError	/api/dascore/exceptions/PatchDataError.qmd
-dascore.utils.patch.PatchOp.new	/api/dascore/models/base/DascoreBaseModel/new.qmd
-dascore.utils.patch.Stack.new	/api/dascore/models/base/DascoreBaseModel/new.qmd
 dascore.utils.patch.UnitError	/api/dascore/exceptions/UnitError.qmd
 dascore.utils.patch.advance	/api/dascore/utils/identity/advance.qmd
 dascore.utils.patch.align_patch_coords	/api/dascore/utils/patch/align_patch_coords.qmd
