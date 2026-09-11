@@ -79,6 +79,7 @@ from dascore.utils.misc import (
 from dascore.utils.patch_registry import fingerprint_call, register_patch_function
 from dascore.utils.paths import is_memory_uri
 from dascore.utils.time import to_float
+from dascore.warnings import DASCoreWarning
 
 _DimAxisValue = namedtuple("_DimAxisValue", ["dim", "axis", "value"])
 
@@ -728,6 +729,26 @@ def _force_patch_merge(patch_dict_list, merge_kwargs, **kwargs):
     patch = dc.Patch(data=new_data, coords=new_coord, attrs=new_attrs, dims=dims)
     new_dict = {"patch": patch}
     return [new_dict]
+
+
+def drop_associated_coords(coords, dim: str, action: str):
+    """
+    Drop, with a warning, the non-dimensional coordinates along a dimension.
+
+    For operations which change a dimension's samples, so the values those
+    coordinates would take at the new samples are unknown.
+    """
+    associated = sorted(
+        name
+        for name, coord_dims in coords.dim_map.items()
+        if name != dim and dim in coord_dims
+    )
+    if not associated:
+        return coords
+    names = ", ".join(associated)
+    msg = f"{action} dimension {dim!r} dropped associated coordinates: {names}."
+    warnings.warn(msg, DASCoreWarning, stacklevel=4)
+    return coords.drop_coords(*associated)[0]
 
 
 def get_start_stop_step(patch: PatchType, dim):

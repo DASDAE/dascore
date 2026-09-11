@@ -12,7 +12,7 @@ from scipy.interpolate import interp1d
 
 import dascore as dc
 from dascore.constants import PatchType, select_values_description
-from dascore.core.coords import BaseCoord, CoordSegmented
+from dascore.core.coords import BaseCoord, CoordSegmented, _fill_layout
 from dascore.core.processor import PatchProcessor
 from dascore.exceptions import (
     CoordError,
@@ -24,7 +24,11 @@ from dascore.utils.array_api import array_namespace
 from dascore.utils.docs import compose_docstring
 from dascore.utils.indexing import get_indexers, label_indexer
 from dascore.utils.misc import get_parent_code_name, iterate
-from dascore.utils.patch import patch_function
+from dascore.utils.patch import (
+    drop_associated_coords,
+    get_dim_axis_value,
+    patch_function,
+)
 
 
 @patch_function()
@@ -1163,3 +1167,116 @@ def split_gaps(self: PatchType, dim: str | None = None) -> dc.Spool:
                 offset = stop
         patches = out
     return dc.spool(patches)
+
+
+def _fill_scalar(value, dtype) -> np.ndarray:
+    """The fill value as the data's dtype, raising if the cast changes it."""
+    try:
+        with np.errstate(invalid="ignore"):
+            cast = np.asarray(value).astype(dtype)
+    except (TypeError, ValueError):
+        cast = None
+    both_null = cast is not None and bool(pd.isnull(cast) and pd.isnull(value))
+    if cast is None or not (both_null or bool(cast == value)):
+        msg = (
+            f"Cannot fill data of dtype {np.dtype(dtype)} with {value!r}. Pass "
+            "a value of that dtype, or cast the data first (eg to float for NaN)."
+        )
+        raise ParameterError(msg)
+    return cast
+
+
+def _place_blocks(data, axis: int, length: int, blocks, fill) -> np.ndarray:
+    """Copy each ``(source start, source stop, target start)`` block; fill the rest."""
+    shape = list(data.shape)
+    shape[axis] = length
+    out = np.empty(shape, dtype=data.dtype)
+    lead = (slice(None),) * axis
+    end = 0
+    for start, stop, target in blocks:
+        out[(*lead, slice(end, target))] = fill
+        end = target + stop - start
+        out[(*lead, slice(target, end))] = data[(*lead, slice(start, stop))]
+    out[(*lead, slice(end, None))] = fill
+    return out
+
+
+@patch_function()
+def fill_gaps(
+    patch: PatchType,
+    *args,
+    value: Any = np.nan,
+    samples: bool = False,
+    **kwargs,
+) -> PatchType:
+    """
+    Fill the holes along a dimension with a constant value.
+
+    Places every run of samples on one evenly sampled grid and writes
+    `value` where no sample sits, so a segmented coordinate (for example
+    from merging patches across a gap) becomes a plain range.
+
+    Parameters
+    ----------
+    patch
+        The patch to fill.
+    *args
+        The dimension to fill, eg `patch.fill_gaps("time")`.
+    value
+        The value written at filled positions. It must fit the data's
+        dtype: NaN cannot fill integer data, so pass an integer or cast
+        the data to float first.
+    samples
+        If True, the limit given with the dimension counts missing samples.
+    **kwargs
+        The dimension and the widest hole to fill, eg `time=10` fills holes
+        up to ten seconds long and leaves wider ones as seams. The limit is
+        in the coordinate's units (seconds for time), a quantity, or a
+        timedelta; None fills every hole.
+
+    Notes
+    -----
+    The coordinate needs a declared step: a segmented coordinate whose
+    runs share one step, or an array stated with a step. A run starting
+    off the grid of the runs before it is placed at the nearest position,
+    moving its labels by at most half a step. Runs sampled at different
+    steps raise; resample them first.
+
+    Non-dimensional coordinates along the dimension are dropped with a
+    warning, since their values at the filled positions are unknown.
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> import dascore as dc
+    >>> from dascore.core.coords import concat_coords, get_coord
+    >>>
+    >>> # A patch whose distance coordinate misses three samples.
+    >>> dist = concat_coords(
+    ...     get_coord(start=0.0, stop=5.0, step=1.0),
+    ...     get_coord(start=8.0, stop=10.0, step=1.0),
+    ... )
+    >>> patch = dc.Patch(
+    ...     data=np.ones((len(dist), 3)),
+    ...     coords={"distance": dist, "time": dc.to_datetime64(np.arange(3))},
+    ...     dims=("distance", "time"),
+    ... )
+    >>> filled = patch.fill_gaps("distance")
+    >>> assert filled.shape == (10, 3)
+    >>> assert np.isnan(filled.data[5:8]).all()
+    >>>
+    >>> # Fill only holes of at most two missing samples: this one stays.
+    >>> assert patch.fill_gaps(distance=2, samples=True).shape == patch.shape
+    >>>
+    >>> # Fill with zeros instead of NaN.
+    >>> assert (patch.fill_gaps("distance", value=0).data[5:8] == 0).all()
+    """
+    dim, axis, limit = get_dim_axis_value(patch, args=args, kwargs=kwargs)[0]
+    fill = _fill_scalar(value, patch.data.dtype)
+    layout = _fill_layout(patch.get_coord(dim), limit, samples=samples)
+    if layout is None:
+        return patch
+    coord, blocks = layout
+    data = _place_blocks(patch.data, axis, len(coord), blocks, fill)
+    coords = drop_associated_coords(patch.coords, dim, "Filling gaps along")
+    return patch.new(data=data, coords=coords._update_grid(dim, **{dim: coord}))

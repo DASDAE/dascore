@@ -3695,6 +3695,148 @@ def concat_coords(*coords, units=None) -> BaseCoord:
     return CoordSegmented(segments=segments)
 
 
+def _grid_pieces(coord: BaseCoord) -> list[tuple[int, CoordRange]]:
+    """
+    The runs of consecutive grid positions, each with its source offset.
+
+    A range is one run; an array declaring a step splits at its holes.
+    """
+    segments = coord.segments if isinstance(coord, CoordSegmented) else (coord,)
+    pieces, offset = [], 0
+    for seg in segments:
+        if isinstance(seg, CoordRange):
+            pieces.append((offset, seg))
+        elif isinstance(seg, CoordMonotonicArray) and not _is_null(seg.step):
+            values = seg.values
+            counts = _on_grid(_diffs(values), seg.step)
+            edges = [0, *(np.flatnonzero(counts != 1) + 1).tolist(), len(values)]
+            for start, stop in itertools.pairwise(edges):
+                piece = get_coord(
+                    start=values[start],
+                    step=seg.step,
+                    shape=(stop - start,),
+                    units=seg.units,
+                )
+                pieces.append((offset + start, piece))
+        else:
+            msg = (
+                "Filling gaps needs a coordinate with a declared step; this one "
+                "has none. Use snap_coords or resample to put it on a grid first."
+            )
+            raise CoordError(msg)
+        offset += len(seg)
+    return pieces
+
+
+def _same_step(first: CoordRange, other: CoordRange) -> bool:
+    """Whether two runs share a step: exactly for ticks, closely for floats."""
+    exact = first.step_exact, other.step_exact
+    if None not in exact:
+        return exact[0] == exact[1]
+    ratio = float(other.step) / float(first.step)
+    return bool(abs(ratio - 1) <= _GRID_RTOL)
+
+
+def _grid_position(anchor: CoordRange, label) -> int:
+    """The position on the anchor's grid nearest a label."""
+    if not anchor._exact:
+        return int(np.round((label - anchor.start) / anchor.step))
+    num, den, offset = anchor._grid_terms
+    ticks = (_to_tick(label) - anchor._start_tick) * den - offset
+    guess = round(Fraction(ticks, num))
+    # labels floor the ideal grid, so the nearest one may be a neighbour
+    near = np.arange(guess - 1, guess + 2)
+    return int(near[np.argmin(np.abs(anchor._labels(near) - label))])
+
+
+def _max_missing(step: CoordRange, coord: BaseCoord, limit, samples: bool):
+    """The most missing positions a filled hole may have, or None for any."""
+    if limit is None:
+        return None
+    if samples:
+        if not _is_int(limit) or limit < 0:
+            msg = f"A sample limit must be a non-negative integer, got {limit!r}."
+            raise ParameterError(msg)
+        return int(limit)
+    excess = coord._gap_tolerance(limit).excess
+    if (exact := step.step_exact) is not None:
+        if is_timedelta64(excess):
+            excess = Fraction(int(to_int(excess)), _NS_PER_S)
+        return int(Fraction(excess) // abs(exact))
+    return math.floor(float(excess) / abs(float(step.step)) * (1 + _GRID_RTOL))
+
+
+def _fill_layout(
+    coord: BaseCoord, limit=None, samples: bool = False
+) -> tuple[BaseCoord, tuple[tuple[int, int, int], ...]] | None:
+    """
+    Place every run of a coordinate on one grid, filling the holes between.
+
+    Returns the filled coordinate and, per run, its ``(source start, source
+    stop, target start)``, or None when there is nothing to fill.
+
+    Parameters
+    ----------
+    coord
+        A range, a segmented coordinate, or an array declaring a step.
+    limit
+        The widest hole to fill, in coordinate units (seconds for time), or
+        missing samples when `samples` is True. Wider holes stay as seams
+        between separate runs. None fills every hole.
+    samples
+        If True, `limit` counts missing samples.
+
+    Notes
+    -----
+    Runs must share one step. A run starting off the grid of the runs
+    before it is placed at the nearest position, moving its labels by at
+    most half a step; two runs landing on the same position raise.
+    """
+    if isinstance(coord, CoordRange) or len(coord) < 2:
+        return None
+    pieces = _grid_pieces(coord)
+    first = pieces[0][1]
+    for _, piece in pieces[1:]:
+        if not _same_step(first, piece):
+            msg = (
+                f"Runs are sampled at different steps ({first.step} and "
+                f"{piece.step}); resample them to one step before filling gaps."
+            )
+            raise CoordError(msg)
+    max_missing = _max_missing(first, coord, limit, samples)
+    # each group: its anchor run, its filled length, and its runs' blocks
+    groups: list[list] = []
+    for source, piece in pieces:
+        stop = source + len(piece)
+        if groups:
+            anchor, length, blocks = groups[-1]
+            position = _grid_position(anchor, piece.start)
+            missing = position - length
+            if missing < 0:
+                msg = (
+                    f"Samples near {piece.start} land on the same grid position "
+                    f"as the ones before them, so the gap cannot be filled."
+                )
+                raise CoordError(msg)
+            if max_missing is None or missing <= max_missing:
+                blocks.append((source, stop, position))
+                groups[-1][1] = position + len(piece)
+                continue
+        groups.append([piece, len(piece), [(source, stop, 0)]])
+    if all(len(blocks) == 1 for *_, blocks in groups):
+        return None
+    coords, out, offset = [], [], 0
+    for anchor, length, blocks in groups:
+        if len(blocks) == 1:  # untouched: keep the labels as they are
+            coords.append(coord[blocks[0][0] : blocks[0][1]])
+        else:
+            coords.append(anchor.change_length(length))
+        out.extend((start, stop, offset + pos) for start, stop, pos in blocks)
+        offset += length
+    new = coords[0] if len(coords) == 1 else concat_coords(*coords)
+    return new, tuple(out)
+
+
 def _get_coord_kind(
     data: ArrayLike | None = None,
     *,

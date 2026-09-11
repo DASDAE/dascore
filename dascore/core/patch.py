@@ -448,6 +448,7 @@ class Patch(NodeRepr, NamespaceOwner):
     squeeze = dascore.proc.coords.squeeze
     append_dims = dascore.proc.coords.append_dims
     split_gaps = dascore.proc.coords.split_gaps
+    fill_gaps = dascore.proc.coords.fill_gaps
     transpose = dascore.proc.coords.transpose
     add_distance_to = dascore.proc.coords.add_distance_to
     enrich = dascore.proc.enrich
