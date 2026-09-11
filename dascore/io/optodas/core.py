@@ -60,7 +60,12 @@ class OptoDASV8(FiberIO):
         distance: tuple[float | None, float | None] | None = None,
         **kwargs,
     ) -> dc.BaseSpool:
-        """Read a OptoDAS spool of patches."""
+        """Read an OptoDAS spool with values in the declared physical units.
+
+        The header's ``dataScale`` is applied to the selected samples for both
+        integer and floating-point storage. If absent, values are unchanged.
+        This decodes storage scaling only; it does not convert phase to strain.
+        """
         patches = _read_opto_das(
             resource, time=time, distance=distance, attr_cls=OptoDASPatchAttrs
         )
