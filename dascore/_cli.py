@@ -9,7 +9,9 @@ import typer
 
 import dascore as dc
 from dascore.utils.doc_cache import documentation_cache, read_document
+from dascore.utils.doc_corpus import DocumentationError
 from dascore.utils.doc_search import search_documents
+from dascore.utils.doc_skills import get_skills, read_bootstrap, read_skill
 
 app = typer.Typer(
     help="The DASCore command-line interface.",
@@ -83,3 +85,28 @@ def doc_search(
             typer.echo(f"   Keywords: {', '.join(result['keywords'])}")
         typer.echo(f"   {result['excerpt']}")
         typer.echo(f"   Read: dascore doc {result['id']}\n")
+
+
+@app.command()
+def skills() -> None:
+    """List the recipes available as skills."""
+    for name, info in get_skills().items():
+        typer.echo(f"{name}: {info['description']}")
+
+
+@app.command()
+def skill(
+    name: str | None = typer.Argument(None, help="Name from the skills catalog"),
+    bootstrap: bool = typer.Option(
+        False, "--bootstrap", help="Print the native agent bootstrap"
+    ),
+) -> None:
+    """Read a skill or print the bootstrap for explicit agent installation."""
+    if bootstrap and name is not None:
+        raise DocumentationError("Use a skill name or --bootstrap, not both.")
+    if bootstrap:
+        sys.stdout.write(read_bootstrap())
+    elif name is not None:
+        sys.stdout.write(read_skill(name))
+    else:
+        raise DocumentationError("Provide a skill name or use --bootstrap.")

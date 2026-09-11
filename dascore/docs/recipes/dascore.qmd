@@ -1,0 +1,43 @@
+---
+title: Choose a DASCore workflow
+description: Identify the installed APIs, inspect data carefully, and choose a recipe for the scientific task.
+keywords: [dascore, workflow, agents, documentation]
+---
+
+Start with the DASCore installed in the project's Python environment. `dascore doc` reports its version, Python executable, package location, and documentation cache. Use that reported executable with `-m dascore` for subsequent commands.
+
+## Find the current API
+
+Read installed signatures and docstrings before writing calls from memory. Search when the operation's name is unfamiliar:
+
+```bash
+python -m dascore doc Patch.select
+python -m dascore doc-search "median filtering"
+python -m dascore doc-search --tag inventory
+```
+
+Substitute the selected environment's executable for `python`. Search results include commands for opening the full page. If the optional search engine is unavailable, exact `doc` lookup remains available.
+
+DASCore's main objects serve different roles:
+
+- A `Patch` holds an array with coordinates, dimensions, units, and metadata.
+- A `Spool` selects, groups, and iterates over patches, including data whose arrays have not yet been read.
+- An `Inventory` describes the observing system, its resources, geometry, configuration, and changes over time.
+- An `AnnotationSet` describes events and regions against explicit time and distance reference systems.
+
+## Inspect before materializing
+
+For unfamiliar files, inspect format and metadata with the installed scanning and spool APIs before reading full arrays. Check coverage, coordinate spacing, units, gaps, and overlaps. Estimate array memory from known shapes and dtypes, allowing room for intermediate arrays; if the metadata is insufficient, report that uncertainty and inspect a bounded preview.
+
+A lazy spool can still trigger large reads when iterated or materialized. Choose explicit time and distance bounds, then check the representative patch before expanding the workflow.
+
+## Choose the procedure
+
+```bash
+python -m dascore skills
+python -m dascore skill make-inventory
+```
+
+The skills catalog selects ordinary documentation recipes. Use `make-inventory` to create or repair observing-system metadata, validate it, round-trip its serialization, and test attachment to representative data.
+
+For other scientific workflows, search the documentation and state the assumptions that affect processing: physical quantity and units, coordinate semantics, sampling, gaps, and chunk boundaries. Validate a small case before applying the workflow to an archive. Keep uncertain deployment facts and scientific interpretations explicit.
