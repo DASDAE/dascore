@@ -412,6 +412,8 @@ class Patch(NodeRepr, NamespaceOwner):
         out.__dict__.update(self.__dict__)
         out._dtype = _as_dtype(self.dtype)
         out._data = None
+        # Another patch, so another identity: a spool keys patches by it.
+        out._instance_id = uuid4().hex
         return out
 
     @property

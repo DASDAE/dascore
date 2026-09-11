@@ -5,11 +5,12 @@ Tests for PatchProcessor: the seam, the generated function, and kernels.
 from __future__ import annotations
 
 import inspect
+import pickle
 from typing import ClassVar
 
 import numpy as np
 import pytest
-from pydantic import ConfigDict
+from pydantic import ConfigDict, Field
 
 import dascore as dc
 from dascore.core.processor import PatchMeta, PatchProcessor, register_kernel
@@ -132,6 +133,32 @@ class TestTheSeam:
         assert out.shape[axis] == 1
         assert np.allclose(out.data, patch.data.sum(axis=axis, keepdims=True))
 
+    def test_reconcile_sees_the_result(self, patch):
+        """The one hook after the kernel; not reached on a no-op."""
+
+        class Tagged(SeamScale):
+            """Tag the result with its dtype."""
+
+            name = None
+
+            def reconcile(self, data, out):
+                """Record what the kernel produced."""
+                return out.update_attrs(station=str(data.dtype))
+
+        assert Tagged()(patch).attrs.station == "float64"
+        assert Tagged(factor=1)(patch).attrs.station == "float64"
+
+        class Untouched(SeamHidden):
+            """A no-op which would tag the result."""
+
+            name = None
+
+            def reconcile(self, data, out):
+                """Would fail the test if reached."""
+                raise AssertionError
+
+        assert Untouched()(patch) is patch
+
     def test_a_no_op_hands_back_the_patch(self, patch):
         """Nothing changed, so nothing is recorded."""
         assert dc.proc.transpose(patch, *patch.dims) is patch
@@ -147,6 +174,137 @@ class TestTheSeam:
         assert type(sub.abs()) is _Sub
         assert type(sub.transpose()) is _Sub
         assert type(sub.rename_coords(distance="depth")) is _Sub
+
+
+class TestReviewFindings:
+    """Edges the counterpart review found."""
+
+    def test_two_classes_one_name_collide(self):
+        """A second class taking a DASCore name is refused, not swapped in."""
+        with pytest.raises(ParameterError, match="claim the tag"):
+
+            class Other(PatchProcessor):
+                """Claim `normalize` from another class."""
+
+                name = "normalize"
+                __module__ = "dascore.proc.basic"
+                __qualname__ = "Other"
+
+        assert resolve_patch_function("normalize") is Normalize.patch_function
+
+    def test_a_coordinate_named_patch(self):
+        """The patch argument is positional-only, so an extra may be `patch`."""
+        patch = dc.Patch(
+            data=np.arange(3.0), coords={"patch": np.arange(3)}, dims=("patch",)
+        )
+        assert patch.rename_coords(patch="renamed").dims == ("renamed",)
+
+    def test_a_narrow_subclass(self, patch):
+        """A subclass whose `__init__` takes no dtype still transposes."""
+
+        class _Sub(dc.Patch):
+            def __init__(self, data=None, coords=None, dims=None, attrs=None):
+                super().__init__(data=data, coords=coords, dims=dims, attrs=attrs)
+
+        sub = _Sub(patch.data, coords=patch.coords)
+        assert type(sub.transpose("time", "distance")) is _Sub
+        assert type(sub.rename_coords(distance="depth")) is _Sub
+
+    def test_a_required_field_after_a_default(self, patch):
+        """A subclass adding a required field makes it keyword-only."""
+
+        class Offset(SeamScale):
+            """Scale, then add."""
+
+            name = None
+            offset: float
+
+            def kernel(self, data):
+                """Scale and add."""
+                return data * self.factor + self.offset
+
+        sig = Offset._call_signature
+        assert sig.parameters["offset"].kind == inspect.Parameter.KEYWORD_ONLY
+        assert np.allclose(Offset(offset=1)(patch).data, patch.data * 2 + 1)
+
+    def test_a_no_op_still_sets_data_type(self, patch):
+        """As a decorated function does, and without recording the call."""
+
+        class Clear(PatchProcessor):
+            """Change nothing but the data_type."""
+
+            name = None
+            data_type = ""
+
+        tagged = patch.update_attrs(data_type="velocity")
+        out = Clear()(tagged)
+        assert out.attrs.data_type == ""
+        assert out.attrs.history == tagged.attrs.history
+
+    def test_func_skips_the_record(self, patch):
+        """`.func` and `raw_function` run the operation without history or ids."""
+        for bypass in (dc.proc.normalize.func, dc.proc.normalize.raw_function):
+            out = bypass(patch, "time")
+            assert out.equals(patch.normalize("time"))
+            assert out.attrs.history == patch.attrs.history
+            assert out.attrs.processing_id == patch.attrs.processing_id
+
+    def test_signature_carries_annotations(self):
+        """Field annotations reach the generated signature."""
+        sig = inspect.signature(dc.proc.normalize)
+        assert sig.parameters["dim"].annotation is str
+        assert sig.return_annotation == "PatchType"
+
+    def test_generated_functions_pickle(self, patch):
+        """So a process pool can run them."""
+        assert pickle.loads(pickle.dumps(dc.proc.demean)) is dc.proc.demean
+        func = SeamScale.patch_function
+        assert pickle.loads(pickle.dumps(func)) is func
+
+    def test_a_bad_call_is_a_type_error(self, patch):
+        """As it was for a plain function: bound against the signature."""
+        with pytest.raises(TypeError, match="dimm"):
+            patch.demean(dimm="time")
+        with pytest.raises(TypeError, match="dim"):
+            patch.standardize()
+
+    def test_a_field_may_not_shadow_the_base(self):
+        """A field named for a base setting would corrupt it silently."""
+        with pytest.raises(ParameterError, match="shadow"):
+
+            class Shadow(PatchProcessor):
+                """Name a field `history`."""
+
+                history: str = "x"
+
+    def test_a_factory_default_shows_its_value(self):
+        """Not pydantic's undefined marker."""
+
+        class Factory(PatchProcessor):
+            """Default a field through a factory."""
+
+            name = None
+            values: tuple = Field(default_factory=lambda: (1, 2))
+
+        assert Factory._call_signature.parameters["values"].default == (1, 2)
+
+    def test_a_numpy_bool_in_a_plan(self, patch):
+        """Numpy scalars are numbers too."""
+
+        class Flag(SeamScale):
+            """Plan a numpy bool."""
+
+            name = None
+
+            def plan(self, patch, out):
+                """Return one."""
+                return {"flag": np.bool_(True)}
+
+            def kernel(self, data, *, flag):
+                """Use it."""
+                return data * self.factor if flag else data
+
+        assert np.allclose(Flag()(patch).data, patch.data * 2)
 
 
 class TestCheck:
@@ -215,7 +373,13 @@ class TestPlan:
 
             def plan(self, patch, out):
                 """Return one of each."""
-                return {"a": 1, "b": 2.0, "c": True, "d": ((1, 2), 3.0)}
+                return {
+                    "a": 1,
+                    "b": 2.0,
+                    "c": True,
+                    "d": ((1, 2), 3.0),
+                    "e": np.arange(3),
+                }
 
             def kernel(self, data, **plan):
                 """Ignore the plan, keep the data."""
@@ -253,6 +417,9 @@ class TestFingerprint:
         assert Normalize("x") == Normalize(dim="x")
         assert hash(Normalize("x")) == hash(Normalize(dim="x"))
         assert hash(Normalize("x")) != hash(Normalize("y"))
+        assert Normalize("x") != Normalize("y")
+        # A default spelled out is the same operation.
+        assert Normalize("x") == Normalize("x", norm="l2")
         assert Normalize("x") != "normalize"
 
     def test_another_class_is_another_operation(self):
@@ -347,12 +514,36 @@ class TestKernelFor:
     def test_another_backend_falls_back_to_the_generic(self):
         """A kernel written to the standard runs wherever it is asked to."""
 
-        @register_kernel(SeamScale, "cupy")
+        class Local(SeamScale):
+            """A class to register against, so nothing leaks."""
+
+            name = None
+
+        @register_kernel(Local, "cupy")
         def _never(processor, data):
             """Registered for a backend nothing here uses."""
             raise AssertionError
 
-        assert SeamScale.kernel_for("numpy") is SeamScale.__dict__["kernel"]
+        assert Local.kernel_for("numpy") is SeamScale.__dict__["kernel"]
+
+    def test_registering_on_a_child_leaves_the_parent(self):
+        """A child's kernel is the child's alone."""
+
+        class Parent(SeamScale):
+            """The parent."""
+
+            name = None
+
+        class Child(Parent):
+            """The child."""
+
+        @register_kernel(Child, "cupy")
+        def _child(processor, data):
+            """The child's cupy kernel."""
+            return data
+
+        assert Child.kernel_for("cupy") is _child
+        assert Parent.kernel_for("cupy") is SeamScale.__dict__["kernel"]
 
     def test_a_subclass_kernel_beats_a_parents_backend_kernel(self):
         """A parent's backend kernel must not answer for a subclass."""
@@ -392,10 +583,27 @@ class TestConversionsKeepTheirAxes:
         other = "distance" if dim == "time" else "time"
         out = getattr(patch, name)(dim)
         assert not np.allclose(out.data, getattr(patch, name)(other).data)
-        if name == "demean":
-            data = np.asarray(patch.data)
-            expected = data - data.mean(axis=patch.get_axis(dim), keepdims=True)
-            assert np.allclose(out.data, expected)
+        data = np.asarray(patch.data)
+        axis = patch.get_axis(dim)
+        mean = data.mean(axis=axis, keepdims=True)
+        expected = {
+            "demean": data - mean,
+            "standardize": (data - mean) / data.std(axis=axis, keepdims=True),
+            "normalize": data / np.sqrt((data**2).sum(axis=axis, keepdims=True)),
+        }[name]
+        assert np.allclose(out.data, expected)
+
+    @pytest.mark.parametrize("name", ["normalize", "standardize"])
+    def test_data_type_cleared(self, patch, name):
+        """Both declare `data_type = ""`."""
+        tagged = patch.update_attrs(data_type="velocity")
+        assert getattr(tagged, name)("time").attrs.data_type == ""
+
+    def test_transpose_writes_no_history(self, patch):
+        """`history = None`, on the class and on its function."""
+        out = patch.transpose("time", "distance")
+        assert out.attrs.history == patch.attrs.history
+        assert dc.proc.transpose._history is None
 
 
 class TestKnownReal:

@@ -29,32 +29,33 @@ from __future__ import annotations
 
 import inspect
 import numbers
-import re
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any, ClassVar
 
 import numpy as np
 from pydantic import ConfigDict
+from pydantic.alias_generators import to_snake
 
 import dascore as dc
+from dascore.config import get_config
 from dascore.constants import PatchType
 from dascore.exceptions import ParameterError
 from dascore.models.base import DascoreBaseModel
 from dascore.utils.array_api import backend_name
 from dascore.utils.identity import ids_enabled
 from dascore.utils.patch import (
+    _call_str,
     _maybe_add_history_str,
+    _stamp_ids,
     attr_type,
-    call_str,
     check_patch_attrs,
     check_patch_coords,
     check_patch_data,
-    stamp_ids,
 )
 from dascore.utils.patch_registry import (
+    _memoized_fingerprint,
     _spell,
     _without_patches,
-    memoized_fingerprint,
     patch_function_tag,
     register_patch_function,
     resolve_patch_function,
@@ -80,16 +81,17 @@ class PatchProcessor(DascoreBaseModel):
     - `reconcile(data, out)`: the one hook which sees both halves.
 
     Each subclass is registered under `name` (snake case of the class name
-    unless set; None registers nothing) and gets a generated patch function,
-    `cls.patch_function`, whose signature is the fields in declaration
-    order.
+    unless set) and gets a generated patch function, `cls.patch_function`:
+    `(patch, <fields in declaration order>)`, with `*name` for the field
+    `_var_positional` names and `**kwargs` when `extra="allow"`. A class
+    with `name = None` gets neither.
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     # Bump when the same fields mean a different result.
     __version__: ClassVar[str] = "1.0"
-    # The patch method this class is; None registers nothing.
+    # The registry name, and the generated function's; None for neither.
     name: ClassVar[str | None] = None
     # What the patch must hold.
     required_dims: ClassVar[tuple[str, ...] | str | None] = None
@@ -113,8 +115,14 @@ class PatchProcessor(DascoreBaseModel):
     def __pydantic_init_subclass__(cls, **kwargs):
         """Register the subclass and generate its patch function."""
         super().__pydantic_init_subclass__(**kwargs)
+        if clashes := set(cls.model_fields) & _RESERVED:
+            msg = (
+                f"{cls.__name__} has fields {sorted(clashes)}, which would "
+                "shadow names PatchProcessor itself uses; rename them."
+            )
+            raise ParameterError(msg)
         if "name" not in cls.__dict__:
-            cls.name = _snake_case(cls.__name__)
+            cls.name = to_snake(cls.__name__)
         cls._call_signature = _call_signature(cls)
         cls.patch_function = None
         if cls.name is not None:
@@ -147,7 +155,7 @@ class PatchProcessor(DascoreBaseModel):
     @property
     def fingerprint(self) -> str:
         """Return the digest of the tag, version and validated fields."""
-        return memoized_fingerprint(
+        return _memoized_fingerprint(
             type(self), self.tag, _without_patches(self.kwargs), self.__version__
         )
 
@@ -204,10 +212,10 @@ class PatchProcessor(DascoreBaseModel):
         """
         Return the result's metadata, as a patch without data.
 
-        Given a patch without data, so it may not read `.data`; one which
-        must is an operation that cannot be planned without its values.
-        Work through the coord manager and `patch.new`, never through patch
-        methods. The default says nothing changes.
+        Given a patch without data, so it cannot read `.data`. Work through
+        the coord manager and `patch.new`: patch methods refuse a patch
+        without data. Returning the argument itself says the metadata did
+        not change, which is how `run` spots a no-op.
         """
         return patch
 
@@ -226,6 +234,10 @@ class PatchProcessor(DascoreBaseModel):
         An operation which changes neither the metadata nor the data hands
         back the patch it was given, and records nothing.
         """
+        return self._run(patch, record=True)
+
+    def _run(self, patch: PatchType, record: bool) -> PatchType:
+        """Run the operation; `record=False` writes no history or ids."""
         self.check(patch)
         described = patch.drop_data()
         out = self.derive(described)
@@ -236,8 +248,14 @@ class PatchProcessor(DascoreBaseModel):
         # must not write into that argument and return it.
         result = data if kernel is None else kernel(self, data, **plan)
         if out is described and result is data:
-            return patch
+            # Nothing done, so nothing recorded; a declared data_type still
+            # applies, as it does for a decorated patch function.
+            if self.data_type is None or not record:
+                return patch
+            return patch.update_attrs(data_type=self.data_type)
         out = self.reconcile(result, out)
+        if not record:
+            return out.new(data=result)
         return out.new(data=result, attrs=self._record(patch, out.attrs))
 
     def _record(self, patch: PatchType, attrs: PatchAttrs) -> PatchAttrs:
@@ -245,15 +263,28 @@ class PatchProcessor(DascoreBaseModel):
         if self.data_type is not None:
             attrs = attrs.update(data_type=self.data_type)
         name = self.name or type(self).__name__
-        if self.history == "full":
-            attrs = _maybe_add_history_str(attrs, call_str(name, self.kwargs))
-        elif self.history is not None:
-            attrs = _maybe_add_history_str(attrs, name)
-        if ids_enabled():
-            fields = self.kwargs.values()
-            others = [x for x in fields if isinstance(x, dc.Patch)]
-            attrs = stamp_ids(patch, attrs, self.fingerprint, others)
-        return attrs
+        if self.history is not None and get_config().patch_history != "disabled":
+            spelled = _call_str(name, self.kwargs) if self.history == "full" else name
+            attrs = _maybe_add_history_str(attrs, spelled)
+        if not ids_enabled():
+            return attrs
+        try:
+            fingerprint = self.fingerprint
+        except Exception:
+            # As for a patch function: a field the serializer cannot encode
+            # means no ids for this call, never a failed call.
+            return attrs
+        others = [x for x in self.kwargs.values() if isinstance(x, dc.Patch)]
+        return _stamp_ids(patch, attrs, fingerprint, others)
+
+
+# Names a subclass field may not take: the base's own settings and methods.
+_RESERVED = frozenset(x for x in vars(PatchProcessor) if not x.startswith("_")) | {
+    "name",
+    "data_type",
+    "history",
+    "patch_function",
+}
 
 
 def register_kernel(cls: type[PatchProcessor], backend: str):
@@ -281,11 +312,6 @@ def register_kernel(cls: type[PatchProcessor], backend: str):
     return decorate
 
 
-def _snake_case(name: str) -> str:
-    """Return `RenameCoords` as `rename_coords`."""
-    return re.sub(r"(?<!^)(?=[A-Z])", "_", name).lower()
-
-
 def _call_signature(cls: type[PatchProcessor]) -> inspect.Signature:
     """Return the signature a call binds against: the fields, then extras."""
     kind = inspect.Parameter.POSITIONAL_OR_KEYWORD
@@ -295,8 +321,21 @@ def _call_signature(cls: type[PatchProcessor]) -> inspect.Signature:
             parameters.append(inspect.Parameter(name, inspect.Parameter.VAR_POSITIONAL))
             kind = inspect.Parameter.KEYWORD_ONLY
             continue
-        default = inspect.Parameter.empty if field.is_required() else field.default
-        parameters.append(inspect.Parameter(name, kind, default=default))
+        default = (
+            inspect.Parameter.empty
+            if field.is_required()
+            else field.get_default(call_default_factory=True)
+        )
+        annotation = field.annotation or inspect.Parameter.empty
+        # A required field after a defaulted one (a subclass adding one) can
+        # only be given by name.
+        if default is inspect.Parameter.empty and any(
+            x.default is not inspect.Parameter.empty for x in parameters
+        ):
+            kind = inspect.Parameter.KEYWORD_ONLY
+        parameters.append(
+            inspect.Parameter(name, kind, default=default, annotation=annotation)
+        )
     if cls.model_config.get("extra") == "allow":
         parameters.append(inspect.Parameter("kwargs", inspect.Parameter.VAR_KEYWORD))
     return inspect.Signature(parameters)
@@ -305,27 +344,46 @@ def _call_signature(cls: type[PatchProcessor]) -> inspect.Signature:
 def _make_patch_function(cls: type[PatchProcessor], name: str):
     """Return the patch function a processor class generates."""
 
-    def patch_function(patch, *args, **kwargs):
-        return cls(*args, **kwargs).run(patch)
+    def build(args, kwargs):
+        """Bind a call against the signature, as a function's would be."""
+        bound = cls._call_signature.bind(*args, **kwargs).arguments
+        return cls(**bound.pop("kwargs", {}), **bound)
+
+    # The patch is positional-only, so a field or an extra may be named
+    # `patch`: `rename_coords(patch="renamed")`.
+    def patch_function(patch, /, *args, **kwargs):
+        return build(args, kwargs).run(patch)
+
+    def bypass(patch, /, *args, **kwargs):
+        return build(args, kwargs)._run(patch, record=False)
 
     # `Any`, because the attributes below are ones a plain function lacks.
     func: Any = patch_function
-    patch = inspect.Parameter("patch", inspect.Parameter.POSITIONAL_OR_KEYWORD)
+    patch = inspect.Parameter(
+        "patch", inspect.Parameter.POSITIONAL_ONLY, annotation="PatchType"
+    )
     signature = cls._call_signature
     func.__signature__ = signature.replace(
-        parameters=[patch, *signature.parameters.values()]
+        parameters=[patch, *signature.parameters.values()],
+        return_annotation="PatchType",
     )
     func.__name__ = name
-    prefix = cls.__qualname__.rpartition(".")[0]
-    func.__qualname__ = f"{prefix}.{name}" if prefix else name
+    # The class attribute it is, so pickle finds it for any class defined at
+    # module level, and two classes claiming one name collide in the
+    # registry rather than one silently replacing the other.
+    func.__qualname__ = f"{cls.__qualname__}.patch_function"
     func.__module__ = cls.__module__
     func.__doc__ = cls.__doc__
     func.__version__ = cls.__version__
-    # Read by `record_call` and by the docs builder, which files the
-    # function under its class's module.
+    # `_history` is read by `record_call`; `__processor__` by the docs
+    # builder, which reads the class for the source file and lines.
     func._history = cls.history
     func.__processor__ = cls
-    func.raw_function = func
+    # What a decorated function's `.func` always was: the operation without
+    # the history and ids, for a body calling another operation.
+    raw: Any = bypass
+    raw.__signature__ = func.__signature__
+    func.func = func.raw_function = raw
     return func
 
 
@@ -344,7 +402,7 @@ def _checked_plan(processor: PatchProcessor, plan: dict[str, Any]) -> dict[str, 
 
 def _is_plain(value) -> bool:
     """Whether a plan value is a number, a tuple of plain values, or an array."""
-    if isinstance(value, numbers.Number):
+    if isinstance(value, numbers.Number | np.bool_):
         return True
     if isinstance(value, tuple):
         return all(_is_plain(x) for x in value)

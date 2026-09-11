@@ -11,6 +11,7 @@ import pandas as pd
 from scipy.fft import next_fast_len
 from scipy.ndimage import correlate1d
 
+import dascore as dc
 from dascore.compat import array
 from dascore.constants import PatchType, samples_arg_description
 from dascore.core.attrs import PatchAttrs
@@ -176,9 +177,10 @@ def update_attrs(self: PatchType, **attrs) -> PatchType:
     new_attrs = self.attrs.model_dump(exclude_unset=True)
     new_attrs.update(attrs)
     validated = PatchAttrs.from_dict(new_attrs)
-    extra = {"dtype": self.dtype} if self._data is None else {}
+    if self._data is None:
+        return _dataless_like(self, self.coords, validated)
     return self.__class__(
-        self._data, coords=self.coords, attrs=validated, dims=self.dims, **extra
+        self._data, coords=self.coords, attrs=validated, dims=self.dims
     )
 
 
@@ -298,8 +300,6 @@ def update(
     """
     # A patch without data stays one unless data are given; `drop_data`,
     # not `new(data=None)`, is how data are taken away.
-    # Passed only then, so a subclass whose `__init__` takes no dtype keeps
-    # working for patches which hold data.
     dataless = data is None and self._data is None
     data = data if data is not None else self._data
     coords = coords if coords is not None else self.coords
@@ -310,8 +310,20 @@ def update(
         attrs = PatchAttrs.from_dict(attrs)
     else:
         attrs = self.attrs
-    extra = {"dtype": self.dtype} if dataless else {}
-    return self.__class__(data=data, coords=coords, attrs=attrs, **extra)
+    if dataless:
+        return _dataless_like(self, coords, attrs)
+    return self.__class__(data=data, coords=coords, attrs=attrs)
+
+
+def _dataless_like(patch, coords, attrs):
+    """
+    Return a patch of `patch`'s class holding no data.
+
+    Built as a `Patch` and handed to the subclass positionally, so a
+    subclass whose `__init__` takes no dtype still works.
+    """
+    out = dc.Patch(coords=coords, attrs=attrs, dtype=patch.dtype)
+    return out if type(patch) is dc.Patch else patch.__class__(out)
 
 
 class Abs(PatchProcessor):
@@ -348,7 +360,7 @@ class Conj(PatchProcessor):
     """
 
     def kernel(self, data):
-        """Return the conjugate; real data, handed back, is a no-op."""
+        """Return the conjugate; real data come back as the same array, a no-op."""
         if _known_real(data):
             return data
         return array_namespace(data).conj(data)

@@ -242,10 +242,10 @@ def fingerprint_call(func, args: tuple = (), kwargs: dict | None = None) -> str:
     version = getattr(func, "__version__", "1.0")
     name = _call_name(func)
     bound = _without_patches(_bind(func, args, kwargs or {}))
-    return memoized_fingerprint(func, name, bound, version)
+    return _memoized_fingerprint(func, name, bound, version)
 
 
-def memoized_fingerprint(owner, name: str, params: dict, version: str) -> str:
+def _memoized_fingerprint(owner, name: str, params: dict, version: str) -> str:
     """
     Return `operation_fingerprint(name, params, version)`, cached.
 
@@ -443,35 +443,6 @@ def _bind(func, args: tuple, kwargs: dict) -> dict:
             raise ParameterError(msg)
         out |= extras
     return out
-
-
-def _as_call(func, kwargs: dict) -> tuple[tuple, dict]:
-    """
-    Return bound arguments as the call which can be made from them.
-
-    A `*args` group cannot be passed by name, and neither can anything in
-    front of one, so those go back to being positional. The result is bound
-    again, so a mapping which is not a call this function accepts is
-    refused here rather than part-way through running it.
-    """
-    signature = _signature(func)
-    parameters = list(signature.parameters.values())[1:]
-    packs = any(x.kind == inspect.Parameter.VAR_POSITIONAL for x in parameters)
-    args, rest = [], dict(kwargs)
-    for parameter in parameters:
-        positional = parameter.kind == inspect.Parameter.POSITIONAL_ONLY or (
-            packs and parameter.kind == inspect.Parameter.POSITIONAL_OR_KEYWORD
-        )
-        if parameter.kind == inspect.Parameter.VAR_POSITIONAL:
-            args.extend(rest.pop(parameter.name, ()))
-        elif positional and parameter.name in rest:
-            args.append(rest.pop(parameter.name))
-        elif positional:
-            # Absent, so everything after it would land in the wrong slot.
-            # `_check` says which name is missing.
-            break
-    _check(func, tuple(args), rest)
-    return tuple(args), rest
 
 
 def _resolve_default(default: Any) -> Any:

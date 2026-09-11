@@ -237,10 +237,10 @@ def _func_and_kwargs_str(func: Callable, patch, *args, **kwargs) -> str:
     callargs.pop("patch", None)
     callargs.pop("self", None)
     kwargs_ = callargs.pop("kwargs", {})
-    return call_str(_func_name(func), {**callargs, **kwargs_})
+    return _call_str(_func_name(func), {**callargs, **kwargs_})
 
 
-def call_str(name: str, arguments: Mapping) -> str:
+def _call_str(name: str, arguments: Mapping) -> str:
     """Spell a call for the history: `name(key=value,...)`, None values left out."""
     spelled = sorted(
         f"{k}={_format_values(v)!r}" for k, v in arguments.items() if v is not None
@@ -330,10 +330,10 @@ def _stamp(patch, attrs, patch_func, args, kwargs):
         # this call, never a reason to fail a call which otherwise worked.
         return attrs
     others = [x for x in (*args, *kwargs.values()) if isinstance(x, dc.Patch)]
-    return stamp_ids(patch, attrs, fingerprint, others)
+    return _stamp_ids(patch, attrs, fingerprint, others)
 
 
-def stamp_ids(patch, attrs, fingerprint: str, others=()):
+def _stamp_ids(patch, attrs, fingerprint: str, others=()):
     """
     Return attrs whose ids say an operation with `fingerprint` made them.
 

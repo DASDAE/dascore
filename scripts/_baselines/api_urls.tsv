@@ -68,7 +68,6 @@ dascore.Inventory.replace	/api/dascore/core/inventory/Inventory/replace.qmd
 dascore.Inventory.resolve	/api/dascore/core/inventory/Inventory/resolve.qmd
 dascore.Patch	/api/dascore/core/patch/Patch.qmd
 dascore.Patch.abs	/api/dascore/proc/basic/abs.qmd
-dascore.Patch.abs.raw_function	/api/dascore/proc/basic/abs.qmd
 dascore.Patch.add_distance_to	/api/dascore/proc/coords/add_distance_to.qmd
 dascore.Patch.aggregate	/api/dascore/proc/aggregate/aggregate.qmd
 dascore.Patch.align_to_coord	/api/dascore/proc/align/align_to_coord.qmd
@@ -80,14 +79,12 @@ dascore.Patch.apply_ufunc	/api/dascore/core/patch/Patch/apply_ufunc.qmd
 dascore.Patch.check_attrs	/api/dascore/utils/patch/check_patch_attrs.qmd
 dascore.Patch.check_coords	/api/dascore/utils/patch/check_patch_coords.qmd
 dascore.Patch.conj	/api/dascore/proc/basic/conj.qmd
-dascore.Patch.conj.raw_function	/api/dascore/proc/basic/conj.qmd
 dascore.Patch.convert_units	/api/dascore/proc/units/convert_units.qmd
 dascore.Patch.coords_from_df	/api/dascore/proc/coords/coords_from_df.qmd
 dascore.Patch.correlate	/api/dascore/proc/correlate/correlate.qmd
 dascore.Patch.correlate_shift	/api/dascore/proc/correlate/correlate_shift.qmd
 dascore.Patch.decimate	/api/dascore/proc/resample/decimate.qmd
 dascore.Patch.demean	/api/dascore/proc/basic/demean.qmd
-dascore.Patch.demean.raw_function	/api/dascore/proc/basic/demean.qmd
 dascore.Patch.demedian	/api/dascore/proc/basic/demedian.qmd
 dascore.Patch.detrend	/api/dascore/proc/detrend/detrend.qmd
 dascore.Patch.dft	/api/dascore/transform/fourier/dft.qmd
@@ -118,7 +115,6 @@ dascore.Patch.idft	/api/dascore/transform/fourier/idft.qmd
 dascore.Patch.idxmax	/api/dascore/proc/aggregate/idxmax.qmd
 dascore.Patch.idxmin	/api/dascore/proc/aggregate/idxmin.qmd
 dascore.Patch.imag	/api/dascore/proc/basic/imag.qmd
-dascore.Patch.imag.raw_function	/api/dascore/proc/basic/imag.qmd
 dascore.Patch.integrate	/api/dascore/transform/integrate/integrate.qmd
 dascore.Patch.interpolate	/api/dascore/proc/resample/interpolate.qmd
 dascore.Patch.istft	/api/dascore/transform/fourier/istft.qmd
@@ -133,7 +129,6 @@ dascore.Patch.median_filter	/api/dascore/proc/filter/median_filter.qmd
 dascore.Patch.min	/api/dascore/proc/aggregate/min.qmd
 dascore.Patch.new	/api/dascore/proc/basic/update.qmd
 dascore.Patch.normalize	/api/dascore/proc/basic/normalize.qmd
-dascore.Patch.normalize.raw_function	/api/dascore/proc/basic/normalize.qmd
 dascore.Patch.notch_filter	/api/dascore/proc/filter/notch_filter.qmd
 dascore.Patch.order	/api/dascore/proc/coords/order.qmd
 dascore.Patch.pad	/api/dascore/proc/basic/pad.qmd
@@ -142,9 +137,7 @@ dascore.Patch.phase_weighted_stack	/api/dascore/transform/hilbert/phase_weighted
 dascore.Patch.pipe	/api/dascore/proc/basic/pipe.qmd
 dascore.Patch.radians_to_strain	/api/dascore/transform/strain/radians_to_strain.qmd
 dascore.Patch.real	/api/dascore/proc/basic/real.qmd
-dascore.Patch.real.raw_function	/api/dascore/proc/basic/real.qmd
 dascore.Patch.rename_coords	/api/dascore/proc/coords/rename_coords.qmd
-dascore.Patch.rename_coords.raw_function	/api/dascore/proc/coords/rename_coords.qmd
 dascore.Patch.resample	/api/dascore/proc/resample/resample.qmd
 dascore.Patch.roll	/api/dascore/proc/basic/roll.qmd
 dascore.Patch.rolling	/api/dascore/proc/rolling/rolling.qmd
@@ -162,7 +155,6 @@ dascore.Patch.split_gaps	/api/dascore/proc/coords/split_gaps.qmd
 dascore.Patch.squeeze	/api/dascore/proc/coords/squeeze.qmd
 dascore.Patch.stalta	/api/dascore/transform/stalta/stalta.qmd
 dascore.Patch.standardize	/api/dascore/proc/basic/standardize.qmd
-dascore.Patch.standardize.raw_function	/api/dascore/proc/basic/standardize.qmd
 dascore.Patch.std	/api/dascore/proc/aggregate/std.qmd
 dascore.Patch.stft	/api/dascore/transform/fourier/stft.qmd
 dascore.Patch.sum	/api/dascore/proc/aggregate/sum.qmd
@@ -170,7 +162,6 @@ dascore.Patch.taper	/api/dascore/proc/taper/taper.qmd
 dascore.Patch.taper_range	/api/dascore/proc/taper/taper_range.qmd
 dascore.Patch.tau_p	/api/dascore/transform/taup/tau_p.qmd
 dascore.Patch.transpose	/api/dascore/proc/coords/transpose.qmd
-dascore.Patch.transpose.raw_function	/api/dascore/proc/coords/transpose.qmd
 dascore.Patch.unselect	/api/dascore/proc/coords/unselect.qmd
 dascore.Patch.update	/api/dascore/proc/basic/update.qmd
 dascore.Patch.update_attrs	/api/dascore/proc/basic/update_attrs.qmd
@@ -315,7 +306,6 @@ dascore.core.Inventory.replace	/api/dascore/core/inventory/Inventory/replace.qmd
 dascore.core.Inventory.resolve	/api/dascore/core/inventory/Inventory/resolve.qmd
 dascore.core.Patch	/api/dascore/core/patch/Patch.qmd
 dascore.core.Patch.abs	/api/dascore/proc/basic/abs.qmd
-dascore.core.Patch.abs.raw_function	/api/dascore/proc/basic/abs.qmd
 dascore.core.Patch.add_distance_to	/api/dascore/proc/coords/add_distance_to.qmd
 dascore.core.Patch.aggregate	/api/dascore/proc/aggregate/aggregate.qmd
 dascore.core.Patch.align_to_coord	/api/dascore/proc/align/align_to_coord.qmd
@@ -327,14 +317,12 @@ dascore.core.Patch.apply_ufunc	/api/dascore/core/patch/Patch/apply_ufunc.qmd
 dascore.core.Patch.check_attrs	/api/dascore/utils/patch/check_patch_attrs.qmd
 dascore.core.Patch.check_coords	/api/dascore/utils/patch/check_patch_coords.qmd
 dascore.core.Patch.conj	/api/dascore/proc/basic/conj.qmd
-dascore.core.Patch.conj.raw_function	/api/dascore/proc/basic/conj.qmd
 dascore.core.Patch.convert_units	/api/dascore/proc/units/convert_units.qmd
 dascore.core.Patch.coords_from_df	/api/dascore/proc/coords/coords_from_df.qmd
 dascore.core.Patch.correlate	/api/dascore/proc/correlate/correlate.qmd
 dascore.core.Patch.correlate_shift	/api/dascore/proc/correlate/correlate_shift.qmd
 dascore.core.Patch.decimate	/api/dascore/proc/resample/decimate.qmd
 dascore.core.Patch.demean	/api/dascore/proc/basic/demean.qmd
-dascore.core.Patch.demean.raw_function	/api/dascore/proc/basic/demean.qmd
 dascore.core.Patch.demedian	/api/dascore/proc/basic/demedian.qmd
 dascore.core.Patch.detrend	/api/dascore/proc/detrend/detrend.qmd
 dascore.core.Patch.dft	/api/dascore/transform/fourier/dft.qmd
@@ -365,7 +353,6 @@ dascore.core.Patch.idft	/api/dascore/transform/fourier/idft.qmd
 dascore.core.Patch.idxmax	/api/dascore/proc/aggregate/idxmax.qmd
 dascore.core.Patch.idxmin	/api/dascore/proc/aggregate/idxmin.qmd
 dascore.core.Patch.imag	/api/dascore/proc/basic/imag.qmd
-dascore.core.Patch.imag.raw_function	/api/dascore/proc/basic/imag.qmd
 dascore.core.Patch.integrate	/api/dascore/transform/integrate/integrate.qmd
 dascore.core.Patch.interpolate	/api/dascore/proc/resample/interpolate.qmd
 dascore.core.Patch.istft	/api/dascore/transform/fourier/istft.qmd
@@ -380,7 +367,6 @@ dascore.core.Patch.median_filter	/api/dascore/proc/filter/median_filter.qmd
 dascore.core.Patch.min	/api/dascore/proc/aggregate/min.qmd
 dascore.core.Patch.new	/api/dascore/proc/basic/update.qmd
 dascore.core.Patch.normalize	/api/dascore/proc/basic/normalize.qmd
-dascore.core.Patch.normalize.raw_function	/api/dascore/proc/basic/normalize.qmd
 dascore.core.Patch.notch_filter	/api/dascore/proc/filter/notch_filter.qmd
 dascore.core.Patch.order	/api/dascore/proc/coords/order.qmd
 dascore.core.Patch.pad	/api/dascore/proc/basic/pad.qmd
@@ -389,9 +375,7 @@ dascore.core.Patch.phase_weighted_stack	/api/dascore/transform/hilbert/phase_wei
 dascore.core.Patch.pipe	/api/dascore/proc/basic/pipe.qmd
 dascore.core.Patch.radians_to_strain	/api/dascore/transform/strain/radians_to_strain.qmd
 dascore.core.Patch.real	/api/dascore/proc/basic/real.qmd
-dascore.core.Patch.real.raw_function	/api/dascore/proc/basic/real.qmd
 dascore.core.Patch.rename_coords	/api/dascore/proc/coords/rename_coords.qmd
-dascore.core.Patch.rename_coords.raw_function	/api/dascore/proc/coords/rename_coords.qmd
 dascore.core.Patch.resample	/api/dascore/proc/resample/resample.qmd
 dascore.core.Patch.roll	/api/dascore/proc/basic/roll.qmd
 dascore.core.Patch.rolling	/api/dascore/proc/rolling/rolling.qmd
@@ -409,7 +393,6 @@ dascore.core.Patch.split_gaps	/api/dascore/proc/coords/split_gaps.qmd
 dascore.core.Patch.squeeze	/api/dascore/proc/coords/squeeze.qmd
 dascore.core.Patch.stalta	/api/dascore/transform/stalta/stalta.qmd
 dascore.core.Patch.standardize	/api/dascore/proc/basic/standardize.qmd
-dascore.core.Patch.standardize.raw_function	/api/dascore/proc/basic/standardize.qmd
 dascore.core.Patch.std	/api/dascore/proc/aggregate/std.qmd
 dascore.core.Patch.stft	/api/dascore/transform/fourier/stft.qmd
 dascore.core.Patch.sum	/api/dascore/proc/aggregate/sum.qmd
@@ -417,7 +400,6 @@ dascore.core.Patch.taper	/api/dascore/proc/taper/taper.qmd
 dascore.core.Patch.taper_range	/api/dascore/proc/taper/taper_range.qmd
 dascore.core.Patch.tau_p	/api/dascore/transform/taup/tau_p.qmd
 dascore.core.Patch.transpose	/api/dascore/proc/coords/transpose.qmd
-dascore.core.Patch.transpose.raw_function	/api/dascore/proc/coords/transpose.qmd
 dascore.core.Patch.unselect	/api/dascore/proc/coords/unselect.qmd
 dascore.core.Patch.update	/api/dascore/proc/basic/update.qmd
 dascore.core.Patch.update_attrs	/api/dascore/proc/basic/update_attrs.qmd
@@ -1183,7 +1165,6 @@ dascore.core.patch.NamespaceOwner	/api/dascore/utils/namespace/NamespaceOwner.qm
 dascore.core.patch.NodeRepr	/api/dascore/utils/display/NodeRepr.qmd
 dascore.core.patch.Patch	/api/dascore/core/patch/Patch.qmd
 dascore.core.patch.Patch.abs	/api/dascore/proc/basic/abs.qmd
-dascore.core.patch.Patch.abs.raw_function	/api/dascore/proc/basic/abs.qmd
 dascore.core.patch.Patch.add_distance_to	/api/dascore/proc/coords/add_distance_to.qmd
 dascore.core.patch.Patch.aggregate	/api/dascore/proc/aggregate/aggregate.qmd
 dascore.core.patch.Patch.align_to_coord	/api/dascore/proc/align/align_to_coord.qmd
@@ -1195,14 +1176,12 @@ dascore.core.patch.Patch.apply_ufunc	/api/dascore/core/patch/Patch/apply_ufunc.q
 dascore.core.patch.Patch.check_attrs	/api/dascore/utils/patch/check_patch_attrs.qmd
 dascore.core.patch.Patch.check_coords	/api/dascore/utils/patch/check_patch_coords.qmd
 dascore.core.patch.Patch.conj	/api/dascore/proc/basic/conj.qmd
-dascore.core.patch.Patch.conj.raw_function	/api/dascore/proc/basic/conj.qmd
 dascore.core.patch.Patch.convert_units	/api/dascore/proc/units/convert_units.qmd
 dascore.core.patch.Patch.coords_from_df	/api/dascore/proc/coords/coords_from_df.qmd
 dascore.core.patch.Patch.correlate	/api/dascore/proc/correlate/correlate.qmd
 dascore.core.patch.Patch.correlate_shift	/api/dascore/proc/correlate/correlate_shift.qmd
 dascore.core.patch.Patch.decimate	/api/dascore/proc/resample/decimate.qmd
 dascore.core.patch.Patch.demean	/api/dascore/proc/basic/demean.qmd
-dascore.core.patch.Patch.demean.raw_function	/api/dascore/proc/basic/demean.qmd
 dascore.core.patch.Patch.demedian	/api/dascore/proc/basic/demedian.qmd
 dascore.core.patch.Patch.detrend	/api/dascore/proc/detrend/detrend.qmd
 dascore.core.patch.Patch.dft	/api/dascore/transform/fourier/dft.qmd
@@ -1233,7 +1212,6 @@ dascore.core.patch.Patch.idft	/api/dascore/transform/fourier/idft.qmd
 dascore.core.patch.Patch.idxmax	/api/dascore/proc/aggregate/idxmax.qmd
 dascore.core.patch.Patch.idxmin	/api/dascore/proc/aggregate/idxmin.qmd
 dascore.core.patch.Patch.imag	/api/dascore/proc/basic/imag.qmd
-dascore.core.patch.Patch.imag.raw_function	/api/dascore/proc/basic/imag.qmd
 dascore.core.patch.Patch.integrate	/api/dascore/transform/integrate/integrate.qmd
 dascore.core.patch.Patch.interpolate	/api/dascore/proc/resample/interpolate.qmd
 dascore.core.patch.Patch.istft	/api/dascore/transform/fourier/istft.qmd
@@ -1248,7 +1226,6 @@ dascore.core.patch.Patch.median_filter	/api/dascore/proc/filter/median_filter.qm
 dascore.core.patch.Patch.min	/api/dascore/proc/aggregate/min.qmd
 dascore.core.patch.Patch.new	/api/dascore/proc/basic/update.qmd
 dascore.core.patch.Patch.normalize	/api/dascore/proc/basic/normalize.qmd
-dascore.core.patch.Patch.normalize.raw_function	/api/dascore/proc/basic/normalize.qmd
 dascore.core.patch.Patch.notch_filter	/api/dascore/proc/filter/notch_filter.qmd
 dascore.core.patch.Patch.order	/api/dascore/proc/coords/order.qmd
 dascore.core.patch.Patch.pad	/api/dascore/proc/basic/pad.qmd
@@ -1257,9 +1234,7 @@ dascore.core.patch.Patch.phase_weighted_stack	/api/dascore/transform/hilbert/pha
 dascore.core.patch.Patch.pipe	/api/dascore/proc/basic/pipe.qmd
 dascore.core.patch.Patch.radians_to_strain	/api/dascore/transform/strain/radians_to_strain.qmd
 dascore.core.patch.Patch.real	/api/dascore/proc/basic/real.qmd
-dascore.core.patch.Patch.real.raw_function	/api/dascore/proc/basic/real.qmd
 dascore.core.patch.Patch.rename_coords	/api/dascore/proc/coords/rename_coords.qmd
-dascore.core.patch.Patch.rename_coords.raw_function	/api/dascore/proc/coords/rename_coords.qmd
 dascore.core.patch.Patch.resample	/api/dascore/proc/resample/resample.qmd
 dascore.core.patch.Patch.roll	/api/dascore/proc/basic/roll.qmd
 dascore.core.patch.Patch.rolling	/api/dascore/proc/rolling/rolling.qmd
@@ -1277,7 +1252,6 @@ dascore.core.patch.Patch.split_gaps	/api/dascore/proc/coords/split_gaps.qmd
 dascore.core.patch.Patch.squeeze	/api/dascore/proc/coords/squeeze.qmd
 dascore.core.patch.Patch.stalta	/api/dascore/transform/stalta/stalta.qmd
 dascore.core.patch.Patch.standardize	/api/dascore/proc/basic/standardize.qmd
-dascore.core.patch.Patch.standardize.raw_function	/api/dascore/proc/basic/standardize.qmd
 dascore.core.patch.Patch.std	/api/dascore/proc/aggregate/std.qmd
 dascore.core.patch.Patch.stft	/api/dascore/transform/fourier/stft.qmd
 dascore.core.patch.Patch.sum	/api/dascore/proc/aggregate/sum.qmd
@@ -1285,7 +1259,6 @@ dascore.core.patch.Patch.taper	/api/dascore/proc/taper/taper.qmd
 dascore.core.patch.Patch.taper_range	/api/dascore/proc/taper/taper_range.qmd
 dascore.core.patch.Patch.tau_p	/api/dascore/transform/taup/tau_p.qmd
 dascore.core.patch.Patch.transpose	/api/dascore/proc/coords/transpose.qmd
-dascore.core.patch.Patch.transpose.raw_function	/api/dascore/proc/coords/transpose.qmd
 dascore.core.patch.Patch.unselect	/api/dascore/proc/coords/unselect.qmd
 dascore.core.patch.Patch.update	/api/dascore/proc/basic/update.qmd
 dascore.core.patch.Patch.update_attrs	/api/dascore/proc/basic/update_attrs.qmd
@@ -1469,18 +1442,16 @@ dascore.core.processor.PatchProcessor.plan	/api/dascore/core/processor/PatchProc
 dascore.core.processor.PatchProcessor.reconcile	/api/dascore/core/processor/PatchProcessor/reconcile.qmd
 dascore.core.processor.PatchProcessor.run	/api/dascore/core/processor/PatchProcessor/run.qmd
 dascore.core.processor.backend_name	/api/dascore/utils/array_api/backend_name.qmd
-dascore.core.processor.call_str	/api/dascore/utils/patch/call_str.qmd
 dascore.core.processor.check_patch_attrs	/api/dascore/utils/patch/check_patch_attrs.qmd
 dascore.core.processor.check_patch_coords	/api/dascore/utils/patch/check_patch_coords.qmd
 dascore.core.processor.check_patch_data	/api/dascore/utils/patch/check_patch_data.qmd
+dascore.core.processor.get_config	/api/dascore/config/get_config.qmd
 dascore.core.processor.ids_enabled	/api/dascore/utils/identity/ids_enabled.qmd
-dascore.core.processor.memoized_fingerprint	/api/dascore/utils/patch_registry/memoized_fingerprint.qmd
 dascore.core.processor.model_values	/api/dascore/utils/serialize/model_values.qmd
 dascore.core.processor.patch_function_tag	/api/dascore/utils/patch_registry/patch_function_tag.qmd
 dascore.core.processor.register_kernel	/api/dascore/core/processor/register_kernel.qmd
 dascore.core.processor.register_patch_function	/api/dascore/utils/patch_registry/register_patch_function.qmd
 dascore.core.processor.resolve_patch_function	/api/dascore/utils/patch_registry/resolve_patch_function.qmd
-dascore.core.processor.stamp_ids	/api/dascore/utils/patch/stamp_ids.qmd
 dascore.core.spool	/api/dascore/core/spool.qmd
 dascore.core.spool.BaseSpool	/api/dascore/core/spool/Spool.qmd
 dascore.core.spool.BaseSpool.attach_inventory	/api/dascore/core/spool/Spool/attach_inventory.qmd
@@ -3313,7 +3284,6 @@ dascore.io.terra15.core.Terra15FormatterV6.write	/api/dascore/io/core/FiberIO/wr
 dascore.io.terra15.utils	/api/dascore/io/terra15/utils.qmd
 dascore.io.terra15.utils.Patch	/api/dascore/core/patch/Patch.qmd
 dascore.io.terra15.utils.Patch.abs	/api/dascore/proc/basic/abs.qmd
-dascore.io.terra15.utils.Patch.abs.raw_function	/api/dascore/proc/basic/abs.qmd
 dascore.io.terra15.utils.Patch.add_distance_to	/api/dascore/proc/coords/add_distance_to.qmd
 dascore.io.terra15.utils.Patch.aggregate	/api/dascore/proc/aggregate/aggregate.qmd
 dascore.io.terra15.utils.Patch.align_to_coord	/api/dascore/proc/align/align_to_coord.qmd
@@ -3325,14 +3295,12 @@ dascore.io.terra15.utils.Patch.apply_ufunc	/api/dascore/core/patch/Patch/apply_u
 dascore.io.terra15.utils.Patch.check_attrs	/api/dascore/utils/patch/check_patch_attrs.qmd
 dascore.io.terra15.utils.Patch.check_coords	/api/dascore/utils/patch/check_patch_coords.qmd
 dascore.io.terra15.utils.Patch.conj	/api/dascore/proc/basic/conj.qmd
-dascore.io.terra15.utils.Patch.conj.raw_function	/api/dascore/proc/basic/conj.qmd
 dascore.io.terra15.utils.Patch.convert_units	/api/dascore/proc/units/convert_units.qmd
 dascore.io.terra15.utils.Patch.coords_from_df	/api/dascore/proc/coords/coords_from_df.qmd
 dascore.io.terra15.utils.Patch.correlate	/api/dascore/proc/correlate/correlate.qmd
 dascore.io.terra15.utils.Patch.correlate_shift	/api/dascore/proc/correlate/correlate_shift.qmd
 dascore.io.terra15.utils.Patch.decimate	/api/dascore/proc/resample/decimate.qmd
 dascore.io.terra15.utils.Patch.demean	/api/dascore/proc/basic/demean.qmd
-dascore.io.terra15.utils.Patch.demean.raw_function	/api/dascore/proc/basic/demean.qmd
 dascore.io.terra15.utils.Patch.demedian	/api/dascore/proc/basic/demedian.qmd
 dascore.io.terra15.utils.Patch.detrend	/api/dascore/proc/detrend/detrend.qmd
 dascore.io.terra15.utils.Patch.dft	/api/dascore/transform/fourier/dft.qmd
@@ -3363,7 +3331,6 @@ dascore.io.terra15.utils.Patch.idft	/api/dascore/transform/fourier/idft.qmd
 dascore.io.terra15.utils.Patch.idxmax	/api/dascore/proc/aggregate/idxmax.qmd
 dascore.io.terra15.utils.Patch.idxmin	/api/dascore/proc/aggregate/idxmin.qmd
 dascore.io.terra15.utils.Patch.imag	/api/dascore/proc/basic/imag.qmd
-dascore.io.terra15.utils.Patch.imag.raw_function	/api/dascore/proc/basic/imag.qmd
 dascore.io.terra15.utils.Patch.integrate	/api/dascore/transform/integrate/integrate.qmd
 dascore.io.terra15.utils.Patch.interpolate	/api/dascore/proc/resample/interpolate.qmd
 dascore.io.terra15.utils.Patch.istft	/api/dascore/transform/fourier/istft.qmd
@@ -3378,7 +3345,6 @@ dascore.io.terra15.utils.Patch.median_filter	/api/dascore/proc/filter/median_fil
 dascore.io.terra15.utils.Patch.min	/api/dascore/proc/aggregate/min.qmd
 dascore.io.terra15.utils.Patch.new	/api/dascore/proc/basic/update.qmd
 dascore.io.terra15.utils.Patch.normalize	/api/dascore/proc/basic/normalize.qmd
-dascore.io.terra15.utils.Patch.normalize.raw_function	/api/dascore/proc/basic/normalize.qmd
 dascore.io.terra15.utils.Patch.notch_filter	/api/dascore/proc/filter/notch_filter.qmd
 dascore.io.terra15.utils.Patch.order	/api/dascore/proc/coords/order.qmd
 dascore.io.terra15.utils.Patch.pad	/api/dascore/proc/basic/pad.qmd
@@ -3387,9 +3353,7 @@ dascore.io.terra15.utils.Patch.phase_weighted_stack	/api/dascore/transform/hilbe
 dascore.io.terra15.utils.Patch.pipe	/api/dascore/proc/basic/pipe.qmd
 dascore.io.terra15.utils.Patch.radians_to_strain	/api/dascore/transform/strain/radians_to_strain.qmd
 dascore.io.terra15.utils.Patch.real	/api/dascore/proc/basic/real.qmd
-dascore.io.terra15.utils.Patch.real.raw_function	/api/dascore/proc/basic/real.qmd
 dascore.io.terra15.utils.Patch.rename_coords	/api/dascore/proc/coords/rename_coords.qmd
-dascore.io.terra15.utils.Patch.rename_coords.raw_function	/api/dascore/proc/coords/rename_coords.qmd
 dascore.io.terra15.utils.Patch.resample	/api/dascore/proc/resample/resample.qmd
 dascore.io.terra15.utils.Patch.roll	/api/dascore/proc/basic/roll.qmd
 dascore.io.terra15.utils.Patch.rolling	/api/dascore/proc/rolling/rolling.qmd
@@ -3407,7 +3371,6 @@ dascore.io.terra15.utils.Patch.split_gaps	/api/dascore/proc/coords/split_gaps.qm
 dascore.io.terra15.utils.Patch.squeeze	/api/dascore/proc/coords/squeeze.qmd
 dascore.io.terra15.utils.Patch.stalta	/api/dascore/transform/stalta/stalta.qmd
 dascore.io.terra15.utils.Patch.standardize	/api/dascore/proc/basic/standardize.qmd
-dascore.io.terra15.utils.Patch.standardize.raw_function	/api/dascore/proc/basic/standardize.qmd
 dascore.io.terra15.utils.Patch.std	/api/dascore/proc/aggregate/std.qmd
 dascore.io.terra15.utils.Patch.stft	/api/dascore/transform/fourier/stft.qmd
 dascore.io.terra15.utils.Patch.sum	/api/dascore/proc/aggregate/sum.qmd
@@ -3415,7 +3378,6 @@ dascore.io.terra15.utils.Patch.taper	/api/dascore/proc/taper/taper.qmd
 dascore.io.terra15.utils.Patch.taper_range	/api/dascore/proc/taper/taper_range.qmd
 dascore.io.terra15.utils.Patch.tau_p	/api/dascore/transform/taup/tau_p.qmd
 dascore.io.terra15.utils.Patch.transpose	/api/dascore/proc/coords/transpose.qmd
-dascore.io.terra15.utils.Patch.transpose.raw_function	/api/dascore/proc/coords/transpose.qmd
 dascore.io.terra15.utils.Patch.unselect	/api/dascore/proc/coords/unselect.qmd
 dascore.io.terra15.utils.Patch.update	/api/dascore/proc/basic/update.qmd
 dascore.io.terra15.utils.Patch.update_attrs	/api/dascore/proc/basic/update_attrs.qmd
@@ -3707,7 +3669,6 @@ dascore.proc.Abs.derive	/api/dascore/core/processor/PatchProcessor/derive.qmd
 dascore.proc.Abs.kernel	/api/dascore/proc/basic/Abs/kernel.qmd
 dascore.proc.Abs.new	/api/dascore/models/base/DascoreBaseModel/new.qmd
 dascore.proc.Abs.patch_function	/api/dascore/proc/basic/abs.qmd
-dascore.proc.Abs.patch_function.raw_function	/api/dascore/proc/basic/abs.qmd
 dascore.proc.Abs.plan	/api/dascore/core/processor/PatchProcessor/plan.qmd
 dascore.proc.Abs.reconcile	/api/dascore/core/processor/PatchProcessor/reconcile.qmd
 dascore.proc.Abs.run	/api/dascore/core/processor/PatchProcessor/run.qmd
@@ -3745,7 +3706,6 @@ dascore.proc.Conj.derive	/api/dascore/core/processor/PatchProcessor/derive.qmd
 dascore.proc.Conj.kernel	/api/dascore/proc/basic/Conj/kernel.qmd
 dascore.proc.Conj.new	/api/dascore/models/base/DascoreBaseModel/new.qmd
 dascore.proc.Conj.patch_function	/api/dascore/proc/basic/conj.qmd
-dascore.proc.Conj.patch_function.raw_function	/api/dascore/proc/basic/conj.qmd
 dascore.proc.Conj.plan	/api/dascore/core/processor/PatchProcessor/plan.qmd
 dascore.proc.Conj.reconcile	/api/dascore/core/processor/PatchProcessor/reconcile.qmd
 dascore.proc.Conj.run	/api/dascore/core/processor/PatchProcessor/run.qmd
@@ -3819,7 +3779,6 @@ dascore.proc.Demean.derive	/api/dascore/core/processor/PatchProcessor/derive.qmd
 dascore.proc.Demean.kernel	/api/dascore/proc/basic/Demean/kernel.qmd
 dascore.proc.Demean.new	/api/dascore/models/base/DascoreBaseModel/new.qmd
 dascore.proc.Demean.patch_function	/api/dascore/proc/basic/demean.qmd
-dascore.proc.Demean.patch_function.raw_function	/api/dascore/proc/basic/demean.qmd
 dascore.proc.Demean.plan	/api/dascore/proc/basic/Demean/plan.qmd
 dascore.proc.Demean.reconcile	/api/dascore/core/processor/PatchProcessor/reconcile.qmd
 dascore.proc.Demean.run	/api/dascore/core/processor/PatchProcessor/run.qmd
@@ -3829,7 +3788,6 @@ dascore.proc.Imag.derive	/api/dascore/core/processor/PatchProcessor/derive.qmd
 dascore.proc.Imag.kernel	/api/dascore/proc/basic/Imag/kernel.qmd
 dascore.proc.Imag.new	/api/dascore/models/base/DascoreBaseModel/new.qmd
 dascore.proc.Imag.patch_function	/api/dascore/proc/basic/imag.qmd
-dascore.proc.Imag.patch_function.raw_function	/api/dascore/proc/basic/imag.qmd
 dascore.proc.Imag.plan	/api/dascore/core/processor/PatchProcessor/plan.qmd
 dascore.proc.Imag.reconcile	/api/dascore/core/processor/PatchProcessor/reconcile.qmd
 dascore.proc.Imag.run	/api/dascore/core/processor/PatchProcessor/run.qmd
@@ -3839,7 +3797,6 @@ dascore.proc.Normalize.derive	/api/dascore/core/processor/PatchProcessor/derive.
 dascore.proc.Normalize.kernel	/api/dascore/proc/basic/Normalize/kernel.qmd
 dascore.proc.Normalize.new	/api/dascore/models/base/DascoreBaseModel/new.qmd
 dascore.proc.Normalize.patch_function	/api/dascore/proc/basic/normalize.qmd
-dascore.proc.Normalize.patch_function.raw_function	/api/dascore/proc/basic/normalize.qmd
 dascore.proc.Normalize.plan	/api/dascore/proc/basic/Normalize/plan.qmd
 dascore.proc.Normalize.reconcile	/api/dascore/core/processor/PatchProcessor/reconcile.qmd
 dascore.proc.Normalize.run	/api/dascore/core/processor/PatchProcessor/run.qmd
@@ -3867,7 +3824,6 @@ dascore.proc.Real.derive	/api/dascore/core/processor/PatchProcessor/derive.qmd
 dascore.proc.Real.kernel	/api/dascore/proc/basic/Real/kernel.qmd
 dascore.proc.Real.new	/api/dascore/models/base/DascoreBaseModel/new.qmd
 dascore.proc.Real.patch_function	/api/dascore/proc/basic/real.qmd
-dascore.proc.Real.patch_function.raw_function	/api/dascore/proc/basic/real.qmd
 dascore.proc.Real.plan	/api/dascore/core/processor/PatchProcessor/plan.qmd
 dascore.proc.Real.reconcile	/api/dascore/core/processor/PatchProcessor/reconcile.qmd
 dascore.proc.Real.run	/api/dascore/core/processor/PatchProcessor/run.qmd
@@ -3876,7 +3832,6 @@ dascore.proc.RenameCoords.check	/api/dascore/core/processor/PatchProcessor/check
 dascore.proc.RenameCoords.derive	/api/dascore/proc/coords/RenameCoords/derive.qmd
 dascore.proc.RenameCoords.new	/api/dascore/models/base/DascoreBaseModel/new.qmd
 dascore.proc.RenameCoords.patch_function	/api/dascore/proc/coords/rename_coords.qmd
-dascore.proc.RenameCoords.patch_function.raw_function	/api/dascore/proc/coords/rename_coords.qmd
 dascore.proc.RenameCoords.plan	/api/dascore/core/processor/PatchProcessor/plan.qmd
 dascore.proc.RenameCoords.reconcile	/api/dascore/core/processor/PatchProcessor/reconcile.qmd
 dascore.proc.RenameCoords.run	/api/dascore/core/processor/PatchProcessor/run.qmd
@@ -3886,7 +3841,6 @@ dascore.proc.Standardize.derive	/api/dascore/core/processor/PatchProcessor/deriv
 dascore.proc.Standardize.kernel	/api/dascore/proc/basic/Standardize/kernel.qmd
 dascore.proc.Standardize.new	/api/dascore/models/base/DascoreBaseModel/new.qmd
 dascore.proc.Standardize.patch_function	/api/dascore/proc/basic/standardize.qmd
-dascore.proc.Standardize.patch_function.raw_function	/api/dascore/proc/basic/standardize.qmd
 dascore.proc.Standardize.plan	/api/dascore/proc/basic/Standardize/plan.qmd
 dascore.proc.Standardize.reconcile	/api/dascore/core/processor/PatchProcessor/reconcile.qmd
 dascore.proc.Standardize.run	/api/dascore/core/processor/PatchProcessor/run.qmd
@@ -3896,12 +3850,10 @@ dascore.proc.Transpose.derive	/api/dascore/proc/coords/Transpose/derive.qmd
 dascore.proc.Transpose.kernel	/api/dascore/proc/coords/Transpose/kernel.qmd
 dascore.proc.Transpose.new	/api/dascore/models/base/DascoreBaseModel/new.qmd
 dascore.proc.Transpose.patch_function	/api/dascore/proc/coords/transpose.qmd
-dascore.proc.Transpose.patch_function.raw_function	/api/dascore/proc/coords/transpose.qmd
 dascore.proc.Transpose.plan	/api/dascore/proc/coords/Transpose/plan.qmd
 dascore.proc.Transpose.reconcile	/api/dascore/core/processor/PatchProcessor/reconcile.qmd
 dascore.proc.Transpose.run	/api/dascore/core/processor/PatchProcessor/run.qmd
 dascore.proc.abs	/api/dascore/proc/basic/abs.qmd
-dascore.proc.abs.raw_function	/api/dascore/proc/basic/abs.qmd
 dascore.proc.adaptive_spectral_filter.AdaptiveSpectralFilter	/api/dascore/proc/adaptive_spectral_filter/AdaptiveSpectralFilter.qmd
 dascore.proc.adaptive_spectral_filter.AdaptiveSpectralFilter.geometry	/api/dascore/proc/adaptive_spectral_filter/AdaptiveSpectralFilter/geometry.qmd
 dascore.proc.adaptive_spectral_filter.AdaptiveSpectralFilter.kernel	/api/dascore/proc/adaptive_spectral_filter/AdaptiveSpectralFilter/kernel.qmd
@@ -4034,7 +3986,6 @@ dascore.proc.basic.Abs.derive	/api/dascore/core/processor/PatchProcessor/derive.
 dascore.proc.basic.Abs.kernel	/api/dascore/proc/basic/Abs/kernel.qmd
 dascore.proc.basic.Abs.new	/api/dascore/models/base/DascoreBaseModel/new.qmd
 dascore.proc.basic.Abs.patch_function	/api/dascore/proc/basic/abs.qmd
-dascore.proc.basic.Abs.patch_function.raw_function	/api/dascore/proc/basic/abs.qmd
 dascore.proc.basic.Abs.plan	/api/dascore/core/processor/PatchProcessor/plan.qmd
 dascore.proc.basic.Abs.reconcile	/api/dascore/core/processor/PatchProcessor/reconcile.qmd
 dascore.proc.basic.Abs.run	/api/dascore/core/processor/PatchProcessor/run.qmd
@@ -4044,7 +3995,6 @@ dascore.proc.basic.Conj.derive	/api/dascore/core/processor/PatchProcessor/derive
 dascore.proc.basic.Conj.kernel	/api/dascore/proc/basic/Conj/kernel.qmd
 dascore.proc.basic.Conj.new	/api/dascore/models/base/DascoreBaseModel/new.qmd
 dascore.proc.basic.Conj.patch_function	/api/dascore/proc/basic/conj.qmd
-dascore.proc.basic.Conj.patch_function.raw_function	/api/dascore/proc/basic/conj.qmd
 dascore.proc.basic.Conj.plan	/api/dascore/core/processor/PatchProcessor/plan.qmd
 dascore.proc.basic.Conj.reconcile	/api/dascore/core/processor/PatchProcessor/reconcile.qmd
 dascore.proc.basic.Conj.run	/api/dascore/core/processor/PatchProcessor/run.qmd
@@ -4089,7 +4039,6 @@ dascore.proc.basic.Demean.derive	/api/dascore/core/processor/PatchProcessor/deri
 dascore.proc.basic.Demean.kernel	/api/dascore/proc/basic/Demean/kernel.qmd
 dascore.proc.basic.Demean.new	/api/dascore/models/base/DascoreBaseModel/new.qmd
 dascore.proc.basic.Demean.patch_function	/api/dascore/proc/basic/demean.qmd
-dascore.proc.basic.Demean.patch_function.raw_function	/api/dascore/proc/basic/demean.qmd
 dascore.proc.basic.Demean.plan	/api/dascore/proc/basic/Demean/plan.qmd
 dascore.proc.basic.Demean.reconcile	/api/dascore/core/processor/PatchProcessor/reconcile.qmd
 dascore.proc.basic.Demean.run	/api/dascore/core/processor/PatchProcessor/run.qmd
@@ -4099,7 +4048,6 @@ dascore.proc.basic.Imag.derive	/api/dascore/core/processor/PatchProcessor/derive
 dascore.proc.basic.Imag.kernel	/api/dascore/proc/basic/Imag/kernel.qmd
 dascore.proc.basic.Imag.new	/api/dascore/models/base/DascoreBaseModel/new.qmd
 dascore.proc.basic.Imag.patch_function	/api/dascore/proc/basic/imag.qmd
-dascore.proc.basic.Imag.patch_function.raw_function	/api/dascore/proc/basic/imag.qmd
 dascore.proc.basic.Imag.plan	/api/dascore/core/processor/PatchProcessor/plan.qmd
 dascore.proc.basic.Imag.reconcile	/api/dascore/core/processor/PatchProcessor/reconcile.qmd
 dascore.proc.basic.Imag.run	/api/dascore/core/processor/PatchProcessor/run.qmd
@@ -4109,7 +4057,6 @@ dascore.proc.basic.Normalize.derive	/api/dascore/core/processor/PatchProcessor/d
 dascore.proc.basic.Normalize.kernel	/api/dascore/proc/basic/Normalize/kernel.qmd
 dascore.proc.basic.Normalize.new	/api/dascore/models/base/DascoreBaseModel/new.qmd
 dascore.proc.basic.Normalize.patch_function	/api/dascore/proc/basic/normalize.qmd
-dascore.proc.basic.Normalize.patch_function.raw_function	/api/dascore/proc/basic/normalize.qmd
 dascore.proc.basic.Normalize.plan	/api/dascore/proc/basic/Normalize/plan.qmd
 dascore.proc.basic.Normalize.reconcile	/api/dascore/core/processor/PatchProcessor/reconcile.qmd
 dascore.proc.basic.Normalize.run	/api/dascore/core/processor/PatchProcessor/run.qmd
@@ -4135,7 +4082,6 @@ dascore.proc.basic.Real.derive	/api/dascore/core/processor/PatchProcessor/derive
 dascore.proc.basic.Real.kernel	/api/dascore/proc/basic/Real/kernel.qmd
 dascore.proc.basic.Real.new	/api/dascore/models/base/DascoreBaseModel/new.qmd
 dascore.proc.basic.Real.patch_function	/api/dascore/proc/basic/real.qmd
-dascore.proc.basic.Real.patch_function.raw_function	/api/dascore/proc/basic/real.qmd
 dascore.proc.basic.Real.plan	/api/dascore/core/processor/PatchProcessor/plan.qmd
 dascore.proc.basic.Real.reconcile	/api/dascore/core/processor/PatchProcessor/reconcile.qmd
 dascore.proc.basic.Real.run	/api/dascore/core/processor/PatchProcessor/run.qmd
@@ -4145,21 +4091,17 @@ dascore.proc.basic.Standardize.derive	/api/dascore/core/processor/PatchProcessor
 dascore.proc.basic.Standardize.kernel	/api/dascore/proc/basic/Standardize/kernel.qmd
 dascore.proc.basic.Standardize.new	/api/dascore/models/base/DascoreBaseModel/new.qmd
 dascore.proc.basic.Standardize.patch_function	/api/dascore/proc/basic/standardize.qmd
-dascore.proc.basic.Standardize.patch_function.raw_function	/api/dascore/proc/basic/standardize.qmd
 dascore.proc.basic.Standardize.plan	/api/dascore/proc/basic/Standardize/plan.qmd
 dascore.proc.basic.Standardize.reconcile	/api/dascore/core/processor/PatchProcessor/reconcile.qmd
 dascore.proc.basic.Standardize.run	/api/dascore/core/processor/PatchProcessor/run.qmd
 dascore.proc.basic.abs	/api/dascore/proc/basic/abs.qmd
-dascore.proc.basic.abs.raw_function	/api/dascore/proc/basic/abs.qmd
 dascore.proc.basic.align_patch_coords	/api/dascore/utils/patch/align_patch_coords.qmd
 dascore.proc.basic.angle	/api/dascore/proc/basic/angle.qmd
 dascore.proc.basic.array	/api/dascore/compat/array.qmd
 dascore.proc.basic.array_namespace	/api/dascore/utils/array_api/array_namespace.qmd
 dascore.proc.basic.bool_patch	/api/dascore/proc/basic/bool_patch.qmd
 dascore.proc.basic.conj	/api/dascore/proc/basic/conj.qmd
-dascore.proc.basic.conj.raw_function	/api/dascore/proc/basic/conj.qmd
 dascore.proc.basic.demean	/api/dascore/proc/basic/demean.qmd
-dascore.proc.basic.demean.raw_function	/api/dascore/proc/basic/demean.qmd
 dascore.proc.basic.demedian	/api/dascore/proc/basic/demedian.qmd
 dascore.proc.basic.dropna	/api/dascore/proc/basic/dropna.qmd
 dascore.proc.basic.equals	/api/dascore/proc/basic/equals.qmd
@@ -4170,26 +4112,21 @@ dascore.proc.basic.get_coord	/api/dascore/core/coords/get_coord.qmd
 dascore.proc.basic.get_coord_manager	/api/dascore/core/coordmanager/get_coord_manager.qmd
 dascore.proc.basic.get_dim_axis_value	/api/dascore/utils/patch/get_dim_axis_value.qmd
 dascore.proc.basic.imag	/api/dascore/proc/basic/imag.qmd
-dascore.proc.basic.imag.raw_function	/api/dascore/proc/basic/imag.qmd
 dascore.proc.basic.nan_reduce	/api/dascore/utils/array_api/nan_reduce.qmd
 dascore.proc.basic.normalize	/api/dascore/proc/basic/normalize.qmd
-dascore.proc.basic.normalize.raw_function	/api/dascore/proc/basic/normalize.qmd
 dascore.proc.basic.pad	/api/dascore/proc/basic/pad.qmd
 dascore.proc.basic.patch_function	/api/dascore/utils/patch/patch_function.qmd
 dascore.proc.basic.pipe	/api/dascore/proc/basic/pipe.qmd
 dascore.proc.basic.real	/api/dascore/proc/basic/real.qmd
-dascore.proc.basic.real.raw_function	/api/dascore/proc/basic/real.qmd
 dascore.proc.basic.roll	/api/dascore/proc/basic/roll.qmd
 dascore.proc.basic.set_dims	/api/dascore/proc/basic/set_dims.qmd
 dascore.proc.basic.standardize	/api/dascore/proc/basic/standardize.qmd
-dascore.proc.basic.standardize.raw_function	/api/dascore/proc/basic/standardize.qmd
 dascore.proc.basic.update	/api/dascore/proc/basic/update.qmd
 dascore.proc.basic.update_attrs	/api/dascore/proc/basic/update_attrs.qmd
 dascore.proc.basic.where	/api/dascore/proc/basic/where.qmd
 dascore.proc.bool_patch	/api/dascore/proc/basic/bool_patch.qmd
 dascore.proc.compose_docstring	/api/dascore/utils/docs/compose_docstring.qmd
 dascore.proc.conj	/api/dascore/proc/basic/conj.qmd
-dascore.proc.conj.raw_function	/api/dascore/proc/basic/conj.qmd
 dascore.proc.convert_units	/api/dascore/proc/units/convert_units.qmd
 dascore.proc.coords	/api/dascore/proc/coords.qmd
 dascore.proc.coords.BaseCoord	/api/dascore/core/coords/BaseCoord.qmd
@@ -4264,7 +4201,6 @@ dascore.proc.coords.RenameCoords.check	/api/dascore/core/processor/PatchProcesso
 dascore.proc.coords.RenameCoords.derive	/api/dascore/proc/coords/RenameCoords/derive.qmd
 dascore.proc.coords.RenameCoords.new	/api/dascore/models/base/DascoreBaseModel/new.qmd
 dascore.proc.coords.RenameCoords.patch_function	/api/dascore/proc/coords/rename_coords.qmd
-dascore.proc.coords.RenameCoords.patch_function.raw_function	/api/dascore/proc/coords/rename_coords.qmd
 dascore.proc.coords.RenameCoords.plan	/api/dascore/core/processor/PatchProcessor/plan.qmd
 dascore.proc.coords.RenameCoords.reconcile	/api/dascore/core/processor/PatchProcessor/reconcile.qmd
 dascore.proc.coords.RenameCoords.run	/api/dascore/core/processor/PatchProcessor/run.qmd
@@ -4274,7 +4210,6 @@ dascore.proc.coords.Transpose.derive	/api/dascore/proc/coords/Transpose/derive.q
 dascore.proc.coords.Transpose.kernel	/api/dascore/proc/coords/Transpose/kernel.qmd
 dascore.proc.coords.Transpose.new	/api/dascore/models/base/DascoreBaseModel/new.qmd
 dascore.proc.coords.Transpose.patch_function	/api/dascore/proc/coords/transpose.qmd
-dascore.proc.coords.Transpose.patch_function.raw_function	/api/dascore/proc/coords/transpose.qmd
 dascore.proc.coords.Transpose.plan	/api/dascore/proc/coords/Transpose/plan.qmd
 dascore.proc.coords.Transpose.reconcile	/api/dascore/core/processor/PatchProcessor/reconcile.qmd
 dascore.proc.coords.Transpose.run	/api/dascore/core/processor/PatchProcessor/run.qmd
@@ -4294,14 +4229,12 @@ dascore.proc.coords.make_broadcastable_to	/api/dascore/proc/coords/make_broadcas
 dascore.proc.coords.order	/api/dascore/proc/coords/order.qmd
 dascore.proc.coords.patch_function	/api/dascore/utils/patch/patch_function.qmd
 dascore.proc.coords.rename_coords	/api/dascore/proc/coords/rename_coords.qmd
-dascore.proc.coords.rename_coords.raw_function	/api/dascore/proc/coords/rename_coords.qmd
 dascore.proc.coords.select	/api/dascore/proc/coords/select.qmd
 dascore.proc.coords.snap_coords	/api/dascore/proc/coords/snap_coords.qmd
 dascore.proc.coords.sort_coords	/api/dascore/proc/coords/sort_coords.qmd
 dascore.proc.coords.split_gaps	/api/dascore/proc/coords/split_gaps.qmd
 dascore.proc.coords.squeeze	/api/dascore/proc/coords/squeeze.qmd
 dascore.proc.coords.transpose	/api/dascore/proc/coords/transpose.qmd
-dascore.proc.coords.transpose.raw_function	/api/dascore/proc/coords/transpose.qmd
 dascore.proc.coords.unselect	/api/dascore/proc/coords/unselect.qmd
 dascore.proc.coords.update_coords	/api/dascore/proc/coords/update_coords.qmd
 dascore.proc.coords_from_df	/api/dascore/proc/coords/coords_from_df.qmd
@@ -4315,7 +4248,6 @@ dascore.proc.correlate.to_float	/api/dascore/utils/time/to_float.qmd
 dascore.proc.correlate_shift	/api/dascore/proc/correlate/correlate_shift.qmd
 dascore.proc.decimate	/api/dascore/proc/resample/decimate.qmd
 dascore.proc.demean	/api/dascore/proc/basic/demean.qmd
-dascore.proc.demean.raw_function	/api/dascore/proc/basic/demean.qmd
 dascore.proc.demedian	/api/dascore/proc/basic/demedian.qmd
 dascore.proc.detrend	/api/dascore/proc/detrend.qmd
 dascore.proc.detrend.ParameterError	/api/dascore/exceptions/ParameterError.qmd
@@ -4370,7 +4302,6 @@ dascore.proc.hampel.move_median	/api/dascore/utils/moving/move_median.qmd
 dascore.proc.hampel.patch_function	/api/dascore/utils/patch/patch_function.qmd
 dascore.proc.hampel_filter	/api/dascore/proc/hampel/hampel_filter.qmd
 dascore.proc.imag	/api/dascore/proc/basic/imag.qmd
-dascore.proc.imag.raw_function	/api/dascore/proc/basic/imag.qmd
 dascore.proc.interpolate	/api/dascore/proc/resample/interpolate.qmd
 dascore.proc.inventory	/api/dascore/proc/inventory.qmd
 dascore.proc.inventory.BaseCoord	/api/dascore/core/coords/BaseCoord.qmd
@@ -4450,7 +4381,6 @@ dascore.proc.mute.sensible_model_hash	/api/dascore/models/base/sensible_model_ha
 dascore.proc.mute.slope_mute	/api/dascore/proc/mute/slope_mute.qmd
 dascore.proc.nan_reduce	/api/dascore/utils/array_api/nan_reduce.qmd
 dascore.proc.normalize	/api/dascore/proc/basic/normalize.qmd
-dascore.proc.normalize.raw_function	/api/dascore/proc/basic/normalize.qmd
 dascore.proc.notch_filter	/api/dascore/proc/filter/notch_filter.qmd
 dascore.proc.order	/api/dascore/proc/coords/order.qmd
 dascore.proc.pad	/api/dascore/proc/basic/pad.qmd
@@ -4458,9 +4388,7 @@ dascore.proc.pass_filter	/api/dascore/proc/filter/pass_filter.qmd
 dascore.proc.patch_function	/api/dascore/utils/patch/patch_function.qmd
 dascore.proc.pipe	/api/dascore/proc/basic/pipe.qmd
 dascore.proc.real	/api/dascore/proc/basic/real.qmd
-dascore.proc.real.raw_function	/api/dascore/proc/basic/real.qmd
 dascore.proc.rename_coords	/api/dascore/proc/coords/rename_coords.qmd
-dascore.proc.rename_coords.raw_function	/api/dascore/proc/coords/rename_coords.qmd
 dascore.proc.resample	/api/dascore/proc/resample.qmd
 dascore.proc.resample.FilterValueError	/api/dascore/exceptions/FilterValueError.qmd
 dascore.proc.resample.ParameterError	/api/dascore/exceptions/ParameterError.qmd
@@ -4502,7 +4430,6 @@ dascore.proc.sort_coords	/api/dascore/proc/coords/sort_coords.qmd
 dascore.proc.split_gaps	/api/dascore/proc/coords/split_gaps.qmd
 dascore.proc.squeeze	/api/dascore/proc/coords/squeeze.qmd
 dascore.proc.standardize	/api/dascore/proc/basic/standardize.qmd
-dascore.proc.standardize.raw_function	/api/dascore/proc/basic/standardize.qmd
 dascore.proc.taper	/api/dascore/proc/taper.qmd
 dascore.proc.taper.ParameterError	/api/dascore/exceptions/ParameterError.qmd
 dascore.proc.taper.broadcast_for_index	/api/dascore/utils/misc/broadcast_for_index.qmd
@@ -4524,7 +4451,6 @@ dascore.proc.tile_apply.TileApply.new	/api/dascore/models/base/DascoreBaseModel/
 dascore.proc.tile_apply.TileApply.window	/api/dascore/proc/tile_apply/TileApply/window.qmd
 dascore.proc.tile_apply.patch_function	/api/dascore/utils/patch/patch_function.qmd
 dascore.proc.transpose	/api/dascore/proc/coords/transpose.qmd
-dascore.proc.transpose.raw_function	/api/dascore/proc/coords/transpose.qmd
 dascore.proc.units	/api/dascore/proc/units.qmd
 dascore.proc.units.convert_units	/api/dascore/proc/units/convert_units.qmd
 dascore.proc.units.get_factor_and_unit	/api/dascore/units/get_factor_and_unit.qmd
@@ -5056,7 +4982,6 @@ dascore.utils.patch.advance	/api/dascore/utils/identity/advance.qmd
 dascore.utils.patch.align_patch_coords	/api/dascore/utils/patch/align_patch_coords.qmd
 dascore.utils.patch.asarray_like	/api/dascore/utils/array_api/asarray_like.qmd
 dascore.utils.patch.backend_name	/api/dascore/utils/array_api/backend_name.qmd
-dascore.utils.patch.call_str	/api/dascore/utils/patch/call_str.qmd
 dascore.utils.patch.check_coords	/api/dascore/utils/patch/check_coords.qmd
 dascore.utils.patch.check_data_units	/api/dascore/utils/patch/check_data_units.qmd
 dascore.utils.patch.check_dims	/api/dascore/utils/patch/check_dims.qmd
@@ -5101,7 +5026,6 @@ dascore.utils.patch.processing_id_of	/api/dascore/utils/identity/processing_id_o
 dascore.utils.patch.register_patch_function	/api/dascore/utils/patch_registry/register_patch_function.qmd
 dascore.utils.patch.stack_patches	/api/dascore/utils/patch/stack_patches.qmd
 dascore.utils.patch.stamp_combination	/api/dascore/utils/identity/stamp_combination.qmd
-dascore.utils.patch.stamp_ids	/api/dascore/utils/patch/stamp_ids.qmd
 dascore.utils.patch.swap_kwargs_dim_to_axis	/api/dascore/utils/patch/swap_kwargs_dim_to_axis.qmd
 dascore.utils.patch.to_float	/api/dascore/utils/time/to_float.qmd
 dascore.utils.patch.to_numpy	/api/dascore/utils/array_api/to_numpy.qmd
@@ -5127,7 +5051,6 @@ dascore.utils.patch_registry	/api/dascore/utils/patch_registry.qmd
 dascore.utils.patch_registry.DASCoreWarning	/api/dascore/warnings/DASCoreWarning.qmd
 dascore.utils.patch_registry.ParameterError	/api/dascore/exceptions/ParameterError.qmd
 dascore.utils.patch_registry.fingerprint_call	/api/dascore/utils/patch_registry/fingerprint_call.qmd
-dascore.utils.patch_registry.memoized_fingerprint	/api/dascore/utils/patch_registry/memoized_fingerprint.qmd
 dascore.utils.patch_registry.operation_fingerprint	/api/dascore/utils/identity/operation_fingerprint.qmd
 dascore.utils.patch_registry.patch_function_tag	/api/dascore/utils/patch_registry/patch_function_tag.qmd
 dascore.utils.patch_registry.register_patch_function	/api/dascore/utils/patch_registry/register_patch_function.qmd
