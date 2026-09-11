@@ -14,6 +14,8 @@ import numpy as np
 import dascore as dc
 from dascore.constants import PatchType
 from dascore.units import Quantity
+from dascore.utils.docs import compose_docstring
+from dascore.utils.misc import broadcast_for_index
 from dascore.utils.patch import patch_function
 
 SpectralFormat = Literal["auto", "fft", "amplitude", "power", "density"]
@@ -39,6 +41,43 @@ _DFT_OUTPUT_TO_FORMAT = {
     "AS": "amplitude",
     "PS": "power",
     "PSD": "density",
+}
+
+
+_SPECTRAL_PARAMETER_DOCS = {
+    "patch": """
+    patch
+        Fourier-domain DASCore patch from ``dft`` or ``stft``.
+    """,
+    "dim": """
+    dim
+        Frequency dimension over which to compute the descriptor. This can be
+        either the original dimension name, such as ``"time"``, or the Fourier
+        dimension name, such as ``"ft_time"``. If omitted, a single Fourier
+        dimension is inferred.
+    """,
+    "fmin": """
+    fmin
+        Optional lower frequency bound.
+    """,
+    "fmax": """
+    fmax
+        Optional upper frequency bound.
+    """,
+    "spectral_format": """
+    spectral_format
+        Representation of the spectral data. ``"auto"`` uses DASCore DFT/STFT
+        metadata when available. Other options are ``"fft"`` for complex Fourier
+        coefficients, ``"amplitude"`` for amplitude spectra, ``"power"`` for
+        power spectra, and ``"density"`` for power spectral densities.
+    """,
+    "negative_frequencies": """
+    negative_frequencies
+        How to handle negative frequency bins. ``"auto"`` drops negative bins
+        only when power is symmetric, ``"drop"`` always uses non-negative
+        frequencies, ``"raise"`` rejects spectra with negative bins, and
+        ``"keep"`` includes them in the calculation.
+    """,
 }
 
 
@@ -263,13 +302,12 @@ def _broadcast_freqs(
     ndim: int,
     freq_axis: int,
 ) -> np.ndarray:
-    """Broadcast frequency vector against an STFT power array."""
-    shape = [1] * ndim
-    shape[freq_axis] = freqs.size
-    return freqs.reshape(shape)
+    """Broadcast a frequency vector against a spectral power array."""
+    return freqs[broadcast_for_index(ndim, freq_axis, slice(None), fill=None)]
 
 
 @patch_function()
+@compose_docstring(**_SPECTRAL_PARAMETER_DOCS)
 def spectral_centroid(
     patch: PatchType,
     dim: str | None = None,
@@ -295,27 +333,12 @@ def spectral_centroid(
 
     Parameters
     ----------
-    patch
-        Fourier-domain DASCore patch from ``dft`` or ``stft``.
-    dim
-        Frequency dimension over which to compute the descriptor. This can be
-        either the original dimension name, such as ``"time"``, or the Fourier
-        dimension name, such as ``"ft_time"``. If omitted, a single Fourier
-        dimension is inferred.
-    fmin
-        Optional lower frequency bound.
-    fmax
-        Optional upper frequency bound.
-    spectral_format
-        Representation of the spectral data. ``"auto"`` uses DASCore DFT/STFT
-        metadata when available. Other options are ``"fft"`` for complex Fourier
-        coefficients, ``"amplitude"`` for amplitude spectra, ``"power"`` for
-        power spectra, and ``"density"`` for power spectral densities.
-    negative_frequencies
-        How to handle negative frequency bins. ``"auto"`` drops negative bins
-        only when power is symmetric, ``"drop"`` always uses non-negative
-        frequencies, ``"raise"`` rejects spectra with negative bins, and
-        ``"keep"`` includes them in the calculation.
+    {patch}
+    {dim}
+    {fmin}
+    {fmax}
+    {spectral_format}
+    {negative_frequencies}
 
     Returns
     -------
@@ -363,6 +386,7 @@ def spectral_centroid(
 
 
 @patch_function()
+@compose_docstring(**_SPECTRAL_PARAMETER_DOCS)
 def median_frequency(
     patch: PatchType,
     dim: str | None = None,
@@ -386,21 +410,12 @@ def median_frequency(
 
     Parameters
     ----------
-    patch
-        Fourier-domain DASCore patch from ``dft`` or ``stft``.
-    dim
-        Frequency dimension over which to compute the descriptor. This can be
-        either the original dimension name or the Fourier dimension name.
-    fmin
-        Optional lower frequency bound.
-    fmax
-        Optional upper frequency bound.
-    spectral_format
-        Representation of the spectral data: ``"auto"``, ``"fft"``,
-        ``"amplitude"``, ``"power"``, or ``"density"``.
-    negative_frequencies
-        How to handle negative frequency bins: ``"auto"``, ``"drop"``,
-        ``"raise"``, or ``"keep"``.
+    {patch}
+    {dim}
+    {fmin}
+    {fmax}
+    {spectral_format}
+    {negative_frequencies}
 
     Returns
     -------
@@ -453,6 +468,7 @@ def median_frequency(
 
 
 @patch_function()
+@compose_docstring(**_SPECTRAL_PARAMETER_DOCS)
 def spectral_peak_frequency(
     patch: PatchType,
     dim: str | None = None,
@@ -473,21 +489,12 @@ def spectral_peak_frequency(
 
     Parameters
     ----------
-    patch
-        Fourier-domain DASCore patch from ``dft`` or ``stft``.
-    dim
-        Frequency dimension over which to compute the descriptor. This can be
-        either the original dimension name or the Fourier dimension name.
-    fmin
-        Optional lower frequency limit.
-    fmax
-        Optional upper frequency limit.
-    spectral_format
-        Representation of the spectral data: ``"auto"``, ``"fft"``,
-        ``"amplitude"``, ``"power"``, or ``"density"``.
-    negative_frequencies
-        How to handle negative frequency bins: ``"auto"``, ``"drop"``,
-        ``"raise"``, or ``"keep"``.
+    {patch}
+    {dim}
+    {fmin}
+    {fmax}
+    {spectral_format}
+    {negative_frequencies}
 
     Returns
     -------
@@ -514,6 +521,7 @@ def spectral_peak_frequency(
 
 
 @patch_function()
+@compose_docstring(**_SPECTRAL_PARAMETER_DOCS)
 def spectral_peak_amplitude(
     patch: PatchType,
     dim: str | None = None,
@@ -533,21 +541,12 @@ def spectral_peak_amplitude(
 
     Parameters
     ----------
-    patch
-        Fourier-domain DASCore patch from ``dft`` or ``stft``.
-    dim
-        Frequency dimension over which to compute the descriptor. This can be
-        either the original dimension name or the Fourier dimension name.
-    fmin
-        Optional lower frequency limit.
-    fmax
-        Optional upper frequency limit.
-    spectral_format
-        Representation of the spectral data: ``"auto"``, ``"fft"``,
-        ``"amplitude"``, ``"power"``, or ``"density"``.
-    negative_frequencies
-        How to handle negative frequency bins: ``"auto"``, ``"drop"``,
-        ``"raise"``, or ``"keep"``.
+    {patch}
+    {dim}
+    {fmin}
+    {fmax}
+    {spectral_format}
+    {negative_frequencies}
 
     Returns
     -------
@@ -571,6 +570,7 @@ def spectral_peak_amplitude(
 
 
 @patch_function()
+@compose_docstring(**_SPECTRAL_PARAMETER_DOCS)
 def spectral_entropy(
     patch: PatchType,
     dim: str | None = None,
@@ -591,23 +591,14 @@ def spectral_entropy(
 
     Parameters
     ----------
-    patch
-        Fourier-domain DASCore patch from ``dft`` or ``stft``.
-    dim
-        Frequency dimension over which to compute the descriptor. This can be
-        either the original dimension name or the Fourier dimension name.
-    fmin
-        Optional lower frequency limit.
-    fmax
-        Optional upper frequency limit.
+    {patch}
+    {dim}
+    {fmin}
+    {fmax}
     normalize
         If True, normalize entropy to [0, 1]. Defaults to True.
-    spectral_format
-        Representation of the spectral data: ``"auto"``, ``"fft"``,
-        ``"amplitude"``, ``"power"``, or ``"density"``.
-    negative_frequencies
-        How to handle negative frequency bins: ``"auto"``, ``"drop"``,
-        ``"raise"``, or ``"keep"``.
+    {spectral_format}
+    {negative_frequencies}
 
     Returns
     -------
@@ -645,6 +636,7 @@ def spectral_entropy(
 
 
 @patch_function()
+@compose_docstring(**_SPECTRAL_PARAMETER_DOCS)
 def spectral_kurtosis(
     patch: PatchType,
     dim: str | None = None,
@@ -666,21 +658,12 @@ def spectral_kurtosis(
 
     Parameters
     ----------
-    patch
-        Fourier-domain DASCore patch from ``dft`` or ``stft``.
-    dim
-        Frequency dimension over which to compute the descriptor. This can be
-        either the original dimension name or the Fourier dimension name.
-    fmin
-        Optional lower frequency limit.
-    fmax
-        Optional upper frequency limit.
-    spectral_format
-        Representation of the spectral data: ``"auto"``, ``"fft"``,
-        ``"amplitude"``, ``"power"``, or ``"density"``.
-    negative_frequencies
-        How to handle negative frequency bins: ``"auto"``, ``"drop"``,
-        ``"raise"``, or ``"keep"``.
+    {patch}
+    {dim}
+    {fmin}
+    {fmax}
+    {spectral_format}
+    {negative_frequencies}
 
     Returns
     -------
@@ -702,10 +685,7 @@ def spectral_kurtosis(
         where=total_power > 0,
     )
 
-    shape = [1] * power.ndim
-    shape[freq_axis] = freqs.size
-
-    f = freqs.reshape(shape)
+    f = _broadcast_freqs(freqs, power.ndim, freq_axis)
 
     mean_f = np.sum(f * p, axis=freq_axis, keepdims=True)
 
@@ -734,6 +714,7 @@ def spectral_kurtosis(
 
 
 @patch_function()
+@compose_docstring(**_SPECTRAL_PARAMETER_DOCS)
 def spectral_flatness(
     patch: PatchType,
     dim: str | None = None,
@@ -755,21 +736,12 @@ def spectral_flatness(
 
     Parameters
     ----------
-    patch
-        Fourier-domain DASCore patch from ``dft`` or ``stft``.
-    dim
-        Frequency dimension over which to compute the descriptor. This can be
-        either the original dimension name or the Fourier dimension name.
-    fmin
-        Optional lower frequency limit.
-    fmax
-        Optional upper frequency limit.
-    spectral_format
-        Representation of the spectral data: ``"auto"``, ``"fft"``,
-        ``"amplitude"``, ``"power"``, or ``"density"``.
-    negative_frequencies
-        How to handle negative frequency bins: ``"auto"``, ``"drop"``,
-        ``"raise"``, or ``"keep"``.
+    {patch}
+    {dim}
+    {fmin}
+    {fmax}
+    {spectral_format}
+    {negative_frequencies}
 
     Returns
     -------
