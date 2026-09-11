@@ -14,6 +14,7 @@ import dascore as dc
 from dascore.io.core import FiberIO
 from dascore.io.terra15.core import Terra15FormatterV4
 from dascore.io.terra15.utils import _get_version_data_node
+from dascore.utils.time import to_datetime64
 
 
 class TestTerra15:
@@ -108,6 +109,26 @@ class TestTerra15Unfinished:
         time = patch_unfinished.coords.get_array("time")
         assert np.all(np.diff(time) >= np.timedelta64(0, "s"))
 
+    @pytest.mark.parametrize("snap", [False, True])
+    def test_read_and_scan_trim_unwritten_rows(self, terra15_das_unfinished_path, snap):
+        """Snapping changes timestamps, never which stored samples are valid."""
+        path = terra15_das_unfinished_path
+        with h5py.File(path) as resource:
+            _, node = _get_version_data_node(resource)
+            times = node["gps_time"][:]
+            count = np.count_nonzero(times > 0)
+            assert 0 < count < len(times)
+            assert np.all(times[count:] == 0)
+            expected_data = node["data"][:count]
+        patch = dc.read(path, snap=snap)[0]
+        np.testing.assert_array_equal(patch.data, expected_data)
+        if not snap:
+            np.testing.assert_array_equal(
+                patch.coords.get_array("time"), to_datetime64(times[:count])
+            )
+        payload = dc.scan_payloads(path, snap=snap)[0]
+        assert payload["coords"] == patch.coords
+
 
 class TestReadArray:
     """Tests for slicing the data node directly."""
@@ -125,35 +146,34 @@ class TestReadArray:
         tail = io.read_array(terra15_das_unfinished_path, {"time": (-3, 10**6)})
         assert np.array_equal(tail, patch.data[-3:])
 
-    def test_raw_grid_counts_every_row(self, terra15_das_unfinished_path):
-        """With snap_dims=False the window lives on the raw grid, as in read."""
+    @pytest.mark.parametrize("snap", [False, True])
+    def test_array_windows_trim_unwritten_rows(self, terra15_das_unfinished_path, snap):
+        """Array windows count from the written tail with either snap setting."""
         io = Terra15FormatterV4()
         path = terra15_das_unfinished_path
-        out = io.read_array(path, {"time": (-5, None)}, snap_dims=False)
-        expected = FiberIO.read_array(io, path, {"time": (-5, None)}, snap_dims=False)
+        out = io.read_array(path, {"time": (-5, None)}, snap_dims=snap)
+        expected = FiberIO.read_array(io, path, {"time": (-5, None)}, snap_dims=snap)
         assert np.array_equal(out, expected)
         assert len(out) == 5
-        raw = io.read_array(path, {}, snap_dims=False)
-        assert len(raw) > len(io.read_array(path, {}))
+        raw = io.read_array(path, {}, snap_dims=snap)
+        np.testing.assert_array_equal(raw, io.read_array(path, {}))
+        np.testing.assert_array_equal(out, raw[-5:])
 
     def test_both_spellings_agree(self, terra15_das_unfinished_path):
-        """`scan` calls it snap and `read` snap_dims; both are taken here.
-
-        The unfinished file is the one where the option changes how many
-        rows there are, so the two grids differ and a mix-up shows.
-        """
+        """Both snap spellings trim unwritten rows; snap wins for coordinates."""
         io = Terra15FormatterV4()
         path = terra15_das_unfinished_path
-        snapped = io.read_array(path, {})
-        raw = io.read_array(path, {}, snap=False)
-        assert len(raw) > len(snapped)
-        # either spelling alone selects the same grid
-        assert len(io.read_array(path, {}, snap_dims=False)) == len(raw)
-        assert len(io.read_array(path, {}, snap=True)) == len(snapped)
-        # given both, snap wins, in read_array and in read alike
-        assert len(io.read_array(path, {}, snap=True, snap_dims=False)) == len(snapped)
+        snapped = io.read(path, snap=True)[0]
+        for options in (
+            {"snap": False},
+            {"snap_dims": False},
+            {"snap": True, "snap_dims": False},
+        ):
+            np.testing.assert_array_equal(
+                io.read_array(path, {}, **options), snapped.data
+            )
         both = io.read(path, snap=True, snap_dims=False)[0]
-        assert len(both.get_coord("time")) == len(snapped)
+        assert both.coords == snapped.coords
 
     def test_reads_only_the_window(self, terra15_v6_path, monkeypatch):
         """The data node is sliced in the file, not read whole then trimmed."""
