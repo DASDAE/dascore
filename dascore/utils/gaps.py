@@ -95,6 +95,12 @@ class GapTolerance:
         if (self.count is None) == (self.excess is None):
             msg = "A GapTolerance is a sample count or an absolute excess, not both."
             raise ParameterError(msg)
+        if self.count is not None:
+            _check_tolerance_value(self.count, "count", allow_infinite=True)
+        else:
+            excess = self.excess
+            value = excess.magnitude if isinstance(excess, Quantity) else excess
+            _check_tolerance_value(value, "excess", shown=excess)
 
     def __str__(self):
         if self.count is not None:
@@ -123,9 +129,7 @@ class GapTolerance:
         if isinstance(tolerance, GapTolerance):
             return tolerance
         if isinstance(tolerance, timedelta) or is_timedelta64(tolerance):
-            tolerance = to_timedelta64(tolerance)
-            _check_tolerance_value(tolerance, name)
-            return cls(excess=tolerance)
+            return cls(excess=to_timedelta64(tolerance))
         if isinstance(tolerance, Quantity):
             if is_data_size(tolerance):
                 msg = (
@@ -141,7 +145,6 @@ class GapTolerance:
                 )
                 raise UnitError(msg)
             if not tolerance.dimensionless:
-                _check_tolerance_value(tolerance.magnitude, name, shown=tolerance)
                 return cls(excess=tolerance)
             tolerance = float(tolerance.m_as("dimensionless"))
         _check_tolerance_value(tolerance, name, allow_infinite=True)
@@ -229,6 +232,16 @@ def is_monotonic_and_finite(values) -> bool:
     return bool(not len(diffs) or np.all(diffs > 0) or np.all(diffs < 0))
 
 
+def _cell_step(declared, values):
+    """A declared step as the magnitude the normalized values are spaced in."""
+    if declared is None or pd.isnull(declared):
+        return None
+    if is_datetime64(values):
+        # datetime values keep their dtype, so their step stays a timedelta
+        return np.abs(np.asarray(declared).astype("timedelta64[ns]"))[()]
+    return np.abs(_to_numeric([declared])[0])
+
+
 def get_gap_edges(coord, tolerance: GapTolerance | None = None):
     """
     Return cell edges and gap locations for drawing a coordinate as cells.
@@ -258,27 +271,23 @@ def get_gap_edges(coord, tolerance: GapTolerance | None = None):
     other gap question: where whole patches fail to meet, read from the
     index rather than from a coordinate's values.
     """
-    declared = getattr(coord, "step", None)
     values = _normalize_coord_values(getattr(coord, "values", coord))
+    step = _cell_step(getattr(coord, "step", None), values)
     if len(values) == 1:
-        msg = "Singleton coordinate has no inferred cell width; using a default width."
-        warnings.warn(msg, UserWarning, stacklevel=2)
-        if is_datetime64(values):
-            step = np.asarray(np.timedelta64(1, "D")).astype("timedelta64[ns]")[()]
-        else:
-            step = 1
+        if step is None:
+            msg = "Singleton coordinate has no inferred cell width; using a default."
+            warnings.warn(msg, UserWarning, stacklevel=2)
+            if is_datetime64(values):
+                step = np.asarray(np.timedelta64(1, "D")).astype("timedelta64[ns]")[()]
+            else:
+                step = 1
         return np.asarray([values[0] - step / 2, values[0] + step / 2]), np.zeros(
             0, dtype=bool
         )
     diffs = np.diff(values)
     numeric_diffs = _to_numeric(diffs)
-    if declared is None or pd.isnull(declared):
+    if step is None:
         step = np.median(np.abs(diffs))
-    elif is_datetime64(values):
-        # datetime values keep their dtype, so their step stays a timedelta
-        step = np.abs(np.asarray(declared).astype("timedelta64[ns]"))[()]
-    else:
-        step = np.abs(_to_numeric([declared])[0])
     gap_mask = np.zeros(len(diffs), dtype=bool)
     if tolerance is not None:
         gap_mask = tolerance.is_gap(numeric_diffs, _to_numeric([step])[0])

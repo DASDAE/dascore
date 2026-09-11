@@ -383,7 +383,7 @@ def patch_to_obspy(patch: PatchType):
 
     def _get_time_stats(patch):
         """Get stats dict with time values."""
-        coord = patch.get_coord("time")
+        coord = patch.get_coord("time", require_evenly_sampled=True)
         tmin = dc.to_datetime64(coord.min())
         tmax = dc.to_datetime64(coord.max())
         dt = np.timedelta64(1, "s") / coord.step

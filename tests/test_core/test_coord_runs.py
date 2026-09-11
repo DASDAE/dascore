@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from fractions import Fraction
+
 import h5py
 import numpy as np
 import pandas as pd
@@ -464,3 +466,107 @@ class TestLegacySnapStep:
         # not a claim they must meet
         assert jittered.step is None or isinstance(jittered, CoordRange)
         np.testing.assert_allclose(jittered.values, [0.0, 1.0, 2.05], atol=0.06)
+
+
+class TestReviewRoundTwo:
+    """Cases the PR review found."""
+
+    @pytest.mark.parametrize("bad", [0, 0.0, np.inf])
+    def test_zero_or_non_finite_step_rejected(self, bad):
+        """A step which spans nothing is no grid; NaN declares none at all."""
+        with pytest.raises(CoordError, match="finite non-zero"):
+            get_coord(data=[0, 1, 2], step=bad)
+        with pytest.raises(ValueError, match="finite non-zero"):
+            CoordMonotonicArray(values=np.array([0, 1, 2]), step=bad)
+        assert get_coord(data=[0, 1, 5], step=np.nan).step is None
+
+    def test_fractional_step_rejected_on_direct_arrays(self):
+        """The array constructor holds the same rule as the factory."""
+        with pytest.raises(ValueError, match="fractional step"):
+            CoordMonotonicArray(values=np.array([0, 1, 3]), step=Fraction(1, 2))
+
+    def test_whole_fraction_is_seconds_for_time(self):
+        """A whole fraction on time values means seconds, as a range reads it."""
+        second = np.timedelta64(1, "s")
+        labels = T0 + np.array([0, 1, 2, 5]) * second
+        coord = get_coord(data=labels, step=(1, 1))
+        assert coord.step == second and coord.missing().count == 2
+        off = T0 + np.array([0, 1]) * np.timedelta64(1, "ns")
+        with pytest.raises(CoordError, match="not on a grid"):
+            get_coord(data=off, step=(1, 1))
+
+    def test_unsigned_values_descending(self):
+        """Unsigned spacings do not wrap when the values descend."""
+        values = np.array([9, 6, 5, 1], dtype=np.uint8)
+        coord = CoordMonotonicArray(values=values, step=1)
+        assert list(coord.missing().iter_runs()) == [(8, 7), (4, 2)]
+        plain = CoordMonotonicArray(values=values)
+        seams = plain.get_discontinuities()
+        assert seams["delta"].tolist() == [-1, -4]
+
+    def test_hole_ends_share_one_anchor(self):
+        """Float noise on the far label does not reach the hole's last position."""
+        coord = CoordMonotonicArray(values=np.array([0.0, 0.30000005]), step=0.1)
+        missing = coord.missing()
+        (run,) = missing.iter_runs()
+        assert run[1] == pytest.approx(0.2) and run[1] == missing.positions()[-1]
+
+    def test_segmented_strided_index_keeps_the_step(self, design_case):
+        """A strided selection of runs still states the grid."""
+        assert design_case[::2].step == 1
+        assert design_case[[3, 0, 1]].step is None
+
+    def test_segments_with_a_contradicting_step_raise(self, design_case):
+        """A step passed beside segments must agree with them."""
+        with pytest.raises(CoordError, match="contradicts"):
+            get_coord(segments=design_case.segments, step=2)
+        assert get_coord(segments=design_case.segments, step=1) == design_case
+
+    def test_new_values_with_an_explicit_step(self):
+        """New values with a step declare that grid, not an inferred one."""
+        coord = get_coord(start=0, stop=5, step=1).new(
+            values=np.array([0, 2, 4]), step=1
+        )
+        assert coord.step == 1 and coord.missing().count == 2
+
+    def test_exporters_refuse_runs(self, design_case):
+        """Formats holding one contiguous trace refuse a coordinate with holes."""
+        pytest.importorskip("obspy")
+        patch = dc.get_example_patch().select(time=(0, 6), samples=True)
+        time = get_coord(data=T0 + np.array(PRESENT) * MS, step=MS)
+        patch = patch.update_coords(time=time)
+        with pytest.raises(CoordError, match="not evenly sampled"):
+            patch.io.to_obspy()
+
+    def test_prebuilt_tolerances_are_validated(self):
+        """The constructors hold the same rules as from_user."""
+        for bad in (GapTolerance.samples, GapTolerance.absolute):
+            with pytest.raises(ParameterError):
+                bad(-1)
+            with pytest.raises(ParameterError):
+                bad(np.nan)
+        with pytest.raises(ParameterError):
+            GapTolerance.absolute(np.inf)
+        assert GapTolerance.samples(np.inf).count == np.inf
+
+    def test_dasdae_keeps_declared_steps_on_array_segments(self, tmp_path):
+        """An array segment's declared step survives a version 2 round trip."""
+        left = CoordMonotonicArray(values=np.array([0.0, 2.0, 3.0]), step=1.0)
+        right = CoordMonotonicArray(values=np.array([6.0, 9.0, 11.0]), step=1.0)
+        coord = concat_coords(left, right)
+        base = dc.get_example_patch().select(distance=(0, 6), samples=True)
+        patch = base.update_coords(distance=coord)
+        back = dc.read(dc.write(patch, tmp_path / "seg.h5", "dasdae"))[0]
+        assert back.get_coord("distance") == coord
+        assert back.get_coord("distance").step == 1.0
+
+    def test_singleton_edges_use_the_declared_step(self, recwarn):
+        """A single value with a step gets a cell of that width, without a warning."""
+        edges, _ = get_gap_edges(get_coord(data=[10], step=5))
+        np.testing.assert_allclose(edges, [7.5, 12.5])
+        second = np.timedelta64(1, "s")
+        edges, _ = get_gap_edges(get_coord(data=[T0], step=second))
+        half = np.timedelta64(500, "ms")
+        expected = np.array([T0 - half, T0 + half], dtype="datetime64[ns]")
+        np.testing.assert_array_equal(edges, expected)
+        assert not [w for w in recwarn if "Singleton" in str(w.message)]

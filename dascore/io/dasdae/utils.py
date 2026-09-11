@@ -338,6 +338,14 @@ def _read_range(node, units):
     return coord._construct(dict(start=start, stop=stop, step=step, shape=shape))
 
 
+def _node_step(attrs):
+    """The step an array node declares, or None."""
+    step = attrs.get("step", None)
+    if step is not None and attrs.get("step_is_timedelta64", False):
+        step = np.timedelta64(step, "ns")
+    return step
+
+
 def _read_segment(node):
     """Rebuild one segment of a version-2 segmented coordinate."""
     units = node.attrs.get("units", None)
@@ -345,7 +353,8 @@ def _read_segment(node):
         return _read_range(node, units)
     # the segments were settled exactly when written, so an array
     # segment is read as the values it holds, never snapped to a range
-    return CoordMonotonicArray(values=_read_array(node), units=units)
+    values = _read_array(node)
+    return CoordMonotonicArray(values=values, units=units, step=_node_step(node.attrs))
 
 
 def _read_coord(node, name, attrs2, snap):
@@ -360,9 +369,7 @@ def _read_coord(node, name, attrs2, snap):
         return _read_range(node, units)
     # any other class, a range too wide to describe, and every version 1
     # node hold their values
-    node_step = node_attrs.get("step", None)
-    if node_attrs.get("step_is_timedelta64", False):
-        node_step = np.timedelta64(node_step, "ns")
+    node_step = _node_step(node_attrs)
     if object_type:
         # a version 2 array holds exactly its values; a step on it is the
         # grid it declares, never a range to rebuild

@@ -447,6 +447,12 @@ class Missing:
         return f"Missing(step={self.step})  missing {self.count}\n  {holes}"
 
 
+def _hole(before, step, count: int) -> tuple:
+    """A hole of ``count`` positions after ``before``, both ends from one anchor."""
+    first = before + step
+    return (first, first + (count - 1) * step, count)
+
+
 def _discontinuity_frame(rows, kind: str, tolerance) -> pd.DataFrame:
     """
     The discontinuities frame from ``(index, before, after, expected)`` rows.
@@ -457,7 +463,8 @@ def _discontinuity_frame(rows, kind: str, tolerance) -> pd.DataFrame:
     """
     columns = ["index", "before", "after", "delta", "excess"]
     df = pd.DataFrame(rows, columns=["index", "before", "after", "expected"])
-    df["delta"] = df["after"] - df["before"]
+    # signed even for unsigned labels, which would wrap under subtraction
+    df["delta"] = [_diffs([b, a])[0] for b, a in zip(df["before"], df["after"])]
     df["excess"] = [
         np.nan if pd.isnull(expected) else abs(delta) - abs(expected)
         for delta, expected in zip(df["delta"], df["expected"])
@@ -1781,6 +1788,40 @@ _MIN_SEGMENT_GUARD_SIZE = 1_000
 _MAX_SEGMENT_FRACTION = 0.1
 
 
+def _declared_step(step, dtype):
+    """
+    A step declared on array values, as the scalar the values are measured in.
+
+    A fraction may only be whole (labels on a fractional grid are floors of
+    ideal positions, so they do not state it) and becomes seconds for time
+    and an integer otherwise; a zero or non-finite step is no grid.
+    """
+    if (fraction := _fraction_step(step)) is not None:
+        if fraction.denominator != 1:
+            msg = (
+                f"A fractional step ({fraction}) cannot be declared on array "
+                "values; build the range with start, step, and shape instead."
+            )
+            raise CoordError(msg)
+        whole = fraction.numerator
+        step = (
+            np.timedelta64(whole * _NS_PER_S, "ns") if dtype_time_like(dtype) else whole
+        )
+    magnitude = np.abs(np.asarray(step))[()]
+    if not magnitude or not np.isfinite(to_float(magnitude)):
+        msg = f"A declared step must be a finite non-zero spacing, got {step}."
+        raise CoordError(msg)
+    return step
+
+
+def _diffs(values) -> np.ndarray:
+    """Neighbour spacings, signed even for unsigned values."""
+    values = np.asarray(values)
+    if values.dtype.kind == "u":
+        values = values.astype(np.int64)
+    return np.diff(values)
+
+
 def _on_grid(deltas, step) -> np.ndarray:
     """
     The whole number of steps in each spacing, raising when one is not whole.
@@ -2519,7 +2560,8 @@ class CoordRange(BaseCoord):
             # new values state their own grid; the range's step is not a
             # claim about them
             data = kwargs.get("data", kwargs.get("values"))
-            return get_coord(data=data, units=kwargs.get("units", self.units))
+            units = kwargs.get("units", self.units)
+            return get_coord(data=data, units=units, step=kwargs.get("step"))
         info = self.model_dump(exclude_unset=True, exclude_defaults=True)
         # A new stop or step re-derives the count, as a range always has.
         if "stop" in kwargs or "step" in kwargs:
@@ -2572,9 +2614,9 @@ class CoordArray(BaseCoord):
             if data.ndim != 1 or not is_strictly_monotonic(data):
                 msg = "A declared step needs one-dimensional, monotonic values."
                 raise CoordError(msg)
-            magnitude = np.abs(np.asarray(step))[()]
+            magnitude = np.abs(np.asarray(_declared_step(step, data.dtype)))[()]
             step = magnitude if len(data) < 2 or data[-1] > data[0] else -magnitude
-            _on_grid(np.diff(data), step)
+            _on_grid(_diffs(data), step)
             values["step"] = step
         return values
 
@@ -2734,7 +2776,7 @@ class CoordMonotonicArray(CoordArray):
         """The spacing the values are held to: the declared step, else the median."""
         if not _is_null(self.step):
             return self.step
-        diffs = np.diff(self.values)
+        diffs = _diffs(self.values)
         # the median magnitude, signed with the values' direction, so
         # either orientation judges the same spacings
         median = np.median(np.abs(diffs))
@@ -2745,7 +2787,7 @@ class CoordMonotonicArray(CoordArray):
         values = self.values
         if len(values) < 2:
             return []
-        diffs = np.diff(values)
+        diffs = _diffs(values)
         expected = self._expected_spacing()
         seams = np.flatnonzero(diffs != expected)
         return [(int(i) + 1, values[i], values[i + 1], expected) for i in seams]
@@ -2753,12 +2795,11 @@ class CoordMonotonicArray(CoordArray):
     def _holes(self) -> list[tuple]:
         """The grid positions skipped between neighbours."""
         values = self.values
-        counts = _on_grid(np.diff(values), self.step)
-        rows = []
-        for i in np.flatnonzero(counts > 1):
-            n = int(counts[i]) - 1
-            rows.append((values[i] + self.step, values[i + 1] - self.step, n))
-        return rows
+        counts = _on_grid(_diffs(values), self.step)
+        return [
+            _hole(values[i], self.step, int(counts[i]) - 1)
+            for i in np.flatnonzero(counts > 1)
+        ]
 
     def select(
         self, args, relative=False, samples=False
@@ -2922,7 +2963,8 @@ def _arrays_continue(prev: CoordMonotonicArray, seg: CoordMonotonicArray) -> boo
     if _is_null(prev.step) or _is_null(seg.step) or prev.step != seg.step:
         return False
     try:
-        return bool(_on_grid(seg.values[:1] - prev.values[-1:], prev.step) == 1)
+        seam = _diffs(np.concatenate([prev.values[-1:], seg.values[:1]]))
+        return bool(_on_grid(seam, prev.step) == 1)
     except CoordError:
         return False  # the same step on offset grids: a seam, not a continuation
 
@@ -3230,7 +3272,9 @@ class CoordSegmented(BaseCoord):
         out = self.values[item]
         if not np.ndim(out):
             return out
-        return get_coord(data=out, units=self.units)
+        # a declared grid survives only an order it can be held against
+        keep = not _is_null(self.step) and is_strictly_monotonic(out)
+        return get_coord(data=out, units=self.units, step=self.step if keep else None)
 
     def select(
         self, args, relative=False, samples=False
@@ -3418,7 +3462,7 @@ class CoordSegmented(BaseCoord):
         for (_, before, after, _), seg in zip(self._seams(), self.segments[1:]):
             count = int(_on_grid(np.asarray([after - before]), step)[0]) - 1
             if count:
-                rows.append((before + step, after - step, count))
+                rows.append(_hole(before, step, count))
             rows.extend(seg._holes())
         return rows
 
@@ -3494,21 +3538,15 @@ class CoordSegmented(BaseCoord):
         if pd.isnull(values).any():
             msg = "from_array does not support missing values."
             raise CoordError(msg)
-        if (fraction := _fraction_step(step)) is not None and fraction.denominator != 1:
-            # labels on a fractional grid are floors of ideal positions, so
-            # they do not state the grid; only a range can hold it
-            msg = (
-                f"A fractional step ({fraction}) cannot be declared on array "
-                "values; build the range with start, step, and shape instead."
-            )
-            raise CoordError(msg)
+        if not _is_null(step):
+            step = _declared_step(step, values.dtype)
         if len(values) < (3 if _is_null(step) else 2):
             out = get_coord(data=values, units=units, step=step)
         else:
             if not is_strictly_monotonic(values):
                 msg = "from_array requires strictly monotonic values."
                 raise CoordError(msg)
-            diffs = np.diff(values)
+            diffs = _diffs(values)
             if _is_null(step):
                 # A diff belongs to a uniform run when it matches a
                 # neighboring diff; isolated diffs are seams (gaps or
@@ -3992,7 +4030,11 @@ def get_coord(
         if any(x is not None for x in others):
             msg = "segments cannot be combined with other coordinate value inputs."
             raise CoordError(msg)
-        return concat_coords(*segments, units=units)
+        out = concat_coords(*segments, units=units)
+        if not _is_null(step) and not _is_null(out.step) and step != out.step:
+            msg = f"step {step} contradicts the segments' step {out.step}."
+            raise CoordError(msg)
+        return out
 
     data = _get_array(data, values)
     shape = _get_shape(shape)

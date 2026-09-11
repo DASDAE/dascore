@@ -187,7 +187,8 @@ def _get_segy_compatible_patch(spool, round_error_max=3e-9):
         patch = _get_patch_with_channel_coord(patch)
     # Ensure there will be no loss in the time sampling.
     # segy supports us precision
-    time_step = dc.to_float(patch.get_coord("time").step)
+    time = patch.get_coord("time", require_evenly_sampled=True)
+    time_step = dc.to_float(time.step)
     new_samp = np.round(time_step, 6)
     round_error = np.abs(new_samp - time_step).max()
     if round_error > round_error_max:
