@@ -1735,17 +1735,23 @@ class Spool(NodeRepr, NamespaceOwner):
         min_col, max_col, step_col = (f"{dim}_{x}" for x in ("min", "max", "step"))
         if df.empty or not {min_col, max_col, step_col} <= set(df.columns):
             return df
-        runs = self._catalog.backend.coord_runs(dim, df["_patch_id"].unique())
+        # a row with no envelope here is one the report cannot place (a
+        # relative time among absolute ones), and its runs no better
+        placed = df[df[min_col].notna()]
+        runs = self._catalog.backend.coord_runs(dim, placed["_patch_id"].unique())
         if runs.empty:
             return df
         runs = runs.rename(columns={"patch_id": "_patch_id"})
-        split = df.merge(runs, on="_patch_id", how="inner")
+        split = placed.merge(runs, on="_patch_id", how="inner")
         for run_col, col in zip(
             ("_env_min", "_env_max", "_env_step"), (min_col, max_col, step_col)
         ):
             values = split[run_col]
             if df[col].dtype != object:
-                values = values.astype(df[col].dtype)
+                try:
+                    values = values.astype(df[col].dtype)
+                except (TypeError, ValueError):
+                    return df  # runs of another kind than the column holds
             split[run_col] = values
         # a selection trims a row's envelope; runs keep only what it holds
         low = split["_env_min"].where(

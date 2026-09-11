@@ -194,3 +194,54 @@ class TestReports:
 def pd_timedelta(milliseconds: int):
     """A gap size of this many milliseconds, as the report states it."""
     return pd.Timedelta(milliseconds, "ms")
+
+
+class TestReviewFindings:
+    """Cases the counterpart review found."""
+
+    def test_relative_runs_among_absolute_times(self, gapped_patch):
+        """A segmented relative-time patch among absolute ones is skipped."""
+        time = gapped_patch.get_coord("time")
+        relative = gapped_patch.update_coords(time=time.values - time.min())
+        spool = dc.spool([gapped_patch, relative])
+        assert len(spool.get_gaps()) >= 1
+        assert len(spool.get_coverage()) >= 1
+
+    def test_chunked_view_keeps_the_hole(self, gapped_patch):
+        """A whole member keeps its identity, and so its runs, through a plan."""
+        chunked = dc.spool([gapped_patch]).chunk(time=None)
+        assert isinstance(chunked[0].get_coord("time"), CoordSegmented)
+        assert len(chunked.get_gaps()) == 1
+        assert chunked.get_coverage()["coverage"].iloc[0] < 1
+
+    def test_directory_chunked_view_keeps_the_hole(self, gapped_directory):
+        """The same through a directory spool's plan."""
+        chunked = gapped_directory.chunk(time=None)
+        assert len(chunked.get_gaps()) == len(gapped_directory.get_gaps())
+
+    def test_selected_ids_filter_in_sql(self, gapped_directory):
+        """Asking for a few patches reads only their runs."""
+        back = gapped_directory._catalog.backend
+        ids = sorted(back._fetch_df("SELECT patch_id FROM patches")["patch_id"])
+        with_runs = back._fetch_df(
+            "SELECT DISTINCT patch_id FROM patch_coords WHERE run_index > 0"
+        )["patch_id"].tolist()
+        without = [x for x in ids if x not in with_runs]
+        # fewer than a quarter of the patches takes the SQL path
+        many = [*without, *range(10_000, 10_020)]
+        assert back.coord_runs("time", many).empty
+        assert len(back.coord_runs("time", with_runs)) == 2
+
+    def test_run_records_by_key(self, gapped_directory):
+        """Runs are found by the whole coordinate's def key."""
+        back = gapped_directory._catalog.backend
+        keys = back._fetch_df(
+            "SELECT cd.def_key FROM patch_coords pc JOIN coord_defs cd "
+            "ON cd.coord_def_id = pc.coord_def_id "
+            "WHERE pc.coord_name = 'time' AND pc.run_index = 0"
+        )["def_key"].tolist()
+        found = back.run_records("time", keys)
+        assert len(found) == 1
+        (runs,) = found.values()
+        assert [r.run_index for r in runs] == [1, 2]
+        assert back.run_records("time", []) == {}

@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import secrets
 from collections.abc import Mapping
+from dataclasses import replace
 
 import numpy as np
 import pandas as pd
@@ -928,8 +929,82 @@ def derived_catalog(
         aux_info=aux_info,
         sizes=_whole_member_sizes(trims, sources),
     )
+    if parent is not None:
+        whole = {} if name in trimmed_dims else _whole_members(trims, sources, name)
+        records = _with_parent_runs(records, parent.backend, name, whole)
     backend.write_sources(records)
     return PatchCatalog(backend=backend, resolver=resolver)
+
+
+def _whole_members(trims: pd.DataFrame, sources: pd.DataFrame, name: str) -> dict:
+    """
+    The planned dimension's def key of each output which is one whole member.
+
+    A plan keeps no identity for the dimension it planned, but an output
+    holding exactly one member, untrimmed, holds that member's values.
+    Keyed by the output's source patch key.
+    """
+    key_col = f"_{name}_def_key"
+    if key_col not in sources.columns or not len(trims):
+        return {}
+    size = trims.groupby("output_id")["_patch_id"].transform("size")
+    modified = trims.get("_modified", pd.Series(False, index=trims.index))
+    whole = trims[(size == 1) & ~modified.fillna(True).astype(bool)]
+    keys = dict(zip(sources["_patch_id"], sources[key_col]))
+    out = {}
+    for output_id, patch_id in zip(whole["output_id"], whole["_patch_id"]):
+        key = keys.get(patch_id)
+        if isinstance(key, str) and key.startswith("fp:"):
+            out[str(int(output_id))] = key
+    return out
+
+
+def _with_parent_runs(records, parent_backend, name: str, whole: dict) -> list:
+    """
+    The records with the runs the parent links to each surviving coordinate.
+
+    An output coordinate which keeps its identity (a whole, untrimmed
+    member's ``fp:`` key) holds the same values, and so the same runs, as
+    it did in the parent; so does the planned dimension of an output
+    which is one whole member (``whole``, by source patch key). One
+    assembled from several members states no runs. Looked up by def key
+    through the run links alone, so a parent without runs costs one
+    empty lookup per coordinate name.
+    """
+
+    def key_of(patch, coord):
+        if coord.run_index:
+            return None
+        if coord.coord_name == name and patch.source_patch_key in whole:
+            return whole[patch.source_patch_key]
+        if coord.coord_hash and coord.def_key.startswith("fp:"):
+            return coord.def_key
+        return None
+
+    wanted: dict[str, set[str]] = {}
+    for source in records:
+        for patch in source.patches:
+            for coord in patch.coords:
+                if (key := key_of(patch, coord)) is not None:
+                    wanted.setdefault(coord.coord_name, set()).add(key)
+    found = {
+        coord_name: parent_backend.run_records(coord_name, keys)
+        for coord_name, keys in wanted.items()
+    }
+    if not any(found.values()):
+        return records
+    out = []
+    for source in records:
+        patches = []
+        for patch in source.patches:
+            coords = []
+            for coord in patch.coords:
+                coords.append(coord)
+                key = key_of(patch, coord)
+                coords.extend(found.get(coord.coord_name, {}).get(key, ()))
+            patches.append(replace(patch, coords=tuple(coords)))
+        out.append(replace(source, patches=tuple(patches)))
+    return out
 
 
 def collapse_working_df(catalog: PatchCatalog) -> pd.DataFrame | None:

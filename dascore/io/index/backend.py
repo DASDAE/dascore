@@ -29,8 +29,12 @@ from dascore.exceptions import (
     UnitError,
 )
 from dascore.io.index.ingest import (
+    _COORD_DEF_BOOLS,
+    _COORD_DEF_FIELDS,
+    CoordRecord,
     SourceRecord,
     _envelope,
+    _py_scalar,
     assemble_source_records,
     attr_column_name,
     coord_dtype_is_stateable,
@@ -1375,12 +1379,63 @@ class SQLiteIndexBackend:
             "JOIN coord_defs cd ON cd.coord_def_id = pc.coord_def_id "
             "WHERE pc.coord_name = ? AND pc.run_index > 0"
         )
-        runs = self._fetch_df(sql, [name])
-        runs = runs[runs["patch_id"].isin({int(x) for x in patch_ids})]
+        ids = [int(x) for x in patch_ids]
+        n_patches = self._fetch_df("SELECT count(*) AS n FROM patches")["n"].iloc[0]
+        if len(ids) * 4 >= n_patches:
+            # most patches asked for: read the run links whole and filter
+            runs = self._fetch_df(sql, [name])
+            runs = runs[runs["patch_id"].isin(set(ids))]
+        else:
+            # a few: let the engine drive from the ids through the key
+            sql += " AND pc.patch_id IN (SELECT value FROM json_each(?))"
+            runs = self._fetch_df(sql, [name, json.dumps(ids)])
         if runs.empty:
             return runs
         runs = self._add_envelope_objects(runs.reset_index(drop=True))
         return runs[["patch_id", "run_index", "_env_min", "_env_max", "_env_step"]]
+
+    def run_records(self, name: str, def_keys) -> dict[str, list[CoordRecord]]:
+        """
+        The run records of the coordinates stated by these def keys.
+
+        A coordinate's runs follow from its values, so any patch linking
+        a def key as a whole also states that key's runs; the first found
+        speaks for all. Keys with no runs are absent from the result.
+        """
+        keys = sorted({str(x) for x in def_keys})
+        if not keys:
+            return {}
+        sql = (
+            "SELECT whole.def_key AS whole_key, pc.patch_id, pc.run_index, "
+            "pc.coord_dims, pc.dtype AS link_dtype, cd.* "
+            "FROM patch_coords pc "
+            "JOIN coord_defs cd ON cd.coord_def_id = pc.coord_def_id "
+            "JOIN patch_coords p0 ON p0.patch_id = pc.patch_id "
+            "AND p0.coord_name = pc.coord_name AND p0.run_index = 0 "
+            "JOIN coord_defs whole ON whole.coord_def_id = p0.coord_def_id "
+            "WHERE pc.coord_name = ? AND pc.run_index > 0 "
+            "AND whole.def_key IN (SELECT value FROM json_each(?))"
+        )
+        rows = self._fetch_df(sql, [name, json.dumps(keys)])
+        out: dict[str, list[CoordRecord]] = {}
+        first_patch: dict[str, int] = {}
+        for row in rows.sort_values(["patch_id", "run_index"]).to_dict("records"):
+            key = row["whole_key"]
+            if first_patch.setdefault(key, row["patch_id"]) != row["patch_id"]:
+                continue
+            fields = {
+                f: _py_scalar(row[f], f in _COORD_DEF_BOOLS) for f in _COORD_DEF_FIELDS
+            }
+            out.setdefault(key, []).append(
+                CoordRecord(
+                    coord_name=name,
+                    coord_dims=row["coord_dims"],
+                    run_index=int(row["run_index"]),
+                    coord_hash=_py_scalar(row["fingerprint"]),
+                    **{**fields, "dtype": row["link_dtype"]},
+                )
+            )
+        return out
 
     def coord_dims_map(self) -> dict[str, str]:
         """Return each coord name's dims string (first observed wins)."""
