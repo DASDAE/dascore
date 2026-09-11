@@ -93,6 +93,16 @@ class TestNodeCodec:
         assert isinstance(h5["seg"], h5py.Group)
         assert set(h5["seg"]) == {"0", "1"}
 
+    def test_extended_float_range_keeps_its_values(self, h5):
+        """A long-double range exceeds a JSON double, so its values are stored."""
+        start = np.nextafter(np.longdouble(1), np.longdouble(2))
+        coord = get_coord(start=start, step=np.longdouble("0.1"), shape=(10,))
+        _save_coord(coord, "wide", h5, compact=True)
+        assert h5["wide"].shape == (10,)
+        back = _read_coord(h5["wide"], "wide", {}, snap=True)
+        assert back.dtype == coord.dtype
+        assert np.array_equal(back.values, coord.values)
+
     def test_arrays_keep_their_values(self, h5):
         """An irregular coordinate still writes its values."""
         _save_coord(CASES["array"], "arr", h5, compact=True)

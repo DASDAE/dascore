@@ -77,11 +77,15 @@ class TestFlatRelation:
         assert step == pd.Timedelta(976562, "ns")
 
     def test_grid_column(self, indexed):
-        """The private grid column holds the grid and the length."""
+        """The private grid column holds a fractional grid and its length.
+
+        A whole-tick grid is what the envelope already states, so it is
+        not carried.
+        """
         df = indexed._catalog.to_df()
         grid = df["_time_grid"].iloc[0]
         assert grid == (1953125, 2, 0, 2000)
-        assert df["_distance_grid"].iloc[0] == (1, 1, 0, 300)
+        assert df["_distance_grid"].iloc[0] is None
 
     def test_coord_from_row(self, indexed, hz_1024_patch):
         """A row rebuilds the exact coordinate, not the rounded one."""
@@ -144,11 +148,11 @@ class TestFlatRelation:
 
     def test_chunk_outputs_carry_grid(self, indexed):
         """A chunk plan keeps the grid of the dimensions it leaves whole."""
-        chunked = indexed.chunk(time=1)
+        chunked = indexed.chunk(distance=100)
         rows = chunked._catalog.to_df()
-        assert rows["_distance_grid"].notna().all()
+        assert rows["_time_grid"].notna().all()
         defs = chunked._catalog.backend._fetch_df("SELECT * FROM coord_defs")
-        assert defs["step_numerator"].notna().any()
+        assert (defs["step_denominator"] == 2).any()
 
     def test_descending_grid(self, indexed, hz_1024_patch):
         """A descending grid rebuilds from its maximum, which the row states."""

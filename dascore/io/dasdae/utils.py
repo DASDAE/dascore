@@ -150,14 +150,44 @@ def _save_array(data, name, group):
     return array_node
 
 
+# The attribute holding a version-2 coordinate description: one JSON
+# document, since every HDF5 attribute read is a separate call.
+_COORD_KEY = "coord"
+
+
 def _raw(value, dtype):
-    """A time as its integer ticks in the coordinate's unit; else itself."""
+    """A time as its integer ticks in the coordinate's unit; else a scalar."""
     array = np.asarray(value)
-    if array.dtype.kind not in "mM":
-        return value
-    # a range's start may state a coarser unit than its dtype
-    name = "start" if array.dtype.kind == "M" else "step"
-    return array.astype(_scalar_dtype(dtype, name)).astype("int64")[()]
+    if array.dtype.kind in "mM":
+        # a range's start may state a coarser unit than its dtype
+        name = "start" if array.dtype.kind == "M" else "step"
+        array = array.astype(_scalar_dtype(dtype, name)).astype("int64")
+    # a python scalar: JSON holds an int exactly and a float at full
+    # precision, and a float32 widens to a double which casts back exactly
+    return array[()].item()
+
+
+def _extended_float(coord) -> bool:
+    """Whether the coordinate's floats are wider than a JSON double holds."""
+    dtype = np.dtype(coord.dtype)
+    return dtype.kind == "f" and dtype.itemsize > 8
+
+
+def _describe_range(coord) -> dict:
+    """The JSON-ready description a version-2 range node holds."""
+    out = {
+        "kind": "range",
+        "dtype": str(coord.dtype),
+        "start": _raw(coord.start, coord.dtype),
+        "length": len(coord),
+        "units": None if coord.units is None else str(coord.units),
+    }
+    if coord._exact:
+        out.update({name: getattr(coord, name) for name in _EXACT_GRID_FIELDS})
+    else:
+        out["stop"] = _raw(coord.stop, coord.dtype)
+        out["step"] = _raw(coord.step, coord.dtype)
+    return out
 
 
 def _save_coord(coord, name, group, compact: bool):
@@ -171,28 +201,21 @@ def _save_coord(coord, name, group, compact: bool):
     """
     if compact and isinstance(coord, CoordSegmented):
         node = group.create_group(name)
-        node.attrs["kind"] = "segmented"
+        units = None if coord.units is None else str(coord.units)
+        node.attrs[_COORD_KEY] = json.dumps({"kind": "segmented", "units": units})
         for i, segment in enumerate(coord.segments):
             _save_coord(segment, str(i), node, compact)
-    elif compact and isinstance(coord, CoordRange):
+        return
+    if compact and isinstance(coord, CoordRange) and not _extended_float(coord):
         node = group.create_dataset(name, shape=(0,), dtype="int64")
-        node.attrs["kind"] = "range"
-        node.attrs["dtype"] = str(coord.dtype)
-        node.attrs["start"] = _raw(coord.start, coord.dtype)
-        node.attrs["length"] = len(coord)
-        if coord._exact:
-            for field in _EXACT_GRID_FIELDS:
-                node.attrs[field] = getattr(coord, field)
-        else:
-            node.attrs["stop"] = _raw(coord.stop, coord.dtype)
-            node.attrs["step"] = _raw(coord.step, coord.dtype)
-    else:
-        node = _save_array(coord.values, name, group)
-        step = coord.step
-        if step is not None:
-            is_td = np.issubdtype(np.asarray(step).dtype, np.timedelta64)
-            node.attrs["step"] = to_int(step) if is_td else step
-            node.attrs["step_is_timedelta64"] = is_td
+        node.attrs[_COORD_KEY] = json.dumps(_describe_range(coord))
+        return
+    node = _save_array(coord.values, name, group)
+    step = coord.step
+    if step is not None:
+        is_td = np.issubdtype(np.asarray(step).dtype, np.timedelta64)
+        node.attrs["step"] = to_int(step) if is_td else step
+        node.attrs["step_is_timedelta64"] = is_td
     if coord.units is not None:
         node.attrs["units"] = str(coord.units)
 
@@ -295,49 +318,49 @@ def _read_array_sample(table_array, index):
     return out
 
 
-def _read_range(node, units):
+def _read_range(description: dict):
     """Rebuild a range from its version-2 description."""
-    attrs = node.attrs
-    dtype = np.dtype(unbyte(attrs["dtype"]))
-    start = np.asarray(attrs["start"]).astype(dtype)[()]
-    shape = (int(attrs["length"]),)
-    if "step_numerator" in attrs:
-        grid = {name: int(attrs[name]) for name in _EXACT_GRID_FIELDS}
+    dtype = np.dtype(description["dtype"])
+    units = description["units"]
+    start = np.asarray(description["start"]).astype(dtype)[()]
+    shape = (description["length"],)
+    if "step_numerator" in description:
+        grid = {name: description[name] for name in _EXACT_GRID_FIELDS}
         return CoordRange(start=start, shape=shape, units=units, **grid)
-    stop = np.asarray(attrs["stop"]).astype(dtype)[()]
-    step = attrs["step"]
+    stop = np.asarray(description["stop"]).astype(dtype)[()]
+    # a python float step keeps a float32 range's dtype, as when written
+    step = description["step"]
     if dtype.kind in "mM":
         step = np.asarray(step).astype(_scalar_dtype(dtype, "step"))[()]
-    elif isinstance(step, np.floating):
-        # as the python float it was written from: a numpy scalar would
-        # promote a float32 range to float64
-        step = step.item()
     coord = CoordRange(start=start, stop=stop, step=step, units=units)
     # The stored fields are a validated range's own; deriving the count
     # from them again can move a float32 endpoint by a sample.
     return coord._construct(dict(start=start, stop=stop, step=step, shape=shape))
 
 
-def _read_segment(node):
-    """Rebuild one segment of a version-2 segmented coordinate."""
-    units = node.attrs.get("units", None)
-    if unbyte(node.attrs.get("kind", "")) == "range":
-        return _read_range(node, units)
-    return CoordMonotonicArray(values=_read_array(node), units=units)
+def _read_described(node, description: dict):
+    """Rebuild a version-2 coordinate from its node's description."""
+    if description["kind"] == "range":
+        return _read_range(description)
+    # the segments were settled exactly when written, so an array
+    # segment is read as the values it holds, never snapped to a range
+    segments = []
+    for i in range(len(node)):
+        child = node[str(i)]
+        if (child_description := child.attrs.get(_COORD_KEY)) is not None:
+            segments.append(_read_range(json.loads(unbyte(child_description))))
+        else:
+            units = child.attrs.get("units", None)
+            segments.append(CoordMonotonicArray(values=_read_array(child), units=units))
+    return CoordSegmented(segments=segments, units=description["units"])
 
 
 def _read_coord(node, name, attrs2, snap):
     """Rebuild one coordinate from its node."""
     node_attrs = node.attrs
+    if (description := node_attrs.get(_COORD_KEY)) is not None:
+        return _read_described(node, json.loads(unbyte(description)))
     units = node_attrs.get("units", None) or attrs2.get(f"{name}_units", None)
-    kind = unbyte(node_attrs.get("kind", ""))
-    if kind == "segmented":
-        # the segments were settled exactly when written, so an array
-        # segment is read as the values it holds, never snapped to a range
-        segments = [_read_segment(node[str(i)]) for i in range(len(node))]
-        return CoordSegmented(segments=segments, units=units)
-    if kind == "range":
-        return _read_range(node, units)
     node_step = node_attrs.get("step", None)
     if node_attrs.get("step_is_timedelta64", False):
         node_step = np.timedelta64(node_step, "ns")

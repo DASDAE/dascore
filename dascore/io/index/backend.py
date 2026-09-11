@@ -1149,11 +1149,14 @@ class SQLiteIndexBackend:
         # Summary-only definitions are useful for indexing/dedup but cannot
         # prove coordinate value identity for merge grouping.
         coords["_key"] = coords["def_key"].where(coords["fingerprint"].notna(), None)
-        # The exact grid with its length, as one object per row (None
-        # where the row states no grid), so the whole-tick envelope above
-        # can be rebuilt into the exact coordinate.
+        # The exact grid with its length, as one object per row, so the
+        # whole-tick envelope above can be rebuilt into the exact
+        # coordinate. A grid of whole ticks on their tick is already what
+        # the envelope states, so only a fractional one is carried (None
+        # otherwise), which keeps this a handful of rows in most archives.
         grid = coords[[*_EXACT_GRID_FIELDS, "length"]]
-        exact = np.flatnonzero(grid.notna().all(axis=1).to_numpy())
+        fractional = (grid["step_denominator"] != 1) | (grid["origin_offset"] != 0)
+        exact = np.flatnonzero((grid.notna().all(axis=1) & fractional).to_numpy())
         terms = np.empty(len(coords), dtype=object)
         rows = grid.to_numpy()[exact].astype("int64").tolist()
         for index, row in zip(exact, rows):
