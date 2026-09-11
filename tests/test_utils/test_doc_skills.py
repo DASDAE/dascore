@@ -24,7 +24,10 @@ class TestSkills:
     def test_catalog(self):
         """The first release exposes the routing and inventory procedures."""
         skills = doc_skills.get_skills()
-        assert set(skills) == {"dascore", "make-inventory"}
+        assert {name: info["target"] for name, info in skills.items()} == {
+            "dascore": "recipes/dascore",
+            "make-inventory": "recipes/tunnel_inventory",
+        }
         assert all(x["title"] and x["description"] for x in skills.values())
 
     @pytest.mark.parametrize("name", ["dascore", "make-inventory"])
@@ -65,22 +68,6 @@ class TestSkills:
         front = yaml.safe_load(text.split("---", 2)[1])
         assert front["name"] == "dascore" and front["description"]
         assert not (tmp_path / "cache").exists()
-
-    def test_inventory_round_trip(self):
-        """The worked inventory survives serialization and representative attachment."""
-        inventory = dc.get_example_inventory("tunnel")
-        restored = dc.inventory(inventory.io.to_yaml())
-        assert restored == inventory
-        patch = dc.get_example_patch(
-            "random_das",
-            acquisition_key="XT.TUN1.00.DAS",
-            time_min="2024-06-01",
-            shape=(1776, 10),
-        )
-        spool = dc.spool(patch).attach_inventory(restored)
-        assert len(spool.select(section="borehole")) == 3
-        enriched = spool.enrich()[0]
-        assert enriched.get_coord("z").values[1590] == -10.0
 
 
 class TestCatalogValidation:

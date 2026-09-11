@@ -17,7 +17,7 @@ Use an inventory to describe the observing system independently of the files con
 5. Serialize with `inventory.io.to_yaml()`, reload with `dc.inventory(text)`, and compare the result. The final example below performs this round trip.
 6. Attach the inventory to a small representative spool with matching acquisition keys and recording times. Check selected regions and enriched coordinates, including unknown positions. Test epoch boundaries when configuration or geometry changes during the data.
 
-Consult `dascore doc Inventory` and the relevant field or method documentation when adapting the example to a different deployment.
+Consult `python -m dascore doc Inventory` with the selected environment's Python executable, and read the relevant field or method documentation when adapting the example to a different deployment.
 
 # Tunnel example
 

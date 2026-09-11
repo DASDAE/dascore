@@ -145,17 +145,6 @@ website:
         - text: Inventory
           href: tutorial/inventory.qmd
 
-    - id: skills
-      title: "Skills"
-      style: "floating"
-      contents:
-        - text: Agent onboarding
-          href: tutorial/agents.qmd
-{% for name, target in skills.items() %}
-        - text: {{ name }}
-          href: {{ target }}.qmd
-{% endfor %}
-
     - id: Recipes
       title: 'Recipes'
       collapse-level: 1
@@ -196,6 +185,17 @@ website:
           contents:
 
             - recipes/docker_basic.qmd
+
+    - id: skills
+      title: "Skills"
+      style: "floating"
+      contents:
+        - text: Agent onboarding
+          href: tutorial/agents.qmd
+{% for name, target in skills.items() %}
+        - text: {{ name }}
+          href: {{ target }}.qmd
+{% endfor %}
 
     - id: contributing
       title: "Contributing"

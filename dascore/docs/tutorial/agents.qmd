@@ -25,18 +25,26 @@ The Skills navigation and CLI use one catalog. Membership in `dascore/docs/skill
 
 Export the small native `SKILL.md` into the skill location supported by your agent. Installing the Python package does not change agent configuration. Use the selected project's Python executable in the following commands.
 
-For a personal [Codex skill](https://developers.openai.com/codex/skills):
+Personal skills use these locations:
 
-```bash
-mkdir -p ~/.agents/skills/dascore
-python -m dascore skill --bootstrap > ~/.agents/skills/dascore/SKILL.md
-```
+| Agent | Directory |
+| --- | --- |
+| [Codex](https://developers.openai.com/codex/skills) | `~/.agents/skills/dascore/` |
+| [Claude Code](https://code.claude.com/docs/en/skills) | `~/.claude/skills/dascore/` |
 
-For a personal [Claude Code skill](https://code.claude.com/docs/en/skills):
+Run this Python example in the selected environment, changing `.agents` to `.claude` for Claude Code. It works on Windows, macOS, and Linux, preserves the exported UTF-8 bytes, and checks that export succeeded before replacing an existing skill:
 
-```bash
-mkdir -p ~/.claude/skills/dascore
-python -m dascore skill --bootstrap > ~/.claude/skills/dascore/SKILL.md
+```python
+import subprocess
+import sys
+from pathlib import Path
+
+content = subprocess.check_output(
+    [sys.executable, "-m", "dascore", "skill", "--bootstrap"]
+)
+directory = Path.home() / ".agents" / "skills" / "dascore"
+directory.mkdir(parents=True, exist_ok=True)
+(directory / "SKILL.md").write_bytes(content)
 ```
 
 Other agents that support [Agent Skills](https://agentskills.io/specification) can use the same exported file in their supported skill directory. Reload or restart the agent if the new skill is not visible.
