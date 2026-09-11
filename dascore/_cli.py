@@ -9,7 +9,7 @@ import typer
 
 import dascore as dc
 from dascore.utils.doc_cache import documentation_cache, read_document
-from dascore.utils.doc_corpus import DocumentationError
+from dascore.utils.doc_search import search_documents
 
 app = typer.Typer(
     help="The DASCore command-line interface.",
@@ -37,6 +37,9 @@ def cli(
     ),
 ) -> None:
     """Configure the DASCore command group."""
+    # Redirected Windows streams can otherwise reject Unicode documentation.
+    if isinstance(sys.stdout, io.TextIOWrapper):
+        sys.stdout.reconfigure(encoding="utf-8")
 
 
 @app.command()
@@ -49,21 +52,34 @@ def doc(
     ),
 ) -> None:
     """Build or read the installed documentation."""
-    # Redirected Windows streams can otherwise reject Unicode documentation.
-    if isinstance(sys.stdout, io.TextIOWrapper):
-        sys.stdout.reconfigure(encoding="utf-8")
-    try:
-        with documentation_cache(rebuild=rebuild) as (root, manifest):
-            if target:
-                sys.stdout.write(read_document(root, manifest, target))
-            else:
-                sys.stdout.write(
-                    f"DASCore: {dc.__version__}\nPython: {sys.executable}\n"
-                    f"Package: {dc.__file__}\nDocumentation: {root}\n"
-                    f"Documents: {len(manifest['documents'])}\n"
-                )
-                for omitted in manifest["omitted"]:
-                    sys.stdout.write(f"Unavailable: {omitted}\n")
-    except (DocumentationError, OSError) as exc:
-        typer.echo(f"dascore: {exc}", err=True)
-        raise typer.Exit(1) from exc
+    with documentation_cache(rebuild=rebuild) as (root, manifest):
+        if target:
+            sys.stdout.write(read_document(root, manifest, target))
+        else:
+            sys.stdout.write(
+                f"DASCore: {dc.__version__}\nPython: {sys.executable}\n"
+                f"Package: {dc.__file__}\nDocumentation: {root}\n"
+                f"Documents: {len(manifest['documents'])}\n"
+            )
+            for omitted in manifest["omitted"]:
+                sys.stdout.write(f"Unavailable: {omitted}\n")
+
+
+@app.command("doc-search")
+def doc_search(
+    query: str = typer.Argument(
+        "", help="Search words, a quoted phrase, or Boolean query"
+    ),
+    tag: str | None = typer.Option(None, "--tag", help="Filter by an exact keyword"),
+    limit: int = typer.Option(5, "--limit", min=1, max=100, help="Maximum results"),
+) -> None:
+    """Search installed documentation and keyword tags."""
+    results = search_documents(query, tag=tag, limit=limit)
+    if not results:
+        typer.echo("No matching documentation.")
+    for number, result in enumerate(results, 1):
+        typer.echo(f"{number}. {result['title']} [{result['kind']}]")
+        if result["keywords"]:
+            typer.echo(f"   Keywords: {', '.join(result['keywords'])}")
+        typer.echo(f"   {result['excerpt']}")
+        typer.echo(f"   Read: dascore doc {result['id']}\n")

@@ -191,12 +191,14 @@ class _APIDocumentCollector:
     @staticmethod
     def _new_record(key, body):
         """Give object and model-field documents the same record structure."""
+        match = re.search(r"(?m)^Keywords\n-+\n([^\n]+)", body)
+        keywords = [x.strip() for x in match[1].split(",")] if match else []
         return dict(
             id=key,
             title=key,
             kind="api",
             aliases=[],
-            keywords=[],
+            keywords=[x for x in keywords if x],
             path="api/" + key.removeprefix("module:").replace(".", "/") + ".md",
             body=body,
         )

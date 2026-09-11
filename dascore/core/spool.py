@@ -2084,6 +2084,10 @@ class Spool(NodeRepr, NamespaceOwner):
         [`Spool.chunk_plan`](`dascore.core.spool.Spool.chunk_plan`),
         which takes the same arguments and returns the plan without
         touching any data.
+
+        Keywords
+        --------
+        spool, chunking, overlapping chunks, gaps, archive
         """
         from dascore.io.index.planned import derived_catalog  # noqa: PLC0415
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 import sys
 
 from dascore.exceptions import MissingOptionalDependencyError
+from dascore.utils.doc_corpus import DocumentationError
 from dascore.utils.misc import optional_import
 
 
@@ -28,3 +29,6 @@ def main(argv: list[str] | None = None) -> int:
     except SystemExit as exc:
         assert isinstance(exc.code, int)
         return exc.code
+    except (DocumentationError, MissingOptionalDependencyError, OSError) as exc:
+        sys.stderr.write(f"dascore: {exc}\n")
+        return 1

@@ -78,6 +78,18 @@ class TestDocuments:
         tutorial = doc_cache.read_document(root, manifest, "tutorial/visualization")
         assert "api/dascore/viz/waterfall/waterfall.md)" in tutorial
 
+    def test_keywords(self, corpus):
+        """Docstring keywords are preserved in metadata and the readable body."""
+        root, manifest = corpus
+        record = next(
+            x
+            for x in manifest["documents"]
+            if x["id"] == "dascore.proc.filter.pass_filter"
+        )
+        assert "low pass" in record["keywords"]
+        text = doc_cache.read_document(root, manifest, "Patch.pass_filter")
+        assert "Keywords\n--------\nfiltering, bandpass, low pass" in text
+
     def test_aliases(self, corpus):
         """Export aliases resolve to one canonical document."""
         root, index = corpus

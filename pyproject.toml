@@ -71,7 +71,7 @@ dascore = "dascore.cli:main"
 
 [project.optional-dependencies]
 
-agents = ["typer>=0.27.2"]
+agents = ["typer>=0.27.2", "tantivy>=0.26,<0.27"]
 
 extras = [
     # A spool converts to a lazily-loaded DataTree (xarray core since
