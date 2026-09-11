@@ -220,21 +220,34 @@ class TestMaintainedCounts:
             "coord_dims, coord_def_id, dtype FROM patch_coords WHERE patch_id = ?",
             (last + 1, last),
         )
+        _assert_consistent(upgraded)
+        assert upgraded.count() == 41
         old.execute("DELETE FROM sources WHERE source_id = 1")
         old.close()
         _assert_consistent(upgraded)
         upgraded.close()
 
-    def test_mixed_kind_sorts_by_majority(self):
-        """A coordinate most patches state as text sorts as text."""
+    def test_mixed_kind_sorts_within_each_kind(self):
+        """Each kind of a mixed-kind coordinate sorts among itself, in any view."""
 
-        def patch(values):
+        def patch(values, tag):
             coords = {"depth": np.array(values)}
-            return dc.Patch(data=np.zeros(len(values)), coords=coords, dims=("depth",))
+            data = np.zeros(len(values))
+            return dc.Patch(
+                data=data, coords=coords, dims=("depth",), attrs={"tag": tag}
+            )
 
-        spool = dc.spool([patch([5.0, 6.0]), patch(["b", "c"]), patch(["a", "d"])])
-        firsts = [p.get_coord("depth").values[0] for p in spool.sort("depth")]
-        assert firsts == ["a", "b", 5.0]
+        values = (["c", "d"], [8.0, 9.0], ["a", "e"], [2.0, 3.0], ["b", "f"])
+        spool = dc.spool(
+            [patch(x, "num" if isinstance(x[0], float) else "text") for x in values]
+        )
+
+        def firsts(view):
+            return [p.get_coord("depth").values[0] for p in view.sort("depth")]
+
+        assert firsts(spool) == [2.0, 8.0, "a", "b", "c"]
+        assert firsts(spool.select(tag="num")) == [2.0, 8.0]
+        assert firsts(spool.select(tag="text")) == ["a", "b", "c"]
 
 
 def _uniform_backend(count: int):
@@ -284,9 +297,12 @@ class TestWorkIsBounded:
         )
         assert large < 2 * small
 
-    def test_one_row_projection_counts_nothing(self, sized_backends):
+    @pytest.mark.parametrize(
+        "read", [lambda b: b.count(), lambda b: b.query(patch_ids=[1])]
+    )
+    def test_no_whole_table_count(self, sized_backends, read):
         """
-        Projecting one row runs no whole-table count.
+        A root count or a one-row projection counts no table.
 
         SQLite counts a table in one VM instruction, so VM steps cannot see
         this; the statements can.
@@ -295,11 +311,11 @@ class TestWorkIsBounded:
         statements = []
         backend._con.set_trace_callback(statements.append)
         try:
-            assert len(backend.query(patch_ids=[1])) == 1
+            read(backend)
         finally:
             backend._con.set_trace_callback(None)
         assert statements
-        assert not [x for x in statements if "count(*)" in x.lower()]
+        assert not [x for x in statements if "count(" in x.lower()]
 
 
 class TestUpgrade:

@@ -21,7 +21,7 @@ The schema separates records with different lifetimes and cardinalities. This av
 
 `coord_defs` and `patch_coords` are deliberately separate. Many patches can share a distance coordinate, so `coord_defs` stores it once and `patch_coords` supplies the many-to-many attachment. Range coordinates receive an exact semantic fingerprint, reconstructed from the coordinate values when a scan did not supply one. Non-range coordinates only receive a merge-compatibility identity when the scan provides an exact fingerprint. This distinction prevents a matching envelope from being mistaken for matching coordinate values while retaining the deduplication needed by future merge planning.
 
-`coord_variants` and `meta_data.patch_count` are summaries rather than records. Triggers update them in the transaction that changes the rows they count, so every connection keeps them exact, including one opened before an upgrade, and a spool's coordinate names, kinds and units, and a root spool's length, cost the same on a large archive as on a small one. A coordinate stated under several value kinds sorts by the kind most patches state.
+`coord_variants` and `meta_data.patch_count` are summaries rather than records. Triggers update them in the transaction that changes the rows they count, so every connection keeps them exact, including one opened before an upgrade, and a spool's coordinate names, kinds and units, and a root spool's length, cost the same on a large archive as on a small one.
 
 `attrs` and `attr_meta` are also complementary. Attribute names are open-ended, so the index cannot define every typed column in advance. `attr_meta` records the stable mapping and units needed to interpret the columns added to `attrs` as data is ingested.
 
@@ -67,6 +67,8 @@ assert dc.spool(root).update().get_contents()["cable"].iloc[0] == "B"
 The base ordering contract is `(sources.ordinal, patch_id)`: ordinals are assigned at ingest, a replaced source keeps its position while new sources append, so merging catalogs concatenates and duplicate sources keep their first-occurrence position with last-occurrence metadata (dict-merge semantics). Spools built from in-memory patches therefore iterate in construction order on every path.
 
 Directory catalogs additionally carry a **per-patch default presentation order**: rows present by time (`time IS NULL` last, then time, with ordinal and patch id as deterministic tiebreaks), because source-grain ordinals alone cannot interleave a multi-patch file whose span straddles a patch of another file. The default order is a catalog contract, not view state — a directory root still updates — and an explicit `sort(...)` replaces it. The directory indexer still renumbers source ordinals to time order (earliest patch per source, path as tiebreak) after each sync, which keeps the ordinal grain stable for replacement and union dedup.
+
+Sorting by a coordinate stated under several value kinds, such as numbers in some patches and text in others, orders each kind's values among themselves in every view: numbers, then text, then times.
 
 SQLite permits concurrent readers and serializes writers. Initialization and updates use an immediate write transaction and a 30-second busy timeout. This relies on correct local-filesystem locking; reliable operation on network filesystems with weak locking is not promised.
 

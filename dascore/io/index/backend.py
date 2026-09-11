@@ -466,22 +466,17 @@ class SQLiteIndexBackend:
         Public because the catalog asks: deciding which selectors are
         numeric (and so unit-convertible) needs the stored kinds.
         """
-        where, params = "", []
+        sql = (
+            "SELECT DISTINCT coord_name, value_kind, units, is_relative "
+            "FROM coord_variants"
+        )
+        params: list = []
         if names is not None:
             params = sorted(names)
-            where = f"WHERE coord_name IN ({self._placeholders(len(params))}) "
-        # A coordinate stated under several kinds sorts by its first row's
-        # kind (see _order_clause): the one most patches state.
-        kind_count = (
-            "(SELECT sum(k.patch_count) FROM coord_variants k "
-            "WHERE k.coord_name = v.coord_name AND k.value_kind = v.value_kind)"
-        )
-        sql = (
-            "SELECT coord_name, value_kind, units, is_relative "
-            f"FROM coord_variants v {where}GROUP BY 1, 2, 3, 4 "
-            f"ORDER BY coord_name, {kind_count} DESC, 2, 3, 4"
-        )
-        return self._fetch_df(sql, params)
+            sql += f" WHERE coord_name IN ({self._placeholders(len(params))})"
+        # ordered, so a mixed-kind coord's kinds sort in a fixed order
+        # (see _order_clause)
+        return self._fetch_df(f"{sql} ORDER BY 1, 2, 3, 4", params)
 
     def _next_id(self, table: str, column: str) -> int:
         df = self._fetch_df(f"SELECT max({column}) AS m FROM {table}")
