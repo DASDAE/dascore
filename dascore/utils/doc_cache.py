@@ -81,6 +81,10 @@ def documentation_cache(rebuild: bool = False):
         # Recover a process interrupted between moving the old and new corpus.
         if backup.exists() and not root.exists():
             os.replace(backup, root)
+        # No other builder for this version can own staging files under the lock.
+        for abandoned in root.parent.glob(f".{root.name}-*"):
+            if abandoned.is_dir():
+                shutil.rmtree(abandoned)
         identity = _source_identity()
         manifest = None if rebuild else _load_manifest(root, identity)
         if manifest is None:

@@ -27,4 +27,6 @@ The `docs_cache_dir` [configuration setting](configuration.qmd) controls the cac
 
 The local API corpus covers core objects, processing, transforms, visualization, built-in namespaces, and selected public utilities. External plugins and format-specific APIs are outside this initial corpus. Documentation generation inspects Python objects and imports the supported modules, but does not instantiate data objects or execute their operations. Missing optional modules are reported in the corpus summary.
 
+Module pages can be selected explicitly, for example `dascore doc module:dascore.viz.waterfall`. When a module re-exports a same-named function, its public attribute name selects the function.
+
 Use exact public names such as `Inventory`, `PatchAttrs.tag`, or `dascore.proc.coords.select`. Authored pages use identifiers such as `tutorial/patch`. Unknown or ambiguous names produce an error and a nonzero exit status. Document output uses UTF-8, including when redirected to a file.

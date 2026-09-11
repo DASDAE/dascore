@@ -167,4 +167,4 @@ class TestApiInspection:
         monkeypatch.setattr(doc_corpus, "import_module", import_owned)
         records, _ = doc_corpus._api_documents()
         assert imported == ["dascore.core.public"]
-        assert list(records) == imported
+        assert list(records) == [f"module:{name}" for name in imported]

@@ -6,6 +6,7 @@ import inspect
 import os
 import re
 from collections import defaultdict
+from functools import cached_property
 from importlib import import_module, metadata
 from pathlib import Path
 from types import ModuleType
@@ -15,6 +16,7 @@ import yaml
 from pydantic import BaseModel
 
 import dascore as dc
+from dascore.utils.array import PatchUFunc
 
 PACKAGE_PATH = Path(dc.__file__).resolve().parent
 DOC_PATH = PACKAGE_PATH / "docs"
@@ -64,6 +66,14 @@ def _unwrap(obj):
         obj = obj.__func__
     if isinstance(obj, property):
         obj = obj.fget
+    if isinstance(obj, cached_property):
+        obj = obj.func
+    # Read wrapper metadata statically, without invoking arbitrary descriptors.
+    wrapped = inspect.getattr_static(obj, "__wrapped__", None)
+    if inspect.isfunction(wrapped):
+        obj = wrapped
+    if isinstance(obj, PatchUFunc):
+        return obj
     if not (
         inspect.ismodule(obj)
         or inspect.isclass(obj)
@@ -91,7 +101,8 @@ def _api_documents():
     records, seen, omitted = {}, set(), []
 
     def add(obj, alias, owner=None):
-        is_property = isinstance(obj, property)
+        is_property = isinstance(obj, (property, cached_property))
+        is_ufunc = isinstance(obj, PatchUFunc)
         obj = _unwrap(obj)
         module = (
             obj.__name__
@@ -105,18 +116,38 @@ def _api_documents():
             or inspect.isclass(obj)
             or inspect.isfunction(obj)
             or inspect.ismethod(obj)
+            or is_ufunc
         ):
             return
-        key = module if inspect.ismodule(obj) else f"{module}.{obj.__qualname__}"
+        if is_ufunc:
+            assert owner is not None
+            module = owner.__module__
+            key = f"{module}.{owner.__qualname__}.{alias.rsplit('.', 1)[-1]}"
+        else:
+            key = (
+                f"module:{module}"
+                if inspect.ismodule(obj)
+                else f"{module}.{obj.__qualname__}"
+            )
         if key not in records:
             try:
                 signature = (
-                    "" if is_property else str(inspect.signature(obj, eval_str=False))
+                    ""
+                    if is_property
+                    else str(
+                        inspect.signature(
+                            obj.__call__ if is_ufunc else obj, eval_str=False
+                        )
+                    )
                 )
             except (TypeError, ValueError):
                 signature = ""
             body = inspect.getdoc(obj) or "No docstring is available."
             prefix = f"Defined in: `{module}`\n\n"
+            if is_ufunc:
+                prefix += (
+                    "This Patch operation wraps the NumPy ufunc documented below.\n\n"
+                )
             if is_property:
                 prefix += (
                     "Property: access this as an attribute, without calling it.\n\n"
@@ -134,7 +165,7 @@ def _api_documents():
                 kind="api",
                 aliases=[],
                 keywords=[],
-                path="api/" + key.replace(".", "/") + ".md",
+                path="api/" + key.removeprefix("module:").replace(".", "/") + ".md",
                 body=prefix + body,
             )
         records[key]["aliases"].append(alias)
@@ -193,8 +224,18 @@ def _api_documents():
                     f"{host.__module__}.{host.__name__}",
                 ):
                     add(namespace, f"{prefix}.{entry.name}")
+    object_aliases = {
+        alias
+        for record in records.values()
+        if not record["id"].startswith("module:")
+        for alias in (*record["aliases"], record["id"])
+    }
     for record in records.values():
         aliases = set(record["aliases"]) | {record["id"]}
+        # Public attribute lookup prefers an exported object over its module.
+        # Modules always remain addressable by their explicit module: identifier.
+        if record["id"].startswith("module:"):
+            aliases -= object_aliases
         aliases |= {x.removeprefix("dascore.") for x in aliases}
         record["aliases"] = sorted(aliases)
     return records, omitted

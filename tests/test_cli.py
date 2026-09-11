@@ -5,6 +5,7 @@ from __future__ import annotations
 import inspect
 import io
 import json
+import runpy
 import subprocess
 import sys
 import sysconfig
@@ -48,6 +49,31 @@ class TestDocuments:
         assert expected.lower() in text.lower()
         assert dc.__version__ in text
 
+    @pytest.mark.parametrize(
+        "name",
+        ["get_unit", "utils.downloader.get_registry_df", "Patch.summary", "Patch.log"],
+    )
+    def test_wrapped_lookup(self, corpus, name):
+        """Cached functions, cached properties, and ufuncs remain discoverable."""
+        text = doc_cache.read_document(*corpus, name)
+        assert "No docstring" not in text
+        if name == "Patch.summary":
+            assert "Property:" in text
+            assert "summary(" not in text
+        if name == "Patch.log":
+            assert "log(patch, *args, **kwargs)" in text
+
+    def test_module_collision(self, corpus):
+        """Exported functions and their same-named modules are both reachable."""
+        root, manifest = corpus
+        function = doc_cache.read_document(root, manifest, "dascore.viz.waterfall")
+        module = doc_cache.read_document(root, manifest, "module:dascore.viz.waterfall")
+        assert "id: dascore.viz.waterfall.waterfall" in function
+        assert "id: module:dascore.viz.waterfall" in module
+        assert function != module
+        tutorial = doc_cache.read_document(root, manifest, "tutorial/visualization")
+        assert "api/dascore/viz/waterfall/waterfall.md)" in tutorial
+
     def test_aliases(self, corpus):
         """Export aliases resolve to one canonical document."""
         root, index = corpus
@@ -81,6 +107,7 @@ class TestDocuments:
             raise AssertionError("The documentation builder executed a data operation")
 
         monkeypatch.setattr(dc.Patch, "__init__", fail)
+        monkeypatch.setattr(doc_corpus.PatchUFunc, "__get__", fail)
         index = doc_corpus.write_corpus(tmp_path)
         assert index["aliases"]["Patch.select"]
 
@@ -122,7 +149,7 @@ class TestDocuments:
         broken = []
         for record in index["documents"]:
             page = root / record["path"]
-            for block in MarkdownIt().parse(page.read_text()):
+            for block in MarkdownIt().parse(page.read_text(encoding="utf-8")):
                 for token in block.children or ():
                     if token.type not in {"link_open", "image"}:
                         continue
@@ -190,7 +217,9 @@ class TestCache:
         monkeypatch.setattr(doc_cache, "source_paths", lambda: [])
 
         def build(root):
-            (root / "example.md").write_text(document.read_text())
+            (root / "example.md").write_text(
+                document.read_text(encoding="utf-8"), encoding="utf-8"
+            )
             return {
                 "documents": [{"id": "example", "path": "example.md"}],
                 "aliases": {"example": ["example.md"]},
@@ -254,7 +283,9 @@ class TestCache:
             with doc_cache.documentation_cache(rebuild=True):
                 pass
         assert doc_cache.read_document(root, original, "example") == "first"
-        assert json.loads((root / "manifest.json").read_text()) == original
+        assert (
+            json.loads((root / "manifest.json").read_text(encoding="utf-8")) == original
+        )
         assert not (root / "partial.md").exists()
 
     def test_failed_publish(self, cache, monkeypatch):
@@ -273,7 +304,9 @@ class TestCache:
             with doc_cache.documentation_cache(rebuild=True):
                 pass
         assert doc_cache.read_document(root, original, "example") == "first"
-        assert json.loads((root / "manifest.json").read_text()) == original
+        assert (
+            json.loads((root / "manifest.json").read_text(encoding="utf-8")) == original
+        )
 
     def test_source_change_during_build(self, cache, monkeypatch):
         """A source edit during generation cannot publish mixed documentation."""
@@ -350,6 +383,28 @@ class TestCache:
             assert main(["doc", "example"]) == 0
             stream.flush()
         assert buffer.getvalue().decode("utf-8") == "Supported: ✅"
+
+    def test_module_entry(self, cache, monkeypatch, capsys):
+        """The module entry point dispatches a real document request and exits zero."""
+        monkeypatch.setattr(sys, "argv", ["dascore", "doc", "example"])
+        with pytest.raises(SystemExit) as result:
+            runpy.run_module("dascore", run_name="__main__")
+        assert result.value.code == 0
+        assert capsys.readouterr().out == "first"
+
+    def test_abandoned_staging(self, cache):
+        """A later request removes staging abandoned by a killed builder."""
+        with doc_cache.documentation_cache() as (root, _):
+            pass
+        abandoned = root.parent / f".{root.name}-abandoned"
+        abandoned.mkdir()
+        (abandoned / "partial.md").write_text("unfinished")
+        unrelated = root.parent / ".another-version-staging"
+        unrelated.mkdir()
+        with doc_cache.documentation_cache() as (root, manifest):
+            assert doc_cache.read_document(root, manifest, "example") == "first"
+        assert not abandoned.exists()
+        assert unrelated.exists()
 
     def test_status(self, cache, capsys):
         """CLI provenance belongs to the invoking process."""
