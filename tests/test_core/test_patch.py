@@ -824,6 +824,9 @@ class TestDataless:
         sub = _Sub(random_patch.data, coords=random_patch.coords)
         assert type(sub.new(attrs=sub.attrs)) is _Sub
         assert sub.update_attrs(station="x").attrs.station == "x"
+        dropped = sub.drop_data()
+        assert type(dropped) is _Sub
+        assert dropped.dtype == sub.dtype
 
     def test_given_dtype_must_agree(self, random_patch):
         """A dtype which contradicts the data is refused."""

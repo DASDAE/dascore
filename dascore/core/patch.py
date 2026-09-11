@@ -405,7 +405,10 @@ class Patch(NodeRepr, NamespaceOwner):
         >>> assert described.dtype == patch.dtype
         >>> assert described.new(data=patch.data).equals(patch)
         """
-        return self.__class__(coords=self.coords, attrs=self.attrs, dtype=self.dtype)
+        # Built as a Patch and handed over positionally, so a subclass whose
+        # `__init__` takes no dtype still gets one.
+        dataless = Patch(coords=self.coords, attrs=self.attrs, dtype=self.dtype)
+        return dataless if type(self) is Patch else self.__class__(dataless)
 
     @property
     def seconds(self) -> float:
