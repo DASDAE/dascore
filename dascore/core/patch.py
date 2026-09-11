@@ -405,15 +405,23 @@ class Patch(NodeRepr, NamespaceOwner):
         >>> assert described.dtype == patch.dtype
         >>> assert described.new(data=patch.data).equals(patch)
         """
-        # A copy of state already validated, not a new construction: every
-        # processor call makes one, and a subclass's `__init__` need not
-        # take a dtype.
+        out = self._described()
+        # Another patch, so another identity: a spool keys patches by it.
+        out._instance_id = uuid4().hex
+        return out
+
+    def _described(self) -> Patch:
+        """
+        Return a copy without data which shares this patch's identity.
+
+        A copy of state already validated, not a new construction: every
+        processor call makes one to plan with and throws it away, and a
+        subclass's `__init__` need not take a dtype.
+        """
         out = self.__class__.__new__(self.__class__)
         out.__dict__.update(self.__dict__)
         out._dtype = _as_dtype(self.dtype)
         out._data = None
-        # Another patch, so another identity: a spool keys patches by it.
-        out._instance_id = uuid4().hex
         return out
 
     @property

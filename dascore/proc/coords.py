@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Mapping
 from typing import Any, Literal
 
 import numpy as np
@@ -242,8 +242,7 @@ class RenameCoords(PatchProcessor):
 rename_coords = RenameCoords.patch_function
 
 
-@patch_function()
-def update_coords(self: PatchType, **kwargs) -> PatchType:
+class UpdateCoords(PatchProcessor):
     """
     Update the coordinates of a patch.
 
@@ -267,12 +266,19 @@ def update_coords(self: PatchType, **kwargs) -> PatchType:
     >>> pa2 = pa.update_coords(distance=new_dist)
     >>> assert np.allclose(pa2.coords.get_array('distance'), new_dist)
     """
-    new_coord = self.coords.update(**kwargs)
-    return self.new(coords=new_coord, dims=new_coord.dims)
+
+    model_config = ConfigDict(extra="allow", frozen=True, arbitrary_types_allowed=True)
+
+    def derive(self, patch):
+        """Return the coordinates with the given ones added or replaced."""
+        new_coord = patch.coords.update(**(self.model_extra or {}))
+        return patch.new(coords=new_coord, dims=new_coord.dims)
 
 
-@patch_function()
-def drop_coords(self: PatchType, *coords: str | Iterable[str]) -> PatchType:
+update_coords = UpdateCoords.patch_function
+
+
+class DropCoords(PatchProcessor):
     """
     Update the coordinates of a patch.
 
@@ -294,18 +300,27 @@ def drop_coords(self: PatchType, *coords: str | Iterable[str]) -> PatchType:
     >>> # A sequence of names works as well.
     >>> pa_no_lat = pa.drop_coords(["latitude"])
     """
-    names = {x for coord in coords for x in iterate(coord)}
-    if dim_coords := names & set(self.dims):
-        msg = f"Cannot drop dimensional coordinates: {dim_coords}"
-        raise ParameterError(msg)
-    new_coord, data = self.coords.drop_coords(*names, array=self.data)
-    if new_coord is self.coords:  # none of the named coords were here
-        return self
-    return self.new(coords=new_coord, dims=new_coord.dims, data=data)
+
+    coords: tuple[Any, ...] = ()
+
+    _var_positional = "coords"
+
+    def derive(self, patch):
+        """Return the coordinates without the named ones."""
+        names = {x for coord in self.coords for x in iterate(coord)}
+        if dim_coords := names & set(patch.dims):
+            msg = f"Cannot drop dimensional coordinates: {dim_coords}"
+            raise ParameterError(msg)
+        new_coord, _ = patch.coords.drop_coords(*names, array=None)
+        if new_coord is patch.coords:  # none of the named coords were here
+            return patch
+        return patch.new(coords=new_coord, dims=new_coord.dims)
 
 
-@patch_function()
-def drop_private_coords(self: PatchType) -> PatchType:
+drop_coords = DropCoords.patch_function
+
+
+class DropPrivateCoords(PatchProcessor):
     """
     Drop all private coords in the patch.
 
@@ -325,18 +340,22 @@ def drop_private_coords(self: PatchType) -> PatchType:
     >>> pa_no_private = pa.drop_private_coords()
     >>> assert "_private" not in pa_no_private.coords.coord_map
     """
-    new_coord, data = self.coords.drop_private_coords(array=self.data)
-    if new_coord is self.coords:  # there were no private coords
-        return self
-    return self.new(coords=new_coord, dims=new_coord.dims, data=data)
+
+    def derive(self, patch):
+        """Return the coordinates without the private ones."""
+        new_coord, _ = patch.coords.drop_private_coords(array=None)
+        if new_coord is patch.coords:  # there were no private coords
+            return patch
+        if dims := set(patch.dims) - set(new_coord.dims):
+            msg = f"Cannot drop private dimensional coordinates: {sorted(dims)}"
+            raise ParameterError(msg)
+        return patch.new(coords=new_coord, dims=new_coord.dims)
 
 
-@patch_function()
-def make_broadcastable_to(
-    self: PatchType,
-    shape: tuple[int, ...],
-    drop_coords=False,
-) -> PatchType:
+drop_private_coords = DropPrivateCoords.patch_function
+
+
+class MakeBroadcastableTo(PatchProcessor):
     """
     Update the coordinates of a patch.
 
@@ -359,10 +378,27 @@ def make_broadcastable_to(
     >>> out = patch.make_broadcastable_to(shape=(2, 3))
     >>> assert out.shape == (2, 3)
     """
-    coords, data = self.coords.make_broadcastable_to(
-        shape, array=self.data, drop_coords=drop_coords
-    )
-    return self.new(coords=coords, data=data)
+
+    shape: tuple[int, ...]
+    drop_coords: bool = False
+
+    def derive(self, patch):
+        """Return the coordinates broadcast up to the shape."""
+        coords, _ = patch.coords.make_broadcastable_to(
+            self.shape, array=None, drop_coords=self.drop_coords
+        )
+        return patch.new(coords=coords)
+
+    def plan(self, patch, out):
+        """Return the shape the data broadcast to."""
+        return {"shape": tuple(np.broadcast_shapes(patch.shape, self.shape))}
+
+    def kernel(self, data, *, shape):
+        """Return the data broadcast to the shape."""
+        return array_namespace(data).broadcast_to(data, shape)
+
+
+make_broadcastable_to = MakeBroadcastableTo.patch_function
 
 
 @patch_function(history="method_name")
@@ -899,8 +935,7 @@ class Transpose(PatchProcessor):
 transpose = Transpose.patch_function
 
 
-@patch_function(history=None)
-def append_dims(patch: PatchType, *empty_dims, **dim_kwargs) -> PatchType:
+class AppendDims(PatchProcessor):
     """
     Insert dimensions at the end of the patch.
 
@@ -942,31 +977,46 @@ def append_dims(patch: PatchType, *empty_dims, **dim_kwargs) -> PatchType:
     - Use [`Patch.transpose`](`dascore.Patch.transpose`) to re-arrange dimensions.
     - If dimension with the same name already exists nothing will happen.
     """
-    dim_dict = {x: 1 for x in empty_dims}
-    dim_dict.update(dim_kwargs)
-    # Remove duplicate dims and convert non ints to arrays.
-    kwargs = {
-        i: (i, np.atleast_1d(v) if not isinstance(v, int) else v)
-        for i, v in dim_dict.items()
-        if i not in patch.dims
-    }
-    # Nothing to do.
-    if not kwargs:
-        return patch
-    ndim = patch.ndim
-    # First get data with empty dimensions
-    insert_inds = [x + ndim for x in range(len(kwargs))]
-    data = np.expand_dims(patch.data, tuple(insert_inds))
-    shapes = list(data.shape)
-    for ind, (_, cdata) in zip(insert_inds, kwargs.values()):
-        shapes[ind] = cdata if isinstance(cdata, int) else len(cdata)
-    data = np.broadcast_to(data, shapes)
-    coords = patch.coords.update(**kwargs)
-    return patch.update(data=data, coords=coords)
+
+    empty_dims: tuple[Any, ...] = ()
+
+    model_config = ConfigDict(extra="allow", frozen=True, arbitrary_types_allowed=True)
+    history = None
+    _var_positional = "empty_dims"
+
+    def _new_dims(self, patch) -> dict:
+        """Return the new dimensions not already in the patch, as coord inputs."""
+        dim_dict = {x: 1 for x in self.empty_dims}
+        dim_dict.update(self.model_extra or {})
+        return {
+            i: (i, np.atleast_1d(v) if not isinstance(v, int) else v)
+            for i, v in dim_dict.items()
+            if i not in patch.dims
+        }
+
+    def derive(self, patch):
+        """Return the coordinates with the new dimensions at the end."""
+        if not (kwargs := self._new_dims(patch)):
+            return patch
+        return patch.new(coords=patch.coords.update(**kwargs))
+
+    def plan(self, patch, out):
+        """Return the shape the data broadcast to."""
+        return {"shape": tuple(out.shape)}
+
+    def kernel(self, data, *, shape):
+        """Return the data with length one axes added, broadcast to the shape."""
+        if len(shape) == data.ndim:
+            return data
+        xp = array_namespace(data)
+        added = (1,) * (len(shape) - data.ndim)
+        return xp.broadcast_to(xp.reshape(data, (*data.shape, *added)), shape)
 
 
-@patch_function()
-def squeeze(self: PatchType, dim=None) -> PatchType:
+append_dims = AppendDims.patch_function
+
+
+class Squeeze(PatchProcessor):
     """
     Return a new object with len one dimensions flattened.
 
@@ -997,20 +1047,36 @@ def squeeze(self: PatchType, dim=None) -> PatchType:
     >>> # Squeeze the length-1 time dimension
     >>> squeezed = single_time.squeeze(dim="time")
     """
-    coords = self.coords.squeeze(dim)
-    # Nothing to squeeze; the coord manager returned self, so reuse this patch.
-    if coords is self.coords:
-        return self
-    if not coords.dims:
-        msg = "Cannot squeeze all dimensions; at least one dimension must remain."
-        raise ParameterError(msg)
-    if dim is None:
-        axes = tuple(i for i, x in enumerate(self.shape) if x == 1)
-    else:
-        axes = tuple(self.get_axis(x) for x in iterate(dim))
-    xp = array_namespace(self.data)
-    data = xp.squeeze(self.data, axis=axes)
-    return self.new(data=data, coords=coords)
+
+    dim: Any = None
+
+    def derive(self, patch):
+        """Return the coordinates without the length one dimensions."""
+        coords = patch.coords.squeeze(self.dim)
+        # Nothing to squeeze; the coord manager returned itself.
+        if coords is patch.coords:
+            return patch
+        if not coords.dims:
+            msg = "Cannot squeeze all dimensions; at least one dimension must remain."
+            raise ParameterError(msg)
+        return patch.new(coords=coords)
+
+    def plan(self, patch, out):
+        """Return the axes to squeeze out."""
+        if out is patch:
+            return {"axes": ()}
+        if self.dim is None:
+            return {"axes": tuple(i for i, x in enumerate(patch.shape) if x == 1)}
+        return {"axes": tuple(patch.get_axis(x) for x in iterate(self.dim))}
+
+    def kernel(self, data, *, axes):
+        """Return the data without the axes; the data if there are none."""
+        if not axes:
+            return data
+        return array_namespace(data).squeeze(data, axis=axes)
+
+
+squeeze = Squeeze.patch_function
 
 
 @patch_function()

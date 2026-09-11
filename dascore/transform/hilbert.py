@@ -9,7 +9,9 @@ from collections.abc import Callable
 import numpy as np
 
 from dascore.constants import DIM_REDUCE_DOCS, PatchType
+from dascore.core.processor import PatchProcessor
 from dascore.exceptions import ParameterError
+from dascore.utils.array_api import array_namespace, asarray_like
 from dascore.utils.docs import compose_docstring
 from dascore.utils.imports import lazy_import
 from dascore.utils.patch import patch_function
@@ -17,8 +19,32 @@ from dascore.utils.patch import patch_function
 scipy_hilbert = lazy_import("scipy.signal", "hilbert")
 
 
-@patch_function(data_type="")
-def hilbert(patch: PatchType, dim: str) -> PatchType:
+def analytic_signal(data, axis: int):
+    """
+    Return the analytic signal of real data along an axis, with the array API.
+
+    The discrete Hilbert transform scipy uses: zero the negative frequencies
+    of the FFT, double the positive ones, and transform back.
+    """
+    xp = array_namespace(data)
+    size = data.shape[axis]
+    weights = np.zeros(size)
+    weights[0] = 1
+    if size % 2 == 0:
+        weights[size // 2] = 1
+        weights[1 : size // 2] = 2
+    else:
+        weights[1 : (size + 1) // 2] = 2
+    shape = [1] * data.ndim
+    shape[axis] = size
+    weights = asarray_like(weights.reshape(shape), data)
+    # The standard's fft takes complex input only.
+    complex_dtype = xp.complex64 if data.dtype == xp.float32 else xp.complex128
+    spectrum = xp.fft.fft(xp.astype(data, complex_dtype), axis=axis)
+    return xp.fft.ifft(spectrum * weights, axis=axis)
+
+
+class Hilbert(PatchProcessor):
     """
     Perform a Hilbert transform on a patch.
 
@@ -48,19 +74,29 @@ def hilbert(patch: PatchType, dim: str) -> PatchType:
     >>> # Real part is original signal
     >>> assert np.allclose(analytic.data.real, patch.data)
     """
-    # Get axis for the dimension
-    patch.get_coord(dim, require_evenly_sampled=True)  # Ensure evenly sampled
-    axis = patch.get_axis(dim)
 
-    # Apply Hilbert transform
-    analytic_signal = scipy_hilbert(patch.data, axis=axis)
+    dim: str
 
-    # Return new patch with complex data
-    return patch.new(data=analytic_signal)
+    data_type = ""
+
+    def plan(self, patch, out):
+        """Return the axis, once it is known to be evenly sampled."""
+        patch.get_coord(self.dim, require_evenly_sampled=True)
+        return {"axis": patch.get_axis(self.dim)}
+
+    def numpy_kernel(self, data, *, axis):
+        """Return the analytic signal along the axis."""
+        return scipy_hilbert(data, axis=axis)
+
+    def kernel(self, data, *, axis):
+        """Return the analytic signal along the axis, through the FFT."""
+        return analytic_signal(data, axis)
 
 
-@patch_function(data_type="envelope")
-def envelope(patch: PatchType, dim: str) -> PatchType:
+hilbert = Hilbert.patch_function
+
+
+class Envelope(Hilbert):
     """
     Calculate the envelope of a signal using the Hilbert transform.
 
@@ -89,14 +125,19 @@ def envelope(patch: PatchType, dim: str) -> PatchType:
     >>> # Envelope is always positive
     >>> assert np.all(env.data >= 0)
     """
-    # Get the analytic signal
-    patch.get_coord(dim, require_evenly_sampled=True)  # Ensure evenly sampled
-    axis = patch.get_axis(dim)
-    data = scipy_hilbert(patch.data, axis=axis)
-    # Calculate envelope as magnitude of analytic signal
-    envelope_data = np.abs(data)
-    # Return new patch with envelope data
-    return patch.new(data=envelope_data)
+
+    data_type = "envelope"
+
+    def numpy_kernel(self, data, *, axis):
+        """Return the magnitude of the analytic signal along the axis."""
+        return np.abs(scipy_hilbert(data, axis=axis))
+
+    def kernel(self, data, *, axis):
+        """Return the magnitude of the analytic signal along the axis."""
+        return array_namespace(data).abs(analytic_signal(data, axis))
+
+
+envelope = Envelope.patch_function
 
 
 def __infer_transform_dim(patch, stack_dim):

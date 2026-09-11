@@ -1068,15 +1068,9 @@ class TestEnrichContracts:
         """
         from dascore.proc.coords import update_coords  # noqa: PLC0415
 
-        cells = dict(
-            zip(
-                update_coords.__code__.co_freevars,
-                [x.cell_contents for x in update_coords.__closure__],
-                strict=True,
-            )
-        )
+        processor = update_coords.__processor__
         for name in ("required_dims", "required_coords", "required_attrs", "data_type"):
-            assert cells[name] is None, (
+            assert getattr(processor, name) is None, (
                 f"update_coords now sets {name!r}, which Patch.enrich would "
                 "silently skip by calling raw_function."
             )

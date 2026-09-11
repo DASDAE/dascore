@@ -5,11 +5,13 @@ from __future__ import annotations
 import math
 import warnings
 from numbers import Real
+from typing import Any
 
 import numpy as np
 
 import dascore as dc
 from dascore.constants import PatchType
+from dascore.core.processor import PatchProcessor
 from dascore.exceptions import ParameterError, UnitError
 from dascore.transform.differentiate import differentiate
 from dascore.units import convert_units, get_factor_and_unit, get_unit
@@ -235,14 +237,7 @@ def _get_gauge_length(patch: PatchType, gauge_length) -> float:
     raise ParameterError(msg)
 
 
-@patch_function()
-def radians_to_strain(
-    patch: PatchType,
-    gauge_length=None,
-    wave_length: float = 1550.0 * 10 ** (-9),
-    stress_constant: float = 0.79,
-    refractive_index: float = 1.445,
-):
+class RadiansToStrain(PatchProcessor):
     r"""
     Convert data in radians to strain (rate).
 
@@ -281,30 +276,55 @@ def radians_to_strain(
     "strain_rate" when they are strain per unit time (eg rad/s becomes
     strain/s) and "strain" otherwise.
     """
-    # First get gauge length, using gl passed into function or attached to attrs.
-    gauge = _get_gauge_length(patch, gauge_length)
-    # If units doesn't contain radians just return so function is idempotent
-    quant = dc.get_quantity(patch.attrs.data_units)
-    if str(dc.get_unit("radians")) not in str(quant):
-        msg = (
-            f"Patch {patch} has no radians in its data_units, "
-            f"skipping strain conversion."
+
+    gauge_length: Any = None
+    wave_length: float = 1550.0 * 10 ** (-9)
+    stress_constant: float = 0.79
+    refractive_index: float = 1.445
+
+    def _constant(self, patch) -> float:
+        """Return the constant multiplying radians, from the gauge length."""
+        gauge = _get_gauge_length(patch, self.gauge_length)
+        denominator = 4 * np.pi * self.refractive_index * gauge * self.stress_constant
+        return self.wave_length / denominator
+
+    def derive(self, patch):
+        """Return the strain units and data_type; the patch if it has no radians."""
+        # The gauge length is checked first, as it always was.
+        _get_gauge_length(patch, self.gauge_length)
+        quant = dc.get_quantity(patch.attrs.data_units)
+        # If units don't contain radians just return, so this is idempotent.
+        if str(dc.get_unit("radians")) not in str(quant):
+            msg = (
+                f"Patch has no radians in its data_units "
+                f"({patch.attrs.data_units!r}), skipping strain conversion."
+            )
+            warnings.warn(msg)
+            return patch
+        data_units = patch.attrs.get("data_units", None)
+        _, d_units = get_factor_and_unit(data_units, simplify=True)
+        new_units = get_unit(d_units) * get_unit("strain/radians")
+        # Radians wasn't eliminated from the output units. Something went wrong.
+        if str(dc.get_unit("radians")) in str(new_units):
+            msg = f"radians to strain failed to convert {data_units} to strain."
+            raise UnitError(msg)
+        attrs = patch.attrs.update(
+            data_units=new_units, data_type=_get_strain_data_type(new_units)
         )
-        warnings.warn(msg)
-        return patch
-    # Get constant to multiply with data array.
-    const = wave_length / (4 * np.pi * refractive_index * gauge * stress_constant)
-    # Handle unit conversions.
-    data_units = patch.attrs.get("data_units", None)
-    d_factor, d_units = get_factor_and_unit(data_units, simplify=True)
-    new_units = get_unit(d_units) * get_unit("strain/radians")
-    # Radians wasn't eliminated from the output units. Something went wrong.
-    if str(dc.get_unit("radians")) in str(new_units):
-        msg = f"radians to strain failed to convert {data_units} to strain."
-        raise UnitError(msg)
-    # Build output patch
-    new_attrs = patch.attrs.update(
-        data_units=new_units, data_type=_get_strain_data_type(new_units)
-    )
-    new_data = patch.data * const * d_factor
-    return patch.update(data=new_data, attrs=new_attrs)
+        return patch.new(attrs=attrs)
+
+    def plan(self, patch, out):
+        """Return the constant and the unit factor, unless nothing converts."""
+        if out is patch:
+            return {}
+        factor, _ = get_factor_and_unit(patch.attrs.get("data_units"), simplify=True)
+        return {"const": self._constant(patch), "factor": factor}
+
+    def kernel(self, data, *, const=None, factor=None):
+        """Return the data as strain; the data themselves if nothing converts."""
+        if const is None:
+            return data
+        return data * const * factor
+
+
+radians_to_strain = RadiansToStrain.patch_function

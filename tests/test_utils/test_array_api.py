@@ -9,9 +9,11 @@ from typing import NamedTuple
 
 import numpy as np
 import pytest
+from scipy.signal import hilbert as sp_hilbert
 
 import dascore as dc
 from dascore.utils.array_api import (
+    array_namespace,
     asarray_like,
     backend_name,
     can_nan_reduce,
@@ -20,6 +22,7 @@ from dascore.utils.array_api import (
     to_numpy,
 )
 from dascore.utils.misc import suppress_warnings
+from dascore.warnings import NumpyFallbackWarning
 
 
 @pytest.fixture(scope="module")
@@ -145,10 +148,17 @@ class TestPatchBackends:
         assert "distance" not in out.dims
 
     def test_numpy_only_function_does_not_warn(self, backend_patch):
-        """Nothing converts or warns for a numpy-only function; its body decides."""
-        # detrend hands the array to scipy, which gives numpy data back.
+        """Nothing converts or warns for a plain numpy-only function."""
+        # median_filter hands the array to scipy, which gives numpy data back.
         with warnings_as_errors():
+            out = backend_patch.median_filter(time=3, samples=True)
+        assert out.shape == backend_patch.shape
+
+    def test_numpy_kernel_falls_back_with_a_warning(self, backend_patch):
+        """A processor's numpy kernel runs on numpy copies, and says so."""
+        with pytest.warns(NumpyFallbackWarning, match="detrend"):
             out = backend_patch.detrend("time")
+        assert backend_name(out.data) == backend_name(backend_patch.data)
         assert out.shape == backend_patch.shape
 
     def test_to_numpy_array(self, backend_patch):
@@ -398,3 +408,89 @@ class TestNanReduce:
         array = np.arange(12, dtype="int64").reshape(3, 4)
         out = np.asarray(nan_reduce(name, to_array(array), axis=0))
         assert np.allclose(out, getattr(np, f"nan{name}")(array, axis=0))
+
+
+def _units(patch):
+    """Return the patch with data units a strain conversion can take."""
+    return patch.update_attrs(data_units="rad", gauge_length=10)
+
+
+# One call per operation converted to a processor, on a random patch.
+_CONVERTED = {
+    "angle": lambda p: p.angle(),
+    "demedian": lambda p: p.demedian("time"),
+    "fillna": lambda p: p.fillna(0),
+    "full": lambda p: p.full(2.0),
+    "flip": lambda p: p.flip("time"),
+    "roll": lambda p: p.roll(time=3, samples=True),
+    "squeeze": lambda p: p.isel(time=slice(0, 1)).squeeze(),
+    "append_dims": lambda p: p.append_dims(new=2),
+    "make_broadcastable_to": lambda p: p.append_dims("new").make_broadcastable_to(
+        (*p.shape, 3)
+    ),
+    "drop_coords": lambda p: p.update_coords(
+        extra=("time", np.ones(p.shape[1]))
+    ).drop_coords("extra"),
+    "drop_private_coords": lambda p: p.drop_private_coords(),
+    "update_coords": lambda p: p.update_coords(time_min=0),
+    "set_units": lambda p: p.set_units("m/s"),
+    "convert_units": lambda p: p.set_units("m/s").convert_units("mm/s"),
+    "simplify_units": lambda p: p.set_units("km/s").simplify_units(),
+    "detrend": lambda p: p.detrend("time"),
+    "sobel_filter": lambda p: p.sobel_filter("time"),
+    "hilbert": lambda p: p.hilbert("time"),
+    "envelope": lambda p: p.envelope("time"),
+    "kurtosis": lambda p: p.kurtosis(time=8, samples=True),
+    "radians_to_strain": lambda p: _units(p).radians_to_strain(),
+}
+
+
+class TestConvertedProcessorsOnBackends:
+    """Every converted operation runs on every backend, or warns it falls back."""
+
+    @pytest.mark.parametrize("name", sorted(_CONVERTED))
+    def test_runs_or_falls_back(self, backend_patch, name):
+        """Native kernels are silent; numpy kernels warn; the backend comes back."""
+        cls = getattr(dc.Patch, name).__processor__
+        backend = backend_name(backend_patch.data)
+        native = any(
+            "kernel" in klass.__dict__ or "numpy_kernel" not in klass.__dict__
+            for klass in cls.__mro__
+            if klass is not dc.PatchProcessor and issubclass(klass, dc.PatchProcessor)
+        )
+        call = _CONVERTED[name]
+        if backend == "numpy" or native:
+            with warnings_as_errors():
+                out = call(backend_patch)
+        else:
+            with pytest.warns(NumpyFallbackWarning, match=cls.name):
+                out = call(backend_patch)
+        assert backend_name(out.data) == backend
+
+
+class TestArrayApiKernelBranches:
+    """The array API kernels' branches, on a backend which is not numpy."""
+
+    def test_angle_of_complex_data(self, backend_patch):
+        """The phase of complex data is atan2 of its parts."""
+        xp = array_namespace(backend_patch.data)
+        data = xp.astype(backend_patch.data, xp.complex128) * (1 + 1j)
+        out = backend_patch.new(data=data).angle()
+        positive = np.asarray(backend_patch.data) > 0
+        assert np.allclose(np.asarray(out.data)[positive], np.pi / 4)
+
+    def test_fillna_fills(self, backend_patch):
+        """Non-finite values are replaced by the value."""
+        xp = array_namespace(backend_patch.data)
+        data = xp.where(backend_patch.data > 0.5, xp.nan, backend_patch.data)
+        out = backend_patch.new(data=data).fillna(-1.0)
+        numpy_out = np.asarray(out.data)
+        assert np.isfinite(numpy_out).all()
+        assert (numpy_out[np.asarray(backend_patch.data) > 0.5] == -1).all()
+
+    def test_hilbert_of_odd_length(self, backend_patch):
+        """Odd and even lengths weight the spectrum differently."""
+        odd = backend_patch.isel(time=slice(0, 99))
+        out = odd.hilbert("time")
+        expected = sp_hilbert(np.asarray(odd.data), axis=odd.get_axis("time"))
+        assert np.allclose(np.asarray(out.data), expected)
