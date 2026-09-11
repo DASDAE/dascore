@@ -11,7 +11,7 @@ import numpy as np
 import pandas as pd
 
 from dascore.core.coords import BaseCoord, CoordRange
-from dascore.utils.time import to_timedelta64
+from dascore.utils.time import dtype_time_like, to_timedelta64
 
 
 def get_indexers(
@@ -216,6 +216,27 @@ def _restore_indexer(indexer, positions):
     return slice(int(span[0]), None if stop < 0 else stop, step)
 
 
+def _exact_slice(coord, start, stop, step) -> slice | None:
+    """A label slice on an ascending integer grid, or None to ask pandas."""
+    if not (isinstance(coord, CoordRange) and coord._exact and coord.sorted):
+        return None
+    # np.timedelta64 subclasses np.integer, so a duration step is refused here
+    step_ok = step is None or (
+        isinstance(step, int | np.integer)
+        and not isinstance(step, np.timedelta64)
+        and step > 0
+    )
+    kinds = np.dtype(coord.dtype).kind if dtype_time_like(coord.dtype) else "iu"
+    bounds = [np.asarray(x) for x in (start, stop) if x is not None]
+    if not step_ok or any(x.dtype.kind not in kinds or pd.isnull(x) for x in bounds):
+        return None
+    if start is not None and stop is not None and start > stop:
+        return slice(0, 0, step)  # select would swap them; pandas selects nothing
+    # select keeps every sample within the inclusive bounds, as pandas does
+    _, indexer = coord.select((start, stop))
+    return slice(indexer.start, indexer.stop, step)
+
+
 def label_indexer(
     coord: BaseCoord,
     value: Any,
@@ -243,6 +264,8 @@ def label_indexer(
                 "method and tolerance are not supported with slices."
             )
         start, stop = compatible(value.start), compatible(value.stop)
+        if (fast := _exact_slice(coord, start, stop, value.step)) is not None:
+            return fast
         index, positions = _label_index(coord, (start, stop))
         result = index.slice_indexer(start, stop, value.step)
         if not isinstance(result, slice):
@@ -265,7 +288,8 @@ def label_indexer(
             tolerance = compatible(tolerance)
     if (
         isinstance(coord, CoordRange)
-        and labels.ndim == 1
+        # a scalar on an integer grid, whose labels cannot repeat
+        and (labels.ndim == 1 or (labels.ndim == 0 and coord._exact))
         and method is None
         and tolerance is None
         and labels.dtype.kind in "iufmM"
@@ -275,7 +299,8 @@ def label_indexer(
             else labels.dtype.kind in "iuf"
         )
     ):
-        return _exact_range_indexer(coord, labels)
+        positions = _exact_range_indexer(coord, np.atleast_1d(labels))
+        return int(positions[0]) if labels.ndim == 0 else positions
     index, positions = _label_index(
         coord,
         np.atleast_1d(labels),

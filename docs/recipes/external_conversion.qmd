@@ -29,7 +29,17 @@ dar = patch.io.to_xarray()
 patch_from_dar = dc.io.xarray_to_patch(dar)
 ```
 
-A whole spool converts to a lazy, [dask](https://docs.dask.org/)-backed [DataTree](https://docs.xarray.dev/en/stable/user-guide/hierarchical-data.html) with one node per group of related patches (partitioned exactly as [`chunk`](`dascore.Spool.chunk`) partitions them) and one child node per merged output segment. Building the tree reads no data — even the tree's time coordinates are lazy (unlike the single-patch conversion above, which materializes its labels): an evenly sampled one is served from start and step on demand, so a segment spanning years of samples costs nothing to label. Computing a selection loads only the source patches it touches.
+Dimension coordinates are lazy: the DataArray's index holds the patch's own coordinate and computes labels only for the samples a selection or `.values` asks about, so a coordinate spanning billions of samples costs nothing to convert. Selection answers as it does on a materialized index (partial datetime strings, `method="nearest"`, `tolerance`), and converting back returns the coordinate exactly, fractional sampling rates and gaps included. xarray aligns such an index only with others of its kind, so an array built by hand, whose index holds its labels, cannot be combined with a lazy one; convert with `lazy_coords=False` to get materialized labels instead.
+
+```python
+import dascore as dc
+
+patch = dc.get_example_patch()
+
+eager = patch.io.to_xarray(lazy_coords=False)
+```
+
+A whole spool converts to a lazy, [dask](https://docs.dask.org/)-backed [DataTree](https://docs.xarray.dev/en/stable/user-guide/hierarchical-data.html) with one node per group of related patches (partitioned exactly as [`chunk`](`dascore.Spool.chunk`) partitions them) and one child node per merged output segment. Building the tree reads no data, and its coordinates are lazy as in the single-patch conversion above, so a segment spanning years of samples costs nothing to label. Computing a selection loads only the source patches it touches.
 
 ```python
 import dascore as dc
@@ -64,7 +74,7 @@ A DataArray from somewhere else needs `import dascore.xarray.accessor` first, si
 
 A dask-backed DataArray is passed through as it stands, so a method which works on the array's own backend leaves it lazy. One which cannot converts, as it does on a patch. Where such a method announces that conversion, and the array is larger than free memory, the accessor raises rather than attempting it; a method which converts silently is not caught, and fails on memory as it would anywhere else.
 
-A coordinate a tree states rather than stores -- an evenly sampled time coordinate, whose labels are computed from its range on demand -- is stated again in what a method hands back, so labelling a long acquisition costs no more after a call than before it. Every DataArray in the call says how its own coordinates arrived, an argument as much as the one called on. A coordinate which arrived spelled out anywhere is spelled out in the result, since a spelled-out index is what xarray aligns on. Laziness follows the name, so a method which renames such a coordinate spells its labels out under the new name.
+A coordinate a DataArray states rather than stores (a lazy one, whose labels are computed on demand) is stated again in what a method hands back, so labelling a long acquisition costs no more after a call than before it. Every DataArray in the call says how its own coordinates arrived, an argument as much as the one called on. A coordinate which arrived spelled out anywhere is spelled out in the result, since a spelled-out index is what xarray aligns on. Laziness follows the name, so a method which renames such a coordinate spells its labels out under the new name.
 
 ## [ObsPy](https://docs.obspy.org/)
 

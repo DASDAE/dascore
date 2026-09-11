@@ -695,10 +695,10 @@ class TestToXarrayLazyCoords:
 
     def test_time_coordinate_is_lazy(self, random_spool):
         """An evenly sampled merged time coordinate gets the lazy index."""
-        from dascore.xarray.index import TemporalRangeIndex  # noqa: PLC0415
+        from dascore.xarray.index import CoordIndex  # noqa: PLC0415
 
         data = self._leaf(random_spool.io.to_xarray())["data"]
-        assert isinstance(data.xindexes["time"], TemporalRangeIndex)
+        assert isinstance(data.xindexes["time"], CoordIndex)
         # the labels are served on demand, not stored as an array
         assert not isinstance(data["time"].variable._data, np.ndarray)
         merged = random_spool.chunk(time=None)[0]
@@ -716,9 +716,10 @@ class TestToXarrayLazyCoords:
         assert sub.sizes["time"] == expected.shape[expected.dims.index("time")]
         np.testing.assert_array_equal(sub.compute().values, expected.data)
 
-    def test_segmented_time_materializes(self, random_patch):
-        """A jittered merge is not one range; its labels spell out."""
-        from dascore.xarray.index import TemporalRangeIndex  # noqa: PLC0415
+    def test_segmented_time_stays_lazy(self, random_patch):
+        """A jittered merge is not one range; it is served as its segments."""
+        from dascore.core.coords import CoordSegmented  # noqa: PLC0415
+        from dascore.xarray.index import CoordIndex  # noqa: PLC0415
 
         coord = random_patch.get_coord("time")
         step = coord.step * 1.04  # within sampling tolerance, off-grid
@@ -727,7 +728,9 @@ class TestToXarrayLazyCoords:
         )
         spool = dc.spool([random_patch, second])
         data = self._leaf(spool.io.to_xarray())["data"]
-        assert not isinstance(data.xindexes["time"], TemporalRangeIndex)
+        index = data.xindexes["time"]
+        assert isinstance(index, CoordIndex)
+        assert isinstance(index.coordinate, CoordSegmented)
         merged = spool.chunk(time=None)[0]
         np.testing.assert_array_equal(
             data["time"].values, merged.get_coord("time").values

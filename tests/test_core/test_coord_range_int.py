@@ -787,15 +787,19 @@ class TestPersistenceGuards:
         patch.io.write(path, "dasdae", file_version="1")
         assert dc.spool(path)[0].get_coord("time") == patch.get_coord("time")
 
-    def test_xarray_lazy_index_skipped(self, hz_1024):
-        """A fractional grid travels to xarray as values, not a rounded index."""
+    def test_xarray_keeps_the_grid(self, hz_1024):
+        """A fractional grid travels to xarray and back exactly, not rounded."""
         pytest.importorskip("xarray")
-        from dascore.xarray.patch import patch_to_xarray  # noqa: PLC0415
+        from dascore.xarray.patch import (  # noqa: PLC0415
+            patch_to_xarray,
+            xarray_to_patch,
+        )
 
         patch = dc.get_example_patch().update_coords(time=hz_1024[:2000])
-        array = patch_to_xarray(patch, lazy_coords={"time"})
-        assert type(array.xindexes["time"]).__name__ != "TemporalRangeIndex"
+        array = patch_to_xarray(patch)
+        assert array.xindexes["time"].coordinate == patch.get_coord("time")
         assert np.array_equal(array["time"].values, patch.get_coord("time").values)
+        assert xarray_to_patch(array).get_coord("time") == patch.get_coord("time")
 
 
 class TestValidationErrors:

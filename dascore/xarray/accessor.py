@@ -78,6 +78,9 @@ def _stated_coords(*values) -> set[str]:
     away from the rest, whichever of the two is called on.
     """
     xr = optional_import("xarray")
+    # function-level: importing the index imports xarray
+    from dascore.xarray.index import CoordIndex  # noqa: PLC0415
+
     stated, spelled_out = set(), set()
     for value in values:
         if not isinstance(value, xr.DataArray):
@@ -85,7 +88,7 @@ def _stated_coords(*values) -> set[str]:
         names = {
             name
             for name, index in value.xindexes.items()
-            if hasattr(getattr(index, "transform", None), "start_ns")
+            if isinstance(index, CoordIndex)
         }
         stated.update(names)
         spelled_out.update(set(value.xindexes) - names)

@@ -3,8 +3,8 @@ Convert a spool to a lazy, dask-backed xarray DataTree.
 
 The tree is partitioned exactly as `chunk` partitions patches; blocks
 load through the same resolver path a chunked spool loads through, and
-evenly sampled time coordinates are served by the lazy index in
-`dascore.xarray.index`.
+range and segmented dimension coordinates are served by the lazy index
+in `dascore.xarray.index`.
 """
 
 from __future__ import annotations
@@ -22,7 +22,7 @@ from dascore.constants import SpoolType
 from dascore.exceptions import PatchConversionError
 from dascore.utils.misc import optional_import
 from dascore.utils.time import to_float
-from dascore.xarray.patch import _lazy_temporal_index
+from dascore.xarray.patch import _lazy_index
 
 
 def _np_scalar(value):
@@ -469,16 +469,13 @@ def spool_to_xarray(
     numeric values are floats — an integer-valued dimension coordinate
     comes back as floats.
 
-    An evenly sampled datetime/timedelta dimension coordinate is served
-    lazily: its labels are computed from start and step on demand
-    rather than stored, so an arbitrarily long merged time coordinate
-    costs nothing to build. Label selection on it resolves
-    arithmetically — a scalar must land on a sample (or pass
-    ``method="nearest"``), a slice keeps every sample within its
-    inclusive endpoints — and reading ``.values`` or asking for the
-    pandas index materializes labels on demand. A merged coordinate
-    which is not one even range (a sub-tolerance seam between
-    differently sampled members) spells its values out, as it must.
+    A dimension coordinate which is a range or segmented is served
+    lazily by `dascore.xarray.index.CoordIndex`: its labels are computed
+    on demand from the merged coordinate rather than stored, so an
+    arbitrarily long merged time coordinate costs nothing to build, and
+    gaps a tolerance keeps stay lazy too. Label selection on it answers
+    as `Patch.sel` does, and reading ``.values`` or asking for the
+    pandas index materializes labels on demand.
 
     A spool with pending value-range selections cannot be converted: the
     catalog states such bounds as candidacy rather than sample positions,
@@ -653,12 +650,11 @@ def spool_to_xarray(
                 else:
                     coord = _envelope_coord(out, d, get_coord)
                 sizes[d] = len(coord)
-                # An evenly sampled temporal coordinate stays lazy: its
-                # labels cost 8 bytes a sample materialized, which for a
-                # long merged time coordinate dwarfs everything else the
-                # tree holds. Irregular (segmented) coordinates are the
-                # exception that must spell out its values.
-                if (index := _lazy_temporal_index(d, coord)) is not None:
+                # A range or segmented coordinate stays lazy: its labels
+                # cost 8 bytes a sample materialized, which for a long
+                # merged time coordinate dwarfs everything else the tree
+                # holds.
+                if (index := _lazy_index(d, coord)) is not None:
                     lazy_indexes[d] = index
                 else:
                     coords[d] = coord.values
