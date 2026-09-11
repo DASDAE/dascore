@@ -17,6 +17,7 @@ import warnings
 import weakref
 from contextlib import contextmanager, suppress
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pandas as pd
@@ -29,15 +30,14 @@ from dascore.exceptions import (
     UnitError,
 )
 from dascore.io.index.ingest import (
-    _COORD_DEF_BOOLS,
     _COORD_DEF_FIELDS,
     CoordRecord,
     SourceRecord,
     _envelope,
-    _py_scalar,
     assemble_source_records,
     attr_column_name,
     coord_dtype_is_stateable,
+    coord_record,
     dump_path_attrs,
     hive_typed_attrs,
 )
@@ -1210,7 +1210,7 @@ class SQLiteIndexBackend:
             "cd.min_float, cd.max_float, cd.step_float, "
             "cd.min_int, cd.max_int, cd.step_int, cd.min_str, cd.max_str "
             "FROM patch_coords pc "
-            # the coordinate as a whole; runs are read only by gap reports
+            # the whole coordinate only: one envelope per patch and name
             "JOIN coord_defs cd ON cd.coord_def_id = pc.coord_def_id "
             "AND pc.run_index = 0"
         )
@@ -1400,47 +1400,30 @@ class SQLiteIndexBackend:
         runs = self._add_envelope_objects(runs.reset_index(drop=True))
         return runs[["patch_id", "run_index", *_ENVELOPE_COLUMNS]]
 
-    def run_records(self, name: str, def_keys) -> dict[str, list[CoordRecord]]:
+    def patch_runs(self, patch_ids) -> dict[int, list[CoordRecord]]:
         """
-        The run records of the coordinates stated by these def keys.
+        The run records each of these patches links, in order, by patch id.
 
-        A coordinate's runs follow from its values, so any patch linking
-        a def key as a whole also states that key's runs; the first found
-        speaks for all. Keys with no runs are absent from the result.
+        Patches without a segmented coordinate are absent; an index
+        without any answers from the empty runs index.
         """
-        keys = sorted({str(x) for x in def_keys})
-        if not keys:
+        probe = "SELECT 1 FROM patch_coords WHERE run_index > 0 LIMIT 1"
+        if self._fetch_df(probe).empty:
             return {}
+        fields = ", ".join(f"cd.{f}" for f in _COORD_DEF_FIELDS if f != "dtype")
         sql = (
-            "SELECT whole.def_key AS whole_key, pc.patch_id, pc.run_index, "
-            "pc.coord_dims, pc.dtype AS link_dtype, cd.* "
-            "FROM patch_coords pc "
+            "SELECT pc.patch_id, pc.coord_name, pc.coord_dims, pc.run_index, "
+            f"pc.dtype, cd.fingerprint, {fields} FROM patch_coords pc "
             "JOIN coord_defs cd ON cd.coord_def_id = pc.coord_def_id "
-            "JOIN patch_coords p0 ON p0.patch_id = pc.patch_id "
-            "AND p0.coord_name = pc.coord_name AND p0.run_index = 0 "
-            "JOIN coord_defs whole ON whole.coord_def_id = p0.coord_def_id "
-            "WHERE pc.coord_name = ? AND pc.run_index > 0 "
-            "AND whole.def_key IN (SELECT value FROM json_each(?))"
+            "WHERE pc.run_index > 0 "
+            "AND pc.patch_id IN (SELECT value FROM json_each(?)) "
+            "ORDER BY pc.patch_id, pc.coord_name, pc.run_index"
         )
-        rows = self._fetch_df(sql, [name, json.dumps(keys)])
-        out: dict[str, list[CoordRecord]] = {}
-        first_patch: dict[str, int] = {}
-        for row in rows.sort_values(["patch_id", "run_index"]).to_dict("records"):
-            key = row["whole_key"]
-            if first_patch.setdefault(key, row["patch_id"]) != row["patch_id"]:
-                continue
-            fields = {
-                f: _py_scalar(row[f], f in _COORD_DEF_BOOLS) for f in _COORD_DEF_FIELDS
-            }
-            out.setdefault(key, []).append(
-                CoordRecord(
-                    coord_name=name,
-                    coord_dims=row["coord_dims"],
-                    run_index=int(row["run_index"]),
-                    coord_hash=_py_scalar(row["fingerprint"]),
-                    **{**fields, "dtype": row["link_dtype"]},
-                )
-            )
+        rows = self._fetch_df(sql, [json.dumps([int(x) for x in patch_ids])])
+        out: dict[int, list[CoordRecord]] = {}
+        for rec in rows.to_dict("records"):
+            row = SimpleNamespace(**rec)
+            out.setdefault(int(row.patch_id), []).append(coord_record(row, row))
         return out
 
     def coord_dims_map(self) -> dict[str, str]:

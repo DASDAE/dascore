@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING, Any, Literal, NoReturn, Self, cast, overload
 import numpy as np
 import pandas as pd
 from pydantic import (
+    Field,
     ValidationError,
     field_serializer,
     field_validator,
@@ -252,10 +253,10 @@ class CoordSummary(DascoreBaseModel):
     step_numerator: int | None = None
     step_denominator: int | None = None
     origin_offset: int | None = None
-    # The summary of each run of a segmented coordinate, in order, so an
-    # index can see holes inside a patch; None for every other coordinate
-    # and for one with more runs than is worth indexing.
-    runs: tuple[CoordSummary, ...] | None = None
+    # Each run's summary, in order, for a segmented coordinate, so an index
+    # can see holes inside a patch; None otherwise, including past
+    # _MAX_SUMMARY_RUNS runs. Left out of the repr, which it would swamp.
+    runs: tuple[CoordSummary, ...] | None = Field(default=None, repr=False)
 
     @property
     def is_exact_grid(self) -> bool:
@@ -3149,7 +3150,6 @@ class CoordSegmented(BaseCoord):
         """Get the summary info about the coord, with a summary per run."""
         summary = super().to_summary(dims=dims)
         if self.segment_count > _MAX_SUMMARY_RUNS:
-            # past this the runs cost more to index than they tell
             return summary
         runs = tuple(x.to_summary(dims=dims) for x in self.segments)
         return summary.model_copy(update={"runs": runs})

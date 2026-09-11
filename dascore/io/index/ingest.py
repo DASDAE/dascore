@@ -694,6 +694,27 @@ def _py_scalar(value, as_bool: bool = False):
     return value
 
 
+def coord_record(link, cdef) -> CoordRecord:
+    """
+    The coordinate record a stored link and its definition describe.
+
+    The link's dtype wins over the definition's: definitions are shared
+    by value, and a link keeps the dtype its patch stated.
+    """
+    return CoordRecord(
+        coord_name=link.coord_name,
+        coord_dims=link.coord_dims,
+        run_index=int(link.run_index),
+        coord_hash=_py_scalar(cdef.fingerprint),
+        dtype=link.dtype,
+        **{
+            f: _py_scalar(getattr(cdef, f), f in _COORD_DEF_BOOLS)
+            for f in _COORD_DEF_FIELDS
+            if f != "dtype"
+        },
+    )
+
+
 def assemble_source_records(
     sources: pd.DataFrame,
     patches: pd.DataFrame,
@@ -763,21 +784,7 @@ def assemble_source_records(
                     )
             coords = []
             for link in iter_rows(link_groups.get(pid, pd.DataFrame()), PatchCoordRow):
-                cdef = def_map[int(link.coord_def_id)]
-                coords.append(
-                    CoordRecord(
-                        coord_name=link.coord_name,
-                        coord_dims=link.coord_dims,
-                        run_index=int(link.run_index),
-                        coord_hash=_py_scalar(cdef.fingerprint),
-                        dtype=link.dtype,
-                        **{
-                            f: _py_scalar(getattr(cdef, f), f in _COORD_DEF_BOOLS)
-                            for f in _COORD_DEF_FIELDS
-                            if f != "dtype"
-                        },
-                    )
-                )
+                coords.append(coord_record(link, def_map[int(link.coord_def_id)]))
             patch_records.append(
                 PatchRecord(
                     source_patch_key=normalize_source_patch_key(patch.source_patch_key),

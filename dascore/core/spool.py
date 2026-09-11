@@ -1728,9 +1728,10 @@ class Spool(NodeRepr, NamespaceOwner):
 
         A segmented coordinate is linked to its runs, so a patch holding a
         hole becomes one row per run and the reports see the hole as they
-        see one between patches. A row a selection trimmed keeps only what
-        of each run lies within its envelope. Patches without runs, which
-        is nearly all of them, pass through untouched.
+        see one between patches. Where a selection trimmed a row, each run
+        is clipped to that row's envelope, and a run left outside it is
+        dropped. Patches without runs, which is nearly all of them, and
+        patches whose runs differ in step pass through untouched.
         """
         min_col, max_col, step_col = (f"{dim}_{x}" for x in ("min", "max", "step"))
         if df.empty or not {min_col, max_col, step_col} <= set(df.columns):
@@ -1741,27 +1742,27 @@ class Spool(NodeRepr, NamespaceOwner):
         runs = self._catalog.backend.coord_runs(dim, placed["_patch_id"].unique())
         if runs.empty:
             return df
+        # a run without the step its neighbours share would read as a
+        # hole beside them, so only runs of one step split a patch
+        by_patch = runs.groupby("patch_id")["_env_step"]
+        unstepped = runs["_env_step"].isna().groupby(runs["patch_id"]).transform("sum")
+        runs = runs[(unstepped == 0) & (by_patch.transform("nunique") == 1)]
+        if runs.empty:
+            return df
         runs = runs.rename(columns={"patch_id": "_patch_id"})
         split = placed.merge(runs, on="_patch_id", how="inner")
         for run_col, col in zip(
             ("_env_min", "_env_max", "_env_step"), (min_col, max_col, step_col)
         ):
-            values = split[run_col]
             if df[col].dtype != object:
-                try:
-                    values = values.astype(df[col].dtype)
-                except (TypeError, ValueError):
-                    return df  # runs of another kind than the column holds
-            split[run_col] = values
-        # a selection trims a row's envelope; runs keep only what it holds
-        low = split["_env_min"].where(
-            split["_env_min"] > split[min_col], split[min_col]
+                split[run_col] = split[run_col].astype(df[col].dtype)
+        split = split.assign(
+            **{
+                min_col: split["_env_min"].clip(lower=split[min_col]),
+                max_col: split["_env_max"].clip(upper=split[max_col]),
+                step_col: split["_env_step"],
+            }
         )
-        high = split["_env_max"].where(
-            split["_env_max"] < split[max_col], split[max_col]
-        )
-        split = split.assign(**{min_col: low, max_col: high})
-        split[step_col] = split["_env_step"]
         split = split[split[min_col] <= split[max_col]]
         whole = df[~df["_patch_id"].isin(runs["_patch_id"])]
         return pd.concat([whole, split[df.columns]], ignore_index=True)
@@ -1778,7 +1779,8 @@ class Spool(NodeRepr, NamespaceOwner):
         Return a dataframe with one row per gap along a dimension.
 
         Each row is a boundary that ``chunk`` would refuse to merge under the
-        same grouping and tolerance rules.
+        same grouping and tolerance rules, or a hole inside a segmented
+        patch, which ``chunk`` plans whole and never looks inside.
 
         Parameters
         ----------
@@ -1816,9 +1818,10 @@ class Spool(NodeRepr, NamespaceOwner):
 
         Overlapping and fully-nested patches never open a gap: each
         boundary is measured against the furthest point reached so far,
-        not the previous row. A patch whose coordinate is segmented (a
-        gapped patch in memory or stored whole, up to 256 runs) is read
-        run by run, so the holes inside it are reported too.
+        not the previous row. A patch whose coordinate is segmented into
+        runs of one step (such as a gapped patch merged in memory, or read
+        whole from a file) is read run by run, so the holes inside it are
+        reported too; one with more than 256 runs is read whole.
 
         A sample-count tolerance scales the step, so patches whose step
         is unknown report no gaps. An absolute tolerance needs no step
@@ -1830,8 +1833,8 @@ class Spool(NodeRepr, NamespaceOwner):
         [`Spool.get_coverage`](`dascore.core.spool.Spool.get_coverage`)
 
         [`get_gap_edges`](`dascore.utils.gaps.get_gap_edges`) finds the
-        gaps in one coordinate's values, which a caller holding the patch
-        can ask; this method reads the index and never loads data.
+        gaps in the values of a coordinate already loaded; this method
+        reads only the index and never loads data.
 
         Examples
         --------
@@ -1898,23 +1901,23 @@ class Spool(NodeRepr, NamespaceOwner):
 
         Coverage is measured from the envelopes the index records: of
         each patch, or of each run of a patch whose coordinate is
-        segmented (a gapped patch in memory or stored whole, up to 256
-        runs), so a hole inside such a patch counts like one between
-        patches. A hole is not visible in a group whose step is unknown:
-        a sample-count tolerance has nothing to scale there, so the group
-        reports no gaps and counts as fully covered. An absolute
-        tolerance does measure it.
-        Both are what `chunk` would make of the data, so a `coverage` of
-        1.0 says "nothing chunk would refuse to merge", not "nothing
-        missing".
+        segmented into runs of one step (up to 256), so a hole inside such
+        a patch counts like one between patches. A hole is not visible in a
+        group whose step is unknown: a sample-count tolerance has nothing
+        to scale there, so the group reports no gaps and counts as fully
+        covered. An absolute tolerance does measure it.
+        Apart from holes inside a segmented patch, which `chunk` plans
+        whole, both are what `chunk` would make of the data, so a
+        `coverage` of 1.0 says "nothing chunk would refuse to merge", not
+        "nothing missing".
 
         See Also
         --------
         [`Spool.get_gaps`](`dascore.core.spool.Spool.get_gaps`)
 
         [`get_gap_edges`](`dascore.utils.gaps.get_gap_edges`) finds the
-        gaps *inside* one patch's coordinate, which is a different
-        question: this method reads the index and never loads data.
+        gaps in the values of a coordinate already loaded; this method
+        reads only the index and never loads data.
 
         Examples
         --------

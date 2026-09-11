@@ -204,8 +204,8 @@ class PatchCoordRow(NamedTuple):
     semantics (two patches can share values under different names).
     `run_index` 0 is the coordinate as a whole, which every query about a
     patch's coordinate reads; a segmented coordinate is also linked to
-    each of its runs, in order, as 1, 2, ..., which only the gap reports
-    read.
+    each of its runs, in order, as 1, 2, ..., which gap reports read and
+    plans and exports carry.
     """
 
     patch_id: int
@@ -383,7 +383,7 @@ SPOOL_LATE_RENAMES = MappingProxyType(
 # autoindex above — patch_coords(patch_id, coord_name, run_index), sources(base_uri,
 # source_path), patches(source_id, source_patch_key), coord_defs(def_key)
 # — and duplicating them measured ~25% extra file size and slower writes
-# for no query gain. The partial index lists the definitions whose grid
+# for no query gain. `idx_cdefs_grid` lists the definitions whose grid
 # the envelope cannot restate -- a fractional step or offset, or a
 # descending run, whose start the envelope does not name -- so a query
 # need not scan them all.
@@ -392,7 +392,7 @@ INDEXES = (
     # whole coordinates only, so run links never lengthen a coordinate scan
     ("idx_pcoords_name", "patch_coords", "coord_name", "run_index = 0"),
     ("idx_cdefs_grid", "coord_defs", "def_key", GRID_NEEDED),
-    # the few links to runs, so asking for them costs nothing without any
+    # run links only, so an index without runs answers from an empty index
     ("idx_pcoords_runs", "patch_coords", "coord_name", "run_index > 0"),
 )
 

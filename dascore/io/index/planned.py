@@ -930,78 +930,49 @@ def derived_catalog(
         sizes=_whole_member_sizes(trims, sources),
     )
     if parent is not None:
-        whole = {} if name in trimmed_dims else _whole_members(trims, sources, name)
-        records = _with_parent_runs(records, parent.backend, name, whole)
+        records = _with_parent_runs(records, parent.backend, trims)
     backend.write_sources(records)
     return PatchCatalog(backend=backend, resolver=resolver)
 
 
-def _whole_members(trims: pd.DataFrame, sources: pd.DataFrame, name: str) -> dict:
+def _with_parent_runs(records, parent_backend, trims: pd.DataFrame) -> list:
     """
-    The planned dimension's def key of each output which is one whole member.
+    The records with the runs their members link in the parent.
 
-    A plan keeps no identity for the dimension it planned, but an output
-    holding exactly one member, untrimmed, holds that member's values.
-    Keyed by the output's source patch key.
+    An output of one member holds that member's values, perhaps trimmed,
+    so it takes the member's runs; the reports clip runs to each row's
+    envelope. An output of several takes runs only for a coordinate which
+    kept its identity, and so equals each member's. A run in other units
+    or of another kind than the output's coordinate is dropped. A re-plan
+    of the same dimension collapses to the grand-parent's members, which
+    this parent does not index, so its outputs state no runs.
     """
-    key_col = f"_{name}_def_key"
-    if key_col not in sources.columns or not len(trims):
-        return {}
-    size = trims.groupby("output_id")["_patch_id"].transform("size")
-    modified = trims.get("_modified", pd.Series(False, index=trims.index))
-    whole = trims[(size == 1) & ~modified.fillna(True).astype(bool)]
-    keys = dict(zip(sources["_patch_id"], sources[key_col]))
-    out = {}
-    for output_id, patch_id in zip(whole["output_id"], whole["_patch_id"]):
-        key = keys.get(patch_id)
-        if isinstance(key, str) and key.startswith("fp:"):
-            out[str(int(output_id))] = key
-    return out
-
-
-def _with_parent_runs(records, parent_backend, name: str, whole: dict) -> list:
-    """
-    The records with the runs the parent links to each surviving coordinate.
-
-    An output coordinate which keeps its identity (a whole, untrimmed
-    member's ``fp:`` key) holds the same values, and so the same runs, as
-    it did in the parent; so does the planned dimension of an output
-    which is one whole member (``whole``, by source patch key). One
-    assembled from several members states no runs. Looked up by def key
-    through the run links alone, so a parent without runs costs one
-    empty lookup per coordinate name.
-    """
-
-    def key_of(patch, coord):
-        if coord.run_index:
-            return None
-        if coord.coord_name == name and patch.source_patch_key in whole:
-            return whole[patch.source_patch_key]
-        if coord.coord_hash and coord.def_key.startswith("fp:"):
-            return coord.def_key
-        return None
-
-    wanted: dict[str, set[str]] = {}
-    for source in records:
-        for patch in source.patches:
-            for coord in patch.coords:
-                if (key := key_of(patch, coord)) is not None:
-                    wanted.setdefault(coord.coord_name, set()).add(key)
-    found = {
-        coord_name: parent_backend.run_records(coord_name, keys)
-        for coord_name, keys in wanted.items()
-    }
-    if not any(found.values()):
+    if trims.empty:
         return records
+    runs = parent_backend.patch_runs(trims["_patch_id"].unique())
+    if not runs:
+        return records
+    members: dict[str, list] = {}
+    for output_id, patch_id in zip(trims["output_id"], trims["_patch_id"], strict=True):
+        members.setdefault(str(int(output_id)), []).append(patch_id)
     out = []
     for source in records:
         patches = []
         for patch in source.patches:
+            ids = members.get(patch.source_patch_key, [])
+            parent = runs.get(ids[0], []) if ids else []
             coords = []
             for coord in patch.coords:
                 coords.append(coord)
-                key = key_of(patch, coord)
-                coords.extend(found.get(coord.coord_name, {}).get(key, ()))
+                if len(ids) > 1 and not coord.coord_hash:
+                    continue
+                kind = (coord.coord_name, coord.value_kind, coord.is_relative)
+                coords.extend(
+                    run
+                    for run in parent
+                    if (run.coord_name, run.value_kind, run.is_relative) == kind
+                    and run.units == coord.units
+                )
             patches.append(replace(patch, coords=tuple(coords)))
         out.append(replace(source, patches=tuple(patches)))
     return out
