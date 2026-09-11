@@ -29,6 +29,7 @@ from dascore.utils.chunk_plan import (
     build_concat_plan,
     patch_local_adjusted_envelopes,
 )
+from dascore.utils.gaps import GapTolerance
 from dascore.utils.time import to_timedelta64
 
 ONE_S = np.timedelta64(1, "s")
@@ -376,7 +377,7 @@ class TestChunkPlanAccessor:
         """Plans record the resolved parameters."""
         spool = dc.get_example_spool("random_das")
         plan = spool.chunk_plan(time=None, tolerance=2.0)
-        assert plan.params["tolerance"] == 2.0
+        assert plan.params["tolerance"] == GapTolerance.samples(2.0)
         assert isinstance(plan.params["group"], tuple)
         assert plan.merge_mode
 

@@ -268,11 +268,14 @@ def get_gap_edges(coord, tolerance: GapTolerance | None = None):
     numeric_diffs = _to_numeric(diffs)
     if declared is None or pd.isnull(declared):
         step = np.median(np.abs(diffs))
+    elif is_datetime64(values):
+        # datetime values keep their dtype, so their step stays a timedelta
+        step = np.abs(np.asarray(declared).astype("timedelta64[ns]"))[()]
     else:
-        step = np.abs(_normalize_coord_values(declared)[()])
+        step = np.abs(_to_numeric([declared])[0])
     gap_mask = np.zeros(len(diffs), dtype=bool)
     if tolerance is not None:
-        gap_mask = tolerance.is_gap(numeric_diffs, _to_numeric(step))
+        gap_mask = tolerance.is_gap(numeric_diffs, _to_numeric([step])[0])
     if not np.any(gap_mask):
         edges = np.concatenate(
             (

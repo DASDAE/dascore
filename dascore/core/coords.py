@@ -14,6 +14,7 @@ import math
 import re
 from collections.abc import Mapping, Sequence, Sized
 from contextlib import suppress
+from dataclasses import dataclass
 from fractions import Fraction
 from functools import cache
 from operator import gt, lt
@@ -375,6 +376,102 @@ def get_compatible_values(val, dtype):
         if val is not None:
             val = func(val)
     return val
+
+
+@dataclass(frozen=True)
+class Missing:
+    """
+    The grid positions a coordinate has no sample at.
+
+    Built by [`missing`](`dascore.core.coords.BaseCoord.missing`) from run
+    arithmetic, so it costs one entry per hole rather than one per
+    position; `positions` spells the labels out, up to a limit.
+
+    Examples
+    --------
+    >>> from dascore.core.coords import get_coord
+    >>> coord = get_coord(data=[1, 3, 4, 10, 11, 12], step=1)
+    >>> missing = coord.missing()
+    >>> missing.count, missing.complete
+    (6, False)
+    >>> list(missing.iter_runs())
+    [(np.int64(2), np.int64(2)), (np.int64(5), np.int64(9))]
+    >>> missing.positions().tolist()
+    [2, 5, 6, 7, 8, 9]
+    """
+
+    step: Any
+    # each hole as (first missing label, last missing label, how many)
+    runs: tuple[tuple[Any, Any, int], ...]
+
+    @property
+    def count(self) -> int:
+        """How many grid positions have no sample."""
+        return sum(n for _, _, n in self.runs)
+
+    @property
+    def complete(self) -> bool:
+        """Whether every grid position between the first and last has a sample."""
+        return not self.runs
+
+    def iter_runs(self):
+        """Yield each hole as its first and last missing label."""
+        for first, last, _ in self.runs:
+            yield first, last
+
+    def positions(self, limit: int = 10_000) -> np.ndarray:
+        """
+        Every missing label, or raise when there are more than ``limit``.
+
+        A long outage on a fast grid is millions of positions; the runs say
+        as much without allocating them.
+        """
+        if self.count > limit:
+            msg = (
+                f"{self.count} missing positions exceed the limit of {limit}; "
+                "raise the limit or use iter_runs."
+            )
+            raise ParameterError(msg)
+        if not self.runs:
+            return np.array([], dtype=np.asarray(self.step).dtype)
+        return np.concatenate(
+            [first + np.arange(n) * self.step for first, _, n in self.runs]
+        )
+
+    def __rich__(self):
+        holes = " | ".join(
+            f"[{first}]" if n == 1 else f"[{first} … {last}]"
+            for first, last, n in self.runs
+        )
+        return f"Missing(step={self.step})  missing {self.count}\n  {holes}"
+
+
+def _discontinuity_frame(rows, kind: str, tolerance) -> pd.DataFrame:
+    """
+    The discontinuities frame from ``(index, before, after, expected)`` rows.
+
+    ``expected`` is the spacing a run expects after itself (None when it
+    states none); ``excess`` is the spacing beyond it. ``kind="gaps"``
+    keeps the rows the tolerance calls gaps.
+    """
+    columns = ["index", "before", "after", "delta", "excess"]
+    df = pd.DataFrame(rows, columns=["index", "before", "after", "expected"])
+    df["delta"] = df["after"] - df["before"]
+    stated = df["expected"].notna()
+    df["excess"] = pd.Series(pd.NA, index=df.index, dtype=object)
+    df.loc[stated, "excess"] = np.abs(df.loc[stated, "delta"]) - np.abs(
+        df.loc[stated, "expected"]
+    )
+    if kind == "gaps":
+        keep = np.zeros(len(df), dtype=bool)
+        if stated.any():
+            delta = df.loc[stated, "delta"].to_numpy()
+            step = df.loc[stated, "expected"].to_numpy()
+            keep[stated.to_numpy()] = tolerance.is_gap(delta, step)
+        df = df[keep]
+    out = df[columns].reset_index(drop=True)
+    out["excess"] = out["excess"].where(out["excess"].notna(), np.nan)
+    return out
 
 
 class BaseCoord(RichRepr, DascoreBaseModel, abc.ABC):
@@ -944,14 +1041,86 @@ class BaseCoord(RichRepr, DascoreBaseModel, abc.ABC):
         `delta` (after - before) and `excess` (delta minus the expected local
         sampling interval, NaN when no sampling interval is defined).
 
-        Coordinates without internal segment structure return an empty
-        dataframe.
+        Evenly sampled coordinates return an empty dataframe. A monotonic
+        array reports every spacing which is not its declared step (or its
+        median spacing when it declares none); a segmented coordinate
+        reports the seams between its runs.
         """
         if kind not in ("all", "gaps"):
             msg = f"kind must be 'all' or 'gaps', got {kind!r}"
             raise ParameterError(msg)
-        columns = ["index", "before", "after", "delta", "excess"]
-        return pd.DataFrame(columns=columns)
+        tolerance = self._gap_tolerance(tolerance)
+        return _discontinuity_frame(self._seams(), kind, tolerance)
+
+    def _seams(self) -> list[tuple]:
+        """The ``(index, before, after, expected)`` rows of every discontinuity."""
+        return []
+
+    def _gap_tolerance(self, tolerance) -> GapTolerance:
+        """
+        The gap tolerance a public argument spells.
+
+        A number is an absolute excess in coordinate units (seconds for
+        time), as [`simplify`](`dascore.core.coords.BaseCoord.simplify`)
+        reads it; a quantity or timedelta converts to those units; a
+        `GapTolerance` is taken as it is, its excess converted likewise.
+        """
+        if isinstance(tolerance, GapTolerance):
+            if tolerance.count is not None:
+                return tolerance
+            tolerance = tolerance.excess
+        if tolerance is None:
+            tolerance = 0
+        stated = None
+        if is_timedelta64(tolerance) and not dtype_time_like(self.dtype):
+            # A timedelta against a numeric coordinate is a length in
+            # seconds, which only the coordinate's units can place.
+            stated = (to_float(tolerance), "s")
+        elif hasattr(tolerance, "units"):  # pint quantity tolerances
+            stated = (tolerance.magnitude, tolerance.units)
+        if stated is not None:
+            magnitude, from_units = stated
+            target = "s" if dtype_time_like(self.dtype) else self.units
+            # A tolerance is a DELTA, so it converts between two anchor
+            # points: 20 degC of deviation is 36 degF, never 68.
+            anchor = convert_units(0.0, target, from_units)
+            tolerance = convert_units(magnitude, target, from_units) - anchor
+        if dtype_time_like(self.dtype):
+            tolerance = dc.to_timedelta64(tolerance)
+            zero = dc.to_timedelta64(0)
+        else:
+            zero = 0
+        if tolerance < zero:
+            msg = "tolerance must not be negative."
+            raise ParameterError(msg)
+        return GapTolerance.absolute(tolerance)
+
+    def missing(self) -> Missing:
+        """
+        The grid positions between the first and last sample with no sample.
+
+        Missing is relative to a declared step: labels ``[0, 2, 4]`` fill a
+        step-2 grid and miss positions 1 and 3 of a step-1 grid. A
+        coordinate without a step, or without an order, cannot say and
+        raises.
+
+        Examples
+        --------
+        >>> from dascore.core.coords import get_coord
+        >>> coord = get_coord(data=[1, 3, 4, 10, 11, 12], step=1)
+        >>> coord.missing().count
+        6
+        >>> get_coord(start=0, stop=10, step=1).missing().complete
+        True
+        """
+        if _is_null(self.step):
+            msg = "missing needs a declared step; this coordinate has none."
+            raise CoordError(msg)
+        return Missing(step=self.step, runs=tuple(self._holes()))
+
+    def _holes(self) -> list[tuple]:
+        """Each hole as ``(first missing label, last missing label, count)``."""
+        return []
 
     @abc.abstractmethod
     def update_limits(self, min=None, max=None, step=None, **kwargs) -> BaseCoord:
@@ -2339,7 +2508,10 @@ class CoordRange(BaseCoord):
     def new(self, **kwargs):
         """Update coordinate; an exact grid is kept unless the step changes."""
         if "data" in kwargs or "values" in kwargs:
-            return super().new(**kwargs)
+            # new values state their own grid; the range's step is not a
+            # claim about them
+            data = kwargs.get("data", kwargs.get("values"))
+            return get_coord(data=data, units=kwargs.get("units", self.units))
         info = self.model_dump(exclude_unset=True, exclude_defaults=True)
         # A new stop or step re-derives the count, as a range always has.
         if "stop" in kwargs or "step" in kwargs:
@@ -2543,6 +2715,33 @@ class CoordMonotonicArray(CoordArray):
     values: ArrayLike
     _rich_style = dascore_styles["coord_monotonic"]
     _sorted = True
+
+    def _expected_spacing(self):
+        """The spacing the values are held to: the declared step, else the median."""
+        if not _is_null(self.step):
+            return self.step
+        diffs = np.diff(self.values)
+        return diffs[0] if len(diffs) < 2 else np.sort(diffs)[len(diffs) // 2]
+
+    def _seams(self) -> list[tuple]:
+        """Every neighbour spacing which is not the expected one."""
+        values = self.values
+        if len(values) < 2:
+            return []
+        diffs = np.diff(values)
+        expected = self._expected_spacing()
+        seams = np.flatnonzero(diffs != expected)
+        return [(int(i) + 1, values[i], values[i + 1], expected) for i in seams]
+
+    def _holes(self) -> list[tuple]:
+        """The grid positions skipped between neighbours."""
+        values = self.values
+        counts = _on_grid(np.diff(values), self.step)
+        rows = []
+        for i in np.flatnonzero(counts > 1):
+            n = int(counts[i]) - 1
+            rows.append((values[i] + self.step, values[i + 1] - self.step, n))
+        return rows
 
     def select(
         self, args, relative=False, samples=False
@@ -3135,39 +3334,13 @@ class CoordSegmented(BaseCoord):
 
     def _get_tolerance(self, tolerance):
         """Coerce the tolerance to the dtype expected for value deviations."""
-        if tolerance is None:
-            tolerance = 0
-        if isinstance(tolerance, GapTolerance):
-            # a count of steps is measured against the runs' own step; an
-            # absolute excess is already a deviation in coordinate units
+        if isinstance(tolerance, GapTolerance) and tolerance.count is not None:
+            # a count of steps is measured against the runs' own step
             steps = [abs(x.step) for x in self.segments if not _is_null(x.step)]
-            if tolerance.count is None:
-                tolerance = tolerance.excess
-            else:
-                tolerance = tolerance.count * get_middle_value(steps) if steps else 0
-        stated = None
-        if is_timedelta64(tolerance) and not dtype_time_like(self.dtype):
-            # A timedelta against a numeric coordinate is a length in
-            # seconds, which only the coordinate's units can place.
-            stated = (to_float(tolerance), "s")
-        elif hasattr(tolerance, "units"):  # pint quantity tolerances
-            stated = (tolerance.magnitude, tolerance.units)
-        if stated is not None:
-            magnitude, from_units = stated
-            target = "s" if dtype_time_like(self.dtype) else self.units
-            # A tolerance is a DELTA, so it converts between two anchor
-            # points: 20 degC of deviation is 36 degF, never 68.
-            anchor = convert_units(0.0, target, from_units)
-            tolerance = convert_units(magnitude, target, from_units) - anchor
-        if dtype_time_like(self.dtype):
-            tolerance = dc.to_timedelta64(tolerance)
-            zero = dc.to_timedelta64(0)
-        else:
-            zero = 0
-        if tolerance < zero:
-            msg = "simplify tolerance must not be negative."
-            raise ParameterError(msg)
-        return tolerance
+            tolerance = tolerance.count * get_middle_value(steps) if steps else 0
+            if dtype_time_like(self.dtype):
+                tolerance = dc.to_timedelta64(tolerance)
+        return self._gap_tolerance(tolerance).excess
 
     def _fit_run(self, run, tol) -> CoordRange | None:
         """Fit a run of segments to a single range within tol, or None."""
@@ -3199,12 +3372,8 @@ class CoordSegmented(BaseCoord):
             return None
         return candidate
 
-    @compose_docstring(doc=get_docstring(BaseCoord.get_discontinuities))
-    def get_discontinuities(self, kind="all", tolerance=None) -> pd.DataFrame:
-        """{doc}."""
-        if kind not in ("all", "gaps"):
-            msg = f"kind must be 'all' or 'gaps', got {kind!r}"
-            raise ParameterError(msg)
+    def _seams(self) -> list[tuple]:
+        """One row per seam between runs, expecting the run's own step after it."""
         offsets = self._segment_offsets()
         ascending = self.sorted
         rows = []
@@ -3212,29 +3381,23 @@ class CoordSegmented(BaseCoord):
             prev, nxt = self.segments[num - 1], self.segments[num]
             before = prev.max() if ascending else prev.min()
             after = nxt.min() if ascending else nxt.max()
-            delta = after - before
-            expected = self._expected_step(prev)
-            excess = np.abs(delta) - np.abs(expected) if expected is not None else None
-            rows.append(
-                dict(
-                    index=int(offsets[num]),
-                    before=before,
-                    after=after,
-                    delta=delta,
-                    excess=excess,
-                )
-            )
-        df = pd.DataFrame(rows, columns=["index", "before", "after", "delta", "excess"])
-        if kind == "gaps":
-            tol = self._get_tolerance(tolerance)
-            excess = df["excess"]
-            df = df[~pd.isnull(excess) & (excess > tol)]
-        return df.reset_index(drop=True)
+            rows.append((int(offsets[num]), before, after, self._expected_step(prev)))
+        return rows
+
+    def _holes(self) -> list[tuple]:
+        """The positions of the common grid between one run and the next."""
+        step = self.step if self.sorted else -self.step
+        rows = []
+        for _, before, after, _ in self._seams():
+            count = int(_on_grid(np.asarray([after - before]), step)[0]) - 1
+            if count:
+                rows.append((before + step, after - step, count))
+        return rows
 
     @staticmethod
     def _expected_step(seg) -> Any:
         """Return the expected next-sample spacing after a segment, or None."""
-        if isinstance(seg, CoordRange):
+        if not _is_null(seg.step):
             return seg.step
         if len(seg) > 1:
             values = seg.values

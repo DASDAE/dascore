@@ -11,7 +11,7 @@ import numpy as np
 
 from dascore.constants import DEFAULT_COLORMAPS, PatchType
 from dascore.exceptions import ParameterError
-from dascore.utils.gaps import get_gap_edges, is_monotonic_and_finite
+from dascore.utils.gaps import GapTolerance, get_gap_edges, is_monotonic_and_finite
 from dascore.utils.patch import patch_function
 from dascore.utils.plotting import (
     _add_colorbar,
@@ -115,9 +115,11 @@ def _plot_with_mesh(ax, data, dims, coords, cmap, gap_color, gap_factor):
     mesh_data = np.ma.asarray(data)
     edges = {}
     cells = {}
-    mesh_gap_factor = gap_factor if gap_color is not None else None
+    # a gap is a spacing past gap_factor steps, measured against the
+    # coordinate's declared step where it has one
+    tolerance = GapTolerance.samples(gap_factor) if gap_color is not None else None
     for axis, dim in enumerate(dims):
-        dim_edges, gap_mask = get_gap_edges(coords[dim], mesh_gap_factor)
+        dim_edges, gap_mask = get_gap_edges(coords[dim], tolerance)
         if gap_color is not None:
             mesh_data = _insert_gap_bands(mesh_data, gap_mask, axis)
         edges[dim] = dim_edges
@@ -289,7 +291,7 @@ def waterfall(
             ax,
             data,
             dims,
-            coords,
+            dim_coords,
             cmap,
             gap_color=gap_color,
             gap_factor=gap_factor,
