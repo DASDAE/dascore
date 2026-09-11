@@ -45,7 +45,7 @@ from dascore.io.index.query import (
     build_sql,
 )
 from dascore.io.index.schema import (
-    FRACTIONAL_GRID,
+    GRID_NEEDED,
     INDEX_VERSION,
     INDEXES,
     KIND_STORAGE,
@@ -1151,19 +1151,28 @@ class SQLiteIndexBackend:
         coords["_key"] = coords["def_key"].where(coords["fingerprint"].notna(), None)
         return coords
 
-    def _fractional_grids(self) -> dict[str, tuple[int, ...]]:
+    def _grids(self, def_keys=None) -> dict[str, tuple[int, ...]]:
         """
         The exact grid and length, by def key, where the envelope cannot restate it.
 
-        A grid of whole ticks on their tick is what the envelope already
-        states, so only a fractional step or offset is fetched: a handful
-        of definitions in most archives, read from the deduplicated table
-        rather than as four more columns on every link row.
+        An ascending grid of whole ticks on their tick is what the
+        envelope already states, so only the rest are fetched (see
+        GRID_NEEDED), from the deduplicated table rather than as four more
+        columns on every link row. ``def_keys`` narrows the fetch to the
+        definitions in hand; None reads them all, for a result covering
+        most of the archive.
         """
         columns = ", ".join(_EXACT_GRID_FIELDS)
-        rows = self._fetch_df(
-            f"SELECT def_key, {columns}, length FROM coord_defs WHERE {FRACTIONAL_GRID}"
-        ).dropna()
+        sql = f"SELECT def_key, {columns}, length FROM coord_defs WHERE ({GRID_NEEDED})"
+        if def_keys is None:
+            rows = self._fetch_df(sql)
+        else:
+            frames = [
+                self._fetch_df(f"{sql} AND def_key IN ({marks})", chunk)
+                for chunk, marks in self._iter_in_batches(list(def_keys))
+            ]
+            rows = pd.concat(frames, ignore_index=True)
+        rows = rows.dropna()
         return {
             row[0]: tuple(int(x) for x in row[1:]) for row in rows.to_numpy().tolist()
         }
@@ -1192,7 +1201,8 @@ class SQLiteIndexBackend:
             "JOIN coord_defs cd ON cd.coord_def_id = pc.coord_def_id"
         )
         n_patches = self._fetch_df("SELECT count(*) AS n FROM patches")["n"].iloc[0]
-        if len(ids) * 4 >= n_patches:
+        most = len(ids) * 4 >= n_patches
+        if most:
             # Most patches selected: one scan plus a pandas filter beats
             # many batched IN queries and their frame concatenation.
             coords = self._fetch_df(link_sql)
@@ -1202,9 +1212,10 @@ class SQLiteIndexBackend:
         if coords.empty:
             return out
         coords = self._add_envelope_objects(coords)
-        # the exact grid where the envelope only approximates it (None
+        # the exact grid where the envelope cannot restate it (None
         # elsewhere), so a row rebuilds the coordinate the file holds
-        grids = coords["def_key"].map(self._fractional_grids()).astype(object)
+        grids = self._grids(None if most else coords["def_key"].unique())
+        grids = coords["def_key"].map(grids).astype(object)
         coords["_grid"] = grids.where(grids.notna(), None)
         for name, group in coords.groupby("coord_name"):
             if not any(coord_dtype_is_stateable(x) for x in group["dtype"].unique()):

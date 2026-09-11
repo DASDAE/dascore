@@ -154,6 +154,17 @@ class TestFlatRelation:
         defs = chunked._catalog.backend._fetch_df("SELECT * FROM coord_defs")
         assert (defs["step_denominator"] == 2).any()
 
+    def test_descending_whole_ticks_carry_grid(self, tmp_path):
+        """A descending range needs its grid: the envelope does not name its start."""
+        patch = dc.get_example_patch()
+        reversed_patch = patch.update_coords(time=patch.get_coord("time")[::-1])
+        dc.write(reversed_patch, tmp_path / "rev.h5", "dasdae")
+        spool = dc.spool(tmp_path).update()
+        row = spool._catalog.to_df().iloc[0].to_dict()
+        assert row["_time_grid"] is not None
+        coord = coord_from_row(row, "time", units="s")
+        assert coord == reversed_patch.get_coord("time")
+
     def test_descending_grid(self, indexed, hz_1024_patch):
         """A descending grid rebuilds from its maximum, which the row states."""
         row = indexed._catalog.to_df().iloc[0].to_dict()

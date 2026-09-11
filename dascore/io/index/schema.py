@@ -377,12 +377,14 @@ SPOOL_LATE_RENAMES = MappingProxyType(
 # autoindex above — patch_coords(patch_id, coord_name), sources(base_uri,
 # source_path), patches(source_id, source_patch_key), coord_defs(def_key)
 # — and duplicating them measured ~25% extra file size and slower writes
-# for no query gain. The partial index lists the few definitions whose
-# grid the envelope cannot restate, so a query need not scan them all.
-FRACTIONAL_GRID = "step_denominator != 1 OR origin_offset != 0"
+# for no query gain. The partial index lists the definitions whose grid
+# the envelope cannot restate -- a fractional step or offset, or a
+# descending run, whose start the envelope does not name -- so a query
+# need not scan them all.
+GRID_NEEDED = "step_denominator != 1 OR origin_offset != 0 OR step_numerator < 0"
 INDEXES = (
     ("idx_pcoords_name", "patch_coords", "coord_name", None),
-    ("idx_cdefs_fractional", "coord_defs", "def_key", FRACTIONAL_GRID),
+    ("idx_cdefs_grid", "coord_defs", "def_key", GRID_NEEDED),
 )
 
 
