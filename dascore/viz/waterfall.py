@@ -186,8 +186,12 @@ def _plot_with_bounds(ax, data, patch, cmap, gap_color, gap_factor):
                 len(patch.get_coord(dim)),
             )
         else:
-            factor = gap_factor if gap_color is not None else None
-            cells[dim] = mesh_cell_edges(*get_gap_edges(patch.get_array(dim), factor))
+            tolerance = (
+                GapTolerance.samples(gap_factor) if gap_color is not None else None
+            )
+            cells[dim] = mesh_cell_edges(
+                *get_gap_edges(patch.get_array(dim), tolerance)
+            )
     y0, y1 = cells[patch.dims[0]]
     x0, x1 = cells[patch.dims[1]]
     vertices = np.empty((*data.shape, 4, 2))

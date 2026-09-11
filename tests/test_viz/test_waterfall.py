@@ -18,7 +18,7 @@ import dascore as dc
 from dascore.examples import inventory_patch_pair
 from dascore.exceptions import ParameterError
 from dascore.units import get_quantity_str, percent
-from dascore.utils.gaps import get_gap_edges
+from dascore.utils.gaps import GapTolerance, get_gap_edges
 from dascore.utils.misc import suppress_warnings
 from dascore.utils.plotting import _get_extents
 from dascore.utils.time import is_datetime64, to_timedelta64
@@ -1289,7 +1289,7 @@ class TestCellExtents:
         values = np.array([0.0, 1.0, 4.0, 5.0])
         if reverse:
             values = values[::-1]
-        edges, gaps = get_gap_edges(values, gap_factor=1.5)
+        edges, gaps = get_gap_edges(values, GapTolerance.samples(1.5))
         assert gaps.tolist() == [False, True, False]
         assert sorted(edges[2:4]) == [1.5, 3.5]
         patch = dc.Patch(
