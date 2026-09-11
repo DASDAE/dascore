@@ -14,7 +14,9 @@ def main(argv: list[str] | None = None) -> int:
         optional_import("typer", required_for="the DASCore command-line interface")
     except MissingOptionalDependencyError as exc:
         sys.stderr.write(
-            f"dascore: {exc}\nInstall CLI support with:\n"
+            f"dascore: CLI support could not load Typer: {exc.__cause__}\n"
+            f'Install with uv:\n  uv pip install --python "{sys.executable}" '
+            '"dascore[agents]"\nOr with pip:\n'
             f'  "{sys.executable}" -m pip install "dascore[agents]"\n'
         )
         return 1

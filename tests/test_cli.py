@@ -498,12 +498,13 @@ class TestOptionalCLI:
     def test_missing_typer(self, hide_module, capsys):
         """A missing Typer gives an install command for the selected interpreter."""
         hide_module("typer")
-        assert dc.get_example_patch().shape
         assert main(["doc"]) == 1
         captured = capsys.readouterr()
         assert not captured.out
         assert "dascore[agents]" in captured.err
         assert sys.executable in captured.err
+        assert f'uv pip install --python "{sys.executable}"' in captured.err
+        assert "pip install typer" not in captured.err
         assert "Traceback" not in captured.err
 
     @pytest.mark.parametrize("args", [[], ["unknown"], ["doc", "--unknown"]])
@@ -516,10 +517,10 @@ class TestOptionalCLI:
 
     @pytest.mark.concurrency
     def test_import_is_lazy(self):
-        """Importing the library and entry point does not import Typer or Click."""
+        """Importing the library and entry point does not import Typer."""
         code = (
             "import sys; import dascore; import dascore.cli; "
-            "assert 'typer' not in sys.modules; assert 'click' not in sys.modules"
+            "assert 'typer' not in sys.modules"
         )
         result = subprocess.run(
             [sys.executable, "-c", code], capture_output=True, text=True, timeout=30

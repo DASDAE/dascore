@@ -142,7 +142,7 @@ profile_base = [
     "pytest-profiling",
 ]
 
-all = ["dascore[extras]"]
+all = ["dascore[extras]", "dascore[agents]"]
 
 profile = ["dascore[test]", "dascore[profile_base]"]
 
