@@ -13,12 +13,18 @@ from dascore.io import BinaryReader, BinaryWriter, FiberIO, PatchSource
 from dascore.io.utils import resolve_keyed_source, slice_dataset
 
 
-def _patch_key(patch):
-    """Retain logical keys serialized before or after PatchSource migration."""
-    source = patch._source or PatchSource()
-    return source.key or normalize_source_patch_key(
-        patch.attrs.get("_source_patch_key", "")
-    )
+def _read_patches(resource):
+    """Load positional entries, retaining unambiguous keys from legacy pickles."""
+    patches = list(dascore.spool(pickle.load(resource)))
+    # PatchSource describes the previous file, not positions in this container.
+    keys = [
+        normalize_source_patch_key(p.attrs.get("_source_patch_key", ""))
+        for p in patches
+    ]
+    resolved = [key or str(index) for index, key in enumerate(keys)]
+    if len(set(resolved)) != len(patches):
+        keys = [""] * len(patches)
+    return list(zip(patches, keys, strict=True))
 
 
 class PickleIO(FiberIO):
@@ -58,24 +64,26 @@ class PickleIO(FiberIO):
         self, resource: BinaryReader, *, snap: bool = True
     ) -> list[dc.Patch]:
         """Decode a pickle to describe its patches without retaining their arrays."""
-        patches = dascore.spool(pickle.load(resource))
         return [
             dc.Patch(
                 coords=p.coords,
                 attrs=p.attrs.drop("_source_patch_key"),
                 dtype=p.dtype,
-                source=PatchSource(key=_patch_key(p)),
+                source=PatchSource(key=key),
             )
-            for p in patches
+            for p, key in _read_patches(resource)
         ]
 
     def read_array(
         self, resource: BinaryReader, windows: dict[str, tuple[int, int]], key: str = ""
     ) -> np.ndarray:
         """Decode one pickled logical patch and slice its array."""
-        patches = dascore.spool(pickle.load(resource))
         patch = resolve_keyed_source(
-            [(_patch_key(p) or str(i), p) for i, p in enumerate(patches)], key
+            [
+                (native or str(i), p)
+                for i, (p, native) in enumerate(_read_patches(resource))
+            ],
+            key,
         )
         return slice_dataset(patch.data, patch.dims, windows)
 

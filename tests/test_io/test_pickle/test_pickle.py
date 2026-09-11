@@ -124,7 +124,7 @@ class TestSerializedSourceKeys:
 
     @pytest.mark.parametrize("legacy", [True, False])
     def test_native_keys_roundtrip(self, tmp_path, random_patch, legacy):
-        """Both old attrs and PatchSource keys survive metadata and bounded reads."""
+        """Legacy native keys survive; current provenance does not name new entries."""
         patches = []
         keys = ["waveforms/first", "waveforms/second"]
         for index, key in enumerate(keys):
@@ -138,8 +138,10 @@ class TestSerializedSourceKeys:
         with path.open("wb") as stream:
             pickle.dump(dc.spool(patches), stream)
         summaries = dc.scan(path)
-        assert [item.source_patch_key for item in summaries] == keys
-        for index, key in enumerate(keys):
+        expected_keys = keys if legacy else ["", ""]
+        assert [item.source_patch_key for item in summaries] == expected_keys
+        read_keys = keys if legacy else ["0", "1"]
+        for index, key in enumerate(read_keys):
             loaded = dc.read(path, source_patch_key=key)[0]
             selected = dc.read(path, source_patch_key=key, time=(1, 4), samples=True)[0]
             expected = patches[index].select(time=(1, 4), samples=True)
@@ -153,3 +155,21 @@ class TestSerializedSourceKeys:
             np.testing.assert_array_equal(
                 dc.spool(path)[index].data, patches[index].data
             )
+
+    @pytest.mark.parametrize("legacy", [False, True])
+    def test_duplicate_origins_use_positions(self, tmp_path, random_patch, legacy):
+        """A patch and a derived copy remain separate pickle entries."""
+        patch = random_patch.new(source=PatchSource(key="1"))
+        if legacy:
+            patch = patch.new(attrs=patch.attrs.update(_source_patch_key="1"))
+        other = patch.new(data=patch.data * 2)
+        path = tmp_path / "same-origin.pkl"
+        dc.write(dc.spool([patch, other]), path, "pickle")
+        loaded = dc.read(path)
+        indexed = dc.spool(path)
+        assert len(loaded) == len(indexed) == 2
+        assert [p._source.key for p in loaded] == ["0", "1"]
+        assert loaded[0].attrs.patch_id != loaded[1].attrs.patch_id
+        for index, expected in enumerate([patch, other]):
+            np.testing.assert_array_equal(loaded[index].data, expected.data)
+            np.testing.assert_array_equal(indexed[index].data, expected.data)
