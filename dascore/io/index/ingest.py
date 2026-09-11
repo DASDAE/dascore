@@ -524,13 +524,12 @@ def patch_record(summary: PatchSummary) -> PatchRecord:
     """Convert one PatchSummary into a PatchRecord."""
     coords = []
     for name, csum in summary.coords.items():
-        if (rec := _coord_record(name, csum)) is None:
-            continue
-        coords.append(rec)
-        # a segmented coordinate's runs follow it, numbered from one
-        for index, run in enumerate(csum.runs or (), start=1):
-            if (part := _coord_record(name, run)) is not None:
-                coords.append(replace(part, run_index=index))
+        if (rec := _coord_record(name, csum)) is not None:
+            coords.append(rec)
+            # a segmented coordinate's runs follow it, numbered from one
+            for index, run in enumerate(csum.runs or (), start=1):
+                if (part := _coord_record(name, run)) is not None:
+                    coords.append(replace(part, run_index=index))
     coords = tuple(coords)
     time_min, time_max, time_step = _envelope(coords, "time", "time")
     dist_min, dist_max, dist_step = _envelope(coords, "distance", "num")

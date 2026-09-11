@@ -289,6 +289,29 @@ class TestDerived:
         chunked = dc.spool(slices).chunk(time=None)
         assert chunked.get_gaps()["gap_size"].tolist() == [HOLE, HOLE]
 
+    def test_merged_members_keep_shared_runs(self, gapped_patch):
+        """Merged members pass on the runs of a coordinate they all share."""
+        distance = gapped_patch.get_coord("distance")
+        mid = distance.values[len(distance) // 2]
+        slices = [
+            gapped_patch.select(distance=(None, mid)),
+            gapped_patch.select(distance=(mid + distance.step, None)),
+        ]
+        merged = dc.spool(slices).chunk(distance=None)
+        assert len(merged) == 1
+        assert merged.get_gaps()["gap_size"].tolist() == [HOLE]
+        assert merged.get_gaps("distance").empty
+
+    def test_concatenated_members_state_no_runs(self, gapped_patch):
+        """An output joined along a dimension takes no member's runs of it."""
+        later = gapped_patch.update_coords(
+            time_min=gapped_patch.get_coord("time").max() + 4 * MS
+        )
+        joined = dc.spool([gapped_patch, later]).concatenate(time=None)
+        (coverage,) = joined.get_coverage().to_dict("records")
+        assert coverage["gap_total"] == pd.Timedelta(0)
+        assert coverage["time_max"] == later.get_coord("time").max()
+
     def test_runs_in_other_units_are_dropped(self):
         """A run the plan restated in other units falls back to its envelope."""
         time = get_coord(start=0.0, step=1.0, shape=(4,), units="s")
