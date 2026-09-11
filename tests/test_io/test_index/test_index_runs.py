@@ -251,9 +251,8 @@ class TestDerived:
     """Plans carry their members' runs."""
 
     def test_chunked_view_reports_the_hole(self, gapped_patch):
-        """A hole chunk splits at is still a gap between its outputs."""
+        """A hole that chunk splits at is still a gap between its outputs."""
         chunked = dc.spool([gapped_patch]).chunk(time=None)
-        assert len(chunked) == 2
         assert chunked.get_gaps()["gap_size"].tolist() == [HOLE]
         assert chunked.get_coverage()["gap_total"].tolist() == [HOLE]
 
@@ -272,10 +271,13 @@ class TestDerived:
         assert chunked.get_gaps()["gap_size"].tolist() == [HOLE + 4 * MS]
 
     def test_chunked_selection_keeps_the_hole(self, gapped_patch):
-        """A trimmed member still holding the hole passes it on."""
+        """A view trimmed into the first run plans only what it holds."""
         t0 = gapped_patch.get_coord("time").min()
         view = dc.spool([gapped_patch]).select(time=(t0 + 500 * MS, None))
-        assert view.chunk(time=None).get_gaps()["gap_size"].tolist() == [HOLE]
+        chunked = view.chunk(time=None)
+        first = chunked[0].get_coord("time")
+        assert (first.min(), first.max()) == (t0 + 500 * MS, t0 + 1000 * MS)
+        assert chunked.get_gaps()["gap_size"].tolist() == [HOLE]
 
     def test_slices_of_one_patch(self, gapped_patch):
         """Two members sharing one time coordinate each keep their own runs."""
@@ -368,11 +370,15 @@ class TestChunkPlansRuns:
             assert out.get_coord("time") == half.get_coord("time")
             np.testing.assert_array_equal(out.data, half.data)
 
-    def test_tolerance_bridges_the_hole(self, gapped_patch):
-        """A tolerance wider than the hole merges the runs back."""
-        spool = dc.spool([gapped_patch])
-        (merged,) = spool.chunk(time=None, tolerance=5, snap_coords=False)
+    @pytest.mark.parametrize("snap_coords", [True, False])
+    def test_tolerance_bridges_the_hole(self, gapped_patch, snap_coords):
+        """Runs bridged into one output are the patch as stored, hole and all."""
+        chunked = dc.spool([gapped_patch]).chunk(
+            time=None, tolerance=5, snap_coords=snap_coords
+        )
+        (merged,) = chunked
         assert merged.equals(gapped_patch)
+        assert chunked.get_gaps()["gap_size"].tolist() == [HOLE]
 
     def test_run_joins_a_contiguous_neighbour(self, gapped_patch, halves):
         """The run next to a patch merges with it, as patches do."""
@@ -389,13 +395,20 @@ class TestChunkPlansRuns:
     def test_windows_never_straddle_the_hole(self, gapped_patch):
         """No window holds samples from both sides of the hole."""
         chunked = dc.spool([gapped_patch]).chunk(time=1)
+        assert len(chunked) == 7
         assert not any(isinstance(p.get_coord("time"), CoordSegmented) for p in chunked)
 
-    def test_plan_members_are_runs(self, gapped_patch):
-        """The plan names each run as a trimmed member."""
-        members = dc.spool([gapped_patch]).chunk_plan(time=None).members
-        assert len(members) == 2
+    def test_plan_members_are_runs(self, gapped_patch, halves):
+        """Each run is a trimmed member; runs in one output are read once."""
+        spool = dc.spool([gapped_patch])
+        members = spool.chunk_plan(time=None).members
         assert members["_modified"].all()
+        for (_, row), half in zip(members.iterrows(), halves, strict=True):
+            coord = half.get_coord("time")
+            assert (row["time_min"], row["time_max"]) == (coord.min(), coord.max())
+        (bridged,) = spool.chunk_plan(time=None, tolerance=5).members.to_dict("records")
+        time = gapped_patch.get_coord("time")
+        assert (bridged["time_min"], bridged["time_max"]) == (time.min(), time.max())
 
     def test_directory_loads_runs(self, gapped_directory, halves):
         """Members read from files load as selections of their patch."""
@@ -405,24 +418,16 @@ class TestChunkPlansRuns:
             np.testing.assert_array_equal(out.data, half.data)
 
     def test_reports_agree_with_chunk(self, gapped_directory):
-        """Every reported gap is a boundary between chunked outputs."""
+        """Every reported gap starts where a chunked output ends."""
         gaps = gapped_directory.get_gaps()
-        assert len(gapped_directory.chunk(time=None)) == len(gaps) + 1
-
-    def test_selection_clips_runs(self, gapped_patch):
-        """A view trimmed into the first run plans only what it holds."""
-        t0 = gapped_patch.get_coord("time").min()
-        view = dc.spool([gapped_patch]).select(time=(t0 + 500 * MS, None))
-        first, _ = view.chunk(time=None)
-        assert first.get_coord("time").min() == t0 + 500 * MS
-
-    def test_other_dimension_ignores_time_runs(self, gapped_patch):
-        """Chunking distance leaves a time-segmented patch whole."""
-        (out,) = dc.spool([gapped_patch]).chunk(distance=None)
-        assert out.equals(gapped_patch)
+        ends = [p.get_coord("time").max() for p in gapped_directory.chunk(time=None)]
+        assert len(ends) == len(gaps) + 1
+        assert list(gaps["time_min"].sort_values()) == [
+            pd.Timestamp(x) for x in ends[:-1]
+        ]
 
     def test_runs_past_the_cap_plan_whole(self):
-        """A coordinate with more runs than the index keeps plans whole."""
+        """A coordinate with more runs than the index stores is planned whole."""
         runs = [
             get_coord(start=20.0 * i, step=1.0, shape=(10,), units="m")
             for i in range(_MAX_SUMMARY_RUNS + 1)
@@ -434,3 +439,40 @@ class TestChunkPlansRuns:
             dims=("distance", "x"),
         )
         assert len(dc.spool([patch]).chunk(distance=None)) == 1
+
+    def test_sample_selection_plans_whole(self, gapped_patch):
+        """A sample selection resolves on the whole patch, so runs stay together."""
+        view = dc.spool([gapped_patch]).select(time=(-10, None), samples=True)
+        (out,) = view.chunk(time=None)
+        assert out.get_coord("time").shape == (10,)
+
+    def test_time_after_distance(self, gapped_patch):
+        """Chunking time after distance still splits at the hole."""
+        chunked = dc.spool([gapped_patch]).chunk(distance=None).chunk(time=None)
+        assert len(chunked) == 2
+        assert chunked.get_gaps()["gap_size"].tolist() == [HOLE]
+
+    def test_chained_chunks_keep_neighbour_samples(self):
+        """A run merged with a neighbour lends it no runs to be trimmed by."""
+        x = np.arange(3)
+        distance = concat_coords(
+            get_coord(start=0.0, step=1.0, shape=(5,), units="m"),
+            get_coord(start=10.0, step=1.0, shape=(5,), units="m"),
+        )
+        gapped = dc.Patch(
+            data=np.zeros((10, 3)),
+            coords={"distance": distance, "x": x},
+            dims=("distance", "x"),
+        )
+        neighbour = dc.Patch(
+            data=np.ones((5, 3)),
+            coords={
+                "distance": get_coord(start=15.0, step=1.0, shape=(5,), units="m"),
+                "x": x,
+            },
+            dims=("distance", "x"),
+        )
+        spool = dc.spool([gapped, neighbour])
+        chained = spool.chunk(distance=None).chunk(x=None).chunk(distance=None)
+        ends = [p.get_coord("distance").max() for p in chained]
+        assert ends == [4.0, 19.0]
