@@ -41,7 +41,6 @@ def _index(engine, root: Path, manifest: dict):
     try:
         if json.loads(marker.read_text(encoding="utf-8")) == identity:
             index = engine.Index.open(str(directory))
-            index.searcher()  # Verify referenced segments before reusing the index.
             return index
     except (OSError, ValueError):
         pass
@@ -54,8 +53,10 @@ def _index(engine, root: Path, manifest: dict):
     writer = index.writer(heap_size=32_000_000, num_threads=1)
     for record in manifest["documents"]:
         body = (root / record["path"]).read_text(encoding="utf-8")
-        body = body.split("\n---\n", 1)[1]
-        tags = [tag.strip().casefold() for tag in record["keywords"]]
+        body = body.split("\n---\n", 1)[1].lstrip().partition("\n")[2].lstrip()
+        if record["kind"] == "api":
+            body = body.partition("\n")[2].lstrip()
+        tags = [tag.casefold() for tag in record["keywords"]]
         fields = {
             "identifier": record["id"],
             "title": record["title"],

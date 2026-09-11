@@ -192,13 +192,13 @@ class _APIDocumentCollector:
     def _new_record(key, body):
         """Give object and model-field documents the same record structure."""
         match = re.search(r"(?m)^Keywords\n-+\n([^\n]+)", body)
-        keywords = [x.strip() for x in match[1].split(",")] if match else []
+        keywords = match[1].split(",") if match else []
         return dict(
             id=key,
             title=key,
             kind="api",
             aliases=[],
-            keywords=[x for x in keywords if x],
+            keywords=keywords,
             path="api/" + key.removeprefix("module:").replace(".", "/") + ".md",
             body=body,
         )
@@ -421,8 +421,6 @@ def write_corpus(destination: Path) -> dict:
         front, body = _frontmatter(_read_source(source))
         key = relative.with_suffix("").as_posix()
         keywords = front.get("keywords", [])
-        if isinstance(keywords, str):
-            keywords = [keywords]
         records[key] = dict(
             id=key,
             title=front.get("title", key),
@@ -437,6 +435,15 @@ def write_corpus(destination: Path) -> dict:
             path=relative.with_suffix(".md").as_posix(),
             body=body,
         )
+    for record in records.values():
+        keywords = record["keywords"]
+        if isinstance(keywords, str):
+            keywords = [keywords]
+        if not isinstance(keywords, list) or not all(
+            isinstance(x, str) for x in keywords
+        ):
+            raise DocumentationError(f"Keywords for {record['id']!r} must be strings.")
+        record["keywords"] = [x.strip() for x in keywords if x.strip()]
     _disambiguate_paths(records)
     aliases = {}
     for record in records.values():

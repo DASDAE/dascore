@@ -5,12 +5,13 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+from importlib.metadata import version
 
 import pytest
 
 import dascore as dc
 from dascore.cli import main
-from dascore.utils import doc_search
+from dascore.utils import doc_corpus, doc_search
 from dascore.utils.doc_cache import documentation_cache, read_document
 from dascore.utils.doc_corpus import DocumentationError
 
@@ -97,6 +98,7 @@ class TestSearch:
         """Keyword-only results still have useful text when no body terms match."""
         results = doc_search.search_documents(tag="inventory")
         assert results and all(x["excerpt"] for x in results)
+        assert all(not x["excerpt"].startswith("# " + x["title"]) for x in results)
 
 
 @pytest.mark.usefixtures("engine")
@@ -126,6 +128,8 @@ class TestIndex:
             identity["engine"] = "old-engine"
             marker.write_text(json.dumps(identity), encoding="utf-8")
         assert doc_search.search_documents("bandpass") == expected
+        identity = json.loads((directory / "identity.json").read_text(encoding="utf-8"))
+        assert identity["engine"] == version("tantivy")
 
     def test_corpus_rebuild(self, search_cache):
         """Replacing the Markdown corpus also invalidates its search index."""
@@ -180,8 +184,41 @@ class TestOptionalSearch:
             doc_search.search_documents(query, tag=tag, limit=limit)
 
     def test_cli_usage(self, capsys):
-        """A bare search explains the required input; limits use Typer validation."""
+        """A bare search and out-of-range limits return useful errors."""
         assert main(["doc-search"]) == 1
         assert "Provide a search query or --tag" in capsys.readouterr().err
-        assert main(["doc-search", "patch", "--limit", "0"]) == 2
+        assert main(["doc-search", "patch", "--limit", "0"]) == 1
         assert "limit" in capsys.readouterr().err
+
+
+class TestKeywordMetadata:
+    """Validate authored keyword metadata before building an optional index."""
+
+    @pytest.mark.parametrize("value", ["[2024]", "false", "null", "{filtering: true}"])
+    def test_invalid(self, tmp_path, monkeypatch, value):
+        """Malformed keyword types fail with a document-specific diagnostic."""
+        source = tmp_path / "docs"
+        source.mkdir()
+        (source / "example.qmd").write_text(f"---\nkeywords: {value}\n---\nExample.")
+        monkeypatch.setattr(doc_corpus, "DOC_PATH", source)
+        with pytest.raises(
+            DocumentationError, match="Keywords for 'example' must be strings"
+        ):
+            doc_corpus.write_corpus(tmp_path / "output")
+
+    @pytest.mark.parametrize(
+        "value, expected",
+        [
+            ('" Filtering "', ["Filtering"]),
+            ('[" filtering ", "", "Median"]', ["filtering", "Median"]),
+        ],
+    )
+    def test_normalized(self, tmp_path, monkeypatch, value, expected):
+        """String and list forms share normalization without losing authored case."""
+        source = tmp_path / "docs"
+        source.mkdir()
+        (source / "example.qmd").write_text(f"---\nkeywords: {value}\n---\nExample.")
+        monkeypatch.setattr(doc_corpus, "DOC_PATH", source)
+        manifest = doc_corpus.write_corpus(tmp_path / "output")
+        record = next(x for x in manifest["documents"] if x["id"] == "example")
+        assert record["keywords"] == expected

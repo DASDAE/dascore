@@ -71,7 +71,7 @@ def doc_search(
         "", help="Search words, a quoted phrase, or Boolean query"
     ),
     tag: str | None = typer.Option(None, "--tag", help="Filter by an exact keyword"),
-    limit: int = typer.Option(5, "--limit", min=1, max=100, help="Maximum results"),
+    limit: int = typer.Option(5, "--limit", help="Maximum results (1-100)"),
 ) -> None:
     """Search installed documentation and keyword tags."""
     results = search_documents(query, tag=tag, limit=limit)

@@ -56,6 +56,8 @@ Results include a title, document kind, keywords, an excerpt, and the exact `das
 
 Words must all match by default. Tantivy query syntax also supports quoted phrases and uppercase Boolean operators such as `OR`. `--tag` matches a whole keyword, ignoring case, and can be used alone or together with a text query. No matches is a successful empty result; malformed queries produce a message and a nonzero exit status.
 
+For an exact API or module identifier, use `doc`, such as `dascore doc module:dascore.viz.waterfall`. Search treats colons and parentheses as query syntax; it does not evaluate Python expressions such as `Patch.select(time=1)`.
+
 The first search builds an index inside the current corpus's `search/` directory. Subsequent searches reuse it. Rebuilding the corpus, changing the engine version, or finding an incomplete index triggers indexing again. The Markdown corpus remains the source of searchable content.
 
 ## Author keyword tags
