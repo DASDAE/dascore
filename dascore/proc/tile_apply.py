@@ -115,8 +115,6 @@ class TileApply(PatchProcessor):
 
     Parameters
     ----------
-    patch
-        The patch to window.
     function
         What to do to the tiles. On the numpy engine it is given the whole
         stack at once, an array of ``[n_tiles, *window]``, and returns one of
@@ -207,6 +205,9 @@ class TileApply(PatchProcessor):
     samples: bool = False
     engine: str = "auto"
 
+    # Only the function by position; the options by name, as before.
+    _positional_fields = ("function",)
+
     def window(self, patch: PatchType) -> Window:
         """Return the window in samples."""
         if self.mode not in _MODES:
@@ -246,10 +247,11 @@ class TileApply(PatchProcessor):
         )
 
     def derive(self, patch):
-        """Return the coordinates of a stack; a blend keeps the input's."""
-        window = self.window(patch)
+        """Return a stack's metadata; a blend keeps the input's."""
+        # A blend's window is resolved, and checked, by `plan`.
         if self.mode == "overlap_add":
             return patch
+        window = self.window(patch)
         assert window.stride is not None
         # The stride the tiles were cut at travels in attrs, so a thinned
         # stack still reassembles under the taper it was cut for.

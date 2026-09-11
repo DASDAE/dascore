@@ -633,6 +633,16 @@ class TestArguments:
         with pytest.raises(ParameterError, match="ramps would cross"):
             patch.tile_apply(halve, overlap=40, time=64, samples=True)
 
+    def test_identity_blend_with_a_set_overlap(self, patch):
+        """Unchanged tiles blend back to the input at a non-default overlap."""
+        out = patch.tile_apply(lambda x: x, time=64, overlap=16, samples=True)
+        assert np.allclose(out.data, patch.data)
+
+    def test_options_are_keyword_only(self, patch):
+        """Only the function goes by position; a stray option raises."""
+        with pytest.raises(TypeError):
+            patch.tile_apply(halve, "stack", time=64, samples=True)
+
     def test_the_processor_is_the_call(self, patch):
         """The seam: the processor and the method agree."""
         op = TileApply(function=halve, time=64, samples=True)

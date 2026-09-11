@@ -59,7 +59,7 @@ DASCore's own `patch.io`, `inventory.io`, and `annotation_set.io` follow this mo
 
 ## Patch processors
 
-A [`PatchProcessor`](`dascore.PatchProcessor`) subclass is a whole operation. Its fields are the parameters; subclassing registers it and generates its patch function, so the class is written once:
+A [`PatchProcessor`](`dascore.PatchProcessor`) subclass is a whole operation. Its fields are the parameters; subclassing registers it and generates its patch function, `cls.patch_function`, which is never written by hand:
 
 ```{python}
 import dascore as dc
@@ -75,16 +75,16 @@ class Scale(dc.PatchProcessor):
 
 
 patch = dc.get_example_patch()
-out = Scale(3)(patch)  # or Scale.patch_function(patch, factor=3)
-assert out.equals(Scale.patch_function(patch, 3))
+out = Scale(3)(patch)
+assert out.equals(Scale.patch_function(patch, factor=3))
 ```
 
-Calling a processor checks the patch, runs it, and records history and lineage ids, exactly as a decorated patch function does. Its fingerprint is its validated fields, so `Scale(3)` and `Scale(3.0)` are one operation.
+Calling a processor checks the patch, runs it, and records history and lineage ids, exactly as a decorated patch function does. Its fingerprint digests the name, `__version__` and validated fields, so `Scale(3)` and `Scale(3.0)` are one operation.
 
 An operation whose metadata changes, or whose kernel needs numbers read from the metadata, splits the work so that no array is touched until the kernel runs:
 
-- `derive(patch)` returns the result's metadata from a patch without data, through the coord manager and `patch.new`.
-- `plan(patch, out)` returns what the kernel needs, as ints, floats, bools, tuples of those, or numeric arrays.
+- `derive(patch)` returns the result's metadata from a patch without data, through the coord manager and `patch.new`; patch methods refuse a patch without data.
+- `plan(patch, out)` gets the same patch and `derive`'s result, and returns what the kernel needs as ints, floats, bools, tuples of those, or numeric arrays.
 - `kernel(data, **plan)` computes the array; it never sees a patch.
 
 ```{python}
@@ -125,7 +125,7 @@ Plain NumPy-based functions may raise or return a NumPy-backed patch for other a
 
 NumPy functions such as `np.mean(patch)` and reductions over excluded dtypes always use this fallback; `__array__`-only objects report `numpy` as their backend.
 
-A backend package can give a processor its own kernel without changing the operation. The kernel takes the processor, the data, and whatever the class's `plan` returns (`abs` plans nothing; `normalize` plans `axis`):
+A backend package can give a processor its own kernel without changing the operation. The kernel takes the processor, the data, and whatever the class's `plan` returns (`abs` plans nothing; `normalize` plans `axis`, and `window` when one is given):
 
 ```{python}
 import numpy as np

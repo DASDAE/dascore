@@ -554,6 +554,13 @@ class TestSTFT:
         # The numeric form must match the explicit-duration form exactly.
         assert out_numeric.equals(out_timedelta)
 
+    def test_history_is_stft_alone(self):
+        """The tiling step inside stft records nothing of its own."""
+        patch = dc.get_example_patch()
+        history = patch.stft(time=64, samples=True).attrs.history
+        assert history[-1].startswith("stft(")
+        assert not any(x.startswith("tile_apply") for x in history)
+
     def test_type(self, chirp_stft_patch, chirp_patch):
         """Return the expected type."""
         patch = chirp_stft_patch

@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from functools import partial
-from typing import Any, Literal
+from typing import Any
 
 import numpy as np
 from pydantic import ConfigDict
@@ -28,7 +28,6 @@ from dascore.utils.signal import get_taper
 from dascore.utils.tiles import TilePlan, get_tile_plan
 from dascore.utils.window import Window, resolve_window
 
-_AdaptiveSpectralEngine = Literal["auto", "numba", "scipy"]
 __all__ = ("AdaptiveSpectralFilter", "adaptive_spectral_filter")
 
 
@@ -227,8 +226,6 @@ class AdaptiveSpectralFilter(PatchProcessor):
 
     Parameters
     ----------
-    patch
-        The patch to filter.
     overlap
         How far each window reaches into the next, in coordinate units or,
         with `samples`, in samples; a mapping gives each dimension its own.
@@ -280,6 +277,8 @@ class AdaptiveSpectralFilter(PatchProcessor):
     """
 
     model_config = ConfigDict(extra="allow", frozen=True)
+    # Every option by name, as before.
+    _positional_fields = ()
 
     overlap: Any = None
     exponent: float = 0.8
@@ -324,7 +323,6 @@ class AdaptiveSpectralFilter(PatchProcessor):
 
     def kernel(self, data, *, axes, size, overlap):
         """Filter every batch over the selected axes and stack the results."""
-        windows, overlaps = size, overlap
         engine = _get_engine(self.engine, len(axes))
         data = np.asarray(data)
         tail = tuple(range(-len(axes), 0))
@@ -334,8 +332,8 @@ class AdaptiveSpectralFilter(PatchProcessor):
         for ind, array in enumerate(working):
             filtered[ind] = engine(
                 array,
-                window_size=windows,
-                overlap=overlaps,
+                window_size=size,
+                overlap=overlap,
                 exponent=float(self.exponent),
                 normalize_power=bool(self.normalize_power),
             )

@@ -100,6 +100,8 @@ class PatchProcessor(DascoreBaseModel):
     history: ClassVar[str | None] = "full"
     # The field a `*args` group fills in the generated function, if any.
     _var_positional: ClassVar[str | None] = None
+    # The fields a call may give positionally, in order; None for all.
+    _positional_fields: ClassVar[tuple[str, ...] | None] = None
     # Kernels registered per backend by `register_kernel`, looked up in each
     # class's own `__dict__` so a subclass never answers with its parent's.
     _kernels: ClassVar[dict[str, Any]] = {}
@@ -326,6 +328,8 @@ def _call_signature(cls: type[PatchProcessor]) -> inspect.Signature:
             if field.is_required()
             else field.get_default(call_default_factory=True)
         )
+        if cls._positional_fields is not None and name not in cls._positional_fields:
+            kind = inspect.Parameter.KEYWORD_ONLY
         annotation = field.annotation or inspect.Parameter.empty
         # A required field after a defaulted one (a subclass adding one) can
         # only be given by name.

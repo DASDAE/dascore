@@ -486,6 +486,19 @@ class TestGeneratedFunction:
         op = SeamExtras("a", "b", flag=True, other=1)
         assert op.kwargs == {"names": ("a", "b"), "flag": True, "other": 1}
 
+    def test_positional_fields(self):
+        """Fields outside `_positional_fields` can only be given by name."""
+
+        class Named(SeamScale):
+            """Take the factor by name only."""
+
+            name = None
+            _positional_fields = ()
+
+        with pytest.raises(TypeError):
+            Named(3)
+        assert Named(factor=3).factor == 3
+
     def test_names_and_docs(self):
         """Named for the operation, documented by the class."""
         func = Normalize.patch_function
