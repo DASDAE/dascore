@@ -341,6 +341,15 @@ class TestEquivalenceWithMonotonic:
                 np.atleast_1d(seg[slc].values), np.atleast_1d(mono[slc].values)
             )
 
+    def test_index_values_parity(self, coord_pair):
+        """Evaluating chosen samples agrees with the materialized coord."""
+        seg, mono = coord_pair
+        indices = np.array([0, 5, len(seg) - 1, -1, 3, 3])
+        out = seg._get_index_values(indices)
+        assert out.dtype == seg.dtype
+        assert np.array_equal(out, mono.values[indices])
+        assert not len(seg._get_index_values(np.array([], dtype=np.int64)))
+
     def test_get_next_index_parity(self, coord_pair):
         """get_next_index matches the materialized coordinate."""
         seg, mono = coord_pair

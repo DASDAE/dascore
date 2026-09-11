@@ -78,6 +78,9 @@ def _stated_coords(*values) -> set[str]:
     away from the rest, whichever of the two is called on.
     """
     xr = optional_import("xarray")
+    # function-level: importing the index imports xarray
+    from dascore.xarray.index import CoordIndex  # noqa: PLC0415
+
     stated, spelled_out = set(), set()
     for value in values:
         if not isinstance(value, xr.DataArray):
@@ -85,7 +88,7 @@ def _stated_coords(*values) -> set[str]:
         names = {
             name
             for name, index in value.xindexes.items()
-            if hasattr(getattr(index, "transform", None), "start_ns")
+            if isinstance(index, CoordIndex)
         }
         stated.update(names)
         spelled_out.update(set(value.xindexes) - names)
@@ -105,8 +108,9 @@ def _as_xarray(value, lazy: set[str]):
     Whether a coordinate is spelled out belongs to the object, not to
     the conversion: a coordinate which arrived stated goes back stated,
     and every other keeps the eager index xarray aligns arithmetic on --
-    including a temporal one beside it, which is why the coordinates are
-    named rather than the array being called lazy as a whole. The
+    even one `CoordIndex` could serve, beside it, which is why the
+    coordinates are named rather than the array being called lazy as a
+    whole. The
     conversion is told which names, so one a tree never spelled out is
     not spelled out on the way back either.
 

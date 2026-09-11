@@ -1,18 +1,17 @@
 """
-A lazy, evenly sampled datetime/timedelta index for xarray.
+A lazy xarray index over a DASCore coordinate.
 
 xarray materializes every dimension coordinate into a numpy array and a
 pandas index, which for a long merged time coordinate costs 8 bytes a
 sample before any data loads — a year of millisecond sampling is a
-quarter terabyte of labels. pandas has no computed-on-demand datetime
-index (``freq`` is metadata on a fully allocated array), so xarray grew
-the ``CoordinateTransform`` machinery instead; its own ``RangeIndex``
-serves lazy float labels on top of it. This module supplies the
-temporal counterpart: labels are ``start + i * step`` computed from the
-position on demand, and selection inverts that arithmetic exactly in
-python integers — int64 subtraction of a far-away label wraps around,
-and float inversion loses sample precision once offsets pass 2**53 ns,
-about 104 days.
+quarter terabyte of labels. `CoordIndex` holds the DASCore coordinate
+itself instead: an evenly sampled range (an exact integer grid for
+nanosecond time and integers, a scalar step for floats) or a segmented
+coordinate, whose segments may be ranges or monotonic arrays. Labels are
+the coordinate's own, computed for the positions asked about; selection
+follows the rules `Patch.sel` follows, which are pandas'; and a slice or
+an abutting concatenation of an integer grid is again a coordinate, so
+laziness survives selection chains.
 
 Everything here is imported only behind the optional xarray dependency.
 """
@@ -26,401 +25,307 @@ import numpy as np
 import pandas as pd
 from xarray import DataArray, Variable
 from xarray.core.indexes import IndexSelResult
-from xarray.indexes import CoordinateTransform, CoordinateTransformIndex
+from xarray.indexes import CoordinateTransform, CoordinateTransformIndex, PandasIndex
 
-_NAT_I8 = np.iinfo("int64").min
-
-# pandas' Resolution ranks, finest first; a partial datetime string
-# names a span only when its resolution is coarser than the index's
-_PERIOD_RESO = {
-    "ns": 0,
-    "us": 1,
-    "ms": 2,
-    "s": 3,
-    "min": 4,
-    "h": 5,
-    "D": 6,
-    "M": 7,
-    "Q": 8,
-    "Y": 9,
-}
-_UNIT_NS = (1_000, 10**6, 10**9, 60 * 10**9, 3_600 * 10**9, 86_400 * 10**9)
+from dascore.core.coords import (
+    BaseCoord,
+    CoordArray,
+    CoordMonotonicArray,
+    CoordRange,
+    CoordSegmented,
+    concat_coords,
+    get_coord,
+)
+from dascore.exceptions import CoordError
+from dascore.utils.indexing import label_indexer, positional_indexer
+from dascore.utils.misc import is_strictly_monotonic
+from dascore.utils.time import dtype_time_like
 
 
-def _ns_resolution(value: int) -> int:
-    """The finest unit with a nonzero component in ``value`` (day at most)."""
-    for rank, divisor in enumerate(_UNIT_NS):
-        if value % divisor:
-            return rank
-    return _PERIOD_RESO["D"]
+def is_servable(coord) -> bool:
+    """Whether `CoordIndex` can serve a coordinate's labels."""
+    if isinstance(coord, CoordSegmented):
+        return True
+    # a zero step repeats one label, which no index can look up
+    return isinstance(coord, CoordRange) and bool(coord.step)
 
 
-def _label_ints(labels: np.ndarray, dtype) -> np.ndarray:
-    """Labels as exact python-int nanoseconds, refusing NaT."""
-    arr = np.atleast_1d(np.asarray(labels))
-    if arr.dtype.kind in "biufc":
-        # pandas never reads a number as a stamp; a materialized twin
-        # raises here, so the lazy index must not select the epoch
-        msg = f"Numeric label(s) {labels!r} do not name {np.dtype(dtype)} samples."
-        raise KeyError(msg)
-    if arr.dtype == np.dtype(dtype):
-        ints = arr.view("int64")
-    else:
-        # pandas raises for values the ns range cannot represent, where a
-        # raw astype would silently wrap a year-2500 label into 1915; the
-        # explicit ns astype matters too, since pandas keeps a coarser
-        # input unit and its int64 form would then be in that unit
-        kind = np.dtype(dtype).kind
-        converter = pd.to_timedelta if kind == "m" else pd.to_datetime
-        try:
-            converted = converter(arr.ravel())
-        except ValueError as err:
-            msg = f"Label(s) {labels!r} do not name {np.dtype(dtype)} samples."
-            raise KeyError(msg) from err
-        converted = converted.astype(np.dtype(dtype))
-        ints = np.asarray(converted.astype("int64")).reshape(arr.shape)
-    if np.any(ints == _NAT_I8):
-        msg = "Cannot select with NaT labels on an evenly sampled coordinate."
-        raise ValueError(msg)
-    # python ints: label arithmetic must not wrap for far-away labels
-    return ints.astype(object)
+def _relabels_exactly(coord) -> bool:
+    """Whether slices of a coordinate keep exactly the labels they select."""
+    # a float range recomputes a slice's labels from its new start, which
+    # can move them in the last bits, and then they no longer align
+    if isinstance(coord, CoordSegmented):
+        return all(_relabels_exactly(x) for x in coord.segments)
+    return not isinstance(coord, CoordRange) or coord._exact
 
 
-class TemporalRangeTransform(CoordinateTransform):
+def _array_coord(labels, units) -> BaseCoord:
+    """Labels held as they are, never re-inferred as a range."""
+    if np.asarray(labels).dtype.kind in "USO":
+        return get_coord(data=labels, units=units)  # text keeps its own class
+    monotonic = len(labels) > 1 and is_strictly_monotonic(labels)
+    cls = CoordMonotonicArray if monotonic else CoordArray
+    return cls(values=labels, units=units)
+
+
+def _as_pandas(index) -> PandasIndex:
+    """The materialized form of any one-dimensional index."""
+    if isinstance(index, PandasIndex):
+        return index
+    return PandasIndex(index.to_pandas_index(), index.dim)
+
+
+def _same_labels(first: BaseCoord, second: BaseCoord) -> bool:
+    """Whether two coordinates label their samples alike, units aside."""
+    if first is second:
+        return True
+    if len(first) != len(second) or first.dtype != second.dtype:
+        return False
+    if not (is_servable(first) and is_servable(second)):
+        # a side which holds its labels costs nothing more to compare
+        positions = np.arange(len(first))
+        labels = (x._get_index_values(positions) for x in (first, second))
+        return bool(np.array_equal(next(labels), next(labels)))
+    if first.units != second.units:
+        # xarray states units as an attribute beside the labels, so an
+        # index compares labels only, as a materialized index does
+        first, second = first.set_units(None), second.set_units(None)
+    return first.fingerprint() == second.fingerprint()
+
+
+def _chained(coords: list[BaseCoord]) -> BaseCoord | None:
+    """The coordinates end to end, or None if they do not chain in this order."""
+    try:
+        out = concat_coords(*coords)
+    except CoordError:
+        return None
+    # concat_coords orders its inputs; xarray's order is the data's
+    starts = [x.min() if out.sorted else x.max() for x in coords]
+    ordered = all((a < b) if out.sorted else (a > b) for a, b in pairwise(starts))
+    return out if ordered and is_servable(out) and _relabels_exactly(out) else None
+
+
+class CoordTransform(CoordinateTransform):
     """
-    Positions to evenly sampled datetime64/timedelta64 labels and back.
+    Positions to the labels of a DASCore coordinate, and back.
 
-    ``forward`` is exact int64 (positions are valid, so no overflow);
-    ``reverse`` computes through python integers, so a label centuries
-    away yields its true out-of-range position instead of wrapping — but
-    returns float positions, as xarray's transform contract asks, so its
-    callers accept float rounding; the index's own selection paths use
-    `_exact_positions` instead.
+    ``forward`` evaluates only the positions asked for; ``reverse``
+    returns the nearest sample as a float position, as xarray's transform
+    contract asks. `CoordIndex` selects through `label_indexer` instead.
     """
 
-    def __init__(self, name: str, size: int, start_ns: int, step_ns: int, dtype):
-        super().__init__((name,), {name: int(size)}, dtype=np.dtype(dtype))
-        self.name = name
-        self.start_ns = int(start_ns)
-        self.step_ns = int(step_ns)
+    def __init__(self, name, coord: BaseCoord, dim: str | None = None):
+        dim = name if dim is None else dim
+        super().__init__((name,), {dim: len(coord)}, dtype=np.dtype(coord.dtype))
+        self.coord = coord
+
+    @property
+    def dim(self) -> str:
+        """The dimension the coordinate labels."""
+        return self.dims[0]
 
     def forward(self, dim_positions) -> dict:
         """Return the labels for the given positions."""
-        pos = np.asarray(dim_positions[self.name])
+        pos = np.asarray(dim_positions[self.dim])
         if pos.dtype.kind == "f":
-            # rounding through float would corrupt exact positions past
-            # 2**53, so only genuinely fractional input goes through it
             pos = np.rint(pos)
-        ints = self.start_ns + pos.astype("int64") * self.step_ns
-        return {self.name: ints.astype("int64").view(self.dtype)}
+        labels = self.coord._get_index_values(pos.astype(np.int64))
+        return {self.coord_names[0]: labels}
 
     def reverse(self, coord_labels) -> dict:
-        """Return the (float) positions for the given labels."""
-        ints = _label_ints(coord_labels[self.name], self.dtype)
-        positions = (ints - self.start_ns) / self.step_ns
-        return {self.name: positions.astype("float64")}
+        """Return the (float) positions of the samples nearest the labels."""
+        labels = np.atleast_1d(np.asarray(coord_labels[self.coord_names[0]]))
+        positions = label_indexer(self.coord, labels, method="nearest")
+        return {self.dim: np.asarray(positions, dtype=np.float64)}
 
-    def equals(self, other, **kwargs) -> bool:
-        """Two transforms are equal when they label every sample alike."""
+    def equals(self, other, exclude=None, **kwargs) -> bool:
+        """Two transforms are equal when they label every sample alike, units aside."""
         return (
-            isinstance(other, TemporalRangeTransform)
-            and self.start_ns == other.start_ns
-            and self.step_ns == other.step_ns
-            and self.dim_size == other.dim_size
-            and self.dtype == other.dtype
+            isinstance(other, CoordTransform)
+            and self.dims == other.dims
+            and _same_labels(self.coord, other.coord)
         )
 
 
-class TemporalRangeIndex(CoordinateTransformIndex):
+class CoordIndex(CoordinateTransformIndex):
     """
-    An xarray index over a `TemporalRangeTransform`.
+    An xarray index serving a DASCore coordinate's labels.
 
-    Selection answers exactly as the materialized segments of the same
-    tree answer: a scalar label must land on a sample — nearer than half
-    a step past either end counts — or ``method="nearest"`` takes the
-    nearest sample within the span; a slice keeps every sample within
-    its (inclusive) endpoints; and a partial datetime string names its
-    whole period, as pandas reads it. A contiguous or strided ``isel``
-    returns a new lazy index, so laziness survives selection chains;
-    anything fancier falls back to a materialized pandas index over just
-    the selected labels. Asking for the pandas form (``.indexes``,
-    ``.to_pandas()``) materializes the labels, as reading ``.values``
-    does, and concatenating abutting segments stays lazy.
+    Selection answers as `Patch.sel` answers, which is as a materialized
+    pandas index answers: partial datetime strings name their periods,
+    slices include both endpoints, and ``method`` and ``tolerance`` work
+    as pandas has them. A slice ``isel`` or a concatenation whose parts
+    chain returns a new lazy index; fancy indexing, an empty slice, a
+    slice whose labels a coordinate would recompute (a float range, or a
+    stride over segments), or a concatenation which reorders or overlaps
+    holds just the labels concerned, still as a `CoordIndex`, so arrays
+    derived from one another align. Aligning with a `CoordIndex` whose
+    labels differ materializes both, costing what aligning materialized
+    indexes costs.
 
-    Not yet supported: aligning with a differently indexed coordinate
-    (xarray raises), and ``sel`` with ``tolerance``, with a ``method``
-    other than nearest, or with ``method`` on a slice.
+    xarray matches an index only with indexes of its own type: combining
+    a lazy array with one whose index is materialized, or reindexing it
+    to new labels, raises xarray's AlignmentError even where the labels
+    agree. Convert with ``lazy_coords=False`` for those.
     """
 
-    transform: TemporalRangeTransform
-
-    def __init__(self, transform: TemporalRangeTransform):
-        super().__init__(transform)
-        self.dim = transform.name
+    transform: CoordTransform
 
     @classmethod
-    def from_coord(cls, name: str, coord) -> TemporalRangeIndex:
-        """Build from an evenly sampled temporal dascore coordinate."""
-        start = np.asarray(coord.min())
-        kind = (
-            "datetime64[ns]"
-            if np.issubdtype(start.dtype, np.datetime64)
-            else ("timedelta64[ns]")
-        )
-        # explicit ns: a coarser-unit start or step would silently
-        # relabel every sample 1000x too fine read as raw integers
-        start_ns = start.astype(kind).view("int64")
-        step_ns = np.asarray(coord.step).astype("timedelta64[ns]").view("int64")
-        transform = TemporalRangeTransform(
-            name, len(coord), int(start_ns), int(step_ns), kind
-        )
-        return cls(transform)
+    def from_variables(cls, variables, *, options) -> CoordIndex:
+        """
+        Build from a coordinate variable, as ``set_xindex`` asks.
+
+        Lets an array whose index holds its labels take this index type,
+        so it aligns with a lazy array without reading that array's labels:
+        ``other.drop_indexes("time").set_xindex("time", CoordIndex)``.
+        Evenly sampled labels become a range; others are held as they are.
+        """
+        if len(variables) != 1:
+            msg = f"CoordIndex serves one coordinate, got {list(variables)}."
+            raise ValueError(msg)
+        ((name, variable),) = variables.items()
+        if variable.ndim != 1:
+            msg = f"CoordIndex serves a one-dimensional coordinate, not {name!r}."
+            raise ValueError(msg)
+        values = np.asarray(variable.values)
+        units = variable.attrs.get("units")
+        coord = get_coord(data=values)
+        # a range is kept only where it reproduces the labels exactly
+        if not np.array_equal(coord._get_index_values(np.arange(len(coord))), values):
+            coord = _array_coord(values, None)
+        if units is not None and not dtype_time_like(coord.dtype):
+            coord = coord.set_units(units)
+        return cls(CoordTransform(name, coord, variable.dims[0]))
+
+    @classmethod
+    def from_coord(cls, name: str, coord: BaseCoord) -> CoordIndex:
+        """Serve a range or segmented DASCore coordinate as ``name``."""
+        assert is_servable(coord), f"{type(coord).__name__} is not servable"
+        return cls(CoordTransform(name, coord))
 
     @property
-    def size(self) -> int:
-        """The number of samples the index labels."""
-        return self.transform.dim_size[self.dim]
+    def coordinate(self) -> BaseCoord:
+        """The DASCore coordinate this index serves."""
+        return self.transform.coord
 
-    def _exact_positions(self, values) -> tuple[np.ndarray, np.ndarray]:
-        """Exact (quotient, remainder) sample positions for labels."""
-        t = self.transform
-        # object (python-int) arrays lack a divmod ufunc; // and % map
-        # to the exact python operators
-        offset = _label_ints(values, t.dtype) - t.start_ns
-        quotient = offset // t.step_ns
-        return quotient, offset - quotient * t.step_ns
+    @property
+    def dim(self) -> str:
+        """The dimension the index labels."""
+        return self.transform.dim
 
-    def rename(self, name_dict, dims_dict) -> TemporalRangeIndex:
-        """A renamed coordinate keeps its lazy index under the new name."""
-        t = self.transform
-        new = dims_dict.get(self.dim, name_dict.get(self.dim, self.dim))
-        if new == self.dim:
-            return self
-        return type(self)(
-            TemporalRangeTransform(new, self.size, t.start_ns, t.step_ns, t.dtype)
-        )
+    @property
+    def index(self) -> pd.Index:
+        """The materialized pandas form, as a `PandasIndex` offers it."""
+        # xarray's own indexes read these when a materialized part comes
+        # first in a concatenation
+        return self.to_pandas_index()
+
+    @property
+    def coord_dtype(self) -> np.dtype:
+        """The label dtype, as a `PandasIndex` offers it."""
+        return self.transform.dtype
+
+    def _with(self, coord: BaseCoord) -> CoordIndex:
+        """An index serving another coordinate under these names."""
+        name = self.transform.coord_names[0]
+        return type(self)(CoordTransform(name, coord, self.dim))
+
+    def _labels(self, positions) -> np.ndarray:
+        """The labels at these positions."""
+        name = self.transform.coord_names[0]
+        return self.transform.forward({self.dim: np.asarray(positions)})[name]
+
+    def _picked(self, positions) -> CoordIndex:
+        """An index holding the labels at these positions."""
+        # still a CoordIndex, which xarray aligns with this one
+        return self._with(_array_coord(self._labels(positions), self.coordinate.units))
 
     def to_pandas_index(self) -> pd.Index:
         """The materialized pandas form, computed on demand."""
-        labels = self.transform.forward({self.dim: np.arange(self.size)})[self.dim]
-        return pd.Index(labels)
-
-    @classmethod
-    def concat(cls, indexes, dim, positions=None) -> TemporalRangeIndex | Any:
-        """
-        Concatenate segment indexes, staying lazy when the grids chain.
-
-        Segments whose ranges abut exactly (same step, each starting one
-        step past the previous end) merge into one lazy index; anything
-        else — a gap, a step change, an explicit reordering — comes back
-        as an ordinary materialized pandas index over the concatenated
-        labels.
-        """
-        transforms = [index.transform for index in indexes]
-        first = transforms[0]
-        chained = positions is None and all(
-            t.step_ns == first.step_ns
-            and t.dtype == first.dtype
-            and t.start_ns == prev.start_ns + prev.dim_size[prev.name] * prev.step_ns
-            for prev, t in pairwise(transforms)
-        )
-        if chained:
-            size = sum(t.dim_size[t.name] for t in transforms)
-            return cls(
-                TemporalRangeTransform(
-                    first.name, size, first.start_ns, first.step_ns, first.dtype
-                )
-            )
-        from xarray.core import nputils  # noqa: PLC0415
-        from xarray.indexes import PandasIndex  # noqa: PLC0415
-
-        values = np.concatenate([index.to_pandas_index().values for index in indexes])
-        if positions is not None:
-            indices = nputils.inverse_permutation(np.concatenate(positions))
-            values = values[indices]
-        return PandasIndex(pd.Index(values), dim)
+        labels = self._labels(np.arange(len(self.coordinate)))
+        return pd.Index(labels, name=self.transform.coord_names[0])
 
     def isel(self, indexers) -> Any:
-        """A sliced view keeps a lazy index; fancy indexing materializes.
-
-        Falling back to a pandas index over just the selected labels
-        (rather than returning None, which would drop the index) keeps
-        label selection working on the result.
-        """
+        """A slice keeps a lazy index where its labels stay exact; else materialize."""
         idx = indexers.get(self.dim)
+        coord = self.coordinate
         if isinstance(idx, slice):
-            start, stop, stride = idx.indices(self.size)
-            if stride > 0:
-                size = max((stop - start + stride - 1) // stride, 0)
-                t = self.transform
-                new = TemporalRangeTransform(
-                    self.dim,
-                    size,
-                    t.start_ns + start * t.step_ns,
-                    t.step_ns * stride,
-                    t.dtype,
-                )
-                return type(self)(new)
-            positions = np.arange(start, stop, stride)
-        else:
-            if getattr(idx, "dims", (self.dim,)) != (self.dim,):
-                # vectorized onto another dimension: the labels no
-                # longer index this one, so xarray drops the index
-                return None
-            positions = np.asarray(getattr(idx, "values", idx))
-            if positions.ndim != 1:
-                # multi-dimensional (vectorized) indexing has no 1-d
-                # labels to index; let xarray drop the index
-                return None
-            if positions.dtype == bool:
-                positions = np.flatnonzero(positions)
-            # the data reads a negative position from the end; so must
-            # its label
-            positions = np.where(positions < 0, positions + self.size, positions)
-        from xarray.indexes import PandasIndex  # noqa: PLC0415
-
-        labels = self.transform.forward({self.dim: positions})[self.dim]
-        return PandasIndex(pd.Index(labels), self.dim)
-
-    def _positions_for(self, values, method):
-        """Validated integer positions for on-grid/nearest label values."""
-        step = self.transform.step_ns
-        quot, rem = self._exact_positions(values)
-        if method == "nearest":
-            pos = quot + (2 * rem >= step)
-        else:
-            if np.any(rem != 0):
-                msg = (
-                    f"Label(s) {values} do not fall on the coordinate's "
-                    "sample grid; pass method='nearest' to take the "
-                    "nearest sample."
-                )
-                raise KeyError(msg)
-            pos = quot
-        if np.any((pos < 0) | (pos >= self.size)):
-            msg = (
-                f"Label(s) {values} fall outside the coordinate's sampled "
-                "span; nothing to select."
-            )
-            raise KeyError(msg)
-        return pos.astype("int64")
-
-    def _period_bounds(self, label: str):
-        """The inclusive span a partial datetime string names, or None.
-
-        pandas answers ``sel(time="2020-01-01")`` on an hourly index with
-        the whole day; the lazy index must answer identically, so a
-        string label resolves through its period's start and end.
-        """
-        if np.dtype(self.transform.dtype).kind != "M":
+            start, stop, stride = idx.indices(len(coord))
+            positions = range(start, stop, stride)
+            # a strided segmented coordinate is an array of its labels
+            lazy = isinstance(coord, CoordRange) or stride == 1
+            if len(positions) and lazy and _relabels_exactly(coord):
+                return self._with(coord[idx])
+            return self._picked(np.asarray(positions, dtype=np.int64))
+        if getattr(idx, "dims", (self.dim,)) != (self.dim,):
+            # vectorized onto another dimension: the labels no longer
+            # index this one, so xarray drops the index
             return None
-        try:
-            period = pd.Period(label)
-        except Exception:
+        raw = idx.values if isinstance(idx, Variable | DataArray) else idx
+        if np.ndim(raw) != 1:
             return None
-        if not isinstance(period, pd.Period):  # NaT parses without erroring
-            return None
-        reso = _PERIOD_RESO.get(period.freqstr.split("-")[0])
-        assert reso is not None, f"unexpected period frequency {period.freqstr!r}"
-        return (
-            period.start_time.to_datetime64(),
-            period.end_time.to_datetime64(),
-            reso,
-        )
-
-    @property
-    def _resolution(self) -> int:
-        """The finest unit any label carries, as pandas infers it.
-
-        pandas infers a DatetimeIndex's resolution from its values; the
-        samples here are ``start + k * step``, so the start's finest unit
-        and (past one sample) the step's finest unit decide it.
-        """
-        t = self.transform
-        reso = _ns_resolution(t.start_ns)
-        if self.size > 1:
-            reso = min(reso, _ns_resolution(t.step_ns))
-        return reso
+        return self._picked(positional_indexer(raw, len(coord)))
 
     def sel(self, labels, method=None, tolerance=None) -> IndexSelResult:
-        """Resolve label selection arithmetically."""
-        if method not in (None, "nearest"):
-            msg = (
-                "TemporalRangeIndex resolves labels to their nearest "
-                f"sample; method={method!r} is not supported."
+        """Resolve label selection as `Patch.sel` does."""
+        label = labels[self.transform.coord_names[0]]
+        coord = self.coordinate
+        if isinstance(label, Variable | DataArray) and label.ndim == 0:
+            label = label.values[()]  # a scalar, strings naming their periods
+        if not isinstance(label, Variable | DataArray):
+            return IndexSelResult(
+                {self.dim: label_indexer(coord, label, method, tolerance)}
             )
-            raise ValueError(msg)
-        if tolerance is not None:
-            msg = "TemporalRangeIndex does not support tolerance in sel."
-            raise ValueError(msg)
-        label = labels[self.dim]
-        if isinstance(label, slice):
-            if method is not None:
-                msg = "cannot use ``method`` argument with a slice, as pandas."
-                raise ValueError(msg)
-            return IndexSelResult({self.dim: self._sel_slice(label)})
-        if isinstance(label, Variable | DataArray):
-            # same validation as plain arrays, keeping the label's dims
-            # so vectorized selection stays vectorized
-            pos = self._positions_for(np.asarray(label.values), method)
-            if isinstance(label, DataArray):
-                return IndexSelResult({self.dim: label.copy(data=pos)})
-            return IndexSelResult({self.dim: Variable(label.dims, pos)})
-        if isinstance(label, str) and (bounds := self._period_bounds(label)):
-            # a datetime string coarser than the index names a span and
-            # keeps the dimension, even over one sample; one at least as
-            # fine names a single stamp, exactly as pandas resolves it
-            lo, hi, reso = bounds
-            if reso <= self._resolution:
-                pos = self._positions_for(lo, method)
-                return IndexSelResult({self.dim: int(pos[0])})
-            indexer = self._sel_slice(slice(lo, hi))
-            if indexer.stop == indexer.start:
-                msg = f"No samples fall within the period named by {label!r}."
-                raise KeyError(msg)
-            return IndexSelResult({self.dim: indexer})
-        # scalar and plain-array labels: exact by default, exactly as the
-        # materialized segments of the same tree answer; nearest opts in.
-        pos = self._positions_for(label, method)
-        if np.ndim(label) == 0:
-            return IndexSelResult({self.dim: int(pos[0])})
-        return IndexSelResult({self.dim: pos})
+        # vectorized selection: look up the values, keep the label's dims;
+        # a mask selects as it stands
+        values = np.asarray(label.values)
+        pos = values
+        if values.dtype != bool:
+            found = label_indexer(coord, values.ravel(), method, tolerance)
+            pos = np.asarray(found).reshape(values.shape)
+        if isinstance(label, DataArray):
+            return IndexSelResult({self.dim: label.copy(data=pos)})
+        return IndexSelResult({self.dim: Variable(label.dims, pos)})
 
-    def _sel_slice(self, label: slice) -> slice:
-        """Resolve a label slice to a positional slice, endpoints inclusive."""
-        # np.timedelta64 subclasses np.integer, so exclude it by name
-        step_ok = isinstance(label.step, int | np.integer) and not isinstance(
-            label.step, np.timedelta64
+    @classmethod
+    def concat(cls, indexes, dim, positions=None) -> Any:
+        """
+        Concatenate indexes, staying lazy when their coordinates chain.
+
+        Parts in ascending (or descending) order with no overlap chain
+        into one range when they continue each other's grid and into a
+        segmented coordinate otherwise; anything else — a reordering, an
+        overlap, a materialized part, float ranges whose fused labels
+        would be recomputed — comes back as a pandas index over the
+        concatenated labels.
+        """
+        if not all(isinstance(x, CoordIndex) for x in indexes):
+            return PandasIndex.concat([_as_pandas(x) for x in indexes], dim, positions)
+        first = indexes[0]
+        coords = [x.coordinate for x in indexes]
+        if positions is None and (out := _chained(coords)) is not None:
+            return first._with(out)
+        labels = np.concatenate(
+            [x._labels(np.arange(len(x.coordinate))) for x in indexes]
         )
-        if label.step is not None and (not step_ok or label.step <= 0):
-            msg = (
-                "A label slice step must be a positive integer stride "
-                f"of samples, got {label.step!r}."
-            )
-            raise ValueError(msg)
+        if positions is not None:
+            labels = labels[np.argsort(np.concatenate([list(x) for x in positions]))]
+        return first._with(_array_coord(labels, first.coordinate.units))
 
-        def endpoint(value, edge):
-            """A slice endpoint, with partial strings naming their period."""
-            if value is None:
-                return None
-            if isinstance(value, str) and (bounds := self._period_bounds(value)):
-                return bounds[edge]
-            return value
+    def join(self, other, how="inner") -> PandasIndex:
+        """Join as materialized indexes join."""
+        # xarray folds several indexes through this, so self may already
+        # be the materialized result of an earlier join
+        return _as_pandas(self).join(_as_pandas(other), how=how)
 
-        start = endpoint(label.start, 0)
-        stop = endpoint(label.stop, 1)
-        # inclusive endpoints, like pandas label slicing: every sample
-        # with start <= label <= stop stays.
-        if start is None:
-            first = 0
-        else:
-            quot, rem = self._exact_positions(start)
-            first = int(quot[0]) + int(rem[0] > 0)  # ceil
-        if stop is None:
-            last = self.size - 1
-        else:
-            quot, _ = self._exact_positions(stop)
-            last = int(quot[0])  # floor
-        first = max(first, 0)
-        last = min(last, self.size - 1)
-        return slice(first, max(last + 1, first), label.step)
+    def reindex_like(self, other, method=None, tolerance=None) -> dict:
+        """Reindex as a materialized index reindexes."""
+        return _as_pandas(self).reindex_like(_as_pandas(other), method, tolerance)
+
+    def _repr_inline_(self, max_width) -> str:
+        coord = self.coordinate
+        return f"{type(self).__name__} ({type(coord).__name__}, size={len(coord)})"
+
+    def __repr__(self) -> str:
+        return self._repr_inline_(None)
