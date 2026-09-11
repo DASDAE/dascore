@@ -602,7 +602,7 @@ class TestScanResultToSummary:
         patch = dc.get_example_patch()
         msg = (
             "DASCore no longer accepts PatchAttrs from FiberIO.scan\\(\\).*"
-            "docs/contributing/new_format.qmd"
+            "dascore/docs/contributing/new_format.qmd"
         )
         with pytest.raises(ValueError, match=msg):
             _scan_result_to_summary(patch.attrs)

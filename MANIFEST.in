@@ -7,11 +7,24 @@ prune *
 
 # Then add only the needed things to distribution (including tests)
 include pyproject.toml
-include README.md
-include docs/LICENSE
+include readme.md
+include dascore/docs/LICENSE
 graft src
 graft dascore
 graft tests
 
 # now re-remove compiled files
 global-exclude __pycache__ *pyc
+
+# Ship authored prose and its images, independently of generated build output.
+prune dascore/docs
+include dascore/docs/LICENSE
+recursive-include dascore/docs *.qmd *.md
+recursive-include dascore/docs/_static *.png *.svg *.jpg *.jpeg
+prune dascore/docs/api
+prune dascore/docs/_site
+prune dascore/docs/.quarto
+prune dascore/docs/site_libs
+prune dascore/docs/lite
+prune dascore/docs/lite_contents
+prune dascore/docs/filters

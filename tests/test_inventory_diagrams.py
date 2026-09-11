@@ -12,7 +12,7 @@ import pytest
 from dascore.core.inventory import Acquisition, FiberArray, OpticalPath
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
-_DOC_PATH = _REPO_ROOT / "docs"
+_DOC_PATH = _REPO_ROOT / "dascore" / "docs"
 _PAGE_PATH = _DOC_PATH / "tutorial" / "inventory.qmd"
 _STATIC_PATH = _DOC_PATH / "_static"
 _DIAGRAMS = {
@@ -48,7 +48,7 @@ _MODEL_FIELDS = {
     },
 }
 
-# The sdist grafts tests but ships only docs/LICENSE. Key this on a page the
+# Key documentation availability on a page the
 # full documentation tree always contains, not on the files under test.
 _DOCS_PRESENT = (_DOC_PATH / "index.qmd").is_file()
 

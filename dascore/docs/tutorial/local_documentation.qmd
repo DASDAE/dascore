@@ -1,0 +1,30 @@
+---
+title: Local documentation
+keywords: [documentation, cli, agents, offline]
+---
+
+Use the documentation that ships with the DASCore installed in your project's Python environment:
+
+```bash
+python -m dascore doc
+python -m dascore doc Patch.select
+python -m dascore doc Spool.chunk
+python -m dascore doc Patch.viz.waterfall
+python -m dascore doc recipes/tunnel_inventory
+```
+
+The equivalent console command is `dascore doc`. Running it without a target reports the DASCore version, Python executable, imported package location, and documentation directory. For repeated agent or notebook work, use the reported Python executable with `-m dascore` to keep using the same environment.
+
+The first request prepares a directory of Markdown files from the packaged tutorials, recipes, and installed API docstrings. Examples remain unevaluated. API pages include their defining module and signatures when available; unbound method signatures include the instance parameter.
+
+DASCore stores this corpus below its OS-specific user cache, in `docs/<DASCore version>/`. Subsequent commands reuse it. Changes to an editable installation's source invalidate the corpus even when its version string stays the same. To regenerate it explicitly:
+
+```bash
+python -m dascore doc --rebuild
+```
+
+The `docs_cache_dir` [configuration setting](configuration.qmd) controls the cache root for calls in a Python process. The default follows Pooch's OS-specific DASCore cache location. Generated Markdown can also be opened directly in a text editor.
+
+The local API corpus covers core objects, processing, transforms, visualization, built-in namespaces, and selected public utilities. External plugins and format-specific APIs are outside this initial corpus. Documentation generation inspects Python objects and imports the supported modules, but does not instantiate data objects or execute their operations. Missing optional modules are reported in the corpus summary.
+
+Use exact public names such as `Inventory`, `PatchAttrs.tag`, or `dascore.proc.coords.select`. Authored pages use identifiers such as `tutorial/patch`. Unknown or ambiguous names produce an error and a nonzero exit status.

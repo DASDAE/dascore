@@ -179,13 +179,13 @@ def _validate_scan_payload(result, require_coord_manager: bool = False):
         msg = (
             "DASCore no longer accepts PatchAttrs from FiberIO.scan(). "
             "Return a structured scan payload instead. "
-            "See docs/contributing/new_format.qmd."
+            "See dascore/docs/contributing/new_format.qmd."
         )
         raise ValueError(msg)
     if not isinstance(result, Mapping):
         msg = (
             "FiberIO.scan() must return ScanPayload mappings; got "
-            f"{type(result).__name__}. See docs/contributing/new_format.qmd."
+            f"{type(result).__name__}. See dascore/docs/contributing/new_format.qmd."
         )
         raise TypeError(msg)
     missing = sorted(set(_SCAN_PAYLOAD_REQUIRED) - set(result))
@@ -193,7 +193,7 @@ def _validate_scan_payload(result, require_coord_manager: bool = False):
         msg = (
             f"scan payload is missing required keys {missing}; a ScanPayload "
             "requires a mapping with `coords`, `attrs`, and `dtype` as well "
-            "as `dims` and `shape`. See docs/contributing/new_format.qmd."
+            "as `dims` and `shape`. See dascore/docs/contributing/new_format.qmd."
         )
         raise TypeError(msg)
     if require_coord_manager and not isinstance(result["coords"], CoordManager):
@@ -341,7 +341,7 @@ def _scan_result_to_summary(
         msg = (
             "DASCore no longer accepts PatchAttrs from FiberIO.scan(). "
             "Return a structured scan payload instead. "
-            "See docs/contributing/new_format.qmd."
+            "See dascore/docs/contributing/new_format.qmd."
         )
         raise ValueError(msg)
     msg = (

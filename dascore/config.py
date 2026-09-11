@@ -135,6 +135,10 @@ class DascoreConfig(BaseModel):
     )
 
     # Local cache and index locations.
+    docs_cache_dir: Path = Field(
+        default_factory=lambda: _get_cache_root() / "docs",
+        description="Directory for versioned local Markdown documentation.",
+    )
     downloader_cache_dir: Path = Field(
         default_factory=lambda: _get_cache_root() / "data",
         description="Persistent directory used to cache downloaded example data.",
@@ -216,6 +220,7 @@ class DascoreConfig(BaseModel):
     )
 
     @field_validator(
+        "docs_cache_dir",
         "downloader_cache_dir",
         "directory_index_map_dir",
         "remote_cache_dir",

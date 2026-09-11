@@ -23,7 +23,7 @@ authors = [
 
 description = "A python library for distributed fiber optic sensing"
 readme = "readme.md"
-license = { file="docs/LICENSE" }
+license = { file="dascore/docs/LICENSE" }
 requires-python = ">=3.12"
 classifiers = [
     "Development Status :: 4 - Beta",
@@ -45,6 +45,7 @@ dependencies = [
      # Provides array_namespace and friends for array-API backed code.
      "array-api-compat>=1.9",
      "h5py",
+     "filelock>=3.12",  # serialize local documentation builds across processes
      "matplotlib>=3.10",
      # 2.0 is the first numpy with native array API support, which is what
      # dascore is written against; 2.3.3 is the first pandas 3 accepts on
@@ -64,6 +65,9 @@ dependencies = [
      "pint>=0.24.4",
      "scipy>=1.15",
 ]
+
+[project.scripts]
+dascore = "dascore.cli:main"
 
 [project.optional-dependencies]
 
@@ -93,7 +97,7 @@ docs = [
     "jinja2",
     "ipywidgets",
     "tabulate",
-    # Quarto executes the {python} cells in docs/**.qmd through jupyter, so
+    # Quarto executes the {python} cells in dascore/docs/**.qmd through jupyter, so
     # a doc build needs a kernel and the notebook plumbing around it. These
     # used to be supplied by a conda environment file rather than declared.
     "ipykernel",
@@ -108,6 +112,8 @@ docs = [
 ]
 
 test = [
+    "build",
+    "markdown-it-py",
     "aiohttp",
     # A reference array API implementation used to catch numpy-only code.
     "array-api-strict",
@@ -330,6 +336,7 @@ line-ending = "lf"
 # Audit API usage in tests on demand; fix library diagnostics:
 #   uvx ty@0.0.65 check --python .venv --config "src.include=['dascore','tests']"
 include = ["dascore"]
+exclude = ["dascore/docs"]
 
 # No type-checking rule is ignored globally.
 
@@ -347,7 +354,7 @@ include = [
 unresolved-import = "ignore"
 
 [tool.typos.files]
-extend-exclude = ["docs/_static/logo.svg"]
+extend-exclude = ["dascore/docs/_static/logo.svg"]
 
 [tool.typos.default]
 # Ignore identifiers after a dot, plus text in [] or quotes (often API names/keys).

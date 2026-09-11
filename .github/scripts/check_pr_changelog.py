@@ -43,7 +43,8 @@ _HELP = (
     "optionally followed by '**breaking**', or the whole section must be the "
     "single word 'none' (bulleted or bare). Example:\n"
     "    - changed **breaking**: `dc.set_config` is no longer a context manager.\n"
-    "See docs/contributing/general_guidelines.qmd (#changelog-entries), published at\n"
+    "See dascore/docs/contributing/general_guidelines.qmd "
+    "(#changelog-entries), published at\n"
     "    https://dascore.org/contributing/general_guidelines.html#changelog-entries"
 )
 

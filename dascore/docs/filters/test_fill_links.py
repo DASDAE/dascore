@@ -15,7 +15,7 @@ class TestFindDocsPath:
     @pytest.fixture
     def docs_tree(self, tmp_path, monkeypatch):
         """A docs directory nested in a path which says "docs" twice."""
-        docs = tmp_path / "worktrees" / "repr-docs" / "docs"
+        docs = tmp_path / "worktrees" / "repr-docs" / "dascore" / "docs"
         filters = docs / "filters"
         filters.mkdir(parents=True)
         (docs / ".cross_ref.json").write_text(json.dumps({"a": "/api/a.qmd"}))

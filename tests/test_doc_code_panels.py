@@ -20,13 +20,13 @@ import dascore as dc
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 _SCRIPT_PATH = _REPO_ROOT / "scripts" / "generate_doc_code_tests.py"
-_QMD = "docs/tutorial/patch.qmd"
+_QMD = "dascore/docs/tutorial/patch.qmd"
 
-# The sdist ships tests but neither scripts/ nor docs/, on the same terms as
+# The sdist ships tests but neither scripts/ nor dascore/docs/, on the same terms as
 # test_build_notebooks.py skipping when scripts/ is absent.
 pytestmark = pytest.mark.skipif(
     not _SCRIPT_PATH.is_file() or not (_REPO_ROOT / _QMD).is_file(),
-    reason="scripts/ and docs/ are not installed",
+    reason="scripts/ and dascore/docs/ are not installed",
 )
 
 # Exercise guard installation and generated print rebinding together.
@@ -56,7 +56,7 @@ sys.modules.update({
 
 shown = "print(patch)" if printing else "patch"
 source = gen.render_test_module(
-    root / "docs" / "tutorial" / "patch.qmd",
+    root / "dascore" / "docs" / "tutorial" / "patch.qmd",
     (
         gen.Chunk(1, "import dascore as dc\\npatch = dc.get_example_patch()\\n"),
         gen.Chunk(2, shown + "\\n"),
@@ -150,7 +150,7 @@ class TestNoPrintedPanels:
         """
         The name a document binds is guarded too, not just the builtin.
 
-        docs/tutorial/patch.qmd imports dascore's print, which is rich's,
+        dascore/docs/tutorial/patch.qmd imports dascore's print, which is rich's,
         and that draws the text repr exactly as the builtin does.
         """
         with conftest_module.no_printed_panels(_QMD):

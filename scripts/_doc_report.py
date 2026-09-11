@@ -36,7 +36,7 @@ import dascore as dc
 SCHEMA_VERSION = 1
 
 REPO_PATH = Path(__file__).absolute().parent.parent
-DOC_PATH = REPO_PATH / "docs"
+DOC_PATH = REPO_PATH / "dascore" / "docs"
 API_DOC_PATH = DOC_PATH / "api"
 SITE_PATH = DOC_PATH / "_site"
 CROSS_REF_PATH = DOC_PATH / ".cross_ref.json"

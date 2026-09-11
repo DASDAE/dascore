@@ -8,7 +8,7 @@ execute:
     warning: false
 ---
 
-{{< include ../readme.md >}}
+{{< include ../../readme.md >}}
 
 :::{.callout minimal="true"}
 Version-specific documentation builds are attached to the [release pages](https://github.com/DASDAE/dascore/releases).

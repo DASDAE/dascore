@@ -278,7 +278,7 @@ def dft(
 
     If every requested dimension is already transformed, ``dft`` returns the
     input unchanged regardless of ``output``. See the
-    [FFT notes](`docs/notes/dft_notes.qmd`) for details.
+    [FFT notes](`dascore/docs/notes/dft_notes.qmd`) for details.
 
     See Also
     --------
@@ -434,7 +434,7 @@ def idft(patch: PatchType, dim: str | Sequence[str] | None = None) -> PatchType:
     Currently, only patches that have been transformed with
     [dft](`dascore.transform.fourier.dft`) can be used with this function.
     After transformation with dft, the transformed coordinates cannot change
-    (e.g., with [select]('dascore.proc.basic.select`) otherwise idft won't
+    (e.g., with [select](`dascore.Patch.select`) otherwise idft won't
     work.
 
     Parameters

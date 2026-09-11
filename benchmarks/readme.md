@@ -32,7 +32,7 @@ Benchmarks are now organized as pytest tests in the `benchmarks/` directory:
 
 Each benchmark uses the `@pytest.mark.benchmark` decorator to automatically measure performance.
 
-The IO benchmark uses the full data registry (all test-suite data files are hosted in the DASDAE/test_data repo and cached by CI; see `docs/contributing/adding_test_data.qmd`).
+The IO benchmark uses the full data registry (all test-suite data files are hosted in the DASDAE/test_data repo and cached by CI; see `dascore/docs/contributing/adding_test_data.qmd`).
 
 ## Continuous Performance Monitoring
 
