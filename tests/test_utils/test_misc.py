@@ -745,10 +745,6 @@ class TestCallableName:
 
         assert _callable_name(Doubler()) == "Doubler"
 
-    def test_node_name(self):
-        """An object with `node_name` is named for its operation, not its class."""
-        assert _callable_name(dc.proc.abs.op()) == "abs"
-
 
 class TestSpoolMap:
     """Tests for the private spool mapping helper."""

@@ -528,14 +528,16 @@ class TestAdaptiveSpectralFilter:
         assert out.data.dtype == np.float32
         assert np.isfinite(out.data).all()
 
-    def test_op_is_the_processor(self) -> None:
-        """The seam: the call names the processor, and the two routes agree."""
+    def test_the_processor_is_the_call(self) -> None:
+        """The seam: the processor and the method agree."""
         patch = _patch((64, 64), ("distance", "time"), dtype=np.float32)
-        op = adaptive_spectral_filter_func.op(time=16, distance=16, samples=True)
+        op = AdaptiveSpectralFilter(time=16, distance=16, samples=True)
 
-        assert isinstance(op, AdaptiveSpectralFilter)
         expected = patch.adaptive_spectral_filter(time=16, distance=16, samples=True)
-        assert op(patch).equals(expected)
+        out = op(patch)
+        assert out.equals(expected)
+        assert out.attrs.history == expected.attrs.history
+        assert out.attrs.processing_id == expected.attrs.processing_id
 
     def test_proc_export_is_function(self) -> None:
         """The processing module should expose the direct patch function."""

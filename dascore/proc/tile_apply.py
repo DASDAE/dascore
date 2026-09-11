@@ -27,6 +27,11 @@ import dascore as dc
 from dascore.constants import PatchType
 from dascore.core.coordmanager import get_coord_manager
 from dascore.core.coords import get_coord
+from dascore.core.processor import (
+    PatchMeta,
+    PatchProcessor,
+    register_implementation,
+)
 from dascore.exceptions import (
     MissingOptionalDependencyError,
     ParameterError,
@@ -43,8 +48,6 @@ from dascore.utils.signal import (
 from dascore.utils.tiles import get_tile_plan
 from dascore.utils.time import dtype_time_like
 from dascore.utils.window import Window, resolve_window
-from dascore.workflow.meta import PatchMeta
-from dascore.workflow.processor import PatchProcessor, register_implementation
 
 __all__ = ("TileApply", "reassemble", "tile_apply")
 

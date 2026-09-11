@@ -61,6 +61,10 @@ from dascore.exceptions import (
     UnknownFiberFormatError,
 )
 from dascore.utils.downloader import resolve_example_uri
+from dascore.utils.identity import (
+    ids_enabled,
+    source_patch_id,
+)
 from dascore.utils.io import (
     IOResourceManager,
     _normalize_source_patch_keys,
@@ -90,10 +94,6 @@ from dascore.utils.remote_io import (
     get_remote_cache_scope,
     remote_cache_scope,
     suppress_gc_pause_warning,
-)
-from dascore.workflow.identity import (
-    ids_enabled,
-    source_patch_id,
 )
 
 # What the scan dispatchers accept: one resource or patch, or an
@@ -1321,7 +1321,7 @@ def source_identity(source) -> tuple[str, int | None, int | None]:
 
     The three fields of a derived id which come from the source rather
     than from the reader; see
-    [`source_patch_id`](`dascore.workflow.identity.source_patch_id`).
+    [`source_patch_id`](`dascore.utils.identity.source_patch_id`).
     """
     if not (path := _source_path_string(source)):
         return "", None, None

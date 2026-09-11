@@ -1,11 +1,10 @@
-"""Canonical serialization and hashing for workflow objects.
+"""Canonical serialization and hashing for operation parameters.
 
 Fingerprint mode encodes parameters for hashing: arrays become byte digests and
 ``None`` mapping values are omitted. Document mode preserves serializable values
 for storage, including arrays as nested lists. Dataframes and Series cannot be
 encoded in document mode. Callables and other unsupported values are named rather
-than reconstructed; decoding them raises. `write_workflow` and `read_workflow`
-choose the storage format from the path suffix.
+than reconstructed; decoding them raises.
 
 Canonical JSON and BLAKE2b provide stable hashes without Python's process-salted
 ``hash``. Dataframes and quantities additionally depend on pandas object hashes
@@ -22,7 +21,7 @@ import warnings
 from collections.abc import Callable, Iterable, Mapping, Set
 from enum import Enum
 from functools import partial
-from pathlib import Path, PurePath
+from pathlib import PurePath
 from typing import Any, Literal
 
 import numpy as np
@@ -33,8 +32,6 @@ from dascore.exceptions import ParameterError
 from dascore.models.base import DascoreBaseModel
 from dascore.models.registry import TAG_FIELD, get_model_tag, resolve_tagged_model
 from dascore.utils.array_api import is_foreign, to_numpy
-from dascore.utils.documents import DocumentFormat, read_document, write_document
-from dascore.utils.paths import quote_path
 from dascore.warnings import DASCoreWarning
 
 # The two encoding modes; see the module docstring.
@@ -61,21 +58,32 @@ _FLOAT = "$float"
 _MODEL = "$model"
 _OPAQUE = "$opaque"
 _PARTIAL = "$partial"
+_PATCH = "$patch"
 _QUANTITY = "$quantity"
 _SLICE = "$slice"
-TASK_TAG = "$task"
-_TASK = TASK_TAG
 _TIMEDELTA = "$timedelta64"
 
 # The digest size used everywhere: 8 bytes, written as 16 hex characters.
 DIGEST_SIZE = 8
 
-# The suffixes a workflow is written and read as, enumerated rather than
-# inferred: a path spelled `.txt` is a caller who meant something this does
-# not do, and picking a format for them would hide it. A path with no
-# suffix at all is JSON.
-YAML_SUFFIXES = frozenset({".yaml", ".yml"})
-JSON_SUFFIXES = frozenset({".json", ""})
+
+class _PatchArgument:
+    """
+    Stands for a patch handed to an operation as an argument.
+
+    A patch argument is an input, not a parameter: which patch it was is
+    said by the ids folded from the operands. It encodes under its own tag,
+    so no string or mapping a caller passes can be mistaken for it.
+    """
+
+    __slots__ = ()
+
+    def __repr__(self):
+        """Say what it is."""
+        return "<patch argument>"
+
+
+PATCH_ARGUMENT = _PatchArgument()
 
 
 def digest(obj: Any, mode: EncodeMode = FINGERPRINT) -> str:
@@ -92,7 +100,7 @@ def digest(obj: Any, mode: EncodeMode = FINGERPRINT) -> str:
 
     Examples
     --------
-    >>> from dascore.workflow.serialize import digest
+    >>> from dascore.utils.serialize import digest
     >>> assert digest({"dim": "time"}) == digest({"dim": "time"})
     >>> assert digest({"dim": "time"}) != digest({"dim": "distance"})
     """
@@ -109,7 +117,7 @@ def combine_hashes(hashes: Iterable[str]) -> str:
 
     Examples
     --------
-    >>> from dascore.workflow.serialize import combine_hashes
+    >>> from dascore.utils.serialize import combine_hashes
     >>> assert combine_hashes(["a", "b"]) != combine_hashes(["b", "a"])
     """
     return digest(list(hashes))
@@ -146,7 +154,7 @@ def encode(obj: Any, mode: EncodeMode = FINGERPRINT) -> Any:
     Examples
     --------
     >>> import numpy as np
-    >>> from dascore.workflow.serialize import encode
+    >>> from dascore.utils.serialize import encode
     >>> encode(np.arange(3), mode="document")["$array"]["data"]
     [0, 1, 2]
     """
@@ -164,7 +172,7 @@ def decode(obj: Any) -> Any:
     Examples
     --------
     >>> import numpy as np
-    >>> from dascore.workflow.serialize import encode, decode
+    >>> from dascore.utils.serialize import encode, decode
     >>> decode(encode(np.datetime64("2020-01-01"), mode="document"))
     np.datetime64('2020-01-01T00:00:00.000000000')
     """
@@ -173,41 +181,6 @@ def decode(obj: Any) -> Any:
     if isinstance(obj, list):
         return [decode(x) for x in obj]
     return obj
-
-
-def write_workflow(document: Mapping, path: Path) -> Path:
-    """
-    Write a workflow document to a file, in the format its suffix names.
-
-    ``.yaml`` and ``.yml`` write YAML, ``.json`` and a bare name write
-    JSON, and anything else is refused.
-    """
-    return write_document(document, path, _file_format(path))
-
-
-def read_workflow(path: Path) -> Any:
-    """Return the workflow document a file holds; see `write_workflow`."""
-    return read_document(
-        path,
-        _file_format(path),
-        error=ParameterError,
-        holds="describes no workflow",
-    )
-
-
-def _file_format(path: Path) -> DocumentFormat:
-    """Return the format a path names, refusing a suffix which names none."""
-    suffix = Path(path).suffix.lower()
-    if suffix in YAML_SUFFIXES:
-        return "yaml"
-    if suffix in JSON_SUFFIXES:
-        return "json"
-    msg = (
-        f"{quote_path(Path(path))} has a suffix which names no format. Use "
-        f"one of {sorted(YAML_SUFFIXES | JSON_SUFFIXES - {''})}, or no "
-        "suffix at all."
-    )
-    raise ParameterError(msg)
 
 
 def _digest_bytes(data: bytes | memoryview) -> str:
@@ -249,10 +222,8 @@ def _encode(obj: Any, mode: EncodeMode) -> Any:
         return {_SLICE: [_encode_value(x, mode) for x in parts]}
     if obj is Ellipsis:
         return {_ELLIPSIS: True}
-    if isinstance(obj, _task_class()):
-        # Checked before the model branch below, which every task also
-        # answers to: a task carries a version its fields do not show.
-        return {_TASK: obj.fingerprint if mode == FINGERPRINT else obj.to_dict()}
+    if obj is PATCH_ARGUMENT:
+        return {_PATCH: True}
     if isinstance(obj, DascoreBaseModel):
         return _encode_model(obj, mode)
     if isinstance(obj, pd.DataFrame | pd.Series):
@@ -324,7 +295,7 @@ def _encode_quantity(value: Quantity, mode: EncodeMode) -> Any:
     Encode a quantity as its magnitude and the unit it was written in.
 
     The unit is not normalized: ``1 m`` and ``100 cm`` are the same length
-    but not the same call, and a task is identified by the call.
+    but not the same call, and an operation is identified by the call.
     """
     return {_QUANTITY: [_encode_value(value.magnitude, mode), f"{value.units:~}"]}
 
@@ -365,7 +336,7 @@ def _encode_dataframe(df: pd.DataFrame | pd.Series, mode: EncodeMode) -> Any:
     if mode == DOCUMENT:
         msg = (
             "A dataframe parameter cannot be written to a document. Give the "
-            "task the values it needs instead of the frame holding them."
+            "operation the values it needs instead of the frame holding them."
         )
         raise ParameterError(msg)
     frame = df.to_frame() if isinstance(df, pd.Series) else df
@@ -499,7 +470,7 @@ def _encode_callable(func: Callable, mode: EncodeMode = FINGERPRINT) -> Any:
     if mode == DOCUMENT:
         msg = (
             "A function parameter cannot be written to a document. Give the "
-            "task values it can carry, or keep the operation in code."
+            "operation values it can carry, or keep it in code."
         )
         raise ParameterError(msg)
     module = getattr(func, "__module__", None) or "<unknown>"
@@ -552,15 +523,6 @@ def _sort_key(value: Any) -> str:
 def _is_array(obj: Any) -> bool:
     """Return True for anything which should encode as an array."""
     return isinstance(obj, np.ndarray) or is_foreign(obj)
-
-
-def _task_class() -> type:
-    """Return the Task class, which cannot be named at module scope."""
-    # task.py imports this module, so importing it back is deferred; the
-    # module object is in sys.modules by the time any value is encoded.
-    from dascore.workflow.task import Task  # noqa: PLC0415
-
-    return Task
 
 
 def _decode_mapping(obj: Mapping) -> Any:
@@ -619,24 +581,10 @@ def _decode_array(value: Mapping) -> np.ndarray:
 def _decode_model(value: Mapping) -> DascoreBaseModel:
     """Decode a dascore model from its tag and fields."""
     # resolve_tagged_model rather than a check of its own: a document naming
-    # a class nothing registers fails the same way here as it does for the
-    # task holding it.
+    # a class nothing registers fails the same way here as it does at the
+    # top level.
     cls = resolve_tagged_model(value[TAG_FIELD])
     return cls(**{key: decode(val) for key, val in value["fields"].items()})
-
-
-def _decode_task(value: Any) -> Any:
-    """Decode a task from its document."""
-    if not isinstance(value, Mapping):
-        msg = (
-            "A task encoded for a fingerprint holds only its digest, so the "
-            "task itself cannot be read back from it."
-        )
-        raise ParameterError(msg)
-    # Imported here rather than at module scope: task.py imports this module.
-    from dascore.workflow.task import Task  # noqa: PLC0415
-
-    return Task.from_dict(value)
 
 
 def _decode_dict(pairs: list) -> dict:
@@ -657,7 +605,7 @@ def _refuse(kind: str):
     def _decoder(value):
         msg = (
             f"A {kind} was encoded by name rather than by value, so it cannot "
-            "be rebuilt from a document. Give the task a value it can carry."
+            "be rebuilt from a document. Give the operation a value it can carry."
         )
         raise ParameterError(msg)
 
@@ -678,8 +626,8 @@ _DECODERS: dict[str, Callable[[Any], Any]] = {
     _MODEL: _decode_model,
     _OPAQUE: _refuse("value"),
     _PARTIAL: _refuse("partial"),
+    _PATCH: _refuse("patch argument"),
     _QUANTITY: _decode_quantity,
     _SLICE: _decode_slice,
-    _TASK: _decode_task,
     _TIMEDELTA: _decode_timedelta,
 }

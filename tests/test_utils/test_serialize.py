@@ -1,4 +1,4 @@
-"""Tests for the canonical workflow serializer."""
+"""Tests for the canonical serializer."""
 
 from __future__ import annotations
 
@@ -14,15 +14,16 @@ import pytest
 import dascore as dc
 from dascore.exceptions import InvalidModelTagError, ParameterError
 from dascore.utils.misc import suppress_warnings
-from dascore.warnings import DASCoreWarning
-from dascore.workflow.serialize import (
+from dascore.utils.serialize import (
     DOCUMENT,
+    PATCH_ARGUMENT,
     canonical_json,
     combine_hashes,
     decode,
     digest,
     encode,
 )
+from dascore.warnings import DASCoreWarning
 
 
 def round_trip(value):
@@ -492,6 +493,13 @@ class TestOddballs:
         """A value nothing else describes is named by its class."""
         with suppress_warnings(DASCoreWarning):
             assert encode(object()) == {"$opaque": "builtins.object"}
+
+    def test_patch_argument_has_its_own_tag(self):
+        """The marker encodes the same wherever its class lives, and warns not."""
+        assert encode(PATCH_ARGUMENT) == {"$patch": True}
+        assert encode({"$patch": True}) != encode(PATCH_ARGUMENT)
+        with pytest.raises(ParameterError, match="cannot be rebuilt"):
+            decode(encode(PATCH_ARGUMENT, mode=DOCUMENT))
 
     def test_opaque_warns(self):
         """Reducing a value to its type name is said out loud."""

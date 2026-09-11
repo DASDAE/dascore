@@ -64,6 +64,7 @@ from dascore.io.utils import (
 )
 from dascore.utils.downloader import fetch
 from dascore.utils.hdf5 import H5Writer
+from dascore.utils.identity import source_patch_id
 from dascore.utils.io import (
     BinaryReader,
     BinaryWriter,
@@ -72,7 +73,6 @@ from dascore.utils.io import (
 )
 from dascore.utils.misc import suppress_warnings
 from dascore.utils.time import to_datetime64
-from dascore.workflow.identity import source_patch_id
 
 tvar = TypeVar("tvar", int, float, str, Path)
 

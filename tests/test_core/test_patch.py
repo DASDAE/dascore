@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import gc
 import operator
+import pickle
 import re
 import weakref
 from typing import Any, cast
@@ -24,6 +25,7 @@ from dascore.exceptions import (
     CoordError,
     ParameterError,
     PatchAttributeError,
+    PatchDataError,
 )
 from dascore.io.core import (
     _scan_result_to_summary,
@@ -736,6 +738,144 @@ class TestEmptyPatch:
         attrs = patch.attrs
         assert len(attrs)
         assert not len(patch.dims)
+
+
+class TestDataless:
+    """A patch built without data describes data it does not hold."""
+
+    @pytest.fixture(scope="class")
+    @classmethod
+    def source(cls, random_patch):
+        """A float32 patch, so a fall back to numpy's default dtype shows."""
+        return random_patch.new(data=np.asarray(random_patch.data, dtype=np.float32))
+
+    @pytest.fixture(scope="class")
+    @classmethod
+    def described(cls, source):
+        """The source patch with its data dropped."""
+        return source.drop_data()
+
+    def test_keeps_the_metadata(self, described, source):
+        """Coords, attrs, dims, shape, size and dtype all survive."""
+        assert described.coords == source.coords
+        assert described.attrs == source.attrs
+        assert described.dims == source.dims
+        assert described.shape == source.shape
+        assert described.size == source.size
+        assert described.dtype == source.dtype
+
+    def test_built_directly(self, random_patch):
+        """Coords and a dtype are enough."""
+        out = Patch(coords=random_patch.coords, dtype="float32")
+        assert out.shape == random_patch.shape
+        assert out.dtype == np.float32
+
+    def test_needs_a_dtype(self, random_patch):
+        """Nothing else says what the data would be."""
+        with pytest.raises(ValueError, match="a dtype may stand in for data"):
+            Patch(coords=random_patch.coords)
+
+    def test_data_raises(self, described):
+        """There is nothing to return."""
+        with pytest.raises(PatchDataError, match="built without data"):
+            _ = described.data
+
+    def test_processing_raises(self, described):
+        """Even an operation which would change nothing."""
+        with pytest.raises(PatchDataError, match="built without data"):
+            described.select()
+        with pytest.raises(PatchDataError):
+            described.abs()
+        # These never read the data, so only the guard stops them.
+        with pytest.raises(PatchDataError):
+            described.set_units("m")
+        with pytest.raises(PatchDataError):
+            described.squeeze()
+
+    def test_new_fills_it(self, described, source):
+        """Data given to `new` make a patch with data again."""
+        assert described.new(data=source.data).equals(source)
+
+    def test_new_checks_the_shape(self, described, source):
+        """Data of the wrong shape are refused."""
+        with pytest.raises(CoordDataError):
+            described.new(data=np.asarray(source.data)[:2])
+
+    def test_new_without_data_keeps_it_dataless(self, described):
+        """New coords are not checked against data it does not have."""
+        coords = described.coords.transpose(*described.dims[::-1])
+        out = described.new(coords=coords)
+        assert out.shape == described.shape[::-1]
+        assert out.dtype == described.dtype
+        assert out.update_attrs(station="x").dtype == described.dtype
+
+    def test_a_misspelled_dtype(self, random_patch):
+        """A string numpy does not know is refused, not stored."""
+        with pytest.raises(TypeError, match="flaot64"):
+            Patch(coords=random_patch.coords, dtype="flaot64")
+
+    def test_a_subclass_without_dtype(self, random_patch):
+        """A subclass whose `__init__` takes no dtype still copies with data."""
+
+        class _Sub(Patch):
+            def __init__(self, data=None, coords=None, dims=None, attrs=None):
+                super().__init__(data=data, coords=coords, dims=dims, attrs=attrs)
+
+        sub = _Sub(random_patch.data, coords=random_patch.coords)
+        assert type(sub.new(attrs=sub.attrs)) is _Sub
+        assert sub.update_attrs(station="x").attrs.station == "x"
+        dropped = sub.drop_data()
+        assert type(dropped) is _Sub
+        assert dropped.dtype == sub.dtype
+
+    def test_given_dtype_must_agree(self, random_patch):
+        """A dtype which contradicts the data is refused."""
+        with pytest.raises(ValueError, match="not the dtype given"):
+            Patch(data=random_patch.data, coords=random_patch.coords, dtype="int8")
+
+    def test_from_a_data_array(self, random_patch):
+        """A DataArray still unpacks into data, coords and attrs."""
+        pytest.importorskip("xarray")
+        array = random_patch.io.to_xarray()
+        assert Patch(array, dims=array.dims).equals(random_patch)
+
+    def test_copying_a_dataless_patch(self, described):
+        """Building a patch from one without data keeps its dtype."""
+        assert described.dtype == np.float32
+        assert Patch(described).dtype == np.float32
+        assert described.new().dtype == np.float32
+
+    def test_repr_reads_no_data(self, described):
+        """The repr says there is no data rather than raising."""
+        text = str(described)
+        assert "no data" in text
+        assert str(described.dtype) in text
+
+    def test_foreign_backend_dtype(self, random_patch):
+        """A backend whose dtypes are not numpy's can still drop its data."""
+        xp = pytest.importorskip("array_api_strict")
+        patch = random_patch.new(data=xp.asarray(random_patch.data))
+        assert patch.drop_data().dtype == patch.dtype
+
+    def test_pickle_round_trip(self, described):
+        """A patch without data pickles as one."""
+        out = pickle.loads(pickle.dumps(described))
+        assert out.dtype == described.dtype
+        assert out.coords == described.coords
+
+    def test_pickled_before_dtype_was_stored(self, random_patch):
+        """A patch with data reads its dtype from the data, not `_dtype`."""
+        patch = random_patch.new()
+        del patch.__dict__["_dtype"]
+        assert patch.dtype == random_patch.data.dtype
+
+    def test_empty_patch_takes_the_dtype(self):
+        """A dtype alone gives an empty patch of that dtype."""
+        assert Patch(dtype="i4").dtype == np.int32
+
+    def test_summary(self, described, source):
+        """A summary needs only the metadata."""
+        assert described.summary == source.summary
 
 
 class TestEquals:

@@ -1,10 +1,10 @@
 """
 Reading and writing the small YAML-or-JSON documents DASCore stores.
 
-An inventory object, an annotation set's attributes and a saved workflow are
-all one mapping written as either spelling, so they are read the same way:
-the caller decides which parser its own naming rules call for, and this
-turns whatever comes back into a mapping or says why it could not.
+An inventory object and an annotation set's attributes are both one mapping
+written as either spelling, so they are read the same way: the caller decides
+which parser its own naming rules call for, and this turns whatever comes back
+into a mapping or says why it could not.
 """
 
 from __future__ import annotations

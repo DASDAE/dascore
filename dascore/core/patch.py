@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from functools import cached_property
-from typing import Any, Final
+from typing import Any, Final, cast
 from uuid import uuid4
 
 import numpy as np
@@ -30,13 +30,30 @@ from dascore.utils.display import (
     Repr,
     array_to_text,
     attrs_to_text,
+    dataless_to_text,
     get_header_text,
     split_block,
 )
+from dascore.utils.identity import with_patch_id
 from dascore.utils.namespace import NamespaceOwner
-from dascore.utils.patch import check_patch_attrs, check_patch_coords, get_patch_names
+from dascore.utils.patch import (
+    check_patch_attrs,
+    check_patch_coords,
+    check_patch_data,
+    get_patch_names,
+)
 from dascore.utils.time import to_float
-from dascore.workflow.identity import with_patch_id
+
+
+def _as_dtype(dtype):
+    """Return a numpy dtype where there is one, else the backend's own."""
+    try:
+        return np.dtype(dtype)
+    except TypeError:
+        # A string is a spelling numpy should know; a misspelling is an error.
+        if isinstance(dtype, str):
+            raise
+        return dtype
 
 
 class Patch(NodeRepr, NamespaceOwner):
@@ -65,6 +82,10 @@ class Patch(NodeRepr, NamespaceOwner):
     attrs
         Optional attributes (non-coordinate metadata) passed as a dict or
         [PatchAttrs](`dascore.core.attrs.PatchAttrs`)
+    dtype
+        The data's dtype. Required when coords are given without data, which
+        builds a patch describing data it does not hold; see
+        [`drop_data`](`dascore.Patch.drop_data`).
 
     Notes
     -----
@@ -77,7 +98,8 @@ class Patch(NodeRepr, NamespaceOwner):
     coords: CoordManager
     dims: tuple[str, ...]
     attrs: PatchAttrs
-    _data: ArrayLike
+    _data: ArrayLike | None
+    _dtype: Any
 
     _namespace_entry_point_group: Final[str] = "dascore.patch_namespace"
 
@@ -87,34 +109,49 @@ class Patch(NodeRepr, NamespaceOwner):
         coords: Mapping[str, Any] | CoordManager | None = None,
         dims: Sequence[str] | None = None,
         attrs: Mapping | PatchAttrs | None = None,
+        dtype: Any = None,
     ):
         # Init empty patch
         if all(x is None for x in (data, coords, dims, attrs)):
-            data = np.asarray([])
+            data = np.asarray([], dtype=dtype)
             coords = {}
             dims = ()
             attrs = dc.PatchAttrs()
         # Init Patch from Patch-like
-        if isinstance(data, DataArray | self.__class__):
+        if isinstance(data, Patch):
+            dtype = data.dtype if dtype is None else dtype
+            data, attrs, coords = data._data, data.attrs, data.coords
+        elif isinstance(data, DataArray):
             data, attrs, coords = data.data, data.attrs, data.coords
         if attrs is None:
             attrs = dc.PatchAttrs()
         if dims is None and isinstance(coords, CoordManager):
             dims = coords.dims
         # By this point, everything should be defined.
-        if any(x is None for x in (data, coords, dims, attrs)):
-            msg = "data, coords, and dims must be defined to init Patch."
+        if coords is None or dims is None or (data is None and dtype is None):
+            msg = (
+                "data, coords, and dims must be defined to init Patch; "
+                "a dtype may stand in for data."
+            )
             raise ValueError(msg)
-        data = array(data)
-        shape = data.shape
-        coords = get_coord_manager(coords, dims=dims, shape=shape)
+        if data is None:
+            coords = get_coord_manager(coords, dims=dims)
+            self._dtype = _as_dtype(dtype)
+        else:
+            data = array(data)
+            coords = get_coord_manager(coords, dims=dims, shape=data.shape)
+            data = array(coords.validate_data(data))
+            if dtype is not None and _as_dtype(dtype) != _as_dtype(data.dtype):
+                msg = f"The data are {data.dtype}, not the dtype given: {dtype}."
+                raise ValueError(msg)
+            self._dtype = None
         attrs = dc.PatchAttrs.from_dict(attrs)
         # Data which names no source still says which data it is, so that
         # everything downstream has something to carry forward.
         attrs = with_patch_id(attrs)
         self._coords = coords
         self._attrs = attrs
-        self._data = array(self.coords.validate_data(data))
+        self._data = data
         # Lineage identity: minted eagerly so copies made at any point
         # (deepcopy/pickle carry __dict__) share it deterministically.
         self._instance_id = uuid4().hex
@@ -213,13 +250,17 @@ class Patch(NodeRepr, NamespaceOwner):
     def _repr_node(self) -> Repr:
         """The banner, the coordinates, the data and the attributes."""
         attrs = self.attrs
+        units = attrs.get("data_units")
+        data_text = (
+            dataless_to_text(self.dtype, units=units)
+            if self._data is None
+            else array_to_text(self._data, units=units)
+        )
         return Repr(
             header=get_header_text("Patch ⚡"),
             body=(
                 self.coords._repr_section(),
-                split_block(
-                    array_to_text(self.data, units=attrs.get("data_units")),
-                ),
+                split_block(data_text),
                 split_block(attrs_to_text(attrs)),
             ),
         )
@@ -307,7 +348,7 @@ class Patch(NodeRepr, NamespaceOwner):
         >>> data = patch.data
         >>> assert data.shape == patch.shape
         """
-        return self._data
+        return cast(ArrayLike, check_patch_data(self)._data)
 
     @property
     def shape(self) -> tuple[int, ...]:
@@ -343,8 +384,31 @@ class Patch(NodeRepr, NamespaceOwner):
 
     @property
     def dtype(self) -> np.dtype:
-        """Return the dtype of the array."""
-        return self.data.dtype
+        """Return the dtype of the array, which a patch without data still has."""
+        # `_dtype` is set only for a patch without data; one pickled before
+        # it existed has none, so a patch with data reads its data's.
+        return self._dtype if self._data is None else self._data.dtype
+
+    def drop_data(self) -> Patch:
+        """
+        Return this patch without its data.
+
+        The result keeps the coords, attrs and dtype, so it still describes
+        the data; asking it for `data` raises. `new(data=...)` fills it again.
+
+        Examples
+        --------
+        >>> import dascore as dc
+        >>> patch = dc.get_example_patch()
+        >>> described = patch.drop_data()
+        >>> assert described.shape == patch.shape
+        >>> assert described.dtype == patch.dtype
+        >>> assert described.new(data=patch.data).equals(patch)
+        """
+        # Built as a Patch and handed over positionally, so a subclass whose
+        # `__init__` takes no dtype still gets one.
+        dataless = Patch(coords=self.coords, attrs=self.attrs, dtype=self.dtype)
+        return dataless if type(self) is Patch else self.__class__(dataless)
 
     @property
     def seconds(self) -> float:

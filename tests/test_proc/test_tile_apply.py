@@ -633,17 +633,13 @@ class TestArguments:
         with pytest.raises(ParameterError, match="ramps would cross"):
             patch.tile_apply(halve, overlap=40, time=64, samples=True)
 
-    def test_op_is_the_processor(self, patch):
-        """The seam: the call names the processor and the two routes agree."""
-        op = dc.proc.tile_apply.op(halve, time=64, samples=True)
-        assert isinstance(op, TileApply)
-        assert op(patch).equals(patch.tile_apply(halve, time=64, samples=True))
-
-    def test_cannot_be_written_to_a_document(self, patch):
-        """An operation holding a function is not one a document can hold."""
-        op = dc.proc.tile_apply.op(halve, time=64, samples=True)
-        with pytest.raises(ParameterError, match="cannot be written"):
-            op.to_dict()
+    def test_the_processor_is_the_call(self, patch):
+        """The seam: the processor and the method agree."""
+        op = TileApply(function=halve, time=64, samples=True)
+        out, expected = op(patch), patch.tile_apply(halve, time=64, samples=True)
+        assert out.equals(expected)
+        assert out.attrs.history == expected.attrs.history
+        assert out.attrs.processing_id == expected.attrs.processing_id
 
 
 class TestPhysicalTileBounds:

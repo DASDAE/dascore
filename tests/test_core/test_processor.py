@@ -4,19 +4,20 @@ Test processor requirements, validation, and array-backend kernel lookup.
 
 from __future__ import annotations
 
-import pickle
-
 import numpy as np
 import pytest
 
 import dascore as dc
-from dascore.exceptions import CoordDataError, ParameterError
-from dascore.proc.basic import Abs, Normalize, _known_real
-from dascore.workflow import PatchMeta, PatchProcessor, Task, register_kernel
-from dascore.workflow.processor import (
+from dascore.core.processor import (
+    PatchMeta,
+    PatchProcessor,
     _resolve_kernel,
     register_implementation,
+    register_kernel,
 )
+from dascore.exceptions import CoordDataError, ParameterError
+from dascore.proc.basic import Abs, Normalize, _known_real
+from dascore.utils.patch_registry import fingerprint_call
 
 
 @pytest.fixture(scope="module")
@@ -216,31 +217,6 @@ class TestRegistrationRefuses:
             register_implementation("update_coords", Strict)
 
 
-class TestTheVersionTravels:
-    """An operation is what it was when it was written down."""
-
-    def test_through_a_document(self, monkeypatch):
-        """A document says which version wrote it, and that is what it is."""
-        op = dc.proc.normalize.op("time")
-        document = op.to_dict()
-        monkeypatch.setattr(dc.proc.normalize, "__version__", "2.0")
-        assert Task.from_dict(document).version == "1.0"
-        # A newly built one does see the bump; that is what a version is for.
-        assert dc.proc.normalize.op("time").version == "2.0"
-
-    def test_through_a_pickle(self, monkeypatch):
-        """Rebuilding in another process must not re-read the function."""
-        restored = Task.from_dict(dc.proc.normalize.op("time").to_dict())
-        monkeypatch.setattr(dc.proc.normalize, "__version__", "2.0")
-        assert pickle.loads(pickle.dumps(restored)).version == "1.0"
-
-    def test_through_an_update(self, monkeypatch):
-        """Changing an argument is not changing which version it is."""
-        restored = Task.from_dict(dc.proc.normalize.op("time").to_dict())
-        monkeypatch.setattr(dc.proc.normalize, "__version__", "2.0")
-        assert restored.update(norm="l1").version == "1.0"
-
-
 class TestKnownReal:
     """
     Detect real dtypes even on array backends without NumPy dtype.kind.
@@ -272,17 +248,63 @@ class TestKnownReal:
 class TestTheSeamIsInvisible:
     """Registering a class must not move anything already recorded."""
 
-    def test_the_fingerprint_is_the_operations(self, patch):
+    def test_the_fingerprint_is_the_calls(self):
         """Not the class's, or every processing_id would stop matching."""
-        by_hand = dc.workflow.PatchOp(
-            name="normalize", kwargs={"dim": "time", "norm": "l2"}
-        )
-        assert Normalize(dim="time", norm="l2").fingerprint == by_hand.fingerprint
+        call = fingerprint_call(dc.proc.normalize, (), {"dim": "time"})
+        assert Normalize(dim="time").fingerprint == call
 
-    def test_an_operation_answers_what_a_patch_op_answers(self):
-        """So a contract written over all of them does not have to care."""
-        op = Abs()
-        assert op.name == "abs"
-        assert op.node_name == "abs"
-        assert op.kwargs == {}
-        assert op.version == dc.proc.abs.__version__
+    def test_it_names_its_operation(self):
+        """The registry tag and the bound arguments."""
+        op = Normalize(dim="distance")
+        assert op.name == "normalize"
+        assert op.kwargs == {
+            "dim": "distance",
+            "norm": "l2",
+            "window": None,
+            "samples": False,
+        }
+
+    def test_it_is_callable(self, patch):
+        """Calling the processor is calling the patch function."""
+        assert Abs()(patch).equals(patch.abs())
+        assert Abs()(patch).attrs.history == patch.abs().attrs.history
+
+    def test_equal_by_operation(self):
+        """Two processors are equal when they are one operation."""
+        assert Normalize(dim="time") == Normalize(dim="time")
+        assert hash(Normalize(dim="time")) == hash(Normalize(dim="time"))
+        assert hash(Normalize(dim="time")) != hash(Normalize(dim="distance"))
+        assert Normalize(dim="time") != Normalize(dim="distance")
+        assert Normalize(dim="time") != "normalize"
+
+    def test_another_class_is_another_operation(self):
+        """Even one which fingerprints alike."""
+
+        class OtherAbs(Abs):
+            """A subclass which inherits the registered name."""
+
+        assert OtherAbs().fingerprint == Abs().fingerprint
+        assert OtherAbs() != Abs()
+
+
+class TestCheck:
+    """`check` refuses a patch which cannot carry the operation."""
+
+    @pytest.mark.parametrize(
+        ("declared", "error"),
+        [
+            ({"required_dims": ("pressure",)}, "PatchCoordinateError"),
+            ({"required_coords": ("no_such_coord",)}, "PatchCoordinateError"),
+            ({"required_attrs": {"data_type": "velocity"}}, "PatchAttributeError"),
+        ],
+    )
+    def test_a_missing_requirement(self, patch, declared, error):
+        """A dimension, coordinate or attr the patch lacks is refused."""
+        processor = type("Needs", (PatchProcessor,), dict(declared))()
+        with pytest.raises(getattr(dc.exceptions, error)):
+            processor.check(patch)
+
+    def test_a_present_requirement(self, patch):
+        """A patch which carries it goes through untouched."""
+        processor = type("NeedsTime", (PatchProcessor,), {"required_dims": "time"})()
+        assert processor.check(patch) is patch

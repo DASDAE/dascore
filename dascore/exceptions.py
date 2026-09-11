@@ -94,6 +94,10 @@ class PatchAttributeError(ValueError, PatchError):
     """Raised when something is wrong with a Patch's attributes."""
 
 
+class PatchDataError(ValueError, PatchError):
+    """Raised when a patch built without data is asked for its data."""
+
+
 class PatchConversionError(ValueError, PatchError):
     """Raised when a patch conversion to a different format fails."""
 

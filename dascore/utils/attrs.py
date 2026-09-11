@@ -15,8 +15,8 @@ import dascore as dc
 from dascore.constants import attr_conflict_description
 from dascore.exceptions import AttributeMergeError, ParameterError
 from dascore.utils.docs import compose_docstring
+from dascore.utils.identity import _ID_FIELDS, fold_ids
 from dascore.utils.misc import iterate
-from dascore.workflow.identity import _ID_FIELDS, fold_ids
 
 _VALID_CONFLICT_VALUES = ("drop", "raise", "keep_first")
 

@@ -13,6 +13,7 @@ from scipy.interpolate import interp1d
 import dascore as dc
 from dascore.constants import PatchType, select_values_description
 from dascore.core.coords import BaseCoord, CoordSegmented
+from dascore.core.processor import PatchProcessor, register_implementation
 from dascore.exceptions import (
     CoordError,
     ParameterError,
@@ -24,10 +25,6 @@ from dascore.utils.docs import compose_docstring
 from dascore.utils.indexing import get_indexers, label_indexer
 from dascore.utils.misc import get_parent_code_name, iterate
 from dascore.utils.patch import patch_function
-from dascore.workflow.processor import (
-    PatchProcessor,
-    register_implementation,
-)
 
 
 @patch_function()
@@ -254,7 +251,7 @@ class RenameCoords(PatchProcessor):
 
     def derive_meta(self, meta):
         """Return the coordinates under their new names."""
-        coords = meta.coords.rename_coord(**self._params())
+        coords = meta.coords.rename_coord(**self.kwargs)
         return meta.update(coords=coords)
 
 

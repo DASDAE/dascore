@@ -838,15 +838,12 @@ def _callable_name(func) -> str:
     """
     Return a human-readable name for a callable's progress label.
 
-    A `functools.partial` is named for the function it wraps. A callable
-    object and a `Task` have no `__name__`; a `Task` standing for more than
-    one operation names itself with `node_name`, and anything else falls
-    back to its class name.
+    A `functools.partial` is named for the function it wraps; a callable
+    object has no `__name__`, so it is named for its class.
     """
     while isinstance(func, functools.partial):
         func = func.func
-    name = getattr(func, "__name__", None) or getattr(func, "node_name", None)
-    return name or type(func).__name__
+    return getattr(func, "__name__", None) or type(func).__name__
 
 
 class _MapFuncWrapper:
