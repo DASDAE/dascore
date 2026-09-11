@@ -195,7 +195,7 @@ def operation_fingerprint(
     One spelling for every operation: a patch function names itself by its
     registry tag (`fingerprint_call`), and the operations which are not
     patch functions -- concatenating, stacking, a ufunc, an array function
-    -- by a capitalized kind no function tag takes.
+    -- by a capitalized kind, which patch function names do not use.
 
     Parameters
     ----------

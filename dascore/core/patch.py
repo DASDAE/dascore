@@ -13,7 +13,7 @@ import dascore as dc
 import dascore.proc.coords
 import dascore.utils.io
 from dascore import transform
-from dascore.compat import array
+from dascore.compat import DataArray, array
 from dascore.core.attrs import PatchAttrs
 from dascore.core.coordmanager import CoordManager, get_coord_manager
 from dascore.core.summary import PatchSummary
@@ -50,6 +50,9 @@ def _as_dtype(dtype):
     try:
         return np.dtype(dtype)
     except TypeError:
+        # A string is a spelling numpy should know; a misspelling is an error.
+        if isinstance(dtype, str):
+            raise
         return dtype
 
 
@@ -96,12 +99,13 @@ class Patch(NodeRepr, NamespaceOwner):
     dims: tuple[str, ...]
     attrs: PatchAttrs
     _data: ArrayLike | None
+    _dtype: Any
 
     _namespace_entry_point_group: Final[str] = "dascore.patch_namespace"
 
     def __init__(
         self,
-        data: ArrayLike | None = None,
+        data: ArrayLike | DataArray | None = None,
         coords: Mapping[str, Any] | CoordManager | None = None,
         dims: Sequence[str] | None = None,
         attrs: Mapping | PatchAttrs | None = None,
@@ -117,6 +121,8 @@ class Patch(NodeRepr, NamespaceOwner):
         if isinstance(data, Patch):
             dtype = data.dtype if dtype is None else dtype
             data, attrs, coords = data._data, data.attrs, data.coords
+        elif isinstance(data, DataArray):
+            data, attrs, coords = data.data, data.attrs, data.coords
         if attrs is None:
             attrs = dc.PatchAttrs()
         if dims is None and isinstance(coords, CoordManager):
@@ -125,7 +131,7 @@ class Patch(NodeRepr, NamespaceOwner):
         if coords is None or dims is None or (data is None and dtype is None):
             msg = (
                 "data, coords, and dims must be defined to init Patch; "
-                "a patch without data needs coords, dims and a dtype."
+                "a dtype may stand in for data."
             )
             raise ValueError(msg)
         if data is None:
@@ -138,7 +144,7 @@ class Patch(NodeRepr, NamespaceOwner):
             if dtype is not None and _as_dtype(dtype) != _as_dtype(data.dtype):
                 msg = f"The data are {data.dtype}, not the dtype given: {dtype}."
                 raise ValueError(msg)
-            self._dtype = data.dtype
+            self._dtype = None
         attrs = dc.PatchAttrs.from_dict(attrs)
         # Data which names no source still says which data it is, so that
         # everything downstream has something to carry forward.
@@ -379,8 +385,8 @@ class Patch(NodeRepr, NamespaceOwner):
     @property
     def dtype(self) -> np.dtype:
         """Return the dtype of the array, which a patch without data still has."""
-        # Read from the data when there is some: a patch pickled before the
-        # dtype was stored has no `_dtype`.
+        # `_dtype` is set only for a patch without data; one pickled before
+        # it existed has none, so a patch with data reads its data's.
         return self._dtype if self._data is None else self._data.dtype
 
     def drop_data(self) -> Patch:

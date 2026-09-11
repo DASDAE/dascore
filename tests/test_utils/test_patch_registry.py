@@ -171,9 +171,22 @@ class TestTheRegistry:
             resolve_patch_function("pkga:denoise")
 
     def test_a_module_re_imported_keeps_its_entry(self):
-        """The same function registered twice is not a collision."""
-        tag = register_patch_function(registry_test_scaled)
-        assert register_patch_function(registry_test_scaled) == tag
+        """A reload makes a new function object at the same path."""
+
+        def first(patch):
+            """The function before a reload."""
+            return patch
+
+        def second(patch):
+            """The same function after it."""
+            return patch
+
+        for func in (first, second):
+            func.__module__ = "reloaded.filters"
+            func.__name__ = func.__qualname__ = "denoise"
+        assert register_patch_function(first) == "reloaded:denoise"
+        assert register_patch_function(second) == "reloaded:denoise"
+        assert resolve_patch_function("reloaded:denoise") is second
 
     @pytest.mark.parametrize(
         ("name", "match"),
@@ -244,17 +257,18 @@ class TestBinding:
 class TestFingerprintCall:
     """The digest a call carries."""
 
-    def test_a_call_is_not_fingerprinted_until_something_reads_it(self, random_patch):
+    def test_an_argument_it_cannot_encode(self, random_patch):
         """An argument the serializer cannot encode never fails the call."""
         deep = {}
         deep["self"] = deep
 
         @dc.patch_function()
         def takes_anything(patch, thing=None):
-            """Accept whatever it is given."""
-            return patch
+            """Accept whatever it is given, and change the patch."""
+            return patch.new(data=patch.data)
 
-        assert takes_anything(random_patch, thing=deep) is not None
+        out = takes_anything(random_patch, thing=deep)
+        assert out.attrs.processing_id == random_patch.attrs.processing_id
 
     def test_the_version_is_part_of_it(self, monkeypatch):
         """An operation at a new version is a new operation."""

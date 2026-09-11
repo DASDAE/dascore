@@ -1532,7 +1532,7 @@ def dataless_to_text(dtype, units=None) -> Text:
 
 
 def array_to_text(data, units=None) -> Text:
-    """Convert a coordinate to string."""
+    """Convert a patch's data array to text."""
     header = _data_header(data.dtype, units)
     # How much room it takes up. A repr states the dtype and the shape,
     # which is the size in pieces; whether it fits in memory is the

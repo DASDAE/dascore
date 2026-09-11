@@ -176,12 +176,9 @@ def update_attrs(self: PatchType, **attrs) -> PatchType:
     new_attrs = self.attrs.model_dump(exclude_unset=True)
     new_attrs.update(attrs)
     validated = PatchAttrs.from_dict(new_attrs)
+    extra = {"dtype": self.dtype} if self._data is None else {}
     return self.__class__(
-        self._data,
-        coords=self.coords,
-        attrs=validated,
-        dims=self.dims,
-        dtype=self.dtype,
+        self._data, coords=self.coords, attrs=validated, dims=self.dims, **extra
     )
 
 
@@ -301,7 +298,9 @@ def update(
     """
     # A patch without data stays one unless data are given; `drop_data`,
     # not `new(data=None)`, is how data are taken away.
-    keeps_dtype = data is None
+    # Passed only then, so a subclass whose `__init__` takes no dtype keeps
+    # working for patches which hold data.
+    dataless = data is None and self._data is None
     data = data if data is not None else self._data
     coords = coords if coords is not None else self.coords
     if dims is None:
@@ -311,8 +310,8 @@ def update(
         attrs = PatchAttrs.from_dict(attrs)
     else:
         attrs = self.attrs
-    dtype = self.dtype if keeps_dtype else None
-    return self.__class__(data=data, coords=coords, attrs=attrs, dtype=dtype)
+    extra = {"dtype": self.dtype} if dataless else {}
+    return self.__class__(data=data, coords=coords, attrs=attrs, **extra)
 
 
 @patch_function()

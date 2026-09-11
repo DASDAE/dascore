@@ -534,7 +534,10 @@ class TestAdaptiveSpectralFilter:
         op = AdaptiveSpectralFilter(time=16, distance=16, samples=True)
 
         expected = patch.adaptive_spectral_filter(time=16, distance=16, samples=True)
-        assert op(patch).equals(expected)
+        out = op(patch)
+        assert out.equals(expected)
+        assert out.attrs.history == expected.attrs.history
+        assert out.attrs.processing_id == expected.attrs.processing_id
 
     def test_proc_export_is_function(self) -> None:
         """The processing module should expose the direct patch function."""

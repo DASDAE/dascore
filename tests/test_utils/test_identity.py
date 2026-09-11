@@ -240,15 +240,17 @@ class TestOperationFingerprints:
 
     def test_arguments_tell_calls_apart(self, pair):
         """Each site records its arguments, not just its kind."""
-        p, q, q2 = pair
+        p, q, _ = pair
         ids = [
             (p + 1).attrs.processing_id,
             (p + 2).attrs.processing_id,
             (1 - p).attrs.processing_id,
             np.mean(p, axis=0).attrs.processing_id,
             np.mean(p, axis=1).attrs.processing_id,
+            np.mean(p, 0).attrs.processing_id,
+            np.mean(p, 1).attrs.processing_id,
             stack_patches([p, q]).attrs.processing_id,
-            stack_patches([p, q2], dim_vary="time").attrs.processing_id,
+            stack_patches([p, q], dim_vary="time").attrs.processing_id,
         ]
         assert len(set(ids)) == len(ids)
 
@@ -273,18 +275,19 @@ class TestOperationFingerprints:
         assert operation_fingerprint("Ufunc", {"name": "add", "reversed": True}) != base
         assert operation_fingerprint("Ufunc", {"name": "add"}, version="2") != base
 
-    def test_concatenate_names_what_it_was_given(self):
+    def test_concatenate_names_what_it_was_given(self, pair):
         """
         Concatenating along time is not concatenating along distance.
 
         `time=None` is the documented call, and the serializer drops a
         `None` mapping value, so the dimensions are held as pairs.
         """
-        time = operation_fingerprint("Concatenate", {"arguments": (("time", None),)})
-        distance = operation_fingerprint(
-            "Concatenate", {"arguments": (("distance", None),)}
-        )
-        assert time != distance
+        p, q, q2 = pair
+        distance = q.get_coord("distance")
+        beside = q.update_coords(distance_min=distance.max() + distance.step)
+        along_time = concatenate_patches([p, q2], time=None)[0]
+        along_distance = concatenate_patches([p, beside], distance=None)[0]
+        assert along_time.attrs.processing_id != along_distance.attrs.processing_id
 
 
 class TestTheRulesOnRealPatches:

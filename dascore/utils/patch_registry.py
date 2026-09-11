@@ -34,7 +34,7 @@ from dascore.utils.serialize import PATCH_ARGUMENT
 # only needs something to put in that slot; nothing ever looks at it.
 _PATCH = object()
 
-# Every patch function, by the tag which names it in a document. Filled by
+# Every patch function, by the tag which names it. Filled by
 # `patch_function` as it decorates, so a function is registered exactly when
 # its module is imported.
 _REGISTERED: dict[str, Any] = {}
@@ -63,7 +63,7 @@ _FINGERPRINT_LIMIT = 4096
 
 def patch_function_tag(func) -> str | None:
     """
-    Return the tag which names a patch function in a document.
+    Return the tag which names a patch function.
 
     DASCore's own are bare, a plugin's are namespaced by the package which
     declares them -- the rule `dascore.models.registry` uses for a model,
@@ -103,19 +103,18 @@ def resolve_patch_function(name: str, module: str | None = None):
     """
     Return the patch function a tag names, else say what is missing.
 
-    Nothing a document names is imported to answer this: reading a file
-    would otherwise be a way to run whatever it names. The sweep this does
-    reach for imports what the *install* declares -- DASCore's own deferred
-    modules, and the namespaces plugins register through entry points --
-    which is a fixed set, not one a document chooses.
+    Nothing a tag names is imported to answer this, since a stored tag
+    would otherwise be a way to run whatever it names. The sweep imports
+    only what the *install* declares: DASCore's own deferred modules and
+    the namespaces plugins register through entry points.
 
     Parameters
     ----------
     name
         The tag, as `patch_function_tag` spells one.
     module
-        Where the function was defined when the document was written, if
-        the document says. Used only to say what to import.
+        Where the function was defined, if known. Used only to say what to
+        import.
     """
     if (found := _REGISTERED.get(name)) is not None:
         return found
@@ -123,7 +122,7 @@ def resolve_patch_function(name: str, module: str | None = None):
         first, second = _AMBIGUOUS[name]
         msg = (
             f"The patch function {name!r} names two functions, {first} and "
-            f"{second}, so which one wrote a document cannot be known."
+            f"{second}, so which one it means cannot be known."
         )
         raise ParameterError(msg)
     _sweep_patch_functions()
@@ -139,18 +138,18 @@ def _missing(name: str, module: str | None) -> str:
         return (
             f"No patch function {leaf!r} is registered in this process. It was "
             "defined in a script or a notebook session, which nothing can "
-            "import; redefine it here and read again."
+            "import; redefine it here and try again."
         )
     if not package:
         return (
             f"No patch function {leaf!r} is registered in this process, and "
             "DASCore defines none by that name."
         )
-    where = f" It was defined in {module} when this was written --" if module else ""
+    where = f" It was defined in {module} --" if module else ""
     return (
         f"No patch function {leaf!r} from package {package!r} is registered in "
         f"this process.{where} import that module (or install {package}) and "
-        "read again."
+        "try again."
     )
 
 
@@ -172,10 +171,10 @@ def _report_collision(tag: str, existing, new) -> None:
     # Out of tree the collision may be between two packages a user merely
     # installed, which they cannot fix by renaming, so importing them both
     # still works. What the tag may not do is quietly resolve to one of
-    # them: a file written by the first would then be read as the second.
+    # them: a tag stored for the first would then run the second.
     _AMBIGUOUS[tag] = (_spell(existing), _spell(new))
     _REGISTERED.pop(tag, None)
-    warnings.warn(f"{msg} Documents naming it can no longer be read.", UserWarning)
+    warnings.warn(f"{msg} The tag no longer resolves to either.", UserWarning)
 
 
 def _sweep_patch_functions() -> None:
@@ -184,8 +183,8 @@ def _sweep_patch_functions() -> None:
 
     `dascore/__init__.py` leaves `dascore.viz` until something asks for it,
     and a plugin's namespace is imported when a patch is first asked for
-    one -- and reading a document never asks a patch for anything. Both are
-    declared by the install, so importing them is not the arbitrary import
+    one, which resolving a tag never does. Both are declared by the
+    install, so importing them is not the arbitrary import
     `resolve_patch_function` refuses.
     """
     global _swept

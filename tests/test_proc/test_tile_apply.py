@@ -636,7 +636,10 @@ class TestArguments:
     def test_the_processor_is_the_call(self, patch):
         """The seam: the processor and the method agree."""
         op = TileApply(function=halve, time=64, samples=True)
-        assert op(patch).equals(patch.tile_apply(halve, time=64, samples=True))
+        out, expected = op(patch), patch.tile_apply(halve, time=64, samples=True)
+        assert out.equals(expected)
+        assert out.attrs.history == expected.attrs.history
+        assert out.attrs.processing_id == expected.attrs.processing_id
 
 
 class TestPhysicalTileBounds:
