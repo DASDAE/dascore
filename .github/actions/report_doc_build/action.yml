@@ -1,9 +1,9 @@
 name: "Report DASCore Doc Build"
 description: >
   Measures the rendered documentation and writes the build report to the job
-  summary. Runs after whichever step produced docs/_site, so the render and
+  summary. Runs after whichever step produced dascore/docs/_site, so the render and
   the publish paths report the same numbers. The report is a build artifact,
-  not a page of the site: nothing under docs/ is written.
+  not a page of the site: nothing under dascore/docs/ is written.
 
 inputs:
   archive:

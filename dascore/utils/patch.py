@@ -1677,7 +1677,7 @@ def concatenate_patches(
     - [`Spool.chunk`](`dascore.Spool.chunk`) performs a similar operation
       but accounts for coordinate values.
     - See also the
-      [chunk section of the spool tutorial](`docs/tutorial/spool`#concatenate)
+      [chunk section of the spool tutorial](`dascore/docs/tutorial/spool`#concatenate)
     """
 
     def _get_dim_and_value(kwargs):

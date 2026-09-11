@@ -42,7 +42,7 @@ website:
 
   image: "_static/logo.png"
   favicon: "_static/logo.png"
-  repo-subdir: docs
+  repo-subdir: dascore/docs
   repo-branch: {{ repo_branch }}
   repo-actions: [edit]
   page-navigation: true
@@ -132,6 +132,9 @@ website:
 
         - text: Configuration
           href: tutorial/configuration.qmd
+
+        - text: Local Documentation
+          href: tutorial/local_documentation.qmd
 
         - text: Coordinates
           href: tutorial/coords.qmd

@@ -16,7 +16,7 @@ import pandas as pd
 from jinja2 import Environment, FileSystemLoader
 
 RENDER_FUNCS = {}
-DOC_PATH = Path(__file__).absolute().parent.parent / "docs"
+DOC_PATH = Path(__file__).absolute().parent.parent / "dascore" / "docs"
 API_DOC_PATH = DOC_PATH / "api"
 API_DOC_PATH.mkdir(exist_ok=True, parents=True)
 TEMPLATE_PATH = DOC_PATH / "_templates"
@@ -605,16 +605,18 @@ def _map_other_qmd_files(doc_path=DOC_PATH, api_path=API_DOC_PATH):
     """Add all other qmd files, excluding API."""
     out = {}
     parent_doc = doc_path.parent
-    api_relative = str(api_path.relative_to(doc_path))
+    api_relative = api_path.relative_to(doc_path).as_posix()
     for path in DOC_PATH.rglob("*.qmd"):
-        path_relative = str(path.relative_to(parent_doc))
+        path_relative = path.relative_to(parent_doc).as_posix()
         # Skip API docs
         if path_relative.startswith(api_relative):
             continue
-        value = "/" + str(path.relative_to(doc_path))
+        value = "/" + path.relative_to(doc_path).as_posix()
         out[path_relative] = value
+        out["dascore/" + path_relative] = value
         # also add key with no qmd extension.
         out[path_relative.split(".")[0]] = value
+        out["dascore/" + path_relative.split(".")[0]] = value
     return out
 
 

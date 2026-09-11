@@ -15,11 +15,11 @@ from pathlib import Path
 import pytest
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
-_DOC_PATH = _REPO_ROOT / "docs"
+_DOC_PATH = _REPO_ROOT / "dascore" / "docs"
 _CHANGELOG_PATH = _DOC_PATH / "changelog.qmd"
 _CHECKER_PATH = _REPO_ROOT / ".github" / "scripts" / "check_pr_changelog.py"
 
-# The sdist includes tests but only docs/LICENSE. Check index.qmd so deleting
+# Check a shipped page so deleting
 # changelog.qmd fails instead of skipping the test.
 _DOCS_PRESENT = (_DOC_PATH / "index.qmd").is_file()
 

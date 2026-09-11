@@ -9,7 +9,7 @@ from _render_api import get_template
 
 import dascore as dc
 
-API_PATH = Path(__file__).absolute().parent.parent / "docs" / "api"
+API_PATH = Path(__file__).absolute().parent.parent / "dascore" / "docs" / "api"
 
 
 def _build_content_string(path, api_path):
@@ -65,7 +65,7 @@ def create_quarto_qmd():
         api_toc_tree=api_toc_tree,
         repo_branch=_get_repo_branch(),
     )
-    path = Path(__file__).parent.parent / "docs" / "_quarto.yml"
+    path = Path(__file__).parent.parent / "dascore" / "docs" / "_quarto.yml"
     with path.open("w") as fi:
         fi.write(out)
 
