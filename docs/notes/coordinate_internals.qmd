@@ -86,7 +86,7 @@ When changing coordinate or scan internals:
 
 - choose tolerant `get_coord(data=...)` only when idealizing small jitter is acceptable
 - use truth-preserving construction for any `snap=False` or exact-value contract
-- keep segment boundaries in live coordinates rather than extending `CoordSummary` with partial structural metadata
+- keep segment boundaries in live coordinates; `CoordSummary.runs` is the one structural field, a summary per run (none past 256 runs) that the index stores for gap reports and plans, never an input for rebuilding the coordinate
 - treat flat coordinate-summary fields as persisted output, not coordinate reconstruction input
 - keep string-coordinate rules explicit instead of routing them through generic numeric logic
 - put shared exact-construction behavior in coordinate or IO helpers instead of duplicating it across formats
