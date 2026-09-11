@@ -3,8 +3,8 @@ Convert a spool to a lazy, dask-backed xarray DataTree.
 
 The tree is partitioned exactly as `chunk` partitions patches; blocks
 load through the same resolver path a chunked spool loads through, and
-range and segmented dimension coordinates are served by the lazy index
-in `dascore.xarray.index`.
+the merged dimension's coordinate is served by the lazy index in
+`dascore.xarray.index`.
 """
 
 from __future__ import annotations
@@ -469,14 +469,19 @@ def spool_to_xarray(
     numeric values are floats — an integer-valued dimension coordinate
     comes back as floats.
 
-    A dimension coordinate which is a range or segmented is served
-    lazily by `dascore.xarray.index.CoordIndex`: its labels are computed
-    on demand from the merged coordinate rather than stored, so an
+    The merged dimension's coordinate, when it is a range or segmented,
+    is served lazily by `dascore.xarray.index.CoordIndex`: its labels are
+    computed on demand from the merged coordinate rather than stored, so an
     arbitrarily long merged time coordinate costs nothing to build, even
     when sub-tolerance gaps or slightly different sampling steps leave it
     segmented rather than one range. Label selection on it answers
     as `Patch.sel` does, and reading ``.values`` or asking for the
-    pandas index materializes labels on demand.
+    pandas index materializes labels on demand. Other dimensions keep
+    materialized labels, which per-channel arrays (gains, offsets) align
+    with. xarray aligns a lazy index only with lazy ones: to combine a
+    segment with arrays indexed along the merged dimension, or reindex
+    it, give it an ordinary index first, which reads its labels, e.g.
+    ``data.drop_indexes("time").set_xindex("time")``.
 
     A spool with pending value-range selections cannot be converted: the
     catalog states such bounds as candidacy rather than sample positions,
@@ -651,11 +656,11 @@ def spool_to_xarray(
                 else:
                     coord = _envelope_coord(out, d, get_coord)
                 sizes[d] = len(coord)
-                # A range or segmented coordinate stays lazy: its labels
-                # cost 8 bytes a sample materialized, which for a long
-                # merged time coordinate dwarfs everything else the tree
-                # holds.
-                if (index := _lazy_index(d, coord)) is not None:
+                # The merged coordinate stays lazy: its labels cost 8 bytes
+                # a sample materialized, which for a long merge dwarfs
+                # everything else the tree holds. The others are short, and
+                # a materialized index is what per-channel arrays align on.
+                if d == dim and (index := _lazy_index(d, coord)) is not None:
                     lazy_indexes[d] = index
                 else:
                     coords[d] = coord.values

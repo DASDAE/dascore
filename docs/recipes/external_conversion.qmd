@@ -39,13 +39,13 @@ patch = dc.get_example_patch()
 lazy = patch.io.to_xarray(lazy_coords=True)
 ```
 
-xarray aligns a lazy index only with others of its kind, so combining a lazy array with an array whose index holds its labels (built from numpy, loaded from netCDF, or converted with the default), or reindexing it to new labels, raises an `AlignmentError`. To combine them, give the lazy array ordinary indexes; the data stays as it is:
+xarray aligns a lazy index only with others of its kind, so combining a lazy array with an array whose index holds its labels (built from numpy, loaded from netCDF, or converted with the default), or reindexing it to new labels, raises an `AlignmentError`. To combine them, give the lazy array ordinary indexes: `drop_indexes` removes the lazy index but keeps the coordinate's labels, and `set_xindex` builds an ordinary index from them, reading every label (8 bytes a sample). The data stays as it is:
 
 ```python
 eager = lazy.drop_indexes(["time", "distance"]).set_xindex("time").set_xindex("distance")
 ```
 
-A whole spool converts to a lazy, [dask](https://docs.dask.org/)-backed [DataTree](https://docs.xarray.dev/en/stable/user-guide/hierarchical-data.html) with one node per group of related patches (partitioned exactly as [`chunk`](`dascore.Spool.chunk`) partitions them) and one child node per merged output segment. Building the tree reads no data, and its dimension coordinates are lazy (as with `lazy_coords=True` above), so a segment spanning years of samples costs nothing to label. Computing a selection loads only the source patches it touches.
+A whole spool converts to a lazy, [dask](https://docs.dask.org/)-backed [DataTree](https://docs.xarray.dev/en/stable/user-guide/hierarchical-data.html) with one node per group of related patches (partitioned exactly as [`chunk`](`dascore.Spool.chunk`) partitions them) and one child node per merged output segment. Building the tree reads no data, and the coordinate of the dimension segments are merged along is lazy (as with `lazy_coords=True` above), so a segment spanning years of samples costs nothing to label. Other dimensions keep ordinary indexes, so per-channel arrays such as gains combine with a segment directly; along the merged dimension, use the `drop_indexes`/`set_xindex` swap above. Computing a selection loads only the source patches it touches.
 
 ```python
 import dascore as dc

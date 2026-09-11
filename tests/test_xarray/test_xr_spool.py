@@ -706,6 +706,25 @@ class TestToXarrayLazyCoords:
             data["time"].values, merged.get_coord("time").values
         )
 
+    def test_only_the_merged_dimension_is_lazy(self, random_spool):
+        """Distance keeps an ordinary index, so per-channel arrays combine."""
+        import xarray as xr  # noqa: PLC0415
+
+        from dascore.xarray.index import CoordIndex  # noqa: PLC0415
+
+        data = self._leaf(random_spool.io.to_xarray())["data"]
+        assert type(data.xindexes["distance"]).__name__ == "PandasIndex"
+        distance = data["distance"].values
+        gains = xr.DataArray(np.ones(len(distance)), coords={"distance": distance})
+        assert (data * gains).sizes == data.sizes
+        # along the merged dimension, an ordinary index is one swap away
+        times = xr.DataArray(
+            np.ones(data.sizes["time"]), coords={"time": data["time"].values}
+        )
+        assert isinstance(data.xindexes["time"], CoordIndex)
+        eager = data.drop_indexes("time").set_xindex("time")
+        assert (eager * times).sizes == data.sizes
+
     def test_sel_matches_patch_select(self, random_spool):
         """Label selection on the tree equals dascore's own select."""
         data = self._leaf(random_spool.io.to_xarray())["data"]
