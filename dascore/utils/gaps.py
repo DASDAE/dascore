@@ -73,8 +73,9 @@ class GapTolerance:
     between neighbouring samples (``k = 1`` is contiguity); ``absolute(q)``
     allows one step plus ``q`` in the coordinate's own units, so the excess
     over the step is what is bounded. An absolute quantity or timedelta is
-    resolved into the coordinate's scalar where the units are known
-    (`resolve`); until then `is_gap` cannot be asked of it.
+    converted into the coordinate's own scalar by the caller which knows
+    the units (a coordinate's ``_gap_tolerance``, a chunk cell's
+    ``_cell_tolerance``); until then `is_gap` cannot be asked of it.
 
     Examples
     --------
@@ -94,6 +95,11 @@ class GapTolerance:
         if (self.count is None) == (self.excess is None):
             msg = "A GapTolerance is a sample count or an absolute excess, not both."
             raise ParameterError(msg)
+
+    def __str__(self):
+        if self.count is not None:
+            return f"{self.count:g} samples"
+        return f"{self.excess} excess"
 
     @classmethod
     def samples(cls, count) -> GapTolerance:

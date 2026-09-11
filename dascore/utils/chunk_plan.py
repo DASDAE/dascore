@@ -39,6 +39,7 @@ from dascore.exceptions import (
 from dascore.units import (
     DimensionalityError,
     Quantity,
+    carries_units,
     convert_units,
     get_byte_count,
     get_quantity,
@@ -434,9 +435,9 @@ def _sampling_group(step: pd.Series, tolerance: float) -> pd.Series:
 
 def _cell_tolerance(tolerance: GapTolerance, sub, name) -> GapTolerance:
     """Resolve an absolute tolerance into one cell's own units."""
-    if tolerance.count is not None:
-        return tolerance
     excess = tolerance.excess
+    if tolerance.count is not None or not carries_units(excess):
+        return tolerance  # a count, or an excess already in coordinate units
     start, _, _ = get_interval_columns(sub, name)
     if isinstance(excess, Quantity):
         shown = excess

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import h5py
 import numpy as np
 import pytest
 
@@ -15,6 +16,7 @@ from dascore.core.coords import (
     get_coord,
 )
 from dascore.exceptions import CoordError, ParameterError
+from dascore.io.dasdae.utils import _read_coord
 from dascore.units import get_quantity
 from dascore.utils.gaps import GapTolerance, get_gap_edges
 
@@ -82,7 +84,11 @@ class TestDeclaredStep:
         assert coord.reverse_sorted
         assert coord.step == -1
         np.testing.assert_array_equal(coord.values, PRESENT[::-1])
-        assert coord.missing().count == 6
+        missing = coord.missing()
+        assert list(missing.iter_runs()) == [(9, 5), (2, 2)]
+        np.testing.assert_array_equal(missing.positions(), [9, 8, 7, 6, 5, 2])
+        dense = CoordMonotonicArray(values=np.array([9, 6, 5, 1]), step=1)
+        assert list(dense.missing().iter_runs()) == [(8, 7), (4, 2)]
 
     def test_time_grid(self):
         """A time coordinate declares a timedelta step."""
@@ -111,9 +117,12 @@ class TestDeclaredStep:
         # the trailing removed position lies past the last sample
         assert as_runs.missing().count == 99
         assert as_array.missing().count == 999
-        # slicing and units keep the declaration
+        # slicing and units keep the declaration; a fancy index that
+        # loses the order loses it, since nothing could hold it
         assert as_array[10:50].step == 1
-        assert as_array.set_units("m").convert_units("ft").step != 1
+        assert as_array[[5, 0, 3]].step is None
+        in_feet = as_array.set_units("m").convert_units("ft")
+        assert in_feet.step == pytest.approx(1 / 0.3048)
 
     def test_direct_array_checks_the_grid(self):
         """Constructing an array coordinate with a step checks its values."""
@@ -135,13 +144,12 @@ class TestDeclaredStep:
         array = get_coord(data=np.arange(3000)[np.arange(3000) % 3 != 2], step=1)
         assert array.to_summary().step is None
 
-    def test_mixed_steps_report_none(self):
-        """Runs of different steps share no grid."""
+    def test_mixed_steps_cannot_say_what_is_missing(self):
+        """Runs of different steps share no grid to be missing from."""
         coord = concat_coords(
             get_coord(start=0.0, stop=5.0, step=1.0),
             get_coord(start=8.0, stop=13.0, step=0.5),
         )
-        assert coord.step is None
         with pytest.raises(CoordError, match="declared step"):
             coord.missing()
 
@@ -263,10 +271,6 @@ class TestDiscontinuities:
         assert gaps["index"].tolist() == [3]
         assert not len(coord.get_discontinuities("gaps", get_quantity("2 m")))
 
-    def test_range_reports_none(self):
-        """An evenly sampled coordinate has no seams."""
-        assert get_coord(start=0, stop=5, step=1).get_discontinuities().empty
-
     def test_single_value_array(self):
         """One value has no spacing to judge."""
         assert CoordMonotonicArray(values=np.array([3.0])).get_discontinuities().empty
@@ -314,3 +318,125 @@ class TestOneVerdict:
         values = np.concatenate([p.get_coord("time").values for p in patches])
         gaps = CoordSegmented.from_array(values).get_discontinuities("gaps", excess)
         assert len(gaps) == 1
+
+
+class TestReviewFindings:
+    """Cases a review found the first cut got wrong."""
+
+    def test_singleton_runs_keep_their_order(self):
+        """Descending values whose runs are all singletons stay descending."""
+        coord = get_coord(data=[9, 6, 3], step=1)
+        np.testing.assert_array_equal(coord.values, [9, 6, 3])
+        assert coord.step == -1 and coord.missing().count == 4
+
+    def test_promotion_respects_the_declared_grid(self):
+        """Even spacing on a finer declared grid is not a range of that spacing."""
+        coord = get_coord(data=np.arange(0, 2000, 2), step=1)
+        assert isinstance(coord, CoordMonotonicArray)
+        assert concat_coords(coord).missing().count == coord.missing().count == 999
+
+    def test_gapped_runs_are_not_evenly_sampled(self, design_case):
+        """A step on runs does not admit them where even sampling is required."""
+        patch = dc.get_example_patch().select(distance=(0, 6), samples=True)
+        patch = patch.update_coords(distance=design_case)
+        with pytest.raises(CoordError, match="not evenly sampled"):
+            patch.get_coord("distance", require_evenly_sampled=True)
+        with pytest.raises(CoordError, match="not evenly sampled"):
+            patch.update_attrs(data_type="velocity").velocity_to_strain_rate_edgeless()
+
+    def test_median_spacing_ignores_orientation(self):
+        """Either orientation of the same labels reports the same gap."""
+        tolerance = GapTolerance.samples(1.2)
+        up = CoordMonotonicArray(values=np.array([0.0, 1.0, 4.0]))
+        down = CoordMonotonicArray(values=np.array([4.0, 1.0, 0.0]))
+        assert len(up.get_discontinuities("gaps", tolerance)) == 1
+        assert len(down.get_discontinuities("gaps", tolerance)) == 1
+
+    def test_declared_step_converts_as_a_difference(self):
+        """An affine unit's offset does not reach the step."""
+        coord = CoordMonotonicArray(
+            values=np.array([0.0, 2.0, 3.0]), step=1, units="degC"
+        )
+        converted = coord.convert_units("degF")
+        assert converted.step == pytest.approx(1.8)
+        assert converted.missing().count == 1
+
+    def test_bare_absolute_excess_in_chunk(self):
+        """An excess stated as a bare number is in the coordinate's units."""
+        first = dc.get_example_patch()
+        first = first.update_coords(distance=first.get_coord("distance").values * 1.0)
+        dist = first.get_coord("distance")
+        second = first.update_coords(distance_min=dist.max() + 2.4 * dist.step)
+        spool = dc.spool([first, second])
+        assert len(spool.chunk(distance=None, tolerance=GapTolerance.absolute(2))) == 1
+        assert len(spool.chunk(distance=None, tolerance=GapTolerance.absolute(1))) == 2
+
+    def test_dasdae_round_trip(self, tmp_path):
+        """Version 2 stores a declared step; version 1 keeps the values alone."""
+        dense = get_coord(data=np.arange(3000)[np.arange(3000) % 3 != 2], step=1)
+        assert isinstance(dense, CoordMonotonicArray)
+        time = dc.get_example_patch().get_coord("time")[:3]
+        coords = {"distance": dense, "time": time}
+        data = np.zeros((len(dense), 3))
+        patch = dc.Patch(data=data, coords=coords, dims=("distance", "time"))
+        back = dc.read(dc.write(patch, tmp_path / "v2.h5", "dasdae"))[0]
+        assert back.get_coord("distance") == dense
+        old = dc.read(dc.write(patch, tmp_path / "v1.h5", "dasdae", file_version="1"))[
+            0
+        ]
+        np.testing.assert_array_equal(old.get_coord("distance").values, dense.values)
+        assert old.get_coord("distance").step is None
+
+    def test_offset_grids_share_no_step(self):
+        """Runs of one step on grids half a step apart declare no common grid."""
+        coord = concat_coords(
+            get_coord(start=0.0, stop=3.0, step=1.0),
+            get_coord(start=5.5, stop=8.5, step=1.0),
+        )
+        assert coord.step is None
+        left = CoordMonotonicArray(values=np.array([0.0, 2.0, 3.0]), step=1.0)
+        right = CoordMonotonicArray(values=np.array([4.5, 7.5, 9.5]), step=1.0)
+        assert isinstance(concat_coords(left, right), CoordSegmented)
+
+    def test_complete_time_grid_positions_dtype(self):
+        """No missing positions still come back in the coordinate's dtype."""
+        coord = get_coord(start=T0, step=np.timedelta64(1, "s"), shape=(5,))
+        assert coord.missing().positions().dtype == coord.dtype
+
+    def test_fingerprint_sees_the_declared_step(self):
+        """Declaring a grid changes what the coordinate is."""
+        plain = CoordMonotonicArray(values=np.array([0, 1, 5]))
+        declared = CoordMonotonicArray(values=np.array([0, 1, 5]), step=1)
+        assert plain.fingerprint() != declared.fingerprint()
+
+    def test_waterfall_paints_gaps_by_declared_step(self):
+        """The mesh opens a band wherever the declared step says a sample is missing."""
+        pytest.importorskip("matplotlib")
+        base = dc.get_example_patch().select(distance=(0, 4), samples=True)
+        distance = get_coord(data=[0, 3, 6, 7], step=1)
+        patch = base.update_coords(distance=distance)
+        ax = patch.viz.waterfall(gap_color="white", cbar=False)
+        array = ax.collections[0].get_array()
+        # two three-wide spacings against a step of one: two bands
+        assert array.shape[0] == patch.shape[0] + 2
+        undeclared = base.update_coords(distance=np.array([0, 3, 6, 7]))
+        ax = undeclared.viz.waterfall(gap_color="white", cbar=False)
+        # the median spacing (3) sees no gap at all
+        assert ax.collections[0].get_array().shape[0] == patch.shape[0]
+
+
+class TestLegacySnapStep:
+    """The DASDAE version 1 snap path and a stored nominal step."""
+
+    def test_single_sample_takes_the_step(self, tmp_path):
+        """One value cannot state its spacing, so the stored step is used."""
+        with h5py.File(tmp_path / "legacy.h5", "w") as h5:
+            h5.create_dataset("_coord_x", data=np.array([5.0]))
+            h5.create_dataset("_coord_y", data=np.array([0.0, 1.0, 2.05]))
+            single = _read_coord(h5["_coord_x"], "x", {"x_step": 2.0}, snap=True)
+            jittered = _read_coord(h5["_coord_y"], "y", {"y_step": 1.0}, snap=True)
+        assert isinstance(single, CoordRange) and single.step == 2.0
+        # longer values keep today's tolerant reading; the nominal step is
+        # not a claim they must meet
+        assert jittered.step is None or isinstance(jittered, CoordRange)
+        np.testing.assert_allclose(jittered.values, [0.0, 1.0, 2.05], atol=0.06)

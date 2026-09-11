@@ -152,7 +152,7 @@ def get_coord(
         coords = sorted(self.coords.coord_map)
         msg = f"Coordinate '{name}' not found in Patch coordinates: {coords}"
         raise CoordError(msg)
-    if require_evenly_sampled and coord.step is None:
+    if require_evenly_sampled and not coord.evenly_sampled:
         extra = f"as required by {get_parent_code_name()}"  # adds caller name
         msg = f"Coordinate {name} is not evenly sampled {extra}"
         raise CoordError(msg)

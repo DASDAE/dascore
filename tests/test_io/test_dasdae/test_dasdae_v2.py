@@ -212,6 +212,17 @@ class TestVersion2Files:
         assert isinstance(back.get_coord("tag"), CoordString)
         assert back == patch
 
+    def test_exact_scan_of_array_values(self, random_patch, tmp_path):
+        """An exact scan keeps a version 2 array's values without fitting."""
+        n = len(random_patch.get_coord("distance"))
+        uneven = np.sort(np.random.default_rng(0).random(n)) * 100
+        patch = random_patch.update_coords(distance=uneven)
+        path = dc.write(patch, tmp_path / "uneven.h5", "dasdae")
+        (payload,) = dc.scan_payloads(path, snap=False)
+        distance = payload["coords"].coord_map["distance"]
+        assert isinstance(distance, CoordMonotonicArray)
+        np.testing.assert_array_equal(distance.values, uneven)
+
     def test_lazy_array_sizes_by_grid(self, tmp_path):
         """The lazy xarray view of a long fractional grid counts its samples."""
         pytest.importorskip("xarray")

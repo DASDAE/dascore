@@ -892,10 +892,11 @@ def get_dim_sampling_rate(patch: PatchType, dim: str) -> float:
     [CoordDataError](`dascore.exceptions.CoordDataError`) if patch is not
     evenly sampled along desired dimension.
     """
-    d_dim = patch.coords.coord_map[dim].step
+    coord = patch.coords.coord_map[dim]
+    d_dim = coord.step
     if isinstance(d_dim, np.timedelta64):
         d_dim = d_dim / np.timedelta64(1, "s")
-    if pd.isnull(d_dim):
+    if pd.isnull(d_dim) or not coord.evenly_sampled:
         # get the name of the calling function
         calling_function = inspect.getframeinfo(sys._getframe(1))[2]
         msg = (

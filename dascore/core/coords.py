@@ -403,6 +403,7 @@ class Missing:
     step: Any
     # each hole as (first missing label, last missing label, how many)
     runs: tuple[tuple[Any, Any, int], ...]
+    dtype: Any = None
 
     @property
     def count(self) -> int:
@@ -433,7 +434,7 @@ class Missing:
             )
             raise ParameterError(msg)
         if not self.runs:
-            return np.array([], dtype=np.asarray(self.step).dtype)
+            return np.array([], dtype=self.dtype)
         return np.concatenate(
             [first + np.arange(n) * self.step for first, _, n in self.runs]
         )
@@ -457,21 +458,19 @@ def _discontinuity_frame(rows, kind: str, tolerance) -> pd.DataFrame:
     columns = ["index", "before", "after", "delta", "excess"]
     df = pd.DataFrame(rows, columns=["index", "before", "after", "expected"])
     df["delta"] = df["after"] - df["before"]
-    stated = df["expected"].notna()
-    df["excess"] = pd.Series(pd.NA, index=df.index, dtype=object)
-    df.loc[stated, "excess"] = np.abs(df.loc[stated, "delta"]) - np.abs(
-        df.loc[stated, "expected"]
-    )
+    df["excess"] = [
+        np.nan if expected is None else abs(delta) - abs(expected)
+        for delta, expected in zip(df["delta"], df["expected"])
+    ]
     if kind == "gaps":
+        stated = df["expected"].notna().to_numpy()
         keep = np.zeros(len(df), dtype=bool)
         if stated.any():
-            delta = df.loc[stated, "delta"].to_numpy()
-            step = df.loc[stated, "expected"].to_numpy()
-            keep[stated.to_numpy()] = tolerance.is_gap(delta, step)
+            delta = df["delta"].to_numpy()[stated]
+            step = df["expected"].to_numpy()[stated]
+            keep[stated] = tolerance.is_gap(delta, step)
         df = df[keep]
-    out = df[columns].reset_index(drop=True)
-    out["excess"] = out["excess"].where(out["excess"].notna(), np.nan)
-    return out
+    return df[columns].reset_index(drop=True)
 
 
 class BaseCoord(RichRepr, DascoreBaseModel, abc.ABC):
@@ -1041,10 +1040,12 @@ class BaseCoord(RichRepr, DascoreBaseModel, abc.ABC):
         `delta` (after - before) and `excess` (delta minus the expected local
         sampling interval, NaN when no sampling interval is defined).
 
-        Evenly sampled coordinates return an empty dataframe. A monotonic
-        array reports every spacing which is not its declared step (or its
-        median spacing when it declares none); a segmented coordinate
-        reports the seams between its runs.
+        A monotonic array reports every spacing which is not its declared
+        step (or its median spacing when it declares none); a segmented
+        coordinate reports the seams between its runs; every other
+        coordinate (a range, an unordered array, a partial or string
+        coordinate) returns an empty dataframe. ``tolerance`` may also be a
+        `dascore.utils.gaps.GapTolerance`.
         """
         if kind not in ("all", "gaps"):
             msg = f"kind must be 'all' or 'gaps', got {kind!r}"
@@ -1063,7 +1064,8 @@ class BaseCoord(RichRepr, DascoreBaseModel, abc.ABC):
         A number is an absolute excess in coordinate units (seconds for
         time), as [`simplify`](`dascore.core.coords.BaseCoord.simplify`)
         reads it; a quantity or timedelta converts to those units; a
-        `GapTolerance` is taken as it is, its excess converted likewise.
+        `GapTolerance` counting samples is returned unchanged, and one
+        stating an excess has that excess converted likewise.
         """
         if isinstance(tolerance, GapTolerance):
             if tolerance.count is not None:
@@ -1101,8 +1103,9 @@ class BaseCoord(RichRepr, DascoreBaseModel, abc.ABC):
 
         Missing is relative to a declared step: labels ``[0, 2, 4]`` fill a
         step-2 grid and miss positions 1 and 3 of a step-1 grid. A
-        coordinate without a step, or without an order, cannot say and
-        raises.
+        coordinate without a step cannot say and raises (an unordered array
+        never carries one); so does a segmented coordinate whose runs share
+        a step but meet off its grid.
 
         Examples
         --------
@@ -1116,7 +1119,7 @@ class BaseCoord(RichRepr, DascoreBaseModel, abc.ABC):
         if _is_null(self.step):
             msg = "missing needs a declared step; this coordinate has none."
             raise CoordError(msg)
-        return Missing(step=self.step, runs=tuple(self._holes()))
+        return Missing(step=self.step, runs=tuple(self._holes()), dtype=self.dtype)
 
     def _holes(self) -> list[tuple]:
         """Each hole as ``(first missing label, last missing label, count)``."""
@@ -1309,7 +1312,9 @@ class BaseCoord(RichRepr, DascoreBaseModel, abc.ABC):
         return CoordSummary(
             min=self.min(),
             max=self.max(),
-            step=self.step,
+            # a summary with a step rebuilds a range; a step declared on
+            # arrays or shared by runs describes their grid, not a range
+            step=self.step if self.evenly_sampled else None,
             dtype=self.dtype,
             units=self.units,
             dims=dims,
@@ -1766,9 +1771,12 @@ def _is_int(value) -> bool:
 # A float spacing this close to a whole number of steps is on the grid;
 # a float grid such as 0.1 cannot be held exactly, an off-grid label can.
 _GRID_RTOL = 1e-6
-# The dense-array guard: past this many samples, an array whose runs
-# would outnumber this fraction of them keeps its values as one array
-# (with its declared step) rather than as thousands of tiny runs.
+# The dense-array guard. Stored arrays often carry sub-step jitter
+# (GPS-stamped DAS time), so run detection would give roughly one run per
+# sample; at or past this many samples, an array whose runs would
+# outnumber this fraction of them keeps its values as one array (with
+# its declared step), which is faster to build, smaller, and no less
+# exact.
 _MIN_SEGMENT_GUARD_SIZE = 1_000
 _MAX_SEGMENT_FRACTION = 0.1
 
@@ -2577,15 +2585,12 @@ class CoordArray(BaseCoord):
         if self.units is None or is_time or is_time_delta:
             return self.set_units(units)
         values = convert_units(self.values, units, self.units)
-        step = (
-            None if self.step is None else convert_units(self.step, units, self.units)
-        )
+        step = self.step
+        if step is not None:
+            # a step is a difference, so an affine unit's offset cancels
+            anchor = convert_units(step * 0, units, self.units)
+            step = convert_units(step, units, self.units) - anchor
         return self.new(units=units, values=values, step=step)
-
-    def to_summary(self, dims=()) -> CoordSummary:
-        """Get the summary info about the coord: an envelope, never a range."""
-        # a summary with a step rebuilds a range, which these values are not
-        return super().to_summary(dims=dims).model_copy(update={"step": None})
 
     def select(
         self, args, relative=False, samples=False
@@ -2681,7 +2686,9 @@ class CoordArray(BaseCoord):
         out = self.values[item]
         if not np.ndim(out):
             return out
-        return self.__class__(values=out, units=self.units, step=self.step)
+        # a declared step survives only an order it can be held against
+        step = self.step if out.ndim == 1 and is_strictly_monotonic(out) else None
+        return self.__class__(values=out, units=self.units, step=step)
 
     def _min(self):
         """Return min value."""
@@ -2692,8 +2699,11 @@ class CoordArray(BaseCoord):
         return np.nanmax(self.values) if self.size else _get_nullish(self.dtype)
 
     def _fingerprint_components(self) -> tuple[Any, ...]:
-        """Return the array payload needed to fingerprint array coords."""
-        return (("array", hash_array(self.values)),)
+        """The array payload, and the grid it declares when it declares one."""
+        components: tuple[Any, ...] = (("array", hash_array(self.values)),)
+        if not _is_null(self.step):
+            components += (("step", str(self.step)),)
+        return components
 
 
 def _negate_for_search(values):
@@ -2725,7 +2735,10 @@ class CoordMonotonicArray(CoordArray):
         if not _is_null(self.step):
             return self.step
         diffs = np.diff(self.values)
-        return diffs[0] if len(diffs) < 2 else np.sort(diffs)[len(diffs) // 2]
+        # the median magnitude, signed with the values' direction, so
+        # either orientation judges the same spacings
+        median = np.median(np.abs(diffs))
+        return median if self.sorted else -median
 
     def _seams(self) -> list[tuple]:
         """Every neighbour spacing which is not the expected one."""
@@ -2853,6 +2866,8 @@ def _maybe_promote_segment(seg: BaseCoord) -> BaseCoord:
     if len(np.unique(diffs)) != 1:
         return seg
     step = diffs[0]
+    if not _is_null(seg.step) and step != seg.step:
+        return seg  # evenly spaced, but not at the grid it declares
     candidate = get_coord(
         start=values[0], stop=values[-1] + step, step=step, units=seg.units
     )
@@ -2906,7 +2921,23 @@ def _arrays_continue(prev: CoordMonotonicArray, seg: CoordMonotonicArray) -> boo
         return True
     if _is_null(prev.step) or _is_null(seg.step) or prev.step != seg.step:
         return False
-    return bool(_on_grid(seg.values[:1] - prev.values[-1:], prev.step) == 1)
+    try:
+        return bool(_on_grid(seg.values[:1] - prev.values[-1:], prev.step) == 1)
+    except CoordError:
+        return False  # the same step on offset grids: a seam, not a continuation
+
+
+def _one_grid(segments, step) -> bool:
+    """Whether every seam between runs of ``step`` is a whole number of steps."""
+    ascending = segments[0].min() < segments[-1].min() if len(segments) > 1 else True
+    for prev, nxt in itertools.pairwise(segments):
+        before = prev.max() if ascending else prev.min()
+        after = nxt.min() if ascending else nxt.max()
+        try:
+            _on_grid(np.asarray([after - before]), step)
+        except CoordError:
+            return False
+    return True
 
 
 def _validate_segment_compat(segments: tuple[BaseCoord, ...]) -> None:
@@ -3041,14 +3072,8 @@ class CoordSegmented(BaseCoord):
         # grid, with positions missing between the runs
         steps = [x.step for x in segments]
         declared = all(not _is_null(x) for x in steps) and len(set(steps)) == 1
-        data["step"] = steps[0] if declared else None
+        data["step"] = steps[0] if declared and _one_grid(segments, steps[0]) else None
         return data
-
-    def to_summary(self, dims=()) -> CoordSummary:
-        """Get the summary info about the coord: an envelope, never a range."""
-        # a summary with a step rebuilds a range, which runs with positions
-        # missing between them are not
-        return super().to_summary(dims=dims).model_copy(update={"step": None})
 
     @field_serializer("segments")
     def _serialize_segments(self, segments, _info):
@@ -3342,8 +3367,6 @@ class CoordSegmented(BaseCoord):
             # a count of steps is measured against the runs' own step
             steps = [abs(x.step) for x in self.segments if not _is_null(x.step)]
             tolerance = tolerance.count * get_middle_value(steps) if steps else 0
-            if dtype_time_like(self.dtype):
-                tolerance = dc.to_timedelta64(tolerance)
         return self._gap_tolerance(tolerance).excess
 
     def _fit_run(self, run, tol) -> CoordRange | None:
@@ -3389,7 +3412,7 @@ class CoordSegmented(BaseCoord):
         return rows
 
     def _holes(self) -> list[tuple]:
-        """The grid positions inside each run and between one run and the next."""
+        """The grid positions skipped inside each run and between runs."""
         step = self.step  # signed with the runs' direction
         rows = list(self.segments[0]._holes())
         for (_, before, after, _), seg in zip(self._seams(), self.segments[1:]):
@@ -3517,11 +3540,13 @@ class CoordSegmented(BaseCoord):
                     ]
                     out = concat_coords(*segments)
             else:
+                # built in the values' own order: a coordinate of singleton
+                # runs states no direction concat_coords could read
                 runs = [
                     CoordRange(start=x[0], step=signed, shape=(len(x),), units=units)
                     for x in np.split(values, splits)
                 ]
-                out = concat_coords(*runs)
+                out = runs[0] if len(runs) == 1 else CoordSegmented(segments=runs)
         if tolerance is not None:
             out = out.simplify(tolerance)
         return out
