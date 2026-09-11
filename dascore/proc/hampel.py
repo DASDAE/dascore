@@ -157,7 +157,7 @@ def hampel_filter(
 
     See Also
     --------
-    - [Despiking recipe](`docs/recipes/despiking.qmd`)
+    - [Despiking recipe](`dascore/docs/recipes/despiking.qmd`)
 
     Examples
     --------

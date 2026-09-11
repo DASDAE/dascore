@@ -52,7 +52,7 @@ def correlate_shift(
     undo_weighting
         If True, also undo the weighting artifact caused by DASCore's dft
         weighting. This is done by simply dividing by the coordinate step.
-        See [dft note](`docs/notes/dft_notes.qmd`) for more details.
+        See [dft note](`dascore/docs/notes/dft_notes.qmd`) for more details.
 
     Examples
     --------
