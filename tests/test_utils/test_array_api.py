@@ -411,38 +411,62 @@ class TestNanReduce:
         assert np.allclose(out, getattr(np, f"nan{name}")(array, axis=0))
 
 
-def _units(patch):
+def _units(patch, units="rad"):
     """Return the patch with data units a strain conversion can take."""
-    return patch.update_attrs(data_units="rad", gauge_length=10)
+    return patch.update_attrs(data_units=units, gauge_length=10)
 
 
-# One call per operation converted to a processor, on a random patch.
+def _signed(patch):
+    """Return the patch with negative values, NaNs and infinities in it."""
+    data = np.asarray(patch.data) - 0.5
+    data[0, :3] = [np.nan, np.inf, -np.inf]
+    return patch.new(data=data)
+
+
+def _single(patch):
+    """Return the patch in single precision."""
+    return patch.new(data=np.asarray(patch.data, dtype=np.float32))
+
+
+# One call per operation converted to a processor, and the numpy patch it is
+# given (on each backend too); the results must match numpy's.
 _CONVERTED = {
-    "angle": lambda p: p.angle(),
-    "demedian": lambda p: p.demedian("time"),
-    "fillna": lambda p: p.fillna(0),
-    "full": lambda p: p.full(2.0),
-    "flip": lambda p: p.flip("time"),
-    "roll": lambda p: p.roll(time=3, samples=True),
-    "squeeze": lambda p: p.isel(time=slice(0, 1)).squeeze(),
-    "append_dims": lambda p: p.append_dims(new=2),
-    "make_broadcastable_to": lambda p: p.append_dims("new").make_broadcastable_to(
-        (*p.shape, 3)
+    "angle": (lambda p: p.angle(), _signed),
+    "demedian": (lambda p: p.demedian("time"), None),
+    "fillna": (lambda p: p.fillna(0), _signed),
+    "fillna_no_inf": (lambda p: p.fillna(0, include_inf=False), _signed),
+    "full": (lambda p: p.full(2.0), None),
+    "flip": (lambda p: p.flip("time"), None),
+    "roll": (lambda p: p.roll(time=3, samples=True), None),
+    "squeeze": (lambda p: p.isel(time=slice(0, 1)).squeeze(), None),
+    "squeeze_one": (
+        lambda p: p.isel(time=slice(0, 1)).append_dims("new").squeeze("time"),
+        None,
     ),
-    "drop_coords": lambda p: p.update_coords(
-        extra=("time", np.ones(p.shape[1]))
-    ).drop_coords("extra"),
-    "drop_private_coords": lambda p: p.drop_private_coords(),
-    "update_coords": lambda p: p.update_coords(time_min=0),
-    "set_units": lambda p: p.set_units("m/s"),
-    "convert_units": lambda p: p.set_units("m/s").convert_units("mm/s"),
-    "simplify_units": lambda p: p.set_units("km/s").simplify_units(),
-    "detrend": lambda p: p.detrend("time"),
-    "sobel_filter": lambda p: p.sobel_filter("time"),
-    "hilbert": lambda p: p.hilbert("time"),
-    "envelope": lambda p: p.envelope("time"),
-    "kurtosis": lambda p: p.kurtosis(time=8, samples=True),
-    "radians_to_strain": lambda p: _units(p).radians_to_strain(),
+    "append_dims": (lambda p: p.append_dims(new=2), None),
+    "make_broadcastable_to": (
+        lambda p: p.append_dims("new").make_broadcastable_to((*p.shape, 3)),
+        None,
+    ),
+    "drop_coords": (
+        lambda p: p.update_coords(extra=("time", np.ones(p.shape[1]))).drop_coords(
+            "extra"
+        ),
+        None,
+    ),
+    "drop_private_coords": (lambda p: p.drop_private_coords(), None),
+    "update_coords": (lambda p: p.update_coords(time_min=0), None),
+    "set_units": (lambda p: p.set_units("m/s"), None),
+    "convert_units": (lambda p: p.set_units("m/s").convert_units("mm/s"), None),
+    "convert_units_offset": (lambda p: p.set_units("degC").convert_units("K"), None),
+    "simplify_units": (lambda p: p.set_units("km/s").simplify_units(), None),
+    "detrend": (lambda p: p.detrend("time"), None),
+    "sobel_filter": (lambda p: p.sobel_filter("time"), None),
+    "hilbert": (lambda p: p.hilbert("time"), None),
+    "hilbert_single": (lambda p: p.hilbert("time"), _single),
+    "envelope": (lambda p: p.envelope("time"), None),
+    "kurtosis": (lambda p: p.kurtosis(time=8, samples=True), None),
+    "radians_to_strain": (lambda p: _units(p, "mrad").radians_to_strain(), None),
 }
 
 
@@ -454,20 +478,37 @@ class TestConvertedProcessorsOnBackends:
     """Every converted operation runs on every backend, or warns it falls back."""
 
     @pytest.mark.parametrize("name", sorted(_CONVERTED))
-    def test_runs_or_falls_back(self, backend_patch, name):
-        """Native kernels are silent; numpy kernels warn; the backend comes back."""
-        cls = getattr(dc.Patch, name).__processor__
-        backend = backend_name(backend_patch.data)
-        call = _CONVERTED[name]
+    def test_runs_or_falls_back(self, random_patch, to_backend, name):
+        """
+        Native kernels are silent, numpy kernels warn, the backend comes back,
+        and the values, dtype and shape are numpy's.
+        """
+        call, prepare = _CONVERTED[name]
+        numpy_patch = prepare(random_patch) if prepare else random_patch
+        patch = to_backend(numpy_patch)
+        operation = name.split("_single")[0].split("_offset")[0]
+        operation = {"fillna_no_inf": "fillna", "squeeze_one": "squeeze"}.get(
+            operation, operation
+        )
+        cls = getattr(dc.Patch, operation).__processor__
+        backend = backend_name(patch.data)
         # A kernel registered for the backend (dask's lazy median) is native.
         registered = backend in cls.__dict__.get("_kernels", {})
-        if name not in _NUMPY_ONLY or registered:
+        if operation not in _NUMPY_ONLY or registered:
             with warnings_as_errors():
-                out = call(backend_patch)
+                out = call(patch)
         else:
             with pytest.warns(NumpyFallbackWarning, match=cls.name):
-                out = call(backend_patch)
+                out = call(patch)
         assert backend_name(out.data) == backend
+        expected = call(numpy_patch)
+        values = np.asarray(out.data)
+        assert values.dtype == np.asarray(expected.data).dtype
+        assert out.dims == expected.dims
+        # Single precision agrees to its own rounding, not float64's.
+        single = values.dtype in (np.float32, np.complex64)
+        atol = 1e-5 if single else 1e-8
+        assert np.allclose(values, expected.data, atol=atol, equal_nan=True)
 
 
 class TestArrayApiKernelBranches:
@@ -476,10 +517,10 @@ class TestArrayApiKernelBranches:
     def test_angle_of_complex_data(self, backend_patch):
         """The phase of complex data is atan2 of its parts."""
         xp = array_namespace(backend_patch.data)
-        data = xp.astype(backend_patch.data, xp.complex128) * (1 + 1j)
+        data = xp.astype(backend_patch.data, xp.complex128) * (1 + 2j)
         out = backend_patch.new(data=data).angle()
         positive = np.asarray(backend_patch.data) > 0
-        assert np.allclose(np.asarray(out.data)[positive], np.pi / 4)
+        assert np.allclose(np.asarray(out.data)[positive], np.arctan2(2, 1))
 
     def test_fillna_fills(self, backend_patch):
         """Non-finite values are replaced by the value."""

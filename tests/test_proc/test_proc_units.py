@@ -156,3 +156,28 @@ class TestSimplifyUnits:
         assert get_quantity(
             summary.get_coord_summary("distance").units
         ) == get_quantity("m")
+
+
+class TestDataConversionValues:
+    """The data themselves change by the conversion's factors."""
+
+    @pytest.fixture(scope="class")
+    @classmethod
+    def patch(cls):
+        """An example patch."""
+        return dc.get_example_patch()
+
+    def test_offset_units(self, patch):
+        """Celsius to kelvin adds the offset."""
+        out = patch.set_units("degC").convert_units("K")
+        assert np.allclose(out.data, np.asarray(patch.data) + 273.15)
+
+    def test_scaled_units(self, patch):
+        """Metres to millimetres multiplies by a thousand."""
+        out = patch.set_units("m/s").convert_units("mm/s")
+        assert np.allclose(out.data, np.asarray(patch.data) * 1000)
+
+    def test_simplify_scales_the_data(self, patch):
+        """Kilometres simplify to metres, and the data scale with them."""
+        out = patch.set_units("km/s").simplify_units()
+        assert np.allclose(out.data, np.asarray(patch.data) * 1000)

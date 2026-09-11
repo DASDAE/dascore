@@ -718,6 +718,110 @@ class TestNumpyKernel:
         assert np.allclose(np.asarray(out.data), np.asarray(strict_patch.data) * 2)
 
 
+class TestKernelLookupOrder:
+    """Which of several kernels up the MRO answers."""
+
+    class Parent(PatchProcessor):
+        """Only a numpy kernel."""
+
+        name = None
+
+        def numpy_kernel(self, data):
+            """Double."""
+            return data * 2
+
+    class Child(Parent):
+        """Its own array API kernel: it means it, on numpy too."""
+
+        def kernel(self, data):
+            """Triple."""
+            return data * 3
+
+    class NumpyChild(PatchProcessor):
+        """A parent kernel of its own, and a numpy kernel below it."""
+
+        name = None
+
+        def kernel(self, data):
+            """Triple."""
+            return data * 3
+
+    class NumpyGrandchild(NumpyChild):
+        """Its own numpy kernel: it means it, falling back if it must."""
+
+        def numpy_kernel(self, data):
+            """Double."""
+            return data * 2
+
+    def test_a_subclass_kernel_beats_a_parents_numpy_kernel(self, patch):
+        """On numpy data the subclass's own array API kernel runs."""
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            out = self.Child()(patch)
+        assert np.allclose(out.data, patch.data * 3)
+
+    def test_a_subclass_numpy_kernel_beats_a_parents_kernel(self, patch):
+        """On another backend the subclass's numpy kernel runs, by fallback."""
+        xp = pytest.importorskip("array_api_strict")
+        strict = patch.new(data=xp.asarray(np.asarray(patch.data)))
+        with pytest.warns(NumpyFallbackWarning):
+            out = self.NumpyGrandchild()(strict)
+        assert np.allclose(np.asarray(out.data), np.asarray(patch.data) * 2)
+
+    def test_numpy_data_never_warn(self, patch):
+        """The numpy kernel is simply run on numpy data."""
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            out = self.Parent()(patch)
+        assert np.allclose(out.data, patch.data * 2)
+
+
+class TestBatchOneParameters:
+    """Parameters of converted operations which change the answer."""
+
+    def test_detrend_type(self, patch):
+        """A constant detrend removes the mean; a linear one does more."""
+        data = np.asarray(patch.data)
+        constant = patch.detrend("time", type="constant").data
+        assert np.allclose(constant, data - data.mean(axis=1, keepdims=True))
+        assert not np.allclose(patch.detrend("time").data, constant)
+
+    def test_sobel_mode(self, patch):
+        """The edge mode reaches scipy."""
+        from scipy import ndimage  # noqa: PLC0415
+
+        axis = patch.get_axis("time")
+        out = patch.sobel_filter("time", mode="constant", cval=1.0).data
+        expected = ndimage.sobel(patch.data, axis=axis, mode="constant", cval=1.0)
+        assert np.allclose(out, expected)
+
+    def test_kurtosis_along_either_axis(self, patch):
+        """The answer does not depend on where the dimension sits."""
+        out = patch.kurtosis(time=16, samples=True)
+        flipped = patch.transpose("time", "distance").kurtosis(time=16, samples=True)
+        assert np.allclose(out.data, flipped.transpose(*patch.dims).data)
+
+    def test_star_args_are_not_given_by_name(self, patch):
+        """`transpose(dims=...)` is refused, as a function's `*dims` would be."""
+        with pytest.raises(TypeError):
+            patch.transpose(dims=("time", "distance"))
+
+    def test_a_slice_of_strings_is_refused(self, patch):
+        """A plan's slice must hold what a slice of an array can."""
+
+        class BadSlice(SeamScale):
+            """Plan a slice by label."""
+
+            name = None
+
+            def plan(self, patch, out):
+                """Return it."""
+                return {"index": slice("a", "b")}
+
+        with pytest.raises(ParameterError, match="plan may hold only"):
+            BadSlice()(patch)
+
+
 class TestReconcileWithData:
     """`reconcile` may return the result itself, for value-dependent output."""
 
