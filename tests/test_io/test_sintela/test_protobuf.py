@@ -8,6 +8,7 @@ import gc
 import struct
 import warnings
 from functools import cache
+from io import BufferedReader
 from pathlib import Path
 
 import numpy as np
@@ -19,6 +20,7 @@ from dascore.io.sintela import SintelaProtobufV1
 from dascore.io.sintela import protobuf_utils as sintela_utils
 from dascore.units import get_quantity
 from dascore.utils.downloader import fetch
+from dascore.utils.io import IOResourceManager
 
 # protobuf is an optional dependency and is not in the test extra, so the
 # min-deps job runs without it. Skipping here (rather than installing it
@@ -269,7 +271,7 @@ class _BytesReader:
         return out
 
 
-class _CountingReader:
+class _CountingReader(BufferedReader):
     """
     A binary handle that records how many bytes were actually read.
 
@@ -280,26 +282,22 @@ class _CountingReader:
     """
 
     def __init__(self, handle):
-        self._handle = handle
+        super().__init__(handle)
         self.bytes_read = 0
 
     def read(self, size=-1):
         """Read from the wrapped handle, accumulating the byte count."""
-        out = self._handle.read(size)
+        out = super().read(size)
         self.bytes_read += len(out)
         return out
-
-    def __getattr__(self, name):
-        """Delegate seek/tell and friends to the wrapped handle."""
-        return getattr(self._handle, name)
 
 
 def _bytes_read_by(func, path) -> int:
     """Return how many bytes ``func`` pulls off disk for ``path``."""
     with path.open("rb") as handle:
-        reader = _CountingReader(handle)
-        func(reader)
-        return reader.bytes_read
+        with _CountingReader(handle) as reader:
+            func(reader)
+            return reader.bytes_read
 
 
 def del_samples_beyond(msg, keep: int):
@@ -557,6 +555,22 @@ class TestSintelaProtobuf:
         path = write_sintela_file("ts_empty_select.pb", ts_records)
         spool = fiber_io.read(path, distance=(999, 1000))
         assert len(spool) == 0
+
+    @pytest.mark.parametrize("method", ["read", "scan"])
+    def test_borrowed_stream_remains_open(
+        self, fiber_io, write_sintela_file, ts_records, method
+    ):
+        """The special read and derived scan leave caller-owned streams reusable."""
+        path = write_sintela_file("borrowed.pb", ts_records)
+        with path.open("rb") as stream:
+            first = getattr(fiber_io, method)(stream)
+            assert not stream.closed
+            second = getattr(fiber_io, method)(stream)
+            assert len(first) == len(second) == 1
+
+    def test_unknown_source_key_skips_read(self, fiber_io):
+        """An unmatched logical key avoids opening or decoding the recording."""
+        assert len(fiber_io.read("does-not-exist.pb", source_patch_key="missing")) == 0
 
     def test_mixed_families_raise(
         self, fiber_io, write_sintela_file, ts_records, band_records
@@ -1167,7 +1181,23 @@ _FAMILY_BUILDERS = [
 class TestSintelaProtobufScanCost:
     """Scanning must not pay for the sample data it does not report."""
 
-    def test_scan_reads_do_not_grow_with_recording_length(self, write_sintela_file):
+    @pytest.mark.parametrize(
+        "scan",
+        [
+            sintela_utils.scan_payload,
+            SintelaProtobufV1().scan,
+            lambda resource: dc.scan_payloads(
+                IOResourceManager(resource),
+                file_format="Sintela_Protobuf",
+                file_version="1",
+                progress=None,
+            ),
+        ],
+        ids=["helper", "reader", "dispatcher"],
+    )
+    def test_scan_reads_do_not_grow_with_recording_length(
+        self, write_sintela_file, scan
+    ):
         """
         A longer timeseries recording must not cost a longer scan.
 
@@ -1188,8 +1218,8 @@ class TestSintelaProtobufScanCost:
         long = _write("ts_long.pb", 64)
         assert long.stat().st_size > 8 * short.stat().st_size
 
-        short_bytes = _bytes_read_by(sintela_utils.scan_payload, short)
-        long_bytes = _bytes_read_by(sintela_utils.scan_payload, long)
+        short_bytes = _bytes_read_by(scan, short)
+        long_bytes = _bytes_read_by(scan, long)
         assert short_bytes == long_bytes
         assert long_bytes < long.stat().st_size / 4
 

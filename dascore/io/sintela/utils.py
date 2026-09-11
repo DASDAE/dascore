@@ -226,11 +226,6 @@ def _read_sample_range(fid, header, start=0, stop=None):
     return data[offset : offset + (stop - start)]
 
 
-def _load_data(fid, header):
-    """Use numpy's memmap to get array information."""
-    return _read_sample_range(fid, header)
-
-
 def _get_attrs_coords_header(rid, attr_class=PatchAttrs, extras=None):
     """Get Patch attributes and coordinates."""
     header = _get_complete_header(rid)

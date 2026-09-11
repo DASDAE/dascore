@@ -5,9 +5,11 @@ from __future__ import annotations
 import pickle
 from io import BytesIO
 
+import numpy as np
 import pytest
 
 import dascore as dc
+from dascore.io import PatchSource
 from dascore.io.pickle.core import PickleIO
 
 
@@ -35,11 +37,7 @@ class TestGetFormat:
         assert not parser.get_format(generic_hdf5)
 
     def test_spool_from_pickle(self, pickle_patch_path, random_patch):
-        """dc.spool on a scanless format wraps the read spool and serves it.
-
-        PICKLE implements read but not scan, so dc.spool routes through
-        Spool(dc.read(...)); the wrapped patches must load back.
-        """
+        """A file-backed pickle spool loads the serialized samples on demand."""
         spool = dc.spool(pickle_patch_path)
         assert len(spool) == 1
         assert len(spool.get_contents()) == 1
@@ -119,3 +117,39 @@ class TestScan:
                 scan_attr = self._get_summary_value(scan_attrs, attr)
                 patch_attr = self._get_summary_value(patch_summary, attr)
                 assert scan_attr == patch_attr
+
+
+class TestSerializedSourceKeys:
+    """Existing pickle source keys remain valid for indexed reloads."""
+
+    @pytest.mark.parametrize("legacy", [True, False])
+    def test_native_keys_roundtrip(self, tmp_path, random_patch, legacy):
+        """Both old attrs and PatchSource keys survive metadata and bounded reads."""
+        patches = []
+        keys = ["waveforms/first", "waveforms/second"]
+        for index, key in enumerate(keys):
+            patch = random_patch.new(data=random_patch.data + index)
+            if legacy:
+                patch = patch.new(attrs=patch.attrs.update(_source_patch_key=key))
+            else:
+                patch = patch.new(source=PatchSource(key=key))
+            patches.append(patch)
+        path = tmp_path / "keys.pkl"
+        with path.open("wb") as stream:
+            pickle.dump(dc.spool(patches), stream)
+        summaries = dc.scan(path)
+        assert [item.source_patch_key for item in summaries] == keys
+        for index, key in enumerate(keys):
+            loaded = dc.read(path, source_patch_key=key)[0]
+            selected = dc.read(path, source_patch_key=key, time=(1, 4), samples=True)[0]
+            expected = patches[index].select(time=(1, 4), samples=True)
+            np.testing.assert_array_equal(selected.data, expected.data)
+            assert (
+                loaded.attrs.patch_id
+                == selected.attrs.patch_id
+                == summaries[index].attrs.patch_id
+            )
+            assert "_source_patch_key" not in loaded.attrs.model_dump()
+            np.testing.assert_array_equal(
+                dc.spool(path)[index].data, patches[index].data
+            )

@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import dascore as dc
-from dascore.constants import timeable_types
-from dascore.core import Patch
 from dascore.core.attrs import PatchAttrs
 from dascore.core.coordmanager import get_coord_manager
 from dascore.core.coords import get_coord
@@ -107,49 +105,6 @@ def _get_raw_time_coord(data_node, time_len):
     time = _get_time_node(data_node)[:time_len]
     values = to_datetime64(time)
     return get_exact_coord(values, units="s")
-
-
-def _read_terra15(
-    pyfi,
-    time: tuple[timeable_types, timeable_types] | None = None,
-    distance: tuple[float, float] | None = None,
-    snap_dims: bool = True,
-) -> Patch:
-    """
-    Read a terra15 file.
-
-    Notes
-    -----
-    The time array is complicated. There is GPS time and Posix time included
-    in the file. In version 0.0.6 and less of dascore we just used gps time.
-    However, sometimes this results in subsequent samples having a time before
-    the previous sample (time did not increase monotonically).
-
-    So now, we use the first GPS sample, the last sample, and length
-    to determine the dt (new in dascore>0.0.11).
-    """
-    _, data_node = _get_version_data_node(pyfi)
-    time_coord_ = _get_time_coord(data_node, snap_dims)
-    time_coord, time_slice = time_coord_.select(time)
-    time_len = len(time_coord)
-    # get data and sliced distance coord
-    dist_coord = _get_distance_coord(pyfi)
-    dist_coord, dist_slice = dist_coord.select(distance)
-    _data = data_node["data"]
-    # checks for incomplete data blocks
-    if _data.shape[0] > time_len:
-        new_start = time_slice.start or 0
-        t_stop = time_slice.stop
-        new_stop = new_start + time_len if t_stop is None else t_stop
-        time_slice = slice(new_start, new_stop)
-    data = data_node["data"][time_slice, dist_slice]
-    coords = get_coord_manager(
-        {"time": time_coord, "distance": dist_coord},
-        dims=("time", "distance"),
-    )
-    dims = ("time", "distance")
-    attrs = _get_default_attrs(pyfi.attrs)
-    return Patch(data=data, coords=coords, attrs=attrs, dims=dims)
 
 
 def _get_default_attrs(root_node_attrs):

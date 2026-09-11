@@ -62,11 +62,3 @@ def _get_attr_dict(h5fi):
     out = maybe_get_items(data_attrs, mapping)
     out["data_units"] = _get_data_units_and_type(data_attrs["DataUnitLabel"])
     return out
-
-
-def _get_attrs_coords_and_data(h5fi, snap=True):
-    """Return the attributes, coordinates, and data array."""
-    cm = _get_coord_manager(h5fi, snap)
-    attrs = _get_attr_dict(h5fi)
-    data = h5fi["data"]
-    return attrs, cm, data

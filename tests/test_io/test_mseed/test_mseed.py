@@ -37,6 +37,7 @@ def _write_mseed(
     sample_rates=None,
     source_ids=None,
     data_samples=None,
+    encoding=None,
 ):
     """Write a small MiniSEED file."""
     pymseed = pytest.importorskip("pymseed")
@@ -64,7 +65,7 @@ def _write_mseed(
         str(path),
         overwrite=True,
         format_version=format_version,
-        encoding=pymseed.DataEncoding.INT32,
+        encoding=pymseed.DataEncoding.INT32 if encoding is None else encoding,
     )
     return path
 
@@ -597,6 +598,19 @@ class TestMiniSeedUtils:
         assert mseed_utils._get_time_limits(...) == (None, None)
         assert mseed_utils._get_time_limits((None, ...)) == (None, None)
 
+    def test_exact_time_limits_and_trim(self):
+        """Trimming at a fractional grid keeps the selected samples and origin."""
+        limits = mseed_utils._get_time_limits(
+            (np.datetime64(333333334, "ns"), np.datetime64(1400000000, "ns"))
+        )
+        assert limits == (333333334, 1400000000)
+        segment = _trace_segment(sample_rate=3.0, data=np.arange(6, dtype=np.int32))
+        selected = mseed_utils._trim_segment_time(segment, limits)
+        np.testing.assert_array_equal(selected.data, [2, 3, 4])
+        assert selected.start_ns == 666666666
+        assert selected.origin_offset == 2
+        assert selected.sample_count == 3
+
     def test_bad_source_id_falls_back_to_station(self):
         """Unparseable source IDs are still preserved."""
 
@@ -673,7 +687,7 @@ class TestMiniSeedUtils:
         ("encoding", "dtype"),
         (
             (0, "S1"),
-            (1, "int16"),
+            (1, "int32"),
             (3, "int32"),
             (4, "float32"),
             (5, "float64"),
@@ -820,3 +834,124 @@ class TestRealMiniSeed:
             "00068",
         }
         assert {x.coords.get_array("seed_channel")[0] for x in spool} == {"HSF"}
+
+
+class TestDecodedArrayContract:
+    """Stored encodings must describe the array returned by the decoder."""
+
+    @pytest.mark.parametrize(
+        "rate, count, offset", [(1024.0, 8, 7812500), (3.0, 1, 333333334)]
+    )
+    def test_fractional_final_record(self, tmp_path, rate, count, offset):
+        """A final one-sample packet survives fractional endpoint rounding."""
+        start = 1704067200000000000
+        first = _write_mseed(
+            tmp_path / "first.mseed",
+            starts=[start],
+            sample_rates=[rate],
+            source_ids=["FDSN:XX_00000__H_S_F"],
+            data_samples=[np.arange(count, dtype=np.int32)],
+        )
+        last = _write_mseed(
+            tmp_path / "last.mseed",
+            starts=[start + offset],
+            sample_rates=[rate],
+            source_ids=["FDSN:XX_00000__H_S_F"],
+            data_samples=[np.array([101], dtype=np.int32)],
+        )
+        path = tmp_path / "joined.mseed"
+        path.write_bytes(first.read_bytes() + last.read_bytes())
+        full = dc.read(path)[0]
+        np.testing.assert_array_equal(full.data[0], np.r_[np.arange(count), 101])
+        tail = dc.read(path, time=(-1, None), samples=True)[0]
+        np.testing.assert_array_equal(tail.data, [[101]])
+        assert full.attrs.patch_id == tail.attrs.patch_id
+
+    def test_overlapping_groups_same_source(self, tmp_path):
+        """Overlapping records with different rates load only their logical group."""
+        parts = []
+        for index, rate in enumerate([10.0, 20.0]):
+            part = _write_mseed(
+                tmp_path / f"rate{index}.mseed",
+                sample_rates=[rate],
+                source_ids=["FDSN:XX_00000__H_S_F"],
+                data_samples=[np.arange(10, dtype=np.int32) + index * 100],
+            )
+            parts.append(part.read_bytes())
+        path = tmp_path / "overlap.mseed"
+        path.write_bytes(b"".join(parts))
+        summaries = dc.scan(path)
+        assert len(summaries) == 2
+        for index, summary in enumerate(summaries):
+            patch = dc.read(path, source_patch_key=summary.source_patch_key)[0]
+            np.testing.assert_array_equal(patch.data, [np.arange(10) + index * 100])
+            assert patch.attrs.patch_id == summary.attrs.patch_id
+
+    def test_mixed_channel_dtypes(self, tmp_path):
+        """A channel subset retains the dtype promoted across its source group."""
+        pymseed = pytest.importorskip("pymseed")
+        rows = [np.arange(10, dtype=np.int32), np.arange(10, dtype=np.float32) + 0.25]
+        parts = []
+        for index, (data, sample_type, encoding) in enumerate(
+            zip(
+                rows,
+                ["i", "f"],
+                [pymseed.DataEncoding.INT32, pymseed.DataEncoding.FLOAT32],
+                strict=True,
+            )
+        ):
+            traces = pymseed.MS3TraceList()
+            traces.add_data(
+                sourceid=f"FDSN:XX_{index:05d}__H_S_F",
+                data_samples=data,
+                sample_type=sample_type,
+                sample_rate=10.0,
+                starttime=pymseed.timestr2nstime("2024-01-01T00:00:00Z"),
+            )
+            part = tmp_path / f"{index}.mseed"
+            traces.to_file(
+                str(part), overwrite=True, format_version=3, encoding=encoding
+            )
+            parts.append(part.read_bytes())
+        path = tmp_path / "mixed.mseed"
+        path.write_bytes(b"".join(parts))
+        summary = dc.scan(path)[0]
+        full = dc.read(path)[0]
+        selected = dc.read(path, channel=(1, 1))[0]
+        assert summary.dtype == str(full.dtype) == str(selected.dtype) == "float64"
+        np.testing.assert_array_equal(full.data, np.stack(rows))
+        np.testing.assert_array_equal(selected.data, rows[1][None, :])
+        assert full.attrs.patch_id == selected.attrs.patch_id == summary.attrs.patch_id
+        assert full._source.key == selected._source.key == summary.source_patch_key
+
+    @pytest.mark.parametrize("version", [2, 3])
+    def test_int16_decodes_as_int32(self, tmp_path, version):
+        """INT16 storage expands to int32 on full and bounded reads."""
+        pymseed = pytest.importorskip("pymseed")
+        path = _write_mseed(
+            tmp_path / "int16.mseed",
+            format_version=version,
+            encoding=pymseed.DataEncoding.INT16,
+        )
+        summary = dc.scan(path)[0]
+        full = dc.read(path)[0]
+        selected = dc.read(path, time=(2, 7), samples=True)[0]
+        expected = np.arange(10, dtype=np.int32) + np.arange(3)[:, None] * 100
+        assert summary.dtype == str(full.dtype) == "int32"
+        assert summary.attrs.sample_type == full.attrs.sample_type == "i"
+        np.testing.assert_array_equal(full.data, expected)
+        np.testing.assert_array_equal(selected.data, expected[:, 2:7])
+        assert full.attrs.patch_id == selected.attrs.patch_id
+
+    @pytest.mark.parametrize(
+        "windows, shape",
+        [
+            ({"channel": (0, 0)}, (0, 10)),
+            ({"time": (3, 3)}, (3, 0)),
+        ],
+    )
+    def test_empty_windows(self, mseed_v3_path, windows, shape):
+        """Empty source windows retain the declared axes and decoded dtype."""
+        out = MSeedV3().read_array(mseed_v3_path, windows)
+        assert out.shape == shape
+        assert out.dtype == np.dtype("int32")

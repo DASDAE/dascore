@@ -40,6 +40,7 @@ from dascore.utils.misc import optional_import
 
 from .utils import (
     _detect_format,
+    _get_group_key,
     _group_segments,
     _read_segments,
     _scan_patches,
@@ -79,19 +80,27 @@ class MSeedV2(FiberIO):
             resolve_keyed_source(groups, key),
             key=lambda item: (item.station, item.source_id),
         )
+        dtype = np.result_type(*[item.dtype for item in summaries])
         shape = (len(summaries), summaries[0].sample_count)
         channels, time = windows_to_slices(windows, ("channel", "time"), shape)
         selected = summaries[channels]
         if not selected or time.start == time.stop:
-            return np.empty(
-                (len(selected), time.stop - time.start), dtype=summaries[0].dtype
-            )
+            return np.empty((len(selected), time.stop - time.start), dtype=dtype)
         source_windows: _SourceWindows = {
             item.source_id: [_trace_time_window(item)] for item in selected
         }
-        segments = _read_segments(resource, pymseed, source_windows=source_windows)
+        group_key = _get_group_key(summaries[0])
+        segments = [
+            segment
+            for segment in _read_segments(
+                resource, pymseed, source_windows=source_windows
+            )
+            if _get_group_key(segment) == group_key
+        ]
         segments = sorted(segments, key=lambda item: (item.station, item.source_id))
-        return np.stack([segment.data[time] for segment in segments])
+        return np.stack([segment.data[time] for segment in segments]).astype(
+            dtype, copy=False
+        )
 
 
 class MSeedV3(MSeedV2):

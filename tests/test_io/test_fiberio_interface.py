@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
+import h5py
 import numpy as np
 import pytest
 
 import dascore as dc
 from dascore.core.source import PatchSource
-from dascore.exceptions import InvalidFiberIOError
-from dascore.io import FiberIO
+from dascore.exceptions import InvalidFiberFileError, InvalidFiberIOError
+from dascore.io import FiberIO, H5Reader
+from dascore.io.dasdae.core import DASDAEV2
 from dascore.io.utils import slice_dataset
 
 
@@ -144,3 +146,44 @@ class TestDerivedRead:
         reader.version = ""
         assert reader.get_format("memory") == (reader.name, "")
         assert reader.get_format("other") is False
+
+
+class TestBorrowedHandles:
+    """Derived methods release only handles opened for their own operation."""
+
+    @pytest.mark.parametrize("method", ["read", "scan"])
+    def test_hdf5_handle_remains_open(self, tmp_path, method):
+        """A caller can reuse its HDF5 handle after read or scan."""
+        path = tmp_path / "borrowed.h5"
+        original = dc.get_example_patch()
+        original.io.write(path, "DASDAE")
+        reader = DASDAEV2()
+        with H5Reader.get_handle(path) as handle:
+            first = getattr(reader, method)(handle)
+            assert handle.id.valid
+            second = getattr(reader, method)(handle)
+            assert len(first) == len(second) == 1
+            if method == "read":
+                np.testing.assert_array_equal(first[0].data, original.data)
+
+
+class TestStoredShapeValidation:
+    """Corrupt sample storage cannot become apparently valid metadata."""
+
+    @pytest.mark.parametrize("missing", [True, False])
+    def test_corrupt_dataset_rejected(self, tmp_path, missing):
+        """Missing data and data/coordinate shape disagreement are rejected."""
+        path = tmp_path / "corrupt.h5"
+        patch = dc.Patch(
+            data=np.arange(6).reshape(2, 3),
+            coords={"x": [0, 1], "y": [0, 1, 2]},
+            dims=("x", "y"),
+        )
+        patch.io.write(path, "DASDAE")
+        with h5py.File(path, "a") as handle:
+            group = next(iter(handle["waveforms"].values()))
+            del group["data"]
+            if not missing:
+                group.create_dataset("data", data=np.zeros((2, 2)))
+        with pytest.raises(InvalidFiberFileError, match="shapes disagree"):
+            DASDAEV2().get_metadata(path)

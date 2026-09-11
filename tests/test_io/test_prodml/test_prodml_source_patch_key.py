@@ -71,11 +71,8 @@ class TestReadArrayKeys:
         for payload in payloads:
             key = payload.source_patch_key
             out = io.read_array(prodml_fbe_path, {}, key=key)
-            expected = (
-                io.read(prodml_fbe_path, source_patch_key=key)[0]
-                .select(samples=True, **{})
-                .data
-            )
+            with h5py.File(prodml_fbe_path, "r") as handle:
+                expected = handle["Acquisition/Processed/Fbe[0]"][key][:]
             assert np.array_equal(out, expected, equal_nan=True), key
             arrays[key] = out
         # the nodes share a shape, so only their values tell them apart
@@ -91,7 +88,7 @@ class TestReadArrayKeys:
 
     def test_keyless_multi_node_raises(self, prodml_fbe_path):
         """Several nodes and no key cannot be resolved."""
-        with pytest.raises(PatchAttributeError, match="source_patch_key"):
+        with pytest.raises(PatchAttributeError, match="pass an explicit key"):
             ProdMLV2_0().read_array(prodml_fbe_path, {})
 
 

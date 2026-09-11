@@ -174,7 +174,7 @@ class TestFebus:
 
     def test_read_array_without_key_raises(self, two_zone_path):
         """A file holding several zones cannot resolve a keyless read."""
-        with pytest.raises(PatchAttributeError, match="source_patch_key"):
+        with pytest.raises(PatchAttributeError, match="pass an explicit key"):
             Febus2().read_array(two_zone_path, {})
 
     def test_read_array_reads_only_touched_blocks(self, febus_path, monkeypatch):

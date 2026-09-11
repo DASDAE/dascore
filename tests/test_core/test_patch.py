@@ -1542,6 +1542,22 @@ class TestStringCoordinatePatch:
 class TestPatchSource:
     """Source metadata belongs to framework assembly, not patch equality."""
 
+    @pytest.mark.parametrize("dataless", [False, True])
+    def test_flat_source_summary(self, random_patch, dataless):
+        """Flattening loaded or data-less patches exposes source fields and dtype."""
+        patch = random_patch.drop_data() if dataless else random_patch
+        patch = patch.new(
+            source=PatchSource(
+                path="/record.h5", format="DASDAE", version="2", key="waveform"
+            )
+        )
+        flat = patch.flat_dump(exclude={"tag"})
+        assert flat["source_patch_key"] == "waveform"
+        assert str(flat["source_path"]) == "/record.h5"
+        assert flat["source_format"] == "DASDAE"
+        assert flat["dtype"] == str(patch.dtype)
+        assert "tag" not in flat
+
     @pytest.mark.parametrize("loaded", [True, False])
     def test_new_keeps_source(self, random_patch, loaded):
         """Metadata updates and attaching data retain the logical source."""

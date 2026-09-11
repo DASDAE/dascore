@@ -558,7 +558,8 @@ class TestRead:
             assert patch1.equals(patch2)
 
     @pytest.mark.parametrize("snap", [True, False])
-    def test_read_window_matches_full_selection(self, io_path_tuple, snap):
+    @pytest.mark.parametrize("keyed", [True, False])
+    def test_read_window_matches_full_selection(self, io_path_tuple, snap, keyed):
         """Every reader selects original samples without changing source identity."""
         _io, path = io_path_tuple
         with skip_missing():
@@ -568,14 +569,14 @@ class TestRead:
             for dim, size in zip(full.dims, full.shape, strict=True)
             if size > 4
         }
-        selected = dc.read(
-            path, snap=snap, source_patch_key=full._source.key, **bounds
-        )[0]
+        key_query = {"source_patch_key": full._source.key} if keyed else {}
+        selected = dc.read(path, snap=snap, **key_query, **bounds)[0]
         expected = full.select(**bounds)
         np.testing.assert_array_equal(selected.data, expected.data)
         assert selected.coords == expected.coords
         assert selected.dtype == expected.dtype
         assert selected.attrs.patch_id == full.attrs.patch_id
+        assert selected._source.key == full._source.key
         assert selected.attrs.processing_id == full.attrs.processing_id
         assert selected.attrs.history == full.attrs.history
 

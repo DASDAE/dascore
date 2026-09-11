@@ -18,18 +18,6 @@ from .utils import (
 )
 
 
-def _resolve_snap(snap, snap_dims, default=True):
-    """
-    Read the option Terra15 spells two ways.
-
-    `scan` calls it ``snap`` and `read` calls it ``snap_dims``; a caller
-    may forward either, so both are taken and ``snap`` wins.
-    """
-    if snap is not None:
-        return snap
-    return default if snap_dims is None else snap_dims
-
-
 class Terra15FormatterV4(FiberIO):
     """Support for Terra15 data format, version 4."""
 

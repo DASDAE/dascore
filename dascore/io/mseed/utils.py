@@ -35,7 +35,7 @@ _STEIM2_ENCODING = 11
 
 _ENCODING_DTYPE_MAP = {
     _TEXT_ENCODING: "S1",
-    _INT16_ENCODING: "int16",
+    _INT16_ENCODING: "int32",
     _INT32_ENCODING: "int32",
     _FLOAT32_ENCODING: "float32",
     _FLOAT64_ENCODING: "float64",
@@ -175,9 +175,11 @@ def _get_time_limits(time=None) -> _TimeLimits:
 
 
 def _trace_time_window(trace: _TraceInfo) -> _TraceWindow:
-    """Return the inclusive time window covered by a trace."""
-    stop = trace.start_ns + max(trace.sample_count - 1, 0) * trace.sample_step_ns
-    return trace.start_ns, stop
+    """Return a record lookup window including fractional-grid rounding."""
+    duration = _duration_ns(trace.sample_rate, max(trace.sample_count - 1, 0))
+    # Match the one-nanosecond tolerance used when coalescing fractional grids.
+    tolerance = int((trace.sample_step * ONE_BILLION).denominator != 1)
+    return trace.start_ns, trace.start_ns + duration + tolerance
 
 
 def _time_windows_overlap(start: int, stop: int, limits: _TimeLimits) -> bool:
@@ -550,7 +552,7 @@ def _metadata_from_segments(
     return dc.Patch(
         attrs=prepared.attrs,
         coords=coords,
-        dtype=prepared.first.dtype,
+        dtype=np.result_type(*[segment.dtype for segment in prepared.segments]),
         source=PatchSource(key=_source_patch_key(group_key)),
     )
 

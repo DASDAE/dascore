@@ -17,7 +17,6 @@ from dascore.io.utils import step_from_rate
 from dascore.models import DateTime64
 from dascore.utils.misc import iterate
 from dascore.utils.remote_io import ensure_local_file
-from dascore.utils.time import to_float
 from dascore.utils.xml import xml_to_dict
 
 # -- Create a pydantic model for the metadata info to help keep thins organized.
@@ -152,14 +151,10 @@ def _paths_to_scan_patches(
     metadata,
     attr_cls=dc.PatchAttrs,
     extra_attrs=None,
-    timestamp=None,
 ) -> list[dc.Patch]:
     """Convert paths to patch summaries for scan/index workflows."""
     extra_attrs = {} if not extra_attrs else extra_attrs
     paths = list(iterate(paths))
-    if timestamp is not None:
-        ts = to_float(timestamp)
-        paths = [x for x in paths if x.stat().st_mtime >= ts]
     if not paths:
         return []
     base_attrs = _make_base_attrs_dict(metadata)
