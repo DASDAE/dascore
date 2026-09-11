@@ -77,8 +77,8 @@ class PatchProcessor(DascoreBaseModel):
     Subclasses declare their parameters as fields and override some of:
 
     - `derive(patch)`: the result's metadata, from a patch without data.
-    - `plan(patch, out)`: the numbers `kernel` needs, as a dict of ints,
-      floats, bools, tuples of those, or numeric arrays.
+    - `plan(patch, out)`: what `kernel` needs, as a dict of numbers, None,
+      slices, tuples of those, or numeric arrays.
     - `kernel(data, **plan)`: the array computation, with the array API.
       It never sees a patch, so a chain of kernels can be compiled.
     - `numpy_kernel(data, **plan)`: the same with numpy, scipy or numba.
