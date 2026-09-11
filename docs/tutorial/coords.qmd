@@ -72,7 +72,7 @@ This changes STFT and stacked-tile metadata: `{dim}_start` / `{dim}_stop` previo
 
 Paired cell bounds require monotonic row order. Reversals and monotonic subsets remain valid. To arbitrarily permute tiles before reassembly or inverse STFT, explicitly drop their public bounds first; the private reconstruction indices still follow the reordered rows.
 
-Selection and raw decimation retain the selected bounds. Operations that build a new grid, including interpolation, resampling, filtered decimation, padding, and rolling windows, drop them. Translation and unit conversion transform them with the dimension. Waterfall image extents use the outer cell edges: half a step beyond the first and last labels, or the explicit pair when attached. Spectrograms display each spectrum at its window-centre label over one hop interval; overlapping source-window bounds are omitted from that plotting view.
+Selection and raw decimation retain the selected bounds. Operations that build a new grid, including interpolation, resampling, filtered decimation, padding, rolling windows, and correlation lag grids, drop them. Translation and unit conversion transform them with the dimension. Waterfall image extents use the outer cell edges: half a step beyond the first and last labels, or the explicit pair when attached. Spectrograms display each spectrum at its window-centre label over one hop interval; overlapping source-window bounds are omitted from that plotting view.
 
 ## Segmented coordinates
 

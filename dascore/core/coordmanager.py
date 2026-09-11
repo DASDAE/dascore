@@ -180,11 +180,12 @@ def _translation_delta(old, new):
 
 
 def _shift_cell_edge(edge, delta):
-    """Translate an edge without unsigned subtraction or addition wrapping."""
-    if edge.dtype.kind == "u":
+    """Translate an edge, promoting integer values when its dtype cannot fit."""
+    if edge.dtype.kind in "iu":
         limits = np.iinfo(edge.dtype)
         in_range = (
-            0 <= int(edge.min()) + delta and int(edge.max()) + delta <= limits.max
+            limits.min <= int(edge.min()) + delta
+            and int(edge.max()) + delta <= limits.max
         )
         if isinstance(edge, CoordRange) and delta == int(delta) and in_range:
             return edge._translated(int(delta))

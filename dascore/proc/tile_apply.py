@@ -65,6 +65,16 @@ def _offset_values(coord, offsets: np.ndarray):
     down from where it starts. Only a range has a step, so only a range
     gets here.
     """
+    if coord.dtype.kind in "iu":
+        # Evaluate the exact grid in Python integers so padded positions can
+        # promote beyond the source dtype instead of wrapping at its limits.
+        num, den, offset = coord._grid_terms
+        return np.asarray(
+            [
+                coord._start_tick + (offset + int(index) * num) // den
+                for index in offsets
+            ]
+        )
     return coord._labels(offsets)
 
 

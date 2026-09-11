@@ -80,7 +80,9 @@ def correlate_shift(
     new_coord = _new_coord.change_length(len(coord))
     assert len(new_coord) == len(coord)
     cm = patch.coords
-    new_cm = cm.update(**{dim: new_coord}).rename_coord(**{dim: f"lag_{dim}"})
+    new_cm = cm._update_grid(dim, **{dim: new_coord}).rename_coord(
+        **{dim: f"lag_{dim}"}
+    )
     out = patch.update(data=data, coords=new_cm)
     return out
 

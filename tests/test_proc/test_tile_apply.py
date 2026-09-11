@@ -686,3 +686,19 @@ class TestPhysicalTileBounds:
             time=permutation, samples=True
         )
         assert reordered.reassemble().equals(patch, close=True)
+
+
+class TestUnsignedTileBounds:
+    """Padding a window can extend its physical bounds below unsigned zero."""
+
+    @pytest.mark.parametrize("dtype", [np.uint8, np.uint64])
+    def test_extrapolated_bounds(self, dtype):
+        """The first overlapping tile spans negative positions without wrapping."""
+        patch = dc.Patch(
+            data=np.arange(32.0), coords={"x": np.arange(32, dtype=dtype)}, dims=("x",)
+        )
+        tiles = patch.tile_apply(identity, mode="stack", x=4, samples=True)
+        assert tiles.get_array("x_start")[0] == -2.5
+        assert tiles.get_array("x_stop")[0] == 1.5
+        assert tiles.get_array("x")[0] == 0
+        assert tiles.reassemble().equals(patch, close=True)

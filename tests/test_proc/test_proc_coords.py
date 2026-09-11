@@ -1394,3 +1394,27 @@ class TestBoundedGridReplacement:
         )
         out = original.update_coords(x=values - np.uint64(1))
         np.testing.assert_array_equal(out.get_array("x_start"), [-1, 0, 1])
+
+
+class TestIntegerCellTranslation:
+    """Integer physical bounds promote when translated outside their dtype."""
+
+    @pytest.mark.parametrize("dtype", [np.int8, np.int64, np.uint64])
+    @pytest.mark.parametrize("shift", [0.5, 200])
+    def test_promoted_bounds(self, dtype, shift):
+        """Fractional and out-of-range shifts retain the actual physical edges."""
+        values = np.arange(2, 5, dtype=dtype)
+        patch = dc.Patch(
+            data=np.ones(3),
+            dims=("x",),
+            coords={
+                "x": values,
+                "x_start": ("x", values - 1),
+                "x_stop": ("x", values + 1),
+            },
+        )
+        out = patch.update_coords(x=values.astype(float) + shift)
+        for name in ("x_start", "x_stop"):
+            np.testing.assert_array_equal(
+                out.get_array(name), patch.get_array(name).astype(float) + shift
+            )
