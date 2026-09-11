@@ -438,7 +438,7 @@ class Missing:
             [first + np.arange(n) * self.step for first, _, n in self.runs]
         )
 
-    def __rich__(self):
+    def __str__(self):
         holes = " | ".join(
             f"[{first}]" if n == 1 else f"[{first} … {last}]"
             for first, last, n in self.runs
@@ -2559,11 +2559,15 @@ class CoordArray(BaseCoord):
         if _is_null(step):
             values["step"] = None
         else:
-            # a declared step is the grid the values sit on, not their spacing
+            # a declared step is the grid the values sit on, not their
+            # spacing; its sign follows the values, as a range's does
             if data.ndim != 1 or not is_strictly_monotonic(data):
                 msg = "A declared step needs one-dimensional, monotonic values."
                 raise CoordError(msg)
+            magnitude = np.abs(np.asarray(step))[()]
+            step = magnitude if len(data) < 2 or data[-1] > data[0] else -magnitude
             _on_grid(np.diff(data), step)
+            values["step"] = step
         return values
 
     def _convert_units(self, units) -> Self:
@@ -2677,7 +2681,7 @@ class CoordArray(BaseCoord):
         out = self.values[item]
         if not np.ndim(out):
             return out
-        return self.__class__(values=out, units=self.units)
+        return self.__class__(values=out, units=self.units, step=self.step)
 
     def _min(self):
         """Return min value."""
@@ -3385,13 +3389,14 @@ class CoordSegmented(BaseCoord):
         return rows
 
     def _holes(self) -> list[tuple]:
-        """The positions of the common grid between one run and the next."""
-        step = self.step if self.sorted else -self.step
-        rows = []
-        for _, before, after, _ in self._seams():
+        """The grid positions inside each run and between one run and the next."""
+        step = self.step  # signed with the runs' direction
+        rows = list(self.segments[0]._holes())
+        for (_, before, after, _), seg in zip(self._seams(), self.segments[1:]):
             count = int(_on_grid(np.asarray([after - before]), step)[0]) - 1
             if count:
                 rows.append((before + step, after - step, count))
+            rows.extend(seg._holes())
         return rows
 
     @staticmethod
