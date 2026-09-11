@@ -930,12 +930,14 @@ def derived_catalog(
         sizes=_whole_member_sizes(trims, sources),
     )
     if parent is not None:
-        records = _with_parent_runs(records, parent.backend, trims)
+        records = _with_parent_runs(records, parent.backend, trims, sources)
     backend.write_sources(records)
     return PatchCatalog(backend=backend, resolver=resolver)
 
 
-def _with_parent_runs(records, parent_backend, trims: pd.DataFrame) -> list:
+def _with_parent_runs(
+    records, parent_backend, trims: pd.DataFrame, sources: pd.DataFrame
+) -> list:
     """
     The records with the runs their members link in the parent.
 
@@ -943,24 +945,27 @@ def _with_parent_runs(records, parent_backend, trims: pd.DataFrame) -> list:
     so it takes the member's runs; the reports clip runs to each row's
     envelope. An output of several takes runs only for a coordinate which
     kept its identity, and so equals each member's. A run in other units
-    or of another kind than the output's coordinate is dropped. A re-plan
-    of the same dimension collapses to the grand-parent's members, which
-    this parent does not index, so its outputs state no runs.
+    or of another kind than the output's coordinate is dropped. Only
+    members read from the parent's index carry its patch ids
+    (``_index_id``); a re-plan of the same dimension collapses to members
+    which do not, so its outputs state no runs.
     """
-    if trims.empty:
+    if trims.empty or "_index_id" not in sources.columns:
         return records
-    runs = parent_backend.patch_runs(trims["_patch_id"].unique())
-    if not runs:
-        return records
+    index_ids = dict(zip(sources["_patch_id"], sources["_index_id"], strict=True))
     members: dict[str, list] = {}
     for output_id, patch_id in zip(trims["output_id"], trims["_patch_id"], strict=True):
-        members.setdefault(str(int(output_id)), []).append(patch_id)
+        members.setdefault(str(int(output_id)), []).append(index_ids.get(patch_id))
+    known = {x for ids in members.values() for x in ids if pd.notna(x)}
+    runs = parent_backend.patch_runs(known)
+    if not runs:
+        return records
     out = []
     for source in records:
         patches = []
         for patch in source.patches:
             ids = members.get(patch.source_patch_key, [])
-            parent = runs.get(ids[0], []) if ids else []
+            parent = runs.get(ids[0], []) if ids and pd.notna(ids[0]) else []
             coords = []
             for coord in patch.coords:
                 coords.append(coord)
@@ -1013,7 +1018,8 @@ def collapse_working_df(catalog: PatchCatalog) -> pd.DataFrame | None:
     # to know. Dropping it left `_build_members` to assume no source was
     # modified, so a member which was a slice of a file came back marked
     # "load whole" and the loader read all of it.
-    working = members.drop(columns=["output_id"], errors="ignore")
+    # index ids name the parent's patches, not these members
+    working = members.drop(columns=["output_id", "_index_id"], errors="ignore")
     working = patch_local_adjusted_envelopes(
         working, catalog.residuals, drop_empty=True
     )

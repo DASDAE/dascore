@@ -1654,6 +1654,9 @@ class Spool(NodeRepr, NamespaceOwner):
         base = collapse_working_df(self._catalog) if same_dim else None
         if base is None:
             base = self._catalog.to_df().reset_index(drop=True)
+            if "_patch_id" in base.columns:
+                # the index's own ids, which only rows read from it carry
+                base = base.assign(_index_id=base["_patch_id"])
         base = _ensure_patch_id(base)
         working = base.drop(columns=list(self._drop_columns), errors="ignore")
         working = _drop_patch_local_empty(working)

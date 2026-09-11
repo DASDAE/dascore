@@ -302,6 +302,24 @@ class TestDerived:
         assert merged.get_gaps()["gap_size"].tolist() == [HOLE]
         assert merged.get_gaps("distance").empty
 
+    def test_rechunk_lends_no_runs(self, gapped_patch):
+        """A re-chunk along the same dimension never lends one patch's runs.
+
+        Its members are the first plan's, whose ids are not the parent
+        index's, so no output takes runs and no patch drops out of the
+        report.
+        """
+        later = dc.get_example_patch().update_coords(
+            time_min=gapped_patch.get_coord("time").max() + 10_000 * MS
+        )
+        once = dc.spool([gapped_patch, later]).chunk(time=None)
+        twice = once.chunk(time=None)
+        assert once.get_gaps()["gap_size"].tolist() == [HOLE, pd.Timedelta(10, "s")]
+        links = twice._catalog.backend._fetch_df("SELECT run_index FROM patch_coords")
+        assert (links["run_index"] == 0).all()
+        coverage = twice.get_coverage()
+        assert coverage["time_max"].max() == later.get_coord("time").max()
+
     def test_concatenated_members_state_no_runs(self, gapped_patch):
         """An output joined along a dimension takes no member's runs of it."""
         later = gapped_patch.update_coords(
