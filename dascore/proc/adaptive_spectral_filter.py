@@ -22,13 +22,16 @@ from pydantic import ConfigDict
 from scipy import fft as sp_fft
 
 from dascore.constants import PatchType
+from dascore.core.processor import (
+    PatchMeta,
+    PatchProcessor,
+    register_implementation,
+)
 from dascore.exceptions import MissingOptionalDependencyError, ParameterError
 from dascore.utils.patch import patch_function
 from dascore.utils.signal import get_taper
 from dascore.utils.tiles import TilePlan, get_tile_plan
 from dascore.utils.window import Window, resolve_window
-from dascore.workflow.meta import PatchMeta
-from dascore.workflow.processor import PatchProcessor, register_implementation
 
 _AdaptiveSpectralEngine = Literal["auto", "numba", "scipy"]
 __all__ = ("AdaptiveSpectralFilter", "adaptive_spectral_filter")

@@ -6,11 +6,11 @@ import numpy as np
 import pytest
 
 import dascore as dc
+from dascore.core.processor import PatchMeta
 from dascore.exceptions import CoordError, ParameterError
 from dascore.units import percent
 from dascore.utils.patch import get_patch_window_size, get_window_axis_step
 from dascore.utils.window import Window, resolve_window
-from dascore.workflow.meta import PatchMeta
 
 
 @pytest.fixture()

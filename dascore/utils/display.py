@@ -1519,11 +1519,21 @@ def _human_size(byte_count: int) -> str:
     return f"{size:.1f} {largest}".replace(".0 ", " ")
 
 
-def array_to_text(data, units=None) -> Text:
-    """Convert a coordinate to string."""
+def _data_header(dtype, units=None) -> Text:
+    """Return the data section's header up to the dtype and units."""
     header = Text("➤ ") + Text("Data", style=dascore_styles["dc_red"])
     unitstr = Text("") if units is None else Text(f", units: {units}")
-    header += Text(f" ({data.dtype}") + unitstr
+    return header + Text(f" ({dtype}") + unitstr
+
+
+def dataless_to_text(dtype, units=None) -> Text:
+    """Describe the data a patch built without any would hold."""
+    return _data_header(dtype, units) + Text(")\n   no data")
+
+
+def array_to_text(data, units=None) -> Text:
+    """Convert a coordinate to string."""
+    header = _data_header(data.dtype, units)
     # How much room it takes up. A repr states the dtype and the shape,
     # which is the size in pieces; whether it fits in memory is the
     # question those two are usually being multiplied to answer.

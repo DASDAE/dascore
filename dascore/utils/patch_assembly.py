@@ -29,6 +29,7 @@ from dascore.io.index.schema import RESERVED_ATTR_COLUMNS
 from dascore.units import get_quantity
 from dascore.utils.attrs import combine_patch_attrs, warn_if_histories_differ
 from dascore.utils.chunk_plan import _SOURCE_COLUMNS
+from dascore.utils.identity import ids_enabled
 from dascore.utils.misc import broadcast_for_index, is_range
 from dascore.utils.patch import (
     _force_patch_merge,
@@ -40,7 +41,6 @@ from dascore.utils.pd import (
     _convert_min_max_in_kwargs,
     get_dim_names_from_columns,
 )
-from dascore.workflow.identity import ids_enabled
 
 
 def _get_varying_dim(df) -> str | None:

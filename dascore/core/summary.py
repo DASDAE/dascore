@@ -290,7 +290,7 @@ class PatchSummary(DascoreBaseModel):
             coords=patch.coords.to_summary_dict(),
             dims=patch.dims,
             shape=patch.shape,
-            dtype=str(np.dtype(patch.data.dtype)),
+            dtype=str(np.dtype(patch.dtype)),
             source_patch_key=patch.attrs.get("_source_patch_key", ""),
         )
 

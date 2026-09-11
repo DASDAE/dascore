@@ -11,7 +11,7 @@ IDs from source metadata or use IDs stored by the format.
 
 Examples
 --------
->>> from dascore.workflow.identity import advance, fold_patch_ids
+>>> from dascore.utils.identity import advance, fold_patch_ids
 >>>
 >>> # What was done: the operation folds into what came before.
 >>> first = advance("", "0123456789abcdef")
@@ -23,11 +23,11 @@ Examples
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from typing import Any
 from uuid import uuid4
 
-from dascore.workflow.serialize import combine_hashes, digest
+from dascore.utils.serialize import combine_hashes, digest
 
 # What a patch carries before anything has been done to it. Not a digest:
 # an empty string is the identity element of `advance`, and reads as "this
@@ -99,7 +99,7 @@ def processing_id_of(attrs) -> str:
 def ids_enabled() -> bool:
     """Whether this process is keeping track of what a patch is."""
     # Imported here rather than at module scope: `dascore.config` is not
-    # built while the workflow package is being imported.
+    # built yet when this module is first imported.
     from dascore import get_config  # noqa: PLC0415
 
     return get_config().patch_provenance != "disabled"
@@ -184,6 +184,30 @@ def source_patch_id(
     )
 
 
+def operation_fingerprint(
+    name: str, params: Mapping[str, Any], version: str = "1.0"
+) -> str:
+    """
+    Return the digest which identifies an operation and its parameters.
+
+    One spelling for every operation: a patch function names itself by its
+    registry tag (`fingerprint_call`), and the operations which are not
+    patch functions -- concatenating, stacking, a ufunc, an array function
+    -- by a capitalized kind no function tag takes.
+
+    Parameters
+    ----------
+    name
+        What was done.
+    params
+        What it was done with. A None value is the same as leaving it out.
+    version
+        The operation's version; bump it when the same parameters mean a
+        different result.
+    """
+    return digest({"operation": name, "version": version, "params": params})
+
+
 def advance(processing_id: str, fingerprint: str) -> str:
     """
     Return the processing id an operation leads to.
@@ -194,7 +218,7 @@ def advance(processing_id: str, fingerprint: str) -> str:
         What the input carried.
     fingerprint
         The operation's fingerprint; see
-        [`fingerprint_call`](`dascore.workflow.processor.fingerprint_call`).
+        [`fingerprint_call`](`dascore.utils.patch_registry.fingerprint_call`).
     """
     # `combine_hashes` rather than a digest of a mapping: both halves are
     # already digests, and this is what it is for -- an ordered series of

@@ -121,9 +121,6 @@ website:
         - text: Transformations
           href: tutorial/transformations.qmd
 
-        - text: Workflow
-          href: tutorial/workflow.qmd
-
         - text: Visualization
           href: tutorial/visualization.qmd
 

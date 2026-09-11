@@ -20,6 +20,7 @@ from dascore.core.coordmanager import (
     get_coord_manager,
 )
 from dascore.core.coords import CoordRange, get_coord
+from dascore.core.processor import PatchProcessor, register_implementation
 from dascore.exceptions import ParameterError
 from dascore.models import ArrayLike
 from dascore.units import Quantity, get_quantity
@@ -44,10 +45,6 @@ from dascore.utils.patch import (
 )
 from dascore.utils.time import dtype_time_like
 from dascore.utils.window import resolve_window
-from dascore.workflow.processor import (
-    PatchProcessor,
-    register_implementation,
-)
 
 # The dtypes which promise, without the values being looked at, that there
 # is no imaginary part: bool, signed and unsigned integers, and floats.
@@ -180,7 +177,11 @@ def update_attrs(self: PatchType, **attrs) -> PatchType:
     new_attrs.update(attrs)
     validated = PatchAttrs.from_dict(new_attrs)
     return self.__class__(
-        self._data, coords=self.coords, attrs=validated, dims=self.dims
+        self._data,
+        coords=self.coords,
+        attrs=validated,
+        dims=self.dims,
+        dtype=self.dtype,
     )
 
 
@@ -298,6 +299,9 @@ def update(
         Optional attributes (non-coordinate metadata) passed as a dict.
 
     """
+    # A patch without data stays one unless data are given; `drop_data`,
+    # not `new(data=None)`, is how data are taken away.
+    keeps_dtype = data is None
     data = data if data is not None else self._data
     coords = coords if coords is not None else self.coords
     if dims is None:
@@ -307,7 +311,8 @@ def update(
         attrs = PatchAttrs.from_dict(attrs)
     else:
         attrs = self.attrs
-    return self.__class__(data=data, coords=coords, attrs=attrs)
+    dtype = self.dtype if keeps_dtype else None
+    return self.__class__(data=data, coords=coords, attrs=attrs, dtype=dtype)
 
 
 @patch_function()

@@ -24,6 +24,7 @@ from dascore.exceptions import (
     CoordError,
     ParameterError,
     PatchAttributeError,
+    PatchDataError,
 )
 from dascore.io.core import (
     _scan_result_to_summary,
@@ -736,6 +737,84 @@ class TestEmptyPatch:
         attrs = patch.attrs
         assert len(attrs)
         assert not len(patch.dims)
+
+
+class TestDataless:
+    """A patch built without data describes data it does not hold."""
+
+    @pytest.fixture(scope="class")
+    @classmethod
+    def described(cls, random_patch):
+        """The random patch with its data dropped."""
+        return random_patch.drop_data()
+
+    def test_keeps_the_metadata(self, described, random_patch):
+        """Coords, attrs, dims, shape, size and dtype all survive."""
+        assert described.coords == random_patch.coords
+        assert described.attrs == random_patch.attrs
+        assert described.dims == random_patch.dims
+        assert described.shape == random_patch.shape
+        assert described.size == random_patch.size
+        assert described.dtype == random_patch.dtype
+
+    def test_built_directly(self, random_patch):
+        """Coords and a dtype are enough."""
+        out = Patch(coords=random_patch.coords, dtype="float32")
+        assert out.shape == random_patch.shape
+        assert out.dtype == np.float32
+
+    def test_needs_a_dtype(self, random_patch):
+        """Nothing else says what the data would be."""
+        with pytest.raises(ValueError, match="needs coords, dims and a dtype"):
+            Patch(coords=random_patch.coords)
+
+    def test_data_raises(self, described):
+        """There is nothing to return."""
+        with pytest.raises(PatchDataError, match="built without data"):
+            _ = described.data
+
+    def test_processing_raises(self, described):
+        """Even an operation which would change nothing."""
+        with pytest.raises(PatchDataError, match="built without data"):
+            described.select()
+        with pytest.raises(PatchDataError):
+            described.abs()
+
+    def test_new_fills_it(self, described, random_patch):
+        """Data given to `new` make a patch with data again."""
+        assert described.new(data=random_patch.data).equals(random_patch)
+
+    def test_new_checks_the_shape(self, described, random_patch):
+        """Data of the wrong shape are refused."""
+        with pytest.raises(CoordDataError):
+            described.new(data=np.asarray(random_patch.data)[:2])
+
+    def test_new_without_data_keeps_it_dataless(self, described):
+        """New coords are not checked against data it does not have."""
+        coords = described.coords.transpose(*described.dims[::-1])
+        out = described.new(coords=coords)
+        assert out.shape == described.shape[::-1]
+        assert out.dtype == described.dtype
+        assert out.update_attrs(station="x").dtype == described.dtype
+
+    def test_given_dtype_must_agree(self, random_patch):
+        """A dtype which contradicts the data is refused."""
+        with pytest.raises(ValueError, match="not the dtype given"):
+            Patch(data=random_patch.data, coords=random_patch.coords, dtype="int8")
+
+    def test_copying_a_dataless_patch(self, described):
+        """Building a patch from one without data keeps its dtype."""
+        assert Patch(described).dtype == described.dtype
+
+    def test_repr_reads_no_data(self, described):
+        """The repr says there is no data rather than raising."""
+        text = str(described)
+        assert "no data" in text
+        assert str(described.dtype) in text
+
+    def test_summary(self, described, random_patch):
+        """A summary needs only the metadata."""
+        assert described.summary == random_patch.summary
 
 
 class TestEquals:

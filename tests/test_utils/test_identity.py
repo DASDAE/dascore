@@ -14,23 +14,23 @@ import numpy as np
 import pytest
 
 import dascore as dc
-import dascore.workflow.processor as processor_module
-from dascore.exceptions import ParameterError
-from dascore.workflow import Task, fingerprint_call
-from dascore.workflow.builtin import ArrayFunc, Concatenate, Stack, Ufunc
-from dascore.workflow.identity import (
+import dascore.utils.patch_registry as registry_module
+from dascore.utils.identity import (
     NOTHING_DONE,
     advance,
     fold_ids,
     fold_patch_ids,
     fold_processing_ids,
     new_patch_id,
+    operation_fingerprint,
     patch_id_of,
     processing_id_of,
     source_patch_id,
     stamp_combination,
 )
-from dascore.workflow.processor import _PATCH_ARGUMENT, _as_key, _signature
+from dascore.utils.patch import concatenate_patches, concatenate_planned, stack_patches
+from dascore.utils.patch_registry import _as_key, _signature, fingerprint_call
+from dascore.utils.serialize import PATCH_ARGUMENT, encode
 
 
 class TestNewDataId:
@@ -180,78 +180,88 @@ class TestFoldProcessingIds:
         assert fold_processing_ids([NOTHING_DONE, NOTHING_DONE]) == NOTHING_DONE
 
 
-class TestBuiltinTasks:
+# A change here moves every id these calls record; make it deliberately.
+_RECORDED_IDS = {
+    "pass_filter": (
+        "a55c04918ad2fd1b",
+        lambda p, q, q2: p.pass_filter(time=(1, 10)),
+    ),
+    "where_patch": ("ef18744a9d94e433", lambda p, q, q2: p.where(p > 0)),
+    "add": ("a6a849bc6d25158b", lambda p, q, q2: p + 1),
+    "rsub": ("2b6260154c90dae0", lambda p, q, q2: 1 - p),
+    "add_patch": ("da85a67f770cffb9", lambda p, q, q2: p + q),
+    "multiply_array": (
+        "0b91efb1fa4f6953",
+        lambda p, q, q2: p * np.ones(p.shape),
+    ),
+    "unary": ("c81e34e4b05acf4b", lambda p, q, q2: np.abs(p)),
+    "array_function": ("5d1f21ba2e75b9ba", lambda p, q, q2: np.mean(p, axis=0)),
+    "concatenate": (
+        "f1dcdfa083a08f29",
+        lambda p, q, q2: concatenate_patches([p, q2], time=None)[0],
+    ),
+    "concatenate_new_dim": (
+        "8d129d6050095ddc",
+        lambda p, q, q2: concatenate_patches([p, q], new=None)[0],
+    ),
+    "concatenate_planned": (
+        "ec7d67711b1c9679",
+        lambda p, q, q2: concatenate_planned([p, q2], "time", conflict="drop"),
+    ),
+    "stack": ("5be94a7e6ec6af39", lambda p, q, q2: stack_patches([p, q])),
+    "stack_dim_vary": (
+        "1356f20526435262",
+        lambda p, q, q2: stack_patches([p, q2], dim_vary="time"),
+    ),
+}
+
+
+class TestOperationFingerprints:
     """The operations which are not patch functions still have names."""
 
-    def test_a_ufunc_names_which_one(self):
-        """Adding is not subtracting."""
-        assert Ufunc(name="add").fingerprint != Ufunc(name="subtract").fingerprint
+    @pytest.fixture(scope="class")
+    @classmethod
+    def pair(cls):
+        """Two patches with fixed ids, the second following the first in time."""
+        base = dc.get_example_patch()
+        first = base.update_attrs(patch_id="a" * 16, processing_id="")
+        second = base.update_attrs(patch_id="b" * 16, processing_id="")
+        time = first.get_coord("time")
+        return first, second, second.update_coords(time_min=time.max() + time.step)
 
-    def test_a_ufunc_names_how_it_was_applied(self):
-        """A reduction is not the plain call."""
-        plain = Ufunc(name="add")
-        assert Ufunc(name="add", method="reduce").fingerprint != plain.fingerprint
+    @pytest.mark.filterwarnings("ignore:Concatenating patches whose histories")
+    @pytest.mark.parametrize("name", sorted(_RECORDED_IDS))
+    def test_recorded_ids_hold(self, pair, name):
+        """Each call stamps the id recorded for it."""
+        expected, call = _RECORDED_IDS[name]
+        assert call(*pair).attrs.processing_id == expected
 
-    def test_a_reversed_ufunc_is_its_own_operation(self):
-        """`1 - patch` is not `patch - 1`."""
-        forward = Ufunc(name="subtract")
-        assert Ufunc(name="subtract", reversed=True).fingerprint != forward.fingerprint
+    def test_an_array_operand_is_not_frozen(self, pair):
+        """Fingerprinting an operand leaves the caller's array writable."""
+        values = np.ones(pair[0].shape)
+        _ = pair[0] * values
+        assert values.flags.writeable
 
-    def test_a_ufunc_names_its_other_operands(self):
-        """Multiplying by two is not multiplying by three."""
-        assert Ufunc(name="multiply", operands=(2,)).fingerprint != (
-            Ufunc(name="multiply", operands=(3,)).fingerprint
-        )
+    def test_kind_and_params_count(self):
+        """A kind or a parameter apart is another operation."""
+        base = operation_fingerprint("Ufunc", {"name": "add"})
+        assert operation_fingerprint("Ufunc", {"name": "subtract"}) != base
+        assert operation_fingerprint("ArrayFunc", {"name": "add"}) != base
+        assert operation_fingerprint("Ufunc", {"name": "add", "reversed": True}) != base
+        assert operation_fingerprint("Ufunc", {"name": "add"}, version="2") != base
 
     def test_concatenate_names_what_it_was_given(self):
         """
         Concatenating along time is not concatenating along distance.
 
         `time=None` is the documented call, and the serializer drops a
-        `None` mapping value, so holding the call as a mapping would make
-        these one operation. They are held as pairs for that reason.
+        `None` mapping value, so the dimensions are held as pairs.
         """
-        assert Concatenate.from_kwargs(time=None).fingerprint != (
-            Concatenate.from_kwargs(distance=None).fingerprint
+        time = operation_fingerprint("Concatenate", {"arguments": (("time", None),)})
+        distance = operation_fingerprint(
+            "Concatenate", {"arguments": (("distance", None),)}
         )
-
-    def test_concatenate_names_how_much(self):
-        """And the size, when one was given."""
-        assert Concatenate.from_kwargs(time=None).fingerprint != (
-            Concatenate.from_kwargs(time=10).fingerprint
-        )
-
-    def test_concatenate_keeps_the_order_it_was_given(self):
-        """Two dimensions given the other way round is another call."""
-        first = Concatenate.from_kwargs(time=None, distance=2)
-        assert (
-            first.fingerprint
-            != Concatenate.from_kwargs(distance=2, time=None).fingerprint
-        )
-
-    def test_stack_names_the_varying_dimension(self):
-        """Which is the only thing which makes two stacks differ."""
-        assert Stack(dim_vary="time").fingerprint != Stack().fingerprint
-
-    def test_an_array_func_names_which_one(self):
-        """And what it was given."""
-        assert ArrayFunc(name="mean", kwargs={"axis": 0}).fingerprint != (
-            ArrayFunc(name="mean").fingerprint
-        )
-
-    @pytest.mark.parametrize(
-        "task",
-        [
-            Concatenate.from_kwargs(time=None),
-            Stack(dim_vary="time"),
-            Ufunc(name="add", operands=(2,)),
-            ArrayFunc(name="mean", kwargs={"axis": 0}),
-        ],
-        ids=["concatenate", "stack", "ufunc", "array_func"],
-    )
-    def test_they_are_written_down(self, task):
-        """A provenance record holds them, so they have to survive one."""
-        assert Task.from_dict(task.to_dict()) == task
+        assert time != distance
 
 
 class TestTheRulesOnRealPatches:
@@ -436,9 +446,6 @@ class TestTheAwkwardCases:
 
         out = only_here(patch)
         assert out.attrs.processing_id != patch.attrs.processing_id
-        # Named by where it was written, which is honestly not resolvable.
-        with pytest.raises(ParameterError, match="cannot be named"):
-            only_here.op()
 
     def test_a_callable_which_cannot_be_hashed(self):
         """Its signature is asked for the slow way rather than cached."""
@@ -716,7 +723,7 @@ class TestWhatTheReviewsFound:
             return patch.new(data=patch.data)
 
         unnameable(patch)
-        held = [k[0] for k in processor_module._FINGERPRINTS]
+        held = [k[0] for k in registry_module._FINGERPRINTS]
         assert any(x is unnameable for x in held)
 
     def test_a_patch_argument_is_not_the_string_that_stands_for_it(self):
@@ -727,8 +734,8 @@ class TestWhatTheReviewsFound:
         operation, though their operands are entirely different.
         """
         patch = dc.get_example_patch()
-        assert fingerprint_call(dc.proc.where, (patch,), {}) != (
-            fingerprint_call(dc.proc.where, ("$patch",), {})
-        )
-        # It says what it is, which is what the digest records of it.
-        assert "patch argument" in repr(_PATCH_ARGUMENT)
+        by_patch = fingerprint_call(dc.proc.where, (patch,), {})
+        assert by_patch != fingerprint_call(dc.proc.where, ("$patch",), {})
+        assert by_patch != fingerprint_call(dc.proc.where, ({"$patch": True},), {})
+        assert encode(PATCH_ARGUMENT) == {"$patch": True}
+        assert "patch argument" in repr(PATCH_ARGUMENT)

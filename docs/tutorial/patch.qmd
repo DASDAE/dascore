@@ -148,7 +148,7 @@ assert doubled.attrs.patch_id == patch.attrs.patch_id
 assert doubled.attrs.processing_id == patch.attrs.processing_id
 ```
 
-Use patch functions when processing should advance provenance. A function that returns the input unchanged advances neither ID, and IDs do not participate in `Patch.equals`. Set `patch_provenance="disabled"` only when IDs are not needed. See [Finding a patch by its ID](spool.qmd#finding-a-patch-by-id) and [Workflow](workflow.qmd) for lookup and operation fingerprints.
+Use patch functions when processing should advance provenance. A function that returns the input unchanged advances neither ID, and IDs do not participate in `Patch.equals`. Set `patch_provenance="disabled"` only when IDs are not needed. See [Finding a patch by its ID](spool.qmd#finding-a-patch-by-id) for lookup.
 
 ## Display and shortcuts
 

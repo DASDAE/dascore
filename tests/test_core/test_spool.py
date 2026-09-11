@@ -33,6 +33,7 @@ from dascore.exceptions import (
 )
 from dascore.io.index.planned import PlanResolver
 from dascore.io.segy import SegyV1_0
+from dascore.proc.basic import Abs
 from dascore.utils.display import range_texts
 from dascore.utils.downloader import fetch
 from dascore.utils.misc import suppress_warnings
@@ -851,13 +852,13 @@ class TestMap:
         except (PermissionError, OSError, RuntimeError) as exc:
             pytest.skip(f"ProcessPoolExecutor unavailable: {exc}")
 
-    @pytest.fixture(params=["partial", "callable_object", "patch_op"])
+    @pytest.fixture(params=["partial", "callable_object", "processor"])
     def nameless_callable(self, request):
         """A callable with no `__name__`, of each kind DASCore makes."""
         callables = {
             "partial": functools.partial(_gigo),
             "callable_object": _CallableObject(),
-            "patch_op": dc.proc.abs.op(),
+            "processor": Abs(),
         }
         return callables[request.param]
 
