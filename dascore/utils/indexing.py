@@ -10,7 +10,7 @@ from typing import Any, Literal
 import numpy as np
 import pandas as pd
 
-from dascore.core.coords import BaseCoord, CoordRange
+from dascore.core.coords import BaseCoord, CoordRange, CoordSegmented
 from dascore.utils.time import dtype_time_like, to_timedelta64
 
 
@@ -100,7 +100,7 @@ def _range_searchsorted(coord, bounds, side):
             positions = size - 1 - positions
         return coord._get_index_values(positions)
 
-    if bounds.dtype.kind in "iufmM" and coord.step:
+    if bounds.dtype.kind in "iufmM" and isinstance(coord, CoordRange) and coord.step:
         # Reuse select's arithmetic lookup, but verify its bracket against
         # actual labels: grid rounding may move an estimate by a sample.
         estimate = _range_estimate(coord, bounds)
@@ -122,6 +122,14 @@ def _range_searchsorted(coord, bounds, side):
 def _require_unique_range(coord):
     """Check range uniqueness without an unbounded scan of floating labels."""
     size = len(coord)
+    if coord._exact:
+        # integer labels repeat only on a zero step; construction refuses
+        # a step finer than one tick
+        if size > 1 and not coord.step_numerator:
+            raise pd.errors.InvalidIndexError(
+                "Range labels repeat on a zero step; use positional indexing instead."
+            )
+        return
     if size > 1 and np.dtype(coord.dtype).kind not in "mM":
         endpoints = np.asarray([coord.start, coord.stop - coord.step])
         dtype = np.result_type(endpoints, 0.0)
@@ -139,6 +147,12 @@ def _require_unique_range(coord):
                 )
 
 
+_NOT_FOUND = (
+    "Not all requested labels were found in the coordinate; pass "
+    "method='nearest' to take the nearest samples."
+)
+
+
 def _exact_range_indexer(coord, labels):
     """Resolve exact label arrays using bounded coordinate lookup."""
     # Numeric exact arrays already carry their labels. Resolve positions
@@ -153,21 +167,22 @@ def _exact_range_indexer(coord, labels):
     if np.any(missing):
         found = _range_searchsorted(coord, labels[missing], "left")
         if np.any(found == len(coord)):
-            raise KeyError("Not all requested labels were found in the coordinate.")
+            raise KeyError(_NOT_FOUND)
         positions[missing] = len(coord) - 1 - found if coord.reverse_sorted else found
     if not np.array_equal(coord._get_index_values(positions), labels):
-        raise KeyError("Not all requested labels were found in the coordinate.")
+        raise KeyError(_NOT_FOUND)
     return positions
 
 
 def _label_index(coord, probes, require_unique=False):
     """Use stored labels or query-sized samples; never expand a compact grid."""
-    if not isinstance(coord, CoordRange):
+    # a segmented coordinate is searched like a range, run by run
+    if not isinstance(coord, CoordRange | CoordSegmented):
         return pd.Index(coord.values), None
     size = len(coord)
     positions = np.unique([0, min(1, size - 1), max(0, size - 2), size - 1])
     anchor = pd.Index(coord._get_index_values(positions))
-    if require_unique:
+    if require_unique and isinstance(coord, CoordRange):
         _require_unique_range(coord)
     pieces = [positions]
     values = np.asarray(probes)
@@ -184,13 +199,13 @@ def _label_index(coord, probes, require_unique=False):
                 try:
                     bound = anchor._maybe_cast_slice_bound(probe, side)
                     anchor[0] < bound  # Validate mixed types before batching.
-                except (TypeError, ValueError):
+                except (TypeError, ValueError, OverflowError):
                     continue  # The final pandas lookup reports invalid labels.
                 bounds.append(bound)
             bounds = pd.Index(bounds).to_numpy()
         try:
             found = _range_searchsorted(coord, bounds, side)
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             continue
         neighbors = np.concatenate([found - 1, found])
         neighbors = neighbors[(neighbors >= 0) & (neighbors < size)]
@@ -216,9 +231,23 @@ def _restore_indexer(indexer, positions):
     return slice(int(span[0]), None if stop < 0 else stop, step)
 
 
+def _unique_grid(coord) -> bool:
+    """Whether a range is an integer grid of distinct labels."""
+    return coord._exact and bool(coord.step_numerator)
+
+
+def _same_kind(coord, labels) -> bool:
+    """Whether labels are compared with a range's own integer arithmetic."""
+    if dtype_time_like(coord.dtype):
+        # another unit would be converted to nanoseconds, which can wrap
+        return labels.dtype == np.dtype(coord.dtype)
+    return labels.dtype.kind in "iu"
+
+
 def _exact_slice(coord, start, stop, step) -> slice | None:
     """A label slice on an ascending integer grid, or None to ask pandas."""
-    if not (isinstance(coord, CoordRange) and coord._exact and coord.sorted):
+    ascending = isinstance(coord, CoordRange) and coord._exact
+    if not (ascending and coord.step_numerator > 0):
         return None
     # np.timedelta64 subclasses np.integer, so a duration step is refused here
     step_ok = step is None or (
@@ -226,9 +255,8 @@ def _exact_slice(coord, start, stop, step) -> slice | None:
         and not isinstance(step, np.timedelta64)
         and step > 0
     )
-    kinds = np.dtype(coord.dtype).kind if dtype_time_like(coord.dtype) else "iu"
     bounds = [np.asarray(x) for x in (start, stop) if x is not None]
-    if not step_ok or any(x.dtype.kind not in kinds or pd.isnull(x) for x in bounds):
+    if not step_ok or any(not _same_kind(coord, x) or pd.isnull(x) for x in bounds):
         return None
     if start is not None and stop is not None and start > stop:
         return slice(0, 0, step)  # select would swap them; pandas selects nothing
@@ -263,6 +291,8 @@ def label_indexer(
             raise NotImplementedError(
                 "method and tolerance are not supported with slices."
             )
+        if value.step == 0:
+            raise ValueError("slice step cannot be zero")
         start, stop = compatible(value.start), compatible(value.stop)
         if (fast := _exact_slice(coord, start, stop, value.step)) is not None:
             return fast
@@ -288,13 +318,13 @@ def label_indexer(
             tolerance = compatible(tolerance)
     if (
         isinstance(coord, CoordRange)
-        # a scalar on an integer grid, whose labels cannot repeat
-        and (labels.ndim == 1 or (labels.ndim == 0 and coord._exact))
+        # a scalar only on an integer grid whose labels cannot repeat
+        and (labels.ndim == 1 or (labels.ndim == 0 and _unique_grid(coord)))
         and method is None
         and tolerance is None
         and labels.dtype.kind in "iufmM"
         and (
-            labels.dtype.kind == np.dtype(coord.dtype).kind
+            labels.dtype == np.dtype(coord.dtype)
             if np.dtype(coord.dtype).kind in "mM"
             else labels.dtype.kind in "iuf"
         )

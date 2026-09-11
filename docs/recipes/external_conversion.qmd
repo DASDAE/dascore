@@ -29,17 +29,23 @@ dar = patch.io.to_xarray()
 patch_from_dar = dc.io.xarray_to_patch(dar)
 ```
 
-Dimension coordinates are lazy: the DataArray's index holds the patch's own coordinate and computes labels only for the samples a selection or `.values` asks about, so a coordinate spanning billions of samples costs nothing to convert. Selection answers as it does on a materialized index (partial datetime strings, `method="nearest"`, `tolerance`), and converting back returns the coordinate exactly, fractional sampling rates and gaps included. xarray aligns such an index only with others of its kind, so an array built by hand, whose index holds its labels, cannot be combined with a lazy one; convert with `lazy_coords=False` to get materialized labels instead.
+Coordinate labels are materialized, as in any xarray index. With `lazy_coords=True` (or a collection of names) the DataArray's index instead holds the patch's own coordinate and computes labels only for the samples a selection or `.values` asks about. Selection answers as it does on a materialized index (partial datetime strings, `method="nearest"`, `tolerance`), and converting back returns the coordinate exactly, fractional sampling rates and gaps included.
 
 ```python
 import dascore as dc
 
 patch = dc.get_example_patch()
 
-eager = patch.io.to_xarray(lazy_coords=False)
+lazy = patch.io.to_xarray(lazy_coords=True)
 ```
 
-A whole spool converts to a lazy, [dask](https://docs.dask.org/)-backed [DataTree](https://docs.xarray.dev/en/stable/user-guide/hierarchical-data.html) with one node per group of related patches (partitioned exactly as [`chunk`](`dascore.Spool.chunk`) partitions them) and one child node per merged output segment. Building the tree reads no data, and its coordinates are lazy as in the single-patch conversion above, so a segment spanning years of samples costs nothing to label. Computing a selection loads only the source patches it touches.
+xarray aligns a lazy index only with others of its kind, so combining a lazy array with an array whose index holds its labels (built from numpy, loaded from netCDF, or converted with the default), or reindexing it to new labels, raises an `AlignmentError`. To combine them, give the lazy array ordinary indexes; the data stays as it is:
+
+```python
+eager = lazy.drop_indexes(["time", "distance"]).set_xindex("time").set_xindex("distance")
+```
+
+A whole spool converts to a lazy, [dask](https://docs.dask.org/)-backed [DataTree](https://docs.xarray.dev/en/stable/user-guide/hierarchical-data.html) with one node per group of related patches (partitioned exactly as [`chunk`](`dascore.Spool.chunk`) partitions them) and one child node per merged output segment. Building the tree reads no data, and its dimension coordinates are lazy (as with `lazy_coords=True` above), so a segment spanning years of samples costs nothing to label. Computing a selection loads only the source patches it touches.
 
 ```python
 import dascore as dc

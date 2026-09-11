@@ -108,8 +108,9 @@ def _as_xarray(value, lazy: set[str]):
     Whether a coordinate is spelled out belongs to the object, not to
     the conversion: a coordinate which arrived stated goes back stated,
     and every other keeps the eager index xarray aligns arithmetic on --
-    including a temporal one beside it, which is why the coordinates are
-    named rather than the array being called lazy as a whole. The
+    even one `CoordIndex` could serve, beside it, which is why the
+    coordinates are named rather than the array being called lazy as a
+    whole. The
     conversion is told which names, so one a tree never spelled out is
     not spelled out on the way back either.
 

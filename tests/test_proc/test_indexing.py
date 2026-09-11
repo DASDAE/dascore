@@ -591,6 +591,20 @@ class TestCompactRangeIndexing:
         assert_matches(patch, "isel", {"x": 0})
         assert_matches(patch, "sel", {"x": coord.start})
 
+    @pytest.mark.parametrize("start", [3, np.datetime64("2020-01-01", "ns")])
+    def test_zero_step_range(self, start):
+        """Every sample of a zero-step range shares its label, as pandas finds."""
+        step = 0 if isinstance(start, int) else np.timedelta64(0, "ns")
+        coord = get_coord(start=start, step=step, shape=(10,))
+        patch = dc.Patch(data=np.arange(10), coords={"x": coord}, dims=("x",))
+        assert_matches(patch, "sel", {"x": coord.start})
+        assert_matches(patch, "sel", {"x": slice(coord.start, coord.start)})
+        # an array of labels cannot say which of the repeats it means
+        with pytest.raises(pd.errors.InvalidIndexError):
+            patch.io.to_xarray().sel(x=[coord.start])
+        with pytest.raises(pd.errors.InvalidIndexError, match="zero step"):
+            patch.sel(x=[coord.start])
+
     @pytest.mark.parametrize("reverse", [False, True])
     @pytest.mark.parametrize(
         "step", [0.1, 0.3, np.float32(0.1), 2, np.timedelta64(1, "ms")]

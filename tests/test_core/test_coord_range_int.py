@@ -796,7 +796,7 @@ class TestPersistenceGuards:
         )
 
         patch = dc.get_example_patch().update_coords(time=hz_1024[:2000])
-        array = patch_to_xarray(patch)
+        array = patch_to_xarray(patch, lazy_coords=True)
         assert array.xindexes["time"].coordinate == patch.get_coord("time")
         assert np.array_equal(array["time"].values, patch.get_coord("time").values)
         assert xarray_to_patch(array).get_coord("time") == patch.get_coord("time")

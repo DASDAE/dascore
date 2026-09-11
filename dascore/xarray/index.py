@@ -7,10 +7,11 @@ sample before any data loads — a year of millisecond sampling is a
 quarter terabyte of labels. `CoordIndex` holds the DASCore coordinate
 itself instead: an evenly sampled range (an exact integer grid for
 nanosecond time and integers, a scalar step for floats) or a segmented
-coordinate of such runs. Labels are the coordinate's own, computed for
-the positions asked about; selection follows the rules `Patch.sel`
-follows, which are pandas'; and a slice or an abutting concatenation is
-again a coordinate, so laziness survives selection chains.
+coordinate, whose segments may be ranges or monotonic arrays. Labels are
+the coordinate's own, computed for the positions asked about; selection
+follows the rules `Patch.sel` follows, which are pandas'; and a slice or
+an abutting concatenation of an integer grid is again a coordinate, so
+laziness survives selection chains.
 
 Everything here is imported only behind the optional xarray dependency.
 """
@@ -26,9 +27,17 @@ from xarray import DataArray, Variable
 from xarray.core.indexes import IndexSelResult
 from xarray.indexes import CoordinateTransform, CoordinateTransformIndex, PandasIndex
 
-from dascore.core.coords import BaseCoord, CoordRange, CoordSegmented, concat_coords
+from dascore.core.coords import (
+    BaseCoord,
+    CoordArray,
+    CoordMonotonicArray,
+    CoordRange,
+    CoordSegmented,
+    concat_coords,
+)
 from dascore.exceptions import CoordError
-from dascore.utils.indexing import label_indexer
+from dascore.utils.indexing import label_indexer, positional_indexer
+from dascore.utils.misc import is_strictly_monotonic
 
 
 def is_servable(coord) -> bool:
@@ -37,6 +46,22 @@ def is_servable(coord) -> bool:
         return True
     # a zero step repeats one label, which no index can look up
     return isinstance(coord, CoordRange) and bool(coord.step)
+
+
+def _relabels_exactly(coord) -> bool:
+    """Whether slices of a coordinate keep exactly the labels they select."""
+    # a float range recomputes a slice's labels from its new start, which
+    # can move them in the last bits, and then they no longer align
+    if isinstance(coord, CoordSegmented):
+        return all(_relabels_exactly(x) for x in coord.segments)
+    return not isinstance(coord, CoordRange) or coord._exact
+
+
+def _array_coord(labels, units) -> BaseCoord:
+    """Labels held as they are, never re-inferred as a range."""
+    monotonic = len(labels) > 1 and is_strictly_monotonic(labels)
+    cls = CoordMonotonicArray if monotonic else CoordArray
+    return cls(values=labels, units=units)
 
 
 def _as_pandas(index) -> PandasIndex:
@@ -68,7 +93,7 @@ def _chained(coords: list[BaseCoord]) -> BaseCoord | None:
     # concat_coords orders its inputs; xarray's order is the data's
     starts = [x.min() if out.sorted else x.max() for x in coords]
     ordered = all((a < b) if out.sorted else (a > b) for a, b in pairwise(starts))
-    return out if ordered and is_servable(out) else None
+    return out if ordered and is_servable(out) and _relabels_exactly(out) else None
 
 
 class CoordTransform(CoordinateTransform):
@@ -80,8 +105,9 @@ class CoordTransform(CoordinateTransform):
     contract asks. `CoordIndex` selects through `label_indexer` instead.
     """
 
-    def __init__(self, name: str, coord: BaseCoord):
-        super().__init__((name,), {name: len(coord)}, dtype=np.dtype(coord.dtype))
+    def __init__(self, name, coord: BaseCoord, dim: str | None = None):
+        dim = name if dim is None else dim
+        super().__init__((name,), {dim: len(coord)}, dtype=np.dtype(coord.dtype))
         self.coord = coord
 
     @property
@@ -104,7 +130,7 @@ class CoordTransform(CoordinateTransform):
         return {self.dim: np.asarray(positions, dtype=np.float64)}
 
     def equals(self, other, exclude=None, **kwargs) -> bool:
-        """Two transforms are equal when they label every sample alike."""
+        """Two transforms are equal when they label every sample alike, units aside."""
         return (
             isinstance(other, CoordTransform)
             and self.dims == other.dims
@@ -118,22 +144,20 @@ class CoordIndex(CoordinateTransformIndex):
 
     Selection answers as `Patch.sel` answers, which is as a materialized
     pandas index answers: partial datetime strings name their periods,
-    slices keep their endpoints, and ``method`` and ``tolerance`` work as
-    pandas has them. A slice ``isel`` or a concatenation whose parts
-    chain returns a new lazy index; fancy indexing, or a concatenation
-    which reorders or overlaps, falls back to a materialized pandas index
-    over just the labels concerned. Aligning with a different index
-    materializes both, as aligning materialized indexes costs.
+    slices include both endpoints, and ``method`` and ``tolerance`` work
+    as pandas has them. A slice ``isel`` or a concatenation whose parts
+    chain returns a new lazy index; fancy indexing, an empty slice, a
+    slice whose labels a coordinate would recompute (a float range, or a
+    stride over segments), or a concatenation which reorders or overlaps
+    holds just the labels concerned, still as a `CoordIndex`, so arrays
+    derived from one another align. Aligning with a `CoordIndex` whose
+    labels differ materializes both, costing what aligning materialized
+    indexes costs.
 
-    An index matches only indexes of its own type: combining a lazy array
-    with one whose index is materialized raises xarray's AlignmentError
-    even where the labels agree. Convert with ``lazy_coords=False`` to
-    combine with such arrays.
-
-    A segmented coordinate's labels are evaluated in full for each label
-    selection on it, and not kept. A slice of a float range is labeled as
-    DASCore labels it, which can differ from the parent's labels in the
-    last bits.
+    xarray matches an index only with indexes of its own type: combining
+    a lazy array with one whose index is materialized, or reindexing it
+    to new labels, raises xarray's AlignmentError even where the labels
+    agree. Convert with ``lazy_coords=False`` for those.
     """
 
     transform: CoordTransform
@@ -154,59 +178,76 @@ class CoordIndex(CoordinateTransformIndex):
         """The dimension the index labels."""
         return self.transform.dim
 
-    def _positions(self, positions) -> PandasIndex:
-        """A materialized index over the labels at these positions."""
-        labels = self.transform.forward({self.dim: np.asarray(positions)})
-        return PandasIndex(pd.Index(labels[self.transform.coord_names[0]]), self.dim)
+    @property
+    def index(self) -> pd.Index:
+        """The materialized pandas form, as a `PandasIndex` offers it."""
+        # xarray's own indexes read these when a materialized part comes
+        # first in a concatenation
+        return self.to_pandas_index()
+
+    @property
+    def coord_dtype(self) -> np.dtype:
+        """The label dtype, as a `PandasIndex` offers it."""
+        return self.transform.dtype
+
+    def _with(self, coord: BaseCoord) -> CoordIndex:
+        """An index serving another coordinate under these names."""
+        name = self.transform.coord_names[0]
+        return type(self)(CoordTransform(name, coord, self.dim))
+
+    def _labels(self, positions) -> np.ndarray:
+        """The labels at these positions."""
+        name = self.transform.coord_names[0]
+        return self.transform.forward({self.dim: np.asarray(positions)})[name]
+
+    def _picked(self, positions) -> CoordIndex:
+        """An index holding the labels at these positions."""
+        # still a CoordIndex, which xarray aligns with this one
+        return self._with(_array_coord(self._labels(positions), self.coordinate.units))
 
     def to_pandas_index(self) -> pd.Index:
         """The materialized pandas form, computed on demand."""
-        return self._positions(np.arange(len(self.coordinate))).index
+        labels = self._labels(np.arange(len(self.coordinate)))
+        return pd.Index(labels, name=self.transform.coord_names[0])
 
     def isel(self, indexers) -> Any:
-        """A sliced view keeps a lazy index; fancy indexing materializes."""
+        """A slice keeps a lazy index where its labels stay exact; else materialize."""
         idx = indexers.get(self.dim)
         coord = self.coordinate
         if isinstance(idx, slice):
             start, stop, stride = idx.indices(len(coord))
             positions = range(start, stop, stride)
             # a strided segmented coordinate is an array of its labels
-            if len(positions) and (isinstance(coord, CoordRange) or stride == 1):
-                name = self.transform.coord_names[0]
-                return type(self)(CoordTransform(name, coord[idx]))
-            return self._positions(np.asarray(positions, dtype=np.int64))
+            lazy = isinstance(coord, CoordRange) or stride == 1
+            if len(positions) and lazy and _relabels_exactly(coord):
+                return self._with(coord[idx])
+            return self._picked(np.asarray(positions, dtype=np.int64))
         if getattr(idx, "dims", (self.dim,)) != (self.dim,):
             # vectorized onto another dimension: the labels no longer
             # index this one, so xarray drops the index
             return None
-        positions = np.asarray(getattr(idx, "values", idx))
-        if isinstance(idx, list | tuple) and not len(idx):
-            positions = positions.astype(np.int64)  # an empty list picks nothing
-        if positions.ndim != 1:
+        raw = idx.values if isinstance(idx, Variable | DataArray) else idx
+        if np.ndim(raw) != 1:
             return None
-        if positions.dtype == bool:
-            positions = np.flatnonzero(positions)
-        if positions.dtype.kind not in "iu":
-            # as numpy refuses them for the data; forward would round them
-            msg = "arrays used as indices must be of integer (or boolean) type"
-            raise IndexError(msg)
-        return self._positions(positions)
+        return self._picked(positional_indexer(raw, len(coord)))
 
     def sel(self, labels, method=None, tolerance=None) -> IndexSelResult:
         """Resolve label selection as `Patch.sel` does."""
-        label = labels[self.dim]
+        label = labels[self.transform.coord_names[0]]
         coord = self.coordinate
-        if isinstance(coord, CoordSegmented):
-            # evaluated for this lookup only; the coordinate keeps no values
-            coord = coord.new(values=coord._get_index_values(np.arange(len(coord))))
+        if isinstance(label, Variable | DataArray) and label.ndim == 0:
+            label = label.values[()]  # a scalar, strings naming their periods
         if not isinstance(label, Variable | DataArray):
             return IndexSelResult(
                 {self.dim: label_indexer(coord, label, method, tolerance)}
             )
-        # vectorized selection: look up the values, keep the label's dims
+        # vectorized selection: look up the values, keep the label's dims;
+        # a mask selects as it stands
         values = np.asarray(label.values)
-        found = label_indexer(coord, values.ravel(), method, tolerance)
-        pos = np.asarray(found).reshape(values.shape)
+        pos = values
+        if values.dtype != bool:
+            found = label_indexer(coord, values.ravel(), method, tolerance)
+            pos = np.asarray(found).reshape(values.shape)
         if isinstance(label, DataArray):
             return IndexSelResult({self.dim: label.copy(data=pos)})
         return IndexSelResult({self.dim: Variable(label.dims, pos)})
@@ -219,15 +260,22 @@ class CoordIndex(CoordinateTransformIndex):
         Parts in ascending (or descending) order with no overlap chain
         into one range when they continue each other's grid and into a
         segmented coordinate otherwise; anything else — a reordering, an
-        overlap, a materialized part — comes back as a pandas index over
-        the concatenated labels.
+        overlap, a materialized part, float ranges whose fused labels
+        would be recomputed — comes back as a pandas index over the
+        concatenated labels.
         """
-        if positions is None and all(isinstance(x, CoordIndex) for x in indexes):
-            coords = [x.coordinate for x in indexes]
-            if (out := _chained(coords)) is not None:
-                name = indexes[0].transform.coord_names[0]
-                return cls(CoordTransform(name, out))
-        return PandasIndex.concat([_as_pandas(x) for x in indexes], dim, positions)
+        if not all(isinstance(x, CoordIndex) for x in indexes):
+            return PandasIndex.concat([_as_pandas(x) for x in indexes], dim, positions)
+        first = indexes[0]
+        coords = [x.coordinate for x in indexes]
+        if positions is None and (out := _chained(coords)) is not None:
+            return first._with(out)
+        labels = np.concatenate(
+            [x._labels(np.arange(len(x.coordinate))) for x in indexes]
+        )
+        if positions is not None:
+            labels = labels[np.argsort(np.concatenate([list(x) for x in positions]))]
+        return first._with(_array_coord(labels, first.coordinate.units))
 
     def join(self, other, how="inner") -> PandasIndex:
         """Join as materialized indexes join."""

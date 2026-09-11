@@ -9,7 +9,13 @@ import pandas as pd
 import pytest
 
 import dascore as dc
-from dascore.core.coords import CoordRange, CoordSegmented, concat_coords, get_coord
+from dascore.core.coords import (
+    CoordArray,
+    CoordRange,
+    CoordSegmented,
+    concat_coords,
+    get_coord,
+)
 
 xr = pytest.importorskip("xarray")
 da = pytest.importorskip("dask.array")
@@ -59,13 +65,7 @@ def _assert_same(lazy_call, eager_call):
     assert out.sizes == expected.sizes
     np.testing.assert_array_equal(np.asarray(out.values), expected.values)
     for name in expected.coords:
-        got, want = out[name].values, expected[name].values
-        if want.dtype.kind == "f":
-            # a slice of a float range is labeled as DASCore labels it,
-            # which can differ from the parent's labels in the last bits
-            np.testing.assert_allclose(got, want, rtol=1e-12, atol=1e-12)
-        else:
-            np.testing.assert_array_equal(got, want)
+        np.testing.assert_array_equal(out[name].values, expected[name].values)
 
 
 def _between(values, i):
@@ -97,6 +97,8 @@ def _queries(values):
         dict(x=slice(values[3], values[21], 3)),
         dict(x=slice(far, values[4])),
         dict(x=slice(values[9], values[3])),
+        dict(x=slice(values[21], values[3], -3)),
+        dict(x=slice(values[3], values[9], 0)),
     ]
 
 
@@ -113,6 +115,12 @@ class TestSelParity:
     @pytest.mark.parametrize(
         "label",
         [
+            slice(np.datetime64("NaT", "ns"), T0 + 5 * HOUR),
+            slice(np.datetime64("2500-01-01"), None),
+            slice(None, np.datetime64("1500-01-01")),
+            np.datetime64("2500-01-01"),
+            np.datetime64("2020-01-01T05", "h"),
+            xr.DataArray("2020-01-01"),
             "2020-01-01",
             "2020-01-01T05",
             "2019-06",
@@ -129,6 +137,19 @@ class TestSelParity:
         lazy, eager = _pair(COORDS["hourly"])
         _assert_same(lambda: lazy.sel(x=label), lambda: eager.sel(x=label))
 
+    @pytest.mark.parametrize("label", [0, [0, 1], 5.0])
+    def test_numbers_do_not_name_stamps(self, label):
+        """A number is no timestamp, even on a grid starting at the epoch."""
+        epoch = get_coord(start=np.datetime64(0, "ns"), step=ONE_MS, shape=(10,))
+        lazy, eager = _pair(epoch)
+        _assert_same(lambda: lazy.sel(x=label), lambda: eager.sel(x=label))
+
+    def test_integers_past_float_precision(self):
+        """An integer grid beyond 2**53 answers exactly."""
+        lazy, eager = _pair(get_coord(start=2**53, step=1, shape=(100,)))
+        for label in (2**53 + 5, [2**53 + 5, 2**53 + 7]):
+            _assert_same(lambda q=label: lazy.sel(x=q), lambda q=label: eager.sel(x=q))
+
     def test_one_sample_period_keeps_dimension(self):
         """A coarse string over one sample keeps the dimension."""
         coord = get_coord(start=T0 - HOUR, step=HOUR, shape=(30,))
@@ -144,6 +165,7 @@ class TestSelParity:
             xr.DataArray(values[[2, 8]], dims="z"),
             xr.Variable("z", values[[4, 9]]),
             xr.DataArray(values[[[1, 2], [3, 4]]], dims=("a", "b")),
+            xr.DataArray(np.arange(len(MS)) % 3 == 0, dims="x"),
         ):
             _assert_same(lambda q=label: lazy.sel(x=q), lambda q=label: eager.sel(x=q))
         out = lazy.sel(x=xr.DataArray(values[[2, 8]], dims="z"))
@@ -167,6 +189,24 @@ class TestSelParity:
         assert lazy.sel(x=slice(values[3], values[9])).sizes["x"] == 7
         assert lazy.sel(x=values[5]).values == 5
         assert lazy.isel(x=slice(2, 50, 3)).sel(x=values[5]).values == 5
+
+    @pytest.mark.parametrize("name", ["ms", "fraction", "int", "descending"])
+    def test_integer_grids_skip_pandas(self, name, monkeypatch):
+        """Scalars and ascending slices on integer grids resolve arithmetically."""
+        from dascore.utils import indexing  # noqa: PLC0415
+
+        coord = COORDS[name]
+        lazy, _ = _pair(coord)
+
+        def _refuse(*args, **kwargs):
+            raise AssertionError("resolved through pandas")
+
+        values = coord.values
+        monkeypatch.setattr(indexing, "_label_index", _refuse)
+        assert lazy.sel(x=values[5]).values == 5
+        if coord.sorted:
+            out = lazy.sel(x=slice(values[3], values[9], 2))
+            np.testing.assert_array_equal(out.values, [3, 5, 7, 9])
 
     def test_segmented_sel_keeps_no_labels(self, monkeypatch):
         """A segmented coordinate evaluates labels for a lookup, never keeps them."""
@@ -196,6 +236,8 @@ class TestIsel:
             [-1, 0],
             np.arange(10) % 3 == 0,
             3,
+            [1.5],
+            [1000],
         ],
     )
     def test_labels_match(self, name, indexer):
@@ -203,9 +245,15 @@ class TestIsel:
         lazy, eager = _pair(COORDS[name])
         if isinstance(indexer, np.ndarray):
             indexer = np.resize(indexer, len(COORDS[name]))
-        out, expected = lazy.isel(x=indexer), eager.isel(x=indexer)
+        try:
+            expected = eager.isel(x=indexer)
+        except Exception as err:
+            with pytest.raises(type(err)):
+                lazy.isel(x=indexer)
+            return
+        out = lazy.isel(x=indexer)
         _assert_same(lambda: out, lambda: expected)
-        if np.ndim(indexer):
+        if np.ndim(indexer) and len(expected["x"]):
             # a label lookup still works on the result
             label = expected["x"].values[0]
             _assert_same(lambda: out.sel(x=label), lambda: expected.sel(x=label))
@@ -220,16 +268,31 @@ class TestIsel:
         assert isinstance(index, CoordIndex)
         assert index.coordinate == MS[indexer]
 
+    def test_float_slices_keep_their_labels(self):
+        """A float range's slice is materialized, keeping the labels it selects."""
+        coord = COORDS["float"]
+        lazy, _ = _pair(coord)
+        sub = lazy.isel(x=slice(3, 20))
+        assert sub.sel(x=coord.values[5]).values == 5
+        assert (lazy + sub).sizes["x"] == 17
+
     def test_segmented_slice_stays_lazy(self):
         """A contiguous slice of a segmented coordinate is served lazily too."""
         lazy, _ = _pair(COORDS["segmented"])
         assert isinstance(lazy.isel(x=slice(10, 60)).xindexes["x"], CoordIndex)
-        assert not isinstance(lazy.isel(x=slice(10, 60, 2)).xindexes["x"], CoordIndex)
+        strided = lazy.isel(x=slice(10, 60, 2)).xindexes["x"]
+        assert isinstance(strided.coordinate, CoordArray)
 
-    def test_fancy_indexing_materializes(self):
-        """Fancy indexing keeps a materialized index over the picks."""
-        lazy, _ = _pair(MS)
-        assert type(lazy.isel(x=[1, 5]).xindexes["x"]).__name__ == "PandasIndex"
+    def test_fancy_indexing_holds_its_picks(self):
+        """Fancy indexing holds the picked labels, and still aligns with a slice."""
+        lazy, eager = _pair(MS)
+        index = lazy.isel(x=[1, 5]).xindexes["x"]
+        assert isinstance(index, CoordIndex)
+        assert isinstance(index.coordinate, CoordArray)
+        _assert_same(
+            lambda: lazy.isel(x=[0, 1, 2]) + lazy.isel(x=slice(0, 3)),
+            lambda: eager.isel(x=[0, 1, 2]) + eager.isel(x=slice(0, 3)),
+        )
 
     def test_vectorized_isel_onto_another_dimension(self):
         """An indexer on a new dimension moves the labels there."""
@@ -241,6 +304,30 @@ class TestIsel:
         np.testing.assert_array_equal(out["x"].values, expected["x"].values)
         grid = xr.DataArray([[1, 5]], dims=("a", "b"))
         assert "x" not in lazy.isel(x=grid).xindexes
+
+
+class TestRenames:
+    """Renaming a dimension or its coordinate keeps them apart."""
+
+    @pytest.mark.parametrize("name", ["ms", "segmented"])
+    def test_rename_dims_and_vars(self, name):
+        """Selection and slicing follow each new name, as eager arrays do."""
+        lazy, eager = (x.to_dataset(name="v") for x in _pair(COORDS[name]))
+        label = COORDS[name].values[3]
+        for rename, key in ((dict(x="y"), "dims"), (dict(x="z"), "vars")):
+            got = getattr(lazy, f"rename_{key}")(**rename)
+            want = getattr(eager, f"rename_{key}")(**rename)
+            coord_name, dim = ("x", "y") if key == "dims" else ("z", "x")
+            _assert_same(
+                lambda g=got, n=coord_name: g.sel({n: label})["v"],
+                lambda w=want, n=coord_name: w.sel({n: label})["v"],
+            )
+            sliced = got.isel({dim: slice(2, 9)})
+            assert sliced[coord_name].dims == (dim,)
+            np.testing.assert_array_equal(
+                sliced[coord_name].values,
+                want.isel({dim: slice(2, 9)})[coord_name].values,
+            )
 
 
 class TestTransform:
@@ -284,11 +371,6 @@ class TestTransform:
 
 class TestEligibility:
     """Which coordinates are served lazily."""
-
-    @pytest.mark.parametrize("name", list(COORDS))
-    def test_ranges_and_segments_are_served(self, name):
-        """Every range and segmented coordinate, any dtype or direction."""
-        assert is_servable(COORDS[name])
 
     def test_others_are_not(self):
         """Arrays and a zero step, whose labels repeat, are not."""
@@ -346,10 +428,10 @@ class TestConcat:
         ],
     )
     def test_unchained_concat_materializes(self, pieces):
-        """Parts which do not chain in order keep their labels, materialized."""
+        """Parts which do not chain in order keep their labels, held as they are."""
         parts = self._parts(*pieces)
         out = xr.concat(parts, dim="x")
-        assert type(out.xindexes["x"]).__name__ == "PandasIndex"
+        assert isinstance(out.xindexes["x"].coordinate, CoordArray)
         expected = np.concatenate([x["x"].values for x in parts])
         np.testing.assert_array_equal(out["x"].values, expected)
 
@@ -360,6 +442,32 @@ class TestConcat:
         out = xr.concat([lazy, later], dim="x")
         np.testing.assert_array_equal(out["x"].values, MS.values)
         assert type(out.xindexes["x"]).__name__ == "PandasIndex"
+
+    def test_concat_after_a_materialized_part(self):
+        """A materialized first part concatenates with lazy ones."""
+        lazy, eager = _pair(MS[:10])
+        _assert_same(
+            lambda: xr.concat([lazy.isel(x=[0, 1]), lazy.isel(x=slice(2, None))], "x"),
+            lambda: xr.concat(
+                [eager.isel(x=[0, 1]), eager.isel(x=slice(2, None))], "x"
+            ),
+        )
+
+    def test_concat_after_a_pandas_index(self):
+        """A plain pandas index first reads the lazy parts' materialized form."""
+        eager = _pair(MS[:50])[1]
+        lazy = _pair(MS[50:])[0]
+        out = xr.concat([eager, lazy], dim="x")
+        assert type(out.xindexes["x"]).__name__ == "PandasIndex"
+        np.testing.assert_array_equal(out["x"].values, MS.values)
+
+    def test_float_parts_keep_their_labels(self):
+        """Float parts never fuse into a range that would relabel them."""
+        coord = COORDS["float"]
+        parts = [_pair(coord[s])[0] for s in (slice(0, 20), slice(20, 50))]
+        out = xr.concat(parts, dim="x")
+        expected = np.concatenate([x["x"].values for x in parts])
+        np.testing.assert_array_equal(out["x"].values, expected)
 
     def test_concat_with_positions_reorders(self):
         """An explicit permutation materializes in that order."""
@@ -396,6 +504,18 @@ class TestAlignment:
         for got, want in zip(out, expected):
             _assert_same(lambda g=got: g, lambda w=want: w)
 
+    @pytest.mark.parametrize("method", [None, "nearest"])
+    def test_reindex_like_takes_method(self, method):
+        """Reindexing to another lazy array honours method, as eager does."""
+        lazy, eager = _pair(MS, data=np.arange(len(MS)) * 1.0)
+        # a coarser grid off this one's samples, so only nearest finds them
+        coarse = get_coord(start=T0 + ONE_MS // 3, step=10 * ONE_MS, shape=(10,))
+        lazy_to, eager_to = _pair(coarse)
+        _assert_same(
+            lambda: lazy.reindex_like(lazy_to, method=method),
+            lambda: eager.reindex_like(eager_to, method=method),
+        )
+
     def test_materialized_index_refuses_to_align(self):
         """Xarray matches indexes by type; lazy_coords=False is the way out."""
         lazy, eager = _pair(MS)
@@ -423,6 +543,30 @@ class TestScale:
         assert sub.sizes["time"] == 2000
         assert sub["time"].values[0] == np.datetime64("2020-01-05", "ns")
         assert isinstance(sub.xindexes["time"], CoordIndex)
+
+    def test_segmented_selection_reads_few_labels(self, monkeypatch):
+        """Selecting on a long segmented coordinate evaluates a handful of labels."""
+        n = 1_000_000_000
+        first = get_coord(start=T0, step=ONE_MS, shape=(n,))
+        second = get_coord(start=first.max() + 10 * ONE_MS, step=ONE_MS, shape=(n,))
+        coord = concat_coords(first, second)
+        index = CoordIndex.from_coord("x", coord)
+        lazy = xr.DataArray(
+            da.zeros((2 * n,), chunks=100_000_000),
+            dims=("x",),
+            coords=xr.Coordinates.from_xindex(index),
+        )
+        original = CoordRange._get_index_values
+
+        def _bounded(self, indices):
+            assert np.size(indices) < 1000, "the selection evaluated every label"
+            return original(self, indices)
+
+        monkeypatch.setattr(CoordRange, "_get_index_values", _bounded)
+        label = second.min() + 5 * ONE_MS
+        assert int(lazy.sel(x=label)["x"].values == label)
+        sub = lazy.sel(x=slice(first.max() - ONE_MS, label))
+        assert sub.sizes["x"] == 8
 
     def test_billion_sample_segments_are_free(self):
         """A gapped merge of long runs builds without materializing labels."""
@@ -470,7 +614,7 @@ class TestPatchRoundTrip:
         """The coordinate comes back equal, exact grid and segments included."""
         coord = COORDS[name]
         patch = dc.Patch(data=np.arange(len(coord)), dims=("x",), coords={"x": coord})
-        array = patch_to_xarray(patch)
+        array = patch_to_xarray(patch, lazy_coords=True)
         assert isinstance(array.xindexes["x"], CoordIndex)
         assert xarray_to_patch(array).get_coord("x") == coord
 
@@ -478,17 +622,17 @@ class TestPatchRoundTrip:
         """Units stated beside a lazy coordinate are the coordinate's units."""
         coord = get_coord(start=0.0, step=0.5, shape=(20,), units="m")
         patch = dc.Patch(data=np.arange(20), dims=("x",), coords={"x": coord})
-        array = patch_to_xarray(patch)
+        array = patch_to_xarray(patch, lazy_coords=True)
         assert array["x"].attrs["units"] == "1 m"
         array["x"].attrs["units"] = "ft"
         back = xarray_to_patch(array).get_coord("x")
         assert back == coord.set_units("ft")
 
-    @pytest.mark.parametrize("lazy", [False, ()])
-    def test_opt_out(self, lazy):
-        """lazy_coords=False (or no names) materializes every coordinate."""
+    @pytest.mark.parametrize("lazy", [{}, {"lazy_coords": False}, {"lazy_coords": ()}])
+    def test_materialized_by_default(self, lazy):
+        """By default (or with no names) every coordinate is materialized."""
         patch = dc.get_example_patch()
-        array = patch_to_xarray(patch, lazy_coords=lazy)
+        array = patch_to_xarray(patch, **lazy)
         kinds = {type(x).__name__ for x in array.xindexes.values()}
         assert kinds == {"PandasIndex"}
         assert xarray_to_patch(array) == patch

@@ -472,8 +472,9 @@ def spool_to_xarray(
     A dimension coordinate which is a range or segmented is served
     lazily by `dascore.xarray.index.CoordIndex`: its labels are computed
     on demand from the merged coordinate rather than stored, so an
-    arbitrarily long merged time coordinate costs nothing to build, and
-    gaps a tolerance keeps stay lazy too. Label selection on it answers
+    arbitrarily long merged time coordinate costs nothing to build, even
+    when sub-tolerance gaps or slightly different sampling steps leave it
+    segmented rather than one range. Label selection on it answers
     as `Patch.sel` does, and reading ``.values`` or asking for the
     pandas index materializes labels on demand.
 

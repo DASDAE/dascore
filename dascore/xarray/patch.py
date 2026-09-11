@@ -30,7 +30,7 @@ def _lazy_index(name, coord):
     return CoordIndex.from_coord(name, coord) if is_servable(coord) else None
 
 
-def patch_to_xarray(patch: PatchType, lazy_coords: bool | Collection[str] = True):
+def patch_to_xarray(patch: PatchType, lazy_coords: bool | Collection[str] = False):
     """
     Convert a patch to an xarray DataArray.
 
@@ -42,27 +42,28 @@ def patch_to_xarray(patch: PatchType, lazy_coords: bool | Collection[str] = True
         Which dimension coordinates to serve lazily through
         `dascore.xarray.index.CoordIndex`, which computes labels on demand from
         the coordinate instead of storing them: True for every evenly sampled or
-        segmented one, False for none, or their names. Other coordinates are
-        materialized.
+        segmented one, False (the default) for none, or their names. Other
+        coordinates are materialized.
 
     Notes
     -----
     A lazy coordinate is the patch's own coordinate, so it converts back exactly,
     exact sampling grid included; a one-sample materialized coordinate cannot
     retain its step. xarray aligns a lazy index only with lazy indexes: combining
-    the result with an array whose index is materialized raises an AlignmentError,
-    so convert with ``lazy_coords=False`` for that.
+    a lazy result with an array whose index is materialized, or reindexing it to
+    new labels, raises an AlignmentError. Materialized labels, the default, cost
+    8 bytes a sample along each dimension, which beside a patch's data is little.
 
     Examples
     --------
     >>> import dascore as dc
     >>> from dascore.xarray import patch_to_xarray
     >>> patch = dc.get_example_patch()
-    >>> # Lazy labels by default; the patch's own coordinates come back.
-    >>> array = patch_to_xarray(patch)
-    >>> assert array.xindexes["time"].coordinate == patch.get_coord("time")
     >>> # Materialized labels, as a plain xarray index holds them.
-    >>> eager = patch_to_xarray(patch, lazy_coords=False)
+    >>> array = patch_to_xarray(patch)
+    >>> # Lazy labels; the patch's own coordinates come back exactly.
+    >>> lazy = patch_to_xarray(patch, lazy_coords=True)
+    >>> assert lazy.xindexes["time"].coordinate == patch.get_coord("time")
     """
     xr = optional_import("xarray")
     _register_accessor()
