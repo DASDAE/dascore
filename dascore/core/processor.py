@@ -123,6 +123,9 @@ class PatchProcessor(DascoreBaseModel):
             raise ParameterError(msg)
         if "name" not in cls.__dict__:
             cls.name = to_snake(cls.__name__)
+        if cls.name is not None and not cls.name.isidentifier():
+            msg = f"{cls.__name__}.name must be a python identifier; got {cls.name!r}."
+            raise ParameterError(msg)
         cls._call_signature = _call_signature(cls)
         cls.patch_function = None
         if cls.name is not None:
@@ -383,6 +386,11 @@ def _make_patch_function(cls: type[PatchProcessor], name: str):
     # the history and ids, for a body calling another operation.
     raw: Any = bypass
     raw.__signature__ = func.__signature__
+    # Named for its class, so two bypasses given as arguments to another
+    # operation fingerprint as two callables, not one closure.
+    raw.__name__ = name
+    raw.__qualname__ = f"{cls.__qualname__}.patch_function.raw_function"
+    raw.__module__ = cls.__module__
     func.func = func.raw_function = raw
     return func
 

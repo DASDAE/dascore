@@ -23,6 +23,7 @@ from dascore.exceptions import (
 )
 from dascore.proc.basic import Normalize, _known_real
 from dascore.utils.patch_registry import patch_function_tag, resolve_patch_function
+from dascore.utils.serialize import encode
 
 
 class SeamScale(PatchProcessor):
@@ -254,6 +255,20 @@ class TestReviewFindings:
         sig = inspect.signature(dc.proc.normalize)
         assert sig.parameters["dim"].annotation is str
         assert sig.return_annotation == "PatchType"
+
+    def test_bypasses_fingerprint_apart(self):
+        """Two bypasses given as arguments are two callables."""
+        abs_raw, imag_raw = dc.proc.abs.raw_function, dc.proc.imag.raw_function
+        assert encode(abs_raw) != encode(imag_raw)
+
+    def test_a_name_must_be_an_identifier(self):
+        """A name the registry cannot tag is refused, not silently skipped."""
+        with pytest.raises(ParameterError, match="identifier"):
+
+            class Hyphen(PatchProcessor):
+                """Claim a name no function can have."""
+
+                name = "scale-op"
 
     def test_generated_functions_pickle(self, patch):
         """So a process pool can run them."""
