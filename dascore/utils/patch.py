@@ -735,13 +735,16 @@ def drop_associated_coords(coords, dim: str, action: str):
     """
     Drop, with a warning, the non-dimensional coordinates along a dimension.
 
-    For operations which change a dimension's samples, so the values those
-    coordinates would take at the new samples are unknown.
+    Use when an operation changes the dimension's samples, leaving those
+    coordinates' values unknown; `action` begins the warning, eg
+    "Resampling". Cell edges are left for the grid update, which drops them
+    without a warning.
     """
+    edges = dc.core.coordmanager._cell_edge_names(dim, coords.coord_map)
     associated = sorted(
         name
         for name, coord_dims in coords.dim_map.items()
-        if name != dim and dim in coord_dims
+        if name != dim and dim in coord_dims and name not in edges
     )
     if not associated:
         return coords

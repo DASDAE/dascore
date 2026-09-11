@@ -112,7 +112,7 @@ assert list(missing.iter_runs()) == [(2, 2), (5, 9)]
 print(missing.positions())
 ```
 
-A dense array whose runs would outnumber a tenth of its samples keeps its values as one monotonic coordinate with the declared step, and `missing()` answers the same. Without a declared step, `missing()` raises; evenly sampled coordinates are always complete. Filling the holes with samples is a patch operation, never a coordinate one. [`Patch.fill_gaps`](`dascore.Patch.fill_gaps`) places every run on one grid and writes a fill value (NaN by default) where no sample sits, so the coordinate becomes a plain range. Passing a limit with the dimension (`fill_gaps(time=10)`, or a sample count with `samples=True`) fills only holes up to that width and leaves wider ones as seams.
+A dense array whose runs would outnumber a tenth of its samples keeps its values as one monotonic coordinate with the declared step, and `missing()` answers the same. Without a declared step, `missing()` raises; evenly sampled coordinates are always complete. Filling the holes with samples is a patch operation, never a coordinate one. [`Patch.fill_gaps`](`dascore.Patch.fill_gaps`) places every run on one grid and writes a fill value (NaN by default) where no sample sits, so the coordinate becomes a plain range. Giving the dimension a limit as a keyword (`fill_gaps(time=10)` in coordinate units, or a count of missing samples with `samples=True`) fills only holes that narrow and leaves wider ones as seams. A hole's width is its missing samples times the step.
 
 ```{python}
 import dascore as dc

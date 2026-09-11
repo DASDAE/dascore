@@ -20,7 +20,7 @@ from dascore.exceptions import (
     PatchCoordinateError,
     PatchError,
 )
-from dascore.utils.array_api import array_namespace
+from dascore.utils.array_api import array_namespace, to_numpy
 from dascore.utils.docs import compose_docstring
 from dascore.utils.indexing import get_indexers, label_indexer
 from dascore.utils.misc import get_parent_code_name, iterate
@@ -1171,13 +1171,18 @@ def split_gaps(self: PatchType, dim: str | None = None) -> dc.Spool:
 
 def _fill_scalar(value, dtype) -> np.ndarray:
     """The fill value as the data's dtype, raising if the cast changes it."""
+    ref = np.asarray(value)
     try:
-        with np.errstate(invalid="ignore"):
-            cast = np.asarray(value).astype(dtype)
+        with np.errstate(invalid="ignore", over="ignore"):
+            cast = ref.astype(dtype)
+        same = bool(pd.isnull(ref) and pd.isnull(cast)) or bool(cast == ref)
+        if not same and cast.dtype.kind in "fc":
+            # a float may round the value, but never overflow it to inf
+            tol = np.finfo(cast.dtype).resolution
+            same = bool(np.isfinite(cast) and np.isclose(cast, ref, rtol=tol, atol=0))
     except (TypeError, ValueError):
-        cast = None
-    both_null = cast is not None and bool(pd.isnull(cast) and pd.isnull(value))
-    if cast is None or not (both_null or bool(cast == value)):
+        same = False
+    if not same:
         msg = (
             f"Cannot fill data of dtype {np.dtype(dtype)} with {value!r}. Pass "
             "a value of that dtype, or cast the data first (eg to float for NaN)."
@@ -1212,9 +1217,10 @@ def fill_gaps(
     """
     Fill the holes along a dimension with a constant value.
 
-    Places every run of samples on one evenly sampled grid and writes
-    `value` where no sample sits, so a segmented coordinate (for example
-    from merging patches across a gap) becomes a plain range.
+    Places runs of samples on one evenly sampled grid and writes `value`
+    where no sample sits, so a segmented coordinate (for example from
+    [`Spool.chunk`](`dascore.Spool.chunk`) with `snap_coords=False` across a
+    gap) becomes a plain range, unless a limit leaves wider holes as seams.
 
     Parameters
     ----------
@@ -1230,17 +1236,18 @@ def fill_gaps(
         If True, the limit given with the dimension counts missing samples.
     **kwargs
         The dimension and the widest hole to fill, eg `time=10` fills holes
-        up to ten seconds long and leaves wider ones as seams. The limit is
-        in the coordinate's units (seconds for time), a quantity, or a
+        missing up to ten seconds of samples and leaves wider ones as seams.
+        A hole's width is its missing samples times the step, one step less
+        than the jump between the labels either side. Give the limit in the
+        coordinate's units (seconds for time), or as a quantity or
         timedelta; None fills every hole.
 
     Notes
     -----
     The coordinate needs a declared step: a segmented coordinate whose
-    runs share one step, or an array stated with a step. A run starting
-    off the grid of the runs before it is placed at the nearest position,
-    moving its labels by at most half a step. Runs sampled at different
-    steps raise; resample them first.
+    runs share one step (different steps raise; resample first), or an
+    array declared with a step. A sample or run off the grid moves to the
+    nearest position, by at most half a step.
 
     Non-dimensional coordinates along the dimension are dropped with a
     warning, since their values at the filled positions are unknown.
@@ -1272,11 +1279,12 @@ def fill_gaps(
     >>> assert (patch.fill_gaps("distance", value=0).data[5:8] == 0).all()
     """
     dim, axis, limit = get_dim_axis_value(patch, args=args, kwargs=kwargs)[0]
-    fill = _fill_scalar(value, patch.data.dtype)
+    data = to_numpy(patch.data)
+    fill = _fill_scalar(value, data.dtype)
     layout = _fill_layout(patch.get_coord(dim), limit, samples=samples)
     if layout is None:
         return patch
     coord, blocks = layout
-    data = _place_blocks(patch.data, axis, len(coord), blocks, fill)
+    data = _place_blocks(data, axis, len(coord), blocks, fill)
     coords = drop_associated_coords(patch.coords, dim, "Filling gaps along")
     return patch.new(data=data, coords=coords._update_grid(dim, **{dim: coord}))

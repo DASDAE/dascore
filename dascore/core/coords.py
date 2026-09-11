@@ -3699,25 +3699,30 @@ def _grid_pieces(coord: BaseCoord) -> list[tuple[int, CoordRange]]:
     """
     The runs of consecutive grid positions, each with its source offset.
 
-    A range is one run; an array declaring a step splits at its holes.
+    A range is one run; an array declaring a step splits at its holes, and
+    a lone sample without a step takes the other runs' step.
     """
     segments = coord.segments if isinstance(coord, CoordSegmented) else (coord,)
+    steps = [x.step for x in segments if not _is_null(x.step)]
     pieces, offset = [], 0
     for seg in segments:
+        step = seg.step
+        if _is_null(step) and len(seg) == 1 and steps:
+            step = steps[0]
         if isinstance(seg, CoordRange):
             pieces.append((offset, seg))
-        elif isinstance(seg, CoordMonotonicArray) and not _is_null(seg.step):
+        elif isinstance(seg, CoordMonotonicArray) and not _is_null(step):
             values = seg.values
-            counts = _on_grid(_diffs(values), seg.step)
-            edges = [0, *(np.flatnonzero(counts != 1) + 1).tolist(), len(values)]
-            for start, stop in itertools.pairwise(edges):
+            counts = _on_grid(_diffs(values), step)
+            edges = np.flatnonzero(counts != 1) + 1
+            for first, stop in itertools.pairwise([0, *edges.tolist(), len(values)]):
                 piece = get_coord(
-                    start=values[start],
-                    step=seg.step,
-                    shape=(stop - start,),
+                    start=values[first],
+                    step=step,
+                    shape=(stop - first,),
                     units=seg.units,
                 )
-                pieces.append((offset + start, piece))
+                pieces.append((offset + first, piece))
         else:
             msg = (
                 "Filling gaps needs a coordinate with a declared step; this one "
@@ -3729,24 +3734,29 @@ def _grid_pieces(coord: BaseCoord) -> list[tuple[int, CoordRange]]:
 
 
 def _same_step(first: CoordRange, other: CoordRange) -> bool:
-    """Whether two runs share a step: exactly for ticks, closely for floats."""
+    """
+    Whether a run shares the first run's step.
+
+    Exactly for ticks; for floats, closely enough that the run drifts from
+    the first run's grid by a negligible fraction of a step.
+    """
     exact = first.step_exact, other.step_exact
     if None not in exact:
         return exact[0] == exact[1]
     ratio = float(other.step) / float(first.step)
-    return bool(abs(ratio - 1) <= _GRID_RTOL)
+    return bool(abs(ratio - 1) * max(len(other) - 1, 1) <= _GRID_RTOL)
 
 
 def _grid_position(anchor: CoordRange, label) -> int:
     """The position on the anchor's grid nearest a label."""
     if not anchor._exact:
         return int(np.round((label - anchor.start) / anchor.step))
-    num, den, offset = anchor._grid_terms
-    ticks = (_to_tick(label) - anchor._start_tick) * den - offset
-    guess = round(Fraction(ticks, num))
-    # labels floor the ideal grid, so the nearest one may be a neighbour
-    near = np.arange(guess - 1, guess + 2)
-    return int(near[np.argmin(np.abs(anchor._labels(near) - label))])
+    tick = _to_tick(label)
+    after = int(anchor._index_of([tick], forward=True)[0])
+    near = (after - 1, after)
+    # ticks as Python integers, so unsigned labels cannot wrap
+    distance = [abs(_to_tick(x) - tick) for x in anchor._labels(np.array(near))]
+    return near[int(np.argmin(distance))]
 
 
 def _max_missing(step: CoordRange, coord: BaseCoord, limit, samples: bool):
@@ -3758,10 +3768,15 @@ def _max_missing(step: CoordRange, coord: BaseCoord, limit, samples: bool):
             msg = f"A sample limit must be a non-negative integer, got {limit!r}."
             raise ParameterError(msg)
         return int(limit)
-    excess = coord._gap_tolerance(limit).excess
+    tolerance = coord._gap_tolerance(limit)
+    if tolerance.count is not None:
+        msg = "Pass a count of missing samples with samples=True instead."
+        raise ParameterError(msg)
+    excess = tolerance.excess
     if (exact := step.step_exact) is not None:
         if is_timedelta64(excess):
-            excess = Fraction(int(to_int(excess)), _NS_PER_S)
+            # the limit was rounded to whole nanoseconds; allow that rounding
+            excess = Fraction(2 * int(to_int(excess)) + 1, 2 * _NS_PER_S)
         return int(Fraction(excess) // abs(exact))
     return math.floor(float(excess) / abs(float(step.step)) * (1 + _GRID_RTOL))
 
@@ -3773,24 +3788,10 @@ def _fill_layout(
     Place every run of a coordinate on one grid, filling the holes between.
 
     Returns the filled coordinate and, per run, its ``(source start, source
-    stop, target start)``, or None when there is nothing to fill.
-
-    Parameters
-    ----------
-    coord
-        A range, a segmented coordinate, or an array declaring a step.
-    limit
-        The widest hole to fill, in coordinate units (seconds for time), or
-        missing samples when `samples` is True. Wider holes stay as seams
-        between separate runs. None fills every hole.
-    samples
-        If True, `limit` counts missing samples.
-
-    Notes
-    -----
-    Runs must share one step. A run starting off the grid of the runs
-    before it is placed at the nearest position, moving its labels by at
-    most half a step; two runs landing on the same position raise.
+    stop, target start)``, or None when there is nothing to fill. `limit`
+    and `samples` are read as in `Patch.fill_gaps`; holes past the limit
+    stay as seams. An off-grid run moves to the nearest position, and two
+    runs on one position raise.
     """
     if isinstance(coord, CoordRange) or len(coord) < 2:
         return None
