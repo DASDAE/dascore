@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from functools import partial
-from typing import Any, ClassVar
+from typing import Any
 
 import numpy as np
 from pydantic import ConfigDict
@@ -27,7 +27,7 @@ import dascore as dc
 from dascore.constants import PatchType
 from dascore.core.coordmanager import get_coord_manager
 from dascore.core.coords import get_coord
-from dascore.core.processor import PatchMeta, _MetaProcessor
+from dascore.core.processor import PatchProcessor
 from dascore.exceptions import (
     MissingOptionalDependencyError,
     ParameterError,
@@ -109,19 +109,7 @@ def _engine_for(engine: str, func) -> str:
     return engine
 
 
-@patch_function()
-def tile_apply(
-    patch: PatchType,
-    function: Callable,
-    *,
-    mode: str = "overlap_add",
-    overlap: Any = None,
-    taper: Any = None,
-    analysis: Any = None,
-    samples: bool = False,
-    engine: str = "auto",
-    **kwargs: Any,
-) -> PatchType:
+class TileApply(PatchProcessor):
     """
     Apply a function to overlapping windows of the patch.
 
@@ -208,30 +196,8 @@ def tile_apply(
       `function`; see
       [`Patch.adaptive_spectral_filter`](`dascore.Patch.adaptive_spectral_filter`).
     """
-    return TileApply(
-        function=function,
-        mode=mode,
-        overlap=overlap,
-        taper=taper,
-        analysis=analysis,
-        samples=samples,
-        engine=engine,
-        **kwargs,
-    )._apply(patch)
-
-
-class TileApply(_MetaProcessor):
-    """
-    Apply a function to overlapping windows of a patch.
-
-    The dimensions to window arrive as extras carrying their window sizes,
-    as the patch function takes them; `window` turns them into sample
-    counts once the coordinates are known, and `derive_meta` says what a
-    stack's coordinates are without touching any data.
-    """
 
     model_config = ConfigDict(extra="allow", frozen=True, arbitrary_types_allowed=True)
-    _patch_function: ClassVar[str] = "tile_apply"
 
     function: Callable
     mode: str = "overlap_add"
@@ -241,7 +207,7 @@ class TileApply(_MetaProcessor):
     samples: bool = False
     engine: str = "auto"
 
-    def window(self, meta: PatchMeta) -> Window:
+    def window(self, patch: PatchType) -> Window:
         """Return the window in samples."""
         if self.mode not in _MODES:
             msg = f"mode must be one of {_MODES}; got {self.mode!r}."
@@ -265,12 +231,12 @@ class TileApply(_MetaProcessor):
             raise ParameterError(msg)
         # In the patch's axis order, whatever order they were named in, so a
         # stack's tile and offset axes come out in that order too.
-        position = {dim: axis for axis, dim in enumerate(meta.dims)}
+        position = {dim: axis for axis, dim in enumerate(patch.dims)}
         selected = dict(
             sorted(selected.items(), key=lambda kv: position.get(kv[0], -1))
         )
         return resolve_window(
-            meta,
+            patch,
             selected,
             samples=self.samples,
             overlap=self.overlap,
@@ -279,31 +245,35 @@ class TileApply(_MetaProcessor):
             min_samples=2,
         )
 
-    def derive_meta(self, meta: PatchMeta) -> PatchMeta:
+    def derive(self, patch):
         """Return the coordinates of a stack; a blend keeps the input's."""
-        window = self.window(meta)
+        window = self.window(patch)
         if self.mode == "overlap_add":
-            return meta
+            return patch
         assert window.stride is not None
         # The stride the tiles were cut at travels in attrs, so a thinned
         # stack still reassembles under the taper it was cut for.
         strides = {
             f"_tile_stride_{d}": int(s) for d, s in zip(window.dims, window.stride)
         }
-        attrs = meta.attrs.update(**strides)
-        coords = _stack_coords(meta, window, self.analysis)
-        return meta.update(coords=coords, attrs=attrs)
+        coords = _stack_coords(patch, window, self.analysis)
+        return patch.new(coords=coords, attrs=patch.attrs.update(**strides))
 
-    def kernel(self, data, meta, out_meta):
+    def plan(self, patch, out):
+        """Return the windowed axes, and the window and stride along each."""
+        window = self.window(patch)
+        assert window.stride is not None
+        return {"axes": window.axes, "size": window.size, "stride": window.stride}
+
+    def kernel(self, data, *, axes, size, stride):
         """Tile every batch over the windowed axes; blend or stack."""
-        window = self.window(meta)
-        assert window.stride is not None and window.overlap is not None
         engine = _engine_for(self.engine, self.function)
-        plan = window.tiles(data.shape)
+        plan = get_tile_plan(tuple(data.shape[x] for x in axes), size, stride)
+        overlap = tuple(z - s for z, s in zip(size, stride))
         data = np.asarray(data)
-        ndim = len(window.axes)
+        ndim = len(axes)
         tail = tuple(range(-ndim, 0))
-        moved = np.moveaxis(data, window.axes, tail)
+        moved = np.moveaxis(data, axes, tail)
         batches = moved.reshape((-1, *moved.shape[-ndim:]))
         if self.mode == "stack":
             analysis = (
@@ -323,8 +293,8 @@ class TileApply(_MetaProcessor):
             # The tile axes go where the windowed dimensions were; the
             # offsets within a tile stay at the end, already in axis order.
             n_batch = moved.ndim - ndim
-            return np.moveaxis(out, range(n_batch, n_batch + ndim), window.axes)
-        analysis, synthesis = _windows(self.analysis, self.taper, plan, window.overlap)
+            return np.moveaxis(out, range(n_batch, n_batch + ndim), axes)
+        analysis, synthesis = _windows(self.analysis, self.taper, plan, overlap)
         if engine == "numba":
             from dascore.utils._tiles_numba import apply_jit  # noqa: PLC0415
 
@@ -340,7 +310,10 @@ class TileApply(_MetaProcessor):
                 for batch in batches
             ]
         out = np.stack(blended).reshape(moved.shape)
-        return np.moveaxis(out, tail, window.axes)
+        return np.moveaxis(out, tail, axes)
+
+
+tile_apply = TileApply.patch_function
 
 
 def _windows(
@@ -362,10 +335,10 @@ def _windowed(tiles: np.ndarray, analysis: np.ndarray | None) -> np.ndarray:
     return tiles if analysis is None else tiles * analysis
 
 
-def _stack_coords(meta: PatchMeta, window: Window, analysis: Any):
+def _stack_coords(patch: PatchType, window: Window, analysis: Any):
     """Return a stack's coordinate manager: tile centres, edges, and offsets."""
-    coords = meta.coords
-    plan = window.tiles(meta.shape)
+    coords = patch.coords
+    plan = window.tiles(patch.shape)
     edges = None if analysis is None else get_window_edges(analysis, plan.size)
     new_coords = {}
     for dim, size, stride, margin, count in zip(
@@ -418,7 +391,7 @@ def _stack_coords(meta: PatchMeta, window: Window, analysis: Any):
                     coords.get_coord(name),
                 )
         coords = coords.disassociate_coord(dim)
-    dims = (*meta.dims, *(f"{dim}_offset" for dim in window.dims))
+    dims = (*patch.dims, *(f"{dim}_offset" for dim in window.dims))
     # Coords given bare, or as (dims, values): the manager takes either.
     coord_map: dict[str, Any] = dict(coords.get_coord_tuple_map())
     coord_map.update(new_coords)

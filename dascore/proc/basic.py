@@ -766,8 +766,7 @@ class Standardize(PatchProcessor):
     The standard score of a sample x is calculated as:
 
     z = (x - u) / s
-    where u is the mean of the training samples or zero if with_mean=False,
-    and s is the standard deviation of the training samples or one if with_std=False.
+    where u is the mean and s the standard deviation along `dim`.
 
     NaN values are ignored when computing the mean and standard deviation. They
     remain NaN in the output but do not affect any other sample.
