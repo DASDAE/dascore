@@ -91,6 +91,7 @@ def decimate(
     dim, axis, factor = get_dim_axis_value(patch, kwargs=kwargs)[0]
     coords, slices = patch.coords.decimate(**{dim: int(factor)})
     if filter_type:
+        coords = coords._update_grid(dim)
         data = _apply_scipy_decimation(patch, factor, ftype=filter_type, axis=axis)
     else:
         data = patch.data[slices]
@@ -203,7 +204,7 @@ def interpolate(patch: PatchType, kind: str | int = "linear", **kwargs) -> Patch
     coord_new = dc.core.get_coord(data=samples)
     updates = {dim: (associated_dims, coord_new)}
     updates |= _interpolate_associated(cm, dim, coord_num, samples_num, kind)
-    cm_new = cm.update(**updates)
+    cm_new = cm._update_grid(dim, **updates)
     return patch.new(data=out, coords=cm_new)
 
 
@@ -311,7 +312,7 @@ def resample(
         msg = f"Resampling dimension {dim!r} dropped associated coordinates: {names}."
         warnings.warn(msg, DASCoreWarning, stacklevel=3)
         cm, _ = cm.drop_coords(*associated)
-    cm = cm.update(**{dim: new_coord})
+    cm = cm._update_grid(dim, **{dim: new_coord})
     out = patch.new(data=data, coords=cm)
     # Interpolate if new sampling rate is not very close to desired sampling rate.
     if not samples and not np.isclose(new_len, np.round(new_len)):

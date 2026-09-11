@@ -1125,3 +1125,137 @@ class TestTranspose:
         """CoordManager transpose to the current order returns self."""
         coords = random_patch.coords
         assert coords.transpose(*coords.dims) is coords
+
+
+class TestCellBoundsOperations:
+    """Bounds follow retained rows and are discarded for new grids."""
+
+    @pytest.fixture
+    def bounded_patch(self, random_patch):
+        """A patch with non-centred cells on both dimensions."""
+        updates = {}
+        for dim in random_patch.dims:
+            coord = random_patch.get_coord(dim)
+            updates[f"{dim}_start"] = (dim, coord)
+            updates[f"{dim}_stop"] = (dim, coord.update(min=coord.min() + coord.step))
+        return random_patch.update_coords(**updates)
+
+    @pytest.mark.parametrize("operation", ["select", "isel", "sel", "decimate"])
+    def test_retained_rows(self, bounded_patch, operation):
+        """Every selection path selects the same bounds as its labels."""
+        patch = bounded_patch
+        if operation == "select":
+            out = patch.select(distance=(2, 8), samples=True)
+        elif operation == "isel":
+            out = patch.isel(distance=slice(2, 8))
+        elif operation == "sel":
+            values = patch.get_array("distance")
+            out = patch.sel(distance=slice(values[2], values[7]))
+        else:
+            out = patch.decimate(distance=2, filter_type=None)
+        np.testing.assert_array_equal(
+            out.get_array("distance_start"), out.get_array("distance")
+        )
+        assert out.get_coord("time_start") == patch.get_coord("time_start")
+
+    @pytest.mark.parametrize(
+        "operation",
+        ["resample", "decimate", "interpolate", "pad", "rolling", "rolling_stride"],
+    )
+    def test_new_grid(self, bounded_patch, operation):
+        """Changing a grid drops only that dimension's pair."""
+        patch = bounded_patch
+        if operation == "resample":
+            out = patch.resample(distance=2)
+        elif operation == "decimate":
+            out = patch.decimate(distance=2)
+        elif operation == "interpolate":
+            out = patch.interpolate(distance=patch.get_array("distance") + 0.25)
+        elif operation == "pad":
+            out = patch.pad(distance=2, samples=True)
+        else:
+            step = 2 if operation.endswith("stride") else 1
+            out = patch.rolling(distance=4, step=step, samples=True).mean()
+        assert "distance_start" not in out.coords
+        assert "distance_stop" not in out.coords
+        assert out.get_coord("time_start") == patch.get_coord("time_start")
+
+    def test_convert_units(self, bounded_patch):
+        """Converting a dimension transforms both bounds in the same call."""
+        out = bounded_patch.convert_units(distance="km")
+        for name in ("distance", "distance_start", "distance_stop"):
+            np.testing.assert_allclose(
+                out.get_array(name), bounded_patch.get_array(name) / 1000
+            )
+            assert out.get_coord(name).units == out.get_coord("distance").units
+
+    @pytest.mark.parametrize("suffix", ["min", "max"])
+    def test_translate(self, bounded_patch, suffix):
+        """Time envelope updates shift bounds by the label translation."""
+        coord = bounded_patch.get_coord("time")
+        delta = np.timedelta64(3, "s")
+        target = getattr(coord, suffix)() + delta
+        out = bounded_patch.update_coords(**{f"time_{suffix}": target})
+        for name in ("time", "time_start", "time_stop"):
+            np.testing.assert_array_equal(
+                out.get_array(name), bounded_patch.get_array(name) + delta
+            )
+
+    def test_step_update(self, bounded_patch):
+        """Changing the declared step discards the old cells."""
+        out = bounded_patch.update_coords(distance_step=2)
+        assert "distance_start" not in out.coords
+        assert "distance_stop" not in out.coords
+
+    def test_rename(self, bounded_patch):
+        """Renaming a dimension retains the reserved pair's meaning."""
+        out = bounded_patch.rename_coords(distance="channel")
+        assert "channel_start" in out.coords
+        assert "distance_start" not in out.coords
+        assert out.coords.dim_map["channel_start"] == ("channel",)
+
+    def test_translate_values(self, bounded_patch):
+        """Replacing labels by a pure translation also translates the cells."""
+        out = bounded_patch.update_coords(
+            distance=bounded_patch.get_array("distance") + 10
+        )
+        for name in ("distance", "distance_start", "distance_stop"):
+            np.testing.assert_array_equal(
+                out.get_array(name), bounded_patch.get_array(name) + 10
+            )
+
+    def test_replace_grid(self, bounded_patch):
+        """A same-length replacement grid must not retain stale bounds."""
+        out = bounded_patch.update_coords(
+            distance=bounded_patch.get_array("distance") * 2
+        )
+        assert "distance_start" not in out.coords
+        assert "distance_stop" not in out.coords
+
+    def test_set_units(self, bounded_patch):
+        """Unit assignment changes the pair's units with the dimension."""
+        out = bounded_patch.set_units(distance="km")
+        for name in ("distance_start", "distance_stop"):
+            assert out.get_coord(name).units == out.get_coord("distance").units
+            np.testing.assert_array_equal(
+                out.get_array(name), bounded_patch.get_array(name)
+            )
+
+    def test_zero_pad(self, bounded_patch):
+        """An unchanged grid keeps its cell bounds."""
+        out = bounded_patch.pad(distance=0, samples=True)
+        assert out.coords == bounded_patch.coords
+
+    def test_coordinate_slices(self, bounded_patch):
+        """Coordinate bracket slicing reproduces the retained selection rows."""
+        out = bounded_patch.isel(distance=slice(1, 20, 3))
+        for name in ("distance", "distance_start", "distance_stop"):
+            np.testing.assert_array_equal(
+                out.get_array(name), bounded_patch.get_coord(name)[1:20:3].values
+            )
+
+    def test_tile_round_trip(self, bounded_patch):
+        """Windowing replaces input cells and reassembly restores their bounds."""
+        out = bounded_patch.tile_apply(lambda x: x, mode="stack", time=16, samples=True)
+        assert out.get_coord("time_start") != bounded_patch.get_coord("time_start")
+        assert out.reassemble().equals(bounded_patch, close=True)

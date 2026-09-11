@@ -67,9 +67,9 @@ class _PatchRollerInfo:
         """
         # Without a step the dimension is unchanged; reuse the coord manager.
         if self.step == 1:
-            return self.patch.coords
+            return self.patch.coords._update_grid(self.dim)
         coord = self.patch.get_coord(self.dim)[:: self.step]
-        return self.patch.coords.update(**{self.dim: coord})
+        return self.patch.coords._update_grid(self.dim, **{self.dim: coord})
 
     def _get_attrs_with_apply_history(self, func_or_str):
         """Get new attrs that has history from apply attached."""

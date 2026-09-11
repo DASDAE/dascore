@@ -62,6 +62,16 @@ assert time.step == np.timedelta64(976562, "ns")
 
 Float coordinates have no tick to be exact against, so a fraction step on one raises and their `step_exact` is `None`.
 
+### Cells and their centres
+
+A coordinate label is conventionally the centre of a cell one step wide, closed on the low side and open on the high side: a label of 10 with step 2 represents `[9, 11)`. This is recommended for data producers, not enforced. The convention stores nothing and adds no coordinate method. Selection always uses labels, not cells.
+
+Cells that are not centred are stated with the auxiliary pair `{dim}_start` / `{dim}_stop`, each one-dimensional and associated with `dim`. These names are reserved for cell edges just as `{dim}_min`, `{dim}_max`, and `{dim}_step` are reserved for the coordinate envelope. This is CF's cell-boundary idea in DASCore's shape: two associated coordinates instead of a separate vertex axis. Together the pair must have the dimension's length, units, and monotonic direction and satisfy `start <= label < stop`; a lone coordinate with either name remains an ordinary coordinate. [`Patch.stft`](`dascore.Patch.stft`) and [`Patch.tile_apply`](`dascore.Patch.tile_apply`) produce this pair for their windows.
+
+This changes STFT and stacked-tile metadata: `{dim}_start` / `{dim}_stop` previously held unitless sample indices; they now hold physical cell edges in the dimension's units. Code that reads these coordinates must account for the new values and units. Reconstruction retains its original indices privately in `_tile_index_{dim}`; inverse STFT and reassembly continue to use those indices.
+
+Selection and raw decimation retain the selected bounds. Operations that build a new grid, including interpolation, resampling, filtered decimation, padding, and rolling windows, drop them. Translation and unit conversion transform them with the dimension. Waterfall image extents use the outer cell edges: half a step beyond the first and last labels, or the explicit pair when attached.
+
 ## Segmented coordinates
 
 [`CoordSegmented`](`dascore.core.coords.CoordSegmented`) preserves monotonic blocks and their discontinuities. Use [`concat_coords(...)`](`dascore.core.coords.concat_coords`) when the blocks are known:

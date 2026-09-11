@@ -41,6 +41,7 @@ from dascore.utils.signal import (
     get_window_nd,
 )
 from dascore.utils.tiles import get_tile_plan
+from dascore.utils.time import dtype_time_like
 from dascore.utils.window import Window, resolve_window
 from dascore.workflow.meta import PatchMeta
 from dascore.workflow.processor import PatchProcessor, register_implementation
@@ -167,8 +168,10 @@ def tile_apply(
     Patch
         In ``"overlap_add"`` mode, a patch with the input's coordinates. In
         ``"stack"`` mode, the tiles: the windowed dimensions carry the tile
-        centres, ``{dim}_start`` and ``{dim}_stop`` say where each tile came
-        from in samples, and ``{dim}_offset`` is the position within a tile.
+        centres, ``{dim}_start`` and ``{dim}_stop`` give its closed low and
+        open high edges in the dimension's units, and ``{dim}_offset`` is
+        the position within a tile. Private ``_tile_index_{dim}`` coordinates
+        retain the sample indices needed for reconstruction.
 
     Examples
     --------
@@ -358,9 +361,10 @@ def _stack_coords(meta: PatchMeta, window: Window, analysis: Any):
     for dim, size, stride, margin, count in zip(
         window.dims, window.size, plan.stride, plan.margin, plan.grid
     ):
+        bounds = (f"{dim}_start", f"{dim}_stop")
         claimed = (
-            f"{dim}_start",
-            f"{dim}_stop",
+            *(bounds if not all(name in coords for name in bounds) else ()),
+            f"_tile_index_{dim}",
             f"{dim}_offset",
             f"_tile_source_{dim}",
             f"_tile_analysis_{dim}",
@@ -374,9 +378,21 @@ def _stack_coords(meta: PatchMeta, window: Window, analysis: Any):
         # The tile's middle sample, in the coordinate's units.
         centres = _offset_values(coord, starts + size // 2)
         offsets = _offset_values(coord, np.arange(size)) - coord.values[0]
-        new_coords[dim] = get_coord(data=centres, units=coord.units)
-        new_coords[f"{dim}_start"] = (dim, starts)
-        new_coords[f"{dim}_stop"] = (dim, starts + size)
+        # Time ranges beginning at the epoch can have unset units; their
+        # generated labels and bounds must all use the same time units.
+        units = dc.get_quantity("s") if dtype_time_like(coord.dtype) else coord.units
+        new_coords[dim] = get_coord(data=centres, units=units)
+        first = _offset_values(coord, starts)
+        last = _offset_values(coord, starts + size - 1)
+        half_step = abs(coord.step) / 2
+        low = np.minimum(first, last) - half_step
+        # A whole-tick duration can lose its half tick on division. Give
+        # that tick to the open upper edge so even a 1-tick cell contains
+        # its label, including on descending grids.
+        high = np.maximum(first, last) + (abs(coord.step) - half_step)
+        new_coords[f"{dim}_start"] = (dim, get_coord(data=low, units=units))
+        new_coords[f"{dim}_stop"] = (dim, get_coord(data=high, units=units))
+        new_coords[f"_tile_index_{dim}"] = (dim, starts)
         new_coords[f"{dim}_offset"] = get_coord(data=offsets, units=coord.units)
         # The coordinate the tiles were cut from, for reassembly, and the
         # window the tiles were cut under, whose dual blends them back.
@@ -433,8 +449,9 @@ def reassemble(patch: PatchType, *, taper: Any = None) -> PatchType:
 
     The inverse of [`tile_apply`](`dascore.Patch.tile_apply`) in
     ``"stack"`` mode: each tile is multiplied by a taper with complementary
-    ramps and added where its ``{dim}_start`` says it came from, so a stack
-    which was not changed returns the original patch exactly.
+    ramps and added at its private sample index, so a stack which was not
+    changed returns the original patch exactly. Public ``{dim}_start`` and
+    ``{dim}_stop`` describe physical cell edges, not reconstruction indices.
 
     Parameters
     ----------
@@ -481,7 +498,7 @@ def reassemble(patch: PatchType, *, taper: Any = None) -> PatchType:
     # Where each tile goes is what its start says, whatever order the tiles
     # are in and whichever of them are still here; the taper is the one the
     # tiles were cut for, which the stride in attrs says.
-    starts = [patch.get_coord(f"{dim}_start").values for dim in dims]
+    starts = [patch.get_coord(f"_tile_index_{dim}").values for dim in dims]
     strides = tuple(int(patch.attrs[f"_tile_stride_{dim}"]) for dim in dims)
     windows = [f"_tile_analysis_{dim}" for dim in dims]
     if all(name in patch.coords.coord_map for name in windows):
@@ -523,6 +540,7 @@ def reassemble(patch: PatchType, *, taper: Any = None) -> PatchType:
         for name in (
             f"{dim}_start",
             f"{dim}_stop",
+            f"_tile_index_{dim}",
             f"{dim}_offset",
             f"_tile_source_{dim}",
             f"_tile_analysis_{dim}",

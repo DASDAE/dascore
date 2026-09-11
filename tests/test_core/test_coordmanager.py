@@ -1647,3 +1647,56 @@ class TestStringCoords:
         cm = get_coord_manager(coords=coords, dims=("channel", "distance"))
         out, _ = cm.select(channel=np.array(["B", "D"]))
         assert np.array_equal(out.get_array("channel"), np.array(["B", "D"]))
+
+
+class TestCellBounds:
+    """Explicit cell bounds describe the dimension in its own units."""
+
+    @pytest.fixture
+    def cell_coords(self):
+        """Three non-centred cells along a dimensional coordinate."""
+        return {
+            "distance": get_coord(data=[1.0, 3.0, 5.0], units="m"),
+            "distance_start": ("distance", get_coord(data=[0.0, 2.0, 4.0], units="m")),
+            "distance_stop": ("distance", get_coord(data=[2.0, 4.0, 6.0], units="m")),
+        }
+
+    @pytest.mark.parametrize(
+        "name,values,units,association,rule",
+        [
+            ("distance_start", [0, 2], "m", "distance", "same length"),
+            ("distance_start", [0, -1, -2], "m", "distance", "same direction"),
+            ("distance_start", [2, 4, 6], "m", "distance", "start <= label"),
+            ("distance_stop", [1, 3, 5], "m", "distance", "label < stop"),
+            ("distance_stop", [2, 4, 6], "s", "distance", "units"),
+            ("distance_stop", [2, 4, 6], "km", "distance", "units"),
+            ("distance_start", [0, 2, 4], "m", None, "associated"),
+            ("distance_start", [[0, 2, 4]], "m", None, "1-D"),
+        ],
+    )
+    def test_invalid_pair(self, cell_coords, name, values, units, association, rule):
+        """Each invalid pair names the dimension and the broken rule."""
+        cell_coords[name] = (association, get_coord(data=values, units=units))
+        with pytest.raises(ValidationError, match=f"distance.*{rule}"):
+            get_coord_manager(cell_coords, dims=("distance",))
+
+    @pytest.mark.parametrize("name", ["distance_start", "distance_stop"])
+    def test_lone_coordinate(self, cell_coords, name):
+        """A lone reserved name retains ordinary auxiliary semantics."""
+        cell_coords.pop(name)
+        other = "distance_stop" if name.endswith("start") else "distance_start"
+        cell_coords[other] = (None, get_coord(data=[123], units="s"))
+        assert other in get_coord_manager(cell_coords, dims=("distance",))
+
+    def test_descending_empty_singleton(self, cell_coords):
+        """Bounds stay low/high when descending or selecting zero/one rows."""
+        cm = get_coord_manager(cell_coords, dims=("distance",))
+        for index in (slice(None, None, -1), slice(0, 0), slice(0, 1)):
+            selected, _ = cm.isel(distance=index)
+            assert "distance_start" in selected
+
+    def test_unitless(self, cell_coords):
+        """Unitless dimensions accept unitless bounds."""
+        cm = get_coord_manager(cell_coords, dims=("distance",))
+        coords = {name: (cm.dim_map[name], coord.set_units(None)) for name, coord in cm}
+        assert get_coord_manager(coords, dims=cm.dims)

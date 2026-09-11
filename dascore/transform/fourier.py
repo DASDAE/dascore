@@ -632,9 +632,10 @@ def stft(
     - The output is a stack of windows as
       [Patch.tile_apply](`dascore.Patch.tile_apply`) makes one, transformed
       along the window: the transformed dimension becomes the window
-      centres, ``{dim}_start`` and ``{dim}_stop`` say where each window came
-      from in samples, the frequencies sit where the dimension was and the
-      centres come last, and the coordinates the stack carries for
+      centres, ``{dim}_start`` and ``{dim}_stop`` give physical cell edges
+      in the dimension's units, the frequencies sit where the dimension was
+      and the centres come last. Private ``_tile_index_{dim}`` coordinates
+      retain sample indices, and the coordinates the stack carries for
       [Patch.reassemble](`dascore.Patch.reassemble`) are what
       [Patch.istft](`dascore.Patch.istft`) blends the windows back with.
       Non-dimensional coordinates along the transformed dimension travel with

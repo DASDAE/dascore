@@ -7,7 +7,6 @@ import string
 import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
 import numpy as np
-import pandas as pd
 
 from dascore.exceptions import ParameterError
 from dascore.units import Hz, get_quantity_str, maybe_convert_percent_to_fraction
@@ -193,79 +192,48 @@ def _maybe_invert_yaxis(ax, patch, dim, ascending=True):
         ax.invert_yaxis()
 
 
-def _cell_edge_limits(low, high, size):
-    """
-    Widen sample-centre limits to the outer edges of the cells.
-
-    An image extent gives the image's outer edges, so the first and last
-    coordinate values would put every sample half a cell off and make the
-    image one cell narrower than the patch. Widening by half a cell lands
-    on the edges `get_gap_edges` gives the mesh, so both renderers cover
-    the same ground. A lone sample has no step to halve, so its limits
-    pass through, as does a span with no room left for another half cell.
-    """
-    if size < 2:
-        return [low, high]
-    # In float, which is what the axis is drawn in: an integer dtype wraps
-    # on the subtraction, and a time unit divides a half step away.
-    low, high = float(low), float(high)
-    half_cell = (high - low) / (2 * (size - 1))
-    if not np.isfinite(half_cell):
-        return [low, high]
-    return [low - half_cell, high + half_cell]
+def _get_plot_values(values):
+    """Convert coordinate values to numeric plotting units."""
+    values = np.asarray(values)
+    if np.issubdtype(values.dtype, np.datetime64):
+        return mdates.date2num(values)
+    if np.issubdtype(values.dtype, np.timedelta64):
+        return values / np.timedelta64(1, "s")
+    return values.astype(float)
 
 
 def _get_extents(dims_r, coords):
-    """Get the extents used for each dimension."""
-
-    def _convert_datetimes(coords, lims):
-        """Convert numpy datetimes to matplotlib style datetimes."""
-        time_dims = [
-            i for i, v in coords.items() if np.issubdtype(v.dtype, np.datetime64)
-        ]
-        for name in time_dims:
-            # We can get a warning about loss of precision in ns, doesn't matter.
-            with suppress_warnings(UserWarning):
-                time_min = pd.to_datetime(lims[name][0]).to_pydatetime()
-                time_max = pd.to_datetime(lims[name][1]).to_pydatetime()
-            # convert to julian date to appease matplotlib
-            lims[name] = [mdates.date2num(time_min), mdates.date2num(time_max)]
-
-    def _convert_timedeltas(coords, lims):
-        timedelta_dims = [
-            i for i, v in coords.items() if np.issubdtype(v.dtype, np.timedelta64)
-        ]
-        for name in timedelta_dims:
-            # We can get a warning about loss of precision in ns, doesn't matter.\
-            low, high = lims[name]
-            onesec = np.timedelta64(1, "s")
-            # convert to julian date to appease matplotlib
-            lims[name] = [low / onesec, high / onesec]
-
-    # need to reverse dims since extent is [left, right, bottom, top]
-    # and we want first dim to go from top to bottom
-    lims = {x: [] for x in dims_r}
+    """Return outer cell limits in plotting units, in the requested axis order."""
+    out = []
     for dim in dims_r:
-        array = coords.get_array(dim) if hasattr(coords, "get_array") else coords[dim]
-        # Use nanmin/nanmax to handle NaN/NaT values in coordinates
+        coord = coords[dim]
+        array = np.asarray(coord)
+        start_name, stop_name = f"{dim}_start", f"{dim}_stop"
+        paired = start_name in coords and stop_name in coords
         with suppress_warnings(RuntimeWarning):
-            array_min = np.nanmin(array)
-            array_max = np.nanmax(array)
-        # If all values are NaN/NaT, fall back to index-based extents
-        if np.isnan(array_min) or np.isnan(array_max):
-            array_min = 0
-            array_max = len(array) - 1
-        lims[dim] += [array_min, array_max]
-    # find datetime coords and convert to numpy mtimes
-    _convert_datetimes(coords, lims)
-    _convert_timedeltas(coords, lims)
-    # Widened after the conversion, where a half step is a fraction of a
-    # day rather than a whole number of whatever unit the coord states.
-    for dim in dims_r:
-        array = coords.get_array(dim) if hasattr(coords, "get_array") else coords[dim]
-        low, high = lims[dim]
-        lims[dim] = _cell_edge_limits(low, high, len(array))
-    out = [x for dim in dims_r for x in lims[dim]]
+            low = np.nanmin(np.asarray(coords[start_name]) if paired else array)
+            high = np.nanmax(np.asarray(coords[stop_name]) if paired else array)
+        # Incomplete coordinates use the same index fallback as before.
+        if np.isnan(low) or np.isnan(high):
+            out.extend([0, len(array) - 1])
+            continue
+        step = None if paired else getattr(coord, "step", None)
+        if np.issubdtype(array.dtype, np.datetime64):
+            low, high = mdates.date2num([low, high])
+            half_step = 0 if step is None else abs(step / np.timedelta64(1, "D")) / 2
+        elif np.issubdtype(array.dtype, np.timedelta64):
+            low, high = low / np.timedelta64(1, "s"), high / np.timedelta64(1, "s")
+            half_step = 0 if step is None else abs(step / np.timedelta64(1, "s")) / 2
+        else:
+            low, high = float(low), float(high)
+            half_step = 0 if step is None else abs(float(step)) / 2
+        # Retain the legacy array-only helper behavior for callers without
+        # coordinate metadata. Waterfall passes the manager and its steps.
+        if not paired and not hasattr(coord, "step") and len(array) > 1:
+            half_step = (high - low) / (2 * (len(array) - 1))
+            if not np.isfinite(half_step):
+                half_step = 0
+        out.extend([low - half_step, high + half_step])
     return out
 
 
