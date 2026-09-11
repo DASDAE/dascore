@@ -613,7 +613,14 @@ class SQLiteIndexBackend:
                         key = c.def_key
                         defs_needed.setdefault(key, c)
                         link_rows.append(
-                            (patch_id, c.coord_name, c.coord_dims, key, c.dtype)
+                            (
+                                patch_id,
+                                c.coord_name,
+                                c.run_index,
+                                c.coord_dims,
+                                key,
+                                c.dtype,
+                            )
                         )
                     patch_id += 1
                 source_id += 1
@@ -626,8 +633,8 @@ class SQLiteIndexBackend:
                 "patch_coords",
                 PatchCoordRow._fields,
                 [
-                    (pid, name, dims, def_ids[key], dtype)
-                    for pid, name, dims, key, dtype in link_rows
+                    (pid, name, run, dims, def_ids[key], dtype)
+                    for pid, name, run, dims, key, dtype in link_rows
                 ],
             )
             # meta_data.last_indexed_ns is the initial-update-complete
@@ -1198,7 +1205,9 @@ class SQLiteIndexBackend:
             "cd.min_float, cd.max_float, cd.step_float, "
             "cd.min_int, cd.max_int, cd.step_int, cd.min_str, cd.max_str "
             "FROM patch_coords pc "
-            "JOIN coord_defs cd ON cd.coord_def_id = pc.coord_def_id"
+            # the coordinate as a whole; runs are read only by gap reports
+            "JOIN coord_defs cd ON cd.coord_def_id = pc.coord_def_id "
+            "AND pc.run_index = 0"
         )
         n_patches = self._fetch_df("SELECT count(*) AS n FROM patches")["n"].iloc[0]
         most = len(ids) * 4 >= n_patches
@@ -1298,7 +1307,7 @@ class SQLiteIndexBackend:
         nothing. `coord_dims_map` still reports it -- what a patch holds
         and what a query can reach are different questions.
         """
-        sql = "SELECT DISTINCT coord_name, dtype FROM patch_coords"
+        sql = "SELECT DISTINCT coord_name, dtype FROM patch_coords WHERE run_index = 0"
         with self._lock:
             rows = self._con.execute(sql).fetchall()
         return {name for name, dtype in rows if coord_dtype_is_stateable(dtype)}
@@ -1346,6 +1355,32 @@ class SQLiteIndexBackend:
             "WHERE coord_dims != coord_name"
         )
         return set(self._fetch_df(sql)["coord_name"].astype(str))
+
+    def coord_runs(self, name: str, patch_ids) -> pd.DataFrame:
+        """
+        The runs one coordinate is stored as, per patch, as envelope objects.
+
+        Only a segmented coordinate is linked to runs (``run_index`` past
+        0), and a partial index holds just those links, so an archive of
+        contiguous patches answers from an empty index. Columns are
+        ``patch_id``, ``run_index`` and ``_env_min``/``_env_max``/
+        ``_env_step``; no row for a patch means it states no runs.
+        """
+        sql = (
+            "SELECT pc.patch_id, pc.run_index, cd.def_key, cd.fingerprint, "
+            "cd.value_kind, cd.is_relative, "
+            "cd.min_float, cd.max_float, cd.step_float, "
+            "cd.min_int, cd.max_int, cd.step_int, cd.min_str, cd.max_str "
+            "FROM patch_coords pc "
+            "JOIN coord_defs cd ON cd.coord_def_id = pc.coord_def_id "
+            "WHERE pc.coord_name = ? AND pc.run_index > 0"
+        )
+        runs = self._fetch_df(sql, [name])
+        runs = runs[runs["patch_id"].isin({int(x) for x in patch_ids})]
+        if runs.empty:
+            return runs
+        runs = self._add_envelope_objects(runs.reset_index(drop=True))
+        return runs[["patch_id", "run_index", "_env_min", "_env_max", "_env_step"]]
 
     def coord_dims_map(self) -> dict[str, str]:
         """Return each coord name's dims string (first observed wins)."""

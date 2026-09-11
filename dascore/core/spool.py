@@ -1722,6 +1722,44 @@ class Spool(NodeRepr, NamespaceOwner):
         working = base.drop(columns=list(self._drop_columns), errors="ignore")
         return _drop_patch_local_empty(working)
 
+    def _with_runs(self, df: pd.DataFrame, dim: str) -> pd.DataFrame:
+        """
+        The relation with each patch split into the runs its index states.
+
+        A segmented coordinate is linked to its runs, so a patch holding a
+        hole becomes one row per run and the reports see the hole as they
+        see one between patches. A row a selection trimmed keeps only what
+        of each run lies within its envelope. Patches without runs, which
+        is nearly all of them, pass through untouched.
+        """
+        min_col, max_col, step_col = (f"{dim}_{x}" for x in ("min", "max", "step"))
+        if df.empty or not {min_col, max_col, step_col} <= set(df.columns):
+            return df
+        runs = self._catalog.backend.coord_runs(dim, df["_patch_id"].unique())
+        if runs.empty:
+            return df
+        runs = runs.rename(columns={"patch_id": "_patch_id"})
+        split = df.merge(runs, on="_patch_id", how="inner")
+        for run_col, col in zip(
+            ("_env_min", "_env_max", "_env_step"), (min_col, max_col, step_col)
+        ):
+            values = split[run_col]
+            if df[col].dtype != object:
+                values = values.astype(df[col].dtype)
+            split[run_col] = values
+        # a selection trims a row's envelope; runs keep only what it holds
+        low = split["_env_min"].where(
+            split["_env_min"] > split[min_col], split[min_col]
+        )
+        high = split["_env_max"].where(
+            split["_env_max"] < split[max_col], split[max_col]
+        )
+        split = split.assign(**{min_col: low, max_col: high})
+        split[step_col] = split["_env_step"]
+        split = split[split[min_col] <= split[max_col]]
+        whole = df[~df["_patch_id"].isin(runs["_patch_id"])]
+        return pd.concat([whole, split[df.columns]], ignore_index=True)
+
     def get_gaps(
         self,
         dim: str = "time",
@@ -1772,7 +1810,9 @@ class Spool(NodeRepr, NamespaceOwner):
 
         Overlapping and fully-nested patches never open a gap: each
         boundary is measured against the furthest point reached so far,
-        not the previous row.
+        not the previous row. A patch whose coordinate is segmented (a
+        gapped patch in memory or stored whole, up to 256 runs) is read
+        run by run, so the holes inside it are reported too.
 
         A sample-count tolerance scales the step, so patches whose step
         is unknown report no gaps. An absolute tolerance needs no step
@@ -1784,8 +1824,8 @@ class Spool(NodeRepr, NamespaceOwner):
         [`Spool.get_coverage`](`dascore.core.spool.Spool.get_coverage`)
 
         [`get_gap_edges`](`dascore.utils.gaps.get_gap_edges`) finds the
-        gaps *inside* one patch's coordinate, which is a different
-        question: this method reads the index and never loads data.
+        gaps in one coordinate's values, which a caller holding the patch
+        can ask; this method reads the index and never loads data.
 
         Examples
         --------
@@ -1799,7 +1839,7 @@ class Spool(NodeRepr, NamespaceOwner):
         >>> assert random_spool().get_gaps().empty
         """
         out = build_gap_frame(
-            self._report_relation(),
+            self._with_runs(self._report_relation(), dim),
             dim,
             tolerance=tolerance,
             group=group,
@@ -1850,11 +1890,14 @@ class Spool(NodeRepr, NamespaceOwner):
         when the span is zero, meaning a single sample). `group_id`
         matches the gap frame's, so the two join on it.
 
-        Coverage is measured between patches, from the envelopes the
-        index records; a hole *inside* a patch is not visible here. Nor
-        is one in a group whose step is unknown: a sample-count tolerance
-        has nothing to scale there, so the group reports no gaps and
-        counts as fully covered. An absolute tolerance does measure it.
+        Coverage is measured from the envelopes the index records: of
+        each patch, or of each run of a patch whose coordinate is
+        segmented (a gapped patch in memory or stored whole, up to 256
+        runs), so a hole inside such a patch counts like one between
+        patches. A hole is not visible in a group whose step is unknown:
+        a sample-count tolerance has nothing to scale there, so the group
+        reports no gaps and counts as fully covered. An absolute
+        tolerance does measure it.
         Both are what `chunk` would make of the data, so a `coverage` of
         1.0 says "nothing chunk would refuse to merge", not "nothing
         missing".
@@ -1878,7 +1921,7 @@ class Spool(NodeRepr, NamespaceOwner):
         >>> assert (random_spool().get_coverage()["coverage"] == 1).all()
         """
         out = build_coverage_frame(
-            self._report_relation(),
+            self._with_runs(self._report_relation(), dim),
             dim,
             tolerance=tolerance,
             group=group,
