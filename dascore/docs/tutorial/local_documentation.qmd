@@ -3,6 +3,14 @@ title: Local documentation
 keywords: [documentation, cli, agents, offline]
 ---
 
+Install the optional command-line dependencies in your project's environment:
+
+```bash
+python -m pip install "dascore[agents]"
+```
+
+The CLI uses Typer. Importing and using DASCore from Python does not require this extra.
+
 Use the documentation that ships with the DASCore installed in your project's Python environment:
 
 ```bash

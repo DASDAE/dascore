@@ -2,51 +2,27 @@
 
 from __future__ import annotations
 
-import argparse
-import io
 import sys
 
-import dascore as dc
-from dascore.utils.doc_cache import documentation_cache, read_document
-from dascore.utils.doc_corpus import DocumentationError
+from dascore.exceptions import MissingOptionalDependencyError
+from dascore.utils.misc import optional_import
 
 
 def main(argv: list[str] | None = None) -> int:
-    """
-    Run the DASCore command line and return its exit status.
-
-    Use `dascore doc` to prepare the installed version's local documentation,
-    or `dascore doc Patch.select` to display a documented API.
-    """
-    parser = argparse.ArgumentParser(prog="dascore", description=__doc__)
-    parser.add_argument(
-        "--version", action="version", version=f"DASCore {dc.__version__}"
-    )
-    commands = parser.add_subparsers(dest="command", required=True)
-    doc = commands.add_parser("doc", help="Build or read the installed documentation")
-    doc.add_argument(
-        "target", nargs="?", help="Public API name or documentation page identifier"
-    )
-    doc.add_argument(
-        "--rebuild", action="store_true", help="Regenerate the Markdown corpus"
-    )
-    args = parser.parse_args(argv)
-    # Redirected Windows streams can otherwise reject Unicode documentation.
-    if isinstance(sys.stdout, io.TextIOWrapper):
-        sys.stdout.reconfigure(encoding="utf-8")
+    """Run the optional DASCore CLI and return its exit status."""
     try:
-        with documentation_cache(rebuild=args.rebuild) as (root, manifest):
-            if args.target:
-                sys.stdout.write(read_document(root, manifest, args.target))
-            else:
-                sys.stdout.write(
-                    f"DASCore: {dc.__version__}\nPython: {sys.executable}\n"
-                    f"Package: {dc.__file__}\nDocumentation: {root}\n"
-                    f"Documents: {len(manifest['documents'])}\n"
-                )
-                for omitted in manifest["omitted"]:
-                    sys.stdout.write(f"Unavailable: {omitted}\n")
-    except (DocumentationError, OSError) as exc:
-        sys.stderr.write(f"dascore: {exc}\n")
+        optional_import("typer", required_for="the DASCore command-line interface")
+    except MissingOptionalDependencyError as exc:
+        sys.stderr.write(
+            f"dascore: {exc}\nInstall CLI support with:\n"
+            f'  "{sys.executable}" -m pip install "dascore[agents]"\n'
+        )
         return 1
-    return 0
+    # The command definitions require the optional Typer dependency.
+    app = optional_import("dascore._cli").app
+
+    try:
+        return app(args=argv, prog_name="dascore")
+    except SystemExit as exc:
+        assert isinstance(exc.code, int)
+        return exc.code
