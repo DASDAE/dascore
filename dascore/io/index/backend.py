@@ -1149,20 +1149,25 @@ class SQLiteIndexBackend:
         # Summary-only definitions are useful for indexing/dedup but cannot
         # prove coordinate value identity for merge grouping.
         coords["_key"] = coords["def_key"].where(coords["fingerprint"].notna(), None)
-        # The exact grid with its length, as one object per row, so the
-        # whole-tick envelope above can be rebuilt into the exact
-        # coordinate. A grid of whole ticks on their tick is already what
-        # the envelope states, so only a fractional one is carried (None
-        # otherwise), which keeps this a handful of rows in most archives.
-        grid = coords[[*_EXACT_GRID_FIELDS, "length"]]
-        fractional = (grid["step_denominator"] != 1) | (grid["origin_offset"] != 0)
-        exact = np.flatnonzero((grid.notna().all(axis=1) & fractional).to_numpy())
-        terms = np.empty(len(coords), dtype=object)
-        rows = grid.to_numpy()[exact].astype("int64").tolist()
-        for index, row in zip(exact, rows):
-            terms[index] = tuple(row)
-        coords["_grid"] = pd.Series(terms, index=coords.index, dtype=object)
         return coords
+
+    def _fractional_grids(self) -> dict[str, tuple[int, ...]]:
+        """
+        The exact grid and length, by def key, where the envelope cannot restate it.
+
+        A grid of whole ticks on their tick is what the envelope already
+        states, so only a fractional step or offset is fetched: a handful
+        of definitions in most archives, read from the deduplicated table
+        rather than as four more columns on every link row.
+        """
+        columns = ", ".join(_EXACT_GRID_FIELDS)
+        rows = self._fetch_df(
+            f"SELECT def_key, {columns}, length FROM coord_defs "
+            "WHERE step_denominator != 1 OR origin_offset != 0"
+        ).dropna()
+        return {
+            row[0]: tuple(int(x) for x in row[1:]) for row in rows.to_numpy().tolist()
+        }
 
     def _pivot_coords(self, out: pd.DataFrame) -> pd.DataFrame:
         """
@@ -1181,10 +1186,9 @@ class SQLiteIndexBackend:
         ids = out["patch_id"].tolist()
         link_sql = (
             "SELECT pc.patch_id, pc.coord_name, cd.def_key, cd.fingerprint, "
-            "cd.value_kind, pc.dtype, cd.is_relative, cd.units, cd.length, "
+            "cd.value_kind, pc.dtype, cd.is_relative, cd.units, "
             "cd.min_float, cd.max_float, cd.step_float, "
-            "cd.min_int, cd.max_int, cd.step_int, cd.min_str, cd.max_str, "
-            "cd.step_numerator, cd.step_denominator, cd.origin_offset "
+            "cd.min_int, cd.max_int, cd.step_int, cd.min_str, cd.max_str "
             "FROM patch_coords pc "
             "JOIN coord_defs cd ON cd.coord_def_id = pc.coord_def_id"
         )
@@ -1199,6 +1203,10 @@ class SQLiteIndexBackend:
         if coords.empty:
             return out
         coords = self._add_envelope_objects(coords)
+        # the exact grid where the envelope only approximates it (None
+        # elsewhere), so a row rebuilds the coordinate the file holds
+        grids = coords["def_key"].map(self._fractional_grids()).astype(object)
+        coords["_grid"] = grids.where(grids.notna(), None)
         for name, group in coords.groupby("coord_name"):
             if not any(coord_dtype_is_stateable(x) for x in group["dtype"].unique()):
                 # Recorded by name alone, so there is no envelope to
@@ -1216,10 +1224,15 @@ class SQLiteIndexBackend:
             steps = dict(zip(pids, group["_env_step"]))
             units = dict(zip(pids, group["units"]))
             dtypes = dict(zip(pids, group["dtype"]))
-            grids = dict(zip(pids, group["_grid"]))
             out[f"_{name}_def_key"] = out["patch_id"].map(keys)
-            # the exact grid and length, for rebuilding the row's range
-            out[f"_{name}_grid"] = out["patch_id"].map(grids)
+            # the exact grid and length, for rebuilding the row's range;
+            # most coordinates state none, and skip the mapping
+            grids = group["_grid"]
+            out[f"_{name}_grid"] = (
+                out["patch_id"].map(dict(zip(pids, grids)))
+                if grids.notna().any()
+                else None
+            )
             # the stored dtype: an envelope alone cannot say whether 0.0
             # to 299.0 by 1.0 labels integers, and a member rebuilt from
             # the row must match the patch the file would give
