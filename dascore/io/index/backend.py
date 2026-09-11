@@ -378,12 +378,13 @@ class SQLiteIndexBackend:
         sql = (
             "SELECT DISTINCT pc.coord_name, cd.value_kind, cd.units, "
             "cd.is_relative FROM patch_coords pc "
-            "JOIN coord_defs cd ON cd.coord_def_id = pc.coord_def_id"
+            "JOIN coord_defs cd ON cd.coord_def_id = pc.coord_def_id "
+            "WHERE pc.run_index = 0"
         )
         params: list = []
         if names is not None:
             params = sorted(names)
-            sql += f" WHERE pc.coord_name IN ({self._placeholders(len(params))})"
+            sql += f" AND pc.coord_name IN ({self._placeholders(len(params))})"
         return self._fetch_df(sql, params)
 
     def _next_id(self, table: str, column: str) -> int:
@@ -1356,7 +1357,7 @@ class SQLiteIndexBackend:
         """
         sql = (
             "SELECT DISTINCT coord_name FROM patch_coords "
-            "WHERE coord_dims != coord_name"
+            "WHERE run_index = 0 AND coord_dims != coord_name"
         )
         return set(self._fetch_df(sql)["coord_name"].astype(str))
 
@@ -1444,7 +1445,10 @@ class SQLiteIndexBackend:
 
     def coord_dims_map(self) -> dict[str, str]:
         """Return each coord name's dims string (first observed wins)."""
-        df = self._fetch_df("SELECT DISTINCT coord_name, coord_dims FROM patch_coords")
+        df = self._fetch_df(
+            "SELECT DISTINCT coord_name, coord_dims FROM patch_coords "
+            "WHERE run_index = 0"
+        )
         out: dict[str, str] = {}
         for name, dims in zip(df["coord_name"], df["coord_dims"]):
             out.setdefault(str(name), str(dims))

@@ -389,7 +389,8 @@ SPOOL_LATE_RENAMES = MappingProxyType(
 # need not scan them all.
 GRID_NEEDED = "step_denominator != 1 OR origin_offset != 0 OR step_numerator < 0"
 INDEXES = (
-    ("idx_pcoords_name", "patch_coords", "coord_name", None),
+    # whole coordinates only, so run links never lengthen a coordinate scan
+    ("idx_pcoords_name", "patch_coords", "coord_name", "run_index = 0"),
     ("idx_cdefs_grid", "coord_defs", "def_key", GRID_NEEDED),
     # the few links to runs, so asking for them costs nothing without any
     ("idx_pcoords_runs", "patch_coords", "coord_name", "run_index > 0"),
