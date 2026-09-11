@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import h5py
 import numpy as np
+import pandas as pd
 import pytest
 
 import dascore as dc
@@ -404,10 +405,33 @@ class TestReviewFindings:
         assert coord.missing().positions().dtype == coord.dtype
 
     def test_fingerprint_sees_the_declared_step(self):
-        """Declaring a grid changes what the coordinate is."""
+        """Declaring a grid changes what the coordinate is, its spelling does not."""
         plain = CoordMonotonicArray(values=np.array([0, 1, 5]))
         declared = CoordMonotonicArray(values=np.array([0, 1, 5]), step=1)
+        as_float = CoordMonotonicArray(values=np.array([0, 1, 5]), step=1.0)
         assert plain.fingerprint() != declared.fingerprint()
+        assert declared.fingerprint() == as_float.fingerprint()
+
+    def test_bare_absolute_excess_on_time(self):
+        """A bare excess on a time dimension is seconds, as coordinates read it."""
+        first = dc.get_example_patch()
+        time = first.get_coord("time")
+        second = first.update_coords(time_min=time.max() + 2.4 * time.step)
+        spool = dc.spool([first, second])
+        wide = float(2 * time.step / np.timedelta64(1, "s"))
+        assert len(spool.chunk(time=None, tolerance=GapTolerance.absolute(wide))) == 1
+        narrow = float(time.step / np.timedelta64(1, "s"))
+        assert len(spool.chunk(time=None, tolerance=GapTolerance.absolute(narrow))) == 2
+
+    def test_seam_after_an_undeclared_singleton(self):
+        """A seam whose run states no spacing reports no excess and no gap."""
+        one = CoordMonotonicArray(values=np.array([T0]))
+        runs = get_coord(start=T0 + 5 * MS, step=MS, shape=(3,))
+        later = get_coord(start=T0 + 20 * MS, step=MS, shape=(3,))
+        coord = concat_coords(one, runs, later)
+        seams = coord.get_discontinuities()
+        assert len(seams) == 2 and pd.isnull(seams["excess"].iloc[0])
+        assert coord.get_discontinuities("gaps")["index"].tolist() == [4]
 
     def test_waterfall_paints_gaps_by_declared_step(self):
         """The mesh opens a band wherever the declared step says a sample is missing."""

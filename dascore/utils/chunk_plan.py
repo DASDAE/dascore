@@ -436,16 +436,20 @@ def _sampling_group(step: pd.Series, tolerance: float) -> pd.Series:
 def _cell_tolerance(tolerance: GapTolerance, sub, name) -> GapTolerance:
     """Resolve an absolute tolerance into one cell's own units."""
     excess = tolerance.excess
-    if tolerance.count is not None or not carries_units(excess):
-        return tolerance  # a count, or an excess already in coordinate units
+    if tolerance.count is not None:
+        return tolerance
     start, _, _ = get_interval_columns(sub, name)
+    time_like = is_datetime64(start.dtype) or is_timedelta64(start.dtype)
+    if not carries_units(excess):
+        # already in coordinate units, which for time are seconds
+        return GapTolerance.absolute(to_timedelta64(excess)) if time_like else tolerance
     if isinstance(excess, Quantity):
         shown = excess
     else:
         # said in seconds, which is what a timedelta measures and how
         # the message reads back
         shown = f"{to_float(excess)} s"
-        if is_datetime64(start.dtype) or is_timedelta64(start.dtype):
+        if time_like:
             return tolerance
         # A numeric coordinate can still be measured in time (a relative
         # time axis, say), so the timedelta converts like any quantity.

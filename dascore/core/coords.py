@@ -459,7 +459,7 @@ def _discontinuity_frame(rows, kind: str, tolerance) -> pd.DataFrame:
     df = pd.DataFrame(rows, columns=["index", "before", "after", "expected"])
     df["delta"] = df["after"] - df["before"]
     df["excess"] = [
-        np.nan if expected is None else abs(delta) - abs(expected)
+        np.nan if pd.isnull(expected) else abs(delta) - abs(expected)
         for delta, expected in zip(df["delta"], df["expected"])
     ]
     if kind == "gaps":
@@ -2702,7 +2702,7 @@ class CoordArray(BaseCoord):
         """The array payload, and the grid it declares when it declares one."""
         components: tuple[Any, ...] = (("array", hash_array(self.values)),)
         if not _is_null(self.step):
-            components += (("step", str(self.step)),)
+            components += (("step", self._hash_scalar(self.step, "step")),)
         return components
 
 
