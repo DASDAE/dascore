@@ -1407,9 +1407,10 @@ class SQLiteIndexBackend:
         Patches without a segmented coordinate are absent; an index
         without any answers from the empty runs index.
         """
-        probe = "SELECT 1 FROM patch_coords WHERE run_index > 0 LIMIT 1"
-        if self._fetch_df(probe).empty:
-            return {}
+        probe = (
+            "SELECT 1 FROM patch_coords INDEXED BY idx_pcoords_runs "
+            "WHERE run_index > 0 LIMIT 1"
+        )
         fields = ", ".join(f"cd.{f}" for f in _COORD_DEF_FIELDS if f != "dtype")
         sql = (
             "SELECT pc.patch_id, pc.coord_name, pc.coord_dims, pc.run_index, "
@@ -1419,11 +1420,18 @@ class SQLiteIndexBackend:
             "AND pc.patch_id IN (SELECT value FROM json_each(?)) "
             "ORDER BY pc.patch_id, pc.coord_name, pc.run_index"
         )
-        rows = self._fetch_df(sql, [json.dumps([int(x) for x in patch_ids])])
+        with self._lock:
+            if self._con.execute(probe).fetchone() is None:
+                return {}
+            # plain rows: the engine's integers are exact, and a frame
+            # would cost more than the lookup
+            cursor = self._con.execute(sql, [json.dumps([int(x) for x in patch_ids])])
+            names = [x[0] for x in cursor.description]
+            rows = cursor.fetchall()
         out: dict[int, list[CoordRecord]] = {}
-        for rec in rows.to_dict("records"):
-            row = SimpleNamespace(**rec)
-            out.setdefault(int(row.patch_id), []).append(coord_record(row, row))
+        for values in rows:
+            row = SimpleNamespace(**dict(zip(names, values, strict=True)))
+            out.setdefault(row.patch_id, []).append(coord_record(row, row))
         return out
 
     def coord_dims_map(self) -> dict[str, str]:
