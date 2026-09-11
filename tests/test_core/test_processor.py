@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import inspect
 import pickle
-from typing import ClassVar
+from typing import Any, ClassVar
 
 import numpy as np
 import pytest
@@ -287,6 +287,19 @@ class TestReviewFindings:
             values: tuple = Field(default_factory=lambda: (1, 2))
 
         assert Factory._call_signature.parameters["values"].default == (1, 2)
+
+    def test_an_unencodable_field_skips_the_ids(self, patch):
+        """A field the serializer refuses costs the ids, not the call."""
+
+        class Dated(SeamScale):
+            """Carry a time outside the nanosecond range."""
+
+            name = None
+            when: Any = np.datetime64("3000-01-01")
+
+        out = Dated()(patch)
+        assert np.allclose(out.data, patch.data * 2)
+        assert out.attrs.processing_id == patch.attrs.processing_id
 
     def test_a_numpy_bool_in_a_plan(self, patch):
         """Numpy scalars are numbers too."""
