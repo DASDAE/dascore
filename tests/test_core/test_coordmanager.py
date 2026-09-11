@@ -1750,8 +1750,9 @@ class TestSelectIndexers:
 
     def test_large_range_stays_compact(self):
         """An index window does not materialize a large regular coordinate."""
-        coord = dc.get_coord(start=0, step=1, shape=(10**12,))
+        count = min(10**12, np.iinfo(np.intp).max)
+        coord = dc.get_coord(start=0, step=1, shape=(count,))
         patch = dc.Patch(coords={"time": coord}, dims=("time",), dtype="float32")
         coords, indexers = patch.coords.select_indexers(time=(-5, None), samples=True)
         assert coords.shape == (5,)
-        assert indexers == {"time": slice(10**12 - 5, 10**12, 1)}
+        assert indexers == {"time": slice(count - 5, count, 1)}

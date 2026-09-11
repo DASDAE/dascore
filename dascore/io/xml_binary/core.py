@@ -8,6 +8,7 @@ import numpy as np
 from pydantic import ValidationError
 
 import dascore as dc
+from dascore.exceptions import InvalidFiberFileError
 from dascore.io import FiberIO
 from dascore.io.utils import resolve_keyed_source, slice_dataset
 from dascore.models import OptionalFiniteFloat, UTF8Str
@@ -66,15 +67,25 @@ class XMLBinaryV1(FiberIO):
             if resource.suffix == self._data_extension
             else list(base.glob(f"*{self._data_extension}"))
         )
-        path = resolve_keyed_source({str(i): path for i, path in enumerate(paths)}, key)
+        members = {str(path): path for path in paths}
+        path = (
+            members[key]
+            if key in members
+            else resolve_keyed_source(
+                {str(i): path for i, path in enumerate(paths)}, key
+            )
+        )
         dims = (
             ("distance", "time") if metadata.transposed_data else ("time", "distance")
         )
         shape = (metadata.number_of_frames, len(_make_distance_coord(metadata)))
         shape = shape[::-1] if metadata.transposed_data else shape
-        data = np.memmap(
-            ensure_local_file(path), dtype=metadata.data_type, mode="r", shape=shape
-        )
+        local_path = ensure_local_file(path)
+        expected_bytes = int(np.prod(shape)) * np.dtype(metadata.data_type).itemsize
+        if local_path.stat().st_size != expected_bytes:
+            msg = f"XMLBinary file {path} must contain exactly {expected_bytes} bytes."
+            raise InvalidFiberFileError(msg)
+        data = np.memmap(local_path, dtype=metadata.data_type, mode="r", shape=shape)
         return slice_dataset(data, dims, windows)
 
     def get_version(self, resource, **kwargs) -> str | None:

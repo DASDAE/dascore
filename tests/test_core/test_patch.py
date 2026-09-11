@@ -704,6 +704,23 @@ class TestPatchSummary:
             )
 
 
+class TestLegacySummaryKeys:
+    """Structured legacy summaries migrate their private selection key."""
+
+    @pytest.mark.parametrize("key", [None, "current"])
+    def test_private_key_migration(self, random_patch, key):
+        """Migrate a legacy key while preserving an explicitly supplied current key."""
+        payload = random_patch.summary.dump_structured()
+        payload["attrs"]["_source_patch_key"] = "legacy"
+        if key is None:
+            payload.pop("source_patch_key")
+        else:
+            payload["source_patch_key"] = key
+        summary = PatchSummary.model_validate(payload)
+        assert summary.source_patch_key == (key or "legacy")
+        assert "_source_patch_key" not in dict(summary.attrs)
+
+
 class TestDisplay:
     """Tests for displaying patches."""
 
@@ -1543,17 +1560,20 @@ class TestPatchSource:
     """Source metadata belongs to framework assembly, not patch equality."""
 
     @pytest.mark.parametrize("dataless", [False, True])
-    def test_flat_source_summary(self, random_patch, dataless):
+    def test_flat_source_summary(self, random_patch, dataless, tmp_path):
         """Flattening loaded or data-less patches exposes source fields and dtype."""
         patch = random_patch.drop_data() if dataless else random_patch
         patch = patch.new(
             source=PatchSource(
-                path="/record.h5", format="DASDAE", version="2", key="waveform"
+                path=str(tmp_path / "record.h5"),
+                format="DASDAE",
+                version="2",
+                key="waveform",
             )
         )
         flat = patch.flat_dump(exclude={"tag"})
         assert flat["source_patch_key"] == "waveform"
-        assert str(flat["source_path"]) == "/record.h5"
+        assert str(flat["source_path"]) == str(tmp_path / "record.h5")
         assert flat["source_format"] == "DASDAE"
         assert flat["dtype"] == str(patch.dtype)
         assert "tag" not in flat

@@ -768,11 +768,12 @@ class FiberIO:
                 for patch in metadata_func(metadata_resource, snap=snap, _pre_cast=True)
             ]
             getattr(metadata_resource, "seek", lambda x: None)(0)
+            origins = [patch._source or PatchSource() for patch in patches]
             if provenance_source is not None:
                 patches = _stamp_source_ids(
                     patches, self.name, self.version, provenance_source
                 )
-            for index, patch in enumerate(patches):
+            for index, (patch, origin) in enumerate(zip(patches, origins, strict=True)):
                 source = patch._source or PatchSource()
                 key = source.key or (str(index) if len(patches) > 1 else "")
                 if wanted and (source.key or str(index)) not in wanted:
@@ -807,7 +808,16 @@ class FiberIO:
                 )
                 getattr(array_resource, "seek", lambda x: None)(0)
                 array_func = cast(_TypeCasterMethod, self.read_array)
-                data = array_func(array_resource, windows, key=key, _pre_cast=True)
+                # Directory member paths pin array loading to the metadata entry,
+                # while public keys and source-derived IDs retain their ordinals.
+                array_key = (
+                    origin.path
+                    if self.input_type == "directory" and origin.path
+                    else key
+                )
+                data = array_func(
+                    array_resource, windows, key=array_key, _pre_cast=True
+                )
                 expected = (
                     tuple(stop - start for start, stop in windows.values())
                     if patch.dims
@@ -1104,7 +1114,8 @@ def _stamp_source_ids(
                 mtime_ns,
                 ordinal=index,
             )
-            attrs = attrs.update(patch_id=patch_id).drop(STORED_PATCH_ID)
+            attrs = attrs.update(patch_id=patch_id)
+        attrs = attrs.drop(STORED_PATCH_ID)
         out.append(patch.new(attrs=attrs, source=origin))
     return out
 

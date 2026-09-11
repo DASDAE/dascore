@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import gc
 import pickle
+import weakref
 from io import BytesIO
 
 import numpy as np
@@ -173,3 +175,53 @@ class TestSerializedSourceKeys:
         for index, expected in enumerate([patch, other]):
             np.testing.assert_array_equal(loaded[index].data, expected.data)
             np.testing.assert_array_equal(indexed[index].data, expected.data)
+
+
+class TestDecodeLifetime:
+    """A pickle operation shares one decode and releases temporary samples."""
+
+    def test_multi_patch_read_decodes_once(self, random_patch, monkeypatch):
+        """The number of whole-file decodes does not grow with the patch count."""
+        patches = [
+            random_patch.new(data=random_patch.data + index) for index in range(4)
+        ]
+        stream = BytesIO(pickle.dumps(dc.spool(patches)))
+        original = pickle.load
+        calls = []
+
+        def counted_load(resource):
+            calls.append(True)
+            return original(resource)
+
+        monkeypatch.setattr(pickle, "load", counted_load)
+        out = PickleIO().read(stream, time=(1, 4), samples=True)
+        assert len(calls) == 1
+        assert not stream.closed
+        assert len(out) == len(patches)
+        for loaded, patch in zip(out, patches, strict=True):
+            np.testing.assert_array_equal(loaded.data, patch.data[:, 1:4])
+        stream.seek(0)
+        stream.truncate()
+        pickle.dump(random_patch.new(data=random_patch.data * 3), stream)
+        reloaded = PickleIO().read(stream)[0]
+        assert len(calls) == 2
+        np.testing.assert_array_equal(reloaded.data, random_patch.data * 3)
+
+    def test_scan_releases_decoded_arrays(self, random_patch, monkeypatch):
+        """Returned metadata and caller-owned streams keep no temporary arrays."""
+        stream = BytesIO(pickle.dumps(random_patch))
+        original = pickle.load
+        refs = []
+
+        def tracked_load(resource):
+            patch = original(resource)
+            refs.append(weakref.ref(patch.data))
+            return patch
+
+        monkeypatch.setattr(pickle, "load", tracked_load)
+        metadata = PickleIO().get_metadata(stream)
+        gc.collect()
+        assert len(metadata) == 1
+        assert metadata[0]._data is None
+        assert not stream.closed
+        assert refs and all(ref() is None for ref in refs)

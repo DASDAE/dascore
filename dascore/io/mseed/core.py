@@ -30,9 +30,12 @@ https://geofon.gfz.de/redmine/projects/redmine/wiki/DAS.
 
 from __future__ import annotations
 
+from collections import defaultdict
+
 import numpy as np
 
 import dascore as dc
+from dascore.exceptions import InvalidFiberFileError
 from dascore.io import FiberIO
 from dascore.io.utils import resolve_keyed_source, windows_to_slices
 from dascore.utils.io import LocalPath
@@ -97,10 +100,20 @@ class MSeedV2(FiberIO):
             )
             if _get_group_key(segment) == group_key
         ]
-        segments = sorted(segments, key=lambda item: (item.station, item.source_id))
-        return np.stack([segment.data[time] for segment in segments]).astype(
-            dtype, copy=False
-        )
+        by_source = defaultdict(list)
+        for segment in segments:
+            by_source[segment.source_id].append(segment)
+        arrays = []
+        for summary in selected:
+            matches = by_source[summary.source_id]
+            if len(matches) != 1:
+                msg = (
+                    f"MiniSEED source {summary.source_id} has {len(matches)} "
+                    "decoded segments matching its header; expected one."
+                )
+                raise InvalidFiberFileError(msg)
+            arrays.append(matches[0].data[time])
+        return np.stack(arrays).astype(dtype, copy=False)
 
 
 class MSeedV3(MSeedV2):

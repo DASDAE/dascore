@@ -10,7 +10,8 @@ import numpy as np
 import pytest
 
 import dascore as dc
-from dascore.exceptions import MissingOptionalDependencyError
+from dascore.exceptions import InvalidFiberFileError, MissingOptionalDependencyError
+from dascore.io.mseed import core as mseed_core
 from dascore.io.mseed import utils as mseed_utils
 from dascore.io.mseed.core import MSeedV2, MSeedV3
 from dascore.utils.downloader import fetch
@@ -955,3 +956,38 @@ class TestDecodedArrayContract:
         out = MSeedV3().read_array(mseed_v3_path, windows)
         assert out.shape == shape
         assert out.dtype == np.dtype("int32")
+
+
+class TestDecodedSourceMatching:
+    """Malformed decoded groups fail as file errors before patch assembly."""
+
+    @pytest.mark.parametrize("kind", ["missing", "duplicate", "wrong_count"])
+    def test_invalid_decoded_group(self, mseed_v3_path, monkeypatch, kind):
+        """Require one decoded segment per declared source and sample grid."""
+        original = mseed_core._read_segments
+
+        def invalid_segments(*args, **kwargs):
+            segments = original(*args, **kwargs)
+            if kind == "missing":
+                return segments[1:]
+            if kind == "duplicate":
+                return [*segments, segments[0]]
+            return [
+                replace(segments[0], sample_count=1, data=segments[0].data[:1]),
+                *segments[1:],
+            ]
+
+        monkeypatch.setattr(mseed_core, "_read_segments", invalid_segments)
+        with pytest.raises(InvalidFiberFileError, match="decoded segments"):
+            dc.read(mseed_v3_path)
+
+    def test_decoded_sources_follow_metadata_order(self, mseed_v3_path, monkeypatch):
+        """The decoder's iteration order cannot swap channel data."""
+        expected = dc.read(mseed_v3_path)[0]
+        original = mseed_core._read_segments
+        monkeypatch.setattr(
+            mseed_core, "_read_segments", lambda *a, **kw: original(*a, **kw)[::-1]
+        )
+        actual = dc.read(mseed_v3_path)[0]
+        np.testing.assert_array_equal(actual.data, expected.data)
+        assert actual.coords == expected.coords

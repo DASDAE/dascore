@@ -11,6 +11,7 @@ import dascore as dc
 from dascore.core.summary import normalize_source_patch_key
 from dascore.io import BinaryReader, BinaryWriter, FiberIO, PatchSource
 from dascore.io.utils import resolve_keyed_source, slice_dataset
+from dascore.utils.io import IOResourceManager
 
 
 def _read_patches(resource):
@@ -25,6 +26,25 @@ def _read_patches(resource):
     if len(set(resolved)) != len(patches):
         keys = [""] * len(patches)
     return list(zip(patches, keys, strict=True))
+
+
+class _PickleReader:
+    """Keep decoded entries only for the lifetime of one I/O resource manager."""
+
+    mode = "rb"
+
+    def __init__(self, patches):
+        self.patches = patches
+
+    @classmethod
+    def get_handle(cls, resource):
+        """Decode once; preserve a caller-owned stream through the nested manager."""
+        with IOResourceManager(resource) as manager:
+            return cls(_read_patches(manager.get_resource(BinaryReader)))
+
+    def close(self):
+        """Release sample arrays when the scan or read finishes."""
+        self.patches.clear()
 
 
 class PickleIO(FiberIO):
@@ -61,7 +81,7 @@ class PickleIO(FiberIO):
             return None
 
     def get_metadata(
-        self, resource: BinaryReader, *, snap: bool = True
+        self, resource: _PickleReader, *, snap: bool = True
     ) -> list[dc.Patch]:
         """Decode a pickle to describe its patches without retaining their arrays."""
         return [
@@ -71,18 +91,18 @@ class PickleIO(FiberIO):
                 dtype=p.dtype,
                 source=PatchSource(key=key),
             )
-            for p, key in _read_patches(resource)
+            for p, key in resource.patches
         ]
 
     def read_array(
-        self, resource: BinaryReader, windows: dict[str, tuple[int, int]], key: str = ""
+        self,
+        resource: _PickleReader,
+        windows: dict[str, tuple[int, int]],
+        key: str = "",
     ) -> np.ndarray:
-        """Decode one pickled logical patch and slice its array."""
+        """Slice one logical patch from the entries decoded for this operation."""
         patch = resolve_keyed_source(
-            [
-                (native or str(i), p)
-                for i, (p, native) in enumerate(_read_patches(resource))
-            ],
+            [(native or str(i), p) for i, (p, native) in enumerate(resource.patches)],
             key,
         )
         return slice_dataset(patch.data, patch.dims, windows)

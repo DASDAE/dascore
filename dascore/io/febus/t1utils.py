@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import numpy as np
-
 import dascore as dc
 from dascore import get_coord_manager
 from dascore.io.utils import drop_blank_attrs, get_exact_coord, get_gridded_coord
@@ -11,10 +9,6 @@ from dascore.utils.hdf5 import H5Reader
 from dascore.utils.misc import maybe_get_items
 
 _DATA = "Data"
-
-
-def _get_h5_attr(fi: H5Reader, key: str) -> np.ndarray:
-    return fi[f"{_DATA}/{key}"][()]
 
 
 def _is_t1_file(fi: H5Reader) -> bool:
@@ -88,5 +82,5 @@ def _scan_t1(fi: H5Reader, snap=True):
     return dc.Patch(
         attrs=_get_t1_attrs(fi),
         coords=coords,
-        dtype=str(_get_h5_attr(fi, "Temperature").dtype),
+        dtype=str(fi["Data/Temperature"].dtype),
     )

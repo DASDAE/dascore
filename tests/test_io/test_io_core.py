@@ -1778,6 +1778,18 @@ class TestSourceIds:
         patch.io.write(moved, "dasdae")
         assert dc.read(moved)[0].attrs.patch_id == patch.attrs.patch_id
 
+    @pytest.mark.parametrize("nameless", [False, True])
+    @pytest.mark.parametrize("disabled", [False, True])
+    def test_marker_removed_without_source_ids(self, dasdae_path, nameless, disabled):
+        """Internal stored-ID markers never leak from pathless or IDs-off reads."""
+        resource = (
+            io.BytesIO(Path(dasdae_path).read_bytes()) if nameless else dasdae_path
+        )
+        mode = "disabled" if disabled else "ids"
+        with config_context(patch_provenance=mode):
+            patch = dc.read(resource, *dc.get_format(dasdae_path))[0]
+        assert STORED_PATCH_ID not in dict(patch.attrs)
+
     def test_the_marker_does_not_survive(self, dasdae_path):
         """The stored id is consumed, not left lying on the attrs."""
         patch = dc.read(dasdae_path)[0]

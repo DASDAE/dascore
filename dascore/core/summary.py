@@ -245,8 +245,10 @@ class PatchSummary(DascoreBaseModel):
         # summaries, so we only need to normalize nested coord values and dims.
         if "attrs" in data or "coords" in data:
             dims = _normalize_dims(data.get("dims", ()))
+            attrs = PatchAttrs.from_dict(data.get("attrs"))
+            key = data.get("source_patch_key", attrs.get("_source_patch_key", ""))
             return _build_patch_summary_payload(
-                attrs=PatchAttrs.from_dict(data.get("attrs")),
+                attrs=attrs.drop("_source_patch_key"),
                 coords=_normalize_coord_summary_map(data.get("coords", {}), dims=dims),
                 dims=dims,
                 shape=data.get("shape", ()),
@@ -254,7 +256,7 @@ class PatchSummary(DascoreBaseModel):
                 source_path=data.get("source_path", data.get("path", "")),
                 source_format=data.get("source_format", data.get("file_format", "")),
                 source_version=data.get("source_version", data.get("file_version", "")),
-                source_patch_key=data.get("source_patch_key", ""),
+                source_patch_key=key,
             )
         msg = (
             "PatchSummary requires structured `attrs`/`coords` input. "

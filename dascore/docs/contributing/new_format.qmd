@@ -62,7 +62,7 @@ Exact metadata can retain large coordinate arrays; request it for targeted files
 
 Multi-patch formats attach a stable native key with `source=PatchSource(key=...)`. The framework passes that key to `read_array`. Prefer native group or node names; use positions only when ordering is guaranteed. Single-patch files usually need no key.
 
-`PatchSource` is framework plumbing stored privately on `patch._source`; it is separate from scientific attrs. Readers supply the logical key, and the dispatcher fills the path, format, and version. Public summaries retain the existing `source_path`, `source_format`, `source_version`, and `source_patch_key` fields. The reserved `windows` field remains unset. Source retention through processing is not guaranteed, and no lazy `Patch.load()` is provided.
+`PatchSource` is framework plumbing stored privately on `patch._source`; it is separate from scientific attrs. Readers supply the logical key, and the dispatcher fills the path, format, and version. Directory readers may also supply an internal member path for timestamp filtering and to pin array loading to the corresponding metadata entry; public source provenance still names the requested resource. Public summaries retain the existing `source_path`, `source_format`, `source_version`, and `source_patch_key` fields. The reserved `windows` field remains unset. Source retention through processing is not guaranteed, and no lazy `Patch.load()` is provided.
 
 The shared `read` accepts one or multiple `source_patch_key` values, selects metadata, and loads matching arrays. Source IDs are derived before selection, so selecting a subset keeps the original logical patch identity. Stored IDs remain authoritative.
 
