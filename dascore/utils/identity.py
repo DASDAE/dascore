@@ -27,6 +27,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from typing import Any
 from uuid import uuid4
 
+from dascore.core.source import PatchSource
 from dascore.utils.misc import suppress_warnings
 from dascore.utils.serialize import combine_hashes, digest
 from dascore.warnings import DASCoreWarning
@@ -137,49 +138,38 @@ def new_patch_id() -> str:
 
 
 def source_patch_id(
-    format_name: str,
-    version: str,
-    path: str,
-    key: object = None,
+    source: PatchSource,
     size_bytes: int | None = None,
     mtime_ns: int | None = None,
+    *,
+    ordinal: object = None,
 ) -> str:
     """
-    Return the id of data read from a file.
-
-    The deterministic ID lets repeated reads of the same source agree and preserves
-    provenance across processes.
+    Return a source-derived data ID without accessing the filesystem.
 
     Parameters
     ----------
-    format_name
-        The format the reader was using.
-    version
-        The version of that format the file was read at.
-    path
-        The path or URI the data came from, as the archive spells it.
-    key
-        What names this patch within the file, when a file holds more than
-        one. The reader's own key if it has one, else the ordinal.
+    source
+        The format, version, canonical path, and native logical patch key.
     size_bytes
-        The size of the source, when it can be had.
+        The size of the source, when available.
     mtime_ns
-        When the source was last written, when it can be had.
+        The source's modification time, when available.
+    ordinal
+        The fallback for a source without a native key. An integer ordinal
+        remains distinct from a native string key, preserving existing IDs.
 
     Notes
     -----
-    Every field already exists in the index, so no filesystem access is required.
-    Size and modification time distinguish replaced sources; unavailable values may
-    be None. Changing modification time changes the ID even if contents are unchanged.
-    Path-derived IDs depend on archive layout and are not stable across
-    hosts. IDs stored by a format remain authoritative and portable.
+    Stored IDs remain authoritative. Path-derived IDs depend on archive
+    layout; changing the path, size, or modification time changes the ID.
     """
     return digest(
         {
-            "format": format_name,
-            "version": version,
-            "path": path,
-            "key": key,
+            "format": source.format,
+            "version": source.version,
+            "path": source.path,
+            "key": source.key or ordinal,
             "size_bytes": size_bytes,
             "mtime_ns": mtime_ns,
         }

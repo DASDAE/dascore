@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import pickle
-from typing import Literal
+
+import numpy as np
 
 import dascore
+import dascore as dc
 from dascore.io import BinaryReader, BinaryWriter, FiberIO
+from dascore.io.utils import resolve_keyed_source, slice_dataset
 
 
 class PickleIO(FiberIO):
@@ -29,35 +32,35 @@ class PickleIO(FiberIO):
         spool_or_patch = b"Spool" in byte_stream or b"Patch" in byte_stream
         return has_dascore and spool_or_patch
 
-    def get_format(
-        self,
-        resource: BinaryReader,
-        **kwargs,
-    ) -> tuple[str, str] | Literal[False]:
-        """
-        Return (name, version) if the file holds a pickled Patch or
-        Spool, else False.
-
-        Parameters
-        ----------
-        resource
-            A binary resource which may contain a pickled patch.
-        """
+    def get_version(self, resource: BinaryReader, **kwargs) -> str | None:
+        """Return the file version when the resource matches this family."""
         try:
-            start = resource.read(100)  # read first 100 bytes, look for class names
+            start = resource.read(100)
             if self._header_is_dascore(start):
                 getattr(resource, "seek", lambda x: None)(0)
                 pickle.load(resource)
-                return ("PICKLE", self.version)  # TODO add pickle protocol
+                return self.version
             else:
-                return False
+                return None
         except (pickle.UnpicklingError, FileNotFoundError, IndexError):
-            return False
+            return None
 
-    def read(self, resource: BinaryReader, **kwargs):
-        """Read a Patch/Spool from disk."""
-        out = pickle.load(resource)
-        return dascore.spool(out)
+    def get_metadata(
+        self, resource: BinaryReader, *, snap: bool = True
+    ) -> list[dc.Patch]:
+        """Decode a pickle to describe its patches without retaining their arrays."""
+        patches = dascore.spool(pickle.load(resource))
+        return [
+            dc.Patch(coords=p.coords, attrs=p.attrs, dtype=p.dtype) for p in patches
+        ]
+
+    def read_array(
+        self, resource: BinaryReader, windows: dict[str, tuple[int, int]], key: str = ""
+    ) -> np.ndarray:
+        """Decode one pickled logical patch and slice its array."""
+        patches = dascore.spool(pickle.load(resource))
+        patch = resolve_keyed_source({str(i): p for i, p in enumerate(patches)}, key)
+        return slice_dataset(patch.data, patch.dims, windows)
 
     def write(self, spool, resource: BinaryWriter, **kwargs):
         """Write a Patch/Spool to disk."""

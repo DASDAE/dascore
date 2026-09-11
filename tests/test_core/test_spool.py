@@ -1029,10 +1029,9 @@ class TestGetSpool:
 
     def test_file_spool(self, random_spool, tmp_path_factory):
         """
-        Tests for getting a file spool vs in-memory spool. Basically,
-        if a format supports scanning, a lazy file-backed spool is
-        returned. If it doesn't, all the file contents have to be loaded
-        into memory, so the spool holds live patches.
+        Both formats construct file spools from data-less metadata.
+        Pickle must deserialize to inspect metadata, but the spool does
+        not retain those sample arrays.
         """
         path = tmp_path_factory.mktemp("file_spoolin")
         dasdae_path = path / "patch.h5"
@@ -1044,7 +1043,10 @@ class TestGetSpool:
         assert not dasdae_spool.has_live_patches
 
         pickle_spool = dc.spool(pickle_path)
-        assert pickle_spool.has_live_patches
+        assert not pickle_spool.has_live_patches
+        assert len(pickle_spool) == len(random_spool)
+        for loaded, expected in zip(pickle_spool, random_spool, strict=True):
+            np.testing.assert_array_equal(loaded.data, expected.data)
 
 
 class TestSpoolBehaviorOptionalImports:

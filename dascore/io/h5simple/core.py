@@ -2,15 +2,12 @@
 
 from __future__ import annotations
 
-from typing import Literal
-
 import numpy as np
 
 import dascore as dc
-from dascore.io import FiberIO, ScanPayload, make_scan_payload
-from dascore.io.utils import build_patches, slice_dataset
+from dascore.io import FiberIO
+from dascore.io.utils import slice_dataset
 from dascore.utils.hdf5 import H5Reader
-from dascore.utils.misc import raise_on_extra_kwargs
 
 from .utils import (
     _get_attrs_coords_and_data,
@@ -26,38 +23,14 @@ class H5Simple(FiberIO):
     preferred_extensions = ("hdf5", "h5")
     version = "1"
 
-    def get_format(
-        self,
-        resource: H5Reader,
-        **kwargs,
-    ) -> tuple[str, str] | Literal[False]:
-        """Determine if is simple h5 format."""
+    def get_version(self, resource: H5Reader, **kwargs) -> str | None:
+        """Return the file version when the resource matches this family."""
         if _is_h5simple(resource):
-            return self.name, self.version
-        return False
-
-    def read(self, resource: H5Reader, snap=True, **kwargs) -> dc.Spool:
-        """
-        Read a simple h5 file.
-
-        Parameters
-        ----------
-        resource
-            The open h5 object.
-        snap
-            If True, snap each coordinate to be evenly sampled.
-        **kwargs
-            Passed to filtering coordinates.
-        """
-        attrs, cm, data = _get_attrs_coords_and_data(resource, snap)
-        return dc.spool(build_patches(cm, data, attrs, selection=kwargs))
+            return self.version
+        return None
 
     def read_array(
-        self,
-        resource: H5Reader,
-        windows: dict[str, tuple[int, int]],
-        snap: bool = True,
-        **kwargs,
+        self, resource: H5Reader, windows: dict[str, tuple[int, int]], key: str = ""
     ) -> np.ndarray:
         """
         Slice the data node directly.
@@ -67,12 +40,11 @@ class H5Simple(FiberIO):
         them. No coordinate values are read either way, and the axis no
         node accounts for is named without building its index.
         """
-        raise_on_extra_kwargs(kwargs, "windows and snap")
         dims, data_node = _get_dims_and_data(resource)
         return slice_dataset(data_node, dims, windows)
 
-    def scan(self, resource: H5Reader, snap=True, **kwargs) -> list[ScanPayload]:
+    def get_metadata(self, resource: H5Reader, *, snap: bool = True) -> list[dc.Patch]:
         """Get the attributes of a h5simple file."""
         attrs, cm, data = _get_attrs_coords_and_data(resource, snap)
         attrs = dc.PatchAttrs.from_dict(attrs)
-        return [make_scan_payload(attrs=attrs, coords=cm, dtype=str(data.dtype))]
+        return [dc.Patch(attrs=attrs, coords=cm, dtype=str(data.dtype))]

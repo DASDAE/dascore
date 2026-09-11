@@ -443,7 +443,7 @@ class TestNetCDFIO:
         assert "time" in patch.coords
         assert "distance" in patch.coords
         assert patch.data.ndim == 2
-        assert patch.attrs["_source_patch_key"] == "data"
+        assert patch._source.key == "data"
 
     def test_scan_netcdf(self, netcdf_path):
         """Test scanning a NetCDF file for metadata."""
@@ -751,7 +751,7 @@ class TestNetCDFUtilsAdvanced:
         patch = spool[0]
         assert set(patch.coords.coord_map) == {"time", "distance"}
         assert patch.attrs.tag == ""
-        assert patch.attrs["_source_patch_key"] == "data"
+        assert patch._source.key == "data"
 
     def test_error_conditions(self, tmp_path):
         """Test various error conditions."""

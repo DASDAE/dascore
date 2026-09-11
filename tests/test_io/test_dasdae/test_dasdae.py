@@ -21,7 +21,6 @@ from dascore.exceptions import (
     ParameterError,
     PatchAttributeError,
 )
-from dascore.io.core import FiberIO
 from dascore.io.dasdae import utils as dasdae_utils
 from dascore.io.dasdae._compat import translate_legacy_attrs
 from dascore.io.dasdae.core import DASDAEV1
@@ -35,7 +34,7 @@ from dascore.io.dasdae.utils import (
     _get_contents_from_patch_groups_generic,
     _get_coords,
     _get_file_version,
-    _get_scan_payload_from_group,
+    _get_metadata_from_group,
     _save_array,
     _save_patch,
 )
@@ -133,7 +132,7 @@ class TestReadDASDAE:
         assert scanned.shape == patch.shape
         assert scanned.dims == patch.dims
         payload = dc.scan_payloads(path)[0]
-        assert payload["coords"].shape == patch.shape
+        assert payload.coords.shape == patch.shape
         assert dc.spool(path)[0].equals(patch)
         assert dc.spool(path).get_contents()["data_size"].iloc[0] == patch.size
 
@@ -200,8 +199,8 @@ class TestReadDASDAE:
         target = scanned[1].source_patch_key
         out = dc.read(path, source_patch_key=target)
         assert len(out) == 1
-        assert out[0].attrs["_source_patch_key"] == target
-        assert out[0].summary.source_patch_key == out[0].attrs["_source_patch_key"]
+        assert out[0]._source.key == target
+        assert out[0].summary.source_patch_key == out[0]._source.key
         assert (
             out[0].summary.get_coord_summary("time").min
             == scanned[1].get_coord_summary("time").min
@@ -216,7 +215,7 @@ class TestReadDASDAE:
         targets = [scanned[0].source_patch_key, scanned[2].source_patch_key]
         out = dc.read(path, source_patch_key=targets)
         assert len(out) == 2
-        assert {patch.attrs["_source_patch_key"] for patch in out} == set(targets)
+        assert {patch._source.key for patch in out} == set(targets)
         assert {patch.summary.get_coord_summary("time").min for patch in out} == {
             scanned[0].get_coord_summary("time").min,
             scanned[2].get_coord_summary("time").min,
@@ -281,7 +280,11 @@ class TestReadArray:
         io = DASDAEV1()
         windows = {"time": (3, 11), "distance": (2, 5)}
         out = io.read_array(written_dascore_v1_random, windows)
-        expected = FiberIO.read_array(io, written_dascore_v1_random, windows)
+        expected = (
+            io.read(written_dascore_v1_random, source_patch_key="")[0]
+            .select(samples=True, **windows)
+            .data
+        )
         assert np.array_equal(out, expected)
         assert out.dtype == random_patch.data.dtype
         assert np.array_equal(out, random_patch.data[2:5, 3:11])
@@ -299,16 +302,12 @@ class TestReadArray:
         for payload in payloads:
             key = payload.source_patch_key
             patch = dc.read(multi_patch_path, source_patch_key=key)[0]
-            out = io.read_array(
-                multi_patch_path, {"time": (1, 4)}, source_patch_key=key
-            )
+            out = io.read_array(multi_patch_path, {"time": (1, 4)}, key=key)
             assert np.array_equal(out, patch.data[:, 1:4])
 
     def test_null_key_resolves_single_patch(self, written_dascore_v1_random):
         """A NaN key (an index row with no stored key) means the lone patch."""
-        out = DASDAEV1().read_array(
-            written_dascore_v1_random, {}, source_patch_key=np.nan
-        )
+        out = DASDAEV1().read_array(written_dascore_v1_random, {}, key=np.nan)
         expected = DASDAEV1().read_array(written_dascore_v1_random, {})
         assert np.array_equal(out, expected)
 
@@ -317,17 +316,17 @@ class TestReadArray:
         name = dc.scan(multi_patch_path)[0].source_patch_key
         for key in ("/waveforms", f"{name}/data", f"./{name}"):
             with pytest.raises(PatchAttributeError, match="No patch named"):
-                DASDAEV1().read_array(multi_patch_path, {}, source_patch_key=key)
+                DASDAEV1().read_array(multi_patch_path, {}, key=key)
 
     def test_keyless_multi_patch_raises(self, multi_patch_path):
         """Several patches and no key cannot be resolved."""
-        with pytest.raises(PatchAttributeError, match="source_patch_key"):
+        with pytest.raises(PatchAttributeError, match="pass an explicit key"):
             DASDAEV1().read_array(multi_patch_path, {})
 
     def test_unknown_key_raises(self, multi_patch_path):
         """A key naming no patch group raises."""
         with pytest.raises(PatchAttributeError, match="No patch named"):
-            DASDAEV1().read_array(multi_patch_path, {}, source_patch_key="nope")
+            DASDAEV1().read_array(multi_patch_path, {}, key="nope")
 
     def test_no_patches_raises(self, generic_hdf5):
         """A file without a waveform group has nothing to read."""
@@ -341,7 +340,7 @@ class TestReadArray:
 
     def test_load_filters_refused(self, written_dascore_v1_random):
         """Value filters are not part of the window contract."""
-        with pytest.raises(ParameterError, match="Unexpected keyword"):
+        with pytest.raises(TypeError, match="unexpected keyword"):
             DASDAEV1().read_array(written_dascore_v1_random, {}, time_min=1)
 
     def test_reads_only_the_window(
@@ -417,9 +416,12 @@ class TestScanDASDAE:
         for key in common_keys:
             assert info1[key] == info2[key]
 
-    def test_get_patch_summary_has_file_metadata(self, random_spool):
-        """The summary helper should stamp DASDAE metadata on each row."""
-        out = DASDAEV1()._get_patch_summary(random_spool)
+    def test_scan_has_file_metadata(self, random_spool, tmp_path):
+        """Public scan summaries retain format, version, and logical patch keys."""
+        path = tmp_path / "summary.h5"
+        DASDAEV1().write(random_spool, path)
+        out = dc.scan_to_df(path)
+        assert len(out) == len(random_spool)
         assert set(out["source_format"]) == {"DASDAE"}
         assert set(out["source_version"]) == {"1"}
         assert out["source_patch_key"].notnull().all()
@@ -574,8 +576,9 @@ class TestLegacyFixtureCompatibility:
             group.attrs["_attrs_coords"] = np.bytes_(payload)
             group.attrs["_cdims_distance"] = "distance"
             group.create_dataset("_coord_distance", data=np.array([0.0, 1.0, 3.0]))
-            summary = _get_scan_payload_from_group(group)
-        assert summary["coords"]["distance"].step is None
+            group.create_dataset("data", data=np.zeros(3))
+            summary = _get_metadata_from_group(group)
+        assert summary.coords["distance"].step is None
 
     def test_decode_legacy_attr_bytes_falls_back_to_text(self):
         """Undecodable legacy bytes should fall back to plain text."""
@@ -806,9 +809,10 @@ class TestDASDAEInternalHelpers:
             group.attrs["_attrs_station"] = np.asarray("A01", dtype=h5py.string_dtype())
             group.attrs["_cdims_time"] = "time"
             group.create_dataset("_coord_time", data=np.array([0, 1]))
-            summary = _get_scan_payload_from_group(group)
-        assert summary["attrs"].station == "A01"
-        assert summary["dtype"] == ""
+            group.create_dataset("data", data=np.zeros(2))
+            summary = _get_metadata_from_group(group)
+        assert summary.attrs.station == "A01"
+        assert summary.dtype == np.dtype("float64")
 
     def test_get_attrs_unpacks_scalar_attr_arrays(self, monkeypatch):
         """Scalar arrays returned by attr decoding should be unpacked."""
@@ -834,13 +838,14 @@ class TestDASDAEInternalHelpers:
             group.attrs["_attrs_station"] = "unused"
             group.attrs["_cdims_time"] = "time"
             group.create_dataset("_coord_time", data=np.array([0, 1]))
+            group.create_dataset("data", data=np.zeros(2))
             monkeypatch.setattr(
                 dasdae_utils,
                 "_decode_attr_value",
                 lambda *_args, **_kwargs: np.asarray("A01"),
             )
-            summary = _get_scan_payload_from_group(group)
-        assert summary["attrs"].station == "A01"
+            summary = _get_metadata_from_group(group)
+        assert summary.attrs.station == "A01"
 
     def test_get_patch_summary_preserves_empty_dims_and_shape(self, tmp_path):
         """Empty stored dims should remain empty tuples in summaries."""
@@ -848,10 +853,10 @@ class TestDASDAEInternalHelpers:
         with h5py.File(path, "w") as h5:
             group = h5.create_group("waveforms").create_group("patch_0")
             group.attrs["_dims"] = ""
-            group.create_dataset("data", data=np.arange(6).reshape(2, 3))
-            summary = _get_scan_payload_from_group(group)
-        assert summary["dims"] == ()
-        assert summary["shape"] == (2, 3)
+            group.create_dataset("data", data=np.empty(0))
+            summary = _get_metadata_from_group(group)
+        assert summary.dims == ()
+        assert summary.shape == (0,)
 
     def test_get_contents_from_patch_groups_returns_empty_without_waveforms(
         self, tmp_path

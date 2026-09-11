@@ -130,8 +130,8 @@ class TestScan:
         io = UptechH5V1()
         scanned = io.scan(uptech_path)[0]
         patch = io.read(uptech_path)[0]
-        assert scanned["coords"] == patch.coords
-        assert scanned["dims"] == patch.dims
+        assert scanned.coords == patch.coords
+        assert scanned.dims == patch.dims
 
 
 class TestTimeValidation:

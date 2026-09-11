@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
-from typing import Literal
-
 import numpy as np
 
 import dascore as dc
-from dascore.io.core import FiberIO, ScanPayload, make_scan_payload
+from dascore.io.core import FiberIO
+from dascore.io.utils import slice_dataset
 from dascore.utils.io import BinaryReader, LocalBinaryReader
 
 from .utils import _get_patch_attrs, _get_version
@@ -20,43 +19,26 @@ class SentekV5(FiberIO):
     version = "5"
     preferred_extensions = ("das",)
 
-    def read(
+    def read_array(
         self,
         resource: LocalBinaryReader,
-        time=None,
-        distance=None,
-        **kwargs,
-    ) -> dc.Spool:
-        """Read a Sentek das file, return a DataArray."""
-        attrs, coords, offsets = _get_patch_attrs(resource)
+        windows: dict[str, tuple[int, int]],
+        key: str = "",
+    ) -> np.ndarray:
+        """Decode the stored layout and select in the metadata's dimension order."""
+        _, coords, offsets = _get_patch_attrs(resource)
         resource.seek(offsets[0])
-        array = np.fromfile(resource, dtype=np.float32, count=offsets[1] * offsets[2])
-        array = np.reshape(array, (offsets[1], offsets[2])).T
-        patch = dc.Patch(data=array, attrs=attrs, coords=coords, dims=coords.dims)
-        # Note: we are being a bit sloppy here in that selecting on
-        # time/distance doesn't actually affect how much data is read from
-        # the binary file. This is probably ok though since Sentek files
-        # tend to be quite small.
-        # The bare function: a patch read under a bound carries what a
-        # whole read carries, and the spool records the trim it asked for.
-        patch = patch.select.raw_function(patch, time=time, distance=distance)
-        return dc.spool([patch]) if patch.data.size else dc.spool([])
+        data = np.fromfile(resource, dtype=np.float32, count=offsets[1] * offsets[2])
+        data = data.reshape((offsets[1], offsets[2])).T
+        return slice_dataset(data, coords.dims, windows)
 
-    def get_format(
-        self,
-        resource: BinaryReader,
-        **kwargs,
-    ) -> tuple[str, str] | Literal[False]:
-        """Auto detect sentek format."""
-        return _get_version(resource)
+    def get_version(self, resource: BinaryReader, **kwargs) -> str | None:
+        """Return the file version when the resource matches this family."""
+        return _match[1] if (_match := _get_version(resource)) else None
 
-    def scan(self, resource: BinaryReader, **kwargs) -> list[ScanPayload]:
+    def get_metadata(
+        self, resource: BinaryReader, *, snap: bool = True
+    ) -> list[dc.Patch]:
         """Extract metadata from sentek file."""
         attrs, coords, _ = _get_patch_attrs(resource)
-        return [
-            make_scan_payload(
-                attrs=attrs,
-                coords=coords,
-                dtype=str(np.dtype(np.float32)),
-            )
-        ]
+        return [dc.Patch(attrs=attrs, coords=coords, dtype=str(np.dtype(np.float32)))]

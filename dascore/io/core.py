@@ -14,20 +14,15 @@ from collections.abc import (
     Generator,
     Iterable,
     Iterator,
-    Mapping,
-    Sequence,
 )
 from contextlib import suppress
+from dataclasses import replace
 from functools import cached_property, wraps
-from numbers import Integral
 from pathlib import Path
 from threading import RLock
 from typing import (
-    Any,
     Literal,
-    NotRequired,
     Protocol,
-    TypedDict,
     TypeVar,
     cast,
     get_type_hints,
@@ -44,9 +39,8 @@ from dascore.constants import (
     path_types,
     time_select_type,
 )
-from dascore.core.attrs import PatchAttrs
-from dascore.core.coordmanager import CoordManager
 from dascore.core.coords import CoordSegmented
+from dascore.core.source import PatchSource
 from dascore.core.spool import Spool
 from dascore.core.summary import PatchSummary, normalize_source_patch_key
 from dascore.exceptions import (
@@ -60,6 +54,7 @@ from dascore.exceptions import (
     RemoteCacheError,
     UnknownFiberFormatError,
 )
+from dascore.io.utils import selection_windows
 from dascore.utils.downloader import resolve_example_uri
 from dascore.utils.identity import (
     ids_enabled,
@@ -73,6 +68,7 @@ from dascore.utils.io import (
 )
 from dascore.utils.mapping import FrozenDict
 from dascore.utils.misc import (
+    _apply_union_indexers,
     _get_install_message,
     _get_install_name,
     _iter_filesystem,
@@ -88,6 +84,7 @@ from dascore.utils.paths import (
     is_example_uri,
     is_local_path,
 )
+from dascore.utils.pd import filter_df
 from dascore.utils.plugins import FIBER_IO_GROUP, get_entry_point_loaders
 from dascore.utils.progress import track
 from dascore.utils.remote_io import (
@@ -111,273 +108,12 @@ ScanInput = (
 )
 
 
-class ScanPayload(TypedDict):
-    """The structured payload contract returned by `FiberIO.scan()`."""
-
-    attrs: PatchAttrs
-    coords: CoordManager
-    dims: tuple[str, ...]
-    shape: tuple[int, ...]
-    dtype: str
-    source_patch_key: NotRequired[str]
-    source_path: NotRequired[str | Path | UPath]
-    source_format: NotRequired[str]
-    source_version: NotRequired[str]
-
-
-def make_scan_payload(
-    *,
-    attrs: dc.PatchAttrs | Mapping[str, Any] | None,
-    coords: CoordManager,
-    dims: Sequence[str] | None = None,
-    shape: Sequence[int] | None = None,
-    dtype: str = "",
-    source_patch_key: str = "",
-) -> ScanPayload:
-    """
-    Build one normalized FiberIO scan payload.
-
-    Parameters
-    ----------
-    attrs
-        The patch attributes, or anything convertible to them.
-    coords
-        The coordinates of the patch, usually a CoordManager.
-    dims
-        The dimension names. If None, use those of `coords`.
-    shape
-        The shape of the patch data. If None, use that of `coords`.
-    dtype
-        The string representation of the data's dtype.
-    source_patch_key
-        Identifies which logical patch of a multi-patch resource this is.
-    """
-    return {
-        "attrs": PatchAttrs.from_dict(attrs),
-        "coords": coords,
-        "dims": tuple(coords.dims if dims is None else dims),
-        "shape": tuple(coords.shape if shape is None else shape),
-        "dtype": str(dtype),
-        "source_patch_key": normalize_source_patch_key(source_patch_key),
-    }
-
-
-_SCAN_PAYLOAD_REQUIRED = ("attrs", "coords", "dims", "shape", "dtype")
-
-
-def _validate_scan_payload(result, require_coord_manager: bool = False):
-    """
-    Validate one FiberIO.scan() result against the ScanPayload contract.
-
-    Shared by the `dc.scan` summary path and `dc.scan_payloads` so both
-    public boundaries enforce the same requirements; only the payload
-    API additionally requires `coords` to be a full CoordManager (the
-    summary path also accepts already-collapsed coordinate mappings) and
-    requires `dims` and `shape` to match it exactly.
-    """
-    if isinstance(result, dc.PatchAttrs):
-        msg = (
-            "DASCore no longer accepts PatchAttrs from FiberIO.scan(). "
-            "Return a structured scan payload instead. "
-            "See docs/contributing/new_format.qmd."
-        )
-        raise ValueError(msg)
-    if not isinstance(result, Mapping):
-        msg = (
-            "FiberIO.scan() must return ScanPayload mappings; got "
-            f"{type(result).__name__}. See docs/contributing/new_format.qmd."
-        )
+def _validate_metadata(patch):
+    """Require a data-less Patch at the reader's metadata boundary."""
+    if not isinstance(patch, dc.Patch) or patch._data is not None:
+        msg = "FiberIO.get_metadata() must return data-less Patch objects."
         raise TypeError(msg)
-    missing = sorted(set(_SCAN_PAYLOAD_REQUIRED) - set(result))
-    if missing:
-        msg = (
-            f"scan payload is missing required keys {missing}; a ScanPayload "
-            "requires a mapping with `coords`, `attrs`, and `dtype` as well "
-            "as `dims` and `shape`. See docs/contributing/new_format.qmd."
-        )
-        raise TypeError(msg)
-    if require_coord_manager and not isinstance(result["coords"], CoordManager):
-        msg = (
-            "scan payload `coords` must be a CoordManager holding the full "
-            f"coordinates; got {type(result['coords']).__name__}."
-        )
-        raise TypeError(msg)
-    if not isinstance(result["coords"], CoordManager | Mapping):
-        msg = "scan payload `coords` must be a CoordManager or coordinate mapping."
-        raise TypeError(msg)
-    attrs = result["attrs"]
-    if not isinstance(attrs, PatchAttrs | Mapping):
-        msg = "scan payload `attrs` must be PatchAttrs or an attribute mapping."
-        raise TypeError(msg)
-    try:
-        PatchAttrs.from_dict(attrs)
-    except (TypeError, ValueError) as exc:
-        msg = "scan payload `attrs` contains invalid attribute values."
-        raise TypeError(msg) from exc
-    dims = result["dims"]
-    valid_dims = (
-        isinstance(dims, tuple)
-        and all(isinstance(x, str) and x for x in dims)
-        and len(set(dims)) == len(dims)
-    )
-    if not valid_dims:
-        msg = "scan payload `dims` must be a tuple of unique, non-empty strings."
-        raise TypeError(msg)
-    shape = result["shape"]
-    valid_shape = (
-        isinstance(shape, tuple)
-        and len(shape) == len(dims)
-        and all(
-            isinstance(x, Integral) and not isinstance(x, bool) and x >= 0
-            for x in shape
-        )
-    )
-    if not valid_shape:
-        msg = "scan payload `shape` must contain one non-negative integer per dim."
-        raise TypeError(msg)
-    dtype = result["dtype"]
-    if not isinstance(dtype, str):
-        msg = "scan payload `dtype` must be a string."
-        raise TypeError(msg)
-    try:
-        np.dtype(dtype)
-    except (TypeError, ValueError) as exc:
-        msg = f"scan payload `dtype` is invalid: {dtype!r}."
-        raise TypeError(msg) from exc
-    optional_types = {
-        "source_patch_key": str,
-        "source_path": (str, Path, UPath),
-        "source_format": str,
-        "source_version": str,
-    }
-    for name, expected_type in optional_types.items():
-        if name in result and not isinstance(result[name], expected_type):
-            msg = f"scan payload `{name}` has an invalid type."
-            raise TypeError(msg)
-    if require_coord_manager:
-        coords = result["coords"]
-        if dims != coords.dims:
-            msg = "scan payload `dims` must exactly match `coords.dims`."
-            raise ValueError(msg)
-        if shape != coords.shape:
-            msg = "scan payload `shape` must exactly match `coords.shape`."
-            raise ValueError(msg)
-    return result
-
-
-def _scan_payload_to_summary(
-    payload: ScanPayload | Mapping[str, Any],
-    *,
-    source_path: str | Path | UPath | None = None,
-    # PatchSummary stores these as plain strings and its validator maps a
-    # missing value to "", so default to what it would normalize None to.
-    source_format: str = "",
-    source_version: str = "",
-    source_patch_key: str | None = None,
-) -> PatchSummary:
-    """Convert one structured FiberIO scan payload into a PatchSummary."""
-    _validate_scan_payload(payload)
-    coords = payload["coords"]
-    if hasattr(coords, "to_summary_dict"):
-        coords = coords.to_summary_dict()
-    return PatchSummary(
-        attrs=PatchAttrs.from_dict(payload["attrs"]),
-        coords=coords,
-        dims=tuple(payload.get("dims", ())),
-        shape=tuple(payload.get("shape", ())),
-        dtype=str(payload["dtype"]),
-        source_path=source_path,
-        source_format=source_format,
-        source_version=source_version,
-        source_patch_key=(
-            normalize_source_patch_key(source_patch_key)
-            or normalize_source_patch_key(payload.get("source_patch_key"))
-        ),
-    )
-
-
-def _scan_result_to_summary(
-    patch_summary: PatchSummary | ScanPayload | Mapping[str, Any],
-    *,
-    source_path: str | Path | UPath | None = None,
-    source_format: str | None = None,
-    source_version: str | None = None,
-    source_patch_key: str | None = None,
-) -> PatchSummary:
-    """Convert scan metadata into a patch summary."""
-    if isinstance(patch_summary, PatchSummary) and all(
-        value in (None, "")
-        for value in (source_path, source_format, source_version, source_patch_key)
-    ):
-        return patch_summary
-    normalized_source_path = "" if source_path in (None, "") else source_path
-    normalized_source_format = "" if source_format in (None, "") else source_format
-    normalized_source_version = "" if source_version in (None, "") else source_version
-    summary_source_patch_key = normalize_source_patch_key(source_patch_key)
-    # PatchSummary is checked first even though it is not a Mapping at
-    # runtime: it is not final, so a checker must assume a subclass could be
-    # both, and only this order narrows it out of the Mapping branch.
-    if isinstance(patch_summary, PatchSummary):
-        return PatchSummary(
-            attrs=patch_summary.attrs,
-            coords=dict(patch_summary.coords),
-            dims=tuple(patch_summary.dims),
-            shape=tuple(patch_summary.shape),
-            dtype=patch_summary.dtype,
-            source_path=normalized_source_path or patch_summary.source_path,
-            source_format=normalized_source_format or patch_summary.source_format,
-            source_version=normalized_source_version or patch_summary.source_version,
-            source_patch_key=summary_source_patch_key or patch_summary.source_patch_key,
-        )
-    if isinstance(patch_summary, Mapping):
-        return _scan_payload_to_summary(
-            patch_summary,
-            source_path=normalized_source_path,
-            source_format=normalized_source_format,
-            source_version=normalized_source_version,
-            source_patch_key=summary_source_patch_key,
-        )
-    if isinstance(patch_summary, dc.PatchAttrs):
-        msg = (
-            "DASCore no longer accepts PatchAttrs from FiberIO.scan(). "
-            "Return a structured scan payload instead. "
-            "See docs/contributing/new_format.qmd."
-        )
-        raise ValueError(msg)
-    msg = (
-        "_scan_result_to_summary only accepts PatchSummary or structured "
-        "scan payload mappings. "
-        f"Got {type(patch_summary).__name__}."
-    )
-    raise TypeError(msg)
-
-
-def _patch_to_summary(
-    patch: dc.Patch,
-    *,
-    source_path: str | Path | UPath | None = None,
-    source_format: str | None = None,
-    source_version: str | None = None,
-) -> PatchSummary:
-    """Convert a loaded patch into a summary tied to its source."""
-    return _scan_result_to_summary(
-        patch.summary,
-        source_path=source_path or "",
-        source_format=source_format,
-        source_version=source_version,
-    )
-
-
-def _patch_to_scan_payload(patch: dc.Patch) -> ScanPayload:
-    """Convert a loaded patch into one structured FiberIO scan payload."""
-    return make_scan_payload(
-        attrs=patch.attrs,
-        coords=patch.coords,
-        dims=patch.dims,
-        shape=patch.shape,
-        dtype=str(np.dtype(patch.data.dtype)),
-        source_patch_key=patch.attrs.get("_source_patch_key", ""),
-    )
+    return patch
 
 
 def _resolve_read_spool(spool, source_patch_key: object = "") -> dc.Patch:
@@ -390,7 +126,7 @@ def _resolve_read_spool(spool, source_patch_key: object = "") -> dc.Patch:
     """
     source_patch_key = normalize_source_patch_key(source_patch_key)
     if source_patch_key and len(spool) == 1:
-        found = normalize_source_patch_key(spool[0].attrs.get("_source_patch_key", ""))
+        found = normalize_source_patch_key((spool[0]._source or PatchSource()).key)
         if found == source_patch_key or (not found and not source_patch_key.isdigit()):
             return spool[0]
     return _select_patch_from_spool(spool, source_patch_key=source_patch_key)
@@ -411,7 +147,7 @@ def _select_patch_from_spool(spool, source_patch_key: object = "") -> dc.Patch:
         matches = [
             patch
             for patch in spool
-            if normalize_source_patch_key(patch.attrs.get("_source_patch_key", ""))
+            if normalize_source_patch_key((patch._source or PatchSource()).key)
             == source_patch_key
         ]
         if len(matches) == 1:
@@ -803,7 +539,7 @@ class _FiberIOManager:
                 # may happen in each fiber_ios get_format method, many of which
                 # may be third party code.
                 func = fiber_io.get_format
-                required_type = _required_resource_type(func)
+                required_type = _required_resource_type(fiber_io.get_version)
                 func_input = None
                 try:
                     # Get resource has to be in the try block because it can also
@@ -910,9 +646,11 @@ def _type_caster(func, sig, required_type, arg_name):
             # Everything else propagates, including a BaseException raised
             # inside get_format: the catch is only this wide so the cleanup
             # above runs on a KeyboardInterrupt, not to swallow one.
-            if fun_name != "get_format" or not isinstance(e, Exception):
+            if fun_name not in {"get_format", "get_version"} or not isinstance(
+                e, Exception
+            ):
                 raise
-            out = False
+            out = None if fun_name == "get_version" else False
         else:
             # if a new file handle was created we need to close it now. But it
             # shouldn't close any passed in, that should happen up the stack.
@@ -962,118 +700,167 @@ class FiberIO:
     # Methods using automatic type casting and the parameter index to cast.
     _automatic_type_casters = FrozenDict(
         {
-            "read": 1,
             "read_array": 1,
-            "scan": 1,
+            "get_metadata": 1,
             "write": 2,
-            "get_format": 1,
+            "get_version": 1,
         }
     )
 
-    def read(self, resource, **kwargs) -> dc.Spool:
-        """
-        Load data from a path.
+    def get_version(self, resource) -> str | None:
+        """Return this family's file version, or None for another family."""
+        msg = f"FiberIO: {self.name} has no get_version method"
+        raise NotImplementedError(msg)
 
-        *kwargs should include support for selecting expected dimensions. For
-        example, distance=(100, 200) would only read data with distance from
-        100 to 200. Multi-patch formats may also accept `source_patch_key` to
-        load one or more logical patches from the source.
+    def get_metadata(self, resource, *, snap: bool = True) -> list[dc.Patch]:
         """
-        msg = f"FiberIO: {self.name} has no read method"
+        Return one data-less patch per logical patch in a resource.
+
+        The coordinates declare the array's dimensions and shape, and the
+        patch declares its dtype. Multi-patch readers put their logical key
+        in `PatchSource`. The framework supplies the source path, format,
+        and version. `snap=False` preserves stored coordinate values when
+        available; neither setting includes unwritten samples.
+        """
+        msg = f"FiberIO: {self.name} has no get_metadata method"
         raise NotImplementedError(msg)
 
     def read_array(
-        self, resource, windows: dict[str, tuple[int, int]], **kwargs
+        self, resource, windows: dict[str, tuple[int, int]], key: str = ""
     ) -> np.ndarray:
         """
-        Return the raw data array for absolute sample windows.
+        Read one logical patch's array over half-open positional windows.
 
-        A data-only fast path for callers which already know a resource's
-        structure (from an index) and need no Patch, attrs, or
-        coordinates back. This default reads the whole resource through
-        ``read`` and trims — a Patch is still built internally, just not
-        returned — so every format is correct without overriding; formats
-        override it to slice storage directly and skip the Patch work.
-
-        Parameters
-        ----------
-        resource
-            The resource to read, as ``read`` takes it.
-        windows
-            Maps dimension name to ``(start, stop)`` half-open python
-            indices on the resource's own sample grid. Dimensions absent
-            from the mapping are returned whole.
-        **kwargs
-            Reader-specific options. Multi-patch resources take
-            ``source_patch_key`` (as ``read`` and ``scan`` spell it)
-            naming the one patch the windows index; without it an
-            ambiguous resource raises rather than guesses. A labelling
-            option is spelled as that format's ``read`` spells it, since
-            this default forwards to ``read``: usually ``snap``, which
-            only labels samples and so cannot move a window and is
-            ignored; where such an option decides how many samples the
-            resource has, it is honored.
-
-        Returns
-        -------
-        The array in the resource's stated dimension order (the order
-        ``scan`` reports), untransposed and uncast. A resource whose
-        array is empty returns that empty array, where this default
-        raises instead, having no patch to build.
-
-        Examples
-        --------
-        >>> from dascore.io.dasdae.core import DASDAEV1
-        >>> from dascore.utils.downloader import fetch
-        >>>
-        >>> path = fetch("example_dasdae_event_1.h5")
-        >>> array = DASDAEV1().read_array(path, {"time": (0, 50)})
-        >>> array.shape
-        (601, 50)
+        `windows` maps dimension names to `(start, stop)` sample indices.
+        Missing dimensions are returned whole. The array follows the
+        dimensions, shape, and dtype declared by `get_metadata`, including
+        format-specific layout and scaling. `key` identifies the logical
+        patch in a multi-patch resource; single-patch formats ignore it.
+        Readers which cannot slice storage decode and then slice here.
         """
-        source_patch_key = kwargs.pop("source_patch_key", "")
-        spool = self.read(resource, **kwargs)
-        patch = _resolve_read_spool(spool, source_patch_key)
-        if windows:
-            patch = patch.select(**dict(windows), samples=True)
-        return patch.data
+        msg = f"FiberIO: {self.name} has no read_array method"
+        raise NotImplementedError(msg)
 
-    def scan(self, resource, *, snap: bool = True, **kwargs) -> list[ScanPayload]:
+    def read(self, resource, *, snap: bool | None = None, **select) -> dc.Spool:
         """
-        Return patch-local metadata and exact coords for a resource.
+        Read patches by selecting metadata and loading the resulting array windows.
 
-        Each item in the returned list should be a `ScanPayload` dict with
-        exact coords and attrs for one logical patch. Do not populate source
-        metadata such as `path`, `file_format`, or `file_version`; DASCore
-        attaches those in the higher-level `dc.scan(...)` pipeline.
-
-        Multi-patch formats should set `source_patch_key` when needed so
-        DASCore can reload the same logical patch later.
-
-        Parameters
-        ----------
-        resource
-            The resource to scan.
-        snap
-            If True (the default), formats may represent stored sample times
-            as an idealized uniform range. If False, returned coords must
-            represent stored coordinate values exactly. This is a documented
-            no-op for formats whose coordinates are defined by start, step,
-            and sample count metadata.
+        Coordinate queries are resolved on the original sample grid without
+        recording a processing operation. `source_patch_key` selects logical
+        patches, and matching attribute queries filter metadata before data
+        are read. `snap` defaults to True; the older `snap_dims` spelling is
+        also accepted, with explicit `snap` taking precedence.
         """
-        # Reading is correct but slow; formats should implement metadata-only scans.
-        read_params = inspect.signature(self.read).parameters
-        read_kwargs = dict(kwargs)
-        if "snap" in read_params:
-            read_kwargs["snap"] = snap
-        elif "snap_dims" in read_params:
-            read_kwargs["snap_dims"] = snap
-        try:
-            spool = self.read(resource, **read_kwargs)
-        except NotImplementedError:
-            msg = f"FiberIO: {self.name} has no scan or read method"
-            raise NotImplementedError(msg)
-        return [_patch_to_scan_payload(pa) for pa in spool]
+        provenance_source = select.pop("_provenance_source", None)
+        snap_dims = select.pop("snap_dims", True)
+        snap = snap_dims if snap is None else snap
+        wanted = _normalize_source_patch_keys(select.pop("source_patch_key", ""))
+        relative = select.pop("relative", False)
+        samples = select.pop("samples", False)
+        out = []
+        with IOResourceManager(resource) as manager:
+            metadata_resource = manager.get_resource(
+                _required_resource_type(self.get_metadata)
+            )
+            metadata_func = cast(_TypeCasterMethod, self.get_metadata)
+            patches = [
+                _validate_metadata(patch)
+                for patch in metadata_func(metadata_resource, snap=snap, _pre_cast=True)
+            ]
+            getattr(metadata_resource, "seek", lambda x: None)(0)
+            if provenance_source is not None:
+                patches = _stamp_source_ids(
+                    patches, self.name, self.version, provenance_source
+                )
+            for index, patch in enumerate(patches):
+                source = patch._source or PatchSource()
+                key = source.key or (str(index) if len(patches) > 1 else "")
+                if wanted and (source.key or str(index)) not in wanted:
+                    continue
+                queries = {
+                    name: value
+                    for name, value in select.items()
+                    if name in patch.coords.coord_map
+                    and patch.coords.coord_map[name].ndim == 1
+                    and value is not None
+                }
+                flat_attrs = patch.attrs.flat_dump()
+                attr_queries = {
+                    name: value
+                    for name, value in select.items()
+                    if name in flat_attrs
+                    and not (pd.api.types.is_scalar(value) and pd.isna(value))
+                }
+                if (
+                    attr_queries
+                    and not filter_df(pd.DataFrame([flat_attrs]), **attr_queries)[0]
+                ):
+                    continue
+                coords, indexers = patch.coords.select_indexers(
+                    relative=relative, samples=samples, **queries
+                )
+                if not coords.size and queries:
+                    continue
+                windows, residual = selection_windows(patch.coords, indexers)
+                array_resource = manager.get_resource(
+                    _required_resource_type(self.read_array)
+                )
+                getattr(array_resource, "seek", lambda x: None)(0)
+                array_func = cast(_TypeCasterMethod, self.read_array)
+                data = array_func(array_resource, windows, key=key, _pre_cast=True)
+                expected = (
+                    tuple(stop - start for start, stop in windows.values())
+                    if patch.dims
+                    else patch.shape
+                )
+                if data.shape != expected or np.dtype(data.dtype) != np.dtype(
+                    patch.dtype
+                ):
+                    msg = (
+                        f"{self.name}.read_array returned {data.shape}/{data.dtype}; "
+                        f"metadata declared {expected}/{patch.dtype}."
+                    )
+                    raise InvalidFiberIOError(msg)
+                data = _apply_union_indexers(residual, data)
+                out.append(
+                    patch.new(data=data, coords=coords, source=replace(source, key=key))
+                )
+        return dc.spool(out)
+
+    def scan(
+        self, resource, *, snap: bool = True, timestamp=None, **kwargs
+    ) -> list[dc.Patch]:
+        """Return data-less patches; the dispatcher attaches source provenance."""
+        if self.input_type == "directory":
+            resource = coerce_to_upath(resource)
+            resource = resource if resource.is_dir() else resource.parent
+        with IOResourceManager(resource) as manager:
+            # Cast outside the best-effort scan handler: invalid input types
+            # are caller errors, not an unsupported file variant.
+            metadata_resource = (
+                resource
+                if kwargs.get("_pre_cast")
+                else manager.get_resource(_required_resource_type(self.get_metadata))
+            )
+            metadata_kwargs = {"snap": snap}
+            if getattr(self.get_metadata, "_type_caster_wrapped", False):
+                metadata_kwargs["_pre_cast"] = True
+            try:
+                patches = self.get_metadata(metadata_resource, **metadata_kwargs)
+            except NotImplementedError as exc:
+                if _is_wrapped_func(self.get_metadata, FiberIO.get_metadata):
+                    raise
+                warnings.warn(str(exc), UserWarning, stacklevel=2)
+                return []
+        if timestamp is not None:
+            patches = [
+                patch
+                for patch in patches
+                if self._updated_after(
+                    (patch._source or PatchSource()).path or resource, timestamp
+                )
+            ]
+        return patches
 
     def write(self, spool: dc.Patch | dc.Spool, resource, **kwargs):
         """Write the spool to a resource (eg path, stream, etc.)."""
@@ -1081,61 +868,27 @@ class FiberIO:
         raise NotImplementedError(msg)
 
     def get_format(self, resource, **kwargs) -> tuple[str, str] | Literal[False]:
-        """
-        Return a tuple of (format_name, version_numbers).
-
-        This should only work if path is the supported file format, otherwise
-        raise UnknownFiberError or return False.
-        """
-        msg = f"FiberIO: {self.name} has no get_version method"
-        raise NotImplementedError(msg)
-
-    @property
-    def implements_read(self) -> bool:
-        """Returns True if the subclass implements its own scan method else False."""
-        return not _is_wrapped_func(self.read, FiberIO.read)
+        """Derive the format name and version from the family detector."""
+        detector = cast(_TypeCasterMethod, self.get_version)
+        version = detector(resource, _pre_cast=kwargs.get("_pre_cast", False))
+        return (self.name, version) if version is not None else False
 
     @property
     def implements_write(self) -> bool:
-        """Returns True if the subclass implements its own scan method else False."""
+        """Return whether the reader supports writing."""
         return not _is_wrapped_func(self.write, FiberIO.write)
-
-    @property
-    def implements_scan(self) -> bool:
-        """Returns True if the subclass implements its own scan method else False."""
-        return not _is_wrapped_func(self.scan, FiberIO.scan)
-
-    @property
-    def implements_read_array(self) -> bool:
-        """Return True if the subclass implements its own read_array method."""
-        return not _is_wrapped_func(self.read_array, FiberIO.read_array)
-
-    @property
-    def implements_get_format(self) -> bool:
-        """Return True if the subclass implements its own get_format method."""
-        return not _is_wrapped_func(self.get_format, FiberIO.get_format)
 
     @classmethod
     def get_supported_io_table(cls):
-        """Make a table of all the supported formats and the methods."""
-        # load all the plugins, so we know about all the FiberIO classes
-        FiberIO.manager.load_plugins()
-        out = []
-        # iterate the dict _format_version_items,
-        # which has the form {format_name: {version_str: FiberIO}}
-        for format_name, version_dict in FiberIO.manager._format_version.items():
-            for version_name, fiberio in version_dict.items():
-                format_info = {
-                    "name": format_name,
-                    "version": version_name,
-                    "scan": fiberio.implements_scan,
-                    "get_format": fiberio.implements_get_format,
-                    "read": fiberio.implements_read,
-                    "read_array": fiberio.implements_read_array,
-                    "write": fiberio.implements_write,
-                }
-                out.append(format_info)
-        return pd.DataFrame(out)
+        """Return the supported formats, versions, and optional write capability."""
+        cls.manager.load_plugins()
+        return pd.DataFrame(
+            [
+                {"name": name, "version": version, "write": io.implements_write}
+                for name, versions in cls.manager._format_version.items()
+                for version, io in versions.items()
+            ]
+        )
 
     def _updated_after(self, resource, timestamp):
         """Determine if the resource was updated after specified mtime."""
@@ -1329,60 +1082,31 @@ def source_identity(source) -> tuple[str, int | None, int | None]:
 
 
 def _stamp_source_ids(
-    spool, file_format: str, file_version: str, source, source_patch_key: object = ""
-):
-    """
-    Say which data each patch read from a file is.
-
-    An id derived from the source rather than minted, so reading the same
-    file twice gives the same answer and a result can be traced back to
-    what it came from. A format which stores its own ids keeps them: that
-    one survived a round trip and this one only names where the bytes are.
-
-    A source which cannot spell a path -- a stream, an open file object --
-    is left with the id its patches were built with. Deriving one from the
-    format alone would hand every such read the same id, which is the one
-    failure worth avoiding: two different data claiming to be one.
-
-    Parameters
-    ----------
-    spool
-        What the reader returned.
-    file_format
-        The format it was read as.
-    file_version
-        The version of that format.
-    source
-        What the caller asked to read.
-    source_patch_key
-        The key the caller asked for, when it asked for exactly one.
-        Used for a reader which honours the key without recording it: the
-        patch is then the only one returned, and its position here would
-        say 0 for whichever of the file's patches it is.
-    """
-    # A FiberIO is free to hand back whatever its format means; only a
-    # spool of patches has ids to stamp.
+    patches: list[dc.Patch], file_format: str, file_version: str, source
+) -> list[dc.Patch]:
+    """Attach source metadata and preserve stored or source-derived patch IDs."""
     path, size_bytes, mtime_ns = source_identity(source)
-    if not path or not isinstance(spool, Spool) or not ids_enabled():
-        return spool
-    # The key the caller asked for stands in for a patch's own only when
-    # it named exactly this patch: a key naming several says which patches
-    # were wanted, not which one any of them is.
-    keys = _normalize_source_patch_keys(source_patch_key)
-    asked_for = keys.pop() if len(keys) == 1 and len(spool) == 1 else ""
+    reload_path = str(_get_reloadable_source_path(source) or "")
     out = []
-    for index, patch in enumerate(spool):
-        attrs = patch.attrs
-        stored = attrs.get(STORED_PATCH_ID, "")
-        key = attrs.get("_source_patch_key", "") or asked_for or index
-        patch_id = stored or source_patch_id(
-            file_format, file_version, path, key, size_bytes, mtime_ns
+    for index, patch in enumerate(patches):
+        origin = replace(
+            patch._source or PatchSource(),
+            path=reload_path,
+            format=file_format,
+            version=file_version,
         )
-        new_attrs = attrs.update(patch_id=patch_id)
-        if stored:
-            new_attrs = new_attrs.drop(STORED_PATCH_ID)
-        out.append(patch.new(attrs=new_attrs))
-    return dc.spool(out)
+        attrs = patch.attrs
+        if path and ids_enabled():
+            stored = attrs.get(STORED_PATCH_ID, "")
+            patch_id = stored or source_patch_id(
+                replace(origin, path=path),
+                size_bytes,
+                mtime_ns,
+                ordinal=index,
+            )
+            attrs = attrs.update(patch_id=patch_id).drop(STORED_PATCH_ID)
+        out.append(patch.new(attrs=attrs, source=origin))
+    return out
 
 
 def read(
@@ -1417,8 +1141,8 @@ def read(
 
     Notes
     -----
-    Unlike [`spool`](`dascore.spool`) this function reads the entire file
-    into memory.
+    This function loads the requested samples immediately. Use
+    [`spool`](`dascore.spool`) to defer loading until patches are accessed.
 
     Examples
     --------
@@ -1448,28 +1172,19 @@ def read(
             fiber_io = FiberIO.manager.get_fiberio(
                 format=file_format, version=file_version
             )
-            required_type = _required_resource_type(fiber_io.read)
-            path = man.get_resource(required_type)
             out = fiber_io.read(
-                path,
+                man,
                 file_version=file_version,
+                _provenance_source=source,
                 time=time,
                 distance=distance,
                 _pre_cast=True,
                 **kwargs,
             )
-            # if resource has a seek go back to 0 so this stream can be re-used.
-            getattr(path, "seek", lambda x: None)(0)
             # The reader's own spelling of its format, not the caller's:
             # `dc.read(path, "netcdf_cf")` and `dc.read(path, "NETCDF_CF")`
             # resolve to one FiberIO and must name one datum.
-            return _stamp_source_ids(
-                out,
-                fiber_io.name,
-                fiber_io.version,
-                source,
-                kwargs.get("source_patch_key", ""),
-            )
+            return out
 
 
 def scan_to_df(
@@ -1590,7 +1305,7 @@ def _get_fiber_io_and_req_type(
     fiber_io_hint = FiberIO.manager.get_fiberio(
         format=file_format_, version=file_version_
     )
-    req_type = _required_resource_type(fiber_io_hint.scan)
+    req_type = _required_resource_type(fiber_io_hint.get_metadata)
     resource = manager.get_resource(req_type)
     # this will get the required resource type to pass to scan.
     return fiber_io_hint, resource
@@ -1660,9 +1375,8 @@ def _iter_scan_results(
     timestamp: float | None = None,
     progress: PROGRESS_LEVELS | Progress = "standard",
     *,
-    snap: bool | None = None,
-    payloads: bool = False,
-) -> Generator[tuple[ScanPayload | PatchSummary, dict[str, Any], int], None, None]:
+    snap: bool = True,
+) -> Generator[tuple[dc.Patch, int], None, None]:
     """
     Yield raw scan results with dispatcher-owned source information.
 
@@ -1701,28 +1415,16 @@ def _iter_scan_results(
         with remote_cache_scope("metadata"):
             for patch_source in tracker:
                 input_index += 1
-                # Normalize direct patch inputs to summary objects.
                 if isinstance(patch_source, dc.Patch):
-                    if payloads:
-                        summary = patch_source.summary
-                        source_info = {
-                            "source_path": _get_reloadable_source_path(
-                                summary.source_path
-                            ),
-                            "source_format": summary.source_format,
-                            "source_version": summary.source_version,
-                        }
-                        result = _patch_to_scan_payload(patch_source)
-                    else:
-                        source_info = {}
-                        result = _patch_to_summary(
-                            patch_source,
-                            source_path=_get_reloadable_source_path(
-                                patch_source.summary.source_path
-                            ),
-                        )
+                    patch = patch_source
+                    result = dc.Patch(
+                        coords=patch.coords,
+                        attrs=patch.attrs,
+                        dtype=patch.dtype,
+                        source=patch._source,
+                    )
                     output_count += 1
-                    yield result, source_info, input_index
+                    yield result, input_index
                     continue
                 with IOResourceManager(patch_source) as man:
                     try:
@@ -1777,17 +1479,13 @@ def _iter_scan_results(
                         ):
                             warnings.warn(f"Failed to scan {resource}", UserWarning)
                             continue
-                    source_path = _get_reloadable_source_path(
-                        resource, fallback=man.source
+                    patches = [_validate_metadata(patch) for patch in source]
+                    patches = _stamp_source_ids(
+                        patches, fiber_io.name, fiber_io.version, man.source
                     )
-                    source_info = {
-                        "source_path": source_path,
-                        "source_format": fiber_io.name,
-                        "source_version": fiber_io.version,
-                    }
-                    for result in source:
+                    for result in patches:
                         output_count += 1
-                        yield result, source_info, input_index
+                        yield result, input_index
     # Stop the progress display before propagating Ctrl+C.
     except KeyboardInterrupt:
         getattr(progress, "stop", lambda: None)()
@@ -1804,7 +1502,7 @@ def scan_payloads(
     timestamp: float | None = None,
     progress: PROGRESS_LEVELS | Progress = "standard",
     snap: bool = True,
-) -> list[ScanPayload]:
+) -> list[dc.Patch]:
     """
     Scan a potential patch source and return full coordinate payloads.
 
@@ -1829,8 +1527,8 @@ def scan_payloads(
 
     Returns
     -------
-    A list of [`ScanPayload`](`dascore.io.core.ScanPayload`) dictionaries with
-    full coordinate managers and source provenance.
+    A list of data-less [`Patch`](`dascore.Patch`) objects with full coordinate
+    managers, dtype, and private source provenance.
 
     Notes
     -----
@@ -1838,32 +1536,18 @@ def scan_payloads(
     memory than [`scan`](`dascore.scan`) summaries. Prefer scanning specific
     files and discard payloads promptly when probing many resources.
     """
-    out: list[ScanPayload] = []
-    iterator = _iter_scan_results(
-        path=path,
-        file_format=file_format,
-        file_version=file_version,
-        ext=ext,
-        timestamp=timestamp,
-        progress=progress,
-        snap=snap,
-        payloads=True,
-    )
-    for result, source_info, _ in iterator:
-        _validate_scan_payload(result, require_coord_manager=True)
-        # dict() erases a TypedDict's value types; the validation above has
-        # already raised unless every key holds what ScanPayload declares.
-        payload = cast("ScanPayload", dict(result))
-        payload["attrs"] = PatchAttrs.from_dict(payload["attrs"])
-        payload.update(
-            {
-                "source_path": source_info.get("source_path") or "",
-                "source_format": source_info.get("source_format") or "",
-                "source_version": source_info.get("source_version") or "",
-            }
+    return [
+        patch
+        for patch, _ in _iter_scan_results(
+            path=path,
+            file_format=file_format,
+            file_version=file_version,
+            ext=ext,
+            timestamp=timestamp,
+            progress=progress,
+            snap=snap,
         )
-        out.append(payload)
-    return out
+    ]
 
 
 def scan(
@@ -1908,103 +1592,17 @@ def scan(
     [`scan_payloads`](`dascore.scan_payloads`)
         Return full coordinate managers instead of envelope summaries.
     """
-    out = []
-    iterator = _iter_scan_results(
-        path=path,
-        file_format=file_format,
-        file_version=file_version,
-        ext=ext,
-        timestamp=timestamp,
-        progress=progress,
-    )
-    inputs = []
-    for result, source_info, input_index in iterator:
-        out.append(_scan_result_to_summary(result, **source_info))
-        inputs.append(input_index)
-    return _stamp_summary_ids(out, inputs)
-
-
-def _stamp_summary_ids(
-    summaries: list[PatchSummary], inputs: list[int]
-) -> list[PatchSummary]:
-    """
-    Say which data each scanned patch is, without reading any of it.
-
-    The same id `read` stamps, derived the same way from the same fields,
-    so a patch found through a spool's index and the same patch read
-    straight off disk agree about which data they are. A summary whose
-    attrs already name an id keeps it: a format which stores one has
-    already answered the question.
-
-    A source is stat-ed once however many patches it holds, and one which
-    names no path is left alone -- an id derived from the format alone
-    would make every such summary the same datum.
-
-    Parameters
-    ----------
-    summaries
-        What the scan produced.
-    inputs
-        Which scan input each summary came from. Ordinals count within
-        one input, so a file's second patch and the same file scanned
-        twice are told apart -- they are otherwise identical, both
-        spelling one path and, absent a key, one key.
-    """
-    if not ids_enabled():
-        return summaries
-    identities: dict[str, tuple[str, int | None, int | None]] = {}
-    out = []
-    ordinals: dict[tuple[int, str], int] = {}
-    for index, summary in enumerate(summaries):
-        attrs = summary.attrs
-        source = str(summary.source_path or "")
-        # Keyed by the input as well as the source: the ordinal is the
-        # reader's own position within one reading of one file, so
-        # scanning a file twice reads the same data twice rather than
-        # making the second copy that file's second patch.
-        key = (inputs[index], source)
-        ordinal = ordinals.get(key, 0)
-        ordinals[key] = ordinal + 1
-        # The marker, not the field: a patch pickled to a file carries the
-        # id it was minted with in some other process, and reading it back
-        # derives one from the file. Only a format which says it stored an
-        # id -- which is what the marker says -- is believed here, so the
-        # two routes cannot disagree.
-        if not source:
-            out.append(summary)
-            continue
-        if stored := attrs.get(STORED_PATCH_ID, ""):
-            out.append(_summary_with_id(summary, attrs, stored))
-            continue
-        if (identity := identities.get(source)) is None:
-            identity = identities[source] = source_identity(summary.source_path)
-        path, size_bytes, mtime_ns = identity
-        # A summary which names a source names a path: `source` is that
-        # path, and canonicalizing one never empties it.
-        assert path, f"{source!r} named a source but no path"
-        patch_id = source_patch_id(
-            summary.source_format,
-            summary.source_version,
-            path,
-            summary.source_patch_key or ordinal,
-            size_bytes,
-            mtime_ns,
+    return [
+        patch.summary
+        for patch, _ in _iter_scan_results(
+            path=path,
+            file_format=file_format,
+            file_version=file_version,
+            ext=ext,
+            timestamp=timestamp,
+            progress=progress,
         )
-        out.append(_summary_with_id(summary, attrs, patch_id))
-    return out
-
-
-def _summary_with_id(summary: PatchSummary, attrs, patch_id: str) -> PatchSummary:
-    """
-    Return a summary which says which data it is.
-
-    `model_copy` rather than `new`: nothing here needs revalidating, and a
-    scan of a large archive would pay for it once per patch. The marker a
-    reader left is consumed rather than carried, as it is when a patch is
-    read.
-    """
-    updated = attrs.update(patch_id=patch_id).drop(STORED_PATCH_ID)
-    return summary.model_copy(update={"attrs": updated})
+    ]
 
 
 def get_format(

@@ -6,8 +6,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import numpy as np
-
 import dascore as dc
 from dascore.io.utils import get_exact_coord, get_gridded_coord
 from dascore.utils.misc import maybe_get_items, unbyte
@@ -153,17 +151,6 @@ def _get_g1_coords_and_attrs(resource):
     return coords, attrs
 
 
-def _get_g1_patch(resource, attr_cls):
-    """Get a patch from the g1 file."""
-    coords, attrs = _get_g1_coords_and_attrs(resource)
-    data_start_line = int(attrs.pop("_data_start_line", 0))
-    resource.seek(0)
-    data = np.loadtxt(resource, skiprows=data_start_line)
-    data = np.asarray(data).reshape(coords.shape)
-    attrs = attr_cls(**{i: v for i, v in attrs.items() if not i.startswith("_")})
-    return dc.Patch(data=data, coords=coords, attrs=attrs)
-
-
 def _get_g1_h5_mapped_attrs(resource, mapping):
     """Return mapped G1 HDF5 attrs, unpacking scalar arrays and decoding bytes."""
     attrs = dict(resource.attrs)
@@ -227,16 +214,6 @@ def _get_g1_h5_base_coords(resource, dims, extra_coords=None, snap=True):
     return dc.get_coord_manager(coords, dims=dims)
 
 
-def _get_g1_h5_patch(resource, attr_cls, data_name, attrs, coords, select_kwargs=None):
-    """Read selected G1 HDF5 data into a patch."""
-    select_kwargs = {} if select_kwargs is None else select_kwargs
-    coords, data = coords.select(array=resource[data_name], **select_kwargs)
-    if 0 in coords.shape:  # Empty data; dont return.
-        return None
-    data = np.asarray(data)
-    return dc.Patch(data=data, coords=coords, attrs=attr_cls(**attrs))
-
-
 def _get_mtx_attrs(resource):
     """Return normalized Febus MTX HDF5 attributes."""
     attrs = _get_g1_h5_mapped_attrs(resource, _G1_H5_ATTR_MAP)
@@ -285,18 +262,6 @@ def _get_mtx_coords(resource, dims=_MTX_DIMS, snap=True):
     )
 
 
-def _get_mtx_patch(resource, attr_cls, attrs=None, select_kwargs=None):
-    """Read a Febus MTX HDF5 file into a patch."""
-    return _get_g1_h5_patch(
-        resource,
-        attr_cls=attr_cls,
-        data_name="mtx",
-        attrs=_get_mtx_attrs(resource) if attrs is None else attrs,
-        coords=_get_mtx_coords(resource),
-        select_kwargs=select_kwargs,
-    )
-
-
 def _bsl_version(resource) -> str | bool:
     """Return the version if a file looks like a Febus G1 BSL HDF5 file."""
     return _get_g1_h5_version(resource, _BSL_H5_DATASETS, _BSL_H5_ATTRS)
@@ -322,17 +287,3 @@ def _get_bsl_attrs(resource):
         }
     )
     return attrs
-
-
-def _get_bsl_patch(resource, attr_cls, attrs=None, select_kwargs=None):
-    """Read a Febus BSL HDF5 file into a patch."""
-    coords = _get_bsl_coords(resource)
-    attrs = _get_bsl_attrs(resource) if attrs is None else attrs
-    return _get_g1_h5_patch(
-        resource,
-        attr_cls=attr_cls,
-        data_name="bsl_data",
-        attrs=attrs,
-        coords=coords,
-        select_kwargs=select_kwargs,
-    )

@@ -10,7 +10,6 @@ import pytest
 
 import dascore as dc
 from dascore.exceptions import PatchAttributeError
-from dascore.io.core import FiberIO
 from dascore.io.prodml.core import ProdMLV2_0
 from dascore.utils.downloader import fetch
 
@@ -36,7 +35,7 @@ class TestProdMLSourcePatchId:
         target = dc.scan(prodml_fbe_path)[0]
         spool = dc.read(prodml_fbe_path, source_patch_key=target.source_patch_key)
         assert len(spool) == 1
-        assert spool[0].attrs["_source_patch_key"] == target.source_patch_key
+        assert spool[0]._source.key == target.source_patch_key
         assert (
             spool[0].summary.get_coord_summary("time").min
             == target.get_coord_summary("time").min
@@ -48,7 +47,7 @@ class TestProdMLSourcePatchId:
         targets = [summaries[0].source_patch_key, summaries[1].source_patch_key]
         spool = dc.read(prodml_fbe_path, source_patch_key=targets)
         assert len(spool) == 2
-        assert {patch.attrs["_source_patch_key"] for patch in spool} == set(targets)
+        assert {patch._source.key for patch in spool} == set(targets)
         assert {patch.summary.get_coord_summary("time").min for patch in spool} == {
             summaries[0].get_coord_summary("time").min,
             summaries[1].get_coord_summary("time").min,
@@ -71,8 +70,12 @@ class TestReadArrayKeys:
         arrays = {}
         for payload in payloads:
             key = payload.source_patch_key
-            out = io.read_array(prodml_fbe_path, {}, source_patch_key=key)
-            expected = FiberIO.read_array(io, prodml_fbe_path, {}, source_patch_key=key)
+            out = io.read_array(prodml_fbe_path, {}, key=key)
+            expected = (
+                io.read(prodml_fbe_path, source_patch_key=key)[0]
+                .select(samples=True, **{})
+                .data
+            )
             assert np.array_equal(out, expected, equal_nan=True), key
             arrays[key] = out
         # the nodes share a shape, so only their values tell them apart
@@ -84,7 +87,7 @@ class TestReadArrayKeys:
     def test_unknown_key_raises(self, prodml_fbe_path):
         """A key naming no node is not silently resolved to one."""
         with pytest.raises(PatchAttributeError, match="No patch named"):
-            ProdMLV2_0().read_array(prodml_fbe_path, {}, source_patch_key="nope")
+            ProdMLV2_0().read_array(prodml_fbe_path, {}, key="nope")
 
     def test_keyless_multi_node_raises(self, prodml_fbe_path):
         """Several nodes and no key cannot be resolved."""
@@ -113,8 +116,10 @@ class TestNodeDims:
         io = ProdMLV2_0()
         payload = dc.scan(fbe_without_dimensions)[0]
         key = payload.source_patch_key
-        out = io.read_array(fbe_without_dimensions, {}, source_patch_key=key)
-        expected = FiberIO.read_array(
-            io, fbe_without_dimensions, {}, source_patch_key=key
+        out = io.read_array(fbe_without_dimensions, {}, key=key)
+        expected = (
+            io.read(fbe_without_dimensions, source_patch_key=key)[0]
+            .select(samples=True, **{})
+            .data
         )
         assert out.shape == expected.shape == payload.shape

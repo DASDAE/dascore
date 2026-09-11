@@ -4,19 +4,15 @@ Core modules for AP sensing support.
 
 from __future__ import annotations
 
-from typing import Literal
-
 import numpy as np
 
 import dascore as dc
-from dascore.constants import opt_timeable_types
-from dascore.io import FiberIO, ScanPayload, make_scan_payload
+from dascore.io import FiberIO
 from dascore.io.utils import slice_dataset
 from dascore.models import OptionalFiniteFloat
 from dascore.utils.hdf5 import H5Reader
-from dascore.utils.misc import raise_on_extra_kwargs
 
-from .utils import _get_attrs_dict, _get_coords, _get_patches, _get_version_string
+from .utils import _get_attrs_dict, _get_coords, _get_version_string
 
 
 class APSensingPatchAttrs(dc.PatchAttrs):
@@ -33,54 +29,21 @@ class APSensingV10(FiberIO):
     preferred_extensions = ("hdf5", "h5")
     version = "10"
 
-    def get_format(
-        self,
-        resource: H5Reader,
-        **kwargs,
-    ) -> tuple[str, str] | Literal[False]:
-        """
-        Return format name and version string if AP sensing, else False.
-
-        Parameters
-        ----------
-        resource
-            An open h5 file which may contain AP sensing data.
-        """
+    def get_version(self, resource: H5Reader, **kwargs) -> str | None:
+        """Return the file version when the resource matches this family."""
         version_str = _get_version_string(resource)
         if version_str:
-            return self.name, version_str
-        return False
+            return version_str
+        return None
 
-    def scan(self, resource: H5Reader, **kwargs) -> list[ScanPayload]:
+    def get_metadata(self, resource: H5Reader, *, snap: bool = True) -> list[dc.Patch]:
         """Scan an AP sensing file, return summary info about the contents."""
         coords = _get_coords(resource)
         attrs = APSensingPatchAttrs.model_validate(_get_attrs_dict(resource))
-        return [
-            make_scan_payload(
-                attrs=attrs, coords=coords, dtype=str(resource["DAS"].dtype)
-            )
-        ]
-
-    def read(
-        self,
-        resource: H5Reader,
-        time: tuple[opt_timeable_types, opt_timeable_types] | None = None,
-        distance: tuple[float | None, float | None] | None = None,
-        **kwargs,
-    ) -> dc.Spool:
-        """Read a single file with APSensing data inside."""
-        patches = _get_patches(
-            resource, time=time, distance=distance, attr_cls=APSensingPatchAttrs
-        )
-        return dc.spool(patches)
+        return [dc.Patch(attrs=attrs, coords=coords, dtype=str(resource["DAS"].dtype))]
 
     def read_array(
-        self,
-        resource: H5Reader,
-        windows: dict[str, tuple[int, int]],
-        snap: bool = True,
-        **kwargs,
+        self, resource: H5Reader, windows: dict[str, tuple[int, int]], key: str = ""
     ) -> np.ndarray:
         """Slice the ``DAS`` dataset directly."""
-        raise_on_extra_kwargs(kwargs, "windows and snap")
         return slice_dataset(resource["DAS"], ("time", "distance"), windows)

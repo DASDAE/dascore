@@ -4,21 +4,20 @@ from __future__ import annotations
 
 import importlib.util
 from pathlib import Path
-from typing import Literal
 
 import numpy as np
 
 import dascore as dc
+from dascore.core.source import PatchSource
 from dascore.exceptions import MissingOptionalDependencyError
 from dascore.io import FiberIO
-from dascore.io.core import ScanPayload, make_scan_payload
 from dascore.io.utils import (
     get_exact_coord,
     resolve_keyed_source,
     windows_to_slices,
 )
 from dascore.utils.hdf5 import H5Reader, get_h5py_file
-from dascore.utils.misc import optional_import, raise_on_extra_kwargs
+from dascore.utils.misc import optional_import
 from dascore.xarray import patch_to_xarray
 
 from .utils import (
@@ -105,42 +104,22 @@ class NetCDFCFV18(FiberIO):
     version = "1.8"
     preferred_extensions = ("nc", "nc4", "netcdf")
 
-    def get_format(
-        self,
-        resource: H5Reader,
-        **kwargs,
-    ) -> tuple[str, str] | Literal[False]:
-        """Return format tuple if file is a CF-convention NetCDF-4, else False."""
+    def get_version(self, resource: H5Reader, **kwargs) -> str | None:
+        """Return the file version when the resource matches this family."""
         if not is_netcdf4_file(resource):
-            return False
+            return None
         cf_version = get_cf_version(resource)
         if not cf_version:
-            return False
+            return None
         try:
             if parse_cf_version(cf_version) >= (1, 6):
-                return self.name, self.version
+                return self.version
         except (TypeError, ValueError):
             pass
-        return False
-
-    def read(self, resource: H5Reader, **kwargs) -> dc.Spool:
-        """Read a NetCDF-4 file into a Spool, streaming remote resources."""
-        with _open_xarray_dataset(resource) as dataset:
-            data_var_name = get_xarray_data_var_name(dataset)
-            # Unloaded, so a selection reads only the samples it keeps.
-            data_array = dataset[data_var_name]
-            patch = self._patch_from_dataset(dataset, data_var_name, data_array, kwargs)
-        if not patch.data.size:
-            return dc.spool([])
-        return dc.spool([patch])
+        return None
 
     def read_array(
-        self,
-        resource: H5Reader,
-        windows: dict[str, tuple[int, int]],
-        source_patch_key="",
-        snap: bool = True,
-        **kwargs,
+        self, resource: H5Reader, windows: dict[str, tuple[int, int]], key: str = ""
     ) -> np.ndarray:
         """
         Slice the payload variable through xarray.
@@ -149,12 +128,11 @@ class NetCDFCFV18(FiberIO):
         so CF decoding (scaling, offsets, fill values) applies exactly as
         it does in `read`.
         """
-        raise_on_extra_kwargs(kwargs, "windows, source_patch_key and snap")
         with _open_xarray_dataset(resource) as dataset:
             data_var_name = get_xarray_data_var_name(dataset)
             resolve_keyed_source(
                 {self._get_source_patch_key(data_var_name): data_var_name},
-                source_patch_key,
+                key,
                 where=str(getattr(resource, "filename", "the resource")),
             )
             data_array = dataset[data_var_name]
@@ -208,9 +186,7 @@ class NetCDFCFV18(FiberIO):
             encoding={"data": encoding} if encoding else None,
         )
 
-    def scan(
-        self, resource: H5Reader, snap: bool = True, **kwargs
-    ) -> list[ScanPayload]:
+    def get_metadata(self, resource: H5Reader, *, snap: bool = True) -> list[dc.Patch]:
         """Scan NetCDF file metadata without loading the full payload array.
 
         Remote resources are streamed via the ``h5netcdf`` engine over the
@@ -219,8 +195,6 @@ class NetCDFCFV18(FiberIO):
         """
         with _open_xarray_dataset(resource) as dataset:
             data_var_name = get_xarray_data_var_name(dataset)
-            # None is a valid xarray key for XDAS-style files whose primary
-            # payload is stored under a None variable name.
             data_array = dataset[data_var_name]
             coords = {
                 name: (coord.dims, self._get_scan_coord(coord, snap=snap))
@@ -235,13 +209,12 @@ class NetCDFCFV18(FiberIO):
                 dataset, data_array, coords, dims, shape
             )
         return [
-            make_scan_payload(
-                attrs=attrs | {"_source_patch_key": source_patch_key},
+            dc.Patch(
+                attrs=attrs,
                 coords=coord_manager,
                 dims=dims,
-                shape=shape,
                 dtype=dtype,
-                source_patch_key=source_patch_key,
+                source=PatchSource(key=source_patch_key),
             )
         ]
 
@@ -265,43 +238,6 @@ class NetCDFCFV18(FiberIO):
         if coords:
             return dc.get_coord_manager(coords=coords, dims=dims)
         return get_coord_manager_for_coordless_data_var(dataset, dims=dims, shape=shape)
-
-    def _patch_from_dataset(self, dataset, data_var_name, data_array, kwargs=None):
-        """
-        Build one patch from an xarray dataset and its data variable.
-
-        The coordinates are read whole and the selection is applied to
-        them, so the payload is sliced before it is loaded and a file
-        which states no coordinates still numbers its samples from where
-        they sit in the file rather than from the start of the slice.
-        """
-        source_patch_key = self._get_source_patch_key(data_var_name)
-        attrs = dict(data_array.attrs) | {"_source_patch_key": source_patch_key}
-        coords = self._coord_manager_from_data_array(
-            dataset,
-            data_array,
-            coords={
-                name: (coord.dims, coord.values)
-                for name, coord in data_array.coords.items()
-            },
-            dims=data_array.dims,
-            shape=data_array.shape,
-        )
-        coords, data = self._select_coords(coords, data_array, kwargs or {})
-        return dc.Patch(
-            data=np.asarray(data),
-            coords=coords,
-            dims=data_array.dims,
-            attrs=attrs,
-        )
-
-    @staticmethod
-    def _select_coords(coords, data_array, kwargs: dict):
-        """Trim the coordinates and the payload together, before loading."""
-        coord_kwargs = {k: v for k, v in kwargs.items() if k in coords.coord_map}
-        if not coord_kwargs:
-            return coords, data_array
-        return coords.select(array=data_array, **coord_kwargs)
 
     def _validate_and_extract_patch(self, spool: dc.Patch | dc.Spool) -> dc.Patch:
         """Validate write input and return the single supported patch."""

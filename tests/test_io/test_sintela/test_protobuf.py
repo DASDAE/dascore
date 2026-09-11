@@ -15,7 +15,6 @@ import pytest
 
 import dascore as dc
 from dascore.exceptions import InvalidFiberFileError, MissingOptionalDependencyError
-from dascore.io.core import _scan_payload_to_summary
 from dascore.io.sintela import SintelaProtobufV1
 from dascore.io.sintela import protobuf_utils as sintela_utils
 from dascore.units import get_quantity
@@ -87,7 +86,7 @@ def _build_meta_payload_without_fiber_id():
 
 def _payload_to_summary(payload):
     """Convert a raw FiberIO scan payload using the production scan path."""
-    return _scan_payload_to_summary(payload)
+    return payload.summary
 
 
 def _without_ids(summary):
@@ -683,10 +682,7 @@ class TestSintelaProtobuf:
         with path.open("rb") as handle:
             assert handle.read(4)
             before = handle.tell()
-            assert fiber_io.get_format.func(fiber_io, handle) == (
-                "Sintela_Protobuf",
-                "1",
-            )
+            assert fiber_io.get_version.func(fiber_io, handle) == "1"
             assert handle.tell() == before
 
     def test_truncated_payload_raises(self, fiber_io, tmp_path):

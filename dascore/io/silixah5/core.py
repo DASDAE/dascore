@@ -4,24 +4,18 @@ Core modules for Silixa H5 support.
 
 from __future__ import annotations
 
-from typing import Literal
-
 import numpy as np
 
 import dascore as dc
-from dascore.constants import opt_timeable_types
-from dascore.io import FiberIO, ScanPayload, make_scan_payload
+from dascore.io import FiberIO
 from dascore.io.utils import slice_dataset
 from dascore.models import OptionalFiniteFloat
 from dascore.utils.hdf5 import H5Reader
-from dascore.utils.misc import raise_on_extra_kwargs
 
 from .utils import (
     _get_attr,
     _get_carina_attr,
-    _get_carina_patches,
     _get_carina_version_string,
-    _get_patches,
     _get_version_string,
 )
 
@@ -43,57 +37,27 @@ class SilixaH5V1(FiberIO):
     _data_name = "Acoustic"
     _version_check = staticmethod(_get_version_string)
     _attr_getter = staticmethod(_get_attr)
-    _patch_getter = staticmethod(_get_patches)
 
-    def get_format(
-        self,
-        resource: H5Reader,
-        **kwargs,
-    ) -> tuple[str, str] | Literal[False]:
-        """
-        Return name and version string if Silixa hdf5 else False.
-
-        Parameters
-        ----------
-        resource
-            An open h5 file which may contain Silixa data.
-        """
+    def get_version(self, resource: H5Reader, **kwargs) -> str | None:
+        """Return the file version when the resource matches this family."""
         version_str = self._version_check(resource, self.version)
         if version_str:
-            return self.name, version_str
-        return False
+            return version_str
+        return None
 
-    def scan(self, resource: H5Reader, **kwargs) -> list[ScanPayload]:
+    def get_metadata(self, resource: H5Reader, *, snap: bool = True) -> list[dc.Patch]:
         """Scan a Silixa HDF5 file, return summary information on the contents."""
         attrs, coords = self._attr_getter(resource, SilixaPatchAttrs)
         return [
-            make_scan_payload(
+            dc.Patch(
                 attrs=attrs, coords=coords, dtype=str(resource[self._data_name].dtype)
             )
         ]
 
-    def read(
-        self,
-        resource: H5Reader,
-        time: tuple[opt_timeable_types, opt_timeable_types] | None = None,
-        distance: tuple[float | None, float | None] | None = None,
-        **kwargs,
-    ) -> dc.Spool:
-        """Read a single file with Silixa H5 data inside."""
-        patches = self._patch_getter(
-            resource, time=time, distance=distance, attr_cls=SilixaPatchAttrs
-        )
-        return dc.spool(patches)
-
     def read_array(
-        self,
-        resource: H5Reader,
-        windows: dict[str, tuple[int, int]],
-        snap: bool = True,
-        **kwargs,
+        self, resource: H5Reader, windows: dict[str, tuple[int, int]], key: str = ""
     ) -> np.ndarray:
         """Slice the version's data dataset (``Acoustic`` or ``Fiber``)."""
-        raise_on_extra_kwargs(kwargs, "windows and snap")
         return slice_dataset(resource[self._data_name], ("time", "distance"), windows)
 
 
@@ -116,4 +80,3 @@ class SilixaH5V2(SilixaH5V1):
     _data_name = "Fiber"
     _version_check = staticmethod(_get_carina_version_string)
     _attr_getter = staticmethod(_get_carina_attr)
-    _patch_getter = staticmethod(_get_carina_patches)

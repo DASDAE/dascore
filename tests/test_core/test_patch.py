@@ -19,6 +19,7 @@ import dascore as dc
 from dascore.compat import random_state
 from dascore.core import Patch
 from dascore.core.coords import BaseCoord, CoordRange
+from dascore.core.source import PatchSource
 from dascore.core.summary import PatchSummary
 from dascore.exceptions import (
     CoordDataError,
@@ -28,7 +29,6 @@ from dascore.exceptions import (
     PatchDataError,
 )
 from dascore.io.core import (
-    _scan_result_to_summary,
     _select_patch_from_spool,
 )
 from dascore.proc.basic import apply_operator
@@ -296,14 +296,12 @@ class TestInit:
         new = dc.Patch(random_patch)
         assert new == random_patch
 
-    def test_patch_summary_from_patch_copies_private_source_patch_key(
-        self, random_patch
-    ):
+    def test_patch_summary_from_patch_reads_source_key(self, random_patch):
         """Patch summaries built from patches should expose the private source id."""
-        patch = random_patch.update_attrs(_source_patch_key="node-3")
+        patch = random_patch.new(source=PatchSource(key="node-3"))
         summary = PatchSummary.from_patch(patch)
         assert summary.source_patch_key == "node-3"
-        assert summary.attrs["_source_patch_key"] == "node-3"
+        assert "_source_patch_key" not in summary.attrs
 
     def test_non_time_distance_dims(self):
         """Ensure dimensions other than time/distance work."""
@@ -586,17 +584,15 @@ class TestPatchSummary:
         assert summary.dtype
         assert "time_min" in summary.flat_dump()
 
-    def test_scan_result_to_summary_noop_returns_same_summary(self, random_patch):
-        """Summary conversion should avoid rebuilding unchanged summaries."""
-        summary = random_patch.summary
-        assert _scan_result_to_summary(summary) is summary
-
-    def test_scan_result_to_summary_override_returns_new_summary(self, random_patch):
-        """Summary conversion should still apply explicit source overrides."""
-        summary = random_patch.summary
-        out = _scan_result_to_summary(summary, source_path="some_path")
-        assert out is not summary
-        assert str(out.source_path) == "some_path"
+    def test_summary_uses_patch_source(self, random_patch):
+        """Summary provenance comes from the source, without altering the input."""
+        source = PatchSource(path="some_path", format="DASDAE", version="1", key="part")
+        out = random_patch.new(source=source).summary
+        assert str(out.source_path) == source.path
+        assert out.source_format == source.format
+        assert out.source_version == source.version
+        assert out.source_patch_key == source.key
+        assert not random_patch.summary.source_path
 
     def test_patch_summary_non_pathlike_source_metadata_is_dropped(self):
         """Non-pathlike source metadata should normalize to a detached summary."""
@@ -1541,3 +1537,39 @@ class TestStringCoordinatePatch:
             np.array(["ch_1", "ch_2", "ch_10"]),
         )
         assert out.shape[0] == 3
+
+
+class TestPatchSource:
+    """Source metadata belongs to framework assembly, not patch equality."""
+
+    @pytest.mark.parametrize("loaded", [True, False])
+    def test_new_keeps_source(self, random_patch, loaded):
+        """Metadata updates and attaching data retain the logical source."""
+        source = PatchSource(
+            path="/example.h5", format="DASDAE", version="2", key="one"
+        )
+        patch = random_patch if loaded else random_patch.drop_data()
+        patch = patch.new(source=source)
+        assert patch.new(attrs=patch.attrs.update(tag="test"))._source == source
+        attached = patch.new(data=random_patch.data)
+        assert attached._source == source
+        np.testing.assert_array_equal(attached.data, random_patch.data)
+
+    def test_source_does_not_change_equality(self, random_patch):
+        """Identical measurements compare equal independently of their source."""
+        other = random_patch.new(source=PatchSource(path="/elsewhere.h5"))
+        assert other.equals(random_patch)
+        assert random_patch._source is None
+
+    def test_new_can_replace_source(self, random_patch):
+        """A new I/O resource replaces the earlier source during assembly."""
+        first = random_patch.new(source=PatchSource(path="/one.h5"))
+        second = first.new(source=PatchSource(path="/two.h5"))
+        assert second._source.path == "/two.h5"
+        assert first._source.path == "/one.h5"
+
+    def test_old_pickle_has_no_source(self, random_patch):
+        """Patches saved before source metadata existed still expose no source."""
+        del random_patch._source
+        assert random_patch._source is None
+        assert random_patch.new()._source is None

@@ -2,19 +2,16 @@
 
 from __future__ import annotations
 
-from typing import Literal
-
 import numpy as np
 
 import dascore as dc
-from dascore.constants import opt_timeable_types
-from dascore.io import FiberIO, ScanPayload, make_scan_payload
+from dascore.io import FiberIO
 from dascore.io.utils import slice_dataset
 from dascore.models import OptionalFiniteFloat, UTF8Str
 from dascore.utils.hdf5 import H5Reader
-from dascore.utils.misc import raise_on_extra_kwargs, unbyte
+from dascore.utils.misc import unbyte
 
-from .utils import _get_opto_das_attrs, _get_opto_das_version_str, _read_opto_das
+from .utils import _get_opto_das_attrs, _get_opto_das_version_str
 
 
 class OptoDASPatchAttrs(dc.PatchAttrs):
@@ -31,76 +28,23 @@ class OptoDASV8(FiberIO):
     preferred_extensions = ("hdf5", "h5")
     version = "8"
 
-    def get_format(
-        self,
-        resource: H5Reader,
-        **kwargs,
-    ) -> tuple[str, str] | Literal[False]:
-        """
-        Return True if file contains OptoDAS version 8 data else False.
-
-        Parameters
-        ----------
-        resource
-            An open h5 file which may contain OptoDAS data.
-        """
+    def get_version(self, resource: H5Reader, **kwargs) -> str | None:
+        """Return the file version when the resource matches this family."""
         version_str = _get_opto_das_version_str(resource)
         if version_str:
-            return self.name, version_str
-        return False
+            return version_str
+        return None
 
-    def scan(
-        self, resource: H5Reader, snap: bool = True, **kwargs
-    ) -> list[ScanPayload]:
+    def get_metadata(self, resource: H5Reader, *, snap: bool = True) -> list[dc.Patch]:
         """Scan a OptoDAS file, return summary information about the file's contents."""
         attrs, coords = _get_opto_das_attrs(resource, snap=snap)
         attrs = OptoDASPatchAttrs.from_dict(attrs)
-        return [
-            make_scan_payload(
-                attrs=attrs, coords=coords, dtype=str(resource["data"].dtype)
-            )
-        ]
-
-    def read(
-        self,
-        resource: H5Reader,
-        time: tuple[opt_timeable_types, opt_timeable_types] | None = None,
-        distance: tuple[float | None, float | None] | None = None,
-        snap: bool = True,
-        **kwargs,
-    ) -> dc.Spool:
-        """
-        Read an OptoDAS file and return a spool of patches.
-
-        Parameters
-        ----------
-        resource
-            The open h5 object.
-        time
-            An optional tuple for filtering time.
-        distance
-            An optional tuple for filtering distance.
-        snap
-            If True, snap each coordinate to be evenly sampled.
-        """
-        patches = _read_opto_das(
-            resource,
-            time=time,
-            distance=distance,
-            snap=snap,
-            attr_cls=OptoDASPatchAttrs,
-        )
-        return dc.spool(patches)
+        return [dc.Patch(attrs=attrs, coords=coords, dtype=str(resource["data"].dtype))]
 
     def read_array(
-        self,
-        resource: H5Reader,
-        windows: dict[str, tuple[int, int]],
-        snap: bool = True,
-        **kwargs,
+        self, resource: H5Reader, windows: dict[str, tuple[int, int]], key: str = ""
     ) -> np.ndarray:
         """Slice the ``data`` dataset directly, in the header's dimension order."""
-        raise_on_extra_kwargs(kwargs, "windows and snap")
         dims = tuple(unbyte(x) for x in resource["header"]["dimensionNames"])
         return slice_dataset(resource["data"], dims, windows)
 

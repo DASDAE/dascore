@@ -9,12 +9,14 @@ from __future__ import annotations
 
 import pickle
 import warnings
+from dataclasses import replace
 
 import numpy as np
 import pytest
 
 import dascore as dc
 import dascore.utils.patch_registry as registry_module
+from dascore.core.source import PatchSource
 from dascore.units import get_unit
 from dascore.utils.identity import (
     NOTHING_DONE,
@@ -49,27 +51,35 @@ class TestNewDataId:
         assert int(made, 16) >= 0
 
 
-# What a file's identity is made of, and one such identity.
-_FIELDS = ("format_name", "version", "path", "key", "size_bytes", "mtime_ns")
-_SOURCE = ("DASDAE", "1", "/data/one.h5", 0, 40, 12345)
+_SOURCE = PatchSource(format="DASDAE", version="1", path="/data/one.h5")
 
 
 class TestSourceDataId:
-    """Data read from a file."""
+    """A source object retains the original digest inputs."""
 
-    def test_it_is_derived(self):
-        """Reading the same file twice is reading the same data."""
-        first = source_patch_id(*_SOURCE)
-        assert first == source_patch_id(*_SOURCE)
+    @pytest.mark.parametrize(
+        "key, ordinal, expected",
+        [
+            ("", 0, "2b45cb0df5f48f50"),
+            ("0", None, "e64c07af748c4576"),
+            ("channel-3", None, "eb088c90676d1ede"),
+            ("", None, "fcbe7acb28166aad"),
+        ],
+    )
+    def test_pre_migration_digest(self, key, ordinal, expected):
+        """Pinned hashes distinguish native strings from integer ordinal fallbacks."""
+        source = replace(_SOURCE, key=key)
+        assert source_patch_id(source, 40, 12345, ordinal=ordinal) == expected
 
     @pytest.mark.parametrize(
         "changed",
         [
-            {"format_name": "TERRA15"},
+            {"format": "TERRA15"},
             {"version": "2"},
             {"path": "/data/two.h5"},
-            {"key": 1},
-            {"key": None},
+            {"key": "1"},
+            {"ordinal": 1},
+            {"ordinal": None},
             {"size_bytes": 41},
             {"mtime_ns": 999},
             {"size_bytes": None},
@@ -77,20 +87,23 @@ class TestSourceDataId:
         ],
     )
     def test_every_part_counts(self, changed):
-        """Each field names data the others would have called the same."""
-        fields = dict(zip(_FIELDS, _SOURCE, strict=True)) | changed
-        assert source_patch_id(**fields) != source_patch_id(*_SOURCE)
+        """Each identity field names data the others would call the same."""
+        source_fields = {
+            k: v
+            for k, v in changed.items()
+            if k in {"format", "version", "path", "key"}
+        }
+        stats = {"size_bytes": 40, "mtime_ns": 12345, "ordinal": 0}
+        stats.update({k: v for k, v in changed.items() if k not in source_fields})
+        assert source_patch_id(
+            replace(_SOURCE, **source_fields), **stats
+        ) != source_patch_id(_SOURCE, 40, 12345, ordinal=0)
 
-    def test_a_key_may_be_anything_encodable(self):
-        """A reader names its patches however it likes."""
-        named = source_patch_id("X", "1", "/a", "channel-3")
-        assert named != source_patch_id("X", "1", "/a", 3)
-
-    def test_a_source_which_cannot_be_stat_ed(self):
-        """Missing stats are a weaker id, not a different kind of one."""
-        made = source_patch_id("X", "1", "/a", 0)
-        assert made == source_patch_id("X", "1", "/a", 0, None, None)
-        assert len(made) == len(source_patch_id(*_SOURCE))
+    def test_missing_stats(self):
+        """Omitted stats and explicit missing stats name the same source."""
+        made = source_patch_id(_SOURCE, ordinal=0)
+        assert made == source_patch_id(_SOURCE, None, None, ordinal=0)
+        assert len(made) == len(source_patch_id(_SOURCE, 40, 12345, ordinal=0))
 
 
 class TestAdvance:

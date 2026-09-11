@@ -39,7 +39,7 @@ class TestSnap:
         With snap=False read returns the file's own time values, as scan
         does; read used to snap them anyway.
         """
-        scanned = dc.scan_payloads(jittered_path, snap=False)[0]["coords"]
+        scanned = dc.scan_payloads(jittered_path, snap=False)[0].coords
         patch = dc.read(jittered_path, snap=False)[0]
         np.testing.assert_array_equal(
             scanned.get_coord("time").values, patch.get_coord("time").values

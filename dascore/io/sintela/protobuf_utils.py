@@ -55,7 +55,6 @@ from dascore.core.attrs import PatchAttrs
 from dascore.core.coordmanager import get_coord_manager
 from dascore.core.coords import get_coord
 from dascore.exceptions import InvalidFiberFileError
-from dascore.io.core import ScanPayload, make_scan_payload
 from dascore.models import OptionalFiniteFloat, PositiveFiniteFloat, PositiveInt
 from dascore.utils.misc import optional_import, suppress_warnings
 
@@ -1485,7 +1484,7 @@ def read_payload(resource):
     return _decode_family(parsed, meta)
 
 
-def scan_payload(resource) -> list[ScanPayload]:
+def scan_payload(resource) -> list[dc.Patch]:
     """Decode a Sintela protobuf file and return FiberIO scan payloads."""
     endpoints = _get_endpoint_metadata(resource)
     if endpoints is not None:
@@ -1495,5 +1494,5 @@ def scan_payload(resource) -> list[ScanPayload]:
         parsed, meta = _parse_records(records, scan_mode=True)
         family_cls = _FAMILY_CLASSES[_validate_single_family(parsed)]
         metadata = family_cls.from_parsed(parsed, meta)
-    shape, coords, attrs, dtype = metadata.scan()
-    return [make_scan_payload(attrs=attrs, coords=coords, shape=shape, dtype=dtype)]
+    _shape, coords, attrs, dtype = metadata.scan()
+    return [dc.Patch(attrs=attrs, coords=coords, dtype=dtype)]

@@ -12,7 +12,7 @@ import pytest
 import dascore as dc
 from dascore.exceptions import MissingOptionalDependencyError
 from dascore.io.mseed import utils as mseed_utils
-from dascore.io.mseed.core import MSeedV2
+from dascore.io.mseed.core import MSeedV2, MSeedV3
 from dascore.utils.downloader import fetch
 from tests.test_io._common_io_test_utils import skip_timeout
 
@@ -364,7 +364,7 @@ class TestMiniSeedRead:
             path, file_format="MSEED", file_version="3", source_patch_key=target
         )
         assert len(spool) == 1
-        assert spool[0].attrs["_source_patch_key"] == target
+        assert spool[0]._source.key == target
 
     def test_read_source_patch_key_with_time(self, mseed_v3_path):
         """source_patch_key from scan works with partial time reads."""
@@ -381,7 +381,7 @@ class TestMiniSeedRead:
             time=(time_min, time_max),
         )
         assert len(spool) == 1
-        assert spool[0].attrs["_source_patch_key"] == target
+        assert spool[0]._source.key == target
         assert spool[0].shape == (3, 4)
         assert spool[0].get_coord("time").min() == time_min
 
@@ -402,53 +402,73 @@ class TestMiniSeedRead:
         )
         assert len(spool) == 0
 
-    def test_source_patch_key_skips_unselected_record_unpack(self):
+    def test_source_patch_key_skips_unselected_record_unpack(self, monkeypatch):
         """source_patch_key reads do not decode records outside selected groups."""
         records = [
             _MiniSeedRecord("FDSN:XX_00000__H_S_F", samprate=10.0),
             _MiniSeedRecord("FDSN:XX_00001__H_S_F", samprate=20.0, fail_unpack=True),
         ]
         target = "v3:XX..HSF:0:10:3"
-        patches = mseed_utils._get_patches(
-            "unused",
-            _pymseed_for_records(records),
-            source_patch_key=target,
+        monkeypatch.setattr(
+            "dascore.io.mseed.core.optional_import",
+            lambda name: _pymseed_for_records(records),
+        )
+        patches = list(
+            MSeedV3().read(
+                "unused",
+                source_patch_key=target,
+            )
         )
         assert len(patches) == 1
-        assert patches[0].attrs["_source_patch_key"] == target
+        assert patches[0]._source.key == target
         assert tuple(patches[0].get_coord("channel").values) == (0,)
 
-    def test_channel_filter_skips_unselected_record_unpack(self):
+    def test_channel_filter_skips_unselected_record_unpack(self, monkeypatch):
         """Channel reads do not decode records outside selected channels."""
         records = [
             _MiniSeedRecord("FDSN:XX_00000__H_S_F"),
             _MiniSeedRecord("FDSN:XX_00001__H_S_F", fail_unpack=True),
         ]
-        patches = mseed_utils._get_patches(
-            "unused",
-            _pymseed_for_records(records),
-            channel=(0, 0),
+        monkeypatch.setattr(
+            "dascore.io.mseed.core.optional_import",
+            lambda name: _pymseed_for_records(records),
+        )
+        patches = list(
+            MSeedV3().read(
+                "unused",
+                channel=(0, 0),
+            )
         )
         assert len(patches) == 1
         assert tuple(patches[0].get_coord("channel").values) == (0,)
 
-    def test_unmatched_source_patch_key_returns_no_patches(self):
+    def test_unmatched_source_patch_key_returns_no_patches(self, monkeypatch):
         """Unknown source patch IDs produce no decoded patches."""
         records = [_MiniSeedRecord("FDSN:XX_00000__H_S_F", fail_unpack=True)]
-        patches = mseed_utils._get_patches(
-            "unused",
-            _pymseed_for_records(records),
-            source_patch_key="v3:XX..HSF:1:10:3",
+        monkeypatch.setattr(
+            "dascore.io.mseed.core.optional_import",
+            lambda name: _pymseed_for_records(records),
+        )
+        patches = list(
+            MSeedV3().read(
+                "unused",
+                source_patch_key="v3:XX..HSF:1:10:3",
+            )
         )
         assert patches == []
 
-    def test_unmatched_channel_returns_no_patches(self):
+    def test_unmatched_channel_returns_no_patches(self, monkeypatch):
         """Channel selections with no sources produce no decoded patches."""
         records = [_MiniSeedRecord("FDSN:XX_00000__H_S_F", fail_unpack=True)]
-        patches = mseed_utils._get_patches(
-            "unused",
-            _pymseed_for_records(records),
-            channel=(10, 10),
+        monkeypatch.setattr(
+            "dascore.io.mseed.core.optional_import",
+            lambda name: _pymseed_for_records(records),
+        )
+        patches = list(
+            MSeedV3().read(
+                "unused",
+                channel=(10, 10),
+            )
         )
         assert patches == []
 
@@ -541,8 +561,8 @@ class TestMiniSeedScan:
                 return "XX", "00000", "", "HSF"
 
         payload = mseed_utils._scan_patches("unused", PyMseed)[0]
-        assert payload["shape"] == (1, 10)
-        assert payload["dtype"] == "int32"
+        assert payload.shape == (1, 10)
+        assert payload.dtype == "int32"
 
     def test_missing_pymseed_raises(self, mseed_v3_path, hide_module):
         """Explicit MiniSEED reads require PyMseed."""
@@ -695,9 +715,8 @@ class TestMiniSeedUtils:
     def test_patch_from_segments_defaults_to_local_channel_indices(self):
         """Patches can still be built without a global channel map."""
         segment = _trace_segment()
-        group_key = mseed_utils._get_group_key(segment)
-        patch = mseed_utils._patch_from_segments(group_key, [segment])
-        assert tuple(patch.get_coord("channel").values) == (0,)
+        coords = mseed_utils._get_coords([segment])
+        assert tuple(coords["channel"].values) == (0,)
 
     def test_source_patch_key_uses_group_key_fields(self):
         """Source patch IDs are built from the typed MiniSEED group key."""

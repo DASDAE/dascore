@@ -3,29 +3,20 @@
 from __future__ import annotations
 
 import contextlib
-from typing import Literal
 
 import numpy as np
-import pandas as pd
 
 import dascore as dc
 from dascore.io import FiberIO
 from dascore.io.utils import slice_dataset
 from dascore.utils.hdf5 import H5Reader, H5Writer
-from dascore.utils.io import _normalize_source_patch_keys
-from dascore.utils.misc import raise_on_extra_kwargs, unbyte
+from dascore.utils.misc import unbyte
 from dascore.utils.patch import get_patch_names
 
 from .utils import (
     _get_contents_from_patch_groups_generic,
     _get_dims,
-    _get_patch_attrs,
     _get_patch_group,
-    _is_legacy_file,
-    _is_legacy_group,
-    _kwargs_empty,
-    _matches_attr_filters,
-    _read_patch,
     _save_patch,
     _write_meta,
 )
@@ -95,63 +86,17 @@ class DASDAEV1(FiberIO):
             unique_name = name if num == 0 else f"{name}__{num}"
             _save_patch(patch, waveforms, unique_name, compact=self._compact_coords)
 
-    def _get_patch_summary(self, patches) -> pd.DataFrame:
-        """Get a patch summary to put into index."""
-        df = (
-            dc.scan_to_df(patches)
-            .assign(
-                source_patch_key=lambda x: get_patch_names(x),
-                source_format=self.name,
-                source_version=self.version,
-            )
-            .dropna(subset=["time_min", "time_max", "distance_min", "distance_max"])
-        )
-        return df
-
-    def get_format(
-        self,
-        resource: H5Reader,
-        **kwargs,
-    ) -> tuple[str, str] | Literal[False]:
-        """Return the format from a dasdae file."""
-        is_dasdae, version = False, ""  # NOQA
+    def get_version(self, resource: H5Reader, **kwargs) -> str | None:
+        """Return the file version when the resource matches this family."""
         attrs = resource.attrs
         file_format = unbyte(attrs.get("__format__", ""))
         if file_format != self.name:
-            return False
+            return None
         version = unbyte(attrs.get("__DASDAE_version__", ""))
-        return file_format, version
-
-    def read(self, resource: H5Reader, source_patch_key=(), **kwargs) -> dc.Spool:
-        """Read a dascore file."""
-        patches = []
-        source_patch_keys = _normalize_source_patch_keys(source_patch_key)
-        try:
-            waveform_group = resource["waveforms"]
-        except (KeyError, IndexError):
-            return dc.spool([])
-        file_legacy = _is_legacy_file(resource)
-        for patch_group in waveform_group.values():
-            patch_name = str(patch_group.name).rsplit("/", maxsplit=1)[-1]
-            if source_patch_keys and patch_name not in source_patch_keys:
-                continue
-            legacy = _is_legacy_group(patch_group, file_legacy)
-            attrs = _get_patch_attrs(patch_group, legacy)
-            if not _matches_attr_filters(attrs, kwargs):
-                continue
-            patch = _read_patch(patch_group, legacy=legacy, **kwargs)
-            if not patch.data.size and not _kwargs_empty(kwargs):
-                continue
-            patches.append(patch)
-        return dc.spool(patches)
+        return version
 
     def read_array(
-        self,
-        resource: H5Reader,
-        windows: dict[str, tuple[int, int]],
-        source_patch_key="",
-        snap: bool = True,
-        **kwargs,
+        self, resource: H5Reader, windows: dict[str, tuple[int, int]], key: str = ""
     ) -> np.ndarray:
         """
         Slice one patch's data dataset directly.
@@ -162,11 +107,10 @@ class DASDAEV1(FiberIO):
         is the waveform group name `scan` reports; a positional index is
         not accepted, because DASDAE never synthesizes one.
         """
-        raise_on_extra_kwargs(kwargs, "windows, source_patch_key and snap")
-        group = _get_patch_group(resource, source_patch_key)
+        group = _get_patch_group(resource, key)
         return slice_dataset(group["data"], _get_dims(group), windows)
 
-    def scan(self, resource: H5Reader, snap: bool = True, **kwargs):
+    def get_metadata(self, resource: H5Reader, *, snap: bool = True) -> list[dc.Patch]:
         """
         Get patch info by iterating waveform groups in the file.
 

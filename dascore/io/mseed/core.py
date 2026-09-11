@@ -30,15 +30,24 @@ https://geofon.gfz.de/redmine/projects/redmine/wiki/DAS.
 
 from __future__ import annotations
 
-from typing import Literal
+import numpy as np
 
 import dascore as dc
-from dascore.constants import opt_timeable_types
-from dascore.io import FiberIO, ScanPayload
+from dascore.io import FiberIO
+from dascore.io.utils import resolve_keyed_source, windows_to_slices
 from dascore.utils.io import LocalPath
 from dascore.utils.misc import optional_import
 
-from .utils import _detect_format, _get_patches, _scan_patches
+from .utils import (
+    _detect_format,
+    _group_segments,
+    _read_segments,
+    _scan_patches,
+    _scan_segments,
+    _source_patch_key,
+    _SourceWindows,
+    _trace_time_window,
+)
 
 
 class MSeedV2(FiberIO):
@@ -48,37 +57,41 @@ class MSeedV2(FiberIO):
     preferred_extensions = ("mseed", "msd", "miniseed")
     version = "2"
 
-    def get_format(
-        self,
-        resource: LocalPath,
-        **kwargs,
-    ) -> tuple[str, str] | Literal[False]:
-        """Determine if path is a MiniSEED file."""
-        return _detect_format(resource)
+    def get_version(self, resource: LocalPath, **kwargs) -> str | None:
+        """Return the file version when the resource matches this family."""
+        return _match[1] if (_match := _detect_format(resource)) else None
 
-    def scan(self, resource: LocalPath, **kwargs) -> list[ScanPayload]:
+    def get_metadata(self, resource: LocalPath, *, snap: bool = True) -> list[dc.Patch]:
         """Scan a MiniSEED file."""
         pymseed = optional_import("pymseed")
         return _scan_patches(resource, pymseed)
 
-    def read(
-        self,
-        resource: LocalPath,
-        time: tuple[opt_timeable_types, opt_timeable_types] | None = None,
-        channel: tuple[int | None, int | None] | None = None,
-        source_patch_key=(),
-        **kwargs,
-    ) -> dc.Spool:
-        """Read a MiniSEED file."""
+    def read_array(
+        self, resource: LocalPath, windows: dict[str, tuple[int, int]], key: str = ""
+    ) -> np.ndarray:
+        """Decode one compatible MiniSEED group in channel/time order."""
         pymseed = optional_import("pymseed")
-        patches = _get_patches(
-            resource,
-            pymseed,
-            time=time,
-            channel=channel,
-            source_patch_key=source_patch_key,
+        groups = {
+            _source_patch_key(group): segments
+            for group, segments in _group_segments(_scan_segments(resource, pymseed))
+        }
+        summaries = sorted(
+            resolve_keyed_source(groups, key),
+            key=lambda item: (item.station, item.source_id),
         )
-        return dc.spool(patches)
+        shape = (len(summaries), summaries[0].sample_count)
+        channels, time = windows_to_slices(windows, ("channel", "time"), shape)
+        selected = summaries[channels]
+        if not selected or time.start == time.stop:
+            return np.empty(
+                (len(selected), time.stop - time.start), dtype=summaries[0].dtype
+            )
+        source_windows: _SourceWindows = {
+            item.source_id: [_trace_time_window(item)] for item in selected
+        }
+        segments = _read_segments(resource, pymseed, source_windows=source_windows)
+        segments = sorted(segments, key=lambda item: (item.station, item.source_id))
+        return np.stack([segment.data[time] for segment in segments])
 
 
 class MSeedV3(MSeedV2):

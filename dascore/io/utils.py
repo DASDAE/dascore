@@ -107,51 +107,6 @@ def drop_blank_attrs(attrs: dict, names: Iterable[str]) -> dict:
     return attrs
 
 
-def build_patches(
-    coords: CoordManager,
-    data: ArrayLike,
-    attrs: dc.PatchAttrs | Mapping[str, Any] | None = None,
-    *,
-    attr_cls: type[dc.PatchAttrs] | None = None,
-    selection: Mapping[str, Any] | None = None,
-) -> list[dc.Patch]:
-    """
-    Trim a data source to a selection and build the resulting patch list.
-
-    This is the tail most single-patch readers share. It returns one
-    patch, or nothing if the selection left no data.
-
-    Parameters
-    ----------
-    coords
-        The coordinates of the untrimmed patch.
-    data
-        The patch data, often an unread node (eg an h5 dataset).
-    attrs
-        The patch attributes, or anything convertible to them.
-    attr_cls
-        The format's PatchAttrs subclass. Defaults to PatchAttrs.
-    selection
-        A mapping of {dimension_name: selection}, eg {"time": (t1, t2)}.
-        None values are dropped, so a read with nothing to trim never
-        touches the data source. Passed to `CoordManager.select`, which
-        ignores names it doesn't know.
-    """
-    # A def-time default would need dc.PatchAttrs while dascore is still
-    # importing this module, so the sentinel is resolved here instead.
-    attr_cls = dc.PatchAttrs if attr_cls is None else attr_cls
-    # Validate attrs before the selection can short-circuit, so bad metadata
-    # still raises on a read which happens to select nothing.
-    patch_attrs = attr_cls.from_dict(attrs)
-    trim = {i: v for i, v in (selection or {}).items() if v is not None}
-    if trim:
-        coords, data = coords.select(array=data, **trim)
-    if not data.size:
-        return []
-    # Ellipsis rather than a slice so 0d data (a scalar patch) also loads.
-    return [dc.Patch(data=data[...], coords=coords, attrs=patch_attrs)]
-
-
 def windows_to_slices(
     windows: Mapping[str, Any], dims: Sequence[str], shape: Sequence[int]
 ) -> tuple[slice, ...]:
@@ -175,6 +130,8 @@ def windows_to_slices(
     if unknown := sorted(set(windows) - set(dims)):
         msg = f"Window dimensions {unknown} are not among patch dims {tuple(dims)}."
         raise ParameterError(msg)
+    if not dims and tuple(shape) == (0,):
+        return (slice(0, 0),)  # Legacy empty Patch has no dims and one empty axis.
     out = []
     for dim, size in zip(dims, shape, strict=True):
         if dim not in windows:
@@ -196,13 +153,11 @@ def resolve_keyed_source(
     where: str = "the resource",
 ):
     """
-    Return the one source a ``source_patch_key`` names.
+    Return the one source a native logical key names.
 
-    Resolves a native key as the default `FiberIO.read_array` does: an
-    empty resource is missing data, and an unknown key, an ambiguous
-    keyless one, or a key naming more than one source cannot be
-    resolved. Unlike the default it takes no positional key, since a
-    format which states its own keys never synthesizes one.
+    An empty resource is missing data. An unknown key, an ambiguous
+    keyless resource, or a key naming multiple sources cannot be resolved.
+    Native keys do not fall back to positional indices.
 
     ``sources`` maps each native key to whatever the caller needs back,
     and is read lazily, so an h5py group can be passed as it is. Pass
@@ -221,7 +176,7 @@ def resolve_keyed_source(
                 raise PatchAttributeError(f"No patch named '{key}' in {where}.")
             return mapping[key]
         if len(mapping) > 1:
-            msg = f"{where} holds several patches; pass source_patch_key."
+            msg = f"{where} holds several patches; pass an explicit key."
             raise PatchAttributeError(msg)
         return next(iter(mapping.values()))
     pairs = list(sources)
@@ -236,7 +191,7 @@ def resolve_keyed_source(
             raise PatchAttributeError(msg)
         return found[0]
     if len(pairs) > 1:
-        msg = f"{where} holds several patches; pass source_patch_key."
+        msg = f"{where} holds several patches; pass an explicit key."
         raise PatchAttributeError(msg)
     return pairs[0][1]
 
@@ -334,3 +289,39 @@ def step_from_interval(seconds) -> Fraction | np.timedelta64:
     if frac is not None and frac > 0:
         return frac
     return dc.to_timedelta64(float(seconds))
+
+
+def selection_windows(
+    coords: CoordManager, indexers: Mapping[str, int | slice | np.ndarray]
+) -> tuple[dict[str, tuple[int, int]], tuple[slice | np.ndarray, ...]]:
+    """Return bounding array windows and residual coordinate indexers."""
+    windows, residual = {}, []
+    if not coords.dims:
+        return windows, ()
+    for dim, size in zip(coords.dims, coords.shape, strict=True):
+        indexer = indexers.get(dim, slice(None))
+        if isinstance(indexer, slice):
+            span = range(size)[indexer]
+            if not span:
+                windows[dim] = (0, 0)
+                residual.append(slice(None))
+                continue
+            start, stop = min(span[0], span[-1]), max(span[0], span[-1]) + 1
+            leftover = (
+                slice(None)
+                if span.step == 1
+                else slice(
+                    span[0] - start, None if span.step < 0 else stop - start, span.step
+                )
+            )
+        else:
+            indices = np.atleast_1d(indexer)
+            if not len(indices):
+                windows[dim] = (0, 0)
+                residual.append(slice(None))
+                continue
+            start, stop = int(indices.min()), int(indices.max()) + 1
+            leftover = indices - start
+        windows[dim] = (start, stop)
+        residual.append(leftover)
+    return windows, tuple(residual)

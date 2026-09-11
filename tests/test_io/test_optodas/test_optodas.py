@@ -21,7 +21,7 @@ class TestOptoDASIssues:
 
         for snap in (True, False):
             payload = fiber_io.scan(path, snap=snap)[0]
-            distance = payload["coords"].get_coord("distance")
+            distance = payload.coords.get_coord("distance")
             assert distance.units == dc.get_quantity("m")
 
 

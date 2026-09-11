@@ -142,20 +142,6 @@ def _normalize_coord_summary_map(
     }
 
 
-def _normalize_source_patch_key(
-    attrs: PatchAttrs, source_patch_key: Any = ""
-) -> tuple[PatchAttrs, str]:
-    """Normalize summary and private attr source ids to one value."""
-    summary_source_patch_key = normalize_source_patch_key(source_patch_key)
-    attrs_source_patch_key = normalize_source_patch_key(
-        attrs.get("_source_patch_key", "")
-    )
-    normalized = summary_source_patch_key or attrs_source_patch_key
-    if normalized:
-        attrs = attrs.update(_source_patch_key=normalized)
-    return attrs, normalized
-
-
 def _upath_from_dump(value) -> UPath | None:
     """
     Return the path a dumped `UPath` describes, or None if it is not one.
@@ -196,7 +182,7 @@ def _build_patch_summary_payload(
     source_patch_key="",
 ) -> dict[str, Any]:
     """Build the canonical structured payload used to validate PatchSummary."""
-    attrs, source_patch_key = _normalize_source_patch_key(attrs, source_patch_key)
+    source_patch_key = normalize_source_patch_key(source_patch_key)
     dims = dims or _infer_dims_from_coords(coords)
     # Only preserve source metadata when the caller already supplied a cheap,
     # path-like reload target. Validation should not touch the filesystem.
@@ -292,7 +278,10 @@ class PatchSummary(DascoreBaseModel):
             dims=patch.dims,
             shape=patch.shape,
             dtype=str(np.dtype(patch.dtype)),
-            source_patch_key=patch.attrs.get("_source_patch_key", ""),
+            source_path=patch._source.path if patch._source else "",
+            source_format=patch._source.format if patch._source else "",
+            source_version=patch._source.version if patch._source else "",
+            source_patch_key=patch._source.key if patch._source else "",
         )
 
     def dump_structured(self) -> dict[str, Any]:

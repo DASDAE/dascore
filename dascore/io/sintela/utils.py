@@ -14,8 +14,6 @@ from __future__ import annotations
 
 import numpy as np
 
-import dascore as dc
-from dascore.compat import array
 from dascore.core.attrs import PatchAttrs
 from dascore.core.coordmanager import get_coord_manager
 from dascore.core.coords import get_coord
@@ -240,19 +238,3 @@ def _get_attrs_coords_header(rid, attr_class=PatchAttrs, extras=None):
     cm = get_coord_manager(coords=coords, dims=DIMS)
     attrs = _get_attr_dict(header, extras)
     return attr_class(**attrs), cm, header
-
-
-def _get_patches(
-    resource, attr_class=PatchAttrs, extras=None, time=None, distance=None, **kwargs
-):
-    """Get the patch from the sintela file."""
-    patch_attrs, cm, header = _get_attrs_coords_header(resource, attr_class, extras)
-    data = _load_data(resource, header)
-    # Apply slicing if needed. This is done before patch creation so a memmap
-    # can be sliced before loading all data into memory.
-    if time is not None or distance is not None:
-        cm, data = cm.select(data, time=time, distance=distance)
-    if not data.size:  # no data in this slice.
-        return []
-    patch = dc.Patch(data=array(data), coords=cm, attrs=patch_attrs)
-    return [patch]

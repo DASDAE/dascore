@@ -10,7 +10,6 @@ import pytest
 
 import dascore as dc
 from dascore.exceptions import ParameterError, PatchAttributeError
-from dascore.io.core import FiberIO
 from dascore.io.febus import Febus2
 from dascore.io.febus.a1utils import (
     _flatten_febus_info,
@@ -77,7 +76,7 @@ class TestFebus:
         target = summaries[0]
         out = dc.read(febus_path, source_patch_key=target.source_patch_key)
         assert len(out) == 1
-        assert out[0].attrs["_source_patch_key"] == target.source_patch_key
+        assert out[0]._source.key == target.source_patch_key
         assert (
             out[0].summary.get_coord_summary("time").min
             == target.get_coord_summary("time").min
@@ -89,7 +88,7 @@ class TestFebus:
         targets = [summaries[0].source_patch_key]
         out = dc.read(febus_path, source_patch_key=targets)
         assert len(out) == 1
-        assert out[0].attrs["_source_patch_key"] == targets[0]
+        assert out[0]._source.key == targets[0]
         assert (
             out[0].summary.get_coord_summary("time").min
             == summaries[0].get_coord_summary("time").min
@@ -123,8 +122,12 @@ class TestFebus:
         assert len(cases) > 1, cases
         for start, stop in cases:
             windows = {"time": (start, stop)}
-            out = io.read_array(febus_path, windows, source_patch_key=key)
-            expected = FiberIO.read_array(io, febus_path, windows, source_patch_key=key)
+            out = io.read_array(febus_path, windows, key=key)
+            expected = (
+                io.read(febus_path, source_patch_key=key)[0]
+                .select(samples=True, **windows)
+                .data
+            )
             assert out.shape == expected.shape == (stop - start, payload.shape[1])
             assert np.array_equal(out, expected, equal_nan=True), (start, stop)
 
@@ -133,9 +136,9 @@ class TestFebus:
         io = Febus2()
         payload = dc.scan(febus_path)[0]
         key = payload.source_patch_key
-        out = io.read_array(febus_path, {"time": (5, 5)}, source_patch_key=key)
+        out = io.read_array(febus_path, {"time": (5, 5)}, key=key)
         assert out.shape == (0, payload.shape[1])
-        out = io.read_array(febus_path, {"distance": (4, 2)}, source_patch_key=key)
+        out = io.read_array(febus_path, {"distance": (4, 2)}, key=key)
         assert out.shape == (payload.shape[0], 0)
 
     @pytest.fixture(scope="class")
@@ -157,14 +160,15 @@ class TestFebus:
         payloads = dc.scan(two_zone_path)
         assert len(payloads) == 2
         arrays = [
-            io.read_array(two_zone_path, {}, source_patch_key=x.source_patch_key)
-            for x in payloads
+            io.read_array(two_zone_path, {}, key=x.source_patch_key) for x in payloads
         ]
         # the copy holds the negated data, so a wrong zone is visible
         assert np.allclose(arrays[0], -arrays[1], equal_nan=True)
         for payload, array in zip(payloads, arrays, strict=True):
-            expected = FiberIO.read_array(
-                io, two_zone_path, {}, source_patch_key=payload.source_patch_key
+            expected = (
+                io.read(two_zone_path, source_patch_key=payload.source_patch_key)[0]
+                .select(samples=True, **{})
+                .data
             )
             assert np.array_equal(array, expected, equal_nan=True)
 
@@ -191,16 +195,14 @@ class TestFebus:
             return original(self, index)
 
         monkeypatch.setattr(h5py.Dataset, "__getitem__", spy)
-        io.read_array(febus_path, {"time": (rows, rows + 2)}, source_patch_key=key)
+        io.read_array(febus_path, {"time": (rows, rows + 2)}, key=key)
         assert reads == [slice(1, 2)], reads
 
     def test_read_array_refuses_a_stepped_window(self, febus_path):
         """A window is a contiguous range; a stride is not part of it."""
         key = dc.scan(febus_path)[0].source_patch_key
         with pytest.raises(ParameterError, match="contiguous"):
-            Febus2().read_array(
-                febus_path, {"time": slice(0, 10, 2)}, source_patch_key=key
-            )
+            Febus2().read_array(febus_path, {"time": slice(0, 10, 2)}, key=key)
 
 
 class TestFebusA1Interrogator:

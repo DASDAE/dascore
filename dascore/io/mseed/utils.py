@@ -16,9 +16,8 @@ import numpy as np
 import dascore as dc
 from dascore.constants import ONE_BILLION
 from dascore.core import get_coord, get_coord_manager
-from dascore.io import ScanPayload
-from dascore.io.core import make_scan_payload
-from dascore.utils.io import LocalPath, _normalize_source_patch_keys, _read_file_header
+from dascore.core.source import PatchSource
+from dascore.utils.io import LocalPath, _read_file_header
 from dascore.utils.time import to_datetime64, to_int
 
 _TimeLimits = tuple[int | None, int | None]
@@ -124,7 +123,7 @@ class _TraceGroupKey:
 
 @dataclass(frozen=True)
 class _PreparedGroup(Generic[_T]):
-    """Sorted group data shared by patch and scan payload creation."""
+    """Sorted group data shared by patch and data-less patch creation."""
 
     segments: Sequence[_T]
     first: _T
@@ -230,7 +229,12 @@ def _record_to_trace_info(record, pymseed, sample_count: int) -> _TraceInfo:
         start_ns=int(record.starttime),
         sample_rate=float(record.samprate),
         sample_count=sample_count,
-        sample_type=str(record.sampletype or ""),
+        sample_type=str(
+            record.sampletype
+            or {value: key for key, value in _SAMPLE_TYPE_DTYPE_MAP.items()}.get(
+                _record_dtype(record), ""
+            )
+        ),
         encoding=str(record.encoding),
         publication_version=int(getattr(record, "pubversion", 0) or 0),
         record_length=int(getattr(record, "reclen", 0) or 0),
@@ -471,39 +475,6 @@ def _get_channel_map(segments: Sequence[_TraceInfo]) -> dict[str, int]:
     return {source_id: ind for ind, source_id in enumerate(source_ids)}
 
 
-def _get_selected_source_ids(channel_map: dict[str, int], channel) -> set[str]:
-    """Return source IDs selected by DASCore channel selector semantics."""
-    if channel is None:
-        return set(channel_map)
-    source_ids = np.asarray(tuple(channel_map))
-    channel_values = np.asarray([channel_map[x] for x in source_ids])
-    channel_coord = get_coord(data=channel_values)
-    _, indexer = channel_coord.select(channel)
-    return {str(x) for x in np.atleast_1d(source_ids[indexer])}
-
-
-def _get_read_plan(path, pymseed, wanted_ids, channel):
-    """Return scan-derived groups and source windows needed for a read."""
-    summaries = _scan_segments(path, pymseed)
-    channel_map = _get_channel_map(summaries)
-    selected_source_ids = _get_selected_source_ids(channel_map, channel)
-    source_windows: _SourceWindows = {}
-    groups = []
-    for group_key, group in _group_segments(summaries):
-        patch_id = _source_patch_key(group_key)
-        if wanted_ids and patch_id not in wanted_ids:
-            continue
-        group = [x for x in group if x.source_id in selected_source_ids]
-        if not group:
-            continue
-        groups.append((group_key, group))
-        for summary in group:
-            source_windows.setdefault(summary.source_id, []).append(
-                _trace_time_window(summary)
-            )
-    return channel_map, groups, source_windows
-
-
 def _source_patch_key(group_key: _TraceGroupKey) -> str:
     """Return a stable source patch ID for a MiniSEED group."""
     source_key = ".".join(
@@ -561,105 +532,38 @@ def _prepare_group(
         "mseed_encoding": first.encoding,
         "mseed_publication_version": first.publication_version,
         "mseed_record_length": first.record_length,
-        "_source_patch_key": _source_patch_key(group_key),
     }
     return _PreparedGroup(segments, first, coords, attrs)
 
 
-def _patch_from_segments(
-    group_key, segments: list[_TraceSegment], channel_map: dict[str, int] | None = None
-) -> dc.Patch:
-    """Create a DASCore Patch from compatible MiniSEED trace segments."""
-    prepared = _prepare_group(group_key, segments, channel_map)
-    data = np.stack([x.data for x in prepared.segments])
-    return dc.Patch(
-        data=data,
-        dims=("channel", "time"),
-        coords=prepared.coords,
-        attrs=prepared.attrs,
-    )
-
-
-def _segments_from_summaries(
-    segments: Sequence[_TraceSegment], summaries: Sequence[_TraceSummary]
-) -> list[_TraceSegment]:
-    """Return decoded segments that overlap selected scan summaries."""
-    summaries_by_source = {}
-    for summary in summaries:
-        summaries_by_source.setdefault(summary.source_id, []).append(summary)
-    out = []
-    for segment in segments:
-        segment_start, segment_stop = _trace_time_window(segment)
-        for summary in summaries_by_source.get(segment.source_id, ()):
-            if _time_windows_overlap(
-                segment_start, segment_stop, _trace_time_window(summary)
-            ):
-                out.append(segment)
-                break
-    return out
-
-
-def _scan_payload_from_segments(
+def _metadata_from_segments(
     group_key,
     segments: list[_TraceSummary],
     channel_map: dict[str, int] | None = None,
-) -> ScanPayload:
-    """Create a DASCore scan payload from MiniSEED trace summaries."""
+) -> dc.Patch:
+    """Create a DASCore data-less patch from MiniSEED trace summaries."""
     prepared = _prepare_group(group_key, segments, channel_map)
     coords = get_coord_manager(
         prepared.coords,
         dims=("channel", "time"),
     )
-    return make_scan_payload(
+    return dc.Patch(
         attrs=prepared.attrs,
         coords=coords,
         dtype=prepared.first.dtype,
-        source_patch_key=prepared.attrs["_source_patch_key"],
+        source=PatchSource(key=_source_patch_key(group_key)),
     )
 
 
-def _get_patches(
-    path, pymseed, time=None, channel=None, source_patch_key=()
-) -> list[dc.Patch]:
-    """Read MiniSEED patches from a path."""
-    wanted_ids = _normalize_source_patch_keys(source_patch_key)
-    patches = []
-    use_scan_plan = bool(wanted_ids) or channel is not None
-    if use_scan_plan:
-        channel_map, segment_groups, source_windows = _get_read_plan(
-            path, pymseed, wanted_ids, channel
-        )
-        if not segment_groups:
-            return []
-        all_segments = _read_segments(
-            path, pymseed, time=time, source_windows=source_windows
-        )
-    else:
-        all_segments = _read_segments(path, pymseed, time=time)
-        channel_map = _get_channel_map(all_segments)
-        segment_groups = list(_group_segments(all_segments))
-    for group_key, segments in segment_groups:
-        if use_scan_plan:
-            segments = _segments_from_summaries(all_segments, segments)
-        if not segments:
-            continue
-        patch = _patch_from_segments(group_key, segments, channel_map=channel_map)
-        if patch.size:
-            patches.append(patch)
-    return sorted(patches, key=lambda x: x.get_coord("channel").min())
-
-
-def _scan_patches(path, pymseed) -> list[ScanPayload]:
-    """Return scan payloads for MiniSEED patches."""
+def _scan_patches(path, pymseed) -> list[dc.Patch]:
+    """Return data-less patches for MiniSEED patches."""
     payloads = []
     all_segments = _scan_segments(path, pymseed)
     channel_map = _get_channel_map(all_segments)
     for group_key, segments in _group_segments(all_segments):
-        payload = _scan_payload_from_segments(
-            group_key, segments, channel_map=channel_map
-        )
+        payload = _metadata_from_segments(group_key, segments, channel_map=channel_map)
         payloads.append(payload)
-    return sorted(payloads, key=lambda x: x["coords"].get_coord("channel").min())
+    return sorted(payloads, key=lambda x: x.coords.get_coord("channel").min())
 
 
 def _is_seed_code(value: bytes, *, allow_space: bool = True) -> bool:

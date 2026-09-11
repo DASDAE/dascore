@@ -8,6 +8,7 @@ import pytest
 import dascore as dc
 from dascore.config import config_context
 from dascore.exceptions import PatchConversionError
+from dascore.io.index.planned import PlanResolver
 
 
 class TestSpoolToXarray:
@@ -454,31 +455,19 @@ class TestToXarrayReadArray:
         return path
 
     @pytest.fixture
-    def override_calls(self):
-        """Give DASDAE a counting read_array override."""
-        from dascore.io.core import FiberIO  # noqa: PLC0415
-        from dascore.io.dasdae.core import DASDAEV2  # noqa: PLC0415
-
+    def override_calls(self, monkeypatch):
+        """Record successful array-only loads, excluding normal derived reads."""
         calls = []
+        original = PlanResolver._load_member_array
 
-        def read_array(self, resource, windows, **kwargs):
-            # a real override's caster wrapper consumes _pre_cast; this
-            # raw function sees it and must not forward it to read
-            kwargs.pop("_pre_cast", None)
-            calls.append(windows)
-            return FiberIO.read_array(self, resource, windows, **kwargs)
+        def load(resolver, row, windows, **kwargs):
+            out = original(resolver, row, windows, **kwargs)
+            if out is not None:
+                calls.append(windows)
+            return out
 
-        # set and restore by hand: monkeypatch would put the inherited
-        # method back as an own class attribute rather than remove it,
-        # and DASDAE has an override of its own to hand back afterwards.
-        missing = object()
-        stored = DASDAEV2.__dict__.get("read_array", missing)
-        DASDAEV2.read_array = read_array
-        yield calls
-        if stored is missing:
-            del DASDAEV2.read_array
-        else:
-            DASDAEV2.read_array = stored
+        monkeypatch.setattr(PlanResolver, "_load_member_array", load)
+        return calls
 
     def _leaf(self, tree):
         """The first dataset holding a data variable."""
@@ -540,6 +529,7 @@ class TestToXarrayReadArray:
         """
         spool = dc.spool(dasdae_directory).update().chunk(time=3)
         eager = spool.chunk(time=None)[0].data
+        override_calls.clear()
         out = self._leaf(spool.io.to_xarray())["data"].data.compute()
         assert np.array_equal(out, eager)
         assert override_calls == []
@@ -560,6 +550,7 @@ class TestToXarrayReadArray:
             patch.update_attrs(history=[]).io.write(tmp_path / f"p{num}.h5", "dasdae")
         spool = dc.spool(tmp_path).update()
         eager = spool.chunk(time=None)[0].data
+        override_calls.clear()
         out = self._leaf(spool.io.to_xarray())["data"].data.compute()
         assert np.array_equal(out, eager)
         # the trimmed member's window must not be anchored at the start
@@ -622,7 +613,6 @@ class TestToXarrayReadArray:
 
     def test_stale_shape_raises(self):
         """An array which breaks the index's promise raises."""
-        from dascore.exceptions import PatchConversionError  # noqa: PLC0415
         from dascore.xarray.spool import _load_xarray_block  # noqa: PLC0415
 
         class _Fake:

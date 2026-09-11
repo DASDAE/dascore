@@ -5,7 +5,7 @@ from __future__ import annotations
 import dascore as dc
 import dascore.core
 from dascore.core.coords import get_coord
-from dascore.io.utils import build_patches, get_exact_coord
+from dascore.io.utils import get_exact_coord
 from dascore.utils.misc import _maybe_unpack, unbyte
 
 # --- Getting format/version
@@ -84,15 +84,3 @@ def _get_opto_das_attrs(fi, snap=True) -> tuple[dict, dascore.core.CoordManager]
     cm = _get_coord_manager(fi, snap=snap)
     attrs = _get_attr_dict(fi["header"])
     return attrs, cm
-
-
-def _read_opto_das(fi, distance=None, time=None, snap=True, attr_cls=dc.PatchAttrs):
-    """Read the OptoDAS values into a patch."""
-    attrs, coords = _get_opto_das_attrs(fi, snap=snap)
-    return build_patches(
-        coords,
-        fi["data"],
-        attrs,
-        attr_cls=attr_cls,
-        selection={"time": time, "distance": distance},
-    )

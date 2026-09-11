@@ -11,7 +11,6 @@ import numpy as np
 import pytest
 
 import dascore as dc
-from dascore.io.core import FiberIO
 from dascore.io.silixah5.utils import _ATTR_MAP as _SILIXA_ATTR_MAP
 from dascore.io.tdms import utils as tdms_utils
 from dascore.io.tdms.core import TDMSFormatterV4713
@@ -269,7 +268,11 @@ class TestReadArray:
         io = TDMSFormatterV4713()
         windows = {"time": (990, 1010), "distance": (5, 9)}
         out = io.read_array(two_segment_path, windows)
-        expected = FiberIO.read_array(io, two_segment_path, windows)
+        expected = (
+            io.read(two_segment_path, source_patch_key="")[0]
+            .select(samples=True, **windows)
+            .data
+        )
         assert out.dtype == expected.dtype
         assert np.array_equal(out, expected)
         assert out.shape == (20, 4)
@@ -314,7 +317,12 @@ class TestReadArray:
         io = TDMSFormatterV4713()
         out = io.read_array(two_segment_path, {"time": (5000, 6000)})
         assert out.shape == (0, 1152)
-        assert out.dtype == FiberIO.read_array(io, two_segment_path, {}).dtype
+        assert (
+            out.dtype
+            == io.read(two_segment_path, source_patch_key="")[0]
+            .select(samples=True, **{})
+            .data.dtype
+        )
 
 
 class TestTDMSInterrogator:

@@ -174,5 +174,5 @@ class TestFebusT1DistanceGrid:
             del fi["Data/Distance"]
             fi.create_dataset("Data/Distance", data=quantized_distance)
         payload = dc.scan_payloads(path, snap=False)[0]
-        dist = payload["coords"].coord_map["distance"]
+        dist = payload.coords.coord_map["distance"]
         assert np.array_equal(dist.values, quantized_distance)
