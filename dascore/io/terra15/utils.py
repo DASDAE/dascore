@@ -103,9 +103,9 @@ def _scan_terra15(h5_fi, data_node, extras=None, snap=True) -> list[ScanPayload]
 # --- Reading patch
 
 
-def _get_raw_time_coord(data_node):
-    """Read the time from the data node and return it."""
-    time = _get_time_node(data_node)[:]
+def _get_raw_time_coord(data_node, time_len):
+    """Read timestamps for the written samples without regularizing them."""
+    time = _get_time_node(data_node)[:time_len]
     values = to_datetime64(time)
     return get_exact_coord(values, units="s")
 
@@ -175,11 +175,11 @@ def _get_default_attrs(root_node_attrs):
 
 def _get_time_coord(data_node, snap_dims=True):
     """Get the time coordinate."""
-    t_min, t_max, _time_len, d_time = _get_scanned_time_info(data_node)
+    t_min, t_max, time_len, d_time = _get_scanned_time_info(data_node)
     if snap_dims:
         time_coord = get_coord(start=t_min, stop=t_max + d_time, step=d_time, units="s")
     else:
-        time_coord = _get_raw_time_coord(data_node)
+        time_coord = _get_raw_time_coord(data_node, time_len)
     return time_coord
 
 

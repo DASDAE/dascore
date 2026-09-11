@@ -16,6 +16,8 @@ from the ``dT`` attribute, so DASCore regularizes them as follows:
 
 3. Convert ``gps_time[0]`` and ``gps_time[-1]`` to ``datetime64`` scan bounds.
 
+Unwritten trailing rows with zero-filled timestamps are excluded whether snapping is enabled or disabled. Passing ``snap=False`` (or ``snap_dims=False`` to `read`) preserves the written samples' raw timestamps.
+
 The scan bounds must exactly match the loaded patch's ``time_min`` and ``time_max``.
 """
 from __future__ import annotations
