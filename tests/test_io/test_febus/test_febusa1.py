@@ -165,11 +165,16 @@ class TestFebus:
         # the copy holds the negated data, so a wrong zone is visible
         assert np.allclose(arrays[0], -arrays[1], equal_nan=True)
         for payload, array in zip(payloads, arrays, strict=True):
-            expected = (
-                io.read(two_zone_path, source_patch_key=payload.source_patch_key)[0]
-                .select(samples=True, **{})
-                .data
-            )
+            with h5py.File(two_zone_path, "r") as handle:
+                zones = {
+                    _get_source_patch_key(zone): zone
+                    for zone in _flatten_febus_info(handle)
+                }
+                zone = zones[payload.source_patch_key]
+                info = _get_zone_time(zone)
+                stored = zone.zone[zone.data_name][:]
+                unpadded = stored[:, info.idx_start : info.idx_stop + 1, :]
+                expected = unpadded.reshape(-1, stored.shape[-1])
             assert np.array_equal(array, expected, equal_nan=True)
 
     def test_read_array_without_key_raises(self, two_zone_path):

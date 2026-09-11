@@ -33,19 +33,20 @@ class TestSelectionWindows:
     """Bounding windows plus residuals reproduce original-grid selections."""
 
     @pytest.mark.parametrize(
-        "indexer",
+        "indexer, expected_window",
         [
-            slice(None, None, -2),
-            slice(0, 0),
-            np.array([], dtype=int),
-            np.array([6, 1, 4]),
-            3,
+            (slice(None, None, -2), (1, 8)),
+            (slice(0, 0), (0, 0)),
+            (np.array([], dtype=int), (0, 0)),
+            (np.array([6, 1, 4]), (1, 7)),
+            (3, (3, 4)),
         ],
     )
-    def test_window_and_residual(self, indexer):
+    def test_window_and_residual(self, indexer, expected_window):
         """Strides, reordering, scalars, and empty selections retain exact cells."""
         data = np.arange(8) * 13 + 5
         coords = get_coord_manager(coords={"time": np.arange(8)}, dims=("time",))
         windows, residual = selection_windows(coords, {"time": indexer})
+        assert windows == {"time": expected_window}
         bounded = data[slice(*windows["time"])]
         np.testing.assert_array_equal(bounded[residual], np.atleast_1d(data[indexer]))

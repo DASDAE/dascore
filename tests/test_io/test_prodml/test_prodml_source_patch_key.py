@@ -114,9 +114,12 @@ class TestNodeDims:
         payload = dc.scan(fbe_without_dimensions)[0]
         key = payload.source_patch_key
         out = io.read_array(fbe_without_dimensions, {}, key=key)
-        expected = (
-            io.read(fbe_without_dimensions, source_patch_key=key)[0]
-            .select(samples=True, **{})
-            .data
-        )
+        with h5py.File(fbe_without_dimensions, "r") as handle:
+            expected = handle["Acquisition/Processed/Fbe[0]"][key][:]
+        assert payload.dims == ("time", "distance")
         assert out.shape == expected.shape == payload.shape
+        assert np.array_equal(out, expected, equal_nan=True)
+        bounded = io.read_array(
+            fbe_without_dimensions, {"time": (3, 9), "distance": (5, 17)}, key=key
+        )
+        assert np.array_equal(bounded, expected[3:9, 5:17], equal_nan=True)
