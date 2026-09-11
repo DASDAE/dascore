@@ -63,6 +63,17 @@ class TestAliases:
         assert data[str(id(dc.Patch))]["name"] == "Patch"
 
 
+class TestProcessorFunctions:
+    """A generated patch function is filed where its module binds it."""
+
+    def test_filed_under_its_class_module(self):
+        """Not under core/processor.py, where its code object lives."""
+        data = parse_project(dc)
+        entry = data[str(id(dc.proc.normalize))]
+        assert entry["name"] == "normalize"
+        assert entry["path"].name == "basic.py"
+
+
 class TestAssertDocumentingThisCheckout:
     """Tests for catching a build which imported another checkout."""
 

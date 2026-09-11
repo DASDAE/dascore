@@ -122,6 +122,11 @@ def compose_docstring(**kwargs: str | Sequence[str]):
             raise ValueError(msg)
 
         func.__doc__ = docstring
+        # A processor's generated patch function copied the docstring before
+        # this decorator ran.
+        generated = getattr(func, "patch_function", None)
+        if getattr(generated, "__processor__", None) is func:
+            generated.__doc__ = docstring
         return func
 
     return _wrap

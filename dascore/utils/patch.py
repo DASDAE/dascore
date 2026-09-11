@@ -237,18 +237,15 @@ def _func_and_kwargs_str(func: Callable, patch, *args, **kwargs) -> str:
     callargs.pop("patch", None)
     callargs.pop("self", None)
     kwargs_ = callargs.pop("kwargs", {})
-    arguments = []
-    arguments += [
-        f"{k}={_format_values(v)!r}" for k, v in callargs.items() if v is not None
-    ]
-    arguments += [
-        f"{k}={_format_values(v)!r}" for k, v in kwargs_.items() if v is not None
-    ]
-    arguments.sort()
-    out = f"{_func_name(func)}("
-    if arguments:
-        out += f"{','.join(arguments)}"
-    return out + ")"
+    return _call_str(_func_name(func), {**callargs, **kwargs_})
+
+
+def _call_str(name: str, arguments: Mapping) -> str:
+    """Spell a call for the history: `name(key=value,...)`, None values left out."""
+    spelled = sorted(
+        f"{k}={_format_values(v)!r}" for k, v in arguments.items() if v is not None
+    )
+    return f"{name}({','.join(spelled)})"
 
 
 def _get_history_str(
@@ -308,9 +305,7 @@ class _PatchFunction(Protocol):
 
     func: Callable
     raw_function: Callable
-    # What the decorator was told, so a registered processor can be held
-    # to the same requirements rather than declaring its own in parallel.
-    _declared: dict
+    _history: str | None
     __version__: str
     __wrapped__: Callable
 
@@ -327,8 +322,6 @@ def _stamp(patch, attrs, patch_func, args, kwargs):
     with `getattr`, because attrs unpickled from before these fields
     existed have neither.
     """
-    members = [patch.attrs]
-    members += [x.attrs for x in (*args, *kwargs.values()) if isinstance(x, dc.Patch)]
     try:
         fingerprint = fingerprint_call(patch_func, args, kwargs)
     except Exception:
@@ -336,6 +329,18 @@ def _stamp(patch, attrs, patch_func, args, kwargs):
         # the serializer cannot encode is a reason to say nothing about
         # this call, never a reason to fail a call which otherwise worked.
         return attrs
+    others = [x for x in (*args, *kwargs.values()) if isinstance(x, dc.Patch)]
+    return _stamp_ids(patch, attrs, fingerprint, others)
+
+
+def _stamp_ids(patch, attrs, fingerprint: str, others=()):
+    """
+    Return attrs whose ids say an operation with `fingerprint` made them.
+
+    `patch` and any `others` are the patches the operation was given; all
+    of them count towards which data the result is.
+    """
+    members = [patch.attrs, *(x.attrs for x in others)]
     return attrs.update(
         # Carried from the inputs rather than from whatever the body
         # returned: filtering data does not make it other data, and a
@@ -369,7 +374,7 @@ def record_call(
     # what the function itself declared, so a call recorded here says
     # exactly what the same call made directly would (`select` records
     # its ids and no history, and must here too)
-    history = getattr(patch_func, "_declared", {}).get("history", "full")
+    history = getattr(patch_func, "_history", "full")
     hist_str = _get_history_str(patch, func, *args, _history=history, **kwargs)
     attrs = _maybe_add_history_str(out.attrs, hist_str)
     if ids_enabled():
@@ -532,17 +537,8 @@ def patch_function(
         patch_func.raw_function = getattr(func, "raw_function", func)
         patch_func.__wrapped__ = func
         patch_func.__version__ = version
-        # What the decorator was told, kept where a registered processor
-        # can find it. `register_implementation` reconciles the two, so
-        # the class and the decorator cannot drift apart in silence.
-        patch_func._declared = {
-            "required_dims": required_dims,
-            "required_coords": required_coords,
-            "required_attrs": required_attrs,
-            "data_type": data_type,
-            "history": history,
-            "validate_call": validate_call,
-        }
+        # How a call is written into history; `record_call` reads it.
+        patch_func._history = history
         # Registered as it is decorated, so a function is resolvable by tag
         # exactly when its module has been imported. A function defined
         # inside a call takes no tag.

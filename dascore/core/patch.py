@@ -405,10 +405,16 @@ class Patch(NodeRepr, NamespaceOwner):
         >>> assert described.dtype == patch.dtype
         >>> assert described.new(data=patch.data).equals(patch)
         """
-        # Built as a Patch and handed over positionally, so a subclass whose
-        # `__init__` takes no dtype still gets one.
-        dataless = Patch(coords=self.coords, attrs=self.attrs, dtype=self.dtype)
-        return dataless if type(self) is Patch else self.__class__(dataless)
+        # A copy of state already validated, not a new construction: every
+        # processor call makes one, and a subclass's `__init__` need not
+        # take a dtype.
+        out = self.__class__.__new__(self.__class__)
+        out.__dict__.update(self.__dict__)
+        out._dtype = _as_dtype(self.dtype)
+        out._data = None
+        # Another patch, so another identity: a spool keys patches by it.
+        out._instance_id = uuid4().hex
+        return out
 
     @property
     def seconds(self) -> float:
