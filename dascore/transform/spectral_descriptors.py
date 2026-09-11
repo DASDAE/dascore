@@ -1,4 +1,9 @@
-"""Spectral descriptor transforms for DASCore patches."""
+"""
+Spectral descriptor transforms for DASCore patches.
+
+Outputs preserve input metadata and processing history, replace data type and
+units, and remove obsolete DFT/STFT attributes and frequency-dependent coordinates.
+"""
 
 from __future__ import annotations
 
@@ -240,7 +245,16 @@ def _prepare_output(
     """Remove frequency-dependent coordinates and preserve remaining metadata."""
     # Descriptor data is already reduced, so only drop coordinates here.
     coords, _ = patch.coords.drop_coords(freq_dim)
-    attrs = {"data_type": data_type, "data_units": data_units}
+    # Reduction no longer represents Fourier coefficients, even when other
+    # Fourier dimensions remain. Preserve unrelated (including private) attrs.
+    obsolete = tuple(
+        key
+        for key in dict(patch.attrs)
+        if key.startswith(("_dft_", "_stft_", "_pre_dft_", "_pre_stft_"))
+    )
+    attrs = patch.attrs.drop(*obsolete, "coords", "dims").update(
+        data_type=data_type, data_units=data_units
+    )
     return dc.Patch(data=data, dims=coords.dims, coords=coords, attrs=attrs)
 
 

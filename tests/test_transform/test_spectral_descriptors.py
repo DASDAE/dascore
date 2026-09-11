@@ -116,6 +116,74 @@ class TestOutputCoordinates:
             assert out.coords.dim_map[coord] == patch.coords.dim_map[coord]
 
 
+@pytest.mark.parametrize(
+    "name, data_type, unit_kind",
+    [
+        ("spectral_centroid", "Spectral Centroid", "frequency"),
+        ("median_frequency", "Median Frequency", "frequency"),
+        ("spectral_peak_frequency", "Frequency at Maximum", "frequency"),
+        ("spectral_peak_amplitude", "Maximum Spectral Amplitude", "amplitude"),
+        ("spectral_entropy", "Spectral Entropy", "dimensionless"),
+        ("spectral_kurtosis", "Spectral Kurtosis", "dimensionless"),
+        ("spectral_flatness", "Spectral Flatness", "dimensionless"),
+    ],
+)
+class TestOutputMetadata:
+    """Descriptor reductions preserve provenance without spectral bookkeeping."""
+
+    @pytest.fixture(params=["dft", "stft", "multidimensional_dft"])
+    def spectrum(self, sine_patch, request):
+        """Create actual transform metadata along with ordinary input attrs."""
+        patch = sine_patch.update_attrs(
+            station="TEST",
+            tag="review",
+            history=["previous_processing"],
+            instrument_name="test instrument",
+            _custom_metadata="preserve me",
+            data_units="m/s",
+        )
+        if request.param == "stft":
+            return patch.stft(time=100, overlap=0, samples=True)
+        dims = (
+            ("time", "distance") if request.param == "multidimensional_dft" else "time"
+        )
+        return patch.dft(dims, pad=False)
+
+    def test_preserves_metadata(self, spectrum, name, data_type, unit_kind):
+        """Keep metadata/history and remaining coords without mutating the input."""
+        original_attrs = spectrum.attrs.model_dump()
+        original_data = spectrum.data.copy()
+        original_coords = spectrum.coords
+
+        out = getattr(spectrum, name)(dim="time", fmin=1, fmax=3)
+
+        for key in ("station", "tag", "instrument_name", "_custom_metadata"):
+            assert out.attrs[key] == spectrum.attrs[key]
+        assert out.attrs.history[:-1] == spectrum.attrs.history
+        assert out.attrs.history[0] == "previous_processing"
+        assert out.attrs.history[-1].startswith(f"{name}(")
+        assert out.attrs.data_type == data_type
+        expected_units = {
+            "frequency": spectrum.get_coord("ft_time").units,
+            "amplitude": spectrum.attrs.data_units,
+            "dimensionless": None,
+        }
+        assert out.attrs.data_units == expected_units[unit_kind]
+        assert not any(
+            key.startswith(("_dft_", "_stft_", "_pre_dft_", "_pre_stft_"))
+            for key in dict(out.attrs)
+        )
+        assert out.dims == tuple(dim for dim in spectrum.dims if dim != "ft_time")
+        assert out.attrs.dim_tuple == out.dims
+        assert dict(out.attrs.coords) == out.coords.to_summary_dict()
+        assert "ft_time" not in out.coords.coord_map
+        for coord in out.coords.coord_map:
+            assert out.get_coord(coord) == spectrum.get_coord(coord)
+        assert spectrum.attrs.model_dump() == original_attrs
+        np.testing.assert_array_equal(spectrum.data, original_data)
+        assert spectrum.coords is original_coords
+
+
 class TestSpectralValidation:
     """Tests for invalid input and spectral format inference."""
 
