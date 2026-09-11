@@ -491,7 +491,7 @@ def _add_exists_clause(
     where.add(
         "p.patch_id IN (SELECT pc.patch_id FROM patch_coords pc "
         "JOIN coord_defs cd ON cd.coord_def_id = pc.coord_def_id "
-        "WHERE " + " AND ".join(conditions) + ")",
+        "WHERE pc.run_index = 0 AND " + " AND ".join(conditions) + ")",
         *params,
     )
 
@@ -598,7 +598,7 @@ def build_coord_clause(
     where.add(
         "p.patch_id IN (SELECT pc.patch_id FROM patch_coords pc "
         "JOIN coord_defs cd ON cd.coord_def_id = pc.coord_def_id "
-        "WHERE " + " AND ".join(conditions) + ")",
+        "WHERE pc.run_index = 0 AND " + " AND ".join(conditions) + ")",
         *params,
     )
 

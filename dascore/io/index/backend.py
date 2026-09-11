@@ -1379,6 +1379,11 @@ class SQLiteIndexBackend:
             "JOIN coord_defs cd ON cd.coord_def_id = pc.coord_def_id "
             "WHERE pc.coord_name = ? AND pc.run_index > 0"
         )
+        # an archive with no run links answers from the partial index
+        # before the ids are so much as read
+        probe = "SELECT 1 FROM patch_coords WHERE coord_name = ? AND run_index > 0"
+        if self._fetch_df(probe + " LIMIT 1", [name]).empty:
+            return pd.DataFrame(columns=["patch_id", "run_index", *_ENVELOPE_COLUMNS])
         ids = [int(x) for x in patch_ids]
         n_patches = self._fetch_df("SELECT count(*) AS n FROM patches")["n"].iloc[0]
         if len(ids) * 4 >= n_patches:
@@ -1392,7 +1397,7 @@ class SQLiteIndexBackend:
         if runs.empty:
             return runs
         runs = self._add_envelope_objects(runs.reset_index(drop=True))
-        return runs[["patch_id", "run_index", "_env_min", "_env_max", "_env_step"]]
+        return runs[["patch_id", "run_index", *_ENVELOPE_COLUMNS]]
 
     def run_records(self, name: str, def_keys) -> dict[str, list[CoordRecord]]:
         """
@@ -1444,6 +1449,10 @@ class SQLiteIndexBackend:
         for name, dims in zip(df["coord_name"], df["coord_dims"]):
             out.setdefault(str(name), str(dims))
         return out
+
+
+# the envelope object columns `_add_envelope_objects` builds
+_ENVELOPE_COLUMNS = ("_env_min", "_env_max", "_env_step")
 
 
 def get_backend(path: str | Path) -> SQLiteIndexBackend:
