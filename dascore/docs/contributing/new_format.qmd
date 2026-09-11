@@ -75,7 +75,7 @@ Reader attrs fall into four groups:
 3. Data state: `data_type`, `data_category`, and `data_units`.
 4. Genuine vendor fields, lightly normalized to snake case and listed in `VENDOR_ATTRS` in `tests/test_io/test_common_io.py`.
 
-Declare vendor fields on a format-specific `PatchAttrs` subclass when they need validation; see [format-specific subclasses](`docs/notes/patch_attrs.qmd`). Reserve `_id` for opaque identifiers and `_key` for structured lookup keys. Source provenance belongs to spool contents, not patch attrs.
+Declare vendor fields on a format-specific `PatchAttrs` subclass when they need validation; see [format-specific subclasses](`dascore/docs/notes/patch_attrs.qmd`). Reserve `_id` for opaque identifiers and `_key` for structured lookup keys. Source provenance belongs to spool contents, not patch attrs.
 
 Optional numeric vendor attrs should not default to NaN or infinity.
 

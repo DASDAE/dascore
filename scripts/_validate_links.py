@@ -10,7 +10,7 @@ from pathlib import Path
 
 def _get_docs_path():
     """Find the documentation path."""
-    path = Path(__file__).parent.parent / "docs"
+    path = Path(__file__).parent.parent / "dascore" / "docs"
     return path
 
 

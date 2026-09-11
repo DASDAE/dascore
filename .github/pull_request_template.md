@@ -19,14 +19,14 @@ pound sign, e.g. `#12` without the backticks)
 ## Changelog
 
 <!-- Required, checked by CI. One bullet per user-facing change, or "none".
-     See docs/contributing/general_guidelines.qmd (#changelog-entries), published at
+     See dascore/docs/contributing/general_guidelines.qmd (#changelog-entries), published at
      https://dascore.org/contributing/general_guidelines.html#changelog-entries -->
 
 ## Checklist
 
 I have:
 
-- [ ] filled in the Changelog section above (see `docs/contributing/general_guidelines.qmd`).
+- [ ] filled in the Changelog section above (see `dascore/docs/contributing/general_guidelines.qmd`).
 
 I have (if applicable):
 

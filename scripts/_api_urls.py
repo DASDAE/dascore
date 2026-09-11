@@ -16,7 +16,7 @@ import sys
 from pathlib import Path
 
 REPO_PATH = Path(__file__).absolute().parent.parent
-CROSS_REF_PATH = REPO_PATH / "docs" / ".cross_ref.json"
+CROSS_REF_PATH = REPO_PATH / "dascore" / "docs" / ".cross_ref.json"
 BASELINE_PATH = Path(__file__).absolute().parent / "_baselines" / "api_urls.tsv"
 
 _HEADER = (
