@@ -150,6 +150,17 @@ class TestSelParity:
         for label in (2**53 + 5, [2**53 + 5, 2**53 + 7]):
             _assert_same(lambda q=label: lazy.sel(x=q), lambda q=label: eager.sel(x=q))
 
+    def test_repeats_anywhere_refuse_arrays(self):
+        """A repeating segment far from the query still refuses array lookups."""
+        coord = concat_coords(
+            get_coord(start=0, step=1, shape=(5,)),
+            get_coord(start=10, step=0, shape=(3,)),
+            get_coord(start=20, step=1, shape=(5,)),
+        )
+        lazy, eager = _pair(coord)
+        for query in (dict(x=[1, 21]), dict(x=21, method="nearest")):
+            _assert_same(lambda q=query: lazy.sel(**q), lambda q=query: eager.sel(**q))
+
     def test_one_sample_period_keeps_dimension(self):
         """A coarse string over one sample keeps the dimension."""
         coord = get_coord(start=T0 - HOUR, step=HOUR, shape=(30,))
@@ -482,6 +493,21 @@ class TestConcat:
 class TestAlignment:
     """Arithmetic between lazy arrays aligns as between eager ones."""
 
+    def test_exact_join_across_representations(self):
+        """A slice and the same samples picked by position are the same labels."""
+        lazy, eager = _pair(MS)
+        _assert_same(
+            lambda: xr.align(
+                lazy.isel(x=slice(0, 3)), lazy.isel(x=[0, 1, 2]), join="exact"
+            )[0],
+            lambda: xr.align(
+                eager.isel(x=slice(0, 3)), eager.isel(x=[0, 1, 2]), join="exact"
+            )[0],
+        )
+        other = lazy.isel(x=[0, 1, 3])
+        with pytest.raises(xr.AlignmentError):
+            xr.align(lazy.isel(x=slice(0, 3)), other, join="exact")
+
     def test_equal_labels_need_no_join(self):
         """Arrays whose coordinates label alike stay lazy."""
         distance = get_coord(start=0.0, step=0.5, shape=(20,), units="m")
@@ -551,6 +577,15 @@ class TestFromVariables:
         monkeypatch.setattr(CoordRange, "_get_index_values", _bounded)
         out = lazy + converted
         assert isinstance(out.xindexes["x"], CoordIndex)
+
+    def test_text_labels_stay_text(self):
+        """Picked text labels keep their own coordinate class."""
+        text = xr.DataArray(np.arange(3), dims="x", coords={"x": ["a", "b", "c"]})
+        out = text.drop_indexes("x").set_xindex("x", CoordIndex)
+        picked = out.isel(x=[0, 1])
+        assert type(picked.xindexes["x"].coordinate).__name__ == "CoordString"
+        joined = xr.concat([picked, out.isel(x=[2])], "x")
+        np.testing.assert_array_equal(joined["x"].values, ["a", "b", "c"])
 
     def test_units_and_refusals(self):
         """Units come from the variable; several or 2-d variables are refused."""
@@ -682,6 +717,15 @@ class TestPatchRoundTrip:
         kinds = {type(x).__name__ for x in array.xindexes.values()}
         assert kinds == {"PandasIndex"}
         assert xarray_to_patch(array) == patch
+
+    def test_all_serves_ranges_only(self):
+        """lazy_coords=True leaves a coordinate holding its labels materialized."""
+        coord = get_coord(data=np.array([0.0, 1.0, 5.0]))
+        patch = dc.Patch(data=np.arange(3), dims=("x",), coords={"x": coord})
+        array = patch_to_xarray(patch, lazy_coords=True)
+        assert type(array.xindexes["x"]).__name__ == "PandasIndex"
+        named = patch_to_xarray(patch, lazy_coords={"x"})
+        assert isinstance(named.xindexes["x"], CoordIndex)
 
     def test_named_coordinates_only(self):
         """Names choose which dimensions are served lazily."""

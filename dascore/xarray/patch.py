@@ -22,12 +22,23 @@ def _register_accessor() -> None:
     from dascore.xarray import accessor  # noqa: F401, PLC0415
 
 
-def _lazy_index(name, coord):
-    """A lazy xarray index for a range or segmented coordinate, else None."""
-    # function-level: xarray is an optional dependency
-    from dascore.xarray.index import CoordIndex, is_servable  # noqa: PLC0415
+def _lazy_index(name, coord, held: bool = False):
+    """
+    A lazy xarray index for a range or segmented coordinate, else None.
 
-    return CoordIndex.from_coord(name, coord) if is_servable(coord) else None
+    With ``held``, any coordinate is served, holding its labels, so an
+    index built over labels by hand comes back as the index it was.
+    """
+    # function-level: xarray is an optional dependency
+    from dascore.xarray.index import (  # noqa: PLC0415
+        CoordIndex,
+        CoordTransform,
+        is_servable,
+    )
+
+    if held or is_servable(coord):
+        return CoordIndex(CoordTransform(name, coord))
+    return None
 
 
 def patch_to_xarray(patch: PatchType, lazy_coords: bool | Collection[str] = False):
@@ -39,11 +50,12 @@ def patch_to_xarray(patch: PatchType, lazy_coords: bool | Collection[str] = Fals
     patch
         The patch to convert.
     lazy_coords
-        Which dimension coordinates to serve lazily through
+        Which dimension coordinates to serve through
         `dascore.xarray.index.CoordIndex`, which computes labels on demand from
         the coordinate instead of storing them: True for every evenly sampled or
-        segmented one, False (the default) for none, or their names. Other
-        coordinates are materialized.
+        segmented one, False (the default) for none, or their names, served
+        whatever their kind (one holding its labels keeps them in the index).
+        Other coordinates are materialized.
 
     Notes
     -----
@@ -73,7 +85,8 @@ def patch_to_xarray(patch: PatchType, lazy_coords: bool | Collection[str] = Fals
         key: value for key, value in dict(patch.attrs).items() if value is not None
     }
     patch_dims = patch.dims
-    if isinstance(lazy_coords, bool):
+    named = not isinstance(lazy_coords, bool)
+    if not named:
         lazy_coords = patch_dims if lazy_coords else ()
     coords, units, lazy = {}, {}, []
     for name, coord in patch.coords.coord_map.items():
@@ -90,7 +103,7 @@ def patch_to_xarray(patch: PatchType, lazy_coords: bool | Collection[str] = Fals
         # one can be served by it; a coordinate merely riding a dimension
         # states its values as any other does.
         if name in lazy_coords and dims == (name,):
-            if (index := _lazy_index(name, coord)) is not None:
+            if (index := _lazy_index(name, coord, held=named)) is not None:
                 lazy.append(index)
                 continue
         coords[name] = (dims, coord.values)

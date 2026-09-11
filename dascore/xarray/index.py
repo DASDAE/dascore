@@ -61,6 +61,8 @@ def _relabels_exactly(coord) -> bool:
 
 def _array_coord(labels, units) -> BaseCoord:
     """Labels held as they are, never re-inferred as a range."""
+    if np.asarray(labels).dtype.kind in "USO":
+        return get_coord(data=labels, units=units)  # text keeps its own class
     monotonic = len(labels) > 1 and is_strictly_monotonic(labels)
     cls = CoordMonotonicArray if monotonic else CoordArray
     return cls(values=labels, units=units)
@@ -79,6 +81,11 @@ def _same_labels(first: BaseCoord, second: BaseCoord) -> bool:
         return True
     if len(first) != len(second) or first.dtype != second.dtype:
         return False
+    if not (is_servable(first) and is_servable(second)):
+        # a side which holds its labels costs nothing more to compare
+        positions = np.arange(len(first))
+        labels = (x._get_index_values(positions) for x in (first, second))
+        return bool(np.array_equal(next(labels), next(labels)))
     if first.units != second.units:
         # xarray states units as an attribute beside the labels, so an
         # index compares labels only, as a materialized index does

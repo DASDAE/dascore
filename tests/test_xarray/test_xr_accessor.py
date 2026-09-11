@@ -381,6 +381,17 @@ class TestLazyCoordinates:
         assert type(out.xindexes["time"]).__name__ == "CoordIndex"
         assert (out - unindexed).shape == tree_leaf.shape
 
+    def test_an_index_over_held_labels_survives(self):
+        """An index given to irregular labels by hand comes back as it was."""
+        from dascore.xarray.index import CoordIndex  # noqa: PLC0415
+
+        xr = pytest.importorskip("xarray")
+        array = xr.DataArray(np.arange(3.0), dims="x", coords={"x": [0.0, 1.0, 5.0]})
+        held = array.drop_indexes("x").set_xindex("x", CoordIndex)
+        out = held.dc.abs()
+        assert isinstance(out.xindexes["x"], CoordIndex)
+        assert (out + held).sizes == held.sizes
+
     def test_a_duration_is_served_like_a_time(self):
         """A lag says its units in its dtype as a stamp does."""
         from dascore.core.coords import get_coord  # noqa: PLC0415

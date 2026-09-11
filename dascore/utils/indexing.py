@@ -182,8 +182,12 @@ def _label_index(coord, probes, require_unique=False):
     size = len(coord)
     positions = np.unique([0, min(1, size - 1), max(0, size - 2), size - 1])
     anchor = pd.Index(coord._get_index_values(positions))
-    if require_unique and isinstance(coord, CoordRange):
-        _require_unique_range(coord)
+    if require_unique:
+        # pandas needs every label unique, not just those near the probes;
+        # array segments are strictly monotonic, so only ranges can repeat
+        for part in getattr(coord, "segments", (coord,)):
+            if isinstance(part, CoordRange):
+                _require_unique_range(part)
     pieces = [positions]
     values = np.asarray(probes)
     for side in ("left", "right"):
