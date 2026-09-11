@@ -39,7 +39,7 @@ class TestDocuments:
             ("Inventory", inspect.getdoc(dc.Inventory).splitlines()[0]),
             ("Patch.viz.waterfall", "waterfall"),
             ("dascore.core.patch.Patch.viz.waterfall", "waterfall"),
-            ("PatchAttrs.tag", "tag"),
+            ("PatchAttrs.tag", "A custom string field."),
             ("recipes/tunnel_inventory", "inventory"),
         ],
     )
@@ -48,6 +48,9 @@ class TestDocuments:
         text = doc_cache.read_document(*corpus, name)
         assert expected.lower() in text.lower()
         assert dc.__version__ in text
+        if name == "PatchAttrs.tag":
+            assert "Type: `<class 'str'>`" in text
+            assert "Defined in: `dascore.core.attrs`" in text
 
     @pytest.mark.parametrize(
         "name",
@@ -62,6 +65,7 @@ class TestDocuments:
             assert "summary(" not in text
         if name == "Patch.log":
             assert "log(patch, *args, **kwargs)" in text
+            assert "wraps the NumPy ufunc documented below" in text
 
     def test_module_collision(self, corpus):
         """Exported functions and their same-named modules are both reachable."""
