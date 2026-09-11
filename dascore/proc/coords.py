@@ -13,7 +13,7 @@ from scipy.interpolate import interp1d
 import dascore as dc
 from dascore.constants import PatchType, select_values_description
 from dascore.core.coords import BaseCoord, CoordSegmented
-from dascore.core.processor import PatchProcessor, register_implementation
+from dascore.core.processor import PatchProcessor
 from dascore.exceptions import (
     CoordError,
     ParameterError,
@@ -212,8 +212,7 @@ def get_array(
     return coord.data
 
 
-@patch_function()
-def rename_coords(self: PatchType, **kwargs) -> PatchType:
+class RenameCoords(PatchProcessor):
     """
     Rename coordinate of Patch.
 
@@ -231,31 +230,16 @@ def rename_coords(self: PatchType, **kwargs) -> PatchType:
     >>> pa2 = pa.rename_coords(distance='fragrance')
     >>> assert 'fragrance' in pa2.dims
     """
-    return RenameCoords(**kwargs)._apply(self)
 
-
-class RenameCoords(PatchProcessor):
-    """
-    Give coordinates other names.
-
-    No kernel: the data are what they were, and only what they are
-    called changes. A processor which defines no kernel says exactly
-    that, and `_apply` hands the array through untouched.
-    """
-
-    # The renames arrive as whatever the caller named them, so the fields
-    # cannot be known in advance; `model_values` folds the extras back
-    # into the parameters, so the fingerprint and the document still hold
-    # every one of them.
+    # The renames arrive under whatever names the caller used.
     model_config = ConfigDict(extra="allow", frozen=True)
 
-    def derive_meta(self, meta):
-        """Return the coordinates under their new names."""
-        coords = meta.coords.rename_coord(**self.kwargs)
-        return meta.update(coords=coords)
+    def derive(self, patch):
+        """Return the coordinates under their new names; there is no kernel."""
+        return patch.new(coords=patch.coords.rename_coord(**self.kwargs))
 
 
-register_implementation("rename_coords", RenameCoords)
+rename_coords = RenameCoords.patch_function
 
 
 @patch_function()
@@ -855,8 +839,7 @@ def order(
     return patch.new(data=data, coords=new_coords)
 
 
-@patch_function(history=None)
-def transpose(self: PatchType, *dims: str) -> PatchType:
+class Transpose(PatchProcessor):
     """
     Transpose the data array to any dimension order desired.
 
@@ -881,25 +864,17 @@ def transpose(self: PatchType, *dims: str) -> PatchType:
     >>> # Set distance as the first dimension.
     >>> out = pa.transpose("distance", ...)
     """
-    return Transpose(dims=tuple(dims))._apply(self)
-
-
-class Transpose(PatchProcessor):
-    """Put the dimensions of a patch into another order."""
 
     # Typed loosely because `...` is a legal element: `transpose(...,
     # "distance")` means "distance last, the rest as they were".
     dims: tuple[Any, ...] = ()
 
-    def derive_meta(self, meta):
-        """
-        Return the coordinates in their new order.
+    history = None
+    _var_positional = "dims"
 
-        The coord manager hands back the very object it was given when
-        the order asked for is the order already held, and that is what
-        tells `_apply` the operation did nothing.
-        """
-        old_dims = meta.coords.dims
+    def derive(self, patch):
+        """Return the coordinates in their new order; the input if unchanged."""
+        old_dims = patch.dims
         named = [x for x in self.dims if x is not ...]
         if invalid := set(named) - set(old_dims):
             msg = (
@@ -907,18 +882,21 @@ class Transpose(PatchProcessor):
                 f"dimensions: {sorted(old_dims)}"
             )
             raise ParameterError(msg)
-        coords = meta.coords.transpose(*self.dims)
-        return meta if coords is meta.coords else meta.update(coords=coords)
+        coords = patch.coords.transpose(*self.dims)
+        return patch if coords is patch.coords else patch.new(coords=coords)
 
-    def kernel(self, data, meta, out_meta):
-        """Return the data with its axes permuted to the new order."""
-        if out_meta is meta:
+    def plan(self, patch, out):
+        """Return the permutation from the old axis order to the new."""
+        return {"axes": tuple(patch.dims.index(x) for x in out.dims)}
+
+    def kernel(self, data, *, axes):
+        """Return the data with its axes permuted, or as it was."""
+        if axes == tuple(range(len(axes))):
             return data
-        axes = tuple(meta.dims.index(x) for x in out_meta.dims)
         return array_namespace(data).permute_dims(data, axes)
 
 
-register_implementation("transpose", Transpose)
+transpose = Transpose.patch_function
 
 
 @patch_function(history=None)

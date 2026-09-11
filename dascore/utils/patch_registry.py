@@ -242,24 +242,42 @@ def fingerprint_call(func, args: tuple = (), kwargs: dict | None = None) -> str:
     version = getattr(func, "__version__", "1.0")
     name = _call_name(func)
     bound = _without_patches(_bind(func, args, kwargs or {}))
-    # Answered from the cache when the same call has been made before,
-    # which in a loop over a spool is every call after the first. Hashing
-    # the bound arguments costs a few microseconds; the digest of their
-    # canonical JSON costs several times that.
+    return memoized_fingerprint(func, name, bound, version)
+
+
+def memoized_fingerprint(owner, name: str, params: dict, version: str) -> str:
+    """
+    Return `operation_fingerprint(name, params, version)`, cached.
+
+    A loop over a spool makes the same call every time. Hashing the
+    parameters costs a few microseconds; the digest of their canonical
+    JSON costs several times that.
+
+    Parameters
+    ----------
+    owner
+        What made the call: a patch function or a processor class.
+    name
+        The operation's name.
+    params
+        Its parameters, with any patch replaced by the patch marker.
+    version
+        Its version.
+    """
     try:
-        # The function itself is in the key, not just its name. For one
-        # which has no tag the name ends in `id(func)`, and CPython reuses
-        # an address once the function is collected -- so a factory making
-        # one patch function per call could hand a later one the earlier
-        # one's fingerprint. Holding the function here makes the key exact
-        # and keeps the address from being reused underneath it.
-        key = (func, name, version, _as_key(bound))
+        # The owner is in the key, not just its name. For one which has no
+        # tag the name ends in `id(owner)`, and CPython reuses an address
+        # once the owner is collected -- so a factory making one per call
+        # could hand a later one the earlier one's fingerprint. Holding the
+        # owner here makes the key exact and keeps the address from being
+        # reused underneath it.
+        key = (owner, name, version, _as_key(params))
     except TypeError:
         # Something unhashable -- an array argument, most often. Its
         # digest is the honest cost of saying which array it was.
-        return operation_fingerprint(name, bound, version)
+        return operation_fingerprint(name, params, version)
     if (found := _FINGERPRINTS.get(key)) is None:
-        found = operation_fingerprint(name, bound, version)
+        found = operation_fingerprint(name, params, version)
         # Bounded, and simply stops growing rather than evicting: the
         # entries are one small string each, and a process which has made
         # four thousand distinct calls is not one this is hot for.

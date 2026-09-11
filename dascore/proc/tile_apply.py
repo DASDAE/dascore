@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from functools import partial
-from typing import Any
+from typing import Any, ClassVar
 
 import numpy as np
 from pydantic import ConfigDict
@@ -27,11 +27,7 @@ import dascore as dc
 from dascore.constants import PatchType
 from dascore.core.coordmanager import get_coord_manager
 from dascore.core.coords import get_coord
-from dascore.core.processor import (
-    PatchMeta,
-    PatchProcessor,
-    register_implementation,
-)
+from dascore.core.processor import PatchMeta, _MetaProcessor
 from dascore.exceptions import (
     MissingOptionalDependencyError,
     ParameterError,
@@ -224,7 +220,7 @@ def tile_apply(
     )._apply(patch)
 
 
-class TileApply(PatchProcessor):
+class TileApply(_MetaProcessor):
     """
     Apply a function to overlapping windows of a patch.
 
@@ -235,6 +231,7 @@ class TileApply(PatchProcessor):
     """
 
     model_config = ConfigDict(extra="allow", frozen=True, arbitrary_types_allowed=True)
+    _patch_function: ClassVar[str] = "tile_apply"
 
     function: Callable
     mode: str = "overlap_add"
@@ -426,9 +423,6 @@ def _stack_coords(meta: PatchMeta, window: Window, analysis: Any):
     coord_map: dict[str, Any] = dict(coords.get_coord_tuple_map())
     coord_map.update(new_coords)
     return get_coord_manager(coords=coord_map, dims=dims)
-
-
-register_implementation("tile_apply", TileApply)
 
 
 def _place_each(stacks, starts, shape, size, weights):

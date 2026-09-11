@@ -19,11 +19,16 @@ def _unwrap_obj(obj):
     return obj
 
 
+def _source_obj(obj):
+    """Return what holds an object's source: a generated function's class."""
+    return getattr(obj, "__processor__", None) or obj
+
+
 def _get_file_path(obj):
     """Try to get the file of a python object."""
     obj = _unwrap_obj(obj)
     try:
-        path = inspect.getfile(obj)
+        path = inspect.getfile(_source_obj(obj))
     except TypeError:
         path = ""
     return Path(path)
@@ -200,7 +205,7 @@ def parse_project(obj, key=None):
 
     def get_data(obj, key, base_path, parent_is_class):
         """Get data from object."""
-        path = inspect.getfile(obj)
+        path = inspect.getfile(_source_obj(obj))
         base_address = _get_base_address(path, base_path)
         data = extract_data(obj, parent_is_class)
         data["base_path"] = Path(base_path)
@@ -236,7 +241,7 @@ def parse_project(obj, key=None):
                 traverse(obj, data_dict, base_path, f"{key}.{name}", False)
         # then handle non-modules
         else:
-            path = inspect.getfile(obj)
+            path = inspect.getfile(_source_obj(obj))
             base_address = _get_base_address(path, base_path)
 
             # Require an address prefix: substring matching confuses similarly named
@@ -254,6 +259,10 @@ def parse_project(obj, key=None):
             if inspect.isclass(obj):
                 for sub_name, sub_obj in inspect.getmembers(obj):
                     if sub_name.startswith("_") or not callable(sub_obj):
+                        continue
+                    # A processor's generated function is documented where
+                    # its module binds it, not as an attribute of the class.
+                    if getattr(sub_obj, "__processor__", None) is obj:
                         continue
                     sub_path = _get_file_path(sub_obj)
                     if str(base_path) not in str(sub_path):

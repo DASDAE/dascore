@@ -87,7 +87,7 @@ from dascore.core.processor import register_kernel
 
 
 @register_kernel(Abs, "mybackend")
-def _abs_mybackend(processor, data, meta, out_meta):
+def _abs_mybackend(processor, data):
     return np.abs(data)
 ```
 

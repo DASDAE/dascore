@@ -457,7 +457,8 @@ class Render:
     def _get_github_source(self, data):
         """Get the github source url."""
         obj = data["object"]
-        source_code, line_start = inspect.getsourcelines(obj)
+        source = getattr(obj, "__processor__", None) or obj
+        source_code, line_start = inspect.getsourcelines(source)
         line_end = line_start + len(source_code)
         rel_path = data["path"].relative_to(data["base_path"])
         # grab repo stuff from environment (on GH actions) or defaults

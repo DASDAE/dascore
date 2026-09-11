@@ -15,18 +15,14 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from functools import partial
-from typing import Any, Literal
+from typing import Any, ClassVar, Literal
 
 import numpy as np
 from pydantic import ConfigDict
 from scipy import fft as sp_fft
 
 from dascore.constants import PatchType
-from dascore.core.processor import (
-    PatchMeta,
-    PatchProcessor,
-    register_implementation,
-)
+from dascore.core.processor import PatchMeta, _MetaProcessor
 from dascore.exceptions import MissingOptionalDependencyError, ParameterError
 from dascore.utils.patch import patch_function
 from dascore.utils.signal import get_taper
@@ -303,7 +299,7 @@ def adaptive_spectral_filter(
     )._apply(patch)
 
 
-class AdaptiveSpectralFilter(PatchProcessor):
+class AdaptiveSpectralFilter(_MetaProcessor):
     """
     Weight every window's spectrum by a power of its own magnitude.
 
@@ -315,6 +311,7 @@ class AdaptiveSpectralFilter(PatchProcessor):
     """
 
     model_config = ConfigDict(extra="allow", frozen=True)
+    _patch_function: ClassVar[str] = "adaptive_spectral_filter"
 
     overlap: Any = None
     exponent: float = 0.8
@@ -372,6 +369,3 @@ class AdaptiveSpectralFilter(PatchProcessor):
             )
         filtered = np.moveaxis(filtered.reshape(moved.shape), tail, axes)
         return _restore_dtype(filtered, data.dtype)
-
-
-register_implementation("adaptive_spectral_filter", AdaptiveSpectralFilter)
