@@ -87,6 +87,7 @@ from dascore.utils.chunk_plan import (
     build_coverage_frame,
     build_gap_frame,
     build_subdivision_plan,
+    coalesce_runs,
     subdivision_pieces,
 )
 from dascore.utils.concurrency import _prefetch
@@ -1631,7 +1632,9 @@ class Spool(NodeRepr, NamespaceOwner):
 
     # --- restructuring (materializing) operations -----------------------
 
-    def _plan_frames(self, dim: str | None = None) -> tuple[pd.DataFrame, pd.DataFrame]:
+    def _plan_frames(
+        self, dim: str | None = None, runs: bool = False
+    ) -> tuple[pd.DataFrame, pd.DataFrame]:
         """
         Return (source_rows, working) frames for planning along ``dim``.
 
@@ -1661,6 +1664,13 @@ class Spool(NodeRepr, NamespaceOwner):
         working = base.drop(columns=list(self._drop_columns), errors="ignore")
         working = _drop_patch_local_empty(working)
         base = base[base["_patch_id"].isin(working["_patch_id"])]
+        patch_local = any(s or r for _, s, r in self._catalog.residuals)
+        if runs and dim is not None and "_index_id" in base.columns:
+            # a sample or relative selection resolves against the whole
+            # patch at load, so its runs cannot be planned apart
+            if not patch_local:
+                working = self._runs_as_members(working, dim)
+                base = base[base["_patch_id"].isin(working["_patch_id"])]
         return base.reset_index(drop=True), working.reset_index(drop=True)
 
     def chunk_plan(
@@ -1696,8 +1706,8 @@ class Spool(NodeRepr, NamespaceOwner):
         >>> members = plan.members
         >>> first = members[members["output_id"] == 0]
         """
-        _, working = self._plan_frames(next(iter(kwargs), None))
-        return build_chunk_plan(
+        _, working = self._plan_frames(next(iter(kwargs), None), runs=True)
+        plan = build_chunk_plan(
             working,
             overlap=overlap,
             keep_partial=keep_partial,
@@ -1708,6 +1718,7 @@ class Spool(NodeRepr, NamespaceOwner):
             missing_dim=missing_dim,
             **kwargs,
         )
+        return coalesce_runs(plan, working)
 
     def _report_relation(self) -> pd.DataFrame:
         """
@@ -1725,35 +1736,41 @@ class Spool(NodeRepr, NamespaceOwner):
         working = base.drop(columns=list(self._drop_columns), errors="ignore")
         return _drop_patch_local_empty(working)
 
-    def _with_runs(self, df: pd.DataFrame, dim: str) -> pd.DataFrame:
+    def _run_rows(self, df: pd.DataFrame, dim: str) -> tuple[pd.DataFrame, list]:
         """
-        The relation with each patch split into the runs its index states.
+        One row per run of each patch whose index states runs, and the ids
+        of the patches split.
 
-        A segmented coordinate is linked to its runs, so a patch holding a
-        hole becomes one row per run and the reports see the hole as they
-        see one between patches. Where a selection trimmed a row, each run
-        is clipped to that row's envelope, and a run left outside it is
-        dropped. Patches without runs, which is nearly all of them, and
-        patches whose runs differ in step pass through untouched.
+        Each run row is its patch's row with the run's envelope and step.
+        Where a selection trimmed a row, each run is clipped to that row's
+        envelope, and a run left outside it is dropped. Only patches whose
+        runs share one step split: a run without its neighbours' step
+        would read as a hole beside them. The ids include a patch whose
+        runs all fell outside its row, so a selection inside a hole drops
+        it rather than keeping it whole.
         """
         min_col, max_col, step_col = (f"{dim}_{x}" for x in ("min", "max", "step"))
+        none = (df.iloc[:0], [])
         if df.empty or not {min_col, max_col, step_col} <= set(df.columns):
-            return df
-        # a row with no envelope here is one the report cannot place (a
-        # relative time among absolute ones), and its runs no better
-        placed = df[df[min_col].notna()]
-        runs = self._catalog.backend.coord_runs(dim, placed["_patch_id"].unique())
+            return none
+        # a row with no envelope here is one neither report nor plan can
+        # place (a relative time among absolute ones), and its runs no better
+        # rows name their patch in this spool's index by `_index_id` when
+        # they are plan members, else by `_patch_id`
+        key = "_index_id" if "_index_id" in df.columns else "_patch_id"
+        placed = df[df[min_col].notna() & df[key].notna()]
+        wanted = placed[key].astype("int64").unique()
+        runs = self._catalog.backend.coord_runs(dim, wanted)
         if runs.empty:
-            return df
-        # a run without the step its neighbours share would read as a
-        # hole beside them, so only runs of one step split a patch
+            return none
         by_patch = runs.groupby("patch_id")["_env_step"]
         unstepped = runs["_env_step"].isna().groupby(runs["patch_id"]).transform("sum")
         runs = runs[(unstepped == 0) & (by_patch.transform("nunique") == 1)]
         if runs.empty:
-            return df
-        runs = runs.rename(columns={"patch_id": "_patch_id"})
-        split = placed.merge(runs, on="_patch_id", how="inner")
+            return none
+        runs = runs.rename(columns={"patch_id": key})
+        placed = placed.astype({key: "int64"})
+        split = placed.merge(runs, on=key, how="inner")
         for run_col, col in zip(
             ("_env_min", "_env_max", "_env_step"), (min_col, max_col, step_col)
         ):
@@ -1767,8 +1784,43 @@ class Spool(NodeRepr, NamespaceOwner):
             }
         )
         split = split[split[min_col] <= split[max_col]]
-        whole = df[~df["_patch_id"].isin(runs["_patch_id"])]
-        return pd.concat([whole, split[df.columns]], ignore_index=True)
+        return split[df.columns].reset_index(drop=True), list(runs[key].unique())
+
+    def _with_runs(self, df: pd.DataFrame, dim: str) -> pd.DataFrame:
+        """
+        The relation with each patch split into the runs its index states.
+
+        A segmented coordinate is linked to its runs, so a patch holding a
+        hole becomes one row per run and the reports see the hole as they
+        see one between patches. Patches without runs of one step, which
+        is nearly all of them, pass through untouched.
+        """
+        split, ids = self._run_rows(df, dim)
+        if not ids:
+            return df
+        whole = df[~df["_patch_id"].isin(ids)]  # reports carry no `_index_id`
+        return pd.concat([whole, split], ignore_index=True)
+
+    def _runs_as_members(self, working: pd.DataFrame, dim: str) -> pd.DataFrame:
+        """
+        Plan each run of a patch as a member of its own.
+
+        A run row keeps its patch's id, states the run's envelope and step,
+        and is marked modified so it loads as a selection of the patch. A
+        hole wider than the tolerance then ends an output as a gap between
+        patches does; `coalesce_runs` reads the runs landing in one output
+        back as one member.
+        """
+        split, ids = self._run_rows(working, dim)
+        if not ids:
+            return working
+        kept = working[~working["_index_id"].isin(ids)]
+        working = pd.concat(
+            [kept, split.assign(_modified=True)],
+            ignore_index=True,
+        )
+        working["_modified"] = working["_modified"].fillna(False).astype(bool)
+        return working
 
     def get_gaps(
         self,
@@ -1782,8 +1834,8 @@ class Spool(NodeRepr, NamespaceOwner):
         Return a dataframe with one row per gap along a dimension.
 
         Each row is a boundary that ``chunk`` would refuse to merge under the
-        same grouping and tolerance rules, or a hole inside a segmented
-        patch, which ``chunk`` plans whole and never looks inside.
+        same grouping and tolerance rules, including a hole inside a patch
+        whose coordinate is segmented.
 
         Parameters
         ----------
@@ -1909,9 +1961,8 @@ class Spool(NodeRepr, NamespaceOwner):
         group whose step is unknown: a sample-count tolerance has nothing
         to scale there, so the group reports no gaps and counts as fully
         covered. An absolute tolerance does measure it.
-        Apart from holes inside a segmented patch, which `chunk` plans
-        whole, both are what `chunk` would make of the data, so a
-        `coverage` of 1.0 says "nothing chunk would refuse to merge", not
+        Gaps and coverage alike are what `chunk` would make of the data, so
+        a `coverage` of 1.0 says "nothing chunk would refuse to merge", not
         "nothing missing".
 
         See Also
@@ -1977,7 +2028,10 @@ class Spool(NodeRepr, NamespaceOwner):
             own units (eg `tolerance=1 * s` admits a spacing of one step
             plus a second), which also works for patches whose sampling
             interval is unknown. Either way a boundary of one sample is
-            contiguous. See `dascore.utils.gaps.GapTolerance`.
+            contiguous. A hole inside a patch whose coordinate is segmented
+            into runs of one step (up to 256) is a gap like any other, so
+            each run can end an output or join a neighbouring patch. See
+            `dascore.utils.gaps.GapTolerance`.
         conflict
             {conflict_desc}
         group
@@ -2033,7 +2087,7 @@ class Spool(NodeRepr, NamespaceOwner):
         """
         from dascore.io.index.planned import derived_catalog  # noqa: PLC0415
 
-        source_rows, working = self._plan_frames(next(iter(kwargs), None))
+        source_rows, working = self._plan_frames(next(iter(kwargs), None), runs=True)
         plan = build_chunk_plan(
             working,
             overlap=overlap,
@@ -2045,6 +2099,7 @@ class Spool(NodeRepr, NamespaceOwner):
             missing_dim=missing_dim,
             **kwargs,
         )
+        plan = coalesce_runs(plan, working)
         merge_kwargs = {
             "conflict": conflict,
             "snap_coords": snap_coords,

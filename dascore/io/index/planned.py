@@ -930,13 +930,13 @@ def derived_catalog(
         sizes=_whole_member_sizes(trims, sources),
     )
     if parent is not None:
-        records = _with_parent_runs(records, parent.backend, trims, sources)
+        records = _with_parent_runs(records, parent.backend, trims, sources, name)
     backend.write_sources(records)
     return PatchCatalog(backend=backend, resolver=resolver)
 
 
 def _with_parent_runs(
-    records, parent_backend, trims: pd.DataFrame, sources: pd.DataFrame
+    records, parent_backend, trims: pd.DataFrame, sources: pd.DataFrame, name: str
 ) -> list:
     """
     The records with the runs their members link in the parent.
@@ -944,11 +944,11 @@ def _with_parent_runs(
     An output of one member holds that member's values, perhaps trimmed,
     so it takes the member's runs; the reports clip runs to each row's
     envelope. An output of several takes runs only for a coordinate which
-    kept its identity, and so equals each member's. A run in other units
-    or of another kind than the output's coordinate is dropped. Only
-    members read from the parent's index carry its patch ids
-    (``_index_id``); a re-plan of the same dimension collapses to members
-    which do not, so its outputs state no runs.
+    kept its identity, and so equals each member's; never along the
+    dimension it merged, whose runs no single member states. A run in other units
+    or of another kind than the output's coordinate is dropped. Members
+    find their runs through the parent's patch ids (``_index_id``); a
+    collapsed re-plan's members carry the id of the output holding them.
     """
     if trims.empty or "_index_id" not in sources.columns:
         return records
@@ -969,7 +969,8 @@ def _with_parent_runs(
             coords = []
             for coord in patch.coords:
                 coords.append(coord)
-                if len(ids) > 1 and not coord.coord_hash:
+                merged = name in str(coord.coord_dims).split(",")
+                if len(ids) > 1 and (merged or not coord.coord_hash):
                     continue
                 kind = (coord.coord_name, coord.value_kind, coord.is_relative)
                 coords.extend(
@@ -1018,8 +1019,12 @@ def collapse_working_df(catalog: PatchCatalog) -> pd.DataFrame | None:
     # to know. Dropping it left `_build_members` to assume no source was
     # modified, so a member which was a slice of a file came back marked
     # "load whole" and the loader read all of it.
-    # index ids name the parent's patches, not these members
-    working = members.drop(columns=["output_id", "_index_id"], errors="ignore")
+    # each member stands in for the output holding it, so the index id is
+    # that output's patch in this catalog (a stale one named the parent's)
+    ids = catalog.backend.patch_ids_by_key()
+    index_ids = [ids.get(str(int(x))) for x in members["output_id"]]
+    working = members.assign(_index_id=pd.array(index_ids, dtype="Int64"))
+    working = working.drop(columns=["output_id"])
     working = patch_local_adjusted_envelopes(
         working, catalog.residuals, drop_empty=True
     )
