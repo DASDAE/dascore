@@ -114,20 +114,15 @@ class Terra15FormatterV4(FiberIO):
 
         Besides the requested block, only the time node's ends and the
         header are read (the whole time node for an unfinished file, to
-        count the rows it actually wrote). ``snap`` selects the grid, and
-        unlike other formats it decides how many rows there are: snapped,
-        they stop at the last written sample; raw, every stored row
-        counts, as the raw time coordinate does. ``read`` calls the same
-        option ``snap_dims``, so both spellings are taken, and ``snap``
-        wins when both are given, as it does in `read`.
+        count the rows it actually wrote). Unwritten trailing rows are
+        always excluded. ``snap`` and ``snap_dims`` are accepted for
+        consistency with `read`; timestamp regularization does not affect
+        positional array windows.
         """
         raise_on_extra_kwargs(kwargs, "windows, snap and snap_dims")
-        snap = _resolve_snap(snap, snap_dims)
         _, data_node = _get_version_data_node(resource)
         data = data_node["data"]
-        time_len = data.shape[0]
-        if snap:
-            _, _, time_len, _ = _get_scanned_time_info(data_node)
+        _, _, time_len, _ = _get_scanned_time_info(data_node)
         shape = (time_len, len(_get_distance_coord(resource)))
         return slice_dataset(data, ("time", "distance"), windows, shape)
 

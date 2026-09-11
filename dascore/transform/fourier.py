@@ -645,7 +645,7 @@ def stft(
     --------
     [Patch.dft](`dascore.Patch.dft`), [Patch.istft](`dascore.Patch.istft`)
     """
-    from dascore.proc.tile_apply import TileApply  # noqa: PLC0415
+    from dascore.proc.tile_apply import tile_apply  # noqa: PLC0415
 
     resolved = resolve_window(
         patch, kwargs, samples=samples, overlap=overlap, enforce_lt_coord=True
@@ -682,7 +682,8 @@ def stft(
         "samples": True,
         **dict(zip(dims, sizes)),
     }
-    stack = TileApply(**settings)._apply(patch)
+    # `.func`: a step of stft, so it records no history or ids of its own.
+    stack = tile_apply.func(patch, **settings)
     tiles = stack.data
     tail = tuple(range(-ndim, 0))
     if detrend:
