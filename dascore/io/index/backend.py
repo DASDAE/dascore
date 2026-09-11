@@ -56,6 +56,8 @@ from dascore.io.index.schema import (
     SPOOL_EARLY_RENAMES,
     TABLE_CONSTRAINTS,
     TABLES,
+    TRIGGERS,
+    VARIANT_COLUMNS,
     WHAT_IS_THIS,
     CoordDefRow,
     CoordVariantRow,
@@ -303,26 +305,31 @@ class SQLiteIndexBackend:
     # --- schema ------------------------------------------------------
 
     def _ensure_schema(self) -> None:
-        tables = self._existing_tables()
-        if tables:
-            self._validate_schema(tables)
-            return
-        with self._transaction():
-            # Another connection may have initialized the file while this
-            # writer waited for BEGIN IMMEDIATE. Re-check under the lock.
-            tables = self._existing_tables()
-            if tables:
-                self._validate_schema(tables)
-                return
-            for name, columns in TABLES.items():
-                self._execute(
-                    create_table_sql(name, columns, TABLE_CONSTRAINTS.get(name, ()))
-                )
-            for index_name, table, column, where in INDEXES:
-                sql = f"CREATE INDEX IF NOT EXISTS {index_name} ON {table} ({column})"
-                self._execute(sql if where is None else f"{sql} WHERE {where}")
-            row = MetaDataRow(WHAT_IS_THIS, INDEX_VERSION, dc.__version__, 0, 0)
-            self._bulk_insert("meta_data", MetaDataRow._fields, [row])
+        if not self._existing_tables():
+            with self._transaction():
+                # Another connection may have initialized the file while this
+                # writer waited for BEGIN IMMEDIATE. Re-check under the lock.
+                if not self._existing_tables():
+                    self._create_schema()
+                    return
+        # outside the transaction: validating may upgrade, which takes its own
+        self._validate_schema(self._existing_tables())
+
+    def _create_schema(self) -> None:
+        for name, columns in TABLES.items():
+            self._execute(
+                create_table_sql(name, columns, TABLE_CONSTRAINTS.get(name, ()))
+            )
+        for index_name, table, column, where in INDEXES:
+            sql = f"CREATE INDEX IF NOT EXISTS {index_name} ON {table} ({column})"
+            self._execute(sql if where is None else f"{sql} WHERE {where}")
+        self._create_triggers()
+        row = MetaDataRow(WHAT_IS_THIS, INDEX_VERSION, dc.__version__, 0, 0)
+        self._bulk_insert("meta_data", MetaDataRow._fields, [row])
+
+    def _create_triggers(self) -> None:
+        for name, body in TRIGGERS.items():
+            self._execute(f"CREATE TRIGGER IF NOT EXISTS {name} {body}")
 
     def _validate_schema(self, tables: set[str]) -> None:
         """
@@ -364,8 +371,21 @@ class SQLiteIndexBackend:
                 f"version {INDEX_VERSION}; delete it and rebuild."
             )
             raise InvalidIndexVersionError(msg)
-        if missing := set(TABLES) - tables:
+        # read afresh: another opener may have upgraded since `tables` was
+        if missing := set(TABLES) - self._existing_tables():
             raise _incomplete(missing)
+        triggers = {
+            row[0]
+            for row in self._con.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'trigger'"
+            )
+        }
+        if missing := set(TRIGGERS) - triggers:
+            msg = (
+                f"Spool index is missing triggers {sorted(missing)}; "
+                "delete it and rebuild."
+            )
+            raise InvalidIndexError(msg)
         for table, expected in TABLES.items():
             actual = self._table_columns(table)
             if not set(expected) <= actual:
@@ -419,29 +439,16 @@ class SQLiteIndexBackend:
         self._execute(
             "UPDATE meta_data SET patch_count = (SELECT count(*) FROM patches)"
         )
-        self._count_coord_variants("1")
-
-    def _count_coord_variants(self, scope: str, params=(), sign: int = 1) -> None:
-        """
-        Add the whole-coordinate links in scope to the variant counts.
-
-        ``scope`` is a WHERE term over ``pc`` (patch_coords); a ``sign`` of
-        -1 removes them instead, and then drops the variants left empty.
-        """
         columns = ", ".join(CoordVariantRow._fields)
-        variant = "pc.coord_name, pc.dtype, cd.value_kind, cd.units, cd.is_relative"
+        variant = VARIANT_COLUMNS.format("pc")
         self._execute(
             f"INSERT INTO coord_variants ({columns}) "
-            f"SELECT json_array({variant}), {variant}, ? * count(*) "
+            f"SELECT json_array({variant}), {variant}, count(*) "
             "FROM patch_coords pc "
             "JOIN coord_defs cd ON cd.coord_def_id = pc.coord_def_id "
-            f"WHERE pc.run_index = 0 AND {scope} GROUP BY 1 "
-            "ON CONFLICT (variant_key) "
-            "DO UPDATE SET patch_count = patch_count + excluded.patch_count",
-            (sign, *params),
+            "WHERE pc.run_index = 0 GROUP BY 1"
         )
-        if sign < 0:
-            self._execute("DELETE FROM coord_variants WHERE patch_count = 0")
+        self._create_triggers()
 
     def _patch_count(self) -> int:
         """Return how many patches the index holds."""
@@ -459,17 +466,22 @@ class SQLiteIndexBackend:
         Public because the catalog asks: deciding which selectors are
         numeric (and so unit-convertible) needs the stored kinds.
         """
-        sql = (
-            "SELECT DISTINCT coord_name, value_kind, units, is_relative "
-            "FROM coord_variants"
-        )
-        params: list = []
+        where, params = "", []
         if names is not None:
             params = sorted(names)
-            sql += f" WHERE coord_name IN ({self._placeholders(len(params))})"
-        # ordered, so a coordinate stated under several kinds always sorts
-        # by the same one (see _order_clause)
-        return self._fetch_df(f"{sql} ORDER BY 1, 2, 3, 4", params)
+            where = f"WHERE coord_name IN ({self._placeholders(len(params))}) "
+        # A coordinate stated under several kinds sorts by its first row's
+        # kind (see _order_clause): the one most patches state.
+        kind_count = (
+            "(SELECT sum(k.patch_count) FROM coord_variants k "
+            "WHERE k.coord_name = v.coord_name AND k.value_kind = v.value_kind)"
+        )
+        sql = (
+            "SELECT coord_name, value_kind, units, is_relative "
+            f"FROM coord_variants v {where}GROUP BY 1, 2, 3, 4 "
+            f"ORDER BY coord_name, {kind_count} DESC, 2, 3, 4"
+        )
+        return self._fetch_df(sql, params)
 
     def _next_id(self, table: str, column: str) -> int:
         df = self._fetch_df(f"SELECT max({column}) AS m FROM {table}")
@@ -636,7 +648,7 @@ class SQLiteIndexBackend:
                 self._delete_by_paths(paths, base_uri=base_uri)
             column_map, skip_units = self._ensure_attr_columns(records)
             source_id = self._next_id("sources", "source_id")
-            patch_id = first_patch_id = self._next_id("patches", "patch_id")
+            patch_id = self._next_id("patches", "patch_id")
             now = time.time_ns()
             source_rows, patch_rows, link_rows = [], [], []
             defs_needed: dict[str, object] = {}
@@ -726,12 +738,6 @@ class SQLiteIndexBackend:
                     for pid, name, run, dims, key, dtype in link_rows
                 ],
             )
-            # new patches take every id from first_patch_id up
-            self._count_coord_variants("pc.patch_id >= ?", (first_patch_id,))
-            self._execute(
-                "UPDATE meta_data SET patch_count = patch_count + ?",
-                (len(patch_rows),),
-            )
             # meta_data.last_indexed_ns is the initial-update-complete
             # marker; only mark_initial_update_done (after renumbering
             # succeeds) may set it, or an interruption here would defeat
@@ -818,21 +824,10 @@ class SQLiteIndexBackend:
         if not source_paths:
             return
         for chunk, marks in self._iter_in_batches(source_paths):
-            params = [*chunk, base_uri]
-            where = f"WHERE source_path IN ({marks}) AND base_uri = ?"
-            patches = (
-                "FROM patches WHERE source_id IN "
-                f"(SELECT source_id FROM sources {where})"
-            )
-            self._count_coord_variants(
-                f"pc.patch_id IN (SELECT patch_id {patches})", params, sign=-1
-            )
             self._execute(
-                "UPDATE meta_data SET patch_count = patch_count - "
-                f"(SELECT count(*) {patches})",
-                params,
+                f"DELETE FROM sources WHERE source_path IN ({marks}) AND base_uri = ?",
+                [*chunk, base_uri],
             )
-            self._execute(f"DELETE FROM sources {where}", params)
 
     def delete_sources(self, source_paths: list[str], base_uri: str = "") -> None:
         """Remove sources (identified by base_uri + path) and dependents."""
@@ -1030,13 +1025,10 @@ class SQLiteIndexBackend:
 
     def count(self, query=None, patch_ids=None) -> int:
         """Count matching patches without projecting or pivoting rows."""
-        unfiltered = all(
-            not (q.attrs or q.coords)
-            for q in _as_query_list(query if query is not None else Query())
-        )
-        if unfiltered and patch_ids is None:
+        queries = _as_query_list(query if query is not None else Query())
+        if patch_ids is None and not any(q.attrs or q.coords for q in queries):
             return self._patch_count()
-        queries, attr_meta, coord_meta = self._query_context(query)
+        queries, attr_meta, coord_meta = self._query_context(queries)
         sql, params, residuals = build_sql(
             queries,
             attr_meta,

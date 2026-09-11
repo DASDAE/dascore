@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -16,7 +17,8 @@ from dascore.io.index.ingest import (
     patch_record,
     summaries_to_records,
 )
-from dascore.io.index.schema import INDEX_VERSION
+from dascore.io.index.query import Query
+from dascore.io.index.schema import INDEX_VERSION, TRIGGERS
 from tests.test_io.test_index.test_heterogeneity_stress import make_random_summaries
 
 # The coordinate discovery version 17 answered by scanning every link.
@@ -66,6 +68,8 @@ def _as_version_17(path):
     """Turn a closed index back into the version 17 layout."""
     con = sqlite3.connect(path)
     try:
+        for name in TRIGGERS:
+            con.execute(f"DROP TRIGGER {name}")
         con.execute("DROP TABLE coord_variants")
         con.execute("ALTER TABLE meta_data DROP COLUMN patch_count")
         con.execute("UPDATE meta_data SET index_version = 17")
@@ -143,8 +147,12 @@ class TestMaintainedCounts:
         _assert_consistent(backend)
 
     def test_rollback(self, backend, records, monkeypatch):
-        """A write which fails partway leaves the counts as they were."""
-        before = _rows(backend, "SELECT * FROM coord_variants")
+        """A write which fails after replacing and adding rows changes no count."""
+        before = (
+            _rows(backend, "SELECT * FROM coord_variants"),
+            backend.get_metadata()["patch_count"],
+        )
+        replacing = summaries_to_records(make_random_summaries(10, seed=2))
         insert = backend._bulk_insert
 
         def failing(table, columns, rows):
@@ -154,8 +162,12 @@ class TestMaintainedCounts:
 
         monkeypatch.setattr(backend, "_bulk_insert", failing)
         with pytest.raises(RuntimeError, match="interrupted"):
-            backend.write_sources(records[40:])
-        assert _rows(backend, "SELECT * FROM coord_variants") == before
+            backend.write_sources([*replacing, *records[40:]])
+        after = (
+            _rows(backend, "SELECT * FROM coord_variants"),
+            backend.get_metadata()["patch_count"],
+        )
+        assert after == before
         _assert_consistent(backend)
 
     def test_reopen(self, backend, tmp_path):
@@ -180,6 +192,49 @@ class TestMaintainedCounts:
         """A root's length is the maintained count."""
         (count,) = backend._con.execute("SELECT count(*) FROM patches").fetchone()
         assert backend.count() == count == 40
+
+    def test_filtered_count_from_iterator(self, backend):
+        """Queries passed as a one-shot iterable still filter the count."""
+        query = Query(attrs={"station": "v1"})
+        expected = backend.count([query])
+        assert expected < backend.count()
+        assert backend.count(iter([query])) == expected
+
+    def test_writes_from_a_connection_opened_before_upgrade(self, backend, tmp_path):
+        """A connection opened on the version 17 file is counted after upgrade."""
+        path = tmp_path / "index.sqlite3"
+        backend.close()
+        _as_version_17(path)
+        old = sqlite3.connect(path, isolation_level=None)
+        old.execute("PRAGMA foreign_keys = ON")
+        (last,) = old.execute("SELECT max(patch_id) FROM patches").fetchone()
+        upgraded = get_backend(path)
+        # a copy of the last patch and its links, then a whole source removed
+        old.execute(
+            "INSERT INTO patches (patch_id, source_id, source_patch_key, dims) "
+            "SELECT ?, source_id, 'copy', dims FROM patches WHERE patch_id = ?",
+            (last + 1, last),
+        )
+        old.execute(
+            "INSERT INTO patch_coords SELECT ?, coord_name, run_index, "
+            "coord_dims, coord_def_id, dtype FROM patch_coords WHERE patch_id = ?",
+            (last + 1, last),
+        )
+        old.execute("DELETE FROM sources WHERE source_id = 1")
+        old.close()
+        _assert_consistent(upgraded)
+        upgraded.close()
+
+    def test_mixed_kind_sorts_by_majority(self):
+        """A coordinate most patches state as text sorts as text."""
+
+        def patch(values):
+            coords = {"depth": np.array(values)}
+            return dc.Patch(data=np.zeros(len(values)), coords=coords, dims=("depth",))
+
+        spool = dc.spool([patch([5.0, 6.0]), patch(["b", "c"]), patch(["a", "d"])])
+        firsts = [p.get_coord("depth").values[0] for p in spool.sort("depth")]
+        assert firsts == ["a", "b", 5.0]
 
 
 def _uniform_backend(count: int):
@@ -305,6 +360,28 @@ class TestUpgrade:
             assert "coord_variants" not in tables
         finally:
             con.close()
+
+    def test_stale_table_list_after_racing_upgrade(self, backend):
+        """An opener whose table list predates another's upgrade still opens."""
+        backend._validate_schema(backend._existing_tables() - {"coord_variants"})
+
+    def test_version_17_created_while_waiting(self, backend, tmp_path, monkeypatch):
+        """A version 17 index made while this opener waited to create one upgrades."""
+        path = tmp_path / "index.sqlite3"
+        backend.close()
+        _as_version_17(path)
+        existing = SQLiteIndexBackend._existing_tables
+        calls = []
+
+        def empty_at_first(self):
+            calls.append(None)
+            return set() if len(calls) == 1 else existing(self)
+
+        monkeypatch.setattr(SQLiteIndexBackend, "_existing_tables", empty_at_first)
+        upgraded = get_backend(path)
+        assert upgraded.get_metadata()["index_version"] == INDEX_VERSION
+        _assert_consistent(upgraded)
+        upgraded.close()
 
     def test_repeated_upgrade_is_harmless(self, backend, tmp_path):
         """An opener which finds the upgrade already done changes nothing."""

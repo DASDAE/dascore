@@ -21,7 +21,7 @@ The schema separates records with different lifetimes and cardinalities. This av
 
 `coord_defs` and `patch_coords` are deliberately separate. Many patches can share a distance coordinate, so `coord_defs` stores it once and `patch_coords` supplies the many-to-many attachment. Range coordinates receive an exact semantic fingerprint, reconstructed from the coordinate values when a scan did not supply one. Non-range coordinates only receive a merge-compatibility identity when the scan provides an exact fingerprint. This distinction prevents a matching envelope from being mistaken for matching coordinate values while retaining the deduplication needed by future merge planning.
 
-`coord_variants` and `meta_data.patch_count` are summaries rather than records. Every write updates them in the transaction that changes the rows they count, so a spool's coordinate names, kinds and units, and a root spool's length, cost the same on a large archive as on a small one.
+`coord_variants` and `meta_data.patch_count` are summaries rather than records. Triggers update them in the transaction that changes the rows they count, so every connection keeps them exact, including one opened before an upgrade, and a spool's coordinate names, kinds and units, and a root spool's length, cost the same on a large archive as on a small one. A coordinate stated under several value kinds sorts by the kind most patches state.
 
 `attrs` and `attr_meta` are also complementary. Attribute names are open-ended, so the index cannot define every typed column in advance. `attr_meta` records the stable mapping and units needed to interpret the columns added to `attrs` as data is ingested.
 
