@@ -168,9 +168,14 @@ def _raw(value, dtype):
 
 
 def _extended_float(coord) -> bool:
-    """Whether the coordinate's floats are wider than a JSON double holds."""
+    """
+    Whether the coordinate's floats are wider than a JSON double holds.
+
+    Judged by the scalar, not the item size: a long double stays a numpy
+    scalar under ``item()`` even where it is only 64 bits wide.
+    """
     dtype = np.dtype(coord.dtype)
-    return dtype.kind == "f" and dtype.itemsize > 8
+    return dtype.kind == "f" and not isinstance(np.zeros((), dtype)[()].item(), float)
 
 
 def _describe_range(coord) -> dict:
