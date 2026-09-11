@@ -266,7 +266,7 @@ def resolve_window(
     coords, sizes = {}, []
     for dim, _, value in dim_axis_values:
         coord = coords[dim] = patch.coords.get_coord(dim)
-        if require_evenly_sampled and coord.step is None:
+        if require_evenly_sampled and not coord.evenly_sampled:
             extra = f"as required by {get_parent_code_name()}"
             msg = f"Coordinate {dim} is not evenly sampled {extra}"
             raise CoordError(msg)

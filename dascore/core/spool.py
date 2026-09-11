@@ -1742,9 +1742,9 @@ class Spool(NodeRepr, NamespaceOwner):
             The dimension to look for gaps along.
         tolerance
             The maximum number of samples patches can be spaced and still
-            count as contiguous, or a quantity or timedelta stating that
-            limit in the coordinate's own units (eg `1 * s`). Same
-            meaning as chunk's `tolerance`.
+            count as contiguous, or a quantity or timedelta bounding the
+            excess over one sample in the coordinate's own units (eg
+            `1 * s`). Same meaning as chunk's `tolerance`.
         group
             Attributes which separate patches into unrelated groups; a gap
             is never reported between two groups. Defaults to the config
@@ -1775,8 +1775,9 @@ class Spool(NodeRepr, NamespaceOwner):
         not the previous row.
 
         A sample-count tolerance scales the step, so patches whose step
-        is unknown report no gaps. An absolute tolerance needs no step,
-        so it reports their gaps like any other patch's.
+        is unknown report no gaps. An absolute tolerance needs no step
+        (an unknown one counts as nothing), so it reports their gaps like
+        any other patch's.
 
         See Also
         --------
@@ -1826,9 +1827,9 @@ class Spool(NodeRepr, NamespaceOwner):
             The dimension to measure along.
         tolerance
             The maximum number of samples patches can be spaced and still
-            count as contiguous, or a quantity or timedelta stating that
-            limit in the coordinate's own units (eg `1 * s`). Same
-            meaning as chunk's `tolerance`.
+            count as contiguous, or a quantity or timedelta bounding the
+            excess over one sample in the coordinate's own units (eg
+            `1 * s`). Same meaning as chunk's `tolerance`.
         group
             Attributes which separate patches into unrelated groups.
             Defaults to the config option `patch_kind_attrs`; sampling
@@ -1917,11 +1918,11 @@ class Spool(NodeRepr, NamespaceOwner):
         tolerance
             The maximum number of samples a block of data can be spaced (gap)
             and still be considered contiguous. A quantity or timedelta
-            states that limit in the coordinate's own units instead (eg
-            `tolerance=1 * s`), which also works for patches whose
-            sampling interval is unknown. Either way a boundary of one
-            sample is contiguous, so a tolerance below one sample never
-            splits adjacent patches.
+            instead bounds the excess over one sample in the coordinate's
+            own units (eg `tolerance=1 * s` admits a spacing of one step
+            plus a second), which also works for patches whose sampling
+            interval is unknown. Either way a boundary of one sample is
+            contiguous. See `dascore.utils.gaps.GapTolerance`.
         conflict
             {conflict_desc}
         group

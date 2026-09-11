@@ -14,7 +14,7 @@ from matplotlib.patches import Rectangle
 from dascore.constants import DEFAULT_COLORMAPS, PatchType
 from dascore.core.coordmanager import _cell_edge_names
 from dascore.exceptions import ParameterError
-from dascore.utils.gaps import get_gap_edges, is_monotonic_and_finite
+from dascore.utils.gaps import GapTolerance, get_gap_edges, is_monotonic_and_finite
 from dascore.utils.patch import patch_function
 from dascore.utils.plotting import (
     _add_colorbar,
@@ -119,9 +119,11 @@ def _plot_with_mesh(ax, data, dims, coords, cmap, gap_color, gap_factor):
     mesh_data = np.ma.asarray(data)
     edges = {}
     cells = {}
-    mesh_gap_factor = gap_factor if gap_color is not None else None
+    # a gap is a spacing past gap_factor steps, measured against the
+    # coordinate's declared step where it has one
+    tolerance = GapTolerance.samples(gap_factor) if gap_color is not None else None
     for axis, dim in enumerate(dims):
-        dim_edges, gap_mask = get_gap_edges(coords[dim], mesh_gap_factor)
+        dim_edges, gap_mask = get_gap_edges(coords[dim], tolerance)
         if gap_color is not None:
             mesh_data = _insert_gap_bands(mesh_data, gap_mask, axis)
         edges[dim] = dim_edges
@@ -274,10 +276,12 @@ def waterfall(
         at detected gaps; None bridges them with adjacent cells. Existing NaN
         or masked data use the same color. Applies only to ``pcolormesh``.
     gap_factor
-        Intervals larger than this multiple of the median are gaps. Must exceed 1,
-        even when ``gap_color`` is None and it has no visual effect. Mixed
-        sampling rates may classify coarser regions as gaps; increase this value
-        or plot or resample those regions separately.
+        Intervals larger than this many steps are gaps, measured against the
+        coordinate's declared step when it has one and its median spacing
+        otherwise (the rule `Spool.chunk` applies with `tolerance`). Must
+        exceed 1, even when ``gap_color`` is None and it has no visual
+        effect. Mixed sampling rates may classify coarser regions as gaps;
+        increase this value or plot or resample those regions separately.
     log
         If True, visualize the common logarithm of the absolute values of patch data.
         To avoid log(0), the abs(array) is cast to float64 and a small value
@@ -388,7 +392,7 @@ def waterfall(
             ax,
             data,
             dims,
-            coords,
+            dim_coords,
             cmap,
             gap_color=gap_color,
             gap_factor=gap_factor,

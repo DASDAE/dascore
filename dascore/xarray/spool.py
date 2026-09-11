@@ -509,12 +509,11 @@ def spool_to_xarray(
     # function-level to avoid circular imports through the package root
     from dascore.core.coords import concat_coords, get_coord  # noqa: PLC0415
     from dascore.io.index.planned import PlanResolver, derived_catalog  # noqa: PLC0415
-    from dascore.units import carries_units  # noqa: PLC0415
     from dascore.utils.chunk_plan import (  # noqa: PLC0415
         _normalize_chunk_units,
         build_chunk_plan,
     )
-    from dascore.utils.misc import get_middle_value  # noqa: PLC0415
+    from dascore.utils.gaps import GapTolerance  # noqa: PLC0415
 
     source_rows, working = spool._plan_frames(dim)
     if not len(working):
@@ -648,21 +647,9 @@ def spool_to_xarray(
                     # the member coordinates truth-preservingly, then
                     # absorb sub-tolerance seams. A seam beyond tolerance
                     # stays segmented here exactly as it does there.
-                    merged = concat_coords(*member_coords)
-                    if carries_units(tolerance):
-                        merged = merged.simplify(tolerance)
-                    else:
-                        mem_steps = [
-                            abs(c.step)
-                            for c in member_coords
-                            if getattr(c, "step", None) is not None
-                            and not pd.isnull(c.step)
-                        ]
-                        if mem_steps:
-                            merged = merged.simplify(
-                                tolerance * get_middle_value(mem_steps)
-                            )
-                    coord = merged
+                    coord = concat_coords(*member_coords).simplify(
+                        GapTolerance.from_user(tolerance, dim)
+                    )
                 else:
                     coord = _envelope_coord(out, d, get_coord)
                 sizes[d] = len(coord)

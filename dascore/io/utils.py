@@ -12,12 +12,7 @@ import numpy as np
 import dascore as dc
 from dascore.constants import INVENTORY_ATTRS
 from dascore.core.coordmanager import CoordManager
-from dascore.core.coords import (
-    BaseCoord,
-    CoordMonotonicArray,
-    CoordSegmented,
-    get_coord,
-)
+from dascore.core.coords import BaseCoord, CoordSegmented, get_coord
 from dascore.core.summary import normalize_source_patch_key
 from dascore.exceptions import (
     CoordError,
@@ -28,22 +23,8 @@ from dascore.exceptions import (
 )
 from dascore.models import ArrayLike
 from dascore.units import convert_units, get_quantity_str
-from dascore.utils.misc import (
-    _to_slice,
-    _validate_sample_values,
-    is_strictly_monotonic,
-    unbyte,
-)
+from dascore.utils.misc import _to_slice, _validate_sample_values, unbyte
 from dascore.utils.time import to_exact_fraction
-
-# Stored coordinate arrays often carry sub-step jitter (e.g. GPS-stamped DAS
-# time). ``CoordSegmented.from_array`` treats every isolated sampling change as
-# a seam, so a jittery array explodes into roughly one short segment per
-# sample. Past this fraction of segments the segmented form is slower to build,
-# larger in memory, and no more exact than a plain monotonic coordinate, so we
-# skip segmentation for arrays large enough for the cost to matter.
-_MAX_SEGMENT_FRACTION = 0.1
-_MIN_SEGMENT_GUARD_SIZE = 1_000
 
 
 def get_attr_names(attr_cls) -> set[str]:
@@ -309,39 +290,20 @@ def get_gridded_coord(values, units=None) -> BaseCoord:
 
 
 def get_exact_coord(values, units=None) -> BaseCoord:
-    """Return an exact coordinate, including for non-monotonic values."""
+    """
+    Return an exact coordinate, including for non-monotonic values.
+
+    Monotonic values keep their runs (`CoordSegmented.from_array`, whose
+    dense-array guard keeps a jittery array as one monotonic coordinate);
+    anything else keeps its values as an array.
+    """
     # atleast_1d matches get_coord(values=...): a squeezed single-sample
     # array (0-d) becomes a length-1 coordinate rather than a scalar.
     values = np.atleast_1d(np.asarray(values))
-    if _is_over_segmented(values):
-        # The guard has established strict monotonicity. Keep the stored
-        # values: get_coord could approximate their jitter with a range.
-        return CoordMonotonicArray(values=values, units=units)
     try:
         return CoordSegmented.from_array(values, tolerance=0, units=units)
     except CoordError:
         return get_coord(data=values, units=units)
-
-
-def _is_over_segmented(values) -> bool:
-    """
-    Cheaply predict whether ``from_array`` would explode into many segments.
-
-    Mirrors ``CoordSegmented.from_array``'s run detection but stops at the
-    segment count, so the degenerate path never materializes the segments.
-    """
-    if values.ndim != 1 or len(values) < _MIN_SEGMENT_GUARD_SIZE:
-        return False
-    if not is_strictly_monotonic(values):
-        return False  # non-monotonic; from_array handles its own fallback
-    diffs = np.diff(values)
-    # A diff belongs to a run when it matches a neighbor; isolated diffs seam.
-    eq_next = diffs[:-1] == diffs[1:]
-    in_run = np.zeros(len(diffs), dtype=bool)
-    in_run[1:] |= eq_next
-    in_run[:-1] |= eq_next
-    segment_count = int(np.count_nonzero(~in_run)) + 1
-    return segment_count > _MAX_SEGMENT_FRACTION * len(values)
 
 
 def step_from_rate(rate) -> Fraction | np.timedelta64:
