@@ -84,27 +84,75 @@ def _unwrap(obj):
     return inspect.unwrap(obj)
 
 
-def _api_documents():
-    """Collect owned objects and aliases from the supported public modules."""
-    modules = set(_API_MODULES)
-    for package in _API_PACKAGES:
-        for path in (PACKAGE_PATH / package).rglob("*.py"):
-            relative = path.relative_to(PACKAGE_PATH)
-            if any(p.startswith("_") for p in relative.parts[:-1]):
-                continue
-            if path.stem.startswith("_") and path.stem != "__init__":
-                continue
-            parts = relative.with_suffix("").parts
-            modules.add(
-                "dascore." + ".".join(parts[:-1] if parts[-1] == "__init__" else parts)
-            )
-    records, seen, omitted = {}, set(), []
+class _APIDocumentCollector:
+    """Collect public API records and aliases without evaluating operations."""
 
-    def add(obj, alias, owner=None):
-        is_property = isinstance(obj, (property, cached_property))
-        is_ufunc = isinstance(obj, PatchUFunc)
-        is_classmethod = isinstance(obj, classmethod)
-        obj = _unwrap(obj)
+    def __init__(self):
+        self.records = {}
+        self.seen = set()
+        self.omitted = []
+
+    def collect(self):
+        """Discover owned APIs and return their records and unavailable modules."""
+        self._collect_modules()
+        self._collect_namespaces()
+        self._finalize_aliases()
+        return self.records, self.omitted
+
+    @staticmethod
+    def _module_names():
+        """Find public analysis modules without crawling external plugins."""
+        modules = set(_API_MODULES)
+        for package in _API_PACKAGES:
+            for path in (PACKAGE_PATH / package).rglob("*.py"):
+                relative = path.relative_to(PACKAGE_PATH)
+                if any(p.startswith("_") for p in relative.parts[:-1]):
+                    continue
+                if path.stem.startswith("_") and path.stem != "__init__":
+                    continue
+                parts = relative.with_suffix("").parts
+                modules.add(
+                    "dascore."
+                    + ".".join(parts[:-1] if parts[-1] == "__init__" else parts)
+                )
+        return sorted(modules)
+
+    def _collect_modules(self):
+        """Inspect public module members and report missing optional dependencies."""
+        for name in self._module_names():
+            try:
+                module = import_module(name)
+            except ModuleNotFoundError as exc:
+                if (exc.name or "").startswith("dascore"):
+                    raise
+                self.omitted.append(f"{name}: missing {exc.name}")
+                continue
+            self._add_object(module, name)
+            for member_name, member in sorted(vars(module).items()):
+                if not member_name.startswith("_"):
+                    self._add_object(member, f"{name}.{member_name}")
+
+    def _collect_namespaces(self):
+        """Add only namespace entry points owned by the installed distribution."""
+        hosts = {
+            "patch": dc.Patch,
+            "spool": dc.Spool,
+            "inventory": dc.Inventory,
+            "annotation": dc.AnnotationSet,
+        }
+        for entry in metadata.distribution("dascore").entry_points:
+            for kind, host in hosts.items():
+                if entry.group == f"dascore.{kind}_namespace":
+                    namespace = entry.load()
+                    for prefix in (
+                        f"dascore.{host.__name__}",
+                        f"{host.__module__}.{host.__name__}",
+                    ):
+                        self._add_object(namespace, f"{prefix}.{entry.name}")
+
+    def _add_object(self, original, alias, owner=None):
+        """Record an owned object and visit public members of each class alias."""
+        obj = _unwrap(original)
         module = (
             obj.__name__
             if isinstance(obj, ModuleType)
@@ -117,10 +165,10 @@ def _api_documents():
             or inspect.isclass(obj)
             or inspect.isfunction(obj)
             or inspect.ismethod(obj)
-            or is_ufunc
+            or isinstance(original, PatchUFunc)
         ):
             return
-        if is_ufunc:
+        if isinstance(original, PatchUFunc):
             assert owner is not None
             module = owner.__module__
             key = f"{module}.{owner.__qualname__}.{alias.rsplit('.', 1)[-1]}"
@@ -130,120 +178,102 @@ def _api_documents():
                 if inspect.ismodule(obj)
                 else f"{module}.{obj.__qualname__}"
             )
-        if key not in records:
-            try:
-                signature = (
-                    ""
-                    if is_property
-                    else str(
-                        inspect.signature(
-                            obj.__call__ if is_ufunc else obj, eval_str=False
-                        )
-                    )
-                )
-            except (TypeError, ValueError):
-                signature = ""
-            body = inspect.getdoc(obj) or "No docstring is available."
-            prefix = f"Defined in: `{module}`\n\n"
-            if is_ufunc:
-                prefix += (
-                    "This Patch operation wraps the NumPy ufunc documented below.\n\n"
-                )
-            if is_property:
-                prefix += (
-                    "Property: access this as an attribute, without calling it.\n\n"
-                )
-            if signature:
-                prefix += f"```python\n{obj.__name__}{signature}\n```\n\n"
-            if owner is not None and signature:
-                prefix += (
-                    "Class method signatures are unbound; "
-                    "Python supplies the first class parameter.\n\n"
-                    if is_classmethod
-                    else "Method signatures are unbound. For an instance method, "
-                    "its instance supplies the first parameter. "
-                    "Direct and static calls require all shown parameters.\n\n"
-                )
-            records[key] = dict(
-                id=key,
-                title=key,
-                kind="api",
-                aliases=[],
-                keywords=[],
-                path="api/" + key.removeprefix("module:").replace(".", "/") + ".md",
-                body=prefix + body,
-            )
-        records[key]["aliases"].append(alias)
-        # Visit each class under each public alias, without evaluating properties.
+        if key not in self.records:
+            body = self._object_body(original, obj, module, owner)
+            self.records[key] = self._new_record(key, body)
+        self.records[key]["aliases"].append(alias)
         visit = (id(obj), alias)
-        if not inspect.isclass(obj) or visit in seen:
+        if not inspect.isclass(obj) or visit in self.seen:
             return
-        seen.add(visit)
+        self.seen.add(visit)
+        self._add_class_members(obj, alias, key)
+
+    @staticmethod
+    def _new_record(key, body):
+        """Give object and model-field documents the same record structure."""
+        return dict(
+            id=key,
+            title=key,
+            kind="api",
+            aliases=[],
+            keywords=[],
+            path="api/" + key.removeprefix("module:").replace(".", "/") + ".md",
+            body=body,
+        )
+
+    @staticmethod
+    def _signature(original, obj):
+        """Read signatures without binding descriptors or evaluating annotations."""
+        if isinstance(original, (property, cached_property)):
+            return ""
+        try:
+            target = obj.__call__ if isinstance(original, PatchUFunc) else obj
+            return str(inspect.signature(target, eval_str=False))
+        except (TypeError, ValueError):
+            return ""
+
+    def _object_body(self, original, obj, module, owner):
+        """Describe the raw docstring, signature, and Python calling convention."""
+        signature = self._signature(original, obj)
+        prefix = f"Defined in: `{module}`\n\n"
+        if isinstance(original, PatchUFunc):
+            prefix += "This Patch operation wraps the NumPy ufunc documented below.\n\n"
+        if isinstance(original, (property, cached_property)):
+            prefix += "Property: access this as an attribute, without calling it.\n\n"
+        if signature:
+            prefix += f"```python\n{obj.__name__}{signature}\n```\n\n"
+        if owner is not None and signature:
+            prefix += (
+                "Class method signatures are unbound; "
+                "Python supplies the first class parameter.\n\n"
+                if isinstance(original, classmethod)
+                else "Method signatures are unbound. For an instance method, "
+                "its instance supplies the first parameter. "
+                "Direct and static calls require all shown parameters.\n\n"
+            )
+        return prefix + (inspect.getdoc(obj) or "No docstring is available.")
+
+    def _add_class_members(self, obj, alias, key):
+        """Inspect public members of a class without evaluating properties."""
         for name, member in inspect.getmembers_static(obj):
             if not name.startswith("_") and not inspect.isclass(member):
-                add(member, f"{alias}.{name}", obj)
+                self._add_object(member, f"{alias}.{name}", obj)
         if issubclass(obj, BaseModel):
-            for name, field in obj.model_fields.items():
-                field_key = f"{key}.{name}"
-                record = records.setdefault(
-                    field_key,
-                    dict(
-                        id=field_key,
-                        title=field_key,
-                        kind="api",
-                        aliases=[],
-                        keywords=[],
-                        path="api/" + field_key.replace(".", "/") + ".md",
-                        body=(
-                            f"Defined in: `{module}`\n\nType: `{field.annotation}`\n\n"
-                            f"{field.description or 'No field description.'}"
-                        ),
-                    ),
-                )
-                record["aliases"].append(f"{alias}.{name}")
+            self._add_model_fields(obj, alias, key)
 
-    for name in sorted(modules):
-        try:
-            module = import_module(name)
-        except ModuleNotFoundError as exc:
-            if (exc.name or "").startswith("dascore"):
-                raise
-            omitted.append(f"{name}: missing {exc.name}")
-            continue
-        add(module, name)
-        for member_name, member in sorted(vars(module).items()):
-            if not member_name.startswith("_"):
-                add(member, f"{name}.{member_name}")
-    hosts = {
-        "patch": dc.Patch,
-        "spool": dc.Spool,
-        "inventory": dc.Inventory,
-        "annotation": dc.AnnotationSet,
-    }
-    for entry in metadata.distribution("dascore").entry_points:
-        for kind, host in hosts.items():
-            if entry.group == f"dascore.{kind}_namespace":
-                namespace = entry.load()
-                for prefix in (
-                    f"dascore.{host.__name__}",
-                    f"{host.__module__}.{host.__name__}",
-                ):
-                    add(namespace, f"{prefix}.{entry.name}")
-    object_aliases = {
-        alias
-        for record in records.values()
-        if not record["id"].startswith("module:")
-        for alias in (*record["aliases"], record["id"])
-    }
-    for record in records.values():
-        aliases = set(record["aliases"]) | {record["id"]}
-        # Public attribute lookup prefers an exported object over its module.
-        # Modules always remain addressable by their explicit module: identifier.
-        if record["id"].startswith("module:"):
-            aliases -= object_aliases
-        aliases |= {x.removeprefix("dascore.") for x in aliases}
-        record["aliases"] = sorted(aliases)
-    return records, omitted
+    def _add_model_fields(self, obj, alias, key):
+        """Document model fields using their declared types and descriptions."""
+        for name, field in obj.model_fields.items():
+            field_key = f"{key}.{name}"
+            body = (
+                f"Defined in: `{obj.__module__}`\n\nType: `{field.annotation}`\n\n"
+                f"{field.description or 'No field description.'}"
+            )
+            record = self.records.setdefault(
+                field_key, self._new_record(field_key, body)
+            )
+            record["aliases"].append(f"{alias}.{name}")
+
+    def _finalize_aliases(self):
+        """Add short names and prefer exported objects over colliding modules."""
+        object_aliases = {
+            alias
+            for record in self.records.values()
+            if not record["id"].startswith("module:")
+            for alias in (*record["aliases"], record["id"])
+        }
+        for record in self.records.values():
+            aliases = set(record["aliases"]) | {record["id"]}
+            # Modules remain addressable by their explicit module: identifier.
+            if record["id"].startswith("module:"):
+                aliases -= object_aliases
+            aliases |= {x.removeprefix("dascore.") for x in aliases}
+            record["aliases"] = sorted(aliases)
+
+
+def _api_documents():
+    """Collect owned objects and aliases from the supported public modules."""
+    return _APIDocumentCollector().collect()
 
 
 def _read_readme():

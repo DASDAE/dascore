@@ -1,4 +1,4 @@
-"""Command-line access to the installed DASCore documentation."""
+"""The DASCore command-line interface."""
 
 from __future__ import annotations
 
