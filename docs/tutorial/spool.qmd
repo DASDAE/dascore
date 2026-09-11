@@ -207,7 +207,7 @@ coverage = gappy.get_coverage()
 second_scale_gaps = gappy.get_gaps(tolerance=1 * s)
 ```
 
-`gap_size` spans from the last sample before a gap to the first after it, so subtract one sample step for the missing extent. The `tolerance` argument, shared with `chunk`, controls which boundaries count. Pass another dimension as in `get_gaps("distance")`; `time` is only the default. Coverage uses patch envelopes; holes inside a patch are not visible. `group_id` links coverage rows to their gaps.
+`gap_size` spans from the last sample before a gap to the first after it, so subtract one sample step for the missing extent. The `tolerance` argument, shared with `chunk`, controls which boundaries count. Pass another dimension as in `get_gaps("distance")`; `time` is only the default. Coverage uses patch envelopes, and for a patch whose coordinate is segmented into runs of one step (such as a gapped patch merged in memory or read whole from a DASDAE file; one with more than 256 runs is read whole) the envelope of each run, so holes inside such a patch are visible too. `group_id` links coverage rows to their gaps.
 
 At the default tolerance of 1.5 samples, one missing sample counts as a gap. A quantity or timedelta bounds the excess over one step in coordinate units instead: a spacing is a gap when it exceeds `step + tolerance`. Coordinates judge their own gaps by the same rule (see [coordinates](coords.qmd#declaring-a-grid-and-finding-missing-samples)). Overlaps are not gaps; coverage calculates the union of available spans.
 

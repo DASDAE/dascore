@@ -33,12 +33,13 @@ from typing import NamedTuple, get_args, get_type_hints
 # Version of the index schema, independent of dascore's version. Bump it
 # when an index written by an older dascore would be read wrongly rather
 # than merely incompletely -- including when what a *stored value* means
-# changes, not only when a column does. Version 16 stores each range
-# coordinate's exact grid and names the envelope columns by storage type;
+# changes, not only when a column does. Version 17 links a segmented
+# coordinate to each of its runs; version 16 stored each range
+# coordinate's exact grid and named the envelope columns by storage type;
 # version 15 stored source coordinate and numeric attribute dtypes. Earlier
 # indexes lack the metadata required for reconstruction and are rebuilt
 # when opened.
-INDEX_VERSION = 16
+INDEX_VERSION = 17
 # Identity string so any tool can sanity-check what it opened.
 WHAT_IS_THIS = "dascore_spool_index"
 
@@ -201,10 +202,15 @@ class PatchCoordRow(NamedTuple):
 
     Links a patch to its coord defs; the name and dims are patch-level
     semantics (two patches can share values under different names).
+    `run_index` 0 is the coordinate as a whole, which every query about a
+    patch's coordinate reads; a segmented coordinate is also linked to
+    each of its runs, in order, as 1, 2, ..., which gap reports read and
+    plans and exports carry.
     """
 
     patch_id: int
     coord_name: str
+    run_index: int
     coord_dims: str
     coord_def_id: int
     dtype: str  # source representation; shared definitions identify values
@@ -280,7 +286,7 @@ TABLE_CONSTRAINTS = MappingProxyType(
             "CHECK (is_relative IS NULL OR is_relative IN (0, 1))",
         ),
         "patch_coords": (
-            "PRIMARY KEY (patch_id, coord_name)",
+            "PRIMARY KEY (patch_id, coord_name, run_index)",
             "FOREIGN KEY (patch_id) REFERENCES patches(patch_id) ON DELETE CASCADE",
             "FOREIGN KEY (coord_def_id) REFERENCES coord_defs(coord_def_id)",
         ),
@@ -374,17 +380,20 @@ SPOOL_LATE_RENAMES = MappingProxyType(
 
 # Explicit secondary indexes, as (name, table, columns, WHERE clause or
 # None). Every other access path is covered by a PRIMARY KEY or UNIQUE
-# autoindex above — patch_coords(patch_id, coord_name), sources(base_uri,
+# autoindex above — patch_coords(patch_id, coord_name, run_index), sources(base_uri,
 # source_path), patches(source_id, source_patch_key), coord_defs(def_key)
 # — and duplicating them measured ~25% extra file size and slower writes
-# for no query gain. The partial index lists the definitions whose grid
+# for no query gain. `idx_cdefs_grid` lists the definitions whose grid
 # the envelope cannot restate -- a fractional step or offset, or a
 # descending run, whose start the envelope does not name -- so a query
 # need not scan them all.
 GRID_NEEDED = "step_denominator != 1 OR origin_offset != 0 OR step_numerator < 0"
 INDEXES = (
-    ("idx_pcoords_name", "patch_coords", "coord_name", None),
+    # whole coordinates only, so run links never lengthen a coordinate scan
+    ("idx_pcoords_name", "patch_coords", "coord_name", "run_index = 0"),
     ("idx_cdefs_grid", "coord_defs", "def_key", GRID_NEEDED),
+    # run links only, so an index without runs answers from an empty index
+    ("idx_pcoords_runs", "patch_coords", "coord_name", "run_index > 0"),
 )
 
 

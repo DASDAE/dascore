@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING, Any, Literal, NoReturn, Self, cast, overload
 import numpy as np
 import pandas as pd
 from pydantic import (
+    Field,
     ValidationError,
     field_serializer,
     field_validator,
@@ -252,6 +253,10 @@ class CoordSummary(DascoreBaseModel):
     step_numerator: int | None = None
     step_denominator: int | None = None
     origin_offset: int | None = None
+    # Each run's summary, in order, for a segmented coordinate, so an index
+    # can see holes inside a patch; None otherwise, including past
+    # _MAX_SUMMARY_RUNS runs. Left out of the repr, which it would swamp.
+    runs: tuple[CoordSummary, ...] | None = Field(default=None, repr=False)
 
     @property
     def is_exact_grid(self) -> bool:
@@ -1785,6 +1790,9 @@ _GRID_RTOL = 1e-6
 # its declared step), which is faster to build, smaller, and no less
 # exact.
 _MIN_SEGMENT_GUARD_SIZE = 1_000
+# A segmented coordinate's summary carries its runs only up to this many,
+# since each becomes an index row; past it the summary is an envelope.
+_MAX_SUMMARY_RUNS = 256
 _MAX_SEGMENT_FRACTION = 0.1
 
 
@@ -3137,6 +3145,14 @@ class CoordSegmented(BaseCoord):
     def segment_count(self) -> int:
         """Return the number of segments."""
         return len(self.segments)
+
+    def to_summary(self, dims=()) -> CoordSummary:
+        """Get the summary info about the coord, with a summary per run."""
+        summary = super().to_summary(dims=dims)
+        if self.segment_count > _MAX_SUMMARY_RUNS:
+            return summary
+        runs = tuple(x.to_summary(dims=dims) for x in self.segments)
+        return summary.model_copy(update={"runs": runs})
 
     @cached_method
     def _segment_offsets(self) -> np.ndarray:
