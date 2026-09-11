@@ -17,3 +17,12 @@ from .taup import tau_p
 from .stalta import stalta
 from .fbe import fbe
 from .kurtosis import kurtosis
+from .spectral_descriptors import (
+    median_frequency,
+    spectral_centroid,
+    spectral_entropy,
+    spectral_flatness,
+    spectral_kurtosis,
+    spectral_peak_frequency,
+    spectral_peak_amplitude,
+)

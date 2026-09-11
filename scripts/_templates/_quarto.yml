@@ -144,6 +144,7 @@ website:
             - recipes/real_time_proc.qmd
             - recipes/parallelization.qmd
             - recipes/low_freq_proc.qmd
+            - recipes/spectral_descriptors.qmd
 
         - section: "IO"
           contents:
