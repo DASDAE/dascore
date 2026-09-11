@@ -528,6 +528,37 @@ class TestAdaptiveSpectralFilter:
         assert out.data.dtype == np.float32
         assert np.isfinite(out.data).all()
 
+    def test_the_method_matches_the_array_filter(self) -> None:
+        """
+        Unequal windows, a set overlap, and non-default weighting all reach
+        the kernel along the right axes.
+        """
+        patch = _patch((48, 96), ("distance", "time"), dtype=np.float64)
+        out = patch.adaptive_spectral_filter(
+            time=32,
+            distance=8,
+            overlap={"time": 10, "distance": 2},
+            exponent=0.5,
+            normalize_power=True,
+            samples=True,
+            engine="scipy",
+        )
+        expected = _adaptive_spectral_filter_scipy(
+            np.asarray(patch.data),
+            window_size=(8, 32),
+            overlap=(2, 10),
+            exponent=0.5,
+            normalize_power=True,
+        )
+        # The patch path filters in float32, the array function in float64.
+        assert np.allclose(out.data, expected, rtol=1e-5, atol=1e-5)
+
+    def test_options_are_keyword_only(self) -> None:
+        """A stray positional option raises rather than binding `overlap`."""
+        patch = _patch((64, 64), ("distance", "time"), dtype=np.float32)
+        with pytest.raises(TypeError):
+            adaptive_spectral_filter_func(patch, 3, time=16, samples=True)
+
     def test_the_processor_is_the_call(self) -> None:
         """The seam: the processor and the method agree."""
         patch = _patch((64, 64), ("distance", "time"), dtype=np.float32)

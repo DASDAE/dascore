@@ -6,7 +6,6 @@ import numpy as np
 import pytest
 
 import dascore as dc
-from dascore.core.processor import PatchMeta
 from dascore.exceptions import CoordError, ParameterError
 from dascore.units import percent
 from dascore.utils.patch import get_patch_window_size, get_window_axis_step
@@ -142,7 +141,7 @@ class TestWindowSize:
 
     def test_from_meta(self, simple_patch):
         """A patch's metadata is enough; no data need be in reach."""
-        meta = PatchMeta.from_patch(simple_patch)
+        meta = simple_patch.drop_data()
         from_meta = resolve_window(meta, {"time": 0.6, "distance": 3.0})
         from_patch = resolve_window(simple_patch, {"time": 0.6, "distance": 3.0})
         assert from_meta == from_patch

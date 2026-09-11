@@ -13,9 +13,8 @@ import pytest
 from pydantic import ConfigDict, Field
 
 import dascore as dc
-from dascore.core.processor import PatchMeta, PatchProcessor, register_kernel
+from dascore.core.processor import PatchProcessor, register_kernel
 from dascore.exceptions import (
-    CoordDataError,
     ParameterError,
     PatchAttributeError,
     PatchCoordinateError,
@@ -487,6 +486,19 @@ class TestGeneratedFunction:
         op = SeamExtras("a", "b", flag=True, other=1)
         assert op.kwargs == {"names": ("a", "b"), "flag": True, "other": 1}
 
+    def test_positional_fields(self):
+        """Fields outside `_positional_fields` can only be given by name."""
+
+        class Named(SeamScale):
+            """Take the factor by name only."""
+
+            name = None
+            _positional_fields = ()
+
+        with pytest.raises(TypeError):
+            Named(3)
+        assert Named(factor=3).factor == 3
+
     def test_names_and_docs(self):
         """Named for the operation, documented by the class."""
         func = Normalize.patch_function
@@ -653,31 +665,3 @@ class TestKnownReal:
             dtype = _Dtype()
 
         assert _known_real(_Array()) is False
-
-
-class TestPatchMeta:
-    """The metadata tile_apply and adaptive_spectral_filter still plan with."""
-
-    @pytest.fixture(scope="class")
-    @classmethod
-    def meta(cls, patch):
-        """The patch without its values."""
-        return PatchMeta.from_patch(patch)
-
-    def test_it_carries_the_shape(self, meta, patch):
-        """Dims, shape, ndim, dtype, backend and axes."""
-        assert (meta.dims, meta.shape, meta.ndim) == (
-            patch.dims,
-            patch.shape,
-            len(patch.dims),
-        )
-        assert meta.dtype == patch.dtype
-        assert meta.backend == "numpy"
-        assert meta.get_axis("time") == patch.get_axis("time")
-
-    def test_update_and_back(self, meta, patch):
-        """Changing one part changes only that part; data make a patch again."""
-        assert meta.update(dtype="float32").coords is meta.coords
-        assert meta.to_patch(patch.data).equals(patch)
-        with pytest.raises(CoordDataError):
-            meta.to_patch(np.asarray(patch.data)[:2])
