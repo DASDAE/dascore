@@ -153,6 +153,46 @@ def _validate_cell_edges(dim, coord_map, dim_map):
         raise CoordError(f"Cell edges for {dim!r} must satisfy label < stop.")
 
 
+def _translation_delta(old, new):
+    """Return a label translation, allowing only floating arithmetic roundoff."""
+    if old.shape != new.shape or not old.size or new.units not in (None, old.units):
+        return None
+    old_kind, new_kind = old.dtype.kind, new.dtype.kind
+    numeric = old_kind in "iuf" and new_kind in "iuf"
+    temporal = old_kind in "mM" and new_kind == old_kind
+    if not (numeric or temporal):
+        return None
+    if numeric:
+        delta = new.values[0].item() - old.values[0].item()
+        values = old.values.astype(object) if old_kind in "iu" else old.values
+    else:
+        delta, values = new.values[0] - old.values[0], old.values
+    shifted = values + delta
+    same = np.array_equal(new.values, shifted)
+    if numeric and "f" in (old_kind, new_kind):
+        dtype = np.result_type(old.dtype, new.dtype)
+        # Canonicalizing the translated array may round once more than
+        # adding the offset to the original labels. This is a machine-
+        # precision bound, not the coordinate fitter's grid tolerance.
+        tolerance = 4 * np.finfo(dtype).eps * (np.abs(old.values) + abs(delta))
+        same = np.all(np.abs(new.values - shifted) <= tolerance)
+    return delta if same else None
+
+
+def _shift_cell_edge(edge, delta):
+    """Translate an edge without unsigned subtraction or addition wrapping."""
+    if edge.dtype.kind == "u":
+        limits = np.iinfo(edge.dtype)
+        in_range = (
+            0 <= int(edge.min()) + delta and int(edge.max()) + delta <= limits.max
+        )
+        if isinstance(edge, CoordRange) and delta == int(delta) and in_range:
+            return edge._translated(int(delta))
+        values = np.asarray([value.item() + delta for value in edge.values])
+        return get_coord(data=values, units=edge.units)
+    return edge.update(min=edge.min() + delta)
+
+
 def _resolve_selection(cm, kwargs, samples=False, relative=False, operation="select"):
     """Resolve DASCore queries using the existing coordinate selection methods."""
     reductions, selected = {}, {}
@@ -330,17 +370,15 @@ class CoordManager(RichRepr, DascoreBaseModel):
             if not names or any(name in kwargs for name in names):
                 continue
             old, new = self.coord_map[dim], coord_map[dim]
-            if old.shape == new.shape and old.size and new.units in (None, old.units):
-                delta = new.values[0] - old.values[0]
-                if np.array_equal(new.values, old.values + delta):
-                    kwargs[dim] = (dim_map[dim], new.set_units(old.units))
-                    for name in names:
-                        edge = self.coord_map[name]
-                        kwargs[name] = (
-                            self.dim_map[name],
-                            edge.update(min=edge.min() + delta),
-                        )
-                    continue
+            if (delta := _translation_delta(old, new)) is not None:
+                kwargs[dim] = (dim_map[dim], new.set_units(old.units))
+                for name in names:
+                    edge = self.coord_map[name]
+                    kwargs[name] = (
+                        self.dim_map[name],
+                        _shift_cell_edge(edge, delta),
+                    )
+                continue
             coord_to_drop.extend(names)
         # find coords to drop because their dimension changed.
         indirect_coord_drops = _get_dim_change_drop(coord_map, dim_map)
@@ -360,7 +398,7 @@ class CoordManager(RichRepr, DascoreBaseModel):
                 else:
                     edge_dims, edge = out[name]
                     delta = new_coord.min() - coord.min()
-                    out[name] = (edge_dims, edge.update(min=edge.min() + delta))
+                    out[name] = (edge_dims, _shift_cell_edge(edge, delta))
 
         dims = tuple(x for x in dims if x not in coord_to_drop)
         # Cast because the factory normalizes the coord mapping in ways the

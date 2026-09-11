@@ -1439,3 +1439,60 @@ class TestExtentFallback:
         """Do not widen an envelope that already fills the finite float range."""
         array = np.array([-1e308, 0.0, 1e308])
         assert _get_extents(("x",), {"x": array}) == [-1e308, 1e308]
+
+
+class TestReviewedCellRendering:
+    """Rendering regressions found by independent and caller review."""
+
+    def test_two_unequal_cells(self):
+        """Two edge arrays can be uniform while the two cell widths differ."""
+        patch = dc.Patch(
+            data=np.ones((2, 2)),
+            dims=("x", "y"),
+            coords={
+                "x": [0.0, 1.0],
+                "y": [0.0, 1.0],
+                "x_start": ("x", [-0.5, 0.5]),
+                "x_stop": ("x", [0.5, 2.5]),
+            },
+        )
+        ax = patch.viz.waterfall(cbar=False)
+        assert not ax.images
+        paths = ax.collections[0].get_paths()
+        assert paths[0].vertices[:, 1].max() == 0.5
+        assert paths[2].vertices[:, 1].min() == 0.5
+
+    def test_incomplete_other_axis(self):
+        """Bounds on one axis retain the existing index fallback on the other."""
+        patch = dc.Patch(
+            data=np.ones((2, 2)),
+            dims=("x", "y"),
+            coords={
+                "x": [0.0, 1.0],
+                "y": [np.nan, np.nan],
+                "x_start": ("x", [-0.5, 0.5]),
+                "x_stop": ("x", [0.5, 1.5]),
+            },
+        )
+        ax = patch.viz.waterfall(cbar=False)
+        assert ax.get_xlim() == (0.0, 1.0)
+        assert ax.get_ylim() == (-0.5, 1.5)
+
+    @pytest.mark.parametrize("gapped", [False, True])
+    def test_descending_grouped_label(self, gapped):
+        """A label spanning descending rows covers their entire cells."""
+        width = 0.5 if gapped else 1.0
+        patch = dc.Patch(
+            data=np.ones((3, 2)),
+            dims=("x", "y"),
+            coords={
+                "x": [2.0, 1.0, 0.0],
+                "y": [0.0, 1.0],
+                "x_start": ("x", [2.0, 1.0, 0.0]),
+                "x_stop": ("x", np.array([2.0, 1.0, 0.0]) + width),
+                "zone": ("x", ["a", "a", "b"]),
+            },
+        )
+        ax = patch.viz.waterfall(cbar=False, label_coord="zone")
+        bars = [line for line in ax.lines if str(line.get_gid()).startswith(BAR_GID)]
+        assert bars[0].get_ydata().tolist() == [2.0 + width, 1.0]

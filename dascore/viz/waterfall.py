@@ -153,7 +153,11 @@ def _bounds_fit_image(coords, dims):
         low, high = start.values, stop.values
         if coords[dim].reverse_sorted:
             low, high = low[::-1], high[::-1]
-        if not (start.evenly_sampled and stop.evenly_sampled):
+        if not (
+            start.evenly_sampled
+            and stop.evenly_sampled
+            and np.all(high - low == high[0] - low[0])
+        ):
             return False
         if not np.array_equal(high[:-1], low[1:]):
             return False
@@ -168,9 +172,17 @@ def _plot_with_bounds(ax, data, patch, cmap, gap_color, gap_factor):
             cells[dim] = tuple(
                 _get_plot_values(patch.get_array(name)) for name in names
             )
-        elif len(patch.get_coord(dim)) == 1:
-            low, high = _get_extents((dim,), patch.coords)
-            cells[dim] = (np.array([low]), np.array([high]))
+            if patch.get_coord(dim).reverse_sorted:
+                cells[dim] = cells[dim][::-1]
+        elif len(patch.get_coord(dim)) == 1 or not is_monotonic_and_finite(
+            patch.get_array(dim)
+        ):
+            cells[dim] = image_cell_edges(
+                _get_extents((dim,), patch.coords),
+                (dim,),
+                dim,
+                len(patch.get_coord(dim)),
+            )
         else:
             factor = gap_factor if gap_color is not None else None
             cells[dim] = mesh_cell_edges(*get_gap_edges(patch.get_array(dim), factor))
@@ -370,7 +382,7 @@ def waterfall(
                 extents, dims_r, plan.dim, len(coords[plan.dim])
             )
             if dim_coords[plan.dim].reverse_sorted:
-                label_edges = tuple(edge[::-1] for edge in label_edges)
+                label_edges = tuple(edge[::-1] for edge in reversed(label_edges))
     else:
         im, cells = _plot_with_mesh(
             ax,
