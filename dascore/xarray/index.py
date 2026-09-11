@@ -34,10 +34,12 @@ from dascore.core.coords import (
     CoordRange,
     CoordSegmented,
     concat_coords,
+    get_coord,
 )
 from dascore.exceptions import CoordError
 from dascore.utils.indexing import label_indexer, positional_indexer
 from dascore.utils.misc import is_strictly_monotonic
+from dascore.utils.time import dtype_time_like
 
 
 def is_servable(coord) -> bool:
@@ -161,6 +163,33 @@ class CoordIndex(CoordinateTransformIndex):
     """
 
     transform: CoordTransform
+
+    @classmethod
+    def from_variables(cls, variables, *, options) -> CoordIndex:
+        """
+        Build from a coordinate variable, as ``set_xindex`` asks.
+
+        Lets an array whose index holds its labels take this index type,
+        so it aligns with a lazy array without reading that array's labels:
+        ``other.drop_indexes("time").set_xindex("time", CoordIndex)``.
+        Evenly sampled labels become a range; others are held as they are.
+        """
+        if len(variables) != 1:
+            msg = f"CoordIndex serves one coordinate, got {list(variables)}."
+            raise ValueError(msg)
+        ((name, variable),) = variables.items()
+        if variable.ndim != 1:
+            msg = f"CoordIndex serves a one-dimensional coordinate, not {name!r}."
+            raise ValueError(msg)
+        values = np.asarray(variable.values)
+        units = variable.attrs.get("units")
+        coord = get_coord(data=values)
+        # a range is kept only where it reproduces the labels exactly
+        if not np.array_equal(coord._get_index_values(np.arange(len(coord))), values):
+            coord = _array_coord(values, None)
+        if units is not None and not dtype_time_like(coord.dtype):
+            coord = coord.set_units(units)
+        return cls(CoordTransform(name, coord, variable.dims[0]))
 
     @classmethod
     def from_coord(cls, name: str, coord: BaseCoord) -> CoordIndex:

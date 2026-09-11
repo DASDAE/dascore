@@ -45,6 +45,14 @@ xarray aligns a lazy index only with others of its kind, so combining a lazy arr
 eager = lazy.drop_indexes(["time", "distance"]).set_xindex("time").set_xindex("distance")
 ```
 
+The other way round often costs less: give the ordinary array the lazy index type instead. Its labels are already in memory, and where they equal the lazy array's the two align without reading the lazy labels at all (labels that differ are joined as ordinary indexes would be, which reads both).
+
+```python
+from dascore.xarray.index import CoordIndex
+
+aligned = eager.drop_indexes("time").set_xindex("time", CoordIndex)
+```
+
 A whole spool converts to a lazy, [dask](https://docs.dask.org/)-backed [DataTree](https://docs.xarray.dev/en/stable/user-guide/hierarchical-data.html) with one node per group of related patches (partitioned exactly as [`chunk`](`dascore.Spool.chunk`) partitions them) and one child node per merged output segment. Building the tree reads no data, and the coordinate of the dimension segments are merged along is lazy (as with `lazy_coords=True` above), so a segment spanning years of samples costs nothing to label. Other dimensions keep ordinary indexes, so per-channel arrays such as gains combine with a segment directly; along the merged dimension, use the `drop_indexes`/`set_xindex` swap above. Computing a selection loads only the source patches it touches.
 
 ```python

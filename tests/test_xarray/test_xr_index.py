@@ -523,6 +523,52 @@ class TestAlignment:
             lazy + eager
 
 
+class TestFromVariables:
+    """An ordinary array takes this index type through set_xindex."""
+
+    @pytest.mark.parametrize("name", ["ms", "descending", "float", "segmented"])
+    def test_labels_kept_exactly(self, name):
+        """The labels an array holds come back unchanged, as a range when even."""
+        _, eager = _pair(COORDS[name])
+        out = eager.drop_indexes("x").set_xindex("x", CoordIndex)
+        assert isinstance(out.xindexes["x"], CoordIndex)
+        np.testing.assert_array_equal(out["x"].values, eager["x"].values)
+        _assert_same(
+            lambda: out.sel(x=eager["x"].values[3]),
+            lambda: eager.sel(x=eager["x"].values[3]),
+        )
+
+    def test_aligns_with_a_lazy_array_without_reading_it(self, monkeypatch):
+        """Equal labels align without evaluating the lazy side's labels."""
+        lazy, eager = _pair(MS)
+        converted = eager.drop_indexes("x").set_xindex("x", CoordIndex)
+        original = CoordRange._get_index_values
+
+        def _bounded(self, indices):
+            assert np.size(indices) < 10, "the lazy labels were read"
+            return original(self, indices)
+
+        monkeypatch.setattr(CoordRange, "_get_index_values", _bounded)
+        out = lazy + converted
+        assert isinstance(out.xindexes["x"], CoordIndex)
+
+    def test_units_and_refusals(self):
+        """Units come from the variable; several or 2-d variables are refused."""
+        distance = xr.DataArray(
+            np.arange(5.0),
+            dims="d",
+            coords={"d": ("d", np.arange(5.0), {"units": "m"})},
+        )
+        out = distance.drop_indexes("d").set_xindex("d", CoordIndex)
+        assert out.xindexes["d"].coordinate.units == dc.get_quantity("m")
+        pair = xr.Dataset(coords={"a": ("x", [1, 2]), "b": ("x", [3, 4])})
+        with pytest.raises(ValueError, match="one coordinate"):
+            pair.set_xindex(["a", "b"], CoordIndex)
+        grid = xr.Dataset(coords={"g": (("x", "y"), [[1, 2], [3, 4]])})
+        with pytest.raises(ValueError, match="one-dimensional"):
+            grid.set_xindex("g", CoordIndex)
+
+
 class TestScale:
     """The reason this index exists: metadata-cost construction."""
 

@@ -482,7 +482,9 @@ def spool_to_xarray(
     segment with arrays indexed along the merged dimension, or reindex
     it, give it an ordinary index first, which reads all its labels into
     memory (so select first where possible), e.g.
-    ``data.drop_indexes("time").set_xindex("time")``.
+    ``data.drop_indexes("time").set_xindex("time")``, or give the other
+    array this index type, ``other.drop_indexes("time").set_xindex("time",
+    CoordIndex)``, which reads no lazy labels where the two agree.
 
     A spool with pending value-range selections cannot be converted: the
     catalog states such bounds as candidacy rather than sample positions,
