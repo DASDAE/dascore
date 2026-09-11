@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import io
 import sys
 
 import dascore as dc
@@ -30,6 +31,9 @@ def main(argv: list[str] | None = None) -> int:
         "--rebuild", action="store_true", help="Regenerate the Markdown corpus"
     )
     args = parser.parse_args(argv)
+    # Redirected Windows streams can otherwise reject Unicode documentation.
+    if isinstance(sys.stdout, io.TextIOWrapper):
+        sys.stdout.reconfigure(encoding="utf-8")
     try:
         with documentation_cache(rebuild=args.rebuild) as (root, manifest):
             if args.target:

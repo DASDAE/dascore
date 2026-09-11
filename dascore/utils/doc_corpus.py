@@ -244,15 +244,16 @@ def _markdown(text, path, aliases, authored):
 
     def link(match):
         label, target = match.groups()
-        reference = unquote(target).strip("`")
+        url = urlsplit(target)
+        reference = unquote(url.path).strip("`")
         if reference in aliases and len(aliases[reference]) == 1:
             dest = aliases[reference][0]
             relative = os.path.relpath(dest, Path(path).parent).replace(os.sep, "/")
-            return f"{label}({relative})"
-        if target.startswith("`"):
+            destination = urlunsplit(("", "", relative, url.query, url.fragment))
+            return f"{label}({destination})"
+        if unquote(url.path).startswith("`"):
             # Unsupported optional APIs have an explicit route to the site index.
             return f"{label}(https://dascore.org/api/dascore.html)"
-        url = urlsplit(target)
         if url.scheme or url.netloc or not url.path:
             return match[0]
         source = Path(os.path.normpath(str(Path(path).parent / url.path)))

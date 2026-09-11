@@ -615,6 +615,7 @@ def _map_other_qmd_files(doc_path=DOC_PATH, api_path=API_DOC_PATH):
         out["dascore/" + path_relative] = value
         # also add key with no qmd extension.
         out[path_relative.split(".")[0]] = value
+        out["dascore/" + path_relative.split(".")[0]] = value
     return out
 
 

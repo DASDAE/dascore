@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import inspect
+import io
 import json
 import subprocess
 import sys
@@ -136,6 +137,11 @@ class TestDocuments:
                     if not path.exists():
                         broken.append((record["id"], target))
         assert not broken
+
+    def test_anchored_reference(self, corpus):
+        """An existing anchored API reference stays local and retains its anchor."""
+        text = doc_cache.read_document(*corpus, "Patch.whiten")
+        assert "tutorial/processing.md#whiten)" in text
 
     def test_markdown(self, corpus):
         """Quarto examples remain readable source, with working page links."""
@@ -334,6 +340,17 @@ class TestCache:
         with doc_cache.documentation_cache() as (root, index):
             assert doc_cache.read_document(root, index, "example") == "first"
 
+    def test_redirected_unicode(self, cache, monkeypatch):
+        """Redirected documentation is UTF-8 even with a legacy Windows encoding."""
+        cache.write_text("Supported: ✅", encoding="utf-8")
+        buffer = io.BytesIO()
+        stream = io.TextIOWrapper(buffer, encoding="cp1252")
+        with monkeypatch.context() as context:
+            context.setattr(sys, "stdout", stream)
+            assert main(["doc", "example"]) == 0
+            stream.flush()
+        assert buffer.getvalue().decode("utf-8") == "Supported: ✅"
+
     def test_status(self, cache, capsys):
         """CLI provenance belongs to the invoking process."""
         assert main(["doc"]) == 0
@@ -357,6 +374,7 @@ class TestCache:
         assert not dc.get_config().docs_cache_dir.exists()
 
 
+@pytest.mark.concurrency
 class TestProcesses:
     """Real command-line processes can build and reuse one shared cache."""
 
