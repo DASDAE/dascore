@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Literal
+
 from dascore.core.processor import PatchProcessor
 from dascore.exceptions import ParameterError
 from dascore.utils.imports import lazy_import
@@ -35,7 +37,7 @@ class Detrend(PatchProcessor):
     """
 
     dim: str
-    type: str = "linear"
+    type: Literal["linear", "constant"] = "linear"
 
     def plan(self, patch, out):
         """Return the axis to detrend along."""
