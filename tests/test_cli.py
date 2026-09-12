@@ -440,9 +440,7 @@ class TestCache:
     def test_help(self, cache):
         """Help and version succeed without building documentation."""
         for args in (["--help"], ["--version"], ["doc", "--help"]):
-            with pytest.raises(SystemExit) as exc:
-                main(args)
-            assert exc.value.code == 0
+            assert main(args) == 0
         assert not dc.get_config().docs_cache_dir.exists()
 
 
@@ -492,3 +490,38 @@ class TestProcesses:
         )
         assert result.returncode == 0, result.stderr
         assert dc.__version__ in result.stdout
+
+
+class TestOptionalCLI:
+    """CLI commands require Typer; Python library use does not."""
+
+    def test_missing_typer(self, hide_module, capsys):
+        """A missing Typer reports the standard optional-dependency guidance."""
+        hide_module("typer")
+        assert main(["doc"]) == 1
+        captured = capsys.readouterr()
+        assert not captured.out
+        assert "typer is not installed" in captured.err
+        assert "pip install typer" in captured.err
+        assert "uv pip install typer" in captured.err
+        assert "Traceback" not in captured.err
+
+    @pytest.mark.parametrize("args", [[], ["unknown"], ["doc", "--unknown"]])
+    def test_usage_errors(self, args, capsys):
+        """Missing commands and invalid arguments return a nonzero usage error."""
+        assert main(args) == 2
+        captured = capsys.readouterr()
+        assert "Usage:" in captured.err
+        assert "Error" in captured.err
+
+    @pytest.mark.concurrency
+    def test_import_is_lazy(self):
+        """Importing the library and entry point does not import Typer."""
+        code = (
+            "import sys; import dascore; import dascore.cli; "
+            "assert 'typer' not in sys.modules"
+        )
+        result = subprocess.run(
+            [sys.executable, "-c", code], capture_output=True, text=True, timeout=30
+        )
+        assert result.returncode == 0, result.stderr

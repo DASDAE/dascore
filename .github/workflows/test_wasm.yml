@@ -113,7 +113,7 @@ jobs:
           # but the documentation examples import them, so the doc tests below
           # cannot run without them.
           .venv-pyodide/bin/pip install dist/*.whl pytest \
-            findiff pyyaml tabulate ipython
+            findiff pyyaml tabulate ipython "typer>=0.27.2"
 
       - name: prepare test data cache
         uses: ./.github/actions/prime-test-data-cache
