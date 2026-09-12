@@ -947,8 +947,14 @@ class SQLiteIndexBackend:
         *,
         limit: int | None = None,
         offset: int = 0,
+        reverse: bool = False,
     ) -> list[int]:
-        """Return ordered patch ids, optionally limited after exact filtering."""
+        """
+        Return ordered patch ids, optionally limited after exact filtering.
+
+        ``reverse`` presents them in the opposite order, so a caller after
+        the last rows can offset from that end instead of the first.
+        """
         queries, attr_meta, coord_meta = self._query_context(query, order_by=order_by)
         sql, params, residuals = build_sql(
             queries,
@@ -957,12 +963,14 @@ class SQLiteIndexBackend:
             order_by=order_by,
             patch_ids=patch_ids,
             ids_only=True,
+            reverse=reverse,
         )
         if residuals:
             # regex residuals need string values; realize the relation
             df = self.query(queries, order_by=order_by, patch_ids=patch_ids)
+            ordered = df["_patch_id"][::-1] if reverse else df["_patch_id"]
             stop = None if limit is None else offset + limit
-            return [int(x) for x in df["_patch_id"].iloc[offset:stop]]
+            return [int(x) for x in ordered.iloc[offset:stop]]
         if limit is not None or offset:
             sql += " LIMIT ? OFFSET ?"
             params.extend((-1 if limit is None else limit, offset))
