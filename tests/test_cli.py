@@ -505,18 +505,17 @@ class TestProcesses:
 
 
 class TestOptionalCLI:
-    """The optional CLI leaves Python use available and explains missing extras."""
+    """CLI commands require Typer; Python library use does not."""
 
     def test_missing_typer(self, hide_module, capsys):
-        """A missing Typer gives an install command for the selected interpreter."""
+        """A missing Typer reports the standard optional-dependency guidance."""
         hide_module("typer")
         assert main(["doc"]) == 1
         captured = capsys.readouterr()
         assert not captured.out
-        assert "dascore[agents]" in captured.err
-        assert sys.executable in captured.err
-        assert f'uv pip install --python "{sys.executable}"' in captured.err
-        assert "pip install typer" not in captured.err
+        assert "typer is not installed" in captured.err
+        assert "pip install typer" in captured.err
+        assert "uv pip install typer" in captured.err
         assert "Traceback" not in captured.err
 
     @pytest.mark.parametrize("args", [[], ["unknown"], ["doc", "--unknown"]])
