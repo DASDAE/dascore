@@ -397,9 +397,9 @@ def _tied_patches(prefix):
             data=np.arange(4),
             coords={"time": start + np.arange(4) * np.timedelta64(1, "s")},
             dims=("time",),
-            attrs={"tag": f"{prefix}-{i:02d}"},
+            attrs={"tag": f"{prefix}-{i:03d}"},
         )
-        for i in range(20)
+        for i in range(200)
     ]
 
 
@@ -449,8 +449,11 @@ class TestTiedOrder:
 
     def test_last_sorted_tied_patch(self, sorted_tied_spool):
         """The same holds when an explicit sort breaks the ties."""
-        contents = sorted_tied_spool.get_contents()
-        assert sorted_tied_spool[-1].attrs.tag == contents["tag"].iloc[-1]
+        catalog = sorted_tied_spool._catalog
+        expected = catalog.to_df()["tag"].iloc[-1]
+        # a view of its own, so the read pages rather than reusing that frame
+        fresh = catalog._view(catalog._queries, catalog._residuals)
+        assert fresh.get_patch(-1).attrs.tag == expected
 
 
 class TestWindowFallbacks:
@@ -484,6 +487,34 @@ class TestWindowFallbacks:
         view = big_spool._catalog.window(slice(0, 10))
         ids = view.ordered_ids()
         assert view.restrict(np.array([2, 0])).ordered_ids() == (ids[2], ids[0])
+
+    def test_unsigned_bounds_match_python(self, big_spool):
+        """Bounds which are unsigned integers cannot underflow into a window."""
+        catalog = big_spool._catalog
+        ids = catalog.ordered_ids()
+        item = slice(np.uint64(5), np.uint64(2))
+        assert catalog.window(item).ordered_ids() == ids[5:2] == ()
+
+    def test_wide_contiguous_window_stays_bounded(self, big_spool, monkeypatch):
+        """A contiguous window costs what it returns, however wide it is."""
+        monkeypatch.setattr(catalog_module, "_WINDOW_SPAN", 4)
+        catalog = big_spool._catalog
+        backend = catalog.backend
+        fetched, counting = _counting_ids(backend)
+        item = slice(-60, None)
+        with mock.patch.object(backend, "query_ids", counting):
+            chosen = catalog.window(item).ordered_ids()
+        assert chosen == catalog.ordered_ids()[item]
+        assert fetched and max(fetched) <= 60
+
+    def test_repeated_last_reads_count_once(self, big_spool):
+        """Reading the final patch again does not count the view again."""
+        catalog = big_spool.select(tag="patch-1[0-9][0-9]")._catalog
+        backend = catalog.backend
+        with mock.patch.object(backend, "count", wraps=backend.count) as count:
+            for _ in range(10):
+                assert catalog.get_patch(-1).attrs.tag == "patch-199"
+        assert count.call_count <= 1
 
     def test_pages_are_evicted(self, big_spool, monkeypatch):
         """Reads which walk away from their page do not accumulate pages."""

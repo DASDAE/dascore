@@ -691,6 +691,7 @@ class PatchCatalog:
         self._revision = revision or _CatalogRevision()
         self._df_cache = _RevisionCache()
         self._live_cache = _RevisionCache()
+        self._len_cache = _RevisionCache()
         # metadata pages serving repeated positional reads, and the
         # revision they describe
         self._pages: dict[int, pd.DataFrame] = {}
@@ -1009,24 +1010,24 @@ class PatchCatalog:
 
         ``length`` is the presented row count, for a caller which knows it.
         """
-        for part in (item.start, item.stop, item.step):
-            if part is not None:
-                operator.index(part)
+        # normalized once: a raw numpy uint bound would underflow the
+        # arithmetic below, and an object with only __index__ cannot compare
+        start = None if item.start is None else operator.index(item.start)
+        stop = None if item.stop is None else operator.index(item.stop)
+        step = 1 if item.step is None else operator.index(item.step)
+        item = slice(start, stop, step)
         fixed = self._ids is not None and self._order is None
         if ids is not None or fixed or self._requires_full_relation():
             chosen = (self.ordered_ids() if ids is None else tuple(ids))[item]
             return self._view(self._queries, self._residuals, ids=tuple(chosen))
-        deep = item.start is not None and item.start > _DEEP_START
-        negative = (item.step is not None and item.step < 0) or any(
-            part is not None and part < 0 for part in (item.start, item.stop)
-        )
+        deep = start is not None and start > _DEEP_START
+        negative = step < 0 or any(x is not None and x < 0 for x in (start, stop))
         if length is None and (deep or negative):
             length = len(self)
         if length is None:
             # a forward window from a known start needs no row count
-            start = 0 if item.start is None else item.start
-            step = 1 if item.step is None else item.step
-            limit = None if item.stop is None else max(0, item.stop - start)
+            begin = 0 if start is None else start
+            limit = None if stop is None else max(0, stop - begin)
             if limit is not None and limit > _MAX_LIMIT:
                 limit = None
             fetched = (
@@ -1037,7 +1038,7 @@ class PatchCatalog:
                     order_by=self._effective_order,
                     patch_ids=self._ids,
                     limit=limit,
-                    offset=start,
+                    offset=begin,
                 )
             )
             return self._view(
@@ -1048,8 +1049,10 @@ class PatchCatalog:
             return self._view(self._queries, self._residuals, ids=())
         first = min(positions[0], positions[-1])
         last = max(positions[0], positions[-1]) + 1
-        if last - first > _WINDOW_SPAN:
-            # a sparse or deep span: correct, but it reads all the ids
+        if abs(step) != 1 and last - first > _WINDOW_SPAN:
+            # a stride whose span dwarfs its result: correct, but it reads
+            # every id. A contiguous window costs what it returns, however
+            # wide, so it keeps its bounded query.
             chosen = self.ordered_ids()[item]
             return self._view(self._queries, self._residuals, ids=tuple(chosen))
         span = self._span_ids(first, last, length)
@@ -1315,6 +1318,9 @@ class PatchCatalog:
                 return len(live)
             if (df := self._df_cache.get(self._revision.value)) is not None:
                 return len(df)
+            # a count can cost a query, and positional reads ask repeatedly
+            if (cached := self._len_cache.get(self._revision.value)) is not None:
+                return cached
             # A range residual *after* a patch-local one can drop rows SQL
             # candidacy kept: the patch-local pass empties the envelope of a
             # patch its window misses, and the range pass then finds nothing
@@ -1324,10 +1330,11 @@ class PatchCatalog:
                 if samples or relative:
                     patch_local = True
                 elif patch_local:
-                    return len(self.to_df())
+                    return self._len_cache.set(len(self.to_df()), self._revision.value)
             # Otherwise SQL candidacy already accounts for every drop, so the
             # count matches len(to_df()) without projecting or pivoting.
-            return self.backend.count(list(self._queries) or None, patch_ids=self._ids)
+            count = self.backend.count(list(self._queries) or None, patch_ids=self._ids)
+            return self._len_cache.set(count, self._revision.value)
 
     def get_patch(self, index: int) -> dc.Patch:
         """Materialize one patch: resolve, then exact two-stage trim."""

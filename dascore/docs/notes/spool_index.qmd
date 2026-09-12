@@ -74,7 +74,7 @@ SQLite permits concurrent readers and serializes writers. Initialization and upd
 
 ## Bounded metadata access
 
-For an indexed spool, the first integer access projects the selected patch's metadata row alone. A second access pays for the page of 64 rows around the row it wants, so repeated positional reads amortize SQL and dataframe setup without realizing the whole view; the eight most recent pages are kept, and an update drops them. Use `spool[:10].get_contents()` for a small preview.
+For an indexed spool, the first integer access projects the selected patch's metadata row alone. A second access pays for the page of 64 rows around the row it wants, so repeated positional reads amortize SQL and dataframe setup without realizing the whole view; the last eight pages fetched are kept, and an update drops them. Use `spool[:10].get_contents()` for a small preview.
 
 A window is fetched from whichever end of the presentation it lies nearer, so `spool[-10:]` costs what `spool[:10]` costs instead of skipping every row before it. Small stepped windows and short arrays of positions read the span they cover and pick within it. A window whose span exceeds 4096 rows — a sparse stride over a large view, say — still reads the whole membership; that limit, and cheap access to an arbitrary deep position, are open work. Regex predicates and coordinate selections whose residual operations can remove candidate rows still require exact filtering before a positional limit can be applied.
 
