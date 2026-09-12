@@ -2802,11 +2802,7 @@ def _spool_from_str(path, **kwargs):
     # scanning build a lazy file-backed spool, else read it into memory.
     elif path.exists():  # a single file path was passed.
         _format, _version = dc.get_format(path, **kwargs)
-        formatter = dc.io.FiberIO.manager.get_fiberio(format=_format, version=_version)
-        if formatter.implements_scan:
-            return Spool.from_file(path, _format, _version)
-        else:
-            return Spool(dc.read(path, _format, _version))
+        return Spool.from_file(path, _format, _version)
     else:
         msg = (
             f"could not get spool from argument: {path}. "

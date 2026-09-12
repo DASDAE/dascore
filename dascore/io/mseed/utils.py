@@ -4,27 +4,21 @@ from __future__ import annotations
 
 import struct
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, replace
 from fractions import Fraction
 from itertools import groupby
-from math import ceil, floor
 from struct import unpack
-from typing import Generic, Literal, TypeVar
+from typing import Literal, TypeVar
 
 import numpy as np
 
 import dascore as dc
 from dascore.constants import ONE_BILLION
 from dascore.core import get_coord, get_coord_manager
-from dascore.io import ScanPayload
-from dascore.io.core import make_scan_payload
-from dascore.utils.io import LocalPath, _normalize_source_patch_keys, _read_file_header
-from dascore.utils.time import to_datetime64, to_int
+from dascore.core.source import PatchSource
+from dascore.utils.io import LocalPath, _read_file_header
 
-_TimeLimits = tuple[int | None, int | None]
-_TraceWindow = tuple[int, int]
-_SourceWindows = dict[str, list[_TimeLimits]]
-_T = TypeVar("_T", bound="_TraceInfo")
+_T = TypeVar("_T", bound="_TraceSummary")
 
 _TEXT_ENCODING = 0
 _INT16_ENCODING = 1
@@ -36,7 +30,7 @@ _STEIM2_ENCODING = 11
 
 _ENCODING_DTYPE_MAP = {
     _TEXT_ENCODING: "S1",
-    _INT16_ENCODING: "int16",
+    _INT16_ENCODING: "int32",
     _INT32_ENCODING: "int32",
     _FLOAT32_ENCODING: "float32",
     _FLOAT64_ENCODING: "float64",
@@ -54,7 +48,7 @@ _SEED_CHARS_WITH_SPACE = _SEED_CHARS + b" "
 
 
 @dataclass(frozen=True)
-class _TraceInfo:
+class _TraceSummary:
     """MiniSEED trace identity and timing metadata."""
 
     source_id: str
@@ -70,9 +64,7 @@ class _TraceInfo:
     encoding: str
     publication_version: int
     record_length: int
-    # Where the ideal first sample sits after start_ns, in units of the
-    # step's nanosecond denominator; non-zero only after an exact trim.
-    origin_offset: int = field(default=0, kw_only=True)
+    dtype: str
 
     @property
     def sample_step_ns(self) -> int:
@@ -90,24 +82,6 @@ class _TraceInfo:
         return self.start_ns + _duration_ns(self.sample_rate, self.sample_count)
 
 
-@dataclass(frozen=True)
-class _TraceSegment(_TraceInfo):
-    """A decoded contiguous MiniSEED segment from one source ID."""
-
-    data: np.ndarray
-
-    def __post_init__(self) -> None:
-        """Validate that trace metadata matches the decoded samples."""
-        assert len(self.data) == self.sample_count
-
-
-@dataclass(frozen=True)
-class _TraceSummary(_TraceInfo):
-    """Metadata for a contiguous MiniSEED segment from one source ID."""
-
-    dtype: str
-
-
 @dataclass(frozen=True, order=True)
 class _TraceGroupKey:
     """Compatibility fields that define one MiniSEED output patch."""
@@ -119,17 +93,6 @@ class _TraceGroupKey:
     start_ns: int
     sample_rate: float
     sample_count: int
-    origin_offset: int = 0
-
-
-@dataclass(frozen=True)
-class _PreparedGroup(Generic[_T]):
-    """Sorted group data shared by patch and scan payload creation."""
-
-    segments: Sequence[_T]
-    first: _T
-    coords: dict
-    attrs: dict
 
 
 def _duration_seconds(sample_rate: float, sample_count: int = 1) -> Fraction:
@@ -162,33 +125,6 @@ def _duration_ns(sample_rate: float, sample_count: int = 1) -> int:
     return round(_duration_seconds(sample_rate, sample_count) * ONE_BILLION)
 
 
-def _get_time_limits(time=None) -> _TimeLimits:
-    """Return optional time limits as epoch nanoseconds."""
-
-    def to_ns(value):
-        if value is None or value is ...:
-            return None
-        return int(to_int(to_datetime64(value)))
-
-    if time is None or time is ...:
-        return None, None
-    return to_ns(time[0]), to_ns(time[1])
-
-
-def _trace_time_window(trace: _TraceInfo) -> _TraceWindow:
-    """Return the inclusive time window covered by a trace."""
-    stop = trace.start_ns + max(trace.sample_count - 1, 0) * trace.sample_step_ns
-    return trace.start_ns, stop
-
-
-def _time_windows_overlap(start: int, stop: int, limits: _TimeLimits) -> bool:
-    """Return True if an inclusive start/stop range overlaps optional limits."""
-    limit_start, limit_stop = limits
-    after_start = limit_stop is None or start <= limit_stop
-    before_stop = limit_start is None or stop >= limit_start
-    return after_start and before_stop
-
-
 def _source_id_to_nslc(pymseed, source_id: str) -> tuple[str, str, str, str]:
     """Return NSLC codes from a MiniSEED source ID."""
     parse_errors = (ValueError, TypeError)
@@ -215,12 +151,13 @@ def _record_dtype(record) -> str:
     return _ENCODING_DTYPE_MAP.get(encoding, "")
 
 
-def _record_to_trace_info(record, pymseed, sample_count: int) -> _TraceInfo:
-    """Convert common PyMseed record fields to trace metadata."""
+def _record_to_summary(record, pymseed) -> _TraceSummary:
+    """Convert a PyMseed record header without unpacking samples."""
     network, station, location, seed_channel = _source_id_to_nslc(
         pymseed, str(record.sourceid)
     )
-    return _TraceInfo(
+    dtype = _record_dtype(record)
+    return _TraceSummary(
         source_id=str(record.sourceid),
         network=network,
         station=station,
@@ -229,81 +166,17 @@ def _record_to_trace_info(record, pymseed, sample_count: int) -> _TraceInfo:
         format_version=str(record.formatversion),
         start_ns=int(record.starttime),
         sample_rate=float(record.samprate),
-        sample_count=sample_count,
-        sample_type=str(record.sampletype or ""),
+        sample_count=int(record.samplecnt),
+        dtype=dtype,
+        sample_type=str(
+            record.sampletype
+            or {value: key for key, value in _SAMPLE_TYPE_DTYPE_MAP.items()}.get(
+                dtype, ""
+            )
+        ),
         encoding=str(record.encoding),
         publication_version=int(getattr(record, "pubversion", 0) or 0),
         record_length=int(getattr(record, "reclen", 0) or 0),
-    )
-
-
-def _record_overlaps_source_windows(record, source_windows: _SourceWindows) -> bool:
-    """Return True if a record overlaps one selected source time window."""
-    record_start = int(record.starttime)
-    record_stop = int(record.endtime)
-    windows = source_windows.get(str(record.sourceid), ())
-    return any(
-        _time_windows_overlap(record_start, record_stop, window) for window in windows
-    )
-
-
-def _record_to_segment(
-    record, pymseed, time_limits: _TimeLimits
-) -> _TraceSegment | None:
-    """Convert a PyMseed record to a trace segment."""
-    if not _time_windows_overlap(
-        int(record.starttime), int(record.endtime), time_limits
-    ):
-        return None
-    record.unpack_data()
-    data = np.asarray(record.np_datasamples)
-    info = _record_to_trace_info(record, pymseed, sample_count=len(data))
-    segment = _TraceSegment(
-        **info.__dict__,
-        # Detach from the PyMseed record buffer before records are advanced.
-        data=data.copy(),
-    )
-    return _trim_segment_time(segment, time_limits)
-
-
-def _record_to_summary(record, pymseed) -> _TraceSummary:
-    """Convert a PyMseed record header to a trace summary."""
-    # Header-only scan trusts samplecnt; corrupted records may decode differently.
-    info = _record_to_trace_info(record, pymseed, sample_count=int(record.samplecnt))
-    return _TraceSummary(
-        **info.__dict__,
-        dtype=_record_dtype(record),
-    )
-
-
-def _trim_segment_time(
-    segment: _TraceSegment, time_limits: _TimeLimits
-) -> _TraceSegment | None:
-    """Trim a segment to a requested time range."""
-    start, stop = time_limits
-    if start is None and stop is None:
-        return segment
-    # Exact nanosecond arithmetic, so a 1024 Hz trace trimmed at a whole
-    # second keeps the sample on that second, and the trimmed origin stays
-    # on the trace's grid.
-    step = segment.sample_step * ONE_BILLION
-    origin = segment.start_ns + Fraction(segment.origin_offset, step.denominator)
-    start_index = 0 if start is None else max(0, ceil((start - origin) / step))
-    stop_index = (
-        segment.sample_count
-        if stop is None
-        else min(segment.sample_count, floor((stop - origin) / step) + 1)
-    )
-    if stop_index <= start_index:
-        return None
-    new_origin = origin + start_index * step
-    start_ns = floor(new_origin)
-    return replace(
-        segment,
-        start_ns=start_ns,
-        origin_offset=int((new_origin - start_ns) * step.denominator),
-        sample_count=stop_index - start_index,
-        data=segment.data[start_index:stop_index].copy(),
     )
 
 
@@ -331,105 +204,29 @@ def _coalesce_source_traces(
     return out
 
 
-def _coalesce_source_segments(segments: list[_TraceSegment]) -> list[_TraceSegment]:
-    """Merge contiguous decoded records for the same source ID."""
+def _can_merge_summaries(pending: _TraceSummary, summary: _TraceSummary) -> bool:
+    """Whether two headers belong to the same contiguous source segment."""
+    return (
+        pending.sample_rate == summary.sample_rate
+        and pending.format_version == summary.format_version
+        and _continues(pending.next_start_ns, summary.start_ns, pending.sample_rate)
+        and pending.dtype == summary.dtype
+        and pending.encoding == summary.encoding
+    )
 
-    def flush_pending(
-        pending: _TraceSegment,
-        data: list[np.ndarray],
-        sample_count: int,
-        record_length: int,
-    ) -> _TraceSegment:
-        """Return the current pending segment without repeated concatenation."""
-        if len(data) == 1:
-            return pending
-        return replace(
-            pending,
-            sample_count=sample_count,
-            record_length=record_length,
-            data=np.concatenate(data),
-        )
 
-    segments = sorted(segments, key=lambda x: (x.source_id, x.start_ns))
-    out = []
-    for _, source_group in groupby(segments, key=lambda x: x.source_id):
-        pending = None
-        data = []
-        sample_count = 0
-        record_length = 0
-        for seg in source_group:
-            if pending is None:
-                pending = seg
-                data = [seg.data]
-                sample_count = seg.sample_count
-                record_length = seg.record_length
-                continue
-            can_merge = (
-                pending.sample_rate == seg.sample_rate
-                and pending.format_version == seg.format_version
-                and _continues(
-                    pending.start_ns + _duration_ns(pending.sample_rate, sample_count),
-                    seg.start_ns,
-                    pending.sample_rate,
-                )
-                and pending.data.dtype == seg.data.dtype
-                and pending.encoding == seg.encoding
-            )
-            if can_merge:
-                data.append(seg.data)
-                sample_count += seg.sample_count
-                record_length = max(record_length, seg.record_length)
-            else:
-                out.append(flush_pending(pending, data, sample_count, record_length))
-                pending = seg
-                data = [seg.data]
-                sample_count = seg.sample_count
-                record_length = seg.record_length
-        if pending is not None:
-            out.append(flush_pending(pending, data, sample_count, record_length))
-    return out
+def _merge_summaries(pending: _T, summary: _T) -> _T:
+    """Combine contiguous header counts while keeping the original grid."""
+    return replace(
+        pending,
+        sample_count=pending.sample_count + summary.sample_count,
+        record_length=max(pending.record_length, summary.record_length),
+    )
 
 
 def _coalesce_source_summaries(summaries: list[_TraceSummary]) -> list[_TraceSummary]:
     """Merge contiguous record summaries for the same source ID."""
-
-    def can_merge(pending: _TraceSummary, summary: _TraceSummary) -> bool:
-        return (
-            pending.sample_rate == summary.sample_rate
-            and pending.format_version == summary.format_version
-            and _continues(pending.next_start_ns, summary.start_ns, pending.sample_rate)
-            and pending.dtype == summary.dtype
-            and pending.encoding == summary.encoding
-        )
-
-    def merge(pending: _TraceSummary, summary: _TraceSummary) -> _TraceSummary:
-        return replace(
-            pending,
-            sample_count=pending.sample_count + summary.sample_count,
-            record_length=max(pending.record_length, summary.record_length),
-        )
-
-    return _coalesce_source_traces(summaries, can_merge, merge)
-
-
-def _read_segments(
-    path: LocalPath,
-    pymseed,
-    time=None,
-    source_windows: _SourceWindows | None = None,
-) -> list[_TraceSegment]:
-    """Read and coalesce decoded MiniSEED records."""
-    segments = []
-    time_limits = _get_time_limits(time)
-    for record in pymseed.MS3Record.from_file(str(path), unpack_data=False):
-        if source_windows is not None and not _record_overlaps_source_windows(
-            record, source_windows
-        ):
-            continue
-        segment = _record_to_segment(record, pymseed, time_limits)
-        if segment is not None and segment.sample_count:
-            segments.append(segment)
-    return _coalesce_source_segments(segments)
+    return _coalesce_source_traces(summaries, _can_merge_summaries, _merge_summaries)
 
 
 def _scan_segments(path: LocalPath, pymseed) -> list[_TraceSummary]:
@@ -442,7 +239,7 @@ def _scan_segments(path: LocalPath, pymseed) -> list[_TraceSummary]:
     return _coalesce_source_summaries(summaries)
 
 
-def _get_group_key(segment: _TraceInfo) -> _TraceGroupKey:
+def _get_group_key(segment: _TraceSummary) -> _TraceGroupKey:
     """Return the compatibility key used to merge traces into a patch."""
     return _TraceGroupKey(
         format_version=segment.format_version,
@@ -452,7 +249,6 @@ def _get_group_key(segment: _TraceInfo) -> _TraceGroupKey:
         start_ns=segment.start_ns,
         sample_rate=segment.sample_rate,
         sample_count=segment.sample_count,
-        origin_offset=segment.origin_offset,
     )
 
 
@@ -463,45 +259,12 @@ def _group_segments(segments: Sequence[_T]):
         yield key, list(group)
 
 
-def _get_channel_map(segments: Sequence[_TraceInfo]) -> dict[str, int]:
+def _get_channel_map(segments: Sequence[_TraceSummary]) -> dict[str, int]:
     """Return stable channel indices for MiniSEED sources."""
     source_ids = dict.fromkeys(
         x.source_id for x in sorted(segments, key=lambda y: (y.station, y.source_id))
     )
     return {source_id: ind for ind, source_id in enumerate(source_ids)}
-
-
-def _get_selected_source_ids(channel_map: dict[str, int], channel) -> set[str]:
-    """Return source IDs selected by DASCore channel selector semantics."""
-    if channel is None:
-        return set(channel_map)
-    source_ids = np.asarray(tuple(channel_map))
-    channel_values = np.asarray([channel_map[x] for x in source_ids])
-    channel_coord = get_coord(data=channel_values)
-    _, indexer = channel_coord.select(channel)
-    return {str(x) for x in np.atleast_1d(source_ids[indexer])}
-
-
-def _get_read_plan(path, pymseed, wanted_ids, channel):
-    """Return scan-derived groups and source windows needed for a read."""
-    summaries = _scan_segments(path, pymseed)
-    channel_map = _get_channel_map(summaries)
-    selected_source_ids = _get_selected_source_ids(channel_map, channel)
-    source_windows: _SourceWindows = {}
-    groups = []
-    for group_key, group in _group_segments(summaries):
-        patch_id = _source_patch_key(group_key)
-        if wanted_ids and patch_id not in wanted_ids:
-            continue
-        group = [x for x in group if x.source_id in selected_source_ids]
-        if not group:
-            continue
-        groups.append((group_key, group))
-        for summary in group:
-            source_windows.setdefault(summary.source_id, []).append(
-                _trace_time_window(summary)
-            )
-    return channel_map, groups, source_windows
 
 
 def _source_patch_key(group_key: _TraceGroupKey) -> str:
@@ -517,7 +280,7 @@ def _source_patch_key(group_key: _TraceGroupKey) -> str:
 
 
 def _get_coords(
-    segments: Sequence[_TraceInfo], channel_map: dict[str, int] | None = None
+    segments: Sequence[_TraceSummary], channel_map: dict[str, int] | None = None
 ):
     """Return DASCore coordinates from compatible MiniSEED segments."""
     segments = sorted(segments, key=lambda x: (x.station, x.source_id))
@@ -536,7 +299,6 @@ def _get_coords(
             start=start,
             step=first.sample_step,
             shape=(sample_count,),
-            origin_offset=first.origin_offset,
         ),
         "source_id": (("channel",), source_ids),
         "network": (("channel",), tuple(x.network for x in segments)),
@@ -546,13 +308,16 @@ def _get_coords(
     }
 
 
-def _prepare_group(
-    group_key, segments: Sequence[_T], channel_map=None
-) -> _PreparedGroup[_T]:
-    """Return shared sorted segments, coordinates, and attrs for one group."""
-    segments = tuple(sorted(segments, key=lambda x: (x.station, x.source_id)))
-    first = segments[0]
-    coords = _get_coords(segments, channel_map=channel_map)
+def _metadata_from_segments(
+    group_key,
+    segments: list[_TraceSummary],
+    channel_map: dict[str, int] | None = None,
+) -> dc.Patch:
+    """Create a data-less patch from compatible MiniSEED record summaries."""
+    first = min(segments, key=lambda item: (item.station, item.source_id))
+    coords = get_coord_manager(
+        _get_coords(segments, channel_map), dims=("channel", "time")
+    )
     attrs = {
         "data_type": "",
         "tag": ".".join((first.network, first.location, first.seed_channel)),
@@ -561,105 +326,28 @@ def _prepare_group(
         "mseed_encoding": first.encoding,
         "mseed_publication_version": first.publication_version,
         "mseed_record_length": first.record_length,
-        "_source_patch_key": _source_patch_key(group_key),
     }
-    return _PreparedGroup(segments, first, coords, attrs)
-
-
-def _patch_from_segments(
-    group_key, segments: list[_TraceSegment], channel_map: dict[str, int] | None = None
-) -> dc.Patch:
-    """Create a DASCore Patch from compatible MiniSEED trace segments."""
-    prepared = _prepare_group(group_key, segments, channel_map)
-    data = np.stack([x.data for x in prepared.segments])
     return dc.Patch(
-        data=data,
-        dims=("channel", "time"),
-        coords=prepared.coords,
-        attrs=prepared.attrs,
-    )
-
-
-def _segments_from_summaries(
-    segments: Sequence[_TraceSegment], summaries: Sequence[_TraceSummary]
-) -> list[_TraceSegment]:
-    """Return decoded segments that overlap selected scan summaries."""
-    summaries_by_source = {}
-    for summary in summaries:
-        summaries_by_source.setdefault(summary.source_id, []).append(summary)
-    out = []
-    for segment in segments:
-        segment_start, segment_stop = _trace_time_window(segment)
-        for summary in summaries_by_source.get(segment.source_id, ()):
-            if _time_windows_overlap(
-                segment_start, segment_stop, _trace_time_window(summary)
-            ):
-                out.append(segment)
-                break
-    return out
-
-
-def _scan_payload_from_segments(
-    group_key,
-    segments: list[_TraceSummary],
-    channel_map: dict[str, int] | None = None,
-) -> ScanPayload:
-    """Create a DASCore scan payload from MiniSEED trace summaries."""
-    prepared = _prepare_group(group_key, segments, channel_map)
-    coords = get_coord_manager(
-        prepared.coords,
-        dims=("channel", "time"),
-    )
-    return make_scan_payload(
-        attrs=prepared.attrs,
+        attrs=attrs,
         coords=coords,
-        dtype=prepared.first.dtype,
-        source_patch_key=prepared.attrs["_source_patch_key"],
+        dtype=np.result_type(*[segment.dtype for segment in segments]),
+        source=PatchSource(key=_source_patch_key(group_key)),
     )
 
 
-def _get_patches(
-    path, pymseed, time=None, channel=None, source_patch_key=()
-) -> list[dc.Patch]:
-    """Read MiniSEED patches from a path."""
-    wanted_ids = _normalize_source_patch_keys(source_patch_key)
-    patches = []
-    use_scan_plan = bool(wanted_ids) or channel is not None
-    if use_scan_plan:
-        channel_map, segment_groups, source_windows = _get_read_plan(
-            path, pymseed, wanted_ids, channel
-        )
-        if not segment_groups:
-            return []
-        all_segments = _read_segments(
-            path, pymseed, time=time, source_windows=source_windows
-        )
-    else:
-        all_segments = _read_segments(path, pymseed, time=time)
-        channel_map = _get_channel_map(all_segments)
-        segment_groups = list(_group_segments(all_segments))
-    for group_key, segments in segment_groups:
-        if use_scan_plan:
-            segments = _segments_from_summaries(all_segments, segments)
-        if not segments:
-            continue
-        patch = _patch_from_segments(group_key, segments, channel_map=channel_map)
-        if patch.size:
-            patches.append(patch)
-    return sorted(patches, key=lambda x: x.get_coord("channel").min())
+def _scan_patches(path, pymseed) -> list[dc.Patch]:
+    """Return data-less patches for MiniSEED patches."""
+    return _metadata_from_summaries(_scan_segments(path, pymseed))
 
 
-def _scan_patches(path, pymseed) -> list[ScanPayload]:
-    """Return scan payloads for MiniSEED patches."""
+def _metadata_from_summaries(all_segments):
+    """Build metadata without repeating the record scan."""
     payloads = []
-    all_segments = _scan_segments(path, pymseed)
     channel_map = _get_channel_map(all_segments)
     for group_key, segments in _group_segments(all_segments):
-        payload = _scan_payload_from_segments(
-            group_key, segments, channel_map=channel_map
-        )
+        payload = _metadata_from_segments(group_key, segments, channel_map=channel_map)
         payloads.append(payload)
-    return sorted(payloads, key=lambda x: x["coords"].get_coord("channel").min())
+    return sorted(payloads, key=lambda x: x.coords.get_coord("channel").min())
 
 
 def _is_seed_code(value: bytes, *, allow_space: bool = True) -> bool:

@@ -8,6 +8,7 @@ import gc
 import struct
 import warnings
 from functools import cache
+from io import BufferedReader
 from pathlib import Path
 
 import numpy as np
@@ -15,11 +16,11 @@ import pytest
 
 import dascore as dc
 from dascore.exceptions import InvalidFiberFileError, MissingOptionalDependencyError
-from dascore.io.core import _scan_payload_to_summary
 from dascore.io.sintela import SintelaProtobufV1
 from dascore.io.sintela import protobuf_utils as sintela_utils
 from dascore.units import get_quantity
 from dascore.utils.downloader import fetch
+from dascore.utils.io import IOResourceManager
 
 # protobuf is an optional dependency and is not in the test extra, so the
 # min-deps job runs without it. Skipping here (rather than installing it
@@ -87,7 +88,7 @@ def _build_meta_payload_without_fiber_id():
 
 def _payload_to_summary(payload):
     """Convert a raw FiberIO scan payload using the production scan path."""
-    return _scan_payload_to_summary(payload)
+    return payload.summary
 
 
 def _without_ids(summary):
@@ -270,7 +271,7 @@ class _BytesReader:
         return out
 
 
-class _CountingReader:
+class _CountingReader(BufferedReader):
     """
     A binary handle that records how many bytes were actually read.
 
@@ -281,26 +282,22 @@ class _CountingReader:
     """
 
     def __init__(self, handle):
-        self._handle = handle
+        super().__init__(handle)
         self.bytes_read = 0
 
     def read(self, size=-1):
         """Read from the wrapped handle, accumulating the byte count."""
-        out = self._handle.read(size)
+        out = super().read(size)
         self.bytes_read += len(out)
         return out
-
-    def __getattr__(self, name):
-        """Delegate seek/tell and friends to the wrapped handle."""
-        return getattr(self._handle, name)
 
 
 def _bytes_read_by(func, path) -> int:
     """Return how many bytes ``func`` pulls off disk for ``path``."""
     with path.open("rb") as handle:
-        reader = _CountingReader(handle)
-        func(reader)
-        return reader.bytes_read
+        with _CountingReader(handle) as reader:
+            func(reader)
+            return reader.bytes_read
 
 
 def del_samples_beyond(msg, keep: int):
@@ -559,6 +556,22 @@ class TestSintelaProtobuf:
         spool = fiber_io.read(path, distance=(999, 1000))
         assert len(spool) == 0
 
+    @pytest.mark.parametrize("method", ["read", "scan"])
+    def test_borrowed_stream_remains_open(
+        self, fiber_io, write_sintela_file, ts_records, method
+    ):
+        """The special read and derived scan leave caller-owned streams reusable."""
+        path = write_sintela_file("borrowed.pb", ts_records)
+        with path.open("rb") as stream:
+            first = getattr(fiber_io, method)(stream)
+            assert not stream.closed
+            second = getattr(fiber_io, method)(stream)
+            assert len(first) == len(second) == 1
+
+    def test_unknown_source_key_skips_read(self, fiber_io):
+        """An unmatched logical key avoids opening or decoding the recording."""
+        assert len(fiber_io.read("does-not-exist.pb", source_patch_key="missing")) == 0
+
     def test_mixed_families_raise(
         self, fiber_io, write_sintela_file, ts_records, band_records
     ):
@@ -683,10 +696,7 @@ class TestSintelaProtobuf:
         with path.open("rb") as handle:
             assert handle.read(4)
             before = handle.tell()
-            assert fiber_io.get_format.func(fiber_io, handle) == (
-                "Sintela_Protobuf",
-                "1",
-            )
+            assert fiber_io.get_version.func(fiber_io, handle) == "1"
             assert handle.tell() == before
 
     def test_truncated_payload_raises(self, fiber_io, tmp_path):
@@ -1171,7 +1181,23 @@ _FAMILY_BUILDERS = [
 class TestSintelaProtobufScanCost:
     """Scanning must not pay for the sample data it does not report."""
 
-    def test_scan_reads_do_not_grow_with_recording_length(self, write_sintela_file):
+    @pytest.mark.parametrize(
+        "scan",
+        [
+            sintela_utils.scan_payload,
+            SintelaProtobufV1().scan,
+            lambda resource: dc.scan_payloads(
+                IOResourceManager(resource),
+                file_format="Sintela_Protobuf",
+                file_version="1",
+                progress=None,
+            ),
+        ],
+        ids=["helper", "reader", "dispatcher"],
+    )
+    def test_scan_reads_do_not_grow_with_recording_length(
+        self, write_sintela_file, scan
+    ):
         """
         A longer timeseries recording must not cost a longer scan.
 
@@ -1192,8 +1218,8 @@ class TestSintelaProtobufScanCost:
         long = _write("ts_long.pb", 64)
         assert long.stat().st_size > 8 * short.stat().st_size
 
-        short_bytes = _bytes_read_by(sintela_utils.scan_payload, short)
-        long_bytes = _bytes_read_by(sintela_utils.scan_payload, long)
+        short_bytes = _bytes_read_by(scan, short)
+        long_bytes = _bytes_read_by(scan, long)
         assert short_bytes == long_bytes
         assert long_bytes < long.stat().st_size / 4
 
@@ -1861,3 +1887,43 @@ class TestSintelaProtobufUtils:
         assert fft_summary.shape == fft_data.shape
         assert fft_shape == (len(fft_records), 2, 3)
         assert fft_dtype == str(np.dtype(np.float32))
+
+
+class TestNamedPacketSnap:
+    """BAND and FFT timestamps are stored values rather than a header grid."""
+
+    @pytest.mark.parametrize(
+        ("builder", "message_type"),
+        [(_build_band_payloads, "BandPacket"), (_build_real_fft_payloads, "FFTPacket")],
+    )
+    @pytest.mark.parametrize("snap", [False, (), "distance", ("distance",)])
+    def test_unselected_time_stays_exact(
+        self, write_sintela_file, builder, message_type, snap
+    ):
+        """Scan and read retain packet jitter and apply bounds to those labels."""
+        records = [builder()[0]] * 4
+        seconds = np.arange(1_700_000_100, 1_700_000_104)
+        nanos = np.array([0, 1000, 0, 0])
+        for index, (sec, nano) in enumerate(zip(seconds, nanos)):
+            records = _mutate_record(
+                records,
+                index,
+                message_type,
+                lambda msg, sec=int(sec), nano=int(nano): _set_timestamp(
+                    msg.header.common_header.time, sec, nano
+                ),
+            )
+        path = write_sintela_file("packet_jitter.pb", records)
+        expected = seconds.astype("datetime64[s]").astype(
+            "datetime64[ns]"
+        ) + nanos.astype("timedelta64[ns]")
+        patch = dc.read(path, snap=snap)[0]
+        scanned = dc.scan_payloads(path, snap=snap)[0]
+        np.testing.assert_array_equal(patch.get_coord("time").values, expected)
+        np.testing.assert_array_equal(scanned.get_coord("time").values, expected)
+        assert not np.array_equal(dc.read(path)[0].get_coord("time").values, expected)
+        bounded = dc.read(
+            path, snap=snap, time=(None, expected[1] - np.timedelta64(1, "ns"))
+        )[0]
+        assert bounded.shape[0] == 1
+        np.testing.assert_array_equal(bounded.data, patch.data[:1])

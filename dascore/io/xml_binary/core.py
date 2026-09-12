@@ -2,17 +2,21 @@
 
 from __future__ import annotations
 
-from typing import Literal
 from xml.etree.ElementTree import ParseError
 
+import numpy as np
 from pydantic import ValidationError
 
 import dascore as dc
-from dascore.io import FiberIO, ScanPayload
+from dascore.constants import snap_type
+from dascore.exceptions import InvalidFiberFileError
+from dascore.io import FiberIO
+from dascore.io.utils import resolve_keyed_source, slice_dataset
 from dascore.models import OptionalFiniteFloat, UTF8Str
 from dascore.utils.paths import coerce_to_upath
+from dascore.utils.remote_io import ensure_local_file
 
-from .utils import _load_patches, _paths_to_scan_patches, _read_xml_metadata
+from .utils import _make_distance_coord, _paths_to_scan_patches, _read_xml_metadata
 
 
 class BinaryPatchAttrs(dc.PatchAttrs):
@@ -40,57 +44,59 @@ class XMLBinaryV1(FiberIO):
         path = coerce_to_upath(resource)
         return path if path.is_dir() else path.parent
 
-    def scan(self, resource, timestamp=None, **kwargs) -> list[ScanPayload]:
-        """Scan the contents of the directory."""
-        path = self._get_base_path(resource)
-        metadata = _read_xml_metadata(path / self._metadata_name)
-        data_files = list(path.glob(f"*{self._data_extension}"))
-        # Need to update time
-        return _paths_to_scan_patches(
-            data_files,
-            metadata,
-            timestamp=timestamp,
-            attr_cls=BinaryPatchAttrs,
+    def get_metadata(self, resource, *, snap: snap_type = True) -> list[dc.Patch]:
+        """Describe each raw file using the directory's XML metadata."""
+        resource = coerce_to_upath(resource)
+        base = self._get_base_path(resource)
+        metadata = _read_xml_metadata(base / self._metadata_name)
+        paths = (
+            [resource]
+            if resource.suffix == self._data_extension
+            else list(base.glob(f"*{self._data_extension}"))
         )
+        return _paths_to_scan_patches(paths, metadata, attr_cls=BinaryPatchAttrs)
 
-    def read(self, resource, time=None, distance=None, **kwargs) -> dc.Spool:
-        """
-        Load data from the directory structure.
-
-        Parameters
-        ----------
-        resource
-            A directory, path to the index file, or path to a data file.
-        time
-            Parameters for filtering by time.
-        distance
-            Parameters for filtering by distance.
-        **kwargs
-            Extra keyword arguments are ignored.
-        """
-        path = coerce_to_upath(resource)
-        base_path = self._get_base_path(path)
-        meta_data = _read_xml_metadata(base_path / self._metadata_name)
-        if path.is_dir():
-            path = list(path.glob(f"*{self._data_extension}"))
-        # Determine if this is a single file or all of them.
-        patches = _load_patches(
-            path,
-            meta_data,
-            time=time,
-            distance=distance,
-            attr_cls=BinaryPatchAttrs,
+    def read_array(
+        self, resource, windows: dict[str, tuple[int, int]], key: str = ""
+    ) -> np.ndarray:
+        """Memory-map one raw file and select in its declared dimension order."""
+        resource = coerce_to_upath(resource)
+        base = self._get_base_path(resource)
+        metadata = _read_xml_metadata(base / self._metadata_name)
+        paths = (
+            [resource]
+            if resource.suffix == self._data_extension
+            else list(base.glob(f"*{self._data_extension}"))
         )
-        return dc.spool(patches)
+        members = {str(path): path for path in paths}
+        path = (
+            members[key]
+            if key in members
+            else resolve_keyed_source(
+                {str(i): path for i, path in enumerate(paths)}, key
+            )
+        )
+        dims = (
+            ("distance", "time") if metadata.transposed_data else ("time", "distance")
+        )
+        shape = (metadata.number_of_frames, len(_make_distance_coord(metadata)))
+        shape = shape[::-1] if metadata.transposed_data else shape
+        local_path = ensure_local_file(path)
+        expected_bytes = int(np.prod(shape)) * np.dtype(metadata.data_type).itemsize
+        if local_path.stat().st_size != expected_bytes:
+            msg = f"XMLBinary file {path} must contain exactly {expected_bytes} bytes."
+            raise InvalidFiberFileError(msg)
+        data = np.memmap(local_path, dtype=metadata.data_type, mode="r", shape=shape)
+        return slice_dataset(data, dims, windows)
 
-    def get_format(self, resource, **kwargs) -> tuple[str, str] | Literal[False]:
-        """Determine if directory is an XML Binary type."""
+    def get_version(self, resource, **kwargs) -> str | None:
+        """Return the file version when the resource matches this family."""
         path = self._get_base_path(resource)
         index_path = path / self._metadata_name
         if not index_path.exists():
-            return False
+            return None
         try:
             _ = _read_xml_metadata(index_path)
         except (ParseError, TypeError, IndexError, ValidationError):
-            return False
-        return self.name, self.version
+            return None
+        return self.version

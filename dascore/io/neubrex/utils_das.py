@@ -82,11 +82,3 @@ def _get_attr_dict(acoustic):
     convert_attr_units(out, "gauge_length", "m")
     out["data_units"] = _get_data_units_and_type(attrs)
     return out
-
-
-def _get_attrs_coords_and_data(h5fi):
-    """Return the attributes, coordinates, and data array."""
-    acoustic = h5fi["Acoustic"]
-    cm = _get_coord_manager(acoustic)
-    attrs = _get_attr_dict(acoustic)
-    return attrs, cm, acoustic

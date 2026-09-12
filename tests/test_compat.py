@@ -4,6 +4,7 @@ Tests for compatibility module.
 
 from __future__ import annotations
 
+import h5py
 import numpy as np
 
 from dascore.compat import array, is_array_like
@@ -156,3 +157,13 @@ class TestArray:
         assert isinstance(out, np.ndarray)
         assert out.shape == ()
         assert not out.flags.writeable
+
+    def test_hdf5_data_survives_closed_file(self, tmp_path):
+        """Resource-backed arrays materialize before their owning file closes."""
+        expected = np.arange(6).reshape(2, 3)
+        with h5py.File(tmp_path / "samples.h5", "w") as handle:
+            dataset = handle.create_dataset("samples", data=expected)
+            out = array(dataset)
+        assert isinstance(out, np.ndarray)
+        assert not out.flags.writeable
+        np.testing.assert_array_equal(out, expected)

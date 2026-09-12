@@ -41,6 +41,21 @@ class TestFebusT1:
         """Get the febus t1 patch with a single time"""
         return self.parser.read(t1_single_reading_path)[0]
 
+    def test_metadata_never_reads_temperature(self, t1_path, monkeypatch):
+        """Indexing reads coordinates and dtype without fetching temperature samples."""
+        getitem = h5py.Dataset.__getitem__
+
+        def checked_getitem(dataset, key, **kwargs):
+            assert dataset.name != "/Data/Temperature"
+            return getitem(dataset, key, **kwargs)
+
+        monkeypatch.setattr(h5py.Dataset, "__getitem__", checked_getitem)
+        patch = dc.scan_payloads(t1_path)[0]
+        assert patch._data is None
+        with h5py.File(t1_path, "r") as handle:
+            assert patch.dtype == handle["Data/Temperature"].dtype
+            assert patch.shape == handle["Data/Temperature"].shape
+
     def test_time_spacing(self, t1_patch):
         """Time steps should be approximately 5 minutes apart."""
         time = t1_patch.get_coord("time")
@@ -174,5 +189,5 @@ class TestFebusT1DistanceGrid:
             del fi["Data/Distance"]
             fi.create_dataset("Data/Distance", data=quantized_distance)
         payload = dc.scan_payloads(path, snap=False)[0]
-        dist = payload["coords"].coord_map["distance"]
+        dist = payload.coords.coord_map["distance"]
         assert np.array_equal(dist.values, quantized_distance)

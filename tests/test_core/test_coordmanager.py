@@ -1720,3 +1720,39 @@ class TestSnapAuxiliary:
         assert out["latitude"].evenly_sampled
         assert out.dim_map["latitude"] == ("x",)
         assert out.dims == ("x",)
+
+
+class TestSelectIndexers:
+    """I/O selection indexers refer to the original grid without a data array."""
+
+    @pytest.mark.parametrize("quality_name", ["quality", "zquality"])
+    def test_associated_constraints_compose(self, quality_name):
+        """A label constraint and a dimension constraint keep their intersection."""
+        data = np.arange(48).reshape(6, 8)
+        patch = dc.Patch(
+            data=data,
+            dims=("distance", "time"),
+            coords={
+                "distance": np.arange(6),
+                "time": np.arange(8),
+                quality_name: ("time", np.arange(8) % 2),
+            },
+        )
+        queries = {"distance": (1, 4), "time": (2, 6), quality_name: (1, 1)}
+        coords, indexers = patch.coords.select_indexers(**queries)
+        distance = np.arange(6)[indexers["distance"]]
+        time = np.arange(8)[indexers["time"]]
+        np.testing.assert_array_equal(distance, [1, 2, 3, 4])
+        np.testing.assert_array_equal(time, [3, 5])
+        expected_coords, expected = patch.coords.select(array=data, **queries)
+        assert coords == expected_coords
+        np.testing.assert_array_equal(data[np.ix_(distance, time)], expected)
+
+    def test_large_range_stays_compact(self):
+        """An index window does not materialize a large regular coordinate."""
+        count = min(10**12, np.iinfo(np.intp).max)
+        coord = dc.get_coord(start=0, step=1, shape=(count,))
+        patch = dc.Patch(coords={"time": coord}, dims=("time",), dtype="float32")
+        coords, indexers = patch.coords.select_indexers(time=(-5, None), samples=True)
+        assert coords.shape == (5,)
+        assert indexers == {"time": slice(count - 5, count, 1)}

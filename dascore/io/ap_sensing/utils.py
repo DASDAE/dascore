@@ -4,7 +4,7 @@ Utility functions for AP sensing module.
 
 import dascore as dc
 from dascore.core import get_coord, get_coord_manager
-from dascore.io.utils import build_patches, step_from_rate
+from dascore.io.utils import step_from_rate
 from dascore.utils.misc import _maybe_unpack, unbyte
 
 
@@ -89,14 +89,3 @@ def _get_attrs_dict(resource):
         "radians_to_nano_strain": _maybe_unpack(pserver["RadiansToNanoStrain"]),
     }
     return out
-
-
-def _get_patches(resource, time=None, distance=None, attr_cls=dc.PatchAttrs):
-    """Get a patch from ap_sensing file."""
-    return build_patches(
-        _get_coords(resource),
-        resource["DAS"],
-        _get_attrs_dict(resource),
-        attr_cls=attr_cls,
-        selection={"time": time, "distance": distance},
-    )

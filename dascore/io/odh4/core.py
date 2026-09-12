@@ -2,19 +2,16 @@
 
 from __future__ import annotations
 
-from typing import Literal
-
 import numpy as np
 
 import dascore as dc
-from dascore.constants import opt_timeable_types
-from dascore.io import FiberIO, ScanPayload, make_scan_payload
+from dascore.constants import snap_type
+from dascore.io import FiberIO
 from dascore.io.utils import slice_dataset
 from dascore.models import OptionalFiniteFloat
 from dascore.utils.hdf5 import H5Reader
-from dascore.utils.misc import raise_on_extra_kwargs
 
-from .utils import _get_attrs_dict, _get_coords, _get_patches, _is_odh4, _read_attrs
+from .utils import _get_attrs_dict, _get_coords, _is_odh4, _read_attrs
 
 
 class ODH4PatchAttrs(dc.PatchAttrs):
@@ -38,54 +35,25 @@ class ODH4V1(FiberIO):
     preferred_extensions = ("hdf5", "h5")
     version = "1"
 
-    def get_format(
-        self,
-        resource: H5Reader,
-        **kwargs,
-    ) -> tuple[str, str] | Literal[False]:
-        """
-        Return format name and version if resource is an ODH4 file.
-
-        Parameters
-        ----------
-        resource
-            An open h5 file which might contain ODH4 data.
-        """
+    def get_version(self, resource: H5Reader, **kwargs) -> str | None:
+        """Return the file version when the resource matches this family."""
         if _is_odh4(resource):
-            return self.name, self.version
-        return False
+            return self.version
+        return None
 
-    def scan(self, resource: H5Reader, **kwargs) -> list[ScanPayload]:
+    def get_metadata(
+        self, resource: H5Reader, *, snap: snap_type = True
+    ) -> list[dc.Patch]:
         """Scan an ODH4 file, return summary info about the contents."""
         file_attrs = _read_attrs(resource)
         coords = _get_coords(file_attrs, resource["raw_data"].shape)
         attrs = ODH4PatchAttrs.model_validate(_get_attrs_dict(file_attrs))
         return [
-            make_scan_payload(
-                attrs=attrs, coords=coords, dtype=str(resource["raw_data"].dtype)
-            )
+            dc.Patch(attrs=attrs, coords=coords, dtype=str(resource["raw_data"].dtype))
         ]
 
-    def read(
-        self,
-        resource: H5Reader,
-        time: tuple[opt_timeable_types, opt_timeable_types] | None = None,
-        distance: tuple[float | None, float | None] | None = None,
-        **kwargs,
-    ) -> dc.Spool:
-        """Read an ODH4 file into a spool."""
-        patches = _get_patches(
-            resource, time=time, distance=distance, attr_cls=ODH4PatchAttrs
-        )
-        return dc.spool(patches)
-
     def read_array(
-        self,
-        resource: H5Reader,
-        windows: dict[str, tuple[int, int]],
-        snap: bool = True,
-        **kwargs,
+        self, resource: H5Reader, windows: dict[str, tuple[int, int]], key: str = ""
     ) -> np.ndarray:
         """Slice the ``raw_data`` dataset directly."""
-        raise_on_extra_kwargs(kwargs, "windows and snap")
         return slice_dataset(resource["raw_data"], ("distance", "time"), windows)

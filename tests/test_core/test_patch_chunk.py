@@ -2500,6 +2500,7 @@ class TestChunkFromIndex:
         assert attrs.tag == "raw"
         assert attrs["vendor_thing"] == 5
         assert attrs.patch_id == "abc"
-        assert attrs["_source_patch_key"] == "DAS__x"
+        assert "_source_patch_key" not in attrs
+        assert row["source_patch_key"] == "DAS__x"
         for name in ("output_id", "source_path", "time_min", "blank", "_modified"):
             assert name not in dict(attrs)

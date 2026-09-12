@@ -2,21 +2,18 @@
 
 from __future__ import annotations
 
-from typing import Literal
-
 import numpy as np
 
 import dascore as dc
-from dascore.constants import opt_timeable_types
-from dascore.io import FiberIO, ScanPayload, make_scan_payload
+from dascore.constants import snap_type
+from dascore.core.source import PatchSource
+from dascore.io import FiberIO
 from dascore.io.utils import slice_dataset
-from dascore.utils.misc import raise_on_extra_kwargs
 
 from ...utils.hdf5 import H5Reader, H5Writer
 from .utils import (
     _get_data_node,
     _get_prodml_version_str,
-    _read_prodml,
     _write_prodml,
     _yield_prodml_attrs_coords,
 )
@@ -29,67 +26,34 @@ class ProdMLV2_0(FiberIO):  # noqa
     preferred_extensions = ("hdf5", "h5")
     version = "2.0"
 
-    def get_format(
-        self,
-        resource: H5Reader,
-        **kwargs,
-    ) -> tuple[str, str] | Literal[False]:
-        """
-        Return True if file contains prodML version 2 data else False.
-
-        Parameters
-        ----------
-        resource
-            A path to the file which may contain prodML data.
-        """
+    def get_version(self, resource: H5Reader, **kwargs) -> str | None:
+        """Return the file version when the resource matches this family."""
         version_str = _get_prodml_version_str(resource)
         if version_str:
-            return (self.name, version_str)
-        return False
+            return version_str
+        return None
 
-    def scan(
-        self, resource: H5Reader, snap: bool = True, **kwargs
-    ) -> list[ScanPayload]:
+    def get_metadata(
+        self, resource: H5Reader, *, snap: snap_type = True
+    ) -> list[dc.Patch]:
         """Scan a prodml file, return summary information about the file's contents."""
-        out: list[ScanPayload] = []
+        out: list[dc.Patch] = []
         for attr, coords, source_patch_key in _yield_prodml_attrs_coords(
             resource, snap=snap
         ):
-            attrs = attr.update(_source_patch_key=source_patch_key)
+            attrs = attr
             out.append(
-                make_scan_payload(
+                dc.Patch(
                     attrs=attrs,
                     coords=coords,
                     dtype=attrs.get("dtype", ""),
-                    source_patch_key=source_patch_key,
+                    source=PatchSource(key=source_patch_key),
                 )
             )
         return out
 
-    def read(
-        self,
-        resource: H5Reader,
-        time: tuple[opt_timeable_types, opt_timeable_types] | None = None,
-        distance: tuple[float | None, float | None] | None = None,
-        source_patch_key=(),
-        **kwargs,
-    ) -> dc.Spool:
-        """Read a ProdML file."""
-        patches = _read_prodml(
-            resource,
-            time=time,
-            distance=distance,
-            source_patch_key=source_patch_key,
-        )
-        return dc.spool(patches)
-
     def read_array(
-        self,
-        resource: H5Reader,
-        windows: dict[str, tuple[int, int]],
-        source_patch_key="",
-        snap: bool = True,
-        **kwargs,
+        self, resource: H5Reader, windows: dict[str, tuple[int, int]], key: str = ""
     ) -> np.ndarray:
         """
         Slice one acquisition node's data array directly.
@@ -98,8 +62,7 @@ class ProdMLV2_0(FiberIO):  # noqa
         ``Raw[0]`` or ``FbeData[0]``); a file holding several nodes needs
         one.
         """
-        raise_on_extra_kwargs(kwargs, "windows, source_patch_key and snap")
-        dataset, dims = _get_data_node(resource, source_patch_key)
+        dataset, dims = _get_data_node(resource, key)
         return slice_dataset(dataset, dims, windows)
 
 

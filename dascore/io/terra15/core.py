@@ -2,37 +2,21 @@
 
 from __future__ import annotations
 
-from typing import Literal
-
 import numpy as np
 
 import dascore as dc
-from dascore.constants import timeable_types
-from dascore.io import FiberIO, ScanPayload
+from dascore.constants import snap_type
+from dascore.io import FiberIO
 from dascore.io.utils import slice_dataset
 from dascore.utils.hdf5 import H5Reader
-from dascore.utils.misc import raise_on_extra_kwargs
 
 from .utils import (
     _get_distance_coord,
     _get_scanned_time_info,
     _get_terra15_version_str,
     _get_version_data_node,
-    _read_terra15,
     _scan_terra15,
 )
-
-
-def _resolve_snap(snap, snap_dims, default=True):
-    """
-    Read the option Terra15 spells two ways.
-
-    `scan` calls it ``snap`` and `read` calls it ``snap_dims``; a caller
-    may forward either, so both are taken and ``snap`` wins.
-    """
-    if snap is not None:
-        return snap
-    return default if snap_dims is None else snap_dims
 
 
 class Terra15FormatterV4(FiberIO):
@@ -42,72 +26,22 @@ class Terra15FormatterV4(FiberIO):
     preferred_extensions = ("hdf5", "h5")
     version = "4"
 
-    def get_format(
-        self,
-        resource: H5Reader,
-        **kwargs,
-    ) -> tuple[str, str] | Literal[False]:
-        """
-        Return True if file contains terra15 version 2 data else False.
-
-        Parameters
-        ----------
-        resource
-            A path to the file which may contain terra15 data.
-        """
+    def get_version(self, resource: H5Reader, **kwargs) -> str | None:
+        """Return the file version when the resource matches this family."""
         version_str = _get_terra15_version_str(resource)
         if version_str:
-            return (self.name, version_str)
-        return False
+            return version_str
+        return None
 
-    def scan(
-        self, resource: H5Reader, snap: bool = True, **kwargs
-    ) -> list[ScanPayload]:
+    def get_metadata(
+        self, resource: H5Reader, *, snap: snap_type = True
+    ) -> list[dc.Patch]:
         """Scan a terra15 v2 file, return summary information."""
         _version, data_node = _get_version_data_node(resource)
         return _scan_terra15(resource, data_node, snap=snap)
 
-    def read(
-        self,
-        resource: H5Reader,
-        time: tuple[timeable_types, timeable_types] | None = None,
-        distance: tuple[float, float] | None = None,
-        snap_dims: bool | None = None,
-        snap: bool | None = None,
-        **kwargs,
-    ) -> dc.Spool:
-        """
-        Read a terra15 file.
-
-        Parameters
-        ----------
-        resource
-            The path to the file.
-        time
-            A tuple for filtering time.
-        distance
-            A tuple for filtering distance.
-        snap_dims
-            If True, ensure the coordinates are evenly sampled monotonic.
-            This will cause some loss in precision but it is usually
-            negligible.
-        snap
-            The name `scan` gives ``snap_dims``, so a caller can forward
-            what it gave `scan`; it wins when both are given.
-        """
-        snap_dims = _resolve_snap(snap, snap_dims)
-        patch = _read_terra15(resource, time, distance, snap_dims=snap_dims)
-        if not patch.data.size:
-            return dc.spool([])
-        return dc.spool(patch)
-
     def read_array(
-        self,
-        resource: H5Reader,
-        windows: dict[str, tuple[int, int]],
-        snap: bool | None = None,
-        snap_dims: bool | None = None,
-        **kwargs,
+        self, resource: H5Reader, windows: dict[str, tuple[int, int]], key: str = ""
     ) -> np.ndarray:
         """
         Slice the data node directly.
@@ -119,7 +53,6 @@ class Terra15FormatterV4(FiberIO):
         consistency with `read`; timestamp regularization does not affect
         positional array windows.
         """
-        raise_on_extra_kwargs(kwargs, "windows, snap and snap_dims")
         _, data_node = _get_version_data_node(resource)
         data = data_node["data"]
         _, _, time_len, _ = _get_scanned_time_info(data_node)

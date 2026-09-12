@@ -9,7 +9,7 @@ from h5py.h5r import Reference, dereference
 import dascore as dc
 from dascore.core.coords import get_coord
 from dascore.exceptions import DASVaderCompatibilityError
-from dascore.io.utils import build_patches, drop_blank_attrs
+from dascore.io.utils import drop_blank_attrs
 from dascore.utils.misc import maybe_get_items, unbyte
 
 # Julia DateTime "instant" values (Dates.value) are milliseconds since
@@ -203,19 +203,3 @@ def _is_dasvader_jld2(h5) -> bool:
     # returns False rather than the empty set the `and` would hand back.
     has_data = bool(DATA_NAMES & set(dtype_names))
     return has_data and has_expected
-
-
-def _read_dasvader(h5, distance=None, time=None):
-    """Read DASVader data into a Patch."""
-    rec = h5["dDAS"][()]
-    cm = _get_coord_manager(h5, rec)
-    ref_names = set(_get_reference_names(h5))
-    data, _ = _get_data_and_dims(h5, rec)
-    attrs = (
-        _get_attr_dict(_dereference(h5, rec["atrib"], "atrib"))
-        if "atrib" in ref_names
-        else {}
-    )
-    return build_patches(
-        cm, data, attrs, selection={"time": time, "distance": distance}
-    )

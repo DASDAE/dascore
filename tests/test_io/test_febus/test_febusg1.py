@@ -14,8 +14,8 @@ import numpy as np
 import pytest
 
 import dascore as dc
-from dascore.io.febus.core import FebusG1CSV1, FebusMTXAttrs, FebusMTXH5V1
-from dascore.io.febus.g1utils import _get_mtx_patch, _is_g1_file
+from dascore.io.febus.core import FebusG1CSV1, FebusMTXH5V1
+from dascore.io.febus.g1utils import _is_g1_file
 from dascore.utils.downloader import fetch
 
 g1_files = (
@@ -112,10 +112,9 @@ class TestG1Scan:
         attrs = g1.scan(g1_path)
         assert len(attrs) == 1
         attr = attrs[0]
-        assert isinstance(attr, dict)
-        assert "source_path" not in attr
-        assert "source_format" not in attr
-        assert "source_version" not in attr
+        assert isinstance(attr, dc.Patch)
+        assert attr._data is None
+        assert attr._source is None
 
     def test_public_scan_adds_source_metadata(self, g1_path):
         """Public scan should attach reload metadata for G1 files."""
@@ -178,49 +177,22 @@ class TestG1MTXH5:
         assert fiber.read(mtx_h5_path, distance=(60, 70))[0].shape[1] == 11
         assert len(fiber.read(mtx_h5_path, frequency=(99999, ...))) == 0
 
-    def test_selection_does_not_read_the_whole_array(self, mtx_h5_path):
+    def test_selection_does_not_read_the_whole_array(self, mtx_h5_path, monkeypatch):
         """A trimmed read touches only the samples it keeps."""
-        read = []
-
-        class _CountingDataset:
-            """Stand in for the stored array and record what is asked of it."""
-
-            def __init__(self, dataset):
-                self._dataset = dataset
-
-            def __getattr__(self, name):
-                return getattr(self._dataset, name)
-
-            def __getitem__(self, item):
-                out = self._dataset[item]
-                read.append(np.size(out))
-                return out
-
-            def __array__(self, *args, **kwargs):
-                read.append(self._dataset.size)
-                return np.asarray(self._dataset, *args, **kwargs)
-
-        class _CountingFile:
-            """An open file which hands out the counting array."""
-
-            def __init__(self, h5):
-                self._h5 = h5
-
-            def __getattr__(self, name):
-                return getattr(self._h5, name)
-
-            def __getitem__(self, item):
-                out = self._h5[item]
-                return _CountingDataset(out) if item == "mtx" else out
-
+        reads = []
+        original = h5py.Dataset.__getitem__
         with h5py.File(mtx_h5_path, "r") as h5:
             stored_size = h5["mtx"].size
-            patch = _get_mtx_patch(
-                _CountingFile(h5),
-                attr_cls=FebusMTXAttrs,
-                select_kwargs={"distance": (60, 70)},
-            )
-        assert max(read) == patch.data.size < stored_size
+
+        def count(dataset, index):
+            out = original(dataset, index)
+            if dataset.name.endswith("/mtx"):
+                reads.append(np.size(out))
+            return out
+
+        monkeypatch.setattr(h5py.Dataset, "__getitem__", count)
+        patch = FebusMTXH5V1().read(mtx_h5_path, distance=(60, 70))[0]
+        assert max(reads) == patch.data.size < stored_size
 
     def test_mtx_must_be_three_dimensional(self, tmp_path):
         """Non-3D MTX datasets should fail with explicit validation."""

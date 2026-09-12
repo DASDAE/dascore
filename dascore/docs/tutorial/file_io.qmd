@@ -63,11 +63,11 @@ source_spool = dc.spool(
 loaded = source_spool[summary_index]
 ```
 
-[`dc.scan_payloads(...)`](`dascore.scan_payloads`) also returns each formatter's `CoordManager`. With `snap=False`, formats that store per-sample coordinates expose their exact values:
+[`dc.scan_payloads(...)`](`dascore.scan_payloads`) returns data-less patches with each formatter's full `CoordManager`, attrs, and dtype. With `snap=False`, formats that store per-sample coordinates expose their exact values:
 
 ```{python}
 payload = dc.scan_payloads(summary.source_path, snap=False)[0]
-time = payload["coords"].get_coord("time")
+time = payload.coords.get_coord("time")
 ```
 
 Payload scans still may read and retain large coordinate arrays, so reserve them for targeted files.

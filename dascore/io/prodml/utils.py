@@ -14,11 +14,15 @@ import dascore as dc
 from dascore.constants import VALID_DATA_TYPES
 from dascore.core.coords import get_coord
 from dascore.exceptions import InvalidSpoolError, PatchError
-from dascore.io.utils import convert_attr_units, get_exact_coord, resolve_keyed_source
+from dascore.io.utils import (
+    convert_attr_units,
+    get_exact_coord,
+    resolve_keyed_source,
+    should_snap,
+)
 from dascore.models import OptionalFiniteFloat, UTF8Str
 from dascore.units import get_quantity_str
 from dascore.utils.hdf5 import encode_h5_strings
-from dascore.utils.io import _normalize_source_patch_keys
 from dascore.utils.misc import iterate, maybe_get_items, register_func, unbyte
 
 # --- Getting format/version
@@ -160,7 +164,7 @@ def _get_time_coord(node, snap=True):
     time_array = node[time_name]
     array_len = len(time_array)
     assert array_len > 0, "Missing time array in ProdML file."
-    if not snap:
+    if not should_snap(snap, "time"):
         values = time_array[:].astype("datetime64[us]")
         return get_exact_coord(values, units="s")
     time_attrs = time_array.attrs
@@ -515,7 +519,6 @@ def _get_raw_node_attr_coords(node_info, d_coord, base_info, snap=True):
     t_coord = _get_time_coord(node_info.node, snap=snap)
     info.update(_get_data_unit_and_type(node_info.node))
     info["dtype"] = str(node_info.node["RawData"].dtype)
-    info["_source_patch_key"] = node_info.name
     coords = dc.get_coord_manager(
         coords={"time": t_coord, "distance": d_coord},
         dims=_get_node_dims(node_info),
@@ -530,7 +533,6 @@ def _get_processed_node_attr_coords(node_info, d_coord, base_info, snap=True):
     t_coord = _get_time_coord(node_info.parent_node, snap=snap)
     out.update(_get_data_unit_and_type(node_info.node))
     out["dtype"] = str(node_info.node.dtype)
-    out["_source_patch_key"] = node_info.name
     out.update(maybe_get_items(node_info.node.attrs, _FBE_NODE_ATTRS))
     out.update(maybe_get_items(node_info.parent_node.attrs, _FBE_PARENT_ATTRS))
     # For some reason, the distance coords in raw and fbe data are not the
@@ -599,23 +601,3 @@ def _get_dims_from_attrs(attrs):
         unbytes = [unbyte(x) for x in iterate(dims)]
         dims = tuple(map_.get(x, x) for x in unbytes)
     return dims
-
-
-def _read_prodml(fi, distance=None, time=None, source_patch_key=None):
-    """Read the prodml values into a patch."""
-    out = []
-    acq = fi["Acquisition"]
-    base_info = _get_root_attrs(acq.attrs)
-    d_coord = _get_distance_coord(acq)
-    source_patch_keys = _normalize_source_patch_keys(source_patch_key)
-    for info in _yield_data_nodes(fi):
-        if source_patch_keys and info.name not in source_patch_keys:
-            continue
-        attr_func = _NODE_ATTRS_PROCESSORS[info.patch_type]
-        attrs, cm = attr_func(info, d_coord, base_info)
-        data = _NODE_DATA_PROCESSORS[info.patch_type](info)
-        if time is not None or distance is not None:
-            cm, data = cm.select(array=data, time=time, distance=distance)
-        if data.size:
-            out.append(dc.Patch(data=data, attrs=attrs, coords=cm))
-    return out

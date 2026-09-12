@@ -325,6 +325,8 @@ class IOResourceManager:
         first_exc = None
         with self._lock:
             for handle in self._cache.values():
+                if handle is self.source:
+                    continue  # The caller owns a supplied handle.
                 try:
                     release_handle(handle, abort=abort)
                 except BaseException as exc:
