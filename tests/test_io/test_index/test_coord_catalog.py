@@ -1,4 +1,4 @@
-"""Persisted coordinate variants, patch counts, and index upgrades."""
+"""Persisted coordinate variants and patch counts."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ import pytest
 
 import dascore as dc
 from dascore.exceptions import InvalidIndexError, InvalidIndexVersionError
-from dascore.io.index.backend import SQLiteIndexBackend, get_backend
+from dascore.io.index.backend import get_backend
 from dascore.io.index.ingest import (
     SourceRecord,
     coord_dtype_is_stateable,
@@ -18,10 +18,10 @@ from dascore.io.index.ingest import (
     summaries_to_records,
 )
 from dascore.io.index.query import Query
-from dascore.io.index.schema import INDEX_VERSION, TRIGGERS
+from dascore.io.index.schema import INDEX_VERSION
 from tests.test_io.test_index.test_heterogeneity_stress import make_random_summaries
 
-# The coordinate discovery version 17 answered by scanning every link.
+# The coordinate discovery this replaces: a scan of every whole-coordinate link.
 _LINK_VARIANTS = (
     "SELECT json_array(pc.coord_name, pc.dtype, cd.value_kind, cd.units, "
     "cd.is_relative) AS variant_key, count(*) AS patch_count "
@@ -59,20 +59,6 @@ def _set_version(path, version):
     con = sqlite3.connect(path)
     try:
         con.execute("UPDATE meta_data SET index_version = ?", (version,))
-        con.commit()
-    finally:
-        con.close()
-
-
-def _as_version_17(path):
-    """Turn a closed index back into the version 17 layout."""
-    con = sqlite3.connect(path)
-    try:
-        for name in TRIGGERS:
-            con.execute(f"DROP TRIGGER {name}")
-        con.execute("DROP TABLE coord_variants")
-        con.execute("ALTER TABLE meta_data DROP COLUMN patch_count")
-        con.execute("UPDATE meta_data SET index_version = 17")
         con.commit()
     finally:
         con.close()
@@ -200,32 +186,25 @@ class TestMaintainedCounts:
         assert expected < backend.count()
         assert backend.count(iter([query])) == expected
 
-    def test_writes_from_a_connection_opened_before_upgrade(self, backend, tmp_path):
-        """A connection opened on the version 17 file is counted after upgrade."""
-        path = tmp_path / "index.sqlite3"
-        backend.close()
-        _as_version_17(path)
-        old = sqlite3.connect(path, isolation_level=None)
-        old.execute("PRAGMA foreign_keys = ON")
-        (last,) = old.execute("SELECT max(patch_id) FROM patches").fetchone()
-        upgraded = get_backend(path)
+    def test_writes_which_bypass_the_backend_are_counted(self, backend):
+        """Rows written straight through SQL are counted like any other."""
+        con = backend._con
+        (last,) = con.execute("SELECT max(patch_id) FROM patches").fetchone()
         # a copy of the last patch and its links, then a whole source removed
-        old.execute(
+        con.execute(
             "INSERT INTO patches (patch_id, source_id, source_patch_key, dims) "
             "SELECT ?, source_id, 'copy', dims FROM patches WHERE patch_id = ?",
             (last + 1, last),
         )
-        old.execute(
+        con.execute(
             "INSERT INTO patch_coords SELECT ?, coord_name, run_index, "
             "coord_dims, coord_def_id, dtype FROM patch_coords WHERE patch_id = ?",
             (last + 1, last),
         )
-        _assert_consistent(upgraded)
-        assert upgraded.count() == 41
-        old.execute("DELETE FROM sources WHERE source_id = 1")
-        old.close()
-        _assert_consistent(upgraded)
-        upgraded.close()
+        _assert_consistent(backend)
+        assert backend.count() == 41
+        con.execute("DELETE FROM sources WHERE source_id = 1")
+        _assert_consistent(backend)
 
     def test_mixed_kind_sorts_within_each_kind(self):
         """Each kind of a mixed-kind coordinate sorts among itself, in any view."""
@@ -318,129 +297,8 @@ class TestWorkIsBounded:
         assert not [x for x in statements if "count(" in x.lower()]
 
 
-class TestUpgrade:
-    """A version 17 index upgrades in place from its stored rows."""
-
-    def test_upgrades_17(self, backend, tmp_path):
-        """The upgraded index carries the same metadata plus its summaries."""
-        path = tmp_path / "index.sqlite3"
-        contents = backend.query()
-        backend.close()
-        _as_version_17(path)
-        upgraded = get_backend(path)
-        assert upgraded.get_metadata()["index_version"] == INDEX_VERSION
-        _assert_consistent(upgraded)
-        assert upgraded.query().equals(contents)
-        upgraded.close()
-
-    def test_directory_upgrade_reads_no_sources(self, tmp_path, monkeypatch):
-        """A directory spool on an upgraded index scans nothing."""
-        for i in range(3):
-            patch = dc.get_example_patch().update_attrs(station=f"S{i}")
-            dc.write(patch, tmp_path / f"{i}.h5", "dasdae")
-        spool = dc.spool(tmp_path).update(progress=None)
-        contents = spool.get_contents()
-        index_path = spool.indexer.index_path
-        spool.indexer.close()
-        _as_version_17(index_path)
-
-        def no_scan(*args, **kwargs):
-            raise AssertionError("upgrading an index must not read sources")
-
-        monkeypatch.setattr(dc, "scan", no_scan)
-        reopened = dc.spool(tmp_path).update(progress=None)
-        assert reopened.get_contents().equals(contents)
-        assert reopened.indexer._backend.get_metadata()["patch_count"] == 3
-        reopened.indexer.close()
-
-    def test_failed_upgrade_keeps_17(self, backend, tmp_path, monkeypatch):
-        """An upgrade which fails partway leaves a version 17 file to rebuild."""
-        path = tmp_path / "index.sqlite3"
-        backend.close()
-        _as_version_17(path)
-        step = SQLiteIndexBackend._upgrade_from_17
-
-        def failing(self):
-            step(self)
-            raise sqlite3.OperationalError("disk I/O error")
-
-        monkeypatch.setattr(SQLiteIndexBackend, "_upgrade_from_17", failing)
-        with pytest.raises(InvalidIndexVersionError, match="disk I/O error"):
-            get_backend(path)
-        con = sqlite3.connect(path)
-        try:
-            assert con.execute("SELECT index_version FROM meta_data").fetchone() == (
-                17,
-            )
-            tables = {x[0] for x in con.execute("SELECT name FROM sqlite_master")}
-            assert "coord_variants" not in tables
-        finally:
-            con.close()
-
-    def test_stale_table_list_after_racing_upgrade(self, backend):
-        """An opener whose table list predates another's upgrade still opens."""
-        backend._validate_schema(backend._existing_tables() - {"coord_variants"})
-
-    def test_version_17_created_while_waiting(self, backend, tmp_path, monkeypatch):
-        """A version 17 index made while this opener waited to create one upgrades."""
-        path = tmp_path / "index.sqlite3"
-        backend.close()
-        _as_version_17(path)
-        existing = SQLiteIndexBackend._existing_tables
-        calls = []
-
-        def empty_at_first(self):
-            calls.append(None)
-            return set() if len(calls) == 1 else existing(self)
-
-        monkeypatch.setattr(SQLiteIndexBackend, "_existing_tables", empty_at_first)
-        upgraded = get_backend(path)
-        assert upgraded.get_metadata()["index_version"] == INDEX_VERSION
-        _assert_consistent(upgraded)
-        upgraded.close()
-
-    def test_repeated_upgrade_is_harmless(self, backend, tmp_path):
-        """An opener which finds the upgrade already done changes nothing."""
-        path = tmp_path / "index.sqlite3"
-        backend.close()
-        _as_version_17(path)
-        upgraded = get_backend(path)
-        before = _rows(upgraded, "SELECT * FROM coord_variants")
-        # what a racing opener does after waiting out the first upgrade
-        upgraded._upgrade()
-        assert _rows(upgraded, "SELECT * FROM coord_variants") == before
-        _assert_consistent(upgraded)
-        upgraded.close()
-
-
 class TestNewerIndex:
     """An index from a newer DASCore is refused and left exactly as it was."""
-
-    def test_newer_upgrade_won_the_race(self, backend, tmp_path, monkeypatch):
-        """
-        An opener which waited out a newer DASCore's upgrade leaves it alone.
-
-        It read version 17 before taking the lock; under the lock it finds
-        a newer file, which it must neither restamp nor accept.
-        """
-        path = tmp_path / "index.sqlite3"
-        backend.close()
-        _as_version_17(path)
-        upgrade = SQLiteIndexBackend._upgrade
-
-        def racing(self):
-            _set_version(path, INDEX_VERSION + 1)
-            upgrade(self)
-
-        monkeypatch.setattr(SQLiteIndexBackend, "_upgrade", racing)
-        with pytest.raises(InvalidIndexError, match="newer"):
-            get_backend(path)
-        con = sqlite3.connect(path)
-        try:
-            (version,) = con.execute("SELECT index_version FROM meta_data").fetchone()
-        finally:
-            con.close()
-        assert version == INDEX_VERSION + 1
 
     def test_backend_refuses_and_preserves(self, backend, tmp_path):
         """Opening it raises an error which does not ask for a rebuild."""

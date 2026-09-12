@@ -57,10 +57,8 @@ from dascore.io.index.schema import (
     TABLE_CONSTRAINTS,
     TABLES,
     TRIGGERS,
-    VARIANT_COLUMNS,
     WHAT_IS_THIS,
     CoordDefRow,
-    CoordVariantRow,
     MetaDataRow,
     PatchCoordRow,
     PatchRow,
@@ -305,15 +303,17 @@ class SQLiteIndexBackend:
     # --- schema ------------------------------------------------------
 
     def _ensure_schema(self) -> None:
-        if not self._existing_tables():
-            with self._transaction():
-                # Another connection may have initialized the file while this
-                # writer waited for BEGIN IMMEDIATE. Re-check under the lock.
-                if not self._existing_tables():
-                    self._create_schema()
-                    return
-        # outside the transaction: validating may upgrade, which takes its own
-        self._validate_schema(self._existing_tables())
+        tables = self._existing_tables()
+        if tables:
+            self._validate_schema(tables)
+            return
+        with self._transaction():
+            # Another connection may have initialized the file while this
+            # writer waited for BEGIN IMMEDIATE. Re-check under the lock.
+            if self._existing_tables():
+                self._validate_schema(self._existing_tables())
+                return
+            self._create_schema()
 
     def _create_schema(self) -> None:
         for name, columns in TABLES.items():
@@ -335,10 +335,9 @@ class SQLiteIndexBackend:
         """
         Validate an existing index before issuing any DDL or mutation.
 
-        A supported older version is upgraded in place, then validated
-        afresh. A newer one raises InvalidIndexError, not the
-        InvalidIndexVersionError the directory indexer answers by deleting
-        the file to rebuild it.
+        An index of another version raises InvalidIndexVersionError, which
+        the directory indexer answers by rebuilding the index. A newer one
+        raises InvalidIndexError instead, so its file is left alone.
         """
 
         def _incomplete(missing):
@@ -362,17 +361,13 @@ class SQLiteIndexBackend:
                 "Upgrade DASCore, or give this version its own index_path."
             )
             raise InvalidIndexError(msg)
-        if version in _UPGRADES:
-            self._upgrade()
-            return self._validate_schema(self._existing_tables())
         if version != INDEX_VERSION:
             msg = (
                 f"Spool index version {version} is incompatible with supported "
                 f"version {INDEX_VERSION}; delete it and rebuild."
             )
             raise InvalidIndexVersionError(msg)
-        # read afresh: another opener may have upgraded since `tables` was
-        if missing := set(TABLES) - self._existing_tables():
+        if missing := set(TABLES) - tables:
             raise _incomplete(missing)
         triggers = {
             row[0]
@@ -404,51 +399,6 @@ class SQLiteIndexBackend:
                 "delete it and rebuild."
             )
             raise InvalidIndexError(msg)
-
-    def _upgrade(self) -> None:
-        """
-        Bring a supported older index to INDEX_VERSION from its own rows.
-
-        One transaction, so an interrupted upgrade leaves the old version
-        whole. A step which fails raises InvalidIndexVersionError, so the
-        directory indexer rebuilds the index instead.
-        """
-        with self._transaction():
-            # read under the write lock: another opener may have upgraded it
-            (version,) = self._con.execute(
-                "SELECT index_version FROM meta_data"
-            ).fetchone()
-            try:
-                # each step stamps its own version, so a file found already
-                # upgraded (or newer) is left exactly as it is
-                for step in range(version, INDEX_VERSION):
-                    getattr(self, _UPGRADES[step])()
-                    self._execute("UPDATE meta_data SET index_version = ?", (step + 1,))
-            except sqlite3.Error as e:
-                msg = (
-                    f"Could not upgrade spool index version {version}: {e}; "
-                    "delete it and rebuild."
-                )
-                raise InvalidIndexVersionError(msg) from e
-
-    def _upgrade_from_17(self) -> None:
-        """Add version 18's patch and coordinate variant counts."""
-        table = "coord_variants"
-        self._execute(create_table_sql(table, TABLES[table], TABLE_CONSTRAINTS[table]))
-        self._execute(add_column_sql("meta_data", "patch_count", "int64"))
-        self._execute(
-            "UPDATE meta_data SET patch_count = (SELECT count(*) FROM patches)"
-        )
-        columns = ", ".join(CoordVariantRow._fields)
-        variant = VARIANT_COLUMNS.format("pc")
-        self._execute(
-            f"INSERT INTO coord_variants ({columns}) "
-            f"SELECT json_array({variant}), {variant}, count(*) "
-            "FROM patch_coords pc "
-            "JOIN coord_defs cd ON cd.coord_def_id = pc.coord_def_id "
-            "WHERE pc.run_index = 0 GROUP BY 1"
-        )
-        self._create_triggers()
 
     def _patch_count(self) -> int:
         """Return how many patches the index holds."""
@@ -1546,9 +1496,6 @@ class SQLiteIndexBackend:
 
 # the envelope object columns `_add_envelope_objects` builds
 _ENVELOPE_COLUMNS = ("_env_min", "_env_max", "_env_step")
-
-# The in-place upgrade step from each supported older index version.
-_UPGRADES = {17: "_upgrade_from_17"}
 
 
 def get_backend(path: str | Path) -> SQLiteIndexBackend:

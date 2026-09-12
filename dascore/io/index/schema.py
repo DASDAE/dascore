@@ -33,14 +33,12 @@ from typing import NamedTuple, get_args, get_type_hints
 # Version of the index schema, independent of dascore's version. Bump it
 # when an index written by an older dascore would be read wrongly rather
 # than merely incompletely -- including when what a *stored value* means
-# changes, not only when a column does. When the new contents can be
-# derived from an old index's own rows, add an upgrade step to the backend
-# rather than forcing a rebuild. Version 18 counts patches and coordinate
-# variants; version 17 links a segmented coordinate to each of its runs;
-# version 16 stored each range coordinate's exact grid and named the
-# envelope columns by storage type; version 15 stored source coordinate and
-# numeric attribute dtypes. Version 17 upgrades in place; earlier indexes
-# are rebuilt when opened.
+# changes, not only when a column does. Version 18 counts patches and
+# coordinate variants; version 17 links a segmented coordinate to each of
+# its runs; version 16 stored each range coordinate's exact grid and named
+# the envelope columns by storage type; version 15 stored source coordinate
+# and numeric attribute dtypes. Earlier indexes lack the metadata required
+# for reconstruction and are rebuilt when opened.
 INDEX_VERSION = 18
 # Identity string so any tool can sanity-check what it opened.
 WHAT_IS_THIS = "dascore_spool_index"
@@ -424,8 +422,8 @@ _OLD_KEY = (
     "WHERE cd.coord_def_id = OLD.coord_def_id)"
 )
 # Triggers keeping the patch and coordinate variant counts. Living in the
-# database, they count every connection's writes, including cascaded
-# deletes and a connection opened before the index was upgraded.
+# database, they count every write however it arrives, including cascaded
+# deletes and rows written straight through SQL.
 TRIGGERS = MappingProxyType(
     {
         "count_patch_added": (
