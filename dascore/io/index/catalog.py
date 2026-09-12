@@ -20,7 +20,6 @@ import abc
 import json
 import operator
 import re
-import sys
 import warnings
 from collections import Counter
 from collections.abc import Mapping, Sequence
@@ -59,6 +58,19 @@ from dascore.utils.paths import is_memory_uri
 # alone cannot interleave multi-patch files); ordinal and patch id stay
 # the deterministic tiebreak inside the ORDER BY.
 _DIRECTORY_ORDER = ("coord", "time", True)
+
+# A window seeks at most this many rows before reading the whole
+# membership instead; ids are small, but a sparse span is not bounded.
+_WINDOW_SPAN = 4096
+# Rows per metadata page, and pages kept, for repeated positional reads.
+_PAGE_ROWS = 64
+_MAX_PAGES = 8
+# A forward window starting beyond this is worth a count, to learn whether
+# seeking from the end would read fewer rows.
+_DEEP_START = 1024
+# Larger than any row count, and past what SQLite binds as an integer: a
+# limit this big means "to the end".
+_MAX_LIMIT = 2**63 - 1
 
 
 def _canonical_coord_selectors(backend, coords: dict) -> tuple[dict, dict]:
@@ -678,8 +690,13 @@ class PatchCatalog:
         self._ids = None if ids is None else tuple(int(x) for x in ids)
         self._revision = revision or _CatalogRevision()
         self._df_cache = _RevisionCache()
-        self._item_read_revision = -1
         self._live_cache = _RevisionCache()
+        self._len_cache = _RevisionCache()
+        # metadata pages serving repeated positional reads, and the
+        # revision they describe
+        self._pages: dict[int, pd.DataFrame] = {}
+        self._page_revision = -1
+        self._read_before = False
         # Source records for rebuilding an in-memory backend (set by
         # __getstate__ so pickled catalogs survive losing the connection).
         self._rebuild_records: tuple = ()
@@ -975,34 +992,102 @@ class PatchCatalog:
             )
         )
 
-    def window(self, item: slice, ids: Sequence[int] | None = None) -> PatchCatalog:
+    def window(
+        self,
+        item: slice,
+        ids: Sequence[int] | None = None,
+        *,
+        length: int | None = None,
+    ) -> PatchCatalog:
         """
         Return a view restricted to a slice of the presented rows.
 
-        Forward contiguous slices limit the SQL membership query. A caller
-        splitting the view can supply its already-fetched ordered ids.
+        The rows are fetched from whichever end of the presentation they
+        lie nearer, so a tail costs what a head costs and neither skips
+        the rows between. A caller splitting the view can supply its
+        already-fetched ordered ids; a view whose membership is already
+        fixed, or one exact filtering must realize, slices what it has.
+
+        ``length`` is the presented row count, for a caller which knows it.
         """
-        start = 0 if item.start is None else operator.index(item.start)
+        # normalized once: a raw numpy uint bound would underflow the
+        # arithmetic below, and an object with only __index__ cannot compare
+        start = None if item.start is None else operator.index(item.start)
         stop = None if item.stop is None else operator.index(item.stop)
         step = 1 if item.step is None else operator.index(item.step)
-        if (
-            ids is None
-            and (self._ids is None or self._order is not None)
-            and step == 1
-            and start >= 0
-            and (stop is None or stop >= 0)
-        ):
-            start, stop, _ = item.indices(sys.maxsize)
+        item = slice(start, stop, step)
+        fixed = self._ids is not None and self._order is None
+        if ids is not None or fixed or self._requires_full_relation():
+            chosen = (self.ordered_ids() if ids is None else tuple(ids))[item]
+            return self._view(self._queries, self._residuals, ids=tuple(chosen))
+        deep = start is not None and start > _DEEP_START
+        negative = step < 0 or any(x is not None and x < 0 for x in (start, stop))
+        if length is None and (deep or negative):
+            length = len(self)
+        if length is None:
+            # a forward window from a known start needs no row count
+            begin = 0 if start is None else start
+            limit = None if stop is None else max(0, stop - begin)
+            if limit is not None and limit > _MAX_LIMIT:
+                limit = None
+            fetched = (
+                []
+                if limit == 0
+                else self.backend.query_ids(
+                    list(self._queries) or None,
+                    order_by=self._effective_order,
+                    patch_ids=self._ids,
+                    limit=limit,
+                    offset=begin,
+                )
+            )
+            return self._view(
+                self._queries, self._residuals, ids=tuple(fetched[::step])
+            )
+        positions = range(*item.indices(length))
+        if not positions:
+            return self._view(self._queries, self._residuals, ids=())
+        first = min(positions[0], positions[-1])
+        last = max(positions[0], positions[-1]) + 1
+        if abs(step) != 1 and last - first > _WINDOW_SPAN:
+            # a stride whose span dwarfs its result: correct, but it reads
+            # every id. A contiguous window costs what it returns, however
+            # wide, so it keeps its bounded query.
+            chosen = self.ordered_ids()[item]
+            return self._view(self._queries, self._residuals, ids=tuple(chosen))
+        span = self._span_ids(first, last, length)
+        chosen = tuple(span[position - first] for position in positions)
+        return self._view(self._queries, self._residuals, ids=chosen)
+
+    def _span_ids(self, first: int, last: int, length: int) -> tuple[int, ...]:
+        """
+        The ids of the presented rows in ``[first, last)``.
+
+        Rows nearer the end are read in the opposite presentation order
+        and turned back, which costs an offset from that end instead of
+        one past every earlier row.
+        """
+        queries = list(self._queries) or None
+        from_end = length - last
+        if from_end < first:
             ids = self.backend.query_ids(
-                list(self._queries) or None,
+                queries,
                 order_by=self._effective_order,
                 patch_ids=self._ids,
-                limit=None if item.stop is None else max(0, stop - start),
-                offset=start,
+                limit=last - first,
+                offset=from_end,
+                reverse=True,
             )
-        else:
-            ids = (self.ordered_ids() if ids is None else ids)[item]
-        return self._view(self._queries, self._residuals, ids=tuple(ids))
+            return tuple(reversed(ids))
+        return tuple(
+            self.backend.query_ids(
+                queries,
+                order_by=self._effective_order,
+                patch_ids=self._ids,
+                limit=last - first,
+                offset=first,
+            )
+        )
 
     def restrict(self, indices, ids=None) -> PatchCatalog:
         """
@@ -1013,14 +1098,42 @@ class PatchCatalog:
         one row, matching the spool's set semantics). ``ids`` is this
         view's presented ids, for a caller which has just read them.
         """
+        array = np.asarray(indices)
+        if ids is None and array.dtype.kind in "iu" and array.size:
+            picked = self._ids_at(array)
+            if picked is not None:
+                return self._view(self._queries, self._residuals, ids=picked)
         ids = np.asarray(self.ordered_ids() if ids is None else ids)
-        picked = ids[np.asarray(indices)]
+        picked = ids[array]
         deduped = tuple(dict.fromkeys(int(x) for x in picked))
         return self._view(self._queries, self._residuals, ids=deduped)
+
+    def _ids_at(self, positions: np.ndarray) -> tuple[int, ...] | None:
+        """
+        The ids at these positions, or None when no bounded fetch will do.
+
+        None sends the caller back to the full membership, which is what
+        an out-of-range position (it raises there) or a span too wide to
+        seek needs.
+        """
+        if self._requires_full_relation() or (
+            self._ids is not None and self._order is None
+        ):
+            return None
+        length = len(self)
+        wanted = [int(x) + length if int(x) < 0 else int(x) for x in positions]
+        if any(x < 0 or x >= length for x in wanted):
+            return None
+        first, last = min(wanted), max(wanted) + 1
+        if last - first > _WINDOW_SPAN:
+            return None
+        span = self._span_ids(first, last, length)
+        return tuple(dict.fromkeys(span[x - first] for x in wanted))
 
     def _invalidate(self) -> None:
         with self._revision.lock:
             self._revision.value += 1
+            self._pages.clear()
             self._df_cache.clear()
             self._live_cache.clear()
 
@@ -1205,6 +1318,9 @@ class PatchCatalog:
                 return len(live)
             if (df := self._df_cache.get(self._revision.value)) is not None:
                 return len(df)
+            # a count can cost a query, and positional reads ask repeatedly
+            if (cached := self._len_cache.get(self._revision.value)) is not None:
+                return cached
             # A range residual *after* a patch-local one can drop rows SQL
             # candidacy kept: the patch-local pass empties the envelope of a
             # patch its window misses, and the range pass then finds nothing
@@ -1214,10 +1330,11 @@ class PatchCatalog:
                 if samples or relative:
                     patch_local = True
                 elif patch_local:
-                    return len(self.to_df())
+                    return self._len_cache.set(len(self.to_df()), self._revision.value)
             # Otherwise SQL candidacy already accounts for every drop, so the
             # count matches len(to_df()) without projecting or pivoting.
-            return self.backend.count(list(self._queries) or None, patch_ids=self._ids)
+            count = self.backend.count(list(self._queries) or None, patch_ids=self._ids)
+            return self._len_cache.set(count, self._revision.value)
 
     def get_patch(self, index: int) -> dc.Patch:
         """Materialize one patch: resolve, then exact two-stage trim."""
@@ -1225,24 +1342,46 @@ class PatchCatalog:
             if (live := self._cold_live_values()) is not None:
                 return live[index]
             df = self._df_cache.get(self._revision.value)
-            if df is None:
-                if (
-                    self._requires_full_relation()
-                    or getattr(self, "_item_read_revision", -1) == self._revision.value
-                ):
-                    # Repeated positional reads amortize projection through the
-                    # existing full-frame cache; a one-off preview stays bounded.
-                    df = self.to_df()
-                else:
-                    if index < 0:
-                        index = range(len(self))[index]
-                    df = self.window(slice(index, index + 1)).to_df()
-                    index = 0
-            row = df.iloc[index].to_dict()
-            self._item_read_revision = self._revision.value
+            if df is not None:
+                row = df.iloc[index].to_dict()
+            elif self._requires_full_relation():
+                row = self.to_df().iloc[index].to_dict()
+            else:
+                row = self._paged_row(index)
         # Reading (and trimming) the patch happens outside the lock; only
         # the row it starts from must come from a consistent relation.
         return self.resolve_row(row)
+
+    def _paged_row(self, index: int) -> dict:
+        """
+        One presented row: alone the first time, then by the page around it.
+
+        A single read decodes its own row and nothing else. Reads after it
+        land near one another, so a page amortizes the query the way the
+        old whole-frame cache did, without projecting a row no one asked
+        for. Callers hold the revision lock.
+        """
+        if self._page_revision != self._revision.value:
+            self._pages.clear()
+            self._page_revision = self._revision.value
+            self._read_before = False
+        length = None
+        if index < 0:
+            length = len(self)
+            index = range(length)[index]
+        if not self._read_before:
+            self._read_before = True
+            window = self.window(slice(index, index + 1), length=length)
+            return window.to_df().iloc[0].to_dict()
+        page, offset = divmod(index, _PAGE_ROWS)
+        frame = self._pages.get(page)
+        if frame is None:
+            start = page * _PAGE_ROWS
+            frame = self.window(slice(start, start + _PAGE_ROWS), length=length).to_df()
+            if len(self._pages) >= _MAX_PAGES:
+                self._pages.pop(next(iter(self._pages)))
+            self._pages[page] = frame
+        return frame.iloc[offset].to_dict()
 
     def resolve_row(self, row: Mapping, extra_trim: Mapping | None = None) -> dc.Patch:
         """
