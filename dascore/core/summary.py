@@ -247,7 +247,12 @@ class PatchSummary(DascoreBaseModel):
             dims = _normalize_dims(data.get("dims", ()))
             attrs = PatchAttrs.from_dict(data.get("attrs"))
             key = data.get("source_patch_key", attrs.get("_source_patch_key", ""))
-            if hasattr(attrs, "_source_patch_key"):
+            # Rebuild legacy pickle attrs to restore missing identity defaults.
+            if (
+                hasattr(attrs, "_source_patch_key")
+                or not hasattr(attrs, "patch_id")
+                or not hasattr(attrs, "processing_id")
+            ):
                 attrs = attrs.drop("_source_patch_key")
             return _build_patch_summary_payload(
                 attrs=attrs,

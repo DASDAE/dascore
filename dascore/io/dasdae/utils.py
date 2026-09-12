@@ -104,7 +104,9 @@ def _save_attrs_and_dims(patch, patch_group):
     """Save the attributes."""
     # copy attrs to group attrs
     # TODO will need to test if objects are serializable
-    attr_dict = patch.attrs.model_dump(exclude_unset=True)
+    # Persist concrete defaults too: the defining attrs subclass may not be
+    # installed when the archive is reopened.
+    attr_dict = patch.attrs.model_dump()
     # The ids are written. An older DASCore reads them as ordinary attrs
     # and then refuses to merge two patches whose ids differ -- which is
     # every pair -- so chunking such a spool there needs conflict="drop".

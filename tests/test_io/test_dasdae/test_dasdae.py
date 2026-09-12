@@ -443,6 +443,25 @@ class TestAttrsClassRoundTrip:
         odh4_patch.io.write(path, "dasdae")
         return path
 
+    def test_default_values_survive_without_class(self, random_patch, tmp_path):
+        """An archive keeps scientific defaults even without the defining plugin."""
+
+        class DefaultAttrs(dc.PatchAttrs):
+            gauge_length: float = 10.0
+
+        attrs = DefaultAttrs()
+        patch = random_patch.new(attrs=attrs)
+        assert "gauge_length" not in patch.attrs.model_fields_set
+        path = tmp_path / "defaults.h5"
+        dc.write(patch, path, "DASDAE")
+        with h5py.File(path, "a") as h5:
+            for group in h5["waveforms"].values():
+                group.attrs[_ATTRS_CLASS_KEY] = "absent:DefaultAttrs"
+        with pytest.warns(UserWarning, match="Nothing registers"):
+            restored = dc.read(path)[0]
+        assert type(restored.attrs) is dc.PatchAttrs
+        assert restored.attrs.gauge_length == 10.0
+
     def test_read_keeps_the_class(self, odh4_path):
         """Reading rebuilds the class which was written."""
         attrs = dc.read(odh4_path)[0].attrs

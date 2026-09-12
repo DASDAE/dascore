@@ -404,6 +404,17 @@ class TestNew:
 class TestPatchSummary:
     """Tests for patch summary helpers and selection fallbacks."""
 
+    def test_legacy_attrs_restore_defaults(self, random_patch):
+        """Summaries of old pickles restore missing identity defaults."""
+        attrs = random_patch.attrs.model_copy()
+        del attrs.__dict__["patch_id"]
+        del attrs.__dict__["processing_id"]
+        summary = dc.PatchSummary(attrs=attrs, coords={})
+        assert summary.attrs.patch_id == ""
+        assert summary.attrs.processing_id == ""
+        assert summary.flat_dump()["processing_id"] == ""
+        assert not hasattr(attrs, "processing_id")
+
     def test_summary_uses_structured_access(self, random_patch):
         """Summary should expose coord summaries explicitly."""
         summary = random_patch.summary
