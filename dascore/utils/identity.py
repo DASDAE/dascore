@@ -122,7 +122,12 @@ def with_patch_id(attrs):
     # instance back untouched rather than revalidating it into one.
     if getattr(attrs, "patch_id", None) or not ids_enabled():
         return attrs
-    return attrs.update(patch_id=new_patch_id())
+    patch_id = new_patch_id()
+    # Old pickles need their missing defaults restored by validation. Current
+    # attrs are already validated; a generated ID changes no scientific fields.
+    if not hasattr(attrs, "patch_id") or not hasattr(attrs, "processing_id"):
+        return attrs.update(patch_id=patch_id)
+    return attrs.model_copy(update={"patch_id": patch_id})
 
 
 def new_patch_id() -> str:

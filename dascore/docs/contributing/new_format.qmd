@@ -64,7 +64,7 @@ Multi-patch formats attach a stable native key with `source=PatchSource(key=...)
 
 `PatchSource` is framework plumbing stored privately on `patch._source`; it is separate from scientific attrs. Readers supply the logical key, and the dispatcher fills the path, format, and version. Directory readers may also supply an internal member path for timestamp filtering and to pin array loading to the corresponding metadata entry; public source provenance still names the requested resource. Public summaries retain the existing `source_path`, `source_format`, `source_version`, and `source_patch_key` fields. The reserved `windows` field remains unset. Source retention through processing is not guaranteed, and no lazy `Patch.load()` is provided.
 
-The shared `read` accepts one or multiple `source_patch_key` values, selects metadata, and loads matching arrays. Source IDs are derived before selection, so selecting a subset keeps the original logical patch identity. Stored IDs remain authoritative.
+The shared `read` exposes keyword-only `samples=False` and `source_patch_key=""` parameters. `samples=True` interprets coordinate bounds as sample indices. It accepts one or multiple `source_patch_key` values, selects metadata, and loads matching arrays. `snap=None` preserves compatibility with `snap_dims`: the effective default is `True`, and explicit `snap` takes precedence over the alias. Source IDs are derived before selection, so selecting a subset keeps the original logical patch identity. Stored IDs remain authoritative.
 
 ## Choose attrs
 

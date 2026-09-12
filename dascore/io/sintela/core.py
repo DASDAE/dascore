@@ -4,6 +4,8 @@ Core module for reading Sintela binary format.
 
 from __future__ import annotations
 
+from collections.abc import Iterable
+
 import numpy as np
 
 import dascore as dc
@@ -113,14 +115,21 @@ class SintelaProtobufV1(FiberIO):
         data, coords, _ = read_payload(resource)
         return slice_dataset(data, coords.dims, windows)
 
-    def read(self, resource, **kwargs) -> dc.Spool:
+    def read(
+        self,
+        resource,
+        *,
+        samples: bool = False,
+        source_patch_key: str | Iterable[str] = "",
+        **kwargs,
+    ) -> dc.Spool:
         """Load all packet metadata while decoding, preserving fast endpoint scans.
 
         META records can appear between data packets. Collecting them during
         indexing would require a header walk through every recording, so this
         reader retains its streaming assembly path instead of the shared read.
         """
-        wanted = _normalize_source_patch_keys(kwargs.get("source_patch_key", ""))
+        wanted = _normalize_source_patch_keys(source_patch_key)
         if wanted and "0" not in wanted:
             return dc.spool([])
         with IOResourceManager(resource) as manager:
@@ -135,7 +144,7 @@ class SintelaProtobufV1(FiberIO):
             if selectors:
                 coords, data = coords.select(
                     data,
-                    samples=kwargs.get("samples", False),
+                    samples=samples,
                     relative=kwargs.get("relative", False),
                     **selectors,
                 )

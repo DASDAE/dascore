@@ -741,7 +741,15 @@ class FiberIO:
         msg = f"FiberIO: {self.name} has no read_array method"
         raise NotImplementedError(msg)
 
-    def read(self, resource, *, snap: bool | None = None, **select) -> dc.Spool:
+    def read(
+        self,
+        resource,
+        *,
+        snap: bool | None = None,
+        samples: bool = False,
+        source_patch_key: str | Iterable[str] = "",
+        **select,
+    ) -> dc.Spool:
         """
         Read patches by selecting metadata and loading the resulting array windows.
 
@@ -749,14 +757,15 @@ class FiberIO:
         recording a processing operation. `source_patch_key` selects logical
         patches, and matching attribute queries filter metadata before data
         are read. `snap` defaults to True; the older `snap_dims` spelling is
-        also accepted, with explicit `snap` taking precedence.
+        also accepted, with explicit `snap` taking precedence. `samples=True`
+        interprets coordinate selections as sample indices. `source_patch_key`
+        accepts one logical key or an iterable of keys.
         """
         provenance_source = select.pop("_provenance_source", None)
         snap_dims = select.pop("snap_dims", True)
         snap = snap_dims if snap is None else snap
-        wanted = _normalize_source_patch_keys(select.pop("source_patch_key", ""))
+        wanted = _normalize_source_patch_keys(source_patch_key)
         relative = select.pop("relative", False)
-        samples = select.pop("samples", False)
         out = []
         with IOResourceManager(resource) as manager:
             metadata_resource = manager.get_resource(
@@ -1114,8 +1123,15 @@ def _stamp_source_ids(
                 mtime_ns,
                 ordinal=index,
             )
-            attrs = attrs.update(patch_id=patch_id)
-        attrs = attrs.drop(STORED_PATCH_ID)
+            # Validate IDs supplied by a reader; derived IDs are trusted strings
+            # and need no second validation of every scientific attribute.
+            attrs = (
+                attrs.update(patch_id=patch_id)
+                if stored
+                else attrs.model_copy(update={"patch_id": patch_id})
+            )
+        if hasattr(attrs, STORED_PATCH_ID):
+            attrs = attrs.drop(STORED_PATCH_ID)
         out.append(patch.new(attrs=attrs, source=origin))
     return out
 

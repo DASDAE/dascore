@@ -247,8 +247,10 @@ class PatchSummary(DascoreBaseModel):
             dims = _normalize_dims(data.get("dims", ()))
             attrs = PatchAttrs.from_dict(data.get("attrs"))
             key = data.get("source_patch_key", attrs.get("_source_patch_key", ""))
+            if hasattr(attrs, "_source_patch_key"):
+                attrs = attrs.drop("_source_patch_key")
             return _build_patch_summary_payload(
-                attrs=attrs.drop("_source_patch_key"),
+                attrs=attrs,
                 coords=_normalize_coord_summary_map(data.get("coords", {}), dims=dims),
                 dims=dims,
                 shape=data.get("shape", ()),

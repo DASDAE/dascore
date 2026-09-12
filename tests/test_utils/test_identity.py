@@ -30,6 +30,7 @@ from dascore.utils.identity import (
     processing_id_of,
     source_patch_id,
     stamp_combination,
+    with_patch_id,
 )
 from dascore.utils.patch import concatenate_patches, concatenate_planned, stack_patches
 from dascore.utils.patch_registry import _as_key, _signature, fingerprint_call
@@ -43,6 +44,27 @@ class TestNewDataId:
     def test_each_is_its_own(self):
         """Two arrays are two data, however alike they look."""
         assert new_patch_id() != new_patch_id()
+
+    def test_assignment_preserves_attrs(self):
+        """Minting an internal ID preserves validated fields and the input attrs."""
+        attrs = dc.PatchAttrs(data_units="m/s", tag="measurement", vendor_value=3)
+        updated = with_patch_id(attrs)
+        assert attrs.patch_id == ""
+        assert updated.patch_id
+        assert updated.model_dump(exclude={"patch_id"}) == attrs.model_dump(
+            exclude={"patch_id"}
+        )
+
+    def test_legacy_attrs_restore_defaults(self):
+        """Unpickled attrs missing identity fields receive their current defaults."""
+        attrs = dc.PatchAttrs(data_units="m/s")
+        del attrs.__dict__["patch_id"]
+        del attrs.__dict__["processing_id"]
+        updated = with_patch_id(attrs)
+        assert updated.patch_id
+        assert updated.processing_id == ""
+        assert updated.data_units == attrs.data_units
+        assert not hasattr(attrs, "patch_id")
 
     def test_it_is_a_hex_string(self):
         """The same shape as every other id, so nothing can tell them apart."""
