@@ -1,4 +1,4 @@
-"""The DASCore command-line interface."""
+"""The DASCore command-line entry point."""
 
 from __future__ import annotations
 
@@ -9,22 +9,16 @@ from dascore.utils.misc import optional_import
 
 
 def main(argv: list[str] | None = None) -> int:
-    """Run the optional DASCore CLI and return its exit status."""
+    """Run the Typer CLI and return its exit status."""
     try:
         optional_import("typer", required_for="the DASCore command-line interface")
-    except MissingOptionalDependencyError as exc:
-        sys.stderr.write(
-            f"dascore: CLI support could not load Typer: {exc.__cause__}\n"
-            f'Install with uv:\n  uv pip install --python "{sys.executable}" '
-            '"dascore[agents]"\nOr with pip:\n'
-            f'  "{sys.executable}" -m pip install "dascore[agents]"\n'
-        )
-        return 1
-    # The command definitions require the optional Typer dependency.
-    app = optional_import("dascore._cli").app
+        # Command definitions depend on the optional Typer package.
+        app = optional_import("dascore._cli").app
 
-    try:
         return app(args=argv, prog_name="dascore")
+    except MissingOptionalDependencyError as exc:
+        sys.stderr.write(f"dascore: {exc}\n")
+        return 1
     except SystemExit as exc:
         assert isinstance(exc.code, int)
         return exc.code
