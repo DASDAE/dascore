@@ -269,6 +269,16 @@ class TestBoundedMetadata:
         assert len(spool) == 11
 
 
+class _Index:
+    """A bound which is only usable through __index__, as Python allows."""
+
+    def __init__(self, value: int):
+        self._value = value
+
+    def __index__(self) -> int:
+        return self._value
+
+
 def _counting_ids(backend):
     """Patch query_ids to record how many ids each call returned."""
     fetched = []
@@ -494,6 +504,18 @@ class TestWindowFallbacks:
         ids = catalog.ordered_ids()
         item = slice(np.uint64(5), np.uint64(2))
         assert catalog.window(item).ordered_ids() == ids[5:2] == ()
+
+    @pytest.mark.parametrize(
+        "bounds", [(np.int64(2), np.int64(5)), (_Index(2), _Index(5))]
+    )
+    def test_index_like_bounds(self, big_spool, bounds):
+        """Anything Python accepts as an index works as a bound."""
+        catalog = big_spool._catalog
+        start, stop = bounds
+        assert (
+            catalog.window(slice(start, stop)).ordered_ids()
+            == (catalog.ordered_ids()[2:5])
+        )
 
     def test_wide_contiguous_window_stays_bounded(self, big_spool, monkeypatch):
         """A contiguous window costs what it returns, however wide it is."""
