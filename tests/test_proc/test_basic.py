@@ -1484,6 +1484,14 @@ class TestFull:
         assert patch.coords == random_patch.coords
         assert np.allclose(patch.data, 1.0)
 
+    def test_broadcastable_fill(self, random_patch):
+        """A fill value which broadcasts to the patch's shape is filled in."""
+        row = np.arange(random_patch.shape[-1], dtype=np.float64)
+        patch = random_patch.full(row)
+        expected = np.full(random_patch.shape, row)
+        assert np.allclose(patch.data, expected)
+        assert patch.data.dtype == expected.dtype
+
 
 class TestDemedian:
     """Tests for demedian of data."""

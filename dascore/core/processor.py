@@ -278,20 +278,23 @@ class PatchProcessor(DascoreBaseModel):
         if out is described and result is data:
             # Nothing done, so nothing recorded; a declared data_type still
             # applies, as it does for a decorated patch function.
-            if self.data_type is None or not record:
+            if self.data_type is None:
                 return patch
             return patch.update_attrs(data_type=self.data_type)
         out = self.reconcile(result, out)
         # Filled here unless `reconcile` already put data in it.
         data = result if out._data is None else out._data
-        if not record:
-            return out.new(data=data)
-        return out.new(data=data, attrs=self._record(patch, out.attrs))
-
-    def _record(self, patch: PatchType, attrs: PatchAttrs) -> PatchAttrs:
-        """Return attrs carrying the data_type, history and ids of this call."""
+        attrs = out.attrs
+        # The data_type describes the result, not the call, so a bypass
+        # skipping history and ids still gets it.
         if self.data_type is not None:
             attrs = attrs.update(data_type=self.data_type)
+        if record:
+            attrs = self._record(patch, attrs)
+        return out.new(data=data, attrs=attrs)
+
+    def _record(self, patch: PatchType, attrs: PatchAttrs) -> PatchAttrs:
+        """Return attrs carrying the history and ids of this call."""
         name = self.name or type(self).__name__
         if self.history is not None and get_config().patch_history != "disabled":
             spelled = _call_str(name, self.kwargs) if self.history == "full" else name

@@ -252,6 +252,23 @@ class TestReviewFindings:
             assert out.attrs.history == patch.attrs.history
             assert out.attrs.processing_id == patch.attrs.processing_id
 
+    def test_bypass_keeps_the_data_type(self, patch):
+        """The data_type describes the result, so skipping the record keeps it."""
+
+        class Tag(PatchProcessor):
+            """Scale the data and declare a data_type."""
+
+            name = None
+            data_type = "tagged"
+
+            def kernel(self, data):
+                """Return the data, doubled."""
+                return data * 2
+
+        out = Tag()._run(patch, record=False)
+        assert out.attrs.data_type == "tagged"
+        assert out.attrs.history == patch.attrs.history
+
     def test_signature_carries_annotations(self):
         """Field annotations reach the generated signature."""
         sig = inspect.signature(dc.proc.normalize)

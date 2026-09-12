@@ -1336,9 +1336,12 @@ class Full(PatchProcessor):
         """Return an array of the data's shape holding only the fill value."""
         # A numpy scalar keeps its dtype, as numpy's own full would.
         fill = np.asarray(self.fill_value)
-        dtype = asarray_like(fill, data).dtype
+        like = asarray_like(fill, data)
         xp = array_namespace(data)
-        return xp.full(data.shape, fill.item(), dtype=dtype, device=device(data))
+        if fill.ndim:
+            # A fill which is not a scalar broadcasts, as numpy's full does.
+            return xp.asarray(xp.broadcast_to(like, data.shape), copy=True)
+        return xp.full(data.shape, fill.item(), dtype=like.dtype, device=device(data))
 
 
 full = Full.patch_function

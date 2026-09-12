@@ -109,6 +109,13 @@ class TestKurtosis:
         assert out.attrs.data_type == "kurtosis"
         assert out.attrs.data_units is None
 
+    def test_bypass_keeps_the_metadata(self, random_patch):
+        """The result is kurtosis however the function is called."""
+        out = dc.transform.kurtosis.func(random_patch, time=0.01)
+        assert out.attrs.data_type == "kurtosis"
+        assert out.attrs.data_units is None
+        assert out.attrs.history == random_patch.attrs.history
+
     def test_restores_original_dimension_order(self, random_patch):
         """Ensure internal transpose does not affect output dims."""
         patch = random_patch.transpose("distance", "time")
