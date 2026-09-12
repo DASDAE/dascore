@@ -17,9 +17,6 @@ def main(argv: list[str] | None = None) -> int:
         app = optional_import("dascore._cli").app
 
         return app(args=argv, prog_name="dascore")
-    except MissingOptionalDependencyError as exc:
-        sys.stderr.write(f"dascore: {exc}\n")
-        return 1
     except SystemExit as exc:
         assert isinstance(exc.code, int)
         return exc.code
