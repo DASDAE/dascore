@@ -3741,16 +3741,15 @@ def _grid_pieces(coord: BaseCoord) -> list[tuple[int, CoordRange]]:
     return pieces
 
 
-def _same_step(first: CoordRange, other: CoordRange) -> bool:
+def _same_step(first: CoordRange, exact, other: CoordRange) -> bool:
     """
-    Whether a run shares the first run's step.
+    Whether a run shares the first run's step, `exact` being its exact form.
 
     Exactly for ticks; for floats, closely enough that the run drifts from
     the first run's grid by a negligible fraction of a step.
     """
-    exact = first.step_exact, other.step_exact
-    if None not in exact:
-        return exact[0] == exact[1]
+    if exact is not None and (other_exact := other.step_exact) is not None:
+        return exact == other_exact
     ratio = float(other.step) / float(first.step)
     return bool(abs(ratio - 1) * max(len(other) - 1, 1) <= _GRID_RTOL)
 
@@ -3759,12 +3758,13 @@ def _grid_position(anchor: CoordRange, label) -> int:
     """The position on the anchor's grid nearest a label."""
     if not anchor._exact:
         return int(np.round((label - anchor.start) / anchor.step))
-    tick = _to_tick(label)
+    num, den, offset = anchor._grid_terms
+    tick, start = _to_tick(label), anchor._start_tick
     after = int(anchor._index_of([tick], forward=True)[0])
-    near = (after - 1, after)
-    # ticks as Python integers, so unsigned labels cannot wrap
-    distance = [abs(_to_tick(x) - tick) for x in anchor._labels(np.array(near))]
-    return near[int(np.argmin(distance))]
+    # the labels either side as the integer ticks _labels casts to dtype,
+    # so the comparison stays in Python integers and cannot wrap
+    ticks = [start + (offset + pos * num) // den for pos in (after - 1, after)]
+    return after - 1 if abs(ticks[0] - tick) <= abs(ticks[1] - tick) else after
 
 
 def _max_missing(step: CoordRange, coord: BaseCoord, limit, samples: bool):
@@ -3805,8 +3805,9 @@ def _fill_layout(
         return None
     pieces = _grid_pieces(coord)
     first = pieces[0][1]
+    first_exact = first.step_exact
     for _, piece in pieces[1:]:
-        if not _same_step(first, piece):
+        if not _same_step(first, first_exact, piece):
             msg = (
                 f"Runs are sampled at different steps ({first.step} and "
                 f"{piece.step}); resample them to one step before filling gaps."
@@ -3842,7 +3843,8 @@ def _fill_layout(
             coords.append(anchor.change_length(length))
         out.extend((start, stop, offset + pos) for start, stop, pos in blocks)
         offset += length
-    new = coords[0] if len(coords) == 1 else concat_coords(*coords)
+    # a lone group is a range, which concat_coords returns unchanged
+    new = concat_coords(*coords)
     return new, tuple(out)
 
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
+from functools import partial
 from typing import Any, Literal
 
 import numpy as np
@@ -23,7 +24,7 @@ from dascore.exceptions import (
 from dascore.utils.array_api import array_namespace, to_numpy
 from dascore.utils.docs import compose_docstring
 from dascore.utils.indexing import get_indexers, label_indexer
-from dascore.utils.misc import get_parent_code_name, iterate
+from dascore.utils.misc import broadcast_for_index, get_parent_code_name, iterate
 from dascore.utils.patch import (
     drop_associated_coords,
     get_dim_axis_value,
@@ -1196,13 +1197,13 @@ def _place_blocks(data, axis: int, length: int, blocks, fill) -> np.ndarray:
     shape = list(data.shape)
     shape[axis] = length
     out = np.empty(shape, dtype=data.dtype)
-    lead = (slice(None),) * axis
+    index = partial(broadcast_for_index, len(shape), axis)
     end = 0
     for start, stop, target in blocks:
-        out[(*lead, slice(end, target))] = fill
+        out[index(slice(end, target))] = fill
         end = target + stop - start
-        out[(*lead, slice(target, end))] = data[(*lead, slice(start, stop))]
-    out[(*lead, slice(end, None))] = fill
+        out[index(slice(target, end))] = data[index(slice(start, stop))]
+    out[index(slice(end, None))] = fill
     return out
 
 
