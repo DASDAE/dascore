@@ -1,7 +1,7 @@
 name: "prepare for doc build"
 description: >
   Installs quarto, renders api docs, and builds the JupyterLite site the
-  tutorial pages link to. Quarto copies docs/lite into the published site as
+  tutorial pages link to. Quarto copies dascore/docs/lite into the published site as
   a project resource, so this must run before `quarto render`/`publish`.
   Each phase is timed into the build report; preparation is a large enough
   share of the end-to-end build to be worth keeping separate from the render.
@@ -56,7 +56,7 @@ runs:
       run: |
         python scripts/_doc_report.py time build_jupyterlite -- \
           jupyter lite build \
-            --contents docs/lite_contents \
-            --output-dir docs/lite \
+            --contents dascore/docs/lite_contents \
+            --output-dir dascore/docs/lite \
             --piplite-wheels dist/dascore-*.whl \
             --no-sourcemaps

@@ -17,7 +17,7 @@ cov_args=(--cov dascore --cov-append --cov-report=)
 # The doc tooling keeps its tests next to the scripts they test rather than
 # under tests/, which mirrors the package. Named here so they are collected:
 # without this the only thing running them is someone remembering to.
-suite=(tests scripts docs/filters)
+suite=(tests scripts dascore/docs/filters)
 
 args=("${suite[@]}" -m "not network" "${parallel[@]}" "${cov_args[@]}")
 if [[ "$1" == "network" ]]; then

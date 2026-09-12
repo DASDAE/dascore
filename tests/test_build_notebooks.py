@@ -18,8 +18,7 @@ from dascore.constants import DATA_VERSION
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 _SCRIPT_PATH = _REPO_ROOT / "scripts" / "build_notebooks.py"
 
-# The sdist ships tests but not scripts/, on the same terms as
-# test_inventory_diagrams.py skipping when the docs tree is absent.
+# These checks exercise checkout-only build tools; the sdist omits scripts/.
 pytestmark = pytest.mark.skipif(
     not _SCRIPT_PATH.is_file(), reason="scripts/ is not installed"
 )

@@ -1,6 +1,6 @@
 """Machinery for coordinates.
 
-See ['Coordinate Internals'](`docs/notes/coordinate_internals.qmd`) for the
+See ['Coordinate Internals'](`dascore/docs/notes/coordinate_internals.qmd`) for the
 current coord-family and string-coordinate design notes.
 """
 
@@ -1200,6 +1200,10 @@ class BaseCoord(RichRepr, DascoreBaseModel, abc.ABC):
     def data(self):
         """Return the internal data. Same as values attribute."""
         return self.values
+
+    def _get_index_values(self, indices):
+        """The labels at these (possibly negative) sample indices."""
+        return np.asarray(self.values)[np.asarray(indices)]
 
     def _get_compatible_value(self, value, relative=False):
         """
@@ -3168,6 +3172,19 @@ class CoordSegmented(BaseCoord):
         out = np.concatenate([x.values for x in self.segments])
         return array(out.astype(self.dtype, copy=False))
 
+    def _get_index_values(self, indices):
+        """Evaluate only the requested samples, each in its own segment."""
+        indices = np.asarray(indices)
+        indices = np.where(indices < 0, indices + len(self), indices)
+        offsets = self._segment_offsets()
+        which = np.searchsorted(offsets, indices, side="right") - 1
+        out = np.empty(indices.shape, dtype=self.dtype)
+        for num in np.unique(which):
+            mask = which == num
+            local = indices[mask] - offsets[num]
+            out[mask] = self.segments[num]._get_index_values(local)
+        return out
+
     def _as_monotonic(self) -> CoordMonotonicArray:
         """
         Return an equivalent (materialized) monotonic array coord.
@@ -3718,7 +3735,7 @@ def _raise_string_coord_error(operation: str) -> NoReturn:
 class CoordString(BaseCoord):
     """A coordinate implementation for string/categorical values.
 
-    See ['Coordinate Internals'](`docs/notes/coordinate_internals.qmd`) for the
+    See ['Coordinate Internals'](`dascore/docs/notes/coordinate_internals.qmd`) for the
     constraints that make string coords differ from numeric and time-like
     coords. Plain string selectors use exact matching unless they contain `*`,
     `?` or `[`, in which case they are read as globs, as SQLite reads them.
@@ -3930,7 +3947,7 @@ def get_coord(
 
     Notes
     -----
-    See ['Coordinate Internals'](`docs/notes/coordinate_internals.qmd`) for
+    See ['Coordinate Internals'](`dascore/docs/notes/coordinate_internals.qmd`) for
     dispatch and coord-family design notes.
 
     The following combinations of input parameters are typical:

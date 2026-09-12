@@ -22,9 +22,9 @@ from dascore.constants import DATA_VERSION
 from dascore.utils.downloader import fetch
 
 ROOT = Path(__file__).resolve().parent.parent
-DOCS = ROOT / "docs"
+DOCS = ROOT / "dascore" / "docs"
 TUTORIAL_DIR = DOCS / "tutorial"
-# Not configurable: docs/filters/lite_button.lua looks for the notebooks here,
+# Not configurable: dascore/docs/filters/lite_button.lua looks for the notebooks here,
 # and prep_doc_build hands the same path to `jupyter lite build`.
 CONTENTS_DIR = DOCS / "lite_contents"
 OUT_DIR = CONTENTS_DIR / "tutorial"

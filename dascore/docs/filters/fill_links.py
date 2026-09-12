@@ -67,9 +67,7 @@ def replace_links(json_data, raw_string):
             else:
                 for item, value in element.items():
                     yield from _yield_links(value)
-                # yield from _yield_links(element.get("c", []))
 
-    # reg_pattern = r'(?<="\%60)(.*?)(?=\%60")'
     reg_pattern = r"(?<=\%60)(.*?)(?=\%60)"
     replace_dict = {}
     for link in _yield_links(json_data):
@@ -80,7 +78,6 @@ def replace_links(json_data, raw_string):
             cross_refs = get_cross_ref_dict()
             key = str_to_scan[start:stop].replace("`", "")
             if (new_value := cross_refs.get(key, key)) != key:
-                # new_sub_str = str_to_scan.replace(f'"%60{key}%60"', f'"{new_value}"')
                 new_sub_str = str_to_scan.replace(f"%60{key}%60", f"{new_value}")
                 if str_to_scan in replace_dict:
                     assert replace_dict[str_to_scan] == new_sub_str
@@ -88,16 +85,6 @@ def replace_links(json_data, raw_string):
     for i, v in replace_dict.items():
         raw_string = raw_string.replace(i, v)
     return raw_string
-
-
-def test():
-    """Function to test filter."""
-    here = Path(__file__).parent
-    data_path = here / "filter_test_data" / "test_data_4.json"
-    with data_path.open("r") as fi:
-        data = fi.read()
-    input_stream = io.StringIO(data)
-    main(input_stream)
 
 
 def main(raw_data=None):
@@ -110,11 +97,3 @@ def main(raw_data=None):
 
 if __name__ == "__main__":
     main()
-    # test()
-
-
-# This is useful for debugging, but need to first install remote_pdb
-# from remote_pdb import RemotePdb
-# RemotePdb('127.0.0.1', 4444).set_trace()
-# Then telnet into the debugger
-# telnet 127.0.0.1 4444
