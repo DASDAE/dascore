@@ -5,6 +5,7 @@ from __future__ import annotations
 import numpy as np
 
 import dascore as dc
+from dascore.constants import snap_type
 from dascore.io import FiberIO
 from dascore.io.utils import slice_dataset
 from dascore.utils.hdf5 import H5Reader
@@ -43,7 +44,9 @@ class H5Simple(FiberIO):
         dims, data_node = _get_dims_and_data(resource)
         return slice_dataset(data_node, dims, windows)
 
-    def get_metadata(self, resource: H5Reader, *, snap: bool = True) -> list[dc.Patch]:
+    def get_metadata(
+        self, resource: H5Reader, *, snap: snap_type = True
+    ) -> list[dc.Patch]:
         """Get the attributes of a h5simple file."""
         attrs, cm, data = _get_attrs_coords_and_data(resource, snap)
         attrs = dc.PatchAttrs.from_dict(attrs)

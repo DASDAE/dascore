@@ -5,6 +5,7 @@ from __future__ import annotations
 import numpy as np
 
 import dascore as dc
+from dascore.constants import snap_type
 from dascore.io import FiberIO
 from dascore.io.utils import slice_dataset
 from dascore.models import OptionalFiniteFloat
@@ -32,7 +33,9 @@ class UptechH5V1(FiberIO):
         """Return the file version when the resource matches this family."""
         return self.version if _is_uptech(resource) else None
 
-    def get_metadata(self, resource: H5Reader, *, snap: bool = True) -> list[dc.Patch]:
+    def get_metadata(
+        self, resource: H5Reader, *, snap: snap_type = True
+    ) -> list[dc.Patch]:
         """Extract metadata without reading the signal array."""
         attrs = UptechPatchAttrs.model_validate(_get_attrs_dict(resource))
         return [

@@ -7,6 +7,7 @@ import contextlib
 import numpy as np
 
 import dascore as dc
+from dascore.constants import snap_type
 from dascore.io import FiberIO
 from dascore.io.utils import slice_dataset
 from dascore.utils.hdf5 import H5Reader, H5Writer
@@ -110,7 +111,9 @@ class DASDAEV1(FiberIO):
         group = _get_patch_group(resource, key)
         return slice_dataset(group["data"], _get_dims(group), windows)
 
-    def get_metadata(self, resource: H5Reader, *, snap: bool = True) -> list[dc.Patch]:
+    def get_metadata(
+        self, resource: H5Reader, *, snap: snap_type = True
+    ) -> list[dc.Patch]:
         """
         Get patch info by iterating waveform groups in the file.
 

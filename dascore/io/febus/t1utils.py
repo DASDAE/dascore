@@ -4,7 +4,12 @@ from __future__ import annotations
 
 import dascore as dc
 from dascore import get_coord_manager
-from dascore.io.utils import drop_blank_attrs, get_exact_coord, get_gridded_coord
+from dascore.io.utils import (
+    drop_blank_attrs,
+    get_exact_coord,
+    get_gridded_coord,
+    should_snap,
+)
 from dascore.utils.hdf5 import H5Reader
 from dascore.utils.misc import maybe_get_items
 
@@ -26,7 +31,7 @@ def _get_distance_coord(fi, snap=True):
     stored values back on the grid they restate.
     """
     dist = fi["Data/Distance"][()]
-    if snap:
+    if should_snap(snap, "distance"):
         return get_gridded_coord(dist, units="m")
     return get_exact_coord(dist, units="m")
 
@@ -35,7 +40,7 @@ def _get_time_coord(fi, snap=True):
     """Get the times from the T1 file"""
     ts = fi["Data/Time"][()].squeeze()
     times = (ts * 1e9).astype("datetime64[ns]")
-    if snap:
+    if should_snap(snap, "time"):
         return dc.get_coord(values=times, units="s")
     return get_exact_coord(times, units="s")
 

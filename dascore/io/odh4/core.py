@@ -5,6 +5,7 @@ from __future__ import annotations
 import numpy as np
 
 import dascore as dc
+from dascore.constants import snap_type
 from dascore.io import FiberIO
 from dascore.io.utils import slice_dataset
 from dascore.models import OptionalFiniteFloat
@@ -40,7 +41,9 @@ class ODH4V1(FiberIO):
             return self.version
         return None
 
-    def get_metadata(self, resource: H5Reader, *, snap: bool = True) -> list[dc.Patch]:
+    def get_metadata(
+        self, resource: H5Reader, *, snap: snap_type = True
+    ) -> list[dc.Patch]:
         """Scan an ODH4 file, return summary info about the contents."""
         file_attrs = _read_attrs(resource)
         coords = _get_coords(file_attrs, resource["raw_data"].shape)

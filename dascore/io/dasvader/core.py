@@ -5,6 +5,7 @@ from __future__ import annotations
 import numpy as np
 
 import dascore as dc
+from dascore.constants import snap_type
 from dascore.io import FiberIO
 from dascore.io.utils import resolve_keyed_source, slice_dataset
 from dascore.utils.hdf5 import H5Reader
@@ -43,7 +44,9 @@ class DASVaderV1(FiberIO):
             return self.version
         return None
 
-    def get_metadata(self, resource: H5Reader, *, snap: bool = True) -> list[dc.Patch]:
+    def get_metadata(
+        self, resource: H5Reader, *, snap: snap_type = True
+    ) -> list[dc.Patch]:
         """Scan a DASVader file, return summary information about the file."""
         rec = resource["dDAS"][()]
         cm = _get_coord_manager(resource, rec)

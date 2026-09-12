@@ -8,6 +8,7 @@ import numpy as np
 
 import dascore
 import dascore as dc
+from dascore.constants import snap_type
 from dascore.core.summary import normalize_source_patch_key
 from dascore.io import BinaryReader, BinaryWriter, FiberIO, PatchSource
 from dascore.io.utils import resolve_keyed_source, slice_dataset
@@ -81,7 +82,7 @@ class PickleIO(FiberIO):
             return None
 
     def get_metadata(
-        self, resource: _PickleReader, *, snap: bool = True
+        self, resource: _PickleReader, *, snap: snap_type = True
     ) -> list[dc.Patch]:
         """Decode a pickle to describe its patches without retaining their arrays."""
         return [

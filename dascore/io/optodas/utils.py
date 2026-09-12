@@ -5,7 +5,7 @@ from __future__ import annotations
 import dascore as dc
 import dascore.core
 from dascore.core.coords import get_coord
-from dascore.io.utils import get_exact_coord
+from dascore.io.utils import get_exact_coord, should_snap
 from dascore.utils.misc import _maybe_unpack, unbyte
 
 # --- Getting format/version
@@ -53,7 +53,7 @@ def _get_coord_manager(fi, snap=True):
         else:  # and distance
             # The channels are ints so we multiply by step to get distance.
             distance = fi["/header/channels"][:] * step
-            if snap:
+            if should_snap(snap, dim):
                 coord = get_coord(data=distance, units=unit)
             else:
                 coord = get_exact_coord(distance, units=unit)

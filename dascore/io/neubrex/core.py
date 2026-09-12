@@ -9,6 +9,7 @@ import numpy as np
 import dascore as dc
 import dascore.io.neubrex.utils_das as das_utils
 import dascore.io.neubrex.utils_rfs as rfs_utils
+from dascore.constants import snap_type
 from dascore.io import FiberIO
 from dascore.io.utils import slice_dataset
 from dascore.models import OptionalFiniteFloat
@@ -62,7 +63,9 @@ class NeubrexRFSV1(FiberIO):
         """
         return slice_dataset(resource["data"], ("time", "distance"), windows)
 
-    def get_metadata(self, resource: H5Reader, *, snap: bool = True) -> list[dc.Patch]:
+    def get_metadata(
+        self, resource: H5Reader, *, snap: snap_type = True
+    ) -> list[dc.Patch]:
         """Get the attributes of a resource belong to this type."""
         cm = rfs_utils._get_coord_manager(resource, snap)
         attrs = NeubrexRFSPatchAttrs.from_dict(rfs_utils._get_attr_dict(resource))
@@ -90,7 +93,9 @@ class NeubrexDASV1(FiberIO):
         """Slice the ``Acoustic`` dataset directly."""
         return slice_dataset(resource["Acoustic"], ("time", "distance"), windows)
 
-    def get_metadata(self, resource: H5Reader, *, snap: bool = True) -> list[dc.Patch]:
+    def get_metadata(
+        self, resource: H5Reader, *, snap: snap_type = True
+    ) -> list[dc.Patch]:
         """Get the attributes of this format from File."""
         acoustic = resource["Acoustic"]
         cm = das_utils._get_coord_manager(acoustic)

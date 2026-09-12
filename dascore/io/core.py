@@ -37,6 +37,7 @@ from dascore.constants import (
     PROGRESS_LEVELS,
     float_select_type,
     path_types,
+    snap_type,
     time_select_type,
 )
 from dascore.core.coords import CoordSegmented
@@ -712,14 +713,15 @@ class FiberIO:
         msg = f"FiberIO: {self.name} has no get_version method"
         raise NotImplementedError(msg)
 
-    def get_metadata(self, resource, *, snap: bool = True) -> list[dc.Patch]:
+    def get_metadata(self, resource, *, snap: snap_type = True) -> list[dc.Patch]:
         """
         Return one data-less patch per logical patch in a resource.
 
         The coordinates declare the array's dimensions and shape, and the
         patch declares its dtype. Multi-patch readers put their logical key
         in `PatchSource`. The framework supplies the source path, format,
-        and version. `snap=False` preserves stored coordinate values when
+        and version. `snap` accepts True, False, a coordinate name, or a tuple of
+        names. `snap=False` preserves stored coordinate values when
         available; neither setting includes unwritten samples.
         """
         msg = f"FiberIO: {self.name} has no get_metadata method"
@@ -745,7 +747,7 @@ class FiberIO:
         self,
         resource,
         *,
-        snap: bool | None = None,
+        snap: snap_type | None = None,
         samples: bool = False,
         source_patch_key: str | Iterable[str] = "",
         **select,
@@ -757,7 +759,8 @@ class FiberIO:
         recording a processing operation. `source_patch_key` selects logical
         patches, and matching attribute queries filter metadata before data
         are read. `snap` defaults to True; the older `snap_dims` spelling is
-        also accepted, with explicit `snap` taking precedence. `samples=True`
+        also accepted, with explicit `snap` taking precedence. Pass a coordinate
+        name or tuple of names to snap only those coordinates. `samples=True`
         interprets coordinate selections as sample indices. `source_patch_key`
         accepts one logical key or an iterable of keys.
         """
@@ -847,7 +850,7 @@ class FiberIO:
         return dc.spool(out)
 
     def scan(
-        self, resource, *, snap: bool = True, timestamp=None, **kwargs
+        self, resource, *, snap: snap_type = True, timestamp=None, **kwargs
     ) -> list[dc.Patch]:
         """Return data-less patches; the dispatcher attaches source provenance."""
         if self.input_type == "directory":
@@ -1402,7 +1405,7 @@ def _iter_scan_results(
     timestamp: float | None = None,
     progress: PROGRESS_LEVELS | Progress = "standard",
     *,
-    snap: bool = True,
+    snap: snap_type = True,
 ) -> Generator[tuple[dc.Patch, int], None, None]:
     """
     Yield raw scan results with dispatcher-owned source information.
@@ -1528,7 +1531,7 @@ def scan_payloads(
     ext: str | None = None,
     timestamp: float | None = None,
     progress: PROGRESS_LEVELS | Progress = "standard",
-    snap: bool = True,
+    snap: snap_type = True,
 ) -> list[dc.Patch]:
     """
     Scan a potential patch source and return full coordinate payloads.
@@ -1550,7 +1553,8 @@ def scan_payloads(
     snap
         If True (the default), formats may represent stored sample times as an
         idealized uniform range. If False, returned coords represent stored
-        coordinate values exactly when the format exposes them.
+        coordinate values exactly when the format exposes them. A coordinate name
+        or tuple of names enables snapping only for those coordinates.
 
     Returns
     -------

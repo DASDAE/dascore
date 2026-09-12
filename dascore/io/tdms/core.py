@@ -5,6 +5,7 @@ from __future__ import annotations
 import numpy as np
 
 import dascore as dc
+from dascore.constants import snap_type
 from dascore.io import FiberIO
 from dascore.io.utils import windows_to_slices
 from dascore.utils.io import BinaryReader, LocalBinaryReader
@@ -37,7 +38,7 @@ class TDMSFormatterV4713(FiberIO):
             return None
 
     def get_metadata(
-        self, resource: BinaryReader, *, snap: bool = True
+        self, resource: BinaryReader, *, snap: snap_type = True
     ) -> list[dc.Patch]:
         """Scan a tdms file, return summary information about the file's contents."""
         out, fileinfo = _get_all_attrs(resource)

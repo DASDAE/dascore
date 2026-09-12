@@ -9,6 +9,7 @@ from collections.abc import Iterable
 import numpy as np
 
 import dascore as dc
+from dascore.constants import snap_type
 from dascore.io import FiberIO
 from dascore.io.core import _stamp_source_ids
 from dascore.io.utils import slice_dataset, windows_to_slices
@@ -59,7 +60,7 @@ class SintelaBinaryV3(FiberIO):
         return None
 
     def get_metadata(
-        self, resource: BinaryReader, *, snap: bool = True
+        self, resource: BinaryReader, *, snap: snap_type = True
     ) -> list[dc.Patch]:
         """Scan a file, return summary information on the contents."""
         attrs, coords, header = _get_attrs_coords_header(resource, SintelaPatchAttrs)
@@ -103,7 +104,7 @@ class SintelaProtobufV1(FiberIO):
         return self.version if tag else None
 
     def get_metadata(
-        self, resource: BinaryReader, *, snap: bool = True
+        self, resource: BinaryReader, *, snap: snap_type = True
     ) -> list[dc.Patch]:
         """Scan a Sintela protobuf recording."""
         return scan_payload(resource)

@@ -11,6 +11,7 @@ from __future__ import annotations
 import numpy as np
 
 import dascore as dc
+from dascore.constants import snap_type
 from dascore.io import FiberIO
 from dascore.io.gdr.utils_das import _get_attrs_coords_and_data, _get_version
 from dascore.io.utils import slice_dataset
@@ -52,7 +53,9 @@ class GDR_V1(FiberIO):  # noqa
             windows,
         )
 
-    def get_metadata(self, resource: H5Reader, *, snap: bool = True) -> list[dc.Patch]:
+    def get_metadata(
+        self, resource: H5Reader, *, snap: snap_type = True
+    ) -> list[dc.Patch]:
         """Get the attributes of a resource belong to this type."""
         attrs, cm, data = _get_attrs_coords_and_data(resource, snap)
         return [

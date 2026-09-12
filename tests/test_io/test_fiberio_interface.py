@@ -7,6 +7,7 @@ import numpy as np
 import pytest
 
 import dascore as dc
+from dascore.core.coords import CoordMonotonicArray
 from dascore.core.source import PatchSource
 from dascore.exceptions import InvalidFiberFileError, InvalidFiberIOError
 from dascore.io import FiberIO, H5Reader
@@ -187,3 +188,72 @@ class TestStoredShapeValidation:
                 group.create_dataset("data", data=np.zeros((2, 2)))
         with pytest.raises(InvalidFiberFileError, match="shapes disagree"):
             DASDAEV2().get_metadata(path)
+
+
+class TestNamedSnap:
+    """Named snapping preserves other coordinates and the original data grid."""
+
+    @pytest.fixture(params=["H5Simple", "DASDAE", "NETCDF_CF"])
+    def jittered_file(self, request, tmp_path):
+        """Store distinguishable samples with small jitter along both dimensions."""
+        path = tmp_path / "jittered.h5"
+        data = np.arange(15).reshape(5, 3)
+        with h5py.File(path, "w") as h5:
+            h5.attrs["dims"] = "time,distance"
+            h5["data"] = data
+            h5["time"] = [0.0, 1.000001, 2.0, 3.0, 4.0]
+            h5["distance"] = [0.0, 1.00000001, 2.0]
+        if request.param != "H5Simple":
+            exact = dc.read(path, file_format="H5Simple", snap=False)[0]
+            # Store explicit value arrays; a serialized segmented coordinate
+            # correctly preserves its declared segments independently of snap.
+            exact = exact.new(
+                coords={
+                    name: CoordMonotonicArray(values=coord.values)
+                    for name, coord in exact.coords.coord_map.items()
+                }
+            )
+            path = tmp_path / "converted.h5"
+            dc.write(exact, path, file_format=request.param)
+        return path, request.param, data
+
+    @pytest.mark.parametrize(
+        ("options", "enabled"),
+        [
+            ({"snap": "time"}, {"time"}),
+            ({"snap": ("time",)}, {"time"}),
+            ({"snap": ("distance",)}, {"distance"}),
+            ({"snap": ("time", "distance")}, {"time", "distance"}),
+            ({"snap": ()}, set()),
+            ({"snap": False}, set()),
+            ({"snap": True}, {"time", "distance"}),
+            ({"snap": "time", "snap_dims": False}, {"time"}),
+        ],
+    )
+    def test_named_coordinates(self, jittered_file, options, enabled):
+        """Only requested coords change, in both scan and full/bounded reads."""
+        path, file_format, data = jittered_file
+        exact = dc.read(path, file_format=file_format, snap=False)[0]
+        gridded = dc.read(path, file_format=file_format, snap=True)[0]
+        read = dc.read(path, file_format=file_format, **options)[0]
+        scanned = dc.scan_payloads(path, file_format=file_format, snap=options["snap"])[
+            0
+        ]
+        bounded = dc.read(
+            path, file_format=file_format, samples=True, time=(1, 3), **options
+        )[0]
+        for name in exact.dims:
+            raw_values = exact.get_coord(name).values
+            grid_values = gridded.get_coord(name).values
+            # Both axes really contain jitter, so selecting either is observable.
+            assert not np.array_equal(raw_values, grid_values)
+            expected = grid_values if name in enabled else raw_values
+            np.testing.assert_array_equal(read.get_coord(name).values, expected)
+            np.testing.assert_array_equal(scanned.get_coord(name).values, expected)
+            selection = slice(1, 3) if name == "time" else slice(None)
+            np.testing.assert_array_equal(
+                bounded.get_coord(name).values, expected[selection]
+            )
+        np.testing.assert_array_equal(read.data, data)
+        np.testing.assert_array_equal(bounded.data, data[1:3])
+        assert exact.attrs.patch_id == read.attrs.patch_id == bounded.attrs.patch_id

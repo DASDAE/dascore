@@ -7,7 +7,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import dascore as dc
-from dascore.io.utils import get_exact_coord, get_gridded_coord
+from dascore.io.utils import get_exact_coord, get_gridded_coord, should_snap
 from dascore.utils.misc import maybe_get_items, unbyte
 
 _G1_H5_BASE_DATASETS = frozenset(
@@ -171,9 +171,9 @@ def _get_g1_h5_version(resource, required_datasets, required_attrs) -> str | boo
 def _get_g1_h5_base_coords(resource, dims, extra_coords=None, snap=True):
     """Return time/distance coords shared by G1 HDF5 files."""
 
-    def _coord(values, units=None):
+    def _coord(values, name, units=None):
         """Return a tolerant or exact coordinate from stored values."""
-        if snap:
+        if should_snap(snap, name):
             return dc.get_coord(data=values, units=units)
         return get_exact_coord(values, units=units)
 
@@ -186,7 +186,7 @@ def _get_g1_h5_base_coords(resource, dims, extra_coords=None, snap=True):
             f"{ends.shape}; the file is truncated or still being written."
         )
         raise ValueError(msg)
-    time = _coord(dc.to_datetime64(starts))
+    time = _coord(dc.to_datetime64(starts), "time")
     # Each sample covers a window rather than being instantaneous, so keep how
     # long it ran. The span is differenced off the raw arrays rather than
     # stored as end_times: starts and ends are each near-regular and snap to
@@ -199,11 +199,11 @@ def _get_g1_h5_base_coords(resource, dims, extra_coords=None, snap=True):
     # the tolerance get_coord uses to recognize an even coordinate, leaving a
     # monotonic coord with no step, so put it back on the grid it restates.
     distances = resource["distances"][...]
-    if snap:
+    if should_snap(snap, "distance"):
         distance = get_gridded_coord(distances, units="m")
     else:
         distance = get_exact_coord(distances, units="m")
-    temperature = _coord(resource["temperatures"][...], units="°C")
+    temperature = _coord(resource["temperatures"][...], "temperature", units="°C")
     coords = {
         "time": time,
         "distance": distance,

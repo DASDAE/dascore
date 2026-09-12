@@ -5,6 +5,7 @@ from __future__ import annotations
 import numpy as np
 
 import dascore as dc
+from dascore.constants import snap_type
 from dascore.io.core import FiberIO
 from dascore.io.utils import slice_dataset
 from dascore.utils.io import BinaryReader, LocalBinaryReader
@@ -37,7 +38,7 @@ class SentekV5(FiberIO):
         return _match[1] if (_match := _get_version(resource)) else None
 
     def get_metadata(
-        self, resource: BinaryReader, *, snap: bool = True
+        self, resource: BinaryReader, *, snap: snap_type = True
     ) -> list[dc.Patch]:
         """Extract metadata from sentek file."""
         attrs, coords, _ = _get_patch_attrs(resource)

@@ -5,6 +5,7 @@ from __future__ import annotations
 import numpy as np
 
 import dascore as dc
+from dascore.constants import snap_type
 from dascore.io.core import FiberIO
 from dascore.io.utils import windows_to_slices
 from dascore.utils.io import LocalBinaryReader, LocalPath
@@ -46,7 +47,9 @@ class SegyV1_0(FiberIO):  # noqa
                 return np.empty((len(range(shape[0])[time]), 0), dtype=stream.dtype)
             return np.stack([stream.trace[index][time] for index in channels], axis=-1)
 
-    def get_metadata(self, resource: LocalPath, *, snap: bool = True) -> list[dc.Patch]:
+    def get_metadata(
+        self, resource: LocalPath, *, snap: snap_type = True
+    ) -> list[dc.Patch]:
         """
         Used to get metadata about a file without reading the whole file.
 

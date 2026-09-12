@@ -7,6 +7,7 @@ from __future__ import annotations
 import numpy as np
 
 import dascore as dc
+from dascore.constants import snap_type
 from dascore.core.source import PatchSource
 from dascore.io import FiberIO
 from dascore.io.utils import resolve_keyed_source, slice_dataset
@@ -83,7 +84,9 @@ class Febus2(FiberIO):
             return version_str
         return None
 
-    def get_metadata(self, resource: H5Reader, *, snap: bool = True) -> list[dc.Patch]:
+    def get_metadata(
+        self, resource: H5Reader, *, snap: snap_type = True
+    ) -> list[dc.Patch]:
         """Scan a febus file, return summary information about the file's contents."""
         out = []
         for attr, cm, feb in _yield_attrs_coords(resource):
@@ -141,7 +144,7 @@ class FebusG1CSV1(FiberIO):
         return self.version if is_g1_file else None
 
     def get_metadata(
-        self, resource: TextReader, *, snap: bool = True
+        self, resource: TextReader, *, snap: snap_type = True
     ) -> list[dc.Patch]:
         """Get the coords and attrs of a G1 file."""
         coords, attrs = _get_g1_coords_and_attrs(resource)
@@ -178,7 +181,9 @@ class FebusMTXH5V1(FiberIO):
         version = _mtx_version(resource)
         return self.version if version == self.version else None
 
-    def get_metadata(self, resource: H5Reader, *, snap: bool = True) -> list[dc.Patch]:
+    def get_metadata(
+        self, resource: H5Reader, *, snap: snap_type = True
+    ) -> list[dc.Patch]:
         """Scan a Febus MTX HDF5 file."""
         attrs = _get_mtx_attrs(resource)
         coords = _get_mtx_coords(resource, snap=snap)
@@ -217,7 +222,9 @@ class FebusBSLH5V1(FiberIO):
         version = _bsl_version(resource)
         return self.version if version == self.version else None
 
-    def get_metadata(self, resource: H5Reader, *, snap: bool = True) -> list[dc.Patch]:
+    def get_metadata(
+        self, resource: H5Reader, *, snap: snap_type = True
+    ) -> list[dc.Patch]:
         """Scan a Febus BSL HDF5 file."""
         attrs = _get_bsl_attrs(resource)
         coords = _get_bsl_coords(resource, snap=snap)
@@ -263,7 +270,9 @@ class FebusT1V1(FiberIO):
         """Return the file version when the resource matches this family."""
         return self.version if _is_t1_file(resource) else None
 
-    def get_metadata(self, resource: H5Reader, *, snap: bool = True) -> list[dc.Patch]:
+    def get_metadata(
+        self, resource: H5Reader, *, snap: snap_type = True
+    ) -> list[dc.Patch]:
         """Return a list with one PatchAttrs for the file's temperature data."""
         return [_scan_t1(resource, snap=snap)]
 

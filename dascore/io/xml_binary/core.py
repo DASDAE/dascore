@@ -8,6 +8,7 @@ import numpy as np
 from pydantic import ValidationError
 
 import dascore as dc
+from dascore.constants import snap_type
 from dascore.exceptions import InvalidFiberFileError
 from dascore.io import FiberIO
 from dascore.io.utils import resolve_keyed_source, slice_dataset
@@ -43,7 +44,7 @@ class XMLBinaryV1(FiberIO):
         path = coerce_to_upath(resource)
         return path if path.is_dir() else path.parent
 
-    def get_metadata(self, resource, *, snap: bool = True) -> list[dc.Patch]:
+    def get_metadata(self, resource, *, snap: snap_type = True) -> list[dc.Patch]:
         """Describe each raw file using the directory's XML metadata."""
         resource = coerce_to_upath(resource)
         base = self._get_base_path(resource)

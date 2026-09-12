@@ -10,7 +10,7 @@ from typing import Any, cast
 import numpy as np
 
 import dascore as dc
-from dascore.constants import INVENTORY_ATTRS
+from dascore.constants import INVENTORY_ATTRS, snap_type
 from dascore.core.coordmanager import CoordManager
 from dascore.core.coords import BaseCoord, CoordSegmented, get_coord
 from dascore.core.summary import normalize_source_patch_key
@@ -23,8 +23,13 @@ from dascore.exceptions import (
 )
 from dascore.models import ArrayLike
 from dascore.units import convert_units, get_quantity_str
-from dascore.utils.misc import _to_slice, _validate_sample_values, unbyte
+from dascore.utils.misc import _to_slice, _validate_sample_values, iterate, unbyte
 from dascore.utils.time import to_exact_fraction
+
+
+def should_snap(snap: snap_type, name: str) -> bool:
+    """Return whether the all/none or named-coordinate option enables snapping."""
+    return snap if isinstance(snap, bool) else name in iterate(snap)
 
 
 def get_attr_names(attr_cls) -> set[str]:

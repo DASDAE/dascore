@@ -7,6 +7,7 @@ from __future__ import annotations
 import numpy as np
 
 import dascore as dc
+from dascore.constants import snap_type
 from dascore.io import BinaryReader, FiberIO
 from dascore.io.utils import slice_dataset
 
@@ -29,7 +30,7 @@ class SR4731V200(FiberIO):
         )
 
     def get_metadata(
-        self, resource: BinaryReader, *, snap: bool = True
+        self, resource: BinaryReader, *, snap: snap_type = True
     ) -> list[dc.Patch]:
         """Scan an SR-4731 SOR file."""
         attrs = _get_patch_attrs(resource, SR4731PatchAttrs)

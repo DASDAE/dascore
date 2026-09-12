@@ -35,6 +35,7 @@ from collections import defaultdict
 import numpy as np
 
 import dascore as dc
+from dascore.constants import snap_type
 from dascore.exceptions import InvalidFiberFileError
 from dascore.io import FiberIO
 from dascore.io.utils import resolve_keyed_source, windows_to_slices
@@ -65,7 +66,9 @@ class MSeedV2(FiberIO):
         """Return the file version when the resource matches this family."""
         return _match[1] if (_match := _detect_format(resource)) else None
 
-    def get_metadata(self, resource: LocalPath, *, snap: bool = True) -> list[dc.Patch]:
+    def get_metadata(
+        self, resource: LocalPath, *, snap: snap_type = True
+    ) -> list[dc.Patch]:
         """Scan a MiniSEED file."""
         pymseed = optional_import("pymseed")
         return _scan_patches(resource, pymseed)

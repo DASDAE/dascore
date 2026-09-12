@@ -14,7 +14,12 @@ import dascore as dc
 from dascore.constants import VALID_DATA_TYPES
 from dascore.core.coords import get_coord
 from dascore.exceptions import InvalidSpoolError, PatchError
-from dascore.io.utils import convert_attr_units, get_exact_coord, resolve_keyed_source
+from dascore.io.utils import (
+    convert_attr_units,
+    get_exact_coord,
+    resolve_keyed_source,
+    should_snap,
+)
 from dascore.models import OptionalFiniteFloat, UTF8Str
 from dascore.units import get_quantity_str
 from dascore.utils.hdf5 import encode_h5_strings
@@ -159,7 +164,7 @@ def _get_time_coord(node, snap=True):
     time_array = node[time_name]
     array_len = len(time_array)
     assert array_len > 0, "Missing time array in ProdML file."
-    if not snap:
+    if not should_snap(snap, "time"):
         values = time_array[:].astype("datetime64[us]")
         return get_exact_coord(values, units="s")
     time_attrs = time_array.attrs

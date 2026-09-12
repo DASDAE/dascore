@@ -8,12 +8,14 @@ from pathlib import Path
 import numpy as np
 
 import dascore as dc
+from dascore.constants import snap_type
 from dascore.core.source import PatchSource
 from dascore.exceptions import MissingOptionalDependencyError
 from dascore.io import FiberIO
 from dascore.io.utils import (
     get_exact_coord,
     resolve_keyed_source,
+    should_snap,
     windows_to_slices,
 )
 from dascore.utils.hdf5 import H5Reader, get_h5py_file
@@ -186,7 +188,9 @@ class NetCDFCFV18(FiberIO):
             encoding={"data": encoding} if encoding else None,
         )
 
-    def get_metadata(self, resource: H5Reader, *, snap: bool = True) -> list[dc.Patch]:
+    def get_metadata(
+        self, resource: H5Reader, *, snap: snap_type = True
+    ) -> list[dc.Patch]:
         """Scan NetCDF file metadata without loading the full payload array.
 
         Remote resources are streamed via the ``h5netcdf`` engine over the
@@ -197,7 +201,10 @@ class NetCDFCFV18(FiberIO):
             data_var_name = get_xarray_data_var_name(dataset)
             data_array = dataset[data_var_name]
             coords = {
-                name: (coord.dims, self._get_scan_coord(coord, snap=snap))
+                name: (
+                    coord.dims,
+                    self._get_scan_coord(coord, snap=should_snap(snap, name)),
+                )
                 for name, coord in data_array.coords.items()
             }
             attrs = dict(data_array.attrs)
