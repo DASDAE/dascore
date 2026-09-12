@@ -93,6 +93,8 @@ Optional numeric vendor attrs should not default to NaN or infinity.
 
 Use [`slice_dataset`](`dascore.io.utils.slice_dataset`) for a dataset already in the declared dimension order, or [`windows_to_slices`](`dascore.io.utils.windows_to_slices`) to resolve windows before format-specific decoding. The shared reader validates the returned shape and dtype before attaching data.
 
+The built-in TDMS, H5Simple, and MiniSEED readers retain parsed headers or dataset handles for the duration of a read through a private preparation helper. MiniSEED batches selected windows into one sample-reading pass. This optimization adds no work to scans and stores no state on the formatter. Subclass overrides and runtime wrappers of either public hook restore the shared path, so inherited optimizations cannot bypass them.
+
 Resource annotations belong on each hook independently. A format can scan with `BinaryReader` and load arrays with `LocalBinaryReader`, for example.
 
 ## Accept managed resources

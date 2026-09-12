@@ -699,6 +699,8 @@ class FiberIO:
     manager = _FiberIOManager(FIBER_IO_GROUP)
 
     # Methods using automatic type casting and the parameter index to cast.
+    _prepared_read_hooks = None
+
     _automatic_type_casters = FrozenDict(
         {
             "read_array": 1,
@@ -743,6 +745,29 @@ class FiberIO:
         msg = f"FiberIO: {self.name} has no read_array method"
         raise NotImplementedError(msg)
 
+    def _prepare_read(self, manager, snap):
+        """Return metadata and a loader for ordered ``(windows, key)`` requests.
+
+        Built-in readers can retain parsed headers in the loader's closure.
+        This hook is never used by scans; it must preserve the public metadata
+        and array contracts and retain nothing after the read completes.
+        """
+        resource = manager.get_resource(_required_resource_type(self.get_metadata))
+        metadata_func = cast(_TypeCasterMethod, self.get_metadata)
+        patches = metadata_func(resource, snap=snap, _pre_cast=True)
+        getattr(resource, "seek", lambda x: None)(0)
+
+        def load(requests):
+            for windows, key in requests:
+                resource = manager.get_resource(
+                    _required_resource_type(self.read_array)
+                )
+                getattr(resource, "seek", lambda x: None)(0)
+                array_func = cast(_TypeCasterMethod, self.read_array)
+                yield array_func(resource, windows, key=key, _pre_cast=True)
+
+        return patches, load
+
     def read(
         self,
         resource,
@@ -771,20 +796,21 @@ class FiberIO:
         relative = select.pop("relative", False)
         out = []
         with IOResourceManager(resource) as manager:
-            metadata_resource = manager.get_resource(
-                _required_resource_type(self.get_metadata)
-            )
-            metadata_func = cast(_TypeCasterMethod, self.get_metadata)
-            patches = [
-                _validate_metadata(patch)
-                for patch in metadata_func(metadata_resource, snap=snap, _pre_cast=True)
-            ]
-            getattr(metadata_resource, "seek", lambda x: None)(0)
+            prepare = self._prepare_read
+            hooks = self._prepared_read_hooks
+            if hooks is not None and any(
+                getattr(getattr(self, name), "__func__", None) is not expected
+                for name, expected in zip(("get_metadata", "read_array"), hooks)
+            ):
+                prepare = FiberIO._prepare_read.__get__(self)
+            patches, load = prepare(manager, snap)
+            patches = [_validate_metadata(patch) for patch in patches]
             origins = [patch._source or PatchSource() for patch in patches]
             if provenance_source is not None:
                 patches = _stamp_source_ids(
                     patches, self.name, self.version, provenance_source
                 )
+            selected, requests = [], []
             for index, (patch, origin) in enumerate(zip(patches, origins, strict=True)):
                 source = patch._source or PatchSource()
                 key = source.key or (str(index) if len(patches) > 1 else "")
@@ -797,7 +823,7 @@ class FiberIO:
                     and patch.coords.coord_map[name].ndim == 1
                     and value is not None
                 }
-                flat_attrs = patch.attrs.flat_dump()
+                flat_attrs = patch.attrs.flat_dump() if select else {}
                 attr_queries = {
                     name: value
                     for name, value in select.items()
@@ -815,11 +841,6 @@ class FiberIO:
                 if not coords.size and queries:
                     continue
                 windows, residual = selection_windows(patch.coords, indexers)
-                array_resource = manager.get_resource(
-                    _required_resource_type(self.read_array)
-                )
-                getattr(array_resource, "seek", lambda x: None)(0)
-                array_func = cast(_TypeCasterMethod, self.read_array)
                 # Directory member paths pin array loading to the metadata entry,
                 # while public keys and source-derived IDs retain their ordinals.
                 array_key = (
@@ -827,9 +848,12 @@ class FiberIO:
                     if self.input_type == "directory" and origin.path
                     else key
                 )
-                data = array_func(
-                    array_resource, windows, key=array_key, _pre_cast=True
+                requests.append((windows, array_key))
+                selected.append(
+                    (patch, coords, replace(source, key=key), windows, residual)
                 )
+            for selection, data in zip(selected, load(requests), strict=True):
+                patch, coords, source, windows, residual = selection
                 expected = (
                     tuple(stop - start for start, stop in windows.values())
                     if patch.dims
@@ -844,9 +868,7 @@ class FiberIO:
                     )
                     raise InvalidFiberIOError(msg)
                 data = _apply_union_indexers(residual, data)
-                out.append(
-                    patch.new(data=data, coords=coords, source=replace(source, key=key))
-                )
+                out.append(patch.new(data=data, coords=coords, source=source))
         return dc.spool(out)
 
     def scan(
@@ -957,6 +979,9 @@ class FiberIO:
             required_type = get_type_hints(method).get(arg_name)
             method_wrapped = _type_caster(method, sig, required_type, arg_name)
             setattr(cls, name, method_wrapped)
+        if "_prepare_read" in cls.__dict__:
+            # Keep the original hooks so subclass and runtime wrappers take effect.
+            cls._prepared_read_hooks = (cls.get_metadata, cls.read_array)
 
 
 @_reinit_after_fork

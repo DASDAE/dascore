@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import shutil
+from functools import wraps
 
 import h5py
 import numpy as np
@@ -11,7 +12,9 @@ import pytest
 import dascore as dc
 from dascore.constants import STORAGE_PROVENANCE_ATTRS
 from dascore.exceptions import UnknownFiberFormatError
+from dascore.io.h5simple.core import H5Simple
 from dascore.utils.downloader import fetch
+from dascore.utils.hdf5 import H5Reader
 
 
 class TestH5Simple:
@@ -32,6 +35,98 @@ class TestH5Simple:
         with h5py.File(new_path, "a") as h5:
             h5.attrs["dims"] = "distance,time"
         return new_path
+
+    def test_read_traverses_layout_once(self, h5simple_path, monkeypatch):
+        """Metadata and samples share one traversal of the HDF5 root nodes."""
+        original = h5py.Group.items
+        calls = []
+
+        def items(group):
+            if group.name == "/":
+                calls.append(1)
+            return original(group)
+
+        monkeypatch.setattr(h5py.Group, "items", items)
+        patch = dc.read(h5simple_path, file_format="H5Simple")[0]
+        assert patch.size
+        assert len(calls) == 1
+
+    def test_bounded_read_only_loads_selected_samples(self, tmp_path, monkeypatch):
+        """The prepared reader slices storage before loading samples."""
+        path = tmp_path / "bounded.h5"
+        data = np.arange(20_000).reshape(200, 100)
+        with h5py.File(path, "w") as handle:
+            handle["raw"] = data
+            handle["time"] = np.arange(200, dtype=float)
+            handle["distance"] = np.arange(100)
+            handle.attrs["dims"] = "time,distance"
+        original = h5py.Dataset.__getitem__
+        reads = []
+
+        def getitem(dataset, selection):
+            result = original(dataset, selection)
+            if dataset.name == "/raw":
+                reads.append(np.asarray(result).size)
+            return result
+
+        monkeypatch.setattr(h5py.Dataset, "__getitem__", getitem)
+        patch = dc.read(
+            path, file_format="H5Simple", samples=True, time=(2, 4), distance=(3, 5)
+        )[0]
+        np.testing.assert_array_equal(patch.data, data[2:4, 3:5])
+        assert reads == [4]
+
+    def test_subclass_array_override(self, h5simple_path):
+        """A format extension's public array hook remains authoritative."""
+
+        class Custom(H5Simple):
+            name = "_test_h5simple_custom_array"
+
+            def read_array(self, resource: H5Reader, windows, key=""):
+                return super().read_array(resource, windows, key=key) * 2
+
+        expected = H5Simple().read(h5simple_path)[0]
+        actual = Custom().read(h5simple_path)[0]
+        np.testing.assert_array_equal(actual.data, expected.data * 2)
+
+    def test_subclass_metadata_override(self, h5simple_path):
+        """A format extension's public metadata hook is used during reading."""
+
+        class Custom(H5Simple):
+            name = "_test_h5simple_custom_metadata"
+
+            def get_metadata(self, resource: H5Reader, *, snap=True):
+                return [
+                    patch.update_attrs(tag="custom")
+                    for patch in super().get_metadata(resource, snap=snap)
+                ]
+
+        assert Custom().read(h5simple_path)[0].attrs.tag == "custom"
+
+    @pytest.mark.parametrize("hook", ["get_metadata", "read_array"])
+    @pytest.mark.parametrize("on_class", [False, True])
+    def test_runtime_wrappers_are_honored(
+        self, h5simple_path, monkeypatch, hook, on_class
+    ):
+        """Runtime instrumentation of either public hook affects shared reading."""
+        reader = H5Simple()
+        expected = reader.read(h5simple_path)[0]
+        owner = H5Simple if on_class else reader
+        original = getattr(owner, hook)
+
+        @wraps(original)
+        def wrapped(*args, **kwargs):
+            out = original(*args, **kwargs)
+            if hook == "read_array":
+                return out * 2
+            return [patch.update_attrs(tag="wrapped") for patch in out]
+
+        monkeypatch.setattr(owner, hook, wrapped)
+        actual = reader.read(h5simple_path)[0]
+        if hook == "read_array":
+            np.testing.assert_array_equal(actual.data, expected.data * 2)
+        else:
+            assert actual.attrs.tag == "wrapped"
 
     def test_no_snap(self, h5simple_path):
         """Ensure when snap is not used it still reads patch."""

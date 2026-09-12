@@ -37,18 +37,33 @@ class TDMSFormatterV4713(FiberIO):
         except Exception:
             return None
 
+    @staticmethod
+    def _metadata(out, fileinfo):
+        """Build metadata from the parsed TDMS header."""
+        coords = dc.core.get_coord_manager(coords=out.pop("coords"))
+        attrs = dc.PatchAttrs.from_dict(out)
+        return [dc.Patch(attrs=attrs, coords=coords, dtype=fileinfo["data_type"])]
+
+    def _prepare_read(self, manager, snap):
+        """Reuse the header parsed for metadata when loading samples."""
+        resource = manager.get_resource(BinaryReader)
+        fileinfo, attrs = _get_fileinfo(resource)
+        patches = self._metadata(attrs, fileinfo)
+        shape = patches[0].shape
+
+        def load(requests):
+            for windows, key in requests:
+                array_resource = manager.get_resource(LocalBinaryReader)
+                yield self._read_array(array_resource, fileinfo, shape, windows)
+
+        return patches, load
+
     def get_metadata(
         self, resource: BinaryReader, *, snap: snap_type = True
     ) -> list[dc.Patch]:
         """Scan a tdms file, return summary information about the file's contents."""
         out, fileinfo = _get_all_attrs(resource)
-        coords = dc.core.get_coord_manager(coords=out.pop("coords"))
-        out = dc.PatchAttrs.from_dict(out)
-        return [
-            dc.Patch(
-                attrs=out, coords=coords, dtype=str(np.dtype(fileinfo["data_type"]))
-            )
-        ]
+        return self._metadata(out, fileinfo)
 
     def read_array(
         self,
@@ -64,6 +79,11 @@ class TDMSFormatterV4713(FiberIO):
         """
         fileinfo, attrs = _get_fileinfo(resource)
         shape = (len(attrs["coords"]["time"]), int(fileinfo["n_channels"]))
+        return self._read_array(resource, fileinfo, shape, windows)
+
+    @staticmethod
+    def _read_array(resource, fileinfo, shape, windows):
+        """Decode a window using an already parsed header."""
         time_slice, dist_slice = windows_to_slices(windows, ("time", "distance"), shape)
         data = _read_sample_range(resource, fileinfo, time_slice.start, time_slice.stop)
         return data[:, dist_slice]

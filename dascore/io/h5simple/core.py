@@ -44,10 +44,25 @@ class H5Simple(FiberIO):
         dims, data_node = _get_dims_and_data(resource)
         return slice_dataset(data_node, dims, windows)
 
+    def _prepare_read(self, manager, snap):
+        """Reuse the data node and dimensions found while reading metadata."""
+        patches, data = self._metadata_and_data(manager.get_resource(H5Reader), snap)
+
+        def load(requests):
+            for windows, key in requests:
+                yield slice_dataset(data, patches[0].dims, windows)
+
+        return patches, load
+
     def get_metadata(
         self, resource: H5Reader, *, snap: snap_type = True
     ) -> list[dc.Patch]:
         """Get the attributes of a h5simple file."""
+        return self._metadata_and_data(resource, snap)[0]
+
+    @staticmethod
+    def _metadata_and_data(resource, snap):
+        """Parse metadata and retain its data node for a subsequent read."""
         attrs, cm, data = _get_attrs_coords_and_data(resource, snap)
         attrs = dc.PatchAttrs.from_dict(attrs)
-        return [dc.Patch(attrs=attrs, coords=cm, dtype=str(data.dtype))]
+        return [dc.Patch(attrs=attrs, coords=cm, dtype=str(data.dtype))], data

@@ -11,11 +11,13 @@ import numpy as np
 import pytest
 
 import dascore as dc
+from dascore.exceptions import RemoteCacheError
 from dascore.io.silixah5.utils import _ATTR_MAP as _SILIXA_ATTR_MAP
 from dascore.io.tdms import utils as tdms_utils
 from dascore.io.tdms.core import TDMSFormatterV4713
 from dascore.io.tdms.utils import parse_time_stamp, type_not_supported
 from dascore.utils.downloader import fetch
+from dascore.utils.io import IOResourceManager, LocalBinaryReader
 
 
 class _FakeTDMSFile(io.BytesIO):
@@ -26,6 +28,56 @@ class _FakeTDMSFile(io.BytesIO):
     def fileno(self):
         """Return a dummy file descriptor for monkeypatched mmap."""
         return 0
+
+
+class TestReadWork:
+    """A read does not fetch the TDMS header twice."""
+
+    @pytest.mark.parametrize(
+        "selection",
+        [
+            {"source_patch_key": "missing"},
+            {"samples": True, "time": (10**9, 10**9 + 1)},
+        ],
+    )
+    def test_rejected_selection_does_not_materialize(self, selection):
+        """Metadata rejection works even when local materialization is disabled."""
+
+        class NoLocalCopy(IOResourceManager):
+            def get_resource(self, required_type):
+                if required_type is LocalBinaryReader:
+                    raise RemoteCacheError("Local materialization is disabled")
+                return super().get_resource(required_type)
+
+        path = fetch("sample_tdms_file_v4713.tdms")
+        with path.open("rb") as resource:
+            manager = NoLocalCopy(resource)
+            assert len(TDMSFormatterV4713().read(manager, **selection)) == 0
+            assert not resource.closed
+
+    def test_header_read_volume(self):
+        """Reading samples needs only the scan header plus the chunk-size fields."""
+
+        class Counter(io.BufferedReader):
+            bytes_read = 0
+
+            def read(self, size=-1):
+                out = super().read(size)
+                self.bytes_read += len(out)
+                return out
+
+        reader = TDMSFormatterV4713()
+        path = fetch("sample_tdms_file_v4713.tdms")
+        with Counter(path.open("rb")) as resource:
+            metadata = reader.get_metadata(resource)[0]
+            scan_bytes = resource.bytes_read
+            resource.seek(0)
+            resource.bytes_read = 0
+            patch = reader.read(resource)[0]
+            assert resource.bytes_read <= scan_bytes + 8
+            assert not resource.closed
+        assert patch.shape == metadata.shape
+        assert patch.dtype == metadata.dtype
 
 
 class TestTDMSUtils:
