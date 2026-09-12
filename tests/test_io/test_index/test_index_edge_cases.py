@@ -237,10 +237,10 @@ class TestIndexCoverageEdges:
         """A failure while creating the schema rolls back and re-raises."""
 
         class _BoomBackend(SQLiteIndexBackend):
-            def _execute(self, sql, params=()):
-                if "INSERT INTO meta_data" in sql:
+            def _bulk_insert(self, table, columns, rows):
+                if table == "meta_data":
                     raise RuntimeError("boom during schema init")
-                return super()._execute(sql, params)
+                return super()._bulk_insert(table, columns, rows)
 
         with pytest.raises(RuntimeError, match="boom during schema init"):
             _BoomBackend(tmp_path / "i.sqlite3")

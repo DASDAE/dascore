@@ -1,7 +1,7 @@
 """
 The SQLite index backend.
 
-Persists the seven-table schema and answers flat-relation queries. One
+Persists the eight-table schema and answers flat-relation queries. One
 engine, one class: the connection handling, the SQL, and the schema
 management are all SQLite's, and `get_backend` is the seam a second
 engine would reopen.
@@ -56,8 +56,10 @@ from dascore.io.index.schema import (
     SPOOL_EARLY_RENAMES,
     TABLE_CONSTRAINTS,
     TABLES,
+    TRIGGERS,
     WHAT_IS_THIS,
     CoordDefRow,
+    MetaDataRow,
     PatchCoordRow,
     PatchRow,
     SourceRow,
@@ -308,43 +310,77 @@ class SQLiteIndexBackend:
         with self._transaction():
             # Another connection may have initialized the file while this
             # writer waited for BEGIN IMMEDIATE. Re-check under the lock.
-            tables = self._existing_tables()
-            if tables:
-                self._validate_schema(tables)
+            if self._existing_tables():
+                self._validate_schema(self._existing_tables())
                 return
-            for name, columns in TABLES.items():
-                self._execute(
-                    create_table_sql(name, columns, TABLE_CONSTRAINTS.get(name, ()))
-                )
-            for index_name, table, column, where in INDEXES:
-                sql = f"CREATE INDEX IF NOT EXISTS {index_name} ON {table} ({column})"
-                self._execute(sql if where is None else f"{sql} WHERE {where}")
+            self._create_schema()
+
+    def _create_schema(self) -> None:
+        for name, columns in TABLES.items():
             self._execute(
-                "INSERT INTO meta_data VALUES (?, ?, ?, ?)",
-                (WHAT_IS_THIS, INDEX_VERSION, dc.__version__, 0),
+                create_table_sql(name, columns, TABLE_CONSTRAINTS.get(name, ()))
             )
+        for index_name, table, column, where in INDEXES:
+            sql = f"CREATE INDEX IF NOT EXISTS {index_name} ON {table} ({column})"
+            self._execute(sql if where is None else f"{sql} WHERE {where}")
+        self._create_triggers()
+        row = MetaDataRow(WHAT_IS_THIS, INDEX_VERSION, dc.__version__, 0, 0)
+        self._bulk_insert("meta_data", MetaDataRow._fields, [row])
+
+    def _create_triggers(self) -> None:
+        for name, body in TRIGGERS.items():
+            self._execute(f"CREATE TRIGGER IF NOT EXISTS {name} {body}")
 
     def _validate_schema(self, tables: set[str]) -> None:
-        """Validate an existing index before issuing any DDL or mutation."""
-        required = set(TABLES)
-        missing = required - tables
-        if missing:
+        """
+        Validate an existing index before issuing any DDL or mutation.
+
+        An index of another version raises InvalidIndexVersionError, which
+        the directory indexer answers by rebuilding the index. A newer one
+        raises InvalidIndexError instead, so its file is left alone.
+        """
+
+        def _incomplete(missing):
             msg = (
                 "Existing spool index is incomplete; missing tables "
                 f"{sorted(missing)}. Delete it and rebuild the index."
             )
-            raise InvalidIndexError(msg)
+            return InvalidIndexError(msg)
+
+        if "meta_data" not in tables:
+            raise _incomplete(set(TABLES) - tables)
         meta = self._fetch_df("SELECT * FROM meta_data")
         if len(meta) != 1 or meta["what_is_this"].iloc[0] != WHAT_IS_THIS:
             msg = "File is not a valid DASCore spool index; delete it and rebuild."
             raise InvalidIndexError(msg)
         version = int(meta["index_version"].iloc[0])
+        if version > INDEX_VERSION:
+            msg = (
+                f"Spool index version {version} was written by a newer DASCore, "
+                f"which this version (index version {INDEX_VERSION}) cannot read. "
+                "Upgrade DASCore, or give this version its own index_path."
+            )
+            raise InvalidIndexError(msg)
         if version != INDEX_VERSION:
             msg = (
                 f"Spool index version {version} is incompatible with supported "
                 f"version {INDEX_VERSION}; delete it and rebuild."
             )
             raise InvalidIndexVersionError(msg)
+        if missing := set(TABLES) - tables:
+            raise _incomplete(missing)
+        triggers = {
+            row[0]
+            for row in self._con.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'trigger'"
+            )
+        }
+        if missing := set(TRIGGERS) - triggers:
+            msg = (
+                f"Spool index is missing triggers {sorted(missing)}; "
+                "delete it and rebuild."
+            )
+            raise InvalidIndexError(msg)
         for table, expected in TABLES.items():
             actual = self._table_columns(table)
             if not set(expected) <= actual:
@@ -364,6 +400,11 @@ class SQLiteIndexBackend:
             )
             raise InvalidIndexError(msg)
 
+    def _patch_count(self) -> int:
+        """Return how many patches the index holds."""
+        with self._lock:
+            return self._con.execute("SELECT patch_count FROM meta_data").fetchone()[0]
+
     def _attr_meta(self) -> pd.DataFrame:
         return self._fetch_df("SELECT * FROM attr_meta")
 
@@ -376,16 +417,16 @@ class SQLiteIndexBackend:
         numeric (and so unit-convertible) needs the stored kinds.
         """
         sql = (
-            "SELECT DISTINCT pc.coord_name, cd.value_kind, cd.units, "
-            "cd.is_relative FROM patch_coords pc "
-            "JOIN coord_defs cd ON cd.coord_def_id = pc.coord_def_id "
-            "WHERE pc.run_index = 0"
+            "SELECT DISTINCT coord_name, value_kind, units, is_relative "
+            "FROM coord_variants"
         )
         params: list = []
         if names is not None:
             params = sorted(names)
-            sql += f" AND pc.coord_name IN ({self._placeholders(len(params))})"
-        return self._fetch_df(sql, params)
+            sql += f" WHERE coord_name IN ({self._placeholders(len(params))})"
+        # ordered, so a mixed-kind coord's kinds sort in a fixed order
+        # (see _order_clause)
+        return self._fetch_df(f"{sql} ORDER BY 1, 2, 3, 4", params)
 
     def _next_id(self, table: str, column: str) -> int:
         df = self._fetch_df(f"SELECT max({column}) AS m FROM {table}")
@@ -929,7 +970,10 @@ class SQLiteIndexBackend:
 
     def count(self, query=None, patch_ids=None) -> int:
         """Count matching patches without projecting or pivoting rows."""
-        queries, attr_meta, coord_meta = self._query_context(query)
+        queries = _as_query_list(query if query is not None else Query())
+        if patch_ids is None and not any(q.attrs or q.coords for q in queries):
+            return self._patch_count()
+        queries, attr_meta, coord_meta = self._query_context(queries)
         sql, params, residuals = build_sql(
             queries,
             attr_meta,
@@ -1214,8 +1258,7 @@ class SQLiteIndexBackend:
             "JOIN coord_defs cd ON cd.coord_def_id = pc.coord_def_id "
             "AND pc.run_index = 0"
         )
-        n_patches = self._fetch_df("SELECT count(*) AS n FROM patches")["n"].iloc[0]
-        most = len(ids) * 4 >= n_patches
+        most = len(ids) * 4 >= self._patch_count()
         if most:
             # Most patches selected: one scan plus a pandas filter beats
             # many batched IN queries and their frame concatenation.
@@ -1312,7 +1355,7 @@ class SQLiteIndexBackend:
         nothing. `coord_dims_map` still reports it -- what a patch holds
         and what a query can reach are different questions.
         """
-        sql = "SELECT DISTINCT coord_name, dtype FROM patch_coords WHERE run_index = 0"
+        sql = "SELECT DISTINCT coord_name, dtype FROM coord_variants"
         with self._lock:
             rows = self._con.execute(sql).fetchall()
         return {name for name, dtype in rows if coord_dtype_is_stateable(dtype)}
@@ -1392,8 +1435,7 @@ class SQLiteIndexBackend:
         if self._fetch_df(probe + " LIMIT 1", [name]).empty:
             return pd.DataFrame(columns=["patch_id", "run_index", *_ENVELOPE_COLUMNS])
         ids = [int(x) for x in patch_ids]
-        n_patches = self._fetch_df("SELECT count(*) AS n FROM patches")["n"].iloc[0]
-        if len(ids) * 4 >= n_patches:
+        if len(ids) * 4 >= self._patch_count():
             # most patches asked for: read the run links whole and filter
             runs = self._fetch_df(sql, [name])
             runs = runs[runs["patch_id"].isin(set(ids))]

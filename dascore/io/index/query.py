@@ -643,6 +643,7 @@ def _order_clause(
     direction = "ASC" if ascending else "DESC"
     params: list = []
     missing_time = ""
+    # (expression, parameters) of each sort key
     if kind == "coord" and name in _HOT_COORDS:
         column = f"p.{quote(f'{name}_min')}"
         rows = coord_meta[coord_meta["coord_name"] == name]
@@ -661,32 +662,32 @@ def _order_clause(
             )
             params.append(name)
             missing_time = "p.time_min IS NULL, "
+        keys = [(column, params)]
     elif kind == "coord":
         rows = coord_meta[coord_meta["coord_name"] == name]
-        # a coord observed under several kinds orders by its first kind
-        value_kind = str(rows["value_kind"].iloc[0])
-        min_col = _COORD_MIN_COLUMNS[value_kind]
-        column = (
-            f"(SELECT cd.{min_col} FROM patch_coords pc "
-            "JOIN coord_defs cd ON cd.coord_def_id = pc.coord_def_id "
-            "WHERE pc.patch_id = p.patch_id AND pc.coord_name = ? "
-            "AND pc.run_index = 0)"
-        )
-        params.append(name)
+        # one key per kind the coord is stated under, so each kind's values
+        # sort among themselves in any view, kinds in coord_meta's order
+        keys = [
+            (
+                f"(SELECT cd.{_COORD_MIN_COLUMNS[value_kind]} FROM patch_coords pc "
+                "JOIN coord_defs cd ON cd.coord_def_id = pc.coord_def_id "
+                "WHERE pc.patch_id = p.patch_id AND pc.coord_name = ? "
+                "AND pc.run_index = 0)",
+                [name],
+            )
+            for value_kind in dict.fromkeys(rows["value_kind"])
+        ]
     else:
         rows = attr_meta[attr_meta["attr_name"] == name]
         columns = [quote(c) for c in rows["column_name"]]
         # an attr observed under several kinds orders by its first column
-        column = f"a.{columns[0]}"
+        keys = [(f"a.{columns[0]}", params)]
     # rows without a value sort last regardless of direction (matching
-    # the ordinal renumberer's missing-time-last rule); the null key
-    # repeats the column expression, so its parameters repeat too
-    params = [*params, *params]
-    sql = (
-        f"ORDER BY {missing_time}{column} IS NULL, "
-        f"{column} {direction}, s.ordinal, p.patch_id"
-    )
-    return sql, params
+    # the ordinal renumberer's missing-time-last rule); each null key
+    # repeats its expression, so its parameters repeat too
+    sql = ", ".join(f"{column} IS NULL, {column} {direction}" for column, _ in keys)
+    params = [x for _, key_params in keys for x in (*key_params, *key_params)]
+    return f"ORDER BY {missing_time}{sql}, s.ordinal, p.patch_id", params
 
 
 def build_sql(
