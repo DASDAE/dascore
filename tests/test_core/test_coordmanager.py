@@ -1192,6 +1192,17 @@ class TestSqueeze:
         assert "time" not in out.dims
 
 
+class TestMakeBroadcastableTo:
+    """Tests for broadcasting a coord manager up to a shape."""
+
+    def test_array_broadcasts_with_the_coords(self):
+        """An array handed in comes back broadcast to the target shape."""
+        patch = dc.get_example_patch().mean()
+        shape = (3, 2)
+        cm, array = patch.coords.make_broadcastable_to(shape, patch.data)
+        assert cm.shape == array.shape == shape
+
+
 class TestNonDimCoords:
     """Tests for adding non-dimensional coordinates."""
 

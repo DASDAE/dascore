@@ -531,6 +531,11 @@ class TestArrayApiKernelBranches:
         assert np.isfinite(numpy_out).all()
         assert (numpy_out[np.asarray(backend_patch.data) > 0.5] == -1).all()
 
+    def test_fillna_of_finite_data_is_a_no_op(self, backend_patch):
+        """With nothing to fill the patch comes back untouched."""
+        out = backend_patch.fillna(-1.0)
+        assert out is backend_patch
+
     def test_hilbert_of_odd_length(self, backend_patch):
         """Odd and even lengths weight the spectrum differently."""
         odd = backend_patch.isel(time=slice(0, 99))
