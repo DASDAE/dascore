@@ -36,11 +36,17 @@ from pydantic import ConfigDict
 from pydantic.alias_generators import to_snake
 
 import dascore as dc
+from dascore.compat import is_array_like
 from dascore.config import get_config
 from dascore.constants import PatchType
 from dascore.exceptions import ParameterError
 from dascore.models.base import DascoreBaseModel
-from dascore.utils.array_api import backend_name
+from dascore.utils.array_api import (
+    asarray_like,
+    backend_name,
+    to_numpy,
+    warn_numpy_fallback,
+)
 from dascore.utils.identity import ids_enabled
 from dascore.utils.patch import (
     _call_str,
@@ -71,11 +77,15 @@ class PatchProcessor(DascoreBaseModel):
     Subclasses declare their parameters as fields and override some of:
 
     - `derive(patch)`: the result's metadata, from a patch without data.
-    - `plan(patch, out)`: the numbers `kernel` needs, as a dict of ints,
-      floats, bools, tuples of those, or numeric arrays.
-    - `kernel(data, **plan)`: the array computation. None of it may see a
-      patch, so a chain of kernels can be compiled.
-    - `reconcile(data, out)`: the one hook which sees both halves.
+    - `plan(patch, out)`: what `kernel` needs, as a dict of numbers, None,
+      slices, tuples of those, or numeric arrays.
+    - `kernel(data, **plan)`: the array computation, with the array API.
+      It never sees a patch, so a chain of kernels can be compiled.
+    - `numpy_kernel(data, **plan)`: the same with numpy, scipy or numba.
+      Numpy data run it in preference to `kernel`; other arrays run it on
+      numpy copies, with a warning, unless the class defines a `kernel`.
+    - `reconcile(result, out)`: the one hook which sees both halves; return
+      a patch holding data when the output depends on the values.
 
     Each subclass is registered under `name` (snake case of the class name
     unless set) and gets a generated patch function, `cls.patch_function`:
@@ -180,17 +190,25 @@ class PatchProcessor(DascoreBaseModel):
         """
         Return the kernel this class runs for a backend, or None.
 
-        Each class in the MRO is asked for a kernel registered for the
-        backend, then for its own `kernel`, before moving up: a subclass
-        which wrote its own kernel means it, and a backend kernel
+        Each class in the MRO is asked, before moving up, for a kernel
+        registered for the backend, then -- for numpy data -- its own
+        `numpy_kernel`, then its own `kernel` (array API), then its
+        `numpy_kernel` run on numpy copies of other arrays, with a
+        `NumpyFallbackWarning`, handing back arrays of the input's backend.
+        A subclass which wrote its own kernel means it, and a backend kernel
         registered against its parent must not answer for it.
         """
         for klass in cls.__mro__:
             contents = klass.__dict__
             if (found := contents.get("_kernels", {}).get(backend)) is not None:
                 return found
+            numpy_only = contents.get("numpy_kernel")
+            if numpy_only is not None and backend == "numpy":
+                return numpy_only
             if (generic := contents.get("kernel")) is not None:
                 return generic
+            if numpy_only is not None:
+                return _via_numpy(numpy_only, cls.name or cls.__name__)
         return None
 
     def check(self, patch: PatchType) -> PatchType:
@@ -225,8 +243,15 @@ class PatchProcessor(DascoreBaseModel):
         """Return the keyword arguments `kernel` needs; see the class docs."""
         return {}
 
-    def reconcile(self, data, out: PatchType) -> PatchType:
-        """Return the result's metadata once the data are known; default as is."""
+    def reconcile(self, result, out: PatchType) -> PatchType:
+        """
+        Return the output patch, given the kernel's result; default `out`.
+
+        The one hook which sees both halves: whatever the kernel returned,
+        which need not be an array, and `derive`'s patch. Return a patch
+        without data to have `result` attached to it, or a patch holding
+        data -- when the output depends on the values -- to use it as is.
+        """
         return out
 
     def run(self, patch: PatchType) -> PatchType:
@@ -241,7 +266,8 @@ class PatchProcessor(DascoreBaseModel):
     def _run(self, patch: PatchType, record: bool) -> PatchType:
         """Run the operation; `record=False` writes no history or ids."""
         self.check(patch)
-        described = patch.drop_data()
+        # Planned against and discarded, so it keeps the input's identity.
+        described = patch._described()
         out = self.derive(described)
         plan = _checked_plan(self, self.plan(described, out))
         data = patch.data
@@ -252,18 +278,23 @@ class PatchProcessor(DascoreBaseModel):
         if out is described and result is data:
             # Nothing done, so nothing recorded; a declared data_type still
             # applies, as it does for a decorated patch function.
-            if self.data_type is None or not record:
+            if self.data_type is None:
                 return patch
             return patch.update_attrs(data_type=self.data_type)
         out = self.reconcile(result, out)
-        if not record:
-            return out.new(data=result)
-        return out.new(data=result, attrs=self._record(patch, out.attrs))
-
-    def _record(self, patch: PatchType, attrs: PatchAttrs) -> PatchAttrs:
-        """Return attrs carrying the data_type, history and ids of this call."""
+        # Filled here unless `reconcile` already put data in it.
+        data = result if out._data is None else out._data
+        attrs = out.attrs
+        # The data_type describes the result, not the call, so a bypass
+        # skipping history and ids still gets it.
         if self.data_type is not None:
             attrs = attrs.update(data_type=self.data_type)
+        if record:
+            attrs = self._record(patch, attrs)
+        return out.new(data=data, attrs=attrs)
+
+    def _record(self, patch: PatchType, attrs: PatchAttrs) -> PatchAttrs:
+        """Return attrs carrying the history and ids of this call."""
         name = self.name or type(self).__name__
         if self.history is not None and get_config().patch_history != "disabled":
             spelled = _call_str(name, self.kwargs) if self.history == "full" else name
@@ -347,9 +378,22 @@ def _call_signature(cls: type[PatchProcessor]) -> inspect.Signature:
 
 def _make_patch_function(cls: type[PatchProcessor], name: str):
     """Return the patch function a processor class generates."""
+    fields = frozenset(cls.model_fields)
+    required = frozenset(x for x, f in cls.model_fields.items() if f.is_required())
+    takes_extras = cls.model_config.get("extra") == "allow"
 
     def build(args, kwargs):
         """Bind a call against the signature, as a function's would be."""
+        # All by name, every required one given, none a function would
+        # refuse: the model takes them as they are, and binding costs more
+        # than the rest of a small operation.
+        simple = not args and cls._var_positional is None
+        if (
+            simple
+            and required <= kwargs.keys()
+            and (takes_extras or kwargs.keys() <= fields)
+        ):
+            return cls(**kwargs)
         bound = cls._call_signature.bind(*args, **kwargs).arguments
         return cls(**bound.pop("kwargs", {}), **bound)
 
@@ -397,22 +441,46 @@ def _make_patch_function(cls: type[PatchProcessor], name: str):
 
 
 def _checked_plan(processor: PatchProcessor, plan: dict[str, Any]) -> dict[str, Any]:
-    """Refuse a plan holding anything but numbers, tuples of them, or arrays."""
+    """Refuse a plan holding anything a compiled kernel could not take."""
     for key, value in plan.items():
         if not _is_plain(value):
             msg = (
                 f"{type(processor).__name__}.plan returned {key}={value!r}; a "
-                "plan may hold only ints, floats, bools, tuples of those, and "
-                "numeric arrays, so the kernel never sees a patch."
+                "plan may hold only numbers, None, slices, tuples of those, "
+                "and numeric arrays, so the kernel never sees a patch."
             )
             raise ParameterError(msg)
     return plan
 
 
 def _is_plain(value) -> bool:
-    """Whether a plan value is a number, a tuple of plain values, or an array."""
-    if isinstance(value, numbers.Number | np.bool_):
+    """Whether a plan value is one JAX takes as data or as a static argument."""
+    if value is None or isinstance(value, numbers.Number | np.bool_):
         return True
+    if isinstance(value, slice):
+        return all(_is_plain(x) for x in (value.start, value.stop, value.step))
     if isinstance(value, tuple):
         return all(_is_plain(x) for x in value)
     return isinstance(value, np.ndarray) and value.dtype.kind in "biufc"
+
+
+def _via_numpy(numpy_kernel, name: str):
+    """Return `numpy_kernel` run on numpy copies, its result sent back."""
+
+    def run_on_numpy(processor, data, **plan):
+        warn_numpy_fallback(name, backend_name(data), skip_dascore=True)
+        numpy_data = to_numpy(data)
+        result = numpy_kernel(processor, numpy_data, **plan)
+        # Handed back unchanged is still "nothing to do".
+        return data if result is numpy_data else _back_to(result, data)
+
+    return run_on_numpy
+
+
+def _back_to(result, like):
+    """Return a numpy kernel's result on the backend of `like`, tuples included."""
+    if isinstance(result, tuple):
+        return tuple(_back_to(x, like) for x in result)
+    if is_array_like(result) or isinstance(result, np.generic):
+        return asarray_like(result, like)
+    return result

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import sys
 from collections.abc import Sequence
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -18,6 +19,7 @@ from scipy.ndimage import median_filter as nd_median_filter
 
 import dascore as dc
 from dascore.constants import PatchType, samples_arg_description
+from dascore.core.processor import PatchProcessor
 from dascore.exceptions import FilterValueError, ParameterError, UnitError
 from dascore.units import (
     convert_units,
@@ -158,10 +160,7 @@ def pass_filter(
     return patch.new(data=out)
 
 
-@patch_function()
-def sobel_filter(
-    patch: PatchType, dim: str, mode: str = "reflect", cval: float | int = 0.0
-) -> PatchType:
+class SobelFilter(PatchProcessor):
     """
     Apply a Sobel filter.
 
@@ -191,10 +190,23 @@ def sobel_filter(
     >>> # 3. Apply Sobel filter along both axes
     >>> sobel_time_space = pa.sobel_filter('time').sobel_filter('distance')
     """
-    dim, mode, cval = _check_sobel_args(dim, mode, cval)
-    axis = patch.get_axis(dim)
-    out = ndimage.sobel(patch.data, axis=axis, mode=mode, cval=cval)
-    return patch.new(data=out)
+
+    # Loose, so `_check_sobel_args` refuses a bad value as a ParameterError.
+    dim: Any
+    mode: Any = "reflect"
+    cval: Any = 0.0
+
+    def plan(self, patch, out):
+        """Return the axis to filter along, once the arguments are checked."""
+        dim, _, _ = _check_sobel_args(self.dim, self.mode, self.cval)
+        return {"axis": patch.get_axis(dim)}
+
+    def numpy_kernel(self, data, *, axis):
+        """Return the Sobel gradient along the axis."""
+        return ndimage.sobel(data, axis=axis, mode=self.mode, cval=self.cval)
+
+
+sobel_filter = SobelFilter.patch_function
 
 
 @patch_function()

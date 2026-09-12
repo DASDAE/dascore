@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import inspect
 import pickle
+import warnings
 from typing import Any, ClassVar
 
 import numpy as np
@@ -21,8 +22,10 @@ from dascore.exceptions import (
     PatchDataError,
 )
 from dascore.proc.basic import Normalize, _known_real
+from dascore.utils.array_api import backend_name
 from dascore.utils.patch_registry import patch_function_tag, resolve_patch_function
 from dascore.utils.serialize import encode
+from dascore.warnings import NumpyFallbackWarning
 
 
 class SeamScale(PatchProcessor):
@@ -249,6 +252,23 @@ class TestReviewFindings:
             assert out.attrs.history == patch.attrs.history
             assert out.attrs.processing_id == patch.attrs.processing_id
 
+    def test_bypass_keeps_the_data_type(self, patch):
+        """The data_type describes the result, so skipping the record keeps it."""
+
+        class Tag(PatchProcessor):
+            """Scale the data and declare a data_type."""
+
+            name = None
+            data_type = "tagged"
+
+            def kernel(self, data):
+                """Return the data, doubled."""
+                return data * 2
+
+        out = Tag()._run(patch, record=False)
+        assert out.attrs.data_type == "tagged"
+        assert out.attrs.history == patch.attrs.history
+
     def test_signature_carries_annotations(self):
         """Field annotations reach the generated signature."""
         sig = inspect.signature(dc.proc.normalize)
@@ -334,6 +354,20 @@ class TestReviewFindings:
         assert np.allclose(Flag()(patch).data, patch.data * 2)
 
 
+class TestDropPrivateDims:
+    """A private coordinate which is a dimension cannot be dropped."""
+
+    def test_refused(self):
+        """Dropping it would leave data with an axis no coordinate names."""
+        patch = dc.Patch(
+            data=np.ones((2, 3)),
+            coords={"_hidden": np.arange(2), "time": np.arange(3)},
+            dims=("_hidden", "time"),
+        )
+        with pytest.raises(ParameterError, match="private dimensional"):
+            patch.drop_private_coords()
+
+
 class TestCheck:
     """`run` refuses what the class declares it cannot take."""
 
@@ -360,8 +394,8 @@ class TestPlan:
 
     @pytest.mark.parametrize(
         "value",
-        ["time", None, [1, 2], np.array(["a"])],
-        ids=["string", "none", "list", "string_array"],
+        ["time", [1, 2], np.array(["a"]), np.array(["2020-01-01"], "M8[ns]")],
+        ids=["string", "list", "string_array", "datetime_array"],
     )
     def test_refused(self, patch, value):
         """Anything else is refused before the kernel runs."""
@@ -406,6 +440,8 @@ class TestPlan:
                     "c": True,
                     "d": ((1, 2), 3.0),
                     "e": np.arange(3),
+                    "f": None,
+                    "g": (slice(None), slice(1, None, 2)),
                 }
 
             def kernel(self, data, **plan):
@@ -611,6 +647,227 @@ class TestKernelFor:
     def test_no_kernel_at_all_is_metadata_only(self):
         """A processor which touches no data says so by defining none."""
         assert SeamHidden.kernel_for("numpy") is None
+
+
+class TestNumpyKernel:
+    """Which kernel runs: numpy's own for numpy data, the array API otherwise."""
+
+    class Both(PatchProcessor):
+        """A processor with a numpy kernel and an array API one."""
+
+        name = None
+
+        def numpy_kernel(self, data):
+            """Double, the numpy way."""
+            return data * 2
+
+        def kernel(self, data):
+            """Triple, the array API way."""
+            return data * 3
+
+    class NumpyOnly(PatchProcessor):
+        """A processor with only a numpy kernel."""
+
+        name = None
+
+        def numpy_kernel(self, data):
+            """Check the kernel is given numpy, then double."""
+            assert isinstance(data, np.ndarray)
+            return data * 2
+
+    @pytest.fixture(scope="class")
+    @classmethod
+    def strict_patch(cls, patch):
+        """The patch on the array_api_strict backend."""
+        xp = pytest.importorskip("array_api_strict")
+        return patch.new(data=xp.asarray(np.asarray(patch.data)))
+
+    def test_numpy_prefers_the_numpy_kernel(self, patch):
+        """Numpy data run the numpy kernel, so numpy results stay as they were."""
+        assert np.allclose(self.Both()(patch).data, patch.data * 2)
+
+    def test_other_backends_use_the_array_api_kernel(self, strict_patch):
+        """Silently, and on their own backend."""
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            out = self.Both()(strict_patch)
+        assert np.allclose(np.asarray(out.data), np.asarray(strict_patch.data) * 3)
+
+    def test_fallback_converts_tuples_and_keeps_no_ops(self, strict_patch):
+        """Arrays inside a tuple come back too; the input handed back is a no-op."""
+
+        class Pair(PatchProcessor):
+            """Return the data and a mask, then rebuild from both."""
+
+            name = None
+
+            def numpy_kernel(self, data):
+                """Return the data, where it is positive, and a count."""
+                return data * 1, data > 0, 3
+
+            def reconcile(self, result, out):
+                """Check both came back on the input's backend."""
+                data, mask, count = result
+                assert backend_name(mask) == backend_name(data)
+                assert count == 3
+                return out.new(data=data)
+
+        class Same(PatchProcessor):
+            """Hand the data back unchanged."""
+
+            name = None
+
+            def numpy_kernel(self, data):
+                """Nothing to do."""
+                return data
+
+        with pytest.warns(NumpyFallbackWarning):
+            out = Pair()(strict_patch)
+        assert backend_name(out.data) == backend_name(strict_patch.data)
+        with pytest.warns(NumpyFallbackWarning):
+            assert Same()(strict_patch) is strict_patch
+
+    def test_a_numpy_kernel_alone_falls_back(self, strict_patch):
+        """Run on numpy copies, with a warning, handing back the backend."""
+        with pytest.warns(NumpyFallbackWarning, match="NumpyOnly"):
+            out = self.NumpyOnly()(strict_patch)
+        assert backend_name(out.data) == backend_name(strict_patch.data)
+        assert np.allclose(np.asarray(out.data), np.asarray(strict_patch.data) * 2)
+
+
+class TestKernelLookupOrder:
+    """Which of several kernels up the MRO answers."""
+
+    class Parent(PatchProcessor):
+        """Only a numpy kernel."""
+
+        name = None
+
+        def numpy_kernel(self, data):
+            """Double."""
+            return data * 2
+
+    class Child(Parent):
+        """Its own array API kernel: it means it, on numpy too."""
+
+        def kernel(self, data):
+            """Triple."""
+            return data * 3
+
+    class NumpyChild(PatchProcessor):
+        """A parent kernel of its own, and a numpy kernel below it."""
+
+        name = None
+
+        def kernel(self, data):
+            """Triple."""
+            return data * 3
+
+    class NumpyGrandchild(NumpyChild):
+        """Its own numpy kernel: it means it, falling back if it must."""
+
+        def numpy_kernel(self, data):
+            """Double."""
+            return data * 2
+
+    def test_a_subclass_kernel_beats_a_parents_numpy_kernel(self, patch):
+        """On numpy data the subclass's own array API kernel runs."""
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            out = self.Child()(patch)
+        assert np.allclose(out.data, patch.data * 3)
+
+    def test_a_subclass_numpy_kernel_beats_a_parents_kernel(self, patch):
+        """On another backend the subclass's numpy kernel runs, by fallback."""
+        xp = pytest.importorskip("array_api_strict")
+        strict = patch.new(data=xp.asarray(np.asarray(patch.data)))
+        with pytest.warns(NumpyFallbackWarning):
+            out = self.NumpyGrandchild()(strict)
+        assert np.allclose(np.asarray(out.data), np.asarray(patch.data) * 2)
+
+    def test_numpy_data_never_warn(self, patch):
+        """The numpy kernel is simply run on numpy data."""
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            out = self.Parent()(patch)
+        assert np.allclose(out.data, patch.data * 2)
+
+
+class TestBatchOneParameters:
+    """Parameters of converted operations which change the answer."""
+
+    def test_detrend_type(self, patch):
+        """A constant detrend removes the mean; a linear one does more."""
+        data = np.asarray(patch.data)
+        constant = patch.detrend("time", type="constant").data
+        assert np.allclose(constant, data - data.mean(axis=1, keepdims=True))
+        assert not np.allclose(patch.detrend("time").data, constant)
+
+    def test_sobel_mode(self, patch):
+        """The edge mode reaches scipy."""
+        from scipy import ndimage  # noqa: PLC0415
+
+        axis = patch.get_axis("time")
+        out = patch.sobel_filter("time", mode="constant", cval=1.0).data
+        expected = ndimage.sobel(patch.data, axis=axis, mode="constant", cval=1.0)
+        assert np.allclose(out, expected)
+
+    def test_kurtosis_along_either_axis(self, patch):
+        """The answer does not depend on where the dimension sits."""
+        out = patch.kurtosis(time=16, samples=True)
+        flipped = patch.transpose("time", "distance").kurtosis(time=16, samples=True)
+        assert np.allclose(out.data, flipped.transpose(*patch.dims).data)
+
+    def test_star_args_are_not_given_by_name(self, patch):
+        """`transpose(dims=...)` is refused, as a function's `*dims` would be."""
+        with pytest.raises(TypeError):
+            patch.transpose(dims=("time", "distance"))
+
+    def test_a_slice_of_strings_is_refused(self, patch):
+        """A plan's slice must hold what a slice of an array can."""
+
+        class BadSlice(SeamScale):
+            """Plan a slice by label."""
+
+            name = None
+
+            def plan(self, patch, out):
+                """Return it."""
+                return {"index": slice("a", "b")}
+
+        with pytest.raises(ParameterError, match="plan may hold only"):
+            BadSlice()(patch)
+
+
+class TestReconcileWithData:
+    """`reconcile` may return the result itself, for value-dependent output."""
+
+    class DropFirstNegativeRows(PatchProcessor):
+        """Keep the distance rows whose first sample is not negative."""
+
+        name = None
+
+        def kernel(self, data):
+            """Return the kept rows and which they were."""
+            keep = np.asarray(data)[:, 0] >= 0
+            return data[keep], keep
+
+        def reconcile(self, result, out):
+            """Build the result from the rows the kernel kept."""
+            data, keep = result
+            distance = out.get_coord("distance")
+            coords = out.coords.update(distance=distance.values[keep])
+            return out.new(coords=coords).new(data=data)
+
+    def test_the_patch_returned_is_the_result(self, patch):
+        """Its coords follow the data, and history and ids are recorded."""
+        signs = np.where(np.arange(patch.shape[0]) % 2, -1.0, 1.0)[:, None]
+        source = patch.new(data=(np.asarray(patch.data) + 1) * signs)
+        out = self.DropFirstNegativeRows()(source)
+        kept = source.get_array("distance")[::2]
+        assert out.shape == (len(kept), patch.shape[1])
+        assert np.array_equal(out.get_array("distance"), kept)
+        assert out.attrs.processing_id != source.attrs.processing_id
 
 
 class TestConversionsKeepTheirAxes:

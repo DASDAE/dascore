@@ -248,20 +248,38 @@ def convert_units(
     """
     if isinstance(data, Quantity):  # an existing quantity
         return convert_units(data.magnitude, to_units, data.units)
+    if (factors := conversion_factors(from_units, to_units)) is None:
+        return data
+    mult1, add, mult2 = factors
+    return (data * mult1 + add) * mult2
+
+
+def conversion_factors(
+    from_units: quantity_like, to_units: quantity_like
+) -> tuple[Any, Any, Any] | None:
+    """
+    Return the factors converting values: `(value * mult1 + add) * mult2`.
+
+    None when there is nothing to convert: `from_units` is None or already
+    matches `to_units`.
+
+    Raises
+    ------
+    [UnitError](`dascore.exceptions.UnitError`) if conversion is not possible.
+    """
     to_units, from_units = get_quantity(to_units), get_quantity(from_units)
     if from_units is None:
-        return data
+        return None
     elif to_units is None:
         msg = "Cannot convert units to_units are not specified"
         raise UnitError(msg)
     # Factors of one aren't free: they round a timedelta64 through float.
     if units_match(from_units, to_units):
-        return data
+        return None
     try:
-        mult1, add, mult2 = _get_conversion_factors(from_units, to_units)
+        return _get_conversion_factors(from_units, to_units)
     except DimensionalityError as e:
         raise UnitError(str(e))
-    return (data * mult1 + add) * mult2
 
 
 def assert_dtype_compatible_with_units(dtype, quantity) -> Quantity | None:

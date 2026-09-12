@@ -8,6 +8,7 @@ from typing import Any, Literal
 
 import numpy as np
 import pandas as pd
+from pydantic import ConfigDict
 from scipy.fft import next_fast_len
 from scipy.ndimage import correlate1d
 
@@ -21,7 +22,7 @@ from dascore.core.coordmanager import (
     get_coord_manager,
 )
 from dascore.core.coords import CoordRange, get_coord
-from dascore.core.processor import PatchProcessor
+from dascore.core.processor import PatchProcessor, register_kernel
 from dascore.exceptions import ParameterError
 from dascore.models import ArrayLike
 from dascore.units import get_quantity
@@ -31,6 +32,7 @@ from dascore.utils.array_api import (
     array_namespace,
     asarray_like,
     backend_name,
+    device,
     is_numpy,
     nan_reduce,
     to_numpy,
@@ -417,8 +419,7 @@ class Imag(PatchProcessor):
 imag = Imag.patch_function
 
 
-@patch_function(data_type="")
-def angle(patch: PatchType) -> PatchType:
+class Angle(PatchProcessor):
     """
     Return a new patch with the phase angles from the data array.
 
@@ -428,7 +429,23 @@ def angle(patch: PatchType) -> PatchType:
     >>> pa = dascore.get_example_patch()
     >>> out = pa.angle()
     """
-    return patch.new(data=np.angle(patch.data))
+
+    data_type = ""
+
+    def numpy_kernel(self, data):
+        """Return the phase angle of every sample."""
+        return np.angle(data)
+
+    def kernel(self, data):
+        """Return the phase angle, as atan2 of the imaginary and real parts."""
+        xp = array_namespace(data)
+        if xp.isdtype(data.dtype, "complex floating"):
+            return xp.atan2(xp.imag(data), xp.real(data))
+        real = _as_float(data)
+        return xp.atan2(xp.zeros_like(real), real)
+
+
+angle = Angle.patch_function
 
 
 @compose_docstring(sample_explanation=samples_arg_description)
@@ -880,8 +897,7 @@ def dropna(
     return patch.new(data=new_data, coords=cm, attrs=attrs)
 
 
-@patch_function()
-def fillna(patch: PatchType, value, include_inf=True) -> PatchType:
+class Fillna(PatchProcessor):
     """
     Return a patch with nullish values replaced by a value.
 
@@ -912,16 +928,30 @@ def fillna(patch: PatchType, value, include_inf=True) -> PatchType:
     >>> # Replace all occurrences of NaN with 5
     >>> out = patch.fillna(5)
     """
-    if include_inf:
-        to_replace = ~np.isfinite(patch.data)
-    else:
-        to_replace = pd.isnull(patch.data)
-    if not np.any(to_replace):  # nothing nullish to fill
-        return patch
-    new_data = patch.data.copy()
-    new_data[to_replace] = value
 
-    return patch.new(data=new_data)
+    value: Any
+    include_inf: bool = True
+
+    def numpy_kernel(self, data):
+        """Return a copy with the nullish values filled; the data if none."""
+        to_replace = ~np.isfinite(data) if self.include_inf else pd.isnull(data)
+        if not np.any(to_replace):
+            return data
+        new_data = data.copy()
+        new_data[to_replace] = self.value
+        return new_data
+
+    def kernel(self, data):
+        """Return the data with the nullish values filled; the data if none."""
+        xp = array_namespace(data)
+        to_replace = ~xp.isfinite(data) if self.include_inf else xp.isnan(data)
+        if not xp.any(to_replace):
+            return data
+        value = xp.asarray(self.value, dtype=data.dtype, device=device(data))
+        return xp.where(to_replace, value, data)
+
+
+fillna = Fillna.patch_function
 
 
 @patch_function()
@@ -1093,8 +1123,7 @@ def pad(
     return patch.new(data=new_data, coords=new_coords)
 
 
-@patch_function()
-def roll(patch, samples=False, update_coord=False, **kwargs):
+class Roll(PatchProcessor):
     """
     Roll patch array elements along a given dimension.
 
@@ -1103,7 +1132,7 @@ def roll(patch, samples=False, update_coord=False, **kwargs):
     patch
         input patch
     samples
-        if True, value indicates coordinate or value of dimension
+        If True, the roll is a number of samples; else in coordinate units.
     update_coord
         if True, updates coord based on rolled amount
     **kwargs
@@ -1123,20 +1152,38 @@ def roll(patch, samples=False, update_coord=False, **kwargs):
     >>> # roll time dimension 5 elements and update coordinates
     >>> rolled_patch3 = patch.roll(time=5, samples=True, update_coord=True)
     """
-    dim, axis, input_value = get_dim_axis_value(patch, kwargs=kwargs)[0]
-    arr = patch.data
-    coord = patch.get_coord(dim)
-    value = coord.get_sample_count(input_value, samples=samples)
 
-    roll_arr = np.roll(arr, value, axis=axis)
+    samples: bool = False
+    update_coord: bool = False
 
-    # update coords if True
-    if update_coord:
-        roll_coord_arr = np.roll(coord.values, value)
-        new_coord = coord.update(values=roll_coord_arr)
-        patch = patch.update_coords(**{dim: new_coord})
+    model_config = ConfigDict(extra="allow")
 
-    return patch.new(data=roll_arr)
+    def _shift(self, patch):
+        """Return the dimension, its axis, and the roll in samples."""
+        dim, axis, value = get_dim_axis_value(patch, kwargs=self.model_extra or {})[0]
+        count = patch.get_coord(dim).get_sample_count(value, samples=self.samples)
+        return dim, axis, count
+
+    def derive(self, patch):
+        """Return the coordinate rolled too, when asked to."""
+        if not self.update_coord:
+            return patch
+        dim, _, count = self._shift(patch)
+        coord = patch.get_coord(dim)
+        new = coord.update(values=np.roll(coord.values, count))
+        return patch.new(coords=patch.coords.update(**{dim: new}))
+
+    def plan(self, patch, out):
+        """Return the axis and the shift in samples."""
+        _, axis, count = self._shift(patch)
+        return {"axis": axis, "shift": count}
+
+    def kernel(self, data, *, axis, shift):
+        """Return the data rolled along the axis."""
+        return array_namespace(data).roll(data, shift, axis=axis)
+
+
+roll = Roll.patch_function
 
 
 @patch_function()
@@ -1204,8 +1251,7 @@ def where(
     return patch.new(data=new_data)
 
 
-@patch_function()
-def flip(patch, *dims, flip_coords=True):
+class Flip(PatchProcessor):
     """
     Flip patch data and (optionally coords) along specified dimensions.
 
@@ -1232,16 +1278,33 @@ def flip(patch, *dims, flip_coords=True):
     >>> # Flip patch over all dimensions.
     >>> out = patch.flip(*patch.dims)
     """
-    if not dims:
-        return patch  # no-op
-    axes = tuple(patch.get_axis(name) for name in dims)
-    data = np.flip(patch.data, axis=axes) if dims else patch.data
-    coords = patch.coords.flip(*dims) if flip_coords else patch.coords
-    return patch.new(data=data, coords=coords)
+
+    dims: tuple[Any, ...] = ()
+    flip_coords: bool = True
+
+    _var_positional = "dims"
+
+    def derive(self, patch):
+        """Return the coordinates flipped, when they flip with the data."""
+        if not self.dims or not self.flip_coords:
+            return patch
+        return patch.new(coords=patch.coords.flip(*self.dims))
+
+    def plan(self, patch, out):
+        """Return the axes to flip."""
+        return {"axes": tuple(patch.get_axis(name) for name in self.dims)}
+
+    def kernel(self, data, *, axes):
+        """Return the data mirrored along the axes; the data if there are none."""
+        if not axes:
+            return data
+        return array_namespace(data).flip(data, axis=axes)
 
 
-@patch_function(data_type="")
-def full(patch, fill_value):
+flip = Flip.patch_function
+
+
+class Full(PatchProcessor):
     """
     Return an identical patch with the data replaced by fill_value.
 
@@ -1264,12 +1327,27 @@ def full(patch, fill_value):
     >>> # Same thing, except for 0s.
     >>> zero_patch = patch.full(0.0)
     """
-    array = np.full(patch.data.shape, fill_value)
-    return patch.update(data=array)
+
+    fill_value: Any
+
+    data_type = ""
+
+    def kernel(self, data):
+        """Return an array of the data's shape holding only the fill value."""
+        # A numpy scalar keeps its dtype, as numpy's own full would.
+        fill = np.asarray(self.fill_value)
+        like = asarray_like(fill, data)
+        xp = array_namespace(data)
+        if fill.ndim:
+            # A fill which is not a scalar broadcasts, as numpy's full does.
+            return xp.asarray(xp.broadcast_to(like, data.shape), copy=True)
+        return xp.full(data.shape, fill.item(), dtype=like.dtype, device=device(data))
 
 
-@patch_function()
-def demedian(patch, dim: str = "time"):
+full = Full.patch_function
+
+
+class Demedian(PatchProcessor):
     """
     Remove the median along a given dimension of a DASCore patch.
 
@@ -1319,16 +1397,24 @@ def demedian(patch, dim: str = "time"):
     >>> plt.show()  # doctest: +SKIP
     >>> plt.close(fig)
     """
-    axis = patch.get_axis(dim)
-    data = patch.data
 
-    # Compute median along axis, keep dims for broadcasting
-    med = np.nanmedian(data, axis=axis, keepdims=True)
+    dim: str = "time"
 
-    new_data = data - med
+    def plan(self, patch, out):
+        """Return the axis to remove the median along."""
+        return {"axis": patch.get_axis(self.dim)}
 
-    # Return a new patch with updated data
-    return patch.new(data=new_data)
+    def numpy_kernel(self, data, *, axis):
+        """Return the data with the NaN-ignoring median of each slice removed."""
+        return data - np.nanmedian(data, axis=axis, keepdims=True)
+
+
+# Dask and cupy implement np.nanmedian themselves, so need no numpy copy.
+for _backend in ("dask", "cupy"):
+    register_kernel(Demedian, _backend)(Demedian.numpy_kernel)
+
+
+demedian = Demedian.patch_function
 
 
 class Demean(PatchProcessor):

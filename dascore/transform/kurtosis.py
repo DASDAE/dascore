@@ -5,11 +5,13 @@ Patch function for kurtosis transform
 from __future__ import annotations
 
 import numpy as np
+from pydantic import ConfigDict
 
-from dascore.constants import PatchType, samples_arg_description
+from dascore.constants import samples_arg_description
+from dascore.core.processor import PatchProcessor
 from dascore.exceptions import ParameterError
 from dascore.utils.docs import compose_docstring
-from dascore.utils.patch import get_dim_axis_value, patch_function
+from dascore.utils.patch import get_dim_axis_value
 from dascore.utils.time import to_float
 
 
@@ -28,14 +30,8 @@ def _get_window_samples(coord, dim, value, samples: bool) -> int:
     return nwin
 
 
-@patch_function()
 @compose_docstring(sample_explanation=samples_arg_description)
-def kurtosis(
-    patch: PatchType,
-    samples: bool = False,
-    recursive: bool = True,
-    **kwargs,
-) -> PatchType:
+class Kurtosis(PatchProcessor):
     """
     Compute kurtosis along a patch dimension.
 
@@ -77,35 +73,41 @@ def kurtosis(
     >>> synthetic = patch.update(data=data)
     >>> onset = synthetic.kurtosis(time=0.002)
     """
-    # Imported here (not at module scope) to keep numba out of `import dascore`.
-    from dascore.transform._kurtosis_kernels import (  # noqa: PLC0415
-        _recursive_kurtosis,
-        _windowed_kurtosis,
-    )
 
-    dim, _, winlen = get_dim_axis_value(patch, kwargs=kwargs)[0]
-    orig_dims = patch.dims
-    patch_t = patch.transpose(dim, ...)
+    samples: bool = False
+    recursive: bool = True
 
-    data = np.asarray(patch_t.data, dtype=float)
-    orig_shape = data.shape
+    model_config = ConfigDict(extra="allow")
+    data_type = "kurtosis"
 
-    data_2d = data.reshape(orig_shape[0], -1)
+    def derive(self, patch):
+        """Return the metadata: kurtosis is dimensionless."""
+        return patch.new(attrs=patch.attrs.update(data_units=""))
 
-    coord = patch_t.get_coord(dim, require_evenly_sampled=True)
-    step = abs(to_float(coord.step))
-    nwin = _get_window_samples(coord, dim, winlen, samples)
+    def plan(self, patch, out):
+        """Return the axis, the sample step, and the window in samples."""
+        dim, axis, winlen = get_dim_axis_value(patch, kwargs=self.model_extra or {})[0]
+        coord = patch.get_coord(dim, require_evenly_sampled=True)
+        step = abs(to_float(coord.step))
+        nwin = _get_window_samples(coord, dim, winlen, self.samples)
+        return {"axis": axis, "step": step, "nwin": nwin}
 
-    if recursive:
-        varx = np.var(data_2d, axis=0)
-        out = _recursive_kurtosis(data_2d, step=step, winlen=nwin * step, varx=varx)
-    else:
-        out = _windowed_kurtosis(data_2d, nwin=nwin)
+    def numpy_kernel(self, data, *, axis, step, nwin):
+        """Return the kurtosis of every window along the axis."""
+        # Imported here (not at module scope) to keep numba out of `import dascore`.
+        from dascore.transform._kurtosis_kernels import (  # noqa: PLC0415
+            _recursive_kurtosis,
+            _windowed_kurtosis,
+        )
 
-    out = out.reshape(orig_shape)
+        moved = np.moveaxis(np.asarray(data, dtype=float), axis, 0)
+        data_2d = moved.reshape(moved.shape[0], -1)
+        if self.recursive:
+            varx = np.var(data_2d, axis=0)
+            out = _recursive_kurtosis(data_2d, step=step, winlen=nwin * step, varx=varx)
+        else:
+            out = _windowed_kurtosis(data_2d, nwin=nwin)
+        return np.moveaxis(out.reshape(moved.shape), 0, axis)
 
-    return (
-        patch_t.new(data=out)
-        .transpose(*orig_dims)
-        .update(attrs={"data_type": "kurtosis", "data_units": ""})
-    )
+
+kurtosis = Kurtosis.patch_function
