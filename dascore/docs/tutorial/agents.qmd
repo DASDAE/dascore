@@ -1,0 +1,60 @@
+---
+title: Agent onboarding
+description: Connect an agent to the documentation and recipes in the project's DASCore installation.
+keywords: [agents, skills, cli, environment]
+---
+
+DASCore provides installed API documentation, search, and workflow recipes through its CLI. Install the optional dependencies in the project's Python environment using its package manager:
+
+```bash
+python -m pip install "dascore[agents]"
+```
+
+For a uv-managed project, use `uv add "dascore[agents]"`. Follow the project's version constraints. Then inspect the selected installation:
+
+```bash
+python -m dascore doc
+python -m dascore skills
+python -m dascore skill dascore
+python -m dascore skill make-inventory
+```
+
+The Skills navigation and CLI use one catalog. Membership in `dascore/docs/skills.yml` makes a recipe a skill; its title, description, and procedure remain in the original documentation page. Recipes keep their ordinary `.qmd` filenames. Keyword tags describe topics independently of skill membership.
+
+## Install the agent bootstrap
+
+Export the small native `SKILL.md` into the skill location supported by your agent. Installing the Python package does not change agent configuration. Use the selected project's Python executable in the following commands.
+
+Personal skills use these locations:
+
+| Agent | Directory |
+| --- | --- |
+| [Codex](https://developers.openai.com/codex/skills) | `~/.agents/skills/dascore/` |
+| [Claude Code](https://code.claude.com/docs/en/skills) | `~/.claude/skills/dascore/` |
+
+Run this Python example in the selected environment, changing `.agents` to `.claude` for Claude Code. It works on Windows, macOS, and Linux, preserves the exported UTF-8 bytes, and checks that export succeeded before replacing an existing skill:
+
+```python
+import subprocess
+import sys
+from pathlib import Path
+
+content = subprocess.check_output(
+    [sys.executable, "-m", "dascore", "skill", "--bootstrap"]
+)
+directory = Path.home() / ".agents" / "skills" / "dascore"
+directory.mkdir(parents=True, exist_ok=True)
+(directory / "SKILL.md").write_bytes(content)
+```
+
+Other agents that support [Agent Skills](https://agentskills.io/specification) can use the same exported file in their supported skill directory. Reload or restart the agent if the new skill is not visible.
+
+The bootstrap tells the agent to identify the project's environment, verify `dascore doc` provenance, and retain that environment's absolute Python executable for subsequent calls. It then loads the current routing recipe and specialized skills through the CLI. It contains neither a fixed interpreter path nor a copied inventory procedure.
+
+Install the bootstrap once per agent location. Recipes and API documentation follow the selected DASCore installation, so switching projects also requires selecting that project's interpreter. Update the exported bootstrap when its installation or discovery instructions change.
+
+## Check the connection
+
+Ask the agent to use DASCore to inspect a small dataset or prepare an inventory. Check that it reports the intended Python executable and DASCore version, discovers the relevant installed recipe, and uses that same executable for subsequent CLI calls. A global `dascore` command can belong to another environment.
+
+Skill retrieval and exact documentation lookup work without the optional search engine when Typer is installed. The routing recipe explains the fallback. The bootstrap and recipes guide the requested work; they do not authorize publishing data or changing unrelated project configuration.

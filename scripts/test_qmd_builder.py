@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import pytest
+import yaml
+
+from dascore.utils.doc_skills import get_skills
 
 _qmd_builder = pytest.importorskip("_qmd_builder")
 
@@ -73,3 +76,31 @@ class TestApiTocTree:
         (tmp_path / "api" / "dascore").mkdir(parents=True)
 
         assert _qmd_builder.build_api_toc_tree(tmp_path / "api") == []
+
+
+class TestSkillsNavigation:
+    """The human navigation uses the same membership as the installed CLI."""
+
+    def test_catalog(self):
+        """Rendering the website template lists every catalogued recipe once."""
+        catalog = yaml.safe_load(
+            (_qmd_builder.API_PATH.parent / "skills.yml").read_text()
+        )
+        text = _qmd_builder.get_template("_quarto.yml").render(
+            dascore_version_str="DASCore test",
+            api_toc_tree=[],
+            repo_branch="dev",
+            skills=catalog,
+        )
+        config = yaml.safe_load(text)
+        sidebar = next(
+            x for x in config["website"]["sidebar"] if x.get("id") == "skills"
+        )
+        links = {
+            x["text"]: x["href"]
+            for x in sidebar["contents"]
+            if x["text"] != "Agent onboarding"
+        }
+        assert links == {
+            name: info["target"] + ".qmd" for name, info in get_skills().items()
+        }

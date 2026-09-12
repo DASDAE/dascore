@@ -62,6 +62,9 @@ website:
       - text: Recipes
         file: recipes/overview.qmd
 
+      - text: Skills
+        file: tutorial/agents.qmd
+
       - text: Notes
         file: notes/notes.qmd
 
@@ -182,6 +185,17 @@ website:
           contents:
 
             - recipes/docker_basic.qmd
+
+    - id: skills
+      title: "Skills"
+      style: "floating"
+      contents:
+        - text: Agent onboarding
+          href: tutorial/agents.qmd
+{% for name, target in skills.items() %}
+        - text: {{ name }}
+          href: {{ target }}.qmd
+{% endfor %}
 
     - id: contributing
       title: "Contributing"

@@ -3,6 +3,14 @@ title: Local documentation
 keywords: [documentation, cli, agents, offline]
 ---
 
+Install the optional command-line dependencies in your project's environment:
+
+```bash
+python -m pip install "dascore[agents]"
+```
+
+The CLI uses Typer. Importing and using DASCore from Python does not require this extra.
+
 Use the documentation that ships with the DASCore installed in your project's Python environment:
 
 ```bash
@@ -30,3 +38,45 @@ The local API corpus covers core objects, processing, transforms, visualization,
 Module pages can be selected explicitly, for example `dascore doc module:dascore.viz.waterfall`. When a module re-exports a same-named function, its public attribute name selects the function.
 
 Use exact public names such as `Inventory`, `PatchAttrs.tag`, or `dascore.proc.coords.select`. Authored pages use identifiers such as `tutorial/patch`. Unknown or ambiguous names produce an error and a nonzero exit status. Document output uses UTF-8, including when redirected to a file.
+
+## Search documentation
+
+Search the installed documentation when you do not know the API name:
+
+```bash
+python -m dascore doc-search "low pass"
+python -m dascore doc-search "median filtering" --limit 3
+python -m dascore doc-search --tag filtering
+python -m dascore doc-search "inventory geometry" --tag inventory
+```
+
+Search uses Tantivy, included in `dascore[agents]`. Other commands do not import the search engine. Tantivy's native binaries support standard CPython on Linux, macOS, and Windows; the browser test environment runs the CLI without this optional engine.
+
+Results include a title, document kind, keywords, an excerpt, and the exact `dascore doc` command to read the full page. The default limit is five results; `--limit` accepts values from 1 to 100. API aliases share one result. Titles, aliases, and authored keywords receive greater weight than incidental body matches.
+
+Words must all match by default. Tantivy query syntax also supports quoted phrases and uppercase Boolean operators such as `OR`. `--tag` matches a whole keyword, ignoring case, and can be used alone or together with a text query. No matches is a successful empty result; malformed queries produce a message and a nonzero exit status.
+
+For an exact API or module identifier, use `doc`, such as `dascore doc module:dascore.viz.waterfall`. Search treats colons and parentheses as query syntax; it does not evaluate Python expressions such as `Patch.select(time=1)`.
+
+The first search builds an index inside the current corpus's `search/` directory. Subsequent searches reuse it. Rebuilding the corpus, changing the engine version, or finding an incomplete index triggers indexing again. The Markdown corpus remains the source of searchable content.
+
+## Author keyword tags
+
+Keep subject keywords with their source document. Authored pages use Quarto frontmatter:
+
+```yaml
+---
+title: Filtering data
+keywords: [filtering, bandpass, low pass]
+---
+```
+
+API docstrings use a `Keywords` section containing one comma-separated line:
+
+```text
+Keywords
+--------
+filtering, bandpass, low pass
+```
+
+The normal website renderer displays this section, and the local corpus preserves the terms as metadata. Use specific scientific terms and common task vocabulary; keyword tags describe subjects rather than classifying a page as an agent skill.
