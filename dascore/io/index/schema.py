@@ -33,13 +33,14 @@ from typing import NamedTuple, get_args, get_type_hints
 # Version of the index schema, independent of dascore's version. Bump it
 # when an index written by an older dascore would be read wrongly rather
 # than merely incompletely -- including when what a *stored value* means
-# changes, not only when a column does. Version 18 counts patches and
+# changes, not only when a column does. Version 19 indexes the default
+# time presentation order; version 18 counts patches and
 # coordinate variants; version 17 links a segmented coordinate to each of
 # its runs; version 16 stored each range coordinate's exact grid and named
 # the envelope columns by storage type; version 15 stored source coordinate
 # and numeric attribute dtypes. Earlier indexes lack the metadata required
 # for reconstruction and are rebuilt when opened.
-INDEX_VERSION = 18
+INDEX_VERSION = 19
 # Identity string so any tool can sanity-check what it opened.
 WHAT_IS_THIS = "dascore_spool_index"
 
@@ -456,6 +457,15 @@ INDEXES = (
     ("idx_cdefs_grid", "coord_defs", "def_key", GRID_NEEDED),
     # run links only, so an index without runs answers from an empty index
     ("idx_pcoords_runs", "patch_coords", "coord_name", "run_index > 0"),
+    # the default presentation order (time, missing last) with the source
+    # the ordinal tiebreak needs, so a page of that order reads this index
+    # rather than sorting the table.
+    (
+        "idx_patches_time_order",
+        "patches",
+        "time_min IS NULL, time_min, source_id",
+        None,
+    ),
 )
 
 
