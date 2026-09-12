@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import shutil
 from functools import wraps
 
@@ -76,7 +77,12 @@ class TestH5Simple:
         np.testing.assert_array_equal(patch.data, data[2:4, 3:5])
         assert reads == [4]
 
-    def test_subclass_array_override(self, h5simple_path):
+    @pytest.fixture
+    def isolated_registry(self, monkeypatch):
+        """Keep temporary subclasses out of the shared formatter registry."""
+        monkeypatch.setattr(H5Simple, "manager", copy.deepcopy(H5Simple.manager))
+
+    def test_subclass_array_override(self, h5simple_path, isolated_registry):
         """A format extension's public array hook remains authoritative."""
 
         class Custom(H5Simple):
@@ -89,7 +95,7 @@ class TestH5Simple:
         actual = Custom().read(h5simple_path)[0]
         np.testing.assert_array_equal(actual.data, expected.data * 2)
 
-    def test_subclass_metadata_override(self, h5simple_path):
+    def test_subclass_metadata_override(self, h5simple_path, isolated_registry):
         """A format extension's public metadata hook is used during reading."""
 
         class Custom(H5Simple):
