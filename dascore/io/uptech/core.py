@@ -41,7 +41,7 @@ class UptechH5V1(FiberIO):
         return [
             dc.Patch(
                 attrs=attrs,
-                coords=_get_coords(resource),
+                coords=_get_coords(resource, snap=snap),
                 dtype=str(resource[_DATASET].dtype),
             )
         ]

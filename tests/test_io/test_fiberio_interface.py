@@ -193,9 +193,14 @@ class TestStoredShapeValidation:
 class TestNamedSnap:
     """Named snapping preserves other coordinates and the original data grid."""
 
-    @pytest.fixture(params=["H5Simple", "DASDAE", "NETCDF_CF"])
+    @pytest.fixture(params=["H5Simple", "DASDAE", "NeubrexRFS"])
     def jittered_file(self, request, tmp_path):
         """Store distinguishable samples with small jitter along both dimensions."""
+        return self._write_jittered_file(tmp_path, request.param)
+
+    @staticmethod
+    def _write_jittered_file(tmp_path, file_format):
+        """Build a stored-array fixture without requiring optional backends."""
         path = tmp_path / "jittered.h5"
         data = np.arange(15).reshape(5, 3)
         with h5py.File(path, "w") as h5:
@@ -203,7 +208,17 @@ class TestNamedSnap:
             h5["data"] = data
             h5["time"] = [0.0, 1.000001, 2.0, 3.0, 4.0]
             h5["distance"] = [0.0, 1.00000001, 2.0]
-        if request.param != "H5Simple":
+        if file_format == "NeubrexRFS":
+            with h5py.File(path, "a") as h5:
+                h5["depth"] = h5["distance"][:]
+                h5["stamps"] = h5["time"][:]
+                h5["stamps_unix"] = h5["time"][:] * 1_000_000
+                h5["data"].attrs.update(
+                    DataUnitLabel="m",
+                    StartDateTime="1970-01-01",
+                    EndDateTime="1970-01-02",
+                )
+        elif file_format != "H5Simple":
             exact = dc.read(path, file_format="H5Simple", snap=False)[0]
             # Store explicit value arrays; a serialized segmented coordinate
             # correctly preserves its declared segments independently of snap.
@@ -214,8 +229,8 @@ class TestNamedSnap:
                 }
             )
             path = tmp_path / "converted.h5"
-            dc.write(exact, path, file_format=request.param)
-        return path, request.param, data
+            dc.write(exact, path, file_format=file_format)
+        return path, file_format, data
 
     @pytest.mark.parametrize(
         ("options", "enabled"),

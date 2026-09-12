@@ -107,7 +107,7 @@ class SintelaProtobufV1(FiberIO):
         self, resource: BinaryReader, *, snap: snap_type = True
     ) -> list[dc.Patch]:
         """Scan a Sintela protobuf recording."""
-        return scan_payload(resource)
+        return scan_payload(resource, snap=snap)
 
     def read_array(
         self, resource: BinaryReader, windows: dict[str, tuple[int, int]], key: str = ""
@@ -120,6 +120,7 @@ class SintelaProtobufV1(FiberIO):
         self,
         resource,
         *,
+        snap: snap_type | None = None,
         samples: bool = False,
         source_patch_key: str | Iterable[str] = "",
         **kwargs,
@@ -130,13 +131,15 @@ class SintelaProtobufV1(FiberIO):
         indexing would require a header walk through every recording, so this
         reader retains its streaming assembly path instead of the shared read.
         """
+        snap_dims = kwargs.pop("snap_dims", True)
+        snap = snap_dims if snap is None else snap
         wanted = _normalize_source_patch_keys(source_patch_key)
         if wanted and "0" not in wanted:
             return dc.spool([])
         with IOResourceManager(resource) as manager:
             stream = manager.get_resource(BinaryReader)
             stream.seek(0)
-            data, coords, attrs = read_payload(stream)
+            data, coords, attrs = read_payload(stream, snap=snap)
             selectors = {
                 name: kwargs[name]
                 for name in coords.dims

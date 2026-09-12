@@ -1887,3 +1887,43 @@ class TestSintelaProtobufUtils:
         assert fft_summary.shape == fft_data.shape
         assert fft_shape == (len(fft_records), 2, 3)
         assert fft_dtype == str(np.dtype(np.float32))
+
+
+class TestNamedPacketSnap:
+    """BAND and FFT timestamps are stored values rather than a header grid."""
+
+    @pytest.mark.parametrize(
+        ("builder", "message_type"),
+        [(_build_band_payloads, "BandPacket"), (_build_real_fft_payloads, "FFTPacket")],
+    )
+    @pytest.mark.parametrize("snap", [False, (), "distance", ("distance",)])
+    def test_unselected_time_stays_exact(
+        self, write_sintela_file, builder, message_type, snap
+    ):
+        """Scan and read retain packet jitter and apply bounds to those labels."""
+        records = [builder()[0]] * 4
+        seconds = np.arange(1_700_000_100, 1_700_000_104)
+        nanos = np.array([0, 1000, 0, 0])
+        for index, (sec, nano) in enumerate(zip(seconds, nanos)):
+            records = _mutate_record(
+                records,
+                index,
+                message_type,
+                lambda msg, sec=int(sec), nano=int(nano): _set_timestamp(
+                    msg.header.common_header.time, sec, nano
+                ),
+            )
+        path = write_sintela_file("packet_jitter.pb", records)
+        expected = seconds.astype("datetime64[s]").astype(
+            "datetime64[ns]"
+        ) + nanos.astype("timedelta64[ns]")
+        patch = dc.read(path, snap=snap)[0]
+        scanned = dc.scan_payloads(path, snap=snap)[0]
+        np.testing.assert_array_equal(patch.get_coord("time").values, expected)
+        np.testing.assert_array_equal(scanned.get_coord("time").values, expected)
+        assert not np.array_equal(dc.read(path)[0].get_coord("time").values, expected)
+        bounded = dc.read(
+            path, snap=snap, time=(None, expected[1] - np.timedelta64(1, "ns"))
+        )[0]
+        assert bounded.shape[0] == 1
+        np.testing.assert_array_equal(bounded.data, patch.data[:1])
