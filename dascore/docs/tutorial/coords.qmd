@@ -112,7 +112,15 @@ assert list(missing.iter_runs()) == [(2, 2), (5, 9)]
 print(missing.positions())
 ```
 
-A dense array whose runs would outnumber a tenth of its samples keeps its values as one monotonic coordinate with the declared step, and `missing()` answers the same. Without a declared step, `missing()` raises; evenly sampled coordinates are always complete. Filling the holes with samples is a patch operation, never a coordinate one.
+A dense array whose runs would outnumber a tenth of its samples keeps its values as one monotonic coordinate with the declared step, and `missing()` answers the same. Without a declared step, `missing()` raises; evenly sampled coordinates are always complete. Filling the holes with samples is a patch operation, never a coordinate one. [`Patch.fill_gaps`](`dascore.Patch.fill_gaps`) places every run on one grid and writes a fill value (NaN by default) where no sample sits, so the coordinate becomes a plain range. Giving the dimension a limit as a keyword (`fill_gaps(time=10)` in coordinate units, or a count of missing samples with `samples=True`) fills only holes that narrow and leaves wider ones as seams. A hole's width is its missing samples times the step.
+
+```{python}
+import dascore as dc
+
+patch = dc.Patch(data=np.ones(len(coord)), coords={"x": coord}, dims=("x",))
+filled = patch.fill_gaps("x", value=0)
+assert filled.shape == (12,) and filled.data.sum() == len(coord)
+```
 
 [`get_discontinuities`](`dascore.core.coords.BaseCoord.get_discontinuities`) reports the seams between runs, and for a monotonic array every spacing that is not its declared step (or its median spacing when it declares none). Its `tolerance` is an excess over one step in coordinate units; pass [`GapTolerance.samples(k)`](`dascore.utils.gaps.GapTolerance`) to count steps instead, which is how `Spool.chunk` and `waterfall(gap_factor=)` judge the same spacing.
 
