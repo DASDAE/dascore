@@ -358,7 +358,7 @@ class TestWindowWorkIsBounded:
         fetched, counting = _counting_ids(backend)
         with mock.patch.object(backend, "query_ids", counting):
             catalog.window(item).ordered_ids()
-        assert fetched and max(fetched) <= allowed
+        assert fetched and sum(fetched) <= allowed
 
     @pytest.mark.parametrize("positions", [[3, 1, 2], [150, 151, 3]])
     def test_small_array_is_bounded(self, big_spool, positions):
@@ -369,7 +369,7 @@ class TestWindowWorkIsBounded:
         with mock.patch.object(backend, "query_ids", counting):
             catalog.restrict(np.array(positions)).ordered_ids()
         span = max(positions) - min(positions) + 1
-        assert fetched and max(fetched) <= span
+        assert fetched and sum(fetched) <= span
 
     def test_last_item_does_not_walk_the_root(self, big_spool):
         """Reading the final patch seeks from the end, not past every row."""
@@ -502,8 +502,14 @@ class TestWindowFallbacks:
         """Bounds which are unsigned integers cannot underflow into a window."""
         catalog = big_spool._catalog
         ids = catalog.ordered_ids()
+        backend = catalog.backend
+        fetched, counting = _counting_ids(backend)
         item = slice(np.uint64(5), np.uint64(2))
-        assert catalog.window(item).ordered_ids() == ids[5:2] == ()
+        with mock.patch.object(backend, "query_ids", counting):
+            chosen = catalog.window(item).ordered_ids()
+        # nothing is asked for, so nothing is read
+        assert chosen == ids[5:2] == ()
+        assert fetched == []
 
     @pytest.mark.parametrize(
         "bounds", [(np.int64(2), np.int64(5)), (_Index(2), _Index(5))]
@@ -527,7 +533,7 @@ class TestWindowFallbacks:
         with mock.patch.object(backend, "query_ids", counting):
             chosen = catalog.window(item).ordered_ids()
         assert chosen == catalog.ordered_ids()[item]
-        assert fetched and max(fetched) <= 60
+        assert fetched and sum(fetched) <= 60
 
     def test_repeated_last_reads_count_once(self, big_spool):
         """Reading the final patch again does not count the view again."""
