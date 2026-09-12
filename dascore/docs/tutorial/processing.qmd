@@ -1,4 +1,5 @@
 ---
+keywords: [filtering, processing, signal processing]
 title: Patch Processing
 execute:
   warning: false

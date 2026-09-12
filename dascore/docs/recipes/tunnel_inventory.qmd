@@ -1,4 +1,5 @@
 ---
+keywords: [inventory, geometry, deployment, validation]
 title: A Tunnel Inventory
 execute:
   warning: false

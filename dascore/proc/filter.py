@@ -141,6 +141,10 @@ def pass_filter(
     >>> bp_m = pa.pass_filter(distance=(50 * m, 100 * m))
     >>> # filter wavelengths less than 200 ft
     >>> lp_ft = pa.pass_filter(distance=(200 * ft, ...))
+
+    Keywords
+    --------
+    filtering, bandpass, low pass, high pass, frequency
     """
     dim, (arg1, arg2) = check_filter_kwargs(kwargs)
     axis = patch.get_axis(dim)
@@ -248,6 +252,10 @@ def median_filter(
 
     Values specified with kwargs should be small, for example < 10 samples
     otherwise this can take a long time and use lots of memory.
+
+    Keywords
+    --------
+    filtering, median, smoothing, denoising
     """
     size = resolve_window(patch, kwargs, samples=samples, min_samples=0).full_size()
     new_data = nd_median_filter(patch.data, size=size, mode=mode, cval=cval)
