@@ -91,6 +91,16 @@ class TestDocuments:
         text = doc_cache.read_document(root, manifest, "Patch.pass_filter")
         assert "Keywords\n--------\nfiltering, bandpass, low pass" in text
 
+    @pytest.mark.parametrize("suffix", ["", "\n\nExamples\n--------\nOther text."])
+    def test_wrapped_keywords(self, tmp_path, monkeypatch, suffix):
+        """Wrapped keywords are preserved without absorbing the next section."""
+        docstring = "Keywords\n--------\nfiltering, median,\ntime domain" + suffix
+        monkeypatch.setattr(inspect.unwrap(dc.Patch.pass_filter), "__doc__", docstring)
+        manifest = doc_corpus.write_corpus(tmp_path)
+        text = doc_cache.read_document(tmp_path, manifest, "Patch.pass_filter")
+        frontmatter = yaml.safe_load(text.split("---", 2)[1])
+        assert frontmatter["keywords"] == ["filtering", "median", "time domain"]
+
     def test_aliases(self, corpus):
         """Export aliases resolve to one canonical document."""
         root, index = corpus
@@ -260,6 +270,17 @@ class TestCache:
         monkeypatch.setattr(doc_cache, "write_corpus", build)
         with dc.config_context(docs_cache_dir=tmp_path / "cache"):
             yield document
+
+    def test_relative_cache(self, cache, tmp_path, monkeypatch, capsys):
+        """The reported cache path remains usable after changing working directory."""
+        monkeypatch.chdir(tmp_path)
+        with dc.config_context(docs_cache_dir=Path("relative")):
+            assert main(["doc"]) == 0
+        output = capsys.readouterr().out
+        root = Path(output.split("Documentation: ", 1)[1].splitlines()[0])
+        assert root.is_absolute()
+        monkeypatch.chdir(tmp_path.parent)
+        assert (root / "example.md").read_text(encoding="utf-8") == "first"
 
     def test_reuse(self, cache, monkeypatch):
         """A warm lookup reads the completed corpus without regenerating it."""

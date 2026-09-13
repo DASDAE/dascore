@@ -71,10 +71,10 @@ def documentation_cache(rebuild: bool = False):
     Prepare the local Markdown corpus and hold its process lock while reading.
 
     The cache root is `get_config().docs_cache_dir / dascore.__version__`.
-    Yield the corpus path and manifest. A failed rebuild retains the preceding
+    Yield the absolute corpus path and manifest. A failed rebuild retains the preceding
     complete corpus; source changes in editable installs invalidate the cache.
     """
-    root = dc.get_config().docs_cache_dir / dc.__version__
+    root = (dc.get_config().docs_cache_dir / dc.__version__).resolve()
     root.parent.mkdir(parents=True, exist_ok=True)
     backup = root.with_name(root.name + ".previous")
     with FileLock(str(root.with_name(root.name + ".lock")), timeout=60):
