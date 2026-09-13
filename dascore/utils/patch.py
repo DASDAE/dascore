@@ -652,14 +652,27 @@ def _get_merge_dim(df) -> str | None:
     return dims_vary[dims_vary].index[0]
 
 
-def _split_coord_merge_kwargs(merge_kwargs) -> tuple[dict, dict]:
-    """Split spool merge kwargs into (attr kwargs, coord kwargs)."""
+def _split_coord_merge_kwargs(merge_kwargs) -> tuple[dict, dict, Any]:
+    """Split spool merge kwargs into (attr kwargs, coord kwargs, fill value)."""
     merge_kwargs = dict(merge_kwargs or {})
     coord_kwargs = {
         "snap_coords": merge_kwargs.pop("snap_coords", True),
         "tolerance": merge_kwargs.pop("tolerance", 1.5),
     }
-    return merge_kwargs, coord_kwargs
+    return merge_kwargs, coord_kwargs, merge_kwargs.pop("fill_value", None)
+
+
+def fill_merged_holes(patch, dim: str, fill_value):
+    """
+    Fill the holes a merge across a gap left in `dim`, if asked to.
+
+    The merged patch is built first and filled after: its holes are only
+    known once every member's coordinate has been placed, which is what
+    the merged coordinate already says.
+    """
+    if fill_value is None:
+        return patch
+    return patch.fill_gaps(dim, value=fill_value)
 
 
 def _get_merged_coord(
@@ -707,7 +720,7 @@ def _force_patch_merge(patch_dict_list, merge_kwargs, **kwargs):
     """
     df = pd.DataFrame(patch_dict_list)
     merge_dim = _get_merge_dim(df)
-    attr_kwargs, coord_kwargs = _split_coord_merge_kwargs(merge_kwargs)
+    attr_kwargs, coord_kwargs, fill_value = _split_coord_merge_kwargs(merge_kwargs)
     if merge_dim is None:  # nothing to merge, complete overlap
         return [patch_dict_list[0]]
     dims = df["dims"].iloc[0].split(",")
@@ -729,7 +742,7 @@ def _force_patch_merge(patch_dict_list, merge_kwargs, **kwargs):
     warn_if_histories_differ(attrs, "Merging")
     new_attrs = combine_patch_attrs(attrs, **attr_kwargs)
     patch = dc.Patch(data=new_data, coords=new_coord, attrs=new_attrs, dims=dims)
-    new_dict = {"patch": patch}
+    new_dict = {"patch": fill_merged_holes(patch, merge_dim, fill_value)}
     return [new_dict]
 
 

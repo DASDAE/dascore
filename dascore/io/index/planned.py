@@ -52,7 +52,11 @@ from dascore.utils.chunk_plan import (
 )
 from dascore.utils.io import IOResourceManager
 from dascore.utils.patch import concatenate_planned
-from dascore.utils.patch_assembly import PatchAssembler
+from dascore.utils.patch_assembly import (
+    PatchAssembler,
+    pad_to_row,
+    patch_from_fill,
+)
 from dascore.utils.paths import is_memory_uri
 
 # Row columns which name dc.read's own keyword arguments; passing one along
@@ -735,7 +739,11 @@ class PlanResolver(PatchResolver):
         """Assemble the output patch a plan row describes."""
         output_id = int(_row_source_patch_key(row))
         members = self.member_rows[self.member_rows["output_id"] == output_id]
-        assert len(members), "no plan members found for output row"
+        if not len(members):
+            # only a fill plan publishes an output no source feeds
+            fill_value = self.merge_kwargs.get("fill_value")
+            assert fill_value is not None, "no plan members found for output row"
+            return self._stamp(patch_from_fill(row, fill_value), row)
         if self.mode == "identity":
             # one untouched member per output; residuals apply at load
             assert len(members) == 1
@@ -756,6 +764,8 @@ class PlanResolver(PatchResolver):
             assembled = self._assembler()._patch_from_instruction_df(joined)
             assert len(assembled) == 1
             patch = assembled[0]
+            if (fill_value := self.merge_kwargs.get("fill_value")) is not None:
+                patch = pad_to_row(patch, self.dim, row, fill_value)
         return self._stamp(patch, row)
 
     def _stamp(self, patch: dc.Patch, row: Mapping) -> dc.Patch:

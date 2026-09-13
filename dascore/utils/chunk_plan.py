@@ -1505,6 +1505,7 @@ def build_chunk_plan(
     conflict: Literal["drop", "raise", "keep_first"] = "raise",
     group=None,
     missing_dim: Literal["raise", "drop"] = "raise",
+    fill_value=None,
     **kwargs,
 ) -> ChunkPlan:
     """
@@ -1556,6 +1557,7 @@ def build_chunk_plan(
         keep_partial=keep_partial,
         snap_coords=snap_coords,
         tolerance=tolerance,
+        fill_value=fill_value,
         conflict=conflict,
         missing_dim=missing_dim,
         group=_resolve_group_attrs(group, set(df.columns)),
@@ -1572,12 +1574,15 @@ def build_chunk_plan(
     labels, forced_merge = _partition(
         df, name, params["group"], tolerance, params["sampling_group_tolerance"]
     )
-    if forced_merge:
+    if forced_merge and fill_value is None:
+        # with a fill value the holes are filled, so the outputs are
+        # evenly sampled after all and there is nothing to warn about
         msg = (
             f"There is a gap in the patch along dimension {name} but a "
             f"merge tolerance of {tolerance} was used to force merging "
             "the patches. As a result, some patches in the chunked spool "
-            "are unevenly sampled."
+            "are unevenly sampled. Pass fill_value to fill the missing "
+            "samples instead."
         )
         warnings.warn(msg, UserWarning, stacklevel=_user_stacklevel())
     per_partition = _needs_partition_resolution(value, overlap)
@@ -1698,8 +1703,11 @@ def build_chunk_plan(
             total = int(m_counts.sum())
         # Plan invariant: every published output has at least one member.
         # An advertised row that cannot assemble is never surfaced as a
-        # runtime error; it is not surfaced at all.
-        fed = m_counts > 0
+        # runtime error; it is not surfaced at all. A fill value lifts
+        # that: a window lying wholly inside a bridged hole has no source
+        # to draw from and is assembled from fill alone, so the outputs
+        # cover the partition evenly instead of skipping the hole.
+        fed = np.ones(n_out, dtype=bool) if fill_value is not None else m_counts > 0
         fed_counts[part] = int(fed.sum())
         out_starts.append(starts_p[fed])
         out_stops.append(stops_p[fed])
@@ -1719,6 +1727,9 @@ def build_chunk_plan(
                 # per-output dtype pools are simple slices
                 kdt = kdtypes[lo_k:hi_k]
                 bounds = np.cumsum(m_counts) - m_counts
+                # an all-fill output draws from no member, so it is the
+                # partition, not its own pool, which names its dtype
+                whole = _combined_dtype(pd.Series(part_dtypes, dtype=object))
                 combined = [
                     _combined_dtype(
                         pd.Series(
@@ -1726,6 +1737,8 @@ def build_chunk_plan(
                             dtype=object,
                         )
                     )
+                    if m_counts[out]
+                    else whole
                     for out in np.flatnonzero(fed)
                 ]
                 dtype_parts.append(

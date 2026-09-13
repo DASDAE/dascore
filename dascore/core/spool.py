@@ -1682,6 +1682,7 @@ class Spool(NodeRepr, NamespaceOwner):
         conflict: Literal["drop", "raise", "keep_first"] = "raise",
         group: str | Sequence[str] | None = None,
         missing_dim: Literal["raise", "drop"] = "raise",
+        fill_value=None,
         **kwargs,
     ):
         """
@@ -1716,6 +1717,7 @@ class Spool(NodeRepr, NamespaceOwner):
             conflict=conflict,
             group=group,
             missing_dim=missing_dim,
+            fill_value=fill_value,
             **kwargs,
         )
         return coalesce_runs(plan, working)
@@ -2002,6 +2004,7 @@ class Spool(NodeRepr, NamespaceOwner):
         conflict: Literal["drop", "raise", "keep_first"] = "raise",
         group: str | Sequence[str] | None = None,
         missing_dim: Literal["raise", "drop"] = "raise",
+        fill_value=None,
         **kwargs,
     ) -> Self:
         """
@@ -2047,6 +2050,14 @@ class Spool(NodeRepr, NamespaceOwner):
         missing_dim
             What to do when patches lack the chunked dimension: "raise"
             (default) or "drop" (exclude them from the output).
+        fill_value
+            If given, the value written into the samples missing from a
+            merge, so an output spanning a hole is evenly sampled rather
+            than segmented. `tolerance` still decides which holes are
+            bridged at all: a hole it does not span separates patches as
+            before, and nothing is filled across it. Use `np.nan` for
+            float data; integer data has no null to fill with and raises,
+            so cast it first.
         kwargs
             kwargs are used to specify the dimension along which to chunk, eg:
             `time=10` chunks along the time axis in 10 second increments.
@@ -2057,6 +2068,8 @@ class Spool(NodeRepr, NamespaceOwner):
 
         Examples
         --------
+        >>> import numpy as np
+        >>>
         >>> import dascore as dc
         >>> from dascore.units import s, megabytes
         >>>
@@ -2069,6 +2082,8 @@ class Spool(NodeRepr, NamespaceOwner):
         >>> size_chunked = spool.chunk(time=1 * megabytes)
         >>> # merge along time axis
         >>> time_merged = spool.chunk(time=...)
+        >>> # merge across holes up to 10 samples wide, filling them with NaN
+        >>> gapless = spool.chunk(time=..., tolerance=10, fill_value=np.nan)
 
         Notes
         -----
@@ -2097,12 +2112,14 @@ class Spool(NodeRepr, NamespaceOwner):
             conflict=conflict,
             group=group,
             missing_dim=missing_dim,
+            fill_value=fill_value,
             **kwargs,
         )
         plan = coalesce_runs(plan, working)
         merge_kwargs = {
             "conflict": conflict,
             "snap_coords": snap_coords,
+            "fill_value": fill_value,
             # the plan's copy is normalized (eg a dimensionless quantity
             # has become the plain multiple it means)
             "tolerance": plan.params["tolerance"],

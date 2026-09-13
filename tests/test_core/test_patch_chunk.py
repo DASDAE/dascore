@@ -2519,3 +2519,169 @@ class TestChunkFromIndex:
         assert attrs["_source_patch_key"] == "DAS__x"
         for name in ("output_id", "source_path", "time_min", "blank", "_modified"):
             assert name not in dict(attrs)
+
+
+class TestChunkFillValue:
+    """Filling the samples a bridged hole is missing."""
+
+    hole = 9  # samples missing between the two patches
+
+    @pytest.fixture()
+    def gapped_spool(self, random_patch):
+        """Two patches of one grid with `hole` samples missing between them."""
+        first = random_patch.select(time=(0, 100), samples=True)
+        second = random_patch.select(time=(100 + self.hole, ...), samples=True)
+        return dc.spool([first, second])
+
+    @staticmethod
+    def _fill_count(patch, dim="time"):
+        """How many positions along dim hold no data."""
+        axis = patch.get_axis(dim)
+        other = tuple(x for x in range(patch.ndim) if x != axis)
+        return int(np.isnan(patch.data).all(axis=other).sum())
+
+    def test_merge_fills_the_hole(self, gapped_spool):
+        """A merge over the hole comes back evenly sampled at the true step."""
+        step = gapped_spool[0].get_coord("time").step
+        merged = gapped_spool.chunk(time=None, tolerance=10, fill_value=np.nan)[0]
+        coord = merged.get_coord("time")
+        assert isinstance(coord, CoordRange)
+        assert coord.step == step
+        assert self._fill_count(merged) == self.hole
+
+    def test_merge_without_fill_value_keeps_the_hole(self, gapped_spool):
+        """Without one the merge is segmented, as it is with no tolerance to span."""
+        with pytest.warns(UserWarning, match="fill_value"):
+            merged = gapped_spool.chunk(time=None, tolerance=10)[0]
+        assert isinstance(merged.get_coord("time"), CoordSegmented)
+
+    def test_fill_value_does_not_widen_the_tolerance(self, gapped_spool):
+        """A hole the tolerance does not span is still a boundary."""
+        assert len(gapped_spool.chunk(time=None, fill_value=np.nan)) == 2
+
+    def test_filling_merge_does_not_warn(self, gapped_spool):
+        """The forced-merge warning is about uneven sampling, which filling ends."""
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            gapped_spool.chunk(time=None, tolerance=10, fill_value=np.nan)[0]
+
+    def test_nothing_to_fill_is_untouched(self, random_spool):
+        """A contiguous spool merges as it would without a fill value."""
+        merged = random_spool.chunk(time=None, fill_value=np.nan)[0]
+        assert isinstance(merged.get_coord("time"), CoordRange)
+        assert not np.isnan(merged.data).any()
+
+    def test_integer_data_raises(self, gapped_spool):
+        """Integers have no null, so NaN cannot be what a hole holds."""
+        spool = dc.spool([x.new(data=x.data.astype(np.int32)) for x in gapped_spool])
+        with pytest.raises(ParameterError, match="Cannot fill data of dtype"):
+            spool.chunk(time=None, tolerance=10, fill_value=np.nan)[0]
+
+    def test_integer_fill_value(self, gapped_spool):
+        """A value of the data's own dtype fills it."""
+        spool = dc.spool(
+            [x.new(data=x.data.astype(np.int32) + 1) for x in gapped_spool]
+        )
+        merged = spool.chunk(time=None, tolerance=10, fill_value=0)[0]
+        assert merged.data.dtype == np.int32
+        axis = merged.get_axis("time")
+        other = tuple(x for x in range(merged.ndim) if x != axis)
+        assert int((merged.data == 0).all(axis=other).sum()) == self.hole
+
+
+class TestChunkFillWindows:
+    """Windows laid over a bridged hole, which no source patch feeds."""
+
+    @pytest.fixture()
+    def spool_and_tolerance(self, random_patch):
+        """Two 2 s patches of one grid with a 4 s hole between them."""
+        start = random_patch.get_coord("time").min()
+        first = random_patch.select(time=(start, start + to_timedelta64(2)))
+        second = random_patch.select(time=(start + to_timedelta64(6), ...))
+        return dc.spool([first, second]), to_timedelta64(5)
+
+    def test_windows_cover_the_hole(self, spool_and_tolerance):
+        """Every second of the bridged span comes back, filled where it must be."""
+        spool, tolerance = spool_and_tolerance
+        chunked = spool.chunk(time=1, tolerance=tolerance, fill_value=np.nan)
+        patches = list(chunked)
+        assert len(patches) == 8
+        # one window per second, none of them short
+        lengths = {len(x.get_coord("time")) for x in patches}
+        assert lengths == {250}
+        # the three windows wholly inside the hole hold nothing else
+        filled = [bool(np.isnan(x.data).all()) for x in patches]
+        assert filled == [False, False, False, True, True, True, False, False]
+
+    def test_partial_window_is_padded(self, spool_and_tolerance):
+        """A window the sources only partly feed is filled out, not left short."""
+        spool, tolerance = spool_and_tolerance
+        chunked = spool.chunk(time=1, tolerance=tolerance, fill_value=np.nan)
+        patch = chunked[2]
+        assert len(patch.get_coord("time")) == 250
+        assert int(np.isnan(patch.data).all(axis=0).sum()) == 249
+
+    def test_patches_match_the_rows(self, spool_and_tolerance):
+        """Every assembled patch spans the window its contents row advertises."""
+        spool, tolerance = spool_and_tolerance
+        chunked = spool.chunk(time=1, tolerance=tolerance, fill_value=np.nan)
+        contents = chunked.get_contents()
+        for num, row in enumerate(contents.itertuples()):
+            coord = chunked[num].get_coord("time")
+            assert coord.min() == row.time_min
+            assert coord.max() == row.time_max
+
+    def test_windows_are_dropped_without_a_fill_value(self, spool_and_tolerance):
+        """The plan only publishes an output no source feeds when it can fill it."""
+        spool, tolerance = spool_and_tolerance
+        with suppress_warnings(UserWarning):
+            plain = spool.chunk(time=1, tolerance=tolerance)
+        assert len(plain) == 5
+
+    def test_streaming_merge_fills(self, random_patch, tmp_path_factory):
+        """The index-backed merge streams into a buffer; it fills too."""
+        path = tmp_path_factory.mktemp("fill_stream")
+        first = random_patch.select(time=(0, 100), samples=True)
+        second = random_patch.select(time=(109, ...), samples=True)
+        for name, patch in (("a.h5", first), ("b.h5", second)):
+            dc.write(patch, path / name, "dasdae")
+        spool = dc.spool(path).update()
+        merged = spool.chunk(time=None, tolerance=10, fill_value=np.nan)[0]
+        coord = merged.get_coord("time")
+        assert isinstance(coord, CoordRange)
+        assert coord.step == random_patch.get_coord("time").step
+        assert int(np.isnan(merged.data).all(axis=0).sum()) == 9
+
+    def test_all_fill_window_takes_the_partition_dtype(self, spool_and_tolerance):
+        """With no member to ask, an all-fill window is the partition's dtype."""
+        spool, tolerance = spool_and_tolerance
+        first, second = spool
+        mixed = dc.spool([first.new(data=first.data.astype(np.float32)), second])
+        chunked = mixed.chunk(time=1, tolerance=tolerance, fill_value=np.nan)
+        # a fed window keeps its own member's dtype; the all-fill one cannot
+        assert chunked[0].data.dtype == np.float32
+        assert chunked[4].data.dtype == np.float64
+
+    def test_undescribable_coord_raises_on_load(self, random_patch):
+        """A fill patch is built from the row, so every coord must be on a grid."""
+        values = np.sort(np.random.default_rng(0).uniform(0, 300, 300))
+        patch = random_patch.update_coords(distance=values)
+        start = patch.get_coord("time").min()
+        first = patch.select(time=(start, start + to_timedelta64(2)))
+        second = patch.select(time=(start + to_timedelta64(6), ...))
+        spool = dc.spool([first, second])
+        chunked = spool.chunk(time=1, tolerance=to_timedelta64(5), fill_value=np.nan)
+        # the windows the sources feed still assemble
+        assert chunked[0].shape == (*first.shape[:1], 250)
+        with pytest.raises(ChunkError, match="no evenly sampled 'distance'"):
+            chunked[4]
+
+    def test_all_fill_window_reads_nothing(self, spool_and_tolerance, monkeypatch):
+        """A window with no members is built from its row, not from a file."""
+        spool, tolerance = spool_and_tolerance
+        chunked = spool.chunk(time=1, tolerance=tolerance, fill_value=np.nan)
+        resolver = chunked._catalog.resolver
+        monkeypatch.setattr(
+            resolver, "_load_member", lambda *a, **kw: pytest.fail("read a source")
+        )
+        assert np.isnan(chunked[4].data).all()
