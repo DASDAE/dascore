@@ -8,15 +8,13 @@ Start with the DASCore installed in the project's Python environment. `dascore d
 
 ## Find the current API
 
-Read installed signatures and docstrings before writing calls from memory. Search when the operation's name is unfamiliar:
+Read installed signatures and docstrings before writing calls from memory:
 
 ```bash
 python -m dascore doc Patch.select
-python -m dascore doc-search "median filtering"
-python -m dascore doc-search --tag inventory
 ```
 
-Substitute the selected environment's executable for `python`. Search results include commands for opening the full page. If the optional search engine is unavailable, exact `doc` lookup remains available.
+Substitute the selected environment's executable for `python`. When the operation's name is unfamiliar, search the Markdown directory reported by `doc` using your editor or agent's file-search tools. Search API names, keyword metadata, and scientific terms such as `filter`, `bandpass`, `inventory`, or `geometry`, then read the relevant sections. Point the search explicitly at that directory, since the user cache may be outside the project workspace. The [local documentation guide](../tutorial/local_documentation.qmd) includes ripgrep examples.
 
 DASCore's main objects serve different roles:
 

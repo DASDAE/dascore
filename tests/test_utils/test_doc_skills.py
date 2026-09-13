@@ -38,9 +38,8 @@ class TestSkills:
         with documentation_cache() as (root, manifest):
             assert text == read_document(root, manifest, target)
 
-    def test_cli(self, cache, capsys, hide_module):
-        """Discovery and recipe retrieval work without the optional search engine."""
-        hide_module("tantivy")
+    def test_cli(self, cache, capsys):
+        """Discovery lists canonical recipes and retrieval serves their contents."""
         assert main(["skills"]) == 0
         listed = capsys.readouterr().out
         for name, info in doc_skills.get_skills().items():
