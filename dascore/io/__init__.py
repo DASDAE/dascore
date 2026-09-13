@@ -30,14 +30,14 @@ from dascore.utils.namespace import (
     AnnotationNameSpace,
     InventoryNameSpace,
     PatchNameSpace,
+    SpoolNameSpace,
 )
 from dascore.utils.pd import dataframe_to_patch, patch_to_dataframe
 from dascore.utils.io import (
-    xarray_to_patch,
-    patch_to_xarray,
     patch_to_obspy,
     obspy_to_patch,
 )
+from dascore.xarray import patch_to_xarray, spool_to_xarray, xarray_to_patch
 
 
 class PatchIO(PatchNameSpace):
@@ -47,6 +47,14 @@ class PatchIO(PatchNameSpace):
     to_dataframe = patch_to_dataframe
     to_xarray = patch_to_xarray
     to_obspy = patch_to_obspy
+
+
+class SpoolIO(SpoolNameSpace):
+    """Namespace for Spool I/O conversions."""
+
+    name = "io"
+
+    to_xarray = spool_to_xarray
 
 
 class InventoryIO(InventoryNameSpace):

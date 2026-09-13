@@ -1,0 +1,23 @@
+---
+title: Profiling and Benchmarks
+---
+
+# Benchmarks
+
+[CodSpeed](https://codspeed.io/) runs the benchmarks under `benchmarks/` in CI. Run them locally with:
+
+```bash
+python -m pytest benchmarks/ --codspeed
+```
+
+Add a benchmark for substantial new behavior and investigate reported regressions before merging.
+
+# Profiling
+
+Profile a specific benchmark with `pytest-profiling`, then inspect the generated `.prof` file with [SnakeViz](https://jiffyclub.github.io/snakeviz/):
+
+```bash
+pip install snakeviz
+pytest benchmarks/test_patch_benchmarks.py::TestProcessingBenchmarks::test_pass_filter --profile
+snakeviz prof/test_pass_filter_performance.prof
+```

@@ -1,0 +1,46 @@
+---
+title: Adding Test Data
+---
+
+Keep generated objects and files small—a few MB at most.
+
+# Generated examples
+
+Add simple Python-built examples to `dascore.examples` and register them for `dc.get_example_patch`, `dc.get_example_spool`, or `dc.get_example_inventory`. Functions must take no arguments or only keyword arguments with defaults.
+
+```{python, filename="dascore.examples.py"}
+#| eval: false
+
+@register_func(EXAMPLE_PATCHES, key="new_das_patch")
+def create_example_patch(argument="default"):
+    ...
+
+@register_func(EXAMPLE_SPOOLS, key="new_das_spool")
+def create_example_spool(value=None):
+    ...
+
+@register_func(EXAMPLE_INVENTORIES, key="new_inventory")
+def create_example_inventory():
+    ...
+```
+
+Call the getter directly for one use; use a fixture for repeated test setup.
+
+# Data files
+
+Test-suite files belong in [DASDAE/test_data](https://github.com/DASDAE/test_data). Clone that repository, add the file, and push to `master` or open a pull request. Then add its filename, SHA-256 hash, and raw URL to `dascore/data_registry.txt`; [Pooch's `file_hash`](https://www.fatiando.org/pooch/latest/api/generated/pooch.file_hash.html) computes the hash.
+
+```text
+jingle_test_file.jgl 12e087d2c1cd08c9afd18334e17e21787be0b646151b39802541ee11a516976a https://raw.githubusercontent.com/DASDAE/test_data/master/das/jingle_test_file.jgl
+```
+
+Use `raw.githubusercontent.com`, not GitHub's redirecting `/raw/` URLs; redirects break browser-based WebAssembly downloads. CI primes one cache from the test-data repository and invalidates it when the registry or `DATA_VERSION` changes; increment `cache_number` in `.github/actions/prime-test-data-cache/action.yml` to force a reset. Documentation-only files may use another host, but tests must not depend on them; list such files in `SKIP_DATA_FILES` in `tests/test_io/test_common_io.py`.
+
+```{python}
+#| eval: false
+from dascore.utils.downloader import fetch
+
+path = fetch("jingle_test_file.jgl")
+```
+
+For HDF5 fixtures, adapt `scripts/modify_h5_file.py` to reduce an existing file.

@@ -4,11 +4,15 @@ from __future__ import annotations
 
 from typing import Literal
 
+import numpy as np
+
 import dascore as dc
 from dascore.constants import opt_timeable_types
 from dascore.io import FiberIO, ScanPayload, make_scan_payload
+from dascore.io.utils import slice_dataset
 from dascore.models import OptionalFiniteFloat, UTF8Str
 from dascore.utils.hdf5 import H5Reader
+from dascore.utils.misc import raise_on_extra_kwargs, unbyte
 
 from .utils import _get_opto_das_attrs, _get_opto_das_version_str, _read_opto_das
 
@@ -62,13 +66,43 @@ class OptoDASV8(FiberIO):
         resource: H5Reader,
         time: tuple[opt_timeable_types, opt_timeable_types] | None = None,
         distance: tuple[float | None, float | None] | None = None,
+        snap: bool = True,
         **kwargs,
     ) -> dc.Spool:
-        """Read a OptoDAS spool of patches."""
+        """
+        Read an OptoDAS file and return a spool of patches.
+
+        Parameters
+        ----------
+        resource
+            The open h5 object.
+        time
+            An optional tuple for filtering time.
+        distance
+            An optional tuple for filtering distance.
+        snap
+            If True, snap each coordinate to be evenly sampled.
+        """
         patches = _read_opto_das(
-            resource, time=time, distance=distance, attr_cls=OptoDASPatchAttrs
+            resource,
+            time=time,
+            distance=distance,
+            snap=snap,
+            attr_cls=OptoDASPatchAttrs,
         )
         return dc.spool(patches)
+
+    def read_array(
+        self,
+        resource: H5Reader,
+        windows: dict[str, tuple[int, int]],
+        snap: bool = True,
+        **kwargs,
+    ) -> np.ndarray:
+        """Slice the ``data`` dataset directly, in the header's dimension order."""
+        raise_on_extra_kwargs(kwargs, "windows and snap")
+        dims = tuple(unbyte(x) for x in resource["header"]["dimensionNames"])
+        return slice_dataset(resource["data"], dims, windows)
 
 
 class OptoDASV9(OptoDASV8):

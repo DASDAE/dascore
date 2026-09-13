@@ -1,36 +1,19 @@
-"""
-Read annotation sets from storage.
+"""Read annotation sets from storage.
 
-A set is stored either as a directory naming what it holds -- always
-``annotations.csv``, one row per annotation; ``attrs`` where it states its
-own dimensions and provenance; ``vertices.csv`` where any path or polygon
-needs one -- or as a bare table whose dimensions the caller states.
+A set is either a directory containing ``annotations.csv``, optional
+attributes, and any required ``vertices.csv``; or a bare table whose dimensions
+the caller supplies. A directory of set directories loads as one set with a
+``set`` column. Per-set dimensions, provenance, and documented columns remain
+under ``attrs.sets``. IDs remain global, so duplicate IDs across sets are
+rejected.
 
-A directory of those directories is a collection, and reads as one set
-whose ``set`` column names which of them each row came from: one return
-type, so nothing downstream has to ask which layout it was handed. What a
-set declares only for itself -- its dimensions, its provenance, its
-documented columns -- is kept under ``attrs.sets``, and a row's identity is
-still the ``id`` it already had, so an id two sets share is refused rather
-than qualified by the set it came from.
+A table may declare dimensions in a ``# dims: distance, time`` comment above
+its header. Data directories may store annotations under ``.annotations``.
+Columns beginning with an underscore are ignored.
 
-A table may declare the dimensions it is stated in itself, in a
-``# dims: distance, time`` comment above its header, and a directory of data
-carries the annotations made on it under the hidden name ``.annotations``, as
-it carries its inventory under ``.inventory``.
-
-A column whose header begins with an underscore is the author's own -- a
-crew's notes on how something was deployed, say -- and is read by nothing:
-the set does not carry it, so it stays in the file it was written in.
-
-CSV has no types, so this module decides what each column holds before the
-models see it: a ``basis`` cell is the JSON document its curve dumps, and
-every other cell is read the way it was written. A dimension column is
-read by the set's own reader, so a stored table and a frame in memory are
-typed alike. Tables are read strictly, through
-[`read_table`](`dascore.utils.tables.read_table`), and the neutral errors
-that raises are named as annotation errors here, at the one boundary which
-knows the format.
+CSV cells are typed before validation. ``basis`` contains its curve's JSON
+document, while dimension columns use the set's normal reader. Table errors
+are exposed as annotation errors.
 """
 
 from __future__ import annotations
@@ -1181,10 +1164,8 @@ def annotations(
     """
     Load annotations from whatever holds them.
 
-    The one door every source goes through, as
-    [`dascore.spool`](`dascore.spool`) is for patches: a set comes back
-    from a set, a directory, a table on disk, or anything a dataframe can
-    be built from.
+    Accept an existing set, dataframe-compatible data, a table, a set directory, a
+    collection directory, or a data directory carrying ``.annotations``.
 
     Parameters
     ----------

@@ -23,7 +23,7 @@ authors = [
 
 description = "A python library for distributed fiber optic sensing"
 readme = "readme.md"
-license = { file="docs/LICENSE" }
+license = { file="dascore/docs/LICENSE" }
 requires-python = ">=3.12"
 classifiers = [
     "Development Status :: 4 - Beta",
@@ -45,6 +45,7 @@ dependencies = [
      # Provides array_namespace and friends for array-API backed code.
      "array-api-compat>=1.9",
      "h5py",
+     "filelock>=3.12",  # serialize local documentation builds across processes
      "matplotlib>=3.10",
      # 2.0 is the first numpy with native array API support, which is what
      # dascore is written against; 2.3.3 is the first pandas 3 accepts on
@@ -65,10 +66,20 @@ dependencies = [
      "scipy>=1.15",
 ]
 
+[project.scripts]
+dascore = "dascore.cli:main"
+
 [project.optional-dependencies]
 
+agents = ["typer>=0.27.2"]
+
 extras = [
-    "xarray",
+    # A spool converts to a lazily-loaded DataTree (xarray core since
+    # 2024.10) whose time coordinates are lazy transform indexes — the
+    # CoordinateTransform API joined xarray's public surface in 2025.07;
+    # dask supplies the arrays.
+    "xarray>=2025.7",
+    "dask",
     # An annotation set may be stored as parquet rather than CSV; CSV is
     # the floor which needs nothing.
     "pyarrow",
@@ -88,7 +99,7 @@ docs = [
     "jinja2",
     "ipywidgets",
     "tabulate",
-    # Quarto executes the {python} cells in docs/**.qmd through jupyter, so
+    # Quarto executes the {python} cells in dascore/docs/**.qmd through jupyter, so
     # a doc build needs a kernel and the notebook plumbing around it. These
     # used to be supplied by a conda environment file rather than declared.
     "ipykernel",
@@ -103,6 +114,10 @@ docs = [
 ]
 
 test = [
+    "dascore[agents]",
+    "build",
+    "jinja2",  # documentation-link regression tests import the website renderer
+    "markdown-it-py",
     "aiohttp",
     # A reference array API implementation used to catch numpy-only code.
     "array-api-strict",
@@ -127,7 +142,7 @@ profile_base = [
     "pytest-profiling",
 ]
 
-all = ["dascore[extras]"]
+all = ["dascore[extras]", "dascore[agents]"]
 
 profile = ["dascore[test]", "dascore[profile_base]"]
 
@@ -149,6 +164,7 @@ dev = ["dascore[test]", "dascore[docs]", "dascore[profile_base]", "dascore[extra
 AI4EPS__V1 = "dascore.io.ai4eps.core:AI4EPSV1"
 APSENSING__V10 = "dascore.io.ap_sensing.core:APSensingV10"
 DASDAE__V1 = "dascore.io.dasdae.core:DASDAEV1"
+DASDAE__V2 = "dascore.io.dasdae.core:DASDAEV2"
 DASVADER__V1 = "dascore.io.dasvader.core:DASVaderV1"
 DASHDF5__V1 = "dascore.io.dashdf5.core:DASHDF5"
 H5SIMPLE__V1_0 = "dascore.io.h5simple.core:H5Simple"
@@ -197,6 +213,7 @@ io = "dascore.io:PatchIO"
 viz = "dascore.viz:VizPatchNameSpace"
 
 [project.entry-points."dascore.spool_namespace"]
+io = "dascore.io:SpoolIO"
 viz = "dascore.viz:VizSpoolNameSpace"
 
 [project.entry-points."dascore.inventory_namespace"]
@@ -319,37 +336,30 @@ markers = [
 line-ending = "lf"
 
 [tool.ty.src]
-# tests/ is deliberately out of scope. Type checking is worth most where a
-# wrong annotation propagates to users, and tests are leaf code with a fast,
-# loud failure signal and 100% enforced coverage. They also do type-hostile
-# things on purpose -- passing bad input to prove it is rejected, monkey
-# patching, building stubs -- so enforcing here costs suppressions on every
-# new test and risks silently weakening one during a mechanical fix.
-#
-# The value is in the scan, not the enforcement: because tests call the
-# public API the way users do, running ty over them audits whether dascore's
-# signatures are honest. Run it on demand -- after an API change, before a
-# release -- read what it says about dascore/, and fix that:
-#
+# Enforce types in library code. Tests intentionally use invalid inputs and stubs.
+# Audit API usage in tests on demand; fix library diagnostics:
 #   uvx ty@0.0.65 check --python .venv --config "src.include=['dascore','tests']"
-#
-# Diagnostics that only describe the tests themselves are not worth acting on.
 include = ["dascore"]
+exclude = ["dascore/docs"]
 
-# No rule is ignored globally: invalid-method-override,
-# invalid-argument-type and invalid-return-type have each been burned down
-# to zero and left on.
+# No type-checking rule is ignored globally.
 
-# These files lazily import optional or untyped modules (xarray, numba,
+# These files import optional or untyped modules (typer, xarray, numba,
 # h5py.h5r) that are not installed in the pre-commit hook's environment.
 [[tool.ty.overrides]]
-include = ["dascore/compat.py", "dascore/utils/jit.py", "dascore/io/dasvader/utils.py"]
+include = [
+    "dascore/_cli.py",
+    "dascore/compat.py",
+    "dascore/utils/jit.py",
+    "dascore/xarray/index.py",
+    "dascore/io/dasvader/utils.py",
+]
 
 [tool.ty.overrides.rules]
 unresolved-import = "ignore"
 
 [tool.typos.files]
-extend-exclude = ["docs/_static/logo.svg"]
+extend-exclude = ["dascore/docs/_static/logo.svg"]
 
 [tool.typos.default]
 # Ignore identifiers after a dot, plus text in [] or quotes (often API names/keys).

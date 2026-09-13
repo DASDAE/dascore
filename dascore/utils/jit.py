@@ -1,6 +1,4 @@
-"""
-Module for applying just in time compilation to speed up functions.
-"""
+"""Utilities for just-in-time compilation."""
 
 from __future__ import annotations
 
@@ -12,10 +10,9 @@ from dascore.utils.misc import _get_install_message
 
 
 class _DummyNumba:
-    """A simple class for acting like numba when numba is not installed."""
+    """Provide the small Numba interface needed when Numba is unavailable."""
 
-    # This isn't intended to make everything work, only basic stuff needed
-    # for tests to pass when numba isn't installed.
+    # This supports only the subset DASCore needs without Numba.
     def prange(self, count):
         """A mock of numba's prange."""
         yield from range(count)
@@ -75,7 +72,7 @@ def maybe_numba_jit(
     - After the jit the original function can be accessed via the `func`
       attribute. This is useful to testing in python mode.
     """
-    # This happens when the decorator is used without parens; use default values
+    # A decorator used without parentheses receives the function here.
     if callable(required):
         return maybe_numba_jit()(required)
 

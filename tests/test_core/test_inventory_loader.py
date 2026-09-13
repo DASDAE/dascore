@@ -662,11 +662,8 @@ class TestOneIdentityOneSpelling:
         with pytest.raises(InvalidInventoryError, match="two extensions"):
             make_inventory(files)
 
-    # Where case is folded, writing the second name replaces the first
-    # rather than joining it, so the collision this refuses cannot be built.
-    # That is the rule holding rather than failing: the guard exists so an
-    # inventory authored where both names fit does not quietly lose one when
-    # it is copied somewhere they do not.
+    # Case-insensitive filesystems cannot create this collision. The guard
+    # prevents losing an entry when inventories move between filesystems.
     @pytest.mark.skipif(FOLDS_CASE, reason="this filesystem holds one of the two")
     def test_case_only_difference(self, make_inventory):
         """A case-insensitive filesystem could not hold both."""

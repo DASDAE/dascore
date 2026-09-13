@@ -1,0 +1,50 @@
+---
+title: Near-Real-Time Processing
+execute:
+  eval: false
+---
+
+Poll a directory spool, process newly indexed patches, and stop after two empty polls. Choose the polling interval for the data cadence and storage latency.
+
+```{python}
+import time
+from pathlib import Path
+
+import dascore as dc
+from dascore.units import s
+
+input_dir = Path("/path/to/incoming/data")
+output_dir = Path("/path/to/results")
+output_dir.mkdir(parents=True, exist_ok=True)
+
+root = dc.spool(input_dir)
+window = step = 10 * s
+poll_seconds = 30
+processed = set()
+empty_polls = 0
+
+while empty_polls < 2:
+    root = root.update()
+    spool = root.sort("time")
+    contents = spool.get_contents()
+    identities = list(zip(contents["source_path"], contents["source_patch_key"]))
+    new_indices = [i for i, identity in enumerate(identities) if identity not in processed]
+
+    if not new_indices:
+        empty_polls += 1
+        time.sleep(poll_seconds)
+        continue
+
+    empty_polls = 0
+    for index in new_indices:
+        identity = identities[index]
+        patch = spool[index]
+        result = patch.rolling(time=window, step=step, engine="numpy").mean()
+        name = f"processed_{len(processed):06d}.h5"
+        result.io.write(output_dir / name, "dasdae")
+        processed.add(identity)
+
+    time.sleep(poll_seconds)
+```
+
+Tracking source identities instead of row positions handles late files that sort before earlier arrivals. For a long-running service, replace the two-poll exit with monitoring and retries, and persist `processed` so restarts do not repeat work.

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import inspect
 import os
+import warnings
 from collections import defaultdict
 from importlib import import_module
 from pathlib import Path
@@ -18,11 +19,16 @@ def _unwrap_obj(obj):
     return obj
 
 
+def _source_obj(obj):
+    """Return what holds an object's source: a generated function's class."""
+    return getattr(obj, "__processor__", None) or obj
+
+
 def _get_file_path(obj):
     """Try to get the file of a python object."""
     obj = _unwrap_obj(obj)
     try:
-        path = inspect.getfile(obj)
+        path = inspect.getfile(_source_obj(obj))
     except TypeError:
         path = ""
     return Path(path)
@@ -86,30 +92,41 @@ def _yield_get_submodules(obj, base_path):
         # this is a directory, look for corresponding __init__.py
         if is_dir and (submod_path / "__init__.py").exists():
             mod_name = str(submod_path.relative_to(base_path)).replace(os.sep, ".")
-            mod = import_module(mod_name)
-            yield mod_name, mod
         elif submod_path.name.endswith(".py") and not is_init:
             mod_name = (
                 str(submod_path.relative_to(base_path))
                 .replace(".py", "")
                 .replace(os.sep, ".")
             )
-            mod = import_module(mod_name)
+        else:
+            continue
+        if (mod := _import_optional_module(mod_name)) is not None:
             yield mod_name, mod
+
+
+def _import_optional_module(mod_name):
+    """Import a project module, skipping one whose optional dependency is absent."""
+    try:
+        return import_module(mod_name)
+    except ModuleNotFoundError as exc:
+        missing = (exc.name or "").split(".")[0]
+        project_root = mod_name.split(".", 1)[0]
+        if not missing or missing == project_root:
+            raise
+        warnings.warn(
+            f"Skipping {mod_name}: its dependency '{exc.name}' is not installed.",
+            stacklevel=2,
+        )
+        return None
 
 
 def assert_documenting_this_checkout(module, repo_path=None) -> None:
     """
-    Raise if the imported module is not the one in this checkout.
+    Raise if the imported module is not this checkout's source.
 
-    Running a script from the scripts directory puts that directory first on
-    the path, not the working directory, so an editable install elsewhere on
-    the machine wins and the docs describe someone else's branch. Prefix the
-    command with `PYTHONPATH=$PWD` to document the checkout you are in.
-
-    An environment nested in the checkout, like a .venv, holds a copy of the
-    package rather than the checkout's own, so being inside the repository is
-    not enough.
+    Use `PYTHONPATH=$PWD` when running scripts: their directory leads sys.path, allowing
+    another editable install to win. Also reject package copies inside nested
+    environments such as .venv.
     """
     if repo_path is None:
         repo_path = Path(__file__).parent.parent
@@ -188,7 +205,7 @@ def parse_project(obj, key=None):
 
     def get_data(obj, key, base_path, parent_is_class):
         """Get data from object."""
-        path = inspect.getfile(obj)
+        path = inspect.getfile(_source_obj(obj))
         base_address = _get_base_address(path, base_path)
         data = extract_data(obj, parent_is_class)
         data["base_path"] = Path(base_path)
@@ -224,21 +241,15 @@ def parse_project(obj, key=None):
                 traverse(obj, data_dict, base_path, f"{key}.{name}", False)
         # then handle non-modules
         else:
-            path = inspect.getfile(obj)
+            path = inspect.getfile(_source_obj(obj))
             base_address = _get_base_address(path, base_path)
 
-            # this is referenced outside of its base address, skip this one.
-            # A prefix test rather than a substring one: the address of
-            # dascore/core/inventory.py is a substring of every key under
-            # dascore/core/inventory_loader.py, so a module named after
-            # another would claim as its own everything it merely imports.
+            # Require an address prefix: substring matching confuses similarly named
+            # modules, such as inventory and inventory_loader.
             if key != base_address and not key.startswith(f"{base_address}."):
                 return
-            # A second module-level name bound to the same object (eg
-            # BaseSpool = Spool) is an alias, not its own entity. The
-            # getmembers call above yields names alphabetically, so
-            # BaseSpool would arrive first, claim the page, and leave
-            # every cross ref to Spool dangling.
+            # Skip aliases so an alphabetically earlier name (BaseSpool) cannot claim
+            # the canonical object page (Spool).
             name = key.split(".")[-1]
             if not parent_is_class and getattr(obj, "__name__", name) != name:
                 return
@@ -248,6 +259,10 @@ def parse_project(obj, key=None):
             if inspect.isclass(obj):
                 for sub_name, sub_obj in inspect.getmembers(obj):
                     if sub_name.startswith("_") or not callable(sub_obj):
+                        continue
+                    # A processor's generated function is documented where
+                    # its module binds it, not as an attribute of the class.
+                    if getattr(sub_obj, "__processor__", None) is obj:
                         continue
                     sub_path = _get_file_path(sub_obj)
                     if str(base_path) not in str(sub_path):

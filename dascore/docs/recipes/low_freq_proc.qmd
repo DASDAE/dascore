@@ -1,0 +1,105 @@
+---
+title: "Low-Frequency Processing"
+---
+
+Low-pass, downsample, and write a spool within a memory budget while trimming filter-edge artifacts.
+
+
+## Inputs
+```{python}
+import tempfile
+from pathlib import Path
+
+import numpy as np
+import dascore as dc
+
+output_data_dir = Path(tempfile.mkdtemp())
+sp = dc.get_example_spool().update().sort("time")
+dt = 1
+cutoff_freq = 1 / (2 * dt)
+filter_safety_factor = 0.9
+memory_limit_MB = 1_000
+tolerance = 1e-3
+```
+
+## Chunk size and edge effects
+
+Reserve space for processing copies and a safety margin. Profile the workflow to tune `processing_factor`; filtering plus interpolation uses about five here.
+
+```{python}
+processing_factor = 5
+memory_safety_factor = 1.2
+patch_size = (
+    memory_limit_MB * dc.units.megabytes / (processing_factor * memory_safety_factor)
+)
+```
+
+Process an impulse and measure where its response exceeds `tolerance` of the peak:
+
+```{python}
+pa_chunked_sp = sp.chunk(time=patch_size, keep_partial=True)[0]
+chunk_size = pa_chunked_sp.seconds
+delta_pa = dc.get_example_patch("delta_patch", dim="time", patch=pa_chunked_sp)
+
+delta_pa_low_passed = delta_pa.pass_filter(time=(None, cutoff_freq * filter_safety_factor))
+new_time_ax = np.arange(
+    delta_pa.get_coord("time").min(),
+    delta_pa.get_coord("time").max(),
+    np.timedelta64(dt, "s"),
+)
+delta_pa_lfp = delta_pa_low_passed.interpolate(time=new_time_ax)
+
+data_abs = np.abs(delta_pa_lfp.data)
+threshold = np.max(data_abs) * tolerance
+ind = data_abs > threshold
+ind_1 = np.where(ind)[1][0]
+ind_2 = np.where(ind)[1][-1]
+
+delta_pa_lfp_length = delta_pa_lfp.seconds 
+time_ax_abs = (new_time_ax - new_time_ax[0]) / np.timedelta64(1, "s")
+time_ax_centered = time_ax_abs - delta_pa_lfp_length // 2 
+
+edge = max(np.abs(time_ax_centered[ind_1]), np.abs(time_ax_centered[ind_2]))
+
+if np.ceil(edge) >= chunk_size / 2:
+    raise ValueError(
+        f"The calculated `edge` value ({edge:.2f} seconds) is greater than half of the processing patch size "
+        f"({chunk_size:.2f} seconds). To resolve this and increase efficiency, consider one of the following:\n"
+        "- Increase `memory_size` to allow for a larger processing window.\n"
+        "- Increase `tolerance` to reduce the sensitivity of artifact detection."
+    )
+```
+
+
+## Process and write
+```{python}
+
+sp_chunked_overlap = sp.chunk(time=patch_size, overlap=2 * edge, keep_partial=True)
+
+for patch in sp_chunked_overlap:
+    pa_low_passed = patch.pass_filter(time=(..., cutoff_freq * filter_safety_factor))
+    new_time_ax = np.arange(
+        pa_low_passed.get_coord("time").min(),
+        pa_low_passed.get_coord("time").max(),
+        np.timedelta64(dt, "s"),
+    )
+    pa_lfp = (
+        pa_low_passed.interpolate(time=new_time_ax)
+        .update_coords(time_step=dt)
+        .select(time=(edge, -edge), relative=True)
+    )
+    
+    pa_lf_name = pa_lfp.get_patch_name()
+    path = output_data_dir / f"{pa_lf_name}.h5"
+    pa_lfp.io.write(path, "dasdae")
+```
+
+Select a bounded time or distance range before merging when the complete result may exceed memory.
+
+## Visualize
+```{python}
+sp_lf = dc.spool(output_data_dir) 
+sp_lf_merged = sp_lf.chunk(time=None, conflict="keep_first")
+pa_lf_merged = sp_lf_merged[0]
+pa_lf_merged.viz.waterfall()
+```

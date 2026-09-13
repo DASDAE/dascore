@@ -38,18 +38,10 @@ def kurtosis(
 ) -> PatchType:
     """
     Compute kurtosis along a patch dimension.
-    Background seismic noise is approximately Gaussian. A seismic arrival
-    (especially a P-wave onset) produces a transient, impulsive signal with
-    a sharply peaked amplitude distribution. Kurtosis — the normalized 4th
-    statistical moment — becomes strongly positive during such impulsive
-    arrivals.
 
-    Here, kurtosis is determined in a window whose length is given as a
-    dimension keyword argument (e.g. ``time=0.5``). We then determine
-    kurtosis of the amplitude distribution in that window.
-    Higher kurtosis thus indicates high amplitude outliers. This in turn
-    can be interpreted as a signal arrival.
-
+    Seismic arrivals are more impulsive than approximately Gaussian background
+    noise, so their windowed amplitude distribution has higher kurtosis. This
+    makes kurtosis useful for detecting arrivals, especially P-wave onsets.
 
     Parameters
     ----------
@@ -58,16 +50,12 @@ def kurtosis(
     samples
         {sample_explanation}
     recursive
-        If True, use recursive pseudo-kurtosis: Instead of computing kurtosis
-        in a sliding window (computationally expensive for continuous data),
-        @langet2014 propose a recursive formulation. This acts like an
-        exponentially weighted moving estimator, so the algorithm updates continuously
-        without storing long windows of data.
-        If False, the common kurtosis calculation is used
+        Use the recursive pseudo-kurtosis of @langet2014, an exponentially
+        weighted estimator that avoids storing sliding windows. False computes
+        ordinary windowed kurtosis.
     **kwargs
-        Used to specify the dimension and window length, e.g. ``time=0.5``
-        computes kurtosis in 0.5 second windows along the time dimension.
-        Units are also supported, e.g. ``distance=10 * dascore.units.get_unit('m')``.
+        Dimension and window length, such as ``time=0.5`` or
+        ``distance=10 * dascore.units.m``.
 
     Returns
     -------
@@ -76,55 +64,18 @@ def kurtosis(
 
     Examples
     --------
-    1) Kurtosis of example event
-    >>> import dascore as dc
-    >>>
-    >>> p = dc.examples.get_example_patch('example_event_2')
-    >>>
-    >>> k = p.kurtosis(time=0.002)
-    >>> ax = k.viz.waterfall(cmap = 'inferno')
-
-    2) To better understand how kurtosis works, we replace the data with
-    normal-distributed random data. We then amplify a block of those
-    data. The modified data has a broader tail, since more high-amplitude
-    values are in the dataset. The kurtosis picks the onset accurately.
-
     >>> import dascore as dc
     >>> import numpy as np
-    >>> import matplotlib.pyplot as plt
+    >>> patch = dc.get_example_patch("example_event_2")
+    >>> kurtosis = patch.kurtosis(time=0.002)
+    >>> _ = kurtosis.viz.waterfall(cmap="inferno")
     >>>
-    >>> p = dc.examples.get_example_patch('example_event_2')
-    >>>
-    >>> # replace event data with normal-distributed random values
+    >>> # Amplify a block of Gaussian noise to create an impulsive onset.
     >>> rng = np.random.default_rng()
-    >>> data = rng.normal(loc=0, scale=1, size=p.data.shape)
-    >>> data0 = data.copy() # original
-    >>> data[:,300:450] = data[:, 300:450]*3 #modified
-    >>>
-    >>> orig = p.update(data=data0)
-    >>> modi = p.update(data=data)
-    >>>
-    >>> # calculate kurtosis on modified data
-    >>> k = modi.kurtosis(time=0.002)
-    >>>
-    >>> fix, axs = plt.subplots(2,2, figsize=(10,6), layout='constrained')
-    >>> ax = orig.viz.waterfall(cmap = 'RdBu', ax=axs[0,0])
-    >>> _ = ax.set_title('Original')
-    >>>
-    >>> ax = modi.viz.waterfall(cmap = 'RdBu', ax=axs[0,1])
-    >>> _ = ax.set_title('Modified')
-    >>>
-    >>> ax = k.viz.waterfall(cmap = 'inferno_r', scale=[0, .4], ax=axs[1,1])
-    >>> _ = ax.set_title('Kurtosis')
-    >>>
-    >>> # plot histograms of both datasets. Note the modified has broader tail!
-    >>> _ = axs[1,0].hist(data.ravel(),  100, alpha=0.5, label='Modified', density=True)
-    >>> _ = axs[1,0].hist(data0.ravel(), 100, alpha=0.5, label='Original', density=True)
-    >>> _ = axs[1,0].legend(loc='upper right')
-    >>> _ = axs[1,0].grid('on')
-    >>> _ = axs[1,0].set_title('Amplitude Distributions')
-    >>> _ = axs[1,0].set_xlabel('Amplitude')
-    >>> _ = axs[1,0].set_ylabel('Probability of occurrence')
+    >>> data = rng.normal(size=patch.shape)
+    >>> data[:, 300:450] *= 3
+    >>> synthetic = patch.update(data=data)
+    >>> onset = synthetic.kurtosis(time=0.002)
     """
     # Imported here (not at module scope) to keep numba out of `import dascore`.
     from dascore.transform._kurtosis_kernels import (  # noqa: PLC0415

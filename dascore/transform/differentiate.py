@@ -21,7 +21,6 @@ from dascore.utils.patch import (
 
 def _grad_diff(ar, axes, dxs):
     """Perform differentiation on the data using np.grad."""
-    # iteratively apply diff along each axis.
     for ax, dx in zip(axes, dxs):
         ar = np.gradient(ar, dx, axis=ax, edge_order=2)
     return ar
@@ -29,7 +28,6 @@ def _grad_diff(ar, axes, dxs):
 
 def _findiff_diff(data, axis, order, dx):
     """Use findiff to get differences along specified dimensions."""
-    # If more than one axis, need to make tuples.
     findiff = optional_import("findiff")
     if len(axis) > 1:
         orders = [1] * len(axis)  # always first order (first derivative).
@@ -55,7 +53,7 @@ def _strided_diff(order, patch, axes, dx_or_spacing, step):
     if len(axes) > 1:
         msg = "Step in patch.differentiate can only be used along one axis."
         raise ParameterError(msg)
-    new_data = np.empty_like(patch.data)
+    new_data = None
     dx_or_space = dx_or_spacing[0]
     for step_ in range(step):
         current_slice = slice(step_, None, step)
@@ -67,11 +65,14 @@ def _strided_diff(order, patch, axes, dx_or_spacing, step):
         else:
             _dx_or_space = dx_or_space * step
         sub = _get_diff(order, patch.data[slicer], axes, [_dx_or_space])
+        if new_data is None:
+            new_data = np.empty_like(patch.data, dtype=sub.dtype)
         new_data[slicer] = sub
+    assert new_data is not None
     return new_data
 
 
-@patch_function(version="1.1")
+@patch_function(version="1.2")
 def differentiate(
     patch: PatchType,
     dim: str | Sequence[str] | None,
@@ -107,6 +108,9 @@ def differentiate(
     order != 2, the optional package findiff must be installed in which case
     order is interpreted as accuracy ("order" means order of differentiation
     in that package).
+
+    Strided output uses the derivative backend's result dtype, including
+    floating-point results for integer input and complex-valued derivatives.
 
     The second order first derivative, for an evenly spaced coordinate,
     is defined as:
@@ -153,7 +157,6 @@ def differentiate(
     # This avoids an extra copy of the array so probably merits its own case.
     else:
         new_data = _get_diff(order, patch.data, axes, dx_or_spacing)
-    # update units and what the data now is
     data_units = _get_data_units_from_dims(patch, dims, truediv)
     data_type = _get_data_type_from_dims(patch, dims, differentiate=True)
     attrs = patch.attrs.update(data_units=data_units, data_type=data_type)

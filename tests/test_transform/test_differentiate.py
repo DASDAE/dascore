@@ -107,6 +107,40 @@ class TestDifferentiateOrder2:
 class TestStep:
     """Tests for step != 1."""
 
+    @pytest.mark.parametrize(
+        "dtype",
+        [
+            np.int8,
+            np.uint8,
+            np.int64,
+            np.float32,
+            np.float64,
+            np.complex64,
+            np.complex128,
+        ],
+    )
+    @pytest.mark.parametrize("step", [2, 3])
+    @pytest.mark.parametrize("order", [2, 4])
+    def test_linear_dtype(self, dtype, step, order):
+        """Strided linear derivatives retain fractions and backend precision."""
+        if order != 2:
+            pytest.importorskip("findiff")
+        samples = np.arange(30, dtype=dtype)
+        slope = 0.5
+        if np.issubdtype(dtype, np.complexfloating):
+            samples = samples * (1 + 2j)
+            slope = 0.5 + 1j
+        patch = dc.Patch(
+            data=samples,
+            coords={"distance": np.arange(30) * 2},
+            dims=("distance",),
+        )
+        out = patch.differentiate("distance", step=step, order=order)
+        ordinary = patch.differentiate("distance", order=order)
+        np.testing.assert_allclose(out.data, slope, rtol=1e-5, atol=1e-6)
+        assert out.data.dtype == ordinary.data.dtype
+        assert out.coords == patch.coords
+
     def test_multi_dim_raises(self, random_patch):
         """Can only use step on a single dimension."""
         msg = "can only be used along one axis"

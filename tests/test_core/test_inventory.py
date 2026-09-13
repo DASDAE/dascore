@@ -574,12 +574,10 @@ class TestComponentPlacement:
         assert marker.new(distance_min=moved).interval == (moved, moved)
 
     def test_stating_an_end_gives_a_marker_a_length(self):
-        """Setting the end is not the mirror of moving the marker.
+        """
+        Setting a marker end creates a length; moving its start moves the marker.
 
-        A marker's end is filled in, so moving the start carries it. The
-        start is the author's, so stating an end is them giving the item a
-        length rather than moving it -- and an end before the start is
-        refused here as on every other interval.
+        An end before the start is rejected.
         """
         marker = inv.Connector(distance_min=5.0)
         assert marker.new(distance_max=8.0).interval == (5.0, 8.0)
@@ -640,12 +638,8 @@ class TestComponentPlacement:
         assert path.optical_length == 0.0
 
     def test_optical_length_stays_selectable(self):
-        """A computed length is still a fact about the component.
-
-        `optical_length` is a property rather than a field now, so it is
-        only in the vocabulary because the model names it as one it
-        derives. The bounds it comes from are deliberately not: they place
-        the component rather than say anything about the fiber in it.
+        """
+        The derived optical_length property remains selectable; placement bounds do not.
         """
         coords = build_inventory().get_names().coords
         assert "optical_components.optical_length" in coords
@@ -1999,12 +1993,7 @@ class TestDisplay:
 
     def test_a_field_value_which_holds_a_newline(self):
         """
-        Every line of a model's line is set in, not just the first.
-
-        A description is free text and is routinely written over more
-        than one line. Indented only on its first, the rest falls to
-        column zero and reads as a block of its own -- which is the
-        misreading the indentation exists to prevent.
+        Indent every line of a multiline field value to keep it within its model.
         """
         array = inv.FiberArray(code="FA1", description="line one\nline two")
         network = inv.Network(code="XT", fiber_arrays=(array,))
@@ -3015,12 +3004,8 @@ class TestSerializationIsLossless:
         assert dc.inventory(other.io.to_yaml()).schema_version == default + 1
 
     def test_empty_label_value_is_rejected(self):
-        """An empty value would have to survive serialization to mean anything.
-
-        It used to be legal, and this guarded it against being pruned and
-        reloading as a boolean flag. It is now rejected outright: it states
-        nothing, and a string coordinate spells an uncovered channel with
-        the empty string, so a covered one could not be told apart.
+        """
+        Reject empty labels, which would be indistinguishable from uncovered channels.
         """
         with pytest.raises(ValidationError, match="may not be the empty string"):
             inv.OpticalPathLabel(
@@ -3125,13 +3110,9 @@ class TestGetNames:
 
     def test_attrs_match_the_reader_vocabulary(self, names):
         """
-        The names read off the models are the ones readers write.
+        Enrichment and readers use the same inventory attribute names.
 
-        INVENTORY_ATTRS is what a reader puts in patch attrs and this is
-        what enrichment could copy there; the two being one vocabulary is
-        what keeps a header value and an enriched value one attr. The
-        data-state trio is the only difference: enrichment copies it when
-        asked by name rather than in the blanket form.
+        The data-state trio is copied only when explicitly requested.
         """
         data_state = {"data_type", "data_category", "data_units"}
         assert set(names.attrs) == set(INVENTORY_ATTRS) | data_state

@@ -50,6 +50,7 @@ def tau_p(
     ...     .pass_filter(time=(..., 300))
     ...     .tau_p(np.arange(1000,6000,10))
     ...     .transpose('time','slowness')
+    ...     .sort_coords('slowness')
     ... )
     >>> ax = taup_patch.viz.waterfall(show=False, cbar=False)
     >>> _ = taup_patch.viz.waterfall(ax=ax)

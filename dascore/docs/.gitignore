@@ -1,0 +1,9 @@
+.quarto/
+_site/*
+
+/.quarto/
+
+**/*.quarto_ipynb
+
+# Standalone renders are generated alongside their source pages.
+**/*.html

@@ -9,7 +9,7 @@ import sys
 import warnings
 from collections import namedtuple
 from collections.abc import Callable, Iterable, Mapping, Sequence
-from typing import Literal, Protocol, cast, overload
+from typing import Any, Literal, Protocol, cast, overload
 
 import numpy as np
 import pandas as pd
@@ -30,10 +30,12 @@ from dascore.exceptions import (
     CoordMergeError,
     IncompatiblePatchError,
     ParameterError,
+    PatchAttributeError,
     PatchCoordinateError,
+    PatchDataError,
     UnitError,
 )
-from dascore.units import carries_units, convert_units, get_quantity
+from dascore.units import get_quantity
 from dascore.utils.array_api import (
     asarray_like,
     backend_name,
@@ -51,39 +53,136 @@ from dascore.utils.attrs import (
 from dascore.utils.coordmanager import merge_coord_managers
 from dascore.utils.deprecate import deprecate
 from dascore.utils.docs import compose_docstring
+from dascore.utils.gaps import GapTolerance
+from dascore.utils.identity import (
+    _ID_FIELDS,
+    advance,
+    fold_patch_ids,
+    fold_processing_ids,
+    ids_enabled,
+    operation_fingerprint,
+    patch_id_of,
+    processing_id_of,
+    stamp_combination,
+)
 from dascore.utils.mapping import FrozenDict
 from dascore.utils.misc import (
     _apply_union_indexers,
     _get_nullish,
     _merge_tuples,
-    get_middle_value,
     iterate,
     to_object_array,
     validate_warn_level,
     warn_or_raise,
     yield_sub_sequences,
 )
+from dascore.utils.patch_registry import fingerprint_call, register_patch_function
 from dascore.utils.paths import is_memory_uri
 from dascore.utils.time import to_float
-from dascore.workflow.builtin import Concatenate, Stack
-from dascore.workflow.checks import attr_type, check_patch_attrs, check_patch_coords
-from dascore.workflow.identity import (
-    _ID_FIELDS,
-    advance,
-    fold_patch_ids,
-    fold_processing_ids,
-    ids_enabled,
-    patch_id_of,
-    processing_id_of,
-    stamp_combination,
-)
-from dascore.workflow.processor import (
-    PatchOp,
-    fingerprint_call,
-    register_patch_function,
-)
 
 _DimAxisValue = namedtuple("_DimAxisValue", ["dim", "axis", "value"])
+
+# What a required-attrs declaration may be: names, or names against values.
+attr_type = dict[str, Any] | str | Sequence[str] | None
+
+
+def check_patch_coords(
+    patch: PatchType,
+    dims: Sequence[str] | None = None,
+    coords: Sequence[str] | None = None,
+) -> PatchType:
+    """
+    Check that a patch has the required coordinates, else raise.
+
+    Parameters
+    ----------
+    patch
+        The input patch
+    dims
+        A dimension name, or a sequence of them.
+    coords
+        A coordinate name, or a sequence of them.
+
+    Raises
+    ------
+    PatchCoordinateError
+        If the patch is missing any of them.
+    """
+    # Each half is skipped when nothing is declared, which is the common
+    # case: building the patch's dim and coord sets is the whole cost here,
+    # and this runs in front of every patch function.
+    # `iterate` rather than the value itself: a single name is spelled as a
+    # string everywhere else in DASCore, and iterating one gives characters.
+    missing = set()
+    if dims:
+        missing |= set(iterate(dims)) - set(patch.dims)
+    if coords:
+        missing |= set(iterate(coords)) - set(patch.coords.coord_map)
+    if missing:
+        msg = f"patch is missing required coordinates: {tuple(missing)}"
+        raise PatchCoordinateError(msg)
+    return patch
+
+
+def check_patch_data(patch: PatchType) -> PatchType:
+    """
+    Check that a patch holds data, else raise.
+
+    A patch built without data (`Patch.drop_data`) describes data; it cannot
+    be processed, even by an operation which would change nothing.
+
+    Raises
+    ------
+    PatchDataError
+        If the patch was built without data.
+    """
+    if getattr(patch, "_data", True) is None:
+        msg = (
+            "This patch was built without data, so it has none to use. "
+            "Attach data with patch.new(data=...) first."
+        )
+        raise PatchDataError(msg)
+    return patch
+
+
+def check_patch_attrs(patch: PatchType, required_attrs: attr_type) -> PatchType:
+    """
+    Check for expected attributes.
+
+    Parameters
+    ----------
+    patch
+        The patch to validate
+    required_attrs
+        The expected attrs. Can be a name, a sequence of them, or a mapping.
+        If a mapping, also check that the values are equal.
+
+    Raises
+    ------
+    PatchAttributeError
+        If the patch is missing any of them, or holds a different value.
+    """
+    if required_attrs is None:
+        return patch
+    # test that patch attr mapping is equal
+    held = dict(patch.attrs)
+    wanted = (
+        set(required_attrs)
+        if isinstance(required_attrs, Mapping)
+        else set(iterate(required_attrs))
+    )
+    # Asked before any value is read: an attr the patch does not carry is a
+    # missing attr, not a lookup error from the middle of a comprehension.
+    if missing := wanted - set(held):
+        msg = f"Patch is missing the following attributes: {missing}"
+        raise PatchAttributeError(msg)
+    if isinstance(required_attrs, Mapping):
+        sub = {i: held[i] for i in required_attrs}
+        if sub != dict(required_attrs):
+            msg = f"Patch's attrs {sub} are not required attrs: {required_attrs}"
+            raise PatchAttributeError(msg)
+    return patch
+
 
 # Longest repr a single history argument may contribute.
 _MAX_HISTORY_VALUE_LEN = 120
@@ -138,18 +237,15 @@ def _func_and_kwargs_str(func: Callable, patch, *args, **kwargs) -> str:
     callargs.pop("patch", None)
     callargs.pop("self", None)
     kwargs_ = callargs.pop("kwargs", {})
-    arguments = []
-    arguments += [
-        f"{k}={_format_values(v)!r}" for k, v in callargs.items() if v is not None
-    ]
-    arguments += [
-        f"{k}={_format_values(v)!r}" for k, v in kwargs_.items() if v is not None
-    ]
-    arguments.sort()
-    out = f"{_func_name(func)}("
-    if arguments:
-        out += f"{','.join(arguments)}"
-    return out + ")"
+    return _call_str(_func_name(func), {**callargs, **kwargs_})
+
+
+def _call_str(name: str, arguments: Mapping) -> str:
+    """Spell a call for the history: `name(key=value,...)`, None values left out."""
+    spelled = sorted(
+        f"{k}={_format_values(v)!r}" for k, v in arguments.items() if v is not None
+    )
+    return f"{name}({','.join(spelled)})"
 
 
 def _get_history_str(
@@ -204,16 +300,12 @@ class _PatchFunction(Protocol):
 
     The decorator attaches references back to the function it wrapped, so
     callers can skip the patch-function machinery when calling it again. It
-    also attaches `op`, which builds the operation this function is, and
-    `__version__`, which that operation is declared at.
+    also attaches `__version__`, which the operation is declared at.
     """
 
     func: Callable
     raw_function: Callable
-    op: Callable
-    # What the decorator was told, so a registered processor can be held
-    # to the same requirements rather than declaring its own in parallel.
-    _declared: dict
+    _history: str | None
     __version__: str
     __wrapped__: Callable
 
@@ -230,8 +322,6 @@ def _stamp(patch, attrs, patch_func, args, kwargs):
     with `getattr`, because attrs unpickled from before these fields
     existed have neither.
     """
-    members = [patch.attrs]
-    members += [x.attrs for x in (*args, *kwargs.values()) if isinstance(x, dc.Patch)]
     try:
         fingerprint = fingerprint_call(patch_func, args, kwargs)
     except Exception:
@@ -239,6 +329,18 @@ def _stamp(patch, attrs, patch_func, args, kwargs):
         # the serializer cannot encode is a reason to say nothing about
         # this call, never a reason to fail a call which otherwise worked.
         return attrs
+    others = [x for x in (*args, *kwargs.values()) if isinstance(x, dc.Patch)]
+    return _stamp_ids(patch, attrs, fingerprint, others)
+
+
+def _stamp_ids(patch, attrs, fingerprint: str, others=()):
+    """
+    Return attrs whose ids say an operation with `fingerprint` made them.
+
+    `patch` and any `others` are the patches the operation was given; all
+    of them count towards which data the result is.
+    """
+    members = [patch.attrs, *(x.attrs for x in others)]
     return attrs.update(
         # Carried from the inputs rather than from whatever the body
         # returned: filtering data does not make it other data, and a
@@ -251,9 +353,33 @@ def _stamp(patch, attrs, patch_func, args, kwargs):
     )
 
 
-def _op_from_call(patch_func, *args, **kwargs):
-    """Return the operation a call to a patch function is."""
-    return PatchOp.from_call(patch_func, args, kwargs)
+def record_call(
+    out: dc.Patch,
+    patch: dc.Patch,
+    patch_func: Callable,
+    args: tuple,
+    kwargs: Mapping[str, object],
+) -> dc.Patch:
+    """
+    Return ``out`` carrying what a call to ``patch_func`` records.
+
+    The history string and the two ids, in one new attrs object: an
+    operation should cost one new patch, not one per thing it stamps.
+
+    Public because what an operation records must not depend on how it
+    was carried out: a spool which pushes a selection into the read
+    still has to record the `select` it then skips.
+    """
+    func = getattr(patch_func, "raw_function", patch_func)
+    # what the function itself declared, so a call recorded here says
+    # exactly what the same call made directly would (`select` records
+    # its ids and no history, and must here too)
+    history = getattr(patch_func, "_history", "full")
+    hist_str = _get_history_str(patch, func, *args, _history=history, **kwargs)
+    attrs = _maybe_add_history_str(out.attrs, hist_str)
+    if ids_enabled():
+        attrs = _stamp(patch, attrs, patch_func, args, kwargs)
+    return out if attrs is out.attrs else out.update(attrs=attrs)
 
 
 def _to_numpy_arg(obj):
@@ -316,102 +442,59 @@ def patch_function(
     Parameters
     ----------
     required_dims
-        A dimension name, or a sequence of them, which must be found in the
-        Patch.
+        Required dimension name or names. Missing dimensions raise
+        `PatchCoordinateError`.
     required_coords
-        A coordinate name, or a sequence of them, which must be found in the
-        Patch.
+        Required coordinate name or names. Missing coordinates raise
+        `PatchCoordinateError`.
     required_attrs
-        An attr name, a sequence of them, or a mapping of names to the values
-        the Patch must hold for them.
+        Required attribute name or names, or a mapping of names to values.
+        Missing or mismatched attributes raise `PatchAttributeError`.
     history
-        Specifies how to track history on Patch.
-            Full - Records function name and str version of input arguments.
-            method_name - Only records method name. Useful if args are long.
-            None - Function call is not recorded in history attribute.
+        ``"full"`` records the function and arguments, ``"method_name"``
+        records only its name, and None records nothing.
     validate_call
-        If True, use pydantic to validate the function call. This can save
-        quite a lot of code in validation checks, but does have some overhead.
+        Whether Pydantic validates calls. This reduces manual checks but adds
+        overhead.
         See [validate_call](https://docs.pydantic.dev/latest/api/validate_call/).
     data_type
-        Controls the output patch's ``data_type`` attr. If None, leave the
-        returned patch's ``data_type`` unchanged. Otherwise, set to specified
-        value. Use an empty string ("") to clear.
+        Output ``data_type``. None preserves it; an empty string clears it.
     version
-        The version of the operation. Bump it when the same arguments should
-        mean a different answer, so that fingerprints recorded against the
-        old behaviour do not name the new one.
+        Operation version. Bump it when the same arguments mean a different
+        result, keeping new fingerprints distinct from old ones.
 
     Examples
     --------
     >>> import dascore as dc
     >>>
-    >>> # 1. A patch method which requires dimensions (time, distance)
-    >>> @dc.patch_function(required_dims=('time', 'distance'))
+    >>> @dc.patch_function(required_dims=("time", "distance"))
     ... def do_something(patch):
-    ...     ...   # raises a PatchCoordsError if patch doesn't have time,
-    ...     #  distance
+    ...     return patch
     >>>
-    >>> # 2. A patch method which requires an attribute 'data_type' == 'DAS'
-    >>> @dc.patch_function(required_attrs={'data_type': 'DAS'})
+    >>> @dc.patch_function(required_attrs={"data_type": "DAS"})
     ... def do_another_thing(patch):
-    ...     ...  # raise PatchAttributeError if patch doesn't have attribute
-    ...     # called "data_type" or its values is not equal to "DAS".
+    ...     return patch
     >>>
-    >>> # 3. A patch method which does type checking on inputs.
-    >>> # The `Field` instance can require various data properties (like ranges)
-    >>> from typing_extensions import Annotated, Literal
     >>> from pydantic import Field
     >>> @dc.patch_function(validate_call=True)
-    ... def do_type_thing(
-    ...     patch,
-    ...     int_le_10_ge_1: int = Field(ge=1, le=10, default=1),
-    ...     option: Literal["min", "max", None] = None,
-    ... ):
-    ...     ...
+    ... def validated(patch, count: int = Field(ge=1, le=10, default=1)):
+    ...     return patch
     >>>
-    >>> # 4. A patch method which sets the output data_type.
-    >>> @dc.patch_function(data_type="strain_rate")
-    ... def do_strain_rate(patch):
-    ...     ...
-    >>>
-    >>> # 5. A patch method which clears the output data_type.
-    >>> @dc.patch_function(data_type="")
-    ... def do_unknown_quantity(patch):
-    ...     ...
-    >>>
-    >>> # 6. A patch method whose body is written to the array API standard,
-    >>> # so it runs on any array backend rather than only on numpy.
+    >>> # Array API code supports non-NumPy backends.
     >>> from dascore.utils.array_api import array_namespace
     >>> @dc.patch_function()
-    ... def do_portable_thing(patch):
+    ... def absolute(patch):
     ...     xp = array_namespace(patch.data)
     ...     return patch.new(data=xp.abs(patch.data))
-    >>>
-    >>> # 7. Every patch function builds the operation it is with `.op`:
-    >>> # the same call said as a task, which can be compared,
-    >>> # fingerprinted, and written to a file.
-    >>> patch = dc.get_example_patch()
-    >>> op = dc.proc.normalize.op(dim="time")
-    >>> assert op(patch).equals(patch.normalize(dim="time"))
-    >>> assert op == dc.proc.normalize.op(dim="time")
 
     Notes
     -----
-    - The original function can still be accessed with the raw_function
-      attribute. This may be useful for avoiding calling the patch_func
-      machinery multiple times from within another patch function.
+    ``raw_function`` exposes the undecorated function, which avoids applying
+    this machinery twice inside another patch function.
 
-    - The decorated function also carries ``op``, which builds the
-      [PatchOp](`dascore.workflow.processor.PatchOp`) a call to it is:
-      ``dc.proc.normalize.op(dim="time")``. The call is bound against the
-      signature, so a positional and a keyword spelling of one call are one
-      operation with one fingerprint.
-
-    - If using `PatchType` or `SpoolType` type variables from the
-      [constants module](`dascore.constants`), make sure dascore is imported
-      as dc at the top of the file where the patch function is defined so
-      the forward refs can be resolved properly for type checking.
+    When annotations use `PatchType` or `SpoolType` from
+    [constants](`dascore.constants`), import dascore as ``dc`` in that module
+    so their forward references resolve.
     """
     # Handled before the wrapper is built so the rest of this function sees
     # required_dims as the dimension names it is everywhere else, not as the
@@ -426,6 +509,7 @@ def patch_function(
 
         @functools.wraps(func)
         def _func(patch, *args, **kwargs):
+            check_patch_data(patch)
             check_patch_coords(
                 patch,
                 dims=required_dims,
@@ -436,23 +520,11 @@ def patch_function(
             attr_updates = {}
             if data_type is not None:
                 attr_updates["data_type"] = data_type
-            # attach history string. Need to consider something a bit less hacky.
+            # Only when something new came back: an operation which
+            # handed the patch straight through did nothing, and nothing
+            # is what it records.
             if out is not patch and hasattr(out, "attrs"):
-                hist_str = _get_history_str(
-                    patch, func, *args, _history=history, **kwargs
-                )
-                attrs = _maybe_add_history_str(out.attrs, hist_str)
-                # What was done, folded into what the input carried, into
-                # the same attrs object the history went into: an operation
-                # should cost one new patch, not one per thing it stamps.
-                #
-                # Only when something new came back: an operation which
-                # handed the patch straight through did nothing, and nothing
-                # is what it records.
-                if ids_enabled():
-                    attrs = _stamp(patch, attrs, patch_func, args, kwargs)
-                if attrs is not out.attrs:
-                    out = out.update(attrs=attrs)
+                out = record_call(out, patch, patch_func, args, kwargs)
             if attr_updates and hasattr(out, "attrs"):
                 out = out.update_attrs(**attr_updates)
             return out
@@ -465,25 +537,12 @@ def patch_function(
         patch_func.raw_function = getattr(func, "raw_function", func)
         patch_func.__wrapped__ = func
         patch_func.__version__ = version
-        # What the decorator was told, kept where a registered processor
-        # can find it. `register_implementation` reconciles the two, so
-        # the class and the decorator cannot drift apart in silence.
-        patch_func._declared = {
-            "required_dims": required_dims,
-            "required_coords": required_coords,
-            "required_attrs": required_attrs,
-            "data_type": data_type,
-            "history": history,
-            "validate_call": validate_call,
-        }
-        # Registered as it is decorated, so a function is nameable in a
-        # document exactly when its module has been imported. A function
-        # defined inside a call takes no tag; `op` says so if it is asked.
+        # How a call is written into history; `record_call` reads it.
+        patch_func._history = history
+        # Registered as it is decorated, so a function is resolvable by tag
+        # exactly when its module has been imported. A function defined
+        # inside a call takes no tag.
         register_patch_function(patch_func)
-        # `op` builds the operation a call to this function is. A partial
-        # rather than a lambda so it pickles, and so the wrapper carries no
-        # closure of its own.
-        patch_func.op = functools.partial(_op_from_call, patch_func)
         return patch_func
 
     return _wrapper
@@ -592,22 +651,6 @@ def _get_merge_dim(df) -> str | None:
     return dims_vary[dims_vary].index[0]
 
 
-def _middle_step(coords, dim, target_units):
-    """Return the middle member step expressed in the merged coord's units."""
-    steps = []
-    for manager in coords:
-        coord = manager.coord_map[dim]
-        step = coord.step
-        if pd.isnull(step):
-            continue
-        if target_units is not None and coord.units is not None:
-            step = convert_units(step, to_units=target_units, from_units=coord.units)
-        steps.append(step)
-    if not steps:
-        return None
-    return get_middle_value(np.asarray(steps))
-
-
 def _split_coord_merge_kwargs(merge_kwargs) -> tuple[dict, dict]:
     """Split spool merge kwargs into (attr kwargs, coord kwargs)."""
     merge_kwargs = dict(merge_kwargs or {})
@@ -627,11 +670,11 @@ def _get_merged_coord(
     The merged dimension coordinate is built by truth-preserving
     concatenation of the member coords (exactly contiguous members fuse to
     a plain range; recorded seams otherwise), then — when `snap_coords` —
-    simplified with bounded error: no value moves more than
-    `tolerance * step`, or than the tolerance itself when it is a
-    quantity or timedelta, which states the bound outright. Merges whose
-    gaps exceed that stay segmented (honestly non-uniform) rather than
-    being relabeled.
+    simplified with bounded error: no value moves more than the tolerance
+    allows, `tolerance` steps for a count or the excess itself for a
+    quantity or timedelta (see `dascore.utils.gaps.GapTolerance`). Merges
+    whose gaps exceed that stay segmented (honestly non-uniform) rather
+    than being relabeled.
     """
     from dascore.core.coords import concat_coords  # noqa: PLC0415
 
@@ -643,13 +686,8 @@ def _get_merged_coord(
         return merge_coord_managers(
             coords, dim=merge_dim, drop_conflicting=drop_conflicting
         )
-    step = _middle_step(coords, merge_dim, merged.units)
-    if snap_coords and carries_units(tolerance):
-        # A tolerance which states its own units needs no step: simplify
-        # reads it in the coordinate's units itself.
-        merged = merged.simplify(tolerance)
-    elif snap_coords and step is not None:
-        merged = merged.simplify(tolerance * np.abs(step))
+    if snap_coords:
+        merged = merged.simplify(GapTolerance.from_user(tolerance, merge_dim))
     # Passing the pre-built dim coord avoids materializing the members'
     # concatenated values only to discard them.
     return merge_coord_managers(
@@ -931,10 +969,11 @@ def get_dim_sampling_rate(patch: PatchType, dim: str) -> float:
     [CoordDataError](`dascore.exceptions.CoordDataError`) if patch is not
     evenly sampled along desired dimension.
     """
-    d_dim = patch.coords.coord_map[dim].step
+    coord = patch.coords.coord_map[dim]
+    d_dim = coord.step
     if isinstance(d_dim, np.timedelta64):
         d_dim = d_dim / np.timedelta64(1, "s")
-    if pd.isnull(d_dim):
+    if pd.isnull(d_dim) or not coord.evenly_sampled:
         # get the name of the calling function
         calling_function = inspect.getframeinfo(sys._getframe(1))[2]
         msg = (
@@ -1638,7 +1677,7 @@ def concatenate_patches(
     - [`Spool.chunk`](`dascore.Spool.chunk`) performs a similar operation
       but accounts for coordinate values.
     - See also the
-      [chunk section of the spool tutorial](`docs/tutorial/spool`#concatenate)
+      [chunk section of the spool tutorial](`dascore/docs/tutorial/spool`#concatenate)
     """
 
     def _get_dim_and_value(kwargs):
@@ -1680,12 +1719,15 @@ def concatenate_patches(
 
     dim, val = _get_dim_and_value(kwargs)
     patches = get_compatible_patches(patches, dim, check_behavior)
-    fingerprint = Concatenate.from_kwargs(check_behavior=check_behavior, **kwargs)
+    fingerprint = operation_fingerprint(
+        "Concatenate",
+        {"arguments": tuple(kwargs.items()), "check_behavior": check_behavior},
+    )
     out = []
     for patch_list in yield_sub_sequences(patches, val):
         # The members agree on kind and units, so the first states them.
         attrs = patch_list[0].attrs
-        out.append(_concatenate_group(patch_list, dim, attrs, fingerprint.fingerprint))
+        out.append(_concatenate_group(patch_list, dim, attrs, fingerprint))
     return out
 
 
@@ -1897,10 +1939,10 @@ def concatenate_planned(
             for x in patches
         ]
         attrs = attrs.update(data_units=kept)
-    task = Concatenate(
-        arguments=((dim, count),), check_behavior=None, conflict=conflict
+    fingerprint = operation_fingerprint(
+        "Concatenate", {"arguments": ((dim, count),), "conflict": conflict}
     )
-    return _concatenate_group(patches, dim, attrs, task.fingerprint)
+    return _concatenate_group(patches, dim, attrs, fingerprint)
 
 
 def stack_patches(
@@ -1961,7 +2003,9 @@ def stack_patches(
     stack_attrs = stamp_combination(
         stack_attrs,
         kept,
-        Stack(dim_vary=dim_vary, check_behavior=check_behavior).fingerprint,
+        operation_fingerprint(
+            "Stack", {"dim_vary": dim_vary, "check_behavior": check_behavior}
+        ),
     )
 
     # create coords array for the stack

@@ -21,7 +21,6 @@ from dascore.exceptions import PatchConversionError, RemoteCacheError
 from dascore.utils.hdf5 import (
     H5Reader,
     H5Writer,
-    LocalH5Reader,
     open_h5_resource,
 )
 from dascore.utils.io import (
@@ -33,7 +32,6 @@ from dascore.utils.io import (
     TextReader,
     ensure_local_file,
     get_handle_from_resource,
-    xarray_to_patch,
 )
 from dascore.utils.misc import suppress_warnings
 from dascore.utils.remote_io import (
@@ -317,18 +315,6 @@ class TestGetHandleFromResource:
             handle.close()
             assert raw.id.valid == 0
 
-    def test_local_h5_reader_materializes_local_path(self, tmp_path):
-        """Ensure LocalH5Reader can open a local path through its adapter."""
-        path = tmp_path / "local_h5_reader.h5"
-        with h5py.File(path, "w") as handle:
-            handle.create_dataset("data", data=[1, 2, 3])
-        handle = LocalH5Reader.get_handle(path)
-        try:
-            assert type(handle).__name__ == "_ManagedH5pyFile"
-            assert list(handle["data"][:]) == [1, 2, 3]
-        finally:
-            handle.close()
-
     def test_h5_reader_wraps_local_path(self, tmp_path):
         """Local path opens should use the same managed HDF5 handle type."""
         path = tmp_path / "managed_local.h5"
@@ -599,8 +585,8 @@ class TestGetHandleFromResource:
         path = UPath("memory://dascore/upath-write-abort-twice.h5")
         handle = H5Writer.get_handle(path)
         handle.create_dataset("data", data=[1, 2, 3])
-        handle._abort()
-        handle._abort()
+        handle.abort()
+        handle.abort()
         assert not path.exists()
 
     def test_not_implemented(self):
@@ -1306,42 +1292,6 @@ class TestTextReader:
             assert out is fi
             assert out.tell() == 0
             assert out.read(1) == "a"
-
-
-class TestXarray:
-    """Tests for xarray conversions."""
-
-    @pytest.fixture
-    def data_array_from_patch(self, random_patch):
-        """Get a data array from a patch."""
-        pytest.importorskip("xarray")
-        return random_patch.io.to_xarray()
-
-    def test_convert_to_xarray(self, data_array_from_patch):
-        """Tests for converting to xarray object."""
-        import xarray as xr  # noqa: PLC0415
-
-        assert isinstance(data_array_from_patch, xr.DataArray)
-
-    def test_convert_from_xarray(self, data_array_from_patch):
-        """Ensure xarray data arrays can be converted back."""
-        out = xarray_to_patch(data_array_from_patch)
-        assert isinstance(out, dc.Patch)
-
-    def test_round_trip(self, random_patch, data_array_from_patch):
-        """Converting to xarray should be lossless."""
-        out = xarray_to_patch(data_array_from_patch)
-        assert out == random_patch
-
-    def test_convert_non_coord(self, random_patch):
-        """Ensure a patch with non-coord can still be converted."""
-        xr = pytest.importorskip("xarray")
-        patch = random_patch.sum("time")
-        dar = patch.io.to_xarray()
-        assert isinstance(dar, xr.DataArray)
-        # Ensure it round-trips
-        patch2 = xarray_to_patch(dar)
-        assert isinstance(patch2, dc.Patch)
 
 
 class TestObsPy:

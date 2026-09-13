@@ -16,7 +16,7 @@ import pandas as pd
 from jinja2 import Environment, FileSystemLoader
 
 RENDER_FUNCS = {}
-DOC_PATH = Path(__file__).absolute().parent.parent / "docs"
+DOC_PATH = Path(__file__).absolute().parent.parent / "dascore" / "docs"
 API_DOC_PATH = DOC_PATH / "api"
 API_DOC_PATH.mkdir(exist_ok=True, parents=True)
 TEMPLATE_PATH = DOC_PATH / "_templates"
@@ -142,16 +142,10 @@ def unpact_annotation(obj, data_dict, address_dict) -> str:
 
 def get_type_hints(obj) -> dict:
     """
-    Get an object's type hints, tolerating names missing at runtime.
+    Return type hints, falling back to unevaluated annotations for missing names.
 
-    Annotations only imported under `TYPE_CHECKING` cannot be resolved when
-    the docs are built, so fall back to the unevaluated annotations rather
-    than failing the entire build.
-
-    The fallback is all-or-nothing because `get_type_hints` resolves an
-    object's annotations together. Today only class-level annotations hit
-    it, and those are never matched against the parameters a signature is
-    built from, so nothing renders differently.
+    Names imported under `TYPE_CHECKING` may be unavailable during doc builds. The
+    fallback applies to all annotations because `get_type_hints` resolves them together.
     """
     try:
         return typing.get_type_hints(obj)
@@ -463,7 +457,8 @@ class Render:
     def _get_github_source(self, data):
         """Get the github source url."""
         obj = data["object"]
-        source_code, line_start = inspect.getsourcelines(obj)
+        source = getattr(obj, "__processor__", None) or obj
+        source_code, line_start = inspect.getsourcelines(source)
         line_end = line_start + len(source_code)
         rel_path = data["path"].relative_to(data["base_path"])
         # grab repo stuff from environment (on GH actions) or defaults
@@ -610,16 +605,18 @@ def _map_other_qmd_files(doc_path=DOC_PATH, api_path=API_DOC_PATH):
     """Add all other qmd files, excluding API."""
     out = {}
     parent_doc = doc_path.parent
-    api_relative = str(api_path.relative_to(doc_path))
+    api_relative = api_path.relative_to(doc_path).as_posix()
     for path in DOC_PATH.rglob("*.qmd"):
-        path_relative = str(path.relative_to(parent_doc))
+        path_relative = path.relative_to(parent_doc).as_posix()
         # Skip API docs
         if path_relative.startswith(api_relative):
             continue
-        value = "/" + str(path.relative_to(doc_path))
+        value = "/" + path.relative_to(doc_path).as_posix()
         out[path_relative] = value
+        out["dascore/" + path_relative] = value
         # also add key with no qmd extension.
         out[path_relative.split(".")[0]] = value
+        out["dascore/" + path_relative.split(".")[0]] = value
     return out
 
 

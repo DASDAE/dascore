@@ -11,6 +11,7 @@ import pandas as pd
 from scipy.fft import next_fast_len
 from scipy.ndimage import correlate1d
 
+import dascore as dc
 from dascore.compat import array
 from dascore.constants import PatchType, samples_arg_description
 from dascore.core.attrs import PatchAttrs
@@ -19,10 +20,11 @@ from dascore.core.coordmanager import (
     CoordManagerInput,
     get_coord_manager,
 )
-from dascore.core.coords import get_coord
+from dascore.core.coords import CoordRange, get_coord
+from dascore.core.processor import PatchProcessor
 from dascore.exceptions import ParameterError
 from dascore.models import ArrayLike
-from dascore.units import Quantity, get_quantity
+from dascore.units import get_quantity
 from dascore.utils.array import _apply_binary_ufunc
 from dascore.utils.array_api import (
     _real_dtype,
@@ -44,10 +46,6 @@ from dascore.utils.patch import (
 )
 from dascore.utils.time import dtype_time_like
 from dascore.utils.window import resolve_window
-from dascore.workflow.processor import (
-    PatchProcessor,
-    register_implementation,
-)
 
 # The dtypes which promise, without the values being looked at, that there
 # is no imaginary part: bool, signed and unsigned integers, and floats.
@@ -179,6 +177,8 @@ def update_attrs(self: PatchType, **attrs) -> PatchType:
     new_attrs = self.attrs.model_dump(exclude_unset=True)
     new_attrs.update(attrs)
     validated = PatchAttrs.from_dict(new_attrs)
+    if self._data is None:
+        return _dataless_like(self, self.coords, validated)
     return self.__class__(
         self._data, coords=self.coords, attrs=validated, dims=self.dims
     )
@@ -298,6 +298,9 @@ def update(
         Optional attributes (non-coordinate metadata) passed as a dict.
 
     """
+    # A patch without data stays one unless data are given; `drop_data`,
+    # not `new(data=None)`, is how data are taken away.
+    dataless = data is None and self._data is None
     data = data if data is not None else self._data
     coords = coords if coords is not None else self.coords
     if dims is None:
@@ -307,11 +310,23 @@ def update(
         attrs = PatchAttrs.from_dict(attrs)
     else:
         attrs = self.attrs
+    if dataless:
+        return _dataless_like(self, coords, attrs)
     return self.__class__(data=data, coords=coords, attrs=attrs)
 
 
-@patch_function()
-def abs(patch: PatchType) -> PatchType:
+def _dataless_like(patch, coords, attrs):
+    """
+    Return a patch of `patch`'s class holding no data.
+
+    Built as a `Patch` and handed to the subclass positionally, so a
+    subclass whose `__init__` takes no dtype still works.
+    """
+    out = dc.Patch(coords=coords, attrs=attrs, dtype=patch.dtype)
+    return out if type(patch) is dc.Patch else patch.__class__(out)
+
+
+class Abs(PatchProcessor):
     """
     Take the absolute value of the patch data.
 
@@ -321,22 +336,16 @@ def abs(patch: PatchType) -> PatchType:
     >>> pa = dascore.get_example_patch() # generate example patch
     >>> out = pa.abs() # take absolute value of generated example patch data
     """
-    return Abs()._apply(patch)
 
-
-class Abs(PatchProcessor):
-    """Take the absolute value of the data."""
-
-    def kernel(self, data, meta, out_meta):
+    def kernel(self, data):
         """Return the magnitude of every sample."""
         return array_namespace(data).abs(data)
 
 
-register_implementation("abs", Abs)
+abs = Abs.patch_function
 
 
-@patch_function()
-def conj(patch: PatchType) -> PatchType:
+class Conj(PatchProcessor):
     """
     Apply the complex conjugate of the patch data.
 
@@ -349,29 +358,18 @@ def conj(patch: PatchType) -> PatchType:
     >>> dft = pa.dft(None)  # multi-dim dft
     >>> conj = dft.conj()
     """
-    return Conj()._apply(patch)
 
-
-class Conj(PatchProcessor):
-    """Flip the sign of the imaginary part."""
-
-    def kernel(self, data, meta, out_meta):
-        """
-        Return the conjugate, or the data unchanged.
-
-        Real data is its own conjugate, and handing back the very array
-        which came in is what tells the caller nothing happened.
-        """
+    def kernel(self, data):
+        """Return the conjugate; real data come back as the same array, a no-op."""
         if _known_real(data):
             return data
         return array_namespace(data).conj(data)
 
 
-register_implementation("conj", Conj)
+conj = Conj.patch_function
 
 
-@patch_function()
-def real(patch: PatchType) -> PatchType:
+class Real(PatchProcessor):
     """
     Return a new patch with the real part of the data array.
 
@@ -381,24 +379,18 @@ def real(patch: PatchType) -> PatchType:
     >>> pa = dascore.get_example_patch()
     >>> out = pa.real()
     """
-    return Real()._apply(patch)
 
-
-class Real(PatchProcessor):
-    """Keep only the real part of the data."""
-
-    def kernel(self, data, meta, out_meta):
+    def kernel(self, data):
         """Return the real part, or the data which is already only that."""
         if _known_real(data):
             return data
         return array_namespace(data).real(data)
 
 
-register_implementation("real", Real)
+real = Real.patch_function
 
 
-@patch_function()
-def imag(patch: PatchType) -> PatchType:
+class Imag(PatchProcessor):
     """
     Return a new patch with the imaginary part of the data array.
 
@@ -408,20 +400,13 @@ def imag(patch: PatchType) -> PatchType:
     >>> pa = dascore.get_example_patch()
     >>> out = pa.imag()
     """
-    return Imag()._apply(patch)
 
-
-class Imag(PatchProcessor):
-    """Keep only the imaginary part of the data."""
-
-    def kernel(self, data, meta, out_meta):
+    def kernel(self, data):
         """
         Return the imaginary part, which is zero for real data.
 
-        Asked for explicitly rather than through `imag`: numpy answers
-        zero for a real array, and the standard refuses the question, so
-        the answer numpy gives has to be built here to mean the same
-        thing on every backend.
+        Built here rather than through `imag`: numpy answers zero for a
+        real array and the standard refuses the question.
         """
         xp = array_namespace(data)
         if _known_real(data):
@@ -429,7 +414,7 @@ class Imag(PatchProcessor):
         return xp.imag(data)
 
 
-register_implementation("imag", Imag)
+imag = Imag.patch_function
 
 
 @patch_function(data_type="")
@@ -446,15 +431,8 @@ def angle(patch: PatchType) -> PatchType:
     return patch.new(data=np.angle(patch.data))
 
 
-@patch_function(data_type="")
 @compose_docstring(sample_explanation=samples_arg_description)
-def normalize(
-    self: PatchType,
-    dim: str,
-    norm: Literal["l1", "l2", "max", "bit"] = "l2",
-    window: float | Quantity | None = None,
-    samples: bool = False,
-) -> PatchType:
+class Normalize(PatchProcessor):
     """
     Normalize a patch along a specified dimension.
 
@@ -473,14 +451,10 @@ def normalize(
     dim
         The dimension along which the normalization takes place.
     norm
-        Determines the value to divide each sample by along a given axis.
-        Options are:
-            l1 - divide each sample by the l1 of the axis.
-            l2 - divide each sample by the l2 of the axis.
-            max - divide each sample by the maximum of the absolute value of the axis.
-            bit - sample-by-sample normalization (-1/+1)
+        Divisor: axis L1 norm (``"l1"``), L2 norm (``"l2"``), maximum
+        absolute value (``"max"``), or sample magnitude (``"bit"``).
     window
-        The length of the moving window, in units of `dim` unless `samples`
+        Moving-window length, in units of `dim` unless `samples`
         is True. The window is centered on the sample it scales and is
         reflected where it runs off either end of `dim`, so every sample is
         scaled. If None, the whole slice is one window. Not supported for
@@ -490,63 +464,41 @@ def normalize(
 
     Notes
     -----
-    - A window is centered on the sample it scales, so an even window length
-      is raised to the next odd one.
+    Even window lengths in coordinate units are raised to the next odd number;
+    with ``samples=True``, an even sample count raises `ParameterError`.
+    Reflection gives every input sample an output without introducing new
+    nulls, unlike [`rolling`](`dascore.Patch.rolling`), which leaves
+    incomplete windows null.
 
-    - Every sample gets a value, the ends included: where a centered window
-      runs off the end of the dimension, the coordinate is reflected about
-      its last sample to fill it (scipy's `mode="reflect"`, the same rule
-      `median_filter` and the other windowed filters use). So the output has
-      the shape it was given and holds no nulls the input did not. This is
-      not what [`rolling`](`dascore.Patch.rolling`) does: rolling returns one
-      value per window rather than one per sample, and leaves nulls where a
-      window was not full. A null edge here would delete real data -- half a
-      window off each end of every trace, which for a one second window at
-      250 Hz is an eighth of an eight second record, first arrivals included.
-
-    - The windowed norms are means rather than sums: `l2` divides by the
-      window's RMS and `l1` by its mean absolute value. Were they sums, the
-      output would scale with the window length, and the reflected windows
-      at the edges of the dimension would not line up with the interior.
-      Over a whole slice the two differ only by a constant, so the
-      unwindowed norms are left as the sums they have always been.
+    Windowed L2 and L1 norms use RMS and mean absolute value, respectively, so
+    scale does not depend on window length. Whole-slice L2 and L1 retain their
+    established sum-based definitions.
 
     Examples
     --------
     >>> import dascore as dc
     >>> patch = dc.get_example_patch()
-    >>>
-    >>> # L2 normalization along time dimension
     >>> l2_norm = patch.normalize(dim="time", norm="l2")
-    >>>
-    >>> # Max normalization along distance dimension
     >>> max_norm = patch.normalize(dim="distance", norm="max")
-    >>>
-    >>> # Bit normalization (sign only)
     >>> bit_norm = patch.normalize(dim="time", norm="bit")
     >>>
     >>> # Automatic gain control: divide by the RMS of a 1 second window.
     >>> agc = patch.normalize(dim="time", norm="l2", window=1)
-    >>>
-    >>> # The same, with the window given in samples.
     >>> agc = patch.normalize(dim="time", norm="l2", window=251, samples=True)
     """
-    return Normalize(dim=dim, norm=norm, window=window, samples=samples)._apply(self)
-
-
-class Normalize(PatchProcessor):
-    """Scale each slice along a dimension by a norm of that slice."""
 
     dim: str
     norm: str = "l2"
     window: Any | None = None
     samples: bool = False
 
-    def kernel(self, data, meta, out_meta):
-        """Return the data with each slice divided by its norm."""
-        axis = meta.get_axis(self.dim)
+    data_type = ""
+
+    def plan(self, patch, out):
+        """Return the axis, and the window in samples when one is given."""
+        axis = patch.get_axis(self.dim)
         if self.window is None:
-            return _normalize_kernel(data, axis, self.norm)
+            return {"axis": axis}
         if self.norm == "bit":
             msg = (
                 "normalize(norm='bit') scales each sample by its own magnitude, "
@@ -556,7 +508,7 @@ class Normalize(PatchProcessor):
         # A window has to be centered on the sample it scales, so it must
         # hold an odd number of them.
         window = resolve_window(
-            meta,
+            patch,
             {self.dim: self.window},
             samples=self.samples,
             allow_multiple=False,
@@ -564,10 +516,16 @@ class Normalize(PatchProcessor):
             require_evenly_sampled=False,
             enforce_lt_coord=True,
         )
-        return _windowed_normalize_kernel(data, axis, self.norm, window.size[0])
+        return {"axis": axis, "window": int(window.size[0])}
+
+    def kernel(self, data, *, axis, window=None):
+        """Return the data with each slice, or window, divided by its norm."""
+        if window is None:
+            return _normalize_kernel(data, axis, self.norm)
+        return _windowed_normalize_kernel(data, axis, self.norm, window)
 
 
-register_implementation("normalize", Normalize)
+normalize = Normalize.patch_function
 
 
 def _window_mean(data, window: int, axis: int):
@@ -801,19 +759,14 @@ def _normalize_kernel(data, axis: int, norm: str):
     return data / xp.where(divisor == 0, one, divisor)
 
 
-@patch_function(data_type="")
-def standardize(
-    self: PatchType,
-    dim: str,
-) -> PatchType:
+class Standardize(PatchProcessor):
     """
     Standardize data by removing the mean and scaling to unit variance.
 
     The standard score of a sample x is calculated as:
 
     z = (x - u) / s
-    where u is the mean of the training samples or zero if with_mean=False,
-    and s is the standard deviation of the training samples or one if with_std=False.
+    where u is the mean and s the standard deviation along `dim`.
 
     NaN values are ignored when computing the mean and standard deviation. They
     remain NaN in the output but do not affect any other sample.
@@ -837,24 +790,24 @@ def standardize(
     standardized_distance = patch.standardize('distance')
     ```
     """
-    return Standardize(dim=dim)._apply(self)
-
-
-class Standardize(PatchProcessor):
-    """Remove the mean and scale to unit variance along a dimension."""
 
     dim: str
 
-    def kernel(self, data, meta, out_meta):
+    data_type = ""
+
+    def plan(self, patch, out):
+        """Return the axis to standardize along."""
+        return {"axis": patch.get_axis(self.dim)}
+
+    def kernel(self, data, *, axis):
         """Return the data centred and scaled along its dimension."""
-        axis = meta.get_axis(self.dim)
         data = _as_float(data)
         mean = nan_reduce("mean", data, axis=axis, keepdims=True)
         std = nan_reduce("std", data, axis=axis, keepdims=True)
         return (data - mean) / std
 
 
-register_implementation("standardize", Standardize)
+standardize = Standardize.patch_function
 
 
 # This is left here to not break compatibility. It also forces `apply_ufunc`
@@ -1060,13 +1013,11 @@ def pad(
         # an integer coordinate to hold a NaN nothing is going to write.
         if not any(pad_tuple):
             return coord
-        if expand_coords and coord.evenly_sampled:
-            new_start = coord.min() - pad_tuple[0] * coord.step
-            new_end = coord.max() + (pad_tuple[1] + 1) * coord.step
-            assert coord.evenly_sampled, "expand_coords requires evenly sampled."
-            new_coord = get_coord(
-                start=new_start, stop=new_end, step=coord.step, units=coord.units
-            )
+        if expand_coords and isinstance(coord, CoordRange):
+            # Extend the grid itself: rebuilding from the rounded step would
+            # move every label of a fractional grid.
+            total = len(coord) + pad_tuple[0] + pad_tuple[1]
+            new_coord = coord._sliced(-pad_tuple[0], 1, total)
         else:
             old_values = coord.values
             # Need to convert ints to float so NaN can be used.
@@ -1136,7 +1087,9 @@ def pad(
 
     # Pad data, update coord manager, and return.
     new_data = np.pad(patch.data, pad_width, mode=mode, constant_values=constant_values)
-    new_coords = patch.coords.update(**new_coords)
+    new_coords = patch.coords._update_grid(
+        *(dim for dim, widths in pad_tuples.items() if any(widths)), **new_coords
+    )
     return patch.new(data=new_data, coords=new_coords)
 
 
@@ -1378,8 +1331,7 @@ def demedian(patch, dim: str = "time"):
     return patch.new(data=new_data)
 
 
-@patch_function()
-def demean(patch, dim: str = "time"):
+class Demean(PatchProcessor):
     """
     Remove the mean along a given dimension of a DASCore patch.
 
@@ -1429,19 +1381,17 @@ def demean(patch, dim: str = "time"):
     >>> plt.show()  # doctest: +SKIP
     >>> plt.close(fig)
     """
-    return Demean(dim=dim)._apply(patch)
-
-
-class Demean(PatchProcessor):
-    """Remove the mean along a dimension."""
 
     dim: str = "time"
 
-    def kernel(self, data, meta, out_meta):
+    def plan(self, patch, out):
+        """Return the axis to remove the mean along."""
+        return {"axis": patch.get_axis(self.dim)}
+
+    def kernel(self, data, *, axis):
         """Return the data with the mean of each slice taken out."""
         data = _as_float(data)
-        mean = nan_reduce("mean", data, axis=meta.get_axis(self.dim), keepdims=True)
-        return data - mean
+        return data - nan_reduce("mean", data, axis=axis, keepdims=True)
 
 
-register_implementation("demean", Demean)
+demean = Demean.patch_function

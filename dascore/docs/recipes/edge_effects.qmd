@@ -1,0 +1,34 @@
+---
+title: Taper Edge Effects
+execute:
+    warning: false
+---
+
+Apply [`taper`](`dascore.proc.taper.taper`) before filtering to reduce edge artifacts.
+
+### Without tapering
+
+```{python}
+import dascore as dc
+
+patch = (
+    dc.get_example_patch('example_event_1')
+    .pass_filter(time=(None, 300))
+)
+
+patch.viz.waterfall(show=True);
+```
+
+### With tapering
+
+```{python}
+import dascore as dc
+
+patch = (
+    dc.get_example_patch('example_event_1')
+    .taper(time=0.05)
+    .pass_filter(time=(None, 300))
+)
+
+patch.viz.waterfall(show=True);
+```

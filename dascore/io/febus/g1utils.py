@@ -287,14 +287,14 @@ def _get_mtx_coords(resource, dims=_MTX_DIMS, snap=True):
 
 def _get_mtx_patch(resource, attr_cls, attrs=None, select_kwargs=None):
     """Read a Febus MTX HDF5 file into a patch."""
-    coords = _get_mtx_coords(resource)
-    attrs = _get_mtx_attrs(resource) if attrs is None else attrs
-    select_kwargs = {} if select_kwargs is None else select_kwargs
-    data = np.asarray(resource["mtx"])
-    coords, data = coords.select(array=data, **select_kwargs)
-    if 0 in coords.shape:
-        return None
-    return dc.Patch(data=data, coords=coords, attrs=attr_cls(**attrs))
+    return _get_g1_h5_patch(
+        resource,
+        attr_cls=attr_cls,
+        data_name="mtx",
+        attrs=_get_mtx_attrs(resource) if attrs is None else attrs,
+        coords=_get_mtx_coords(resource),
+        select_kwargs=select_kwargs,
+    )
 
 
 def _bsl_version(resource) -> str | bool:

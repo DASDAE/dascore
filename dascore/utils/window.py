@@ -213,8 +213,9 @@ def resolve_window(
     Parameters
     ----------
     patch
-        The patch, or anything with its ``dims`` and ``coords`` -- a
-        `PatchMeta` serves, so a processor can resolve a window without data.
+        The patch, or anything with its ``dims`` and ``coords`` -- a patch
+        without data serves, so a processor can resolve a window before
+        the data are read.
     kwargs
         Dimension names and the window along each, in coordinate units or,
         with ``samples``, in samples. A `Quantity` keeps its units either way.
@@ -266,7 +267,7 @@ def resolve_window(
     coords, sizes = {}, []
     for dim, _, value in dim_axis_values:
         coord = coords[dim] = patch.coords.get_coord(dim)
-        if require_evenly_sampled and coord.step is None:
+        if require_evenly_sampled and not coord.evenly_sampled:
             extra = f"as required by {get_parent_code_name()}"
             msg = f"Coordinate {dim} is not evenly sampled {extra}"
             raise CoordError(msg)

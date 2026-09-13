@@ -1249,6 +1249,13 @@ class TestReduceCoord:
 class TestCoordRange:
     """Tests for coords from array."""
 
+    def test_empty_slice_units(self):
+        """An empty compact slice keeps its coordinate units without expansion."""
+        coord = get_coord(start=0, stop=10, step=1, units="m")
+        selected = coord[5:5]
+        assert selected.shape == (0,)
+        assert selected.units == coord.units
+
     def test_init_array(self, evenly_sampled_coord):
         """Ensure the array can be initialized."""
         assert evenly_sampled_coord.step == 1.0
@@ -1440,12 +1447,19 @@ class TestCoordRange:
         assert coord1.shape == (1,)
 
     def test_monotonic_with_sampling(self):
-        """Ensure init'ing monotonic array with sampling also works."""
-        sample_rate = 1_000
-        t_array = np.linspace(0.0, 1, 1000)
-        sample_rate = 1 / sample_rate
-        out = get_coord(data=t_array, step=sample_rate)
+        """Values on the declared grid make a range of that step."""
+        step = 1 / 1_000
+        t_array = np.arange(1000) * step
+        out = get_coord(data=t_array, step=step)
+        assert isinstance(out, CoordRange)
         assert out.shape == out.data.shape == (len(out),)
+        assert out.step == step
+
+    def test_off_grid_values_with_step_raise(self):
+        """A declared step is a claim the values must meet."""
+        # linspace's spacing is 1/999, not the 1/1000 declared
+        with pytest.raises(CoordError, match="not on a grid"):
+            get_coord(data=np.linspace(0.0, 1, 1000), step=1 / 1_000)
 
     def test_len_one_array_like_start_no_deprecation(self):
         """Array-like scalar start should not emit numpy scalar conversion warning."""
@@ -1842,12 +1856,9 @@ class TestPartialCoord:
     @pytest.mark.parametrize("dtype", ["datetime64[ns]", "timedelta64[us]"])
     def test_all_null_array_keeps_its_dtype(self, dtype):
         """
-        An array of nulls says nothing about when, but still says what.
+        All-null arrays retain their dtype in partial coords.
 
-        The values are gone, the kind of thing they were is not, and a
-        partial coord has a dtype to record it. Dropping it turned missing
-        datetimes into untyped NaN. Float is left out of the parameters:
-        an unset dtype already reads as float64, so it cannot regress.
+        Float is excluded because an unset dtype already defaults to float64.
         """
         dtype = np.dtype(dtype)
         coord = get_coord(data=np.full(3, "NaT", dtype=dtype))
@@ -2627,6 +2638,19 @@ class TestStringCoords:
         assert isinstance(indexer, np.ndarray)
         assert np.array_equal(indexer, np.array([True, True, False, False]))
 
+    def test_wildcard_select_character_class(self):
+        """
+        A class picks the characters it holds, negated with a caret.
+
+        Selection read fnmatch here and SQLite everywhere else, so a class
+        was spelled one way on a coordinate and the other on a spool.
+        """
+        coord = get_coord(data=np.array(["ch_1", "ch_2", "ch_3"]))
+        out, _ = coord.select("ch_[12]")
+        assert np.array_equal(out.values, np.array(["ch_1", "ch_2"]))
+        out, _ = coord.select("ch_[^12]")
+        assert np.array_equal(out.values, np.array(["ch_3"]))
+
     def test_wildcard_select_no_match_returns_empty(self, string_coord):
         """Wildcard selectors with no matches should return an empty coord."""
         out, indexer = string_coord.select("z*")
@@ -2968,3 +2992,17 @@ class TestUnitNoOps:
         """A class which did not implement it gets an error naming itself."""
         with pytest.raises(NotImplementedError, match="unit conversion"):
             BaseCoord._convert_units(evenly_sampled_coord, "m")
+
+
+class TestIndexCoordinate:
+    """The coordinate-level positional API remains usable independently."""
+
+    @pytest.mark.parametrize("axis", [0, 1])
+    def test_multidimensional(self, axis):
+        """An explicit axis indexes only that dimension and preserves units."""
+        values = np.arange(20).reshape(4, 5)
+        coord = get_coord(data=values, units="m")
+        actual = coord.index(slice(1, 3), axis=axis)
+        expected = values[1:3, :] if axis == 0 else values[:, 1:3]
+        np.testing.assert_array_equal(actual.values, expected)
+        assert actual.units == coord.units

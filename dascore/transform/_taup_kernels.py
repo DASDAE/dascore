@@ -63,7 +63,7 @@ def _jit_taup_general(data, distance, dt, p_vals):
                 samp_val_neg = (
                     tau + p * (mod_distance[-1] - mod_distance[nx - 1 - ix]) / dt
                 )
-                ind_neg = int(samp_val_pos)
+                ind_neg = int(samp_val_neg)
                 if ind_pos + 1 < nt:
                     taup[ip + n_slo, tau] += (1.0 + ind_pos - samp_val_pos) * data[
                         ix, ind_pos

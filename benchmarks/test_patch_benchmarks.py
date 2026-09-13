@@ -8,8 +8,9 @@ import pytest
 
 import dascore as dc
 from dascore.config import config_context
+from dascore.proc.basic import Normalize
 from dascore.utils.patch import get_start_stop_step
-from dascore.workflow.processor import _FINGERPRINTS
+from dascore.utils.patch_registry import _FINGERPRINTS
 
 
 @pytest.fixture(scope="module")
@@ -531,4 +532,4 @@ class TestIdentityOverhead:
     @pytest.mark.benchmark
     def test_processor_fingerprint(self, example_patch):
         """Building an operation and asking it what it is."""
-        dc.proc.normalize.op(dim="time").fingerprint
+        Normalize(dim="time").fingerprint

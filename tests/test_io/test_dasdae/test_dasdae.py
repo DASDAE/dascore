@@ -14,8 +14,14 @@ import pytest
 import dascore as dc
 from dascore.compat import random_state
 from dascore.config import config_context
-from dascore.core.coords import CoordString
-from dascore.exceptions import InvalidFiberFileError
+from dascore.core.coords import CoordRange, CoordString
+from dascore.exceptions import (
+    InvalidFiberFileError,
+    MissingPatchError,
+    ParameterError,
+    PatchAttributeError,
+)
+from dascore.io.core import FiberIO
 from dascore.io.dasdae import utils as dasdae_utils
 from dascore.io.dasdae._compat import translate_legacy_attrs
 from dascore.io.dasdae.core import DASDAEV1
@@ -106,6 +112,30 @@ class TestWriteDASDAE:
 
 class TestReadDASDAE:
     """Test for reading a dasdae format."""
+
+    @pytest.mark.parametrize(
+        "indexers", [{"distance": 3}, {"time": 2}, {"distance": 3, "time": 2}]
+    )
+    @pytest.mark.parametrize("drop", [False, True])
+    def test_indexed_scalar_roundtrip(self, random_patch, tmp_path, indexers, drop):
+        """Indexed channels and scalar patches can be saved, scanned, and read."""
+        count = random_patch.shape[0]
+        patch = random_patch.update_coords(
+            channel=("distance", np.array(["sensor"] * count)),
+            delay=("distance", np.arange(count) * np.timedelta64(1, "ms")),
+        ).isel(indexers, drop=drop)
+        path = tmp_path / "indexed.h5"
+        dc.write(patch, path, "DASDAE")
+        restored = dc.read(path)[0]
+        assert restored.equals(patch)
+        assert restored.shape == patch.shape
+        scanned = dc.scan(path)[0]
+        assert scanned.shape == patch.shape
+        assert scanned.dims == patch.dims
+        payload = dc.scan_payloads(path)[0]
+        assert payload["coords"].shape == patch.shape
+        assert dc.spool(path)[0].equals(patch)
+        assert dc.spool(path).get_contents()["data_size"].iloc[0] == patch.size
 
     def test_round_trip_empty_patch(self, written_dascore_v1_empty):
         """Ensure an empty patch can be deserialized."""
@@ -231,6 +261,146 @@ class TestReadDASDAE:
 
         assert len(out) == 1
         assert out[0].attrs.tag == "S120"
+
+
+@pytest.fixture(scope="class")
+def multi_patch_path(tmp_path_factory):
+    """A DASDAE file holding three patches with distinct data."""
+    path = tmp_path_factory.mktemp("read_array") / "multi.h5"
+    spool = dc.examples.get_example_spool("random_das", length=3)
+    patches = [p.update(data=p.data + i * 100) for i, p in enumerate(spool)]
+    dc.write(dc.spool(patches), path, "DASDAE", file_version="1")
+    return path
+
+
+class TestReadArray:
+    """Tests for the data-only hyperslab read."""
+
+    def test_matches_default(self, written_dascore_v1_random, random_patch):
+        """The override returns exactly what the read-and-trim default does."""
+        io = DASDAEV1()
+        windows = {"time": (3, 11), "distance": (2, 5)}
+        out = io.read_array(written_dascore_v1_random, windows)
+        expected = FiberIO.read_array(io, written_dascore_v1_random, windows)
+        assert np.array_equal(out, expected)
+        assert out.dtype == random_patch.data.dtype
+        assert np.array_equal(out, random_patch.data[2:5, 3:11])
+
+    def test_whole_array(self, written_dascore_v1_random, random_patch):
+        """No windows returns the whole array."""
+        out = DASDAEV1().read_array(written_dascore_v1_random, {})
+        assert np.array_equal(out, random_patch.data)
+
+    def test_keyed_patch(self, multi_patch_path):
+        """A source patch key picks that patch's data."""
+        io = DASDAEV1()
+        payloads = dc.scan(multi_patch_path)
+        assert len(payloads) == 3
+        for payload in payloads:
+            key = payload.source_patch_key
+            patch = dc.read(multi_patch_path, source_patch_key=key)[0]
+            out = io.read_array(
+                multi_patch_path, {"time": (1, 4)}, source_patch_key=key
+            )
+            assert np.array_equal(out, patch.data[:, 1:4])
+
+    def test_null_key_resolves_single_patch(self, written_dascore_v1_random):
+        """A NaN key (an index row with no stored key) means the lone patch."""
+        out = DASDAEV1().read_array(
+            written_dascore_v1_random, {}, source_patch_key=np.nan
+        )
+        expected = DASDAEV1().read_array(written_dascore_v1_random, {})
+        assert np.array_equal(out, expected)
+
+    def test_path_like_key_raises(self, multi_patch_path):
+        """A key h5py would read as a path names no patch."""
+        name = dc.scan(multi_patch_path)[0].source_patch_key
+        for key in ("/waveforms", f"{name}/data", f"./{name}"):
+            with pytest.raises(PatchAttributeError, match="No patch named"):
+                DASDAEV1().read_array(multi_patch_path, {}, source_patch_key=key)
+
+    def test_keyless_multi_patch_raises(self, multi_patch_path):
+        """Several patches and no key cannot be resolved."""
+        with pytest.raises(PatchAttributeError, match="source_patch_key"):
+            DASDAEV1().read_array(multi_patch_path, {})
+
+    def test_unknown_key_raises(self, multi_patch_path):
+        """A key naming no patch group raises."""
+        with pytest.raises(PatchAttributeError, match="No patch named"):
+            DASDAEV1().read_array(multi_patch_path, {}, source_patch_key="nope")
+
+    def test_no_patches_raises(self, generic_hdf5):
+        """A file without a waveform group has nothing to read."""
+        with pytest.raises(MissingPatchError, match="No patches"):
+            DASDAEV1().read_array(generic_hdf5, {})
+
+    def test_unknown_dimension_raises(self, written_dascore_v1_random):
+        """A window on a dimension the patch lacks raises."""
+        with pytest.raises(ParameterError, match="not among patch dims"):
+            DASDAEV1().read_array(written_dascore_v1_random, {"bob": (0, 1)})
+
+    def test_load_filters_refused(self, written_dascore_v1_random):
+        """Value filters are not part of the window contract."""
+        with pytest.raises(ParameterError, match="Unexpected keyword"):
+            DASDAEV1().read_array(written_dascore_v1_random, {}, time_min=1)
+
+    def test_reads_only_the_window(
+        self, written_dascore_v1_random, random_patch, monkeypatch
+    ):
+        """The dataset is sliced in the file, not read whole then trimmed."""
+        seen = []
+        original = h5py.Dataset.__getitem__
+
+        def spy(self, index):
+            seen.append(index)
+            return original(self, index)
+
+        monkeypatch.setattr(h5py.Dataset, "__getitem__", spy)
+        DASDAEV1().read_array(written_dascore_v1_random, {"time": (2, 6)})
+        assert seen == [(slice(0, random_patch.shape[0]), slice(2, 6))]
+
+
+class TestSpoolReadHints:
+    """Spool selection limits file data reads on even and uneven coordinates."""
+
+    @pytest.mark.parametrize("dim", ["distance", "time"])
+    @pytest.mark.parametrize("uneven", [False, True])
+    def test_single_range_reads_only_selected_data(
+        self, tmp_path, monkeypatch, dim, uneven
+    ):
+        """A single range needs no regular step to read only its selected samples."""
+        increments = [1, 2] if uneven else [1, 1]
+        distance = np.cumsum(np.resize(increments, 150)).astype(float)
+        time = np.datetime64("2020-01-01", "ns") + np.cumsum(
+            np.resize(increments, 200)
+        ) * np.timedelta64(1, "ms")
+        patch = dc.Patch(
+            data=np.arange(30_000).reshape(150, 200),
+            dims=("distance", "time"),
+            coords={"distance": distance, "time": time},
+        ).abs()
+        patch.io.write(tmp_path / "source.h5", "dasdae")
+        spool = dc.spool(tmp_path).update()
+        source = spool[0]
+        values = source.get_array(dim)
+        selection = {dim: (values[5], values[20])}
+        expected = source.select(**selection)
+        read_shapes = []
+        original = h5py.Dataset.__getitem__
+
+        def spy(dataset, index):
+            out = original(dataset, index)
+            if dataset.name.endswith("/data"):
+                read_shapes.append(out.shape)
+            return out
+
+        monkeypatch.setattr(h5py.Dataset, "__getitem__", spy)
+        selected = spool.select(**selection)[0]
+        assert read_shapes == [expected.shape]
+        assert selected.data.size < source.data.size / 8
+        assert np.array_equal(selected.data, expected.data)
+        assert selected.attrs.processing_id == expected.attrs.processing_id
+        assert selected.attrs.history == expected.attrs.history
 
 
 class TestScanDASDAE:
@@ -712,7 +882,7 @@ class TestDASDAEInternalHelpers:
             coords = _get_coords(group, ("time",), {})
 
         coord = coords.get_coord("time")
-        assert coord.__class__.__name__ == "CoordRange"
+        assert isinstance(coord, CoordRange)
         assert len(coord) == 3
         assert coord.start == 10
         assert coord.step == 10

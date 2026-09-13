@@ -5,18 +5,22 @@ from __future__ import annotations
 import contextlib
 from typing import Literal
 
+import numpy as np
 import pandas as pd
 
 import dascore as dc
 from dascore.io import FiberIO
+from dascore.io.utils import slice_dataset
 from dascore.utils.hdf5 import H5Reader, H5Writer
 from dascore.utils.io import _normalize_source_patch_keys
-from dascore.utils.misc import unbyte
+from dascore.utils.misc import raise_on_extra_kwargs, unbyte
 from dascore.utils.patch import get_patch_names
 
 from .utils import (
     _get_contents_from_patch_groups_generic,
+    _get_dims,
     _get_patch_attrs,
+    _get_patch_group,
     _is_legacy_file,
     _is_legacy_group,
     _kwargs_empty,
@@ -52,6 +56,8 @@ class DASDAEV1(FiberIO):
     preferred_extensions = ("h5", "hdf5")
     version = "1"
     multi_patch_write = True
+    # Version 2 writes ranges and segments as descriptions, not values.
+    _compact_coords = False
 
     def write(
         self,
@@ -87,7 +93,7 @@ class DASDAEV1(FiberIO):
             num = counts.get(name, 0)
             counts[name] = num + 1
             unique_name = name if num == 0 else f"{name}__{num}"
-            _save_patch(patch, waveforms, unique_name)
+            _save_patch(patch, waveforms, unique_name, compact=self._compact_coords)
 
     def _get_patch_summary(self, patches) -> pd.DataFrame:
         """Get a patch summary to put into index."""
@@ -139,6 +145,27 @@ class DASDAEV1(FiberIO):
             patches.append(patch)
         return dc.spool(patches)
 
+    def read_array(
+        self,
+        resource: H5Reader,
+        windows: dict[str, tuple[int, int]],
+        source_patch_key="",
+        snap: bool = True,
+        **kwargs,
+    ) -> np.ndarray:
+        """
+        Slice one patch's data dataset directly.
+
+        Only the group's ``_dims`` attribute and the requested hyperslab
+        leave the file; patch attrs and coordinates are never parsed. See
+        `FiberIO.read_array` for the window contract. ``source_patch_key``
+        is the waveform group name `scan` reports; a positional index is
+        not accepted, because DASDAE never synthesizes one.
+        """
+        raise_on_extra_kwargs(kwargs, "windows, source_patch_key and snap")
+        group = _get_patch_group(resource, source_patch_key)
+        return slice_dataset(group["data"], _get_dims(group), windows)
+
     def scan(self, resource: H5Reader, snap: bool = True, **kwargs):
         """
         Get patch info by iterating waveform groups in the file.
@@ -149,3 +176,21 @@ class DASDAEV1(FiberIO):
             A path to the file.
         """
         return _get_contents_from_patch_groups_generic(resource, snap=snap)
+
+
+class DASDAEV2(DASDAEV1):
+    """
+    DASDAE format version 2.
+
+    Reads and writes as version 1, except that each coordinate node
+    states its class (``object_type``) and describes itself: a range is stored as its
+    start, extent, and step (the exact grid where the coordinate holds
+    one, so a fractional sampling rate never drifts) at the cost of a few
+    attributes however long it is; a segmented coordinate as a group of
+    its segments; and only irregular coordinates as arrays of values.
+    Gapped patches are therefore stored as they are rather than split.
+    """
+
+    version = "2"
+    segmented_write = True
+    _compact_coords = True

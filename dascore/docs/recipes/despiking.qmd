@@ -1,0 +1,57 @@
+---
+title: "Despiking"
+execute:
+  warning: false
+---
+
+[`Patch.hampel_filter`](`dascore.Patch.hampel_filter`) replaces samples whose deviation from the local median exceeds a threshold in [median absolute deviation](https://en.wikipedia.org/wiki/Median_absolute_deviation) units with the local median.
+
+## Example data
+
+```{python}
+import numpy as np
+
+import dascore as dc
+
+plot_kwargs = dict(scale=(-200, 200), scale_type="absolute")
+
+patch = dc.get_example_patch("example_event_2")
+data = patch.data.copy()
+
+data[50, 100] = 600
+data[100, 150] = -1000
+data[150, 200] = 1200.0
+data[:, 75] = 1500.0
+data[75, :] = -1400
+spike_patch = patch.update(data=data)
+
+ax = spike_patch.viz.waterfall(**plot_kwargs)
+ax.set_title("Data with Artificial Spikes");
+```
+
+## One dimension
+
+Lower thresholds filter more aggressively:
+
+```{python}
+filtered_time = spike_patch.hampel_filter(time=0.02, threshold=3.5)
+
+ax = filtered_time.viz.waterfall(**plot_kwargs)
+ax.set_title("Filtered along Time (threshold=3.5)");
+```
+::: {.callout-warning}
+Large exact windows (`approximate=False`) are expensive because cost grows with window area. The default approximation is nearly insensitive to window size.
+:::
+
+## Multiple dimensions
+
+Include `distance` to remove channel-wide spikes:
+
+```{python}
+filtered_2d = spike_patch.hampel_filter(time=0.02, distance=5.0, threshold=3.5)
+
+ax = filtered_2d.viz.waterfall(**plot_kwargs)
+ax.set_title("Filtered along Time and Distance");
+```
+
+Start with thresholds of 3.5–5 and odd windows of 5, 7, or 9 samples per dimension (`samples=True`), then inspect the result. Use exact medians only when the approximation is insufficient.

@@ -42,7 +42,7 @@ website:
 
   image: "_static/logo.png"
   favicon: "_static/logo.png"
-  repo-subdir: docs
+  repo-subdir: dascore/docs
   repo-branch: {{ repo_branch }}
   repo-actions: [edit]
   page-navigation: true
@@ -121,9 +121,6 @@ website:
         - text: Transformations
           href: tutorial/transformations.qmd
 
-        - text: Workflow
-          href: tutorial/workflow.qmd
-
         - text: Visualization
           href: tutorial/visualization.qmd
 
@@ -136,6 +133,9 @@ website:
         - text: Configuration
           href: tutorial/configuration.qmd
 
+        - text: Local Documentation
+          href: tutorial/local_documentation.qmd
+
         - text: Coordinates
           href: tutorial/coords.qmd
 
@@ -147,12 +147,6 @@ website:
       collapse-level: 1
       contents:
         - recipes/overview.qmd
-
-        - section: "Contributing"
-          contents:
-
-            - recipes/how_to_contribute.qmd
-            - recipes/contributing_to_documentation.qmd
 
         - section: "Coordinates"
           contents:

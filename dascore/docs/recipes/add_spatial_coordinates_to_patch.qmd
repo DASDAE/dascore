@@ -1,0 +1,38 @@
+---
+title: Add Spatial Coordinates
+execute:
+  warning: false
+---
+
+[`coords_from_df`](`dascore.proc.coords.coords_from_df`) maps table columns onto a patch dimension. This example adds surveyed X, Y, and Z coordinates along `distance`.
+
+```{python}
+#| code-fold: true
+import pandas as pd
+
+import dascore as dc
+
+# Pandas needs a local path rather than an examples:// URI.
+path = dc.examples.fetch("brady_hs_DAS_DTS_coords.csv")
+coord_table = pd.read_csv(path).rename(columns={"Channel": "distance"})
+patch = dc.get_example_patch()
+units = {name: "m" for name in coord_table.columns[1:]}
+new_coordinates = coord_table.iloc[51:]
+
+```
+
+
+```{python}
+import matplotlib.pyplot as plt
+
+patch_with_coords = patch.coords_from_df(
+    new_coordinates,
+    units=units,
+    extrapolate=True,
+)
+
+coords = patch_with_coords.coords
+x = coords.get_array("X")
+y = coords.get_array("Y")
+plt.scatter(x, y);
+```

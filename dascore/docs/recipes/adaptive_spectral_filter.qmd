@@ -1,0 +1,55 @@
+---
+title: Adaptive Spectral (AFK) Filtering
+execute:
+    warning: False
+---
+
+[`Patch.adaptive_spectral_filter`](`dascore.Patch.adaptive_spectral_filter`) implements the adaptive frequency-wavenumber filter of @isken2022denoising. It weights each window's Fourier coefficients by magnitude and blends the windows, favoring coherent arrivals over spectrally diffuse noise.
+
+```{python}
+import numpy as np
+import matplotlib.pyplot as plt
+
+import dascore as dc
+
+patch = dc.get_example_patch("example_event_2").pass_filter(time=(1, 300))
+filtered = patch.adaptive_spectral_filter(time=16, distance=16, samples=True)
+
+
+def show(axes, patches, titles):
+    """Each patch on its own colour scale: the filter does not keep amplitude."""
+    for ax, patch, title in zip(axes, patches, titles):
+        scale = np.percentile(np.abs(patch.data), 99)
+        patch.viz.waterfall(ax=ax, scale=scale, scale_type="absolute", cmap="bwr")
+        ax.set_title(title)
+    axes[0].figure.tight_layout()
+
+
+fig, axes = plt.subplots(1, 2, figsize=(12, 5), sharey=True)
+show(axes, [patch, filtered], ["band-passed", "filtered"])
+```
+
+`exponent` defaults to 0.8 and `overlap` to the window's maximum. Window sizes use coordinate units unless `samples=True`; one dimension filters each trace independently.
+
+## Choosing the exponent
+
+Zero leaves data unchanged; values above one may suppress weak coherent arrivals.
+
+```{python}
+exponents = [0.2, 0.5, 0.8, 1.2]
+fig, axes = plt.subplots(1, 4, figsize=(20, 5), sharey=True)
+show(
+    axes,
+    [
+        patch.adaptive_spectral_filter(
+            time=16, distance=16, samples=True, exponent=exponent
+        )
+        for exponent in exponents
+    ],
+    [f"exponent={exponent}" for exponent in exponents],
+)
+```
+
+## What it does not do
+
+The filter does not preserve amplitude or remove coherent noise. Compare arrivals within one result, and remove striping, ringing, or surface waves first.

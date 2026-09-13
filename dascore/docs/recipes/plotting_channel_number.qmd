@@ -1,0 +1,26 @@
+---
+title: Plot Channel Number
+execute:
+  warning: false
+---
+
+Add a channel-number coordinate, promote it to a dimension, and plot against it.
+
+
+```{python}
+import numpy as np
+
+import dascore as dc
+
+patch = dc.get_example_patch()
+
+dist_len = patch.coord_shapes["distance"][0]
+channel_number = np.arange(dist_len)
+
+out = (
+    patch.update_coords(channel_number=("distance", channel_number))
+    .set_dims(distance="channel_number")
+)
+
+out.viz.waterfall();
+```

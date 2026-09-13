@@ -11,4 +11,4 @@ runs:
       shell: bash
       run: |
         python scripts/_doc_report.py time quarto_render -- \
-          quarto render docs
+          quarto render dascore/docs

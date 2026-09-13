@@ -61,6 +61,10 @@ from dascore.exceptions import (
     UnknownFiberFormatError,
 )
 from dascore.utils.downloader import resolve_example_uri
+from dascore.utils.identity import (
+    ids_enabled,
+    source_patch_id,
+)
 from dascore.utils.io import (
     IOResourceManager,
     _normalize_source_patch_keys,
@@ -90,10 +94,6 @@ from dascore.utils.remote_io import (
     get_remote_cache_scope,
     remote_cache_scope,
     suppress_gc_pause_warning,
-)
-from dascore.workflow.identity import (
-    ids_enabled,
-    source_patch_id,
 )
 
 # What the scan dispatchers accept: one resource or patch, or an
@@ -179,13 +179,13 @@ def _validate_scan_payload(result, require_coord_manager: bool = False):
         msg = (
             "DASCore no longer accepts PatchAttrs from FiberIO.scan(). "
             "Return a structured scan payload instead. "
-            "See docs/contributing/new_format.qmd."
+            "See dascore/docs/contributing/new_format.qmd."
         )
         raise ValueError(msg)
     if not isinstance(result, Mapping):
         msg = (
             "FiberIO.scan() must return ScanPayload mappings; got "
-            f"{type(result).__name__}. See docs/contributing/new_format.qmd."
+            f"{type(result).__name__}. See dascore/docs/contributing/new_format.qmd."
         )
         raise TypeError(msg)
     missing = sorted(set(_SCAN_PAYLOAD_REQUIRED) - set(result))
@@ -193,7 +193,7 @@ def _validate_scan_payload(result, require_coord_manager: bool = False):
         msg = (
             f"scan payload is missing required keys {missing}; a ScanPayload "
             "requires a mapping with `coords`, `attrs`, and `dtype` as well "
-            "as `dims` and `shape`. See docs/contributing/new_format.qmd."
+            "as `dims` and `shape`. See dascore/docs/contributing/new_format.qmd."
         )
         raise TypeError(msg)
     if require_coord_manager and not isinstance(result["coords"], CoordManager):
@@ -341,7 +341,7 @@ def _scan_result_to_summary(
         msg = (
             "DASCore no longer accepts PatchAttrs from FiberIO.scan(). "
             "Return a structured scan payload instead. "
-            "See docs/contributing/new_format.qmd."
+            "See dascore/docs/contributing/new_format.qmd."
         )
         raise ValueError(msg)
     msg = (
@@ -762,7 +762,7 @@ class _FiberIOManager:
         **kwargs,
     ) -> tuple[str, str]:
         """
-        Return the name of the format contained in the file and version number.
+        Return the file's format name and version.
 
         See [`dascore.io.core.get_format`](`dascore.io.core.get_format`)
         for docs.
@@ -943,26 +943,27 @@ def _is_wrapped_func(func1, func2):
 
 class FiberIO:
     """
-    An interface which adds support for a given filer format.
-
-    This class should be subclassed when adding support for new formats.
+    Interface for a fiber data format; subclass it to add format support.
     """
 
     name: str = ""
     version: str = ""
     preferred_extensions: tuple[str, ...] = ()
-    # Specifies if this fiber IO expects a directory or single file
+    # Whether this format expects a directory or a single file.
     input_type: Literal["file", "directory"] = "file"
     # True when a single resource can hold more than one patch.
     multi_patch_write: bool = False
+    # True when a written patch may keep gapped (segmented) dimensional
+    # coordinates; otherwise write splits or refuses them.
+    segmented_write: bool = False
 
     manager = _FiberIOManager(FIBER_IO_GROUP)
 
-    # A dict of methods which should implement automatic type casting.
-    # and the index of the parameter to type cast.
+    # Methods using automatic type casting and the parameter index to cast.
     _automatic_type_casters = FrozenDict(
         {
             "read": 1,
+            "read_array": 1,
             "scan": 1,
             "write": 2,
             "get_format": 1,
@@ -980,6 +981,62 @@ class FiberIO:
         """
         msg = f"FiberIO: {self.name} has no read method"
         raise NotImplementedError(msg)
+
+    def read_array(
+        self, resource, windows: dict[str, tuple[int, int]], **kwargs
+    ) -> np.ndarray:
+        """
+        Return the raw data array for absolute sample windows.
+
+        A data-only fast path for callers which already know a resource's
+        structure (from an index) and need no Patch, attrs, or
+        coordinates back. This default reads the whole resource through
+        ``read`` and trims — a Patch is still built internally, just not
+        returned — so every format is correct without overriding; formats
+        override it to slice storage directly and skip the Patch work.
+
+        Parameters
+        ----------
+        resource
+            The resource to read, as ``read`` takes it.
+        windows
+            Maps dimension name to ``(start, stop)`` half-open python
+            indices on the resource's own sample grid. Dimensions absent
+            from the mapping are returned whole.
+        **kwargs
+            Reader-specific options. Multi-patch resources take
+            ``source_patch_key`` (as ``read`` and ``scan`` spell it)
+            naming the one patch the windows index; without it an
+            ambiguous resource raises rather than guesses. A labelling
+            option is spelled as that format's ``read`` spells it, since
+            this default forwards to ``read``: usually ``snap``, which
+            only labels samples and so cannot move a window and is
+            ignored; where such an option decides how many samples the
+            resource has, it is honored.
+
+        Returns
+        -------
+        The array in the resource's stated dimension order (the order
+        ``scan`` reports), untransposed and uncast. A resource whose
+        array is empty returns that empty array, where this default
+        raises instead, having no patch to build.
+
+        Examples
+        --------
+        >>> from dascore.io.dasdae.core import DASDAEV1
+        >>> from dascore.utils.downloader import fetch
+        >>>
+        >>> path = fetch("example_dasdae_event_1.h5")
+        >>> array = DASDAEV1().read_array(path, {"time": (0, 50)})
+        >>> array.shape
+        (601, 50)
+        """
+        source_patch_key = kwargs.pop("source_patch_key", "")
+        spool = self.read(resource, **kwargs)
+        patch = _resolve_read_spool(spool, source_patch_key)
+        if windows:
+            patch = patch.select(**dict(windows), samples=True)
+        return patch.data
 
     def scan(self, resource, *, snap: bool = True, **kwargs) -> list[ScanPayload]:
         """
@@ -1004,9 +1061,7 @@ class FiberIO:
             no-op for formats whose coordinates are defined by start, step,
             and sample count metadata.
         """
-        # default scan method reads in the file and returns required attributes
-        # however, this can be very slow, so each parser should implement scan
-        # when possible.
+        # Reading is correct but slow; formats should implement metadata-only scans.
         read_params = inspect.signature(self.read).parameters
         read_kwargs = dict(kwargs)
         if "snap" in read_params:
@@ -1051,6 +1106,11 @@ class FiberIO:
         return not _is_wrapped_func(self.scan, FiberIO.scan)
 
     @property
+    def implements_read_array(self) -> bool:
+        """Return True if the subclass implements its own read_array method."""
+        return not _is_wrapped_func(self.read_array, FiberIO.read_array)
+
+    @property
     def implements_get_format(self) -> bool:
         """Return True if the subclass implements its own get_format method."""
         return not _is_wrapped_func(self.get_format, FiberIO.get_format)
@@ -1071,6 +1131,7 @@ class FiberIO:
                     "scan": fiberio.implements_scan,
                     "get_format": fiberio.implements_get_format,
                     "read": fiberio.implements_read,
+                    "read_array": fiberio.implements_read_array,
                     "write": fiberio.implements_write,
                 }
                 out.append(format_info)
@@ -1260,7 +1321,7 @@ def source_identity(source) -> tuple[str, int | None, int | None]:
 
     The three fields of a derived id which come from the source rather
     than from the reader; see
-    [`source_patch_id`](`dascore.workflow.identity.source_patch_id`).
+    [`source_patch_id`](`dascore.utils.identity.source_patch_id`).
     """
     if not (path := _source_path_string(source)):
         return "", None, None
@@ -1437,7 +1498,7 @@ def scan_to_df(
     ext
         The extensions to map.
     timestamp
-        Time stamp indicating the minimum mtime.
+        Minimum modification time.
     progress
         The type of progress bar to use. None disables progress bar and
         "basic" is best for low latency scenarios.
@@ -1727,7 +1788,7 @@ def _iter_scan_results(
                     for result in source:
                         output_count += 1
                         yield result, source_info, input_index
-    # Ensure ctl + c exists scan.
+    # Stop the progress display before propagating Ctrl+C.
     except KeyboardInterrupt:
         getattr(progress, "stop", lambda: None)()
         raise
@@ -1752,15 +1813,13 @@ def scan_payloads(
     path
         A resource containing fiber data.
     file_format
-        Format of the file. If not provided DASCore will try to determine it.
-        Only applicable for path-like inputs.
+        File format. DASCore detects it when omitted. Only applies to path-like inputs.
     file_version
-        Version of the file. If not provided DASCore will try to determine it.
-        Only applicable for path-like inputs.
+        File version. DASCore detects it when omitted. Only applies to path-like inputs.
     ext
         The extensions to map.
     timestamp
-        Time stamp indicating the minimum mtime.
+        Minimum modification time.
     progress
         The type of progress bar to use. None disables the progress bar.
     snap
@@ -1816,26 +1875,23 @@ def scan(
     progress: PROGRESS_LEVELS | Progress = "standard",
 ) -> list[PatchSummary]:
     """
-    Scan a potential patch source, return a list of patch summaries.
+    Scan a potential patch source and return its patch summaries.
 
     Parameters
     ----------
     path
         A resource containing Fiber data.
     file_format
-        Format of the file. If not provided DASCore will try to determine it.
-        Only applicable for path-like inputs.
+        File format. DASCore detects it when omitted. Only applies to path-like inputs.
     file_version
-        Version of the file. If not provided DASCore will try to determine it.
-        Only applicable for path-like inputs.
+        File version. DASCore detects it when omitted. Only applies to path-like inputs.
     ext
         The extensions to map.
     timestamp
-        Time stamp indicating the minimum mtime.
+        Minimum modification time.
     progress
-        The type of progress bar to use. None disables progress bar and
-        "basic" is best for low latency scenarios. Can also accept a subclass
-        of rich.progress.Progress.
+        Progress display. None disables it, ``"basic"`` suits low-latency
+        operations, and a ``rich.progress.Progress`` subclass customizes it.
 
     Returns
     -------
@@ -1959,7 +2015,7 @@ def get_format(
     **kwargs,
 ) -> tuple[str, str]:
     """
-    Return the name of the format contained in the file and version number.
+    Return the file's format name and version.
 
     Parameters
     ----------
@@ -1970,9 +2026,7 @@ def get_format(
     file_version
         The known file version.
     fiber_io_hint
-        A dict of {input_type: fiber_io}. This is an optimization
-        which assumes the last used fiberio (for a given input type)
-        is likely to be the next one.
+        Mapping of input type to the last-used FiberIO, used as a detection hint.
 
     Returns
     -------
@@ -2021,28 +2075,35 @@ def is_directory_format(path) -> bool:
     return True
 
 
-def _resolves_assembled_patches(spool) -> bool:
+def _may_hold_gaps(spool) -> bool:
     """
-    Return True when the spool can produce patches that are not literal
-    persisted file reads (live patches or plan-assembled outputs).
+    Return True when the spool can produce a patch with gapped coordinates.
 
-    Persisted patches are always contiguous, so purely file-backed
-    spools skip gap inspection; plan resolvers can assemble several
-    sources across a real gap into a segmented coordinate.
+    Live patches and plan-assembled outputs can carry a segmented
+    coordinate, and so can a file read from a format which stores one
+    (`segmented_write`); every other file read is contiguous, so a spool
+    of those skips gap inspection rather than loading every patch.
     """
     if getattr(spool, "has_live_patches", False):
         return True
     catalog = getattr(spool, "_catalog", None)
     resolver = getattr(catalog, "resolver", None)
-    return bool(getattr(resolver, "plan_entries", dict)())
+    if getattr(resolver, "plan_entries", dict)():
+        return True
+    df = spool.get_contents()
+    sources = set(zip(df.get("source_format", ()), df.get("source_version", ())))
+    manager = FiberIO.manager
+    return any(
+        manager.get_fiberio(format=name, version=version).segmented_write
+        for name, version in sources
+    )
 
 
 def _maybe_split_gapped_patches(spool, fiber_io, split):
     """Handle patches whose dimensional coords contain gaps before writing."""
-    # Gap inspection depends on what the spool resolves, not on where
-    # its ultimate members live: only literal file reads are always
-    # contiguous (gapped patches are never persisted).
-    if not _resolves_assembled_patches(spool):
+    # a destination which stores gaps needs no inspection, which would
+    # otherwise load every patch of a file-backed spool at once
+    if (fiber_io.segmented_write and not split) or not _may_hold_gaps(spool):
         return spool
 
     def _has_gaps(patch):
@@ -2057,10 +2118,11 @@ def _maybe_split_gapped_patches(spool, fiber_io, split):
         return spool
     if not split:
         msg = (
-            "Cannot write patches whose dimensional coordinates contain "
-            "gaps (segmented coordinates); a written patch must be "
-            "contiguous. Pass split=True to write each contiguous section "
-            "as its own patch, or split explicitly with patch.split_gaps()."
+            f"Format {fiber_io.name} cannot write patches whose dimensional "
+            "coordinates contain gaps (segmented coordinates); its patches "
+            "must be contiguous. Pass split=True to write each contiguous "
+            "section as its own patch, or split explicitly with "
+            "patch.split_gaps()."
         )
         raise ParameterError(msg)
     patches = []
@@ -2104,12 +2166,12 @@ def write(
         Optionally specify the version of the file, else use the latest
         version for the format.
     split
-        A written patch must have contiguous (non-gapped) coordinates.
         If True, patches whose dimensional coordinates contain gaps
         (segmented coordinates, e.g. from merging nearly-contiguous data)
         are split into contiguous patches before writing; this requires a
         format which supports multiple patches per file. If False (default)
-        such patches raise a
+        a format which stores gapped patches (DASDAE version 2) writes them
+        whole and any other raises a
         [`ParameterError`](`dascore.exceptions.ParameterError`).
 
     Raises

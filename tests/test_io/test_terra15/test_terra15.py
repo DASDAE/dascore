@@ -11,7 +11,10 @@ import pandas as pd
 import pytest
 
 import dascore as dc
+from dascore.io.core import FiberIO
+from dascore.io.terra15.core import Terra15FormatterV4
 from dascore.io.terra15.utils import _get_version_data_node
+from dascore.utils.time import to_datetime64
 
 
 class TestTerra15:
@@ -73,7 +76,7 @@ class TestTerra15:
         )
 
     def test_unsupported_version_error(self):
-        """Test that unsupported Terra15 version raises NotImplementedError."""
+        """Reject unsupported Terra15 versions."""
 
         # Create a mock HDF5 root object with unsupported version
         class MockRoot:
@@ -81,7 +84,7 @@ class TestTerra15:
 
         mock_root = MockRoot()
 
-        # Test that it raises NotImplementedError
+        # Reject unsupported versions.
         with pytest.raises(NotImplementedError, match="Unknown Terra15 version"):
             _get_version_data_node(mock_root)
 
@@ -105,3 +108,84 @@ class TestTerra15Unfinished:
         """Ensure the time is increasing."""
         time = patch_unfinished.coords.get_array("time")
         assert np.all(np.diff(time) >= np.timedelta64(0, "s"))
+
+    @pytest.mark.parametrize("snap", [False, True])
+    def test_read_and_scan_trim_unwritten_rows(self, terra15_das_unfinished_path, snap):
+        """Snapping changes timestamps, never which stored samples are valid."""
+        path = terra15_das_unfinished_path
+        with h5py.File(path) as resource:
+            _, node = _get_version_data_node(resource)
+            times = node["gps_time"][:]
+            count = np.count_nonzero(times > 0)
+            assert 0 < count < len(times)
+            assert np.all(times[count:] == 0)
+            expected_data = node["data"][:count]
+        patch = dc.read(path, snap=snap)[0]
+        np.testing.assert_array_equal(patch.data, expected_data)
+        if not snap:
+            np.testing.assert_array_equal(
+                patch.coords.get_array("time"), to_datetime64(times[:count])
+            )
+        payload = dc.scan_payloads(path, snap=snap)[0]
+        assert payload["coords"] == patch.coords
+
+
+class TestReadArray:
+    """Tests for slicing the data node directly."""
+
+    def test_unfinished_file_stops_at_written_samples(
+        self, terra15_das_unfinished_path
+    ):
+        """Zero-filled rows past the last written sample are never returned."""
+        io = Terra15FormatterV4()
+        patch = dc.spool(terra15_das_unfinished_path)[0]
+        out = io.read_array(terra15_das_unfinished_path, {})
+        assert out.shape == patch.shape
+        assert np.array_equal(out, patch.data)
+        # a window past the end clips to the written samples, as select does
+        tail = io.read_array(terra15_das_unfinished_path, {"time": (-3, 10**6)})
+        assert np.array_equal(tail, patch.data[-3:])
+
+    @pytest.mark.parametrize("snap", [False, True])
+    def test_array_windows_trim_unwritten_rows(self, terra15_das_unfinished_path, snap):
+        """Array windows count from the written tail with either snap setting."""
+        io = Terra15FormatterV4()
+        path = terra15_das_unfinished_path
+        out = io.read_array(path, {"time": (-5, None)}, snap_dims=snap)
+        expected = FiberIO.read_array(io, path, {"time": (-5, None)}, snap_dims=snap)
+        assert np.array_equal(out, expected)
+        assert len(out) == 5
+        raw = io.read_array(path, {}, snap_dims=snap)
+        np.testing.assert_array_equal(raw, io.read_array(path, {}))
+        np.testing.assert_array_equal(out, raw[-5:])
+
+    def test_both_spellings_agree(self, terra15_das_unfinished_path):
+        """Both snap spellings trim unwritten rows; snap wins for coordinates."""
+        io = Terra15FormatterV4()
+        path = terra15_das_unfinished_path
+        snapped = io.read(path, snap=True)[0]
+        for options in (
+            {"snap": False},
+            {"snap_dims": False},
+            {"snap": True, "snap_dims": False},
+        ):
+            np.testing.assert_array_equal(
+                io.read_array(path, {}, **options), snapped.data
+            )
+        both = io.read(path, snap=True, snap_dims=False)[0]
+        assert both.coords == snapped.coords
+
+    def test_reads_only_the_window(self, terra15_v6_path, monkeypatch):
+        """The data node is sliced in the file, not read whole then trimmed."""
+        seen = []
+        original = h5py.Dataset.__getitem__
+
+        def spy(self, index):
+            if self.name.endswith("/data"):
+                seen.append(index)
+            return original(self, index)
+
+        monkeypatch.setattr(h5py.Dataset, "__getitem__", spy)
+        Terra15FormatterV4().read_array(terra15_v6_path, {"time": (2, 6)})
+        assert len(seen) == 1
+        assert seen[0][0] == slice(2, 6)

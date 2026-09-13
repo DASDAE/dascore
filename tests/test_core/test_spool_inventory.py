@@ -1661,16 +1661,10 @@ class TestSelectorEdgeShapes:
         self, patch, inventory
     ):
         """
-        A bad selector is bad whether or not an inventory is attached.
+        Malformed index selectors raise with or without an inventory.
 
-        Every patch here states the name, so the inventory is never
-        consulted and the index's own complaint is the only one there is;
-        swallowing it as "the index selects nothing" would turn the error
-        into an empty spool.
-
-        The count is what forces it: an index-only select composes the
-        predicate lazily and complains when the rows are realized, while
-        an inventory-backed one realizes them at the call.
+        Counting realizes the lazy index-only selection; inventory-backed selection
+        realizes it immediately.
         """
         stated = patch.update_attrs(gauge_length=10.0)
         for spool in (
@@ -1900,12 +1894,7 @@ class TestConformBoundaryPolicy:
 
     def test_unstated_time_step_raises_naming_the_file(self, patch, inventory):
         """
-        A patch which must be cut but states no step says so, loudly.
-
-        The cut is found on the patch's own sample grid, which the step
-        is the only description of. Backing off to the raw boundary
-        would silently drop the sample beside it, and for an operation
-        asked to reconcile metadata that is the worse answer.
+        Splitting requires a sample step; using the raw boundary could drop a sample.
         """
         coord = patch.get_coord("time")
         times = np.sort(np.concatenate([coord.values[:5], coord.values[10:15]]))
@@ -2167,13 +2156,8 @@ class TestConformSubdivision:
 
     def test_a_boundary_which_changes_nothing_cuts_nothing(self, patch, inventory):
         """
-        An epoch bound the answers do not change across is not a boundary.
-
-        Every stated time on the key's branch is a candidate, so a fiber
-        array re-registered mid-patch — renamed, say — puts a bound
-        inside the row while leaving its acquisition and optical path
-        saying exactly what they said before. Splitting there would grow
-        the spool for nothing, and refusing the patch would be worse.
+        Epoch bounds leave patches intact when acquisition and optical path are
+        unchanged.
         """
         coord = patch.get_coord("time")
         when = coord.min() + coord.step * 500
@@ -2315,13 +2299,9 @@ class TestConformPartialCoverage:
         self, patch, inventory, off_grid_boundary
     ):
         """
-        A patch is judged over its whole span, not where it begins.
+        An acquisition lapsing mid-patch makes the whole row unresolved.
 
-        The acquisition lapses partway through with nothing after it, so
-        the tail of the patch has no entry. Keeping the described head
-        would answer a question the caller did not ask — they asked
-        about the patch — so the row is undescribed and `on_unresolved`
-        governs it.
+        The on_unresolved policy governs the row; do not retain only its described head.
         """
         array = inventory.networks[0].fiber_arrays[0]
         lapsed = inventory.replace(
@@ -2339,14 +2319,10 @@ class TestConformPartialCoverage:
         self, patch, inventory, off_grid_boundary
     ):
         """
-        An optical path ending mid-patch is a change of path like any other.
+        A lapsed optical path splits a patch into two described pieces.
 
-        An acquisition with no optical path is a described acquisition —
-        it simply projects nothing along the fiber — so the piece after
-        the lapse is described once, as the piece before it is. This is
-        why a lapsed *path* subdivides where a lapsed *acquisition*
-        leaves the row undescribed: the acquisition is what makes a
-        patch describable at all.
+        An acquisition remains described without a path; a lapsed acquisition instead
+        makes the row unresolved.
         """
         array = inventory.networks[0].fiber_arrays[0]
         lapsed = inventory.replace(
@@ -2650,12 +2626,8 @@ class TestChannelSelect:
 
     def test_the_patch_axis_keeps_its_own_meaning(self, patch, inventory):
         """
-        `distance` is the patch's axis, inventory attached or not.
-
-        The inventory could also place it on the fiber — its channels
-        start at 100 m along the path — so a name the index already uses
-        for a coordinate has to keep it, or attaching would move a name
-        out of the namespace it has always been in.
+        Attaching an inventory preserves the patch distance axis despite its path
+        offset.
         """
         spool = dc.spool(patch).attach_inventory(inventory)
         for form in ({}, {"_coords": {"distance": (0, 100)}}):
@@ -2806,13 +2778,9 @@ class TestExpandBy:
 
     def test_one_split_partitions_the_channels(self, patch, inventory):
         """
-        A channel holds one value of a group, so one split cannot share it.
+        One grouping assigns each channel once, including overlapping intervals.
 
-        Overlapping intervals of a group resolve to a single value per
-        channel — the projection `Patch.enrich` uses — so the outputs of
-        one call divide the fiber rather than covering it twice. Two
-        *different* groups may still cut it differently, which is what
-        makes a nested split worth doing.
+        Different groups may partition the channels differently in nested splits.
         """
         spool = dc.spool(patch).attach_inventory(inventory)
         for group in ("zone", "noisy"):
@@ -3459,15 +3427,10 @@ class TestChannelSelectContracts:
     )
     def test_the_index_selects_what_enrichment_projects(self, start, step, size):
         """
-        A rebuilt grid must name the same channels the patch's own does.
+        Index-reconstructed grids select the same channels as patch grids.
 
-        The grid is reconstructed from the index envelope rather than
-        read off the patch, and `Patch.select` does not snap an interior
-        bound to the nearest sample — so a float grid which drifted from
-        the patch's own values could trim one channel too many. Compared
-        by count and position rather than by value, since a trimmed
-        CoordRange regenerates its values from the piece's own start and
-        so differs in the last ulp for any trim, inventory or not.
+        Compare counts and positions: trimmed CoordRanges regenerate values from a new
+        start and may differ by an ulp.
         """
         distance = start + np.arange(size) * step
         span = float(distance.max() - distance.min())

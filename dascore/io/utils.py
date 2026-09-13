@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import warnings
-from collections.abc import Iterable, Mapping
-from typing import Any
+from collections.abc import Iterable, Mapping, Sequence
+from fractions import Fraction
+from typing import Any, cast
 
 import numpy as np
 
@@ -12,19 +13,18 @@ import dascore as dc
 from dascore.constants import INVENTORY_ATTRS
 from dascore.core.coordmanager import CoordManager
 from dascore.core.coords import BaseCoord, CoordSegmented, get_coord
-from dascore.exceptions import CoordError, UnitError
+from dascore.core.summary import normalize_source_patch_key
+from dascore.exceptions import (
+    CoordError,
+    MissingPatchError,
+    ParameterError,
+    PatchAttributeError,
+    UnitError,
+)
 from dascore.models import ArrayLike
 from dascore.units import convert_units, get_quantity_str
-from dascore.utils.misc import unbyte
-
-# Stored coordinate arrays often carry sub-step jitter (e.g. GPS-stamped DAS
-# time). ``CoordSegmented.from_array`` treats every isolated sampling change as
-# a seam, so a jittery array explodes into roughly one short segment per
-# sample. Past this fraction of segments the segmented form is slower to build,
-# larger in memory, and no more exact than a plain monotonic coordinate, so we
-# skip segmentation for arrays large enough for the cost to matter.
-_MAX_SEGMENT_FRACTION = 0.1
-_MIN_SEGMENT_GUARD_SIZE = 1_000
+from dascore.utils.misc import _to_slice, _validate_sample_values, unbyte
+from dascore.utils.time import to_exact_fraction
 
 
 def get_attr_names(attr_cls) -> set[str]:
@@ -152,6 +152,112 @@ def build_patches(
     return [dc.Patch(data=data[...], coords=coords, attrs=patch_attrs)]
 
 
+def windows_to_slices(
+    windows: Mapping[str, Any], dims: Sequence[str], shape: Sequence[int]
+) -> tuple[slice, ...]:
+    """
+    Turn `FiberIO.read_array` windows into one slice per dimension.
+
+    Each window is validated as `Patch.select` validates ``samples=True``
+    values and resolved against its dimension's length, so every slice
+    comes back with explicit non-negative bounds and ``start <= stop`` (a
+    reversed window is empty); a dimension without a window is taken whole.
+
+    Parameters
+    ----------
+    windows
+        Dimension name to ``(start, stop)`` half-open sample indices.
+    dims
+        The dimensions in the array's stored order.
+    shape
+        The array's shape, in the same order.
+    """
+    if unknown := sorted(set(windows) - set(dims)):
+        msg = f"Window dimensions {unknown} are not among patch dims {tuple(dims)}."
+        raise ParameterError(msg)
+    out = []
+    for dim, size in zip(dims, shape, strict=True):
+        if dim not in windows:
+            out.append(slice(0, size))
+            continue
+        _validate_sample_values(windows[dim])
+        window = _to_slice(windows[dim])
+        if window.step not in (None, 1):
+            msg = f"A window is a contiguous range; {dim!r} asked for {windows[dim]!r}."
+            raise ParameterError(msg)
+        span = range(size)[window]
+        out.append(slice(span.start, max(span.stop, span.start)))
+    return tuple(out)
+
+
+def resolve_keyed_source(
+    sources: Mapping[str, Any] | Iterable[tuple[str, Any]],
+    key,
+    where: str = "the resource",
+):
+    """
+    Return the one source a ``source_patch_key`` names.
+
+    Resolves a native key as the default `FiberIO.read_array` does: an
+    empty resource is missing data, and an unknown key, an ambiguous
+    keyless one, or a key naming more than one source cannot be
+    resolved. Unlike the default it takes no positional key, since a
+    format which states its own keys never synthesizes one.
+
+    ``sources`` maps each native key to whatever the caller needs back,
+    and is read lazily, so an h5py group can be passed as it is. Pass
+    ``(key, value)`` pairs instead where a resource can state one key
+    twice, so the ambiguity is seen rather than silently resolved.
+    """
+    key = normalize_source_patch_key(key)
+    if isinstance(sources, Mapping):
+        # a mapping cannot hold a name twice, so it is read as it is: an
+        # h5py group resolves a name without opening its siblings
+        mapping = cast("Mapping[str, Any]", sources)
+        if not len(mapping):
+            raise MissingPatchError(f"No patches in {where}.")
+        if key:
+            if key not in mapping:
+                raise PatchAttributeError(f"No patch named '{key}' in {where}.")
+            return mapping[key]
+        if len(mapping) > 1:
+            msg = f"{where} holds several patches; pass source_patch_key."
+            raise PatchAttributeError(msg)
+        return next(iter(mapping.values()))
+    pairs = list(sources)
+    if not pairs:
+        raise MissingPatchError(f"No patches in {where}.")
+    if key:
+        found = [value for name, value in pairs if name == key]
+        if not found:
+            raise PatchAttributeError(f"No patch named '{key}' in {where}.")
+        if len(found) > 1:
+            msg = f"{where} names '{key}' more than once; it cannot be resolved."
+            raise PatchAttributeError(msg)
+        return found[0]
+    if len(pairs) > 1:
+        msg = f"{where} holds several patches; pass source_patch_key."
+        raise PatchAttributeError(msg)
+    return pairs[0][1]
+
+
+def slice_dataset(
+    dataset: ArrayLike,
+    dims: Sequence[str],
+    windows: Mapping[str, Any],
+    shape: Sequence[int] | None = None,
+) -> np.ndarray:
+    """
+    Read the sample windows of an array stored in ``dims`` order.
+
+    ``shape`` defaults to the dataset's own; pass it when an axis of the
+    grid `scan` reports is shorter than the stored one, as it is for a
+    Terra15 file whose trailing rows were never written.
+    """
+    shape = dataset.shape if shape is None else shape
+    return dataset[windows_to_slices(windows, dims, shape)]
+
+
 def get_gridded_coord(values, units=None) -> BaseCoord:
     """
     Return a stored coordinate array forced onto an even grid.
@@ -184,35 +290,47 @@ def get_gridded_coord(values, units=None) -> BaseCoord:
 
 
 def get_exact_coord(values, units=None) -> BaseCoord:
-    """Return an exact coordinate, including for non-monotonic values."""
+    """
+    Return an exact coordinate, including for non-monotonic values.
+
+    Monotonic values keep their runs (`CoordSegmented.from_array`, whose
+    dense-array guard keeps a jittery array as one monotonic coordinate);
+    anything else keeps its values as an array.
+    """
     # atleast_1d matches get_coord(values=...): a squeezed single-sample
     # array (0-d) becomes a length-1 coordinate rather than a scalar.
     values = np.atleast_1d(np.asarray(values))
-    if _is_over_segmented(values):
-        return get_coord(data=values, units=units)
     try:
         return CoordSegmented.from_array(values, tolerance=0, units=units)
     except CoordError:
         return get_coord(data=values, units=units)
 
 
-def _is_over_segmented(values) -> bool:
+def step_from_rate(rate) -> Fraction | np.timedelta64:
     """
-    Cheaply predict whether ``from_array`` would explode into many segments.
+    The time step a file states as a sampling rate in Hz.
 
-    Mirrors ``CoordSegmented.from_array``'s run detection but stops at the
-    segment count, so the degenerate path never materializes the segments.
+    A rate that is a simple number (1024.0, 3000.0, 62.5, 999.9) gives an
+    exact `Fraction` step in seconds, which `get_coord` keeps on its grid;
+    any other rate gives the nearest nanosecond timedelta, as before. A
+    float32 rate recovers only the values it holds exactly, which is the
+    honest reading of it.
     """
-    if values.ndim != 1 or len(values) < _MIN_SEGMENT_GUARD_SIZE:
-        return False
-    diffs = np.diff(values)
-    zero = diffs[0] - diffs[0]
-    if not (np.all(diffs > zero) or np.all(diffs < zero)):
-        return False  # non-monotonic; from_array handles its own fallback
-    # A diff belongs to a run when it matches a neighbor; isolated diffs seam.
-    eq_next = diffs[:-1] == diffs[1:]
-    in_run = np.zeros(len(diffs), dtype=bool)
-    in_run[1:] |= eq_next
-    in_run[:-1] |= eq_next
-    segment_count = int(np.count_nonzero(~in_run)) + 1
-    return segment_count > _MAX_SEGMENT_FRACTION * len(values)
+    frac = to_exact_fraction(rate)
+    if frac is not None and frac > 0:
+        return 1 / frac
+    return dc.to_timedelta64(1 / float(rate))
+
+
+def step_from_interval(seconds) -> Fraction | np.timedelta64:
+    """
+    The time step a file states as a sample interval in seconds.
+
+    The exact `Fraction` when the interval is a simple fraction (``1 /
+    3000``, ``0.004``), otherwise the nearest nanosecond timedelta, as
+    before.
+    """
+    frac = to_exact_fraction(seconds)
+    if frac is not None and frac > 0:
+        return frac
+    return dc.to_timedelta64(float(seconds))

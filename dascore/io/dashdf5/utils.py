@@ -34,6 +34,9 @@ def _get_cf_version_str(hdf_fi) -> str | Literal[False]:
     return das_hdf_str[0].replace("DAS-HDF5-", "")
 
 
+_CF_DIMS = ("channel", "time")
+
+
 def _get_cf_coords(hdf_fi, minimal=False, snap=True) -> dc.core.CoordManager:
     """
     Get a coordinate manager of full file range.
@@ -72,16 +75,25 @@ def _get_cf_coords(hdf_fi, minimal=False, snap=True) -> dc.core.CoordManager:
         "y": ("channel",),
         "z": ("channel",),
     }
-    dims = ("channel", "time")
     cm = dc.core.CoordManager(
         coord_map=coords_map,
         dim_map=dim_map,
-        dims=dims,
+        dims=_CF_DIMS,
     )
-    # a bit of a hack to make sure data and coords align.
-    if cm.shape != hdf_fi["das"].shape:
+    if cm.dims != _get_cf_dims(hdf_fi):
         cm = cm.transpose()
     return cm
+
+
+def _get_cf_dims(hdf_fi) -> tuple[str, str]:
+    """
+    The stored dimension order of the ``das`` dataset.
+
+    The format does not state it, so it is read off the dataset's shape:
+    the channel-major order unless only the other one fits.
+    """
+    shape = (len(hdf_fi["channel"]), len(hdf_fi["t"]))
+    return _CF_DIMS if hdf_fi["das"].shape == shape else _CF_DIMS[::-1]
 
 
 def _get_cf_attrs(hdf_fi, coords=None, extras=None):

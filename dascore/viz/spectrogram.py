@@ -124,7 +124,10 @@ def spectrogram(
     This is [Patch.stft](`dascore.Patch.stft`) followed by
     [Patch.viz.waterfall](`dascore.viz.waterfall`), with one other
     dimension averaged away, and the values drawn are |STFT|² in the scaling
-    `stft` uses. Before DASCore 0.1.22 it called `scipy.signal.spectrogram`
+    `stft` uses. Each spectrum is drawn at its window-centre label over one
+    hop interval. The overlapping source-window bounds are omitted from
+    this plotting view so adjacent windows cannot obscure each other.
+    Before DASCore 0.1.22 it called `scipy.signal.spectrogram`
     directly, which differed in more than scaling: it removed the mean of
     each window (`detrend="constant"`), tapered with a ``("tukey", 0.25)``
     window, overlapped by an eighth of the window, took no windows past the
@@ -159,6 +162,9 @@ def spectrogram(
         detrend=detrend,
         **kwargs,
     )
+    # A spectrum occupies one hop in this view; its source window can
+    # overlap neighbouring windows and is not a display pixel.
+    spec = spec.drop_coords(f"{dim}_start", f"{dim}_stop")
     return spec.viz.waterfall(
         ax=ax, cmap=cmap, scale=scale, scale_type=scale_type, log=log, show=show
     )

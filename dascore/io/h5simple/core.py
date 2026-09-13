@@ -4,12 +4,19 @@ from __future__ import annotations
 
 from typing import Literal
 
+import numpy as np
+
 import dascore as dc
 from dascore.io import FiberIO, ScanPayload, make_scan_payload
-from dascore.io.utils import build_patches
+from dascore.io.utils import build_patches, slice_dataset
 from dascore.utils.hdf5 import H5Reader
+from dascore.utils.misc import raise_on_extra_kwargs
 
-from .utils import _get_attrs_coords_and_data, _is_h5simple
+from .utils import (
+    _get_attrs_coords_and_data,
+    _get_dims_and_data,
+    _is_h5simple,
+)
 
 
 class H5Simple(FiberIO):
@@ -44,6 +51,25 @@ class H5Simple(FiberIO):
         """
         attrs, cm, data = _get_attrs_coords_and_data(resource, snap)
         return dc.spool(build_patches(cm, data, attrs, selection=kwargs))
+
+    def read_array(
+        self,
+        resource: H5Reader,
+        windows: dict[str, tuple[int, int]],
+        snap: bool = True,
+        **kwargs,
+    ) -> np.ndarray:
+        """
+        Slice the data node directly.
+
+        The dimensions come from the file's ``dims`` attribute, or from
+        which node's length matches each axis, exactly as `read` resolves
+        them. No coordinate values are read either way, and the axis no
+        node accounts for is named without building its index.
+        """
+        raise_on_extra_kwargs(kwargs, "windows and snap")
+        dims, data_node = _get_dims_and_data(resource)
+        return slice_dataset(data_node, dims, windows)
 
     def scan(self, resource: H5Reader, snap=True, **kwargs) -> list[ScanPayload]:
         """Get the attributes of a h5simple file."""

@@ -1,11 +1,5 @@
 """
-Tests for the panel guard in the tests scripts/generate_doc_code_tests.py writes.
-
-A tutorial which prints a Patch, Spool or Inventory shows the reader the
-text repr where the docs site could have drawn the panel. Nothing about
-that is red: the page builds, the cell runs, and the only sign is output
-nobody can fold. The guard turns it into a failing doc example, and
-these tests are what say the guard is still installed.
+Test that generated doc examples reject printing objects with collapsible panels.
 """
 
 from __future__ import annotations
@@ -26,21 +20,17 @@ import dascore as dc
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 _SCRIPT_PATH = _REPO_ROOT / "scripts" / "generate_doc_code_tests.py"
-_QMD = "docs/tutorial/patch.qmd"
+_QMD = "dascore/docs/tutorial/patch.qmd"
 
-# The sdist ships tests but neither scripts/ nor docs/, on the same terms as
+# The sdist ships tests but neither scripts/ nor dascore/docs/, on the same terms as
 # test_build_notebooks.py skipping when scripts/ is absent.
 pytestmark = pytest.mark.skipif(
     not _SCRIPT_PATH.is_file() or not (_REPO_ROOT / _QMD).is_file(),
-    reason="scripts/ and docs/ are not installed",
+    reason="scripts/ and dascore/docs/ are not installed",
 )
 
-# Run out of process, because the whole chain has to be exercised at once:
-# the context installs the guard, and the generated module rebinds `print`
-# from `builtins` after every chunk, which only reaches the guard because
-# it reads the name then rather than at import. Out of process because
-# `qmd_test_context` deliberately leaves `sys.stdout` reconfigured, and a
-# doc example's harness should not follow the rest of the suite home.
+# Exercise guard installation and generated print rebinding together.
+# Use a subprocess because qmd_test_context leaves sys.stdout reconfigured.
 _RUN_GENERATED = """
 import builtins, importlib.util, sys, types
 from pathlib import Path
@@ -66,7 +56,7 @@ sys.modules.update({
 
 shown = "print(patch)" if printing else "patch"
 source = gen.render_test_module(
-    root / "docs" / "tutorial" / "patch.qmd",
+    root / "dascore" / "docs" / "tutorial" / "patch.qmd",
     (
         gen.Chunk(1, "import dascore as dc\\npatch = dc.get_example_patch()\\n"),
         gen.Chunk(2, shown + "\\n"),
@@ -160,7 +150,7 @@ class TestNoPrintedPanels:
         """
         The name a document binds is guarded too, not just the builtin.
 
-        docs/tutorial/patch.qmd imports dascore's print, which is rich's,
+        dascore/docs/tutorial/patch.qmd imports dascore's print, which is rich's,
         and that draws the text repr exactly as the builtin does.
         """
         with conftest_module.no_printed_panels(_QMD):
@@ -193,13 +183,8 @@ class TestNoPrintedPanels:
 
     def test_a_formatted_panel_goes_through(self, conftest_module, random_patch):
         """
-        The limit, pinned: an object formatted first arrives as a string.
-
-        `print(f"{patch}")` is what docs/recipes/parallelization.qmd
-        writes inside a loop, and by the time the guard sees it there is
-        nothing to tell it from any other text a document means to
-        print. Stated here so the boundary is a decision rather than a
-        gap somebody finds later.
+        Preformatted objects reach the guard as strings and cannot be distinguished from
+        ordinary text.
         """
         with conftest_module.no_printed_panels(_QMD):
             builtins.print(f"{random_patch}")  # noqa: T201

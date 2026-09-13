@@ -81,14 +81,13 @@ class _MuteGeometry(ABC, BaseModel):
 
         def _broadcast_smooth_to_dims(dims, smooth):
             """Broadcast smooth samples to dims length."""
-            # First, we need to get the smooth parameters to line up with the dims.
-            # For a single value, just broadcast to dim length.
+            # Align smoothing parameters with the dimensions.
             if not isinstance(smooth, Mapping):
                 vals = [smooth] * len(dims)
                 axes = self.axes
                 smooth_dims = dims
             else:
-                # Otherwise, the smooth dict must be a subset of the dimensions.
+                # The smoothing dict must name patch dimensions.
                 if not set(smooth).issubset(set(dims)):
                     msg = (
                         f"If a smooth dictionary is used in Mute, it must be a "
@@ -126,7 +125,7 @@ class _MuteGeometry(ABC, BaseModel):
 
         smooth_by_dims, axes, smooth_dims = _broadcast_smooth_to_dims(self.dims, smooth)
         smooth_ints = _convert_to_samples(smooth_by_dims, smooth_dims, patch)
-        # Now convert to input format for scipy's gaussian filter.
+        # Convert to scipy's axis order.
         return smooth_ints, axes
 
 
@@ -204,15 +203,13 @@ class _MuteGeometry2D(_MuteGeometry):
             [dc.to_float(patch.get_coord(x).coord_range()) for x in dims]
         )
         origin = get_2d_line_intersection(*points)
-        # Get vectors with various stages of normalization.
-        # We need to first normalize in coord space and then by l2 norm.
+        # Normalize first in coordinate space, then by the L2 norm.
         l1 = points[1] - points[0]
         l2 = points[3] - points[2]
         v1, v2 = l1 / coord_norm, l2 / coord_norm
         norm_v1, norm_v2 = norm(v1), norm(v2)
         with np.errstate(divide="ignore", invalid="ignore"):
             v1_norm, v2_norm = v1 / norm_v1, v2 / norm_v2
-        # Then get array for easier manipulation
         v_norms = np.stack([v1_norm, v2_norm], axis=0)
 
         # Check if any points are degenerate.
@@ -273,11 +270,8 @@ class _MuteGeometry2D(_MuteGeometry):
                 # This pair value is a place holder (None, ...)
                 elif not is_sized and (pair is None or pair is Ellipsis):
                     continue
-                # This is an implicit value; here is where things get crazy.
-                # We handle this by creating a new set of points to sub into
-                # the output array. This new set shares a first point with the
-                # other line, as well as the point on the implicit dimension.
-                # The value for the non-implicit dimension is held fixed.
+                # Resolve the implicit value with a line sharing the other
+                # line's first point while holding the explicit dimension fixed.
                 else:
                     ifill_index = pair_ind
                     other_col_ind = 0 if ind == 1 else 1
@@ -328,13 +322,11 @@ class _MuteGeometry2D(_MuteGeometry):
             coord_vals -= dc.to_float(coord.min())
             # Iterate over each origin.
             for onum, origin in enumerate(self.origins):
-                # We need to transform coordinate values to values between 0 and 1.
-                # with the same dimensionality as array.
+                # Scale coordinates to [0, 1] with the array's dimensionality.
                 norm_vals = (coord_vals - origin[dim_num]) / coord_range
                 bcast_inds = [None] * array.ndim
                 bcast_inds[ax] = slice(None)
                 norms = norm_vals[tuple(bcast_inds)]
-                # Next, we set those values on an array with the same shape as array.
                 inds = [slice(None)] * array.ndim
                 inds[ax] = slice(None, len(coord))
                 carray = np.empty_like(array)
@@ -442,86 +434,49 @@ def line_mute(
         The patch instance.
     {smooth_param}
     invert
-        If True, invert the taper such that the values outside the defined region
-        are set to 0.
+        Zero values outside rather than inside the region.
     relative
-        If True (default), values are relative to coordinate edges.
-        Positive values are offsets from start, negative from end.
+        Interpret positive values from the coordinate start and negative values
+        from its end; False uses absolute coordinate values.
     **kwargs
-        Dimension specifications as (boundary_1, boundary_2) pairs.
-        Each boundary can be:
-        - Scalar: constant value (defines plane perpendicular to dimension)
-        - Length-2 sequence: coordinates defining a straight line (2D only)
-        - None or ...: edge of coordinate (min or max)
+        One or two dimensions mapped to boundary pairs. Each boundary is a
+        scalar, a length-2 straight line (2D only), or None/``...`` for the
+        coordinate edge.
 
     Examples
     --------
     >>> import dascore as dc
-    >>>
-    >>> # An example patch full of 1s with time on y axis and distance on x.
     >>> patch = dc.get_example_patch().full(1)
-    >>>
-    >>> # Mute first 0.5s (relative to start by default)
+    >>> # Mute the first 0.5 s, or retain only the middle section.
     >>> muted = patch.line_mute(time=(0, 0.5))
-    >>>
-    >>> # Mute everything except middle section
     >>> kept = patch.line_mute(time=(0.2, -0.2), invert=True)
     >>>
-    >>> # 1D Mute with smoothed absolute units for time.
+    >>> # Smooth boundaries with an explicit unit.
     >>> muted = patch.line_mute(time=(0.2, 0.8), smooth=0.02 * dc.units.s)
     >>>
-    >>> # Classic first break mute: mute early arrivals
-    >>> # Line from (t=0, d=0) to (t=0.3, d=300) defines velocity=1000 m/s
-    >>> # The other line (defined by time=0 and distance=None) is t=0 (over all
-    >>> # distances).
+    >>> # Mute early arrivals above a 1,000 m/s line.
     >>> muted = patch.line_mute(
     ...     time=(0, [0, 0.3]),
     ...     distance=(None, [0, 300]),
     ...     smooth=0.02,
     ... )
     >>>
-    >>> # Mute late arrivals: from velocity line to a vertical line with
-    >>> # with distance=0 (over all times).
-    >>> muted = patch.line_mute(
-    ...     time=([0, 0.3], None),
-    ...     distance=([0, 300], 0),
-    ... )
-    >>>
-    >>> # Mute wedge between two velocity lines
+    >>> # Mute between two velocity lines, or invert to keep the wedge.
     >>> muted = patch.line_mute(
     ...     time=([0, 0.375], [0, 0.25]),
     ...     distance=([0, 300], [0, 300]),
     ... )
-    >>>
-    >>> # Mute wedge outside two velocity lines
-    >>> muted = patch.line_mute(
+    >>> kept = patch.line_mute(
     ...     time=([0, 0.375], [0, 0.25]),
     ...     distance=([0, 300], [0, 300]),
     ...     invert=True,
     ... )
-    >>>
-    >>> # Apply custom tapering
-    >>> ones = patch.full(1.0)
-    >>> envelope = ones.line_mute(
-    ...     time=([0, 0.375], [0, 0.25]),
-    ...     distance=([0, 300], [0, 300]),
-    ... )
-    >>> # Knock down edges with rolling mean along the time dimension.
-    >>> smooth = envelope.rolling(time=5, samples=True).mean()
-    >>> # Then multiply the two patches.
-    >>> result = patch * smooth
 
     Notes
     -----
-    - By relative=True (the default) means values are offsets from coordinate
-      edges. Use relative=False for absolute coordinate values.
-
-    - Currently, mute doesn't support more than 2 dimensions, and 2D mutes
-      require straight-line boundaries.
-
-    - For more control over boundary smoothing, use a patch with one values
-      then apply custom tapering/smoothing before multiplying with the
-      original patch. See example section for more details.
+    At most two dimensions are supported, and 2D boundaries must be straight.
+    For custom smoothing, apply the mute to an all-ones patch, smooth that
+    envelope, then multiply it by the original patch.
 
     See Also
     --------
@@ -530,7 +485,6 @@ def line_mute(
     - [`Patch.gaussian_filter`](`dascore.proc.filter.gaussian_filter`)
     - [`Patch.slope_mute`](`dascore.Patch.slope_mute`)
     """
-    # Get geometry object to set up the problem.
     geo = _get_mute_geometry(patch, kwargs, relative)
     # Initialize the output array which shares the dimensionality of the
     # patch (so it will broadcast) but is as flat as possible.

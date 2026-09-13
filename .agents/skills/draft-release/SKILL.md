@@ -35,7 +35,7 @@ Input: `release_type`, one of `major`, `minor`, `patch`/`bugfix` (equivalent). D
 
 5. Collect entries. Each PR body has a `## Changelog` section, already written
    and categorized by its author per "Changelog entries" in
-   `docs/contributing/general_guidelines.qmd` and enforced by
+   `dascore/docs/contributing/general_guidelines.qmd` and enforced by
    `.github/scripts/check_pr_changelog.py`. Read those bullets rather than
    re-deriving them: each becomes one entry under the section its category
    names, and every `**breaking**` entry is also listed under `Breaking Changes`.
@@ -55,7 +55,7 @@ Input: `release_type`, one of `major`, `minor`, `patch`/`bugfix` (equivalent). D
    else observable including performance. Check the tag before marking anything
    breaking — an API introduced after it cannot break anyone.
 
-   See "Draft the release notes" in `docs/contributing/publish_a_new_release.qmd`
+   See "Draft the release notes" in `dascore/docs/contributing/publish_a_new_release.qmd`
    for the sections to use, and their order.
 
 6. Print the new tag and the changelog. Split a PR's unrelated changes into

@@ -1,10 +1,7 @@
 """
-Validate the Changelog section of a pull request body.
+Validate the PR_BODY environment variable's Changelog section.
 
-Release notes are assembled from merged pull requests, so each one must state
-its user-facing changes in a machine-readable form. This script checks the body
-supplied in the PR_BODY environment variable and exits non-zero, explaining
-what is wrong, when it does not conform.
+Exit nonzero with diagnostics when it does not match the release-note format.
 """
 
 from __future__ import annotations
@@ -46,7 +43,8 @@ _HELP = (
     "optionally followed by '**breaking**', or the whole section must be the "
     "single word 'none' (bulleted or bare). Example:\n"
     "    - changed **breaking**: `dc.set_config` is no longer a context manager.\n"
-    "See docs/contributing/general_guidelines.qmd (#changelog-entries), published at\n"
+    "See dascore/docs/contributing/general_guidelines.qmd "
+    "(#changelog-entries), published at\n"
     "    https://dascore.org/contributing/general_guidelines.html#changelog-entries"
 )
 

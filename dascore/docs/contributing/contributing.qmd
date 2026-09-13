@@ -1,0 +1,22 @@
+---
+title: Contributing
+aliases:
+  - /recipes/how_to_contribute.html
+---
+
+Contributions are welcome. Follow the [code of conduct](code_of_conduct.qmd), then [install DASCore for development](dev_install.qmd).
+
+- [General workflow and changelog](general_guidelines.qmd)
+- [Testing](testing.qmd)
+- [Style and linting](style_and_linting.qmd)
+- [Documentation](documentation.qmd)
+- [Adding file formats](new_format.qmd)
+- [Extending DASCore](extending_dascore.qmd)
+
+# Planning
+
+Development planning and prioritization happens in the [DASDAE project](https://github.com/orgs/DASDAE/projects/2).
+
+# DASCore or other DASDAE packages
+
+Features belong in DASCore when they are broadly useful, not domain-specific, and need no new dependency; propose specialized features as extension packages. Before adding any dependency, open a discussion describing the feature, dependency cost, and related uses. Controversial additions may require a developer-check-in presentation covering installation size and future uses, followed by majority approval. Other [DASDAE](https://github.com/DASDAE) packages may choose their own workflow, but following DASCore's conventions makes cross-project work easier.

@@ -152,6 +152,12 @@ class TestManyFileDirectoryBenchmarks:
         assert len(spool)
 
     @pytest.mark.benchmark
+    def test_count_time_window(self, indexed_spool):
+        """Time counting the patches in a short time window."""
+        window = ("2023-01-01T00:00:01", "2023-01-01T00:00:02")
+        assert len(indexed_spool.select(time=window))
+
+    @pytest.mark.benchmark
     def test_merge_many_files(self, indexed_spool):
         """Time merging many files into a single patch."""
         merged = indexed_spool.chunk(time=None)

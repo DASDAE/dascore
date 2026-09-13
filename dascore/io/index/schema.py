@@ -33,10 +33,13 @@ from typing import NamedTuple, get_args, get_type_hints
 # Version of the index schema, independent of dascore's version. Bump it
 # when an index written by an older dascore would be read wrongly rather
 # than merely incompletely -- including when what a *stored value* means
-# changes, not only when a column does. 14 reads a legacy DASDAE file's
-# PyTables attr payloads, so 13 stored the payload text where a value
-# is now stored (`gauge_length` of "N." rather than nothing).
-INDEX_VERSION = 14
+# changes, not only when a column does. Version 18 counts patches and
+# coordinate variants; version 17 links a segmented coordinate to each of
+# its runs; version 16 stored each range coordinate's exact grid and named
+# the envelope columns by storage type; version 15 stored source coordinate
+# and numeric attribute dtypes. Earlier indexes lack the metadata required
+# for reconstruction and are rebuilt when opened.
+INDEX_VERSION = 18
 # Identity string so any tool can sanity-check what it opened.
 WHAT_IS_THIS = "dascore_spool_index"
 
@@ -66,6 +69,8 @@ class MetaDataRow(NamedTuple):
     index_version: int
     dascore_version: str
     last_indexed_ns: int
+    # every patch in the index, kept by the counting triggers
+    patch_count: int
 
 
 class SourceRow(NamedTuple):
@@ -119,6 +124,12 @@ class PatchRow(NamedTuple):
     distance_min: float | None  # original units, as the coord states them
     distance_max: float | None
     distance_step: float | None
+    # 1 when every attr the patch defines is a column; 0 when ingest had
+    # to leave one out (an array, a name a structural column owns), so a
+    # row built into a patch would be missing what the file holds.
+    attrs_complete: int
+    # JSON mapping for numeric attrs whose scalar dtype SQL would erase.
+    attr_dtypes: str | None
 
 
 class AttrsRow(NamedTuple):
@@ -150,6 +161,10 @@ class CoordDefRow(NamedTuple):
     reconstructed exactly from the range summary. Non-range coordinates
     without a fingerprint use a summary hash for storage deduplication,
     but it is not exposed as value identity.
+
+    The envelope columns are named by storage type: `_int` holds epoch
+    or duration nanoseconds, `_float` numbers in the coordinate's units,
+    `_str` text. `value_kind` and `is_relative` say what the integers mean.
     """
 
     coord_def_id: int
@@ -163,15 +178,24 @@ class CoordDefRow(NamedTuple):
     # the index shows what the patch shows. Unit-bearing queries convert
     # themselves per stored unit at query time.
     units: str | None
-    min_num: float | None
-    max_num: float | None
-    step_num: float | None
-    min_ns: int | None
-    max_ns: int | None
-    step_ns: int | None
+    # 1 when the row alone rebuilds every value of the coordinate (a
+    # range); 0 when it is only an envelope and the values live in the
+    # source (arrays, strings, segmented coordinates).
+    is_exact: bool
+    min_float: float | None
+    max_float: float | None
+    step_float: float | None
+    min_int: int | None
+    max_int: int | None
+    step_int: int | None
     min_str: str | None
     max_str: str | None
     is_relative: bool | None
+    # The exact grid of a nanosecond-time or integer range, in ticks (see
+    # CoordRange); NULL for float ranges and for rows which are not exact.
+    step_numerator: int | None
+    step_denominator: int | None
+    origin_offset: int | None
 
 
 class PatchCoordRow(NamedTuple):
@@ -180,12 +204,38 @@ class PatchCoordRow(NamedTuple):
 
     Links a patch to its coord defs; the name and dims are patch-level
     semantics (two patches can share values under different names).
+    `run_index` 0 is the coordinate as a whole, which every query about a
+    patch's coordinate reads; a segmented coordinate is also linked to
+    each of its runs, in order, as 1, 2, ..., which gap reports read and
+    plans and exports carry.
     """
 
     patch_id: int
     coord_name: str
+    run_index: int
     coord_dims: str
     coord_def_id: int
+    dtype: str  # source representation; shared definitions identify values
+
+
+class CoordVariantRow(NamedTuple):
+    """
+    A row of the coord_variants table: one per distinct stated coordinate.
+
+    Counts the whole-coordinate links (`run_index` 0) sharing a name,
+    dtype, kind, units and relativity, so coordinate discovery reads these
+    few rows rather than every link. Kept by the counting triggers;
+    `variant_key` is the other five as a JSON array, giving a tuple with
+    nullable members a unique identity.
+    """
+
+    variant_key: str
+    coord_name: str
+    dtype: str
+    value_kind: str
+    units: str | None
+    is_relative: bool | None
+    patch_count: int
 
 
 # The row class declaring each stored table.
@@ -198,6 +248,7 @@ TABLE_ROWS = MappingProxyType(
         "attr_meta": AttrMetaRow,
         "coord_defs": CoordDefRow,
         "patch_coords": PatchCoordRow,
+        "coord_variants": CoordVariantRow,
     }
 )
 
@@ -254,13 +305,15 @@ TABLE_CONSTRAINTS = MappingProxyType(
             "PRIMARY KEY (coord_def_id)",
             "UNIQUE (def_key)",
             "CHECK (value_kind IN ('num', 'time', 'str'))",
+            "CHECK (is_exact IN (0, 1))",
             "CHECK (is_relative IS NULL OR is_relative IN (0, 1))",
         ),
         "patch_coords": (
-            "PRIMARY KEY (patch_id, coord_name)",
+            "PRIMARY KEY (patch_id, coord_name, run_index)",
             "FOREIGN KEY (patch_id) REFERENCES patches(patch_id) ON DELETE CASCADE",
             "FOREIGN KEY (coord_def_id) REFERENCES coord_defs(coord_def_id)",
         ),
+        "coord_variants": ("PRIMARY KEY (variant_key)",),
     }
 )
 
@@ -286,6 +339,8 @@ RESERVED_ATTR_COLUMNS = frozenset(
         "dims",
         "dtype",
         "data_size",
+        "attrs_complete",
+        "attr_dtypes",
         # These named structural columns until version 9 dropped them.
         # They stay reserved: the spool gives them a meaning whether or
         # not a column holds one, and un-reserving a name silently turns
@@ -338,14 +393,70 @@ RESERVED_ATTR_COLUMNS = frozenset(
 # backend, before attr columns land, so the attr finds the public spelling
 # free; the rest are renamed where the spool relation is built.
 SPOOL_EARLY_RENAMES = MappingProxyType({"patch_id": "_patch_id"})
-SPOOL_LATE_RENAMES = MappingProxyType({"dtype": "_dtype", "data_size": "_data_size"})
+SPOOL_LATE_RENAMES = MappingProxyType(
+    {
+        "dtype": "_dtype",
+        "data_size": "_data_size",
+        "attrs_complete": "_attrs_complete",
+        "attr_dtypes": "_attr_dtypes",
+    }
+)
 
-# Explicit secondary indexes. Every other access path is covered by a
-# PRIMARY KEY or UNIQUE autoindex above — patch_coords(patch_id,
-# coord_name), sources(base_uri, source_path), patches(source_id,
-# source_patch_key), coord_defs(def_key) — and duplicating them measured
-# ~25% extra file size and slower writes for no query gain.
-INDEXES = (("idx_pcoords_name", "patch_coords", "coord_name"),)
+# Explicit secondary indexes, as (name, table, columns, WHERE clause or
+# None). Every other access path is covered by a PRIMARY KEY or UNIQUE
+# autoindex above — patch_coords(patch_id, coord_name, run_index), sources(base_uri,
+# source_path), patches(source_id, source_patch_key), coord_defs(def_key)
+# — and duplicating them measured ~25% extra file size and slower writes
+# for no query gain. `idx_cdefs_grid` lists the definitions whose grid
+# the envelope cannot restate -- a fractional step or offset, or a
+# descending run, whose start the envelope does not name -- so a query
+# need not scan them all.
+GRID_NEEDED = "step_denominator != 1 OR origin_offset != 0 OR step_numerator < 0"
+
+# A patch_coords row's coord_variants identity, given its alias; the row's
+# definition is always joined as `cd`.
+VARIANT_COLUMNS = "{0}.coord_name, {0}.dtype, cd.value_kind, cd.units, cd.is_relative"
+_NEW, _OLD = VARIANT_COLUMNS.format("NEW"), VARIANT_COLUMNS.format("OLD")
+_OLD_KEY = (
+    f"(SELECT json_array({_OLD}) FROM coord_defs cd "
+    "WHERE cd.coord_def_id = OLD.coord_def_id)"
+)
+# Triggers keeping the patch and coordinate variant counts. Living in the
+# database, they count every write however it arrives, including cascaded
+# deletes and rows written straight through SQL.
+TRIGGERS = MappingProxyType(
+    {
+        "count_patch_added": (
+            "AFTER INSERT ON patches BEGIN "
+            "UPDATE meta_data SET patch_count = patch_count + 1; END"
+        ),
+        "count_patch_removed": (
+            "AFTER DELETE ON patches BEGIN "
+            "UPDATE meta_data SET patch_count = patch_count - 1; END"
+        ),
+        "count_variant_added": (
+            "AFTER INSERT ON patch_coords WHEN NEW.run_index = 0 BEGIN "
+            f"INSERT INTO coord_variants SELECT json_array({_NEW}), {_NEW}, 1 "
+            "FROM coord_defs cd WHERE cd.coord_def_id = NEW.coord_def_id "
+            "ON CONFLICT (variant_key) "
+            "DO UPDATE SET patch_count = patch_count + 1; END"
+        ),
+        "count_variant_removed": (
+            "AFTER DELETE ON patch_coords WHEN OLD.run_index = 0 BEGIN "
+            "UPDATE coord_variants SET patch_count = patch_count - 1 "
+            f"WHERE variant_key = {_OLD_KEY}; "
+            "DELETE FROM coord_variants "
+            f"WHERE variant_key = {_OLD_KEY} AND patch_count = 0; END"
+        ),
+    }
+)
+INDEXES = (
+    # whole coordinates only, so run links never lengthen a coordinate scan
+    ("idx_pcoords_name", "patch_coords", "coord_name", "run_index = 0"),
+    ("idx_cdefs_grid", "coord_defs", "def_key", GRID_NEEDED),
+    # run links only, so an index without runs answers from an empty index
+    ("idx_pcoords_runs", "patch_coords", "coord_name", "run_index > 0"),
+)
 
 
 # --- SQL generation -----------------------------------------------------

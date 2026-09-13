@@ -33,11 +33,9 @@ def specplot(
     """
     Plot the spectrum contained in a Fourier-transformed patch.
 
-    This function wraps :meth:`Patch.viz.waterfall` and automatically
-    identifies the Fourier-transformed coordinate. The corresponding axis label
-    is replaced with a publication-friendly descriptor (e.g. ``Frequency`` or
-    ``Wavenumber``). Optionally, the Fourier axis can be displayed
-    on a logarithmic scale.
+    Wraps [waterfall](`dascore.viz.waterfall`), identifies the Fourier coordinate,
+    and labels it as frequency or wavenumber. ``log=True`` uses a logarithmic
+    Fourier axis.
 
     Parameters
     ----------
@@ -45,13 +43,12 @@ def specplot(
         The patch containing spectral data. At least one coordinate must
         represent a Fourier-transformed dimension (``ft_*``).
     ax
-        Existing matplotlib axes to draw on. If omitted, a new axes is
-        created.
+        Existing matplotlib axes; creates one when omitted.
     cmap
         Colormap passed to [waterfall](`dascore.viz.waterfall`).
     scale
         Scaling limits passed to [waterfall](`dascore.viz.waterfall`).
-        Default is [0, 1], showing the full data range
+        Defaults to [0, 1], the full data range.
     scale_type
         Scaling mode passed to [waterfall](`dascore.viz.waterfall`).
     interpolation
@@ -63,9 +60,9 @@ def specplot(
         For a distance coordinate, positive and negative wavenumbers are shown, while
         for a time coordinate only positive frequencies are shown.
     cbar
-        If True, colorbar is added.
+        Whether to add a colorbar.
     show
-        If True, show the plot, else just return axis.
+        Whether to show the plot.
 
     Returns
     -------
@@ -89,7 +86,7 @@ def specplot(
     >>> fk_patch = patch.dft(("time", "distance")).abs()
     >>> ax = fk_patch.viz.specplot(log=True, cmap='inferno')
     """
-    # check if patch actually has a fourier-transformed dimension
+    # Require at least one Fourier-transformed dimension.
     dims = patch.coords.dims
     is_fft_dim = [d.startswith("ft_") for d in dims]
     if not any(is_fft_dim):
@@ -108,7 +105,7 @@ def specplot(
         )
         raise PatchError(msg)
 
-    # Make the plot
+    # Draw through waterfall, then specialize the Fourier axes.
     ax = patch.viz.waterfall(
         cmap=cmap,
         ax=ax,
@@ -127,7 +124,7 @@ def specplot(
         if dim not in fft_dims:
             continue
 
-        # replace labels with publication-ready descriptors
+        # Replace labels with publication-ready descriptors.
         label = _get_dim_label(patch, dim)
         for key, value in label_replacements.items():
             label = label.replace(key, value)

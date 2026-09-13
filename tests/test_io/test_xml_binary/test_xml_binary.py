@@ -230,6 +230,27 @@ class TestRead:
         assert isinstance(out, dc.BaseSpool)
         assert len(out) == 1
 
+    @pytest.mark.parametrize("single", [False, True])
+    def test_reader_trim_records_selection_once(
+        self, binary_xml_directory, tmp_path, single
+    ):
+        """Directory and single-file sources match direct selection provenance."""
+        directory = binary_xml_directory
+        if single:
+            directory = tmp_path
+            shutil.copy2(binary_xml_directory / "metadata.xml", directory)
+            shutil.copy2(next(binary_xml_directory.glob("*.raw")), directory)
+        spool = dc.spool(directory).update()
+        source = spool[0]
+        time = source.get_coord("time")
+        bounds = (time.min() + 10 * time.step, time.min() + 20 * time.step)
+        expected = source.select(time=bounds)
+        out = spool.select(time=bounds)[0]
+        assert out.attrs.processing_id == expected.attrs.processing_id
+        assert out.attrs.history == expected.attrs.history
+        assert np.array_equal(out.data, expected.data)
+        assert out.coords == expected.coords
+
     def test_read_whole_directory(self, binary_xml_directory):
         """Ensure the simple path can be read by fiber io instance."""
         fiber_io = XMLBinaryV1()

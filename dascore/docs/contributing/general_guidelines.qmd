@@ -1,0 +1,33 @@
+---
+title: Guidelines
+---
+
+# Branches and versions
+
+Develop each change on its own branch and merge it into `dev` by pull request. Releases merge `dev` into `master`. The [development docs](https://dascore.netlify.app) track `dev`; [stable docs](https://dascore.org) update on release.
+
+DASCore loosely follows [semantic versioning](https://semver.org/): features normally advance the minor version and fixes the patch version.
+
+## Contribution workflow
+
+1. Fork DASCore if you cannot push to the main repository, clone your fork, and add `https://github.com/DASDAE/dascore.git` as the `upstream` remote.
+2. Create a branch from the latest `dev` and make one focused change.
+3. Run the affected tests, full test suite, and pre-commit hooks.
+4. Push the branch and open a pull request against `DASDAE/dascore:dev` with a clear description and changelog entry.
+
+# Changelog entries
+
+DASCore has no changelog file. Release notes are assembled from each pull request's required `## Changelog` section. Add one bullet per user-facing change, starting with `added`, `changed`, `deprecated`, `removed`, `fixed`, or `security`; use `none` when nothing is user-facing. Add `**breaking**` after the category only for changes that can break code written against the latest release.
+
+```markdown
+- added: `Patch.enrich` copies inventory metadata onto a patch.
+- changed **breaking**: `dc.set_config` is no longer a context manager; use `dc.config_context`.
+```
+
+After the colon, write a complete sentence with a subject, verb, and period. `none` may be bare or the only bullet (`- none`).
+
+# Code conventions
+
+- Prefer `pathlib.Path`; strings may be faster for very large file indexes.
+- Use snake-case dataframe columns and `df["column"]`, not attribute access.
+- Return new dataframes and series unless an explicit `inplace` option is necessary.

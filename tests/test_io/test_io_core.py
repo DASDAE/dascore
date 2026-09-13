@@ -7,6 +7,7 @@ import io
 import os
 import shutil
 import threading
+from fractions import Fraction
 from pathlib import Path
 from typing import ClassVar, Literal, TypeVar
 
@@ -51,9 +52,19 @@ from dascore.io.core import (
     make_scan_payload,
 )
 from dascore.io.dasdae.core import DASDAEV1
-from dascore.io.utils import build_patches, convert_attr_units, get_exact_coord
+from dascore.io.utils import (
+    build_patches,
+    convert_attr_units,
+    get_exact_coord,
+    resolve_keyed_source,
+    slice_dataset,
+    step_from_interval,
+    step_from_rate,
+    windows_to_slices,
+)
 from dascore.utils.downloader import fetch
 from dascore.utils.hdf5 import H5Writer
+from dascore.utils.identity import source_patch_id
 from dascore.utils.io import (
     BinaryReader,
     BinaryWriter,
@@ -62,7 +73,6 @@ from dascore.utils.io import (
 )
 from dascore.utils.misc import suppress_warnings
 from dascore.utils.time import to_datetime64
-from dascore.workflow.identity import source_patch_id
 
 tvar = TypeVar("tvar", int, float, str, Path)
 
@@ -336,6 +346,33 @@ class TestGetExactCoord:
         np.testing.assert_array_equal(coord.values, values)
         assert not isinstance(coord, CoordSegmented)
 
+    @pytest.mark.parametrize("length", [999, 1000, 2000])
+    @pytest.mark.parametrize("reverse", [False, True])
+    def test_float_jitter_preserved(self, length, reverse):
+        """Avoiding excessive segments must not approximate floating-point values."""
+        values = np.arange(length, dtype=float)
+        values += np.random.default_rng(4).uniform(-1e-5, 1e-5, length)
+        values = values[::-1] if reverse else values
+
+        coord = get_exact_coord(values, units="m")
+
+        np.testing.assert_array_equal(coord.values, values)
+        assert not isinstance(coord, CoordSegmented)
+        assert coord.units == dc.get_quantity("m")
+        assert coord.reverse_sorted == reverse
+
+    @pytest.mark.parametrize("repeats", [2, 250])
+    def test_unsigned_unsorted_selection(self, repeats):
+        """Unsigned difference wraparound must not select a monotonic search path."""
+        values = np.tile(np.array([0, 2, 1, 3], dtype=np.uint16), repeats)
+        coord = get_exact_coord(values)
+
+        np.testing.assert_array_equal(coord.values, values)
+        selected, indexer = coord.select((1, 1))
+        expected = np.ones(repeats, dtype=values.dtype)
+        np.testing.assert_array_equal(selected.values, expected)
+        np.testing.assert_array_equal(values[indexer], expected)
+
     def test_large_non_monotonic_array_preserved(self):
         """A large non-monotonic array skips the segment guard and stays exact."""
         rng = np.random.default_rng(1)
@@ -565,7 +602,7 @@ class TestScanResultToSummary:
         patch = dc.get_example_patch()
         msg = (
             "DASCore no longer accepts PatchAttrs from FiberIO.scan\\(\\).*"
-            "docs/contributing/new_format.qmd"
+            "dascore/docs/contributing/new_format.qmd"
         )
         with pytest.raises(ValueError, match=msg):
             _scan_result_to_summary(patch.attrs)
@@ -1799,6 +1836,15 @@ class TestGetSupportedIOTable:
         # assert that the length of the DataFrame is not 0
         assert len(result_df) > 0
 
+    def test_read_array_column(self):
+        """The table says which formats slice storage directly."""
+        table = FiberIO.get_supported_io_table()
+        flags = table.groupby("name")["read_array"].any()
+        assert flags["DASDAE"]
+        # a format which writes but inherits the default, so the column
+        # cannot be mistaken for the write flag
+        assert not flags["PICKLE"]
+
 
 class TestMissingInstallName:
     """Tests for guessing the package to install from a dependency error."""
@@ -2202,3 +2248,250 @@ class TestSourceIds:
         """The config which turns the ids off turns this off too."""
         with config_context(patch_provenance="disabled"):
             assert dc.read(terra15_path)[0].attrs.patch_id == ""
+
+
+class TestFiberIOReadArray:
+    """Tests for the read_array data-only contract and its default."""
+
+    @pytest.fixture(scope="class")
+    def single_patch_path(self, tmp_path_factory):
+        """One patch written to a DASDAE file."""
+        path = tmp_path_factory.mktemp("read_array") / "single.h5"
+        dc.write(dc.get_example_patch(), path, "dasdae")
+        return path
+
+    @pytest.fixture(scope="class")
+    def multi_patch_path(self, tmp_path_factory):
+        """Two patches with distinct data written to one DASDAE file."""
+        path = tmp_path_factory.mktemp("read_array") / "multi.h5"
+        spool = dc.examples.get_example_spool("random_das", length=2)
+        # distinct arrays, or a wrong-patch resolution could pass parity
+        patches = [patch.new(data=patch.data + num) for num, patch in enumerate(spool)]
+        assert not np.array_equal(patches[0].data, patches[1].data)
+        dc.write(dc.spool(patches), path, "dasdae")
+        return path
+
+    @pytest.fixture(scope="class")
+    def dasdae_io(self, single_patch_path):
+        """The FiberIO which read the file, resolved exactly."""
+        fmt, version = dc.get_format(single_patch_path)
+        return FiberIO.manager.get_fiberio(format=fmt, version=version)
+
+    def test_default_matches_read_then_select(self, dasdae_io, single_patch_path):
+        """Windows are half-open python indices: plain numpy slicing.
+
+        DASDAE overrides read_array, so these tests call the base body
+        unbound to pin the default rather than the override.
+        """
+        patch = dc.read(single_patch_path)[0]
+        assert patch.dims == ("distance", "time")
+        windows = {"time": (5, 50), "distance": (2, 9)}
+        out = FiberIO.read_array(dasdae_io, single_patch_path, windows)
+        expected = patch.data[2:9, 5:50]
+        assert np.array_equal(out, expected)
+        # untransposed and uncast: the file's own order and dtype
+        assert out.dtype == patch.data.dtype
+
+    def test_absent_dimensions_load_whole(self, dasdae_io, single_patch_path):
+        """A dimension missing from windows comes back whole."""
+        patch = dc.read(single_patch_path)[0]
+        out = FiberIO.read_array(dasdae_io, single_patch_path, {"time": (0, 10)})
+        expected = patch.select(time=(0, 10), samples=True).data
+        assert np.array_equal(out, expected)
+        whole = FiberIO.read_array(dasdae_io, single_patch_path, {})
+        assert np.array_equal(whole, patch.data)
+
+    def test_multi_patch_selects_keyed_patch(self, dasdae_io, multi_patch_path):
+        """The key names which patch of the file the windows index."""
+        for payload in dc.scan(multi_patch_path):
+            key = payload.source_patch_key
+            wanted = dc.read(multi_patch_path, source_patch_key=key)[0]
+            out = FiberIO.read_array(
+                dasdae_io, multi_patch_path, {"time": (3, 17)}, source_patch_key=key
+            )
+            expected = wanted.select(time=(3, 17), samples=True).data
+            assert np.array_equal(out, expected)
+
+    def test_multi_patch_without_key_raises(self, dasdae_io, multi_patch_path):
+        """Windows on an ambiguous grid never guess a patch."""
+        with pytest.raises(PatchAttributeError, match="uniquely resolved"):
+            FiberIO.read_array(dasdae_io, multi_patch_path, {"time": (0, 5)})
+
+    def test_override_resource_coercion(self, single_patch_path):
+        """An override's resource annotation is honored like read's.
+
+        The type-casting layer promises FiberIO authors that a method's
+        resource parameter arrives as the annotated handle type; that
+        must hold for read_array or an override written like a read
+        method fails on the raw path it is handed.
+        """
+        seen = {}
+
+        class ReadArrayCastFormat(FiberIO):
+            name = "_test_read_array_cast"
+            version = "1"
+
+            def read_array(self, resource: BinaryReader, windows, **kwargs):
+                seen["resource"] = resource
+                return np.zeros(2)
+
+        fiber_io = ReadArrayCastFormat()
+        out = fiber_io.read_array(single_patch_path, {})
+        assert np.array_equal(out, np.zeros(2))
+        assert hasattr(seen["resource"], "read")  # a handle, not a path
+
+    def test_implements_flag(self, dasdae_io):
+        """The flag says whether a format overrides the default."""
+        assert dasdae_io.implements_read_array
+
+        class PlainFormat(FiberIO):
+            name = "_test_plain_read_array"
+            version = "1"
+
+        plain = PlainFormat()
+        assert not plain.implements_read_array
+        # set and delete by hand: monkeypatch would restore the inherited
+        # method as an own class attribute rather than remove it
+        PlainFormat.read_array = lambda self, resource, windows, **kw: np.empty(0)
+        try:
+            assert plain.implements_read_array
+        finally:
+            del PlainFormat.read_array
+        assert not plain.implements_read_array
+
+
+class TestWindowsToSlices:
+    """Tests for turning read_array windows into per-dimension slices."""
+
+    def test_absent_dimension_is_whole(self):
+        """A dimension without a window spans its whole length."""
+        out = windows_to_slices({"time": (2, 5)}, ("distance", "time"), (7, 9))
+        assert out == (slice(0, 7), slice(2, 5))
+
+    def test_open_negative_and_overlong_bounds_resolve(self):
+        """None, ..., negative, and past-the-end bounds resolve like numpy."""
+        out = windows_to_slices(
+            {"time": (..., 3), "distance": (-2, 50)}, ("time", "distance"), (9, 7)
+        )
+        assert out == (slice(0, 3), slice(5, 7))
+        assert windows_to_slices({"time": (4, None)}, ("time",), (9,)) == (slice(4, 9),)
+
+    def test_empty_window_stays_empty(self):
+        """A reversed window is empty, never negative-length."""
+        assert windows_to_slices({"time": (6, 2)}, ("time",), (9,)) == (slice(6, 6),)
+
+    def test_unknown_dimension_raises(self):
+        """A window on a dimension the array lacks raises."""
+        with pytest.raises(ParameterError, match="not among patch dims"):
+            windows_to_slices({"bob": (0, 1)}, ("time",), (9,))
+
+    def test_non_integer_bounds_raise(self):
+        """Bounds are sample indices, never values."""
+        with pytest.raises(ParameterError, match="integers"):
+            windows_to_slices({"time": (1.5, 3)}, ("time",), (9,))
+
+
+class TestSliceDataset:
+    """Tests for reading the windows of a stored array."""
+
+    @pytest.fixture
+    def dataset(self, tmp_path):
+        """A 2-D HDF5 dataset of known values."""
+        path = tmp_path / "array.h5"
+        with h5py.File(path, "w") as h5:
+            h5.create_dataset("data", data=np.arange(60).reshape(10, 6))
+        with h5py.File(path, "r") as h5:
+            yield h5["data"]
+
+    def test_windows_read_in_the_file(self, dataset):
+        """Only the window's values come back, in the dataset's order."""
+        out = slice_dataset(dataset, ("time", "distance"), {"time": (2, 5)})
+        assert np.array_equal(out, dataset[2:5, :])
+
+    def test_shape_caps_a_shorter_grid(self, dataset):
+        """A grid shorter than the stored array never reads past its end."""
+        dims, short = ("time", "distance"), (4, 6)
+        whole = slice_dataset(dataset, dims, {}, short)
+        assert np.array_equal(whole, dataset[:4, :])
+        # a window past the shortened grid clips to it, not to the file
+        tail = slice_dataset(dataset, dims, {"time": (2, 50)}, short)
+        assert np.array_equal(tail, dataset[2:4, :])
+
+
+class TestResolveKeyedSource:
+    """Tests for resolving which source a key names."""
+
+    def test_mapping_resolves_by_key(self):
+        """A mapping is read as it is; a lone source needs no key."""
+        assert resolve_keyed_source({"a": 1, "b": 2}, "b") == 2
+        assert resolve_keyed_source({"a": 1}, "") == 1
+
+    def test_pairs_resolve_by_key(self):
+        """Pairs resolve like a mapping when the names are distinct."""
+        assert resolve_keyed_source([("a", 1), ("b", 2)], "b") == 2
+        assert resolve_keyed_source([("a", 1)], "") == 1
+
+    def test_empty_is_missing(self):
+        """Nothing to resolve is missing data, not a bad key."""
+        for empty in ({}, []):
+            with pytest.raises(MissingPatchError, match="No patches"):
+                resolve_keyed_source(empty, "a")
+
+    def test_unknown_key(self):
+        """A key naming nothing is refused either way."""
+        for sources in ({"a": 1}, [("a", 1)]):
+            with pytest.raises(PatchAttributeError, match="No patch named"):
+                resolve_keyed_source(sources, "b")
+
+    def test_keyless_ambiguous(self):
+        """Several sources and no key cannot be resolved."""
+        for sources in ({"a": 1, "b": 2}, [("a", 1), ("b", 2)]):
+            with pytest.raises(PatchAttributeError, match="source_patch_key"):
+                resolve_keyed_source(sources, "")
+
+    def test_repeated_name_in_pairs(self):
+        """A resource naming one key twice is ambiguous, never the last one."""
+        with pytest.raises(PatchAttributeError, match="more than once"):
+            resolve_keyed_source([("a", 1), ("a", 2)], "a")
+
+
+class TestStepFromRate:
+    """Readers turn a stated rate or interval into an exact step when they can."""
+
+    def test_exact_rates(self):
+        """Simple rates give exact steps."""
+        assert step_from_rate(1024.0) == Fraction(1, 1024)
+        assert step_from_rate(3000) == Fraction(1, 3000)
+        assert step_from_rate(1000.0) == Fraction(1, 1000)
+
+    def test_inexact_rate_keeps_nanoseconds(self):
+        """An arbitrary rate keeps the rounded nanosecond step."""
+        rate = 1234.56789012345
+        out = step_from_rate(rate)
+        assert isinstance(out, np.timedelta64)
+        assert out == dc.to_timedelta64(1 / rate)
+
+    def test_float32_rate(self):
+        """A float32 rate recovers only what it holds exactly."""
+        assert step_from_rate(np.float32(1024.0)) == Fraction(1, 1024)
+        assert step_from_rate(np.float32(62.5)) == Fraction(2, 125)
+        # A float32 999.9 is 999.9000244; nothing is claimed for it.
+        assert isinstance(step_from_rate(np.float32(999.9)), np.timedelta64)
+        assert step_from_rate(999.9) == Fraction(10, 9999)
+
+    def test_interval(self):
+        """Simple intervals give exact steps."""
+        assert step_from_interval(0.004) == Fraction(1, 250)
+        assert step_from_interval(1 / 3000) == Fraction(1, 3000)
+        assert isinstance(step_from_interval(0.0012345678912345), np.timedelta64)
+
+    def test_nonpositive_falls_back(self):
+        """A non-positive rate is not a grid."""
+        assert isinstance(step_from_rate(-100.0), np.timedelta64)
+
+    def test_coordinate_from_step(self):
+        """The step feeds straight into get_coord."""
+        t0 = np.datetime64("2020-01-01T00:00:00", "ns")
+        coord = get_coord(start=t0, step=step_from_rate(1024.0), shape=(1024,))
+        assert coord.step_exact == Fraction(1, 1024)
+        assert coord.stop == t0 + np.timedelta64(1, "s")

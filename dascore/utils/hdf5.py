@@ -19,6 +19,7 @@ from h5py import File as H5pyFile
 from dascore.compat import UPath
 from dascore.config import get_config
 from dascore.constants import http_protocols, remote_hdf5_tuned_protocols
+from dascore.utils.deprecate import deprecate
 from dascore.utils.misc import (
     _maybe_make_parent_directory,
     _maybe_unpack,
@@ -29,7 +30,6 @@ from dascore.utils.remote_io import (
     _FallbackFileObj,
     _get_cached_local_file,
     ensure_local_file,
-    get_local_handle,
     is_no_range_http_error,
     pause_gc,
     resume_gc,
@@ -355,15 +355,6 @@ class H5Reader(_H5CasterBase):
         )
 
 
-class LocalH5Reader(H5Reader):
-    """An h5py reader which first materializes remote resources locally."""
-
-    @classmethod
-    def get_handle(cls, resource):
-        """Get a local-file-backed h5py handle."""
-        return get_local_handle(resource, super().get_handle)
-
-
 class H5Writer(H5Reader):
     """A thin wrapper around h5py for writing files."""
 
@@ -427,10 +418,6 @@ class H5Writer(H5Reader):
             self._temp_path.unlink(missing_ok=True)
             self._closed = True
 
-        def _abort(self):
-            """Backward-compatible alias for abort()."""
-            self.abort()
-
         def __enter__(self):
             return self
 
@@ -452,6 +439,14 @@ class H5Writer(H5Reader):
         return super().get_handle(resource)
 
 
+@deprecate(
+    info=(
+        "unpack_scalar_h5_dataset is deprecated. Use "
+        "dascore.utils.misc._maybe_unpack, which reads a scalar out of a "
+        "dataset of either shape and leaves anything else alone."
+    ),
+    removed_in="0.2.0",
+)
 def unpack_scalar_h5_dataset(dataset):
     """
     Unpack a scalar H5Py dataset.

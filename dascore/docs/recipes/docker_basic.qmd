@@ -1,0 +1,21 @@
+---
+title: Using DASCore with Docker
+execute:
+  warning: false
+---
+
+Build an image of DASCore's stable conda-forge release with the repository's [Docker](https://www.docker.com/) file:
+```bash
+git clone https://github.com/DASDAE/dascore
+```
+
+```bash
+cd dascore
+docker build -t dascore .
+```
+
+Mount the current directory and run a script from it:
+
+```bash
+docker run -it -v $PWD:/app dascore python /app/test.py
+```

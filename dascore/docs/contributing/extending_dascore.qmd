@@ -1,0 +1,144 @@
+---
+title: Extending DASCore
+---
+
+Namespaces let external packages expose methods such as `patch.my_plugin.method()` without subclassing DASCore objects or adding optional dependencies to core. File formats use [`FiberIO`](new_format.qmd), not namespaces.
+
+| Host | Base class | Entry-point group | Registry |
+|---|---|---|---|
+| `Patch` | `PatchNameSpace` | `dascore.patch_namespace` | `patch.csv` |
+| `Spool` | `SpoolNameSpace` | `dascore.spool_namespace` | `spool.csv` |
+| `Inventory` | `InventoryNameSpace` | `dascore.inventory_namespace` | `inventory.csv` |
+| `AnnotationSet` | `AnnotationNameSpace` | `dascore.annotation_namespace` | `annotation.csv` |
+
+The base classes live in `dascore.utils.namespace`. A method receives the host object, so it behaves like a normal host method.
+
+## Local namespaces
+
+For notebooks, tests, or private code, define a named subclass and import it before access:
+
+```{python}
+import dascore as dc
+from dascore.constants import PatchType
+from dascore.utils.namespace import PatchNameSpace
+
+
+class MyPatchNamespace(PatchNameSpace):
+    name = "my_ext"
+
+    @dc.patch_function()
+    def peak_to_peak(patch: PatchType) -> float:
+        return patch.data.max() - patch.data.min()
+
+
+patch = dc.get_example_patch()
+value = patch.my_ext.peak_to_peak()
+```
+
+The name must be a public Python identifier. Defining a duplicate host/name pair warns and replaces the earlier class.
+
+## Plugin packages
+
+Reusable extensions should register an entry point. Given the class above in `dascore_extra.patch_namespace`:
+
+```default
+[project.entry-points."dascore.patch_namespace"]
+my_ext = "dascore_extra.patch_namespace:MyPatchNamespace"
+```
+
+DASCore loads it on first access. `Spool`, `Inventory`, and `AnnotationSet` use the same pattern with the base class and group from the table.
+
+After publishing the package, add it to the matching file under `dascore/plugin_registry/` so missing-plugin errors can tell users what to install:
+
+```text
+package_name,package_url,namespace
+dascore-extra,https://github.com/yourorg/dascore-extra,my_ext
+```
+
+DASCore's own `patch.io`, `inventory.io`, and `annotation_set.io` follow this model.
+
+## Patch processors
+
+A [`PatchProcessor`](`dascore.PatchProcessor`) subclass is a whole operation. Its fields are the parameters; subclassing registers it and generates its patch function, `cls.patch_function`, which is never written by hand:
+
+```{python}
+import dascore as dc
+
+
+class Scale(dc.PatchProcessor):
+    """Multiply the data by a factor."""
+
+    factor: float = 2.0
+
+    def kernel(self, data):
+        return data * self.factor
+
+
+patch = dc.get_example_patch()
+out = Scale(3)(patch)
+assert out.equals(Scale.patch_function(patch, factor=3))
+```
+
+Calling a processor checks the patch, runs it, and records history and lineage ids, exactly as a decorated patch function does. Its fingerprint digests the name, `__version__` and validated fields, so `Scale(3)` and `Scale(3.0)` are one operation.
+
+An operation whose metadata changes, or whose kernel needs numbers read from the metadata, splits the work so that no array is touched until the kernel runs:
+
+- `derive(patch)` returns the result's metadata from a patch without data, through the coord manager and `patch.new`; patch methods refuse a patch without data.
+- `plan(patch, out)` gets the same patch and `derive`'s result, and returns what the kernel needs as ints, floats, bools, tuples of those, or numeric arrays.
+- `kernel(data, **plan)` computes the array; it never sees a patch.
+
+```{python}
+class RemoveMean(dc.PatchProcessor):
+    """Remove the mean along a dimension."""
+
+    dim: str = "time"
+
+    def plan(self, patch, out):
+        return {"axis": patch.get_axis(self.dim)}
+
+    def kernel(self, data, *, axis):
+        return data - data.mean(axis=axis, keepdims=True)
+
+
+out = RemoveMean(dim="distance")(patch)
+```
+
+Class variables declare the rest: `required_dims`, `required_coords`, and `required_attrs` for what a patch must hold, `data_type` for the result's, `history` for how a call is recorded, and `__version__`, bumped when the same fields mean a different result. `name` sets the patch function's name, and `name = None` registers nothing. [`Transpose`](`dascore.proc.coords.Transpose`) and [`TileApply`](`dascore.proc.tile_apply.TileApply`) show `derive` changing a patch's shape.
+
+## Array backends
+
+Patch functions receive the original data backend. Use its [array API](https://data-apis.org/array-api/latest/) namespace instead of NumPy when the function should support multiple backends:
+
+```{python}
+import dascore as dc
+from dascore.constants import PatchType
+from dascore.utils.array_api import array_namespace
+
+
+@dc.patch_function()
+def double(patch: PatchType) -> PatchType:
+    xp = array_namespace(patch.data)
+    return patch.new(data=xp.multiply(patch.data, 2))
+```
+
+Plain NumPy-based functions may raise or return a NumPy-backed patch for other arrays. Operators and ufuncs stay in the array namespace when possible; otherwise they convert through NumPy and emit `NumpyFallbackWarning`.
+
+NumPy functions such as `np.mean(patch)` and reductions over excluded dtypes always use this fallback; `__array__`-only objects report `numpy` as their backend.
+
+A backend package can give a processor its own kernel without changing the operation. The kernel takes the processor, the data, and whatever the class's `plan` returns (`abs` plans nothing; `normalize` plans `axis`, and `window` when one is given):
+
+```{python}
+import numpy as np
+
+from dascore.proc.basic import Abs
+from dascore.core.processor import register_kernel
+
+
+@register_kernel(Abs, "mybackend")
+def _abs_mybackend(processor, data):
+    return np.abs(data)
+```
+
+The data backend selects the kernel; unregistered backends use the processor's own `kernel`.
+
+See [Contributing](contributing.qmd), [Testing](testing.qmd), and [Documentation](documentation.qmd) for package conventions.

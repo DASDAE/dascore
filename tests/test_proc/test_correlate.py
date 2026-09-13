@@ -38,6 +38,27 @@ class TestCorrelateShift:
         argmax = np.argmax(random_dft_patch.data, axis=time_ax)
         assert np.all(coord_array[argmax] == dc.to_timedelta64(0))
 
+    def test_source_bounds_dropped(self):
+        """The DFT/IDFT workflow discards position cells when creating lag bins."""
+        values = np.arange(8.0)
+        patch = dc.Patch(
+            data=np.arange(8.0),
+            dims=("x",),
+            coords={
+                "x": values,
+                "x_start": ("x", values - 2),
+                "x_stop": ("x", values + 2),
+            },
+        )
+        dft = patch.dft("x")
+        restored = (dft * dft.conj()).idft()
+        assert "x_start" in restored.coords
+        out = restored.correlate_shift("x")
+        assert out.dims == ("lag_x",)
+        assert "lag_x_start" not in out.coords
+        assert "lag_x_stop" not in out.coords
+        np.testing.assert_array_equal(out.get_array("lag_x"), np.arange(-4.0, 4.0))
+
     def test_auto_correlation_odd_coord(self, random_patch_odd):
         """Ensure correlate_shift works when dim's coord length is odd."""
         dft = random_patch_odd.dft(dim="time")

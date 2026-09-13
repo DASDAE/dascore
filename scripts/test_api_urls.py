@@ -16,7 +16,7 @@ def cross_ref(tmp_path):
     mapping = {
         "dascore.io.core.read": "/api/dascore/io/core/read.qmd",
         "dascore.read": "/api/dascore/io/core/read.qmd",
-        "docs/tutorial/patch.qmd": "/tutorial/patch.qmd",
+        "dascore/docs/tutorial/patch.qmd": "/tutorial/patch.qmd",
     }
     path.write_text(json.dumps(mapping))
     return path

@@ -270,17 +270,9 @@ def align_to_coord(
     patch
         The patch to align.
     mode : str
-        Determines the output shape of the patch. Options are:
-        "full" - Regardless of shift, all original data are preserved.
-            This can result in patches with many fill values along the
-            aligned dimension. It also allows cases where some traces do
-            not overlap at all.
-        "same" - The patch will retain its shape, however, only one trace
-            (and traces that weren't shifted) will remain complete. Parts
-            of shifted traces will be discarded.
-        "valid" - The output patch will likely be smaller than the input
-            patch, as only completely overlapped valid data are kept. This
-            means no fill_values will occur in the patch.
+        Output extent: ``"full"`` preserves all data with fill as needed,
+        ``"same"`` preserves the input shape and trims shifted edges, and
+        ``"valid"`` keeps only the region shared by every shifted trace.
     samples
         If True, the values in the alignment coordinate specify integer sample
         offsets from the original start position. If False, the values specify
@@ -305,67 +297,39 @@ def align_to_coord(
     --------
     >>> import dascore as dc
     >>> import numpy as np
-    >>> patch = dc.get_example_patch()
-    >>> # Select a smaller subset for examples
-    >>> patch = patch.select(distance=(0, 50))
-    >>>
-    >>> # Example 1: Shift along distance (channels).
-    >>> time = patch.get_coord("time")
+    >>> patch = dc.get_example_patch().select(distance=(0, 50))
     >>> distance = patch.get_array("distance")
-    >>> # Specify time shift for each channel.
-    >>> dt = np.timedelta64(1, 'ms')  # 1 millisecond
-    >>> start_times = np.arange(len(distance)) * dt
+    >>> start_times = np.arange(len(distance)) * np.timedelta64(1, "ms")
     >>> patch_shift = patch.update_coords(shift_times=("distance", start_times))
-    >>> # Traces are now shifted.
     >>> aligned_offsets = patch_shift.align_to_coord(time="shift_times", mode="full")
     >>>
-    >>> # Example 2: Round-trip alignment with reverse parameter
-    >>> # Use samples rather than value offsets.
-    >>> shifts = np.arange(len(distance))  # shifts in samples
+    >>> # Align by samples and reverse the operation.
+    >>> shifts = np.arange(len(distance))
     >>> patch_shift = patch.update_coords(my_shifts=("distance", shifts))
-    >>> # Forward alignment
     >>> aligned = patch_shift.align_to_coord(
     ...     time="my_shifts", samples=True, mode="full"
     ... )
-    >>> # Reverse to get back original (after dropping NaN padding)
     >>> reversed_patch = aligned.align_to_coord(
     ...     time="my_shifts", samples=True, mode="full", reverse=True
     ... )
-    >>> original = reversed_patch.dropna("time")
-    >>> assert original.equals(patch_shift)
+    >>> assert reversed_patch.dropna("time").equals(patch_shift)
     >>>
-    >>> # Example 3: Use 'valid' mode to extract only overlapping region
     >>> valid_aligned = patch_shift.align_to_coord(
     ...     time="my_shifts", samples=True, mode="valid"
     ... )
-    >>> # Result contains no NaN values, only the overlapping data
     >>> assert not np.isnan(valid_aligned.data).any()
 
     Notes
     -----
-    **Mode Parameter**
+    For two length-10 traces separated by five samples, the modes produce:
 
-    To understand the mode argument, consider a 2D patch with two traces,
-    an alignment dimension length of 10, and a shift of 5 samples.
+    ```text
+    full                 same          valid
+    -----aaaaaaaaaa      aaaaaaaaaa    aaaaa
+    bbbbbbbbbb-----      bbbbb-----    bbbbb
+    ```
 
-    For mode=="full" the output looks like this:
-        -----aaaaaaaaaa
-        bbbbbbbbbb-----
-    For mode=="same" the patch will look like this:
-        aaaaaaaaaa
-        bbbbb-----
-    For mode=="valid":
-        aaaaa
-        bbbbb
-    where a and b represent values in first and second trace, respectively,
-    and the - represents the fill values.
-
-    **Alignment Semantics**
-
-    All alignment operations are purely relative: shifts specify offsets from the
-    original position. When samples=True, shifts are integer sample offsets. When
-    samples=False, shifts are value offsets (e.g., timedelta64 for time dimensions)
-    relative to the start of the aligned dimension.
+    Letters represent data and dashes represent fill values.
     """
     # Validate inputs and get coordinates.
     dim_name, coord_name = _validate_alignment_inputs(patch, kwargs)

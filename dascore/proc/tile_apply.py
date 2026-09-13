@@ -27,6 +27,7 @@ import dascore as dc
 from dascore.constants import PatchType
 from dascore.core.coordmanager import get_coord_manager
 from dascore.core.coords import get_coord
+from dascore.core.processor import PatchProcessor
 from dascore.exceptions import (
     MissingOptionalDependencyError,
     ParameterError,
@@ -41,10 +42,8 @@ from dascore.utils.signal import (
     get_window_nd,
 )
 from dascore.utils.tiles import get_tile_plan
-from dascore.utils.time import is_datetime64, is_timedelta64, to_float
+from dascore.utils.time import dtype_time_like
 from dascore.utils.window import Window, resolve_window
-from dascore.workflow.meta import PatchMeta
-from dascore.workflow.processor import PatchProcessor, register_implementation
 
 __all__ = ("TileApply", "reassemble", "tile_apply")
 
@@ -62,12 +61,20 @@ def _offset_values(coord, offsets: np.ndarray):
     Return coordinate values `offsets` samples from the coordinate's first sample.
 
     From the first sample, not the minimum: a descending coordinate steps
-    down from where it starts.
+    down from where it starts. Only a range has a step, so only a range
+    gets here.
     """
-    first, step = coord.values[0], coord.step
-    if is_datetime64(coord.dtype) or is_timedelta64(coord.dtype):
-        return first + dc.to_timedelta64(offsets * to_float(step))
-    return first + offsets * step
+    if coord.dtype.kind in "iu":
+        # Evaluate the exact grid in Python integers so padded positions can
+        # promote beyond the source dtype instead of wrapping at its limits.
+        num, den, offset = coord._grid_terms
+        return np.asarray(
+            [
+                coord._start_tick + (offset + int(index) * num) // den
+                for index in offsets
+            ]
+        )
+    return coord._labels(offsets)
 
 
 def _engine_for(engine: str, func) -> str:
@@ -102,26 +109,12 @@ def _engine_for(engine: str, func) -> str:
     return engine
 
 
-@patch_function()
-def tile_apply(
-    patch: PatchType,
-    function: Callable,
-    *,
-    mode: str = "overlap_add",
-    overlap: Any = None,
-    taper: Any = None,
-    analysis: Any = None,
-    samples: bool = False,
-    engine: str = "auto",
-    **kwargs: Any,
-) -> PatchType:
+class TileApply(PatchProcessor):
     """
     Apply a function to overlapping windows of the patch.
 
     Parameters
     ----------
-    patch
-        The patch to window.
     function
         What to do to the tiles. On the numpy engine it is given the whole
         stack at once, an array of ``[n_tiles, *window]``, and returns one of
@@ -170,8 +163,10 @@ def tile_apply(
     Patch
         In ``"overlap_add"`` mode, a patch with the input's coordinates. In
         ``"stack"`` mode, the tiles: the windowed dimensions carry the tile
-        centres, ``{dim}_start`` and ``{dim}_stop`` say where each tile came
-        from in samples, and ``{dim}_offset`` is the position within a tile.
+        centres, ``{dim}_start`` and ``{dim}_stop`` give its closed low and
+        open high edges in the dimension's units, and ``{dim}_offset`` is
+        the position within a tile. Private ``_tile_index_{dim}`` coordinates
+        retain the sample indices needed for reconstruction.
 
     Examples
     --------
@@ -199,27 +194,6 @@ def tile_apply(
       `function`; see
       [`Patch.adaptive_spectral_filter`](`dascore.Patch.adaptive_spectral_filter`).
     """
-    return TileApply(
-        function=function,
-        mode=mode,
-        overlap=overlap,
-        taper=taper,
-        analysis=analysis,
-        samples=samples,
-        engine=engine,
-        **kwargs,
-    )._apply(patch)
-
-
-class TileApply(PatchProcessor):
-    """
-    Apply a function to overlapping windows of a patch.
-
-    The dimensions to window arrive as extras carrying their window sizes,
-    as the patch function takes them; `window` turns them into sample
-    counts once the coordinates are known, and `derive_meta` says what a
-    stack's coordinates are without touching any data.
-    """
 
     model_config = ConfigDict(extra="allow", frozen=True, arbitrary_types_allowed=True)
 
@@ -231,7 +205,10 @@ class TileApply(PatchProcessor):
     samples: bool = False
     engine: str = "auto"
 
-    def window(self, meta: PatchMeta) -> Window:
+    # Only the function by position; the options by name, as before.
+    _positional_fields = ("function",)
+
+    def window(self, patch: PatchType) -> Window:
         """Return the window in samples."""
         if self.mode not in _MODES:
             msg = f"mode must be one of {_MODES}; got {self.mode!r}."
@@ -255,12 +232,12 @@ class TileApply(PatchProcessor):
             raise ParameterError(msg)
         # In the patch's axis order, whatever order they were named in, so a
         # stack's tile and offset axes come out in that order too.
-        position = {dim: axis for axis, dim in enumerate(meta.dims)}
+        position = {dim: axis for axis, dim in enumerate(patch.dims)}
         selected = dict(
             sorted(selected.items(), key=lambda kv: position.get(kv[0], -1))
         )
         return resolve_window(
-            meta,
+            patch,
             selected,
             samples=self.samples,
             overlap=self.overlap,
@@ -269,31 +246,36 @@ class TileApply(PatchProcessor):
             min_samples=2,
         )
 
-    def derive_meta(self, meta: PatchMeta) -> PatchMeta:
-        """Return the coordinates of a stack; a blend keeps the input's."""
-        window = self.window(meta)
+    def derive(self, patch):
+        """Return a stack's metadata; a blend keeps the input's."""
+        # A blend's window is resolved, and checked, by `plan`.
         if self.mode == "overlap_add":
-            return meta
+            return patch
+        window = self.window(patch)
         assert window.stride is not None
         # The stride the tiles were cut at travels in attrs, so a thinned
         # stack still reassembles under the taper it was cut for.
         strides = {
             f"_tile_stride_{d}": int(s) for d, s in zip(window.dims, window.stride)
         }
-        attrs = meta.attrs.update(**strides)
-        coords = _stack_coords(meta, window, self.analysis)
-        return meta.update(coords=coords, attrs=attrs)
+        coords = _stack_coords(patch, window, self.analysis)
+        return patch.new(coords=coords, attrs=patch.attrs.update(**strides))
 
-    def kernel(self, data, meta, out_meta):
+    def plan(self, patch, out):
+        """Return the windowed axes, and the window and stride along each."""
+        window = self.window(patch)
+        assert window.stride is not None
+        return {"axes": window.axes, "size": window.size, "stride": window.stride}
+
+    def kernel(self, data, *, axes, size, stride):
         """Tile every batch over the windowed axes; blend or stack."""
-        window = self.window(meta)
-        assert window.stride is not None and window.overlap is not None
         engine = _engine_for(self.engine, self.function)
-        plan = window.tiles(data.shape)
+        plan = get_tile_plan(tuple(data.shape[x] for x in axes), size, stride)
+        overlap = tuple(z - s for z, s in zip(size, stride))
         data = np.asarray(data)
-        ndim = len(window.axes)
+        ndim = len(axes)
         tail = tuple(range(-ndim, 0))
-        moved = np.moveaxis(data, window.axes, tail)
+        moved = np.moveaxis(data, axes, tail)
         batches = moved.reshape((-1, *moved.shape[-ndim:]))
         if self.mode == "stack":
             analysis = (
@@ -313,8 +295,8 @@ class TileApply(PatchProcessor):
             # The tile axes go where the windowed dimensions were; the
             # offsets within a tile stay at the end, already in axis order.
             n_batch = moved.ndim - ndim
-            return np.moveaxis(out, range(n_batch, n_batch + ndim), window.axes)
-        analysis, synthesis = _windows(self.analysis, self.taper, plan, window.overlap)
+            return np.moveaxis(out, range(n_batch, n_batch + ndim), axes)
+        analysis, synthesis = _windows(self.analysis, self.taper, plan, overlap)
         if engine == "numba":
             from dascore.utils._tiles_numba import apply_jit  # noqa: PLC0415
 
@@ -330,7 +312,10 @@ class TileApply(PatchProcessor):
                 for batch in batches
             ]
         out = np.stack(blended).reshape(moved.shape)
-        return np.moveaxis(out, tail, window.axes)
+        return np.moveaxis(out, tail, axes)
+
+
+tile_apply = TileApply.patch_function
 
 
 def _windows(
@@ -352,18 +337,19 @@ def _windowed(tiles: np.ndarray, analysis: np.ndarray | None) -> np.ndarray:
     return tiles if analysis is None else tiles * analysis
 
 
-def _stack_coords(meta: PatchMeta, window: Window, analysis: Any):
+def _stack_coords(patch: PatchType, window: Window, analysis: Any):
     """Return a stack's coordinate manager: tile centres, edges, and offsets."""
-    coords = meta.coords
-    plan = window.tiles(meta.shape)
+    coords = patch.coords
+    plan = window.tiles(patch.shape)
     edges = None if analysis is None else get_window_edges(analysis, plan.size)
     new_coords = {}
     for dim, size, stride, margin, count in zip(
         window.dims, window.size, plan.stride, plan.margin, plan.grid
     ):
+        bounds = (f"{dim}_start", f"{dim}_stop")
         claimed = (
-            f"{dim}_start",
-            f"{dim}_stop",
+            *(bounds if not all(name in coords for name in bounds) else ()),
+            f"_tile_index_{dim}",
             f"{dim}_offset",
             f"_tile_source_{dim}",
             f"_tile_analysis_{dim}",
@@ -377,9 +363,21 @@ def _stack_coords(meta: PatchMeta, window: Window, analysis: Any):
         # The tile's middle sample, in the coordinate's units.
         centres = _offset_values(coord, starts + size // 2)
         offsets = _offset_values(coord, np.arange(size)) - coord.values[0]
-        new_coords[dim] = get_coord(data=centres, units=coord.units)
-        new_coords[f"{dim}_start"] = (dim, starts)
-        new_coords[f"{dim}_stop"] = (dim, starts + size)
+        # Time ranges beginning at the epoch can have unset units; their
+        # generated labels and bounds must all use the same time units.
+        units = dc.get_quantity("s") if dtype_time_like(coord.dtype) else coord.units
+        new_coords[dim] = get_coord(data=centres, units=units)
+        first = _offset_values(coord, starts)
+        last = _offset_values(coord, starts + size - 1)
+        half_step = abs(coord.step) / 2
+        low = np.minimum(first, last) - half_step
+        # A whole-tick duration can lose its half tick on division. Give
+        # that tick to the open upper edge so even a 1-tick cell contains
+        # its label, including on descending grids.
+        high = np.maximum(first, last) + (abs(coord.step) - half_step)
+        new_coords[f"{dim}_start"] = (dim, get_coord(data=low, units=units))
+        new_coords[f"{dim}_stop"] = (dim, get_coord(data=high, units=units))
+        new_coords[f"_tile_index_{dim}"] = (dim, starts)
         new_coords[f"{dim}_offset"] = get_coord(data=offsets, units=coord.units)
         # The coordinate the tiles were cut from, for reassembly, and the
         # window the tiles were cut under, whose dual blends them back.
@@ -395,14 +393,11 @@ def _stack_coords(meta: PatchMeta, window: Window, analysis: Any):
                     coords.get_coord(name),
                 )
         coords = coords.disassociate_coord(dim)
-    dims = (*meta.dims, *(f"{dim}_offset" for dim in window.dims))
+    dims = (*patch.dims, *(f"{dim}_offset" for dim in window.dims))
     # Coords given bare, or as (dims, values): the manager takes either.
     coord_map: dict[str, Any] = dict(coords.get_coord_tuple_map())
     coord_map.update(new_coords)
     return get_coord_manager(coords=coord_map, dims=dims)
-
-
-register_implementation("tile_apply", TileApply)
 
 
 def _place_each(stacks, starts, shape, size, weights):
@@ -436,8 +431,9 @@ def reassemble(patch: PatchType, *, taper: Any = None) -> PatchType:
 
     The inverse of [`tile_apply`](`dascore.Patch.tile_apply`) in
     ``"stack"`` mode: each tile is multiplied by a taper with complementary
-    ramps and added where its ``{dim}_start`` says it came from, so a stack
-    which was not changed returns the original patch exactly.
+    ramps and added at its private sample index, so a stack which was not
+    changed returns the original patch exactly. Public ``{dim}_start`` and
+    ``{dim}_stop`` describe physical cell edges, not reconstruction indices.
 
     Parameters
     ----------
@@ -484,7 +480,7 @@ def reassemble(patch: PatchType, *, taper: Any = None) -> PatchType:
     # Where each tile goes is what its start says, whatever order the tiles
     # are in and whichever of them are still here; the taper is the one the
     # tiles were cut for, which the stride in attrs says.
-    starts = [patch.get_coord(f"{dim}_start").values for dim in dims]
+    starts = [patch.get_coord(f"_tile_index_{dim}").values for dim in dims]
     strides = tuple(int(patch.attrs[f"_tile_stride_{dim}"]) for dim in dims)
     windows = [f"_tile_analysis_{dim}" for dim in dims]
     if all(name in patch.coords.coord_map for name in windows):
@@ -526,6 +522,7 @@ def reassemble(patch: PatchType, *, taper: Any = None) -> PatchType:
         for name in (
             f"{dim}_start",
             f"{dim}_stop",
+            f"_tile_index_{dim}",
             f"{dim}_offset",
             f"_tile_source_{dim}",
             f"_tile_analysis_{dim}",

@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import sys
 import textwrap
+from types import SimpleNamespace
 
 import pytest
 
@@ -70,14 +71,19 @@ class TestTimeCommand:
             json.loads(report_path.read_text())["timings"]["prep"]["return_code"] == 3
         )
 
-    def test_page_progress(self, report_path, capsys):
+    def test_page_progress(self, report_path, capsys, monkeypatch):
         """Quarto's progress lines become per page times."""
+        # Progress timestamps measure receipt, not the child process's sleeps.
+        # Control only the report clock so scheduling cannot change the result.
+        ticks = iter([0.0, 0.01, 0.06, 0.104, 0.15])
+        monkeypatch.setattr(
+            _doc_report, "time", SimpleNamespace(monotonic=lambda: next(ticks))
+        )
         script = (
-            "import sys, time\n"
+            "import sys\n"
             "for num, name in enumerate(['a.qmd', 'b.qmd', 'c.qmd'], start=1):\n"
             "    sys.stdout.write(f'\\x1b[1m\\r[{num:>4}/1395] {name}\\x1b[0m\\n')\n"
             "    sys.stdout.flush()\n"
-            "    time.sleep(0.05)\n"
         )
         _doc_report.time_command("quarto_render", [sys.executable, "-c", script])
 
@@ -85,11 +91,11 @@ class TestTimeCommand:
         assert timing["page_count"] == 3
         # The last page has no next page to bound it; it lands in finalize.
         assert set(timing["pages"]) == {"a.qmd", "b.qmd"}
-        # Bounded, not pinned: a loaded runner takes as long as it takes.
-        # The two sleeps between the three progress lines are the floor, and
-        # the sleep after the last one has to land outside the page phase.
-        assert timing["page_phase"] >= 0.1
-        assert timing["page_phase"] < timing["wall"]
+        assert timing["pages"] == {"a.qmd": 0.05, "b.qmd": 0.044}
+        assert timing["startup"] == 0.01
+        assert timing["page_phase"] == 0.094
+        assert timing["finalize"] == 0.046
+        assert timing["wall"] == 0.15
         assert timing["startup"] + timing["page_phase"] + timing["finalize"] == (
             pytest.approx(timing["wall"], abs=0.01)
         )

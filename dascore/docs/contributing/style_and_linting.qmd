@@ -1,0 +1,11 @@
+---
+title: Style and Linting
+---
+
+DASCore's pre-commit hooks format, lint, and type-check the repository. Install them during the [development setup](dev_install.qmd), and run the full set twice before pushing because the first pass may modify files:
+
+```shell
+pre-commit run --all
+```
+
+Annotate public functions and methods with [type hints](https://docs.python.org/3/library/typing.html). [ty](https://github.com/astral-sh/ty) checks the full `dascore` package using `[tool.ty]` in `pyproject.toml`; do not add errors in enforced categories. See [Documentation](documentation.qmd) for docstring conventions.

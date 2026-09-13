@@ -17,7 +17,9 @@ from functools import cache
 from io import BufferedIOBase, BytesIO, UnsupportedOperation
 from operator import eq, ge, le
 from pathlib import Path
+from tempfile import mkdtemp
 
+import h5py
 import numpy as np
 import pandas as pd
 import pytest
@@ -28,7 +30,8 @@ from dascore.exceptions import CoordError, UnknownFiberFormatError
 from dascore.io import BinaryReader, FiberIO
 from dascore.io.ai4eps import AI4EPSV1
 from dascore.io.ap_sensing import APSensingV10
-from dascore.io.dasdae import DASDAEV1
+from dascore.io.core import _required_resource_type
+from dascore.io.dasdae import DASDAEV1, DASDAEV2
 from dascore.io.dashdf5 import DASHDF5
 from dascore.io.febus import Febus1, Febus2, FebusBSLH5V1, FebusMTXH5V1, FebusT1V1
 from dascore.io.gdr import GDR_V1
@@ -53,12 +56,25 @@ from dascore.io.terra15 import (
 )
 from dascore.io.uptech import UptechH5V1
 from dascore.utils.downloader import fetch, get_registry_df
+from dascore.utils.hdf5 import H5Reader
 from dascore.utils.misc import all_close, iterate, order_range_tuple
 from tests.test_io._common_io_test_utils import (
     get_flat_io_test,
     skip_missing,
     skip_timeout,
 )
+
+# No shipped file is DASDAE version 2 yet: the current writer makes one
+# (see `_write_dasdae_v2`) so the format sits in the same matrix as the
+# version it succeeds.
+_DASDAE_V2_PATH = Path(mkdtemp("dasdae_v2")) / "example_dasdae_v2.h5"
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _write_dasdae_v2():
+    """Write the version 2 example before any fixture fetches it."""
+    dc.write(dc.get_example_patch("random_das"), _DASDAE_V2_PATH, "dasdae")
+
 
 # --- Fixtures
 
@@ -73,6 +89,7 @@ COMMON_IO_READ_TESTS = {
     AI4EPSV1(): ("ai4eps_1.h5",),
     APSensingV10(): ("ap_sensing_1.hdf5",),
     DASDAEV1(): ("example_dasdae_event_1.h5",),
+    DASDAEV2(): (str(_DASDAE_V2_PATH),),
     DASHDF5(): ("PoroTomo_iDAS_1.h5",),
     Febus1(): ("valencia_febus_example.h5",),
     Febus2(): ("febus_1.h5", "febus_2.h5"),
@@ -117,6 +134,7 @@ COMMON_IO_READ_TESTS = {
 COMMON_IO_WRITE_TESTS = (
     PickleIO(),
     DASDAEV1(),
+    DASDAEV2(),
 )
 
 # Specifies data registry entries which should not be tested.
@@ -272,27 +290,15 @@ FORMATS_WITH_DEFAULT_SCAN = frozenset({"PickleIO", "RSFV1", "WavIO"})
 
 class _CountingHandle(BufferedIOBase):
     """
-    A readable file object which tallies the bytes it hands out.
+    A readable file object that counts returned bytes.
 
-    Counting here rather than at the process keeps the number free of
-    page-cache and allocator noise, and drops the dependence on /proc, so this
-    measures on every platform DASCore tests rather than only Linux. It also
-    needs no warm-up scan, since module imports never reach this counter.
+    This platform-independent measure excludes page-cache and allocator noise. It
+    counts consumed bytes rather than kernel reads, which may differ by one small
+    buffer fill but still detects scans that consume every sample.
 
-    Counts bytes consumed, not bytes the kernel moved, so it reads lower than
-    /proc would by up to a buffer fill per reader. That gap is a few KB where
-    the budget is a quarter of a megabyte-plus file, and it cannot hide the
-    failure this guards: a scan that walks every sample consumes every sample.
-
-    Anything handing back the file underneath is refused, since reads through
-    it would not be counted: fileno, which also allows the whole file to be
-    mapped, plus raw, peek, and detach. No current reader needs any of them,
-    so one that does belongs in IGNORE_SCAN_CHECK.
-
-    The name attribute is the exception, and stays available: TDMS, sentek,
-    and Sintela_Binary consult it while scanning. They only stat the file
-    through it rather than read it, which is visible in their totals -- each
-    stays within a buffer fill of what /proc charges the whole scan.
+    Accessors that expose the underlying file (``fileno``, ``raw``, ``peek``, and
+    ``detach``) are refused because they bypass the counter. ``name`` remains
+    available for readers that inspect or stat the path.
     """
 
     _refused = frozenset({"raw", "peek", "detach"})
@@ -557,6 +563,108 @@ class TestRead:
         for patch1, patch2 in zip(spool1, spool2):
             assert patch1.equals(patch2)
 
+    def test_read_array_matches_default(self, io_path_tuple):
+        """A format's read_array override must agree with the read-and-trim default."""
+        io, path = io_path_tuple
+        if not io.implements_read_array:
+            pytest.skip(f"{io.name} inherits the default read_array")
+        with skip_missing():
+            payload = dc.scan(path)[0]
+        key = payload.source_patch_key
+        kwargs = {"source_patch_key": key} if key else {}
+        sized = [
+            (dim, size)
+            for dim, size in zip(payload.dims, payload.shape, strict=True)
+            if size > 2
+        ]
+        every = {dim: (1, size - 1) for dim, size in sized}
+        # the partial and empty cases pin the other half of the contract:
+        # a dimension absent from windows comes back whole
+        for windows in (every, {sized[0][0]: every[sized[0][0]]}, {}):
+            out = io.read_array(path, windows, **kwargs)
+            expected = FiberIO.read_array(io, path, windows, **kwargs)
+            assert out.dtype == expected.dtype
+            # a gap is stored as nan, which is never equal to itself
+            nan = np.issubdtype(out.dtype, np.inexact)
+            assert np.array_equal(out, expected, equal_nan=nan), windows
+
+    def test_read_array_honors_labelling_options(self, io_path_tuple):
+        """A labelling option selects the grid `scan` reports under it.
+
+        Most formats' `snap` only labels samples, so it cannot move the
+        window; where it decides how many samples the resource has, the
+        array follows it. Either way the caller may forward what it gave
+        `scan`, and the shapes have to agree.
+        """
+        io, path = io_path_tuple
+        if not io.implements_read_array:
+            pytest.skip(f"{io.name} inherits the default read_array")
+        # what scan takes, read_array must take: the caller forwards it
+        if "snap" not in inspect.signature(io.scan).parameters:
+            pytest.skip(f"{io.name}.scan takes no labelling option")
+        with skip_missing():
+            payloads = {x: dc.scan_payloads(path, snap=x)[0] for x in (True, False)}
+        key = payloads[True].get("source_patch_key", "")
+        kwargs = {"source_patch_key": key} if key else {}
+        for snap, payload in payloads.items():
+            out = io.read_array(path, {}, snap=snap, **kwargs)
+            assert out.shape == tuple(payload["shape"]), snap
+
+    def test_hdf5_read_array_never_reads_the_array_whole(
+        self, io_path_tuple, monkeypatch
+    ):
+        """An HDF5 override slices its data array in the file."""
+        io, path = io_path_tuple
+        resource_type = (
+            _required_resource_type(io.read_array) if io.implements_read_array else None
+        )
+        if resource_type is None or not issubclass(resource_type, H5Reader):
+            pytest.skip(f"{io.name} has no HDF5 read_array override")
+        with skip_missing():
+            payload = dc.scan(path)[0]
+        key = payload.source_patch_key
+        kwargs = {"source_patch_key": key} if key else {}
+        # a small window, so reading the array whole is never mistaken
+        # for reading what was asked for
+        windows = {
+            dim: (1, min(size - 1, 4))
+            for dim, size in zip(payload.dims, payload.shape, strict=True)
+            if size > 2
+        }
+        assert windows, "no dimension long enough to window"
+        reads = []
+        original = h5py.Dataset.__getitem__
+
+        patch_size = int(np.prod(payload.shape))
+
+        def spy(self, index):
+            out = original(self, index)
+            # the data array holds at least a sample per patch value;
+            # a coordinate or metadata array is smaller
+            if self.ndim > 1 and self.size >= patch_size:
+                reads.append((self.shape, np.shape(out), index))
+            return out
+
+        monkeypatch.setattr(h5py.Dataset, "__getitem__", spy)
+        io.read_array(path, windows, **kwargs)
+        assert reads, "the data array was never read"
+        stored = reads[0][0]
+        if len(stored) == len(payload.dims):
+            # the plain case: one read, sliced on every windowed axis
+            assert len(reads) == 1, reads
+            wanted = tuple(
+                (1, min(size - 1, 4)) if dim in windows else (0, size)
+                for dim, size in zip(payload.dims, payload.shape, strict=True)
+            )
+            index = reads[0][2]
+            assert isinstance(index, tuple) and len(index) == len(wanted), index
+            # xarray spells the same slice with an explicit unit step
+            assert tuple((x.start, x.stop) for x in index) == wanted, index
+        else:
+            # a cube of blocks reads more than the window, never all of it
+            for shape, got, _ in reads:
+                assert got != shape, (shape, got)
+
     def test_slice_single_dim_both_ends(self, io_path_tuple):
         """
         Ensure each dimension can be passed as an argument to `read` and
@@ -596,6 +704,27 @@ class TestRead:
         spool = io.read(path, time=(end_time + one_second, ...))
         assert len(spool) == 0
 
+    def test_a_read_bound_records_nothing(self, io_path_tuple):
+        """
+        A patch read under a coordinate bound carries what a whole read carries.
+
+        The bound is the read's business; a spool records the trim it
+        asked for, so a reader which recorded it too would record it twice.
+        """
+        io, path = io_path_tuple
+        with skip_missing():
+            whole = io.read(path)
+        if len(whole) != 1 or "time" not in whole[0].dims:
+            pytest.skip("Test requires a single patch with a time dimension.")
+        patch = whole[0]
+        values = patch.get_coord("time").values
+        if len(values) < 6:
+            pytest.skip("Test requires a time dimension with room to trim.")
+        bounded = io.read(path, time=(values[2], values[-3]))
+        assert len(bounded) == 1
+        assert bounded[0].attrs.processing_id == patch.attrs.processing_id
+        assert bounded[0].attrs.history == patch.attrs.history
+
     def test_slice_out_all_patches_distance(self, io_path_tuple):
         """Ensure slicing outside file distance range returns an empty spool."""
         io, path = io_path_tuple
@@ -627,13 +756,9 @@ class TestScan:
         """
         Scanning must not pull a file's sample data off disk.
 
-        A reader that walks every sample to build a summary still returns the
-        right answer, which makes this easy to regress and expensive to live
-        with: indexing a directory then costs a full read of every file in it.
-
-        Measured in bytes rather than memory, because a reader can stream a
-        file without holding it, and because sample data lands in C-extension
-        buffers that Python's allocation tracing cannot see.
+        A full-data scan can return correct metadata while making directory indexing
+        cost a full read per file. Byte counts catch streaming and C-extension
+        buffers that Python memory tracing misses.
         """
         io, path = io_path_tuple
         if io.name.upper() in IGNORE_SCAN_CHECK:
@@ -659,10 +784,9 @@ class TestScan:
         """
         Formats should implement scan rather than inherit the default.
 
-        The budget above can only weigh formats that have a large enough test
-        file, so it cannot see a format which never implements scan at all and
-        so reads everything through the FiberIO default. That is what this
-        covers; see FORMATS_WITH_DEFAULT_SCAN for the known exceptions.
+        The byte budget only covers formats with large fixtures. This check catches
+        formats that inherit the full-read fallback; ``FORMATS_WITH_DEFAULT_SCAN``
+        lists accepted exceptions.
         """
         FiberIO.manager.load_plugins()
         # Other test modules register FiberIO subclasses globally on import,

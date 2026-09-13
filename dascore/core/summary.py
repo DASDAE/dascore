@@ -1,6 +1,6 @@
 """Summary models for patch workflows.
 
-See ['Coordinate Internals'](`docs/notes/coordinate_internals.qmd`) for the
+See ['Coordinate Internals'](`dascore/docs/notes/coordinate_internals.qmd`) for the
 relationship between full coords, exact coord summaries, and flattened index metadata.
 """
 
@@ -91,7 +91,8 @@ def _flatten_coord_summary(
     if dim_tuple and coord_name not in exclude:
         out[coord_name] = (summary_dict["min"], summary_dict["max"])
     for field, value in summary_dict.items():
-        if field in exclude:
+        # runs are structure, not a flat value; the index reads them whole
+        if field in exclude or field == "runs":
             continue
         if field == "dims":
             value = ",".join(value) if value else ""
@@ -290,7 +291,7 @@ class PatchSummary(DascoreBaseModel):
             coords=patch.coords.to_summary_dict(),
             dims=patch.dims,
             shape=patch.shape,
-            dtype=str(np.dtype(patch.data.dtype)),
+            dtype=str(np.dtype(patch.dtype)),
             source_patch_key=patch.attrs.get("_source_patch_key", ""),
         )
 

@@ -1,12 +1,8 @@
 """
-What every windowed patch function does today, pinned before the resolvers merge.
+Parity tests for window resolution across patch functions.
 
-Each windowed function used to turn "a window of X" into sample counts its own
-way, and the ways differed at the edges: whether an even window is adjusted or
-refused, whether a window longer than the coordinate is refused, what
-`overlap=None` means, how a percent rounds. The tests here pin those edges
-with literal values taken from the functions before the resolvers were made
-one, so the merge can be checked against them rather than trusted.
+These tests preserve prior edge behavior for even or oversized windows,
+`overlap=None`, and percentage rounding.
 """
 
 from __future__ import annotations
@@ -226,10 +222,7 @@ class TestNoFloor:
 
 class TestChangedOnPurpose:
     """
-    What the resolver does differently, each a call which used to fail.
-
-    Pinned so the difference is on record rather than discovered; each
-    is named in the pull request which made it.
+    Intentional behavior changes introduced by the shared resolver.
     """
 
     def test_hampel_takes_a_quantity_under_samples(self, patch):
@@ -308,12 +301,9 @@ class TestEmptySelection:
 
 class TestTaperRamps:
     """
-    The ramp each edge-tapering function builds, pinned by value.
+    Pin the shared 2n + 1 edge-taper construction by value.
 
-    All take the first n samples of a window of 2n + 1, so a five-sample
-    triangle is 1/6, 2/6, ... 5/6 and the plateau follows. `Patch.taper`
-    used to take the first half of a window of 2n instead (1/10, 3/10,
-    ...), and moved here on purpose: one ramp, everywhere.
+    A five-sample triangle is 1/6, 2/6, ... 5/6 before the plateau.
     """
 
     @pytest.fixture(scope="class")

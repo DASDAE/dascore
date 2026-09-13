@@ -112,11 +112,7 @@ def _none_if_not_finite(value):
         return value
 
 
-# How to spell a number which may be absent. Absence is `None`, because
-# json has no spelling for nan: a nan-defaulted float writes `null` and
-# then refuses to read it back, so its class cannot reconstruct from its
-# own dump. A file which spells "unknown" as nan is read as absent rather
-# than refused, since that is the same statement in another notation.
+# Use None for missing numbers so JSON null round-trips; accept nan as missing.
 OptionalFiniteFloat = Annotated[
     FiniteFloat | None, BeforeValidator(_none_if_not_finite)
 ]

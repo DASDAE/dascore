@@ -47,10 +47,8 @@ class UnresolvedPatchError(PatchError):
     """
     Raised when an inventory does not describe a patch.
 
-    The patch names no inventory entry, or names one the inventory does
-    not resolve to exactly one of. A patch the inventory describes *twice*
-    (one straddling an epoch boundary) is a different condition and raises
-    a plain `PatchError`: it needs subdividing, not a missing-data policy.
+    The patch's inventory entry is missing or ambiguous. A patch spanning an epoch
+    boundary instead raises `PatchError` and needs subdividing.
     """
 
 
@@ -94,6 +92,10 @@ class PatchBroadcastError(ValueError, PatchError):
 
 class PatchAttributeError(ValueError, PatchError):
     """Raised when something is wrong with a Patch's attributes."""
+
+
+class PatchDataError(ValueError, PatchError):
+    """Raised when a patch built without data is asked for its data."""
 
 
 class PatchConversionError(ValueError, PatchError):
@@ -141,10 +143,8 @@ class MissingOptionalDependencyError(ImportError, DependencyError):
     """
     Raised when an optional package needed for some functionality is missing.
 
-    The install_name attribute, when set, gives the name of the package to
-    install (eg protobuf) which may differ from the import name
-    (eg google.protobuf). It defaults on the class so subclasses which don't
-    call this init still have it.
+    `install_name` names the package to install (e.g., protobuf for google.protobuf).
+    Its class default also covers subclasses that skip this initializer.
     """
 
     install_name: str | None = None

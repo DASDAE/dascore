@@ -28,7 +28,7 @@ from dascore.units import convert_units, get_quantity_str
 from dascore.utils.misc import unbyte
 
 # Every flat coord-summary key an old file may contain ({name}_{field}).
-_LEGACY_COORD_FIELDS = tuple(CoordSummary.model_fields)
+_LEGACY_COORD_FIELDS = tuple(f for f in CoordSummary.model_fields if f != "runs")
 # The subset legacy writers actually flattened into attrs; dims/fingerprint
 # never appeared as flat keys, so translate re-emits only these while the
 # strip above removes the full (superset) field family.

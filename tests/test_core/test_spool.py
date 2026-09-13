@@ -29,9 +29,11 @@ from dascore.exceptions import (
     MissingPatchError,
     ParameterError,
     UnknownExampleError,
+    UnknownFiberFormatError,
 )
 from dascore.io.index.planned import PlanResolver
 from dascore.io.segy import SegyV1_0
+from dascore.proc.basic import Abs
 from dascore.utils.display import range_texts
 from dascore.utils.downloader import fetch
 from dascore.utils.misc import suppress_warnings
@@ -850,13 +852,13 @@ class TestMap:
         except (PermissionError, OSError, RuntimeError) as exc:
             pytest.skip(f"ProcessPoolExecutor unavailable: {exc}")
 
-    @pytest.fixture(params=["partial", "callable_object", "patch_op"])
+    @pytest.fixture(params=["partial", "callable_object", "processor"])
     def nameless_callable(self, request):
         """A callable with no `__name__`, of each kind DASCore makes."""
         callables = {
             "partial": functools.partial(_gigo),
             "callable_object": _CallableObject(),
-            "patch_op": dc.proc.abs.op(),
+            "processor": Abs(),
         }
         return callables[request.param]
 
@@ -948,6 +950,59 @@ class TestGetSpool:
         out2 = dc.spool(terra15_das_example_path, file_format="terra15")
         assert isinstance(out2, BaseSpool)
         assert len(out1) == len(out2)
+
+    def test_single_file_format_probed_once(self, terra15_das_example_path):
+        """
+        Opening one file sniffs its format once.
+
+        from_file re-sniffed a format its caller had already resolved,
+        which opens the file again; for a remote source that is a second
+        round trip.
+        """
+        manager = dc.io.FiberIO.manager
+        with mock.patch.object(
+            manager, "_get_format", wraps=manager._get_format
+        ) as probe:
+            # Inside the block: a spool which sniffs while it builds rows
+            # lazily would otherwise slip past the count.
+            assert len(dc.spool(terra15_das_example_path))
+        assert probe.call_count == 1
+
+    def test_from_file_with_known_format_does_not_probe(self, terra15_das_example_path):
+        """A caller which states the format is believed."""
+        fmt, ver = dc.get_format(terra15_das_example_path)
+        manager = dc.io.FiberIO.manager
+        with mock.patch.object(
+            manager, "_get_format", wraps=manager._get_format
+        ) as probe:
+            assert len(Spool.from_file(terra15_das_example_path, fmt, ver))
+        assert probe.call_count == 0
+
+    def test_update_rereads_a_rewritten_format(self, tmp_path):
+        """A file rewritten in another format is re-sniffed, not assumed."""
+        path = tmp_path / "patch.h5"
+        patch = dc.get_example_patch()
+        patch.io.write(path, "dasdae")
+        spool = dc.spool(path)
+        assert len(spool) == 1
+        path.unlink()
+        patch.io.write(path, "pickle")
+        updated = spool.update()
+        assert len(updated) == 1
+        assert updated[0].equals(patch)
+
+    def test_stated_format_is_believed(self, terra15_das_example_path):
+        """
+        A stated format is used as given, as dc.read and dc.scan use it.
+
+        Naming a format the file is not therefore yields what that reader
+        makes of the file rather than an error, which is the contract the
+        other two entry points already have.
+        """
+        spool = Spool.from_file(terra15_das_example_path, "DASDAE", "1")
+        assert len(spool) == 0
+        with pytest.raises(UnknownFiberFormatError):
+            Spool.from_file(terra15_das_example_path, "not_a_format", "1")
 
     def test_non_existent_file_raises(self):
         """A path that doesn't exist should raise."""

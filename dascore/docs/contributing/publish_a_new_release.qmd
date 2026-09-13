@@ -1,0 +1,43 @@
+---
+title: Publish a New Release
+---
+
+DASCore's version comes from git tags; do not edit a version file.
+
+## Prepare and publish
+
+1. Confirm the documentation builds locally or on a PR labeled `documentation`.
+2. Open [Draft a new release](https://github.com/DASDAE/dascore/releases/new).
+3. Choose the next `v*` tag using the [version policy](general_guidelines.qmd#branches-and-versions).
+4. Assemble notes from merged PR `## Changelog` sections. Use **Breaking Changes**, **Added**, **Changed**, **Deprecated**, **Removed**, **Fixed**, and **Security**, omitting empty sections. Repeat breaking entries in **Breaking Changes** and end each entry with its PR number.
+5. Publish the release to create the tag. GitHub Actions publishes PyPI distributions and builds the docs from that tag.
+
+GitHub can generate a draft, and the repository's `draft-release` agent skill can collect entries, but maintainers must verify the version, target, categories, and wording.
+
+## Pre-releases
+
+For alpha, beta, or release-candidate builds:
+
+1. Target the branch containing the code, usually `dev`; GitHub otherwise defaults to `master`.
+2. Use a [PEP 440](https://peps.python.org/pep-0440/) tag such as `v0.2.0a1`, `v0.2.0b1`, or `v0.2.0rc1`.
+3. Select **Set as a pre-release**. The docs workflow uses this flag to avoid replacing stable docs.
+4. Do not publish the pre-release to conda-forge's main channel.
+
+State how to install it (`pip install --pre dascore==0.2.0b1`), that it is unavailable on conda-forge, where to report problems, and what breaks relative to the last stable release. The docs workflow still builds and attaches `docs.zip`; it intentionally skips deployment.
+
+## Verify and recover
+
+Confirm these workflows succeed:
+
+- `PublishPackage`: uploads distributions to [PyPI](https://pypi.org/project/dascore/).
+- `BuildDeployStableDocs`: builds docs, attaches `docs.zip`, and deploys stable releases.
+
+Then verify PyPI and, for stable releases, [dascore.org](https://dascore.org). For pre-releases, inspect `docs.zip` instead.
+
+Release jobs check out the tag, so reruns use the same commit after its branch advances. Re-run a transient docs job as needed. Re-run `PublishPackage` only when nothing reached PyPI: PyPI never permits reusing a filename, even after deletion, so partial uploads or source fixes require a new tag. Never move a public tag.
+
+## Conda-forge
+
+After a stable version reaches PyPI, check [dascore-feedstock](https://github.com/conda-forge/dascore-feedstock) for the bot's update PR or open a “bot commands” issue titled `@conda-forge-admin, please update version`. Verify its requirements against `pyproject.toml`, merge it, and confirm the package appears on [conda-forge](https://anaconda.org/conda-forge/dascore).
+
+The feedstock may include useful optional dependencies unless their slow conda release cadence blocks DASCore releases.

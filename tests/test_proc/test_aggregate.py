@@ -112,7 +112,7 @@ class TestBasicAggregations:
 
     @pytest.mark.parametrize("method", list(_AGG_FUNCS))
     def test_named_aggregations(self, random_patch, method):
-        """Simply run the named aggregations."""
+        """Run each named aggregation."""
         patch = getattr(random_patch, method)(dim="distance")
         assert isinstance(patch, dc.Patch)
 

@@ -1,0 +1,45 @@
+---
+title: DASCore Development Installation
+---
+
+Clone the integration branch and fetch the version tags:
+
+```bash
+git clone --branch dev https://github.com/DASDAE/dascore.git
+cd dascore
+git fetch --tags
+```
+
+Use an isolated environment. With [uv](https://docs.astral.sh/uv/):
+
+```bash
+uv venv
+source .venv/bin/activate
+uv pip install -e ".[dev]"
+```
+
+Or with [conda](https://www.anaconda.com/):
+
+```bash
+conda env create -f environment.yml
+conda activate dascore
+pip install -e ".[dev]"
+```
+
+Install the commit hooks:
+
+```bash
+pre-commit install -f
+```
+
+To refresh an existing checkout, activate its environment and run:
+
+```bash
+git switch dev
+git pull --tags origin dev
+pip install -e ".[dev]"
+```
+
+If `origin` is your fork, replace `origin` with `upstream`.
+
+Use `uv pip` instead of `pip` in a uv environment.

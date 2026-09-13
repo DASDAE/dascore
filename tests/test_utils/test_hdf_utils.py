@@ -16,6 +16,7 @@ from dascore.utils.hdf5 import (
     extract_h5_attrs,
     get_h5py_file,
     h5_matches_structure,
+    unpack_scalar_h5_dataset,
 )
 
 
@@ -132,3 +133,19 @@ class TestExtractH5Attrs:
         }
         with pytest.raises(KeyError):
             extract_h5_attrs(h5_example_file, map_name)
+
+
+class TestUnpackScalarH5Dataset:
+    """The old scalar reader warns and keeps working until it is removed."""
+
+    def test_warns_and_reads(self, tmp_path):
+        """It still reads a scalar, and says where to go instead."""
+        path = tmp_path / "scalar.h5"
+        with h5py.File(path, "w") as h5:
+            h5.create_dataset("value", data=5.0)
+            h5.create_dataset("wrapped", data=[5.0])
+        with h5py.File(path, "r") as h5:
+            with pytest.warns(DeprecationWarning, match="unpack_scalar_h5_dataset"):
+                assert unpack_scalar_h5_dataset(h5["value"]) == 5.0
+            with pytest.warns(DeprecationWarning, match="unpack_scalar_h5_dataset"):
+                assert unpack_scalar_h5_dataset(h5["wrapped"]) == 5.0

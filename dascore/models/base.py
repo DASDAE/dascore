@@ -130,14 +130,9 @@ class DascoreBaseModel(BaseModel):
         """
         Name this class in the document, in json-mode dumps only.
 
-        A python-mode dump is not a document: it is what equality compares,
-        what ``new`` reconstructs from and what the index ingests, none of
-        which want a key that is not a field.
-
-        Gated inside the serializer rather than with ``when_used="json"``,
-        which reads better and silently breaks ``include``/``exclude``:
-        pydantic skips the whole wrapper in python mode, and with it the
-        field filtering the handler would have applied.
+        Python-mode dumps omit the tag for equality, reconstruction, and indexing. Gate
+        inside the serializer: ``when_used="json"`` skips the wrapper in Python mode,
+        bypassing the handler's include/exclude filtering.
         """
         out = handler(self)
         if info.mode != "json" or TAG_FIELD in out:  # a union member's own
@@ -157,14 +152,9 @@ class DascoreBaseModel(BaseModel):
         """
         Consume a document's class tag, refusing one which names another class.
 
-        The tag is never required: a document dispatches on it before it
-        gets here, and a hand-written object or a nested one may simply not
-        state it. What it may not do is disagree.
-
-        A value which names no known class is left alone rather than
-        consumed. ``PatchAttrs`` keeps extra fields, so this key may be a
-        reader's own metadata, and eating it would lose that silently; a
-        tag DASCore wrote always resolves.
+        Tags are optional but must agree when recognized. Preserve unknown tags:
+        ``PatchAttrs`` may carry them as reader metadata. Tags written by DASCore always
+        resolve.
         """
         if not isinstance(data, Mapping) or TAG_FIELD not in data:
             return data
@@ -209,15 +199,11 @@ class InventoryModel(RichRepr, DascoreBaseModel):
     """
     Base class for immutable DASDAE inventory objects.
 
-    Every inventory object carries two uniform attachment points for
-    information the model does not otherwise represent: ``description``
-    (free prose for humans, matching StationXML's Description element)
-    and ``extra_fields`` (typed key-values, e.g. for round-tripping
-    unmodeled metadata from external formats).
+    ``description`` holds prose (matching StationXML's Description); ``extra_fields``
+    holds typed metadata absent from the model.
 
-    Every field is immutable: collections are tuples and mappings are
-    frozen, so instances are safe to hold by reference. They hash on their
-    field values whenever those values are themselves hashable.
+    Collections are tuples and mappings are frozen, so instances can be shared safely.
+    Models hash by field value when all values are hashable.
     """
 
     description: str = Field(default="", description="Free-text description.")

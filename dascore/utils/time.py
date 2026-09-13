@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 from datetime import date, datetime, timedelta
+from fractions import Fraction
 from functools import singledispatch
 from typing import Any, SupportsFloat, cast, overload
 
@@ -134,38 +135,6 @@ def _float_array_to_ns(array):
     return np.rint(array * 1_000_000_000).astype(np.int64)
 
 
-def _saturate_time(value, amount, sign: int = 1):
-    """Add/subtract a timedelta to a time-like value, saturating at int64 bounds.
-
-    Numpy silently wraps datetime64/timedelta64 overflow rather than raising,
-    so the arithmetic is performed with Python ints (via object arrays) and
-    clipped back into the valid int64 range.
-    """
-    is_dt = is_datetime64(value)
-    is_td = is_timedelta64(value)
-    if not (is_dt or is_td):
-        msg = f"type {type(value)} is not supported"
-        raise NotImplementedError(msg)
-    value = to_datetime64(value) if is_dt else to_timedelta64(value)
-    dtype = "datetime64[ns]" if is_dt else "timedelta64[ns]"
-    limits = np.iinfo(np.int64)
-    lower, upper = int(limits.min) + 1, int(limits.max)
-    value_ns = np.asarray(to_int(value)).astype(object)
-    amount_ns = np.asarray(sign * to_int(to_timedelta64(amount))).astype(object)
-    out = np.clip(value_ns + amount_ns, lower, upper)
-    return np.asarray(out).astype(np.int64).astype(dtype)[()]
-
-
-def saturate_add(value, amount):
-    """Add a timedelta to a time-like value, saturating at int64 bounds."""
-    return _saturate_time(value, amount)
-
-
-def saturate_subtract(value, amount):
-    """Subtract a timedelta from a time-like value, saturating at int64 bounds."""
-    return _saturate_time(value, amount, sign=-1)
-
-
 @singledispatch
 def to_datetime64(obj: timeable_types | np.ndarray):
     """
@@ -290,7 +259,7 @@ def _string_array_to_datetime64(arr: pd.arrays.StringArray):
 
 @to_datetime64.register(np.datetime64)
 def _pass_datetime(datetime):
-    """Return the datetime at nanosecond precision."""
+    """Return datetime64 at nanosecond precision."""
     return _to_ns_unit(datetime, is_datetime=True)[()]
 
 
@@ -376,7 +345,7 @@ def _float_to_timedelta64(num: float | int) -> np.timedelta64:
 
 @to_timedelta64.register(np.timedelta64)
 def _pass_time_delta(time_delta):
-    """Return the time delta at nanosecond precision."""
+    """Return the timedelta at nanosecond precision."""
     return _to_ns_unit(time_delta, is_datetime=False)[()]
 
 
@@ -433,7 +402,7 @@ def _string_array_to_timedelta64(arr: pd.arrays.StringArray):
 
 @to_timedelta64.register(pd.Timedelta)
 def _unpack_pandas_time_delta(time_delta: pd.Timedelta):
-    """Return the time delta at nanosecond precision, whatever its own unit."""
+    """Return the timedelta at nanosecond precision, whatever its own unit."""
     return to_timedelta64(time_delta.to_numpy())
 
 
@@ -449,7 +418,7 @@ def _timedelta_to_timedelta64(td):
 
 @to_timedelta64.register(str)
 def _time_delta_from_str(time_delta_str: str):
-    """Simply return the time delta."""
+    """Parse a duration string as numpy timedelta64."""
     match time_delta_str.split():
         # Can split string into (hopefully) units and values. Standard case.
         case [val, units]:
@@ -489,7 +458,7 @@ def _float_to_num(num: float | int) -> float | int:
 def _array_to_int(array: np.ndarray) -> np.ndarray:
     """Convert an array of possible dates to int64 nanoseconds."""
     array = np.asarray(array)
-    if not len(array):
+    if not array.size:
         return array.astype(np.int64)
     # dealing with an array of datetime64 or empty array
     is_dt = np.issubdtype(array.dtype, np.datetime64)
@@ -504,7 +473,7 @@ def _array_to_int(array: np.ndarray) -> np.ndarray:
 @_to_int.register(datetime)
 @_to_int.register(pd.Timestamp)
 def _time_to_int(datetime):
-    """Simply return the datetime converted to ns."""
+    """Return integer nanoseconds since the Unix epoch."""
     return to_int([to_datetime64(datetime)])[0]
 
 
@@ -613,7 +582,7 @@ def _series_to_float(series: pd.Series) -> pd.Series:
 @_to_float.register(datetime)
 @_to_float.register(pd.Timestamp)
 def _time_to_float(datetime):
-    """Simply return the datetime."""
+    """Return float seconds since the Unix epoch."""
     td = to_datetime64(datetime) - _EPOCH_DATETIME64
     return to_float(td)
 
@@ -708,3 +677,68 @@ def dtype_time_like(dtype_or_array) -> bool:
     if is_timedelta or is_datetime:
         return True
     return False
+
+
+def to_exact_fraction(
+    value, *, max_term: int = 100_000, rel_tol: float = 0.0
+) -> Fraction | None:
+    """
+    Recover the simple fraction a float was rounded from, or None.
+
+    A stored rate of ``1024.0`` or an interval computed as ``1 / 3000`` is
+    the nearest double to a ratio of small integers. This returns that
+    ratio when one whose numerator and denominator are both at most
+    ``max_term`` rounds to the very same double; otherwise None, and the
+    caller should keep the value as given. Exact agreement between small
+    terms is what makes the guess safe: an arbitrary double has about a
+    one-in-a-million chance of matching such a fraction.
+
+    A value stored with fewer digits than a double holds (``0.00033333333``,
+    or a float32) never matches exactly. ``rel_tol`` admits such a value,
+    but loosely: every real number is within a part in a billion of some
+    fraction with terms below a million (pi is 3126535/995207), so pair a
+    tolerance with a small ``max_term``. Never apply this to a derived
+    quantity.
+
+    Parameters
+    ----------
+    value
+        A finite number (int, float, numpy scalar, or Fraction).
+    max_term
+        The largest numerator or denominator considered.
+    rel_tol
+        The relative error allowed between the fraction and ``value``;
+        zero (the default) requires the same double.
+
+    Examples
+    --------
+    >>> from dascore.utils.time import to_exact_fraction
+    >>> to_exact_fraction(1024.0)
+    Fraction(1024, 1)
+    >>> to_exact_fraction(1 / 3000)
+    Fraction(1, 3000)
+    >>> to_exact_fraction(0.00033333333, rel_tol=1e-7, max_term=10_000)
+    Fraction(1, 3000)
+    >>> to_exact_fraction(0.1234567891234) is None
+    True
+    """
+    if isinstance(value, Fraction):
+        return value
+    if isinstance(value, bool | np.bool_):
+        return None
+    try:
+        as_float = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(as_float):
+        return None
+    if as_float == 0:
+        return Fraction(0)
+    frac = Fraction(as_float).limit_denominator(max_term)
+    if abs(frac.numerator) > max_term:
+        return None
+    if rel_tol == 0:
+        return frac if float(frac) == as_float else None
+    if not math.isclose(float(frac), as_float, rel_tol=rel_tol, abs_tol=0.0):
+        return None
+    return frac

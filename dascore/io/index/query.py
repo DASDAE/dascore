@@ -16,15 +16,16 @@ import re
 from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
 from enum import Enum, auto
+from typing import NamedTuple
 
 import numpy as np
 import pandas as pd
 
 from dascore.exceptions import InvalidSpoolQueryError, ParameterError, UnitError
-from dascore.io.index.ingest import typed_value
+from dascore.io.index.ingest import TypedValue, typed_value
 from dascore.io.index.schema import glob_expr, quote
-from dascore.units import convert_units
-from dascore.utils.misc import is_range
+from dascore.units import convert_units, get_quantity
+from dascore.utils.misc import glob_to_regex, is_range
 from dascore.utils.pd import resolve_selector_namespaces
 
 _GLOB_CHARS = frozenset("*?[")
@@ -43,6 +44,24 @@ class _Unset(Enum):
 
 
 _UNSET = _Unset.UNSET
+
+
+@dataclass(frozen=True)
+class CoordExists:
+    """
+    Candidacy predicate for a patch-local coordinate selection.
+
+    The bounds are resolved per patch at load, so the index can only ask
+    that the coordinate exist. ``units_from`` carries the original range
+    when one of its bounds is a quantity: a metre window still has to
+    exclude a seconds coordinate, or metadata would claim a row that
+    raises `UnitError` on load.
+    """
+
+    units_from: tuple | None = None
+
+
+COORD_EXISTS = CoordExists()
 
 
 @dataclass(frozen=True)
@@ -89,6 +108,8 @@ def _coerce_scalar(value, target_kinds: set[str]):
     Follows the coercion table in the selector spec; datetime-like
     strings become time queries only when the target has a time kind.
     """
+    if isinstance(value, str) and value == "" and "str" in target_kinds:
+        return TypedValue("str", value)
     typed = typed_value(value)
     if typed is None:
         msg = f"Cannot use {value!r} as a spool query value."
@@ -325,79 +346,6 @@ def build_attr_clause(
     return None
 
 
-def glob_to_regex(pattern: str) -> re.Pattern:
-    """
-    Translate a glob to the regex which matches what SQLite's GLOB does.
-
-    SQLite is the authority on what a glob selector means, since that is
-    what the index applies, and it is not `fnmatch`: a character class is
-    negated with `[^...]`, where fnmatch spells that `[!...]` and reads a
-    leading `!` as a literal. Translating here rather than reaching for
-    fnmatch is what keeps one pattern from selecting opposite halves of a
-    spool depending on which side answered it. An unterminated class
-    matches nothing, as it does in SQLite; a class a regex cannot express
-    at all (a reversed range, which SQLite reads leniently) matches
-    nothing here rather than being guessed at.
-    """
-    out, index, size = [], 0, len(pattern)
-    while index < size:
-        char = pattern[index]
-        if char in "*?":
-            out.append(".*" if char == "*" else ".")
-        elif char == "[":
-            # A class may open with '^' to negate and may hold ']' as its
-            # first member; the class ends at the next ']' after those.
-            end = index + 1 + pattern[index + 1 : index + 2].count("^")
-            end += pattern[end : end + 1].count("]")
-            end = pattern.find("]", end)
-            if end < 0:
-                return _MATCHES_NOTHING
-            body = pattern[index + 1 : end]
-            negate, body = body.startswith("^"), body.removeprefix("^")
-            # A ']' opening a class is one of its members, and SQLite takes
-            # it as a plain one: it is not the low end of a range, so the
-            # dash which may follow it is a member too.
-            leading = ""
-            if body.startswith("]"):
-                leading, body = re.escape("]"), body[1:]
-            out.append(f"[{'^' if negate else ''}{leading}{_class_body(body)}]")
-            index = end
-        else:
-            out.append(re.escape(char))
-        index += 1
-    # DOTALL, since SQLite's wildcards cross a newline like any other byte.
-    return re.compile("".join(out) + r"\Z", re.DOTALL)
-
-
-# A pattern which matches nothing, for a glob SQLite would not read.
-_MATCHES_NOTHING = re.compile(r"(?!)")
-
-
-def _class_body(body: str) -> str:
-    """
-    Escape the members of a glob character class for a regex one.
-
-    Ranges stay ranges, since a glob class means them, with each endpoint
-    escaped on its own — escaping the body wholesale would turn the dash
-    of a range into a member. A range's low endpoint is also emitted as a
-    member: SQLite tests it before testing the range, so `[z-a]` matches
-    `z` where the reversed range alone matches nothing.
-    """
-    out, index, size = [], 0, len(body)
-    while index < size:
-        low = body[index]
-        if index + 2 < size and body[index + 1] == "-":
-            high = body[index + 2]
-            out.append(re.escape(low))
-            if low <= high:
-                out.append(f"{re.escape(low)}-{re.escape(high)}")
-            index += 3
-            continue
-        out.append(re.escape(low))
-        index += 1
-    return "".join(out)
-
-
 def evaluate_attr_predicate(values, name: str, value, units=None) -> np.ndarray:
     """
     Evaluate one attr selector against values held in memory.
@@ -490,6 +438,64 @@ def evaluate_attr_predicate(values, name: str, value, units=None) -> np.ndarray:
     return compare(value, operator.eq)
 
 
+class _UnitBound(NamedTuple):
+    """The only thing unit compatibility needs from a bound."""
+
+    units: str
+
+
+def _dimensional_bounds(value) -> list[_UnitBound]:
+    """
+    Return the bounds of a range which constrain the coordinate's units.
+
+    Relative bounds are never validated against each other here (a
+    reversed pair is legal per patch), so this reads their units directly
+    rather than coercing the range. Percentages are dimensionless: they
+    describe a fraction of whatever the patch spans, so they constrain
+    nothing.
+    """
+    out: list[_UnitBound] = []
+    for raw in value or ():
+        units = getattr(raw, "units", None)
+        quantity = None if units is None else get_quantity(units)
+        if quantity is None or quantity.dimensionless:
+            continue
+        out.append(_UnitBound(str(units)))
+    return out
+
+
+def _add_exists_clause(
+    where: _Where, rows: pd.DataFrame, name: str, value: CoordExists
+) -> None:
+    """Add an existence clause, narrowed to dimensionally usable units."""
+    conditions = ["pc.coord_name = ?"]
+    params: list = [name]
+    if "str" in set(rows["value_kind"]):
+        # String coordinates have no offset arithmetic (`Patch.select`
+        # refuses them), so they are never relative candidates. A
+        # population with no other kind is rejected eagerly, in select.
+        conditions.append("cd.value_kind != 'str'")
+    compatible = None
+    bounds = _dimensional_bounds(value.units_from)
+    if bounds and len(rows):
+        compatible = _compatible_coord_units(rows, bounds, name)
+    if compatible is not None:
+        # NULL-unit definitions can never be proven incompatible, so they
+        # stay candidates, exactly as the bounded clause treats them.
+        if not compatible:
+            conditions.append("cd.units IS NULL")
+        else:
+            marks = ", ".join("?" * len(compatible))
+            conditions.append(f"(cd.units IS NULL OR cd.units IN ({marks}))")
+            params.extend(sorted(compatible))
+    where.add(
+        "p.patch_id IN (SELECT pc.patch_id FROM patch_coords pc "
+        "JOIN coord_defs cd ON cd.coord_def_id = pc.coord_def_id "
+        "WHERE pc.run_index = 0 AND " + " AND ".join(conditions) + ")",
+        *params,
+    )
+
+
 def build_coord_clause(
     where: _Where,
     coord_meta: pd.DataFrame,
@@ -504,6 +510,9 @@ def build_coord_clause(
     membership/boolean masks are applied at patch load, above this layer.
     """
     rows = coord_meta[coord_meta["coord_name"] == name]
+    if isinstance(value, CoordExists):
+        _add_exists_clause(where, rows, name, value)
+        return
     if isinstance(value, tuple) and len(value) != 2:
         msg = f"Coordinate range for {name!r} must be a length 2 sequence."
         raise ParameterError(msg)
@@ -520,73 +529,76 @@ def build_coord_clause(
         raise InvalidSpoolQueryError(msg)
 
     compatible_units = _compatible_coord_units(rows, typed_values, name)
+    if name == "time" and kind == "time" and compatible_units is None:
+        # These columns copy the absolute coordinate's exact ns envelope.
+        # Relative, numeric, and absent time coords leave them NULL.
+        for bound, column, op in ((lo, "time_max", ">="), (hi, "time_min", "<=")):
+            if bound is not None:
+                where.add(f"p.{column} {op} ?", bound)
+        return
 
     min_col, max_col = {
-        "time": ("min_ns", "max_ns"),
-        "dur": ("min_ns", "max_ns"),
-        "num": ("min_num", "max_num"),
+        "time": ("min_int", "max_int"),
+        "dur": ("min_int", "max_int"),
+        "num": ("min_float", "max_float"),
         "str": ("min_str", "max_str"),
-        None: (None, None),
     }[kind]
     conditions = ["pc.coord_name = ?"]
     params: list = [name]
-    if kind is not None:
-        if kind in ("time", "dur"):
-            # absolute queries match absolute coords, durations relative.
-            conditions.append("cd.is_relative = ?")
-            params.append(kind == "dur")
-            kind_match = "time"
-        else:
-            kind_match = kind
-        conditions.append("cd.value_kind = ?")
-        params.append(kind_match)
-        # lo bounds the coord max (overlap), hi bounds the coord min.
-        # typed_values holds the coerced non-open bounds in (lo, hi) order,
-        # so each side pairs with its TypedValue (which knows the bound's
-        # own units) here.
-        sides = []
-        for bound, bound_col, op in ((lo, max_col, ">="), (hi, min_col, "<=")):
-            if bound is None:
-                continue
-            sides.append((bound, typed_values[len(sides)], bound_col, op))
-        if compatible_units is None:
-            # A bare range means each definition's native units: one plain
-            # predicate against the envelopes, which are stored in the
-            # coordinate's original units.
-            for bound, _typed, bound_col, op in sides:
-                conditions.append(f"cd.{bound_col} {op} ?")
-                params.append(bound)
-        elif not compatible_units:
-            conditions.append("cd.units IS NULL")
-        else:
-            # A unit-bearing range converts itself once per distinct
-            # compatible stored unit into an OR branch; a bare bound in a
-            # mixed range stays native per branch, exactly how the
-            # residual's per-bound _CanonicalRange reads it at load.
-            # NULL-unit defs stay unconstrained candidates: unitless
-            # values cannot be proven dimensionally incompatible.
-            branches = ["cd.units IS NULL"]
-            for unit in sorted(compatible_units):
-                sub_clauses = ["cd.units = ?"]
-                sub_params: list = [unit]
-                for bound, typed, bound_col, op in sides:
-                    if typed.units is None:
-                        val = bound
-                    else:
-                        val = convert_units(
-                            bound, to_units=unit, from_units=typed.units
-                        )
-                    sub_clauses.append(f"cd.{bound_col} {op} ?")
-                    sub_params.append(val)
-                branches.append("(" + " AND ".join(sub_clauses) + ")")
-                params.extend(sub_params)
-            conditions.append("(" + " OR ".join(branches) + ")")
+    if kind in ("time", "dur"):
+        # absolute queries match absolute coords, durations relative.
+        conditions.append("cd.is_relative = ?")
+        params.append(kind == "dur")
+        kind_match = "time"
+    else:
+        kind_match = kind
+    conditions.append("cd.value_kind = ?")
+    params.append(kind_match)
+    # lo bounds the coord max (overlap), hi bounds the coord min.
+    # typed_values holds the coerced non-open bounds in (lo, hi) order,
+    # so each side pairs with its TypedValue (which knows the bound's
+    # own units) here.
+    sides = []
+    for bound, bound_col, op in ((lo, max_col, ">="), (hi, min_col, "<=")):
+        if bound is None:
+            continue
+        sides.append((bound, typed_values[len(sides)], bound_col, op))
+    if compatible_units is None:
+        # A bare range means each definition's native units: one plain
+        # predicate against the envelopes, which are stored in the
+        # coordinate's original units.
+        for bound, _typed, bound_col, op in sides:
+            conditions.append(f"cd.{bound_col} {op} ?")
+            params.append(bound)
+    elif not compatible_units:
+        conditions.append("cd.units IS NULL")
+    else:
+        # A unit-bearing range converts itself once per distinct
+        # compatible stored unit into an OR branch; a bare bound in a
+        # mixed range stays native per branch, exactly how the
+        # residual's per-bound _CanonicalRange reads it at load.
+        # NULL-unit defs stay unconstrained candidates: unitless
+        # values cannot be proven dimensionally incompatible.
+        branches = ["cd.units IS NULL"]
+        for unit in sorted(compatible_units):
+            sub_clauses = ["cd.units = ?"]
+            sub_params: list = [unit]
+            for bound, typed, bound_col, op in sides:
+                if typed.units is None:
+                    val = bound
+                else:
+                    val = convert_units(bound, to_units=unit, from_units=typed.units)
+                sub_clauses.append(f"cd.{bound_col} {op} ?")
+                sub_params.append(val)
+            branches.append("(" + " AND ".join(sub_clauses) + ")")
+            params.extend(sub_params)
+        conditions.append("(" + " OR ".join(branches) + ")")
     # A semi-join the engine can evaluate once (idx_pcoords_name) beats a
     # correlated EXISTS probed per patch row (~2.5x on a 200k-source index).
     where.add(
         "p.patch_id IN (SELECT pc.patch_id FROM patch_coords pc "
         "JOIN coord_defs cd ON cd.coord_def_id = pc.coord_def_id "
-        "WHERE " + " AND ".join(conditions) + ")",
+        "WHERE pc.run_index = 0 AND " + " AND ".join(conditions) + ")",
         *params,
     )
 
@@ -610,7 +622,7 @@ def _build_where(
 
 
 # typed coord_defs envelope-minimum column per value kind
-_COORD_MIN_COLUMNS = {"num": "min_num", "time": "min_ns", "str": "min_str"}
+_COORD_MIN_COLUMNS = {"num": "min_float", "time": "min_int", "str": "min_str"}
 # the two conventional dims cached as columns on the patches table
 _HOT_COORDS = ("time", "distance")
 
@@ -630,30 +642,52 @@ def _order_clause(
     kind, name, ascending = order_by
     direction = "ASC" if ascending else "DESC"
     params: list = []
+    missing_time = ""
+    # (expression, parameters) of each sort key
     if kind == "coord" and name in _HOT_COORDS:
         column = f"p.{quote(f'{name}_min')}"
+        rows = coord_meta[coord_meta["coord_name"] == name]
+        if name == "time" and (
+            rows["value_kind"].ne("time").any() or rows["is_relative"].any()
+        ):
+            # Only absolute times populate the hot column. Other time
+            # coordinate kinds sort by their own minimum after absolute times.
+            column = (
+                f"COALESCE({column}, (SELECT "
+                "COALESCE(cd.min_int, cd.min_float, cd.min_str) "
+                "FROM patch_coords pc JOIN coord_defs cd "
+                "ON cd.coord_def_id = pc.coord_def_id "
+                "WHERE pc.patch_id = p.patch_id AND pc.coord_name = ? "
+                "AND pc.run_index = 0))"
+            )
+            params.append(name)
+            missing_time = "p.time_min IS NULL, "
+        keys = [(column, params)]
     elif kind == "coord":
         rows = coord_meta[coord_meta["coord_name"] == name]
-        # a coord observed under several kinds orders by its first kind
-        value_kind = str(rows["value_kind"].iloc[0])
-        min_col = _COORD_MIN_COLUMNS[value_kind]
-        column = (
-            f"(SELECT cd.{min_col} FROM patch_coords pc "
-            "JOIN coord_defs cd ON cd.coord_def_id = pc.coord_def_id "
-            "WHERE pc.patch_id = p.patch_id AND pc.coord_name = ?)"
-        )
-        params.append(name)
+        # one key per kind the coord is stated under, so each kind's values
+        # sort among themselves in any view, kinds in coord_meta's order
+        keys = [
+            (
+                f"(SELECT cd.{_COORD_MIN_COLUMNS[value_kind]} FROM patch_coords pc "
+                "JOIN coord_defs cd ON cd.coord_def_id = pc.coord_def_id "
+                "WHERE pc.patch_id = p.patch_id AND pc.coord_name = ? "
+                "AND pc.run_index = 0)",
+                [name],
+            )
+            for value_kind in dict.fromkeys(rows["value_kind"])
+        ]
     else:
         rows = attr_meta[attr_meta["attr_name"] == name]
         columns = [quote(c) for c in rows["column_name"]]
         # an attr observed under several kinds orders by its first column
-        column = f"a.{columns[0]}"
+        keys = [(f"a.{columns[0]}", params)]
     # rows without a value sort last regardless of direction (matching
-    # the ordinal renumberer's missing-time-last rule); the null key
-    # repeats the column expression, so its parameters repeat too
-    params = [*params, *params]
-    sql = f"ORDER BY {column} IS NULL, {column} {direction}, s.ordinal, p.patch_id"
-    return sql, params
+    # the ordinal renumberer's missing-time-last rule); each null key
+    # repeats its expression, so its parameters repeat too
+    sql = ", ".join(f"{column} IS NULL, {column} {direction}" for column, _ in keys)
+    params = [x for _, key_params in keys for x in (*key_params, *key_params)]
+    return f"ORDER BY {missing_time}{sql}, s.ordinal, p.patch_id", params
 
 
 def build_sql(
@@ -738,7 +772,7 @@ def apply_residuals(
         keep = col.map(
             lambda x: bool(pattern.search(x)) if isinstance(x, str) else False
         )
-        df = df[keep]
+        df = df[keep.astype(bool)]
     return df
 
 

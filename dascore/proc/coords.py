@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable
-from typing import Any
+from collections.abc import Iterable, Mapping
+from typing import Any, Literal
 
 import numpy as np
 import pandas as pd
@@ -13,6 +13,7 @@ from scipy.interpolate import interp1d
 import dascore as dc
 from dascore.constants import PatchType, select_values_description
 from dascore.core.coords import BaseCoord, CoordSegmented
+from dascore.core.processor import PatchProcessor
 from dascore.exceptions import (
     CoordError,
     ParameterError,
@@ -21,12 +22,9 @@ from dascore.exceptions import (
 )
 from dascore.utils.array_api import array_namespace
 from dascore.utils.docs import compose_docstring
+from dascore.utils.indexing import get_indexers, label_indexer
 from dascore.utils.misc import get_parent_code_name, iterate
 from dascore.utils.patch import patch_function
-from dascore.workflow.processor import (
-    PatchProcessor,
-    register_implementation,
-)
 
 
 @patch_function()
@@ -34,21 +32,17 @@ def snap_coords(patch: PatchType, *coords, reverse: bool = False) -> PatchType:
     """
     Snap coordinates to evenly spaced samples.
 
-    This ensures all of the specified coordinates are evenly spaced and
-    monotonic. First, the patch is sorted along specified coordinates,
-    then coordinates are assumed evenly-sampled from their min to max value.
-    Doing this can introduce some error since the coordinate labels are moved
-    and the data (apart from the sorting) are left unchanged.
-    Consider using [interpolate](`dascore.Patch.interpolate`) for a more expensive
-    but more accurate linear interpolation.
+    Sorts each specified coordinate, then replaces its labels with evenly spaced
+    values between its endpoints in the selected sort direction. Data remain
+    unchanged after sorting, so snapping can shift labels. Use
+    [interpolate](`dascore.Patch.interpolate`) when linear interpolation is preferable.
 
     Parameters
     ----------
     patch
         The patch whose coordinates should be snapped.
     *coords
-        Used to specify the dimension names to convert to CoordRanges. If not
-        specified convert all dimensional coordinates.
+        Dimensions to snap. By default, snap every dimensional coordinate.
     reverse
         If True, reverse the sorting of the coordinates.
 
@@ -155,7 +149,7 @@ def get_coord(
         coords = sorted(self.coords.coord_map)
         msg = f"Coordinate '{name}' not found in Patch coordinates: {coords}"
         raise CoordError(msg)
-    if require_evenly_sampled and coord.step is None:
+    if require_evenly_sampled and not coord.evenly_sampled:
         extra = f"as required by {get_parent_code_name()}"  # adds caller name
         msg = f"Coordinate {name} is not evenly sampled {extra}"
         raise CoordError(msg)
@@ -218,8 +212,7 @@ def get_array(
     return coord.data
 
 
-@patch_function()
-def rename_coords(self: PatchType, **kwargs) -> PatchType:
+class RenameCoords(PatchProcessor):
     """
     Rename coordinate of Patch.
 
@@ -237,31 +230,16 @@ def rename_coords(self: PatchType, **kwargs) -> PatchType:
     >>> pa2 = pa.rename_coords(distance='fragrance')
     >>> assert 'fragrance' in pa2.dims
     """
-    return RenameCoords(**kwargs)._apply(self)
 
-
-class RenameCoords(PatchProcessor):
-    """
-    Give coordinates other names.
-
-    No kernel: the data are what they were, and only what they are
-    called changes. A processor which defines no kernel says exactly
-    that, and `_apply` hands the array through untouched.
-    """
-
-    # The renames arrive as whatever the caller named them, so the fields
-    # cannot be known in advance; `model_values` folds the extras back
-    # into the parameters, so the fingerprint and the document still hold
-    # every one of them.
+    # The renames arrive under whatever names the caller used.
     model_config = ConfigDict(extra="allow", frozen=True)
 
-    def derive_meta(self, meta):
-        """Return the coordinates under their new names."""
-        coords = meta.coords.rename_coord(**self._params())
-        return meta.update(coords=coords)
+    def derive(self, patch):
+        """Return the coordinates under their new names; there is no kernel."""
+        return patch.new(coords=patch.coords.rename_coord(**self.kwargs))
 
 
-register_implementation("rename_coords", RenameCoords)
+rename_coords = RenameCoords.patch_function
 
 
 @patch_function()
@@ -497,13 +475,17 @@ def select(
 
     {select_params}
 
+    For xarray-compatible indexing, use [`Patch.sel`](`dascore.Patch.sel`) for labels or
+    [`Patch.isel`](`dascore.Patch.isel`) for sample positions. These methods preserve
+    indexer order and repetitions and remove dimensions selected with scalar indexers.
+    `select` preserves dimensions and filters values in source order.
+
     Parameters
     ----------
     patch
         The patch object.
     copy
-        If True, copy the resulting data. This is needed so the old
-        array can get gc'ed and memory freed.
+        Copy the result so it does not retain the original data array.
     relative
         If True, select ranges are relative to the start of coordinate, if
         positive, or the end of the coordinate, if negative.
@@ -515,78 +497,50 @@ def select(
     Examples
     --------
     >>> import numpy as np
-    >>> import dascore as dc
     >>> from dascore.examples import get_example_patch
     >>> patch = get_example_patch()
     >>>
-    >>> # select meters 50 to 300
+    >>> # Coordinate values and open bounds.
     >>> new_distance = patch.select(distance=(50, 300))
-    >>>
-    >>> # select channels less than 300
     >>> lt_dist = patch.select(distance=(..., 300))
     >>>
-    >>> # select time (1 second from start to -1 second from end)
-    >>> t1 = patch.get_coord("time").min() + dc.to_timedelta64(1)
-    >>> t2 = patch.get_coord("time").max() - dc.to_timedelta64(1)
-    >>> new_time1 = patch.select(time=(t1, t2))
+    >>> # One second from the start through one second before the end.
+    >>> new_time = patch.select(time=(1, -1), relative=True)
     >>>
-    >>> # this can be accomplished more simply using the relative keyword
-    >>> new_time2 = patch.select(time=(1, -1), relative=True)
-    >>>
-    >>> # filter 1 second from start time to 3 seconds from start time
-    >>> new_time3 = patch.select(time=(1, 3), relative=True)
-    >>>
-    >>> # filter 6 second from end time to 1 second from end time
-    >>> new_time4 = patch.select(time=(-6, -1), relative=True)
-    >>>
-    >>> # Select first 10 distance indices
+    >>> # Sample ranges and scalar sample indices.
     >>> new_distance1 = patch.select(distance=(..., 10), samples=True)
-    >>>
-    >>> # Select last time row/column
     >>> new_distance2 = patch.select(time=-1, samples=True)
     >>>
-    >>> # only include certain rows/columns based on a boolean array.
+    >>> # Boolean masks and explicit coordinate values.
     >>> time = patch.get_array("time")
-    >>> new_time_5 = patch.select(time=time>time[2])
-    >>>
-    >>> # Select only specific values along a dimension
+    >>> new_time_5 = patch.select(time=time > time[2])
     >>> distance = patch.get_array("distance")
     >>> new_distance_3 = patch.select(distance=distance[1::2])
 
     Notes
     -----
-    - It is important to remember select will not change the order of the
-      patch, only filter values. If the order of the patch should change, or
-      multiple rows/columns need to be repeated,
-      See [`Patch.order`](`dascore.Patch.order`).
+    Selection filters values without reordering or repeating them; use
+    [`Patch.order`](`dascore.Patch.order`) for those operations.
 
-    - A range of values includes both of its endpoints, but a range of
-      samples excludes its upper bound, like python's slicing. This means
-      -1 at the end of a sample range excludes the last sample, even
-      though -1 on its own selects it. Using the example patch, which has
-      300 distance channels and 2000 time samples:
+    Value ranges include both endpoints. Sample ranges are half-open like
+    Python slices, so ``-1`` as a range end excludes the final sample while
+    the scalar ``-1`` selects it:
 
       >>> import dascore as dc
       >>> patch = dc.get_example_patch()
-      >>> # Both endpoints included; 11 channels.
       >>> len(patch.select(distance=(0, 10)).get_array("distance"))
       11
-      >>> # Upper bound excluded; 10 samples.
       >>> len(patch.select(time=(0, 10), samples=True).get_array("time"))
       10
-      >>> # -1 as a range end drops the last sample.
       >>> len(patch.select(time=(0, -1), samples=True).get_array("time"))
       1999
-      >>> # But -1 on its own selects it.
       >>> len(patch.select(time=-1, samples=True).get_array("time"))
       1
 
-      A slice can be used in place of a tuple, and makes the half-open
-      behavior of sample ranges more obvious:
-
-      >>> len(patch.select(time=slice(0, -1), samples=True).get_array("time"))
-      1999
-
+    See Also
+    --------
+    [Patch.sel](`dascore.Patch.sel`) : Xarray-compatible label indexing.
+    [Patch.isel](`dascore.Patch.isel`) : Xarray-compatible positional indexing.
     """
     _check_coord_names(patch, kwargs)
     new_coords, data = patch.coords.select(
@@ -601,6 +555,148 @@ def select(
     if copy:
         data = data.copy()
     return patch.new(data=data, coords=new_coords)
+
+
+@patch_function(history=None)
+def isel(
+    patch: PatchType,
+    indexers: Mapping[str, Any] | None = None,
+    drop: bool = False,
+    missing_dims: str = "raise",
+    **indexers_kwargs: Any,
+) -> PatchType:
+    """
+    Select sample positions with xarray-compatible dimension indexing.
+
+    Supports the `DataArray.isel` operations described below. Use
+    [`Patch.select`](`dascore.Patch.select`) for DASCore's tuple range notation,
+    relative selections, and filtering that preserves dimensions and source order.
+
+    Parameters
+    ----------
+    patch
+        Patch to index.
+    indexers
+        Mapping of dimension names to integer positions, slices, or 1D integer
+        arrays or boolean masks. Supply this or keyword indexers.
+    drop
+        Drop coordinates made scalar by indexing. By default they are retained
+        as scalar coordinates. Scalar indexers remove their dimension either way;
+        use a one-element list to retain a length-one dimension.
+    missing_dims
+        How to handle absent dimensions: ``"raise"``, ``"warn"``, or ``"ignore"``.
+    **indexers_kwargs
+        Dimension indexers supplied as keywords.
+
+    Notes
+    -----
+    Slices use Python's exclusive stop and support strides and negative indices.
+    Evenly sampled slice results stay compact; floating coordinate values can
+    differ from xarray by rounding relative to the original range, as with `select`.
+    Arrays preserve order and repetitions; arrays on multiple dimensions select
+    every combination of positions. Out-of-bounds scalar and array indices raise.
+    Labelled xarray indexers and multidimensional indexer arrays are not supported.
+
+    Examples
+    --------
+    >>> import dascore as dc
+    >>> patch = dc.get_example_patch()
+    >>> window = patch.isel(time=slice(0, 100, 2), distance=[3, 1, 3])
+    >>> assert window.shape == (3, 50)
+    >>> channel = patch.isel(distance=3)
+    >>> assert channel.dims == ("time",)
+    >>> assert channel.get_array("distance").shape == ()
+
+    See Also
+    --------
+    [Patch.sel](`dascore.Patch.sel`) : Xarray-compatible label indexing.
+    [Patch.select](`dascore.Patch.select`) : Range filtering and relative selections.
+    """
+    coords, data = patch.coords.isel(
+        indexers,
+        array=patch.data,
+        drop=drop,
+        missing_dims=missing_dims,
+        **indexers_kwargs,
+    )
+    if coords is patch.coords and data is patch.data:
+        return patch
+    return patch.new(data=data, coords=coords)
+
+
+@patch_function(history=None)
+def sel(
+    patch: PatchType,
+    indexers: Mapping[str, Any] | None = None,
+    method: Literal["nearest"] | None = None,
+    tolerance: Any = None,
+    drop: bool = False,
+    **indexers_kwargs: Any,
+) -> PatchType:
+    """
+    Select coordinate labels with xarray-compatible dimension indexing.
+
+    Supports the `DataArray.sel` operations described below. Use
+    [`Patch.select`](`dascore.Patch.select`) for DASCore's tuple range notation,
+    relative selections, and filtering that preserves dimensions and source order.
+
+    Parameters
+    ----------
+    patch
+        Patch to index.
+    indexers
+        Mapping of dimension names to scalar labels, slices, or 1D label arrays.
+        Supply this or keyword indexers. Quantities convert to coordinate units.
+    method
+        ``None`` requires exact matches; ``"nearest"`` selects the nearest label.
+    tolerance
+        Maximum distance allowed for nearest matches, in coordinate units or as
+        a quantity. Datetime tolerances are durations. Not supported with slices.
+    drop
+        Drop coordinates made scalar by indexing instead of retaining them.
+        Scalar indexers remove their dimension regardless of this option.
+    **indexers_kwargs
+        Dimension indexers supplied as keywords.
+
+    Notes
+    -----
+    Label slices include both endpoints. Arrays preserve order and repetitions,
+    selecting every combination when several dimensions have array indexers.
+    Missing scalar or array labels raise KeyError. Slices follow coordinate
+    order, including descending coordinates, and require sliceable labels.
+    Datetime strings follow pandas' partial-date selection rules.
+    Evenly sampled coordinates stay compact during lookup and slicing.
+    Floating slice labels can differ from xarray by rounding relative to the
+    original range.
+    Array/nearest lookup on long grids below floating-point resolution raises
+    instead of expanding the grid to check whether every label is unique.
+
+    This supports dimension coordinates, not arbitrary auxiliary coordinates or
+    MultiIndexes. Labelled xarray indexers and multidimensional indexer arrays
+    are not supported. Dimensions without labels use positional indexing.
+
+    Examples
+    --------
+    >>> import dascore as dc
+    >>> patch = dc.get_example_patch()
+    >>> window = patch.sel(distance=slice(10, 20))
+    >>> assert window.shape[0] == 11
+    >>> channel = patch.sel(distance=10.2, method="nearest", tolerance=0.5)
+    >>> assert channel.get_array("distance") == 10
+
+    See Also
+    --------
+    [Patch.isel](`dascore.Patch.isel`) : Xarray-compatible positional indexing.
+    [Patch.select](`dascore.Patch.select`) : Range filtering and relative selections.
+    """
+    if method not in (None, "nearest"):
+        raise ValueError("method must be None or 'nearest'.")
+    requested = get_indexers(indexers, indexers_kwargs, patch.dims)
+    positions = {
+        dim: label_indexer(patch.get_coord(dim), value, method, tolerance)
+        for dim, value in requested.items()
+    }
+    return isel.func(patch, positions, drop=drop)
 
 
 @patch_function(history=None)
@@ -620,8 +716,7 @@ def unselect(
     patch
         The patch object.
     copy
-        If True, copy the resulting data. This is needed so the old
-        array can get gc'ed and memory freed.
+        Copy the result so it does not retain the original data array.
     relative
         If True, unselect ranges are relative to the start of coordinate, if
         positive, or the end of the coordinate, if negative.
@@ -701,8 +796,7 @@ def order(
     patch
         The patch object.
     copy
-        If True, copy the resulting data. This is needed so the old
-        array can get gc'ed and memory freed.
+        Copy the result so it does not retain the original data array.
     relative
         If True, order values are relative to the start/end of the coordinates.
     samples
@@ -745,8 +839,7 @@ def order(
     return patch.new(data=data, coords=new_coords)
 
 
-@patch_function(history=None)
-def transpose(self: PatchType, *dims: str) -> PatchType:
+class Transpose(PatchProcessor):
     """
     Transpose the data array to any dimension order desired.
 
@@ -771,25 +864,17 @@ def transpose(self: PatchType, *dims: str) -> PatchType:
     >>> # Set distance as the first dimension.
     >>> out = pa.transpose("distance", ...)
     """
-    return Transpose(dims=tuple(dims))._apply(self)
-
-
-class Transpose(PatchProcessor):
-    """Put the dimensions of a patch into another order."""
 
     # Typed loosely because `...` is a legal element: `transpose(...,
     # "distance")` means "distance last, the rest as they were".
     dims: tuple[Any, ...] = ()
 
-    def derive_meta(self, meta):
-        """
-        Return the coordinates in their new order.
+    history = None
+    _var_positional = "dims"
 
-        The coord manager hands back the very object it was given when
-        the order asked for is the order already held, and that is what
-        tells `_apply` the operation did nothing.
-        """
-        old_dims = meta.coords.dims
+    def derive(self, patch):
+        """Return the coordinates in their new order; the input if unchanged."""
+        old_dims = patch.dims
         named = [x for x in self.dims if x is not ...]
         if invalid := set(named) - set(old_dims):
             msg = (
@@ -797,18 +882,21 @@ class Transpose(PatchProcessor):
                 f"dimensions: {sorted(old_dims)}"
             )
             raise ParameterError(msg)
-        coords = meta.coords.transpose(*self.dims)
-        return meta if coords is meta.coords else meta.update(coords=coords)
+        coords = patch.coords.transpose(*self.dims)
+        return patch if coords is patch.coords else patch.new(coords=coords)
 
-    def kernel(self, data, meta, out_meta):
-        """Return the data with its axes permuted to the new order."""
-        if out_meta is meta:
+    def plan(self, patch, out):
+        """Return the permutation from the old axis order to the new."""
+        return {"axes": tuple(patch.dims.index(x) for x in out.dims)}
+
+    def kernel(self, data, *, axes):
+        """Return the data with its axes permuted, or as it was."""
+        if axes == tuple(range(len(axes))):
             return data
-        axes = tuple(meta.dims.index(x) for x in out_meta.dims)
         return array_namespace(data).permute_dims(data, axes)
 
 
-register_implementation("transpose", Transpose)
+transpose = Transpose.patch_function
 
 
 @patch_function(history=None)

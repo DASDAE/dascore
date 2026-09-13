@@ -5,6 +5,7 @@ from __future__ import annotations
 import warnings
 from datetime import date, datetime, timedelta
 from decimal import Decimal
+from fractions import Fraction
 
 import numpy as np
 import pandas as pd
@@ -21,9 +22,8 @@ except ImportError:
 from dascore.utils.time import (
     is_datetime64,
     is_timedelta64,
-    saturate_add,
-    saturate_subtract,
     to_datetime64,
+    to_exact_fraction,
     to_float,
     to_int,
     to_timedelta64,
@@ -762,63 +762,6 @@ class TestToInt:
         assert np.issubdtype(out.dtype, np.integer)
 
 
-class TestSaturateTime:
-    """Tests for saturating datetime and timedelta operations."""
-
-    class _OverflowingAdd:
-        """Object which forces the saturating fallback path."""
-
-        def __add__(self, other):
-            raise OverflowError
-
-        def __sub__(self, other):
-            raise OverflowError
-
-    def test_datetime_add_saturates_upper_bound(self):
-        """Adding past datetime64 max should clamp to max."""
-        limits = np.iinfo(np.int64)
-        dt = np.array(int(limits.max) - 1).astype("datetime64[ns]")
-        out = saturate_add(dt, np.timedelta64(5, "ns"))
-        expected = np.array(int(limits.max)).astype("datetime64[ns]")
-        assert out == expected
-
-    def test_datetime_subtract_saturates_lower_bound(self):
-        """Subtracting past datetime64 min should clamp to min."""
-        limits = np.iinfo(np.int64)
-        dt = np.array(int(limits.min) + 1).astype("datetime64[ns]")
-        out = saturate_subtract(dt, np.timedelta64(5, "ns"))
-        expected = np.array(int(limits.min) + 1).astype("datetime64[ns]")
-        assert out == expected
-
-    def test_datetime_ops_preserve_normal_values(self):
-        """Normal datetime arithmetic should match numpy time arithmetic."""
-        dt = np.datetime64("2020-01-01", "ns")
-        delta = np.timedelta64(5, "s")
-        assert saturate_add(dt, delta) == dt + delta
-        assert saturate_subtract(dt, delta) == dt - delta
-
-    def test_timedelta_ops_saturate(self):
-        """Timedelta64 values should also saturate at int64 bounds."""
-        limits = np.iinfo(np.int64)
-        td = np.array(int(limits.max) - 1).astype("timedelta64[ns]")
-        out = saturate_add(td, np.timedelta64(5, "ns"))
-        expected = np.array(int(limits.max)).astype("timedelta64[ns]")
-        assert out == expected
-
-    def test_datetime_array_saturates(self):
-        """Arrays should saturate overflowing entries and preserve normal ones."""
-        limits = np.iinfo(np.int64)
-        dt = np.array([int(limits.max) - 1, 0]).astype("datetime64[ns]")
-        out = saturate_add(dt, np.timedelta64(5, "ns"))
-        expected = np.array([int(limits.max), 5]).astype("datetime64[ns]")
-        assert np.all(out == expected)
-
-    def test_unsupported_type_raises_after_overflow(self):
-        """Unsupported values should still raise from the fallback path."""
-        with pytest.raises(NotImplementedError):
-            saturate_add(self._OverflowingAdd(), np.timedelta64(5, "ns"))
-
-
 class TestIsDateTime:
     """Ensure is_datetime64 detects datetimes."""
 
@@ -994,3 +937,59 @@ class TestIsTimeDelta:
         d2 = np.array([1, 2]).astype("timedelta64[ms]").dtype
         assert not is_timedelta64(d1)
         assert is_timedelta64(d2)
+
+
+class TestToExactFraction:
+    """Recovering the simple fraction a float states."""
+
+    @pytest.mark.parametrize(
+        "value, expected",
+        [
+            (1024.0, Fraction(1024)),
+            (3000, Fraction(3000)),
+            (62.5, Fraction(125, 2)),
+            (1 / 3000, Fraction(1, 3000)),
+            (1 / 1024, Fraction(1, 1024)),
+            (0.004, Fraction(1, 250)),
+            (np.float64(0.0005), Fraction(1, 2000)),
+            (Fraction(7, 3), Fraction(7, 3)),
+            (0.0, Fraction(0)),
+        ],
+    )
+    def test_recovers(self, value, expected):
+        """Simple fractions are recovered from their doubles."""
+        assert to_exact_fraction(value) == expected
+
+    @pytest.mark.parametrize(
+        "value", [0.1234567891234, np.pi, 1e-12, float("nan"), float("inf"), "s", True]
+    )
+    def test_declines(self, value):
+        """Anything else is declined."""
+        assert to_exact_fraction(value) is None
+
+    def test_lower_precision_needs_looser_tolerance(self):
+        """A truncated or float32 value is recovered only when allowed."""
+        assert to_exact_fraction(0.00033333333) is None
+        loose = dict(rel_tol=1e-7, max_term=10_000)
+        assert to_exact_fraction(0.00033333333, **loose) == Fraction(1, 3000)
+        assert to_exact_fraction(np.float32(1 / 3000)) is None
+        assert to_exact_fraction(np.float32(1 / 3000), **loose) == Fraction(1, 3000)
+
+    def test_tolerance_still_declines(self):
+        """A tolerance admits only what lands inside it."""
+        assert to_exact_fraction(np.pi, rel_tol=1e-9, max_term=1000) is None
+        assert to_exact_fraction(np.pi, rel_tol=1e-6, max_term=1000) == Fraction(
+            355, 113
+        )
+
+    def test_max_term(self):
+        """Fractions with terms past the limit are declined."""
+        assert to_exact_fraction(1 / 3000, max_term=1000) is None
+        assert to_exact_fraction(3000.0, max_term=1000) is None
+        assert to_exact_fraction(200_000.0) is None
+
+    def test_strict_defaults_reject_arbitrary_doubles(self):
+        """Arbitrary doubles are not simple fractions."""
+        rng = np.random.default_rng(1)
+        values = 10 ** rng.uniform(-6, 5, size=5000)
+        assert all(to_exact_fraction(v) is None for v in values)

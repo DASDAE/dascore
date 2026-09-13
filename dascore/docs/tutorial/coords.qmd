@@ -1,0 +1,260 @@
+---
+title: Coordinates and Coordinate Managers
+execute:
+  warning: false
+---
+
+:::{.callout-warning}
+This page covers advanced features. Most users should work through the [Patch coordinate interface](patch.qmd#data-and-coordinates).
+:::
+
+[`BaseCoord`](`dascore.core.coords.BaseCoord`) represents one coordinate. [`CoordManager`](`dascore.core.coordmanager.CoordManager`) groups coordinates and keeps their associated arrays aligned. Both return new objects rather than modifying themselves.
+
+# Coordinates
+
+## Creation
+
+[`get_coord`](`dascore.core.coords.get_coord`) chooses the appropriate coordinate type from a range or array.
+
+```{python}
+import re
+
+import numpy as np
+
+from dascore.core import get_coord, get_coord_manager
+
+regular = get_coord(start=0, stop=10, step=1, units="m")
+same = get_coord(data=np.arange(10), units="m")
+irregular = get_coord(data=np.array([0.0, 1.0, 2.2, 4.0]))
+
+assert regular == same
+```
+
+Coordinates expose values, units, data type, ordering, sampling regularity, limits, and length through their attributes and methods.
+
+| Attribute | Meaning |
+|---|---|
+| `sorted` | Whether the coordinate reports ascending ordering |
+| `reverse_sorted` | Whether the coordinate reports descending ordering |
+| `evenly_sampled` | Whether one step describes every value |
+| `dtype` | NumPy data type |
+| `data` | Array of coordinate values |
+| `units` | Physical units, if present |
+| `degenerate` | Whether the coordinate is empty or zero-dimensional |
+| `min()`, `max()` | Coordinate limits |
+| `step_exact` | The spacing as an exact `Fraction` (seconds for time), or `None` for float coordinates |
+
+### Exact sampling rates
+
+Time and integer ranges keep their spacing exactly. A step may be given as a `Fraction` or a `(numerator, denominator)` tuple in the coordinate's units, so a 1024 Hz recording is `(1, 1024)` seconds rather than a step rounded to 976562 nanoseconds, which would drift by 1.8 ms an hour. Every label is the nearest tick to its position on the exact grid, and slicing, striding, reversing, and selecting all stay on that grid. `step` still reports the nearest whole-tick spacing for code that expects one.
+
+```{python}
+from fractions import Fraction
+
+t0 = np.datetime64("2020-01-01T00:00:00")
+time = get_coord(start=t0, step=(1, 1024), shape=(3_686_400,))
+
+assert time.step_exact == Fraction(1, 1024)
+assert time[::2].step_exact == Fraction(1, 512)
+assert time.stop == t0 + np.timedelta64(1, "h")
+assert time.step == np.timedelta64(976562, "ns")
+```
+
+Float coordinates have no tick to be exact against, so a fraction step on one raises and their `step_exact` is `None`.
+
+### Cells and their centres
+
+A coordinate label is conventionally the centre of a cell one step wide, closed on the low side and open on the high side: a label of 10 with step 2 represents `[9, 11)`. This is recommended for data producers, not enforced. The convention stores nothing and adds no coordinate method. Selection always uses labels, not cells.
+
+Cells that are not centred are stated with the auxiliary pair `{dim}_start` / `{dim}_stop`, each one-dimensional and associated with `dim`. These names are reserved for cell edges just as `{dim}_min`, `{dim}_max`, and `{dim}_step` are reserved for the coordinate envelope. This is CF's cell-boundary idea in DASCore's shape: two associated coordinates instead of a separate vertex axis. Together the pair must have the dimension's length, units, and monotonic direction and satisfy `start <= label < stop`; a lone coordinate with either name remains an ordinary coordinate. [`Patch.stft`](`dascore.Patch.stft`) and [`Patch.tile_apply`](`dascore.Patch.tile_apply`) produce this pair for their windows.
+
+This changes STFT and stacked-tile metadata: `{dim}_start` / `{dim}_stop` previously held unitless sample indices; they now hold physical cell edges in the dimension's units. Code that reads these coordinates must account for the new values and units. Reconstruction retains its original indices privately in `_tile_index_{dim}`; inverse STFT and reassembly continue to use those indices. Saved STFT or stacked-tile files from the earlier development version cannot be read under the new validation because their pair contains sample indices; regenerate those stacks from their source patches.
+
+Paired cell bounds require monotonic row order. Reversals and monotonic subsets remain valid. To arbitrarily permute tiles before reassembly or inverse STFT, explicitly drop their public bounds first; the private reconstruction indices still follow the reordered rows.
+
+Selection and raw decimation retain the selected bounds. Operations that build a new grid, including interpolation, resampling, filtered decimation, padding, rolling windows, and correlation lag grids, drop them. Translation and unit conversion transform them with the dimension. Waterfall image extents use the outer cell edges: half a step beyond the first and last labels, or the explicit pair when attached. Spectrograms display each spectrum at its window-centre label over one hop interval; overlapping source-window bounds are omitted from that plotting view.
+
+## Segmented coordinates
+
+[`CoordSegmented`](`dascore.core.coords.CoordSegmented`) preserves monotonic blocks and their discontinuities. Use [`concat_coords(...)`](`dascore.core.coords.concat_coords`) when the blocks are known:
+
+```{python}
+from dascore.core.coords import concat_coords
+
+first = get_coord(start=0.0, stop=5.0, step=1.0, units="m")
+second = get_coord(start=8.0, stop=13.0, step=1.0, units="m")
+segmented = concat_coords(first, second)
+
+print(segmented.get_discontinuities("gaps"))
+```
+
+Use [`CoordSegmented.from_array(...)`](`dascore.core.coords.CoordSegmented.from_array`) to preserve an exact monotonic array. It returns the simplest truthful coordinate, so uniform input becomes `CoordRange`. A segmented coordinate reports a `step` only when every run declares the same one, and `None` otherwise. `simplify(tolerance=...)` may reduce segments within an error bound, while `snap()` replaces values with one evenly sampled range. Use `patch.split_gaps()` before writing segmented dimensions to formats that cannot represent gaps; DASDAE version 2 stores them whole.
+
+```{python}
+from dascore.core.coords import CoordSegmented
+
+values = np.array([0.0, 1.0, 2.0, 7.0, 8.0, 9.0])
+exact = CoordSegmented.from_array(values, tolerance=0, units="m")
+assert np.array_equal(exact.values, values)
+```
+
+### Declaring a grid and finding missing samples
+
+Labels alone do not say which positions are missing: `[0, 2, 4]` fills a step-2 grid and misses two positions of a step-1 grid. Passing `step` with array data declares the grid. Every value must sit on it (an off-grid value raises rather than moves), each run of consecutive positions becomes a range of that step, and [`missing()`](`dascore.core.coords.BaseCoord.missing`) reports the positions between the first and last sample that have no sample, one entry per hole rather than one per position.
+
+```{python}
+coord = get_coord(data=[1, 3, 4, 10, 11, 12], step=1)
+assert coord.segment_count == 3 and coord.step == 1
+
+missing = coord.missing()
+assert missing.count == 6 and not missing.complete
+assert list(missing.iter_runs()) == [(2, 2), (5, 9)]
+print(missing.positions())
+```
+
+A dense array whose runs would outnumber a tenth of its samples keeps its values as one monotonic coordinate with the declared step, and `missing()` answers the same. Without a declared step, `missing()` raises; evenly sampled coordinates are always complete. Filling the holes with samples is a patch operation, never a coordinate one.
+
+[`get_discontinuities`](`dascore.core.coords.BaseCoord.get_discontinuities`) reports the seams between runs, and for a monotonic array every spacing that is not its declared step (or its median spacing when it declares none). Its `tolerance` is an excess over one step in coordinate units; pass [`GapTolerance.samples(k)`](`dascore.utils.gaps.GapTolerance`) to count steps instead, which is how `Spool.chunk` and `waterfall(gap_factor=)` judge the same spacing.
+
+## Updating and units
+
+`update` uses an existing coordinate as a template:
+
+```{python}
+start = np.datetime64("2023-01-01")
+coord = get_coord(start=start, stop=start + np.timedelta64(1, "h"), step=np.timedelta64(1, "m"))
+
+shifted = coord.update(data=coord.values + np.timedelta64(10, "s"))
+coarser = coord.update(step=np.timedelta64(30, "m"))
+```
+
+Updating `min`, `max`, or `step` retains the coordinate length and derives the remaining range values. Updating `data` instead lets DASCore choose the simplest coordinate class that represents the new array.
+
+`set_units` changes the label without changing values; `convert_units` converts both.
+
+```{python}
+relabeled = regular.set_units("ft")
+converted = regular.convert_units("ft")
+```
+
+## Sorting, snapping, and selecting
+
+Methods that reorder or remove samples return both a coordinate and an indexer for the associated array.
+
+```{python}
+unsorted = get_coord(data=np.array([3, 1, 2]))
+sorted_coord, indexer = unsorted.sort()
+
+data = np.arange(6).reshape(3, 2)
+sorted_data = data[indexer, :]
+
+selected_coord, indexer = regular.select((3, 7))
+selected_data = np.arange(len(regular))[indexer]
+```
+
+Selections accept compatible quantities and convert them before comparison:
+
+```{python}
+from dascore.units import ft
+
+selected_in_feet, _ = regular.select((3 * ft, 20 * ft))
+```
+
+`sort` permutes existing values and returns the matching permutation. `snap` changes values, while `simplify(tolerance=...)` chooses a simpler representation only within the requested displacement bound. The distinction is important whenever coordinate values are measurements rather than ideal labels.
+
+`snap()` returns only a coordinate because it replaces values rather than permuting them. Use `CoordManager.snap` or `Patch.snap_coords` when data must be sorted with the coordinate before snapping.
+
+## String coordinates
+
+String coordinates support exact matches, `*` and `?` wildcards, compiled regular expressions, boolean masks, and sorting. They do not support units, relative selection, or numeric ranges.
+
+```{python}
+labels = get_coord(data=np.array(["ch_a", "ch_b", "aux_1", "aux_2"]))
+
+exact, _ = labels.select("ch_b")
+channels, _ = labels.select("ch_*")
+aux, _ = labels.select(re.compile(r"^aux_\d$"))
+sorted_labels, sort_indexer = labels.sort()
+```
+
+Strings containing `*` or `?` are treated as wildcard patterns, so avoid those characters in labels which must be matched literally. Boolean masks are the unambiguous choice for arbitrary sets.
+
+## Finding insertion positions
+
+[`get_next_index`](`dascore.core.coords.BaseCoord.get_next_index`) returns where a value is or would be inserted in a sorted coordinate:
+
+```{python}
+assert regular.get_next_index(2) == 2
+assert regular.get_next_index(2.1) == 3
+```
+
+# Coordinate managers
+
+## Creation and association
+
+[`get_coord_manager`](`dascore.core.coordmanager.get_coord_manager`) creates a manager from coordinates and ordered dimensions. Tuple values specify `(associated_dimensions, coordinate)`; use `None` for an independent coordinate.
+
+```{python}
+distance = get_coord(start=0, stop=10, step=1)
+time = get_coord(start=0, stop=1, step=0.1)
+latitude = get_coord(data=np.linspace(41.5, 41.6, len(distance)))
+
+manager = get_coord_manager(
+    coords={
+        "distance": distance,
+        "time": time,
+        "latitude": ("distance", latitude),
+        "deployment": (None, get_coord(data=np.array(["A"]))),
+    },
+    dims=("distance", "time"),
+)
+```
+
+`manager.dims` stores dimension order, `coord_map` maps names to coordinates, and `dim_map` records dimensional associations.
+
+```{python}
+print(manager.dims)
+print(dict(manager.dim_map))
+```
+
+## Updating
+
+`CoordManager.update` replaces, adds, disassociates, or drops coordinates:
+
+```{python}
+new_distance = distance.update(data=distance.values + 10)
+updated = manager.update(distance=new_distance)
+detached = updated.update(latitude=(None, latitude))
+without_latitude = detached.update(latitude=None)
+```
+
+New coordinates use the same update form:
+
+```{python}
+quality = get_coord(data=np.linspace(0, 1, len(distance)))
+with_quality = manager.update(quality=("distance", quality))
+independent = manager.update(run=(None, get_coord(data=np.array([1]))))
+```
+
+Setting a dimension coordinate to `None` drops that dimension and every coordinate depending on it. Dropping a missing non-dimensional coordinate is a no-op.
+
+## Methods with data
+
+Operations that change array alignment accept the array and return an updated manager and array. Coordinate names are keyword arguments, as on `Patch`.
+
+```{python}
+import dascore as dc
+
+patch = dc.get_example_patch()
+manager, data = patch.coords, patch.data
+
+selected_manager, selected_data = manager.select(data=data, distance=(..., 100))
+sorted_manager, sorted_data = manager.sort("time", "distance", array=data, reverse=True)
+renamed = manager.rename_coord(time="elapsed_time")
+```
+
+When several dimensions are sorted together, the returned data reflects each permutation in dimension order. Renaming a dimension also updates every coordinate association that refers to it.
+
+`select`, `order`, `sort`, and `snap` accept an associated array and return `(manager, array)`. Methods that do not change alignment, such as unit conversion, return only a manager.
+
+Prefer the corresponding Patch methods when operating on a patch; they keep data, coordinates, metadata, and provenance together.

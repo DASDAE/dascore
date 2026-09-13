@@ -20,8 +20,7 @@ import inspect
 import math
 import warnings
 from collections.abc import Sequence
-from dataclasses import dataclass, field
-from datetime import timedelta
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Literal
 
@@ -50,8 +49,13 @@ from dascore.units import (
 from dascore.utils.attrs import known_only, validate_conflict
 from dascore.utils.chunk import get_intervals
 from dascore.utils.docs import compose_docstring
-from dascore.utils.misc import get_middle_value, is_range
-from dascore.utils.pd import get_dim_names_from_columns, get_interval_columns
+from dascore.utils.gaps import DEFAULT_TOLERANCE, GapTolerance, gap_boundaries
+from dascore.utils.misc import _CanonicalRange, get_middle_value, is_range
+from dascore.utils.pd import (
+    adjust_segments,
+    get_dim_names_from_columns,
+    get_interval_columns,
+)
 from dascore.utils.time import is_datetime64, is_timedelta64, to_float, to_timedelta64
 
 # Columns which never participate in conflict policing and never carry to
@@ -66,23 +70,7 @@ _SOURCE_COLUMNS = (
     "patch_id",
     "processing_id",
 )
-# The default continuity tolerance; looser values warn when they force
-# merges (#662).
-_DEFAULT_TOLERANCE = 1.5
-
-
-@dataclass(frozen=True)
-class _AbsoluteTolerance:
-    """
-    A continuity tolerance stated in the coordinate's units, not in samples.
-
-    A quantity or timedelta tolerance resolves to one of these per cell,
-    since only the cell fixes the units and dtype to express it in. The
-    wrapper lets the gap test tell an absolute tolerance from a sample
-    count; on a unitless coordinate both are plain numbers.
-    """
-
-    value: Any
+_PATCH_LOCAL_EMPTY = "_patch_local_empty"
 
 
 @dataclass(frozen=True)
@@ -122,6 +110,32 @@ class ChunkPlan:
         return self.value is None
 
 
+def coalesce_runs(plan: ChunkPlan, working: pd.DataFrame) -> ChunkPlan:
+    """
+    Merge each output's consecutive members cut from one patch's runs.
+
+    A patch split into runs plans run by run (its rows share one
+    `_patch_id`), so a hole can end an output; the runs which land in
+    one output are read from their patch once, as one member spanning
+    them.
+    """
+    members = plan.members
+    ids = working["_patch_id"]
+    split = set(ids[ids.duplicated(keep=False)])
+    if not split or members.empty:
+        return plan
+    lo, hi = f"{plan.dim}_min", f"{plan.dim}_max"
+    out, pid = members["output_id"], members["_patch_id"]
+    same = (out == out.shift()) & (pid == pid.shift()) & pid.isin(split)
+    if not same.any():
+        return plan
+    piece = (~same).cumsum()
+    merged = members[~same].copy()
+    merged[lo] = members.groupby(piece, sort=False)[lo].min().to_numpy()
+    merged[hi] = members.groupby(piece, sort=False)[hi].max().to_numpy()
+    return replace(plan, members=merged.reset_index(drop=True))
+
+
 def _kind_codes(df: pd.DataFrame, names: Sequence[str]) -> pd.Series:
     """
     Label each row by kind: rows sharing a label hold equal values.
@@ -157,14 +171,160 @@ def _resolve_group_attrs(group, columns) -> tuple[str, ...]:
     return tuple(dict.fromkeys(names))
 
 
-def samples_adjusted_envelopes(
+def _adjust_unit_segments(df, name, canonical):
+    """Trim envelopes by a canonical range expressed in each row's units."""
+    unit_col = f"_{name}_units"
+    if df.empty:
+        return df
+    if unit_col not in df.columns:
+        return adjust_segments(
+            df, ignore_bad_kwargs=True, **{name: canonical.magnitudes}
+        )
+    pieces = []
+    for unit, sub in df.groupby(df[unit_col], dropna=False, sort=False):
+        if unit is None or pd.isnull(unit) or unit == "":
+            rng = canonical.magnitudes
+        else:
+            rng = canonical.magnitudes_in(str(unit))
+        pieces.append(adjust_segments(sub, ignore_bad_kwargs=True, **{name: rng}))
+    return pd.concat(pieces).sort_index()
+
+
+def _adjust_absolute_envelopes(df, coords):
+    """Project one absolute coordinate selection onto relation envelopes."""
+    for name, value in coords.items():
+        if isinstance(value, _CanonicalRange):
+            df = _adjust_unit_segments(df, name, value)
+        elif is_range(value):
+            df = adjust_segments(df, ignore_bad_kwargs=True, **{name: value})
+    return df
+
+
+def _relative_bound(mins, maxs, value, open_values, units=None):
+    """
+    Resolve one patch-local relative bound for every relation row.
+
+    Returns the per-row values, whether the bound could not be projected,
+    and whether it leaves its side of the range unbounded.
+    """
+    is_quantity = hasattr(value, "units")
+    if value is None or value is Ellipsis:
+        return open_values, False, True
+    if not is_quantity and np.ndim(value) == 0 and pd.isnull(value):
+        return open_values, False, True
+    try:
+        was_percent = is_percent(value)
+        sign = value.magnitude if is_quantity else to_float(value)
+        if np.ndim(sign):
+            return open_values, True, False
+        reference = mins if sign >= 0 else maxs
+        time_like = is_datetime64(mins) or is_timedelta64(mins)
+        if not np.isfinite(sign) and time_like:
+            # A non-finite offset becomes NaT, which `Patch.select` ignores,
+            # so the patch loads whole and the envelope stays open. A numeric
+            # coordinate takes the infinity literally and the arithmetic
+            # below already says so: +inf from the start selects nothing.
+            return open_values, False, True
+        if was_percent:
+            offset = (value.magnitude / 100) * (maxs - mins)
+        elif is_quantity:
+            target_units = "s" if time_like else units
+            if target_units is None or pd.isnull(target_units) or target_units == "":
+                raise UnitError("Cannot project a quantity without coordinate units.")
+            magnitude = convert_units(value.magnitude, target_units, value.units)
+            offset = to_timedelta64(magnitude) if time_like else magnitude
+        elif time_like:
+            offset = to_timedelta64(value)
+        else:
+            offset = value
+        return reference + offset, False, False
+    except (NotImplementedError, TypeError, UnitError, ValueError):
+        # Keep the source envelope as a candidacy superset. The loaded
+        # coordinate remains authoritative and applies the exact selection.
+        return open_values, True, False
+
+
+def _adjust_relative_envelopes(df, coords, drop_empty):
+    """Project patch-local relative ranges onto relation envelopes."""
+    for name, value in coords.items():
+        cols = [f"{name}_min", f"{name}_max"]
+        if not set(cols).issubset(df.columns) or not is_range(value):
+            df["_modified"] = True
+            continue
+        dtype_col = f"_{name}_coord_dtype"
+        if dtype_col in df:
+            # Index arithmetic cannot prove a no-op at narrower precision.
+            # Leave size and identity unknown until the patch is selected.
+            df["_modified"] = df.get("_modified", False) | df[dtype_col].isin(
+                ("float16", "float32")
+            )
+        unit_col = f"_{name}_units"
+        grouped = (
+            df.groupby(df[unit_col], dropna=False, sort=False)
+            if unit_col in df.columns
+            else [(None, df)]
+        )
+        pieces = []
+        for unit, sub in grouped:
+            mins, maxs = (sub[c] for c in cols)
+            lo, hi = value
+            units = None if unit is None or pd.isnull(unit) or unit == "" else str(unit)
+            left, left_unresolved, left_open = _relative_bound(
+                mins, maxs, lo, mins, units
+            )
+            right, right_unresolved, right_open = _relative_bound(
+                mins, maxs, hi, maxs, units
+            )
+            unresolved = mins.isna() | maxs.isna()
+            if left_unresolved or right_unresolved:
+                unresolved |= True
+            # An open bound already sits at the envelope extreme on its own
+            # side, so it can never reorder the range. Swapping it back in
+            # would make a window that starts past the patch end look like
+            # one ending at it, hiding the emptiness the `keep` test finds.
+            if left_open or right_open:
+                swap = pd.Series(False, index=sub.index)
+            else:
+                swap = right < left
+            new_min = left.where(~swap, other=right)
+            new_max = right.where(~swap, other=left)
+            new_min = new_min.mask(unresolved, mins)
+            new_max = new_max.mask(unresolved, maxs)
+            # Test before clipping so an entirely out-of-range window is not
+            # resurrected as a one-sample envelope.
+            keep = (new_min <= maxs) & (new_max >= mins)
+            keep |= unresolved
+            # Preserve whole-source metadata for relative no-ops. Unknown
+            # projections still cannot claim that the source loads whole.
+            sub["_modified"] = (
+                sub.get("_modified", False)
+                | unresolved
+                | ~keep
+                | (new_min > mins)
+                | (new_max < maxs)
+            )
+            sub[cols[0]] = new_min.clip(lower=mins, upper=maxs)
+            sub[cols[1]] = new_max.clip(lower=mins, upper=maxs)
+            if drop_empty:
+                sub = sub[keep]
+            else:
+                empty = ~keep & ~unresolved
+                sub[cols] = sub[cols].mask(empty)
+                sub[_PATCH_LOCAL_EMPTY] = sub.get(_PATCH_LOCAL_EMPTY, False) | empty
+            pieces.append(sub)
+        df = pd.concat(pieces).sort_index() if pieces else df.iloc[:0]
+    return df
+
+
+def patch_local_adjusted_envelopes(
     df: pd.DataFrame, residuals, drop_empty: bool = True
 ) -> pd.DataFrame:
     """
-    Adjust envelope columns for patch-local samples residuals.
+    Replay coordinate residuals onto relation envelopes in call order.
 
-    A ``samples=True`` index window trims each patch at load, so the
-    planner must consume the trimmed envelopes or it publishes outputs
+    Absolute residuals trim membership and envelopes. A patch-local sample
+    or relative selection preserves row membership, but the planner must
+    consume its trimmed envelopes or it publishes outputs
     that lie entirely outside the selected samples (phantom empties).
     Negative indices resolve per patch against the envelope-derived
     sample count (rows whose count is unknown keep their envelope as a
@@ -178,8 +338,12 @@ def samples_adjusted_envelopes(
         return value is None or isinstance(value, int | np.integer)
 
     df = df.copy(deep=False)
-    for coords, samples in residuals:
+    for coords, samples, relative in residuals:
         if not samples:
+            if relative:
+                df = _adjust_relative_envelopes(df, coords, drop_empty)
+            else:
+                df = _adjust_absolute_envelopes(df, coords)
             continue
         for name, value in coords.items():
             cols = [f"{name}_min", f"{name}_max", f"{name}_step"]
@@ -232,7 +396,17 @@ def samples_adjusted_envelopes(
             df[cols[1]] = new_max.clip(lower=mins, upper=maxs)
             if drop_empty:
                 df = df[keep]
+            else:
+                empty = ~keep & ~unresolved
+                df[cols] = df[cols].mask(empty)
+                df[_PATCH_LOCAL_EMPTY] = df.get(_PATCH_LOCAL_EMPTY, False) | empty
     return df
+
+
+def _drop_patch_local_empty(df: pd.DataFrame) -> pd.DataFrame:
+    """Drop rows whose selected patch is empty from data-bearing plans."""
+    empty = df.get(_PATCH_LOCAL_EMPTY)
+    return df if empty is None else df[~empty]
 
 
 def _ensure_patch_id(df: pd.DataFrame) -> pd.DataFrame:
@@ -285,159 +459,35 @@ def _sampling_group(step: pd.Series, tolerance: float) -> pd.Series:
     return pd.Series(labels, index=step.index)
 
 
-def _check_tolerance_value(value, name, shown=None, *, allow_infinite=False):
-    """
-    Reject a tolerance no gap could be measured against.
-
-    An infinite sample count is a coherent request — no boundary is ever
-    a gap — but an infinite distance is not a distance, so only the
-    count is allowed to be one.
-    """
-    shown = value if shown is None else shown
-    # One tolerance, not one per patch: a one-element array passes every
-    # test below and then broadcasts through the gap comparison.
-    if np.asarray(value).ndim:
-        msg = (
-            f"The tolerance for {name!r} must be a single value, got an "
-            f"array of {np.asarray(value).size}."
-        )
-        raise ParameterError(msg)
-    try:
-        null = bool(pd.isnull(value))
-        # A bare 0 would make numpy cast the timedelta to a generic unit.
-        zero = to_timedelta64(0) if is_timedelta64(value) else 0
-        negative = not null and value < zero
-    except TypeError:
-        msg = (
-            f"The tolerance for {name!r} must be a sample count, a quantity, "
-            f"or a timedelta, got {shown!r}. A unit-bearing string becomes a "
-            "quantity with dascore.get_quantity."
-        )
-        raise ParameterError(msg) from None
-    if null or (not allow_infinite and not np.isfinite(value)):
-        msg = f"The tolerance for {name!r} must be finite, got {shown}."
-        raise ParameterError(msg)
-    if negative:
-        msg = f"The tolerance for {name!r} must not be negative, got {shown}."
-        raise ParameterError(msg)
-
-
-def _normalize_tolerance(tolerance, name):
-    """
-    Validate a continuity tolerance and reduce it to one of two forms.
-
-    A number is a multiple of the sampling interval; a quantity or
-    timedelta states the limit in the coordinate's own units, which only
-    a cell can resolve (it fixes the units and dtype), so it passes
-    through to be resolved there. A dimensionless quantity *is* the
-    multiple, so it becomes a number.
-    """
-    if isinstance(tolerance, timedelta) or is_timedelta64(tolerance):
-        # to_timedelta64 takes the several spellings of a timedelta
-        tolerance = to_timedelta64(tolerance)
-        _check_tolerance_value(tolerance, name)
-        return tolerance
-    if isinstance(tolerance, Quantity):
-        if is_data_size(tolerance):
-            msg = (
-                f"Cannot use a tolerance of {tolerance} for {name!r}: a data "
-                "size does not measure a gap along a coordinate."
-            )
-            raise UnitError(msg)
-        if is_percent(tolerance):
-            msg = (
-                f"Cannot use a tolerance of {tolerance} for {name!r}: a "
-                "percentage is neither a sample count nor a length. Pass the "
-                "count itself, or a length in the coordinate's units."
-            )
-            raise UnitError(msg)
-        if not tolerance.dimensionless:
-            _check_tolerance_value(tolerance.magnitude, name, shown=tolerance)
-            return tolerance
-        # a dimensionless quantity is the sample count it spells out
-        tolerance = float(tolerance.m_as("dimensionless"))
-    _check_tolerance_value(tolerance, name, allow_infinite=True)
-    return tolerance
-
-
-def _cell_tolerance(tolerance, sub, name):
+def _cell_tolerance(tolerance: GapTolerance, sub, name) -> GapTolerance:
     """Resolve an absolute tolerance into one cell's own units."""
-    if not carries_units(tolerance):
+    excess = tolerance.excess
+    if tolerance.count is not None:
         return tolerance
     start, _, _ = get_interval_columns(sub, name)
-    if isinstance(tolerance, Quantity):
-        shown = tolerance
+    time_like = is_datetime64(start.dtype) or is_timedelta64(start.dtype)
+    if not carries_units(excess):
+        # already in coordinate units, which for time are seconds
+        return GapTolerance.absolute(to_timedelta64(excess)) if time_like else tolerance
+    if isinstance(excess, Quantity):
+        shown = excess
     else:
         # said in seconds, which is what a timedelta measures and how
         # the message reads back
-        shown = f"{to_float(tolerance)} s"
-        if is_datetime64(start.dtype) or is_timedelta64(start.dtype):
-            return _AbsoluteTolerance(tolerance)
+        shown = f"{to_float(excess)} s"
+        if time_like:
+            return tolerance
         # A numeric coordinate can still be measured in time (a relative
         # time axis, say), so the timedelta converts like any quantity.
-        tolerance = get_quantity(f"{to_float(tolerance)} s")
+        excess = get_quantity(f"{to_float(excess)} s")
     prefix = f"Cannot use a tolerance of {shown} for {name!r}"
-    value = _quantity_to_dim_value(tolerance, sub, name, start.dtype, prefix=prefix)
-    return _AbsoluteTolerance(value)
+    value = _quantity_to_dim_value(excess, sub, name, start.dtype, prefix=prefix)
+    return GapTolerance.absolute(value)
 
 
-def _gap_boundaries(start, stop, step, tolerance):
-    """
-    Locate the discontinuities in one cell (spec 2.4).
-
-    Returns `(order, reach, has_gap)` over the start-ordered rows.
-    `reach` is the furthest stop seen *before* each row, so an
-    overlapping or fully-nested row can never open a gap behind it, and
-    `has_gap` marks each row whose start clears that reach by more than
-    the margin: `tolerance` steps for a sample count, or the tolerance
-    itself (never under one step) for an
-    [`_AbsoluteTolerance`](`dascore.utils.chunk_plan._AbsoluteTolerance`).
-    The first row has nothing behind it, and a row whose step is unknown
-    compares False against a sample count, so neither reports a gap.
-
-    Arrays rather than a frame, and an explicit first-row mask rather
-    than `shift`, whose NaN fill would upcast integer envelopes to
-    float — `reach` is a reported value, not just a comparand.
-    """
-    order = np.argsort(start.to_numpy())
-    starts = start.to_numpy()[order]
-    stops = stop.to_numpy()[order]
-    # envelopes are value-ordered regardless of coordinate orientation,
-    # so the continuity margin uses the step magnitude
-    steps = np.abs(step.to_numpy()[order])
-    reach = np.empty_like(stops)
-    reach[:1] = stops[:1]
-    np.maximum.accumulate(stops[:-1], out=reach[1:])
-    # Measure the distance from the reach rather than comparing against
-    # `reach + step * tolerance`: a float margin promotes that sum, and
-    # an integer coordinate past 2**53 rounds both endpoints together,
-    # hiding the gap. The distance itself is small enough to compare.
-    # Only rows past the reach are measured — a row which starts at or
-    # before it cannot open a gap, and subtracting there would wrap an
-    # unsigned envelope into an enormous phantom one.
-    has_gap = np.zeros(len(starts), dtype=bool)
-    ahead = starts > reach
-    if ahead.any():
-        if isinstance(tolerance, _AbsoluteTolerance):
-            # Adjacent patches sit exactly one step apart, so a margin
-            # narrower than the step would open a gap where no sample is
-            # missing. An unknown step has no floor to apply.
-            step_ahead = steps[ahead]
-            margin = np.where(
-                pd.isnull(step_ahead),
-                tolerance.value,
-                np.maximum(step_ahead, tolerance.value),
-            )
-        else:
-            margin = steps[ahead] * tolerance
-        has_gap[ahead] = (starts[ahead] - reach[ahead]) > margin
-    has_gap[:1] = False
-    return order, reach, has_gap
-
-
-def _continuity_group(start, stop, step, tolerance) -> pd.Series:
+def _continuity_group(start, stop, step, tolerance: GapTolerance) -> pd.Series:
     """Label maximal near-contiguous runs (spec 2.4)."""
-    order, _, has_gap = _gap_boundaries(start, stop, step, tolerance)
+    order, _, has_gap = gap_boundaries(start, stop, step, tolerance)
     out = pd.Series(0, index=start.index, dtype=np.int64)
     out.iloc[order] = np.cumsum(has_gap)
     return out
@@ -627,19 +677,19 @@ def _cell_labels(df, name, group_attrs, sampling_tolerance) -> pd.Series:
     return base.astype(str) + "_" + samp.astype(str)
 
 
-def _may_exceed_default(tol, step: pd.Series) -> bool:
+def _may_exceed_default(tol: GapTolerance, step: pd.Series) -> bool:
     """True when an absolute margin can exceed the default anywhere in a cell.
 
-    The margin is `max(step, tol)` against the default's `1.5 * step`, so
-    the tolerance is looser exactly where it passes 1.5 steps — which is
-    at the cell's *smallest* step, since a cell may mix steps within the
-    sampling tolerance. A cell with no known step is never forced: the
-    default cannot close a boundary there at all.
+    The margin is `step + excess` against the default's `1.5 * step`, so
+    the tolerance is looser exactly where the excess passes half a step,
+    which is at the cell's *smallest* step, since a cell may mix steps
+    within the sampling tolerance. A cell with no known step is never
+    forced: the default cannot close a boundary there at all.
     """
     steps = np.abs(to_float(step.to_numpy()))
     if not np.isfinite(steps).any():
         return False
-    return to_float(tol.value) > _DEFAULT_TOLERANCE * np.nanmin(steps)
+    return to_float(tol.excess) > (DEFAULT_TOLERANCE - 1) * np.nanmin(steps)
 
 
 def _partition(
@@ -658,14 +708,15 @@ def _partition(
     cell = _cell_labels(df, name, group_attrs, sampling_tolerance)
     cont = pd.Series(0, index=df.index, dtype=np.int64)
     forced_merge = False
-    absolute = carries_units(tolerance)
+    absolute = tolerance.count is None
+    default = GapTolerance.samples(DEFAULT_TOLERANCE)
     for _, index in df.groupby(cell, sort=False).groups.items():
         sub = df.loc[index]
         s, e, st = get_interval_columns(sub, name)
         tol = _cell_tolerance(tolerance, sub, name)
         labels = _continuity_group(s, e, st, tol).astype(np.int64)
         cont.loc[index] = labels
-        if forced_merge or not (absolute or tolerance > _DEFAULT_TOLERANCE):
+        if forced_merge or not (absolute or tolerance.count > DEFAULT_TOLERANCE):
             continue
         # An absolute tolerance can be looser than the default at one
         # boundary and tighter at another, so it is checked against the
@@ -676,8 +727,8 @@ def _partition(
         # By containment, not by count: a partition holding more than one
         # of the default's is one the tolerance forced together, even
         # when the counts match.
-        default = _continuity_group(s, e, st, _DEFAULT_TOLERANCE)
-        forced_merge = bool(default.groupby(labels).nunique().gt(1).any())
+        by_default = _continuity_group(s, e, st, default)
+        forced_merge = bool(by_default.groupby(labels).nunique().gt(1).any())
     return cell + "_" + cont.astype(str), forced_merge
 
 
@@ -1167,8 +1218,12 @@ def _carried_columns(
         if has_dims and not pd.isnull(dims_val):
             dim_names = set(str(dims_val).split(","))
         dim_names.discard(name)
+        # a kept identity brings the exact grid it describes
         part_cols = [
-            key for x in sorted(dim_names) if (key := f"_{x}_def_key") in columns
+            key
+            for x in sorted(dim_names)
+            for suffix in ("_def_key", "_grid")
+            if (key := f"_{x}{suffix}") in columns
         ]
         coord_names = set(police_dims[part].split(",")) | {name}
         part_cols += [key for x in coord_names if (key := f"_{x}_units") in columns]
@@ -1293,7 +1348,7 @@ def _cell_gaps(df: pd.DataFrame, name: str, group_attrs, tolerance):
         sub = df.loc[groups[label]]
         start, stop, step = get_interval_columns(sub, name)
         tol = _cell_tolerance(tolerance, sub, name)
-        row_order, reach, has_gap = _gap_boundaries(start, stop, step, tol)
+        row_order, reach, has_gap = gap_boundaries(start, stop, step, tol)
         found = np.flatnonzero(has_gap)
         # the row opening each gap states the step, signed as the
         # coordinate is -- only the continuity margin needs a magnitude
@@ -1327,7 +1382,7 @@ def build_gap_frame(
     df: pd.DataFrame,
     name: str,
     *,
-    tolerance: float | Quantity | np.timedelta64 = _DEFAULT_TOLERANCE,
+    tolerance: float | Quantity | np.timedelta64 | GapTolerance = DEFAULT_TOLERANCE,
     group: str | Sequence[str] | None = None,
     missing_dim: Literal["raise", "drop"] = "drop",
 ) -> pd.DataFrame:
@@ -1342,7 +1397,7 @@ def build_gap_frame(
     """
     df, group_attrs, carried, names = _report_preamble(df, name, group, missing_dim)
     min_name, max_name, step_name = names
-    tolerance = _normalize_tolerance(tolerance, name)
+    tolerance = GapTolerance.from_user(tolerance, name)
     columns = [min_name, max_name, step_name, "gap_size", "group_id", *carried]
     # Contiguous cells are dropped rather than concatenated: their empty
     # frames carry object-dtype attr columns, which would widen the
@@ -1367,7 +1422,7 @@ def build_coverage_frame(
     df: pd.DataFrame,
     name: str,
     *,
-    tolerance: float | Quantity | np.timedelta64 = _DEFAULT_TOLERANCE,
+    tolerance: float | Quantity | np.timedelta64 | GapTolerance = DEFAULT_TOLERANCE,
     group: str | Sequence[str] | None = None,
     missing_dim: Literal["raise", "drop"] = "drop",
 ) -> pd.DataFrame:
@@ -1382,7 +1437,7 @@ def build_coverage_frame(
     """
     df, group_attrs, carried, names = _report_preamble(df, name, group, missing_dim)
     min_name, max_name, step_name = names
-    tolerance = _normalize_tolerance(tolerance, name)
+    tolerance = GapTolerance.from_user(tolerance, name)
     columns = [
         min_name,
         max_name,
@@ -1446,7 +1501,7 @@ def build_chunk_plan(
     overlap=None,
     keep_partial: bool = False,
     snap_coords: bool = True,
-    tolerance: float | Quantity | np.timedelta64 = 1.5,
+    tolerance: float | Quantity | np.timedelta64 | GapTolerance = 1.5,
     conflict: Literal["drop", "raise", "keep_first"] = "raise",
     group=None,
     missing_dim: Literal["raise", "drop"] = "raise",
@@ -1468,7 +1523,7 @@ def build_chunk_plan(
     # offending chunk call. See #804.
     validate_conflict(conflict)
     ((name, value),) = kwargs.items()
-    tolerance = _normalize_tolerance(tolerance, name)
+    tolerance = GapTolerance.from_user(tolerance, name)
     value = None if value is Ellipsis else value
     # Police quantities before merge_mode is decided: a NaN magnitude is
     # null, so a nan-valued size would silently merge the whole spool

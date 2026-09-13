@@ -227,9 +227,14 @@ class TestConstruction:
 class TestProperties:
     """Tests for basic properties of segmented coords."""
 
-    def test_step_is_none(self, float_gap_coord):
-        """Segmented coords report no single step."""
-        assert float_gap_coord.step is None
+    def test_step_is_the_common_step(self, float_gap_coord):
+        """Runs of one step report it; runs of different steps report none."""
+        assert float_gap_coord.step == 1.0
+        mixed = concat_coords(
+            get_coord(start=0.0, stop=5.0, step=1.0),
+            get_coord(start=8.0, stop=13.0, step=0.5),
+        )
+        assert mixed.step is None
 
     def test_not_evenly_sampled(self, float_gap_coord):
         """Segmented coords are never evenly sampled."""
@@ -335,6 +340,15 @@ class TestEquivalenceWithMonotonic:
             assert np.array_equal(
                 np.atleast_1d(seg[slc].values), np.atleast_1d(mono[slc].values)
             )
+
+    def test_index_values_parity(self, coord_pair):
+        """Evaluating chosen samples agrees with the materialized coord."""
+        seg, mono = coord_pair
+        indices = np.array([0, 5, len(seg) - 1, -1, 3, 3])
+        out = seg._get_index_values(indices)
+        assert out.dtype == seg.dtype
+        assert np.array_equal(out, mono.values[indices])
+        assert not len(seg._get_index_values(np.array([], dtype=np.int64)))
 
     def test_get_next_index_parity(self, coord_pair):
         """get_next_index matches the materialized coordinate."""
@@ -1005,9 +1019,9 @@ class TestSplitGapsAndWrite:
             gapped_patch.split_gaps(dim="bob")
 
     def test_write_gapped_raises_by_default(self, gapped_patch, tmp_path):
-        """Writing a gapped patch without split=True raises."""
+        """A format which cannot store gaps refuses a gapped patch."""
         with pytest.raises(ParameterError, match="split=True"):
-            dc.write(gapped_patch, tmp_path / "gapped.h5", "dasdae")
+            dc.write(gapped_patch, tmp_path / "gapped.h5", "dasdae", file_version="1")
 
     def test_write_split_round_trip(self, gapped_patch, tmp_path):
         """split=True writes contiguous patches that round trip exactly."""
@@ -1061,9 +1075,11 @@ class TestFromArray:
         coord = CoordSegmented.from_array(np.arange(10.0))
         assert isinstance(coord, CoordRange)
 
-    def test_irregular_returns_monotonic(self):
-        """Arrays with no uniform runs come back as one monotonic coord."""
+    @pytest.mark.parametrize("reverse", [False, True])
+    def test_irregular_returns_monotonic(self, reverse):
+        """Arrays with no uniform runs retain their values and direction."""
         values = np.array([0.0, 1.0, 2.1, 3.3, 4.0])
+        values = values[::-1] if reverse else values
         coord = CoordSegmented.from_array(values)
         assert isinstance(coord, CoordMonotonicArray)
         assert np.array_equal(coord.values, values)
@@ -1162,7 +1178,9 @@ class TestPlannedSpoolWriteGuard:
     def test_write_raises_without_split(self, gapped_planned_spool, tmp_path):
         """Writing a gapped planned spool raises the documented error."""
         with pytest.raises(ParameterError, match="split"):
-            dc.write(gapped_planned_spool, tmp_path / "out.h5", "DASDAE")
+            dc.write(
+                gapped_planned_spool, tmp_path / "out.h5", "DASDAE", file_version="1"
+            )
 
     def test_write_split_true(self, gapped_planned_spool, tmp_path):
         """split=True writes each contiguous section as its own patch."""

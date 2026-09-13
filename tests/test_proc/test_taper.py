@@ -31,7 +31,6 @@ TAPER_WINDOWS = ("hann", "triang", "blackmanharris")
 @pytest.fixture(scope="session", params=TAPER_WINDOWS)
 def time_tapered_patch(request, patch_ones):
     """Return a tapered trace."""
-    # first get a patch with all ones for easy testing
     patch = patch_ones.update(data=np.ones_like(patch_ones.data))
     out = taper(patch, time=0.05, window_type=request.param)
     return out
@@ -41,11 +40,8 @@ def test_every_window_tapers():
     """
     Each documented name builds the window scipy has for it.
 
-    Two of them are aliases (`cos` for hann, `ramp` for triang), so a name
-    pointing at the wrong scipy symbol would still return an array of the
-    right length. Asserting the shape of the window is what catches that:
-    every one of them tapers to near zero at both ends, hamming's 0.08 being
-    the highest, and boxcar is the one which does not taper at all.
+    Aliases can return the right length despite resolving to the wrong SciPy
+    symbol. Every window except boxcar must taper below 0.09 at both ends.
     """
     assert set(TAPER_WINDOWS) <= set(WINDOW_NAMES)
     for name in WINDOW_NAMES:
