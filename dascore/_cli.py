@@ -10,7 +10,6 @@ import typer
 import dascore as dc
 from dascore.utils.doc_cache import documentation_cache, read_document
 from dascore.utils.doc_corpus import DocumentationError
-from dascore.utils.doc_search import search_documents
 from dascore.utils.doc_skills import get_skills, read_bootstrap, read_skill
 
 app = typer.Typer(
@@ -65,26 +64,6 @@ def doc(
             )
             for omitted in manifest["omitted"]:
                 sys.stdout.write(f"Unavailable: {omitted}\n")
-
-
-@app.command("doc-search")
-def doc_search(
-    query: str = typer.Argument(
-        "", help="Search words, a quoted phrase, or Boolean query"
-    ),
-    tag: str | None = typer.Option(None, "--tag", help="Filter by an exact keyword"),
-    limit: int = typer.Option(5, "--limit", help="Maximum results (1-100)"),
-) -> None:
-    """Search installed documentation and keyword tags."""
-    results = search_documents(query, tag=tag, limit=limit)
-    if not results:
-        typer.echo("No matching documentation.")
-    for number, result in enumerate(results, 1):
-        typer.echo(f"{number}. {result['title']} [{result['kind']}]")
-        if result["keywords"]:
-            typer.echo(f"   Keywords: {', '.join(result['keywords'])}")
-        typer.echo(f"   {result['excerpt']}")
-        typer.echo(f"   Read: dascore doc {result['id']}\n")
 
 
 @app.command()
