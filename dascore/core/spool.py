@@ -2055,9 +2055,10 @@ class Spool(NodeRepr, NamespaceOwner):
             merge, so an output spanning a hole is evenly sampled rather
             than segmented. `tolerance` still decides which holes are
             bridged at all: a hole it does not span separates patches as
-            before, and nothing is filled across it. Use `np.nan` for
-            float data; integer data has no null to fill with and raises,
-            so cast it first.
+            before, and nothing is filled across it. The value has to
+            survive a cast to the data's own dtype, so `np.nan` needs
+            float data; fill integer data with an integer, or cast it
+            first.
         kwargs
             kwargs are used to specify the dimension along which to chunk, eg:
             `time=10` chunks along the time axis in 10 second increments.
@@ -2082,7 +2083,7 @@ class Spool(NodeRepr, NamespaceOwner):
         >>> size_chunked = spool.chunk(time=1 * megabytes)
         >>> # merge along time axis
         >>> time_merged = spool.chunk(time=...)
-        >>> # merge across holes up to 10 samples wide, filling them with NaN
+        >>> # merge across holes of up to 9 missing samples, filling them
         >>> gapless = spool.chunk(time=..., tolerance=10, fill_value=np.nan)
 
         Notes

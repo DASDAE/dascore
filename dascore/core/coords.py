@@ -1860,22 +1860,29 @@ def _on_grid(deltas, step) -> np.ndarray:
     return counts.astype(np.int64)
 
 
-def _keeps_step(segments, step, count: int) -> bool:
+def _keeps_step(segments, ascending: bool) -> bool:
     """
-    Whether re-fitting `segments` at `step` keeps their declared step.
+    Whether any seam between `segments` skips a position of their grid.
 
-    A re-fit which spreads a hole over the run reaches the last sample at a
-    different position on the declared grid; only drift under half a sample
-    (the jitter of labels rounded on their way to a file) is absorbed.
-    Segments stating different steps declare no one grid to keep, so they
-    re-fit freely.
+    A seam a whole number of steps wider than one is a hole: the samples
+    for those positions are absent, and re-fitting the run to one range
+    would spread the hole over it, reaching the last sample early and
+    relabeling every sample after the hole. A seam which is *not* a whole
+    number of steps is misalignment rather than absent data -- the jitter
+    of labels rounded on their way to a file, or members trimmed where
+    they overlapped -- and remains the tolerance's business.
     """
-    declared = [abs(x.step) for x in segments if not _is_null(x.step)]
-    if not declared or any(x != declared[0] for x in declared[1:]):
-        return True
-    # doubled rather than halving the step, which a coarse timedelta unit
-    # (eg a step of one second) would floor to zero
-    return 2 * abs(abs(step) - declared[0]) * (count - 1) <= declared[0]
+    for prev, nxt in itertools.pairwise(segments):
+        step = prev.step if not _is_null(prev.step) else nxt.step
+        if _is_null(step):
+            continue
+        before = prev.max() if ascending else prev.min()
+        after = nxt.min() if ascending else nxt.max()
+        steps = abs(after - before) / abs(step)
+        whole = np.round(steps)
+        if whole > 1 and abs(steps - whole) <= _GRID_RTOL * whole:
+            return False
+    return True
 
 
 def _to_tick(value) -> int:
@@ -3497,7 +3504,7 @@ class CoordSegmented(BaseCoord):
         ).change_length(n)
         actual = np.concatenate([x.values for x in run])
         deviation = np.max(np.abs(candidate.values - actual))
-        if deviation > tol or (keep_step and not _keeps_step(run, step, n)):
+        if deviation > tol or (keep_step and not _keeps_step(run, ascending)):
             return None
         return candidate
 

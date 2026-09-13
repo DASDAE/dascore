@@ -72,6 +72,10 @@ _SOURCE_COLUMNS = (
 )
 _PATCH_LOCAL_EMPTY = "_patch_local_empty"
 
+# Slack when deciding which side of a grid position a window edge falls on,
+# so an edge a float rounding error short of a position still holds it.
+_GRID_SNAP_RTOL = 1e-9
+
 
 @dataclass(frozen=True)
 class ChunkPlan:
@@ -1218,11 +1222,15 @@ def _carried_columns(
         if has_dims and not pd.isnull(dims_val):
             dim_names = set(str(dims_val).split(","))
         dim_names.discard(name)
-        # a kept identity brings the exact grid it describes
+        # a kept identity brings the exact grid it describes, and the
+        # dtype that grid's values are stated in: a row is all an output
+        # with no members has to rebuild the coordinate from, and an
+        # integer coordinate rebuilt from the frame's float envelope
+        # would not match the same coordinate on its neighbours
         part_cols = [
             key
             for x in sorted(dim_names)
-            for suffix in ("_def_key", "_grid")
+            for suffix in ("_def_key", "_grid", "_coord_dtype")
             if (key := f"_{x}{suffix}") in columns
         ]
         coord_names = set(police_dims[part].split(",")) | {name}
@@ -1674,6 +1682,14 @@ def build_chunk_plan(
                 deferred = exc
                 break
             starts_p, stops_p = start_stop[:, 0], start_stop[:, 1]
+            if fill_value is not None:
+                starts_p, stops_p, on_grid = _grid_snapped(
+                    starts_p, stops_p, g_starts[part], abs(part_step)
+                )
+                if not on_grid.all():
+                    starts_p, stops_p = starts_p[on_grid], stops_p[on_grid]
+                if not len(starts_p):
+                    continue
         active[part] = True
         n_out = len(starts_p)
         ids_p = np.arange(next_id, next_id + n_out)
@@ -2304,6 +2320,25 @@ def _concatenated_steps(sorted_df: pd.DataFrame, codes: np.ndarray, name: str):
     contiguous = pd.Series(follows).groupby(codes).all()
     first = by_output.first()
     return first.where(one_step & contiguous).to_numpy()
+
+
+def _grid_snapped(starts, stops, origin, step):
+    """
+    Window edges moved onto the grid the partition's samples sit on.
+
+    A chunk length need not be a whole number of samples, so an edge can
+    fall between two positions. A filled output builds its coordinate
+    from the envelope its row states, so that envelope has to be the
+    first and last position the window actually holds -- otherwise the
+    coordinate is anchored between samples and every label it carries is
+    wrong. Returns the snapped edges and a mask dropping any window which
+    holds no position at all.
+    """
+    lo = np.ceil((starts - origin) / step - _GRID_SNAP_RTOL)
+    hi = np.floor((stops - origin) / step + _GRID_SNAP_RTOL)
+    keep = hi >= lo
+    lo, hi = lo.astype(np.int64), hi.astype(np.int64)
+    return origin + lo * step, origin + hi * step, keep
 
 
 def _snapped_cuts(cuts, start, step) -> list:

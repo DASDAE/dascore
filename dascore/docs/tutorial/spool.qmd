@@ -190,7 +190,7 @@ Eligible whole-file merges read arrays directly and reconstruct coordinates and 
 
 Data-size limits cover the array only, not coordinates, metadata, or later processing copies. `MB` is decimal and `MiB` is binary.
 
-### Filling bridged holes
+## Filling bridged holes
 
 A `tolerance` wide enough to span a hole merges the patches on either side, but the samples in between are still missing, so the merged patch is unevenly sampled and its coordinate stays segmented. `fill_value` writes those samples instead, and the output comes back as an ordinary evenly sampled patch.
 
@@ -202,7 +202,7 @@ with_gaps = random_spool(time_gap=np.timedelta64(1, "s"), length=3)
 filled = with_gaps.chunk(time=None, tolerance=300, fill_value=np.nan)
 ```
 
-`tolerance` alone decides which holes are bridged: a hole it does not span separates patches as before, and nothing is filled across it. When a chunk length is given as well, the windows cover the whole bridged span, so one lying entirely inside a hole comes back as an all-fill patch and one the sources only partly feed is padded rather than left short. Integer data has no null to fill with and raises, so cast it first. [`Patch.fill_gaps`](`dascore.Patch.fill_gaps`) does the same to a patch you already hold.
+`tolerance` alone decides which holes are bridged: a hole it does not span separates patches as before, and nothing is filled across it. When a chunk length is given as well, the windows cover the whole bridged span, so one lying entirely inside a hole comes back as an all-fill patch and one the sources only partly feed is padded rather than left short. The fill value has to survive a cast to the data's own dtype, so `np.nan` needs float data; fill integer data with an integer, or cast it first. [`Patch.fill_gaps`](`dascore.Patch.fill_gaps`) does the same to a patch you already hold.
 
 ## Gaps and coverage
 

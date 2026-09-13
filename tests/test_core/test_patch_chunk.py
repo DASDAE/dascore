@@ -1516,8 +1516,11 @@ class TestQuantityTolerance:
         exact = spool.chunk(time=None, snap_coords=False)[0].get_coord("time")
         assert isinstance(snapped, CoordRange)
         assert isinstance(exact, CoordSegmented)
-        # no sample moved far enough to land on another grid position
-        assert abs(snapped.values - exact.values).max() < coord.step
+        # no sample moved far enough to land on another grid position,
+        # and none moved past the tolerance the merge was given either
+        deviation = abs(snapped.values - exact.values).max()
+        assert deviation < coord.step
+        assert deviation <= 1.5 * coord.step
 
     def test_plan_records_normalized_tolerance(self, random_spool):
         """The plan records the tolerance it actually used."""
@@ -2534,20 +2537,28 @@ class TestChunkFillValue:
         return dc.spool([first, second])
 
     @staticmethod
-    def _fill_count(patch, dim="time"):
-        """How many positions along dim hold no data."""
+    def _fill_positions(patch, dim="time"):
+        """Which positions along dim hold no data."""
         axis = patch.get_axis(dim)
         other = tuple(x for x in range(patch.ndim) if x != axis)
-        return int(np.isnan(patch.data).all(axis=other).sum())
+        return np.flatnonzero(np.isnan(patch.data).all(axis=other))
 
     def test_merge_fills_the_hole(self, gapped_spool):
         """A merge over the hole comes back evenly sampled at the true step."""
-        step = gapped_spool[0].get_coord("time").step
+        first, second = gapped_spool
+        step = first.get_coord("time").step
         merged = gapped_spool.chunk(time=None, tolerance=10, fill_value=np.nan)[0]
         coord = merged.get_coord("time")
         assert isinstance(coord, CoordRange)
         assert coord.step == step
-        assert self._fill_count(merged) == self.hole
+        # the fill belongs where the samples are missing, not at an end
+        start = len(first.get_coord("time"))
+        expected = np.arange(start, start + self.hole)
+        assert np.array_equal(self._fill_positions(merged), expected)
+        # and the real samples still carry the labels they arrived with
+        kept = np.setdiff1d(np.arange(len(coord)), expected)
+        source = np.concatenate([first.data, second.data], axis=1)
+        assert np.array_equal(merged.data[:, kept], source)
 
     def test_merge_without_fill_value_keeps_the_hole(self, gapped_spool):
         """Without one the merge is segmented, as it is with no tolerance to span."""
@@ -2584,6 +2595,32 @@ class TestChunkFillValue:
         # and the samples either side keep the values their labels had
         kept = np.setdiff1d(np.arange(filled.shape[1]), where)
         assert np.array_equal(filled.data[:, kept], gapped.data)
+
+    def test_filled_spool_rechunks_without_losing_fill(self, gapped_spool):
+        """Re-planning a filled spool must not collapse back to its sources."""
+        filled = gapped_spool.chunk(time=None, tolerance=10, fill_value=np.nan)
+        again = filled.chunk(time=None)
+        assert len(again) == 1
+        before, after = filled[0], again[0]
+        assert after.shape == before.shape
+        assert np.array_equal(after.data, before.data, equal_nan=True)
+
+    def test_hole_is_kept_when_steps_differ_slightly(self, random_patch):
+        """Steps too close to tell apart are still not licence to spread a hole."""
+        coord = random_patch.get_coord("time")
+        first = random_patch.select(time=(0, 100), samples=True)
+        second = random_patch.select(time=(110, ...), samples=True)
+        # a step one nanosecond longer: well inside the sampling group
+        nudged = second.new(
+            coords=second.coords.update(time_step=coord.step + to_timedelta64(1e-9))
+        )
+        spool = dc.spool([first, nudged])
+        with pytest.warns(UserWarning, match="fill_value"):
+            merged = spool.chunk(time=None, tolerance=20)[0]
+        merged_coord = merged.get_coord("time")
+        assert isinstance(merged_coord, CoordSegmented)
+        # the pathology: one range whose step was stretched to cover the hole
+        assert abs(merged_coord.segments[0].step - coord.step) < to_timedelta64(1e-8)
 
     def test_integer_data_raises(self, gapped_spool):
         """Integers have no null, so NaN cannot be what a hole holds."""
@@ -2664,17 +2701,47 @@ class TestChunkFillWindows:
         coord = merged.get_coord("time")
         assert isinstance(coord, CoordRange)
         assert coord.step == random_patch.get_coord("time").step
-        assert int(np.isnan(merged.data).all(axis=0).sum()) == 9
+        # placed at the hole the sources left, not appended at an end
+        where = np.flatnonzero(np.isnan(merged.data).all(axis=0))
+        start = len(first.get_coord("time"))
+        assert np.array_equal(where, np.arange(start, start + 9))
+
+    def test_window_edges_off_the_grid_do_not_move_labels(self):
+        """A chunk length of a fraction of a sample must not re-anchor the data."""
+        values = np.arange(8.0)
+        patch = dc.Patch(
+            data=values[None, :],
+            coords={"distance": np.array([0.0]), "time": values},
+            dims=("distance", "time"),
+        )
+        spool = dc.spool([patch])
+        # 2.5 samples per window, so no window edge lands on a position
+        plain = list(spool.chunk(time=2.5))
+        filled = list(spool.chunk(time=2.5, fill_value=np.nan))
+        assert len(filled) == len(plain)
+        for fill, expected in zip(filled, plain):
+            # nothing was missing, so filling changes neither labels nor data
+            assert np.array_equal(
+                fill.get_coord("time").values, expected.get_coord("time").values
+            )
+            assert np.array_equal(fill.data, expected.data)
 
     def test_all_fill_window_takes_the_partition_dtype(self, spool_and_tolerance):
         """With no member to ask, an all-fill window is the partition's dtype."""
         spool, tolerance = spool_and_tolerance
         first, second = spool
-        mixed = dc.spool([first.new(data=first.data.astype(np.float32)), second])
+        # float16 with float32 combines to float32, which is neither
+        # member's dtype nor the no-dtype fallback of float64
+        mixed = dc.spool(
+            [
+                first.new(data=first.data.astype(np.float16)),
+                second.new(data=second.data.astype(np.float32)),
+            ]
+        )
         chunked = mixed.chunk(time=1, tolerance=tolerance, fill_value=np.nan)
         # a fed window keeps its own member's dtype; the all-fill one cannot
-        assert chunked[0].data.dtype == np.float32
-        assert chunked[4].data.dtype == np.float64
+        assert chunked[0].data.dtype == np.float16
+        assert chunked[4].data.dtype == np.float32
 
     def test_undescribable_coord_raises_on_load(self, random_patch):
         """A fill patch is built from the row, so every coord must be on a grid."""

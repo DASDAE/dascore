@@ -44,6 +44,10 @@ from dascore.utils.pd import (
     get_dim_names_from_columns,
 )
 
+# Slack when counting whole steps between a window edge and a sample, so a
+# ratio a float rounding short of a whole number still counts it.
+_STEP_SNAP_RTOL = 1e-9
+
 
 def _get_varying_dim(df) -> str | None:
     """
@@ -334,8 +338,9 @@ def coord_from_row(row: Mapping, dim: str, units=None):
     The exact grid a row carries rebuilds the coordinate the file holds,
     either way it runs; the whole-tick envelope only approximates a
     fractional step and states no direction. The grid counts ticks in the
-    file's units and dtype, so a unit-converted row, or one whose plan
-    states a placeholder float dtype, is rebuilt from its envelope alone.
+    file's units and dtype, so a unit-converted row, or one stating only
+    the float dtype the frame holds every envelope as, is rebuilt from
+    its envelope alone.
     """
     values = _row_values(row, dim)
     if values is None:
@@ -357,7 +362,7 @@ def coord_from_row(row: Mapping, dim: str, units=None):
     return get_coord(start=lo, stop=hi + step, step=step, units=units)
 
 
-def patch_from_fill(row: Mapping, fill_value) -> dc.Patch:
+def patch_from_fill(row: Mapping, plan_dim: str, fill_value) -> dc.Patch:
     """
     The all-fill patch an output row with no members describes.
 
@@ -375,9 +380,10 @@ def patch_from_fill(row: Mapping, fill_value) -> dc.Patch:
         coord = coord_from_row(row, dim, units=units)
         if coord is None:
             msg = (
-                f"Cannot fill the hole in {row.get('dims')}: the plan states no "
-                f"evenly sampled {dim!r} coordinate for a patch with no data of "
-                "its own. Chunk with a smaller tolerance, or without fill_value."
+                f"Cannot fill a hole along {plan_dim!r}: the plan states no "
+                f"evenly sampled {dim!r} coordinate, and a window no source "
+                "feeds has only its plan row to rebuild one from. Chunk with "
+                "a smaller tolerance, or without fill_value."
             )
             raise ChunkError(msg)
         coord_map[dim] = coord
@@ -386,6 +392,11 @@ def patch_from_fill(row: Mapping, fill_value) -> dc.Patch:
     data = np.full(coords.shape, _fill_scalar(fill_value, dtype), dtype=dtype)
     attrs = _attrs_from_row(row, dims)
     return dc.Patch(data=data, coords=coords, dims=dims, attrs=attrs)
+
+
+def _whole_steps(ratio) -> int:
+    """How many whole steps fit in a ratio, forgiving float error at the edge."""
+    return int(np.floor(float(ratio) + _STEP_SNAP_RTOL))
 
 
 def fill_to_row(patch: dc.Patch, dim: str, row: Mapping, fill_value) -> dc.Patch:
@@ -405,17 +416,30 @@ def fill_to_row(patch: dc.Patch, dim: str, row: Mapping, fill_value) -> dc.Patch
     from dascore.proc.coords import _fill_scalar, _place_blocks  # noqa: PLC0415
 
     patch = patch.fill_gaps(dim, value=fill_value)
-    target = coord_from_row(row, dim, units=patch.get_coord(dim).units)
     coord = patch.get_coord(dim)
-    if target is None or len(target) <= len(coord) or coord.step != target.step:
+    bounds = _row_values(row, dim)
+    if bounds is None or _is_null(step := coord.step) or step <= step * 0:
         return patch
-    offset = int(np.round((coord.min() - target.min()) / target.step))
-    # every member was trimmed to the window, so the samples fit inside it
-    assert 0 <= offset and offset + len(coord) <= len(target)
+    # Counted on the samples' own grid and anchored on their own first
+    # label, so padding can only ever add positions around them: a target
+    # built from the window's edges instead would move every label
+    # whenever those edges did not land on the samples' grid.
+    low, high, _ = bounds
+    before = _whole_steps((coord.min() - low) / step)
+    after = _whole_steps((high - coord.max()) / step)
+    if before <= 0 and after <= 0:
+        return patch
+    before, after = max(before, 0), max(after, 0)
+    target = get_coord(
+        start=coord.min() - before * step,
+        step=step,
+        shape=(before + len(coord) + after,),
+        units=coord.units,
+    )
     data = to_numpy(patch.data)
     axis = patch.get_axis(dim)
     fill = _fill_scalar(fill_value, data.dtype)
-    blocks = ((0, data.shape[axis], offset),)
+    blocks = ((0, data.shape[axis], before),)
     data = _place_blocks(data, axis, len(target), blocks, fill)
     coords = drop_associated_coords(patch.coords, dim, "Filling the gaps along")
     return patch.new(data=data, coords=coords._update_grid(dim, **{dim: target}))
