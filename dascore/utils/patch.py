@@ -673,9 +673,9 @@ def _get_merged_coord(
     a plain range; recorded seams otherwise), then — when `snap_coords` —
     simplified with bounded error: no value moves more than the tolerance
     allows, `tolerance` steps for a count or the excess itself for a
-    quantity or timedelta (see `dascore.utils.gaps.GapTolerance`). Merges
-    whose gaps exceed that stay segmented (honestly non-uniform) rather
-    than being relabeled.
+    quantity or timedelta (see `dascore.utils.gaps.GapTolerance`), and the
+    members' own step is kept, so a merge across a hole stays segmented
+    (honestly non-uniform) rather than being relabeled at a slower rate.
     """
     from dascore.core.coords import concat_coords  # noqa: PLC0415
 
@@ -688,7 +688,9 @@ def _get_merged_coord(
             coords, dim=merge_dim, drop_conflicting=drop_conflicting
         )
     if snap_coords:
-        merged = merged.simplify(GapTolerance.from_user(tolerance, merge_dim))
+        merged = merged.simplify(
+            GapTolerance.from_user(tolerance, merge_dim), keep_step=True
+        )
     # Passing the pre-built dim coord avoids materializing the members'
     # concatenated values only to discard them.
     return merge_coord_managers(

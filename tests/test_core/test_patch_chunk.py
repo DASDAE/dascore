@@ -27,7 +27,7 @@ from dascore.utils.gaps import GapTolerance
 from dascore.utils.misc import get_middle_value, suppress_warnings
 from dascore.utils.patch import _get_merged_coord
 from dascore.utils.patch_assembly import PatchAssembler, _match_merge_units
-from dascore.utils.time import to_timedelta64
+from dascore.utils.time import to_int, to_timedelta64
 
 
 @pytest.fixture(scope="class")
@@ -1252,13 +1252,14 @@ class TestQuantityTolerance:
         assert len(merged) == 1
         assert len(spool.chunk(time=None, tolerance=get_quantity(f"{step} s"))) == 2
 
-    def test_merged_coord_simplifies(self, random_patch):
-        """A merge under an absolute tolerance still snaps to a range."""
-        step = dc.to_float(random_patch.get_coord("time").step)
+    def test_merged_coord_keeps_its_step(self, random_patch):
+        """A merge under an absolute tolerance keeps the patches' own step."""
+        coord = random_patch.get_coord("time")
+        step = dc.to_float(coord.step)
         spool = self._gapped(random_patch, 3)
         with pytest.warns(UserWarning, match="gap in the patch"):
             merged = spool.chunk(time=None, tolerance=get_quantity(f"{4 * step} s"))
-        assert merged[0].get_coord("time").step is not None
+        assert merged[0].get_coord("time").step == coord.step
 
     def test_distance_unit_converts(self, random_spool):
         """A tolerance in feet is read in the coordinate's metres, not as metres."""
@@ -1488,20 +1489,35 @@ class TestQuantityTolerance:
         # a dimensionless quantity is the sample count it spells out
         assert handed == GapTolerance.samples(2.0)
 
-    def test_snap_bound_holds_at_the_tolerance(self, random_patch):
-        """Simplifying under an absolute tolerance moves no value past it."""
+    def test_snapping_never_relabels_across_a_hole(self, random_patch):
+        """However wide the tolerance, a hole is missing data, not a slower rate."""
         step = random_patch.get_coord("time").step
         spool = self._gapped(random_patch, 40)
         with pytest.warns(UserWarning, match="gap in the patch"):
             snapped = spool.chunk(time=None, tolerance=41 * step)[0]
             exact = spool.chunk(time=None, tolerance=41 * step, snap_coords=False)[0]
         snapped_coord, exact_coord = (x.get_coord("time") for x in (snapped, exact))
-        # the hole is wide enough that a looser bound would show: the
-        # exact coordinate keeps the seam, the snapped one does not
-        assert isinstance(exact_coord, CoordSegmented)
-        assert isinstance(snapped_coord, CoordRange)
-        deviation = abs(snapped_coord.values - exact_coord.values).max()
-        assert deviation <= 41 * step
+        # snapping the merge is now a no-op: the hole stays a seam and
+        # every label keeps the value the source patch gave it
+        assert isinstance(snapped_coord, CoordSegmented)
+        assert snapped_coord.step == step
+        assert np.array_equal(snapped_coord.values, exact_coord.values)
+
+    def test_snapping_still_absorbs_sub_sample_jitter(self, random_patch):
+        """Labels a fraction of a step off the grid do collapse to a range."""
+        coord = random_patch.get_coord("time")
+        offset = np.timedelta64(int(to_int(coord.step) // 3), "ns")
+        base = random_patch.update_attrs(history="")
+        after = base.update_coords(
+            time_min=coord.max() + coord.step + offset
+        ).update_attrs(history="")
+        spool = dc.spool((base, after))
+        snapped = spool.chunk(time=None)[0].get_coord("time")
+        exact = spool.chunk(time=None, snap_coords=False)[0].get_coord("time")
+        assert isinstance(snapped, CoordRange)
+        assert isinstance(exact, CoordSegmented)
+        # no sample moved far enough to land on another grid position
+        assert abs(snapped.values - exact.values).max() < coord.step
 
     def test_plan_records_normalized_tolerance(self, random_spool):
         """The plan records the tolerance it actually used."""

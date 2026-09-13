@@ -654,7 +654,7 @@ def spool_to_xarray(
                     # absorb sub-tolerance seams. A seam beyond tolerance
                     # stays segmented here exactly as it does there.
                     coord = concat_coords(*member_coords).simplify(
-                        GapTolerance.from_user(tolerance, dim)
+                        GapTolerance.from_user(tolerance, dim), keep_step=True
                     )
                 else:
                     coord = _envelope_coord(out, d, get_coord)

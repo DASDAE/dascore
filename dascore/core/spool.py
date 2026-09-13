@@ -2017,10 +2017,10 @@ class Spool(NodeRepr, NamespaceOwner):
             This often occurs because of data gaps or at end of chunks.
         snap_coords
             If True (default), simplify the coordinates of joined patches to
-            an evenly sampled range when doing so moves no coordinate value
-            by more than `tolerance` (samples, or the length itself when
-            the tolerance states one). Merges whose gaps exceed that keep
-            an exact segmented coordinate instead.
+            an evenly sampled range, absorbing the sub-sample jitter of
+            labels rounded on their way to a file. A merge across a hole
+            keeps an exact segmented coordinate however wide the tolerance:
+            missing samples are absent data, not a slower sampling rate.
         tolerance
             The maximum number of samples a block of data can be spaced (gap)
             and still be considered contiguous. A quantity or timedelta

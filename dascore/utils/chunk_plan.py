@@ -1577,7 +1577,7 @@ def build_chunk_plan(
             f"There is a gap in the patch along dimension {name} but a "
             f"merge tolerance of {tolerance} was used to force merging "
             "the patches. As a result, some patches in the chunked spool "
-            "may be unevenly sampled, or have their sampling rate increased."
+            "are unevenly sampled."
         )
         warnings.warn(msg, UserWarning, stacklevel=_user_stacklevel())
     per_partition = _needs_partition_resolution(value, overlap)
