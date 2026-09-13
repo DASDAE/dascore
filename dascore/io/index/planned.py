@@ -54,7 +54,7 @@ from dascore.utils.io import IOResourceManager
 from dascore.utils.patch import concatenate_planned
 from dascore.utils.patch_assembly import (
     PatchAssembler,
-    pad_to_row,
+    fill_to_row,
     patch_from_fill,
 )
 from dascore.utils.paths import is_memory_uri
@@ -765,7 +765,7 @@ class PlanResolver(PatchResolver):
             assert len(assembled) == 1
             patch = assembled[0]
             if (fill_value := self.merge_kwargs.get("fill_value")) is not None:
-                patch = pad_to_row(patch, self.dim, row, fill_value)
+                patch = fill_to_row(patch, self.dim, row, fill_value)
         return self._stamp(patch, row)
 
     def _stamp(self, patch: dc.Patch, row: Mapping) -> dc.Patch:

@@ -2571,6 +2571,20 @@ class TestChunkFillValue:
         assert isinstance(merged.get_coord("time"), CoordRange)
         assert not np.isnan(merged.data).any()
 
+    def test_single_member_hole_fills_in_place(self, gapped_spool):
+        """A lone member carrying its own hole is filled at the hole, not the end."""
+        with pytest.warns(UserWarning, match="fill_value"):
+            gapped = gapped_spool.chunk(time=None, tolerance=20)[0]
+        assert isinstance(gapped.get_coord("time"), CoordSegmented)
+        # one source patch, so nothing is merged and only the fill reshapes it
+        filled = dc.spool([gapped]).chunk(time=None, tolerance=20, fill_value=np.nan)[0]
+        where = np.flatnonzero(np.isnan(filled.data).all(axis=0))
+        first = len(gapped_spool[0].get_coord("time"))
+        assert np.array_equal(where, np.arange(first, first + self.hole))
+        # and the samples either side keep the values their labels had
+        kept = np.setdiff1d(np.arange(filled.shape[1]), where)
+        assert np.array_equal(filled.data[:, kept], gapped.data)
+
     def test_integer_data_raises(self, gapped_spool):
         """Integers have no null, so NaN cannot be what a hole holds."""
         spool = dc.spool([x.new(data=x.data.astype(np.int32)) for x in gapped_spool])

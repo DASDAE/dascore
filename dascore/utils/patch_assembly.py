@@ -38,7 +38,6 @@ from dascore.utils.patch import (
     _get_merged_coord,
     _split_coord_merge_kwargs,
     drop_associated_coords,
-    fill_merged_holes,
 )
 from dascore.utils.pd import (
     _convert_min_max_in_kwargs,
@@ -389,20 +388,23 @@ def patch_from_fill(row: Mapping, fill_value) -> dc.Patch:
     return dc.Patch(data=data, coords=coords, dims=dims, attrs=attrs)
 
 
-def pad_to_row(patch: dc.Patch, dim: str, row: Mapping, fill_value) -> dc.Patch:
+def fill_to_row(patch: dc.Patch, dim: str, row: Mapping, fill_value) -> dc.Patch:
     """
-    Fill an assembled patch out to the window its plan row advertises.
+    Write the fill value into every sample an assembled output is missing.
 
-    A window laid over a bridged hole reaches past the samples any source
-    holds, so the merge leaves it short at one or both ends. Filling those
-    edge positions makes the patch match the row `get_contents` shows for
-    it. A row which states no evenly sampled window (a descending
-    coordinate, whose direction an envelope cannot express) is left alone.
+    Two kinds are missing, and only the whole output knows both. Inside
+    it are the holes a bridged gap left, whether the members were merged
+    across one or a single member carried one of its own. Outside them
+    are the edge positions a window laid over a hole advertises but no
+    source feeds. A row stating no evenly sampled window (a descending
+    coordinate, whose direction an envelope cannot express) keeps the
+    interior fill and is not padded.
     """
     # the placement and the cast check live with fill_gaps, which proc
     # imports from utils
     from dascore.proc.coords import _fill_scalar, _place_blocks  # noqa: PLC0415
 
+    patch = patch.fill_gaps(dim, value=fill_value)
     target = coord_from_row(row, dim, units=patch.get_coord(dim).units)
     coord = patch.get_coord(dim)
     if target is None or len(target) <= len(coord) or coord.step != target.step:
@@ -584,9 +586,7 @@ class PatchAssembler:
                 f"{merge_dim} but found {found_dim}."
             )
             raise CoordMergeError(msg)
-        attr_kwargs, coord_kwargs, fill_value = _split_coord_merge_kwargs(
-            self.merge_kwargs
-        )
+        attr_kwargs, coord_kwargs = _split_coord_merge_kwargs(self.merge_kwargs)
         conf = attr_kwargs.get("conflict", None)
         drop_conflicting = conf in {"drop", "keep_first"}
         new_coord = _get_merged_coord(
@@ -594,10 +594,7 @@ class PatchAssembler:
         )
         warn_if_histories_differ(attrs, "Merging")
         new_attrs = combine_patch_attrs(attrs, **attr_kwargs)
-        patch = dc.Patch(
-            data=buffer, coords=new_coord, attrs=new_attrs, dims=list(dims)
-        )
-        return fill_merged_holes(patch, merge_dim, fill_value)
+        return dc.Patch(data=buffer, coords=new_coord, attrs=new_attrs, dims=list(dims))
 
     def _member_meta_from_index(self, rows) -> list[_MemberMeta] | None:
         """What the rows state about every member, or None if any is silent.
