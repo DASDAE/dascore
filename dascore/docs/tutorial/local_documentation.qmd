@@ -63,7 +63,7 @@ keywords: [filtering, bandpass, low pass]
 ---
 ```
 
-API docstrings use a `Keywords` section containing one comma-separated line:
+API docstrings use a `Keywords` section containing comma-separated terms:
 
 ```text
 Keywords
