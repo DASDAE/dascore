@@ -261,3 +261,32 @@ class TestRadianToStrain:
         patch = rad_patch.update_attrs(data_units=dc.get_unit("radians * radians"))
         with pytest.raises(UnitError, match="failed to convert"):
             patch.radians_to_strain()
+
+    @pytest.mark.parametrize("rate", [False, True])
+    @pytest.mark.parametrize("length_unit", ["m", "km"])
+    def test_normalized_phase(self, rad_patch, rate, length_unit):
+        """Per-length phase and equivalent phase across a gauge give equal strain."""
+        time_unit = "/s" if rate else ""
+        gauge = rad_patch.attrs.gauge_length
+        across = rad_patch.update_attrs(data_units=f"rad{time_unit}")
+        length_scale = dc.get_quantity(length_unit).to("m").magnitude
+        normalized = rad_patch.update(
+            data=rad_patch.data / gauge * length_scale,
+            attrs=rad_patch.attrs.update(
+                data_units=f"rad/{length_unit}{time_unit}", gauge_length=None
+            ),
+        )
+        expected = across.radians_to_strain()
+        result = normalized.radians_to_strain()
+        np.testing.assert_allclose(result.data, expected.data, rtol=1e-12, atol=0)
+        assert result.attrs.data_units == dc.get_quantity(f"strain{time_unit}")
+        assert result.coords == normalized.coords
+        # An explicit gauge length must not rescale spatially normalized phase.
+        overridden = normalized.radians_to_strain(gauge_length=100)
+        np.testing.assert_array_equal(overridden.data, result.data)
+
+    @pytest.mark.parametrize("units", ["rad/m**2", "rad*m", "rad/s**2"])
+    def test_unsupported_phase_units(self, rad_patch, units):
+        """Unsupported dimensions must not silently produce non-strain units."""
+        with pytest.raises(UnitError, match="failed to convert"):
+            rad_patch.update_attrs(data_units=units).radians_to_strain()
