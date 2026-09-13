@@ -28,6 +28,10 @@ class TestOptoDASIssues:
         patch = spool[0]
         assert isinstance(patch, dc.Patch)
         assert patch.data.shape
+        assert patch.coords.get_coord("distance").units == dc.get_quantity("m")
+        for attrs in (patch.attrs, fiber_io.scan(path)[0]):
+            assert attrs.distance_units == dc.get_quantity("m")
+            assert attrs.gauge_length_units == dc.get_quantity("m")
 
 
 class TestDataScale:
