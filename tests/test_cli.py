@@ -14,6 +14,7 @@ from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
 import pytest
+import yaml
 from markdown_it import MarkdownIt
 
 import dascore as dc
@@ -537,3 +538,40 @@ class TestOptionalCLI:
             [sys.executable, "-c", code], capture_output=True, text=True, timeout=30
         )
         assert result.returncode == 0, result.stderr
+
+
+class TestKeywordMetadata:
+    """Preserve usable keyword metadata in ordinary Markdown documents."""
+
+    @pytest.mark.parametrize("value", ["[2024]", "false", "null", "{filtering: true}"])
+    def test_invalid(self, tmp_path, monkeypatch, value):
+        """Malformed keyword types fail with a document-specific diagnostic."""
+        source = tmp_path / "docs"
+        source.mkdir()
+        (source / "example.qmd").write_text(f"---\nkeywords: {value}\n---\nExample.")
+        monkeypatch.setattr(doc_corpus, "DOC_PATH", source)
+        with pytest.raises(
+            doc_corpus.DocumentationError,
+            match="Keywords for 'example' must be strings",
+        ):
+            doc_corpus.write_corpus(tmp_path / "output")
+
+    @pytest.mark.parametrize(
+        "value, expected",
+        [
+            ('" Filtering "', ["Filtering"]),
+            ('[" filtering ", "", "Median"]', ["filtering", "Median"]),
+        ],
+    )
+    def test_normalized(self, tmp_path, monkeypatch, value, expected):
+        """String and list forms share normalization without losing authored case."""
+        source = tmp_path / "docs"
+        source.mkdir()
+        (source / "example.qmd").write_text(f"---\nkeywords: {value}\n---\nExample.")
+        monkeypatch.setattr(doc_corpus, "DOC_PATH", source)
+        manifest = doc_corpus.write_corpus(tmp_path / "output")
+        record = next(x for x in manifest["documents"] if x["id"] == "example")
+        assert record["keywords"] == expected
+        text = (tmp_path / "output" / record["path"]).read_text(encoding="utf-8")
+        front = yaml.safe_load(text.split("---", 2)[1])
+        assert front["keywords"] == expected
