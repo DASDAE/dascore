@@ -48,15 +48,20 @@ class TestSkills:
         assert capsys.readouterr().out == doc_skills.read_skill("make-inventory")
 
     @pytest.mark.parametrize(
-        "args", [["skill"], ["skill", "unknown"], ["skill", "dascore", "--bootstrap"]]
+        "args, code, message",
+        [
+            (["skill"], 2, "Provide a skill name"),
+            (["skill", "unknown"], 1, "Available skills: dascore, make-inventory"),
+            (["skill", "dascore", "--bootstrap"], 2, "Use a skill name"),
+        ],
     )
-    def test_errors(self, args, capsys):
-        """Missing, unknown, and contradictory skill requests fail usefully."""
-        assert main(args) == 1
+    def test_errors(self, args, code, message, capsys):
+        """Usage errors and failed lookups report their distinct causes."""
+        assert main(args) == code
         captured = capsys.readouterr()
-        assert not captured.out and "dascore:" in captured.err
-        if "unknown" in args:
-            assert "Available skills: dascore, make-inventory" in captured.err
+        assert not captured.out and message in captured.err
+        if code == 2:
+            assert "Usage:" in captured.err
 
     def test_bootstrap(self, capsys, tmp_path):
         """Export is verbatim and does not require building the corpus."""

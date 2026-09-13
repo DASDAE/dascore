@@ -9,7 +9,6 @@ import typer
 
 import dascore as dc
 from dascore.utils.doc_cache import documentation_cache, read_document
-from dascore.utils.doc_corpus import DocumentationError
 from dascore.utils.doc_skills import get_skills, read_bootstrap, read_skill
 
 app = typer.Typer(
@@ -82,10 +81,10 @@ def skill(
 ) -> None:
     """Read a skill or print the bootstrap for explicit agent installation."""
     if bootstrap and name is not None:
-        raise DocumentationError("Use a skill name or --bootstrap, not both.")
+        raise typer.BadParameter("Use a skill name or --bootstrap, not both.")
     if bootstrap:
         sys.stdout.write(read_bootstrap())
     elif name is not None:
         sys.stdout.write(read_skill(name))
     else:
-        raise DocumentationError("Provide a skill name or use --bootstrap.")
+        raise typer.BadParameter("Provide a skill name or use --bootstrap.")
