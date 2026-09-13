@@ -49,7 +49,7 @@ def _get_coord_manager(fi):
         else:  # and distance
             # The channels are ints so we multiply by step to get distance.
             distance = fi["/header/channels"][:] * step
-            coord = get_coord(values=distance)
+            coord = get_coord(values=distance, units=unit)
         coords[dim] = coord
     out = dascore.core.get_coord_manager(coords=coords, dims=dims)
     return out
@@ -63,7 +63,7 @@ def _get_attr_dict(header):
         "instrument": "instrument_id",
         "experiment": "acquisition_id",
     }
-    out = {"data_category": "DAS"}
+    out = {"data_category": "DAS", "gauge_length_units": "m"}
     for head_name, attr_name in attr_map.items():
         value = header[head_name]
         if hasattr(value, "shape"):
