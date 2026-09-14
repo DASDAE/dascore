@@ -5,12 +5,13 @@ from __future__ import annotations
 import math
 from datetime import date, datetime, timedelta
 from fractions import Fraction
-from functools import singledispatch
+from functools import partial, singledispatch
 from typing import Any, SupportsFloat, cast, overload
 
 import numpy as np
 import pandas as pd
 import pint
+from pandas.errors import OutOfBoundsDatetime, OutOfBoundsTimedelta
 from pint import DimensionalityError
 
 from dascore.constants import (
@@ -49,6 +50,28 @@ def _seconds_out_of_ns_range(seconds: np.ndarray) -> np.ndarray:
     return bad & ~np.isnat(seconds)
 
 
+def _calendar_counts_out_of_ns_range(value: np.ndarray) -> np.ndarray:
+    """
+    Mask the year or month counts no nanosecond count can fall in.
+
+    Numpy converts these units through the calendar rather than a checked
+    multiply, so an extreme count wraps into range instead of overflowing.
+    The range itself in the same unit bounds them before any conversion.
+    """
+    lo, hi = np.array([_NS_MIN, _NS_MAX], dtype="datetime64[ns]").astype(value.dtype)
+    counts = value.astype(np.int64)
+    bad = (counts < lo.astype(np.int64)) | (counts > hi.astype(np.int64))
+    return bad & ~np.isnat(value)
+
+
+def _raise_first_out_of_ns_range(value, bad, is_datetime: bool):
+    """Raise for the first masked value, if any."""
+    if np.any(bad):
+        _raise_out_of_ns_range(
+            np.asarray(value)[np.asarray(bad)].ravel()[0], is_datetime
+        )
+
+
 def _to_ns_unit(value: np.ndarray | np.datetime64 | np.timedelta64, is_datetime: bool):
     """
     Cast a datetime64/timedelta64 to nanoseconds, raising on overflow.
@@ -64,12 +87,16 @@ def _to_ns_unit(value: np.ndarray | np.datetime64 | np.timedelta64, is_datetime:
         return value.astype(dtype)
     unit = np.datetime_data(value.dtype)[0]
     if unit in _OVERFLOWABLE_UNITS and unit != "ns":
-        seconds = value.astype("datetime64[s]" if is_datetime else "timedelta64[s]")
-        bad = _seconds_out_of_ns_range(seconds)
-        if np.any(bad):
-            _raise_out_of_ns_range(
-                np.asarray(value)[np.asarray(bad)].ravel()[0], is_datetime
-            )
+        if is_datetime and unit in ("Y", "M"):
+            bad = _calendar_counts_out_of_ns_range(value)
+            _raise_first_out_of_ns_range(value, bad, is_datetime)
+        try:
+            seconds = value.astype("datetime64[s]" if is_datetime else "timedelta64[s]")
+        except OverflowError:  # a count too large for even whole seconds
+            _raise_out_of_ns_range(value, is_datetime)
+        _raise_first_out_of_ns_range(
+            value, _seconds_out_of_ns_range(seconds), is_datetime
+        )
     try:
         return value.astype(dtype)
     except OverflowError:  # a value inside the boundary second
@@ -120,10 +147,7 @@ def _check_ns_strings(strings, values):
     counts = np.floor_divide(values.astype(np.int64), 1_000_000_000)
     wrapped = (counts != seconds.astype(np.int64)) | np.isnat(values)
     bad = (_seconds_out_of_ns_range(seconds) | wrapped) & ~np.isnat(seconds)
-    if np.any(bad):
-        _raise_out_of_ns_range(
-            np.asarray(strings)[np.asarray(bad)].ravel()[0], is_datetime=True
-        )
+    _raise_first_out_of_ns_range(strings, bad, is_datetime=True)
 
 
 def _float_array_to_ns(array):
@@ -133,6 +157,26 @@ def _float_array_to_ns(array):
     if np.issubdtype(array.dtype, np.integer):
         return array.astype(np.int64) * 1_000_000_000
     return np.rint(array * 1_000_000_000).astype(np.int64)
+
+
+def _parse_string_array(parse, arr, is_datetime: bool):
+    """
+    Parse a pandas string array, keeping NaT for text that is not a time.
+
+    Coercion also empties a valid value the nanosecond range cannot hold,
+    so the positions it emptied are parsed again one at a time to tell the
+    two apart. A value pandas can hold in a coarser unit is kept as is and
+    checked by the cast to nanoseconds.
+    """
+    parsed = parse(arr, errors="coerce")
+    for value in arr[parsed.isna() & ~arr.isna()]:
+        try:
+            parse(value)
+        except (OutOfBoundsDatetime, OutOfBoundsTimedelta):
+            _raise_out_of_ns_range(value, is_datetime)
+        except ValueError:
+            continue
+    return _to_ns_unit(parsed.to_numpy(), is_datetime)
 
 
 @singledispatch
@@ -253,8 +297,8 @@ def _string_array_to_datetime64(arr: pd.arrays.StringArray):
     other -- they share only `BaseStringArray` -- so registering one does
     not dispatch the other.
     """
-    out = pd.to_datetime(arr, errors="coerce", format="mixed")
-    return out.to_numpy(dtype="datetime64[ns]")
+    parse = partial(pd.to_datetime, format="mixed")
+    return _parse_string_array(parse, arr, is_datetime=True)
 
 
 @to_datetime64.register(np.datetime64)
@@ -396,8 +440,7 @@ def _series_to_timedelta64_series(ser: pd.Series) -> pd.Series:
 @to_timedelta64.register(pd.arrays.ArrowStringArray)
 def _string_array_to_timedelta64(arr: pd.arrays.StringArray):
     """Convert a pandas string array, of either backing, to timedelta64."""
-    out = pd.to_timedelta(arr, errors="coerce")
-    return out.to_numpy(dtype="timedelta64[ns]")
+    return _parse_string_array(pd.to_timedelta, arr, is_datetime=False)
 
 
 @to_timedelta64.register(pd.Timedelta)

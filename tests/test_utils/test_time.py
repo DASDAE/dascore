@@ -29,6 +29,14 @@ from dascore.utils.time import (
     to_timedelta64,
 )
 
+STRING_BACKINGS = [
+    "python",
+    pytest.param(
+        "pyarrow",
+        marks=pytest.mark.skipif(pyarrow is None, reason="pyarrow is not installed"),
+    ),
+]
+
 
 class Dummy:
     """A dummy class for testing dispatching."""
@@ -497,6 +505,62 @@ class TestNanosecondBounds:
         """A single unrepresentable element rejects the whole array."""
         with pytest.raises(TimeError, match="outside the range"):
             to_datetime64(np.array(["2020-01-01", "2500-01-01"]))
+
+    @pytest.mark.parametrize("unit", ["Y", "M"])
+    @pytest.mark.parametrize("sign", [1, -1])
+    def test_calendar_unit_wrapping_into_range(self, unit, sign):
+        """Numpy converts years through the calendar: this count landed in 1969."""
+        count = sign * (np.iinfo(np.int64).max // 2)
+        value = np.array([count], dtype=f"datetime64[{unit}]")
+        with pytest.raises(TimeError, match="outside the range"):
+            to_datetime64(value)
+
+    def test_calendar_unit_edges(self):
+        """The bound in whole years is inside on one side and outside on the other."""
+        assert to_datetime64(np.array(["2262"], dtype="datetime64[Y]"))[
+            0
+        ] == np.datetime64("2262-01-01", "ns")
+        with pytest.raises(TimeError, match="outside the range"):
+            to_datetime64(np.array(["1677"], dtype="datetime64[Y]"))
+
+    @pytest.mark.parametrize("unit", ["Y", "M", "W", "D", "h", "m"])
+    def test_coarse_unit_overflowing_seconds(self, unit):
+        """The cast to whole seconds overflowed with numpy's own error."""
+        count = np.iinfo(np.int64).max // 2
+        with pytest.raises(TimeError, match="outside the range"):
+            to_timedelta64(np.array([count], dtype=f"timedelta64[{unit}]"))
+        if unit not in ("Y", "M"):
+            with pytest.raises(TimeError, match="outside the range"):
+                to_datetime64(np.array([count], dtype=f"datetime64[{unit}]"))
+
+    @pytest.mark.parametrize("backing", STRING_BACKINGS)
+    @pytest.mark.parametrize("iso", (*out_of_range, "2262-04-11T23:47:16.854775808"))
+    def test_pandas_string_array(self, backing, iso):
+        """Pandas coerced an unrepresentable date to NaT, or overflowed raw."""
+        arr = pd.array(["2020-01-01", iso], dtype=f"string[{backing}]")
+        with pytest.raises(TimeError, match="outside the range"):
+            to_datetime64(arr)
+
+    @pytest.mark.parametrize("backing", STRING_BACKINGS)
+    @pytest.mark.parametrize("duration", ("106752 days", "-106752 days"))
+    def test_pandas_string_array_of_durations(self, backing, duration):
+        """A duration past the range was coerced to NaT like a typo."""
+        arr = pd.array(["1s", duration], dtype=f"string[{backing}]")
+        with pytest.raises(TimeError, match="outside the range"):
+            to_timedelta64(arr)
+
+    @pytest.mark.parametrize("backing", STRING_BACKINGS)
+    def test_pandas_string_array_still_coerces_text(self, backing):
+        """Text that is not a time, and the last valid nanosecond, still pass."""
+        last_ns = "2262-04-11T23:47:16.854775807"
+        dates = pd.array(["not a date", None, last_ns], dtype=f"string[{backing}]")
+        out = to_datetime64(dates)
+        assert np.isnat(out[0]) and np.isnat(out[1])
+        assert out[2] == np.datetime64(last_ns, "ns")
+        durations = pd.array(["garbage", None, "1s"], dtype=f"string[{backing}]")
+        out = to_timedelta64(durations)
+        assert np.isnat(out[0]) and np.isnat(out[1])
+        assert out[2] == np.timedelta64(1, "s")
 
     def test_seconds_from_epoch(self):
         """Seconds from the epoch overflowed with an opaque OverflowError."""
