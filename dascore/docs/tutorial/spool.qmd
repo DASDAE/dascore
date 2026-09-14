@@ -1,4 +1,5 @@
 ---
+keywords: [spool, chunking, overlapping chunks, gaps, archive]
 title: Spool
 execute:
   warning: false

@@ -113,8 +113,15 @@ docs = [
     "jupyter-server",
 ]
 
-test = [
+test_base = [
     "dascore[agents]",
+    "pytest",
+    "pytest-timeout",
+    "pytest-xdist",
+]
+
+test = [
+    "dascore[test_base]",
     "build",
     "jinja2",  # documentation-link regression tests import the website renderer
     "markdown-it-py",
@@ -127,10 +134,7 @@ test = [
     "coverage>=7.4,<8",
     "pytest-cov>=4",
     "pre-commit",
-    "pytest",
-    "pytest-timeout",
     "pytest-codeblocks",
-    "pytest-xdist",
     "s3fs",
     "starlette",
     "twine",
