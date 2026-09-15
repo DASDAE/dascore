@@ -133,14 +133,17 @@ def _check_ns_strings(strings, values):
     Check strings numpy parsed straight into nanoseconds.
 
     With more than six fractional digits numpy builds the value in ns and an
-    out of range date wraps silently instead of raising. The whole seconds
-    parse without wrapping, so they are checked and compared against the
-    nanosecond value: a mismatch means it wrapped inside the range.
+    out of range date wraps silently instead of raising. The same strings
+    parsed with an explicit second unit cannot wrap, so they are checked and
+    compared against the nanosecond value: a mismatch means it wrapped inside
+    the range.
     """
     if np.datetime_data(values.dtype)[0] != "ns":
         return
-    heads = np.strings.partition(np.asarray(strings, dtype=str), ".")[0]
-    seconds = heads.astype("datetime64[s]")
+    # The whole string rather than the part before the fraction: cutting the
+    # fraction cuts a trailing timezone offset with it, and numpy applies the
+    # offset only to the value that still carries one.
+    seconds = np.asarray(strings, dtype=str).astype("datetime64[s]")
     # Compared as integer counts: numpy cannot narrow the lowest valid ns to
     # seconds without overflowing. A wrap onto the NaT sentinel reads as NaT,
     # so NaT is only accepted where the string itself parsed to NaT.

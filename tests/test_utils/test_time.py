@@ -641,6 +641,49 @@ class TestNanosecondBounds:
         assert to_datetime64(iso) == expected
         assert to_datetime64(np.array([iso]))[0] == expected
 
+    # The offset shifts the value, so the range it must be checked against is
+    # the one after numpy normalizes it to UTC.
+    offset_in_range = (
+        # A plain value the offset moves within the range.
+        ("2020-01-01T00:00:00.123456789+01:00", "2019-12-31T23:00:00.123456789"),
+        ("2020-01-01T00:00:00.123456789-05:00", "2020-01-01T05:00:00.123456789"),
+        # Out of range where it is written, the outermost valid ns once in UTC.
+        ("2262-04-12T04:47:16.854775807+05:00", "2262-04-11T23:47:16.854775807"),
+        ("1677-09-20T19:12:43.145224193-05:00", "1677-09-21T00:12:43.145224193"),
+    )
+
+    @pytest.mark.parametrize("iso,utc", offset_in_range)
+    def test_offset_with_nanoseconds_converts(self, iso, utc):
+        """An offset is not a wrap: the value it points at is in range."""
+        expected = np.datetime64(utc, "ns")
+        assert to_datetime64(iso) == expected
+        assert to_datetime64(np.array([iso]))[0] == expected
+
+    offset_out_of_range = (
+        # In range where it is written, one ns past the bound once in UTC.
+        "2262-04-11T23:47:16.854775807-05:00",
+        "1677-09-21T00:12:43.145224193+05:00",
+        # Out of range on both readings.
+        "2500-01-01T00:00:00.000000000+01:00",
+        "1000-01-01T00:00:00.000000000-05:00",
+    )
+
+    @pytest.mark.parametrize("iso", offset_out_of_range)
+    def test_offset_with_nanoseconds_out_of_range(self, iso):
+        """The offset can also carry a written value out of the range."""
+        with pytest.raises(TimeError, match="outside the range"):
+            to_datetime64(iso)
+        with pytest.raises(TimeError, match="outside the range"):
+            to_datetime64(np.array([iso]))
+
+    @pytest.mark.parametrize("suffix", ["Z", "+00:00"])
+    def test_utc_suffix_with_nanoseconds(self, suffix):
+        """A zero offset leaves the value where it is written."""
+        iso = f"2020-01-01T00:00:00.123456789{suffix}"
+        expected = np.datetime64("2020-01-01T00:00:00.123456789", "ns")
+        assert to_datetime64(iso) == expected
+        assert to_datetime64(np.array([iso]))[0] == expected
+
     def test_nat_string_next_to_nanoseconds(self):
         """A NaT string is still NaT, not mistaken for a wrapped value."""
         out = to_datetime64(np.array(["NaT", "2020-01-01T00:00:00.123456789"]))
