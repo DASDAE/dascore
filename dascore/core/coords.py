@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import abc
+import numbers
 from collections.abc import Sized
-from contextlib import suppress
+from contextlib import contextmanager, suppress
 from functools import cache
 from operator import gt, lt
 from typing import Any, TypeVar
@@ -23,8 +24,9 @@ from typing_extensions import Self
 import dascore as dc
 from dascore.compat import array, is_array
 from dascore.constants import _AGG_FUNCS, DIM_REDUCE_DOCS, dascore_styles
-from dascore.exceptions import CoordError, ParameterError
+from dascore.exceptions import CoordError, ParameterError, UnitError
 from dascore.units import (
+    PintError,
     Quantity,
     Unit,
     convert_units,
@@ -57,6 +59,112 @@ from dascore.utils.time import dtype_time_like, is_datetime64, is_timedelta64, t
 min_max_type = TypeVar("min_max_type")
 
 step_type = TypeVar("step_type")
+
+# Types which coords know how to combine with in array operations.
+_ARRAY_OP_TYPES = (np.ndarray, np.generic, numbers.Number, Quantity, list, tuple)
+
+# Ufuncs whose operands must all share the same units. These also return
+# outputs in those units, unless the output is boolean.
+_UNIT_MATCHED_UFUNCS = frozenset(
+    {
+        np.add,
+        np.subtract,
+        np.mod,
+        np.fmod,
+        np.remainder,
+        np.maximum,
+        np.minimum,
+        np.fmax,
+        np.fmin,
+        np.hypot,
+        np.greater,
+        np.greater_equal,
+        np.less,
+        np.less_equal,
+        np.equal,
+        np.not_equal,
+        np.positive,
+        np.negative,
+        np.absolute,
+        np.fabs,
+        np.rint,
+        np.floor,
+        np.ceil,
+        np.trunc,
+    }
+)
+
+# Numpy functions which reduce an array to a single value. Time-like coords
+# need special handling for these (see _reduce_time_like).
+_REDUCING_ARRAY_FUNCS = frozenset(
+    {
+        np.mean,
+        np.nanmean,
+        np.median,
+        np.nanmedian,
+        np.std,
+        np.nanstd,
+        np.sum,
+        np.nansum,
+        np.min,
+        np.nanmin,
+        np.max,
+        np.nanmax,
+    }
+)
+
+
+def _map_nested(func, obj):
+    """Apply func to each non-container element of a nested structure."""
+    if isinstance(obj, tuple | list):
+        return type(obj)(_map_nested(func, x) for x in obj)
+    if isinstance(obj, dict):
+        return {i: _map_nested(func, v) for i, v in obj.items()}
+    return func(obj)
+
+
+@contextmanager
+def _unit_error_context(func, units):
+    """Raise a dascore UnitError when pint can't perform an operation."""
+    try:
+        yield
+    except PintError as ex:
+        name = getattr(func, "__name__", func)
+        msg = f"{name} failed for coordinate with units of {units}. {ex}"
+        raise UnitError(msg) from ex
+
+
+def _to_magnitude(obj, units=None):
+    """Strip units from a quantity, first converting to units if provided."""
+    if not isinstance(obj, Quantity):
+        return obj
+    return obj.magnitude if units is None else obj.to(units).magnitude
+
+
+def _wrap_array_op_output(out, units=None):
+    """
+    Convert the output of an array operation back to a coordinate.
+
+    Scalars (eg reductions) keep their units but are not coordinates, and
+    boolean arrays are left alone since they are masks, not coordinates.
+    """
+    if isinstance(out, tuple | list):  # Eg np.divmod or np.array_split.
+        return type(out)(_wrap_array_op_output(x, units) for x in out)
+    if isinstance(out, Quantity):
+        # Dimensionless units can still have a scale (eg m/cm) so the
+        # magnitude has to be converted before the units are dropped.
+        if out.units.dimensionless:
+            out, units = out.to("dimensionless").magnitude, None
+        else:
+            out, units = out.magnitude, out.units
+    if not is_array(out) or np.ndim(out) == 0:
+        # Time-like values (eg datetime64) can't have units attached.
+        if units is None or dtype_time_like(np.asarray(out).dtype):
+            return out
+        return out * units
+    if np.issubdtype(out.dtype, np.bool_):
+        return out
+    return get_coord(data=out, units=units)
 
 
 def ensure_consistent_dtype(value, name, dtype):
@@ -259,6 +367,14 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
     Coordinates should usually be created with
     [get_coords](`dascore.core.coords.get_coord`) rather than using the class
     directly.
+
+    Notes
+    -----
+    Coordinates support python operators, numpy ufuncs, and numpy functions,
+    each of which returns a new coordinate whose units reflect the operation
+    performed. Operations which return a single value (eg `np.mean`) return
+    a scalar and operations which return booleans (eg `np.greater`) return
+    arrays. See the [coordinate tutorial](/tutorial/coords.qmd) for details.
     """
 
     units: UnitQuantity = None
@@ -498,6 +614,158 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
     def __array__(self, dtype=None, copy=False):
         """Numpy method for getting array data with `np.array(coord)`."""
         return self.data
+
+    def _to_operand(self, obj, units=None):
+        """
+        Convert an input of an array operation to an array or quantity.
+
+        Parameters
+        ----------
+        obj
+            The object to convert. Coords and quantities are unpacked into
+            their values and units, anything else is passed through.
+        units
+            If provided, the units assumed for values which have none (eg
+            the 1 in `coord + 1`).
+        """
+        if isinstance(obj, BaseCoord):
+            data, obj_units = obj.data, obj.units
+        elif isinstance(obj, Quantity):
+            data, obj_units = obj.magnitude, obj.units
+        else:
+            data, obj_units = obj, None
+        # Time-like coords operate on raw values; pint knows nothing of
+        # numpy's datetime64/timedelta64.
+        if dtype_time_like(self.dtype):
+            return data
+        obj_units = obj_units if obj_units is not None else units
+        return data if obj_units is None else data * obj_units
+
+    def _get_op_units(self, inputs):
+        """Get the units which apply to operands which have none."""
+        if self.units is not None:
+            return self.units
+        others = (getattr(x, "units", None) for x in inputs)
+        return next((x for x in others if x is not None), None)
+
+    def _operate(self, ufunc, *inputs):
+        """Apply a ufunc, deferring to other types when they aren't known."""
+        if any(not isinstance(x, (BaseCoord, *_ARRAY_OP_TYPES)) for x in inputs):
+            return NotImplemented
+        return ufunc(*inputs)
+
+    def __array_ufunc__(self, ufunc, method, *inputs, **kwargs):
+        """Implement numpy's ufunc protocol (eg np.sqrt(coord), coord + 1)."""
+        # Coord data is read-only, so numpy raises for operations which
+        # write into it, but ufunc.at ignores the flag and must be rejected.
+        if method == "at":
+            msg = (
+                "Coordinates are immutable, so ufunc.at is not supported. "
+                "Apply the operation to the coordinate's values instead."
+            )
+            raise ParameterError(msg)
+        if any(not isinstance(x, (BaseCoord, *_ARRAY_OP_TYPES)) for x in inputs):
+            return NotImplemented
+        # Ufuncs which require operands share units also preserve them.
+        matched = ufunc in _UNIT_MATCHED_UFUNCS
+        units = self._get_op_units(inputs)
+        operands = [self._to_operand(x, units if matched else None) for x in inputs]
+        with _unit_error_context(ufunc, self.unit_str):
+            if method != "__call__":
+                # Pint doesn't implement reduce/accumulate/outer, so units
+                # are handled here, which only works if they don't change.
+                if not matched and units is not None:
+                    msg = (
+                        f"The units resulting from {ufunc.__name__}.{method} "
+                        f"are ambiguous for a coordinate with units of "
+                        f"{self.unit_str}. Use the coordinate's values instead."
+                    )
+                    raise UnitError(msg)
+                operands = [_to_magnitude(x, units) for x in operands]
+            # When operands are quantities pint performs the unit algebra
+            # (eg m * m -> m ** 2) and raises on invalid ops (eg m + s).
+            out = getattr(ufunc, method)(*operands, **kwargs)
+        return _wrap_array_op_output(out, units if matched else None)
+
+    def __array_function__(self, func, types, args, kwargs):
+        """Implement numpy's array protocol (eg np.concatenate([coord1]))."""
+        if any(not issubclass(x, (BaseCoord, *_ARRAY_OP_TYPES)) for x in types):
+            return NotImplemented
+        # Numpy can't reduce absolute times so dascore's logic is used.
+        if dtype_time_like(self.dtype) and func in _REDUCING_ARRAY_FUNCS:
+            out = _reduce_time_like(func, self.data)
+            return _wrap_array_op_output(out[0] if out.size == 1 else out, self.units)
+        args = _map_nested(self._to_operand, args)
+        kwargs = _map_nested(self._to_operand, kwargs)
+        with _unit_error_context(func, self.unit_str):
+            out = func(*args, **kwargs)
+        return _wrap_array_op_output(out)
+
+    def __add__(self, other):
+        return self._operate(np.add, self, other)
+
+    def __radd__(self, other):
+        return self._operate(np.add, other, self)
+
+    def __sub__(self, other):
+        return self._operate(np.subtract, self, other)
+
+    def __rsub__(self, other):
+        return self._operate(np.subtract, other, self)
+
+    def __mul__(self, other):
+        return self._operate(np.multiply, self, other)
+
+    def __rmul__(self, other):
+        return self._operate(np.multiply, other, self)
+
+    def __truediv__(self, other):
+        return self._operate(np.divide, self, other)
+
+    def __rtruediv__(self, other):
+        return self._operate(np.divide, other, self)
+
+    def __floordiv__(self, other):
+        return self._operate(np.floor_divide, self, other)
+
+    def __rfloordiv__(self, other):
+        return self._operate(np.floor_divide, other, self)
+
+    def __mod__(self, other):
+        return self._operate(np.mod, self, other)
+
+    def __rmod__(self, other):
+        return self._operate(np.mod, other, self)
+
+    def __pow__(self, other):
+        return self._operate(np.power, self, other)
+
+    def __rpow__(self, other):
+        return self._operate(np.power, other, self)
+
+    def __neg__(self):
+        return self._operate(np.negative, self)
+
+    def __pos__(self):
+        return self._operate(np.positive, self)
+
+    def __abs__(self):
+        return self._operate(np.absolute, self)
+
+    # Note: __eq__ (and __ne__) are not defined here; they compare
+    # coordinates, not their values, since coords are pydantic models.
+
+    def __gt__(self, other):
+        return self._operate(np.greater, self, other)
+
+    def __ge__(self, other):
+        return self._operate(np.greater_equal, self, other)
+
+    def __lt__(self, other):
+        return self._operate(np.less, self, other)
+
+    def __le__(self, other):
+        return self._operate(np.less_equal, self, other)
 
     @cached_method
     def min(self):
