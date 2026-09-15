@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import replace
+import tracemalloc
 from fractions import Fraction
 from typing import Any
 
@@ -10,9 +10,10 @@ import numpy as np
 import pytest
 
 import dascore as dc
-from dascore.exceptions import MissingOptionalDependencyError
+from dascore.exceptions import InvalidFiberFileError, MissingOptionalDependencyError
+from dascore.io.mseed import core as mseed_core
 from dascore.io.mseed import utils as mseed_utils
-from dascore.io.mseed.core import MSeedV2
+from dascore.io.mseed.core import MSeedV2, MSeedV3
 from dascore.utils.downloader import fetch
 from tests.test_io._common_io_test_utils import skip_timeout
 
@@ -37,6 +38,7 @@ def _write_mseed(
     sample_rates=None,
     source_ids=None,
     data_samples=None,
+    encoding=None,
 ):
     """Write a small MiniSEED file."""
     pymseed = pytest.importorskip("pymseed")
@@ -64,7 +66,7 @@ def _write_mseed(
         str(path),
         overwrite=True,
         format_version=format_version,
-        encoding=pymseed.DataEncoding.INT32,
+        encoding=pymseed.DataEncoding.INT32 if encoding is None else encoding,
     )
     return path
 
@@ -75,14 +77,15 @@ def _write_mseed_v2_header(path):
     return path
 
 
-def _trace_segment(**kwargs):
-    """Return a small decoded MiniSEED trace segment for helper tests."""
+def _trace_summary(**kwargs):
+    """Return a small MiniSEED header summary for helper tests."""
     data = kwargs.pop("data", np.arange(3, dtype=np.int32))
     # Annotated because the values are heterogeneous; without it the
     # inferred value type is object and every field of the splat below
     # is rejected.
     defaults: dict[str, Any] = dict(
         source_id="FDSN:XX_00000__H_S_F",
+        dtype=str(data.dtype),
         network="XX",
         station="00000",
         location="",
@@ -97,19 +100,7 @@ def _trace_segment(**kwargs):
         record_length=256,
     )
     defaults.update(kwargs)
-    return mseed_utils._TraceSegment(**defaults, data=data)
-
-
-def _trace_summary(**kwargs):
-    """Return a small MiniSEED trace summary for helper tests."""
-    segment = _trace_segment(**kwargs)
-    summary_kwargs = {
-        key: getattr(segment, key) for key in mseed_utils._TraceInfo.__annotations__
-    }
-    return mseed_utils._TraceSummary(
-        **summary_kwargs,
-        dtype=str(segment.data.dtype),
-    )
+    return mseed_utils._TraceSummary(**defaults)
 
 
 class _MiniSeedRecord:
@@ -172,6 +163,160 @@ def mseed_v2_path(tmp_path):
 def mseed_v3_path(tmp_path):
     """Return a small MiniSEED v3 path."""
     return _write_mseed(tmp_path / "test_v3.mseed", format_version=3)
+
+
+class TestReadWork:
+    """Read planning reuses headers and skips samples outside the request."""
+
+    def test_two_passes_for_multiple_groups(self, monkeypatch):
+        """One header pass and one sample pass suffice for multiple patches."""
+        records = [
+            _MiniSeedRecord("FDSN:XX_00000__H_S_F", samprate=10),
+            _MiniSeedRecord("FDSN:XX_00001__H_S_F", samprate=20),
+        ]
+        pymseed = _pymseed_for_records(records)
+        original = pymseed.MS3Record.from_file
+        passes = []
+
+        def from_file(*args, **kwargs):
+            passes.append(1)
+            return original(*args, **kwargs)
+
+        monkeypatch.setattr(pymseed.MS3Record, "from_file", from_file)
+        monkeypatch.setattr(mseed_core, "optional_import", lambda name: pymseed)
+        patches = MSeedV3().read("unused")
+        assert len(patches) == 2
+        assert len(passes) == 2
+        for patch in patches:
+            np.testing.assert_array_equal(patch.data, np.arange(3)[None, :])
+
+    @pytest.mark.parametrize("rate", [10, 1024])
+    @pytest.mark.parametrize("array_only", [False, True])
+    def test_time_window_skips_record_unpack(self, monkeypatch, rate, array_only):
+        """An interior window decodes its records, including fractional grids."""
+        records = [
+            _MiniSeedRecord(
+                data=np.arange(index * 3, (index + 1) * 3, dtype=np.int32),
+                starttime=round(index * 3 * 1_000_000_000 / rate),
+                samprate=rate,
+                fail_unpack=index in (0, 3),
+            )
+            for index in range(4)
+        ]
+        pymseed = _pymseed_for_records(records)
+        monkeypatch.setattr(mseed_core, "optional_import", lambda name: pymseed)
+        reader = MSeedV3()
+        if array_only:
+            data = reader.read_array("unused", {"time": (4, 7)})
+        else:
+            data = reader.read("unused", samples=True, time=(4, 7))[0].data
+        np.testing.assert_array_equal(data, np.arange(4, 7)[None, :])
+
+    @pytest.mark.parametrize("samples", [None, (2, 4)])
+    def test_overlapping_groups_keep_record_membership(self, monkeypatch, samples):
+        """Same-rate overlapping records retain their separate logical identities."""
+        records = [
+            _MiniSeedRecord(data=np.arange(10, dtype=np.int32)),
+            _MiniSeedRecord(
+                data=np.arange(100, 110, dtype=np.int32), starttime=500_000_000
+            ),
+        ]
+        pymseed = _pymseed_for_records(records)
+        monkeypatch.setattr(mseed_core, "optional_import", lambda name: pymseed)
+        reader = MSeedV3()
+        metadata = reader.get_metadata("unused")
+        query = {} if samples is None else {"samples": True, "time": samples}
+        for patches in [
+            reader.read("unused", **query),
+            [
+                reader.read("unused", source_patch_key=patch._source.key, **query)[0]
+                for patch in metadata
+            ],
+        ]:
+            assert len(patches) == 2
+            for index, patch in enumerate(patches):
+                expected = records[index].np_datasamples[
+                    slice(*(samples or (None, None)))
+                ]
+                np.testing.assert_array_equal(patch.data, expected[None, :])
+                assert patch._source.key == metadata[index]._source.key
+
+    def test_skipped_record_cannot_merge_scanned_groups(self, monkeypatch):
+        """A rejected record still separates the groups established by scanning."""
+        records = [
+            _MiniSeedRecord(),
+            _MiniSeedRecord(
+                data=np.array([99], dtype=np.int32),
+                samprate=20,
+                starttime=100_000_000,
+                fail_unpack=True,
+            ),
+            _MiniSeedRecord(
+                data=np.arange(3, 6, dtype=np.int32), starttime=300_000_000
+            ),
+        ]
+        pymseed = _pymseed_for_records(records)
+        monkeypatch.setattr(mseed_core, "optional_import", lambda name: pymseed)
+        patches = MSeedV3().read("unused", samples=True, time=(2, 3))
+        assert len(patches) == 2
+        assert [patch.data.item() for patch in patches] == [2, 5]
+
+    def test_partial_records_keep_original_fractional_grid(self, monkeypatch):
+        """Record rounding cannot reanchor coalescing after a selection."""
+        records = [
+            _MiniSeedRecord(
+                data=np.arange(6, dtype=np.int32), samprate=7, fail_unpack=True
+            ),
+            _MiniSeedRecord(
+                data=np.arange(6, 9, dtype=np.int32), samprate=7, starttime=857_142_858
+            ),
+            _MiniSeedRecord(
+                data=np.arange(9, 12, dtype=np.int32),
+                samprate=7,
+                starttime=1_285_714_285,
+            ),
+        ]
+        pymseed = _pymseed_for_records(records)
+        monkeypatch.setattr(mseed_core, "optional_import", lambda name: pymseed)
+        patch = MSeedV3().read("unused", samples=True, time=(6, 12))[0]
+        np.testing.assert_array_equal(patch.data, np.arange(6, 12)[None, :])
+        assert patch.get_coord("time").step_exact == Fraction(1, 7)
+
+    def test_batch_keeps_only_one_output_copy(self, monkeypatch):
+        """Multiple groups do not retain a second complete decoded data copy."""
+        records = [
+            _MiniSeedRecord(
+                f"FDSN:XX_{index:05d}__H_S_F",
+                data=np.arange(262_144 + index, dtype=np.int32),
+            )
+            for index in range(16)
+        ]
+        pymseed = _pymseed_for_records(records)
+        monkeypatch.setattr(mseed_core, "optional_import", lambda name: pymseed)
+        MSeedV3().get_metadata("unused")  # Warm metadata classes before measuring.
+        tracemalloc.start()
+        try:
+            patches = MSeedV3().read("unused")
+            _, peak = tracemalloc.get_traced_memory()
+        finally:
+            tracemalloc.stop()
+        assert len(patches) == len(records)
+        output_bytes = sum(patch.data.nbytes for patch in patches)
+        assert peak < output_bytes + 4 * 1024**2
+        for patch, record in zip(patches, records, strict=True):
+            np.testing.assert_array_equal(patch.data, record.np_datasamples[None, :])
+
+    def test_read_does_not_retain_previous_headers(self, monkeypatch):
+        """One formatter can read changed content without stale metadata."""
+        records = [_MiniSeedRecord()]
+        pymseed = _pymseed_for_records(records)
+        monkeypatch.setattr(mseed_core, "optional_import", lambda name: pymseed)
+        reader = MSeedV3()
+        first = reader.read("unused")[0]
+        records[:] = [_MiniSeedRecord(data=np.arange(7, dtype=np.int32))]
+        second = reader.read("unused")[0]
+        assert first.shape == (1, 3)
+        np.testing.assert_array_equal(second.data, np.arange(7)[None, :])
 
 
 class TestMiniSeedGetFormat:
@@ -315,14 +460,6 @@ class TestMiniSeedRead:
         assert mseed_utils._continues(985_351_562, 985_351_563, 1024.0)
         assert not mseed_utils._continues(985_351_562, 985_351_565, 1024.0)
 
-    def test_group_key_includes_phase(self, tmp_path):
-        """Segments trimmed onto different phases are not stacked together."""
-        path = _write_mseed(tmp_path / "phase.mseed", sample_rates=[1024.0] * 3)
-        segments = mseed_utils._read_segments(path, pytest.importorskip("pymseed"))
-        shifted = replace(segments[1], origin_offset=1)
-        keys = {mseed_utils._get_group_key(s) for s in (segments[0], shifted)}
-        assert len(keys) == 2
-
     def test_incompatible_sample_rates_are_separate_patches(self, tmp_path):
         """Incompatible traces are returned as separate patches."""
         path = _write_mseed(
@@ -364,7 +501,7 @@ class TestMiniSeedRead:
             path, file_format="MSEED", file_version="3", source_patch_key=target
         )
         assert len(spool) == 1
-        assert spool[0].attrs["_source_patch_key"] == target
+        assert spool[0]._source.key == target
 
     def test_read_source_patch_key_with_time(self, mseed_v3_path):
         """source_patch_key from scan works with partial time reads."""
@@ -381,7 +518,7 @@ class TestMiniSeedRead:
             time=(time_min, time_max),
         )
         assert len(spool) == 1
-        assert spool[0].attrs["_source_patch_key"] == target
+        assert spool[0]._source.key == target
         assert spool[0].shape == (3, 4)
         assert spool[0].get_coord("time").min() == time_min
 
@@ -402,53 +539,73 @@ class TestMiniSeedRead:
         )
         assert len(spool) == 0
 
-    def test_source_patch_key_skips_unselected_record_unpack(self):
+    def test_source_patch_key_skips_unselected_record_unpack(self, monkeypatch):
         """source_patch_key reads do not decode records outside selected groups."""
         records = [
             _MiniSeedRecord("FDSN:XX_00000__H_S_F", samprate=10.0),
             _MiniSeedRecord("FDSN:XX_00001__H_S_F", samprate=20.0, fail_unpack=True),
         ]
         target = "v3:XX..HSF:0:10:3"
-        patches = mseed_utils._get_patches(
-            "unused",
-            _pymseed_for_records(records),
-            source_patch_key=target,
+        monkeypatch.setattr(
+            "dascore.io.mseed.core.optional_import",
+            lambda name: _pymseed_for_records(records),
+        )
+        patches = list(
+            MSeedV3().read(
+                "unused",
+                source_patch_key=target,
+            )
         )
         assert len(patches) == 1
-        assert patches[0].attrs["_source_patch_key"] == target
+        assert patches[0]._source.key == target
         assert tuple(patches[0].get_coord("channel").values) == (0,)
 
-    def test_channel_filter_skips_unselected_record_unpack(self):
+    def test_channel_filter_skips_unselected_record_unpack(self, monkeypatch):
         """Channel reads do not decode records outside selected channels."""
         records = [
             _MiniSeedRecord("FDSN:XX_00000__H_S_F"),
             _MiniSeedRecord("FDSN:XX_00001__H_S_F", fail_unpack=True),
         ]
-        patches = mseed_utils._get_patches(
-            "unused",
-            _pymseed_for_records(records),
-            channel=(0, 0),
+        monkeypatch.setattr(
+            "dascore.io.mseed.core.optional_import",
+            lambda name: _pymseed_for_records(records),
+        )
+        patches = list(
+            MSeedV3().read(
+                "unused",
+                channel=(0, 0),
+            )
         )
         assert len(patches) == 1
         assert tuple(patches[0].get_coord("channel").values) == (0,)
 
-    def test_unmatched_source_patch_key_returns_no_patches(self):
+    def test_unmatched_source_patch_key_returns_no_patches(self, monkeypatch):
         """Unknown source patch IDs produce no decoded patches."""
         records = [_MiniSeedRecord("FDSN:XX_00000__H_S_F", fail_unpack=True)]
-        patches = mseed_utils._get_patches(
-            "unused",
-            _pymseed_for_records(records),
-            source_patch_key="v3:XX..HSF:1:10:3",
+        monkeypatch.setattr(
+            "dascore.io.mseed.core.optional_import",
+            lambda name: _pymseed_for_records(records),
+        )
+        patches = list(
+            MSeedV3().read(
+                "unused",
+                source_patch_key="v3:XX..HSF:1:10:3",
+            )
         )
         assert patches == []
 
-    def test_unmatched_channel_returns_no_patches(self):
+    def test_unmatched_channel_returns_no_patches(self, monkeypatch):
         """Channel selections with no sources produce no decoded patches."""
         records = [_MiniSeedRecord("FDSN:XX_00000__H_S_F", fail_unpack=True)]
-        patches = mseed_utils._get_patches(
-            "unused",
-            _pymseed_for_records(records),
-            channel=(10, 10),
+        monkeypatch.setattr(
+            "dascore.io.mseed.core.optional_import",
+            lambda name: _pymseed_for_records(records),
+        )
+        patches = list(
+            MSeedV3().read(
+                "unused",
+                channel=(10, 10),
+            )
         )
         assert patches == []
 
@@ -541,8 +698,8 @@ class TestMiniSeedScan:
                 return "XX", "00000", "", "HSF"
 
         payload = mseed_utils._scan_patches("unused", PyMseed)[0]
-        assert payload["shape"] == (1, 10)
-        assert payload["dtype"] == "int32"
+        assert payload.shape == (1, 10)
+        assert payload.dtype == "int32"
 
     def test_missing_pymseed_raises(self, mseed_v3_path, hide_module):
         """Explicit MiniSEED reads require PyMseed."""
@@ -568,14 +725,34 @@ class TestMiniSeedUtils:
 
     def test_next_start_ns_avoids_sample_step_drift(self):
         """Record adjacency uses total duration instead of rounded sample steps."""
-        segment = _trace_segment(sample_rate=3.0, sample_count=3)
+        segment = _trace_summary(sample_rate=3.0, sample_count=3)
         assert segment.sample_step_ns == 333_333_333
         assert segment.next_start_ns == 1_000_000_000
 
-    def test_open_time_limits(self):
-        """None and ellipsis are open time bounds."""
-        assert mseed_utils._get_time_limits(...) == (None, None)
-        assert mseed_utils._get_time_limits((None, ...)) == (None, None)
+    @pytest.mark.parametrize("limits", [..., (None, ...)])
+    def test_open_time_limits(self, monkeypatch, limits):
+        """None and ellipsis are open time bounds at the read boundary."""
+        records = [_MiniSeedRecord()]
+        pymseed = _pymseed_for_records(records)
+        monkeypatch.setattr(mseed_core, "optional_import", lambda name: pymseed)
+        patch = MSeedV3().read("unused", time=limits)[0]
+        np.testing.assert_array_equal(patch.data, np.arange(3)[None, :])
+
+    def test_exact_time_limits_and_trim(self, monkeypatch):
+        """A fractional selection preserves the original exact grid and samples."""
+        records = [_MiniSeedRecord(data=np.arange(6, dtype=np.int32), samprate=3)]
+        pymseed = _pymseed_for_records(records)
+        monkeypatch.setattr(mseed_core, "optional_import", lambda name: pymseed)
+        reader = MSeedV3()
+        full = reader.read("unused")[0]
+        selected = reader.read(
+            "unused",
+            time=(np.datetime64(333333334, "ns"), np.datetime64(1400000000, "ns")),
+        )[0]
+        np.testing.assert_array_equal(selected.data, [[2, 3, 4]])
+        expected = full.select(time=(2, 5), samples=True)
+        assert selected.coords == expected.coords
+        assert selected.get_coord("time").step_exact == Fraction(1, 3)
 
     def test_bad_source_id_falls_back_to_station(self):
         """Unparseable source IDs are still preserved."""
@@ -621,22 +798,23 @@ class TestMiniSeedUtils:
         with pytest.raises(RuntimeError, match="unexpected bug"):
             mseed_utils._source_id_to_nslc(BadPyMseed, "not-fdsn")
 
-    def test_record_to_segment_skips_non_overlapping_records(self):
-        """Record metadata can be rejected before sample unpacking."""
+    def test_read_skips_non_overlapping_records(self, monkeypatch):
+        """A nonoverlapping time query is rejected before sample unpacking."""
+        records = [_MiniSeedRecord(fail_unpack=True)]
+        pymseed = _pymseed_for_records(records)
+        monkeypatch.setattr(mseed_core, "optional_import", lambda name: pymseed)
+        assert len(MSeedV3().read("unused", time=(np.datetime64(1, "s"), None))) == 0
 
-        class Record:
-            starttime = 0
-            endtime = 10
-
-            def unpack_data(self):
-                raise AssertionError("should not unpack")
-
-        assert mseed_utils._record_to_segment(Record(), None, (20, 30)) is None
-
-    def test_trim_segment_time_returns_none_for_empty_selection(self):
-        """Time trimming can remove all samples from a decoded segment."""
-        segment = _trace_segment()
-        assert mseed_utils._trim_segment_time(segment, (25_000_000, 75_000_000)) is None
+    def test_time_range_between_samples_is_empty(self, monkeypatch):
+        """A time window between adjacent samples yields no data."""
+        records = [_MiniSeedRecord(fail_unpack=True)]
+        pymseed = _pymseed_for_records(records)
+        monkeypatch.setattr(mseed_core, "optional_import", lambda name: pymseed)
+        patches = MSeedV3().read(
+            "unused",
+            time=(np.datetime64(25_000_000, "ns"), np.datetime64(75_000_000, "ns")),
+        )
+        assert len(patches) == 0
 
     def test_record_dtype_from_sample_type(self):
         """Populated sample types are preferred when inferring scan dtype."""
@@ -653,7 +831,7 @@ class TestMiniSeedUtils:
         ("encoding", "dtype"),
         (
             (0, "S1"),
-            (1, "int16"),
+            (1, "int32"),
             (3, "int32"),
             (4, "float32"),
             (5, "float64"),
@@ -685,19 +863,26 @@ class TestMiniSeedUtils:
         out = mseed_utils._coalesce_source_summaries([first, second])
         assert len(out) == 2
 
-    def test_source_segments_with_different_encodings_are_not_coalesced(self):
-        """Read and scan coalescing both preserve MiniSEED encoding changes."""
-        first = _trace_segment(encoding="3")
-        second = _trace_segment(start_ns=first.next_start_ns, encoding="11")
-        out = mseed_utils._coalesce_source_segments([first, second])
-        assert len(out) == 2
+    def test_different_encodings_are_separate_in_scan_and_read(self, monkeypatch):
+        """Changing encoding separates records in both metadata and loaded data."""
+        records = [_MiniSeedRecord(), _MiniSeedRecord(starttime=300_000_000)]
+        records[1].encoding = 11
+        pymseed = _pymseed_for_records(records)
+        monkeypatch.setattr(mseed_core, "optional_import", lambda name: pymseed)
+        reader = MSeedV3()
+        metadata = reader.get_metadata("unused")
+        patches = reader.read("unused")
+        assert len(metadata) == len(patches) == 2
+        for description, patch in zip(metadata, patches, strict=True):
+            assert description.coords == patch.coords
+            assert description.attrs.mseed_encoding == patch.attrs.mseed_encoding
+            np.testing.assert_array_equal(patch.data, np.arange(3)[None, :])
 
     def test_patch_from_segments_defaults_to_local_channel_indices(self):
         """Patches can still be built without a global channel map."""
-        segment = _trace_segment()
-        group_key = mseed_utils._get_group_key(segment)
-        patch = mseed_utils._patch_from_segments(group_key, [segment])
-        assert tuple(patch.get_coord("channel").values) == (0,)
+        segment = _trace_summary()
+        coords = mseed_utils._get_coords([segment])
+        assert tuple(coords["channel"].values) == (0,)
 
     def test_source_patch_key_uses_group_key_fields(self):
         """Source patch IDs are built from the typed MiniSEED group key."""
@@ -801,3 +986,177 @@ class TestRealMiniSeed:
             "00068",
         }
         assert {x.coords.get_array("seed_channel")[0] for x in spool} == {"HSF"}
+
+
+class TestDecodedArrayContract:
+    """Stored encodings must describe the array returned by the decoder."""
+
+    @pytest.mark.parametrize(
+        "rate, count, offset", [(1024.0, 8, 7812500), (3.0, 1, 333333334)]
+    )
+    def test_fractional_final_record(self, tmp_path, rate, count, offset):
+        """A final one-sample packet survives fractional endpoint rounding."""
+        start = 1704067200000000000
+        first = _write_mseed(
+            tmp_path / "first.mseed",
+            starts=[start],
+            sample_rates=[rate],
+            source_ids=["FDSN:XX_00000__H_S_F"],
+            data_samples=[np.arange(count, dtype=np.int32)],
+        )
+        last = _write_mseed(
+            tmp_path / "last.mseed",
+            starts=[start + offset],
+            sample_rates=[rate],
+            source_ids=["FDSN:XX_00000__H_S_F"],
+            data_samples=[np.array([101], dtype=np.int32)],
+        )
+        path = tmp_path / "joined.mseed"
+        path.write_bytes(first.read_bytes() + last.read_bytes())
+        full = dc.read(path)[0]
+        np.testing.assert_array_equal(full.data[0], np.r_[np.arange(count), 101])
+        tail = dc.read(path, time=(-1, None), samples=True)[0]
+        np.testing.assert_array_equal(tail.data, [[101]])
+        assert full.attrs.patch_id == tail.attrs.patch_id
+
+    def test_overlapping_groups_same_source(self, tmp_path):
+        """Overlapping records with different rates load only their logical group."""
+        parts = []
+        for index, rate in enumerate([10.0, 20.0]):
+            part = _write_mseed(
+                tmp_path / f"rate{index}.mseed",
+                sample_rates=[rate],
+                source_ids=["FDSN:XX_00000__H_S_F"],
+                data_samples=[np.arange(10, dtype=np.int32) + index * 100],
+            )
+            parts.append(part.read_bytes())
+        path = tmp_path / "overlap.mseed"
+        path.write_bytes(b"".join(parts))
+        summaries = dc.scan(path)
+        assert len(summaries) == 2
+        for index, summary in enumerate(summaries):
+            patch = dc.read(path, source_patch_key=summary.source_patch_key)[0]
+            np.testing.assert_array_equal(patch.data, [np.arange(10) + index * 100])
+            assert patch.attrs.patch_id == summary.attrs.patch_id
+
+    def test_mixed_channel_dtypes(self, tmp_path):
+        """A channel subset retains the dtype promoted across its source group."""
+        pymseed = pytest.importorskip("pymseed")
+        rows = [np.arange(10, dtype=np.int32), np.arange(10, dtype=np.float32) + 0.25]
+        parts = []
+        for index, (data, sample_type, encoding) in enumerate(
+            zip(
+                rows,
+                ["i", "f"],
+                [pymseed.DataEncoding.INT32, pymseed.DataEncoding.FLOAT32],
+                strict=True,
+            )
+        ):
+            traces = pymseed.MS3TraceList()
+            traces.add_data(
+                sourceid=f"FDSN:XX_{index:05d}__H_S_F",
+                data_samples=data,
+                sample_type=sample_type,
+                sample_rate=10.0,
+                starttime=pymseed.timestr2nstime("2024-01-01T00:00:00Z"),
+            )
+            part = tmp_path / f"{index}.mseed"
+            traces.to_file(
+                str(part), overwrite=True, format_version=3, encoding=encoding
+            )
+            parts.append(part.read_bytes())
+        path = tmp_path / "mixed.mseed"
+        path.write_bytes(b"".join(parts))
+        summary = dc.scan(path)[0]
+        full = dc.read(path)[0]
+        selected = dc.read(path, channel=(1, 1))[0]
+        assert summary.dtype == str(full.dtype) == str(selected.dtype) == "float64"
+        np.testing.assert_array_equal(full.data, np.stack(rows))
+        np.testing.assert_array_equal(selected.data, rows[1][None, :])
+        assert full.attrs.patch_id == selected.attrs.patch_id == summary.attrs.patch_id
+        assert full._source.key == selected._source.key == summary.source_patch_key
+
+    @pytest.mark.parametrize("version", [2, 3])
+    def test_int16_decodes_as_int32(self, tmp_path, version):
+        """INT16 storage expands to int32 on full and bounded reads."""
+        pymseed = pytest.importorskip("pymseed")
+        path = _write_mseed(
+            tmp_path / "int16.mseed",
+            format_version=version,
+            encoding=pymseed.DataEncoding.INT16,
+        )
+        summary = dc.scan(path)[0]
+        full = dc.read(path)[0]
+        selected = dc.read(path, time=(2, 7), samples=True)[0]
+        expected = np.arange(10, dtype=np.int32) + np.arange(3)[:, None] * 100
+        assert summary.dtype == str(full.dtype) == "int32"
+        assert summary.attrs.sample_type == full.attrs.sample_type == "i"
+        np.testing.assert_array_equal(full.data, expected)
+        np.testing.assert_array_equal(selected.data, expected[:, 2:7])
+        assert full.attrs.patch_id == selected.attrs.patch_id
+
+    @pytest.mark.parametrize(
+        "windows, shape",
+        [
+            ({"channel": (0, 0)}, (0, 10)),
+            ({"time": (3, 3)}, (3, 0)),
+        ],
+    )
+    def test_empty_windows(self, mseed_v3_path, windows, shape):
+        """Empty source windows retain the declared axes and decoded dtype."""
+        out = MSeedV3().read_array(mseed_v3_path, windows)
+        assert out.shape == shape
+        assert out.dtype == np.dtype("int32")
+
+
+class TestDecodedSourceMatching:
+    """Malformed decoded groups fail as file errors before patch assembly."""
+
+    @pytest.mark.parametrize(
+        "kind", ["missing", "duplicate", "wrong_count", "wrong_dtype", "wrong_header"]
+    )
+    def test_invalid_decoded_group(self, monkeypatch, kind):
+        """Reject records whose decoded samples or headers disagree with the scan."""
+        records = [_MiniSeedRecord(), _MiniSeedRecord("FDSN:XX_00001__H_S_F")]
+        pymseed = _pymseed_for_records(records)
+        calls = 0
+
+        def from_file(path, *, unpack_data):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                return iter(records)
+            if kind == "missing":
+                return iter(records[1:])
+            if kind == "duplicate":
+                return iter([*records, records[0]])
+            if kind == "wrong_count":
+                records[0].np_datasamples = records[0].np_datasamples[:1]
+            elif kind == "wrong_dtype":
+                records[0].np_datasamples = records[0].np_datasamples.astype("float64")
+            else:
+                records[0].sourceid = "FDSN:XX_CHANGED__H_S_F"
+            return iter(records)
+
+        monkeypatch.setattr(pymseed.MS3Record, "from_file", from_file)
+        monkeypatch.setattr(mseed_core, "optional_import", lambda name: pymseed)
+        with pytest.raises(InvalidFiberFileError, match="decoded segments"):
+            MSeedV3().read("unused")
+
+    def test_decoded_sources_follow_metadata_order(self, monkeypatch):
+        """File record order cannot swap the metadata's channel order."""
+        records = [
+            _MiniSeedRecord(
+                "FDSN:XX_00001__H_S_F", data=np.arange(100, 103, dtype=np.int32)
+            ),
+            _MiniSeedRecord("FDSN:XX_00000__H_S_F", data=np.arange(3, dtype=np.int32)),
+        ]
+        pymseed = _pymseed_for_records(records)
+        monkeypatch.setattr(mseed_core, "optional_import", lambda name: pymseed)
+        reader = MSeedV3()
+        metadata = reader.get_metadata("unused")[0]
+        patch = reader.read("unused")[0]
+        np.testing.assert_array_equal(
+            patch.data, np.array([[0, 1, 2], [100, 101, 102]])
+        )
+        assert patch.coords == metadata.coords

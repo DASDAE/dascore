@@ -2,21 +2,16 @@
 
 from __future__ import annotations
 
-from typing import Literal
-
 import numpy as np
 
 import dascore as dc
-from dascore.constants import timeable_types
-from dascore.io import FiberIO, ScanPayload, make_scan_payload
-from dascore.io.utils import build_patches, windows_to_slices
+from dascore.constants import snap_type
+from dascore.io import FiberIO
+from dascore.io.utils import windows_to_slices
 from dascore.utils.io import BinaryReader, LocalBinaryReader
-from dascore.utils.misc import raise_on_extra_kwargs
 
 from .utils import (
     _get_all_attrs,
-    _get_data,
-    _get_default_attrs,
     _get_fileinfo,
     _get_version_str,
     _read_sample_range,
@@ -31,63 +26,50 @@ class TDMSFormatterV4713(FiberIO):
     preferred_extensions = ("tdms",)
     lead_in_length = 28
 
-    def get_format(
-        self,
-        resource: BinaryReader,
-        **kwargs,
-    ) -> tuple[str, str] | Literal[False]:
-        """
-        Return a tuple of (TDMS, version) if TDMS else False.
-
-        Parameters
-        ----------
-        resource
-            A path to the file which may contain silixa data.
-        """
+    def get_version(self, resource: BinaryReader, **kwargs) -> str | None:
+        """Return the file version when the resource matches this family."""
         try:
             version_str = _get_version_str(resource)
             if version_str:
-                return "TDMS", version_str
+                return version_str
             else:
-                return False
+                return None
         except Exception:
-            return False
+            return None
 
-    def scan(self, resource: BinaryReader, **kwargs) -> list[ScanPayload]:
+    @staticmethod
+    def _metadata(out, fileinfo):
+        """Build metadata from the parsed TDMS header."""
+        coords = dc.core.get_coord_manager(coords=out.pop("coords"))
+        attrs = dc.PatchAttrs.from_dict(out)
+        return [dc.Patch(attrs=attrs, coords=coords, dtype=fileinfo["data_type"])]
+
+    def _prepare_read(self, manager, snap):
+        """Reuse the header parsed for metadata when loading samples."""
+        resource = manager.get_resource(BinaryReader)
+        fileinfo, attrs = _get_fileinfo(resource)
+        patches = self._metadata(attrs, fileinfo)
+        shape = patches[0].shape
+
+        def load(requests):
+            for windows, key in requests:
+                array_resource = manager.get_resource(LocalBinaryReader)
+                yield self._read_array(array_resource, fileinfo, shape, windows)
+
+        return patches, load
+
+    def get_metadata(
+        self, resource: BinaryReader, *, snap: snap_type = True
+    ) -> list[dc.Patch]:
         """Scan a tdms file, return summary information about the file's contents."""
         out, fileinfo = _get_all_attrs(resource)
-        coords = dc.core.get_coord_manager(coords=out.pop("coords"))
-        out = dc.PatchAttrs.from_dict(out)
-        return [
-            make_scan_payload(
-                attrs=out,
-                coords=coords,
-                dtype=str(np.dtype(fileinfo["data_type"])),
-            )
-        ]
-
-    def read(
-        self,
-        resource: LocalBinaryReader,
-        time: tuple[timeable_types, timeable_types] | None = None,
-        distance: tuple[float, float] | None = None,
-        **kwargs,
-    ) -> dc.Spool:
-        """Read a silixa tdms file, return a DataArray."""
-        # get all data, total amount of samples and associated attributes
-        data, _channel_length, attrs_full = _get_data(resource, lead_in_length=28)
-        attrs = _get_default_attrs(resource, attrs_full)
-        coords = dc.core.get_coord_manager(coords=attrs_full["coords"])
-        patches = build_patches(
-            coords, data, attrs, selection={"time": time, "distance": distance}
-        )
-        return dc.spool(patches)
+        return self._metadata(out, fileinfo)
 
     def read_array(
         self,
         resource: LocalBinaryReader,
         windows: dict[str, tuple[int, int]],
-        **kwargs,
+        key: str = "",
     ) -> np.ndarray:
         """
         Decode only the segments a time window touches.
@@ -95,9 +77,13 @@ class TDMSFormatterV4713(FiberIO):
         The distance window is applied after decoding, since a segment
         interleaves its channels.
         """
-        raise_on_extra_kwargs(kwargs, "windows")
         fileinfo, attrs = _get_fileinfo(resource)
         shape = (len(attrs["coords"]["time"]), int(fileinfo["n_channels"]))
+        return self._read_array(resource, fileinfo, shape, windows)
+
+    @staticmethod
+    def _read_array(resource, fileinfo, shape, windows):
+        """Decode a window using an already parsed header."""
         time_slice, dist_slice = windows_to_slices(windows, ("time", "distance"), shape)
         data = _read_sample_range(resource, fileinfo, time_slice.start, time_slice.stop)
         return data[:, dist_slice]

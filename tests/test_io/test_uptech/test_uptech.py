@@ -85,6 +85,20 @@ class TestGetFormat:
 class TestRead:
     """Tests for reading Uptech files."""
 
+    @pytest.mark.parametrize("snap", [False, (), "distance", ("distance",)])
+    def test_unselected_time_stays_exact(self, tmp_path, snap):
+        """Stored timestamp jitter survives when time is excluded from snapping."""
+        times = np.array([0.0, 0.500001, 1.0, 1.5])
+        path = _write_uptech(tmp_path / "jittered.h5", time=times)
+        expected = dc.to_datetime64(times)
+        patch = dc.read(path, snap=snap)[0]
+        scanned = dc.scan_payloads(path, snap=snap)[0]
+        np.testing.assert_array_equal(patch.get_coord("time").values, expected)
+        np.testing.assert_array_equal(scanned.get_coord("time").values, expected)
+        assert not np.array_equal(dc.read(path)[0].get_coord("time").values, expected)
+        bounded = dc.read(path, snap=snap, time=(None, dc.to_datetime64(0.5000005)))
+        assert bounded[0].shape == (1, 3)
+
     def test_read(self, uptech_path):
         """Read a minimal export and check attrs come through."""
         patch = UptechH5V1().read(uptech_path)[0]
@@ -130,8 +144,8 @@ class TestScan:
         io = UptechH5V1()
         scanned = io.scan(uptech_path)[0]
         patch = io.read(uptech_path)[0]
-        assert scanned["coords"] == patch.coords
-        assert scanned["dims"] == patch.dims
+        assert scanned.coords == patch.coords
+        assert scanned.dims == patch.dims
 
 
 class TestTimeValidation:

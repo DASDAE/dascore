@@ -83,7 +83,7 @@ from dascore.utils.display import (
     render_text,
 )
 from dascore.utils.docs import compose_docstring
-from dascore.utils.indexing import get_indexers, positional_indexer
+from dascore.utils.indexing import compose_indexers, get_indexers, positional_indexer
 from dascore.utils.mapping import FrozenDict
 from dascore.utils.misc import (
     _apply_union_indexers,
@@ -727,6 +727,16 @@ class CoordManager(RichRepr, DascoreBaseModel):
         """
         return self._select(kwargs, array, relative=relative, samples=samples)
 
+    def select_indexers(
+        self, *, relative: bool = False, samples: bool = False, **kwargs
+    ) -> tuple[Self, dict[str, int | slice | np.ndarray]]:
+        """Select coordinates and return positional indexers on their original grid."""
+        indexers = {}
+        coords, _ = self._select(
+            kwargs, relative=relative, samples=samples, _indexers=indexers
+        )
+        return coords, indexers
+
     def isel(
         self,
         indexers: Mapping[str, Any] | None = None,
@@ -749,8 +759,12 @@ class CoordManager(RichRepr, DascoreBaseModel):
         relative=False,
         samples=False,
         drop=False,
+        _indexers=None,
     ):
         """Resolve queries, then apply every selection through one indexing engine."""
+        original_sizes = (
+            dict(zip(self.dims, self.shape)) if _indexers is not None else {}
+        )
         if relative or samples:
             self._check_multiple_relative(queries)
         groups = (
@@ -771,6 +785,12 @@ class CoordManager(RichRepr, DascoreBaseModel):
                 dim: positional_indexer(value, len(self.coord_map[dim]))
                 for dim, value in indices.items()
             }
+            if _indexers is not None:
+                for dim, indexer in indices.items():
+                    previous = _indexers.get(dim, slice(None))
+                    _indexers[dim] = compose_indexers(
+                        original_sizes[dim], previous, indexer
+                    )
             self, array = self._apply_indexers(indices, array, selected, drop=drop)
         return self, array
 

@@ -11,7 +11,7 @@ from upath import UPath
 
 import dascore as dc
 from dascore.constants import STORAGE_PROVENANCE_ATTRS
-from dascore.exceptions import UnknownFiberFormatError
+from dascore.exceptions import InvalidFiberFileError, UnknownFiberFormatError
 from dascore.io.xml_binary import XMLBinaryV1
 from dascore.io.xml_binary.utils import _read_xml_metadata
 from dascore.utils.time import to_float
@@ -221,6 +221,54 @@ class TestScanContents:
 
 class TestRead:
     """Tests for reading contents into Patches."""
+
+    @pytest.mark.parametrize("size_change", [-2, 1, 2])
+    @pytest.mark.parametrize("windows", [{}, {"time": (0, 5)}])
+    def test_reject_wrong_file_size(
+        self, binary_xml_directory, tmp_path, size_change, windows
+    ):
+        """Full and bounded reads reject both trailing and missing raw bytes."""
+        shutil.copy2(binary_xml_directory / "metadata.xml", tmp_path)
+        source = next(binary_xml_directory.glob("*.raw"))
+        path = tmp_path / source.name
+        data = source.read_bytes()
+        data = data[:size_change] if size_change < 0 else data + bytes(size_change)
+        path.write_bytes(data)
+        with pytest.raises(InvalidFiberFileError, match="exactly"):
+            XMLBinaryV1().read_array(path, windows)
+
+    def test_directory_order_cannot_swap_samples(
+        self, binary_xml_directory, tmp_path, monkeypatch
+    ):
+        """Metadata and samples stay paired when listings return different orders."""
+        shutil.copytree(binary_xml_directory, tmp_path, dirs_exist_ok=True)
+        paths = sorted(tmp_path.glob("*.raw"))
+        expected = {}
+        for index, path in enumerate(paths):
+            data = np.full(10000, index + 1, dtype="uint16")
+            path.write_bytes(data.tobytes())
+            patch = XMLBinaryV1().read(path)[0]
+            expected[patch.get_coord("time").min()] = data.reshape(patch.shape)
+        path_type = type(UPath(tmp_path))
+        glob = path_type.glob
+        calls = []
+
+        def alternating_glob(path, pattern, **kwargs):
+            items = list(glob(path, pattern, **kwargs))
+            if str(path) == str(tmp_path) and pattern == "*.raw":
+                calls.append(True)
+                items = sorted(items, reverse=len(calls) % 2 == 0)
+            return iter(items)
+
+        monkeypatch.setattr(path_type, "glob", alternating_glob)
+        patches = dc.read(tmp_path, "XMLBinary", "1")
+        assert len(patches) == 2
+        assert len(calls) >= 2
+        assert [p._source.key for p in patches] == ["0", "1"]
+        for patch in patches:
+            np.testing.assert_array_equal(
+                patch.data, expected[patch.get_coord("time").min()]
+            )
 
     def test_read_single_file(self, binary_xml_directory):
         """Ensure we can read a single binary file in the directory."""

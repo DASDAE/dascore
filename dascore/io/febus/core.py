@@ -4,31 +4,21 @@ IO module for reading Febus data.
 
 from __future__ import annotations
 
-import warnings
-from typing import Literal
-
 import numpy as np
 
 import dascore as dc
-from dascore.constants import (
-    float_select_type,
-    opt_timeable_types,
-    time_select_type,
-    timeable_types,
-)
-from dascore.io import FiberIO, ScanPayload
-from dascore.io.core import make_scan_payload
+from dascore.constants import snap_type
+from dascore.core.source import PatchSource
+from dascore.io import FiberIO
 from dascore.io.utils import resolve_keyed_source, slice_dataset
 from dascore.models import OptionalFiniteFloat, UTF8Str
 from dascore.utils.hdf5 import H5Reader
 from dascore.utils.io import TextReader
-from dascore.utils.misc import raise_on_extra_kwargs
 
 from .a1utils import (
     _flatten_febus_info,
     _get_febus_version_str,
     _get_source_patch_key,
-    _read_febus,
     _read_febus_array,
     _yield_attrs_coords,
 )
@@ -38,21 +28,13 @@ from .g1utils import (
     _bsl_version,
     _get_bsl_attrs,
     _get_bsl_coords,
-    _get_bsl_patch,
     _get_g1_coords_and_attrs,
-    _get_g1_patch,
     _get_mtx_attrs,
     _get_mtx_coords,
-    _get_mtx_patch,
     _is_g1_file,
     _mtx_version,
 )
-from .t1utils import _get_t1_patch, _is_t1_file, _scan_t1
-
-# Kept as module-local names for the many signatures below; the shared
-# definitions live in dascore.constants.
-_float_select_type = float_select_type
-_time_select_type = time_select_type
+from .t1utils import _is_t1_file, _scan_t1
 
 
 class FebusPatchAttrs(dc.PatchAttrs):
@@ -95,65 +77,32 @@ class Febus2(FiberIO):
     preferred_extensions = ("hdf5", "h5")
     version = "2"
 
-    def get_format(
-        self,
-        resource: H5Reader,
-        **kwargs,
-    ) -> tuple[str, str] | Literal[False]:
-        """
-        Return True if file contains febus version 8 data else False.
-
-        Parameters
-        ----------
-        resource
-            An open h5 file which may contain febus data.
-        """
+    def get_version(self, resource: H5Reader, **kwargs) -> str | None:
+        """Return the file version when the resource matches this family."""
         version_str = _get_febus_version_str(resource)
         if version_str:
-            return self.name, version_str
-        return False
+            return version_str
+        return None
 
-    def scan(self, resource: H5Reader, **kwargs) -> list[ScanPayload]:
+    def get_metadata(
+        self, resource: H5Reader, *, snap: snap_type = True
+    ) -> list[dc.Patch]:
         """Scan a febus file, return summary information about the file's contents."""
         out = []
         for attr, cm, feb in _yield_attrs_coords(resource):
-            attrs = FebusPatchAttrs.from_dict(attr).update(
-                _source_patch_key=_get_source_patch_key(feb)
-            )
+            attrs = FebusPatchAttrs.from_dict(attr)
             out.append(
-                make_scan_payload(
+                dc.Patch(
                     attrs=attrs,
                     coords=cm,
                     dtype=str(feb.zone[feb.data_name].dtype),
-                    source_patch_key=attrs["_source_patch_key"],
+                    source=PatchSource(key=_get_source_patch_key(feb)),
                 )
             )
         return out
 
-    def read(
-        self,
-        resource: H5Reader,
-        time: tuple[opt_timeable_types, opt_timeable_types] | None = None,
-        distance: tuple[float | None, float | None] | None = None,
-        source_patch_key=(),
-        **kwargs,
-    ) -> dc.Spool:
-        """Read a febus spool of patches."""
-        patches = _read_febus(
-            resource,
-            time=time,
-            distance=distance,
-            source_patch_key=source_patch_key,
-            attr_cls=FebusPatchAttrs,
-        )
-        return dc.spool(patches)
-
     def read_array(
-        self,
-        resource: H5Reader,
-        windows: dict[str, tuple[int, int]],
-        source_patch_key="",
-        **kwargs,
+        self, resource: H5Reader, windows: dict[str, tuple[int, int]], key: str = ""
     ) -> np.ndarray:
         """
         Read one zone's window out of its block-structured data cube.
@@ -161,15 +110,12 @@ class Febus2(FiberIO):
         ``source_patch_key`` is the ``group:source:zone`` name `scan`
         reports; a file holding several zones needs one.
         """
-        raise_on_extra_kwargs(kwargs, "windows and source_patch_key")
-        # pairs, not a mapping: two zones can generate one name, and the
-        # default read refuses such a key rather than picking one
         zones = [
             (_get_source_patch_key(zone), zone)
             for zone in _flatten_febus_info(resource)
         ]
         where = str(getattr(resource, "filename", "the resource"))
-        febus = resolve_keyed_source(zones, source_patch_key, where=where)
+        febus = resolve_keyed_source(zones, key, where=where)
         return _read_febus_array(febus, windows)
 
 
@@ -191,32 +137,31 @@ class FebusG1CSV1(FiberIO):
     preferred_extensions = ("bsl", "mtx")
     version = "1"
 
-    def get_format(
-        self,
-        resource: TextReader,
-        **kwargs,
-    ) -> tuple[str, str] | Literal[False]:
-        """Get the name/version of a G1 file else return False."""
+    def get_version(self, resource: TextReader, **kwargs) -> str | None:
+        """Return the file version when the resource matches this family."""
         is_g1_file = _is_g1_file(resource)
-        resource.seek(0)  # proactively set resource back to position 0.
-        return (self.name, self.version) if is_g1_file else False
+        resource.seek(0)
+        return self.version if is_g1_file else None
 
-    def scan(self, resource: TextReader, **kwargs) -> list[ScanPayload]:
+    def get_metadata(
+        self, resource: TextReader, *, snap: snap_type = True
+    ) -> list[dc.Patch]:
         """Get the coords and attrs of a G1 file."""
-        # Handle case of unsupported files (eg spectrum).
-        try:
-            coords, attrs = _get_g1_coords_and_attrs(resource)
-        except NotImplementedError as f:
-            warnings.warn(str(f), stacklevel=2)
-            return []
+        coords, attrs = _get_g1_coords_and_attrs(resource)
         attrs_no_private = {i: v for i, v in attrs.items() if not i.startswith("_")}
         attrs = FebusBOTDRStrainAttrs(**attrs_no_private)
-        return [make_scan_payload(attrs=attrs, coords=coords, dtype="float64")]
+        return [dc.Patch(attrs=attrs, coords=coords, dtype="float64")]
 
-    def read(self, resource: TextReader, **kwargs) -> dc.Spool:
-        """Read a G1 file, return a Patch object."""
-        pa = _get_g1_patch(resource, attr_cls=FebusBOTDRStrainAttrs)
-        return dc.spool([pa])
+    def read_array(
+        self, resource: TextReader, windows: dict[str, tuple[int, int]], key: str = ""
+    ) -> np.ndarray:
+        """Decode CSV samples and select the requested positional window."""
+        coords, attrs = _get_g1_coords_and_attrs(resource)
+        resource.seek(0)
+        data = np.loadtxt(resource, skiprows=int(attrs.get("_data_start_line", 0)))
+        return slice_dataset(
+            np.asarray(data).reshape(coords.shape), coords.dims, windows
+        )
 
 
 class FebusMTXH5V1(FiberIO):
@@ -231,67 +176,31 @@ class FebusMTXH5V1(FiberIO):
     preferred_extensions = ("h5", "hdf5")
     version = "1"
 
-    def get_format(
-        self,
-        resource: H5Reader,
-        **kwargs,
-    ) -> tuple[str, str] | Literal[False]:
-        """Get the name/version of an MTX HDF5 file else return False."""
+    def get_version(self, resource: H5Reader, **kwargs) -> str | None:
+        """Return the file version when the resource matches this family."""
         version = _mtx_version(resource)
-        return (self.name, self.version) if version == self.version else False
+        return self.version if version == self.version else None
 
-    def scan(
-        self, resource: H5Reader, snap: bool = True, **kwargs
-    ) -> list[ScanPayload]:
+    def get_metadata(
+        self, resource: H5Reader, *, snap: snap_type = True
+    ) -> list[dc.Patch]:
         """Scan a Febus MTX HDF5 file."""
         attrs = _get_mtx_attrs(resource)
         coords = _get_mtx_coords(resource, snap=snap)
         return [
-            make_scan_payload(
+            dc.Patch(
                 attrs=FebusMTXAttrs(**attrs),
                 coords=coords,
                 dtype=str(resource["mtx"].dtype),
             )
         ]
 
-    def read(
-        self,
-        resource: H5Reader,
-        frequency: _float_select_type | None = None,
-        time: _time_select_type | None = None,
-        distance: _float_select_type | None = None,
-        **kwargs,
-    ) -> dc.Spool:
-        """Read a Febus MTX HDF5 file into a spool."""
-        select_kwargs = {
-            key: value
-            for key, value in {
-                "frequency": frequency,
-                "time": time,
-                "distance": distance,
-            }.items()
-            if value is not None
-        }
-        attrs = _get_mtx_attrs(resource)
-        patch = _get_mtx_patch(
-            resource,
-            attr_cls=FebusMTXAttrs,
-            attrs=attrs,
-            select_kwargs=select_kwargs,
-        )
-        return dc.spool([] if patch is None else [patch])
-
     def read_array(
-        self,
-        resource: H5Reader,
-        windows: dict[str, tuple[int, int]],
-        snap: bool = True,
-        **kwargs,
+        self, resource: H5Reader, windows: dict[str, tuple[int, int]], key: str = ""
     ) -> np.ndarray:
         """
         Slice the ``mtx`` dataset directly.
         """
-        raise_on_extra_kwargs(kwargs, "windows and snap")
         return slice_dataset(resource["mtx"], _MTX_DIMS, windows)
 
 
@@ -308,62 +217,31 @@ class FebusBSLH5V1(FiberIO):
     preferred_extensions = ("h5", "hdf5")
     version = "1"
 
-    def get_format(
-        self,
-        resource: H5Reader,
-        **kwargs,
-    ) -> tuple[str, str] | Literal[False]:
-        """Get the name/version of a BSL HDF5 file else return False."""
+    def get_version(self, resource: H5Reader, **kwargs) -> str | None:
+        """Return the file version when the resource matches this family."""
         version = _bsl_version(resource)
-        return (self.name, self.version) if version == self.version else False
+        return self.version if version == self.version else None
 
-    def scan(
-        self, resource: H5Reader, snap: bool = True, **kwargs
-    ) -> list[ScanPayload]:
+    def get_metadata(
+        self, resource: H5Reader, *, snap: snap_type = True
+    ) -> list[dc.Patch]:
         """Scan a Febus BSL HDF5 file."""
         attrs = _get_bsl_attrs(resource)
         coords = _get_bsl_coords(resource, snap=snap)
         return [
-            make_scan_payload(
+            dc.Patch(
                 attrs=FebusBOTDRStrainAttrs(**attrs),
                 coords=coords,
                 dtype=str(resource["bsl_data"].dtype),
             )
         ]
 
-    def read(
-        self,
-        resource: H5Reader,
-        time: _time_select_type | None = None,
-        distance: _float_select_type | None = None,
-        **kwargs,
-    ) -> dc.Spool:
-        """Read a Febus BSL HDF5 file into a spool."""
-        select_kwargs = {
-            key: value
-            for key, value in {"time": time, "distance": distance}.items()
-            if value is not None
-        }
-        attrs = _get_bsl_attrs(resource)
-        patch = _get_bsl_patch(
-            resource,
-            attr_cls=FebusBOTDRStrainAttrs,
-            attrs=attrs,
-            select_kwargs=select_kwargs,
-        )
-        return dc.spool([] if patch is None else [patch])
-
     def read_array(
-        self,
-        resource: H5Reader,
-        windows: dict[str, tuple[int, int]],
-        snap: bool = True,
-        **kwargs,
+        self, resource: H5Reader, windows: dict[str, tuple[int, int]], key: str = ""
     ) -> np.ndarray:
         """
         Slice the ``bsl_data`` dataset directly.
         """
-        raise_on_extra_kwargs(kwargs, "windows and snap")
         return slice_dataset(resource["bsl_data"], _BSL_DIMS, windows)
 
 
@@ -388,51 +266,22 @@ class FebusT1V1(FiberIO):
 
     preferred_extensions = ("hdf5", "h5")
 
-    def get_format(
-        self, resource: H5Reader, **kwargs
-    ) -> tuple[str, str] | Literal[False]:
-        """Return (name, version) if this is a FEBUS T1 file, else False."""
-        return (self.name, self.version) if _is_t1_file(resource) else False
+    def get_version(self, resource: H5Reader, **kwargs) -> str | None:
+        """Return the file version when the resource matches this family."""
+        return self.version if _is_t1_file(resource) else None
 
-    def scan(
-        self, resource: H5Reader, snap: bool = True, **kwargs
-    ) -> list[ScanPayload]:
+    def get_metadata(
+        self, resource: H5Reader, *, snap: snap_type = True
+    ) -> list[dc.Patch]:
         """Return a list with one PatchAttrs for the file's temperature data."""
         return [_scan_t1(resource, snap=snap)]
 
-    def read(
-        self,
-        resource: H5Reader,
-        time: tuple[timeable_types, timeable_types] | None = None,
-        distance: tuple[float, float] | None = None,
-        **kwargs,
-    ) -> dc.Spool:
-        """
-        Read temperature data into a list containing one Patch.
-
-        Parameters
-        ----------
-        resource
-            Open h5py.File — provided automatically by DASCore.
-        """
-        pa = _get_t1_patch(
-            resource, self.name, self.version, time=time, distance=distance
-        )
-        if not pa.data.size:
-            return dc.spool([])
-        return dc.spool([pa])
-
     def read_array(
-        self,
-        resource: H5Reader,
-        windows: dict[str, tuple[int, int]],
-        snap: bool = True,
-        **kwargs,
+        self, resource: H5Reader, windows: dict[str, tuple[int, int]], key: str = ""
     ) -> np.ndarray:
         """
         Slice the ``Data/Temperature`` dataset directly.
         """
-        raise_on_extra_kwargs(kwargs, "windows and snap")
         return slice_dataset(
             resource["Data/Temperature"], ("time", "distance"), windows
         )

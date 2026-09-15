@@ -255,8 +255,6 @@ def _attrs_from_row(row: Mapping, dims: tuple[str, ...]) -> dc.PatchAttrs:
     for name in ("patch_id", "processing_id"):
         if not _is_null(value := row.get(name)):
             out[name] = value
-    if not _is_null(key := row.get("source_patch_key")):
-        out["_source_patch_key"] = key
     return dc.PatchAttrs.from_dict(out)
 
 

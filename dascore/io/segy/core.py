@@ -2,16 +2,17 @@
 
 from __future__ import annotations
 
-from typing import Literal
+import numpy as np
 
 import dascore as dc
-from dascore.io.core import FiberIO, ScanPayload, make_scan_payload
+from dascore.constants import snap_type
+from dascore.io.core import FiberIO
+from dascore.io.utils import windows_to_slices
 from dascore.utils.io import LocalBinaryReader, LocalPath
 from dascore.utils.misc import optional_import
 
 from .utils import (
     _get_coords,
-    _get_filtered_data_and_coords,
     _get_segy_version,
     _write_segy,
 )
@@ -29,37 +30,26 @@ class SegyV1_0(FiberIO):  # noqa
     # subclassed and this changed for debugging reasons.
     _package_name = "segyio"
 
-    def get_format(
-        self,
-        resource: LocalBinaryReader,
-        **kwargs,
-    ) -> tuple[str, str] | Literal[False]:
-        """Make sure input is segy."""
-        return _get_segy_version(resource)
+    def get_version(self, resource: LocalBinaryReader, **kwargs) -> str | None:
+        """Return the file version when the resource matches this family."""
+        return _match[1] if (_match := _get_segy_version(resource)) else None
 
-    def read(self, resource: LocalPath, time=None, channel=None, **kwargs):
-        """
-        Read should take a path and return a patch or sequence of patches.
-
-        It can also define its own optional parameters, and should always
-        accept kwargs. If the format supports partial reads, these should
-        be implemented as well.
-        """
+    def read_array(
+        self, resource: LocalPath, windows: dict[str, tuple[int, int]], key: str = ""
+    ) -> np.ndarray:
+        """Read selected trace samples in time/channel order."""
         segyio = optional_import(self._package_name)
-        path_str = str(resource)
-        with segyio.open(path_str, ignore_geometry=True) as fi:
-            coords = _get_coords(fi)
-            attrs = dc.PatchAttrs()
-            data, coords = _get_filtered_data_and_coords(
-                fi, coords, time=time, channel=channel
-            )
-        if not data.size:
-            return dc.spool([])
+        with segyio.open(str(resource), ignore_geometry=True) as stream:
+            shape = (len(stream.samples), len(stream.header))
+            time, channel = windows_to_slices(windows, ("time", "channel"), shape)
+            channels = range(shape[1])[channel]
+            if not channels:
+                return np.empty((len(range(shape[0])[time]), 0), dtype=stream.dtype)
+            return np.stack([stream.trace[index][time] for index in channels], axis=-1)
 
-        patch = dc.Patch(coords=coords, data=data, attrs=attrs)
-        return dc.spool([patch])
-
-    def scan(self, resource: LocalPath, **kwargs) -> list[ScanPayload]:
+    def get_metadata(
+        self, resource: LocalPath, *, snap: snap_type = True
+    ) -> list[dc.Patch]:
         """
         Used to get metadata about a file without reading the whole file.
 
@@ -71,7 +61,7 @@ class SegyV1_0(FiberIO):  # noqa
             coords = _get_coords(fi)
             attrs = dc.PatchAttrs()
             dtype = str(fi.dtype)
-        return [make_scan_payload(attrs=attrs, coords=coords, dtype=dtype)]
+        return [dc.Patch(attrs=attrs, coords=coords, dtype=dtype)]
 
     def write(self, spool: dc.Patch | dc.Spool, resource, **kwargs):
         """

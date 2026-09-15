@@ -54,12 +54,12 @@ class TestFebusBSL:
         payloads = self.parser.scan(bsl_path)
         assert len(payloads) == 1
         payload = payloads[0]
-        attr = payload["attrs"]
+        attr = payload.attrs
         assert isinstance(attr, dc.PatchAttrs)
         assert "path" not in attr.model_dump()
         assert "file_format" not in attr.model_dump()
         assert "file_version" not in attr.model_dump()
-        assert payload["dims"] == ("time", "distance")
+        assert payload.dims == ("time", "distance")
         assert attr.data_category == "DSS"
         assert attr.data_type == "strain"
         assert attr.data_units == dc.get_quantity("microstrain")

@@ -2,14 +2,11 @@
 
 from __future__ import annotations
 
-from dascore.constants import timeable_types
-from dascore.core import Patch
+import dascore as dc
 from dascore.core.attrs import PatchAttrs
 from dascore.core.coordmanager import get_coord_manager
 from dascore.core.coords import get_coord
-from dascore.io import ScanPayload
-from dascore.io.core import make_scan_payload
-from dascore.io.utils import get_exact_coord
+from dascore.io.utils import get_exact_coord, should_snap
 from dascore.utils.misc import maybe_get_items
 from dascore.utils.time import to_datetime64, to_timedelta64
 
@@ -82,7 +79,7 @@ def _get_version_data_node(root):
     return version, data_node
 
 
-def _scan_terra15(h5_fi, data_node, extras=None, snap=True) -> list[ScanPayload]:
+def _scan_terra15(h5_fi, data_node, extras=None, snap=True) -> list[dc.Patch]:
     """Scan a terra15 file, return metadata."""
     out = {} if extras is None else dict(extras)
     out.update(_get_default_attrs(h5_fi.attrs))
@@ -92,7 +89,7 @@ def _scan_terra15(h5_fi, data_node, extras=None, snap=True) -> list[ScanPayload]
     }
     coord_manager = get_coord_manager(coords=coords, dims=tuple(coords))
     return [
-        make_scan_payload(
+        dc.Patch(
             attrs=PatchAttrs.from_dict(out),
             coords=coord_manager,
             dtype=str(data_node["data"].dtype),
@@ -108,49 +105,6 @@ def _get_raw_time_coord(data_node, time_len):
     time = _get_time_node(data_node)[:time_len]
     values = to_datetime64(time)
     return get_exact_coord(values, units="s")
-
-
-def _read_terra15(
-    pyfi,
-    time: tuple[timeable_types, timeable_types] | None = None,
-    distance: tuple[float, float] | None = None,
-    snap_dims: bool = True,
-) -> Patch:
-    """
-    Read a terra15 file.
-
-    Notes
-    -----
-    The time array is complicated. There is GPS time and Posix time included
-    in the file. In version 0.0.6 and less of dascore we just used gps time.
-    However, sometimes this results in subsequent samples having a time before
-    the previous sample (time did not increase monotonically).
-
-    So now, we use the first GPS sample, the last sample, and length
-    to determine the dt (new in dascore>0.0.11).
-    """
-    _, data_node = _get_version_data_node(pyfi)
-    time_coord_ = _get_time_coord(data_node, snap_dims)
-    time_coord, time_slice = time_coord_.select(time)
-    time_len = len(time_coord)
-    # get data and sliced distance coord
-    dist_coord = _get_distance_coord(pyfi)
-    dist_coord, dist_slice = dist_coord.select(distance)
-    _data = data_node["data"]
-    # checks for incomplete data blocks
-    if _data.shape[0] > time_len:
-        new_start = time_slice.start or 0
-        t_stop = time_slice.stop
-        new_stop = new_start + time_len if t_stop is None else t_stop
-        time_slice = slice(new_start, new_stop)
-    data = data_node["data"][time_slice, dist_slice]
-    coords = get_coord_manager(
-        {"time": time_coord, "distance": dist_coord},
-        dims=("time", "distance"),
-    )
-    dims = ("time", "distance")
-    attrs = _get_default_attrs(pyfi.attrs)
-    return Patch(data=data, coords=coords, attrs=attrs, dims=dims)
 
 
 def _get_default_attrs(root_node_attrs):
@@ -176,7 +130,7 @@ def _get_default_attrs(root_node_attrs):
 def _get_time_coord(data_node, snap_dims=True):
     """Get the time coordinate."""
     t_min, t_max, time_len, d_time = _get_scanned_time_info(data_node)
-    if snap_dims:
+    if should_snap(snap_dims, "time"):
         time_coord = get_coord(start=t_min, stop=t_max + d_time, step=d_time, units="s")
     else:
         time_coord = _get_raw_time_coord(data_node, time_len)

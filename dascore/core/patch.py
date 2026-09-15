@@ -16,6 +16,7 @@ from dascore import transform
 from dascore.compat import DataArray, array
 from dascore.core.attrs import PatchAttrs
 from dascore.core.coordmanager import CoordManager, get_coord_manager
+from dascore.core.source import PatchSource
 from dascore.core.summary import PatchSummary
 from dascore.models import ArrayLike
 from dascore.utils.array import (
@@ -87,6 +88,9 @@ class Patch(NodeRepr, NamespaceOwner):
         builds a patch describing data it does not hold; see
         [`drop_data`](`dascore.Patch.drop_data`).
 
+    source
+        Internal source metadata supplied by the I/O framework.
+
     Notes
     -----
     Coordinates are owned by the patch/coord manager, not by attrs.
@@ -100,6 +104,8 @@ class Patch(NodeRepr, NamespaceOwner):
     attrs: PatchAttrs
     _data: ArrayLike | None
     _dtype: Any
+    # The class default also covers patches restored from older pickles.
+    _source: PatchSource | None = None
 
     _namespace_entry_point_group: Final[str] = "dascore.patch_namespace"
 
@@ -110,6 +116,7 @@ class Patch(NodeRepr, NamespaceOwner):
         dims: Sequence[str] | None = None,
         attrs: Mapping | PatchAttrs | None = None,
         dtype: Any = None,
+        source: PatchSource | None = None,
     ):
         # Init empty patch
         if all(x is None for x in (data, coords, dims, attrs)):
@@ -152,6 +159,7 @@ class Patch(NodeRepr, NamespaceOwner):
         self._coords = coords
         self._attrs = attrs
         self._data = data
+        self._source = source
         # Lineage identity: minted eagerly so copies made at any point
         # (deepcopy/pickle carry __dict__) share it deterministically.
         self._instance_id = uuid4().hex

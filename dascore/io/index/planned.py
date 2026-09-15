@@ -648,7 +648,7 @@ class PlanResolver(PatchResolver):
         if info is None:
             return None
         loader, path, fiber_io, key = info
-        kwargs = {"source_patch_key": key} if key else {}
+        kwargs = {"key": key} if key else {}
         # The resource manager resolves remote paths and opens the handle
         # type the override's annotation asks for, exactly as dc.read
         # provisions its reader; _pre_cast says the work is already done.
@@ -692,8 +692,6 @@ class PlanResolver(PatchResolver):
             # back the newest reader, which may not match this file.
             fiber_io = FiberIO.manager.get_fiberio(format=fmt, version=version)
         except UnknownFiberFormatError:
-            return None
-        if not fiber_io.implements_read_array:
             return None
         key = _row_source_patch_key(row)
         if key.isdigit():

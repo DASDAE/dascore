@@ -7,7 +7,7 @@ import numpy as np
 import dascore as dc
 from dascore.constants import STORAGE_PROVENANCE_ATTRS
 from dascore.core import get_coord
-from dascore.io.utils import get_exact_coord
+from dascore.io.utils import get_exact_coord, should_snap
 from dascore.utils.misc import _maybe_unpack, unbyte
 
 # --- Getting format/version
@@ -38,7 +38,7 @@ def _get_attrs_coords_and_data(h5, snap):
 
 def _get_coord(v, snap, name):
     """Get the coord values from a node."""
-    if snap:
+    if should_snap(snap, name):
         start = v[0] if name != "time" else dc.to_datetime64(v[0])
         stop = v[-1] if name != "time" else dc.to_datetime64(v[-1])
         duration = stop - start

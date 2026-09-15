@@ -9,8 +9,10 @@ Adding IO support requires a `FiberIO` subclass, a small fixture, common IO regi
 Create `dascore/io/jingle/__init__.py` and `core.py`. The module docstring should describe basic use and non-obvious format details.
 
 ```{python filename="dascore/io/jingle/core.py"}
+import numpy as np
 import dascore as dc
-from dascore.io import FiberIO, ScanPayload, make_scan_payload
+from dascore.constants import snap_type
+from dascore.io import FiberIO, PatchSource
 
 
 class JingleV1(FiberIO):
@@ -20,47 +22,51 @@ class JingleV1(FiberIO):
     preferred_extensions = ("jgl",)
     version = "1"
 
-    def get_format(self, resource, **kwargs):
-        """Return (name, version) when resource is Jingle; otherwise false."""
+    def get_version(self, resource) -> str | None:
+        """Return the resource's Jingle version, or None for another family."""
 
-    def scan(self, resource, snap: bool = True, **kwargs) -> list[ScanPayload]:
-        """Return one metadata payload per logical patch."""
+    def get_metadata(self, resource, *, snap: snap_type = True) -> list[dc.Patch]:
+        """Describe each logical patch without retaining its sample array."""
         return [
-            make_scan_payload(
+            dc.Patch(
                 attrs=patch_attrs,
                 coords=coord_manager,
                 dtype=dtype,
-                source_patch_key=patch_key,
+                source=PatchSource(key=patch_key),
             )
         ]
 
-    def read(self, resource, source_patch_key=(), **kwargs) -> dc.Spool:
-        """Return requested patches."""
-
-    def write(self, spool, resource, **kwargs):
-        """Write patches."""
+    def read_array(self, resource, windows: dict[str, tuple[int, int]], key: str = "") -> np.ndarray:
+        """Read one patch window in the metadata's dimension order and dtype."""
 ```
 
-Implement only supported methods. Without `get_format`, callers must provide `file_format` and `file_version`. Every method should accept `**kwargs` so format-specific options compose with the public API. Two class attributes describe what a writer can hold: `multi_patch_write` when one file takes several patches, and `segmented_write` when a patch may keep gapped (segmented) dimensional coordinates; without it, `dc.write` splits or refuses such patches.
+Every reader implements these three hooks. The base class derives `get_format`, `scan`, and `read`; keep those inherited for new formats. Sintela protobuf retains a specialized `read` because its fast scan inspects only the endpoints, while loading samples also collects META records occurring in the middle. This avoids making directory indexing walk every packet. `get_version` detects the family and may return a version other than the class's own version, allowing the manager to select the matching implementation. `None` means the resource belongs to another family; an empty version string is valid.
 
-Scan payloads must match `read()` for attrs, shape, dtype, and patch identity; coordinates also match unless an exact `snap=False` scan intentionally exposes stored values that `read()` cannot return. Lazy spools plan from scan results.
+Writing is optional: implement `write(self, spool, resource, **kwargs)` when supported. Two class attributes describe what a writer can hold: `multi_patch_write` when one file takes several patches, and `segmented_write` when a patch may keep gapped dimensional coordinates; without it, `dc.write` splits or refuses such patches.
 
-## Scan coordinates
+## Metadata and coordinates
 
-[`FiberIO.scan`](`dascore.io.core.FiberIO.scan`) returns full `CoordManager` objects in `ScanPayload` dictionaries. [`scan_payloads`](`dascore.scan_payloads`) exposes these and adds source provenance; [`scan`](`dascore.scan`) and [`scan_to_df`](`dascore.scan_to_df`) reduce them to index-friendly summaries. Do not add source path, format, or version inside the formatter.
+[`FiberIO.get_metadata`](`dascore.io.core.FiberIO.get_metadata`) returns data-less patches carrying full coordinate managers, attrs, and dtype. Dimensions and shape come from the coordinates. Accessing a data-less patch's `.data` raises; the framework later attaches the requested array with `Patch.new(data=...)`.
 
-Every scan implementation must accept `snap: bool = True`:
+[`scan_payloads`](`dascore.scan_payloads`) exposes these patches with source provenance attached. [`scan`](`dascore.scan`) returns `PatchSummary` objects, and [`scan_to_df`](`dascore.scan_to_df`) flattens those summaries for indexing. Metadata and loaded patches describe the same shape, dtype, and coordinates for a given snap mode. Their attrs also agree, except that Sintela protobuf reads collect additional META records while loading samples.
+
+The metadata hook accepts one option, `snap`:
 
 - `snap=True` may idealize stored coordinates as uniform ranges.
-- `snap=False` must preserve stored coordinate values exactly.
+- `snap=False` preserves stored coordinate values exactly.
+- `snap="time"` or `snap=("time", "distance")` enables snapping only for the named coordinates. Use `should_snap(snap, name)` in coordinate builders rather than testing the truthiness of `snap`.
 
-For stored per-sample arrays, use [`get_exact_coord`](`dascore.io.utils.get_exact_coord`) rather than `get_coord(array)`, whose tolerance may hide jitter. Header-defined start/step/count coordinates may treat `snap=False` as a no-op. Exact payloads retain arrays, so use them for targeted files rather than whole directories.
+For stored per-sample arrays, use [`get_exact_coord`](`dascore.io.utils.get_exact_coord`) rather than `get_coord(array)`, whose tolerance may hide jitter. Header-defined start/step/count coordinates may treat `snap=False` as a no-op. Snapping changes coordinate labels, not the number of written samples. Both modes must trim unwritten storage rows.
+
+Exact metadata can retain large coordinate arrays; request it for targeted files rather than whole directories. Formats such as Pickle may need to deserialize sample data to obtain metadata, but must return patches that do not retain those arrays.
 
 ## Identify patches within a file
 
-Multi-patch formats should emit a stable `source_patch_key` for every payload and accept it in `read()`. Set `attrs["_source_patch_key"]` on scan attrs and loaded patches; DASCore normalizes it to the public summary field. Native group or node names are preferable to positions unless ordering is guaranteed. Single-patch files usually need no key.
+Multi-patch formats attach a stable native key with `source=PatchSource(key=...)`. The framework passes that key to `read_array`. Prefer native group or node names; use positions only when ordering is guaranteed. Single-patch files usually need no key.
 
-`source_patch_key` is the public summary and reload field; `_source_patch_key` is the private attr formatters set. If both are supplied to `PatchSummary`, the public value wins and is copied to the attr. Private attrs do not affect patch compatibility, and `read()` must handle one key or multiple keys.
+`PatchSource` is framework plumbing stored privately on `patch._source`; it is separate from scientific attrs. Readers supply the logical key, and the dispatcher fills the path, format, and version. Directory readers may also supply an internal member path for timestamp filtering and to pin array loading to the corresponding metadata entry; public source provenance still names the requested resource. Public summaries retain the existing `source_path`, `source_format`, `source_version`, and `source_patch_key` fields. The reserved `windows` field remains unset. Source retention through processing is not guaranteed, and no lazy `Patch.load()` is provided.
+
+The shared `read` exposes keyword-only `samples=False` and `source_patch_key=""` parameters. `samples=True` interprets coordinate bounds as sample indices. It accepts one or multiple `source_patch_key` values, selects metadata, and loads matching arrays. `snap="time"` or `snap=("time", "distance")` snaps only the named coordinates; `True` enables all and `False` (or an empty tuple) disables all. Reader coordinate builders use `dascore.io.utils.should_snap`, which handles names through `iterate`. `snap=None` preserves compatibility with `snap_dims`: the effective default is `True`, and explicit `snap` takes precedence over the alias. Source IDs are derived before selection, so selecting a subset keeps the original logical patch identity. Stored IDs remain authoritative.
 
 ## Choose attrs
 
@@ -75,37 +81,21 @@ Declare vendor fields on a format-specific `PatchAttrs` subclass when they need 
 
 Optional numeric vendor attrs should not default to NaN or infinity.
 
-## Build payloads and patches
+## Read array windows
 
-[`make_scan_payload`](`dascore.io.make_scan_payload`) derives dims and shape from coords. DASCore's default scan can normalize a loaded patch, but custom scanning should avoid loading data.
-
-Most readers can finish with [`build_patches`](`dascore.io.utils.build_patches`), which applies selections, drops empty results, and attaches attrs:
-
-```python
-return dc.spool(
-    build_patches(
-        coords,
-        data_node,
-        attrs,
-        attr_cls=JingleV1PatchAttrs,
-        selection={"time": time, "distance": distance},
-    )
-)
-```
-
-## `read_array`: a data-only fast path
-
-[`FiberIO.read_array`](`dascore.io.core.FiberIO.read_array`) returns raw data for absolute sample windows. Its default calls `read()` and trims; override it only when the format can slice storage directly, as DASDAE's `DASDAEV1.read_array` does with its HDF5 dataset.
+[`FiberIO.read_array`](`dascore.io.core.FiberIO.read_array`) accepts sample indices on the resource's original grid. The shared reader resolves coordinate selections first and calls this hook with a contiguous bounding window. It then applies any residual noncontiguous selection to the returned array.
 
 - `windows` maps dimensions to half-open `(start, stop)` sample indices; omitted dimensions are returned whole.
-- Return the array in the dimension order reported by `scan()`, without transposing or casting.
-- Multi-patch formats receive the native `source_patch_key`; raise rather than guess when it is missing.
-- Annotate `resource` with the same managed-resource type used by `read()`.
-- Accept indices, not coordinate values; callers perform value-to-index conversion.
+- Return the shape, dtype, and dimension order declared by `get_metadata`. Apply storage-layout transposes, casts, padding removal, or block unrolling inside this hook when needed.
+- Multi-patch formats receive `key`; raise rather than guess when it is missing or ambiguous.
+- Accept sample indices, not coordinate values or snapping options. `snap` belongs to metadata construction.
+- Slice storage directly where possible; formats requiring decoding may decode and then slice. There is no fallback through `read`.
 
-Accept the labelling options your `read` takes, usually `snap`, even when they change nothing: the default forwards them, so refusing one would make the same call work for one format and fail for another.
+Use [`slice_dataset`](`dascore.io.utils.slice_dataset`) for a dataset already in the declared dimension order, or [`windows_to_slices`](`dascore.io.utils.windows_to_slices`) to resolve windows before format-specific decoding. The shared reader validates the returned shape and dtype before attaching data.
 
-The caller bypasses `read_array` for synthesized positional keys.
+The built-in TDMS, H5Simple, and MiniSEED readers retain parsed headers or dataset handles for the duration of a read through a private preparation helper. MiniSEED batches selected windows into one sample-reading pass. This optimization adds no work to scans and stores no state on the formatter. Subclass overrides and runtime wrappers of either public hook restore the shared path, so inherited optimizations cannot bypass them.
+
+Resource annotations belong on each hook independently. A format can scan with `BinaryReader` and load arrays with `LocalBinaryReader`, for example.
 
 ## Accept managed resources
 
@@ -131,7 +121,7 @@ class JingleV1(FiberIO):
     preferred_extensions = ("jgl",)
     version = "1"
 
-    def read(self, resource: BinaryReader, **kwargs):
+    def get_version(self, resource: BinaryReader) -> str | None:
         assert isinstance(resource, io.BufferedIOBase)
         header = resource.read(50)
         resource.seek(20)

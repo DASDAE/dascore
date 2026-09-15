@@ -22,6 +22,7 @@ from dascore.core.coordmanager import (
 )
 from dascore.core.coords import CoordRange, get_coord
 from dascore.core.processor import PatchProcessor
+from dascore.core.source import PatchSource
 from dascore.exceptions import ParameterError
 from dascore.models import ArrayLike
 from dascore.units import get_quantity
@@ -277,6 +278,7 @@ def update(
     coords: CoordManagerInput | CoordManager | None = None,
     dims: Sequence[str] | None = None,
     attrs: Mapping | PatchAttrs | None = None,
+    source: PatchSource | None = None,
 ) -> PatchType:
     """
     Return a copy of the Patch with updated data, coords, dims, or attrs.
@@ -296,6 +298,8 @@ def update(
         first axis of data, the second to the second dimension, and so on.
     attrs
         Optional attributes (non-coordinate metadata) passed as a dict.
+    source
+        Internal I/O source metadata. If omitted, retain the current source.
 
     """
     # A patch without data stays one unless data are given; `drop_data`,
@@ -311,8 +315,11 @@ def update(
     else:
         attrs = self.attrs
     if dataless:
-        return _dataless_like(self, coords, attrs)
-    return self.__class__(data=data, coords=coords, attrs=attrs)
+        out = _dataless_like(self, coords, attrs)
+    else:
+        out = self.__class__(data=data, coords=coords, attrs=attrs)
+    out._source = self._source if source is None else source
+    return out
 
 
 def _dataless_like(patch, coords, attrs):

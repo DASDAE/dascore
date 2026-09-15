@@ -10,7 +10,6 @@ import pytest
 
 import dascore as dc
 from dascore.exceptions import InvalidFiberFileError
-from dascore.io.core import FiberIO
 from dascore.io.sintela import SintelaBinaryV3
 from dascore.io.sintela.utils import _get_complete_header
 from dascore.utils.downloader import fetch
@@ -53,7 +52,11 @@ class TestReadArray:
         patch = dc.spool(binary_path)[0]
         windows = {"time": (3, 11), "distance": (2, 6)}
         out = io.read_array(binary_path, windows)
-        expected = FiberIO.read_array(io, binary_path, windows)
+        expected = (
+            io.read(binary_path, source_patch_key="")[0]
+            .select(samples=True, **windows)
+            .data
+        )
         assert out.dtype == expected.dtype
         assert np.array_equal(out, expected)
         assert np.array_equal(out, patch.data[3:11, 2:6])
@@ -76,7 +79,11 @@ class TestReadArray:
         whole = packets * samples * channels * np.dtype(header["dtype"]).itemsize
         assert out.base.nbytes < whole
         # and it is the right packet
-        expected = FiberIO.read_array(io, binary_path, {"time": (start, start + 3)})
+        expected = (
+            io.read(binary_path, source_patch_key="")[0]
+            .select(samples=True, **{"time": (start, start + 3)})
+            .data
+        )
         assert np.array_equal(out, expected)
 
     def test_empty_window(self, binary_path):

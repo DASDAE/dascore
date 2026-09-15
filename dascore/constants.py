@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import textwrap
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Collection, Iterable, Mapping
 from functools import partial
 from pathlib import Path
 from types import EllipsisType, MappingProxyType
@@ -48,6 +48,9 @@ float_select_type = tuple[float | EllipsisType | None, float | EllipsisType | No
 # mapping of name -> selector (the general form) or a name/collection of
 # names tagging which bare kwargs belong to that namespace.
 namespace_select_type = Mapping[str, Any] | str | Iterable[str] | None
+
+# Reader snapping accepts all/none, one coordinate name, or a collection of names.
+snap_type = bool | str | Collection[str]
 
 # Number types
 numeric_types = int | float

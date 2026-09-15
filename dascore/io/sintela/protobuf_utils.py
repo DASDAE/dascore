@@ -51,11 +51,12 @@ import numpy as np
 from pydantic import BaseModel, ConfigDict, ValidationError
 
 import dascore as dc
+from dascore.constants import snap_type
 from dascore.core.attrs import PatchAttrs
 from dascore.core.coordmanager import get_coord_manager
 from dascore.core.coords import get_coord
 from dascore.exceptions import InvalidFiberFileError
-from dascore.io.core import ScanPayload, make_scan_payload
+from dascore.io.utils import get_exact_coord, should_snap
 from dascore.models import OptionalFiniteFloat, PositiveFiniteFloat, PositiveInt
 from dascore.utils.misc import optional_import, suppress_warnings
 
@@ -740,7 +741,7 @@ def _get_distance_coord(start_channel: int, spacing: float, count: int, step: in
     )
 
 
-def _get_times(times: list[np.datetime64 | None]):
+def _get_times(times: list[np.datetime64 | None], snap: snap_type = True):
     """
     Build a time coordinate from packet timestamps.
 
@@ -748,7 +749,10 @@ def _get_times(times: list[np.datetime64 | None]):
     None in the signature is what the list comprehension produces, not a
     supported input.
     """
-    return get_coord(data=np.asarray(times, dtype="datetime64[ns]"))
+    values = np.asarray(times, dtype="datetime64[ns]")
+    return (
+        get_coord(data=values) if should_snap(snap, "time") else get_exact_coord(values)
+    )
 
 
 def _assert_float_equal(name: str, values: list[float], *, rtol: float = 1e-6):
@@ -830,10 +834,10 @@ def _validate_single_family(parsed: list[tuple[str, Any]]) -> str:
     return families.pop()
 
 
-def _decode_family(parsed: list[tuple[str, Any]], meta: ParsedMeta):
+def _decode_family(parsed: list[tuple[str, Any]], meta: ParsedMeta, snap=True):
     """Decode one parsed data family into data, coords, and attrs."""
     family_cls = _FAMILY_CLASSES[_validate_single_family(parsed)]
-    return family_cls.from_parsed(parsed, meta).decode(parsed)
+    return family_cls.from_parsed(parsed, meta, snap=snap).decode(parsed)
 
 
 class _PacketHeaderFields(_ProtobufModel):
@@ -930,6 +934,7 @@ class TimeseriesMetadata(_PacketMetadata):
         meta: ParsedMeta,
         *,
         total_samples: int | None = None,
+        snap: snap_type = True,
     ):
         """
         Validate timeseries headers and build shared attrs/coords.
@@ -1126,7 +1131,7 @@ class BandMetadata(_PacketMetadata):
     band_def: tuple[tuple[Any, ...], ...]
 
     @classmethod
-    def from_parsed(cls, parsed: list[tuple[str, Any]], meta: ParsedMeta):
+    def from_parsed(cls, parsed: list[tuple[str, Any]], meta: ParsedMeta, *, snap=True):
         """Validate band headers and build shared attrs/coords."""
         headers = [msg.header for _tag, msg in parsed]
         common_headers = [h.common_header for h in headers]
@@ -1168,7 +1173,7 @@ class BandMetadata(_PacketMetadata):
         band = get_coord(start=0, stop=num_bands, step=1)
         coords = get_coord_manager(
             {
-                "time": _get_times(times),
+                "time": _get_times(times, snap=snap),
                 "distance": distance,
                 "band": band,
                 "band_start_frequency": (
@@ -1239,7 +1244,7 @@ class FFTMetadata(_PacketMetadata):
         return np.complex64 if self.has_complex else np.float32
 
     @classmethod
-    def from_parsed(cls, parsed: list[tuple[str, Any]], meta: ParsedMeta):
+    def from_parsed(cls, parsed: list[tuple[str, Any]], meta: ParsedMeta, *, snap=True):
         """Validate FFT headers and build shared attrs/coords."""
         headers = [msg.header for _tag, msg in parsed]
         common_headers = [h.common_header for h in headers]
@@ -1276,7 +1281,11 @@ class FFTMetadata(_PacketMetadata):
             start=0.0, stop=bin_res * num_bins, step=bin_res, units="Hz"
         )
         coords = get_coord_manager(
-            {"time": _get_times(times), "distance": distance, "frequency": frequency},
+            {
+                "time": _get_times(times, snap=snap),
+                "distance": distance,
+                "frequency": frequency,
+            },
             dims=DIMS_FFT,
         )
         attrs = _base_attrs(
@@ -1474,7 +1483,7 @@ def _get_endpoint_metadata(resource):
     return metadata, meta
 
 
-def read_payload(resource):
+def read_payload(resource, *, snap: snap_type = True):
     """Decode a Sintela protobuf file into data, coords, and attrs."""
     endpoints = _get_endpoint_metadata(resource)
     if endpoints is not None:
@@ -1482,10 +1491,10 @@ def read_payload(resource):
         return metadata.decode_stream(resource, meta)
     records = _iter_envelope_records(resource, strict=True)
     parsed, meta = _parse_records(records, scan_mode=False)
-    return _decode_family(parsed, meta)
+    return _decode_family(parsed, meta, snap=snap)
 
 
-def scan_payload(resource) -> list[ScanPayload]:
+def scan_payload(resource, *, snap: snap_type = True) -> list[dc.Patch]:
     """Decode a Sintela protobuf file and return FiberIO scan payloads."""
     endpoints = _get_endpoint_metadata(resource)
     if endpoints is not None:
@@ -1494,6 +1503,6 @@ def scan_payload(resource) -> list[ScanPayload]:
         records = _iter_envelope_records(resource, strict=True, headers_only=True)
         parsed, meta = _parse_records(records, scan_mode=True)
         family_cls = _FAMILY_CLASSES[_validate_single_family(parsed)]
-        metadata = family_cls.from_parsed(parsed, meta)
-    shape, coords, attrs, dtype = metadata.scan()
-    return [make_scan_payload(attrs=attrs, coords=coords, shape=shape, dtype=dtype)]
+        metadata = family_cls.from_parsed(parsed, meta, snap=snap)
+    _shape, coords, attrs, dtype = metadata.scan()
+    return [dc.Patch(attrs=attrs, coords=coords, dtype=dtype)]
