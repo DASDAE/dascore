@@ -1005,7 +1005,7 @@ class BaseCoord(RichRepr, DascoreBaseModel, abc.ABC):
         """
         return self
 
-    def simplify(self, tolerance=None) -> BaseCoord:
+    def simplify(self, tolerance=None, keep_step: bool = False) -> BaseCoord:
         """
         Return the simplest coordinate representing the same values.
 
@@ -1019,6 +1019,10 @@ class BaseCoord(RichRepr, DascoreBaseModel, abc.ABC):
             The maximum amount any coordinate value may change. For time-like
             coordinates this is a timedelta (numeric values interpreted as
             seconds). None or 0 permit only exact (lossless) simplifications.
+        keep_step
+            If True, only re-fit at the segments' own step, so missing
+            samples stay missing however large the tolerance. Merging uses
+            this: a hole is data that is absent, not a slower sampling rate.
 
         Notes
         -----
@@ -1854,6 +1858,31 @@ def _on_grid(deltas, step) -> np.ndarray:
         msg = f"Values are not on a grid of step {step}: spacing {deltas[off][0]}."
         raise CoordError(msg)
     return counts.astype(np.int64)
+
+
+def _keeps_step(segments, ascending: bool) -> bool:
+    """
+    Whether any seam between `segments` skips a position of their grid.
+
+    A seam a whole number of steps wider than one is a hole: the samples
+    for those positions are absent, and re-fitting the run to one range
+    would spread the hole over it, reaching the last sample early and
+    relabeling every sample after the hole. A seam which is *not* a whole
+    number of steps is misalignment rather than absent data -- the jitter
+    of labels rounded on their way to a file, or members trimmed where
+    they overlapped -- and remains the tolerance's business.
+    """
+    for prev, nxt in itertools.pairwise(segments):
+        step = prev.step if not _is_null(prev.step) else nxt.step
+        if _is_null(step):
+            continue
+        before = prev.max() if ascending else prev.min()
+        after = nxt.min() if ascending else nxt.max()
+        steps = abs(after - before) / abs(step)
+        whole = np.round(steps)
+        if whole > 1 and abs(steps - whole) <= _GRID_RTOL * whole:
+            return False
+    return True
 
 
 def _to_tick(value) -> int:
@@ -3407,7 +3436,7 @@ class CoordSegmented(BaseCoord):
         """
         return self._as_monotonic().snap()
 
-    def simplify(self, tolerance=None) -> BaseCoord:
+    def simplify(self, tolerance=None, keep_step: bool = False) -> BaseCoord:
         """
         Return the simplest coordinate representing the same values.
 
@@ -3422,19 +3451,22 @@ class CoordSegmented(BaseCoord):
             The maximum amount any coordinate value may change. For time-like
             coordinates this is a timedelta (numeric values interpreted as
             seconds). None or 0 permit only exact simplifications.
+        keep_step
+            If True, a re-fit may not change the segments' declared step,
+            so a hole stays a hole however large the tolerance.
         """
         tol = self._get_tolerance(tolerance)
         result = []
         run = [self.segments[0]]
-        run_fit = self._fit_run(run, tol)
+        run_fit = self._fit_run(run, tol, keep_step)
         for seg in self.segments[1:]:
             trial = [*run, seg]
-            fit = self._fit_run(trial, tol)
+            fit = self._fit_run(trial, tol, keep_step)
             if fit is not None:
                 run, run_fit = trial, fit
             else:
                 result.append(run_fit if run_fit is not None else run[0])
-                run, run_fit = [seg], self._fit_run([seg], tol)
+                run, run_fit = [seg], self._fit_run([seg], tol, keep_step)
         result.append(run_fit if run_fit is not None else run[0])
         return self._rebuild(result)
 
@@ -3446,7 +3478,7 @@ class CoordSegmented(BaseCoord):
             tolerance = tolerance.count * get_middle_value(steps) if steps else 0
         return self._gap_tolerance(tolerance).excess
 
-    def _fit_run(self, run, tol) -> CoordRange | None:
+    def _fit_run(self, run, tol, keep_step: bool = False) -> CoordRange | None:
         """Fit a run of segments to a single range within tol, or None."""
         if len(run) == 1 and isinstance(run[0], CoordRange):
             return run[0]
@@ -3472,7 +3504,7 @@ class CoordSegmented(BaseCoord):
         ).change_length(n)
         actual = np.concatenate([x.values for x in run])
         deviation = np.max(np.abs(candidate.values - actual))
-        if deviation > tol:
+        if deviation > tol or (keep_step and not _keeps_step(run, ascending)):
             return None
         return candidate
 
