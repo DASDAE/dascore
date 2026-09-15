@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+import yaml
 from _render_api import get_template
 
 import dascore as dc
@@ -64,6 +65,10 @@ def create_quarto_qmd():
         dascore_version_str=version_str,
         api_toc_tree=api_toc_tree,
         repo_branch=_get_repo_branch(),
+        # Historical site builds restore older runtime code but keep these docs.
+        skills=yaml.safe_load(
+            (API_PATH.parent / "skills.yml").read_text(encoding="utf-8")
+        ),
     )
     path = Path(__file__).parent.parent / "dascore" / "docs" / "_quarto.yml"
     with path.open("w") as fi:

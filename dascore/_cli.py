@@ -9,7 +9,7 @@ import typer
 
 import dascore as dc
 from dascore.utils.doc_cache import documentation_cache, read_document
-from dascore.utils.doc_corpus import DocumentationError
+from dascore.utils.doc_skills import get_skills, read_bootstrap, read_skill
 
 app = typer.Typer(
     help="The DASCore command-line interface.",
@@ -37,6 +37,9 @@ def cli(
     ),
 ) -> None:
     """Configure the DASCore command group."""
+    # Redirected Windows streams can otherwise reject Unicode documentation.
+    if isinstance(sys.stdout, io.TextIOWrapper):
+        sys.stdout.reconfigure(encoding="utf-8")
 
 
 @app.command()
@@ -49,21 +52,39 @@ def doc(
     ),
 ) -> None:
     """Build or read the installed documentation."""
-    # Redirected Windows streams can otherwise reject Unicode documentation.
-    if isinstance(sys.stdout, io.TextIOWrapper):
-        sys.stdout.reconfigure(encoding="utf-8")
-    try:
-        with documentation_cache(rebuild=rebuild) as (root, manifest):
-            if target:
-                sys.stdout.write(read_document(root, manifest, target))
-            else:
-                sys.stdout.write(
-                    f"DASCore: {dc.__version__}\nPython: {sys.executable}\n"
-                    f"Package: {dc.__file__}\nDocumentation: {root}\n"
-                    f"Documents: {len(manifest['documents'])}\n"
-                )
-                for omitted in manifest["omitted"]:
-                    sys.stdout.write(f"Unavailable: {omitted}\n")
-    except (DocumentationError, OSError) as exc:
-        typer.echo(f"dascore: {exc}", err=True)
-        raise typer.Exit(1) from exc
+    with documentation_cache(rebuild=rebuild) as (root, manifest):
+        if target:
+            sys.stdout.write(read_document(root, manifest, target))
+        else:
+            sys.stdout.write(
+                f"DASCore: {dc.__version__}\nPython: {sys.executable}\n"
+                f"Package: {dc.__file__}\nDocumentation: {root}\n"
+                f"Documents: {len(manifest['documents'])}\n"
+            )
+            for omitted in manifest["omitted"]:
+                sys.stdout.write(f"Unavailable: {omitted}\n")
+
+
+@app.command()
+def skills() -> None:
+    """List the recipes available as skills."""
+    for name, info in get_skills().items():
+        typer.echo(f"{name}: {info['description']}")
+
+
+@app.command()
+def skill(
+    name: str | None = typer.Argument(None, help="Name from the skills catalog"),
+    bootstrap: bool = typer.Option(
+        False, "--bootstrap", help="Print the native agent bootstrap"
+    ),
+) -> None:
+    """Read a skill or print the bootstrap for explicit agent installation."""
+    if bootstrap and name is not None:
+        raise typer.BadParameter("Use a skill name or --bootstrap, not both.")
+    if bootstrap:
+        sys.stdout.write(read_bootstrap())
+    elif name is not None:
+        sys.stdout.write(read_skill(name))
+    else:
+        raise typer.BadParameter("Provide a skill name or use --bootstrap.")
