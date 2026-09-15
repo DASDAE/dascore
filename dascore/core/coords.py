@@ -3695,6 +3695,159 @@ def concat_coords(*coords, units=None) -> BaseCoord:
     return CoordSegmented(segments=segments)
 
 
+def _grid_pieces(coord: BaseCoord) -> list[tuple[int, CoordRange]]:
+    """
+    The runs of consecutive grid positions, each with its source offset.
+
+    A range is one run; an array declaring a step splits at its holes, and
+    a lone sample without a step takes the other runs' step.
+    """
+    segments = coord.segments if isinstance(coord, CoordSegmented) else (coord,)
+    steps = [x.step for x in segments if not _is_null(x.step)]
+    pieces, offset = [], 0
+    for seg in segments:
+        step = seg.step
+        if _is_null(step) and len(seg) == 1 and steps:
+            step = steps[0]
+        if isinstance(seg, CoordRange):
+            pieces.append((offset, seg))
+        elif isinstance(seg, CoordMonotonicArray) and not _is_null(step):
+            values = seg.values
+            counts = _on_grid(_diffs(values), step)
+            edges = np.flatnonzero(counts != 1) + 1
+            for first, stop in itertools.pairwise([0, *edges.tolist(), len(values)]):
+                piece = get_coord(
+                    start=values[first],
+                    step=step,
+                    shape=(stop - first,),
+                    units=seg.units,
+                )
+                # floats pass _on_grid per spacing; the run must not drift
+                drift = np.abs(piece.values - values[first:stop])
+                if values.dtype.kind == "f" and np.max(drift) > abs(step) / 2:
+                    msg = (
+                        f"Values drift more than half a step from the grid of "
+                        f"step {step}; use snap_coords before filling gaps."
+                    )
+                    raise CoordError(msg)
+                pieces.append((offset + first, piece))
+        else:
+            msg = (
+                "Filling gaps needs a coordinate with a declared step; this one "
+                "has none. Use snap_coords or resample to put it on a grid first."
+            )
+            raise CoordError(msg)
+        offset += len(seg)
+    return pieces
+
+
+def _same_step(first: CoordRange, exact, other: CoordRange) -> bool:
+    """
+    Whether a run shares the first run's step, `exact` being its exact form.
+
+    Exactly for ticks; for floats, closely enough that the run drifts from
+    the first run's grid by a negligible fraction of a step.
+    """
+    if exact is not None and (other_exact := other.step_exact) is not None:
+        return exact == other_exact
+    ratio = float(other.step) / float(first.step)
+    return bool(abs(ratio - 1) * max(len(other) - 1, 1) <= _GRID_RTOL)
+
+
+def _grid_position(anchor: CoordRange, label) -> int:
+    """The position on the anchor's grid nearest a label."""
+    if not anchor._exact:
+        return int(np.round((label - anchor.start) / anchor.step))
+    num, den, offset = anchor._grid_terms
+    tick, start = _to_tick(label), anchor._start_tick
+    after = int(anchor._index_of([tick], forward=True)[0])
+    # the labels either side as the integer ticks _labels casts to dtype,
+    # so the comparison stays in Python integers and cannot wrap
+    ticks = [start + (offset + pos * num) // den for pos in (after - 1, after)]
+    return after - 1 if abs(ticks[0] - tick) <= abs(ticks[1] - tick) else after
+
+
+def _max_missing(step: CoordRange, coord: BaseCoord, limit, samples: bool):
+    """The most missing positions a filled hole may have, or None for any."""
+    if limit is None:
+        return None
+    if samples:
+        if not _is_int(limit) or limit < 0:
+            msg = f"A sample limit must be a non-negative integer, got {limit!r}."
+            raise ParameterError(msg)
+        return int(limit)
+    tolerance = coord._gap_tolerance(limit)
+    if tolerance.count is not None:
+        msg = "Pass a count of missing samples with samples=True instead."
+        raise ParameterError(msg)
+    excess = tolerance.excess
+    if (exact := step.step_exact) is not None:
+        if is_timedelta64(excess):
+            # the limit was rounded to whole nanoseconds; allow that rounding
+            excess = Fraction(2 * int(to_int(excess)) + 1, 2 * _NS_PER_S)
+        return int(Fraction(excess) // abs(exact))
+    return math.floor(float(excess) / abs(float(step.step)) * (1 + _GRID_RTOL))
+
+
+def _fill_layout(
+    coord: BaseCoord, limit=None, samples: bool = False
+) -> tuple[BaseCoord, tuple[tuple[int, int, int], ...]] | None:
+    """
+    Place every run of a coordinate on one grid, filling the holes between.
+
+    Returns the filled coordinate and, per run, its ``(source start, source
+    stop, target start)``, or None when there is nothing to fill. `limit`
+    and `samples` are read as in `Patch.fill_gaps`; holes past the limit
+    stay as seams. An off-grid run moves to the nearest position, and two
+    runs on one position raise.
+    """
+    if isinstance(coord, CoordRange) or len(coord) < 2:
+        return None
+    pieces = _grid_pieces(coord)
+    first = pieces[0][1]
+    first_exact = first.step_exact
+    for _, piece in pieces[1:]:
+        if not _same_step(first, first_exact, piece):
+            msg = (
+                f"Runs are sampled at different steps ({first.step} and "
+                f"{piece.step}); resample them to one step before filling gaps."
+            )
+            raise CoordError(msg)
+    max_missing = _max_missing(first, coord, limit, samples)
+    # each group: its anchor run, its filled length, and its runs' blocks
+    groups: list[list] = []
+    for source, piece in pieces:
+        stop = source + len(piece)
+        if groups:
+            anchor, length, blocks = groups[-1]
+            position = _grid_position(anchor, piece.start)
+            missing = position - length
+            if missing < 0:
+                msg = (
+                    f"Samples near {piece.start} land on the same grid position "
+                    f"as the ones before them, so the gap cannot be filled."
+                )
+                raise CoordError(msg)
+            if max_missing is None or missing <= max_missing:
+                blocks.append((source, stop, position))
+                groups[-1][1] = position + len(piece)
+                continue
+        groups.append([piece, len(piece), [(source, stop, 0)]])
+    if all(len(blocks) == 1 for *_, blocks in groups):
+        return None
+    coords, out, offset = [], [], 0
+    for anchor, length, blocks in groups:
+        if len(blocks) == 1:  # untouched: keep the labels as they are
+            coords.append(coord[blocks[0][0] : blocks[0][1]])
+        else:
+            coords.append(anchor.change_length(length))
+        out.extend((start, stop, offset + pos) for start, stop, pos in blocks)
+        offset += length
+    # a lone group is a range, which concat_coords returns unchanged
+    new = concat_coords(*coords)
+    return new, tuple(out)
+
+
 def _get_coord_kind(
     data: ArrayLike | None = None,
     *,
