@@ -3013,6 +3013,32 @@ class TestUnitNoOps:
 class TestIndexCoordinate:
     """The coordinate-level positional API remains usable independently."""
 
+    @pytest.mark.parametrize("operation", ["index", "getitem"])
+    @pytest.mark.parametrize("indices", [[2, 0, 3, 1], [1, 1, 0, 2]])
+    def test_reordered_array_selection(self, operation, indices):
+        """Reordering or repeating labels must not imply monotonic search order."""
+        coord = CoordMonotonicArray(values=np.array([0.0, 1.0, 3.0, 6.0]), units="m")
+        indices = np.array(indices)
+        out = coord.index(indices) if operation == "index" else coord[indices]
+        np.testing.assert_array_equal(out.values, coord.values[indices])
+        selected, _ = out.select((0.0, 1.0))
+        expected = [0.0, 1.0] if indices[0] == 2 else [1.0, 1.0, 0.0]
+        np.testing.assert_array_equal(selected.values, expected)
+        assert selected.units == coord.units
+
+    def test_partial_decimation_metadata(self):
+        """Sample decimation preserves a partial coordinate's units and dtype."""
+        coord = CoordPartial(shape=(10,), units="m", dtype="float32")
+        patch = dc.Patch(
+            data=np.arange(10), coords={"distance": coord}, dims=("distance",)
+        )
+        out = patch.decimate(distance=2, filter_type=None)
+        selected = out.get_coord("distance")
+        assert selected.units == coord.units
+        assert selected.dtype == coord.dtype
+        assert selected.shape == (5,)
+        np.testing.assert_array_equal(out.data, [0, 2, 4, 6, 8])
+
     @pytest.mark.parametrize("axis", [0, 1])
     def test_multidimensional(self, axis):
         """An explicit axis indexes only that dimension and preserves units."""

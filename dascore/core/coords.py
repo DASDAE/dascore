@@ -1628,7 +1628,7 @@ class CoordPartial(BaseCoord):
         # We init a temporary array just to get numpy to do the
         # indexing. There is probably a faster way but this is robust.
         dummy = np.empty(self.shape)[item]
-        return self.__class__(shape=dummy.shape)
+        return self.__class__(shape=dummy.shape, units=self.units, dtype=self.dtype)
 
     def _max(self):
         """Dummy funct to do nothing but raise."""
@@ -2741,13 +2741,15 @@ class CoordArray(BaseCoord):
             out = get_coord(data=vals, units=self.units)
         return out.new(**kwargs)
 
-    def __getitem__(self, item) -> Self:
+    def __getitem__(self, item):
         out = self.values[item]
         if not np.ndim(out):
             return out
-        # a declared step survives only an order it can be held against
-        step = self.step if out.ndim == 1 and is_strictly_monotonic(out) else None
-        return self.__class__(values=out, units=self.units, step=step)
+        # Reordering can invalidate both monotonic search and a declared grid.
+        monotonic = is_strictly_monotonic(out)
+        step = self.step if monotonic else None
+        cls = self.__class__ if monotonic else CoordArray
+        return cls(values=out, units=self.units, step=step)
 
     def _min(self):
         """Return min value."""
