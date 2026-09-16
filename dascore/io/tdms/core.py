@@ -5,9 +5,9 @@ from __future__ import annotations
 import numpy as np
 
 import dascore as dc
-from dascore.constants import snap_type
+from dascore.constants import INVENTORY_ATTRS, snap_type
 from dascore.io import FiberIO
-from dascore.io.utils import windows_to_slices
+from dascore.io.utils import get_attr_names, windows_to_slices
 from dascore.utils.io import BinaryReader, LocalBinaryReader
 
 from .utils import (
@@ -16,6 +16,8 @@ from .utils import (
     _get_version_str,
     _read_sample_range,
 )
+
+_ATTR_NAMES = get_attr_names(dc.PatchAttrs) | set(INVENTORY_ATTRS)
 
 
 class TDMSFormatterV4713(FiberIO):
@@ -41,7 +43,9 @@ class TDMSFormatterV4713(FiberIO):
     def _metadata(out, fileinfo):
         """Build metadata from the parsed TDMS header."""
         coords = dc.core.get_coord_manager(coords=out.pop("coords"))
-        attrs = dc.PatchAttrs.from_dict(out)
+        attrs = dc.PatchAttrs.from_dict(
+            {name: out[name] for name in _ATTR_NAMES if name in out}
+        )
         return [dc.Patch(attrs=attrs, coords=coords, dtype=fileinfo["data_type"])]
 
     def _prepare_read(self, manager, snap):

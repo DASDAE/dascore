@@ -11,6 +11,7 @@ import numpy as np
 import pytest
 
 import dascore as dc
+from dascore.constants import INVENTORY_ATTRS
 from dascore.exceptions import RemoteCacheError
 from dascore.io.silixah5.utils import _ATTR_MAP as _SILIXA_ATTR_MAP
 from dascore.io.tdms import utils as tdms_utils
@@ -399,6 +400,41 @@ class TestTDMSInterrogator:
         with open(tdms_path, "rb") as fi:
             header, _ = tdms_utils._get_all_attrs(fi)
         return header["SystemInfomation.OS.HostName"]
+
+    def test_flat_inventory_attr(self, tdms_path, monkeypatch):
+        """A canonical property already named in the header survives filtering."""
+        read_attr = tdms_utils._read_attr
+
+        def canonical_attr(resource):
+            name, value = read_attr(resource)
+            if name == "GaugeLength":
+                name = "gauge_length"
+            return name, value
+
+        monkeypatch.setattr(tdms_utils, "_read_attr", canonical_attr)
+        patch = dc.read(tdms_path)[0]
+        metadata = dc.scan_payloads(tdms_path)[0]
+        summary = dc.scan(tdms_path)[0]
+        assert patch.attrs.gauge_length == 10.0
+        assert metadata.attrs.gauge_length == summary.attrs.gauge_length == 10.0
+
+    def test_canonical_scan_and_read(self, tdms_path, raw_host_name):
+        """Scan and read omit raw vendor fields while retaining canonical facts."""
+        patch = dc.read(tdms_path)[0]
+        metadata = dc.scan_payloads(tdms_path)[0]
+        summary = dc.scan(tdms_path)[0]
+        attrs = dict(patch.attrs)
+        allowed = set(dc.PatchAttrs.model_fields) | set(INVENTORY_ATTRS)
+        assert set(attrs) <= allowed
+        assert attrs == dict(metadata.attrs) == dict(summary.attrs)
+        assert attrs["interrogator.name"] == raw_host_name
+        assert attrs["data_type"] == "strain_rate"
+        assert metadata.coords == patch.coords
+        assert metadata.dtype == patch.dtype
+        selected = dc.read(tdms_path, samples=True, time=(1, 4), distance=(2, 5))[0]
+        np.testing.assert_array_equal(selected.data, patch.data[1:4, 2:5])
+        assert selected.attrs == patch.attrs
+        assert selected._source == patch._source == metadata._source
 
     def test_name_is_host_name(self, tdms_attrs, raw_host_name):
         """The name is exactly the HostName property, eg "iDAS005"."""

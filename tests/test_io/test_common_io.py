@@ -152,7 +152,7 @@ SKIP_DATA_FILES = {
 # have converted away at the parse boundary.
 # Formats which hand back the attrs stored in the file rather than building
 # them from a header, so the file, not the reader, chooses the names.
-_PASS_THROUGH_FORMATS = frozenset({"DASDAE", "NETCDF_CF", "TDMS"})
+_PASS_THROUGH_FORMATS = frozenset({"DASDAE", "NETCDF_CF"})
 
 VENDOR_ATTRS = frozenset(
     {
