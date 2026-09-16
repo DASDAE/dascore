@@ -25,6 +25,7 @@ from dascore.core.coords import (
     CoordMonotonicArray,
     CoordPartial,
     CoordRange,
+    CoordSegmented,
     CoordString,
     CoordSummary,
     _get_coord_kind,
@@ -3025,6 +3026,38 @@ class TestIndexCoordinate:
         expected = [0.0, 1.0] if indices[0] == 2 else [1.0, 1.0, 0.0]
         np.testing.assert_array_equal(selected.values, expected)
         assert selected.units == coord.units
+
+    @pytest.mark.parametrize("temporal", [False, True])
+    @pytest.mark.parametrize("operation", ["stride", "array", "select", "decimate"])
+    def test_segmented_selection_preserves_labels(self, temporal, operation):
+        """Selecting across stored runs must preserve their small discontinuity."""
+        values = np.array(
+            [
+                0,
+                1_000_000_000,
+                2_000_000_000,
+                3_000_000_000,
+                4_000_001_000,
+                5_000_001_000,
+                6_000_001_000,
+            ]
+        )
+        values = values.astype("datetime64[ns]") if temporal else values / 1e9
+        coord = CoordSegmented.from_array(values)
+        assert isinstance(coord, CoordSegmented)
+        indices = np.array([0, 2, 4, 6])
+        if operation == "stride":
+            out = coord.index(slice(None, None, 2))
+        elif operation == "array":
+            out = coord.index(indices)
+        elif operation == "select":
+            out, _ = coord.select(indices, samples=True)
+        else:
+            patch = dc.Patch(data=np.arange(7), coords={"x": coord}, dims=("x",))
+            selected = patch.decimate(x=2, filter_type=None)
+            np.testing.assert_array_equal(selected.data, [0, 2, 4, 6])
+            out = selected.get_coord("x")
+        np.testing.assert_array_equal(out.values, values[indices])
 
     def test_partial_decimation_metadata(self):
         """Sample decimation preserves a partial coordinate's units and dtype."""

@@ -14,6 +14,7 @@ from collections.abc import (
     Generator,
     Iterable,
     Iterator,
+    Sequence,
 )
 from contextlib import suppress
 from dataclasses import replace
@@ -1129,13 +1130,22 @@ def source_identity(source) -> tuple[str, int | None, int | None]:
 
 
 def _stamp_source_ids(
-    patches: list[dc.Patch], file_format: str, file_version: str, source
+    patches: list[dc.Patch],
+    file_format: str,
+    file_version: str,
+    source,
+    *,
+    indices: Sequence[int] | None = None,
 ) -> list[dc.Patch]:
-    """Attach source metadata and preserve stored or source-derived patch IDs."""
+    """Stamp selected patches, retaining their original source ordinals and keys."""
+    indices = range(len(patches)) if indices is None else indices
+    if not indices:
+        return []
     path, size_bytes, mtime_ns = source_identity(source)
     reload_path = str(_get_reloadable_source_path(source) or "")
     out = []
-    for index, patch in enumerate(patches):
+    for index in indices:
+        patch = patches[index]
         origin = replace(
             patch._source or PatchSource(),
             path=reload_path,
@@ -1503,11 +1513,10 @@ def _iter_scan_results(
                         # Directory fiber_io should send skip signal back to generator
                         # so that no files/sub directories are scanned.
                         generator.send("skip")
-                        if not fiber_io._updated_after(resource, timestamp):
-                            continue
-                        # Directory FiberIO may need to know the time after which
-                        # contents should be returned.
-                        scan_kwargs = {"timestamp": timestamp, "_pre_cast": True}
+                        # Existing members can change without updating directory
+                        # mtime. Keep every member until source IDs and positional
+                        # keys are assigned; filtering first renumbers survivors.
+                        scan_kwargs = {"_pre_cast": True}
                         if snap is not None:
                             scan_kwargs["snap"] = snap
                         source = fiber_io.scan(resource, **scan_kwargs)
@@ -1537,9 +1546,23 @@ def _iter_scan_results(
                         ):
                             warnings.warn(f"Failed to scan {resource}", UserWarning)
                             continue
-                    patches = [_validate_metadata(patch) for patch in source]
+                    members = [_validate_metadata(patch) for patch in source]
+                    indices = None
+                    if fiber_io.input_type == "directory" and timestamp is not None:
+                        indices = [
+                            index
+                            for index, member in enumerate(members)
+                            if fiber_io._updated_after(
+                                (member._source or PatchSource()).path or resource,
+                                timestamp,
+                            )
+                        ]
                     patches = _stamp_source_ids(
-                        patches, fiber_io.name, fiber_io.version, man.source
+                        members,
+                        fiber_io.name,
+                        fiber_io.version,
+                        man.source,
+                        indices=indices,
                     )
                     for result in patches:
                         output_count += 1

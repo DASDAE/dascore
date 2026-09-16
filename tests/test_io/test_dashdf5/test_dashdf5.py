@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import shutil
+
 import h5py
 import numpy as np
 import pytest
@@ -50,3 +52,27 @@ class TestSnap:
         """The CF signal description supplies the canonical data type."""
         assert dc.read(jittered_path)[0].attrs.data_type == "strain_rate"
         assert dc.scan(jittered_path)[0].attrs.data_type == "strain_rate"
+
+    @pytest.mark.parametrize("reader", [dc.read, dc.scan], ids=["read", "scan"])
+    @pytest.mark.parametrize(
+        ("long_name", "expected"),
+        [
+            (None, ""),
+            (np.bytes_(b"strain_rate"), "strain_rate"),
+            ("Axial Strain Rate (nm/m/s)", "Axial Strain Rate (nm/m/s)"),
+        ],
+        ids=["missing", "bytes", "free_text"],
+    )
+    def test_long_name_representation(
+        self, jittered_path, tmp_path, reader, long_name, expected
+    ):
+        """Signal descriptions decode bytes and preserve optional free text."""
+        path = tmp_path / "description.h5"
+        shutil.copyfile(jittered_path, path)
+        with h5py.File(path, "r+") as h5:
+            attrs = h5["das"].attrs
+            if long_name is None:
+                del attrs["long_name"]
+            else:
+                attrs["long_name"] = long_name
+        assert reader(path)[0].attrs.data_type == expected

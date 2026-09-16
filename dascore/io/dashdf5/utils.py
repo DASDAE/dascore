@@ -9,6 +9,7 @@ import numpy as np
 import dascore as dc
 from dascore.core import get_coord
 from dascore.io.utils import get_exact_coord, should_snap
+from dascore.utils.misc import unbyte
 
 # --- Getting format/version
 
@@ -103,7 +104,9 @@ def _get_cf_attrs(hdf_fi, coords=None, extras=None):
     for n1, n2 in _ROOT_ATTR_MAPPING.items():
         out[n1] = hdf_fi.attrs.get(n2)
     for source, target in _DAS_ATTR_MAPPING.items():
-        out[target] = getattr(hdf_fi.get("das", {}), "attrs", {}).get(source)
+        value = getattr(hdf_fi.get("das", {}), "attrs", {}).get(source)
+        if value is not None:
+            out[target] = unbyte(value)
     for n1, n2 in _CRS_MAPPING.items():
         out[n1] = getattr(hdf_fi.get("crs", {}), "attrs", {}).get(n2)
     return dc.PatchAttrs.from_dict(out)

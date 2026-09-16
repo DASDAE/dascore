@@ -3312,9 +3312,10 @@ class CoordSegmented(BaseCoord):
         out = self.values[item]
         if not np.ndim(out):
             return out
-        # a declared grid survives only an order it can be held against
-        keep = not _is_null(self.step) and is_strictly_monotonic(out)
-        return get_coord(data=out, units=self.units, step=self.step if keep else None)
+        # Keep stored runs exact even when a stride crosses a small seam.
+        if is_strictly_monotonic(out):
+            return self.from_array(out, units=self.units, step=self.step)
+        return get_coord(data=out, units=self.units)
 
     def select(
         self, args, relative=False, samples=False

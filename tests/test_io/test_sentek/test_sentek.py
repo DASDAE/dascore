@@ -57,9 +57,15 @@ class TestStoredLayout:
         return path, data, distance, time
 
     @pytest.mark.parametrize("snap", [True, False, "time", "distance"])
-    def test_full_and_bounded_samples(self, stored_file, snap):
+    @pytest.mark.parametrize("constant_distance", [False, True])
+    def test_full_and_bounded_samples(self, stored_file, snap, constant_distance):
         """Stored headers never leak into the signal or displace its final values."""
         path, data, distance, time = stored_file
+        if constant_distance:
+            distance = np.zeros_like(distance)
+            with path.open("r+b") as stream:
+                stream.seek(6 * 4)
+                stream.write(distance.tobytes())
         full = dc.read(path, snap=snap)[0]
         np.testing.assert_array_equal(full.data, data)
         selected = dc.read(path, snap=snap, samples=True, distance=(1, 3), time=(2, 5))[

@@ -78,7 +78,7 @@ def _read_coord(fid, offset, count, snap, start_time=None):
             start=values[0],
             step=(values[-1] - values[0]) / (count - 1),
             shape=(count,),
-        )
+        ).change_length(count)
     return get_exact_coord(values)
 
 
