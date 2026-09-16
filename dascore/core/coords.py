@@ -1324,9 +1324,11 @@ class BaseCoord(RichRepr, DascoreBaseModel, abc.ABC):
                 slice(None, None) if i != axis else indexer for i in range(ndims)
             )
         out = self[indexer]
-        return (
-            out if isinstance(out, BaseCoord) else get_coord(data=out, units=self.units)
-        )
+        if isinstance(out, BaseCoord):
+            if out.ndim:
+                return out
+            out = out.values[()]
+        return get_coord(data=out, units=self.units)
 
     def to_summary(self, dims=()) -> CoordSummary:
         """Get the summary info about the coord."""
@@ -1625,10 +1627,9 @@ class CoordPartial(BaseCoord):
         return value
 
     def __getitem__(self, item):
-        # We init a temporary array just to get numpy to do the
-        # indexing. There is probably a faster way but this is robust.
-        dummy = np.empty(self.shape)[item]
-        return self.__class__(shape=dummy.shape, units=self.units, dtype=self.dtype)
+        # Index the broadcast view without allocating the full coordinate.
+        selected = self.values[item]
+        return self.__class__(shape=selected.shape, units=self.units, dtype=self.dtype)
 
     def _max(self):
         """Dummy funct to do nothing but raise."""

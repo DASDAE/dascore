@@ -3059,6 +3059,33 @@ class TestIndexCoordinate:
             out = selected.get_coord("x")
         np.testing.assert_array_equal(out.values, values[indices])
 
+    @pytest.mark.parametrize("indexer", [slice(1, 4), np.array([3, 2, 1])])
+    def test_partial_index_avoids_full_allocation(self, monkeypatch, indexer):
+        """Selecting a few unknown positions must not allocate all their values."""
+        coord = CoordPartial(shape=(100_000_000,), units="m", dtype="float32")
+        original_empty = np.empty
+
+        def bounded_empty(shape, *args, **kwargs):
+            assert np.prod(shape) < 1_000, "Allocated the full partial coordinate"
+            return original_empty(shape, *args, **kwargs)
+
+        monkeypatch.setattr(np, "empty", bounded_empty)
+        selected = coord.index(indexer)
+        assert selected.shape == (3,)
+        assert selected.units == coord.units
+        assert selected.dtype == coord.dtype
+
+    @pytest.mark.parametrize("indexer", [0, np.int64(-1), (0,)])
+    def test_partial_scalar_index(self, indexer):
+        """Scalar positional indexing still returns a usable one-sample coord."""
+        coord = CoordPartial(shape=(10,), units="m", dtype="float32")
+        out = coord.index(indexer)
+        assert out.shape == (1,)
+        assert len(out) == 1
+        assert out.units == coord.units
+        assert out.dtype == coord.dtype
+        np.testing.assert_array_equal(out.values, np.array([np.nan], dtype="float32"))
+
     def test_partial_decimation_metadata(self):
         """Sample decimation preserves a partial coordinate's units and dtype."""
         coord = CoordPartial(shape=(10,), units="m", dtype="float32")
