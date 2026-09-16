@@ -13,7 +13,7 @@ becomes a Patch.
 from __future__ import annotations
 
 import json
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -220,7 +220,9 @@ class _Member:
         )
 
 
-def _attrs_from_row(row: Mapping, dims: tuple[str, ...]) -> dc.PatchAttrs:
+def _attrs_from_row(
+    row: Mapping, dims: tuple[str, ...], coord_names: Iterable[str] | None = None
+) -> dc.PatchAttrs:
     """
     The attrs an index row states for its member.
 
@@ -231,7 +233,11 @@ def _attrs_from_row(row: Mapping, dims: tuple[str, ...]) -> dc.PatchAttrs:
     array, a name colliding with a structural column -- is null here and
     takes its default, as it would on the patch `read` builds.
     """
-    envelope = {f"{d}_{x}" for d in dims for x in ("min", "max", "step", "units")}
+    # every coordinate's envelope, not only every dimension's: a patch
+    # carrying latitude(distance) has latitude_min columns which describe
+    # that coordinate and are not attrs of its own
+    named = dims if coord_names is None else coord_names
+    envelope = {f"{d}_{x}" for d in named for x in ("min", "max", "step", "units")}
     # RESERVED_ATTR_COLUMNS names what an index row spends on structure
     # rather than on attrs, the time and distance envelopes among them --
     # those columns exist on every row, whether or not the member has
@@ -362,36 +368,52 @@ def coord_from_row(row: Mapping, dim: str, units=None):
     return get_coord(start=lo, stop=hi + step, step=step, units=units)
 
 
-def patch_from_fill(row: Mapping, plan_dim: str, fill_value) -> dc.Patch:
+def patch_from_fill(
+    coords: CoordManager, row: Mapping, plan_dim: str, fill_value
+) -> dc.Patch:
     """
     The all-fill patch an output row with no members describes.
 
     A window lying wholly inside a bridged hole has no source to read
-    from, so its coordinates, element dtype and attrs are the ones the
-    row already states and every sample is the fill value.
+    from, so its samples are all the fill value. It must still look like
+    the outputs beside it, though: `coords` is a sibling's coordinates,
+    which is what states the values, dtypes and units of every dimension
+    this plan did not chunk. Only the chunked dimension comes from the
+    row, which is the window the plan advertised.
     """
     # the cast check lives with fill_gaps, which proc imports from utils
     from dascore.proc.coords import _fill_scalar  # noqa: PLC0415
 
-    dims = tuple(str(row["dims"]).split(","))
-    coord_map = {}
-    for dim in dims:
-        units = None if _is_null(u := row.get(f"_{dim}_units")) else u
-        coord = coord_from_row(row, dim, units=units)
-        if coord is None:
-            msg = (
-                f"Cannot fill a hole along {plan_dim!r}: the plan states no "
-                f"evenly sampled {dim!r} coordinate, and a window no source "
-                "feeds has only its plan row to rebuild one from. Chunk with "
-                "a smaller tolerance, or without fill_value."
-            )
-            raise ChunkError(msg)
-        coord_map[dim] = coord
-    coords = get_coord_manager(coord_map, dims=dims)
+    sibling = coords.coord_map[plan_dim]
+    bounds = _row_values(row, plan_dim)
+    if bounds is None or _is_null(step := sibling.step):
+        msg = (
+            f"Cannot fill a hole along {plan_dim!r}: a window no source feeds "
+            "takes the span its plan row states and the step its neighbours "
+            "are sampled at, and one of those is missing. Chunk with a "
+            "smaller tolerance, or without fill_value."
+        )
+        raise ChunkError(msg)
+    # The row's envelope orders values and so states no direction; the
+    # step beside it does, which is why the window is rebuilt from both.
+    low, high, _ = bounds
+    length = int(np.round(abs(high - low) / abs(step))) + 1
+    descending = step < step * 0
+    coord = get_coord(
+        start=high if descending else low,
+        step=step,
+        shape=(length,),
+        units=sibling.units,
+    )
+    # A coordinate riding the chunked dimension describes samples which
+    # are not there, so it cannot come along; one riding any other
+    # dimension is the same for every patch here and does.
+    coords = drop_associated_coords(coords, plan_dim, "Filling the gaps along")
+    coords = coords._update_grid(plan_dim, **{plan_dim: coord})
     dtype = np.dtype(row.get("_dtype") or np.float64)
     data = np.full(coords.shape, _fill_scalar(fill_value, dtype), dtype=dtype)
-    attrs = _attrs_from_row(row, dims)
-    return dc.Patch(data=data, coords=coords, dims=dims, attrs=attrs)
+    attrs = _attrs_from_row(row, coords.dims, coord_names=set(coords.coord_map))
+    return dc.Patch(data=data, coords=coords, dims=coords.dims, attrs=attrs)
 
 
 def _whole_steps(ratio) -> int:
@@ -418,20 +440,23 @@ def fill_to_row(patch: dc.Patch, dim: str, row: Mapping, fill_value) -> dc.Patch
     patch = patch.fill_gaps(dim, value=fill_value)
     coord = patch.get_coord(dim)
     bounds = _row_values(row, dim)
-    if bounds is None or _is_null(step := coord.step) or step <= step * 0:
+    if bounds is None or _is_null(step := coord.step):
         return patch
     # Counted on the samples' own grid and anchored on their own first
     # label, so padding can only ever add positions around them: a target
     # built from the window's edges instead would move every label
     # whenever those edges did not land on the samples' grid.
     low, high, _ = bounds
-    before = _whole_steps((coord.min() - low) / step)
-    after = _whole_steps((high - coord.max()) / step)
+    size = abs(step)
+    below = _whole_steps((coord.min() - low) / size)
+    above = _whole_steps((high - coord.max()) / size)
+    # the envelope orders values; the array may run the other way
+    before, after = (above, below) if step < step * 0 else (below, above)
     if before <= 0 and after <= 0:
         return patch
     before, after = max(before, 0), max(after, 0)
     target = get_coord(
-        start=coord.min() - before * step,
+        start=coord.values[0] - before * step,
         step=step,
         shape=(before + len(coord) + after,),
         units=coord.units,

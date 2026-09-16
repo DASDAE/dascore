@@ -24,6 +24,7 @@ import numpy as np
 import pandas as pd
 
 import dascore as dc
+from dascore.core.coordmanager import CoordManager
 from dascore.core.coords import _EXACT_GRID_FIELDS, CoordSummary
 from dascore.exceptions import UnknownFiberFormatError
 from dascore.io.core import FiberIO, _required_resource_type
@@ -569,6 +570,8 @@ class PlanResolver(PatchResolver):
         # nested plan loading this one's outputs passes its own member
         # row instead -- trim instructions, with no envelope to fill to.
         self._output_rows: dict[int, Mapping] = {}
+        # a sibling's coordinates per output which has none of its own
+        self._fill_coords: dict[int, CoordManager] = {}
         if merge_kwargs.get("fill_value") is not None and output_rows is not None:
             self._output_rows = {
                 int(row["output_id"]): row for row in output_rows.to_dict("records")
@@ -769,7 +772,9 @@ class PlanResolver(PatchResolver):
         if not len(members):
             # only a fill plan publishes an output no source feeds
             assert fill_row is not None, "no plan members found for output row"
-            return self._stamp(patch_from_fill(fill_row, self.dim, fill_value), row)
+            coords = self._sibling_coords(output_id)
+            filled = patch_from_fill(coords, fill_row, self.dim, fill_value)
+            return self._stamp(filled, row)
         if self.mode == "identity":
             # one untouched member per output; residuals apply at load
             assert len(members) == 1
@@ -793,6 +798,28 @@ class PlanResolver(PatchResolver):
             if fill_row is not None:
                 patch = fill_to_row(patch, self.dim, fill_row, fill_value)
         return self._stamp(patch, row)
+
+    def _sibling_coords(self, output_id: int):
+        """
+        The coordinates of the nearest output a source actually feeds.
+
+        An output with no members still has to look like the ones beside
+        it -- the same coordinates, values, dtypes and units on every
+        dimension but the chunked one -- and only a real patch states
+        those; an envelope cannot restate an arbitrary array, and the
+        frame holds every numeric one as float. Outputs are numbered in
+        order, so the nearest fed one is a neighbour in the same
+        partition. One member is read per hole and its coordinates kept,
+        never its data.
+        """
+        ids = self.member_rows["output_id"].to_numpy()
+        assert len(ids), "a fill plan with no members anywhere has no structure"
+        nearest = int(ids[np.argmin(np.abs(ids - output_id))])
+        if nearest not in self._fill_coords:
+            rows = self.member_rows[self.member_rows["output_id"] == nearest]
+            patch = self._load_member(rows.iloc[0].to_dict())
+            self._fill_coords[nearest] = patch.coords
+        return self._fill_coords[nearest]
 
     def _stamp(self, patch: dc.Patch, row: Mapping) -> dc.Patch:
         """
@@ -960,6 +987,8 @@ def derived_catalog(
     aux_info = _aux_coord_info(
         sources, trims, name, coord_dims_map, trimmed_dims, concat=mode == "concat"
     )
+    if merge_kwargs.get("fill_value") is not None:
+        aux_info = _aux_info_for_unfed(aux_info, outputs)
     records = _output_records(
         outputs,
         token,
@@ -970,6 +999,28 @@ def derived_catalog(
         records = _with_parent_runs(records, parent.backend, trims, sources, name)
     backend.write_sources(records)
     return PatchCatalog(backend=backend, resolver=resolver)
+
+
+def _aux_info_for_unfed(aux_info: Mapping, outputs: pd.DataFrame) -> dict:
+    """
+    Lend each output no source feeds its nearest sibling's auxiliary coords.
+
+    Auxiliary coordinates ride a dimension this plan did not chunk, so
+    every output of a partition describes them identically; one built
+    from fill alone has no member to read them off, and a row silently
+    missing them would conflict with its siblings' the moment the filled
+    spool was merged again.
+    """
+    if not aux_info or "output_id" not in outputs.columns:
+        return dict(aux_info)
+    known = np.array(sorted(aux_info))
+    out = dict(aux_info)
+    for value in outputs["output_id"]:
+        output_id = int(value)
+        if output_id in out:
+            continue
+        out[output_id] = aux_info[int(known[np.argmin(np.abs(known - output_id))])]
+    return out
 
 
 def _with_parent_runs(

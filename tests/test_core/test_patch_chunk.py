@@ -2743,26 +2743,81 @@ class TestChunkFillWindows:
         assert chunked[0].data.dtype == np.float16
         assert chunked[4].data.dtype == np.float32
 
-    def test_undescribable_coord_raises_on_load(self, random_patch):
-        """A fill patch is built from the row, so every coord must be on a grid."""
+    def test_fill_window_copies_a_coord_no_envelope_could_state(self, random_patch):
+        """An unevenly sampled coordinate is copied, not rebuilt from a row."""
         values = np.sort(np.random.default_rng(0).uniform(0, 300, 300))
         patch = random_patch.update_coords(distance=values)
         start = patch.get_coord("time").min()
         first = patch.select(time=(start, start + to_timedelta64(2)))
         second = patch.select(time=(start + to_timedelta64(6), ...))
         spool = dc.spool([first, second])
-        chunked = spool.chunk(time=1, tolerance=to_timedelta64(5), fill_value=np.nan)
-        # the windows the sources feed still assemble
-        assert chunked[0].shape == (*first.shape[:1], 250)
-        with pytest.raises(ChunkError, match="no evenly sampled 'distance'"):
-            chunked[4]
+        with suppress_warnings(UserWarning):
+            chunked = spool.chunk(
+                time=1, tolerance=to_timedelta64(5), fill_value=np.nan
+            )
+        filled = chunked[4]
+        assert np.isnan(filled.data).all()
+        assert np.array_equal(filled.get_coord("distance").values, values)
 
-    def test_all_fill_window_reads_nothing(self, spool_and_tolerance, monkeypatch):
-        """A window with no members is built from its row, not from a file."""
+    def test_descending_dimension_fills(self, random_patch):
+        """A coordinate running the other way fills at the same positions."""
+        size = random_patch.shape[0]
+        patch = random_patch.update_coords(distance=np.arange(size)[::-1] * 1.0)
+        spool = dc.spool(
+            [patch.select(distance=(200, 299)), patch.select(distance=(0, 100))]
+        )
+        with suppress_warnings(UserWarning):
+            chunked = spool.chunk(distance=20, tolerance=200, fill_value=np.nan)
+        assert {len(x.get_coord("distance")) for x in chunked} == {20}
+        # every window runs high to low, as its sources do
+        for windowed in chunked:
+            coord = windowed.get_coord("distance")
+            assert coord.values[0] > coord.values[-1]
+        # the hole spans 101 to 199, so those windows hold nothing else
+        all_fill = [bool(np.isnan(x.data).all()) for x in chunked]
+        assert all_fill == [False] * 6 + [True] * 4 + [False] * 5
+
+    def test_all_fill_windows_share_one_read(self, spool_and_tolerance):
+        """The sibling a fill window copies its structure from is read once."""
         spool, tolerance = spool_and_tolerance
         chunked = spool.chunk(time=1, tolerance=tolerance, fill_value=np.nan)
         resolver = chunked._catalog.resolver
-        monkeypatch.setattr(
-            resolver, "_load_member", lambda *a, **kw: pytest.fail("read a source")
-        )
-        assert np.isnan(chunked[4].data).all()
+        reads = []
+        original = resolver._load_member
+        resolver._load_member = lambda *a, **kw: (
+            reads.append(1),
+            original(*a, **kw),
+        )[1]
+        # three windows lie wholly inside the hole, between two fed ones
+        for index in (3, 4, 5):
+            assert np.isnan(chunked[index].data).all()
+        first_pass = len(reads)
+        assert 0 < first_pass <= 2  # one sibling on each side of the hole
+        for index in (3, 4, 5):
+            assert np.isnan(chunked[index].data).all()
+        assert len(reads) == first_pass  # the coordinates are kept
+
+    def test_fill_window_keeps_associated_coords(self, random_patch_with_lat_lon):
+        """A window with no data still carries what its siblings carry."""
+        patch = random_patch_with_lat_lon
+        start = patch.get_coord("time").min()
+        first = patch.select(time=(start, start + to_timedelta64(2)))
+        second = patch.select(time=(start + to_timedelta64(6), ...))
+        spool = dc.spool([first, second])
+        with suppress_warnings(UserWarning):
+            chunked = spool.chunk(
+                time=1, tolerance=to_timedelta64(5), fill_value=np.nan
+            )
+        fed, filled = chunked[0], chunked[4]
+        assert set(fed.coords.coord_map) == set(filled.coords.coord_map)
+        # riding distance, which the chunk did not touch, so the values
+        # are the ones every patch here states
+        for name in ("latitude", "longitude"):
+            assert np.array_equal(
+                fed.get_coord(name).values, filled.get_coord(name).values
+            )
+        # and the rows agree well enough to be merged back together
+        with suppress_warnings(UserWarning):
+            merged = chunked.chunk(time=None)[0]
+        assert len(merged.get_coord("time")) == 2000
+        assert len(chunked.select(latitude=...)) == len(chunked)
