@@ -211,6 +211,9 @@ def _get_data_unit_and_type(node):
         "FbeDataUnit": "data_units",
     }
     out = maybe_get_items(attrs, attr_map)
+    # some vendors (eg Fosina) use "unitless", which pint can't parse
+    if str(out.get("data_units", "")).lower() == "unitless":
+        out.pop("data_units")
     if (data_type := out.get("data_type")) is not None:
         clean = data_type.lower().replace(" ", "_")
         out["data_type"] = clean if clean in VALID_DATA_TYPES else ""
