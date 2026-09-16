@@ -129,10 +129,8 @@ def _numeric_dtype_str(stored) -> str:
     """The numeric dtype a row states for a coordinate, else float64."""
     if not isinstance(stored, str) or not stored:
         return "float64"
-    try:
-        dtype = np.dtype(stored)
-    except TypeError:
-        return "float64"
+    # the column is written from a real dtype, as _row_values also assumes
+    dtype = np.dtype(stored)
     return str(dtype) if np.issubdtype(dtype, np.number) else "float64"
 
 
@@ -1011,9 +1009,10 @@ def _aux_info_for_unfed(aux_info: Mapping, outputs: pd.DataFrame) -> dict:
     missing them would conflict with its siblings' the moment the filled
     spool was merged again.
     """
-    if not aux_info or "output_id" not in outputs.columns:
-        return dict(aux_info)
     known = np.array(sorted(aux_info))
+    # every output states the dimensions it did not chunk, so there is
+    # always a sibling to lend from
+    assert len(known)
     out = dict(aux_info)
     for value in outputs["output_id"]:
         output_id = int(value)

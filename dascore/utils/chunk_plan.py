@@ -1686,10 +1686,10 @@ def build_chunk_plan(
                 starts_p, stops_p, on_grid = _grid_snapped(
                     starts_p, stops_p, g_starts[part], abs(part_step)
                 )
-                if not on_grid.all():
-                    starts_p, stops_p = starts_p[on_grid], stops_p[on_grid]
-                if not len(starts_p):
-                    continue
+                starts_p, stops_p = starts_p[on_grid], stops_p[on_grid]
+                # a window shorter than one sample never gets this far:
+                # the length is policed against the step long before
+                assert len(starts_p)
         active[part] = True
         n_out = len(starts_p)
         ids_p = np.arange(next_id, next_id + n_out)

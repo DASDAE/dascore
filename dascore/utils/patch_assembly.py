@@ -23,7 +23,7 @@ import pandas as pd
 import dascore as dc
 from dascore.core.coordmanager import CoordManager, get_coord_manager
 from dascore.core.coords import _EXACT_GRID_FIELDS, CoordRange, get_coord
-from dascore.exceptions import ChunkError, CoordMergeError, UnitError
+from dascore.exceptions import CoordMergeError, UnitError
 from dascore.io.index.ingest import _is_missing
 from dascore.io.index.schema import RESERVED_ATTR_COLUMNS
 from dascore.units import get_quantity
@@ -386,14 +386,11 @@ def patch_from_fill(
 
     sibling = coords.coord_map[plan_dim]
     bounds = _row_values(row, plan_dim)
-    if bounds is None or _is_null(step := sibling.step):
-        msg = (
-            f"Cannot fill a hole along {plan_dim!r}: a window no source feeds "
-            "takes the span its plan row states and the step its neighbours "
-            "are sampled at, and one of those is missing. Chunk with a "
-            "smaller tolerance, or without fill_value."
-        )
-        raise ChunkError(msg)
+    step = sibling.step
+    # A plan states the span of every window it publishes, and a spool
+    # whose members have no step never reaches a fill: the plan cannot
+    # measure a chunk length against it, and a merge cannot fill one.
+    assert bounds is not None and not _is_null(step)
     # The row's envelope orders values and so states no direction; the
     # step beside it does, which is why the window is rebuilt from both.
     low, high, _ = bounds
@@ -440,8 +437,10 @@ def fill_to_row(patch: dc.Patch, dim: str, row: Mapping, fill_value) -> dc.Patch
     patch = patch.fill_gaps(dim, value=fill_value)
     coord = patch.get_coord(dim)
     bounds = _row_values(row, dim)
-    if bounds is None or _is_null(step := coord.step):
-        return patch
+    step = coord.step
+    # fill_gaps above refuses a coordinate with no step, and the row of
+    # an output the plan published always states the window's span
+    assert bounds is not None and not _is_null(step)
     # Counted on the samples' own grid and anchored on their own first
     # label, so padding can only ever add positions around them: a target
     # built from the window's edges instead would move every label

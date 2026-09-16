@@ -1874,8 +1874,9 @@ def _keeps_step(segments, ascending: bool) -> bool:
     """
     for prev, nxt in itertools.pairwise(segments):
         step = prev.step if not _is_null(prev.step) else nxt.step
-        if _is_null(step):
-            continue
+        # two adjacent segments which both state no step would have fused
+        # into one array rather than being held apart as segments
+        assert not _is_null(step)
         before = prev.max() if ascending else prev.min()
         after = nxt.min() if ascending else nxt.max()
         steps = abs(after - before) / abs(step)
